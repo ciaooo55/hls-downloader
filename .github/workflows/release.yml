@@ -118,8 +118,18 @@ jobs:
           path: release
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release/*
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = @(Get-ChildItem .\release -File | Select-Object -ExpandProperty FullName)
+          if ($files.Count -eq 0) {
+            throw "No release files were downloaded."
+          }
+          & gh release create "${{ github.ref_name }}" @files `
+            --verify-tag `
+            --generate-notes `
+            --title "HLS Downloader ${{ github.ref_name }}"
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub Release creation failed with exit code $LASTEXITCODE"
+          }
