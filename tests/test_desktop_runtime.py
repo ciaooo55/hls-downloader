@@ -1,0 +1,180 @@
+import sys
+import threading
+
+from fastapi.testclient import TestClient
+
+from backend.app.desktop_runtime import activate_window, register_activation
+from backend.app.main import app
+from backend.desktop import (
+    DesktopBridge,
+    DesktopController,
+    UvicornServerThread,
+    public_base_url,
+)
+
+
+class FakeWindow:
+    def __init__(self, confirm_result: bool = True) -> None:
+        self.confirm_result = confirm_result
+        self.calls: list[str] = []
+        self.selected_folders: tuple[str, ...] | None = None
+
+    def create_confirmation_dialog(self, title: str, message: str) -> bool:
+        self.calls.append(f"confirm:{title}:{message}")
+        return self.confirm_result
+
+    def restore(self) -> None:
+        self.calls.append("restore")
+
+    def show(self) -> None:
+        self.calls.append("show")
+
+    def destroy(self) -> None:
+        self.calls.append("destroy")
+
+    def create_file_dialog(self, dialog_type):
+        self.calls.append(f"file-dialog:{dialog_type}")
+        return self.selected_folders
+
+
+class FakeServer:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def stop(self) -> None:
+        self.calls.append("stop")
+
+    def join(self, timeout: float | None = None) -> None:
+        self.calls.append(f"join:{timeout}")
+
+
+def test_close_cancel_keeps_window_and_server_running():
+    window = FakeWindow(confirm_result=False)
+    server = FakeServer()
+    controller = DesktopController(window, server)
+
+    assert controller.on_closing() is False
+
+    assert server.calls == []
+    assert "destroy" not in window.calls
+
+
+def test_close_confirmation_stops_server_before_destroying_window():
+    window = FakeWindow(confirm_result=True)
+    server = FakeServer()
+    controller = DesktopController(window, server, shutdown_timeout=12)
+
+    assert controller.on_closing() is False
+    assert controller.wait_for_shutdown(timeout=2)
+
+    assert server.calls == ["stop", "join:12"]
+    assert window.calls[-1] == "destroy"
+    assert controller.on_closing() is True
+
+
+def test_repeated_close_does_not_start_duplicate_shutdown():
+    window = FakeWindow(confirm_result=True)
+    server = FakeServer()
+    release = threading.Event()
+
+    class BlockingServer(FakeServer):
+        def join(self, timeout: float | None = None) -> None:
+            self.calls.append(f"join:{timeout}")
+            release.wait(timeout=1)
+
+    server = BlockingServer()
+    controller = DesktopController(window, server)
+
+    assert controller.on_closing() is False
+    assert controller.on_closing() is False
+    release.set()
+    assert controller.wait_for_shutdown(timeout=2)
+
+    assert server.calls.count("stop") == 1
+
+
+def test_activation_restores_and_shows_registered_window():
+    window = FakeWindow()
+    controller = DesktopController(window, FakeServer())
+    register_activation(controller.activate)
+
+    assert activate_window() is True
+    assert window.calls == ["restore", "show"]
+
+
+def test_activation_reports_false_when_no_window_is_registered():
+    register_activation(None)
+    assert activate_window() is False
+
+
+def test_activation_api_requires_token_and_calls_registered_window():
+    calls: list[str] = []
+    register_activation(lambda: calls.append("activate"))
+
+    with TestClient(app) as client:
+        unauthorized = client.post("/api/app/activate")
+        activated = client.post("/api/app/activate", headers={"X-Token": "55555"})
+
+    assert unauthorized.status_code == 401
+    assert activated.status_code == 200
+    assert activated.json() == {"ok": True}
+    assert calls == ["activate"]
+
+
+def test_public_base_url_uses_loopback_for_wildcard_host(monkeypatch):
+    from backend import desktop as desktop_module
+
+    monkeypatch.setattr(desktop_module.settings, "host", "0.0.0.0")
+    monkeypatch.setattr(desktop_module.settings, "port", 9876)
+
+    assert public_base_url() == "http://127.0.0.1:9876"
+
+
+def test_desktop_server_configures_without_console_streams(monkeypatch):
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+
+    server = UvicornServerThread()
+
+    assert server.is_alive() is False
+
+
+def test_desktop_bridge_exports_configured_userscript(tmp_path):
+    source = tmp_path / "source.user.js"
+    source.write_text(
+        "// ==UserScript==\n"
+        "// @version      4.0.0\n"
+        "  const API_BASE = 'http://127.0.0.1:8765/api';\n"
+        "  const TOKEN = '55555';\n"
+        "  const SCRIPT_VERSION = '4.0.0';\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "output"
+    output.mkdir()
+    window = FakeWindow()
+    window.selected_folders = (str(output),)
+    bridge = DesktopBridge(window, folder_dialog_type="folder", source_path=source)
+
+    result = bridge.export_userscript()
+
+    assert result["ok"] is True
+    target = output / "m3u8-sniffer.user.js"
+    assert result["path"] == str(target)
+    assert 'const TOKEN = "55555";' in target.read_text(encoding="utf-8")
+
+
+def test_desktop_bridge_opens_userscript_installer_in_default_browser():
+    opened: list[str] = []
+    bridge = DesktopBridge(url_opener=opened.append)
+
+    result = bridge.open_userscript_installer()
+
+    assert result == {"ok": True}
+    assert opened == [f"{public_base_url()}/userscript/m3u8-sniffer.user.js"]
+
+
+def test_desktop_bridge_keeps_native_objects_private_from_js_discovery():
+    bridge = DesktopBridge(window=FakeWindow(), folder_dialog_type="folder")
+
+    assert vars(bridge)
+    assert all(name.startswith("_") for name in vars(bridge))

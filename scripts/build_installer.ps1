@@ -1,0 +1,205 @@
+param(
+    [switch]$SkipFrontend,
+    [switch]$SkipSmoke
+)
+
+$ErrorActionPreference = "Stop"
+
+$Root = Resolve-Path (Join-Path $PSScriptRoot "..")
+$FrontendDir = Join-Path $Root "frontend"
+$BackendDir = Join-Path $Root "backend"
+$UserscriptDir = Join-Path $Root "userscript"
+$StageDir = Join-Path $Root "build\installer\stage"
+$ReleaseDir = Join-Path $Root "release"
+$ToolsDir = Join-Path $Root "tools"
+$WebViewBootstrapper = Join-Path $ToolsDir "MicrosoftEdgeWebview2Setup.exe"
+$WebViewBootstrapperUrl = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+$NsisCondaPrefix = Join-Path $ToolsDir "nsis-conda"
+$NsisVersion = "3.12"
+$NsisZip = Join-Path $ToolsDir "nsis-$NsisVersion.zip"
+$NsisUrl = "https://downloads.sourceforge.net/project/nsis/NSIS%203/$NsisVersion/nsis-$NsisVersion.zip"
+$InstallerScript = Join-Path $Root "installer\hls-downloader.nsi"
+$InstallerOut = Join-Path $ReleaseDir "HLSDownloaderSetup.exe"
+
+function Invoke-Step($Name, [scriptblock]$Block) {
+    Write-Host ""
+    Write-Host "==> $Name" -ForegroundColor Cyan
+    & $Block
+}
+
+function Get-MakeNsis {
+    $existing = Get-ChildItem -Path $ToolsDir -Recurse -Filter "makensis.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($existing) {
+        return $existing.FullName
+    }
+
+    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+    $downloadedZip = $false
+    try {
+        if (-not (Test-Path $NsisZip)) {
+            Write-Host "Downloading NSIS $NsisVersion..."
+            Invoke-WebRequest -Uri $NsisUrl -OutFile $NsisZip -MaximumRedirection 10
+        }
+        $signature = [System.IO.File]::ReadAllBytes($NsisZip)[0..3]
+        $downloadedZip = ($signature[0] -eq 0x50 -and $signature[1] -eq 0x4B)
+    } catch {
+        $downloadedZip = $false
+    }
+
+    if ($downloadedZip) {
+        Expand-Archive -Path $NsisZip -DestinationPath $ToolsDir -Force
+        $makensis = Get-ChildItem -Path $ToolsDir -Recurse -Filter "makensis.exe" | Select-Object -First 1
+        if ($makensis) {
+            return $makensis.FullName
+        }
+    }
+
+    Remove-Item -Force $NsisZip -ErrorAction SilentlyContinue
+    Write-Host "SourceForge did not return a usable zip; creating project-local conda NSIS environment..."
+    & conda create -y -p $NsisCondaPrefix "nsis=$NsisVersion" | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "conda failed to install NSIS into $NsisCondaPrefix"
+    }
+    $makensis = Get-ChildItem -Path $ToolsDir -Recurse -Filter "makensis.exe" | Select-Object -First 1
+    if (-not $makensis) {
+        throw "makensis.exe not found after installing NSIS into $ToolsDir"
+    }
+    return $makensis.FullName
+}
+
+Invoke-Step "Stop running packaged app" {
+    Get-Process HLSDownloader -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Milliseconds 500
+}
+
+Invoke-Step "Prepare directories" {
+    Remove-Item -Recurse -Force $StageDir -ErrorAction SilentlyContinue
+    Remove-Item -Force $InstallerOut -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $StageDir, $ReleaseDir | Out-Null
+}
+
+Invoke-Step "Prepare WebView2 bootstrapper" {
+    if (-not (Test-Path $WebViewBootstrapper)) {
+        Invoke-WebRequest -Uri $WebViewBootstrapperUrl -OutFile $WebViewBootstrapper -MaximumRedirection 10
+    }
+    $signature = Get-AuthenticodeSignature $WebViewBootstrapper
+    if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Microsoft Corporation") {
+        throw "WebView2 bootstrapper does not have a valid Microsoft signature"
+    }
+}
+
+if (-not $SkipFrontend) {
+    Invoke-Step "Build frontend" {
+        Push-Location $FrontendDir
+        try {
+            if (-not (Test-Path "node_modules")) {
+                pnpm install --frozen-lockfile
+            }
+            pnpm run build
+        } finally {
+            Pop-Location
+        }
+    }
+}
+
+Invoke-Step "Build backend executable" {
+    Push-Location $BackendDir
+    try {
+        python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --noconsole `
+            --name HLSDownloader `
+            --paths . `
+            --collect-all webview `
+            --hidden-import webview.platforms.edgechromium `
+            --hidden-import uvicorn.lifespan.on `
+            --hidden-import uvicorn.loops.auto `
+            --hidden-import uvicorn.protocols.http.auto `
+            --hidden-import uvicorn.protocols.websockets.auto `
+            run_server.py
+    } finally {
+        Pop-Location
+    }
+}
+
+Invoke-Step "Stage application files" {
+    Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloader.exe") -Destination $StageDir
+    Copy-Item -Path (Join-Path $Root "config.json") -Destination $StageDir
+    Copy-Item -Path $WebViewBootstrapper -Destination $StageDir
+
+    New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "bin") | Out-Null
+    Copy-Item -Path (Join-Path $Root "bin\ffmpeg.exe") -Destination (Join-Path $StageDir "bin")
+    Copy-Item -Path (Join-Path $Root "bin\ffprobe.exe") -Destination (Join-Path $StageDir "bin")
+
+    New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "frontend") | Out-Null
+    Copy-Item -Recurse -Force -Path (Join-Path $FrontendDir "dist") -Destination (Join-Path $StageDir "frontend")
+
+    New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "userscript") | Out-Null
+    Copy-Item -Force -Path (Join-Path $UserscriptDir "m3u8-sniffer.user.js") -Destination (Join-Path $StageDir "userscript")
+}
+
+if (-not $SkipSmoke) {
+    Invoke-Step "Smoke test packaged app" {
+        $smokeExe = Join-Path $StageDir "HLSDownloader.exe"
+        $proc = Start-Process -FilePath $smokeExe -WorkingDirectory $StageDir -PassThru -WindowStyle Hidden
+        try {
+            $ok = $false
+            for ($i = 0; $i -lt 40; $i++) {
+                Start-Sleep -Milliseconds 500
+                try {
+                    $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/health" -TimeoutSec 2
+                    if ($health) {
+                        $ok = $true
+                        break
+                    }
+                } catch {
+                }
+            }
+            if (-not $ok) {
+                throw "Packaged app did not respond on /api/health"
+            }
+        } finally {
+            if ($proc -and -not $proc.HasExited) {
+                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            }
+            for ($i = 0; $i -lt 20; $i++) {
+                $children = Get-Process HLSDownloader -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Path -eq $smokeExe }
+                if (-not $children) {
+                    break
+                }
+                $children | Stop-Process -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Milliseconds 250
+            }
+            if (Get-Process HLSDownloader -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $smokeExe }) {
+                throw "Packaged app processes remained after smoke test"
+            }
+            for ($i = 0; $i -lt 20; $i++) {
+                if (-not (Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue)) {
+                    break
+                }
+                Start-Sleep -Milliseconds 250
+            }
+            if (Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue) {
+                throw "Port 8765 remained occupied after smoke test"
+            }
+        }
+    }
+}
+
+Invoke-Step "Build NSIS installer" {
+    $makensis = Get-MakeNsis
+    & $makensis "/INPUTCHARSET" "UTF8" "/DSTAGE_DIR=$StageDir" "/DOUT_FILE=$InstallerOut" $InstallerScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "makensis failed with exit code $LASTEXITCODE"
+    }
+    if (-not (Test-Path $InstallerOut)) {
+        throw "makensis reported success but did not create $InstallerOut"
+    }
+}
+
+Write-Host ""
+Write-Host "Installer created:" -ForegroundColor Green
+Write-Host $InstallerOut
