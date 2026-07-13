@@ -54,3 +54,35 @@ def test_installer_build_and_nsis_include_userscript():
     assert 'Join-Path $StageDir "userscript"' in build_script
     assert '${STAGE_DIR}\\userscript\\m3u8-sniffer.user.js' in nsis_script
     assert 'RMDir /r "$INSTDIR\\userscript"' in nsis_script
+
+
+def test_windows_build_emits_setup_and_portable_assets():
+    root = Path(__file__).resolve().parent.parent
+    build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
+
+    assert "HLSDownloader-Windows-x64-Setup.exe" in build_script
+    assert "HLSDownloader-Windows-x64-Portable.zip" in build_script
+    assert 'Join-Path $PortableStage "portable"' in build_script
+    assert "Compress-Archive" in build_script
+
+
+def test_windows_build_uses_tools_from_path_on_clean_runner():
+    root = Path(__file__).resolve().parent.parent
+    build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
+
+    assert 'Get-Command "makensis.exe"' in build_script
+    assert 'Copy-MediaTool "ffmpeg.exe"' in build_script
+    assert 'Copy-MediaTool "ffprobe.exe"' in build_script
+    assert "Get-Command $Name" in build_script
+    assert "Copy-Item" in build_script
+    assert '$StageDir, $ReleaseDir, $BinDir, $ToolsDir' in build_script
+
+
+def test_source_only_gitignore_excludes_generated_binaries():
+    root = Path(__file__).resolve().parent.parent
+    ignore = (root / ".gitignore").read_text(encoding="utf-8")
+
+    assert "bin/" in ignore
+    assert "release/" in ignore
+    assert "backend/dist/" in ignore
+    assert "frontend/dist/" in ignore

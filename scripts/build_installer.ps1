@@ -1,6 +1,7 @@
 param(
     [switch]$SkipFrontend,
-    [switch]$SkipSmoke
+    [switch]$SkipSmoke,
+    [string]$Version = "1.1.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,8 +11,10 @@ $FrontendDir = Join-Path $Root "frontend"
 $BackendDir = Join-Path $Root "backend"
 $UserscriptDir = Join-Path $Root "userscript"
 $StageDir = Join-Path $Root "build\installer\stage"
+$PortableStage = Join-Path $Root "build\installer\portable"
 $ReleaseDir = Join-Path $Root "release"
 $ToolsDir = Join-Path $Root "tools"
+$BinDir = Join-Path $Root "bin"
 $WebViewBootstrapper = Join-Path $ToolsDir "MicrosoftEdgeWebview2Setup.exe"
 $WebViewBootstrapperUrl = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
 $NsisCondaPrefix = Join-Path $ToolsDir "nsis-conda"
@@ -19,7 +22,8 @@ $NsisVersion = "3.12"
 $NsisZip = Join-Path $ToolsDir "nsis-$NsisVersion.zip"
 $NsisUrl = "https://downloads.sourceforge.net/project/nsis/NSIS%203/$NsisVersion/nsis-$NsisVersion.zip"
 $InstallerScript = Join-Path $Root "installer\hls-downloader.nsi"
-$InstallerOut = Join-Path $ReleaseDir "HLSDownloaderSetup.exe"
+$InstallerOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Setup.exe"
+$PortableOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Portable.zip"
 
 function Invoke-Step($Name, [scriptblock]$Block) {
     Write-Host ""
@@ -28,6 +32,19 @@ function Invoke-Step($Name, [scriptblock]$Block) {
 }
 
 function Get-MakeNsis {
+    $pathCommand = Get-Command "makensis.exe" -ErrorAction SilentlyContinue
+    if ($pathCommand) {
+        return $pathCommand.Source
+    }
+
+    $installedCandidates = @(
+        (Join-Path ${env:ProgramFiles(x86)} "NSIS\makensis.exe"),
+        (Join-Path $env:ProgramFiles "NSIS\makensis.exe")
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    if ($installedCandidates) {
+        return $installedCandidates[0]
+    }
+
     $existing = Get-ChildItem -Path $ToolsDir -Recurse -Filter "makensis.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($existing) {
         return $existing.FullName
@@ -67,15 +84,34 @@ function Get-MakeNsis {
     return $makensis.FullName
 }
 
+function Copy-MediaTool($Name) {
+    $destination = Join-Path $BinDir $Name
+    if (Test-Path -LiteralPath $destination) {
+        return
+    }
+
+    $command = Get-Command $Name -ErrorAction SilentlyContinue
+    if (-not $command) {
+        throw "$Name was not found. Install FFmpeg or place $Name in $BinDir before packaging."
+    }
+    New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+    Copy-Item -LiteralPath $command.Source -Destination $destination
+}
+
 Invoke-Step "Stop running packaged app" {
     Get-Process HLSDownloader -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Milliseconds 500
 }
 
 Invoke-Step "Prepare directories" {
-    Remove-Item -Recurse -Force $StageDir -ErrorAction SilentlyContinue
-    Remove-Item -Force $InstallerOut -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force -Path $StageDir, $ReleaseDir | Out-Null
+    Remove-Item -Recurse -Force $StageDir, $PortableStage -ErrorAction SilentlyContinue
+    Remove-Item -Force $InstallerOut, $PortableOut -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $StageDir, $ReleaseDir, $BinDir, $ToolsDir | Out-Null
+}
+
+Invoke-Step "Prepare FFmpeg tools" {
+    Copy-MediaTool "ffmpeg.exe"
+    Copy-MediaTool "ffprobe.exe"
 }
 
 Invoke-Step "Prepare WebView2 bootstrapper" {
@@ -191,7 +227,7 @@ if (-not $SkipSmoke) {
 
 Invoke-Step "Build NSIS installer" {
     $makensis = Get-MakeNsis
-    & $makensis "/INPUTCHARSET" "UTF8" "/DSTAGE_DIR=$StageDir" "/DOUT_FILE=$InstallerOut" $InstallerScript
+    & $makensis "/INPUTCHARSET" "UTF8" "/DAPP_VERSION=$Version" "/DSTAGE_DIR=$StageDir" "/DOUT_FILE=$InstallerOut" $InstallerScript
     if ($LASTEXITCODE -ne 0) {
         throw "makensis failed with exit code $LASTEXITCODE"
     }
@@ -200,6 +236,23 @@ Invoke-Step "Build NSIS installer" {
     }
 }
 
+Invoke-Step "Build portable archive" {
+    New-Item -ItemType Directory -Force -Path $PortableStage | Out-Null
+    Copy-Item -Path (Join-Path $StageDir "*") -Destination $PortableStage -Recurse -Force
+    Set-Content -LiteralPath (Join-Path $PortableStage "portable") -Value "" -Encoding ASCII
+    @"
+HLS Downloader portable edition
+
+Run HLSDownloader.exe. If Microsoft Edge WebView2 Runtime is missing, run
+MicrosoftEdgeWebview2Setup.exe once before starting the downloader.
+"@ | Set-Content -LiteralPath (Join-Path $PortableStage "README-PORTABLE.txt") -Encoding UTF8
+    Compress-Archive -Path (Join-Path $PortableStage "*") -DestinationPath $PortableOut -CompressionLevel Optimal
+    if (-not (Test-Path -LiteralPath $PortableOut)) {
+        throw "Portable archive was not created: $PortableOut"
+    }
+}
+
 Write-Host ""
-Write-Host "Installer created:" -ForegroundColor Green
+Write-Host "Windows release assets created:" -ForegroundColor Green
 Write-Host $InstallerOut
+Write-Host $PortableOut
