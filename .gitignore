@@ -40,6 +40,7 @@ data.db-wal
 
 # Local worktrees and editors
 .worktrees/
+docs/superpowers/
 .idea/
 .vscode/
 *.swp
