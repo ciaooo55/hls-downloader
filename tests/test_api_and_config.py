@@ -59,3 +59,13 @@ def test_save_settings_serializes_project_paths_as_relative(tmp_path, monkeypatc
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["download_dir"] == "downloads"
     assert saved["ffmpeg_path"] == "bin\\ffmpeg.exe"
+
+
+def test_repository_default_config_is_site_neutral():
+    config_path = config_module.PROJECT_ROOT / "config.json"
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert data["default_referer"] == ""
+    assert data["default_origin"] == ""
+    assert data["default_cookie"] == ""
+    assert data["default_concurrency"] == 4

@@ -1,149 +1,164 @@
-# HLS 下载器
+# HLS Downloader
 
-本地 HLS/m3u8 视频下载工具，Web 界面管理。
+[![CI](https://github.com/ciaooo55/hls-downloader/actions/workflows/ci.yml/badge.svg)](https://github.com/ciaooo55/hls-downloader/actions/workflows/ci.yml)
+[![Windows Release](https://github.com/ciaooo55/hls-downloader/actions/workflows/release.yml/badge.svg)](https://github.com/ciaooo55/hls-downloader/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-## 快速启动
+一个面向 Windows 的本地 HLS/m3u8 下载器。它提供传统下载管理器风格的桌面界面、实时分片与合并进度、暂停续传、批量任务，以及配套的油猴嗅探脚本。
 
-```
-双击 start.cmd
-```
+程序只监听 `127.0.0.1`，任务、配置和视频均保存在本机。
 
-自动安装依赖、启动后端、打开浏览器。
+## 下载
+
+从 [Releases](https://github.com/ciaooo55/hls-downloader/releases/latest) 下载最新版：
+
+| 文件 | 用途 |
+| --- | --- |
+| `HLSDownloader-Windows-x64-Setup.exe` | Windows 10/11 x64 安装版，带卸载程序和快捷方式 |
+| `HLSDownloader-Windows-x64-Portable.zip` | Windows 10/11 x64 便携版，解压后直接运行 |
+| `m3u8-sniffer.user.js` | 可单独导入 Tampermonkey 的油猴脚本 |
+| `SHA256SUMS.txt` | Release 文件的 SHA256 校验值 |
+
+安装包和便携包由 GitHub Actions 从源码自动构建，不保存在 Git 仓库中。程序内已包含 FFmpeg、ffprobe、前端资源和油猴脚本。
+
+> 当前安装包没有商业代码签名证书。Windows SmartScreen 首次运行时可能显示未知发布者，请只从本仓库 Releases 下载并核对 SHA256。
+
+## 使用
+
+1. 安装版运行安装程序；便携版完整解压后运行 `HLSDownloader.exe`。
+2. 在顶部输入框粘贴 m3u8 链接，或粘贴含视频的网页地址进行识别。
+3. 确认文件名、保存目录和并发数后开始下载。
+4. 下载阶段可暂停、恢复或取消；分片完成后会显示单独的合并进度。
+5. 完成后可直接打开视频或所在目录。
 
 ## 功能
 
-- 粘贴 m3u8 链接一键下载
-- 分段多线程下载（IDM 风格），支持断点续传
-- 油猴脚本自动嗅探网页中的 m3u8 资源
-- 实时进度：分片数、速度、ETA、线程状态、连接状态
-- 合并和转封装阶段也有进度显示，不再卡在 100% 看不出状态
-- 文件名冲突自动处理
-- 批量下载、暂停/恢复/取消/重试
-- 下载目录可浏览选择
-- 完成后可直接打开文件或所在目录
-- 自动清理临时文件
-- 点播 HLS：支持多层主清单、AES-128、BYTERANGE、fMP4 init map、discontinuity
+- m3u8 直链和网页链接识别
+- 固定 worker 队列并发下载
+- 暂停、恢复、取消、重试和批量任务
+- 分片、速度、ETA、合并与转封装进度
+- 断点续传和原子临时文件
+- 并发同名输出保护
+- AES-128 显式 IV、默认 sequence IV 和 key rotation
+- BYTERANGE 显式/连续偏移与严格 Range 校验
+- 多层主清单递归、循环检测和最高带宽变体选择
+- fMP4 init map、map 切换和 discontinuity
+- 重启恢复任务历史
+- 深色/浅色界面切换
+- 油猴脚本安装、导出和运行状态检测
 
 ## 支持范围
 
-当前阶段只支持点播 HLS。会明确拒绝直播清单、SAMPLE-AES/DRM 和独立音轨；外部字幕会跳过并记录提示。
-
-## 依赖
-
-- Python 3.10+
-- ffmpeg / ffprobe 已放在项目 `bin/` 目录
-
-安装依赖：
-```
-pip install -r requirements.txt
-```
-
-项目只内置运行必需的 ffmpeg 工具；Python 环境依赖写在文本清单里：
-
-- 根目录 `requirements.txt`：入口依赖清单
-- `backend/requirements.txt`：后端实际 Python 包列表
-- `requirements-dev.txt`：运行 Python 测试所需依赖
-- 前端依赖使用 `frontend/pnpm-lock.yaml` 固定版本
+当前只支持点播 HLS。直播清单、SAMPLE-AES/DRM、独立音轨下载和字幕封装会明确提示不支持；外部字幕会跳过并记录提示。
 
 ## 油猴脚本
 
-安装版启动后会自动打开 `http://127.0.0.1:8765/help` 使用教程，CLI 窗口也会打印教程、管理器和脚本安装地址。
+1. 在浏览器安装 [Tampermonkey](https://www.tampermonkey.net/)。
+2. 启动下载器，在工具栏点击油猴脚本按钮。
+3. 可直接打开安装地址，也可一键导出 `m3u8-sniffer.user.js` 到指定目录后手动导入。
+4. 打开含视频的 HTTPS 页面并播放，脚本会显示捕获到的 HLS 地址。
+5. 点击“发送下载”，任务会出现在桌面下载器中。
 
-1. 安装 [Tampermonkey](https://www.tampermonkey.net/)
-2. 在使用教程中点击“安装油猴脚本”，或手动导入 `userscript/m3u8-sniffer.user.js`
-3. 打开含视频的网页，右上角自动弹出资源提示
-4. 点"发送下载"，可在浮窗内看到实时进度
-5. 完成后点"打开文件"或"打开目录"
+浏览器扩展不允许普通程序读取其脚本安装列表，因此下载器通过脚本向本地服务报到来判断它是否正在运行。
 
-教程页会显示脚本最近是否向本地下载器报到。受浏览器安全限制，它不能直接读取 Tampermonkey 的脚本安装列表；安装后打开任意 HTTPS 页面，通常几秒内就会显示“已检测到油猴脚本运行”。
+## 源码运行
 
-## 配置
+需要：
 
-编辑 `config.json`：
+- Windows 10/11 x64
+- Python 3.12
+- Node.js 24
+- pnpm 11
+- FFmpeg 与 ffprobe
 
-| 字段 | 说明 | 默认值 |
-|------|------|--------|
-| token | 认证 token | 55555 |
-| download_dir | 下载目录 | downloads |
-| default_concurrency | 默认并发（分片数） | 4 |
-| max_concurrent_tasks | 最大同时任务数 | 2 |
-| ffmpeg_path | ffmpeg 路径，相对项目根目录解析 | bin\ffmpeg.exe |
-
-## 项目结构
-
-```
-hls-downloader/
-├── start.cmd              # 一键启动
-├── requirements.txt       # Python 依赖入口
-├── config.json            # 配置
-├── bin/                   # ffmpeg + ffprobe
-├── backend/
-│   ├── app/
-│   │   ├── main.py        # FastAPI 入口
-│   │   ├── api.py         # API 路由
-│   │   ├── config.py      # 配置管理
-│   │   ├── database.py    # SQLite
-│   │   ├── models.py      # 数据模型
-│   │   ├── schemas.py     # Pydantic 模型
-│   │   ├── utils.py       # 工具函数
-│   │   └── downloader/
-│   │       ├── hls.py     # 下载引擎
-│   │       ├── merge.py   # 合并+转封装
-│   │       ├── parser.py  # m3u8 解析
-│   │       ├── progress.py# 速度/ETA
-│   │       └── task_manager.py
-│   └── requirements.txt
-├── frontend/              # Web UI (React)
-│   ├── dist/              # 构建产物
-│   └── src/
-├── userscript/
-│   └── m3u8-sniffer.user.js
-└── README.md
-```
-
-## 开发模式
+安装依赖：
 
 ```powershell
-# 后端
+python -m pip install -r requirements-dev.txt
+cd frontend
+corepack enable
+corepack prepare pnpm@11.7.0 --activate
+pnpm install --frozen-lockfile
+cd ..
+```
+
+把 `ffmpeg.exe` 和 `ffprobe.exe` 放到项目的 `bin` 目录，然后运行：
+
+```powershell
+.\build_frontend.ps1
 .\run_backend.ps1
-
-# 前端 (另一个终端)
-.\run_frontend.ps1
-
-# 打开 http://localhost:5173
 ```
 
-验证：
+打开 `http://127.0.0.1:8765/ui`。也可以运行 `start.cmd` 完成依赖检查、启动服务和打开教程。
+
+前端开发模式：
 
 ```powershell
-pip install -r requirements-dev.txt
+.\run_frontend.ps1
+```
+
+## 测试
+
+```powershell
 python -m pytest -q
+
 cd frontend
 pnpm test
 pnpm run build
 ```
 
-## 生产模式
+## 本地打包
+
+打包需要 PyInstaller、NSIS、FFmpeg 和 ffprobe：
 
 ```powershell
-# 构建前端
-.\build_frontend.ps1
-
-# 启动
-.\start.cmd
-# 打开 http://127.0.0.1:8765/ui
+python -m pip install -r requirements-build.txt
+choco install ffmpeg nsis -y
+.\scripts\build_installer.ps1 -Version 1.1.0
 ```
 
-## 打包安装包
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1
-```
-
-输出文件：
+输出位于忽略的 `release` 目录：
 
 ```text
-release\HLSDownloaderSetup.exe
+HLSDownloader-Windows-x64-Setup.exe
+HLSDownloader-Windows-x64-Portable.zip
 ```
 
-安装包默认安装到 `%LOCALAPPDATA%\Programs\HLS Downloader`，安装向导里可以修改目录。安装内容包含程序、ffmpeg/ffprobe、前端和油猴脚本。卸载会移除这些程序文件和快捷方式；`config.json` 与 `downloads` 会保留，避免误删下载记录。
+## GitHub 自动发布
+
+- 推送到 `main` 或提交 Pull Request：运行 Python 测试、前端测试和生产构建。
+- 在 Actions 页面手动运行 `Windows Release`：生成可下载的工作流产物，不创建正式 Release。
+- 推送 `v*` 标签：自动测试、打包、计算 SHA256，并创建对应 GitHub Release。
+
+发布示例：
+
+```powershell
+git tag v1.1.0
+git push origin v1.1.0
+```
+
+详细流程见 [docs/releasing.md](docs/releasing.md)。
+
+## 项目结构
+
+```text
+backend/       FastAPI、任务管理、HLS 下载和桌面入口
+frontend/      React/TypeScript 下载管理界面
+installer/     NSIS 安装程序定义
+scripts/       Windows 打包脚本
+tests/         Python 自动化测试
+userscript/    Tampermonkey 嗅探脚本
+.github/       CI 与自动 Release 工作流
+```
+
+## 安全说明
+
+- 服务默认只监听 `127.0.0.1`，不要改成公网地址。
+- `config.json` 中的 token 用于本机 UI 和油猴脚本通信，不是 GitHub token。
+- 不要把 Cookie、网站账号信息、下载记录或个人配置提交到仓库。
+- 仓库不跟踪 `bin`、`release`、数据库、下载目录和构建缓存。
+
+## License
+
+[MIT](LICENSE)
+
