@@ -37,12 +37,12 @@ function Get-MakeNsis {
         return $pathCommand.Source
     }
 
-    $installedCandidates = @(
+    $installedCandidate = @(
         (Join-Path ${env:ProgramFiles(x86)} "NSIS\makensis.exe"),
         (Join-Path $env:ProgramFiles "NSIS\makensis.exe")
-    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
-    if ($installedCandidates) {
-        return $installedCandidates[0]
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+    if ($installedCandidate) {
+        return $installedCandidate
     }
 
     $existing = Get-ChildItem -Path $ToolsDir -Recurse -Filter "makensis.exe" -ErrorAction SilentlyContinue | Select-Object -First 1

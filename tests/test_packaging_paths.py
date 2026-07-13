@@ -76,6 +76,7 @@ def test_windows_build_uses_tools_from_path_on_clean_runner():
     assert "Get-Command $Name" in build_script
     assert "Copy-Item" in build_script
     assert '$StageDir, $ReleaseDir, $BinDir, $ToolsDir' in build_script
+    assert "return $installedCandidates[0]" not in build_script
 
 
 def test_source_only_gitignore_excludes_generated_binaries():
