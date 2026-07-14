@@ -40,6 +40,7 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "actions/download-artifact@v7" in workflow
     assert "softprops/action-gh-release" not in workflow
     assert "gh release create" in workflow
+    assert '--repo "${{ github.repository }}"' in workflow
     assert "startsWith(github.ref, 'refs/tags/v')" in workflow
     assert "contents: write" in workflow
 

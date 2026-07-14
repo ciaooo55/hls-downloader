@@ -127,6 +127,7 @@ jobs:
             throw "No release files were downloaded."
           }
           & gh release create "${{ github.ref_name }}" @files `
+            --repo "${{ github.repository }}" `
             --verify-tag `
             --generate-notes `
             --title "HLS Downloader ${{ github.ref_name }}"
