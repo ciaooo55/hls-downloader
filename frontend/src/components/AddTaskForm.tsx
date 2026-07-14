@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { createTask } from '../api'
+import { LEGACY_REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 
 export default function AddTaskForm({ settings, onAdded }: { settings: any; onAdded: () => void }) {
   const [url, setUrl] = useState('')
@@ -71,7 +72,7 @@ export default function AddTaskForm({ settings, onAdded }: { settings: any; onAd
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <input placeholder="Referer（可选）" value={referer} onChange={e => setReferer(e.target.value)} style={{ ...input, flex: 2, marginBottom: 0 }} />
+        <input placeholder={`Referer，例如 ${LEGACY_REQUEST_EXAMPLES.referer}`} title={REQUEST_FIELD_HELP.referer} value={referer} onChange={e => setReferer(e.target.value)} style={{ ...input, flex: 2, marginBottom: 0 }} />
         <input placeholder="文件名（自动生成）" value={filename} onChange={e => setFilename(e.target.value)} style={{ ...input, flex: 2, marginBottom: 0 }} />
         <span style={{ fontSize: 11, color: '#4b5563', whiteSpace: 'nowrap' }}>并发</span>
         <input type="number" value={concurrency} onChange={e => setConcurrency(Math.max(1, +e.target.value))} style={{ ...input, width: 60, marginBottom: 0, textAlign: 'center' }} />
@@ -91,9 +92,9 @@ export default function AddTaskForm({ settings, onAdded }: { settings: any; onAd
 
       {showAdvanced && (
         <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
-          <input placeholder="Origin" value={origin} onChange={e => setOrigin(e.target.value)} style={{ ...input, flex: 1, marginBottom: 0 }} />
-          <input placeholder="User-Agent" value={ua} onChange={e => setUa(e.target.value)} style={{ ...input, flex: 2, marginBottom: 0 }} />
-          <input placeholder="Cookie" value={cookie} onChange={e => setCookie(e.target.value)} style={{ ...input, flex: 1, marginBottom: 0 }} />
+          <input placeholder={`Origin，例如 ${LEGACY_REQUEST_EXAMPLES.origin}`} title={REQUEST_FIELD_HELP.origin} value={origin} onChange={e => setOrigin(e.target.value)} style={{ ...input, flex: 1, marginBottom: 0 }} />
+          <input placeholder="User-Agent（通常保持默认）" title={REQUEST_FIELD_HELP.userAgent} value={ua} onChange={e => setUa(e.target.value)} style={{ ...input, flex: 2, marginBottom: 0 }} />
+          <input placeholder="Cookie，例如 sessionid=abc" title={REQUEST_FIELD_HELP.cookie} value={cookie} onChange={e => setCookie(e.target.value)} style={{ ...input, flex: 1, marginBottom: 0 }} />
         </div>
       )}
     </div>

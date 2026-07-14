@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, Copy, FolderOpen, Trash2, X } from 'lucide-react'
 import { fetchSettings, openExplorer, saveSettings } from '../api'
 import { beginUninstall, getDesktopInfo } from '../desktop'
+import { LEGACY_REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 import FolderPicker from './FolderPicker'
 
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
@@ -55,19 +56,25 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
       <div className="input-action"><input value={settings.download_dir || ''} onChange={event => update('download_dir', event.target.value)} /><button className="secondary-button" onClick={() => setShowPicker(true)}>选择目录</button><button className="icon-button bordered" title="打开目录" onClick={() => openExplorer(settings.download_dir || '')}><FolderOpen size={17} /></button></div>
       <p className="field-note">临时分片保存在下载目录的 .tasks 子目录，完成后按设置清理。</p>
 
-      <div className="form-row">
-        <div><label>默认并发数</label><input type="number" min={1} max={64} value={settings.default_concurrency ?? 4} onChange={event => update('default_concurrency', Number(event.target.value))} /></div>
-        <div><label>最大同时任务数</label><input type="number" min={1} max={16} value={settings.max_concurrent_tasks ?? 2} onChange={event => update('max_concurrent_tasks', Number(event.target.value))} /></div>
+      <div className="form-row settings-number-row">
+        <div><label>默认并发数</label><input type="number" min={1} max={64} value={settings.default_concurrency ?? 4} onChange={event => update('default_concurrency', Number(event.target.value))} /><p className="field-note">{REQUEST_FIELD_HELP.concurrency}</p></div>
+        <div><label>最大同时任务数</label><input type="number" min={1} max={16} value={settings.max_concurrent_tasks ?? 2} onChange={event => update('max_concurrent_tasks', Number(event.target.value))} /><p className="field-note">{REQUEST_FIELD_HELP.maxTasks}</p></div>
       </div>
-      <label>默认 Referer</label><input value={settings.default_referer || ''} onChange={event => update('default_referer', event.target.value)} />
+      <label>默认 Referer</label><input value={settings.default_referer || ''} onChange={event => update('default_referer', event.target.value)} placeholder={LEGACY_REQUEST_EXAMPLES.referer} />
+      <p className="field-note">{REQUEST_FIELD_HELP.referer}</p>
 
-      <button className="text-button advanced-toggle" onClick={() => setShowAdvanced(value => !value)}>{showAdvanced ? <ChevronDown size={14} /> : <ChevronRight size={14} />}高级选项</button>
+      <button className="text-button advanced-toggle" onClick={() => setShowAdvanced(value => !value)}>{showAdvanced ? <ChevronDown size={14} /> : <ChevronRight size={14} />}{showAdvanced ? '收起高级选项' : '高级选项（Origin / User-Agent / Cookie / FFmpeg）'}</button>
       {showAdvanced && <div className="advanced-settings">
-        <label>默认 Origin</label><input value={settings.default_origin || ''} onChange={event => update('default_origin', event.target.value)} />
-        <label>默认 User-Agent</label><input value={settings.default_user_agent || ''} onChange={event => update('default_user_agent', event.target.value)} />
-        <label>默认 Cookie</label><input value={settings.default_cookie || ''} onChange={event => update('default_cookie', event.target.value)} />
+        <label>默认 Origin</label><input value={settings.default_origin || ''} onChange={event => update('default_origin', event.target.value)} placeholder={LEGACY_REQUEST_EXAMPLES.origin} />
+        <p className="field-note">{REQUEST_FIELD_HELP.origin}</p>
+        <label>默认 User-Agent</label><input value={settings.default_user_agent || ''} onChange={event => update('default_user_agent', event.target.value)} placeholder={LEGACY_REQUEST_EXAMPLES.userAgent} />
+        <p className="field-note">{REQUEST_FIELD_HELP.userAgent}</p>
+        <label>默认 Cookie</label><input value={settings.default_cookie || ''} onChange={event => update('default_cookie', event.target.value)} placeholder="sessionid=abc; token=xyz" />
+        <p className="field-note">{REQUEST_FIELD_HELP.cookie}</p>
         <label>ffmpeg 路径</label><div className="input-action"><input value={settings.ffmpeg_path || ''} onChange={event => update('ffmpeg_path', event.target.value)} /><button className="icon-button bordered" title="打开文件位置" onClick={() => openExplorer(settings.ffmpeg_path || '')}><FolderOpen size={17} /></button></div>
-        <label>允许的域名（逗号分隔，留空表示不限）</label><input value={(settings.allowed_hosts || []).join(',')} onChange={event => update('allowed_hosts', event.target.value.split(',').map(value => value.trim()).filter(Boolean))} />
+        <p className="field-note">{REQUEST_FIELD_HELP.ffmpegPath}</p>
+        <label>允许的域名</label><input value={(settings.allowed_hosts || []).join(',')} onChange={event => update('allowed_hosts', event.target.value.split(',').map(value => value.trim()).filter(Boolean))} placeholder="example.com,cdn.example.com" />
+        <p className="field-note">{REQUEST_FIELD_HELP.allowedHosts}</p>
         <label className="checkbox-label"><input type="checkbox" checked={settings.keep_temp_files || false} onChange={event => update('keep_temp_files', event.target.checked)} />保留临时文件（调试用）</label>
       </div>}
 
