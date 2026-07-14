@@ -3,7 +3,12 @@ import threading
 
 from fastapi.testclient import TestClient
 
-from backend.app.desktop_runtime import activate_window, register_activation
+from backend.app.desktop_runtime import (
+    activate_window,
+    register_activation,
+    register_shutdown,
+    request_shutdown,
+)
 from backend.app.main import app
 from backend.desktop import (
     DesktopBridge,
@@ -29,6 +34,9 @@ class FakeWindow:
     def show(self) -> None:
         self.calls.append("show")
 
+    def hide(self) -> None:
+        self.calls.append("hide")
+
     def destroy(self) -> None:
         self.calls.append("destroy")
 
@@ -48,32 +56,43 @@ class FakeServer:
         self.calls.append(f"join:{timeout}")
 
 
-def test_close_cancel_keeps_window_and_server_running():
-    window = FakeWindow(confirm_result=False)
+class FakeTray:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def stop(self) -> None:
+        self.calls.append("stop")
+
+
+def test_window_close_hides_to_tray_and_keeps_server_running():
+    window = FakeWindow()
     server = FakeServer()
     controller = DesktopController(window, server)
 
     assert controller.on_closing() is False
 
     assert server.calls == []
+    assert window.calls == ["hide"]
     assert "destroy" not in window.calls
 
 
-def test_close_confirmation_stops_server_before_destroying_window():
-    window = FakeWindow(confirm_result=True)
+def test_exit_stops_server_and_tray_before_destroying_window():
+    window = FakeWindow()
     server = FakeServer()
-    controller = DesktopController(window, server, shutdown_timeout=12)
+    tray = FakeTray()
+    controller = DesktopController(window, server, tray=tray, shutdown_timeout=12)
 
-    assert controller.on_closing() is False
+    assert controller.request_exit() is True
     assert controller.wait_for_shutdown(timeout=2)
 
     assert server.calls == ["stop", "join:12"]
+    assert tray.calls == ["stop"]
     assert window.calls[-1] == "destroy"
     assert controller.on_closing() is True
 
 
-def test_repeated_close_does_not_start_duplicate_shutdown():
-    window = FakeWindow(confirm_result=True)
+def test_repeated_exit_does_not_start_duplicate_shutdown():
+    window = FakeWindow()
     server = FakeServer()
     release = threading.Event()
 
@@ -85,8 +104,8 @@ def test_repeated_close_does_not_start_duplicate_shutdown():
     server = BlockingServer()
     controller = DesktopController(window, server)
 
-    assert controller.on_closing() is False
-    assert controller.on_closing() is False
+    assert controller.request_exit() is True
+    assert controller.request_exit() is False
     release.set()
     assert controller.wait_for_shutdown(timeout=2)
 
@@ -107,6 +126,17 @@ def test_activation_reports_false_when_no_window_is_registered():
     assert activate_window() is False
 
 
+def test_registered_shutdown_requests_controller_exit():
+    calls: list[str] = []
+    register_shutdown(lambda: calls.append("exit"))
+
+    assert request_shutdown() is True
+    assert calls == ["exit"]
+
+    register_shutdown(None)
+    assert request_shutdown() is False
+
+
 def test_activation_api_requires_token_and_calls_registered_window():
     calls: list[str] = []
     register_activation(lambda: calls.append("activate"))
@@ -119,6 +149,20 @@ def test_activation_api_requires_token_and_calls_registered_window():
     assert activated.status_code == 200
     assert activated.json() == {"ok": True}
     assert calls == ["activate"]
+
+
+def test_shutdown_api_requires_token_and_calls_registered_shutdown():
+    calls: list[str] = []
+    register_shutdown(lambda: calls.append("shutdown"))
+
+    with TestClient(app) as client:
+        unauthorized = client.post("/api/app/shutdown")
+        stopped = client.post("/api/app/shutdown", headers={"X-Token": "55555"})
+
+    assert unauthorized.status_code == 401
+    assert stopped.status_code == 200
+    assert stopped.json() == {"ok": True}
+    assert calls == ["shutdown"]
 
 
 def test_public_base_url_uses_loopback_for_wildcard_host(monkeypatch):
@@ -178,3 +222,30 @@ def test_desktop_bridge_keeps_native_objects_private_from_js_discovery():
 
     assert vars(bridge)
     assert all(name.startswith("_") for name in vars(bridge))
+
+
+def test_desktop_bridge_reports_installed_mode_and_starts_uninstaller(tmp_path):
+    uninstaller = tmp_path / "Uninstall.exe"
+    uninstaller.write_bytes(b"installer")
+    started: list[list[str]] = []
+    exits: list[str] = []
+    window = FakeWindow(confirm_result=True)
+    bridge = DesktopBridge(
+        window=window,
+        uninstaller_path=uninstaller,
+        process_starter=lambda command: started.append(command),
+        exit_request=lambda: exits.append("exit"),
+    )
+
+    assert bridge.get_desktop_info() == {"ok": True, "installed": True, "mode": "installed"}
+    assert bridge.begin_uninstall() == {"ok": True}
+    assert started == [[str(uninstaller)]]
+    assert exits == ["exit"]
+    assert any(call.startswith("confirm:卸载 HLS Downloader") for call in window.calls)
+
+
+def test_desktop_bridge_does_not_offer_uninstall_without_uninstaller(tmp_path):
+    bridge = DesktopBridge(window=FakeWindow(), uninstaller_path=tmp_path / "missing.exe")
+
+    assert bridge.get_desktop_info()["installed"] is False
+    assert bridge.begin_uninstall() == {"ok": False, "error": "当前版本无需卸载"}

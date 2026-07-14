@@ -6,7 +6,7 @@
 
 一个面向 Windows 的本地 HLS/m3u8 下载器。它提供传统下载管理器风格的桌面界面、实时分片与合并进度、暂停续传、批量任务，以及配套的油猴嗅探脚本。
 
-程序只监听 `127.0.0.1`，任务、配置和视频均保存在本机。
+程序只监听 `127.0.0.1`，任务、配置和视频均保存在本机。关闭主窗口后程序会留在系统托盘继续下载，可从托盘重新打开或彻底退出。
 
 ## 下载
 
@@ -31,6 +31,8 @@
 4. 下载阶段可暂停、恢复或取消；分片完成后会显示单独的合并进度。
 5. 完成后可直接打开视频或所在目录。
 
+安装版的设置、任务历史和 WebView 缓存位于 `%LOCALAPPDATA%\HLS Downloader`，默认视频目录为 `%USERPROFILE%\Downloads\HLS Downloader`。卸载会清除程序数据和缓存，并询问是否同时删除视频；默认保留视频。便携版的所有运行数据仍保存在解压目录中。
+
 ## 功能
 
 - m3u8 直链和网页链接识别
@@ -44,6 +46,8 @@
 - 多层主清单递归、循环检测和最高带宽变体选择
 - fMP4 init map、map 切换和 discontinuity
 - 重启恢复任务历史
+- Windows 系统托盘、单实例唤醒和可靠退出
+- 设置页、开始菜单和 Windows“已安装的应用”卸载入口
 - 深色/浅色界面切换
 - 油猴脚本安装、导出和运行状态检测
 
@@ -114,7 +118,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.1.0
+.\scripts\build_installer.ps1 -Version 1.1.1
 ```
 
 输出位于忽略的 `release` 目录：
@@ -133,8 +137,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.1.1
+git push origin v1.1.1
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。

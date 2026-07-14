@@ -1,7 +1,7 @@
 param(
     [switch]$SkipFrontend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.1.0"
+    [string]$Version = "1.1.1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -84,18 +84,41 @@ function Get-MakeNsis {
     return $makensis.FullName
 }
 
-function Copy-MediaTool($Name) {
-    $destination = Join-Path $BinDir $Name
-    if (Test-Path -LiteralPath $destination) {
-        return
+function Find-MediaTool($Name) {
+    if ($env:ChocolateyInstall) {
+        $chocolateyTools = Join-Path $env:ChocolateyInstall "lib\ffmpeg\tools"
+        if (Test-Path -LiteralPath $chocolateyTools) {
+            $packagedTool = Get-ChildItem -LiteralPath $chocolateyTools -Recurse -File -Filter $Name -ErrorAction SilentlyContinue |
+                Sort-Object Length -Descending |
+                Select-Object -First 1
+            if ($packagedTool) {
+                return $packagedTool.FullName
+            }
+        }
     }
 
     $command = Get-Command $Name -ErrorAction SilentlyContinue
     if (-not $command) {
         throw "$Name was not found. Install FFmpeg or place $Name in $BinDir before packaging."
     }
-    New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-    Copy-Item -LiteralPath $command.Source -Destination $destination
+    return $command.Source
+}
+
+function Copy-MediaTool($Name) {
+    $destination = Join-Path $BinDir $Name
+    if (-not (Test-Path -LiteralPath $destination)) {
+        $source = Find-MediaTool $Name
+        New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+        Copy-Item -LiteralPath $source -Destination $destination
+    }
+
+    $versionOutput = @(& $destination -version 2>&1)
+    $exitCode = $LASTEXITCODE
+    $toolName = [IO.Path]::GetFileNameWithoutExtension($Name)
+    if ($exitCode -ne 0 -or ($versionOutput -join "`n") -notmatch "(?m)^$toolName version ") {
+        $details = ($versionOutput | Select-Object -First 3) -join " | "
+        throw "Bundled media tool validation failed for $Name (exit $exitCode): $details"
+    }
 }
 
 Invoke-Step "Stop running packaged app" {
@@ -149,6 +172,8 @@ Invoke-Step "Build backend executable" {
             --name HLSDownloader `
             --paths . `
             --collect-all webview `
+            --collect-all pystray `
+            --hidden-import pystray._win32 `
             --hidden-import webview.platforms.edgechromium `
             --hidden-import uvicorn.lifespan.on `
             --hidden-import uvicorn.loops.auto `
@@ -179,48 +204,56 @@ Invoke-Step "Stage application files" {
 if (-not $SkipSmoke) {
     Invoke-Step "Smoke test packaged app" {
         $smokeExe = Join-Path $StageDir "HLSDownloader.exe"
-        $proc = Start-Process -FilePath $smokeExe -WorkingDirectory $StageDir -PassThru -WindowStyle Hidden
+        $smokePortableMarker = Join-Path $StageDir "portable"
+        Set-Content -LiteralPath $smokePortableMarker -Value "" -Encoding ASCII
         try {
-            $ok = $false
-            for ($i = 0; $i -lt 40; $i++) {
-                Start-Sleep -Milliseconds 500
-                try {
-                    $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/health" -TimeoutSec 2
-                    if ($health) {
-                        $ok = $true
+            $proc = Start-Process -FilePath $smokeExe -WorkingDirectory $StageDir -PassThru -WindowStyle Hidden
+            try {
+                $ok = $false
+                for ($i = 0; $i -lt 40; $i++) {
+                    Start-Sleep -Milliseconds 500
+                    try {
+                        $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/health" -TimeoutSec 2
+                        if ($health) {
+                            $ok = $true
+                            break
+                        }
+                    } catch {
+                    }
+                }
+                if (-not $ok) {
+                    throw "Packaged app did not respond on /api/health"
+                }
+            } finally {
+                if ($proc -and -not $proc.HasExited) {
+                    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                }
+                for ($i = 0; $i -lt 20; $i++) {
+                    $children = Get-Process HLSDownloader -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Path -eq $smokeExe }
+                    if (-not $children) {
                         break
                     }
-                } catch {
+                    $children | Stop-Process -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Milliseconds 250
                 }
-            }
-            if (-not $ok) {
-                throw "Packaged app did not respond on /api/health"
+                if (Get-Process HLSDownloader -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $smokeExe }) {
+                    throw "Packaged app processes remained after smoke test"
+                }
+                for ($i = 0; $i -lt 20; $i++) {
+                    if (-not (Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue)) {
+                        break
+                    }
+                    Start-Sleep -Milliseconds 250
+                }
+                if (Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue) {
+                    throw "Port 8765 remained occupied after smoke test"
+                }
             }
         } finally {
-            if ($proc -and -not $proc.HasExited) {
-                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-            }
-            for ($i = 0; $i -lt 20; $i++) {
-                $children = Get-Process HLSDownloader -ErrorAction SilentlyContinue |
-                    Where-Object { $_.Path -eq $smokeExe }
-                if (-not $children) {
-                    break
-                }
-                $children | Stop-Process -Force -ErrorAction SilentlyContinue
-                Start-Sleep -Milliseconds 250
-            }
-            if (Get-Process HLSDownloader -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $smokeExe }) {
-                throw "Packaged app processes remained after smoke test"
-            }
-            for ($i = 0; $i -lt 20; $i++) {
-                if (-not (Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue)) {
-                    break
-                }
-                Start-Sleep -Milliseconds 250
-            }
-            if (Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue) {
-                throw "Port 8765 remained occupied after smoke test"
-            }
+            Remove-Item -LiteralPath $smokePortableMarker -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath (Join-Path $StageDir "data.db"), (Join-Path $StageDir "data.db-shm"), (Join-Path $StageDir "data.db-wal") -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath (Join-Path $StageDir ".webview"), (Join-Path $StageDir "downloads") -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 }

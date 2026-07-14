@@ -60,4 +60,4 @@ def test_readme_documents_windows_release_assets():
     assert "m3u8-sniffer.user.js" in readme
     assert "SHA256SUMS.txt" in readme
     assert "Windows 10/11" in readme
-    assert "git tag v1.1.0" in readme
+    assert "git tag v1.1.1" in readme

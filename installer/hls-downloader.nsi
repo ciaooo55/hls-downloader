@@ -6,7 +6,7 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.1.0"
+  !define APP_VERSION "1.1.1"
 !endif
 !define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
@@ -45,10 +45,6 @@ Section "Install" SecInstall
   File "${STAGE_DIR}\HLSDownloader.exe"
   File "${STAGE_DIR}\MicrosoftEdgeWebview2Setup.exe"
   File /oname=config.default.json "${STAGE_DIR}\config.json"
-  IfFileExists "$INSTDIR\config.json" 0 +2
-    Goto ConfigDone
-  CopyFiles /SILENT "$INSTDIR\config.default.json" "$INSTDIR\config.json"
-ConfigDone:
 
   SetRegView 32
   ReadRegStr $0 HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_GUID}" "pv"
@@ -84,32 +80,76 @@ ConfigDone:
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "Publisher" "${COMPANY_NAME}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "DisplayIcon" "$INSTDIR\HLSDownloader.exe"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "UninstallString" "$INSTDIR\Uninstall.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "QuietUninstallString" '$\"$INSTDIR\Uninstall.exe$\" /S'
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "NoRepair" 1
 
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\HLSDownloader.exe" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
-  CreateShortcut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
+  CreateShortcut "$SMPROGRAMS\${APP_NAME}\卸载 ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
   CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\HLSDownloader.exe" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
 SectionEnd
 
 Section "Uninstall"
+  DetailPrint "正在关闭 HLS Downloader..."
+  IfFileExists "$INSTDIR\HLSDownloader.exe" 0 ShutdownDone
+    ExecWait '$\"$INSTDIR\HLSDownloader.exe$\" --shutdown'
+    Sleep 2000
+    nsExec::ExecToStack 'taskkill /IM HLSDownloader.exe /F'
+    Pop $1
+    Pop $2
+ShutdownDone:
+
+  StrCpy $0 "preserve"
+  IfSilent RemoveApplicationData
+  MessageBox MB_ICONQUESTION|MB_YESNO|MB_DEFBUTTON2 "是否同时删除已下载的视频？$\r$\n$\r$\n选择“否”只删除程序、设置、任务历史和缓存。" IDNO RemoveApplicationData
+  StrCpy $0 "delete"
+  RMDir /r "$PROFILE\Downloads\HLS Downloader"
+  RMDir /r "$INSTDIR\downloads"
+
+RemoveApplicationData:
   Delete "$DESKTOP\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk"
+  Delete "$SMPROGRAMS\${APP_NAME}\卸载 ${APP_NAME}.lnk"
   RMDir "$SMPROGRAMS\${APP_NAME}"
 
   Delete "$INSTDIR\HLSDownloader.exe"
   Delete "$INSTDIR\MicrosoftEdgeWebview2Setup.exe"
   Delete "$INSTDIR\config.default.json"
+  Delete "$INSTDIR\config.json"
+  Delete "$INSTDIR\data.db"
+  Delete "$INSTDIR\data.db-shm"
+  Delete "$INSTDIR\data.db-wal"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir /r "$INSTDIR\frontend"
   RMDir /r "$INSTDIR\userscript"
   RMDir /r "$INSTDIR\bin"
+  RMDir /r "$INSTDIR\.webview"
+  RMDir /r "$INSTDIR\.data"
 
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
   DeleteRegKey HKCU "Software\${APP_NAME}"
 
+  ${If} $0 == "delete"
+    RMDir /r "$INSTDIR"
+  ${Else}
+    RMDir "$INSTDIR"
+  ${EndIf}
+
+  ; WebView2 helpers can release cache files just after the main process exits.
+  RMDir /r "$LOCALAPPDATA\HLS Downloader"
+  Sleep 1000
+  RMDir /r "$LOCALAPPDATA\HLS Downloader"
+  Sleep 1000
+  RMDir /r "$LOCALAPPDATA\HLS Downloader"
+
+  Delete "$INSTDIR\HLSDownloader.exe"
+  Delete "$INSTDIR\Uninstall.exe"
+  RMDir "$INSTDIR"
+  Sleep 1000
+  Delete "$INSTDIR\HLSDownloader.exe"
+  Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
 SectionEnd

@@ -19,8 +19,8 @@
 ```powershell
 git switch main
 git pull --ff-only
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.1.1
+git push origin v1.1.1
 ```
 
 `v*` 标签会触发完整 Windows 构建。成功后工作流自动创建同名 GitHub Release，并上传：
@@ -37,6 +37,7 @@ SHA256SUMS.txt
 - 测试失败：先在本机运行 `python -m pytest -q`、`pnpm test` 和 `pnpm run build`。
 - FFmpeg/NSIS 安装失败：在 GitHub Actions 中重新运行失败任务；持续失败时检查 Chocolatey 服务状态。
 - 打包后启动失败：下载工作流日志，查看 `Smoke test packaged app` 步骤。
+- 安装包异常偏小或无法合并：确认构建日志中的 FFmpeg/ffprobe 版本验证通过，并实际运行便携包内的两个程序检查版本。
 - Release 缺文件：不要手动补传；修复工作流后删除错误标签和 Release，再重新创建标签。
 
 GitHub 自动提供发布所需的 `GITHUB_TOKEN`。工作流不读取或保存本机 `GH_TOKEN`。

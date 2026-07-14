@@ -20,7 +20,7 @@ from .downloader.task_manager import (
 )
 from .utils import get_domain
 from .userscript_monitor import userscript_monitor
-from .desktop_runtime import activate_window
+from .desktop_runtime import activate_window, request_shutdown
 from .url_recognition import RecognitionError, recognize_url
 
 router = APIRouter(prefix="/api")
@@ -53,6 +53,12 @@ async def health():
 async def activate_desktop_app(x_token: str = Header(default="")):
     _check_token(x_token)
     return {"ok": activate_window()}
+
+
+@router.post("/app/shutdown")
+async def shutdown_desktop_app(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return {"ok": request_shutdown()}
 
 
 @router.post("/recognize")

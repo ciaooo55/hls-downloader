@@ -1,8 +1,8 @@
 import aiosqlite
 import asyncio
-from pathlib import Path
+from .paths import RUNTIME_PATHS
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data.db"
+DB_PATH = RUNTIME_PATHS.database_path
 
 SCHEMA = """CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,

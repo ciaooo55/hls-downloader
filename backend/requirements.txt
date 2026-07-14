@@ -7,3 +7,4 @@ aiosqlite>=0.20.0
 m3u8>=6.0.0
 cryptography>=42.0.0
 pywebview==6.2.1
+pystray==0.19.5

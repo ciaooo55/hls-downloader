@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { ChevronDown, ChevronRight, Copy, FolderOpen, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Copy, FolderOpen, Trash2, X } from 'lucide-react'
 import { fetchSettings, openExplorer, saveSettings } from '../api'
+import { beginUninstall, getDesktopInfo } from '../desktop'
 import FolderPicker from './FolderPicker'
 
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
@@ -9,9 +10,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
+  const [uninstallAvailable, setUninstallAvailable] = useState(false)
 
   useEffect(() => {
     fetchSettings().then(setSettings).catch(reason => setError(reason.message || '加载设置失败'))
+    getDesktopInfo().then(info => setUninstallAvailable(info.installed === true))
   }, [])
 
   const update = (key: string, value: unknown) => setSettings((current: any) => ({ ...current, [key]: value }))
@@ -34,6 +37,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     } catch {
       setError('无法复制，请手动选择 Token')
     }
+  }
+  const uninstall = async () => {
+    setError('')
+    const result = await beginUninstall()
+    if (!result.ok && !result.canceled) setError(result.error || '无法启动卸载程序')
   }
 
   return <div className="modal-overlay" onMouseDown={onClose}>
@@ -64,6 +72,10 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
       </div>}
 
       {error && <div className="inline-error">{error}</div>}
+      {uninstallAvailable && <div className="app-management">
+        <div><strong>卸载程序</strong><span>删除程序、设置、任务历史和缓存</span></div>
+        <button className="danger-button" onClick={uninstall}><Trash2 size={15} />卸载</button>
+      </div>}
       <footer><button className="secondary-button" onClick={onClose}>关闭</button><button className="primary-button" onClick={doSave}>{saved ? '已完成' : '保存设置'}</button></footer>
     </section>
     {showPicker && <FolderPicker initialPath={settings.download_dir || ''} onSelect={path => { update('download_dir', path); setShowPicker(false) }} onClose={() => setShowPicker(false)} />}

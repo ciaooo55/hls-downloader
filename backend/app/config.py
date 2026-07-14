@@ -1,23 +1,15 @@
 import json
-import secrets
-import sys
 from pathlib import Path
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from .paths import RUNTIME_PATHS
 
-def _project_root() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent.parent
-
-
-PROJECT_ROOT = _project_root()
-CONFIG_PATH = PROJECT_ROOT / "config.json"
+PROJECT_ROOT = RUNTIME_PATHS.project_root
+CONFIG_PATH = RUNTIME_PATHS.config_path
 
 class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8765
-    token: str = Field(default_factory=lambda: secrets.token_urlsafe(24))
+    token: str = "55555"
     download_dir: str = "downloads"
     default_concurrency: int = 4
     default_user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
@@ -31,13 +23,13 @@ class Settings(BaseSettings):
 
     model_config = {"env_prefix": "HLS_"}
 
-def _resolve_path(v: str) -> str:
+def _resolve_path(v: str, base: Path = PROJECT_ROOT) -> str:
     if not v:
         return v
     p = Path(v)
     if p.is_absolute():
         return str(p)
-    return str((PROJECT_ROOT / p).resolve())
+    return str((base / p).resolve())
 
 
 def _serialize_path(v: str) -> str:
@@ -56,9 +48,9 @@ def load_settings() -> Settings:
         data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         s = Settings(**data)
     else:
-        s = Settings()
+        s = Settings(download_dir=str(RUNTIME_PATHS.default_download_dir))
         save_settings(s)
-    s.download_dir = _resolve_path(s.download_dir)
+    s.download_dir = _resolve_path(s.download_dir, PROJECT_ROOT)
     Path(s.download_dir).mkdir(parents=True, exist_ok=True)
     s.ffmpeg_path = _resolve_path(s.ffmpeg_path)
     return s
@@ -79,7 +71,7 @@ def apply_settings_update(s: Settings, data: dict) -> None:
         if hasattr(s, key):
             setattr(s, key, value)
     s.download_dir = _resolve_path(s.download_dir)
-    s.ffmpeg_path = _resolve_path(s.ffmpeg_path)
+    s.ffmpeg_path = _resolve_path(s.ffmpeg_path, PROJECT_ROOT)
     Path(s.download_dir).mkdir(parents=True, exist_ok=True)
 
 settings = load_settings()

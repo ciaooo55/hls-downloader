@@ -3,11 +3,15 @@ interface NativeResult {
   canceled?: boolean
   path?: string
   error?: string
+  installed?: boolean
+  mode?: string
 }
 
 interface NativeApi {
   export_userscript(): Promise<NativeResult>
   open_userscript_installer(): Promise<NativeResult>
+  get_desktop_info(): Promise<NativeResult>
+  begin_uninstall(): Promise<NativeResult>
 }
 
 declare global {
@@ -46,5 +50,25 @@ export async function openUserscriptInstaller(): Promise<NativeResult> {
     return { ok: true }
   } catch (reason) {
     return { ok: false, error: reason instanceof Error ? reason.message : '无法打开安装地址' }
+  }
+}
+
+export async function getDesktopInfo(): Promise<NativeResult> {
+  try {
+    const api = await waitForNativeApi()
+    if (!api) return { ok: true, installed: false, mode: 'web' }
+    return await api.get_desktop_info()
+  } catch (reason) {
+    return { ok: false, installed: false, error: reason instanceof Error ? reason.message : '无法读取桌面版信息' }
+  }
+}
+
+export async function beginUninstall(): Promise<NativeResult> {
+  try {
+    const api = await waitForNativeApi()
+    if (!api) return { ok: false, error: '卸载仅在安装版中可用' }
+    return await api.begin_uninstall()
+  } catch (reason) {
+    return { ok: false, error: reason instanceof Error ? reason.message : '无法启动卸载程序' }
   }
 }
