@@ -547,6 +547,8 @@ class HLSDownloader:
         try:
             async with client.stream("GET", url, headers=request_headers) as response:
                 if byte_range:
+                    if response.status_code >= 400:
+                        response.raise_for_status()
                     if response.status_code != 206:
                         raise RuntimeError(
                             f"BYTERANGE 请求需要 HTTP 206，实际为 {response.status_code}"

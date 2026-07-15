@@ -43,7 +43,7 @@ def test_merge_segments_builds_concat_list_and_emits_progress(tmp_path, monkeypa
         return True
 
     monkeypatch.setattr(merge_mod, "_run_ffmpeg", fake_run_ffmpeg)
-    monkeypatch.setattr(merge_mod, "_probe_duration", _async_zero)
+    monkeypatch.setattr(merge_mod, "_probe_duration", _async_positive)
 
     segments = [
         {"index": 0, "init_path": str(init_path), "duration": 4},
@@ -93,7 +93,7 @@ def test_fmp4_preparation_does_not_block_event_loop(tmp_path, monkeypatch):
 
     monkeypatch.setattr(merge_mod, "_combine_files", slow_combine)
     monkeypatch.setattr(merge_mod, "_run_ffmpeg", fake_run_ffmpeg)
-    monkeypatch.setattr(merge_mod, "_probe_duration", _async_zero)
+    monkeypatch.setattr(merge_mod, "_probe_duration", _async_positive)
 
     async def run():
         ticks = 0
@@ -187,5 +187,18 @@ def test_merge_failure_preserves_ffmpeg_stderr_reason(tmp_path, monkeypatch):
         )
 
 
+def test_verify_output_rejects_media_that_ffprobe_cannot_read(tmp_path, monkeypatch):
+    output = tmp_path / "broken.mp4"
+    output.write_bytes(b"not-a-media-file")
+    monkeypatch.setattr(merge_mod, "_probe_duration", _async_zero)
+
+    with pytest.raises(RuntimeError, match="ffprobe 无法读取"):
+        asyncio.run(merge_mod._verify_output("ffmpeg", output, 10))
+
+
 async def _async_zero(*args, **kwargs):
     return 0.0
+
+
+async def _async_positive(*args, **kwargs):
+    return 9.0

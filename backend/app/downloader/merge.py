@@ -314,6 +314,8 @@ async def _verify_output(
     if not output_path.exists() or output_path.stat().st_size == 0:
         raise RuntimeError("输出文件为空或不存在")
     actual_duration = await _probe_duration(ffmpeg_path, output_path)
+    if actual_duration <= 0:
+        raise RuntimeError("ffprobe 无法读取输出媒体，文件可能损坏")
     if expected_duration >= 3 and actual_duration > 0:
         minimum = expected_duration * 0.9
         if actual_duration < minimum:

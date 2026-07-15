@@ -6,7 +6,7 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.1.3"
+  !define APP_VERSION "1.1.4"
 !endif
 !define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
@@ -45,6 +45,9 @@ Section "Install" SecInstall
   File "${STAGE_DIR}\HLSDownloader.exe"
   File "${STAGE_DIR}\MicrosoftEdgeWebview2Setup.exe"
   File /oname=config.default.json "${STAGE_DIR}\config.json"
+
+  SetOutPath "$INSTDIR\_internal"
+  File /r "${STAGE_DIR}\_internal\*"
 
   SetRegView 32
   ReadRegStr $0 HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_GUID}" "pv"
@@ -126,6 +129,7 @@ RemoveApplicationData:
   RMDir /r "$INSTDIR\frontend"
   RMDir /r "$INSTDIR\userscript"
   RMDir /r "$INSTDIR\bin"
+  RMDir /r "$INSTDIR\_internal"
   RMDir /r "$INSTDIR\.webview"
   RMDir /r "$INSTDIR\.data"
 

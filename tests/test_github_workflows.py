@@ -27,6 +27,7 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     workflow = _workflow("release.yml")
 
     assert "workflow_dispatch:" in workflow
+    assert 'default: "1.1.4"' in workflow
     assert "tags:" in workflow and "v*" in workflow
     assert "windows-latest" in workflow
     assert "ubuntu-latest" not in workflow
@@ -61,4 +62,4 @@ def test_readme_documents_windows_release_assets():
     assert "m3u8-sniffer.user.js" in readme
     assert "SHA256SUMS.txt" in readme
     assert "Windows 10/11" in readme
-    assert "git tag v1.1.3" in readme
+    assert "git tag v1.1.4" in readme

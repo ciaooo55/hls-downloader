@@ -12,6 +12,7 @@ from backend.app.downloader.hls import (
     _decrypt_aes128_file,
     _reserve_output_path,
 )
+from backend.app.downloader.errors import diagnose_download_error
 from backend.app.models import Task
 
 
@@ -105,6 +106,32 @@ def test_download_resource_validates_byte_range_and_renames_atomically(tmp_path)
         assert not destination.exists()
 
     asyncio.run(run_bad())
+
+
+def test_byte_range_http_error_keeps_real_status_code(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="forbidden")
+
+    async def run():
+        downloader = HLSDownloader(_task())
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(httpx.HTTPStatusError) as raised:
+                await downloader._download_resource(
+                    client,
+                    "https://example.test/media.bin",
+                    tmp_path / "forbidden.seg",
+                    {},
+                    {"offset": 2, "length": 4},
+                )
+        details = diagnose_download_error(
+            raised.value,
+            stage="downloading_segments",
+            url="https://example.test/media.bin",
+        )
+        assert details.code == "HTTP_403"
+        assert details.http_status == 403
+
+    asyncio.run(run())
 
 
 def test_decrypt_aes128_file_validates_and_removes_pkcs7_padding(tmp_path):

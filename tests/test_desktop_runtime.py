@@ -91,6 +91,51 @@ def test_exit_stops_server_and_tray_before_destroying_window():
     assert controller.on_closing() is True
 
 
+def test_exit_stops_tray_before_waiting_for_server_shutdown():
+    release = threading.Event()
+    join_started = threading.Event()
+    tray = FakeTray()
+
+    class BlockingServer(FakeServer):
+        def join(self, timeout: float | None = None) -> None:
+            self.calls.append(f"join:{timeout}")
+            join_started.set()
+            release.wait(timeout=2)
+
+    controller = DesktopController(FakeWindow(), BlockingServer(), tray=tray)
+
+    try:
+        assert controller.request_exit() is True
+        assert join_started.wait(timeout=1)
+        assert tray.calls == ["stop"]
+    finally:
+        release.set()
+        assert controller.wait_for_shutdown(timeout=2)
+
+
+def test_exit_continues_when_tray_or_window_hide_fails():
+    class BrokenTray(FakeTray):
+        def stop(self) -> None:
+            super().stop()
+            raise RuntimeError("tray failed")
+
+    class BrokenWindow(FakeWindow):
+        def hide(self) -> None:
+            super().hide()
+            raise RuntimeError("window failed")
+
+    window = BrokenWindow()
+    server = FakeServer()
+    tray = BrokenTray()
+    controller = DesktopController(window, server, tray=tray)
+
+    assert controller.request_exit() is True
+    assert controller.wait_for_shutdown(timeout=2)
+    assert tray.calls == ["stop"]
+    assert server.calls == ["stop", "join:20"]
+    assert window.calls == ["hide", "destroy"]
+
+
 def test_repeated_exit_does_not_start_duplicate_shutdown():
     window = FakeWindow()
     server = FakeServer()
@@ -176,6 +221,14 @@ def test_registered_shutdown_requests_controller_exit():
 
     register_shutdown(None)
     assert request_shutdown() is False
+
+
+def test_registered_shutdown_returns_callback_result():
+    register_shutdown(lambda: False)
+
+    assert request_shutdown() is False
+
+    register_shutdown(None)
 
 
 def test_activation_api_requires_token_and_calls_registered_window():

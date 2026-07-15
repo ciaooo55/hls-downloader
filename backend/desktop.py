@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -10,6 +11,9 @@ import webbrowser
 from pathlib import Path
 
 import uvicorn
+
+
+logger = logging.getLogger(__name__)
 
 try:
     from .app.config import PROJECT_ROOT, settings
@@ -256,10 +260,12 @@ class DesktopController:
         self.tray = tray
 
     def request_exit(self) -> bool:
+        tray = None
         with self._state_lock:
             if self._shutdown_started:
                 return False
             self._shutdown_started = True
+            tray = self.tray
             if self.force_exit is not None:
                 self._force_exit_timer = threading.Timer(
                     self.force_exit_delay,
@@ -268,6 +274,15 @@ class DesktopController:
                 )
                 self._force_exit_timer.daemon = True
                 self._force_exit_timer.start()
+        if tray is not None:
+            try:
+                tray.stop()
+            except Exception:
+                logger.exception("failed to stop tray icon during shutdown")
+        try:
+            self.window.hide()
+        except Exception:
+            logger.exception("failed to hide desktop window during shutdown")
         threading.Thread(target=self._shutdown_then_destroy, daemon=True).start()
         return True
 
@@ -282,8 +297,6 @@ class DesktopController:
         try:
             self.server.stop()
             self.server.join(timeout=self.shutdown_timeout)
-            if self.tray is not None:
-                self.tray.stop()
             with self._state_lock:
                 self._allow_close = True
             self.window.destroy()

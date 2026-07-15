@@ -12,7 +12,7 @@ def _task(task_id: str = "task1", status: TaskStatus = TaskStatus.QUEUED) -> Tas
     return Task(id=task_id, url="https://example.test/vod.m3u8", status=status)
 
 
-def test_start_task_is_idempotent(monkeypatch):
+def test_repeated_start_is_rejected_without_starting_duplicate(monkeypatch):
     started = 0
     release = asyncio.Event()
 
@@ -35,7 +35,8 @@ def test_start_task_is_idempotent(monkeypatch):
 
         await manager.start_task(task.id)
         first_handle = task.task_handle
-        await manager.start_task(task.id)
+        with pytest.raises(TaskConflictError, match="已经在运行"):
+            await manager.start_task(task.id)
         await asyncio.sleep(0)
 
         assert task.task_handle is first_handle

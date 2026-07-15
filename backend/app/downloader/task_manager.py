@@ -178,7 +178,7 @@ class TaskManager:
     async def start_task(self, task_id: str) -> None:
         task = self._get_task(task_id)
         if task.task_handle and not task.task_handle.done():
-            return
+            raise TaskConflictError("任务已经在运行")
         if task.status not in {TaskStatus.QUEUED, TaskStatus.PAUSED}:
             raise TaskConflictError(f"任务状态 {task.status.value} 不能开始")
 

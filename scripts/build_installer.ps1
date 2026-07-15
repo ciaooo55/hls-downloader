@@ -1,7 +1,7 @@
 param(
     [switch]$SkipFrontend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.1.3"
+    [string]$Version = "1.1.4"
 )
 
 $ErrorActionPreference = "Stop"
@@ -169,7 +169,7 @@ Invoke-Step "Build backend executable" {
         python -m PyInstaller `
             --noconfirm `
             --clean `
-            --onefile `
+            --onedir `
             --noconsole `
             --name HLSDownloader `
             --paths . `
@@ -188,7 +188,7 @@ Invoke-Step "Build backend executable" {
 }
 
 Invoke-Step "Stage application files" {
-    Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloader.exe") -Destination $StageDir
+    Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloader\*") -Destination $StageDir -Recurse -Force
     Copy-Item -Path (Join-Path $Root "config.json") -Destination $StageDir
     Copy-Item -Path $WebViewBootstrapper -Destination $StageDir
 
@@ -225,6 +225,42 @@ if (-not $SkipSmoke) {
                 }
                 if (-not $ok) {
                     throw "Packaged app did not respond on /api/health"
+                }
+
+                $shutdownAccepted = $false
+                for ($i = 0; $i -lt 120; $i++) {
+                    try {
+                        $shutdown = Invoke-RestMethod `
+                            -Method Post `
+                            -Uri "http://127.0.0.1:8765/api/app/shutdown" `
+                            -Headers @{ "X-Token" = "55555" } `
+                            -ContentType "application/json" `
+                            -Body "{}" `
+                            -TimeoutSec 2
+                        if ($shutdown.ok -eq $true) {
+                            $shutdownAccepted = $true
+                            break
+                        }
+                    } catch {
+                    }
+                    Start-Sleep -Milliseconds 250
+                }
+                if (-not $shutdownAccepted) {
+                    throw "Graceful shutdown failed: desktop callback was not ready after 30 seconds"
+                }
+
+                for ($i = 0; $i -lt 40; $i++) {
+                    $proc.Refresh()
+                    $remaining = Get-Process HLSDownloader -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Path -eq $smokeExe }
+                    if ($proc.HasExited -and -not $remaining) {
+                        break
+                    }
+                    Start-Sleep -Milliseconds 250
+                }
+                $proc.Refresh()
+                if (-not $proc.HasExited -or (Get-Process HLSDownloader -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $smokeExe })) {
+                    throw "Graceful shutdown failed: packaged app process remained after 10 seconds"
                 }
             } finally {
                 if ($proc -and -not $proc.HasExited) {
