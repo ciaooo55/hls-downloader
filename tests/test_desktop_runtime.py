@@ -112,6 +112,47 @@ def test_repeated_exit_does_not_start_duplicate_shutdown():
     assert server.calls.count("stop") == 1
 
 
+def test_exit_watchdog_forces_process_termination_if_window_loop_stalls():
+    forced = threading.Event()
+    exit_codes: list[int] = []
+    controller = DesktopController(
+        FakeWindow(),
+        FakeServer(),
+        force_exit=lambda code: (exit_codes.append(code), forced.set()),
+        force_exit_delay=0.01,
+    )
+
+    assert controller.request_exit() is True
+    assert controller.wait_for_shutdown(timeout=2)
+    assert forced.wait(timeout=2)
+    assert exit_codes == [0]
+
+
+def test_exit_watchdog_runs_even_when_window_destroy_blocks():
+    forced = threading.Event()
+    release_destroy = threading.Event()
+
+    class BlockingWindow(FakeWindow):
+        def destroy(self) -> None:
+            self.calls.append("destroy")
+            release_destroy.wait(timeout=2)
+
+    controller = DesktopController(
+        BlockingWindow(),
+        FakeServer(),
+        force_exit=lambda _code: forced.set(),
+        force_exit_delay=0.01,
+    )
+
+    try:
+        assert controller.request_exit() is True
+        assert forced.wait(timeout=1)
+        assert controller.wait_for_shutdown(timeout=0.01) is False
+    finally:
+        release_destroy.set()
+        assert controller.wait_for_shutdown(timeout=2)
+
+
 def test_activation_restores_and_shows_registered_window():
     window = FakeWindow()
     controller = DesktopController(window, FakeServer())

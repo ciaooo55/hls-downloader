@@ -52,6 +52,12 @@ class TaskResponse(BaseModel):
     active_slots: int = 0
     active_segment_indexes: list[int] = Field(default_factory=list)
     error_message: str
+    error_code: str = ""
+    error_stage: str = ""
+    error_url: str = ""
+    error_hint: str = ""
+    http_status: int = 0
+    error_attempt: int = 0
     output_path: str
     created_at: str
     updated_at: str
@@ -75,7 +81,7 @@ class SettingsUpdate(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "1.1.0"
+    version: str = "1.1.3"
 
 
 class UserscriptPing(BaseModel):

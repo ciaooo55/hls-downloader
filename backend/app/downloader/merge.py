@@ -158,7 +158,9 @@ async def merge_segments(
                 on_progress=on_progress,
             )
         if not success:
-            raise RuntimeError("ffmpeg 合并失败，详情请查看任务日志")
+            if task is not None and task.last_log.startswith("ffmpeg"):
+                raise RuntimeError(task.last_log)
+            raise RuntimeError("ffmpeg 合并失败，未返回可读取的错误信息")
 
         if task is not None:
             task.stage = "verifying"

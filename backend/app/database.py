@@ -26,6 +26,12 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS tasks (
     eta_seconds REAL DEFAULT 0,
     post_percent REAL DEFAULT 0,
     error_message TEXT DEFAULT '',
+    error_code TEXT DEFAULT '',
+    error_stage TEXT DEFAULT '',
+    error_url TEXT DEFAULT '',
+    error_hint TEXT DEFAULT '',
+    http_status INTEGER DEFAULT 0,
+    error_attempt INTEGER DEFAULT 0,
     output_path TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
@@ -38,6 +44,12 @@ MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN started_at TEXT DEFAULT ''",
     "ALTER TABLE tasks ADD COLUMN finished_at TEXT DEFAULT ''",
     "ALTER TABLE tasks ADD COLUMN post_percent REAL DEFAULT 0",
+    "ALTER TABLE tasks ADD COLUMN error_code TEXT DEFAULT ''",
+    "ALTER TABLE tasks ADD COLUMN error_stage TEXT DEFAULT ''",
+    "ALTER TABLE tasks ADD COLUMN error_url TEXT DEFAULT ''",
+    "ALTER TABLE tasks ADD COLUMN error_hint TEXT DEFAULT ''",
+    "ALTER TABLE tasks ADD COLUMN http_status INTEGER DEFAULT 0",
+    "ALTER TABLE tasks ADD COLUMN error_attempt INTEGER DEFAULT 0",
 ]
 
 _lock = asyncio.Lock()

@@ -12,6 +12,7 @@ from ..config import settings
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
 from .merge import merge_segments
+from .errors import as_download_error, diagnose_download_error, format_download_error
 from .parser import UnsupportedPlaylistError, parse_m3u8
 from .progress import ProgressTracker
 
@@ -67,6 +68,7 @@ class HLSDownloader:
         self._completed_count = 0
         self._failed_indexes: list[int] = []
         self._key_cache: dict[str, bytes] = {}
+        self._last_segment_error: Exception | None = None
 
     def _headers(self) -> dict[str, str]:
         headers = {"Accept": "*/*"}
@@ -109,6 +111,37 @@ class HLSDownloader:
     def _is_pausing(self) -> bool:
         return bool(self.task.pause_event and self.task.pause_event.is_set())
 
+    def _clear_failure(self) -> None:
+        self.task.error_message = ""
+        self.task.error_code = ""
+        self.task.error_stage = ""
+        self.task.error_url = ""
+        self.task.error_hint = ""
+        self.task.http_status = 0
+        self.task.error_attempt = 0
+
+    def _record_failure(self, exc: BaseException, *, stage: str, url: str = "") -> None:
+        details = diagnose_download_error(exc, stage=stage, url=url or self.task.url)
+        self.task.error_code = details.code
+        self.task.error_stage = details.stage
+        self.task.error_url = details.url
+        self.task.error_hint = details.hint
+        self.task.http_status = details.http_status
+        self.task.error_attempt = details.attempt
+        self.task.error_message = format_download_error(details)
+
+    def _cleanup_failed_temp(self, task_dir: Path) -> None:
+        if settings.keep_temp_files or not task_dir.exists():
+            return
+        keep = {"download.log", "playlist.m3u8"}
+        for child in task_dir.iterdir():
+            if child.name in keep:
+                continue
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+
     async def _load_media_playlist(
         self,
         client: httpx.AsyncClient,
@@ -144,6 +177,7 @@ class HLSDownloader:
         output: Path | None = None
 
         try:
+            self._clear_failure()
             task.status = TaskStatus.DOWNLOADING_M3U8
             task.started_at = task.started_at or datetime.now().isoformat()
             task.progress.connection_status = "connecting"
@@ -192,9 +226,9 @@ class HLSDownloader:
                     return
 
             if self._failed_indexes:
-                raise RuntimeError(
-                    f"{len(self._failed_indexes)} 个分片下载失败，共 {len(segments)} 个"
-                )
+                if self._last_segment_error is not None:
+                    raise self._last_segment_error
+                raise RuntimeError(f"{len(self._failed_indexes)} 个分片下载失败，共 {len(segments)} 个")
             if self._is_canceled():
                 task.status = TaskStatus.CANCELED
                 self._set_stage("canceled", "已取消")
@@ -241,26 +275,29 @@ class HLSDownloader:
                 task.last_log = "程序已关闭，分片已保留，可在下次启动后恢复"
                 self._publish()
         except UnsupportedPlaylistError as exc:
+            failure_stage = task.stage
+            self._record_failure(exc, stage=failure_stage)
             task.status = TaskStatus.UNSUPPORTED
-            task.error_message = str(exc)
             task.finished_at = datetime.now().isoformat()
             task.progress.connection_status = "error"
-            self._set_stage("unsupported", str(exc))
+            self._set_stage("unsupported", task.error_message)
+            self._cleanup_failed_temp(task_dir)
         except Exception as exc:
             if self._is_canceled():
                 task.status = TaskStatus.CANCELED
                 task.finished_at = datetime.now().isoformat()
                 self._set_stage("canceled", "已取消")
             else:
+                failure_stage = task.stage
+                self._record_failure(exc, stage=failure_stage)
                 task.status = TaskStatus.FAILED
-                task.error_message = str(exc)
                 task.finished_at = datetime.now().isoformat()
                 task.progress.connection_status = "error"
-                self._set_stage("failed", str(exc))
+                self._set_stage("failed", task.error_message)
             if output and output.exists() and output.stat().st_size == 0:
                 output.unlink(missing_ok=True)
-            if not settings.keep_temp_files:
-                shutil.rmtree(task_dir, ignore_errors=True)
+            if task.status is TaskStatus.FAILED:
+                self._cleanup_failed_temp(task_dir)
         finally:
             task.progress.active_workers = 0
             task.progress.active_slots = 0
@@ -338,6 +375,7 @@ class HLSDownloader:
         self.tracker.start(len(segments))
         self._completed_count = 0
         self._failed_indexes = []
+        self._last_segment_error = None
         self.task.progress.failed_segments = 0
 
         async def worker() -> None:
@@ -358,6 +396,14 @@ class HLSDownloader:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    failure = as_download_error(
+                        exc,
+                        stage="downloading_segments",
+                        url=segment["url"],
+                        attempt=MAX_RETRIES,
+                    )
+                    if self._last_segment_error is None:
+                        self._last_segment_error = failure
                     self._failed_indexes.append(index)
                     self.task.progress.failed_segments = len(self._failed_indexes)
                     self.task.progress.last_worker_error = f"[{index}] {str(exc)[:120]}"
@@ -453,7 +499,14 @@ class HLSDownloader:
                         f"[segment {index}] 第 {attempt + 1}/{MAX_RETRIES} 次失败: {exc}"
                     )
                     await asyncio.sleep(min(2**attempt, 10))
-        raise RuntimeError(f"重试 {MAX_RETRIES} 次仍失败: {last_error}")
+        if last_error is None:
+            raise RuntimeError(f"分片 {index} 下载失败")
+        raise as_download_error(
+            last_error,
+            stage="downloading_segments",
+            url=segment["url"],
+            attempt=MAX_RETRIES,
+        ) from last_error
 
     async def _fetch_key(
         self,

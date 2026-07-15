@@ -61,11 +61,38 @@ def test_save_settings_serializes_project_paths_as_relative(tmp_path, monkeypatc
     assert saved["ffmpeg_path"] == "bin\\ffmpeg.exe"
 
 
-def test_repository_default_config_is_site_neutral():
+def test_repository_default_config_uses_missav_request_headers():
     config_path = config_module.PROJECT_ROOT / "config.json"
     data = json.loads(config_path.read_text(encoding="utf-8"))
 
-    assert data["default_referer"] == ""
-    assert data["default_origin"] == ""
+    assert data["config_version"] == 2
+    assert data["default_referer"] == "https://missav.ai/"
+    assert data["default_origin"] == "https://missav.ai"
     assert data["default_cookie"] == ""
     assert data["default_concurrency"] == 4
+
+
+def test_old_blank_request_defaults_migrate_to_missav(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "config_version": 1,
+                "token": "55555",
+                "download_dir": str(tmp_path / "downloads"),
+                "ffmpeg_path": str(tmp_path / "ffmpeg.exe"),
+                "default_referer": "",
+                "default_origin": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+
+    loaded = config_module.load_settings()
+
+    assert loaded.config_version == 2
+    assert loaded.default_referer == "https://missav.ai/"
+    assert loaded.default_origin == "https://missav.ai"
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["config_version"] == 2

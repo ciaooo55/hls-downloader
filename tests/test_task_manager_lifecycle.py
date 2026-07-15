@@ -123,6 +123,90 @@ def test_load_from_db_keeps_history_and_pauses_interrupted_tasks(monkeypatch):
         assert interrupted.stage == "interrupted"
         assert interrupted.progress.completed_segments == 3
         assert interrupted.progress.post_percent == 25.0
+        failed = manager.tasks["failed1"]
+        assert failed.error_code == "HTTP_403"
+        assert failed.error_stage == "downloading_segments"
+        assert failed.http_status == 403
+        assert failed.error_hint == "检查请求头"
+
+    asyncio.run(run())
+
+
+def test_retry_clears_structured_failure_fields(monkeypatch):
+    async def run():
+        manager = TaskManager()
+        task = _task(status=TaskStatus.FAILED)
+        task.error_message = "failed"
+        task.error_code = "HTTP_403"
+        task.error_stage = "parsing"
+        task.error_url = "https://example.test/vod.m3u8"
+        task.error_hint = "检查请求头"
+        task.http_status = 403
+        task.error_attempt = 5
+        manager.tasks[task.id] = task
+        monkeypatch.setattr(manager, "_save_db", _async_noop)
+        monkeypatch.setattr(manager, "start_task", _async_noop)
+
+        await manager.retry_task(task.id)
+
+        assert task.error_message == ""
+        assert task.error_code == ""
+        assert task.error_stage == ""
+        assert task.error_url == ""
+        assert task.error_hint == ""
+        assert task.http_status == 0
+        assert task.error_attempt == 0
+
+    asyncio.run(run())
+
+
+def test_task_event_contains_structured_failure_details():
+    manager = TaskManager()
+    task = _task(status=TaskStatus.FAILED)
+    task.error_code = "HTTP_429"
+    task.error_stage = "downloading_segments"
+    task.error_url = "https://cdn.example.test/1.ts"
+    task.error_hint = "降低并发"
+    task.http_status = 429
+    task.error_attempt = 5
+
+    event = manager._task_event(task)
+
+    assert event["error_code"] == "HTTP_429"
+    assert event["error_stage"] == "downloading_segments"
+    assert event["error_url"] == "https://cdn.example.test/1.ts"
+    assert event["error_hint"] == "降低并发"
+    assert event["http_status"] == 429
+    assert event["error_attempt"] == 5
+
+
+def test_structured_failure_details_survive_database_reload(tmp_path, monkeypatch):
+    from backend.app import database as database_module
+
+    async def run():
+        monkeypatch.setattr(database_module, "DB_PATH", tmp_path / "tasks.db")
+        manager = TaskManager()
+        task = await manager.create_task("https://example.test/vod.m3u8")
+        task.status = TaskStatus.FAILED
+        task.error_message = "[HTTP_403] HTTP 403 Forbidden"
+        task.error_code = "HTTP_403"
+        task.error_stage = "downloading_segments"
+        task.error_url = "https://cdn.example.test/1.ts"
+        task.error_hint = "检查请求头"
+        task.http_status = 403
+        task.error_attempt = 5
+        await manager._save_db(task)
+
+        restored = TaskManager()
+        await restored.load_from_db()
+        loaded = restored.tasks[task.id]
+
+        assert loaded.error_code == "HTTP_403"
+        assert loaded.error_stage == "downloading_segments"
+        assert loaded.error_url == "https://cdn.example.test/1.ts"
+        assert loaded.error_hint == "检查请求头"
+        assert loaded.http_status == 403
+        assert loaded.error_attempt == 5
 
     asyncio.run(run())
 
@@ -180,6 +264,12 @@ def _db_row(status: str, task_id: str) -> dict:
         "eta_seconds": 9,
         "post_percent": 25,
         "error_message": "",
+        "error_code": "HTTP_403" if status == "failed" else "",
+        "error_stage": "downloading_segments" if status == "failed" else "",
+        "error_url": "https://cdn.example.test/1.ts" if status == "failed" else "",
+        "error_hint": "检查请求头" if status == "failed" else "",
+        "http_status": 403 if status == "failed" else 0,
+        "error_attempt": 5 if status == "failed" else 0,
         "output_path": "",
         "created_at": "2026-01-01T00:00:00",
         "updated_at": "2026-01-01T00:00:00",

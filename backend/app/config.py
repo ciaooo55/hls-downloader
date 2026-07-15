@@ -7,14 +7,15 @@ PROJECT_ROOT = RUNTIME_PATHS.project_root
 CONFIG_PATH = RUNTIME_PATHS.config_path
 
 class Settings(BaseSettings):
+    config_version: int = 2
     host: str = "127.0.0.1"
     port: int = 8765
     token: str = "55555"
     download_dir: str = "downloads"
     default_concurrency: int = 4
     default_user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
-    default_referer: str = ""
-    default_origin: str = ""
+    default_referer: str = "https://missav.ai/"
+    default_origin: str = "https://missav.ai"
     default_cookie: str = ""
     ffmpeg_path: str = "bin\\ffmpeg.exe"
     allowed_hosts: list[str] = []
@@ -46,7 +47,17 @@ def _serialize_path(v: str) -> str:
 def load_settings() -> Settings:
     if CONFIG_PATH.exists():
         data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        migrated = False
+        if int(data.get("config_version", 1) or 1) < 2:
+            if not data.get("default_referer"):
+                data["default_referer"] = "https://missav.ai/"
+            if not data.get("default_origin"):
+                data["default_origin"] = "https://missav.ai"
+            data["config_version"] = 2
+            migrated = True
         s = Settings(**data)
+        if migrated:
+            save_settings(s)
     else:
         s = Settings(download_dir=str(RUNTIME_PATHS.default_download_dir))
         save_settings(s)

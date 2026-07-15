@@ -1,7 +1,7 @@
 param(
     [switch]$SkipFrontend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.1.2"
+    [string]$Version = "1.1.3"
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,6 +24,8 @@ $NsisUrl = "https://downloads.sourceforge.net/project/nsis/NSIS%203/$NsisVersion
 $InstallerScript = Join-Path $Root "installer\hls-downloader.nsi"
 $InstallerOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Setup.exe"
 $PortableOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Portable.zip"
+$UserscriptOut = Join-Path $ReleaseDir "m3u8-sniffer.user.js"
+$ChecksumsOut = Join-Path $ReleaseDir "SHA256SUMS.txt"
 
 function Invoke-Step($Name, [scriptblock]$Block) {
     Write-Host ""
@@ -128,7 +130,7 @@ Invoke-Step "Stop running packaged app" {
 
 Invoke-Step "Prepare directories" {
     Remove-Item -Recurse -Force $StageDir, $PortableStage -ErrorAction SilentlyContinue
-    Remove-Item -Force $InstallerOut, $PortableOut -ErrorAction SilentlyContinue
+    Remove-Item -Force $InstallerOut, $PortableOut, $UserscriptOut, $ChecksumsOut -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $StageDir, $ReleaseDir, $BinDir, $ToolsDir | Out-Null
 }
 
@@ -285,7 +287,27 @@ MicrosoftEdgeWebview2Setup.exe once before starting the downloader.
     }
 }
 
+Invoke-Step "Assemble release files" {
+    Copy-Item -LiteralPath (Join-Path $UserscriptDir "m3u8-sniffer.user.js") -Destination $UserscriptOut -Force
+    $expected = @($InstallerOut, $PortableOut, $UserscriptOut)
+    foreach ($path in $expected) {
+        if (-not (Test-Path -LiteralPath $path)) {
+            throw "Missing release file: $path"
+        }
+    }
+    $lines = Get-ChildItem -LiteralPath $ReleaseDir -File |
+        Where-Object Name -ne "SHA256SUMS.txt" |
+        Sort-Object Name |
+        ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+        }
+    $lines | Set-Content -LiteralPath $ChecksumsOut -Encoding ASCII
+}
+
 Write-Host ""
 Write-Host "Windows release assets created:" -ForegroundColor Green
 Write-Host $InstallerOut
 Write-Host $PortableOut
+Write-Host $UserscriptOut
+Write-Host $ChecksumsOut

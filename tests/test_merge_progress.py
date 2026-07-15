@@ -3,6 +3,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from backend.app.downloader import merge as merge_mod
 
 
@@ -156,6 +158,33 @@ def test_merge_segments_writes_temp_output_then_replaces_placeholder(tmp_path, m
     assert ffmpeg_outputs == [output_path.with_name("out.merging.mp4")]
     assert output_path.read_bytes() == b"mp4"
     assert not output_path.with_name("out.merging.mp4").exists()
+
+
+def test_merge_failure_preserves_ffmpeg_stderr_reason(tmp_path, monkeypatch):
+    seg_dir = tmp_path / "segments"
+    seg_dir.mkdir()
+    (seg_dir / "000000.seg").write_bytes(b"one")
+    output_path = tmp_path / "out.mp4"
+    output_path.touch()
+    task = _task()
+
+    async def fake_run_ffmpeg(cmd, task=None, duration_sec=0, on_progress=None):
+        task.last_log = "ffmpeg 失败: Invalid data found when processing input"
+        return False
+
+    monkeypatch.setattr(merge_mod, "_run_ffmpeg", fake_run_ffmpeg)
+
+    with pytest.raises(RuntimeError, match="Invalid data found"):
+        asyncio.run(
+            merge_mod.merge_segments(
+                seg_dir=seg_dir,
+                output_path=output_path,
+                segments=[{"index": 0, "init_path": None, "duration": 1}],
+                ffmpeg_path="ffmpeg",
+                task=task,
+                total_duration=1,
+            )
+        )
 
 
 async def _async_zero(*args, **kwargs):

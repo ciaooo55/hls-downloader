@@ -19,6 +19,12 @@ export interface Task {
   connection_status: string
   post_percent: number
   error_message: string
+  error_code: string
+  error_stage: string
+  error_url: string
+  error_hint: string
+  http_status: number
+  error_attempt: number
   output_path: string
   created_at: string
   updated_at: string

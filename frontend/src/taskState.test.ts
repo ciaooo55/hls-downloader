@@ -20,15 +20,17 @@ describe('task state updates', () => {
     const updated = mergeTaskEvent(tasks, {
       type: 'task_progress',
       task_id: 'one',
-      status: 'merging',
-      post_percent: 35,
+      status: 'failed',
+      error_code: 'HTTP_403',
+      error_hint: '检查请求头',
     })
 
     expect(updated[0]).toMatchObject({
       id: 'one',
       title: 'Video',
-      status: 'merging',
-      post_percent: 35,
+      status: 'failed',
+      error_code: 'HTTP_403',
+      error_hint: '检查请求头',
     })
   })
 

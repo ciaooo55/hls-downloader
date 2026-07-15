@@ -30,7 +30,7 @@ export default function TaskTable({ tasks, selected, onSelect, onOpenDetails }: 
             <td className="check-col"><input type="checkbox" checked={selected.has(task.id)} onChange={() => toggleOne(task.id)} aria-label={`选择 ${task.title || task.filename || task.id}`} /></td>
             <td className="name-cell"><span title={task.title || task.filename || task.id}>{task.title || task.filename || task.id}</span><small title={task.url}>{task.url}</small></td>
             <td>{fmtBytes(task.total_bytes)}</td><td>{fmtBytes(task.downloaded_bytes)}</td>
-            <td><span className={`status status-${task.status}`}>{labels[task.status] || task.status}</span></td>
+            <td><span className={`status status-${task.status}`}>{labels[task.status] || task.status}</span>{task.error_code && <small className="failure-code" title={task.error_message}>{task.error_code}</small>}</td>
             <td><div className="table-progress"><div><i style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div><span>{progress.toFixed(1)}%</span></div></td>
             <td className="speed-cell">{fmtSpeed(task.speed_bytes_per_sec)}</td><td>{fmtEta(task.eta_seconds)}</td>
             <td>{task.total_segments ? `${task.completed_segments}/${task.total_segments}` : '--'}</td><td>{fmtDate(task.updated_at)}</td>

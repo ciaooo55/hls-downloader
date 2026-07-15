@@ -50,6 +50,12 @@ class Task:
     status: TaskStatus = TaskStatus.QUEUED
     progress: TaskProgress = field(default_factory=TaskProgress)
     error_message: str = ""
+    error_code: str = ""
+    error_stage: str = ""
+    error_url: str = ""
+    error_hint: str = ""
+    http_status: int = 0
+    error_attempt: int = 0
     output_path: str = ""
     stage: str = ""
     last_log: str = ""

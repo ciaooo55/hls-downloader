@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -221,15 +222,26 @@ class DesktopTray:
 
 
 class DesktopController:
-    def __init__(self, window, server, tray=None, shutdown_timeout: float = 20) -> None:
+    def __init__(
+        self,
+        window,
+        server,
+        tray=None,
+        shutdown_timeout: float = 20,
+        force_exit=None,
+        force_exit_delay: float = 3,
+    ) -> None:
         self.window = window
         self.server = server
         self.tray = tray
         self.shutdown_timeout = shutdown_timeout
+        self.force_exit = force_exit
+        self.force_exit_delay = force_exit_delay
         self._allow_close = False
         self._shutdown_started = False
         self._shutdown_done = threading.Event()
         self._state_lock = threading.Lock()
+        self._force_exit_timer = None
 
     def on_closing(self) -> bool:
         with self._state_lock:
@@ -248,6 +260,14 @@ class DesktopController:
             if self._shutdown_started:
                 return False
             self._shutdown_started = True
+            if self.force_exit is not None:
+                self._force_exit_timer = threading.Timer(
+                    self.force_exit_delay,
+                    self.force_exit,
+                    args=(0,),
+                )
+                self._force_exit_timer.daemon = True
+                self._force_exit_timer.start()
         threading.Thread(target=self._shutdown_then_destroy, daemon=True).start()
         return True
 
@@ -318,7 +338,7 @@ def main() -> int:
         text_select=True,
     )
     bridge._set_window(window)
-    controller = DesktopController(window, server)
+    controller = DesktopController(window, server, force_exit=os._exit)
     tray = DesktopTray(controller.activate, controller.request_exit)
     controller.set_tray(tray)
     bridge._set_exit_request(controller.request_exit)

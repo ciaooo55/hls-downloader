@@ -208,7 +208,15 @@ async def get_task_log(task_id: str, x_token: str = Header(default="")):
     log_file = Path(settings.download_dir) / ".tasks" / task_id / "download.log"
     if log_file.exists():
         return {"log": log_file.read_text(encoding="utf-8", errors="replace")}
-    return {"log": f"stage: {task.stage}\nlast_log: {task.last_log}\nerror: {task.error_message}"}
+    return {
+        "log": (
+            f"stage: {task.stage}\n"
+            f"error_code: {task.error_code}\n"
+            f"last_log: {task.last_log}\n"
+            f"error: {task.error_message}\n"
+            f"hint: {task.error_hint}"
+        )
+    }
 
 @router.get("/events")
 async def events(request: Request):
@@ -317,6 +325,12 @@ def _to_resp(task) -> TaskResponse:
         active_slots=task.progress.active_slots,
         active_segment_indexes=task.progress.active_segment_indexes,
         error_message=task.error_message,
+        error_code=task.error_code,
+        error_stage=task.error_stage,
+        error_url=task.error_url,
+        error_hint=task.error_hint,
+        http_status=task.http_status,
+        error_attempt=task.error_attempt,
         output_path=task.output_path,
         created_at=task.created_at or "",
         updated_at=task.updated_at or "",

@@ -32,6 +32,16 @@ TERMINAL_STATUSES = {
 }
 
 
+def _clear_task_error(task: Task) -> None:
+    task.error_message = ""
+    task.error_code = ""
+    task.error_stage = ""
+    task.error_url = ""
+    task.error_hint = ""
+    task.http_status = 0
+    task.error_attempt = 0
+
+
 class TaskManagerError(Exception):
     pass
 
@@ -174,7 +184,7 @@ class TaskManager:
 
         task.cancel_event = asyncio.Event()
         task.pause_event = asyncio.Event()
-        task.error_message = ""
+        _clear_task_error(task)
 
         async def run_task() -> None:
             try:
@@ -254,7 +264,7 @@ class TaskManager:
         task.status = TaskStatus.QUEUED
         task.stage = "queued"
         task.last_log = "正在重试"
-        task.error_message = ""
+        _clear_task_error(task)
         task.output_path = ""
         task.started_at = ""
         task.finished_at = ""
@@ -320,6 +330,12 @@ class TaskManager:
                 stage=stage,
                 last_log=last_log,
                 error_message=_row_value(row, "error_message", "") or "",
+                error_code=_row_value(row, "error_code", "") or "",
+                error_stage=_row_value(row, "error_stage", "") or "",
+                error_url=_row_value(row, "error_url", "") or "",
+                error_hint=_row_value(row, "error_hint", "") or "",
+                http_status=int(_row_value(row, "http_status", 0) or 0),
+                error_attempt=int(_row_value(row, "error_attempt", 0) or 0),
                 output_path=_row_value(row, "output_path", "") or "",
                 created_at=_row_value(row, "created_at", "") or "",
                 updated_at=_row_value(row, "updated_at", "") or "",
@@ -339,7 +355,8 @@ class TaskManager:
                 "UPDATE tasks SET status=?,stage=?,last_log=?,total_segments=?,"
                 "completed_segments=?,failed_segments=?,downloaded_bytes=?,total_bytes=?,"
                 "speed_bytes_per_sec=?,eta_seconds=?,post_percent=?,error_message=?,"
-                "output_path=?,updated_at=?,started_at=?,finished_at=? WHERE id=?",
+                "error_code=?,error_stage=?,error_url=?,error_hint=?,http_status=?,"
+                "error_attempt=?,output_path=?,updated_at=?,started_at=?,finished_at=? WHERE id=?",
                 (
                     task.status.value,
                     task.stage,
@@ -353,6 +370,12 @@ class TaskManager:
                     task.progress.eta_seconds,
                     task.progress.post_percent,
                     task.error_message,
+                    task.error_code,
+                    task.error_stage,
+                    task.error_url,
+                    task.error_hint,
+                    task.http_status,
+                    task.error_attempt,
                     task.output_path,
                     task.updated_at,
                     task.started_at or "",
@@ -430,6 +453,12 @@ class TaskManager:
             "active_slots": progress.active_slots,
             "active_segment_indexes": list(progress.active_segment_indexes),
             "error_message": task.error_message,
+            "error_code": task.error_code,
+            "error_stage": task.error_stage,
+            "error_url": task.error_url,
+            "error_hint": task.error_hint,
+            "http_status": task.http_status,
+            "error_attempt": task.error_attempt,
             "output_path": task.output_path,
             "created_at": task.created_at,
             "updated_at": task.updated_at,

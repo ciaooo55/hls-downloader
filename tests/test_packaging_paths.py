@@ -77,6 +77,16 @@ def test_windows_build_emits_setup_and_portable_assets():
     assert "Compress-Archive" in build_script
 
 
+def test_windows_build_emits_userscript_and_current_checksums():
+    root = Path(__file__).resolve().parent.parent
+    build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
+
+    assert 'Join-Path $ReleaseDir "m3u8-sniffer.user.js"' in build_script
+    assert 'Join-Path $ReleaseDir "SHA256SUMS.txt"' in build_script
+    assert "Get-FileHash -LiteralPath" in build_script
+    assert "Where-Object Name -ne \"SHA256SUMS.txt\"" in build_script
+
+
 def test_windows_build_uses_tools_from_path_on_clean_runner():
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
