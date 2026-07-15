@@ -2,6 +2,20 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+try:
+    from curl_cffi.requests.exceptions import (
+        ChunkedEncodingError as CurlProtocolError,
+        ConnectionError as CurlConnectionError,
+        Timeout as CurlTimeout,
+    )
+except ImportError:
+    _CURL_PROTOCOL_ERRORS = ()
+    _CURL_CONNECTION_ERRORS = ()
+    _CURL_TIMEOUT_ERRORS = ()
+else:
+    _CURL_PROTOCOL_ERRORS = (CurlProtocolError,)
+    _CURL_CONNECTION_ERRORS = (CurlConnectionError,)
+    _CURL_TIMEOUT_ERRORS = (CurlTimeout,)
 
 
 @dataclass(frozen=True)
@@ -66,11 +80,28 @@ def diagnose_download_error(
     if existing is not None:
         return existing.details
 
-    http_error = next((item for item in chain if isinstance(item, httpx.HTTPStatusError)), None)
+    http_error = next(
+        (
+            item
+            for item in chain
+            if getattr(getattr(item, "response", None), "status_code", 0) >= 400
+        ),
+        None,
+    )
     if http_error is not None:
-        status = http_error.response.status_code
-        reason = http_error.response.reason_phrase or "HTTP error"
-        request_url = str(http_error.request.url) if http_error.request else url
+        response = http_error.response
+        status = response.status_code
+        reason = (
+            getattr(response, "reason_phrase", "")
+            or getattr(response, "reason", "")
+            or "HTTP error"
+        )
+        request = getattr(http_error, "request", None)
+        request_url = (
+            str(request.url)
+            if request is not None
+            else str(getattr(response, "url", "") or url)
+        )
         return DownloadErrorDetails(
             code=f"HTTP_{status}",
             message=f"HTTP {status} {reason}",
@@ -81,7 +112,10 @@ def diagnose_download_error(
             attempt=attempt,
         )
 
-    if any(isinstance(item, httpx.TimeoutException) for item in chain):
+    if any(
+        isinstance(item, (httpx.TimeoutException, *_CURL_TIMEOUT_ERRORS))
+        for item in chain
+    ):
         return DownloadErrorDetails(
             code="NETWORK_TIMEOUT",
             message="连接或读取数据超时",
@@ -90,7 +124,10 @@ def diagnose_download_error(
             url=redact_url(url),
             attempt=attempt,
         )
-    if any(isinstance(item, httpx.ConnectError) for item in chain):
+    if any(
+        isinstance(item, (httpx.ConnectError, *_CURL_CONNECTION_ERRORS))
+        for item in chain
+    ):
         return DownloadErrorDetails(
             code="NETWORK_CONNECT_FAILED",
             message="无法连接到资源服务器",
@@ -99,7 +136,10 @@ def diagnose_download_error(
             url=redact_url(url),
             attempt=attempt,
         )
-    if any(isinstance(item, httpx.RemoteProtocolError) for item in chain):
+    if any(
+        isinstance(item, (httpx.RemoteProtocolError, *_CURL_PROTOCOL_ERRORS))
+        for item in chain
+    ):
         return DownloadErrorDetails(
             code="NETWORK_PROTOCOL_ERROR",
             message="服务器提前断开或返回了无效网络响应",

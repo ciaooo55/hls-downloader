@@ -3,8 +3,13 @@ import re
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
+try:
+    from curl_cffi.requests import AsyncSession as CurlAsyncSession
+except ImportError:
+    CurlAsyncSession = None
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -21,6 +26,67 @@ MAX_RETRIES = 5
 MAX_PLAYLIST_DEPTH = 5
 SEG_TIMEOUT = httpx.Timeout(connect=10, read=60, write=30, pool=30)
 _CONTENT_RANGE_RE = re.compile(r"^bytes (\d+)-(\d+)/(\d+|\*)$", re.IGNORECASE)
+
+
+class _BrowserHLSClient:
+    def __init__(self, concurrency: int) -> None:
+        self._session = CurlAsyncSession(
+            max_clients=concurrency + 4,
+            impersonate="firefox",
+            default_headers=False,
+            http_version="v1",
+            timeout=(10, 60),
+            allow_redirects=True,
+        )
+
+    async def __aenter__(self):
+        await self._session.__aenter__()
+        return self
+
+    async def __aexit__(self, *args):
+        return await self._session.__aexit__(*args)
+
+    async def get(self, url: str, **kwargs):
+        return await self._session.get(url, **kwargs)
+
+    async def download_to_file(
+        self,
+        url: str,
+        destination: Path,
+        headers: dict[str, str],
+        cancel_check,
+    ) -> tuple[Any, int]:
+        written = 0
+        response = await self._session.get(url, headers=headers, stream=True)
+        try:
+            with destination.open("wb") as output:
+                async for chunk in response.aiter_content():
+                    if cancel_check():
+                        if response.quit_now:
+                            response.quit_now.set()
+                        raise asyncio.CancelledError
+                    output.write(chunk)
+                    written += len(chunk)
+        finally:
+            if response.astream_task and not response.astream_task.done():
+                if response.quit_now:
+                    response.quit_now.set()
+                await response.aclose()
+        return response, written
+
+
+def _create_hls_client(concurrency: int):
+    if CurlAsyncSession is not None:
+        return _BrowserHLSClient(concurrency)
+    limits = httpx.Limits(
+        max_connections=concurrency + 4,
+        max_keepalive_connections=concurrency + 2,
+    )
+    return httpx.AsyncClient(
+        timeout=SEG_TIMEOUT,
+        follow_redirects=True,
+        limits=limits,
+    )
 
 
 def _reserve_output_path(path: Path) -> Path:
@@ -144,7 +210,7 @@ class HLSDownloader:
 
     async def _load_media_playlist(
         self,
-        client: httpx.AsyncClient,
+        client: Any,
         url: str,
         headers: dict[str, str],
     ) -> dict:
@@ -186,15 +252,7 @@ class HLSDownloader:
             concurrency = max(1, int(task.concurrency or settings.default_concurrency or 4))
             task.concurrency = concurrency
             headers = self._headers()
-            limits = httpx.Limits(
-                max_connections=concurrency + 4,
-                max_keepalive_connections=concurrency + 2,
-            )
-            async with httpx.AsyncClient(
-                timeout=SEG_TIMEOUT,
-                follow_redirects=True,
-                limits=limits,
-            ) as client:
+            async with _create_hls_client(concurrency) as client:
                 task.status = TaskStatus.PARSING
                 self._set_stage("parsing", "正在解析 HLS 清单")
                 parsed = await self._load_media_playlist(client, task.url, headers)
@@ -306,7 +364,7 @@ class HLSDownloader:
 
     async def _download_init_maps(
         self,
-        client: httpx.AsyncClient,
+        client: Any,
         segments: list[dict],
         headers: dict[str, str],
     ) -> None:
@@ -363,7 +421,7 @@ class HLSDownloader:
 
     async def _download_segments(
         self,
-        client: httpx.AsyncClient,
+        client: Any,
         segments: list[dict],
         headers: dict[str, str],
         concurrency: int,
@@ -432,7 +490,7 @@ class HLSDownloader:
 
     async def _download_one_segment(
         self,
-        client: httpx.AsyncClient,
+        client: Any,
         segment: dict,
         headers: dict[str, str],
     ) -> None:
@@ -510,7 +568,7 @@ class HLSDownloader:
 
     async def _fetch_key(
         self,
-        client: httpx.AsyncClient,
+        client: Any,
         url: str,
         headers: dict[str, str],
     ) -> bytes:
@@ -526,7 +584,7 @@ class HLSDownloader:
 
     async def _download_resource(
         self,
-        client: httpx.AsyncClient,
+        client: Any,
         url: str,
         destination: Path,
         headers: dict[str, str],
@@ -543,34 +601,44 @@ class HLSDownloader:
             end = start + expected_length - 1
             request_headers["Range"] = f"bytes={start}-{end}"
 
+        def validate_response(response) -> None:
+            if response.status_code >= 400:
+                response.raise_for_status()
+            if not byte_range:
+                return
+            if response.status_code != 206:
+                raise RuntimeError(
+                    f"BYTERANGE 请求需要 HTTP 206，实际为 {response.status_code}"
+                )
+            match = _CONTENT_RANGE_RE.match(response.headers.get("Content-Range", ""))
+            if not match:
+                raise RuntimeError("BYTERANGE 响应缺少有效 Content-Range")
+            actual_start, actual_end = int(match.group(1)), int(match.group(2))
+            if actual_start != start or actual_end != end:
+                raise RuntimeError(
+                    f"Content-Range 不匹配，期望 {start}-{end}，实际 "
+                    f"{actual_start}-{actual_end}"
+                )
+
         written = 0
         try:
-            async with client.stream("GET", url, headers=request_headers) as response:
-                if byte_range:
-                    if response.status_code >= 400:
-                        response.raise_for_status()
-                    if response.status_code != 206:
-                        raise RuntimeError(
-                            f"BYTERANGE 请求需要 HTTP 206，实际为 {response.status_code}"
-                        )
-                    match = _CONTENT_RANGE_RE.match(response.headers.get("Content-Range", ""))
-                    if not match:
-                        raise RuntimeError("BYTERANGE 响应缺少有效 Content-Range")
-                    actual_start, actual_end = int(match.group(1)), int(match.group(2))
-                    if actual_start != start or actual_end != end:
-                        raise RuntimeError(
-                            f"Content-Range 不匹配，期望 {start}-{end}，实际 "
-                            f"{actual_start}-{actual_end}"
-                        )
-                else:
-                    response.raise_for_status()
-
-                with temporary.open("wb") as output:
-                    async for chunk in response.aiter_bytes(256 * 1024):
-                        if self._is_canceled():
-                            raise asyncio.CancelledError
-                        output.write(chunk)
-                        written += len(chunk)
+            if hasattr(client, "download_to_file"):
+                response, written = await client.download_to_file(
+                    url,
+                    temporary,
+                    request_headers,
+                    self._is_canceled,
+                )
+                validate_response(response)
+            else:
+                async with client.stream("GET", url, headers=request_headers) as response:
+                    validate_response(response)
+                    with temporary.open("wb") as output:
+                        async for chunk in response.aiter_bytes(256 * 1024):
+                            if self._is_canceled():
+                                raise asyncio.CancelledError
+                            output.write(chunk)
+                            written += len(chunk)
 
             if written == 0:
                 raise RuntimeError("下载结果为空")

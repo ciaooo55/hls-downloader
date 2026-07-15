@@ -1,6 +1,7 @@
 import asyncio
 
 import httpx
+from curl_cffi.requests.exceptions import ReadTimeout as CurlReadTimeout
 
 from backend.app.downloader.errors import diagnose_download_error
 from backend.app.downloader.hls import HLSDownloader
@@ -34,6 +35,25 @@ def test_http_403_reports_code_stage_redacted_url_and_header_hint():
     assert "403" in details.message
 
 
+def test_browser_transport_http_error_keeps_status_and_url():
+    class BrowserResponse:
+        status_code = 403
+        reason = "Forbidden"
+        url = "https://cdn.example.test/video.m3u8?token=secret"
+
+    class BrowserHttpError(RuntimeError):
+        response = BrowserResponse()
+
+    details = diagnose_download_error(
+        BrowserHttpError("browser request failed"),
+        stage="parsing",
+    )
+
+    assert details.code == "HTTP_403"
+    assert details.http_status == 403
+    assert details.url == "https://cdn.example.test/video.m3u8"
+
+
 def test_http_429_and_timeout_have_actionable_hints():
     limited = diagnose_download_error(
         _http_error(429, "https://cdn.example.test/1.ts"),
@@ -49,6 +69,13 @@ def test_http_429_and_timeout_have_actionable_hints():
     assert "降低并发" in limited.hint
     assert timed_out.code == "NETWORK_TIMEOUT"
     assert "网络" in timed_out.hint
+
+    browser_timeout = diagnose_download_error(
+        CurlReadTimeout("browser transport timed out"),
+        stage="downloading_segments",
+        url="https://cdn.example.test/3.ts",
+    )
+    assert browser_timeout.code == "NETWORK_TIMEOUT"
 
 
 def test_range_and_merge_failures_get_stable_codes():
@@ -90,7 +117,7 @@ def test_playlist_http_failure_is_persisted_on_task(tmp_path, monkeypatch):
             kwargs["transport"] = httpx.MockTransport(handler)
             super().__init__(*args, **kwargs)
 
-    monkeypatch.setattr(hls_module.httpx, "AsyncClient", MockClient)
+    monkeypatch.setattr(hls_module, "_create_hls_client", lambda _concurrency: MockClient())
     task = Task(id="failure", url="https://example.test/video.m3u8?token=secret")
 
     asyncio.run(HLSDownloader(task).run())
@@ -118,7 +145,7 @@ def test_failed_download_keeps_log_but_removes_large_temp_data(tmp_path, monkeyp
             kwargs["transport"] = httpx.MockTransport(handler)
             super().__init__(*args, **kwargs)
 
-    monkeypatch.setattr(hls_module.httpx, "AsyncClient", MockClient)
+    monkeypatch.setattr(hls_module, "_create_hls_client", lambda _concurrency: MockClient())
     task = Task(id="keep-log", url="https://example.test/video.m3u8")
     task_dir = tmp_path / ".tasks" / task.id
     segments = task_dir / "segments"

@@ -1,7 +1,7 @@
 param(
     [switch]$SkipFrontend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.1.4"
+    [string]$Version = "1.1.5"
 )
 
 $ErrorActionPreference = "Stop"
@@ -175,6 +175,7 @@ Invoke-Step "Build backend executable" {
             --paths . `
             --collect-all webview `
             --collect-all pystray `
+            --collect-all curl_cffi `
             --hidden-import pystray._win32 `
             --hidden-import webview.platforms.edgechromium `
             --hidden-import uvicorn.lifespan.on `

@@ -112,7 +112,9 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
 
     assert "pystray==" in requirements
+    assert "curl_cffi==0.14.0" in requirements
     assert "--collect-all pystray" in build_script
+    assert "--collect-all curl_cffi" in build_script
     assert 'HLSDownloader.exe$\\" --shutdown' in nsis_script
     assert "taskkill /IM HLSDownloader.exe /F" in nsis_script
     assert 'RMDir /r "$LOCALAPPDATA\\HLS Downloader"' in nsis_script

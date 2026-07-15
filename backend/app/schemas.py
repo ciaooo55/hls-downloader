@@ -81,7 +81,7 @@ class SettingsUpdate(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "1.1.4"
+    version: str = "1.1.5"
 
 
 class UserscriptPing(BaseModel):

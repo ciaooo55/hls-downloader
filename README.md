@@ -36,6 +36,7 @@
 ## 功能
 
 - m3u8 直链和网页链接识别
+- 浏览器兼容 TLS 指纹，减少 CDN/Cloudflare 对安装包网络栈的误拦截
 - 固定 worker 队列并发下载
 - 暂停、恢复、取消、重试和批量任务
 - 分片、速度、ETA、合并与转封装进度
@@ -118,7 +119,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.1.4
+.\scripts\build_installer.ps1 -Version 1.1.5
 ```
 
 输出位于忽略的 `release` 目录：
@@ -137,8 +138,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.1.4
-git push origin v1.1.4
+git tag v1.1.5
+git push origin v1.1.5
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。

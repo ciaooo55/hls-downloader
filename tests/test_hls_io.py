@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from backend.app.config import settings
 from backend.app.downloader.hls import (
     HLSDownloader,
+    _create_hls_client,
     _decrypt_aes128_file,
     _reserve_output_path,
 )
@@ -193,3 +194,61 @@ def test_reserve_output_path_is_atomic(tmp_path):
     assert second.name == "video_1.mp4"
     assert first.exists()
     assert second.exists()
+
+
+def test_browser_transport_uses_firefox_tls_and_streams_to_disk(tmp_path, monkeypatch):
+    from backend.app.downloader import hls as hls_module
+
+    created = []
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"Content-Length": "6"}
+        quit_now = None
+        astream_task = None
+
+        async def aiter_content(self):
+            yield b"abc"
+            yield b"def"
+
+    class FakeSession:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url, **kwargs):
+            assert kwargs["stream"] is True
+            return FakeResponse()
+
+    monkeypatch.setattr(hls_module, "CurlAsyncSession", FakeSession)
+
+    async def run():
+        client = _create_hls_client(4)
+        downloader = HLSDownloader(_task())
+        destination = tmp_path / "browser.seg"
+        async with client:
+            written = await downloader._download_resource(
+                client,
+                "https://example.test/browser.seg",
+                destination,
+                {},
+            )
+        assert written == 6
+        assert destination.read_bytes() == b"abcdef"
+
+    asyncio.run(run())
+    assert created == [
+        {
+            "max_clients": 8,
+            "impersonate": "firefox",
+            "default_headers": False,
+            "http_version": "v1",
+            "timeout": (10, 60),
+            "allow_redirects": True,
+        }
+    ]
