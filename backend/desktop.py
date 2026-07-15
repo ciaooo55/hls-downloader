@@ -304,6 +304,38 @@ class DesktopController:
             self._shutdown_done.set()
 
 
+class StartupExitController:
+    """Accept exit requests while the desktop window is still being created."""
+
+    def __init__(self, server, force_exit=None, force_exit_delay: float = 3) -> None:
+        self.server = server
+        self.force_exit = force_exit
+        self.force_exit_delay = force_exit_delay
+        self._active = True
+        self._exit_requested = False
+        self._state_lock = threading.Lock()
+
+    def request_exit(self) -> bool:
+        with self._state_lock:
+            if not self._active or self._exit_requested:
+                return False
+            self._exit_requested = True
+            if self.force_exit is not None:
+                timer = threading.Timer(
+                    self.force_exit_delay,
+                    self.force_exit,
+                    args=(0,),
+                )
+                timer.daemon = True
+                timer.start()
+        self.server.stop()
+        return True
+
+    def disarm(self) -> None:
+        with self._state_lock:
+            self._active = False
+
+
 def _show_startup_error(message: str) -> None:
     try:
         import ctypes
@@ -331,9 +363,12 @@ def main() -> int:
         )
         return 1
 
+    startup_exit = StartupExitController(server, force_exit=os._exit)
+    register_shutdown(startup_exit.request_exit)
     try:
         import webview
     except ImportError:
+        register_shutdown(None)
         server.stop()
         server.join(timeout=5)
         _show_startup_error("桌面组件未安装，请重新安装 HLS Downloader。")
@@ -357,6 +392,7 @@ def main() -> int:
     bridge._set_exit_request(controller.request_exit)
     register_activation(controller.activate)
     register_shutdown(controller.request_exit)
+    startup_exit.disarm()
     window.events.closing += controller.on_closing
 
     try:

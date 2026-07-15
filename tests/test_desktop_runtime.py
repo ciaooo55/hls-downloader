@@ -13,6 +13,7 @@ from backend.app.main import app
 from backend.desktop import (
     DesktopBridge,
     DesktopController,
+    StartupExitController,
     UvicornServerThread,
     public_base_url,
 )
@@ -196,6 +197,33 @@ def test_exit_watchdog_runs_even_when_window_destroy_blocks():
     finally:
         release_destroy.set()
         assert controller.wait_for_shutdown(timeout=2)
+
+
+def test_startup_exit_stops_server_and_forces_stalled_process_exit():
+    forced = threading.Event()
+    exit_codes: list[int] = []
+    server = FakeServer()
+    controller = StartupExitController(
+        server,
+        force_exit=lambda code: (exit_codes.append(code), forced.set()),
+        force_exit_delay=0.01,
+    )
+
+    assert controller.request_exit() is True
+    assert controller.request_exit() is False
+    assert server.calls == ["stop"]
+    assert forced.wait(timeout=1)
+    assert exit_codes == [0]
+
+
+def test_startup_exit_is_disabled_after_desktop_controller_takes_over():
+    server = FakeServer()
+    controller = StartupExitController(server)
+
+    controller.disarm()
+
+    assert controller.request_exit() is False
+    assert server.calls == []
 
 
 def test_activation_restores_and_shows_registered_window():
