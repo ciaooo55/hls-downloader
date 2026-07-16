@@ -7,7 +7,7 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.1.8"
+  !define APP_VERSION "1.1.9"
 !endif
 !define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
@@ -58,20 +58,9 @@ Function .onInit
   ${GetOptions} $0 "/DELETESELF=" $DeleteSelf
 FunctionEnd
 
-Function .onGUIEnd
-  ${If} $DeleteSelf == "1"
-  ${AndIf} $InstallCompleted == "1"
-    GetTempFileName $0
-    Delete $0
-    StrCpy $0 "$0.cmd"
-    FileOpen $1 $0 w
-    FileWrite $1 '@echo off$\r$\n'
-    FileWrite $1 'ping 127.0.0.1 -n 4 >nul$\r$\n'
-    FileWrite $1 'del /f /q "$EXEPATH"$\r$\n'
-    FileWrite $1 'del /f /q "%~f0"$\r$\n'
-    FileClose $1
-    ExecShell "open" "$0" "" SW_HIDE
-  ${EndIf}
+Function ScheduleSelfDelete
+  System::Call 'kernel32::GetCurrentProcessId() i .r0'
+  Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -Command "Wait-Process -Id $0 -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '$EXEPATH' -Force -ErrorAction SilentlyContinue"`
 FunctionEnd
 
 !macro CloseRunningApp Suffix
@@ -145,6 +134,9 @@ Section "Install" SecInstall
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\卸载 ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
   CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\HLSDownloader.exe" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
   StrCpy $InstallCompleted "1"
+  ${If} $DeleteSelf == "1"
+    Call ScheduleSelfDelete
+  ${EndIf}
 SectionEnd
 
 Section "Uninstall"

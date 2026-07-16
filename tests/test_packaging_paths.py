@@ -154,7 +154,9 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     assert '!insertmacro CloseRunningApp Uninstall' in nsis_script
     assert "Sleep 3500" in nsis_script
     assert '"/DELETESELF="' in nsis_script
-    assert 'del /f /q "$EXEPATH"' in nsis_script
+    assert "Wait-Process -Id $0" in nsis_script
+    assert "Remove-Item -LiteralPath '$EXEPATH'" in nsis_script
+    assert "Call ScheduleSelfDelete" in nsis_script
 
 
 def test_windows_package_uses_onedir_and_smoke_tests_graceful_shutdown():
