@@ -31,6 +31,10 @@
 4. 下载阶段可暂停、恢复或取消；分片完成后会显示单独的合并进度。
 5. 完成后可直接打开视频或所在目录。
 
+单个任务无需先勾选：直接右键任务行即可开始、暂停、恢复、取消、重试、查看日志、打开文件位置或删除。勾选框仅用于批量操作。
+
+工具栏右侧有明确的“更新”按钮，可随时检查版本。自动更新安装包保存在设置中的下载目录，安装成功后会自动删除。
+
 安装版的设置、任务历史和 WebView 缓存位于 `%LOCALAPPDATA%\HLS Downloader`，默认视频目录为 `%USERPROFILE%\Downloads\HLS Downloader`。卸载会清除程序数据和缓存，并询问是否同时删除视频；默认保留视频。便携版的所有运行数据仍保存在解压目录中。
 
 ## 功能
@@ -39,6 +43,7 @@
 - 浏览器兼容 TLS 指纹，减少 CDN/Cloudflare 对安装包网络栈的误拦截
 - 固定 worker 队列并发下载
 - 暂停、恢复、取消、重试和批量任务
+- 任务列表右键快捷操作
 - 分片、速度、ETA、合并与转封装进度
 - 断点续传和原子临时文件
 - 并发同名输出保护
@@ -48,7 +53,8 @@
 - fMP4 init map、map 切换和 discontinuity
 - 重启恢复任务历史
 - Windows 系统托盘、单实例唤醒和可靠退出
-- 启动检查更新、SHA256 校验和一键下载安装
+- 工具栏检查更新、启动更新提示、SHA256 校验和一键下载安装
+- 更新包保存到下载目录并在安装成功后自动删除
 - 安装或升级前自动关闭正在运行的安装版或便携版实例
 - 设置页、开始菜单和 Windows“已安装的应用”卸载入口
 - 深色/浅色界面切换
@@ -121,7 +127,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.1.7
+.\scripts\build_installer.ps1 -Version 1.1.8
 ```
 
 输出位于忽略的 `release` 目录：
@@ -140,8 +146,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.1.7
-git push origin v1.1.7
+git tag v1.1.8
+git push origin v1.1.8
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。

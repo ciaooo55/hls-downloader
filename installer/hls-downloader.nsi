@@ -2,11 +2,12 @@ Unicode true
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
+!include "FileFunc.nsh"
 
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.1.7"
+  !define APP_VERSION "1.1.8"
 !endif
 !define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
@@ -30,6 +31,9 @@ InstallDir "$LOCALAPPDATA\Programs\HLS Downloader"
 InstallDirRegKey HKCU "Software\${APP_NAME}" "InstallDir"
 RequestExecutionLevel user
 
+Var DeleteSelf
+Var InstallCompleted
+
 !define MUI_ABORTWARNING
 !define MUI_ICON "${ICON_FILE}"
 !define MUI_UNICON "${ICON_FILE}"
@@ -46,6 +50,29 @@ RequestExecutionLevel user
 
 !insertmacro MUI_LANGUAGE "English"
 !insertmacro MUI_LANGUAGE "SimpChinese"
+
+Function .onInit
+  StrCpy $DeleteSelf "0"
+  StrCpy $InstallCompleted "0"
+  ${GetParameters} $0
+  ${GetOptions} $0 "/DELETESELF=" $DeleteSelf
+FunctionEnd
+
+Function .onGUIEnd
+  ${If} $DeleteSelf == "1"
+  ${AndIf} $InstallCompleted == "1"
+    GetTempFileName $0
+    Delete $0
+    StrCpy $0 "$0.cmd"
+    FileOpen $1 $0 w
+    FileWrite $1 '@echo off$\r$\n'
+    FileWrite $1 'ping 127.0.0.1 -n 4 >nul$\r$\n'
+    FileWrite $1 'del /f /q "$EXEPATH"$\r$\n'
+    FileWrite $1 'del /f /q "%~f0"$\r$\n'
+    FileClose $1
+    ExecShell "open" "$0" "" SW_HIDE
+  ${EndIf}
+FunctionEnd
 
 !macro CloseRunningApp Suffix
   IfFileExists "$INSTDIR\HLSDownloader.exe" 0 CloseRunningAppForce${Suffix}
@@ -117,6 +144,7 @@ Section "Install" SecInstall
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\HLSDownloader.exe" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\卸载 ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
   CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\HLSDownloader.exe" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
+  StrCpy $InstallCompleted "1"
 SectionEnd
 
 Section "Uninstall"

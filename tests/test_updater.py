@@ -142,6 +142,21 @@ def test_installer_download_is_atomic_and_sha256_verified(tmp_path):
     assert not list(tmp_path.glob("*.part"))
 
 
+def test_installer_download_uses_configured_download_directory(monkeypatch, tmp_path):
+    data = b"MZ" + b"installer" * 10
+    info = _info(data)
+    downloads = tmp_path / "Downloads" / "HLS Downloader"
+    monkeypatch.setattr(updater, "get_update_directory", lambda: downloads)
+
+    result = updater.download_installer(
+        info,
+        opener=lambda request, timeout: FakeResponse(data),
+    )
+
+    assert result.parent == downloads
+    assert result.name == "HLSDownloader-Update-9.0.0.exe"
+
+
 def test_installer_download_removes_partial_file_on_bad_hash(tmp_path):
     data = b"MZbroken"
     info = _info(data, digest="0" * 64)
@@ -154,6 +169,31 @@ def test_installer_download_removes_partial_file_on_bad_hash(tmp_path):
         )
 
     assert not list(tmp_path.iterdir())
+
+
+def test_update_cache_cleanup_removes_only_update_installers(monkeypatch, tmp_path):
+    downloads = tmp_path / "downloads"
+    legacy = tmp_path / "data" / "updates"
+    downloads.mkdir()
+    legacy.mkdir(parents=True)
+    stale = downloads / "HLSDownloader-Update-8.0.0.exe"
+    partial = legacy / "HLSDownloader-Update-8.0.0.exe.part"
+    unrelated = downloads / "keep-me.exe"
+    stale.write_bytes(b"old")
+    partial.write_bytes(b"partial")
+    unrelated.write_bytes(b"keep")
+    monkeypatch.setattr(updater, "get_update_directory", lambda: downloads)
+    monkeypatch.setattr(
+        updater,
+        "RUNTIME_PATHS",
+        SimpleNamespace(mode="installed", data_root=tmp_path / "data"),
+    )
+
+    updater.cleanup_update_cache()
+
+    assert not stale.exists()
+    assert not partial.exists()
+    assert unrelated.exists()
 
 
 def test_update_service_never_launches_installer_twice(monkeypatch, tmp_path):
@@ -170,7 +210,7 @@ def test_update_service_never_launches_installer_twice(monkeypatch, tmp_path):
     with pytest.raises(UpdateError, match="已经启动"):
         service.download_and_launch(process_starter=lambda args: launched.append(args))
 
-    assert launched == [[str(installer)]]
+    assert launched == [[str(installer), "/DELETESELF=1"]]
 
 
 def test_update_api_requires_token_and_returns_release_state(monkeypatch):

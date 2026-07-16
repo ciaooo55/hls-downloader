@@ -35,6 +35,7 @@ class UpdateInfo:
     size: int
     digest: str
     notes: str
+    download_directory: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -56,6 +57,13 @@ def is_newer_version(candidate: str, current: str) -> bool:
     right = _version_parts(current)
     width = max(len(left), len(right))
     return left + (0,) * (width - len(left)) > right + (0,) * (width - len(right))
+
+
+def get_update_directory() -> Path:
+    # Import lazily so updater helpers remain usable while configuration starts up.
+    from .config import settings
+
+    return Path(settings.download_dir).expanduser().resolve()
 
 
 def _request_json(url: str, *, opener=urllib.request.urlopen) -> dict:
@@ -121,6 +129,7 @@ def check_for_update(*, opener=urllib.request.urlopen) -> UpdateInfo:
         size=size,
         digest=digest.removeprefix("sha256:"),
         notes=str(payload.get("body", ""))[:4000],
+        download_directory=str(get_update_directory()),
     )
 
 
@@ -175,6 +184,7 @@ def _check_from_release_files(*, opener=urllib.request.urlopen) -> UpdateInfo:
         size=0,
         digest=digest,
         notes="",
+        download_directory=str(get_update_directory()),
     )
 
 
@@ -189,7 +199,7 @@ def download_installer(
     if not info.can_auto_install:
         raise UpdateError("自动安装仅适用于安装版")
 
-    root = destination_root or (RUNTIME_PATHS.data_root / "updates")
+    root = destination_root or get_update_directory()
     root.mkdir(parents=True, exist_ok=True)
     destination = root / f"HLSDownloader-Update-{info.latest_version}.exe"
     temporary = destination.with_suffix(".exe.part")
@@ -225,11 +235,13 @@ def download_installer(
 
 
 def cleanup_update_cache() -> None:
-    root = RUNTIME_PATHS.data_root / "updates"
-    if not root.is_dir():
-        return
-    for item in root.iterdir():
-        if item.is_file() and item.name.startswith("HLSDownloader-Update-"):
+    roots = {get_update_directory(), RUNTIME_PATHS.data_root / "updates"}
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for item in root.glob("HLSDownloader-Update-*.exe*"):
+            if not item.is_file():
+                continue
             try:
                 item.unlink()
             except OSError:
@@ -258,7 +270,7 @@ class UpdateService:
             info = self.check(force=True)
             installer = download_installer(info)
             try:
-                process_starter([str(installer)])
+                process_starter([str(installer), "/DELETESELF=1"])
             except OSError as exc:
                 raise UpdateError(f"无法启动更新安装程序：{exc}") from exc
             self._install_started = True

@@ -15,6 +15,7 @@ import SettingsPanel from './components/SettingsPanel'
 import BatchAddPanel from './components/BatchAddPanel'
 import LogModal from './components/LogModal'
 import UpdateNotice from './components/UpdateNotice'
+import UpdateDialog from './components/UpdateDialog'
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([])
@@ -29,6 +30,7 @@ export default function App() {
   const [showBatch, setShowBatch] = useState(false)
   const [showUserscript, setShowUserscript] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showUpdate, setShowUpdate] = useState(false)
   const [error, setError] = useState('')
   const [theme, setTheme] = useState<Theme>(() => resolveTheme(localStorage.getItem('hls_theme'), matchMedia('(prefers-color-scheme: dark)').matches))
   const lastStatuses = useRef<Record<string, string>>({})
@@ -78,13 +80,13 @@ export default function App() {
   const completedSize = tasks.filter(task => task.status === 'done').reduce((sum, task) => sum + (task.downloaded_bytes || 0), 0)
   const queued = tasks.filter(task => task.status === 'queued').length
 
-  const perform = async (action: string) => {
-    if (!selectedTasks.length) return
-    if (action === 'delete' && !confirm(`确定删除选中的 ${selectedTasks.length} 个任务？`)) return
+  const perform = async (action: string, targets: Task[] = selectedTasks) => {
+    if (!targets.length) return
+    if (action === 'delete' && !confirm(`确定删除 ${targets.length} 个任务？`)) return
     setError('')
     try {
-      if (action === 'delete') await Promise.all(selectedTasks.map(task => deleteTask(task.id)))
-      else await Promise.all(selectedTasks.map(task => taskAction(task.id, action)))
+      if (action === 'delete') await Promise.all(targets.map(task => deleteTask(task.id)))
+      else await Promise.all(targets.map(task => taskAction(task.id, action)))
       setSelected(new Set()); await load()
     } catch (reason: any) { setError(reason.message || '任务操作失败') }
   }
@@ -105,14 +107,14 @@ export default function App() {
   }
 
   return <div className="desktop-app">
-    <DesktopToolbar commands={commands} theme={theme} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onOpen={() => selectedTasks[0]?.output_path && openExplorer(selectedTasks[0].output_path)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onUserscript={() => setShowUserscript(true)} onRefresh={load} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
+    <DesktopToolbar commands={commands} theme={theme} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onOpen={() => selectedTasks[0]?.output_path && openExplorer(selectedTasks[0].output_path)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onUserscript={() => setShowUserscript(true)} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
     <div className="workspace">
       <Sidebar tasks={tasks} active={filter} onChange={setFilter} userscript={userscript} />
       <main className="content">
         <UpdateNotice />
-        <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} ({filtered.length})</strong><span>{selected.size ? `已选择 ${selected.size} 项` : '双击任务查看详情'}</span></div>
+        <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} ({filtered.length})</strong><span>{selected.size ? `已选择 ${selected.size} 项` : '右键任务可直接操作，双击查看详情'}</span></div>
         {error && <div className="action-error">{error}</div>}
-        <TaskTable tasks={filtered} selected={selected} onSelect={setSelected} onOpenDetails={setDetails} />
+        <TaskTable tasks={filtered} selected={selected} onSelect={setSelected} onOpenDetails={setDetails} onTaskAction={(task, action) => perform(action, [task])} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openExplorer(task.output_path)} />
       </main>
     </div>
     <footer className="statusbar"><span>活动任务 <b>{running.length}</b></span><span>队列 <b>{queued}</b></span><span>总速度 <b>{fmtSpeed(totalSpeed)}</b></span><span>已完成 <b>{fmtBytes(completedSize)}</b></span><span>{userscript?.detected ? '油猴脚本已连接' : '本地服务正常'}</span></footer>
@@ -120,6 +122,7 @@ export default function App() {
     {showBatch && <div className="modal-overlay" onMouseDown={() => setShowBatch(false)}><section className="modal" onMouseDown={event => event.stopPropagation()}><header><div><h2>批量添加</h2><p>每行输入一个 m3u8 链接</p></div></header><BatchAddPanel settings={settings} onAdded={() => { setShowBatch(false); load() }} /><footer><button className="secondary-button" onClick={() => setShowBatch(false)}>关闭</button></footer></section></div>}
     {showUserscript && <UserscriptDialog onClose={() => { setShowUserscript(false); load() }} />}
     {showSettings && <SettingsPanel onClose={() => { setShowSettings(false); load() }} />}
+    {showUpdate && <UpdateDialog onClose={() => setShowUpdate(false)} />}
     {details && <TaskDetailsModal task={tasks.find(task => task.id === details.id) || details} onClose={() => setDetails(null)} onLog={() => setLogTaskId(details.id)} />}
     {logTaskId && <LogModal taskId={logTaskId} onClose={() => setLogTaskId(null)} />}
   </div>

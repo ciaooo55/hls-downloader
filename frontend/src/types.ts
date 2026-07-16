@@ -61,4 +61,5 @@ export interface UpdateInfo {
   size: number
   digest: string
   notes: string
+  download_directory: string
 }

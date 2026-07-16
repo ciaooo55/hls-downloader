@@ -1,6 +1,6 @@
 import {
   ClipboardPaste, FileText, FolderOpen, Layers3, Moon, Pause, Play,
-  Plus, RefreshCw, RotateCcw, Settings, Sun, Trash2, Users, XCircle,
+  CircleArrowUp, Plus, RefreshCw, RotateCcw, Settings, Sun, Trash2, Users, XCircle,
 } from 'lucide-react'
 import type { CommandState } from '../taskCommands'
 import type { Theme } from '../theme'
@@ -16,6 +16,7 @@ interface Props {
   onLog: () => void
   onUserscript: () => void
   onRefresh: () => void
+  onUpdate: () => void
   onSettings: () => void
   onToggleTheme: () => void
 }
@@ -51,6 +52,7 @@ export default function DesktopToolbar(props: Props) {
       <div className="tool-group">
         <ToolButton title="油猴脚本工具" onClick={props.onUserscript}><Users size={18} /></ToolButton>
         <ToolButton title="刷新任务" onClick={props.onRefresh}><RefreshCw size={18} /></ToolButton>
+        <ToolButton title="检查软件更新" onClick={props.onUpdate}><CircleArrowUp size={18} /><span>更新</span></ToolButton>
         <ToolButton title={props.theme === 'dark' ? '切换浅色主题' : '切换深色主题'} onClick={props.onToggleTheme}>{props.theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</ToolButton>
         <ToolButton title="设置" onClick={props.onSettings}><Settings size={18} /></ToolButton>
       </div>
