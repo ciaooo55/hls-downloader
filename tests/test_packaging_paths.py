@@ -86,6 +86,20 @@ def test_app_icon_is_used_by_executable_tray_ui_and_installer():
     assert 'src="/ui/app-icon.png"' in toolbar
 
 
+def test_desktop_ui_bypasses_webview_cache_and_displays_version():
+    root = Path(__file__).resolve().parent.parent
+    desktop = (root / "backend" / "desktop.py").read_text(encoding="utf-8")
+    main = (root / "backend" / "app" / "main.py").read_text(encoding="utf-8")
+    app = (root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    toolbar = (root / "frontend" / "src" / "components" / "DesktopToolbar.tsx").read_text(encoding="utf-8")
+
+    assert "/ui?version={APP_VERSION}" in desktop
+    assert '"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"' in main
+    assert "setAppVersion(healthData.version" in app
+    assert "桌面下载管理器{props.version" in toolbar
+    assert 'className="tool-button update-button"' in toolbar
+
+
 def test_windows_build_emits_setup_and_portable_assets():
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")

@@ -8,6 +8,7 @@ import type { Theme } from '../theme'
 interface Props {
   commands: CommandState
   theme: Theme
+  version: string
   onNew: () => void
   onPaste: () => void
   onBatch: () => void
@@ -31,7 +32,7 @@ export default function DesktopToolbar(props: Props) {
   const c = props.commands
   return (
     <header className="desktop-toolbar">
-      <div className="brand-block"><img className="app-mark" src="/ui/app-icon.png" alt="" /><div><strong>HLS Downloader</strong><span>桌面下载管理器</span></div></div>
+      <div className="brand-block"><img className="app-mark" src="/ui/app-icon.png" alt="" /><div><strong>HLS Downloader</strong><span>桌面下载管理器{props.version ? ` · v${props.version}` : ''}</span></div></div>
       <div className="tool-group">
         <ToolButton title="新建并识别链接" onClick={props.onNew} primary><Plus size={18} /><span>新建</span></ToolButton>
         <ToolButton title="粘贴并识别" onClick={props.onPaste}><ClipboardPaste size={18} /></ToolButton>
@@ -52,7 +53,7 @@ export default function DesktopToolbar(props: Props) {
       <div className="tool-group">
         <ToolButton title="油猴脚本工具" onClick={props.onUserscript}><Users size={18} /></ToolButton>
         <ToolButton title="刷新任务" onClick={props.onRefresh}><RefreshCw size={18} /></ToolButton>
-        <ToolButton title="检查软件更新" onClick={props.onUpdate}><CircleArrowUp size={18} /><span>更新</span></ToolButton>
+        <button className="tool-button update-button" title="检查软件更新" aria-label="检查软件更新" onClick={props.onUpdate}><CircleArrowUp size={18} /><span>更新</span></button>
         <ToolButton title={props.theme === 'dark' ? '切换浅色主题' : '切换深色主题'} onClick={props.onToggleTheme}>{props.theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</ToolButton>
         <ToolButton title="设置" onClick={props.onSettings}><Settings size={18} /></ToolButton>
       </div>

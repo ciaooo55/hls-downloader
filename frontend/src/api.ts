@@ -30,6 +30,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const fetchSettings = () => request<any>('/settings')
+export const fetchHealth = () => request<{ status: string; version: string }>('/health')
 export const saveSettings = (data: any) =>
   request<{ ok: boolean }>('/settings', { method: 'POST', body: JSON.stringify(data) })
 export const fetchTasks = () => request<any[]>('/tasks')

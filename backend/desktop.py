@@ -18,12 +18,14 @@ logger = logging.getLogger(__name__)
 try:
     from .app.config import PROJECT_ROOT, settings
     from .app.paths import RUNTIME_PATHS
+    from .app.version import APP_VERSION
     from .app.desktop_runtime import register_activation, register_shutdown
     from .app.main import app
     from .app.userscript_service import USERSCRIPT_FILENAME, export_userscript, render_userscript
 except ImportError:
     from app.config import PROJECT_ROOT, settings
     from app.paths import RUNTIME_PATHS
+    from app.version import APP_VERSION
     from app.desktop_runtime import register_activation, register_shutdown
     from app.main import app
     from app.userscript_service import USERSCRIPT_FILENAME, export_userscript, render_userscript
@@ -34,6 +36,10 @@ def public_base_url() -> str:
     if host in {"0.0.0.0", "::"}:
         host = "127.0.0.1"
     return f"http://{host}:{settings.port}"
+
+
+def desktop_ui_url() -> str:
+    return f"{public_base_url()}/ui?version={APP_VERSION}"
 
 
 class DesktopBridge:
@@ -417,7 +423,7 @@ def _run_desktop() -> int:
     bridge = DesktopBridge(folder_dialog_type=webview.FileDialog.FOLDER)
     window = webview.create_window(
         "HLS Downloader",
-        f"{public_base_url()}/ui",
+        desktop_ui_url(),
         js_api=bridge,
         width=1180,
         height=760,

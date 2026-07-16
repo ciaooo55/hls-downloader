@@ -1,5 +1,6 @@
 import sys
 import threading
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -9,13 +10,16 @@ from backend.app.desktop_runtime import (
     register_shutdown,
     request_shutdown,
 )
+from backend.app import main as main_module
 from backend.app.main import app
+import backend.desktop as desktop_module
 from backend.desktop import (
     DesktopBridge,
     DesktopController,
     StartupExitController,
     SingleInstanceLock,
     UvicornServerThread,
+    desktop_ui_url,
     public_base_url,
 )
 
@@ -329,6 +333,29 @@ def test_public_base_url_uses_loopback_for_wildcard_host(monkeypatch):
     monkeypatch.setattr(desktop_module.settings, "port", 9876)
 
     assert public_base_url() == "http://127.0.0.1:9876"
+
+
+def test_desktop_ui_url_is_versioned_to_bypass_webview_cache(monkeypatch):
+    monkeypatch.setattr(desktop_module, "APP_VERSION", "9.8.7")
+
+    assert desktop_ui_url() == f"{public_base_url()}/ui?version=9.8.7"
+
+
+def test_ui_files_disable_persistent_webview_cache(monkeypatch, tmp_path: Path):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<h1>fresh UI</h1>", encoding="utf-8")
+    (dist / "app.js").write_text("console.log('fresh')", encoding="utf-8")
+    monkeypatch.setattr(main_module, "UI_DIST", dist)
+
+    with TestClient(app) as client:
+        index = client.get("/ui?version=9.8.7")
+        asset = client.get("/ui/app.js")
+
+    assert index.status_code == 200
+    assert asset.status_code == 200
+    assert "no-store" in index.headers["cache-control"]
+    assert "no-store" in asset.headers["cache-control"]
 
 
 def test_desktop_server_configures_without_console_streams(monkeypatch):

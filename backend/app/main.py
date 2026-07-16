@@ -30,6 +30,11 @@ app.include_router(router)
 
 UI_DIST = PROJECT_ROOT / "frontend" / "dist"
 USERSCRIPT_FILE = PROJECT_ROOT / "userscript" / "m3u8-sniffer.user.js"
+UI_RESPONSE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
 
 
 @app.get("/userscript/m3u8-sniffer.user.js")
@@ -124,18 +129,18 @@ async def serve_help():
 async def serve_ui_root():
     idx = UI_DIST / "index.html"
     if idx.exists():
-        return FileResponse(idx)
+        return FileResponse(idx, headers=UI_RESPONSE_HEADERS)
     return HTMLResponse("<h2>Frontend not built</h2><p>Run: cd frontend && npm run build</p>", status_code=404)
 
 @app.get("/ui/{full_path:path}")
 async def serve_ui_files(full_path: str):
     file = UI_DIST / full_path
     if file.exists() and file.is_file():
-        return FileResponse(file)
+        return FileResponse(file, headers=UI_RESPONSE_HEADERS)
     # SPA fallback: return index.html for unknown routes
     idx = UI_DIST / "index.html"
     if idx.exists():
-        return FileResponse(idx)
+        return FileResponse(idx, headers=UI_RESPONSE_HEADERS)
     return HTMLResponse("Not found", status_code=404)
 
 @app.get("/")
