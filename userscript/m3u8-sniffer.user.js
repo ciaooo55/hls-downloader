@@ -1,8 +1,10 @@
 // ==UserScript==
 // @name         m3u8 一键下载
 // @namespace    hls-downloader
-// @version      4.1.0
+// @version      4.2.0
 // @description  打开网页自动嗅探 m3u8 资源，一键下载，实时进度，完成后可打开文件/目录
+// @compatible   Tampermonkey
+// @compatible   ScriptCat
 // @match        https://*/*
 // @exclude      http://127.0.0.1/*
 // @exclude      http://localhost/*
@@ -19,7 +21,7 @@
   // ============ Configuration ============
   const API_BASE = 'http://127.0.0.1:8765/api';
   const TOKEN = '55555'; // Must match config.json token
-  const SCRIPT_VERSION = '4.1.0';
+  const SCRIPT_VERSION = '4.2.0';
   // =======================================
 
   const found = new Map();
@@ -441,6 +443,8 @@
     btn.classList.add('sending');
     btn.disabled = true;
 
+    // The media host may differ from the page host. Anti-hotlink checks need the
+    // current page as Referer/Origin, not the bundled missav fallback.
     const data = {
       url: url,
       referer: location.href,

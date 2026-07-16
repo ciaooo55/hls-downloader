@@ -41,7 +41,7 @@ def test_userscript_ping_updates_authenticated_status_and_help_page():
     assert status.json()["page_origin"] == "https://video.example"
     assert status.json()["last_seen_at"]
     assert help_page.status_code == 200
-    assert "已检测到油猴脚本运行" in help_page.text
+    assert "已检测到浏览器脚本运行" in help_page.text
     assert "/userscript/m3u8-sniffer.user.js" in help_page.text
 
 
@@ -58,11 +58,23 @@ def test_userscript_sends_startup_ping_and_periodic_heartbeat():
     root = Path(__file__).resolve().parent.parent
     source = (root / "userscript" / "m3u8-sniffer.user.js").read_text(encoding="utf-8")
 
-    assert "const SCRIPT_VERSION = '4.1.0';" in source
+    assert "const SCRIPT_VERSION = '4.2.0';" in source
+    assert "// @compatible   Tampermonkey" in source
+    assert "// @compatible   ScriptCat" in source
     assert "apiPost('/userscript/ping'" in source
     assert "page_url: location.href" in source
     assert "setTimeout(pingDownloader, 500);" in source
     assert "setInterval(pingDownloader, 60000);" in source
+
+
+def test_userscript_uses_current_page_as_request_source_for_cross_domain_media():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "userscript" / "m3u8-sniffer.user.js").read_text(encoding="utf-8")
+
+    assert "referer: location.href" in source
+    assert "origin: location.origin" in source
+    assert "referer: 'https://missav.ai/'" not in source
+    assert "origin: 'https://missav.ai'" not in source
 
 
 def test_packaged_entry_starts_desktop_window_without_external_browser():

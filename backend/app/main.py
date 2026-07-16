@@ -61,7 +61,7 @@ async def serve_help():
     status = userscript_monitor.snapshot()
     if status.detected:
         state_class = "detected"
-        state_title = "已检测到油猴脚本运行"
+        state_title = "已检测到浏览器脚本运行"
         version = escape(status.version or "未知")
         page_origin = escape(status.page_origin or "未知页面")
         state_detail = f"版本 {version}，来源 {page_origin}"
@@ -71,7 +71,7 @@ async def serve_help():
         state_detail = "请打开一个 HTTPS 视频页面，等待几秒后刷新此页。"
     else:
         state_class = "waiting"
-        state_title = "本次启动尚未检测到油猴脚本"
+        state_title = "本次启动尚未检测到浏览器脚本"
         state_detail = "安装脚本后打开一个 HTTPS 视频页面，此页会自动更新。"
 
     return HTMLResponse(
@@ -103,9 +103,9 @@ async def serve_help():
 <body>
   <main>
     <h1>HLS Downloader 使用教程</h1>
-    <p>下载器已经启动。先安装油猴脚本，再打开视频网站。</p>
+    <p>下载器已经启动。先通过 ScriptCat 或 Tampermonkey 安装浏览器脚本，再打开视频网站。</p>
     <div class="actions">
-      <a class="button" href="/userscript/m3u8-sniffer.user.js">安装油猴脚本</a>
+      <a class="button" href="/userscript/m3u8-sniffer.user.js">安装浏览器脚本</a>
       <a class="button" href="/ui">打开下载管理器</a>
     </div>
     <div class="status {state_class}">
@@ -114,12 +114,12 @@ async def serve_help():
     </div>
     <h2>使用步骤</h2>
     <ol>
-      <li>浏览器先安装 Tampermonkey（油猴）扩展。</li>
-      <li>点击上面的“安装油猴脚本”，在油猴页面确认安装。</li>
+      <li>浏览器先安装 ScriptCat 或 Tampermonkey 扩展。</li>
+      <li>点击上面的“安装浏览器脚本”，在扩展页面确认安装。</li>
       <li>打开 HTTPS 视频页面并播放，页面右上角会出现嗅探结果。</li>
       <li>点击下载后，可回到下载管理器查看分片和合并进度。</li>
     </ol>
-    <p class="note">受浏览器安全限制，程序不能读取油猴的安装列表；这里显示的是脚本最近是否向本地下载器报到。</p>
+    <p class="note">脚本发送任务时会使用当前网页的 Referer 和 Origin，即使视频链接位于另一个域名。受浏览器安全限制，程序不能读取 ScriptCat 或 Tampermonkey 的安装列表；这里显示的是脚本最近是否向本地下载器报到。</p>
   </main>
 </body>
 </html>"""

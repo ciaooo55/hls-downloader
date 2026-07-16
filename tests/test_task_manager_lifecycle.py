@@ -238,6 +238,104 @@ def test_downloader_shutdown_cancellation_preserves_partial_files(tmp_path, monk
     asyncio.run(run())
 
 
+def test_temp_root_is_removed_only_after_all_tasks_finish_successfully(tmp_path, monkeypatch):
+    async def run():
+        manager = TaskManager()
+        first = _task("first", TaskStatus.DONE)
+        second = _task("second", TaskStatus.DOWNLOADING_SEGMENTS)
+        manager.tasks = {first.id: first, second.id: second}
+        monkeypatch.setattr(manager_module.settings, "download_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module.settings, "keep_temp_files", False)
+        temp_root = tmp_path / ".tasks"
+        (temp_root / "leftover").mkdir(parents=True)
+        (temp_root / "leftover" / "partial.seg").write_bytes(b"partial")
+
+        await manager._cleanup_temp_root_if_all_done()
+        assert temp_root.exists()
+
+        second.status = TaskStatus.DONE
+        await manager._cleanup_temp_root_if_all_done()
+        assert not temp_root.exists()
+
+    asyncio.run(run())
+
+
+def test_temp_root_is_preserved_for_failed_or_paused_tasks(tmp_path, monkeypatch):
+    async def run():
+        manager = TaskManager()
+        manager.tasks = {
+            "failed": _task("failed", TaskStatus.FAILED),
+            "paused": _task("paused", TaskStatus.PAUSED),
+        }
+        monkeypatch.setattr(manager_module.settings, "download_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module.settings, "keep_temp_files", False)
+        temp_root = tmp_path / ".tasks"
+        temp_root.mkdir()
+
+        await manager._cleanup_temp_root_if_all_done()
+        assert temp_root.exists()
+
+    asyncio.run(run())
+
+
+def test_deleting_last_task_removes_temp_root(tmp_path, monkeypatch):
+    async def fake_run_db(*args, **kwargs):
+        return None
+
+    async def run():
+        manager = TaskManager()
+        task = _task("failed", TaskStatus.FAILED)
+        manager.tasks[task.id] = task
+        monkeypatch.setattr(manager_module.settings, "download_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module.settings, "keep_temp_files", False)
+        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+        temp_root = tmp_path / ".tasks"
+        (temp_root / task.id).mkdir(parents=True)
+
+        await manager.delete_task(task.id)
+        assert not temp_root.exists()
+
+    asyncio.run(run())
+
+
+def test_new_task_registration_waits_for_final_temp_cleanup(tmp_path, monkeypatch):
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    async def fake_run_db(*args, **kwargs):
+        return None
+
+    async def delayed_to_thread(func, *args):
+        cleanup_started.set()
+        await release_cleanup.wait()
+        func(*args)
+
+    async def run():
+        manager = TaskManager()
+        done = _task("done", TaskStatus.DONE)
+        manager.tasks[done.id] = done
+        monkeypatch.setattr(manager_module.settings, "download_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module.settings, "keep_temp_files", False)
+        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+        monkeypatch.setattr(manager_module.asyncio, "to_thread", delayed_to_thread)
+        temp_root = tmp_path / ".tasks"
+        temp_root.mkdir()
+
+        cleanup = asyncio.create_task(manager._cleanup_temp_root_if_all_done())
+        await cleanup_started.wait()
+        create = asyncio.create_task(manager.create_task("https://example.test/new.m3u8"))
+        await asyncio.sleep(0)
+        assert not create.done()
+
+        release_cleanup.set()
+        await cleanup
+        new_task = await create
+        assert new_task.id in manager.tasks
+        assert not temp_root.exists()
+
+    asyncio.run(run())
+
+
 async def _async_noop(*args, **kwargs):
     return None
 

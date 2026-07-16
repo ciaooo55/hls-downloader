@@ -10,7 +10,7 @@ export default function AddTaskForm({ settings, onAdded }: { settings: any; onAd
   const [cookie, setCookie] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [filename, setFilename] = useState('')
-  const [concurrency, setConcurrency] = useState(4)
+  const [concurrency, setConcurrency] = useState(8)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const settingsApplied = useRef(false)
@@ -23,7 +23,7 @@ export default function AddTaskForm({ settings, onAdded }: { settings: any; onAd
       setOrigin(settings.default_origin || '')
       setUa(settings.default_user_agent || '')
       setCookie(settings.default_cookie || '')
-      setConcurrency(settings.default_concurrency || 4)
+      setConcurrency(settings.default_concurrency || 8)
     }
   }, [settings])
 

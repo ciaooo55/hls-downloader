@@ -61,7 +61,7 @@ def test_reports_no_candidate_for_page_without_static_hls():
 
     assert result.kind == "none"
     assert result.candidates == []
-    assert "油猴脚本" in result.message
+    assert "ScriptCat" in result.message
 
 
 def test_rejects_response_over_size_limit():

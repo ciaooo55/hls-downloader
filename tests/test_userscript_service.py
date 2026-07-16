@@ -21,13 +21,13 @@ def test_render_injects_current_api_token_and_version():
         host="127.0.0.1",
         port=9000,
         token="a'b\\c",
-        version="4.1.0",
+        version="4.2.0",
     )
 
     assert 'const API_BASE = "http://127.0.0.1:9000/api";' in rendered
     assert 'const TOKEN = "a\'b\\\\c";' in rendered
-    assert 'const SCRIPT_VERSION = "4.1.0";' in rendered
-    assert "// @version      4.1.0" in rendered
+    assert 'const SCRIPT_VERSION = "4.2.0";' in rendered
+    assert "// @version      4.2.0" in rendered
 
 
 def test_export_is_atomic_and_refuses_unconfirmed_overwrite(tmp_path):

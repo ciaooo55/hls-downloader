@@ -77,7 +77,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     <section className="modal settings-modal" onMouseDown={event => event.stopPropagation()}>
       <header><div><h2>设置</h2><p>下载目录、并发与请求参数</p></div><button className="icon-button" title="关闭" onClick={onClose}><X size={18} /></button></header>
 
-      <label>Token（油猴脚本自动使用此值）</label>
+      <label>Token（浏览器脚本自动使用此值）</label>
       <div className="input-action"><input value={settings.token || ''} readOnly /><button className="secondary-button" title="复制 Token" onClick={copyToken}><Copy size={15} />复制</button></div>
 
       <label>下载保存目录</label>
@@ -85,8 +85,8 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
       <p className="field-note">临时分片保存在下载目录的 .tasks 子目录，完成后按设置清理。</p>
 
       <div className="form-row settings-number-row">
-        <div><label>默认并发数</label><input type="number" min={1} max={64} value={settings.default_concurrency ?? 4} onChange={event => update('default_concurrency', Number(event.target.value))} /><p className="field-note">{REQUEST_FIELD_HELP.concurrency}</p></div>
-        <div><label>最大同时任务数</label><input type="number" min={1} max={16} value={settings.max_concurrent_tasks ?? 2} onChange={event => update('max_concurrent_tasks', Number(event.target.value))} /><p className="field-note">{REQUEST_FIELD_HELP.maxTasks}</p></div>
+        <div><label>默认并发数</label><input type="number" min={1} max={64} value={settings.default_concurrency ?? 8} onChange={event => update('default_concurrency', Number(event.target.value))} /><p className="field-note">{REQUEST_FIELD_HELP.concurrency}</p></div>
+        <div><label>最大同时任务数</label><input type="number" min={1} max={16} value={settings.max_concurrent_tasks ?? 3} onChange={event => update('max_concurrent_tasks', Number(event.target.value))} /><p className="field-note">{REQUEST_FIELD_HELP.maxTasks}</p></div>
       </div>
       <label>默认 Referer</label><input value={settings.default_referer || ''} onChange={event => update('default_referer', event.target.value)} placeholder={LEGACY_REQUEST_EXAMPLES.referer} />
       <p className="field-note">{REQUEST_FIELD_HELP.referer}</p>

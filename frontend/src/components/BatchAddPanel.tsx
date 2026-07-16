@@ -5,7 +5,7 @@ import { LEGACY_REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 export default function BatchAddPanel({ settings, onAdded }: { settings: any; onAdded: () => void }) {
   const [text, setText] = useState('')
   const [referer, setReferer] = useState(settings?.default_referer || '')
-  const [concurrency, setConcurrency] = useState(settings?.default_concurrency || 4)
+  const [concurrency, setConcurrency] = useState(settings?.default_concurrency || 8)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const urls = text.split('\n').map(value => value.trim()).filter(Boolean)

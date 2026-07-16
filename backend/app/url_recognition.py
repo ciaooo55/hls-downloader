@@ -104,7 +104,7 @@ async def recognize_url(url: str, headers: dict[str, str], client=None) -> Recog
             kind="none",
             final_url=final_url,
             candidates=[],
-            message="页面未发现静态 HLS，请使用油猴脚本嗅探动态媒体请求。",
+            message="页面未发现静态 HLS，请使用 ScriptCat 或 Tampermonkey 浏览器脚本嗅探动态媒体请求。",
         )
     finally:
         if owned_client:

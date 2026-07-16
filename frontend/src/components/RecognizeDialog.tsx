@@ -8,7 +8,7 @@ import { LEGACY_REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 export default function RecognizeDialog({ settings, initialUrl = '', onClose, onAdded, onNeedUserscript }: { settings: Settings; initialUrl?: string; onClose: () => void; onAdded: () => void; onNeedUserscript: () => void }) {
   const [url, setUrl] = useState(initialUrl)
   const [filename, setFilename] = useState('')
-  const [concurrency, setConcurrency] = useState(settings.default_concurrency || 4)
+  const [concurrency, setConcurrency] = useState(settings.default_concurrency || 8)
   const [advanced, setAdvanced] = useState(false)
   const [referer, setReferer] = useState(settings.default_referer || '')
   const [origin, setOrigin] = useState(settings.default_origin || '')
@@ -47,7 +47,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
     </div>}
     {error && <div className="inline-error">{error}</div>}
     {view?.mode === 'choose' && <div className="candidate-list"><strong>发现 {result?.candidates.length} 个播放清单</strong>{result?.candidates.map(candidate => <button key={candidate.url} title={candidate.url} onClick={() => startCandidate(candidate.url)}>{candidate.url}</button>)}</div>}
-    {view?.mode === 'not-found' && <div className="not-found"><p>{view.message}</p><button className="secondary-button" onClick={onNeedUserscript}>打开油猴脚本工具</button></div>}
+    {view?.mode === 'not-found' && <div className="not-found"><p>{view.message}</p><button className="secondary-button" onClick={onNeedUserscript}>打开浏览器脚本工具</button></div>}
     <footer><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={busy || !url.trim()} onClick={recognize}>{busy ? '正在识别...' : '识别并下载'}</button></footer>
   </section></div>
 }

@@ -28,7 +28,7 @@ export default function Sidebar({ tasks, active, onChange, userscript }: { tasks
         })}
       </nav>
       <div className="sidebar-script">
-        <span className="sidebar-caption">油猴脚本</span>
+        <span className="sidebar-caption">浏览器脚本</span>
         <div className={`script-state ${userscript?.detected ? 'online' : userscript?.seen_before ? 'seen' : ''}`}><Radio size={15} /><span>{userscript?.detected ? '已检测运行' : userscript?.seen_before ? '此前运行过' : '尚未检测'}</span></div>
         {userscript?.version && <small>版本 {userscript.version}</small>}
       </div>

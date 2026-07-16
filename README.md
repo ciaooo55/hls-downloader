@@ -4,7 +4,7 @@
 [![Windows Release](https://github.com/ciaooo55/hls-downloader/actions/workflows/release.yml/badge.svg)](https://github.com/ciaooo55/hls-downloader/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-一个面向 Windows 的本地 HLS/m3u8 下载器。它提供传统下载管理器风格的桌面界面、实时分片与合并进度、暂停续传、批量任务，以及配套的油猴嗅探脚本。
+一个面向 Windows 的本地 HLS/m3u8 下载器。它提供传统下载管理器风格的桌面界面、实时分片与合并进度、暂停续传、批量任务，以及配套的浏览器嗅探脚本。
 
 程序只监听 `127.0.0.1`，任务、配置和视频均保存在本机。关闭主窗口后程序会留在系统托盘继续下载，可从托盘重新打开或彻底退出。
 
@@ -16,10 +16,10 @@
 | --- | --- |
 | `HLSDownloader-Windows-x64-Setup.exe` | Windows 10/11 x64 安装版，带在线更新、卸载程序和快捷方式 |
 | `HLSDownloader-Windows-x64-Portable.zip` | Windows 10/11 x64 便携版，解压后直接运行 |
-| `m3u8-sniffer.user.js` | 可单独导入 Tampermonkey 的油猴脚本 |
+| `m3u8-sniffer.user.js` | 可单独导入 ScriptCat 或 Tampermonkey 的浏览器脚本 |
 | `SHA256SUMS.txt` | Release 文件的 SHA256 校验值 |
 
-安装包和便携包由 GitHub Actions 从源码自动构建，不保存在 Git 仓库中。程序内已包含 FFmpeg、ffprobe、前端资源和油猴脚本。
+安装包和便携包由 GitHub Actions 从源码自动构建，不保存在 Git 仓库中。程序内已包含 FFmpeg、ffprobe、前端资源和浏览器脚本。
 
 > 当前安装包没有商业代码签名证书。Windows SmartScreen 首次运行时可能显示未知发布者，请只从本仓库 Releases 下载并核对 SHA256。
 
@@ -58,21 +58,23 @@
 - 安装或升级前自动关闭正在运行的安装版或便携版实例
 - 设置页、开始菜单和 Windows“已安装的应用”卸载入口
 - 深色/浅色界面切换
-- 油猴脚本安装、导出和运行状态检测
+- ScriptCat/Tampermonkey 脚本安装、导出和运行状态检测
 
 ## 支持范围
 
 当前只支持点播 HLS。直播清单、SAMPLE-AES/DRM、独立音轨下载和字幕封装会明确提示不支持；外部字幕会跳过并记录提示。
 
-## 油猴脚本
+## 浏览器脚本
 
-1. 在浏览器安装 [Tampermonkey](https://www.tampermonkey.net/)。
-2. 启动下载器，在工具栏点击油猴脚本按钮。
+1. 在浏览器安装 [ScriptCat](https://scriptcat.org/) 或 [Tampermonkey](https://www.tampermonkey.net/)。
+2. 启动下载器，在工具栏点击浏览器脚本按钮。
 3. 可直接打开安装地址，也可一键导出 `m3u8-sniffer.user.js` 到指定目录后手动导入。
 4. 打开含视频的 HTTPS 页面并播放，脚本会显示捕获到的 HLS 地址。
 5. 点击“发送下载”，任务会出现在桌面下载器中。
 
-浏览器扩展不允许普通程序读取其脚本安装列表，因此下载器通过脚本向本地服务报到来判断它是否正在运行。
+脚本发送任务时自动使用当前网页的 Referer、Origin、User-Agent 和 Cookie。例如在 `https://123.com` 页面捕获到 `https://456.com/video.m3u8`，请求来源会使用 `123.com`，不会沿用设置中的 missav 默认值。浏览器扩展不允许普通程序读取其脚本安装列表，因此下载器通过脚本向本地服务报到来判断它是否正在运行。
+
+默认每个任务使用 8 个分片并发，最多同时下载 3 个任务。成功任务会立即清理自己的分片缓存；所有任务成功完成后，下载目录中的内部 `.tasks` 缓存目录也会删除。暂停或失败任务会保留续传和诊断文件。
 
 ## 源码运行
 
@@ -127,7 +129,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.1.10
+.\scripts\build_installer.ps1 -Version 1.1.11
 ```
 
 输出位于忽略的 `release` 目录：
@@ -146,8 +148,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.1.10
-git push origin v1.1.10
+git tag v1.1.11
+git push origin v1.1.11
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。
@@ -160,14 +162,14 @@ frontend/      React/TypeScript 下载管理界面
 installer/     NSIS 安装程序定义
 scripts/       Windows 打包脚本
 tests/         Python 自动化测试
-userscript/    Tampermonkey 嗅探脚本
+userscript/    ScriptCat/Tampermonkey 嗅探脚本
 .github/       CI 与自动 Release 工作流
 ```
 
 ## 安全说明
 
 - 服务默认只监听 `127.0.0.1`，不要改成公网地址。
-- `config.json` 中的 token 用于本机 UI 和油猴脚本通信，不是 GitHub token。
+- `config.json` 中的 token 用于本机 UI 和浏览器脚本通信，不是 GitHub token。
 - 不要把 Cookie、网站账号信息、下载记录或个人配置提交到仓库。
 - 仓库不跟踪 `bin`、`release`、数据库、下载目录和构建缓存。
 

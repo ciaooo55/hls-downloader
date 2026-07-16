@@ -18,5 +18,7 @@ describe('request field guidance', () => {
     expect(REQUEST_FIELD_HELP.cookie).toContain('不要填 Cookie:')
     expect(REQUEST_FIELD_HELP.referer).toContain('留空')
     expect(REQUEST_FIELD_HELP.origin).toContain('留空')
+    expect(REQUEST_FIELD_HELP.concurrency).toContain('当前默认 8')
+    expect(REQUEST_FIELD_HELP.maxTasks).toContain('当前默认 3')
   })
 })

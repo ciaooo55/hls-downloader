@@ -69,6 +69,7 @@ class TaskManager:
         self._event_subscribers: list[asyncio.Queue] = []
         self._sniffed: list[dict] = []
         self._pending_saves: dict[str, asyncio.Task] = {}
+        self._temp_cleanup_lock = asyncio.Lock()
 
     def _get_sem(self) -> asyncio.Semaphore:
         limit = max(1, int(settings.max_concurrent_tasks))
@@ -146,7 +147,8 @@ class TaskManager:
             created_at=now,
             updated_at=now,
         )
-        self.tasks[task_id] = task
+        async with self._temp_cleanup_lock:
+            self.tasks[task_id] = task
         await run_db(
             "INSERT INTO tasks "
             "(id,title,url,referer,origin,user_agent,cookie,filename,concurrency,"
@@ -205,6 +207,7 @@ class TaskManager:
                 raise
             finally:
                 await self._save_db(task)
+                await self._cleanup_temp_root_if_all_done()
 
         task.task_handle = asyncio.create_task(run_task(), name=f"hls-{task.id}")
 
@@ -282,6 +285,22 @@ class TaskManager:
             pending.cancel()
         await run_db("DELETE FROM tasks WHERE id=?", (task_id,))
         self._broadcast_nowait({"type": "task_deleted", "task_id": task_id})
+        await self._cleanup_temp_root_if_all_done()
+
+    async def _cleanup_temp_root_if_all_done(self) -> None:
+        async with self._temp_cleanup_lock:
+            if settings.keep_temp_files:
+                return
+            if self.tasks and any(task.status is not TaskStatus.DONE for task in self.tasks.values()):
+                return
+
+            download_dir = Path(settings.download_dir).resolve()
+            temp_root = (download_dir / ".tasks").resolve()
+            if temp_root.name != ".tasks" or temp_root.parent != download_dir:
+                logger.error("refusing to clean unexpected temp path: %s", temp_root)
+                return
+            if temp_root.exists():
+                await asyncio.to_thread(shutil.rmtree, temp_root, True)
 
     async def cleanup_orphan_temp_dirs(self) -> None:
         base = Path(settings.download_dir) / ".tasks"
@@ -290,6 +309,7 @@ class TaskManager:
         for child in base.iterdir():
             if child.is_dir() and child.name not in self.tasks:
                 shutil.rmtree(child, ignore_errors=True)
+        await self._cleanup_temp_root_if_all_done()
 
     async def load_from_db(self) -> None:
         rows = await run_db("SELECT * FROM tasks ORDER BY created_at ASC")

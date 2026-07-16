@@ -1,10 +1,10 @@
 {
-  "config_version": 2,
+  "config_version": 3,
   "host": "127.0.0.1",
   "port": 8765,
   "token": "55555",
   "download_dir": "downloads",
-  "default_concurrency": 4,
+  "default_concurrency": 8,
   "default_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0",
   "default_referer": "https://missav.ai/",
   "default_origin": "https://missav.ai",
@@ -12,5 +12,5 @@
   "ffmpeg_path": "bin\\ffmpeg.exe",
   "allowed_hosts": [],
   "keep_temp_files": false,
-  "max_concurrent_tasks": 2
+  "max_concurrent_tasks": 3
 }

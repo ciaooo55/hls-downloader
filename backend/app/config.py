@@ -7,12 +7,12 @@ PROJECT_ROOT = RUNTIME_PATHS.project_root
 CONFIG_PATH = RUNTIME_PATHS.config_path
 
 class Settings(BaseSettings):
-    config_version: int = 2
+    config_version: int = 3
     host: str = "127.0.0.1"
     port: int = 8765
     token: str = "55555"
     download_dir: str = "downloads"
-    default_concurrency: int = 4
+    default_concurrency: int = 8
     default_user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
     default_referer: str = "https://missav.ai/"
     default_origin: str = "https://missav.ai"
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     ffmpeg_path: str = "bin\\ffmpeg.exe"
     allowed_hosts: list[str] = []
     keep_temp_files: bool = False
-    max_concurrent_tasks: int = 2
+    max_concurrent_tasks: int = 3
 
     model_config = {"env_prefix": "HLS_"}
 
@@ -48,12 +48,21 @@ def load_settings() -> Settings:
     if CONFIG_PATH.exists():
         data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         migrated = False
-        if int(data.get("config_version", 1) or 1) < 2:
+        version = int(data.get("config_version", 1) or 1)
+        if version < 2:
             if not data.get("default_referer"):
                 data["default_referer"] = "https://missav.ai/"
             if not data.get("default_origin"):
                 data["default_origin"] = "https://missav.ai"
             data["config_version"] = 2
+            version = 2
+            migrated = True
+        if version < 3:
+            if int(data.get("default_concurrency", 4) or 4) == 4:
+                data["default_concurrency"] = 8
+            if int(data.get("max_concurrent_tasks", 2) or 2) == 2:
+                data["max_concurrent_tasks"] = 3
+            data["config_version"] = 3
             migrated = True
         s = Settings(**data)
         if migrated:

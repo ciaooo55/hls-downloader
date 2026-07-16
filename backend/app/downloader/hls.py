@@ -249,7 +249,7 @@ class HLSDownloader:
             task.progress.connection_status = "connecting"
             self._set_stage("downloading_m3u8", "正在获取 m3u8 清单")
 
-            concurrency = max(1, int(task.concurrency or settings.default_concurrency or 4))
+            concurrency = max(1, int(task.concurrency or settings.default_concurrency or 8))
             task.concurrency = concurrency
             headers = self._headers()
             async with _create_hls_client(concurrency) as client:
