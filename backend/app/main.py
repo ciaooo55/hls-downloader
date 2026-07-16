@@ -10,9 +10,11 @@ from .api import router
 from .downloader.task_manager import manager
 from .userscript_monitor import userscript_monitor
 from .userscript_service import render_userscript
+from .updater import cleanup_update_cache
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    cleanup_update_cache()
     await manager.load_from_db()
     try:
         await manager.cleanup_orphan_temp_dirs()

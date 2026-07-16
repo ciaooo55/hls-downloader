@@ -14,7 +14,7 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `HLSDownloader-Windows-x64-Setup.exe` | Windows 10/11 x64 安装版，带卸载程序和快捷方式 |
+| `HLSDownloader-Windows-x64-Setup.exe` | Windows 10/11 x64 安装版，带在线更新、卸载程序和快捷方式 |
 | `HLSDownloader-Windows-x64-Portable.zip` | Windows 10/11 x64 便携版，解压后直接运行 |
 | `m3u8-sniffer.user.js` | 可单独导入 Tampermonkey 的油猴脚本 |
 | `SHA256SUMS.txt` | Release 文件的 SHA256 校验值 |
@@ -48,6 +48,8 @@
 - fMP4 init map、map 切换和 discontinuity
 - 重启恢复任务历史
 - Windows 系统托盘、单实例唤醒和可靠退出
+- 启动检查更新、SHA256 校验和一键下载安装
+- 安装或升级前自动关闭正在运行的安装版或便携版实例
 - 设置页、开始菜单和 Windows“已安装的应用”卸载入口
 - 深色/浅色界面切换
 - 油猴脚本安装、导出和运行状态检测
@@ -119,7 +121,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.1.6
+.\scripts\build_installer.ps1 -Version 1.1.7
 ```
 
 输出位于忽略的 `release` 目录：
@@ -138,8 +140,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.1.6
-git push origin v1.1.6
+git tag v1.1.7
+git push origin v1.1.7
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。

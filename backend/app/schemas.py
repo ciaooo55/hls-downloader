@@ -2,6 +2,8 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from urllib.parse import urlparse
 
+from .version import APP_VERSION
+
 class TaskCreate(BaseModel):
     url: str
     referer: str = ""
@@ -81,7 +83,7 @@ class SettingsUpdate(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "1.1.6"
+    version: str = APP_VERSION
 
 
 class UserscriptPing(BaseModel):

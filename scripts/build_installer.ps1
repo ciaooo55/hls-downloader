@@ -1,7 +1,7 @@
 param(
     [switch]$SkipFrontend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.1.6"
+    [string]$Version = "1.1.7"
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,6 +10,8 @@ $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $FrontendDir = Join-Path $Root "frontend"
 $BackendDir = Join-Path $Root "backend"
 $UserscriptDir = Join-Path $Root "userscript"
+$AssetsDir = Join-Path $Root "assets"
+$IconFile = Join-Path $AssetsDir "app-icon.ico"
 $StageDir = Join-Path $Root "build\installer\stage"
 $PortableStage = Join-Path $Root "build\installer\portable"
 $ReleaseDir = Join-Path $Root "release"
@@ -132,6 +134,9 @@ Invoke-Step "Prepare directories" {
     Remove-Item -Recurse -Force $StageDir, $PortableStage -ErrorAction SilentlyContinue
     Remove-Item -Force $InstallerOut, $PortableOut, $UserscriptOut, $ChecksumsOut -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $StageDir, $ReleaseDir, $BinDir, $ToolsDir | Out-Null
+    if (-not (Test-Path -LiteralPath $IconFile)) {
+        throw "Application icon is missing: $IconFile"
+    }
 }
 
 Invoke-Step "Prepare FFmpeg tools" {
@@ -172,6 +177,7 @@ Invoke-Step "Build backend executable" {
             --onedir `
             --noconsole `
             --name HLSDownloader `
+            --icon $IconFile `
             --paths . `
             --collect-all webview `
             --collect-all pystray `
@@ -192,6 +198,10 @@ Invoke-Step "Stage application files" {
     Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloader\*") -Destination $StageDir -Recurse -Force
     Copy-Item -Path (Join-Path $Root "config.json") -Destination $StageDir
     Copy-Item -Path $WebViewBootstrapper -Destination $StageDir
+
+    New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "assets") | Out-Null
+    Copy-Item -Path (Join-Path $AssetsDir "app-icon.png") -Destination (Join-Path $StageDir "assets")
+    Copy-Item -Path $IconFile -Destination (Join-Path $StageDir "assets")
 
     New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "bin") | Out-Null
     Copy-Item -Path (Join-Path $Root "bin\ffmpeg.exe") -Destination (Join-Path $StageDir "bin")
@@ -226,6 +236,18 @@ if (-not $SkipSmoke) {
                 }
                 if (-not $ok) {
                     throw "Packaged app did not respond on /api/health"
+                }
+
+                $secondProc = Start-Process -FilePath $smokeExe -WorkingDirectory $StageDir -PassThru -WindowStyle Hidden
+                if (-not $secondProc.WaitForExit(12000)) {
+                    Stop-Process -Id $secondProc.Id -Force -ErrorAction SilentlyContinue
+                    throw "Single-instance check failed: second packaged process did not exit"
+                }
+                $proc.Refresh()
+                $samePathProcesses = @(Get-Process HLSDownloader -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Path -eq $smokeExe })
+                if ($proc.HasExited -or $samePathProcesses.Count -ne 1) {
+                    throw "Single-instance check failed: expected exactly one packaged process"
                 }
 
                 $shutdownAccepted = $false
@@ -299,7 +321,7 @@ if (-not $SkipSmoke) {
 
 Invoke-Step "Build NSIS installer" {
     $makensis = Get-MakeNsis
-    & $makensis "/INPUTCHARSET" "UTF8" "/DAPP_VERSION=$Version" "/DSTAGE_DIR=$StageDir" "/DOUT_FILE=$InstallerOut" $InstallerScript
+    & $makensis "/INPUTCHARSET" "UTF8" "/DAPP_VERSION=$Version" "/DSTAGE_DIR=$StageDir" "/DICON_FILE=$IconFile" "/DOUT_FILE=$InstallerOut" $InstallerScript
     if ($LASTEXITCODE -ne 0) {
         throw "makensis failed with exit code $LASTEXITCODE"
     }

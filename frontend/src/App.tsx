@@ -14,6 +14,7 @@ import UserscriptDialog from './components/UserscriptDialog'
 import SettingsPanel from './components/SettingsPanel'
 import BatchAddPanel from './components/BatchAddPanel'
 import LogModal from './components/LogModal'
+import UpdateNotice from './components/UpdateNotice'
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([])
@@ -108,6 +109,7 @@ export default function App() {
     <div className="workspace">
       <Sidebar tasks={tasks} active={filter} onChange={setFilter} userscript={userscript} />
       <main className="content">
+        <UpdateNotice />
         <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} ({filtered.length})</strong><span>{selected.size ? `已选择 ${selected.size} 项` : '双击任务查看详情'}</span></div>
         {error && <div className="action-error">{error}</div>}
         <TaskTable tasks={filtered} selected={selected} onSelect={setSelected} onOpenDetails={setDetails} />

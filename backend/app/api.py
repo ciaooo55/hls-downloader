@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Header, Request
 from fastapi.responses import StreamingResponse
@@ -22,6 +23,7 @@ from .utils import get_domain
 from .userscript_monitor import userscript_monitor
 from .desktop_runtime import activate_window, request_shutdown
 from .url_recognition import RecognitionError, recognize_url
+from .updater import UpdateError, update_service
 
 router = APIRouter(prefix="/api")
 
@@ -59,6 +61,32 @@ async def activate_desktop_app(x_token: str = Header(default="")):
 async def shutdown_desktop_app(x_token: str = Header(default="")):
     _check_token(x_token)
     return {"ok": request_shutdown()}
+
+
+@router.get("/update/check")
+async def check_update(force: bool = False, x_token: str = Header(default="")):
+    _check_token(x_token)
+    try:
+        info = await asyncio.to_thread(update_service.check, force=force)
+    except UpdateError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return info.to_dict()
+
+
+@router.post("/update/install")
+async def install_update(x_token: str = Header(default="")):
+    _check_token(x_token)
+    try:
+        info = await asyncio.to_thread(update_service.download_and_launch)
+    except UpdateError as exc:
+        status = 409 if any(
+            marker in str(exc) for marker in ("重复", "正在下载", "已经启动")
+        ) else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    timer = threading.Timer(0.75, request_shutdown)
+    timer.daemon = True
+    timer.start()
+    return {"ok": True, "version": info.latest_version}
 
 
 @router.post("/recognize")

@@ -50,3 +50,15 @@ export interface UserscriptStatus {
   page_origin: string
   last_seen_at: string
 }
+
+export interface UpdateInfo {
+  current_version: string
+  latest_version: string
+  available: boolean
+  can_auto_install: boolean
+  release_url: string
+  download_url: string
+  size: number
+  digest: string
+  notes: string
+}

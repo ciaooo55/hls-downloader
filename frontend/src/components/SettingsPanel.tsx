@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { ChevronDown, ChevronRight, Copy, FolderOpen, Trash2, X } from 'lucide-react'
-import { fetchSettings, openExplorer, saveSettings } from '../api'
+import { ChevronDown, ChevronRight, Copy, Download, FolderOpen, RefreshCw, Trash2, X } from 'lucide-react'
+import { fetchSettings, fetchUpdateInfo, installUpdate, openExplorer, saveSettings } from '../api'
 import { beginUninstall, getDesktopInfo } from '../desktop'
 import { LEGACY_REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
+import type { UpdateInfo } from '../types'
 import FolderPicker from './FolderPicker'
 
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
@@ -12,10 +13,14 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [uninstallAvailable, setUninstallAvailable] = useState(false)
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [installingUpdate, setInstallingUpdate] = useState(false)
 
   useEffect(() => {
     fetchSettings().then(setSettings).catch(reason => setError(reason.message || '加载设置失败'))
     getDesktopInfo().then(info => setUninstallAvailable(info.installed === true))
+    fetchUpdateInfo().then(setUpdateInfo).catch(() => {})
   }, [])
 
   const update = (key: string, value: unknown) => setSettings((current: any) => ({ ...current, [key]: value }))
@@ -43,6 +48,29 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     setError('')
     const result = await beginUninstall()
     if (!result.ok && !result.canceled) setError(result.error || '无法启动卸载程序')
+  }
+  const checkUpdate = async () => {
+    setCheckingUpdate(true)
+    setError('')
+    try {
+      setUpdateInfo(await fetchUpdateInfo(true))
+    } catch (reason: any) {
+      setError(reason.message || '检查更新失败')
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }
+  const updateApp = async () => {
+    if (!updateInfo?.available) return
+    if (!window.confirm(`下载安装 v${updateInfo.latest_version}？下载器将在安装前自动关闭。`)) return
+    setInstallingUpdate(true)
+    setError('')
+    try {
+      await installUpdate()
+    } catch (reason: any) {
+      setError(reason.message || '更新失败')
+      setInstallingUpdate(false)
+    }
   }
 
   return <div className="modal-overlay" onMouseDown={onClose}>
@@ -79,6 +107,12 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
       </div>}
 
       {error && <div className="inline-error">{error}</div>}
+      <div className="app-management">
+        <div><strong>软件更新</strong><span>{updateInfo ? `当前 v${updateInfo.current_version} · ${updateInfo.available ? `可更新到 v${updateInfo.latest_version}` : '已是最新版本'}` : '尚未检查'}</span></div>
+        {updateInfo?.available && updateInfo.can_auto_install
+          ? <button className="primary-button" disabled={installingUpdate} onClick={updateApp}><Download size={15} />{installingUpdate ? '正在下载…' : '下载安装'}</button>
+          : <button className="secondary-button" disabled={checkingUpdate} onClick={checkUpdate}><RefreshCw size={15} />{checkingUpdate ? '检查中…' : '检查更新'}</button>}
+      </div>
       {uninstallAvailable && <div className="app-management">
         <div><strong>卸载程序</strong><span>删除程序、设置、任务历史和缓存</span></div>
         <button className="danger-button" onClick={uninstall}><Trash2 size={15} />卸载</button>

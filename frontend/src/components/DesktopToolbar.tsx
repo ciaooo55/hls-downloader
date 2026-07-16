@@ -30,7 +30,7 @@ export default function DesktopToolbar(props: Props) {
   const c = props.commands
   return (
     <header className="desktop-toolbar">
-      <div className="brand-block"><div className="app-mark">H</div><div><strong>HLS Downloader</strong><span>桌面下载管理器</span></div></div>
+      <div className="brand-block"><img className="app-mark" src="/ui/app-icon.png" alt="" /><div><strong>HLS Downloader</strong><span>桌面下载管理器</span></div></div>
       <div className="tool-group">
         <ToolButton title="新建并识别链接" onClick={props.onNew} primary><Plus size={18} /><span>新建</span></ToolButton>
         <ToolButton title="粘贴并识别" onClick={props.onPaste}><ClipboardPaste size={18} /></ToolButton>

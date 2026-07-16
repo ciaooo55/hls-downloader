@@ -184,6 +184,11 @@ def shutdown_existing_instance() -> bool:
 def _create_tray_image():
     from PIL import Image, ImageDraw
 
+    icon_path = Path(PROJECT_ROOT) / "assets" / "app-icon.png"
+    if icon_path.is_file():
+        with Image.open(icon_path) as source:
+            return source.convert("RGBA").resize((64, 64), Image.Resampling.LANCZOS)
+
     image = Image.new("RGBA", (64, 64), (23, 25, 29, 255))
     draw = ImageDraw.Draw(image)
     draw.rounded_rectangle((8, 8, 56, 56), radius=10, fill=(39, 43, 50, 255))
@@ -336,6 +341,45 @@ class StartupExitController:
             self._active = False
 
 
+class SingleInstanceLock:
+    ERROR_ALREADY_EXISTS = 183
+
+    def __init__(self, name: str = "Local\\HLSDownloader.ciaooo55", kernel32=None) -> None:
+        self.name = name
+        self.kernel32 = kernel32
+        self.handle = None
+
+    def acquire(self) -> bool:
+        if os.name != "nt" and self.kernel32 is None:
+            return True
+        if self.kernel32 is None:
+            import ctypes
+
+            self.kernel32 = ctypes.windll.kernel32
+        handle = self.kernel32.CreateMutexW(None, False, self.name)
+        if not handle:
+            raise OSError("无法创建单实例锁")
+        if self.kernel32.GetLastError() == self.ERROR_ALREADY_EXISTS:
+            self.kernel32.CloseHandle(handle)
+            return False
+        self.handle = handle
+        return True
+
+    def release(self) -> None:
+        if self.handle is not None:
+            self.kernel32.CloseHandle(self.handle)
+            self.handle = None
+
+
+def _activate_existing_with_retry(timeout: float = 8) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if activate_existing_instance():
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def _show_startup_error(message: str) -> None:
     try:
         import ctypes
@@ -345,11 +389,7 @@ def _show_startup_error(message: str) -> None:
         print(message, flush=True)
 
 
-def main() -> int:
-    if "--shutdown" in sys.argv[1:]:
-        shutdown_existing_instance()
-        return 0
-
+def _run_desktop() -> int:
     if activate_existing_instance():
         return 0
 
@@ -411,3 +451,18 @@ def main() -> int:
             controller.request_exit()
             controller.wait_for_shutdown(timeout=20)
     return 0
+
+
+def main() -> int:
+    if "--shutdown" in sys.argv[1:]:
+        shutdown_existing_instance()
+        return 0
+
+    instance_lock = SingleInstanceLock()
+    if not instance_lock.acquire():
+        _activate_existing_with_retry()
+        return 0
+    try:
+        return _run_desktop()
+    finally:
+        instance_lock.release()

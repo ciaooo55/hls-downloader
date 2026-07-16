@@ -6,7 +6,7 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.1.6"
+  !define APP_VERSION "1.1.7"
 !endif
 !define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
@@ -18,13 +18,21 @@ Unicode true
   !define OUT_FILE "HLSDownloaderSetup.exe"
 !endif
 
+!ifndef ICON_FILE
+  !error "ICON_FILE is required. Pass /DICON_FILE=<path> to makensis."
+!endif
+
 Name "${APP_NAME}"
 OutFile "${OUT_FILE}"
+Icon "${ICON_FILE}"
+UninstallIcon "${ICON_FILE}"
 InstallDir "$LOCALAPPDATA\Programs\HLS Downloader"
 InstallDirRegKey HKCU "Software\${APP_NAME}" "InstallDir"
 RequestExecutionLevel user
 
 !define MUI_ABORTWARNING
+!define MUI_ICON "${ICON_FILE}"
+!define MUI_UNICON "${ICON_FILE}"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -39,7 +47,20 @@ RequestExecutionLevel user
 !insertmacro MUI_LANGUAGE "English"
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
+!macro CloseRunningApp Suffix
+  IfFileExists "$INSTDIR\HLSDownloader.exe" 0 CloseRunningAppForce${Suffix}
+    DetailPrint "正在关闭运行中的 HLS Downloader..."
+    ExecWait '$\"$INSTDIR\HLSDownloader.exe$\" --shutdown'
+    Sleep 3500
+CloseRunningAppForce${Suffix}:
+    nsExec::ExecToStack 'taskkill /IM HLSDownloader.exe /F'
+    Pop $0
+    Pop $1
+    Sleep 500
+!macroend
+
 Section "Install" SecInstall
+  !insertmacro CloseRunningApp Install
   SetOutPath "$INSTDIR"
 
   File "${STAGE_DIR}\HLSDownloader.exe"
@@ -74,6 +95,10 @@ Section "Install" SecInstall
   SetOutPath "$INSTDIR\userscript"
   File "${STAGE_DIR}\userscript\m3u8-sniffer.user.js"
 
+  SetOutPath "$INSTDIR\assets"
+  File "${STAGE_DIR}\assets\app-icon.png"
+  File "${STAGE_DIR}\assets\app-icon.ico"
+
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
@@ -95,14 +120,7 @@ Section "Install" SecInstall
 SectionEnd
 
 Section "Uninstall"
-  DetailPrint "正在关闭 HLS Downloader..."
-  IfFileExists "$INSTDIR\HLSDownloader.exe" 0 ShutdownDone
-    ExecWait '$\"$INSTDIR\HLSDownloader.exe$\" --shutdown'
-    Sleep 2000
-    nsExec::ExecToStack 'taskkill /IM HLSDownloader.exe /F'
-    Pop $1
-    Pop $2
-ShutdownDone:
+  !insertmacro CloseRunningApp Uninstall
 
   StrCpy $0 "preserve"
   IfSilent RemoveApplicationData
@@ -128,6 +146,7 @@ RemoveApplicationData:
   Delete "$INSTDIR\Uninstall.exe"
   RMDir /r "$INSTDIR\frontend"
   RMDir /r "$INSTDIR\userscript"
+  RMDir /r "$INSTDIR\assets"
   RMDir /r "$INSTDIR\bin"
   RMDir /r "$INSTDIR\_internal"
   RMDir /r "$INSTDIR\.webview"

@@ -52,6 +52,10 @@ export const browseDir = (path: string = '') =>
 export const testConnection = () => request<any>('/test')
 export const recognizeUrl = (data: any) => request<any>('/recognize', { method: 'POST', body: JSON.stringify(data) })
 export const fetchUserscriptStatus = () => request<any>('/userscript/status')
+export const fetchUpdateInfo = (force = false) =>
+  request<any>(`/update/check${force ? '?force=true' : ''}`)
+export const installUpdate = () =>
+  request<{ ok: boolean; version: string }>('/update/install', { method: 'POST' })
 
 export function connectSSE(
   onEvent: (event: any) => void,

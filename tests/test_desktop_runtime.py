@@ -14,6 +14,7 @@ from backend.desktop import (
     DesktopBridge,
     DesktopController,
     StartupExitController,
+    SingleInstanceLock,
     UvicornServerThread,
     public_base_url,
 )
@@ -65,6 +66,21 @@ class FakeTray:
         self.calls.append("stop")
 
 
+class FakeKernel32:
+    def __init__(self, last_error: int = 0) -> None:
+        self.last_error = last_error
+        self.closed: list[int] = []
+
+    def CreateMutexW(self, *_args):
+        return 42
+
+    def GetLastError(self):
+        return self.last_error
+
+    def CloseHandle(self, handle):
+        self.closed.append(handle)
+
+
 def test_window_close_hides_to_tray_and_keeps_server_running():
     window = FakeWindow()
     server = FakeServer()
@@ -75,6 +91,25 @@ def test_window_close_hides_to_tray_and_keeps_server_running():
     assert server.calls == []
     assert window.calls == ["hide"]
     assert "destroy" not in window.calls
+
+
+def test_single_instance_lock_holds_and_releases_windows_mutex():
+    kernel = FakeKernel32()
+    lock = SingleInstanceLock(kernel32=kernel)
+
+    assert lock.acquire() is True
+    assert kernel.closed == []
+    lock.release()
+
+    assert kernel.closed == [42]
+
+
+def test_single_instance_lock_rejects_second_process():
+    kernel = FakeKernel32(last_error=SingleInstanceLock.ERROR_ALREADY_EXISTS)
+    lock = SingleInstanceLock(kernel32=kernel)
+
+    assert lock.acquire() is False
+    assert kernel.closed == [42]
 
 
 def test_exit_stops_server_and_tray_before_destroying_window():

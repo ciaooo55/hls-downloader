@@ -67,6 +67,25 @@ def test_installer_build_and_nsis_include_userscript():
     assert 'RMDir /r "$INSTDIR\\userscript"' in nsis_script
 
 
+def test_app_icon_is_used_by_executable_tray_ui_and_installer():
+    root = Path(__file__).resolve().parent.parent
+    build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
+    nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
+    desktop = (root / "backend" / "desktop.py").read_text(encoding="utf-8")
+    toolbar = (root / "frontend" / "src" / "components" / "DesktopToolbar.tsx").read_text(encoding="utf-8")
+
+    assert (root / "assets" / "app-icon.ico").stat().st_size > 10_000
+    assert (root / "assets" / "app-icon.png").stat().st_size > 10_000
+    assert "--icon $IconFile" in build_script
+    assert 'Copy-Item -Path (Join-Path $AssetsDir "app-icon.png")' in build_script
+    assert 'Icon "${ICON_FILE}"' in nsis_script
+    assert 'UninstallIcon "${ICON_FILE}"' in nsis_script
+    assert '!define MUI_ICON "${ICON_FILE}"' in nsis_script
+    assert '!define MUI_UNICON "${ICON_FILE}"' in nsis_script
+    assert 'assets" / "app-icon.png"' in desktop
+    assert 'src="/ui/app-icon.png"' in toolbar
+
+
 def test_windows_build_emits_setup_and_portable_assets():
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
@@ -131,6 +150,9 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     assert 'Set-Content -LiteralPath $smokePortableMarker' in build_script
     assert 'Remove-Item -LiteralPath $smokePortableMarker' in build_script
     assert 'Join-Path $StageDir ".webview"' in build_script
+    assert '!insertmacro CloseRunningApp Install' in nsis_script
+    assert '!insertmacro CloseRunningApp Uninstall' in nsis_script
+    assert "Sleep 3500" in nsis_script
 
 
 def test_windows_package_uses_onedir_and_smoke_tests_graceful_shutdown():
@@ -143,6 +165,8 @@ def test_windows_package_uses_onedir_and_smoke_tests_graceful_shutdown():
     assert 'dist\\HLSDownloader\\*' in build_script
     assert 'api/app/shutdown' in build_script
     assert 'Graceful shutdown failed' in build_script
+    assert "Single-instance check failed" in build_script
+    assert "$secondProc.WaitForExit(12000)" in build_script
     assert '${STAGE_DIR}\\_internal' in nsis_script
     assert 'RMDir /r "$INSTDIR\\_internal"' in nsis_script
 
