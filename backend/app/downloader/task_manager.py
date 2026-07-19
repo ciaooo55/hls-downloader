@@ -11,6 +11,7 @@ from ..database import run_db
 from ..models import Task, TaskProgress, TaskStatus
 from ..utils import sanitize_filename
 from .hls import HLSDownloader
+from .playback import MIN_START_DURATION, PlaybackError, playback_service
 
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,13 @@ TERMINAL_STATUSES = {
     TaskStatus.FAILED,
     TaskStatus.CANCELED,
     TaskStatus.UNSUPPORTED,
+}
+PLAYBACK_STATUSES = {
+    TaskStatus.DOWNLOADING_SEGMENTS,
+    TaskStatus.PAUSING,
+    TaskStatus.PAUSED,
+    TaskStatus.MERGING,
+    TaskStatus.REMUXING,
 }
 
 
@@ -70,6 +78,7 @@ class TaskManager:
         self._sniffed: list[dict] = []
         self._pending_saves: dict[str, asyncio.Task] = {}
         self._temp_cleanup_lock = asyncio.Lock()
+        self._maintenance_task: asyncio.Task | None = None
 
     def _get_sem(self) -> asyncio.Semaphore:
         limit = max(1, int(settings.max_concurrent_tasks))
@@ -137,12 +146,28 @@ class TaskManager:
             actions.append("cancel")
         if task.status in {TaskStatus.FAILED, TaskStatus.CANCELED, TaskStatus.UNSUPPORTED} and not live:
             actions.append("retry")
+        if self._playback_ready(task):
+            actions.append("preview")
         if task.status is TaskStatus.DONE and task.output_path:
             actions.extend(("launch", "open"))
         actions.append("log")
         if task.status in TERMINAL_STATUSES and not live:
             actions.append("delete")
         return actions
+
+    @staticmethod
+    def _playback_ready(task: Task) -> bool:
+        if task.status is TaskStatus.DONE and task.output_path:
+            return True
+        progress = task.progress
+        return (
+            task.status in PLAYBACK_STATUSES
+            and progress.playable_segments > 0
+            and (
+                progress.playable_duration >= MIN_START_DURATION
+                or progress.playable_segments == progress.total_segments
+            )
+        )
 
     def get_queue_position(self, task: Task) -> int:
         if task.status is not TaskStatus.QUEUED or not self._has_live_handle(task):
@@ -307,8 +332,7 @@ class TaskManager:
         task.progress.active_workers = 0
         task.progress.active_slots = 0
         await self._save_db(task)
-        if not settings.keep_temp_files:
-            shutil.rmtree(Path(settings.download_dir) / ".tasks" / task_id, ignore_errors=True)
+        await self._cleanup_task_temp(task)
 
     async def retry_task(self, task_id: str) -> None:
         task = self._get_task(task_id)
@@ -328,6 +352,7 @@ class TaskManager:
         task.started_at = ""
         task.finished_at = ""
         task.progress = TaskProgress()
+        playback_service.invalidate(task.id)
         await self._save_db(task)
         await self.start_task(task_id)
 
@@ -335,13 +360,58 @@ class TaskManager:
         task = self._get_task(task_id)
         if task.task_handle and not task.task_handle.done():
             await self.cancel_task(task_id)
+        playback_service.close_task(task_id)
         self.tasks.pop(task_id, None)
         pending = self._pending_saves.pop(task_id, None)
         if pending and not pending.done():
             pending.cancel()
         await run_db("DELETE FROM tasks WHERE id=?", (task_id,))
+        task_dir = Path(settings.download_dir) / ".tasks" / task_id
+        if task_dir.exists() and not settings.keep_temp_files:
+            await asyncio.to_thread(shutil.rmtree, task_dir, True)
         self._broadcast_nowait({"type": "task_deleted", "task_id": task_id})
         await self._cleanup_temp_root_if_all_done()
+
+    async def release_playback(self, task_id: str, session_id: str) -> bool:
+        task = self._get_task(task_id)
+        closed = playback_service.close(task_id, session_id)
+        if closed:
+            await self._cleanup_task_temp(task)
+            await self._cleanup_temp_root_if_all_done()
+        return closed
+
+    async def _cleanup_task_temp(self, task: Task) -> None:
+        if settings.keep_temp_files:
+            return
+        task_dir = Path(settings.download_dir) / ".tasks" / task.id
+        if not task_dir.exists():
+            return
+        cleanup = None
+        if task.status in {TaskStatus.DONE, TaskStatus.CANCELED}:
+            cleanup = lambda: shutil.rmtree(task_dir, ignore_errors=True)
+        elif task.status in {TaskStatus.FAILED, TaskStatus.UNSUPPORTED}:
+            cleanup = lambda: self._trim_failed_task_dir(task_dir)
+        if cleanup is not None:
+            await asyncio.to_thread(
+                playback_service.cleanup_if_inactive,
+                task.id,
+                cleanup,
+            )
+
+    @staticmethod
+    def _trim_failed_task_dir(task_dir: Path) -> None:
+        keep = {"download.log", "playlist.m3u8"}
+        try:
+            children = list(task_dir.iterdir())
+        except FileNotFoundError:
+            return
+        for child in children:
+            if child.name in keep:
+                continue
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
 
     async def _cleanup_temp_root_if_all_done(self) -> None:
         async with self._temp_cleanup_lock:
@@ -356,15 +426,24 @@ class TaskManager:
                 logger.error("refusing to clean unexpected temp path: %s", temp_root)
                 return
             if temp_root.exists():
-                await asyncio.to_thread(shutil.rmtree, temp_root, True)
+                await asyncio.to_thread(
+                    playback_service.cleanup_if_no_active,
+                    set(self.tasks),
+                    lambda: shutil.rmtree(temp_root, ignore_errors=True),
+                )
 
     async def cleanup_orphan_temp_dirs(self) -> None:
         base = Path(settings.download_dir) / ".tasks"
         if not base.exists() or settings.keep_temp_files:
             return
         for child in base.iterdir():
-            if child.is_dir() and child.name not in self.tasks:
+            if not child.is_dir():
+                continue
+            task = self.tasks.get(child.name)
+            if task is None:
                 shutil.rmtree(child, ignore_errors=True)
+            elif task.status in {TaskStatus.DONE, TaskStatus.CANCELED}:
+                await self._cleanup_task_temp(task)
         await self._cleanup_temp_root_if_all_done()
 
     async def load_from_db(self) -> None:
@@ -389,6 +468,9 @@ class TaskManager:
                 speed_bytes_per_sec=float(_row_value(row, "speed_bytes_per_sec", 0) or 0),
                 eta_seconds=float(_row_value(row, "eta_seconds", 0) or 0),
                 post_percent=float(_row_value(row, "post_percent", 0) or 0),
+                playable_segments=int(_row_value(row, "playable_segments", 0) or 0),
+                playable_duration=float(_row_value(row, "playable_duration", 0) or 0),
+                media_duration=float(_row_value(row, "media_duration", 0) or 0),
                 connection_status="idle",
             )
             task = Task(
@@ -418,6 +500,15 @@ class TaskManager:
                 started_at=_row_value(row, "started_at", "") or "",
                 finished_at=_row_value(row, "finished_at", "") or "",
             )
+            if status in PLAYBACK_STATUSES:
+                try:
+                    snapshot = playback_service.snapshot(task.id, status.value, task.output_path)
+                    task.progress.playable_segments = snapshot.available_segments
+                    task.progress.playable_duration = snapshot.available_duration
+                    task.progress.media_duration = snapshot.total_duration
+                except PlaybackError:
+                    task.progress.playable_segments = 0
+                    task.progress.playable_duration = 0
             self.tasks[task.id] = task
             if status is not stored_status:
                 interrupted.append(task)
@@ -431,6 +522,7 @@ class TaskManager:
                 "UPDATE tasks SET status=?,stage=?,last_log=?,total_segments=?,"
                 "completed_segments=?,failed_segments=?,downloaded_bytes=?,total_bytes=?,"
                 "speed_bytes_per_sec=?,eta_seconds=?,post_percent=?,error_message=?,"
+                "playable_segments=?,playable_duration=?,media_duration=?,"
                 "error_code=?,error_stage=?,error_url=?,error_hint=?,http_status=?,"
                 "error_attempt=?,output_path=?,updated_at=?,started_at=?,finished_at=? WHERE id=?",
                 (
@@ -446,6 +538,9 @@ class TaskManager:
                     task.progress.eta_seconds,
                     task.progress.post_percent,
                     task.error_message,
+                    task.progress.playable_segments,
+                    task.progress.playable_duration,
+                    task.progress.media_duration,
                     task.error_code,
                     task.error_stage,
                     task.error_url,
@@ -485,6 +580,10 @@ class TaskManager:
         self._pending_saves[task.id] = asyncio.create_task(delayed_save())
 
     async def shutdown(self) -> None:
+        if self._maintenance_task and not self._maintenance_task.done():
+            self._maintenance_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._maintenance_task
         handles = [
             task.task_handle
             for task in self.tasks.values()
@@ -495,6 +594,21 @@ class TaskManager:
         await asyncio.gather(*handles, return_exceptions=True)
         for task in self.tasks.values():
             await self._write_db(task)
+
+    def start_maintenance(self) -> None:
+        if self._maintenance_task and not self._maintenance_task.done():
+            return
+
+        async def maintain() -> None:
+            while True:
+                await asyncio.sleep(30)
+                for task_id in playback_service.expire():
+                    task = self.tasks.get(task_id)
+                    if task is not None:
+                        await self._cleanup_task_temp(task)
+                await self._cleanup_temp_root_if_all_done()
+
+        self._maintenance_task = asyncio.create_task(maintain(), name="playback-cleanup")
 
     def _task_event(self, task: Task, event_type: str = "task_progress") -> dict:
         progress = task.progress
@@ -528,6 +642,10 @@ class TaskManager:
             "post_percent": progress.post_percent,
             "active_slots": progress.active_slots,
             "active_segment_indexes": list(progress.active_segment_indexes),
+            "playable_segments": progress.playable_segments,
+            "playable_duration": progress.playable_duration,
+            "media_duration": progress.media_duration,
+            "playback_ready": self._playback_ready(task),
             "error_message": task.error_message,
             "error_code": task.error_code,
             "error_stage": task.error_stage,

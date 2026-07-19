@@ -32,6 +32,24 @@ export interface Task {
   finished_at: string
   available_actions: string[]
   queue_position: number
+  playable_segments: number
+  playable_duration: number
+  media_duration: number
+  playback_ready: boolean
+}
+
+export interface PlaybackStatus {
+  ready: boolean
+  mode: 'hls' | 'file'
+  available_segments: number
+  total_segments: number
+  available_duration: number
+  total_duration: number
+  complete: boolean
+}
+
+export interface PlaybackSession extends PlaybackStatus {
+  session_id: string
 }
 
 export interface Settings {

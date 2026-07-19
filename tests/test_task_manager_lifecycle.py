@@ -204,6 +204,14 @@ def test_available_actions_follow_backend_state_and_live_handle():
     downloading.pause_event = asyncio.Event()
     assert "pause" in manager.get_available_actions(downloading)
 
+    downloading.progress.total_segments = 10
+    downloading.progress.playable_segments = 2
+    downloading.progress.playable_duration = 8
+    assert "preview" in manager.get_available_actions(downloading)
+
+    downloading.progress.playable_duration = 2
+    assert "preview" not in manager.get_available_actions(downloading)
+
 
 def test_task_event_contains_available_actions_and_queue_position():
     class LiveHandle:
@@ -241,6 +249,9 @@ def test_structured_failure_details_survive_database_reload(tmp_path, monkeypatc
         task.error_hint = "检查请求头"
         task.http_status = 403
         task.error_attempt = 5
+        task.progress.playable_segments = 7
+        task.progress.playable_duration = 42.5
+        task.progress.media_duration = 120.0
         await manager._save_db(task)
 
         restored = TaskManager()
@@ -253,6 +264,9 @@ def test_structured_failure_details_survive_database_reload(tmp_path, monkeypatc
         assert loaded.error_hint == "检查请求头"
         assert loaded.http_status == 403
         assert loaded.error_attempt == 5
+        assert loaded.progress.playable_segments == 7
+        assert loaded.progress.playable_duration == 42.5
+        assert loaded.progress.media_duration == 120.0
 
     asyncio.run(run())
 

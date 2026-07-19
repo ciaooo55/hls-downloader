@@ -17,7 +17,7 @@
     window.GM_setClipboard = () => {};
     window.GM_xmlhttpRequest = options => setTimeout(() => options.onload({
       status: 200,
-      responseText: JSON.stringify(options.url.endsWith('/health') ? { status: 'ok', version: '1.1.12' } : { ok: true }),
+      responseText: JSON.stringify(options.url.endsWith('/health') ? { status: 'ok', version: '1.1.13' } : { ok: true }),
     }), 20);
     performance.getEntriesByType = type => type === 'resource' ? [
       { name: 'https://cdn.example.test/hls/1080p/index.m3u8?token=preview' },

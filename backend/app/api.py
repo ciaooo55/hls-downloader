@@ -3,7 +3,7 @@ import json
 import threading
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Header, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from .schemas import (
     HealthResponse,
     SettingsUpdate,
@@ -19,6 +19,12 @@ from .downloader.task_manager import (
     TaskNotFoundError,
     manager,
 )
+from .downloader.playback import (
+    PlaybackError,
+    PlaybackNotReadyError,
+    PlaybackSessionError,
+    playback_service,
+)
 from .utils import get_domain
 from .userscript_monitor import userscript_monitor
 from .desktop_runtime import activate_window, request_shutdown
@@ -30,6 +36,11 @@ router = APIRouter(prefix="/api")
 def _check_token(x_token: str = Header(default="")):
     if x_token != settings.token:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+def _check_playback_token(x_token: str = "", token: str = ""):
+    """Allow native HLS clients to carry the local token in the media URL."""
+    _check_token(x_token or token)
 
 def _check_host(url: str):
     if settings.allowed_hosts:
@@ -254,6 +265,177 @@ async def get_task_log(task_id: str, x_token: str = Header(default="")):
         )
     }
 
+
+def _playback_task(task_id: str):
+    task = manager.tasks.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
+def _raise_playback_error(exc: PlaybackError):
+    if isinstance(exc, PlaybackSessionError):
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    if isinstance(exc, PlaybackNotReadyError):
+        raise HTTPException(status_code=425, detail=str(exc)) from exc
+    raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/tasks/{task_id}/playback")
+async def open_task_playback(task_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    task = _playback_task(task_id)
+    try:
+        session_id, snapshot = playback_service.open_ready_session(
+            task.id,
+            task.status.value,
+            task.output_path,
+        )
+    except PlaybackError as exc:
+        _raise_playback_error(exc)
+    return {"session_id": session_id, **snapshot.to_dict()}
+
+
+@router.get("/tasks/{task_id}/playback/status")
+async def task_playback_status(
+    task_id: str,
+    session: str,
+    x_token: str = Header(default=""),
+):
+    _check_token(x_token)
+    task = _playback_task(task_id)
+    try:
+        playback_service.touch(task.id, session)
+        return playback_service.snapshot(
+            task.id,
+            task.status.value,
+            task.output_path,
+        ).to_dict()
+    except PlaybackError as exc:
+        _raise_playback_error(exc)
+
+
+@router.post("/tasks/{task_id}/playback/heartbeat")
+async def heartbeat_task_playback(
+    task_id: str,
+    session: str,
+    x_token: str = Header(default=""),
+):
+    _check_token(x_token)
+    _playback_task(task_id)
+    try:
+        playback_service.touch(task_id, session)
+    except PlaybackError as exc:
+        _raise_playback_error(exc)
+    return {"ok": True}
+
+
+@router.delete("/tasks/{task_id}/playback")
+async def close_task_playback(
+    task_id: str,
+    session: str,
+    x_token: str = Header(default=""),
+):
+    _check_token(x_token)
+    try:
+        closed = await manager.release_playback(task_id, session)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": closed}
+
+
+@router.get("/tasks/{task_id}/playback/index.m3u8")
+async def task_playback_playlist(
+    task_id: str,
+    session: str,
+    token: str = "",
+    x_token: str = Header(default=""),
+):
+    _check_playback_token(x_token, token)
+    task = _playback_task(task_id)
+    try:
+        content = playback_service.playlist(
+            task.id,
+            task.status.value,
+            session,
+            access_token=token,
+        )
+    except PlaybackError as exc:
+        _raise_playback_error(exc)
+    return PlainTextResponse(
+        content,
+        media_type="application/vnd.apple.mpegurl",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/tasks/{task_id}/playback/segments/{index}.seg")
+async def task_playback_segment(
+    task_id: str,
+    index: int,
+    session: str,
+    token: str = "",
+    x_token: str = Header(default=""),
+):
+    _check_playback_token(x_token, token)
+    _playback_task(task_id)
+    try:
+        path, is_fmp4 = playback_service.segment_path(task_id, index, session)
+    except PlaybackError as exc:
+        _raise_playback_error(exc)
+    return FileResponse(
+        path,
+        media_type="video/mp4" if is_fmp4 else "video/mp2t",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+@router.get("/tasks/{task_id}/playback/maps/{map_name}")
+async def task_playback_map(
+    task_id: str,
+    map_name: str,
+    session: str,
+    token: str = "",
+    x_token: str = Header(default=""),
+):
+    _check_playback_token(x_token, token)
+    _playback_task(task_id)
+    try:
+        path = playback_service.map_path(task_id, map_name, session)
+    except PlaybackError as exc:
+        _raise_playback_error(exc)
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+@router.get("/tasks/{task_id}/playback/media")
+async def task_playback_media(
+    task_id: str,
+    session: str,
+    token: str = "",
+    x_token: str = Header(default=""),
+):
+    _check_token(x_token or token)
+    task = _playback_task(task_id)
+    try:
+        playback_service.touch(task_id, session)
+    except PlaybackError as exc:
+        _raise_playback_error(exc)
+    if task.status.value != "done" or not task.output_path:
+        raise HTTPException(status_code=409, detail="最终媒体文件尚未准备好")
+    path = Path(task.output_path)
+    if not path.exists() or not path.is_file() or path.stat().st_size <= 0:
+        raise HTTPException(status_code=404, detail="媒体文件不存在")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        content_disposition_type="inline",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
 @router.get("/events")
 async def events(request: Request):
     tok = request.query_params.get("x_token") or request.query_params.get("token") or request.headers.get("x-token", "")
@@ -375,6 +557,10 @@ def _to_resp(task) -> TaskResponse:
         post_percent=task.progress.post_percent,
         active_slots=task.progress.active_slots,
         active_segment_indexes=task.progress.active_segment_indexes,
+        playable_segments=task.progress.playable_segments,
+        playable_duration=task.progress.playable_duration,
+        media_duration=task.progress.media_duration,
+        playback_ready=manager._playback_ready(task),
         error_message=task.error_message,
         error_code=task.error_code,
         error_stage=task.error_stage,

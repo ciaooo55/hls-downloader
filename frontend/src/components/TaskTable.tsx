@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { FileText, FolderOpen, Info, LoaderCircle, MoreHorizontal, Pause, Play, PlayCircle, RotateCcw, Trash2, XCircle } from 'lucide-react'
+import { FileText, FolderOpen, Info, LoaderCircle, MonitorPlay, MoreHorizontal, Pause, Play, PlayCircle, RotateCcw, Trash2, XCircle } from 'lucide-react'
 import { getDisplayedProgress } from '../taskState'
 import { fmtBytes, fmtDate, fmtEta, fmtSpeed } from '../format'
 import { taskContextActions, type TaskContextAction } from '../taskContextActions'
@@ -9,18 +9,18 @@ import type { Task } from '../types'
 
 const menuLabels: Record<TaskContextAction, string> = {
   details: '查看详情', start: '开始下载', pause: '暂停', resume: '恢复',
-  cancel: '取消任务', retry: '重试', launch: '播放文件', open: '打开文件位置', log: '查看日志', delete: '删除任务',
+  cancel: '取消任务', retry: '重试', preview: '内置播放', launch: '系统播放', open: '打开文件位置', log: '查看日志', delete: '删除任务',
 }
 
 const menuIcons: Record<TaskContextAction, React.ReactNode> = {
   details: <Info size={16} />, start: <Play size={16} />, pause: <Pause size={16} />,
   resume: <RotateCcw size={16} />, cancel: <XCircle size={16} />, retry: <RotateCcw size={16} />,
-  launch: <PlayCircle size={16} />, open: <FolderOpen size={16} />, log: <FileText size={16} />, delete: <Trash2 size={16} />,
+  preview: <MonitorPlay size={16} />, launch: <PlayCircle size={16} />, open: <FolderOpen size={16} />, log: <FileText size={16} />, delete: <Trash2 size={16} />,
 }
 
 interface ContextMenuState { task: Task; x: number; y: number }
 
-export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTaskAction, onOpenLog, onOpenFile, onLaunchFile }: {
+export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTaskAction, onOpenLog, onOpenFile, onLaunchFile, onPreview }: {
   tasks: Task[]
   selected: Set<string>
   pending: Set<string>
@@ -30,6 +30,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
   onOpenLog: (task: Task) => void
   onOpenFile: (task: Task) => void
   onLaunchFile: (task: Task) => void
+  onPreview: (task: Task) => void
 }) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
   const allSelected = tasks.length > 0 && tasks.every(task => selected.has(task.id))
@@ -76,6 +77,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
     const task = menu.task
     setMenu(null)
     if (action === 'details') onOpenDetails(task)
+    else if (action === 'preview') onPreview(task)
     else if (action === 'launch') onLaunchFile(task)
     else if (action === 'open') onOpenFile(task)
     else if (action === 'log') onOpenLog(task)
@@ -96,7 +98,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
               else onSelect(new Set([task.id]))
             }}
             onContextMenu={event => openMenu(event, task)}
-            onDoubleClick={() => onOpenDetails(task)}>
+            onDoubleClick={() => task.available_actions?.includes('preview') ? onPreview(task) : onOpenDetails(task)}>
             <td className="check-col"><input type="checkbox" checked={selected.has(task.id)} onChange={() => toggleOne(task.id)} aria-label={`选择 ${task.title || task.filename || task.id}`} /></td>
             <td className="name-cell"><span title={task.title || task.filename || task.id}>{task.title || task.filename || task.id}</span><small title={task.url}>{task.url}</small></td>
             <td><span className={`status status-${task.status}`}>{pending.has(task.id) && <LoaderCircle className="spin" size={12} />}{task.status === 'queued' && task.queue_position ? `排队中 · 第 ${task.queue_position} 位` : statusLabel(task.status)}</span>{task.error_code && <small className="failure-code" title={task.error_message}>{task.error_code}</small>}</td>
@@ -110,7 +112,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
       {menu && createPortal(
         <div className="task-context-menu" role="menu" style={{ left: menu.x, top: menu.y }} onPointerDown={event => event.stopPropagation()}>
           {(pending.has(menu.task.id) ? ['details', 'log'] as TaskContextAction[] : taskContextActions(menu.task)).map(action => <button key={action} role="menuitem" className={action === 'delete' ? 'danger' : ''} onClick={() => runMenuAction(action)}>
-            {menuIcons[action]}<span>{menuLabels[action]}</span>
+            {menuIcons[action]}<span>{action === 'preview' && menu.task.status !== 'done' ? '边下边播' : menuLabels[action]}</span>
           </button>)}
         </div>,
         document.body,

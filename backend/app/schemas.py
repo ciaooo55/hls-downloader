@@ -53,6 +53,10 @@ class TaskResponse(BaseModel):
     post_percent: float = 0.0
     active_slots: int = 0
     active_segment_indexes: list[int] = Field(default_factory=list)
+    playable_segments: int = 0
+    playable_duration: float = 0.0
+    media_duration: float = 0.0
+    playback_ready: bool = False
     error_message: str
     error_code: str = ""
     error_stage: str = ""

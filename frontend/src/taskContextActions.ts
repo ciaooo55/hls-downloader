@@ -2,11 +2,12 @@ import { commandState, type TaskLike } from './taskCommands'
 
 export type TaskContextAction =
   | 'details' | 'start' | 'pause' | 'resume' | 'cancel'
-  | 'retry' | 'launch' | 'open' | 'log' | 'delete'
+  | 'retry' | 'preview' | 'launch' | 'open' | 'log' | 'delete'
 
 export function taskContextActions(task: TaskLike): TaskContextAction[] {
   const commands = commandState([task])
   const actions: TaskContextAction[] = ['details']
+  if (task.available_actions?.includes('preview')) actions.push('preview')
   if (commands.start) actions.push('start')
   if (commands.pause) actions.push('pause')
   if (commands.resume) actions.push('resume')

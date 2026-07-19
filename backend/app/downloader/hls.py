@@ -19,6 +19,7 @@ from ..utils import sanitize_filename
 from .merge import merge_segments
 from .errors import as_download_error, diagnose_download_error, format_download_error
 from .parser import UnsupportedPlaylistError, parse_m3u8
+from .playback import playback_service, write_playback_plan
 from .progress import ProgressTracker
 
 
@@ -196,17 +197,34 @@ class HLSDownloader:
         self.task.error_attempt = details.attempt
         self.task.error_message = format_download_error(details)
 
-    def _cleanup_failed_temp(self, task_dir: Path) -> None:
+    async def _cleanup_failed_temp(self, task_dir: Path) -> None:
         if settings.keep_temp_files or not task_dir.exists():
             return
-        keep = {"download.log", "playlist.m3u8"}
-        for child in task_dir.iterdir():
-            if child.name in keep:
-                continue
-            if child.is_dir():
-                shutil.rmtree(child, ignore_errors=True)
-            else:
-                child.unlink(missing_ok=True)
+
+        def cleanup() -> None:
+            keep = {"download.log", "playlist.m3u8"}
+            for child in task_dir.iterdir():
+                if child.name in keep:
+                    continue
+                if child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
+
+        await asyncio.to_thread(
+            playback_service.cleanup_if_inactive,
+            self.task.id,
+            cleanup,
+        )
+
+    async def _cleanup_task_dir(self, task_dir: Path) -> None:
+        if settings.keep_temp_files or not task_dir.exists():
+            return
+        await asyncio.to_thread(
+            playback_service.cleanup_if_inactive,
+            self.task.id,
+            lambda: shutil.rmtree(task_dir, ignore_errors=True),
+        )
 
     async def _load_media_playlist(
         self,
@@ -264,6 +282,9 @@ class HLSDownloader:
                 task.progress.total_segments = len(segments)
                 self._set_stage("parsing", f"解析完成，共 {len(segments)} 个分片")
                 await self._download_init_maps(client, segments, headers)
+                write_playback_plan(task_dir, segments, parsed["total_duration"])
+                task.progress.media_duration = float(parsed["total_duration"] or 0)
+                self._refresh_playback_progress()
 
                 task.status = TaskStatus.DOWNLOADING_SEGMENTS
                 task.progress.max_workers = concurrency
@@ -314,8 +335,7 @@ class HLSDownloader:
             task.progress.connection_status = "idle"
             size_mb = output.stat().st_size / 1048576
             self._set_stage("done", f"完成: {output.name} ({size_mb:.1f} MB)")
-            if not settings.keep_temp_files:
-                shutil.rmtree(task_dir, ignore_errors=True)
+            await self._cleanup_task_dir(task_dir)
 
         except asyncio.CancelledError:
             task.progress.connection_status = "idle"
@@ -325,8 +345,7 @@ class HLSDownloader:
                 self._set_stage("canceled", "已取消")
                 if output and output.exists() and output.stat().st_size == 0:
                     output.unlink(missing_ok=True)
-                if not settings.keep_temp_files:
-                    shutil.rmtree(task_dir, ignore_errors=True)
+                await self._cleanup_task_dir(task_dir)
             else:
                 task.status = TaskStatus.PAUSED
                 task.stage = "interrupted"
@@ -339,7 +358,7 @@ class HLSDownloader:
             task.finished_at = datetime.now().isoformat()
             task.progress.connection_status = "error"
             self._set_stage("unsupported", task.error_message)
-            self._cleanup_failed_temp(task_dir)
+            await self._cleanup_failed_temp(task_dir)
         except Exception as exc:
             if self._is_canceled():
                 task.status = TaskStatus.CANCELED
@@ -355,7 +374,7 @@ class HLSDownloader:
             if output and output.exists() and output.stat().st_size == 0:
                 output.unlink(missing_ok=True)
             if task.status is TaskStatus.FAILED:
-                self._cleanup_failed_temp(task_dir)
+                await self._cleanup_failed_temp(task_dir)
         finally:
             task.progress.active_workers = 0
             task.progress.active_slots = 0
@@ -450,7 +469,9 @@ class HLSDownloader:
                 self.task.progress.active_segment_indexes.append(index)
                 self._publish()
                 try:
-                    await self._download_one_segment(client, segment, headers)
+                    completed = await self._download_one_segment(client, segment, headers)
+                    if completed:
+                        self._refresh_playback_progress()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -493,18 +514,18 @@ class HLSDownloader:
         client: Any,
         segment: dict,
         headers: dict[str, str],
-    ) -> None:
+    ) -> bool:
         index = segment["index"]
         destination = self._seg_dir() / f"{index:06d}.seg"
         if destination.exists() and destination.stat().st_size > 0:
             self.tracker.add_completed(destination.stat().st_size)
             self._completed_count += 1
-            return
+            return True
 
         last_error: Exception | None = None
         for attempt in range(MAX_RETRIES):
             if self._is_canceled() or self._is_pausing():
-                return
+                return False
             try:
                 key_info = segment.get("key")
                 if key_info:
@@ -543,7 +564,7 @@ class HLSDownloader:
                         f"{self._completed_count}/{self.task.progress.total_segments} 分片 "
                         f"{snapshot['speed'] / 1024:.0f} KB/s",
                     )
-                return
+                return True
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -565,6 +586,20 @@ class HLSDownloader:
             url=segment["url"],
             attempt=MAX_RETRIES,
         ) from last_error
+
+    def _refresh_playback_progress(self) -> None:
+        try:
+            snapshot = playback_service.snapshot(
+                self.task.id,
+                self.task.status.value,
+                self.task.output_path,
+            )
+        except Exception:
+            return
+        progress = self.task.progress
+        progress.playable_segments = snapshot.available_segments
+        progress.playable_duration = snapshot.available_duration
+        progress.media_duration = snapshot.total_duration
 
     async def _fetch_key(
         self,

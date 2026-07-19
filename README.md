@@ -29,7 +29,8 @@
 2. 在顶部输入框粘贴 m3u8 链接，或粘贴含视频的网页地址进行识别。
 3. 确认文件名、保存目录和并发数后开始下载。
 4. 下载阶段可暂停、恢复或取消；分片完成后会显示单独的合并进度。
-5. 完成后可直接打开视频或所在目录。
+5. 下载达到可播放长度后，可以点击“边下边播”；完成后同一窗口会自动切换为本地 MP4 播放。
+6. 播放器显示当前下载速度，进度条支持悬停缩略图、拖动预览、倍速、音量、画中画和全屏。
 
 单个任务无需先勾选：直接右键任务行即可开始、暂停、恢复、取消、重试、查看日志、打开文件位置或删除。勾选框仅用于批量操作。
 
@@ -45,6 +46,8 @@
 - 暂停、恢复、取消、重试和批量任务
 - 任务列表右键快捷操作
 - 分片、速度、ETA、合并与转封装进度
+- 内置播放器：边下边播、完成后本地 Range 播放、下载速度、缩略图预览和 0.5x-3x 倍速
+- 播放器按需加载，缩略图只在悬停时解码并限制缓存，不占用下载 worker
 - 断点续传和原子临时文件
 - 并发同名输出保护
 - AES-128 显式 IV、默认 sequence IV 和 key rotation
@@ -77,6 +80,8 @@
 脚本发送任务时自动使用当前网页的 Referer、Origin、User-Agent 和 Cookie。例如在 `https://123.com` 页面捕获到 `https://456.com/video.m3u8`，请求来源会使用 `123.com`，不会沿用设置中的 missav 默认值。浏览器扩展不允许普通程序读取其脚本安装列表，因此下载器通过脚本向本地服务报到来判断它是否正在运行。
 
 默认每个任务使用 8 个分片并发，最多同时下载 3 个任务。成功任务会立即清理自己的分片缓存；所有任务成功完成后，下载目录中的内部 `.tasks` 缓存目录也会删除。暂停或失败任务会保留续传和诊断文件。
+
+播放器使用已下载的连续分片生成临时本地 HLS 清单，默认至少积累 6 秒后开放播放；下载完成后使用带 `faststart` 的 MP4 和 HTTP Range，避免再次读取源站。关闭播放器会释放会话，空闲会话超时后自动清理临时文件。
 
 ## 源码运行
 
@@ -131,7 +136,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.1.12
+.\scripts\build_installer.ps1 -Version 1.1.13
 ```
 
 输出位于忽略的 `release` 目录：
@@ -150,8 +155,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.1.12
-git push origin v1.1.12
+git tag v1.1.13
+git push origin v1.1.13
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。

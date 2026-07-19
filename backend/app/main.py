@@ -16,6 +16,7 @@ from .updater import cleanup_update_cache
 async def lifespan(app: FastAPI):
     cleanup_update_cache()
     await manager.load_from_db()
+    manager.start_maintenance()
     try:
         await manager.cleanup_orphan_temp_dirs()
     except Exception:

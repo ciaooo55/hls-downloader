@@ -21,4 +21,12 @@ describe('taskContextActions', () => {
       'details', 'open', 'log', 'delete',
     ])
   })
+
+  it('puts built-in playback directly in the context menu when ready', () => {
+    expect(taskContextActions({
+      id: 'playing',
+      status: 'downloading_segments',
+      available_actions: ['pause', 'cancel', 'preview', 'log'],
+    })).toEqual(['details', 'preview', 'pause', 'cancel', 'log'])
+  })
 })
