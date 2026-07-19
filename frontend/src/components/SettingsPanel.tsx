@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, Copy, Download, FolderOpen, RefreshCw, Trash2, X } from 'lucide-react'
-import { fetchSettings, fetchUpdateInfo, installUpdate, openExplorer, saveSettings } from '../api'
+import { fetchSettings, fetchUpdateInfo, installUpdate, openExplorer, saveSettings, testConnection } from '../api'
 import { beginUninstall, getDesktopInfo } from '../desktop'
 import { LEGACY_REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 import type { UpdateInfo } from '../types'
@@ -8,7 +8,10 @@ import FolderPicker from './FolderPicker'
 
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [settings, setSettings] = useState<any>({})
+  const [original, setOriginal] = useState<any>({})
   const [saved, setSaved] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
@@ -16,33 +19,63 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
   const [installingUpdate, setInstallingUpdate] = useState(false)
+  const [environment, setEnvironment] = useState<any>(null)
+  const [checkingEnvironment, setCheckingEnvironment] = useState(false)
+  const dirty = JSON.stringify(settings) !== JSON.stringify(original)
 
   useEffect(() => {
-    fetchSettings().then(setSettings).catch(reason => setError(reason.message || '加载设置失败'))
+    fetchSettings().then(data => { setSettings(data); setOriginal(data) }).catch(reason => setError(reason.message || '加载设置失败'))
     getDesktopInfo().then(info => setUninstallAvailable(info.installed === true))
     fetchUpdateInfo().then(setUpdateInfo).catch(() => {})
   }, [])
 
+  const requestClose = () => {
+    if (dirty && !window.confirm('设置尚未保存，确定关闭吗？')) return
+    onClose()
+  }
+
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (showPicker) setShowPicker(false)
+      else requestClose()
+    }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [dirty, showPicker])
+
   const update = (key: string, value: unknown) => setSettings((current: any) => ({ ...current, [key]: value }))
   const doSave = async () => {
     setError('')
+    if (!String(settings.download_dir || '').trim()) { setError('下载保存目录不能为空'); return }
+    if (settings.default_concurrency < 1 || settings.default_concurrency > 64) { setError('默认并发数必须在 1 到 64 之间'); return }
+    if (settings.max_concurrent_tasks < 1 || settings.max_concurrent_tasks > 16) { setError('最大同时任务数必须在 1 到 16 之间'); return }
+    if (!String(settings.ffmpeg_path || '').trim()) { setError('ffmpeg 路径不能为空'); return }
+    setSaving(true)
     try {
-      await saveSettings(settings)
-      localStorage.setItem('hls_token', settings.token || '55555')
+      const normalized = await saveSettings(settings)
+      setSettings(normalized); setOriginal(normalized)
+      localStorage.setItem('hls_token', normalized.token || '55555')
       setSaved(true)
       window.setTimeout(() => setSaved(false), 2000)
     } catch (reason: any) {
       setError(reason.message || '保存设置失败')
-    }
+    } finally { setSaving(false) }
   }
   const copyToken = async () => {
     try {
       await navigator.clipboard.writeText(settings.token || '')
-      setSaved(true)
-      window.setTimeout(() => setSaved(false), 1200)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1200)
     } catch {
       setError('无法复制，请手动选择 Token')
     }
+  }
+  const checkEnvironment = async () => {
+    setCheckingEnvironment(true); setError('')
+    try { setEnvironment(await testConnection()) }
+    catch (reason: any) { setError(reason.message || '环境检查失败') }
+    finally { setCheckingEnvironment(false) }
   }
   const uninstall = async () => {
     setError('')
@@ -73,12 +106,13 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     }
   }
 
-  return <div className="modal-overlay" onMouseDown={onClose}>
+  return <div className="modal-overlay" onMouseDown={requestClose}>
     <section className="modal settings-modal" onMouseDown={event => event.stopPropagation()}>
-      <header><div><h2>设置</h2><p>下载目录、并发与请求参数</p></div><button className="icon-button" title="关闭" onClick={onClose}><X size={18} /></button></header>
+      <header><div><h2>设置{dirty ? ' *' : ''}</h2><p>下载目录、并发与请求参数</p></div><button className="icon-button" title="关闭" onClick={requestClose}><X size={18} /></button></header>
+      <div className="settings-body">
 
       <label>Token（浏览器脚本自动使用此值）</label>
-      <div className="input-action"><input value={settings.token || ''} readOnly /><button className="secondary-button" title="复制 Token" onClick={copyToken}><Copy size={15} />复制</button></div>
+      <div className="input-action"><input value={settings.token || ''} readOnly /><button className="secondary-button" title="复制 Token" onClick={copyToken}><Copy size={15} />{copied ? '已复制' : '复制'}</button></div>
 
       <label>下载保存目录</label>
       <div className="input-action"><input value={settings.download_dir || ''} onChange={event => update('download_dir', event.target.value)} /><button className="secondary-button" onClick={() => setShowPicker(true)}>选择目录</button><button className="icon-button bordered" title="打开目录" onClick={() => openExplorer(settings.download_dir || '')}><FolderOpen size={17} /></button></div>
@@ -108,6 +142,10 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
 
       {error && <div className="inline-error">{error}</div>}
       <div className="app-management">
+        <div><strong>运行环境</strong><span>{environment ? `FFmpeg ${environment.ffmpeg ? '正常' : '未找到'} · 并发 ${environment.concurrency} · 同时任务 ${environment.max_tasks}` : '检查 FFmpeg、下载目录与当前并发设置'}</span></div>
+        <button className="secondary-button" disabled={checkingEnvironment || dirty} title={dirty ? '请先保存设置' : '检查运行环境'} onClick={checkEnvironment}><RefreshCw size={15} />{dirty ? '保存后检查' : checkingEnvironment ? '检查中…' : '检查环境'}</button>
+      </div>
+      <div className="app-management">
         <div><strong>软件更新</strong><span>{updateInfo ? `当前 v${updateInfo.current_version} · ${updateInfo.available ? `可更新到 v${updateInfo.latest_version}` : '已是最新版本'}` : '尚未检查'}</span></div>
         {updateInfo?.available && updateInfo.can_auto_install
           ? <button className="primary-button" disabled={installingUpdate} onClick={updateApp}><Download size={15} />{installingUpdate ? '正在下载…' : '下载安装'}</button>
@@ -117,7 +155,8 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
         <div><strong>卸载程序</strong><span>删除程序、设置、任务历史和缓存</span></div>
         <button className="danger-button" onClick={uninstall}><Trash2 size={15} />卸载</button>
       </div>}
-      <footer><button className="secondary-button" onClick={onClose}>关闭</button><button className="primary-button" onClick={doSave}>{saved ? '已完成' : '保存设置'}</button></footer>
+      </div>
+      <footer><button className="secondary-button" onClick={requestClose}>关闭</button><button className="primary-button" disabled={!dirty || saving} onClick={doSave}>{saving ? '保存中…' : saved ? '已保存' : '保存设置'}</button></footer>
     </section>
     {showPicker && <FolderPicker initialPath={settings.download_dir || ''} onSelect={path => { update('download_dir', path); setShowPicker(false) }} onClose={() => setShowPicker(false)} />}
   </div>

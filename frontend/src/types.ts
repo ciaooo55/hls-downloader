@@ -30,6 +30,8 @@ export interface Task {
   updated_at: string
   started_at: string
   finished_at: string
+  available_actions: string[]
+  queue_position: number
 }
 
 export interface Settings {

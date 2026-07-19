@@ -32,7 +32,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const fetchSettings = () => request<any>('/settings')
 export const fetchHealth = () => request<{ status: string; version: string }>('/health')
 export const saveSettings = (data: any) =>
-  request<{ ok: boolean }>('/settings', { method: 'POST', body: JSON.stringify(data) })
+  request<any>('/settings', { method: 'POST', body: JSON.stringify(data) })
 export const fetchTasks = () => request<any[]>('/tasks')
 export const createTask = (data: any) =>
   request<any>('/tasks', { method: 'POST', body: JSON.stringify(data) })
@@ -42,9 +42,16 @@ export const taskAction = (id: string, action: string) =>
   request<{ ok: boolean }>(`/tasks/${id}/${action}`, { method: 'POST' })
 export const deleteTask = (id: string) =>
   request<{ ok: boolean }>(`/tasks/${id}`, { method: 'DELETE' })
+export const clearCompletedTasks = () =>
+  request<{ ok: boolean; count: number }>('/tasks/completed', { method: 'DELETE' })
 export const fetchLog = (id: string) => request<{ log: string }>(`/tasks/${id}/log`)
 export const openExplorer = (path: string) =>
   request<{ ok: boolean }>('/open-explorer', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  })
+export const launchFile = (path: string) =>
+  request<{ ok: boolean }>('/launch-file', {
     method: 'POST',
     body: JSON.stringify({ path }),
   })

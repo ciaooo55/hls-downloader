@@ -22,4 +22,10 @@ describe('commandState', () => {
     expect(commandState([task('done')]).open).toBe(true)
     expect(commandState([task('done')]).delete).toBe(true)
   })
+
+  it('uses backend action flags instead of guessing from status', () => {
+    expect(commandState([{ id: 'queued', status: 'queued', available_actions: ['cancel', 'log'] }]).start).toBe(false)
+    expect(commandState([{ id: 'parsing', status: 'parsing', available_actions: ['cancel', 'log'] }]).pause).toBe(false)
+    expect(commandState([{ id: 'segments', status: 'downloading_segments', available_actions: ['pause', 'cancel', 'log'] }]).pause).toBe(true)
+  })
 })

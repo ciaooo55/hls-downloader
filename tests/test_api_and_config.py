@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from backend.app import config as config_module
 from backend.app.downloader.task_manager import TaskConflictError, TaskNotFoundError
 from backend.app.main import app
+from backend.app.models import Task, TaskStatus
 from backend.app.schemas import SettingsUpdate, TaskBatchCreate, TaskCreate
 
 
@@ -44,6 +45,43 @@ def test_task_action_maps_manager_errors_to_http_status(monkeypatch):
     monkeypatch.setattr(api_module.manager, "pause_task", missing)
     response = client.post("/api/tasks/task1/pause", headers={"X-Token": "55555"})
     assert response.status_code == 404
+
+
+def test_clear_completed_only_deletes_finished_records(monkeypatch):
+    from backend.app import api as api_module
+
+    done = Task(id="done", url="https://example.test/done.m3u8", status=TaskStatus.DONE)
+    failed = Task(id="failed", url="https://example.test/failed.m3u8", status=TaskStatus.FAILED)
+    deleted = []
+
+    async def delete(task_id):
+        deleted.append(task_id)
+
+    monkeypatch.setattr(api_module.manager, "tasks", {done.id: done, failed.id: failed})
+    monkeypatch.setattr(api_module.manager, "delete_task", delete)
+
+    response = TestClient(app).delete("/api/tasks/completed", headers={"X-Token": "55555"})
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "count": 1}
+    assert deleted == ["done"]
+
+
+def test_launch_file_requires_an_existing_file(tmp_path, monkeypatch):
+    import os
+
+    opened = []
+    media = tmp_path / "video.mp4"
+    media.write_bytes(b"media")
+    monkeypatch.setattr(os, "startfile", lambda path: opened.append(path), raising=False)
+    client = TestClient(app)
+
+    missing = client.post("/api/launch-file", json={"path": str(tmp_path / "missing.mp4")}, headers={"X-Token": "55555"})
+    response = client.post("/api/launch-file", json={"path": str(media)}, headers={"X-Token": "55555"})
+
+    assert missing.status_code == 404
+    assert response.status_code == 200
+    assert opened == [str(media)]
 
 
 def test_save_settings_serializes_project_paths_as_relative(tmp_path, monkeypatch):

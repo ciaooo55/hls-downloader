@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { connectSSE, deleteTask, fetchHealth, fetchSettings, fetchTasks, fetchUserscriptStatus, openExplorer, taskAction } from './api'
+import { Search, Trash2 } from 'lucide-react'
+import { clearCompletedTasks, connectSSE, deleteTask, fetchHealth, fetchSettings, fetchTasks, fetchUserscriptStatus, launchFile, openExplorer, taskAction } from './api'
 import { fmtBytes, fmtSpeed } from './format'
 import { isRunningStatus, mergeTaskEvent } from './taskState'
 import { commandState } from './taskCommands'
+import { filterAndSortTasks } from './taskPresentation'
 import { resolveTheme, type Theme } from './theme'
 import type { Settings, Task, UserscriptStatus } from './types'
 import DesktopToolbar from './components/DesktopToolbar'
@@ -24,6 +26,9 @@ export default function App() {
   const [userscript, setUserscript] = useState<UserscriptStatus | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [filter, setFilter] = useState<TaskFilter>('all')
+  const [query, setQuery] = useState('')
+  const [pending, setPending] = useState<Set<string>>(new Set())
+  const [feedback, setFeedback] = useState('')
   const [details, setDetails] = useState<Task | null>(null)
   const [logTaskId, setLogTaskId] = useState<string | null>(null)
   const [showRecognize, setShowRecognize] = useState(false)
@@ -35,6 +40,7 @@ export default function App() {
   const [error, setError] = useState('')
   const [theme, setTheme] = useState<Theme>(() => resolveTheme(localStorage.getItem('hls_theme'), matchMedia('(prefers-color-scheme: dark)').matches))
   const lastStatuses = useRef<Record<string, string>>({})
+  const feedbackTimer = useRef<number | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -68,28 +74,58 @@ export default function App() {
 
   useEffect(() => { document.documentElement.dataset.theme = theme }, [theme])
   useEffect(() => { setSelected(current => new Set([...current].filter(id => tasks.some(task => task.id === id)))) }, [tasks])
+  useEffect(() => () => { if (feedbackTimer.current) window.clearTimeout(feedbackTimer.current) }, [])
 
-  const filtered = useMemo(() => tasks.filter(task => {
-    if (filter === 'all') return true
-    if (filter === 'running') return isRunningStatus(task.status) || task.status === 'queued'
-    return task.status === filter
-  }).sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || '')), [tasks, filter])
+  const filtered = useMemo(() => filterAndSortTasks(tasks, filter, query), [tasks, filter, query])
   const selectedTasks = tasks.filter(task => selected.has(task.id))
-  const commands = commandState(selectedTasks)
+  const detailTask = details ? tasks.find(task => task.id === details.id) || details : null
+  const commands = commandState(selectedTasks.some(task => pending.has(task.id)) ? [] : selectedTasks)
   const running = tasks.filter(task => isRunningStatus(task.status))
   const totalSpeed = running.reduce((sum, task) => sum + (task.speed_bytes_per_sec || 0), 0)
   const completedSize = tasks.filter(task => task.status === 'done').reduce((sum, task) => sum + (task.downloaded_bytes || 0), 0)
   const queued = tasks.filter(task => task.status === 'queued').length
+  const completed = tasks.filter(task => task.status === 'done')
+
+  const showFeedback = (message: string) => {
+    setFeedback(message)
+    if (feedbackTimer.current) window.clearTimeout(feedbackTimer.current)
+    feedbackTimer.current = window.setTimeout(() => setFeedback(''), 3500)
+  }
 
   const perform = async (action: string, targets: Task[] = selectedTasks) => {
     if (!targets.length) return
     if (action === 'delete' && !confirm(`确定删除 ${targets.length} 个任务？`)) return
+    const fresh = targets.filter(task => !pending.has(task.id))
+    if (!fresh.length) return
     setError('')
+    setPending(current => new Set([...current, ...fresh.map(task => task.id)]))
     try {
-      if (action === 'delete') await Promise.all(targets.map(task => deleteTask(task.id)))
-      else await Promise.all(targets.map(task => taskAction(task.id, action)))
-      setSelected(new Set()); await load()
-    } catch (reason: any) { setError(reason.message || '任务操作失败') }
+      const results = await Promise.allSettled(fresh.map(task => action === 'delete' ? deleteTask(task.id) : taskAction(task.id, action)))
+      const failures = results.filter(result => result.status === 'rejected') as PromiseRejectedResult[]
+      const successCount = results.length - failures.length
+      if (failures.length) {
+        const reason = failures[0].reason
+        setError(`成功 ${successCount} 项，失败 ${failures.length} 项：${reason?.message || '任务操作失败'}`)
+      } else {
+        showFeedback(`${action === 'delete' ? '已删除' : '操作完成'} ${successCount} 项`)
+        setSelected(new Set())
+      }
+    } finally {
+      setPending(current => new Set([...current].filter(id => !fresh.some(task => task.id === id))))
+      await load()
+    }
+  }
+  const clearCompleted = async () => {
+    if (!completed.length || !confirm(`清除 ${completed.length} 条已完成记录？不会删除视频文件。`)) return
+    try {
+      const result = await clearCompletedTasks()
+      showFeedback(`已清除 ${result.count} 条完成记录`)
+      await load()
+    } catch (reason: any) { setError(reason.message || '清理失败') }
+  }
+  const launchOutput = async (task: Task) => {
+    if (!task.output_path) return
+    try { await launchFile(task.output_path) } catch (reason: any) { setError(reason.message || '无法打开文件') }
   }
   const toggleTheme = () => {
     const next = theme === 'dark' ? 'light' : 'dark'
@@ -113,9 +149,9 @@ export default function App() {
       <Sidebar tasks={tasks} active={filter} onChange={setFilter} userscript={userscript} />
       <main className="content">
         <UpdateNotice />
-        <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} ({filtered.length})</strong><span>{selected.size ? `已选择 ${selected.size} 项` : '右键任务可直接操作，双击查看详情'}</span></div>
+        <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} ({filtered.length})</strong><div className="list-tools"><label className="task-search"><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务、链接或错误码" aria-label="搜索任务" /></label><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={clearCompleted}><Trash2 size={14} />清理已完成</button></div></div>
         {error && <div className="action-error">{error}</div>}
-        <TaskTable tasks={filtered} selected={selected} onSelect={setSelected} onOpenDetails={setDetails} onTaskAction={(task, action) => perform(action, [task])} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openExplorer(task.output_path)} />
+        <TaskTable tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTaskAction={(task, action) => perform(action, [task])} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openExplorer(task.output_path)} onLaunchFile={launchOutput} />
       </main>
     </div>
     <footer className="statusbar"><span>活动任务 <b>{running.length}</b></span><span>队列 <b>{queued}</b></span><span>总速度 <b>{fmtSpeed(totalSpeed)}</b></span><span>已完成 <b>{fmtBytes(completedSize)}</b></span><span>{userscript?.detected ? '浏览器脚本已连接' : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span></footer>
@@ -124,7 +160,8 @@ export default function App() {
     {showUserscript && <UserscriptDialog onClose={() => { setShowUserscript(false); load() }} />}
     {showSettings && <SettingsPanel onClose={() => { setShowSettings(false); load() }} />}
     {showUpdate && <UpdateDialog onClose={() => setShowUpdate(false)} />}
-    {details && <TaskDetailsModal task={tasks.find(task => task.id === details.id) || details} onClose={() => setDetails(null)} onLog={() => setLogTaskId(details.id)} />}
+    {detailTask && <TaskDetailsModal task={detailTask} pending={pending.has(detailTask.id)} onClose={() => setDetails(null)} onLog={() => setLogTaskId(detailTask.id)} onAction={action => perform(action, [detailTask])} onOpenFile={() => detailTask.output_path && openExplorer(detailTask.output_path)} onLaunchFile={() => launchOutput(detailTask)} />}
     {logTaskId && <LogModal taskId={logTaskId} onClose={() => setLogTaskId(null)} />}
+    {feedback && <div className="toast" role="status">{feedback}</div>}
   </div>
 }

@@ -58,13 +58,42 @@ def test_userscript_sends_startup_ping_and_periodic_heartbeat():
     root = Path(__file__).resolve().parent.parent
     source = (root / "userscript" / "m3u8-sniffer.user.js").read_text(encoding="utf-8")
 
-    assert "const SCRIPT_VERSION = '4.2.0';" in source
+    assert "const SCRIPT_VERSION = '4.3.0';" in source
     assert "// @compatible   Tampermonkey" in source
     assert "// @compatible   ScriptCat" in source
     assert "apiPost('/userscript/ping'" in source
     assert "page_url: location.href" in source
     assert "setTimeout(pingDownloader, 500);" in source
     assert "setInterval(pingDownloader, 60000);" in source
+
+
+def test_userscript_panel_is_collapsible_and_remembers_its_position():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "userscript" / "m3u8-sniffer.user.js").read_text(encoding="utf-8")
+
+    assert "GM_getValue('hls_panel_collapsed', true)" in source
+    assert "GM_setValue('hls_panel_collapsed'" in source
+    assert "GM_setValue('hls_panel_side'" in source
+    assert "hls-collapsed" in source
+    assert "data-tab=\"resources\"" in source
+    assert "data-tab=\"tasks\"" in source
+
+
+def test_userscript_exposes_common_resource_and_task_actions():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "userscript" / "m3u8-sniffer.user.js").read_text(encoding="utf-8")
+
+    for marker in (
+        "hls-download-all",
+        "hls-rescan",
+        "actionButton('pause'",
+        "actionButton('resume'",
+        "actionButton('cancel'",
+        "actionButton('retry'",
+        "actionButton('launch'",
+    ):
+        assert marker in source
+    assert "escapeHTML(state.error)" in source
 
 
 def test_userscript_uses_current_page_as_request_source_for_cross_domain_media():

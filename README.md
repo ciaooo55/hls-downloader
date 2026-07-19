@@ -69,8 +69,10 @@
 1. 在浏览器安装 [ScriptCat](https://scriptcat.org/) 或 [Tampermonkey](https://www.tampermonkey.net/)。
 2. 启动下载器，在工具栏点击浏览器脚本按钮。
 3. 可直接打开安装地址，也可一键导出 `m3u8-sniffer.user.js` 到指定目录后手动导入。
-4. 打开含视频的 HTTPS 页面并播放，脚本会显示捕获到的 HLS 地址。
-5. 点击“发送下载”，任务会出现在桌面下载器中。
+4. 打开含视频的网页并播放，右上角折叠按钮会显示捕获数量；点击后展开资源与任务面板。
+5. 可单个或批量发送资源，并在面板中暂停、继续、取消、重试、播放成品或打开文件位置。
+
+脚本默认折叠为 `48 × 48` 的小按钮，不会持续遮挡视频；折叠状态、资源/任务标签和左右停靠位置会自动记忆。也可以手动粘贴 m3u8、重新扫描当前页面、复制全部链接或隐藏已结束任务。
 
 脚本发送任务时自动使用当前网页的 Referer、Origin、User-Agent 和 Cookie。例如在 `https://123.com` 页面捕获到 `https://456.com/video.m3u8`，请求来源会使用 `123.com`，不会沿用设置中的 missav 默认值。浏览器扩展不允许普通程序读取其脚本安装列表，因此下载器通过脚本向本地服务报到来判断它是否正在运行。
 
@@ -129,7 +131,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.1.11
+.\scripts\build_installer.ps1 -Version 1.1.12
 ```
 
 输出位于忽略的 `release` 目录：
@@ -148,8 +150,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.1.11
-git push origin v1.1.11
+git tag v1.1.12
+git push origin v1.1.12
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。

@@ -146,7 +146,7 @@ async def update_settings(body: SettingsUpdate, x_token: str = Header(default=""
     data = body.model_dump(exclude_none=True)
     apply_settings_update(settings, data)
     save_settings(settings)
-    return {"ok": True}
+    return settings.model_dump()
 
 @router.post("/tasks", response_model=TaskResponse)
 async def create_task(body: TaskCreate, x_token: str = Header(default="")):
@@ -182,6 +182,14 @@ async def create_batch(body: TaskBatchCreate, x_token: str = Header(default=""))
 async def list_tasks(x_token: str = Header(default="")):
     _check_token(x_token)
     return [_to_resp(t) for t in manager.tasks.values()]
+
+@router.delete("/tasks/completed")
+async def clear_completed_tasks(x_token: str = Header(default="")):
+    _check_token(x_token)
+    task_ids = [task.id for task in manager.tasks.values() if task.status.value == "done"]
+    for task_id in task_ids:
+        await _manager_action(manager.delete_task(task_id))
+    return {"ok": True, "count": len(task_ids)}
 
 @router.get("/tasks/{task_id}", response_model=TaskResponse)
 async def get_task(task_id: str, x_token: str = Header(default="")):
@@ -296,6 +304,21 @@ async def open_explorer(body: dict, x_token: str = Header(default="")):
         subprocess.Popen(["explorer", str(p)])
     return {"ok": True}
 
+@router.post("/launch-file")
+async def launch_file(body: dict, x_token: str = Header(default="")):
+    _check_token(x_token)
+    path = body.get("path", "")
+    if not path:
+        raise HTTPException(status_code=400, detail="path required")
+    target = Path(path)
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    import os
+    if not hasattr(os, "startfile"):
+        raise HTTPException(status_code=501, detail="当前系统不支持直接打开文件")
+    await asyncio.to_thread(os.startfile, str(target))
+    return {"ok": True}
+
 @router.get("/browse-dir")
 async def browse_dir(path: str = "", x_token: str = Header(default="")):
     _check_token(x_token)
@@ -364,6 +387,8 @@ def _to_resp(task) -> TaskResponse:
         updated_at=task.updated_at or "",
         started_at=task.started_at or "",
         finished_at=task.finished_at or "",
+        available_actions=manager.get_available_actions(task),
+        queue_position=manager.get_queue_position(task),
     )
 
 

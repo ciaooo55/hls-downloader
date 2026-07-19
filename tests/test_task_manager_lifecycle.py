@@ -181,6 +181,51 @@ def test_task_event_contains_structured_failure_details():
     assert event["error_attempt"] == 5
 
 
+def test_available_actions_follow_backend_state_and_live_handle():
+    class LiveHandle:
+        @staticmethod
+        def done():
+            return False
+
+    manager = TaskManager()
+    queued = _task("queued", TaskStatus.QUEUED)
+    manager.tasks[queued.id] = queued
+    assert "start" in manager.get_available_actions(queued)
+
+    queued.task_handle = LiveHandle()
+    assert "start" not in manager.get_available_actions(queued)
+    assert "cancel" in manager.get_available_actions(queued)
+
+    parsing = _task("parsing", TaskStatus.PARSING)
+    parsing.pause_event = asyncio.Event()
+    assert "pause" not in manager.get_available_actions(parsing)
+
+    downloading = _task("segments", TaskStatus.DOWNLOADING_SEGMENTS)
+    downloading.pause_event = asyncio.Event()
+    assert "pause" in manager.get_available_actions(downloading)
+
+
+def test_task_event_contains_available_actions_and_queue_position():
+    class LiveHandle:
+        @staticmethod
+        def done():
+            return False
+
+    manager = TaskManager()
+    first = _task("first", TaskStatus.QUEUED)
+    second = _task("second", TaskStatus.QUEUED)
+    first.created_at = "2026-01-01T00:00:00"
+    second.created_at = "2026-01-01T00:00:01"
+    first.task_handle = LiveHandle()
+    second.task_handle = LiveHandle()
+    manager.tasks = {first.id: first, second.id: second}
+
+    event = manager._task_event(second)
+
+    assert event["available_actions"] == ["cancel", "log"]
+    assert event["queue_position"] == 2
+
+
 def test_structured_failure_details_survive_database_reload(tmp_path, monkeypatch):
     from backend.app import database as database_module
 

@@ -15,6 +15,6 @@ export default function UserscriptDialog({ onClose }: { onClose: () => void }) {
     <div className={`userscript-status ${status?.detected ? 'online' : ''}`}><i /><div><strong>{status?.detected ? '已检测到脚本运行' : status?.seen_before ? '脚本此前运行过' : '本次尚未检测到脚本'}</strong><span>{status?.detected ? `${status.version || '未知版本'} · ${status.page_origin || '未知页面'}` : '安装后打开一个 HTTPS 视频页面，状态会自动更新。'}</span></div></div>
     <div className="script-actions"><button className="primary-button" onClick={install}><ExternalLink size={16} />直接安装脚本</button><button className="secondary-button" onClick={exportFile}><Download size={16} />导出到指定目录</button></div>
     {message && <div className="inline-message">{message}</div>}
-    <p className="fine-print">脚本下载时会自动使用当前网页的 Referer、Origin、User-Agent 和 Cookie；程序无法直接读取 ScriptCat 或 Tampermonkey 的安装列表，状态表示脚本最近是否向本地下载器报到。</p>
+    <p className="fine-print">新版脚本默认折叠为右上角小按钮，可展开、换边并记住位置；支持批量发送、手动添加、暂停、继续、取消、重试和打开成品。下载请求自动使用当前网页的 Referer、Origin、User-Agent 和 Cookie。</p>
   </section></div>
 }

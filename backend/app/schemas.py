@@ -65,6 +65,8 @@ class TaskResponse(BaseModel):
     updated_at: str
     started_at: str = ""
     finished_at: str = ""
+    available_actions: list[str] = Field(default_factory=list)
+    queue_position: int = 0
 
 class SettingsUpdate(BaseModel):
     host: Optional[str] = None

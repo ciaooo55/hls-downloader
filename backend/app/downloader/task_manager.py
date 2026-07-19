@@ -116,6 +116,54 @@ class TaskManager:
             raise TaskNotFoundError(f"任务不存在: {task_id}")
         return task
 
+    @staticmethod
+    def _has_live_handle(task: Task) -> bool:
+        return bool(task.task_handle and not task.task_handle.done())
+
+    def get_available_actions(self, task: Task) -> list[str]:
+        live = self._has_live_handle(task)
+        actions: list[str] = []
+        if task.status is TaskStatus.QUEUED and not live:
+            actions.append("start")
+        if (
+            task.status is TaskStatus.DOWNLOADING_SEGMENTS
+            and task.pause_event is not None
+            and not task.pause_event.is_set()
+        ):
+            actions.append("pause")
+        if task.status is TaskStatus.PAUSED and not live:
+            actions.append("resume")
+        if task.status not in TERMINAL_STATUSES:
+            actions.append("cancel")
+        if task.status in {TaskStatus.FAILED, TaskStatus.CANCELED, TaskStatus.UNSUPPORTED} and not live:
+            actions.append("retry")
+        if task.status is TaskStatus.DONE and task.output_path:
+            actions.extend(("launch", "open"))
+        actions.append("log")
+        if task.status in TERMINAL_STATUSES and not live:
+            actions.append("delete")
+        return actions
+
+    def get_queue_position(self, task: Task) -> int:
+        if task.status is not TaskStatus.QUEUED or not self._has_live_handle(task):
+            return 0
+        queued = sorted(
+            (
+                item for item in self.tasks.values()
+                if item.status is TaskStatus.QUEUED and self._has_live_handle(item)
+            ),
+            key=lambda item: (item.created_at or "", item.id),
+        )
+        try:
+            return queued.index(task) + 1
+        except ValueError:
+            return 0
+
+    def _broadcast_queue_updates(self) -> None:
+        for task in self.tasks.values():
+            if task.status is TaskStatus.QUEUED:
+                self._broadcast_nowait(self._task_event(task))
+
     async def create_task(
         self,
         url,
@@ -172,9 +220,9 @@ class TaskManager:
                 0,
             ),
         )
-        self._broadcast_nowait(self._task_event(task, event_type="task_created"))
         if auto_start:
             await self.start_task(task_id)
+        self._broadcast_nowait(self._task_event(task, event_type="task_created"))
         return task
 
     async def start_task(self, task_id: str) -> None:
@@ -210,6 +258,14 @@ class TaskManager:
                 await self._cleanup_temp_root_if_all_done()
 
         task.task_handle = asyncio.create_task(run_task(), name=f"hls-{task.id}")
+        task.task_handle.add_done_callback(
+            lambda _handle: (
+                self._broadcast_nowait(self._task_event(task)),
+                self._broadcast_queue_updates(),
+            )
+        )
+        self._broadcast_nowait(self._task_event(task))
+        self._broadcast_queue_updates()
 
     async def pause_task(self, task_id: str) -> None:
         task = self._get_task(task_id)
@@ -484,6 +540,8 @@ class TaskManager:
             "updated_at": task.updated_at,
             "started_at": task.started_at,
             "finished_at": task.finished_at,
+            "available_actions": self.get_available_actions(task),
+            "queue_position": self.get_queue_position(task),
         }
 
     def _on_log_write(self, task_id: str, message: str) -> None:

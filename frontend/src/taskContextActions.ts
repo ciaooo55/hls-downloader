@@ -2,7 +2,7 @@ import { commandState, type TaskLike } from './taskCommands'
 
 export type TaskContextAction =
   | 'details' | 'start' | 'pause' | 'resume' | 'cancel'
-  | 'retry' | 'open' | 'log' | 'delete'
+  | 'retry' | 'launch' | 'open' | 'log' | 'delete'
 
 export function taskContextActions(task: TaskLike): TaskContextAction[] {
   const commands = commandState([task])
@@ -12,6 +12,7 @@ export function taskContextActions(task: TaskLike): TaskContextAction[] {
   if (commands.resume) actions.push('resume')
   if (commands.cancel) actions.push('cancel')
   if (commands.retry) actions.push('retry')
+  if (task.available_actions?.includes('launch')) actions.push('launch')
   if (commands.open) actions.push('open')
   if (commands.log) actions.push('log')
   if (commands.delete) actions.push('delete')

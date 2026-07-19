@@ -2,6 +2,7 @@ export interface TaskLike {
   id: string
   status: string
   output_path?: string
+  available_actions?: string[]
 }
 
 export interface CommandState {
@@ -15,9 +16,7 @@ export interface CommandState {
   log: boolean
 }
 
-const PAUSABLE = new Set([
-  'downloading', 'downloading_m3u8', 'parsing', 'downloading_segments',
-])
+const PAUSABLE = new Set(['downloading_segments'])
 const CANCELABLE = new Set([
   'queued', 'downloading', 'downloading_m3u8', 'parsing',
   'downloading_segments', 'pausing', 'paused', 'merging', 'remuxing',
@@ -32,14 +31,18 @@ export function commandState(tasks: TaskLike[]): CommandState {
       retry: false, delete: false, open: false, log: false,
     }
   }
+  const backendActions = tasks.every(task => Array.isArray(task.available_actions))
+  const allowed = (action: string) => backendActions
+    ? tasks.every(task => task.available_actions!.includes(action))
+    : null
   return {
-    start: tasks.every(task => task.status === 'queued'),
-    pause: tasks.every(task => PAUSABLE.has(task.status)),
-    resume: tasks.every(task => task.status === 'paused'),
-    cancel: tasks.every(task => CANCELABLE.has(task.status)),
-    retry: tasks.every(task => RETRYABLE.has(task.status)),
-    delete: tasks.every(task => DELETABLE.has(task.status)),
-    open: tasks.length === 1 && tasks[0].status === 'done',
-    log: tasks.length === 1,
+    start: allowed('start') ?? tasks.every(task => task.status === 'queued'),
+    pause: allowed('pause') ?? tasks.every(task => PAUSABLE.has(task.status)),
+    resume: allowed('resume') ?? tasks.every(task => task.status === 'paused'),
+    cancel: allowed('cancel') ?? tasks.every(task => CANCELABLE.has(task.status)),
+    retry: allowed('retry') ?? tasks.every(task => RETRYABLE.has(task.status)),
+    delete: allowed('delete') ?? tasks.every(task => DELETABLE.has(task.status)),
+    open: tasks.length === 1 && (allowed('open') ?? tasks[0].status === 'done'),
+    log: tasks.length === 1 && (allowed('log') ?? true),
   }
 }

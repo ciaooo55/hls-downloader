@@ -1,38 +1,35 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { FileText, FolderOpen, Info, Pause, Play, RotateCcw, Trash2, XCircle } from 'lucide-react'
+import { FileText, FolderOpen, Info, LoaderCircle, MoreHorizontal, Pause, Play, PlayCircle, RotateCcw, Trash2, XCircle } from 'lucide-react'
 import { getDisplayedProgress } from '../taskState'
 import { fmtBytes, fmtDate, fmtEta, fmtSpeed } from '../format'
 import { taskContextActions, type TaskContextAction } from '../taskContextActions'
+import { statusLabel } from '../taskPresentation'
 import type { Task } from '../types'
-
-const labels: Record<string, string> = {
-  queued: '排队中', downloading: '下载中', downloading_m3u8: '获取清单', parsing: '解析中',
-  downloading_segments: '下载分片', pausing: '暂停中', paused: '已暂停', merging: '合并中',
-  remuxing: '转封装', done: '已完成', failed: '失败', canceled: '已取消', unsupported: '不支持',
-}
 
 const menuLabels: Record<TaskContextAction, string> = {
   details: '查看详情', start: '开始下载', pause: '暂停', resume: '恢复',
-  cancel: '取消任务', retry: '重试', open: '打开文件位置', log: '查看日志', delete: '删除任务',
+  cancel: '取消任务', retry: '重试', launch: '播放文件', open: '打开文件位置', log: '查看日志', delete: '删除任务',
 }
 
 const menuIcons: Record<TaskContextAction, React.ReactNode> = {
   details: <Info size={16} />, start: <Play size={16} />, pause: <Pause size={16} />,
   resume: <RotateCcw size={16} />, cancel: <XCircle size={16} />, retry: <RotateCcw size={16} />,
-  open: <FolderOpen size={16} />, log: <FileText size={16} />, delete: <Trash2 size={16} />,
+  launch: <PlayCircle size={16} />, open: <FolderOpen size={16} />, log: <FileText size={16} />, delete: <Trash2 size={16} />,
 }
 
 interface ContextMenuState { task: Task; x: number; y: number }
 
-export default function TaskTable({ tasks, selected, onSelect, onOpenDetails, onTaskAction, onOpenLog, onOpenFile }: {
+export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTaskAction, onOpenLog, onOpenFile, onLaunchFile }: {
   tasks: Task[]
   selected: Set<string>
+  pending: Set<string>
   onSelect: (ids: Set<string>) => void
   onOpenDetails: (task: Task) => void
   onTaskAction: (task: Task, action: string) => void
   onOpenLog: (task: Task) => void
   onOpenFile: (task: Task) => void
+  onLaunchFile: (task: Task) => void
 }) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
   const allSelected = tasks.length > 0 && tasks.every(task => selected.has(task.id))
@@ -64,7 +61,7 @@ export default function TaskTable({ tasks, selected, onSelect, onOpenDetails, on
   const openMenu = (event: React.MouseEvent, task: Task) => {
     event.preventDefault()
     onSelect(new Set([task.id]))
-    const actions = taskContextActions(task)
+    const actions = pending.has(task.id) ? ['details', 'log'] : taskContextActions(task)
     const width = 184
     const height = actions.length * 36 + 12
     setMenu({
@@ -79,6 +76,7 @@ export default function TaskTable({ tasks, selected, onSelect, onOpenDetails, on
     const task = menu.task
     setMenu(null)
     if (action === 'details') onOpenDetails(task)
+    else if (action === 'launch') onLaunchFile(task)
     else if (action === 'open') onOpenFile(task)
     else if (action === 'log') onOpenLog(task)
     else onTaskAction(task, action)
@@ -88,10 +86,10 @@ export default function TaskTable({ tasks, selected, onSelect, onOpenDetails, on
   return (
     <div className="table-scroll">
       <table className="task-table">
-        <thead><tr><th className="check-col"><input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="选择全部任务" /></th><th>文件名</th><th>大小</th><th>已下载</th><th>状态</th><th>进度</th><th>速度</th><th>剩余</th><th>分片</th><th>更新时间</th></tr></thead>
+        <thead><tr><th className="check-col"><input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="选择全部任务" /></th><th>文件名</th><th>状态</th><th>进度</th><th>速度 / 剩余</th><th className="segments-col">分片</th><th className="updated-col">更新时间</th><th className="menu-col" /></tr></thead>
         <tbody>{tasks.map(task => {
           const progress = getDisplayedProgress(task)
-          return <tr key={task.id} className={selected.has(task.id) ? 'selected' : ''}
+          return <tr key={task.id} className={`${selected.has(task.id) ? 'selected ' : ''}${pending.has(task.id) ? 'pending' : ''}`.trim()}
             onClick={event => {
               if ((event.target as HTMLElement).closest('input')) return
               if (event.ctrlKey || event.metaKey) toggleOne(task.id)
@@ -101,17 +99,17 @@ export default function TaskTable({ tasks, selected, onSelect, onOpenDetails, on
             onDoubleClick={() => onOpenDetails(task)}>
             <td className="check-col"><input type="checkbox" checked={selected.has(task.id)} onChange={() => toggleOne(task.id)} aria-label={`选择 ${task.title || task.filename || task.id}`} /></td>
             <td className="name-cell"><span title={task.title || task.filename || task.id}>{task.title || task.filename || task.id}</span><small title={task.url}>{task.url}</small></td>
-            <td>{fmtBytes(task.total_bytes)}</td><td>{fmtBytes(task.downloaded_bytes)}</td>
-            <td><span className={`status status-${task.status}`}>{labels[task.status] || task.status}</span>{task.error_code && <small className="failure-code" title={task.error_message}>{task.error_code}</small>}</td>
-            <td><div className="table-progress"><div><i style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div><span>{progress.toFixed(1)}%</span></div></td>
-            <td className="speed-cell">{fmtSpeed(task.speed_bytes_per_sec)}</td><td>{fmtEta(task.eta_seconds)}</td>
-            <td>{task.total_segments ? `${task.completed_segments}/${task.total_segments}` : '--'}</td><td>{fmtDate(task.updated_at)}</td>
+            <td><span className={`status status-${task.status}`}>{pending.has(task.id) && <LoaderCircle className="spin" size={12} />}{task.status === 'queued' && task.queue_position ? `排队中 · 第 ${task.queue_position} 位` : statusLabel(task.status)}</span>{task.error_code && <small className="failure-code" title={task.error_message}>{task.error_code}</small>}</td>
+            <td><div className="table-progress"><div><i style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div><span>{progress.toFixed(1)}%</span></div><small className="progress-bytes">{fmtBytes(task.downloaded_bytes)} / {fmtBytes(task.total_bytes)}</small></td>
+            <td><span className="speed-cell">{fmtSpeed(task.speed_bytes_per_sec)}</span><small className="eta-cell">{fmtEta(task.eta_seconds)}</small></td>
+            <td className="segments-col">{task.total_segments ? `${task.completed_segments}/${task.total_segments}` : '--'}</td><td className="updated-col">{fmtDate(task.updated_at)}</td>
+            <td className="menu-col"><button className="row-menu-button" title="任务操作" onClick={event => { event.stopPropagation(); openMenu(event, task) }}><MoreHorizontal size={17} /></button></td>
           </tr>
         })}</tbody>
       </table>
       {menu && createPortal(
         <div className="task-context-menu" role="menu" style={{ left: menu.x, top: menu.y }} onPointerDown={event => event.stopPropagation()}>
-          {taskContextActions(menu.task).map(action => <button key={action} role="menuitem" className={action === 'delete' ? 'danger' : ''} onClick={() => runMenuAction(action)}>
+          {(pending.has(menu.task.id) ? ['details', 'log'] as TaskContextAction[] : taskContextActions(menu.task)).map(action => <button key={action} role="menuitem" className={action === 'delete' ? 'danger' : ''} onClick={() => runMenuAction(action)}>
             {menuIcons[action]}<span>{menuLabels[action]}</span>
           </button>)}
         </div>,
