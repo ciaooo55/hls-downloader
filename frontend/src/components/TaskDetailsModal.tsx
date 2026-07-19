@@ -1,10 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertTriangle, FileText, FolderOpen, LoaderCircle, MonitorPlay, Pause, PlayCircle, RotateCcw, Trash2, X, XCircle } from 'lucide-react'
 import { getFailureDetails } from '../failureDetails'
 import { fmtBytes, fmtDate, fmtEta, fmtSpeed } from '../format'
 import { getDisplayedProgress } from '../taskState'
 import { stageLabel, statusLabel } from '../taskPresentation'
 import type { Task } from '../types'
+import { fetchTorrentFiles, selectTorrentFiles } from '../api'
 
 export default function TaskDetailsModal({ task, pending, onClose, onLog, onAction, onOpenFile, onLaunchFile, onPreview }: {
   task: Task
@@ -18,20 +19,35 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
 }) {
   const failure = task.error_message || task.error_code ? getFailureDetails(task) : null
   const actions = task.available_actions || []
+  const [torrentFiles, setTorrentFiles] = useState<Array<{ index: number; path: string; size: number }>>([])
+  const [selectedFiles, setSelectedFiles] = useState<number[]>([])
+  const [selectionBusy, setSelectionBusy] = useState(false)
   useEffect(() => {
     const close = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
     window.addEventListener('keydown', close)
     return () => window.removeEventListener('keydown', close)
   }, [onClose])
+  useEffect(() => {
+    if (task.task_type !== 'torrent') return
+    fetchTorrentFiles(task.id).then(result => {
+      setTorrentFiles(result.files || [])
+      setSelectedFiles(result.selected || [])
+    }).catch(() => {})
+  }, [task.id, task.task_type, task.status])
   return <div className="modal-overlay" onMouseDown={onClose}><section className="modal task-details" onMouseDown={event => event.stopPropagation()}>
     <header><div><h2>{task.title || task.filename || task.id}</h2><p title={task.url}>{task.url}</p></div><button className="icon-button" title="关闭" onClick={onClose}><X size={18} /></button></header>
-    <div className="detail-grid"><Detail label="状态" value={statusLabel(task.status)} /><Detail label="阶段" value={stageLabel(task.stage)} /><Detail label="总大小" value={fmtBytes(task.total_bytes)} /><Detail label="已下载" value={fmtBytes(task.downloaded_bytes)} /><Detail label="进度" value={`${getDisplayedProgress(task).toFixed(1)}%`} /><Detail label="速度" value={fmtSpeed(task.speed_bytes_per_sec)} /><Detail label="剩余" value={fmtEta(task.eta_seconds)} /><Detail label="分片" value={`${task.completed_segments}/${task.total_segments}`} /><Detail label="活动线程" value={`${task.active_workers}/${task.max_workers}`} /><Detail label="更新时间" value={fmtDate(task.updated_at)} /></div>
+    <div className="detail-grid"><Detail label="类型" value={task.task_type.toUpperCase()} /><Detail label="状态" value={statusLabel(task.status)} /><Detail label="阶段" value={stageLabel(task.stage)} /><Detail label="总大小" value={fmtBytes(task.total_bytes)} /><Detail label="已下载" value={fmtBytes(task.downloaded_bytes)} /><Detail label="进度" value={`${getDisplayedProgress(task).toFixed(1)}%`} /><Detail label="下载速度" value={fmtSpeed(task.speed_bytes_per_sec)} /><Detail label="剩余" value={fmtEta(task.eta_seconds)} /><Detail label={task.task_type === 'torrent' ? 'Piece' : '分片'} value={`${task.completed_segments}/${task.total_segments}`} /><Detail label={task.task_type === 'torrent' ? 'Peer / Seed' : '活动线程'} value={task.task_type === 'torrent' ? `${task.peer_count} / ${task.seed_count}` : `${task.active_workers}/${task.max_workers}`} /><Detail label="上传速度" value={task.task_type === 'torrent' ? fmtSpeed(task.upload_speed_bytes_per_sec) : '--'} /><Detail label="更新时间" value={fmtDate(task.updated_at)} /></div>
     {task.last_log && <div className="detail-message"><b>最近日志</b><code>{task.last_log}</code></div>}
     {failure && <section className="failure-details">
       <h3><AlertTriangle size={17} />{failure.title}</h3>
       {failure.items.length > 0 && <dl>{failure.items.map(item => <div key={item.label}><dt>{item.label}</dt><dd title={item.value}>{item.value}</dd></div>)}</dl>}
       {failure.message && <div className="failure-message"><b>失败原因</b><code>{failure.message}</code></div>}
       {failure.hint && <div className="failure-hint"><b>处理建议</b><span>{failure.hint}</span></div>}
+    </section>}
+    {task.task_type === 'torrent' && torrentFiles.length > 0 && <section className="torrent-files">
+      <div className="torrent-files-head"><h3>BT 文件选择</h3><span>{selectedFiles.length}/{torrentFiles.length}</span></div>
+      <div className="torrent-file-list">{torrentFiles.map(file => <label key={file.index}><input type="checkbox" checked={selectedFiles.includes(file.index)} disabled={task.status === 'downloading' || task.status === 'done'} onChange={event => setSelectedFiles(current => event.target.checked ? [...current, file.index] : current.filter(index => index !== file.index))} /><span title={file.path}>{file.path}</span><b>{fmtBytes(file.size)}</b></label>)}</div>
+      {task.status !== 'downloading' && task.status !== 'done' && <button className="secondary-button" disabled={selectionBusy || !selectedFiles.length} onClick={async () => { setSelectionBusy(true); try { await selectTorrentFiles(task.id, selectedFiles) } finally { setSelectionBusy(false) } }}>保存文件选择</button>}
     </section>}
     {task.output_path && <div className="output-path" title={task.output_path}>{task.output_path}</div>}
     <footer className="detail-actions">

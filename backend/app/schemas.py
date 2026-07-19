@@ -3,9 +3,13 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from .version import APP_VERSION
+from .models import TaskType
 
 class TaskCreate(BaseModel):
     url: str
+    task_type: TaskType = TaskType.AUTO
+    source_page_url: str = ""
+    mime_type: str = ""
     referer: str = ""
     origin: str = ""
     user_agent: str = ""
@@ -18,8 +22,10 @@ class TaskCreate(BaseModel):
     @classmethod
     def validate_url(cls, value: str) -> str:
         parsed = urlparse(value)
+        if parsed.scheme == "magnet" and parsed.query:
+            return value
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ValueError("url 必须是有效的 HTTP(S) 地址")
+            raise ValueError("url 必须是有效的 HTTP(S) 或 magnet 地址")
         return value
 
 class TaskBatchCreate(BaseModel):
@@ -27,6 +33,9 @@ class TaskBatchCreate(BaseModel):
 
 class TaskResponse(BaseModel):
     id: str
+    task_type: str = "hls"
+    source_page_url: str = ""
+    mime_type: str = ""
     title: str
     url: str
     referer: str
@@ -56,6 +65,11 @@ class TaskResponse(BaseModel):
     playable_segments: int = 0
     playable_duration: float = 0.0
     media_duration: float = 0.0
+    progress_percent: float = 0.0
+    uploaded_bytes: int = 0
+    upload_speed_bytes_per_sec: float = 0.0
+    peer_count: int = 0
+    seed_count: int = 0
     playback_ready: bool = False
     error_message: str
     error_code: str = ""
@@ -86,6 +100,12 @@ class SettingsUpdate(BaseModel):
     allowed_hosts: Optional[list[str]] = None
     keep_temp_files: Optional[bool] = None
     max_concurrent_tasks: Optional[int] = Field(default=None, ge=1, le=16)
+    http_chunk_size_mb: Optional[int] = Field(default=None, ge=1, le=64)
+    bt_upload_limit_kib: Optional[int] = Field(default=None, ge=0, le=1048576)
+    bt_max_connections: Optional[int] = Field(default=None, ge=10, le=1000)
+    bt_enable_dht: Optional[bool] = None
+    browser_takeover_enabled: Optional[bool] = None
+    browser_takeover_min_mb: Optional[int] = Field(default=None, ge=0, le=10240)
 
 class HealthResponse(BaseModel):
     status: str = "ok"
@@ -99,6 +119,10 @@ class UserscriptPing(BaseModel):
 
 class PlaybackSeekRequest(BaseModel):
     time: float = Field(ge=0, le=86400)
+
+
+class TorrentFileSelection(BaseModel):
+    indexes: list[int] = Field(min_length=1, max_length=10000)
 
 
 class UrlRecognitionRequest(BaseModel):

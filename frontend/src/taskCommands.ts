@@ -16,10 +16,11 @@ export interface CommandState {
   log: boolean
 }
 
-const PAUSABLE = new Set(['downloading_segments'])
+const PAUSABLE = new Set(['downloading_segments', 'downloading', 'fetching_metadata', 'checking'])
 const CANCELABLE = new Set([
   'queued', 'downloading', 'downloading_m3u8', 'parsing',
-  'downloading_segments', 'pausing', 'paused', 'merging', 'remuxing',
+  'downloading_segments', 'fetching_metadata', 'checking', 'awaiting_selection',
+  'awaiting_confirmation', 'pausing', 'paused', 'merging', 'remuxing',
 ])
 const RETRYABLE = new Set(['failed', 'canceled', 'unsupported'])
 const DELETABLE = new Set(['done', 'failed', 'canceled', 'unsupported'])

@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import json
 import logging
 import shutil
 import uuid
@@ -8,15 +9,21 @@ from pathlib import Path
 
 from ..config import settings
 from ..database import run_db
-from ..models import Task, TaskProgress, TaskStatus
+from ..models import Task, TaskProgress, TaskStatus, TaskType
+from ..credentials import protect_secret, unprotect_secret
 from ..utils import sanitize_filename
 from .hls import HLSDownloader
+from .http_file import HTTPDownloader
+from .dash import DashDownloader
+from .torrent import TorrentDownloader
 from .playback import MIN_START_DURATION, PlaybackError, playback_service
 
 
 logger = logging.getLogger(__name__)
 
 ACTIVE_STATUSES = {
+    TaskStatus.FETCHING_METADATA,
+    TaskStatus.CHECKING,
     TaskStatus.DOWNLOADING,
     TaskStatus.DOWNLOADING_M3U8,
     TaskStatus.PARSING,
@@ -32,12 +39,27 @@ TERMINAL_STATUSES = {
     TaskStatus.UNSUPPORTED,
 }
 PLAYBACK_STATUSES = {
+    TaskStatus.DOWNLOADING,
     TaskStatus.DOWNLOADING_SEGMENTS,
     TaskStatus.PAUSING,
     TaskStatus.PAUSED,
     TaskStatus.MERGING,
     TaskStatus.REMUXING,
 }
+
+
+def resolve_task_type(value: TaskType | str, url: str) -> TaskType:
+    requested = TaskType(value)
+    if requested is not TaskType.AUTO:
+        return requested
+    lowered = url.lower().split("#", 1)[0].split("?", 1)[0]
+    if url.lower().startswith("magnet:") or lowered.endswith(".torrent"):
+        return TaskType.TORRENT
+    if lowered.endswith(".mpd"):
+        return TaskType.DASH
+    if ".m3u8" in lowered:
+        return TaskType.HLS
+    return TaskType.HTTP
 
 
 def _clear_task_error(task: Task) -> None:
@@ -77,7 +99,7 @@ class TaskManager:
         self._event_subscribers: list[asyncio.Queue] = []
         self._sniffed: list[dict] = []
         self._pending_saves: dict[str, asyncio.Task] = {}
-        self._downloaders: dict[str, HLSDownloader] = {}
+        self._downloaders: dict[str, object] = {}
         self._temp_cleanup_lock = asyncio.Lock()
         self._maintenance_task: asyncio.Task | None = None
 
@@ -136,7 +158,12 @@ class TaskManager:
         if task.status is TaskStatus.QUEUED and not live:
             actions.append("start")
         if (
-            task.status is TaskStatus.DOWNLOADING_SEGMENTS
+            task.status in {
+                TaskStatus.DOWNLOADING_SEGMENTS,
+                TaskStatus.DOWNLOADING,
+                TaskStatus.FETCHING_METADATA,
+                TaskStatus.CHECKING,
+            }
             and task.pause_event is not None
             and not task.pause_event.is_set()
         ):
@@ -158,7 +185,15 @@ class TaskManager:
 
     @staticmethod
     def _playback_ready(task: Task) -> bool:
-        if task.status is TaskStatus.DONE and task.output_path:
+        if task.status is TaskStatus.DONE and (
+            task.engine_state.get("stream_path") or task.output_path
+        ):
+            return True
+        if (
+            task.task_type in {TaskType.HTTP, TaskType.TORRENT}
+            and task.status in {TaskStatus.DOWNLOADING, TaskStatus.PAUSING, TaskStatus.PAUSED}
+            and task.engine_state.get("stream_path")
+        ):
             return True
         progress = task.progress
         return (
@@ -193,6 +228,9 @@ class TaskManager:
     async def create_task(
         self,
         url,
+        task_type=TaskType.AUTO,
+        source_page_url="",
+        mime_type="",
         referer="",
         origin="",
         user_agent="",
@@ -203,11 +241,18 @@ class TaskManager:
         auto_start=False,
     ) -> Task:
         task_id = str(uuid.uuid4())[:8]
-        filename = sanitize_filename(filename or title or task_id)
+        resolved_type = resolve_task_type(task_type, url)
+        requested_name = filename or title or (
+            task_id if resolved_type is TaskType.HLS else ""
+        )
+        filename = sanitize_filename(requested_name) if requested_name else ""
         now = datetime.now().isoformat()
         task = Task(
             id=task_id,
             url=url,
+            task_type=resolved_type,
+            source_page_url=source_page_url,
+            mime_type=mime_type,
             referer=referer or settings.default_referer,
             origin=origin or settings.default_origin,
             user_agent=user_agent or settings.default_user_agent,
@@ -225,17 +270,20 @@ class TaskManager:
             self.tasks[task_id] = task
         await run_db(
             "INSERT INTO tasks "
-            "(id,title,url,referer,origin,user_agent,cookie,filename,concurrency,"
-            "status,stage,last_log,started_at,finished_at,post_percent) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "(id,task_type,source_page_url,mime_type,title,url,referer,origin,user_agent,cookie,filename,concurrency,"
+            "status,stage,last_log,started_at,finished_at,post_percent,engine_state) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task.id,
+                task.task_type.value,
+                task.source_page_url,
+                task.mime_type,
                 task.title,
                 task.url,
                 task.referer,
                 task.origin,
                 task.user_agent,
-                task.cookie,
+                protect_secret(task.cookie),
                 task.filename,
                 task.concurrency,
                 task.status.value,
@@ -244,6 +292,7 @@ class TaskManager:
                 "",
                 "",
                 0,
+                "{}",
             ),
         )
         if auto_start:
@@ -267,7 +316,13 @@ class TaskManager:
                 async with self._get_sem():
                     if task.cancel_event and task.cancel_event.is_set():
                         return
-                    downloader = HLSDownloader(
+                    downloader_class = {
+                        TaskType.HLS: HLSDownloader,
+                        TaskType.HTTP: HTTPDownloader,
+                        TaskType.DASH: DashDownloader,
+                        TaskType.TORRENT: TorrentDownloader,
+                    }[task.task_type]
+                    downloader = downloader_class(
                         task,
                         on_progress=self._on_progress,
                         on_log=self._on_log_write,
@@ -278,16 +333,24 @@ class TaskManager:
                     finally:
                         self._downloaders.pop(task.id, None)
             except asyncio.CancelledError:
-                task.status = TaskStatus.CANCELED
-                task.stage = "canceled"
-                task.last_log = "已取消"
-                task.finished_at = datetime.now().isoformat()
+                if task.cancel_event and task.cancel_event.is_set():
+                    task.status = TaskStatus.CANCELED
+                    task.stage = "canceled"
+                    task.last_log = "已取消"
+                    task.finished_at = datetime.now().isoformat()
+                else:
+                    task.status = TaskStatus.PAUSED
+                    task.stage = "interrupted"
+                    task.last_log = "上次运行中断，可点击恢复"
                 raise
             finally:
                 await self._save_db(task)
                 await self._cleanup_temp_root_if_all_done()
 
-        task.task_handle = asyncio.create_task(run_task(), name=f"hls-{task.id}")
+        task.task_handle = asyncio.create_task(
+            run_task(),
+            name=f"{task.task_type.value}-{task.id}",
+        )
         task.task_handle.add_done_callback(
             lambda _handle: (
                 self._broadcast_nowait(self._task_event(task)),
@@ -319,16 +382,71 @@ class TaskManager:
             downloader.request_seek(segment_index)
         self._broadcast_nowait(self._task_event(task))
 
+    def get_stream_info(self, task_id: str) -> tuple[Path, int]:
+        task = self._get_task(task_id)
+        raw_path = task.engine_state.get("stream_path", "")
+        if not raw_path and task.status is TaskStatus.DONE:
+            raw_path = task.output_path
+        path = Path(raw_path) if raw_path else Path()
+        if not raw_path or not path.exists() or not path.is_file():
+            raise TaskConflictError("播放文件尚未准备好")
+        size = int(
+            task.engine_state.get("stream_size")
+            or task.engine_state.get("total_size")
+            or task.progress.total_bytes
+            or path.stat().st_size
+        )
+        return path, size
+
+    async def wait_for_stream_range(
+        self,
+        task_id: str,
+        start: int,
+        end: int,
+        timeout: float = 45.0,
+    ) -> tuple[Path, int]:
+        task = self._get_task(task_id)
+        downloader = self._downloaders.get(task_id)
+        if downloader is not None and hasattr(downloader, "wait_for_range"):
+            path = await downloader.wait_for_range(start, end, timeout=timeout)
+            size = int(
+                task.engine_state.get("stream_size")
+                or task.engine_state.get("total_size")
+                or task.progress.total_bytes
+            )
+            return path, size
+        return self.get_stream_info(task_id)
+
     async def pause_task(self, task_id: str) -> None:
         task = self._get_task(task_id)
-        if task.status is not TaskStatus.DOWNLOADING_SEGMENTS:
-            raise TaskConflictError("只有分片下载阶段可以暂停")
+        if task.status not in {
+            TaskStatus.DOWNLOADING_SEGMENTS,
+            TaskStatus.DOWNLOADING,
+            TaskStatus.FETCHING_METADATA,
+            TaskStatus.CHECKING,
+        }:
+            raise TaskConflictError("当前阶段不能暂停")
         if task.pause_event is None:
             raise TaskConflictError("任务尚未进入可暂停状态")
         task.pause_event.set()
         task.status = TaskStatus.PAUSING
         task.stage = "pausing"
         task.last_log = "正在等待当前分片完成"
+        await self._save_db(task)
+
+    async def select_torrent_files(self, task_id: str, indexes: list[int]) -> None:
+        task = self._get_task(task_id)
+        if task.task_type is not TaskType.TORRENT:
+            raise TaskConflictError("该任务不是 BT 任务")
+        files = task.engine_state.get("files", [])
+        valid = {int(entry["index"]) for entry in files}
+        selected = sorted({int(index) for index in indexes if int(index) in valid})
+        if not selected:
+            raise TaskConflictError("至少选择一个文件")
+        task.engine_state["selected_files"] = selected
+        downloader = self._downloaders.get(task_id)
+        if isinstance(downloader, TorrentDownloader):
+            downloader.select_files(selected)
         await self._save_db(task)
 
     async def resume_task(self, task_id: str) -> None:
@@ -499,15 +617,23 @@ class TaskManager:
                 playable_segments=int(_row_value(row, "playable_segments", 0) or 0),
                 playable_duration=float(_row_value(row, "playable_duration", 0) or 0),
                 media_duration=float(_row_value(row, "media_duration", 0) or 0),
+                progress_percent=float(_row_value(row, "progress_percent", 0) or 0),
+                uploaded_bytes=int(_row_value(row, "uploaded_bytes", 0) or 0),
+                upload_speed_bytes_per_sec=float(_row_value(row, "upload_speed_bytes_per_sec", 0) or 0),
+                peer_count=int(_row_value(row, "peer_count", 0) or 0),
+                seed_count=int(_row_value(row, "seed_count", 0) or 0),
                 connection_status="idle",
             )
             task = Task(
                 id=row["id"],
                 url=row["url"],
+                task_type=TaskType(_row_value(row, "task_type", TaskType.HLS.value) or TaskType.HLS.value),
+                source_page_url=_row_value(row, "source_page_url", "") or "",
+                mime_type=_row_value(row, "mime_type", "") or "",
                 referer=_row_value(row, "referer", "") or "",
                 origin=_row_value(row, "origin", "") or "",
                 user_agent=_row_value(row, "user_agent", "") or "",
-                cookie=_row_value(row, "cookie", "") or "",
+                cookie=unprotect_secret(_row_value(row, "cookie", "") or ""),
                 title=_row_value(row, "title", "") or "",
                 filename=_row_value(row, "filename", "") or "",
                 concurrency=int(_row_value(row, "concurrency", 0) or 0),
@@ -527,6 +653,7 @@ class TaskManager:
                 updated_at=_row_value(row, "updated_at", "") or "",
                 started_at=_row_value(row, "started_at", "") or "",
                 finished_at=_row_value(row, "finished_at", "") or "",
+                engine_state=json.loads(_row_value(row, "engine_state", "{}") or "{}"),
             )
             if status in PLAYBACK_STATUSES:
                 try:
@@ -552,7 +679,9 @@ class TaskManager:
                 "speed_bytes_per_sec=?,eta_seconds=?,post_percent=?,error_message=?,"
                 "playable_segments=?,playable_duration=?,media_duration=?,"
                 "error_code=?,error_stage=?,error_url=?,error_hint=?,http_status=?,"
-                "error_attempt=?,output_path=?,updated_at=?,started_at=?,finished_at=? WHERE id=?",
+                "error_attempt=?,output_path=?,updated_at=?,started_at=?,finished_at=?,"
+                "task_type=?,source_page_url=?,mime_type=?,progress_percent=?,uploaded_bytes=?,"
+                "upload_speed_bytes_per_sec=?,peer_count=?,seed_count=?,engine_state=? WHERE id=?",
                 (
                     task.status.value,
                     task.stage,
@@ -579,6 +708,15 @@ class TaskManager:
                     task.updated_at,
                     task.started_at or "",
                     task.finished_at or "",
+                    task.task_type.value,
+                    task.source_page_url,
+                    task.mime_type,
+                    task.progress.progress_percent,
+                    task.progress.uploaded_bytes,
+                    task.progress.upload_speed_bytes_per_sec,
+                    task.progress.peer_count,
+                    task.progress.seed_count,
+                    json.dumps(task.engine_state, ensure_ascii=False),
                     task.id,
                 ),
             )
@@ -640,16 +778,25 @@ class TaskManager:
 
     def _task_event(self, task: Task, event_type: str = "task_progress") -> dict:
         progress = task.progress
+        progress_percent = progress.progress_percent
+        if not progress_percent and progress.total_segments:
+            progress_percent = min(
+                100.0,
+                progress.completed_segments * 100 / progress.total_segments,
+            )
         return {
             "type": event_type,
             "task_id": task.id,
             "id": task.id,
+            "task_type": task.task_type.value,
+            "source_page_url": task.source_page_url,
+            "mime_type": task.mime_type,
             "title": task.title,
             "url": task.url,
             "referer": task.referer,
             "origin": task.origin,
             "user_agent": task.user_agent,
-            "cookie": task.cookie,
+            "cookie": "",
             "filename": task.filename,
             "concurrency": task.concurrency,
             "status": task.status.value,
@@ -673,6 +820,11 @@ class TaskManager:
             "playable_segments": progress.playable_segments,
             "playable_duration": progress.playable_duration,
             "media_duration": progress.media_duration,
+            "progress_percent": progress_percent,
+            "uploaded_bytes": progress.uploaded_bytes,
+            "upload_speed_bytes_per_sec": progress.upload_speed_bytes_per_sec,
+            "peer_count": progress.peer_count,
+            "seed_count": progress.seed_count,
             "playback_ready": self._playback_ready(task),
             "error_message": task.error_message,
             "error_code": task.error_code,

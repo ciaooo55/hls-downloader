@@ -50,6 +50,8 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     if (!String(settings.download_dir || '').trim()) { setError('下载保存目录不能为空'); return }
     if (settings.default_concurrency < 1 || settings.default_concurrency > 64) { setError('默认并发数必须在 1 到 64 之间'); return }
     if (settings.max_concurrent_tasks < 1 || settings.max_concurrent_tasks > 16) { setError('最大同时任务数必须在 1 到 16 之间'); return }
+    if (settings.http_chunk_size_mb < 1 || settings.http_chunk_size_mb > 64) { setError('HTTP 分段大小必须在 1 到 64 MiB 之间'); return }
+    if (settings.bt_upload_limit_kib < 0) { setError('BT 上传限制不能小于 0'); return }
     if (!String(settings.ffmpeg_path || '').trim()) { setError('ffmpeg 路径不能为空'); return }
     setSaving(true)
     try {
@@ -122,6 +124,19 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
         <div><label>默认并发数</label><input type="number" min={1} max={64} value={settings.default_concurrency ?? 8} onChange={event => update('default_concurrency', Number(event.target.value))} /><p className="field-note">{REQUEST_FIELD_HELP.concurrency}</p></div>
         <div><label>最大同时任务数</label><input type="number" min={1} max={16} value={settings.max_concurrent_tasks ?? 3} onChange={event => update('max_concurrent_tasks', Number(event.target.value))} /><p className="field-note">{REQUEST_FIELD_HELP.maxTasks}</p></div>
       </div>
+      <div className="settings-section-title">普通文件与浏览器接管</div>
+      <div className="form-row settings-number-row">
+        <div><label>HTTP 分段大小（MiB）</label><input type="number" min={1} max={64} value={settings.http_chunk_size_mb ?? 8} onChange={event => update('http_chunk_size_mb', Number(event.target.value))} /><p className="field-note">每段完成后可安全暂停；较小更灵活，较大请求更少。</p></div>
+        <div><label>接管最小大小（MiB）</label><input type="number" min={0} max={10240} value={settings.browser_takeover_min_mb ?? 1} onChange={event => update('browser_takeover_min_mb', Number(event.target.value))} /><p className="field-note">小于该大小的普通文件继续交给浏览器。</p></div>
+      </div>
+      <label className="checkbox-label"><input type="checkbox" checked={settings.browser_takeover_enabled ?? true} onChange={event => update('browser_takeover_enabled', event.target.checked)} />启用浏览器普通文件接管</label>
+
+      <div className="settings-section-title">BT 下载</div>
+      <div className="form-row settings-number-row">
+        <div><label>上传上限（KiB/s）</label><input type="number" min={0} max={1048576} value={settings.bt_upload_limit_kib ?? 1024} onChange={event => update('bt_upload_limit_kib', Number(event.target.value))} /><p className="field-note">0 表示不限速；完成后会立即停止做种。</p></div>
+        <div><label>最大 Peer 连接</label><input type="number" min={10} max={1000} value={settings.bt_max_connections ?? 80} onChange={event => update('bt_max_connections', Number(event.target.value))} /><p className="field-note">限制 BT 网络连接和内存占用。</p></div>
+      </div>
+      <label className="checkbox-label"><input type="checkbox" checked={settings.bt_enable_dht ?? true} onChange={event => update('bt_enable_dht', event.target.checked)} />启用 DHT 节点发现</label>
       <label>默认 Referer</label><input value={settings.default_referer || ''} onChange={event => update('default_referer', event.target.value)} placeholder={LEGACY_REQUEST_EXAMPLES.referer} />
       <p className="field-note">{REQUEST_FIELD_HELP.referer}</p>
 

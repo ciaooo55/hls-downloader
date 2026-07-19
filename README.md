@@ -4,7 +4,7 @@
 [![Windows Release](https://github.com/ciaooo55/hls-downloader/actions/workflows/release.yml/badge.svg)](https://github.com/ciaooo55/hls-downloader/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-一个面向 Windows 的本地 HLS/m3u8 下载器。它提供传统下载管理器风格的桌面界面、实时分片与合并进度、暂停续传、批量任务，以及配套的浏览器嗅探脚本。
+一个面向 Windows 的本地下载管理器。支持点播 HLS、非 DRM DASH、普通 HTTP/HTTPS 文件和 BT/magnet，提供暂停续传、边下边播、浏览器接管及统一任务列表。
 
 程序只监听 `127.0.0.1`，任务、配置和视频均保存在本机。关闭主窗口后程序会留在系统托盘继续下载，可从托盘重新打开或彻底退出。
 
@@ -17,6 +17,8 @@
 | `HLSDownloader-Windows-x64-Setup.exe` | Windows 10/11 x64 安装版，带在线更新、卸载程序和快捷方式 |
 | `HLSDownloader-Windows-x64-Portable.zip` | Windows 10/11 x64 便携版，解压后直接运行 |
 | `m3u8-sniffer.user.js` | 可单独导入 ScriptCat 或 Tampermonkey 的浏览器脚本 |
+| `HLSDownloader-Chrome.zip` | Chrome MV3 商店/开发者模式提交包 |
+| `HLSDownloader-Firefox.zip` | Firefox MV3 签名提交包 |
 | `SHA256SUMS.txt` | Release 文件的 SHA256 校验值 |
 
 安装包和便携包由 GitHub Actions 从源码自动构建，不保存在 Git 仓库中。程序内已包含 FFmpeg、ffprobe、前端资源和浏览器脚本。
@@ -65,7 +67,13 @@
 
 ## 支持范围
 
-当前只支持点播 HLS。直播清单、SAMPLE-AES/DRM、独立音轨下载和字幕封装会明确提示不支持；外部字幕会跳过并记录提示。
+支持点播 HLS、非 DRM DASH、严格 Range 的 HTTP 续传和 libtorrent BT。直播、SAMPLE-AES/DRM、受保护 EME、无法重放的 `blob:`/POST 下载不会尝试绕过。
+
+## 浏览器扩展
+
+Release 同时生成 Chrome 和 Firefox MV3 提交包。安装版会自动注册 `com.ciaooo55.hls_downloader` Native Messaging Host，扩展不会接触本地 API Token。普通浏览器下载会先暂停；只有桌面端点击“立即下载”后才取消浏览器任务，拒绝、超时或桌面端离线都会恢复浏览器下载。
+
+扩展支持响应嗅探、页面 fetch/XHR/media/Performance 观察、右键下载和 magnet 链接。Cookie 必须按站点单独授权，桌面任务中的 Cookie 使用 Windows DPAPI 加密后再写入数据库。Chrome 正式安装需要 Chrome Web Store，Firefox 永久安装需要 Mozilla 签名。
 
 ## 浏览器脚本
 
@@ -136,7 +144,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.1.14
+.\scripts\build_installer.ps1 -Version 1.2.0
 ```
 
 输出位于忽略的 `release` 目录：
@@ -155,8 +163,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.1.14
-git push origin v1.1.14
+git tag v1.2.0
+git push origin v1.2.0
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。
@@ -164,7 +172,8 @@ git push origin v1.1.14
 ## 项目结构
 
 ```text
-backend/       FastAPI、任务管理、HLS 下载和桌面入口
+backend/       FastAPI、统一任务调度、下载内核、Native Host 和桌面入口
+extension/     WXT/React Chrome 与 Firefox MV3 扩展
 frontend/      React/TypeScript 下载管理界面
 installer/     NSIS 安装程序定义
 scripts/       Windows 打包脚本

@@ -1,9 +1,10 @@
 import asyncio
 import json
+import re
 import threading
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Header, Request
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Header, Request, UploadFile, File, Form
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse, Response
 from .schemas import (
     HealthResponse,
     SettingsUpdate,
@@ -13,6 +14,7 @@ from .schemas import (
     UrlRecognitionRequest,
     UserscriptPing,
     PlaybackSeekRequest,
+    TorrentFileSelection,
 )
 from .config import apply_settings_update, settings, save_settings
 from .downloader.task_manager import (
@@ -31,6 +33,8 @@ from .userscript_monitor import userscript_monitor
 from .desktop_runtime import activate_window, request_shutdown
 from .url_recognition import RecognitionError, recognize_url
 from .updater import UpdateError, update_service
+from .models import TaskStatus, TaskType
+from .browser_handoff import browser_handoffs
 
 router = APIRouter(prefix="/api")
 
@@ -44,6 +48,8 @@ def _check_playback_token(x_token: str = "", token: str = ""):
     _check_token(x_token or token)
 
 def _check_host(url: str):
+    if url.lower().startswith("magnet:") or url.lower().startswith("torrent-file:"):
+        return
     if settings.allowed_hosts:
         domain = get_domain(url)
         if domain not in settings.allowed_hosts:
@@ -61,6 +67,80 @@ async def _manager_action(awaitable):
 @router.get("/health", response_model=HealthResponse)
 async def health():
     return HealthResponse()
+
+
+@router.post("/browser/handoffs")
+async def create_browser_handoff(request: Request, x_token: str = Header(default="")):
+    _check_token(x_token)
+    payload = await request.json()
+    url = str(payload.get("url", ""))
+    if not url.startswith(("http://", "https://", "magnet:")):
+        raise HTTPException(status_code=422, detail="浏览器资源地址无效")
+    _check_host(url)
+    return browser_handoffs.create(payload).public()
+
+
+@router.post("/browser/ping")
+async def browser_extension_ping(request: Request, x_token: str = Header(default="")):
+    _check_token(x_token)
+    payload = await request.json()
+    browser_handoffs.record_ping(str(payload.get("version", "")))
+    return {"ok": True}
+
+
+@router.get("/browser/status")
+async def browser_extension_status(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return browser_handoffs.status()
+
+
+@router.get("/browser/handoffs")
+async def list_browser_handoffs(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return browser_handoffs.pending()
+
+
+@router.get("/browser/handoffs/{handoff_id}")
+async def get_browser_handoff(handoff_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    item = browser_handoffs.get(handoff_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
+    return item.public()
+
+
+@router.post("/browser/handoffs/{handoff_id}/accept")
+async def accept_browser_handoff(handoff_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    item = browser_handoffs.get(handoff_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
+    if item.status != "pending":
+        raise HTTPException(status_code=409, detail=f"接管请求当前状态为 {item.status}")
+    task = await manager.create_task(
+        url=item.url,
+        task_type=TaskType.AUTO,
+        source_page_url=item.source_page_url,
+        mime_type=item.mime_type,
+        referer=item.referer,
+        origin=item.origin,
+        user_agent=item.user_agent,
+        cookie=item.cookie,
+        filename=item.filename,
+        auto_start=True,
+    )
+    item.status = "accepted"
+    item.task_id = task.id
+    return item.public()
+
+
+@router.post("/browser/handoffs/{handoff_id}/reject")
+async def reject_browser_handoff(handoff_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    item = browser_handoffs.reject(handoff_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
+    return item.public()
 
 
 @router.post("/app/activate")
@@ -165,7 +245,9 @@ async def create_task(body: TaskCreate, x_token: str = Header(default="")):
     _check_token(x_token)
     _check_host(body.url)
     task = await manager.create_task(
-        url=body.url, referer=body.referer, origin=body.origin,
+        url=body.url, task_type=body.task_type,
+        source_page_url=body.source_page_url, mime_type=body.mime_type,
+        referer=body.referer, origin=body.origin,
         user_agent=body.user_agent, cookie=body.cookie,
         title=body.title, filename=body.filename,
         concurrency=body.concurrency,
@@ -181,7 +263,9 @@ async def create_batch(body: TaskBatchCreate, x_token: str = Header(default=""))
     results = []
     for t in body.tasks:
         task = await manager.create_task(
-            url=t.url, referer=t.referer, origin=t.origin,
+            url=t.url, task_type=t.task_type,
+            source_page_url=t.source_page_url, mime_type=t.mime_type,
+            referer=t.referer, origin=t.origin,
             user_agent=t.user_agent, cookie=t.cookie,
             title=t.title, filename=t.filename,
             concurrency=t.concurrency,
@@ -189,6 +273,61 @@ async def create_batch(body: TaskBatchCreate, x_token: str = Header(default=""))
         )
         results.append(_to_resp(task))
     return results
+
+
+@router.post("/tasks/torrent-file", response_model=TaskResponse)
+async def create_torrent_file_task(
+    file: UploadFile = File(...),
+    title: str = Form(default=""),
+    x_token: str = Header(default=""),
+):
+    _check_token(x_token)
+    name = file.filename or "download.torrent"
+    if not name.lower().endswith(".torrent"):
+        raise HTTPException(status_code=400, detail="只接受 .torrent 文件")
+    content = await file.read(16 * 1024 * 1024 + 1)
+    if not content or len(content) > 16 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="种子文件为空或超过 16 MiB")
+    task = await manager.create_task(
+        url=f"torrent-file:{name}",
+        task_type=TaskType.TORRENT,
+        title=title or Path(name).stem,
+        filename=Path(name).stem,
+        auto_start=False,
+    )
+    task_dir = Path(settings.download_dir) / ".tasks" / task.id
+    task_dir.mkdir(parents=True, exist_ok=True)
+    source = task_dir / "uploaded.torrent"
+    source.write_bytes(content)
+    task.engine_state["torrent_path"] = str(source)
+    await manager._save_db(task)
+    await manager.start_task(task.id)
+    return _to_resp(task)
+
+
+@router.get("/tasks/{task_id}/files")
+async def get_task_files(task_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    task = manager.tasks.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.task_type is not TaskType.TORRENT:
+        raise HTTPException(status_code=409, detail="该任务不是 BT 任务")
+    return {
+        "files": task.engine_state.get("files", []),
+        "selected": task.engine_state.get("selected_files", []),
+    }
+
+
+@router.put("/tasks/{task_id}/files")
+async def select_task_files(
+    task_id: str,
+    body: TorrentFileSelection,
+    x_token: str = Header(default=""),
+):
+    _check_token(x_token)
+    await _manager_action(manager.select_torrent_files(task_id, body.indexes))
+    return {"ok": True}
 
 @router.get("/tasks", response_model=list[TaskResponse])
 async def list_tasks(x_token: str = Header(default="")):
@@ -286,6 +425,23 @@ def _raise_playback_error(exc: PlaybackError):
 async def open_task_playback(task_id: str, x_token: str = Header(default="")):
     _check_token(x_token)
     task = _playback_task(task_id)
+    if task.task_type is not TaskType.HLS:
+        try:
+            _, size = manager.get_stream_info(task.id)
+        except TaskConflictError as exc:
+            raise HTTPException(status_code=425, detail=str(exc)) from exc
+        session_id = playback_service.open_session(task.id)
+        return {
+            "session_id": session_id,
+            "ready": True,
+            "mode": "file",
+            "available_segments": task.progress.completed_segments,
+            "total_segments": task.progress.total_segments,
+            "available_duration": task.progress.media_duration,
+            "total_duration": task.progress.media_duration,
+            "complete": task.status is TaskStatus.DONE,
+            "total_bytes": size,
+        }
     try:
         session_id, snapshot = playback_service.open_ready_session(
             task.id,
@@ -307,6 +463,18 @@ async def task_playback_status(
     task = _playback_task(task_id)
     try:
         playback_service.touch(task.id, session)
+        if task.task_type is not TaskType.HLS:
+            _, size = manager.get_stream_info(task.id)
+            return {
+                "ready": True,
+                "mode": "file",
+                "available_segments": task.progress.completed_segments,
+                "total_segments": task.progress.total_segments,
+                "available_duration": task.progress.media_duration,
+                "total_duration": task.progress.media_duration,
+                "complete": task.status is TaskStatus.DONE,
+                "total_bytes": size,
+            }
         return playback_service.snapshot(
             task.id,
             task.status.value,
@@ -446,6 +614,7 @@ async def task_playback_map(
 @router.get("/tasks/{task_id}/playback/media")
 async def task_playback_media(
     task_id: str,
+    request: Request,
     session: str,
     token: str = "",
     x_token: str = Header(default=""),
@@ -456,6 +625,57 @@ async def task_playback_media(
         playback_service.touch(task_id, session)
     except PlaybackError as exc:
         _raise_playback_error(exc)
+    if task.task_type is not TaskType.HLS:
+        try:
+            path, total = manager.get_stream_info(task_id)
+        except TaskConflictError as exc:
+            raise HTTPException(status_code=425, detail=str(exc)) from exc
+        range_header = request.headers.get("range", "")
+        match = re.match(r"^bytes=(\d*)-(\d*)$", range_header, re.IGNORECASE)
+        if not match:
+            start, end = 0, min(total - 1, 2 * 1024 * 1024 - 1)
+        else:
+            start_text, end_text = match.groups()
+            if not start_text and not end_text:
+                raise HTTPException(status_code=416, detail="无效的 Range")
+            if start_text:
+                start = int(start_text)
+                end = int(end_text) if end_text else min(total - 1, start + 4 * 1024 * 1024 - 1)
+            else:
+                length = min(int(end_text), 4 * 1024 * 1024)
+                start, end = max(0, total - length), total - 1
+            end = min(end, total - 1, start + 4 * 1024 * 1024 - 1)
+        if start < 0 or start >= total or end < start:
+            raise HTTPException(
+                status_code=416,
+                detail="请求范围超出文件长度",
+                headers={"Content-Range": f"bytes */{total}"},
+            )
+        try:
+            path, total = await manager.wait_for_stream_range(task_id, start, end)
+        except (TaskConflictError, FileNotFoundError, TimeoutError) as exc:
+            raise HTTPException(status_code=425, detail=str(exc)) from exc
+
+        def read_range() -> bytes:
+            with path.open("rb") as media:
+                media.seek(start)
+                return media.read(end - start + 1)
+
+        content = await asyncio.to_thread(read_range)
+        if len(content) != end - start + 1:
+            raise HTTPException(status_code=425, detail="目标字节范围尚未完整写入")
+        return Response(
+            content=content,
+            status_code=206,
+            media_type=task.mime_type or "application/octet-stream",
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Range": f"bytes {start}-{end}/{total}",
+                "Content-Length": str(len(content)),
+                "Cache-Control": "private, no-store",
+            },
+        )
+
     if task.status.value != "done" or not task.output_path:
         raise HTTPException(status_code=409, detail="最终媒体文件尚未准备好")
     path = Path(task.output_path)
@@ -569,9 +789,11 @@ async def browse_dir(path: str = "", x_token: str = Header(default="")):
 
 def _to_resp(task) -> TaskResponse:
     return TaskResponse(
-        id=task.id, title=task.title, url=task.url,
+        id=task.id, task_type=task.task_type.value,
+        source_page_url=task.source_page_url, mime_type=task.mime_type,
+        title=task.title, url=task.url,
         referer=task.referer, origin=task.origin,
-        user_agent=task.user_agent, cookie=task.cookie,
+        user_agent=task.user_agent, cookie="",
         filename=task.filename, concurrency=task.concurrency,
         status=task.status.value, stage=task.stage, last_log=task.last_log,
         total_segments=task.progress.total_segments,
@@ -592,6 +814,18 @@ def _to_resp(task) -> TaskResponse:
         playable_segments=task.progress.playable_segments,
         playable_duration=task.progress.playable_duration,
         media_duration=task.progress.media_duration,
+        progress_percent=(
+            task.progress.progress_percent
+            or (
+                task.progress.completed_segments * 100 / task.progress.total_segments
+                if task.progress.total_segments
+                else 0.0
+            )
+        ),
+        uploaded_bytes=task.progress.uploaded_bytes,
+        upload_speed_bytes_per_sec=task.progress.upload_speed_bytes_per_sec,
+        peer_count=task.progress.peer_count,
+        seed_count=task.progress.seed_count,
         playback_ready=manager._playback_ready(task),
         error_message=task.error_message,
         error_code=task.error_code,

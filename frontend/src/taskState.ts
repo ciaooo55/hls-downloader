@@ -31,17 +31,26 @@ export function getDisplayedProgress(task: TaskRecord): number {
   if (task.status === 'merging' || task.status === 'remuxing') {
     return Number(task.post_percent || 0)
   }
+  if (Number(task.progress_percent || 0) > 0) {
+    return Math.max(0, Math.min(100, Number(task.progress_percent)))
+  }
   if (!task.total_segments) return 0
   return (Number(task.completed_segments || 0) / Number(task.total_segments)) * 100
 }
 
 export function isPausable(task: TaskRecord): boolean {
-  return task.status === 'downloading_segments'
+  return Boolean(
+    task.status
+    && ['downloading_segments', 'downloading', 'fetching_metadata', 'checking'].includes(task.status),
+  )
 }
 
-export function isRunningStatus(status: string): boolean {
+export function isRunningStatus(status?: string): boolean {
+  if (!status) return false
   return [
     'downloading',
+    'fetching_metadata',
+    'checking',
     'downloading_m3u8',
     'downloading_segments',
     'parsing',

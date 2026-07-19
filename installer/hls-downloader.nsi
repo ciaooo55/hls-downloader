@@ -7,7 +7,7 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.1.14"
+  !define APP_VERSION "1.2.0"
 !endif
 !define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
@@ -80,6 +80,7 @@ Section "Install" SecInstall
   SetOutPath "$INSTDIR"
 
   File "${STAGE_DIR}\HLSDownloader.exe"
+  File "${STAGE_DIR}\HLSDownloaderNativeHost.exe"
   File "${STAGE_DIR}\MicrosoftEdgeWebview2Setup.exe"
   File /oname=config.default.json "${STAGE_DIR}\config.json"
 
@@ -114,6 +115,15 @@ Section "Install" SecInstall
   SetOutPath "$INSTDIR\assets"
   File "${STAGE_DIR}\assets\app-icon.png"
   File "${STAGE_DIR}\assets\app-icon.ico"
+
+  SetOutPath "$INSTDIR\native-host"
+  File "${STAGE_DIR}\native-host\chrome.json"
+  File "${STAGE_DIR}\native-host\firefox.json"
+  SetOutPath "$INSTDIR\scripts"
+  File "${STAGE_DIR}\scripts\register-native-host.ps1"
+
+  WriteRegStr HKCU "Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader" "" "$INSTDIR\native-host\chrome.json"
+  WriteRegStr HKCU "Software\Mozilla\NativeMessagingHosts\com.ciaooo55.hls_downloader" "" "$INSTDIR\native-host\firefox.json"
 
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -157,6 +167,7 @@ RemoveApplicationData:
   RMDir "$SMPROGRAMS\${APP_NAME}"
 
   Delete "$INSTDIR\HLSDownloader.exe"
+  Delete "$INSTDIR\HLSDownloaderNativeHost.exe"
   Delete "$INSTDIR\MicrosoftEdgeWebview2Setup.exe"
   Delete "$INSTDIR\config.default.json"
   Delete "$INSTDIR\config.json"
@@ -167,6 +178,8 @@ RemoveApplicationData:
   RMDir /r "$INSTDIR\frontend"
   RMDir /r "$INSTDIR\userscript"
   RMDir /r "$INSTDIR\assets"
+  RMDir /r "$INSTDIR\native-host"
+  RMDir /r "$INSTDIR\scripts"
   RMDir /r "$INSTDIR\bin"
   RMDir /r "$INSTDIR\_internal"
   RMDir /r "$INSTDIR\.webview"
@@ -174,6 +187,8 @@ RemoveApplicationData:
 
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
   DeleteRegKey HKCU "Software\${APP_NAME}"
+  DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader"
+  DeleteRegKey HKCU "Software\Mozilla\NativeMessagingHosts\com.ciaooo55.hls_downloader"
 
   ${If} $0 == "delete"
     RMDir /r "$INSTDIR"

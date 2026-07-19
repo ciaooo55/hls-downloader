@@ -20,9 +20,12 @@ function headers(): Record<string, string> {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const requestHeaders = init.body instanceof FormData
+    ? { 'X-Token': getToken(), ...(init.headers || {}) }
+    : { ...headers(), ...(init.headers || {}) }
   const response = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { ...headers(), ...(init.headers || {}) },
+    headers: requestHeaders,
   })
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {
@@ -40,6 +43,19 @@ export const createTask = (data: any) =>
   request<any>('/tasks', { method: 'POST', body: JSON.stringify(data) })
 export const createBatch = (tasks: any[]) =>
   request<any[]>('/tasks/batch', { method: 'POST', body: JSON.stringify({ tasks }) })
+export const uploadTorrent = (file: File, title = '') => {
+  const body = new FormData()
+  body.append('file', file)
+  body.append('title', title)
+  return request<any>('/tasks/torrent-file', { method: 'POST', body, headers: {} })
+}
+export const fetchTorrentFiles = (id: string) =>
+  request<{ files: any[]; selected: number[] }>(`/tasks/${id}/files`)
+export const selectTorrentFiles = (id: string, indexes: number[]) =>
+  request<{ ok: boolean }>(`/tasks/${id}/files`, {
+    method: 'PUT',
+    body: JSON.stringify({ indexes }),
+  })
 export const taskAction = (id: string, action: string) =>
   request<{ ok: boolean }>(`/tasks/${id}/${action}`, { method: 'POST' })
 export const deleteTask = (id: string) =>
@@ -62,6 +78,10 @@ export const browseDir = (path: string = '') =>
 export const testConnection = () => request<any>('/test')
 export const recognizeUrl = (data: any) => request<any>('/recognize', { method: 'POST', body: JSON.stringify(data) })
 export const fetchUserscriptStatus = () => request<any>('/userscript/status')
+export const fetchBrowserHandoffs = () => request<any[]>('/browser/handoffs')
+export const fetchBrowserStatus = () => request<any>('/browser/status')
+export const resolveBrowserHandoff = (id: string, action: 'accept' | 'reject') =>
+  request<any>(`/browser/handoffs/${encodeURIComponent(id)}/${action}`, { method: 'POST' })
 export const fetchUpdateInfo = (force = false) =>
   request<any>(`/update/check${force ? '?force=true' : ''}`)
 export const installUpdate = () =>

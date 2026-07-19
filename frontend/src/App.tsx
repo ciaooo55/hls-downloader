@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LoaderCircle, Search, Trash2 } from 'lucide-react'
-import { clearCompletedTasks, connectSSE, deleteTask, fetchHealth, fetchSettings, fetchTasks, fetchUserscriptStatus, launchFile, openExplorer, taskAction } from './api'
+import { clearCompletedTasks, connectSSE, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchSettings, fetchTasks, fetchUserscriptStatus, launchFile, openExplorer, resolveBrowserHandoff, taskAction } from './api'
 import { fmtBytes, fmtSpeed } from './format'
 import { isRunningStatus, mergeTaskEvent } from './taskState'
 import { commandState } from './taskCommands'
 import { filterAndSortTasks } from './taskPresentation'
 import { resolveTheme, type Theme } from './theme'
-import type { Settings, Task, UserscriptStatus } from './types'
+import type { BrowserStatus, Settings, Task, UserscriptStatus } from './types'
 import DesktopToolbar from './components/DesktopToolbar'
 import Sidebar, { type TaskFilter } from './components/Sidebar'
 import TaskTable from './components/TaskTable'
@@ -18,6 +18,7 @@ import BatchAddPanel from './components/BatchAddPanel'
 import LogModal from './components/LogModal'
 import UpdateNotice from './components/UpdateNotice'
 import UpdateDialog from './components/UpdateDialog'
+import BrowserHandoffDialog, { type BrowserHandoff } from './components/BrowserHandoffDialog'
 
 const VideoPlayerModal = lazy(() => import('./components/VideoPlayerModal'))
 
@@ -26,6 +27,7 @@ export default function App() {
   const [settings, setSettings] = useState<Settings>({})
   const [appVersion, setAppVersion] = useState('')
   const [userscript, setUserscript] = useState<UserscriptStatus | null>(null)
+  const [browserStatus, setBrowserStatus] = useState<BrowserStatus | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [filter, setFilter] = useState<TaskFilter>('all')
   const [query, setQuery] = useState('')
@@ -40,6 +42,8 @@ export default function App() {
   const [showUserscript, setShowUserscript] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showUpdate, setShowUpdate] = useState(false)
+  const [handoffs, setHandoffs] = useState<BrowserHandoff[]>([])
+  const [handoffBusy, setHandoffBusy] = useState(false)
   const [error, setError] = useState('')
   const [theme, setTheme] = useState<Theme>(() => resolveTheme(localStorage.getItem('hls_theme'), matchMedia('(prefers-color-scheme: dark)').matches))
   const lastStatuses = useRef<Record<string, string>>({})
@@ -47,8 +51,8 @@ export default function App() {
 
   const load = useCallback(async () => {
     try {
-      const [taskData, settingData, scriptData, healthData] = await Promise.all([fetchTasks(), fetchSettings(), fetchUserscriptStatus(), fetchHealth()])
-      setTasks(taskData); setSettings(settingData); setUserscript(scriptData); setAppVersion(healthData.version || ''); setError('')
+      const [taskData, settingData, scriptData, browserData, healthData] = await Promise.all([fetchTasks(), fetchSettings(), fetchUserscriptStatus(), fetchBrowserStatus(), fetchHealth()])
+      setTasks(taskData); setSettings(settingData); setUserscript(scriptData); setBrowserStatus(browserData); setAppVersion(healthData.version || ''); setError('')
     } catch (reason: any) { setError(reason.message || '无法连接本地下载服务') }
   }, [])
 
@@ -74,6 +78,13 @@ export default function App() {
     const timer = window.setInterval(load, 30000)
     return () => { events.close(); window.clearInterval(timer) }
   }, [load])
+
+  useEffect(() => {
+    const refresh = () => fetchBrowserHandoffs().then(setHandoffs).catch(() => {})
+    refresh()
+    const timer = window.setInterval(refresh, 1500)
+    return () => window.clearInterval(timer)
+  }, [])
 
   useEffect(() => { document.documentElement.dataset.theme = theme }, [theme])
   useEffect(() => { setSelected(current => new Set([...current].filter(id => tasks.some(task => task.id === id)))) }, [tasks])
@@ -131,6 +142,18 @@ export default function App() {
     if (!task.output_path) return
     try { await launchFile(task.output_path) } catch (reason: any) { setError(reason.message || '无法打开文件') }
   }
+  const resolveHandoff = async (action: 'accept' | 'reject') => {
+    const item = handoffs[0]
+    if (!item || handoffBusy) return
+    setHandoffBusy(true)
+    try {
+      await resolveBrowserHandoff(item.id, action)
+      setHandoffs(current => current.filter(entry => entry.id !== item.id))
+      if (action === 'accept') await load()
+    } catch (reason: any) {
+      setError(reason.message || '浏览器接管操作失败')
+    } finally { setHandoffBusy(false) }
+  }
   const toggleTheme = () => {
     const next = theme === 'dark' ? 'light' : 'dark'
     localStorage.setItem('hls_theme', next); setTheme(next)
@@ -150,7 +173,7 @@ export default function App() {
   return <div className="desktop-app">
     <DesktopToolbar commands={commands} theme={theme} version={appVersion} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onOpen={() => selectedTasks[0]?.output_path && openExplorer(selectedTasks[0].output_path)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onUserscript={() => setShowUserscript(true)} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
     <div className="workspace">
-      <Sidebar tasks={tasks} active={filter} onChange={setFilter} userscript={userscript} />
+      <Sidebar tasks={tasks} active={filter} onChange={setFilter} userscript={userscript} browserStatus={browserStatus} />
       <main className="content">
         <UpdateNotice />
         <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} ({filtered.length})</strong><div className="list-tools"><label className="task-search"><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务、链接或错误码" aria-label="搜索任务" /></label><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={clearCompleted}><Trash2 size={14} />清理已完成</button></div></div>
@@ -168,5 +191,6 @@ export default function App() {
     {playingTask && <Suspense fallback={<div className="modal-overlay player-overlay"><div className="player-chunk-loading"><LoaderCircle className="spin" size={24} /><span>正在打开播放器</span></div></div>}><VideoPlayerModal task={playingTask} onClose={() => setPlaying(null)} /></Suspense>}
     {logTaskId && <LogModal taskId={logTaskId} onClose={() => setLogTaskId(null)} />}
     {feedback && <div className="toast" role="status">{feedback}</div>}
+    {handoffs[0] && <BrowserHandoffDialog item={handoffs[0]} busy={handoffBusy} onResolve={resolveHandoff} />}
   </div>
 }

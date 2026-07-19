@@ -179,7 +179,8 @@ def test_windows_package_uses_onedir_and_smoke_tests_graceful_shutdown():
     nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
 
     assert "--onedir" in build_script
-    assert "--onefile" not in build_script
+    assert "--name HLSDownloaderNativeHost" in build_script
+    assert "--onefile" in build_script
     assert 'dist\\HLSDownloader\\*' in build_script
     assert 'api/app/shutdown' in build_script
     assert 'Graceful shutdown failed' in build_script

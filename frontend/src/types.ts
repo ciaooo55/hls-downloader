@@ -1,5 +1,8 @@
 export interface Task {
   id: string
+  task_type: 'hls' | 'dash' | 'http' | 'torrent'
+  source_page_url: string
+  mime_type: string
   title: string
   filename: string
   url: string
@@ -36,6 +39,11 @@ export interface Task {
   playable_duration: number
   media_duration: number
   playback_ready: boolean
+  progress_percent: number
+  uploaded_bytes: number
+  upload_speed_bytes_per_sec: number
+  peer_count: number
+  seed_count: number
 }
 
 export interface PlaybackStatus {
@@ -69,6 +77,19 @@ export interface Settings {
   default_referer?: string
   default_origin?: string
   default_cookie?: string
+  http_chunk_size_mb?: number
+  bt_upload_limit_kib?: number
+  bt_max_connections?: number
+  bt_enable_dht?: boolean
+  browser_takeover_enabled?: boolean
+  browser_takeover_min_mb?: number
+}
+
+export interface TorrentFileEntry {
+  index: number
+  path: string
+  size: number
+  offset?: number
 }
 
 export interface UserscriptStatus {
@@ -77,6 +98,12 @@ export interface UserscriptStatus {
   version: string
   page_origin: string
   last_seen_at: string
+}
+
+export interface BrowserStatus {
+  detected: boolean
+  seen_before: boolean
+  version?: string
 }
 
 export interface UpdateInfo {

@@ -778,12 +778,15 @@
     setTimeout(() => element.remove(), 2600);
   }
 
-  renderPanel();
-  scan();
-  setTimeout(scan, 1200);
-  setTimeout(scan, 3500);
-  setInterval(scan, 5000);
-  setTimeout(pingDownloader, 500);
-  setInterval(pingDownloader, 60000);
-  setTimeout(checkService, 900);
+  setTimeout(() => {
+    if (document.documentElement.hasAttribute('data-hls-downloader-extension')) return;
+    renderPanel();
+    scan();
+    setTimeout(scan, 1200);
+    setTimeout(scan, 3500);
+    setInterval(scan, 5000);
+    setTimeout(pingDownloader, 500);
+    setInterval(pingDownloader, 60000);
+    setTimeout(checkService, 900);
+  }, 300);
 })();

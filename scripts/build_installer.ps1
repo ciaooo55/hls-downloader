@@ -1,7 +1,7 @@
 param(
     [switch]$SkipFrontend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.1.14"
+    [string]$Version = "1.2.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,6 +10,7 @@ $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $FrontendDir = Join-Path $Root "frontend"
 $BackendDir = Join-Path $Root "backend"
 $UserscriptDir = Join-Path $Root "userscript"
+$ExtensionDir = Join-Path $Root "extension"
 $AssetsDir = Join-Path $Root "assets"
 $IconFile = Join-Path $AssetsDir "app-icon.ico"
 $StageDir = Join-Path $Root "build\installer\stage"
@@ -17,6 +18,9 @@ $PortableStage = Join-Path $Root "build\installer\portable"
 $ReleaseDir = Join-Path $Root "release"
 $ToolsDir = Join-Path $Root "tools"
 $BinDir = Join-Path $Root "bin"
+$FFmpegArchive = Join-Path $ToolsDir "ffmpeg-windows.zip"
+$FFmpegToolsDir = Join-Path $ToolsDir "ffmpeg-windows"
+$FFmpegArchiveUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
 $WebViewBootstrapper = Join-Path $ToolsDir "MicrosoftEdgeWebview2Setup.exe"
 $WebViewBootstrapperUrl = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
 $NsisCondaPrefix = Join-Path $ToolsDir "nsis-conda"
@@ -27,6 +31,8 @@ $InstallerScript = Join-Path $Root "installer\hls-downloader.nsi"
 $InstallerOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Setup.exe"
 $PortableOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Portable.zip"
 $UserscriptOut = Join-Path $ReleaseDir "m3u8-sniffer.user.js"
+$ChromeExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Chrome.zip"
+$FirefoxExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Firefox.zip"
 $ChecksumsOut = Join-Path $ReleaseDir "SHA256SUMS.txt"
 
 function Invoke-Step($Name, [scriptblock]$Block) {
@@ -102,10 +108,27 @@ function Find-MediaTool($Name) {
     }
 
     $command = Get-Command $Name -ErrorAction SilentlyContinue
-    if (-not $command) {
-        throw "$Name was not found. Install FFmpeg or place $Name in $BinDir before packaging."
+    if ($command) {
+        return $command.Source
     }
-    return $command.Source
+
+    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+    if (-not (Test-Path -LiteralPath $FFmpegToolsDir)) {
+        Write-Host "Downloading verified Windows FFmpeg build..."
+        Invoke-WebRequest -Uri $FFmpegArchiveUrl -OutFile $FFmpegArchive -MaximumRedirection 10
+        $signature = [System.IO.File]::ReadAllBytes($FFmpegArchive)[0..3]
+        if ($signature[0] -ne 0x50 -or $signature[1] -ne 0x4B) {
+            throw "FFmpeg download did not return a zip archive."
+        }
+        Expand-Archive -LiteralPath $FFmpegArchive -DestinationPath $FFmpegToolsDir -Force
+    }
+    $downloaded = Get-ChildItem -LiteralPath $FFmpegToolsDir -Recurse -File -Filter $Name -ErrorAction SilentlyContinue |
+        Sort-Object Length -Descending |
+        Select-Object -First 1
+    if (-not $downloaded) {
+        throw "$Name was not found in the downloaded FFmpeg archive."
+    }
+    return $downloaded.FullName
 }
 
 function Copy-MediaTool($Name) {
@@ -132,7 +155,7 @@ Invoke-Step "Stop running packaged app" {
 
 Invoke-Step "Prepare directories" {
     Remove-Item -Recurse -Force $StageDir, $PortableStage -ErrorAction SilentlyContinue
-    Remove-Item -Force $InstallerOut, $PortableOut, $UserscriptOut, $ChecksumsOut -ErrorAction SilentlyContinue
+    Remove-Item -Force $InstallerOut, $PortableOut, $UserscriptOut, $ChromeExtensionOut, $FirefoxExtensionOut, $ChecksumsOut -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $StageDir, $ReleaseDir, $BinDir, $ToolsDir | Out-Null
     if (-not (Test-Path -LiteralPath $IconFile)) {
         throw "Application icon is missing: $IconFile"
@@ -166,6 +189,14 @@ if (-not $SkipFrontend) {
             Pop-Location
         }
     }
+    Invoke-Step "Build browser extensions" {
+        Push-Location $ExtensionDir
+        try {
+            if (-not (Test-Path "node_modules")) { pnpm install --frozen-lockfile }
+            pnpm test
+            pnpm run build
+        } finally { Pop-Location }
+    }
 }
 
 Invoke-Step "Build backend executable" {
@@ -182,6 +213,9 @@ Invoke-Step "Build backend executable" {
             --collect-all webview `
             --collect-all pystray `
             --collect-all curl_cffi `
+            --collect-all libtorrent `
+            --collect-all yt_dlp `
+            --collect-all multipart `
             --hidden-import pystray._win32 `
             --hidden-import webview.platforms.edgechromium `
             --hidden-import uvicorn.lifespan.on `
@@ -189,6 +223,13 @@ Invoke-Step "Build backend executable" {
             --hidden-import uvicorn.protocols.http.auto `
             --hidden-import uvicorn.protocols.websockets.auto `
             run_server.py
+        python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --console `
+            --name HLSDownloaderNativeHost `
+            native_host.py
     } finally {
         Pop-Location
     }
@@ -196,6 +237,7 @@ Invoke-Step "Build backend executable" {
 
 Invoke-Step "Stage application files" {
     Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloader\*") -Destination $StageDir -Recurse -Force
+    Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloaderNativeHost.exe") -Destination $StageDir
     Copy-Item -Path (Join-Path $Root "config.json") -Destination $StageDir
     Copy-Item -Path $WebViewBootstrapper -Destination $StageDir
 
@@ -212,6 +254,11 @@ Invoke-Step "Stage application files" {
 
     New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "userscript") | Out-Null
     Copy-Item -Force -Path (Join-Path $UserscriptDir "m3u8-sniffer.user.js") -Destination (Join-Path $StageDir "userscript")
+
+    New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "native-host") | Out-Null
+    Copy-Item -Force -Path (Join-Path $ExtensionDir "native-host\chrome.json"), (Join-Path $ExtensionDir "native-host\firefox.json") -Destination (Join-Path $StageDir "native-host")
+    New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "scripts") | Out-Null
+    Copy-Item -Force -Path (Join-Path $Root "scripts\register-native-host.ps1") -Destination (Join-Path $StageDir "scripts")
 }
 
 if (-not $SkipSmoke) {
@@ -339,6 +386,10 @@ HLS Downloader portable edition
 
 Run HLSDownloader.exe. If Microsoft Edge WebView2 Runtime is missing, run
 MicrosoftEdgeWebview2Setup.exe once before starting the downloader.
+
+To enable Chrome/Firefox integration, run:
+powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1
+To remove the registration, add -Unregister.
 "@ | Set-Content -LiteralPath (Join-Path $PortableStage "README-PORTABLE.txt") -Encoding UTF8
     Compress-Archive -Path (Join-Path $PortableStage "*") -DestinationPath $PortableOut -CompressionLevel Optimal
     if (-not (Test-Path -LiteralPath $PortableOut)) {
@@ -348,7 +399,9 @@ MicrosoftEdgeWebview2Setup.exe once before starting the downloader.
 
 Invoke-Step "Assemble release files" {
     Copy-Item -LiteralPath (Join-Path $UserscriptDir "m3u8-sniffer.user.js") -Destination $UserscriptOut -Force
-    $expected = @($InstallerOut, $PortableOut, $UserscriptOut)
+    Compress-Archive -Path (Join-Path $ExtensionDir ".output\chrome-mv3\*") -DestinationPath $ChromeExtensionOut -CompressionLevel Optimal
+    Compress-Archive -Path (Join-Path $ExtensionDir ".output\firefox-mv3\*") -DestinationPath $FirefoxExtensionOut -CompressionLevel Optimal
+    $expected = @($InstallerOut, $PortableOut, $UserscriptOut, $ChromeExtensionOut, $FirefoxExtensionOut)
     foreach ($path in $expected) {
         if (-not (Test-Path -LiteralPath $path)) {
             throw "Missing release file: $path"
@@ -369,4 +422,6 @@ Write-Host "Windows release assets created:" -ForegroundColor Green
 Write-Host $InstallerOut
 Write-Host $PortableOut
 Write-Host $UserscriptOut
+Write-Host $ChromeExtensionOut
+Write-Host $FirefoxExtensionOut
 Write-Host $ChecksumsOut

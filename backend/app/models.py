@@ -3,7 +3,20 @@ from enum import Enum
 from typing import Optional
 import asyncio
 
+
+class TaskType(str, Enum):
+    AUTO = "auto"
+    HLS = "hls"
+    DASH = "dash"
+    HTTP = "http"
+    TORRENT = "torrent"
+
+
 class TaskStatus(str, Enum):
+    AWAITING_CONFIRMATION = "awaiting_confirmation"
+    FETCHING_METADATA = "fetching_metadata"
+    AWAITING_SELECTION = "awaiting_selection"
+    CHECKING = "checking"
     QUEUED = "queued"
     DOWNLOADING = "downloading"
     DOWNLOADING_M3U8 = "downloading_m3u8"
@@ -38,11 +51,19 @@ class TaskProgress:
     playable_segments: int = 0
     playable_duration: float = 0.0
     media_duration: float = 0.0
+    progress_percent: float = 0.0
+    uploaded_bytes: int = 0
+    upload_speed_bytes_per_sec: float = 0.0
+    peer_count: int = 0
+    seed_count: int = 0
 
 @dataclass
 class Task:
     id: str
     url: str
+    task_type: TaskType = TaskType.HLS
+    source_page_url: str = ""
+    mime_type: str = ""
     referer: str = ""
     origin: str = ""
     user_agent: str = ""
@@ -71,3 +92,4 @@ class Task:
     pause_event: Optional[asyncio.Event] = field(default=None, repr=False)
     task_handle: Optional[asyncio.Task] = field(default=None, repr=False)
     playback_seek_index: Optional[int] = field(default=None, repr=False)
+    engine_state: dict = field(default_factory=dict, repr=False)

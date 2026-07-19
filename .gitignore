@@ -15,6 +15,9 @@ venv/
 # Frontend
 frontend/node_modules/
 frontend/dist/
+extension/node_modules/
+extension/.wxt/
+extension/.output/
 
 # Build and packaging output
 bin/

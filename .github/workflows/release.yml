@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version used in the installer, for example 1.1.14
+        description: Version used in the installer, for example 1.2.0
         required: false
-        default: "1.1.14"
+        default: "1.2.0"
   push:
     tags:
       - "v*"
@@ -50,12 +50,19 @@ jobs:
           Push-Location frontend
           pnpm install --frozen-lockfile
           Pop-Location
+          Push-Location extension
+          pnpm install --frozen-lockfile
+          Pop-Location
 
       - name: Run verification
         shell: pwsh
         run: |
           python -m pytest -q
           Push-Location frontend
+          pnpm test
+          pnpm run build
+          Pop-Location
+          Push-Location extension
           pnpm test
           pnpm run build
           Pop-Location
@@ -80,7 +87,9 @@ jobs:
           $expected = @(
             "HLSDownloader-Windows-x64-Setup.exe",
             "HLSDownloader-Windows-x64-Portable.zip",
-            "m3u8-sniffer.user.js"
+            "m3u8-sniffer.user.js",
+            "HLSDownloader-Chrome.zip",
+            "HLSDownloader-Firefox.zip"
           )
           foreach ($name in $expected) {
             if (-not (Test-Path -LiteralPath (Join-Path .\release $name))) {

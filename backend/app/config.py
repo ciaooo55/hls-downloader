@@ -7,7 +7,7 @@ PROJECT_ROOT = RUNTIME_PATHS.project_root
 CONFIG_PATH = RUNTIME_PATHS.config_path
 
 class Settings(BaseSettings):
-    config_version: int = 3
+    config_version: int = 4
     host: str = "127.0.0.1"
     port: int = 8765
     token: str = "55555"
@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     allowed_hosts: list[str] = []
     keep_temp_files: bool = False
     max_concurrent_tasks: int = 3
+    http_chunk_size_mb: int = 8
+    bt_upload_limit_kib: int = 1024
+    bt_max_connections: int = 80
+    bt_enable_dht: bool = True
+    browser_takeover_enabled: bool = True
+    browser_takeover_min_mb: int = 1
 
     model_config = {"env_prefix": "HLS_"}
 
@@ -63,6 +69,9 @@ def load_settings() -> Settings:
             if int(data.get("max_concurrent_tasks", 2) or 2) == 2:
                 data["max_concurrent_tasks"] = 3
             data["config_version"] = 3
+            migrated = True
+        if version < 4:
+            data["config_version"] = 4
             migrated = True
         s = Settings(**data)
         if migrated:

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { FileText, FolderOpen, Info, LoaderCircle, MonitorPlay, MoreHorizontal, Pause, Play, PlayCircle, RotateCcw, Trash2, XCircle } from 'lucide-react'
+import { FileText, Film, FolderOpen, Globe2, Info, LoaderCircle, Magnet, MonitorPlay, MoreHorizontal, Pause, Play, PlayCircle, RadioTower, RotateCcw, Trash2, XCircle } from 'lucide-react'
 import { getDisplayedProgress } from '../taskState'
 import { fmtBytes, fmtDate, fmtEta, fmtSpeed } from '../format'
 import { taskContextActions, type TaskContextAction } from '../taskContextActions'
@@ -19,6 +19,14 @@ const menuIcons: Record<TaskContextAction, React.ReactNode> = {
 }
 
 interface ContextMenuState { task: Task; x: number; y: number }
+
+const typeLabels = { hls: 'HLS', dash: 'DASH', http: 'HTTP', torrent: 'BT' }
+const typeIcons = {
+  hls: <Film size={15} />,
+  dash: <RadioTower size={15} />,
+  http: <Globe2 size={15} />,
+  torrent: <Magnet size={15} />,
+}
 
 export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTaskAction, onOpenLog, onOpenFile, onLaunchFile, onPreview }: {
   tasks: Task[]
@@ -84,7 +92,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
     else onTaskAction(task, action)
   }
 
-  if (!tasks.length) return <div className="empty-state"><DownloadCloudIcon /><strong>暂无任务</strong><span>点击“新建”粘贴 m3u8 或普通网页链接</span></div>
+  if (!tasks.length) return <div className="empty-state"><DownloadCloudIcon /><strong>暂无任务</strong><span>点击“新建”添加文件、HLS、DASH、magnet 或种子</span></div>
   return (
     <div className="table-scroll">
       <table className="task-table">
@@ -100,11 +108,11 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
             onContextMenu={event => openMenu(event, task)}
             onDoubleClick={() => task.available_actions?.includes('preview') ? onPreview(task) : onOpenDetails(task)}>
             <td className="check-col"><input type="checkbox" checked={selected.has(task.id)} onChange={() => toggleOne(task.id)} aria-label={`选择 ${task.title || task.filename || task.id}`} /></td>
-            <td className="name-cell"><span title={task.title || task.filename || task.id}>{task.title || task.filename || task.id}</span><small title={task.url}>{task.url}</small></td>
+            <td className="name-cell"><span title={task.title || task.filename || task.id}><i className={`task-type type-${task.task_type}`} title={typeLabels[task.task_type]}>{typeIcons[task.task_type]}</i>{task.title || task.filename || task.id}</span><small title={task.url}>{task.url}</small></td>
             <td><span className={`status status-${task.status}`}>{pending.has(task.id) && <LoaderCircle className="spin" size={12} />}{task.status === 'queued' && task.queue_position ? `排队中 · 第 ${task.queue_position} 位` : statusLabel(task.status)}</span>{task.error_code && <small className="failure-code" title={task.error_message}>{task.error_code}</small>}</td>
             <td><div className="table-progress"><div><i style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div><span>{progress.toFixed(1)}%</span></div><small className="progress-bytes">{fmtBytes(task.downloaded_bytes)} / {fmtBytes(task.total_bytes)}</small></td>
-            <td><span className="speed-cell">{fmtSpeed(task.speed_bytes_per_sec)}</span><small className="eta-cell">{fmtEta(task.eta_seconds)}</small></td>
-            <td className="segments-col">{task.total_segments ? `${task.completed_segments}/${task.total_segments}` : '--'}</td><td className="updated-col">{fmtDate(task.updated_at)}</td>
+            <td><span className="speed-cell">{fmtSpeed(task.speed_bytes_per_sec)}</span><small className="eta-cell">{task.task_type === 'torrent' && task.upload_speed_bytes_per_sec > 0 ? `↑ ${fmtSpeed(task.upload_speed_bytes_per_sec)}` : fmtEta(task.eta_seconds)}</small></td>
+            <td className="segments-col" title={task.task_type === 'torrent' ? `Peer ${task.peer_count} · Seed ${task.seed_count}` : undefined}>{task.total_segments ? `${task.completed_segments}/${task.total_segments}` : '--'}</td><td className="updated-col">{fmtDate(task.updated_at)}</td>
             <td className="menu-col"><button className="row-menu-button" title="任务操作" onClick={event => { event.stopPropagation(); openMenu(event, task) }}><MoreHorizontal size={17} /></button></td>
           </tr>
         })}</tbody>
