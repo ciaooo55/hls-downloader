@@ -12,6 +12,7 @@ from .schemas import (
     TaskResponse,
     UrlRecognitionRequest,
     UserscriptPing,
+    PlaybackSeekRequest,
 )
 from .config import apply_settings_update, settings, save_settings
 from .downloader.task_manager import (
@@ -330,6 +331,25 @@ async def heartbeat_task_playback(
     return {"ok": True}
 
 
+@router.post("/tasks/{task_id}/playback/seek")
+async def seek_task_playback(
+    task_id: str,
+    request: PlaybackSeekRequest,
+    session: str,
+    x_token: str = Header(default=""),
+):
+    _check_token(x_token)
+    _playback_task(task_id)
+    try:
+        target = playback_service.request_seek(task_id, session, request.time)
+        await manager.request_playback_seek(task_id, target["index"])
+        return target
+    except PlaybackError as exc:
+        _raise_playback_error(exc)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.delete("/tasks/{task_id}/playback")
 async def close_task_playback(
     task_id: str,
@@ -349,6 +369,7 @@ async def task_playback_playlist(
     task_id: str,
     session: str,
     token: str = "",
+    full: bool = False,
     x_token: str = Header(default=""),
 ):
     _check_playback_token(x_token, token)
@@ -359,6 +380,7 @@ async def task_playback_playlist(
             task.status.value,
             session,
             access_token=token,
+            full=full,
         )
     except PlaybackError as exc:
         _raise_playback_error(exc)
@@ -375,12 +397,22 @@ async def task_playback_segment(
     index: int,
     session: str,
     token: str = "",
+    full: bool = False,
     x_token: str = Header(default=""),
 ):
     _check_playback_token(x_token, token)
     _playback_task(task_id)
     try:
-        path, is_fmp4 = playback_service.segment_path(task_id, index, session)
+        if full:
+            await manager.request_playback_seek(task_id, index, force=False)
+            path, is_fmp4 = await playback_service.wait_for_segment(
+                task_id,
+                index,
+                session,
+                sparse=True,
+            )
+        else:
+            path, is_fmp4 = playback_service.segment_path(task_id, index, session)
     except PlaybackError as exc:
         _raise_playback_error(exc)
     return FileResponse(

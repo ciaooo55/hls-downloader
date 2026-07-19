@@ -1,4 +1,4 @@
-import type { PlaybackSession, PlaybackStatus } from './types'
+import type { PlaybackSeek, PlaybackSession, PlaybackStatus } from './types'
 
 const BASE = '/api'
 
@@ -72,10 +72,15 @@ export const fetchPlaybackStatus = (id: string, session: string) =>
   request<PlaybackStatus>(`/tasks/${id}/playback/status?session=${encodeURIComponent(session)}`)
 export const heartbeatPlayback = (id: string, session: string) =>
   request<{ ok: boolean }>(`/tasks/${id}/playback/heartbeat?session=${encodeURIComponent(session)}`, { method: 'POST' })
+export const requestPlaybackSeek = (id: string, session: string, time: number) =>
+  request<PlaybackSeek>(`/tasks/${id}/playback/seek?session=${encodeURIComponent(session)}`, {
+    method: 'POST',
+    body: JSON.stringify({ time }),
+  })
 export const closePlaybackSession = (id: string, session: string) =>
   request<{ ok: boolean }>(`/tasks/${id}/playback?session=${encodeURIComponent(session)}`, { method: 'DELETE', keepalive: true })
-export const playbackPlaylistUrl = (id: string, session: string) =>
-  `${BASE}/tasks/${encodeURIComponent(id)}/playback/index.m3u8?session=${encodeURIComponent(session)}&token=${encodeURIComponent(getToken())}`
+export const playbackPlaylistUrl = (id: string, session: string, full = true) =>
+  `${BASE}/tasks/${encodeURIComponent(id)}/playback/index.m3u8?session=${encodeURIComponent(session)}&token=${encodeURIComponent(getToken())}${full ? '&full=1' : ''}`
 export const playbackMediaUrl = (id: string, session: string) =>
   `${BASE}/tasks/${encodeURIComponent(id)}/playback/media?session=${encodeURIComponent(session)}&token=${encodeURIComponent(getToken())}`
 

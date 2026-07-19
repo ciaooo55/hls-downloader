@@ -24,6 +24,7 @@ import {
   heartbeatPlayback,
   playbackMediaUrl,
   playbackPlaylistUrl,
+  requestPlaybackSeek,
 } from '../api'
 import { fmtSpeed } from '../format'
 import { isRunningStatus } from '../taskState'
@@ -79,6 +80,7 @@ export default function VideoPlayerModal({ task, onClose }: {
   const thumbnailIdleRef = useRef<number | null>(null)
   const thumbnailBusyRef = useRef(false)
   const pendingThumbnailRef = useRef<{ time: number; key: number } | null>(null)
+  const seekTimerRef = useRef<number | null>(null)
   const resumePositionRef = useRef(0)
   const mediaErrorRecoveries = useRef(0)
 
@@ -105,11 +107,13 @@ export default function VideoPlayerModal({ task, onClose }: {
   const effectiveDuration = useMemo(() => {
     if (mode === 'file') return Math.max(mediaDuration, task.media_duration || 0)
     return Math.max(
+      playbackStatus?.total_duration || 0,
+      task.media_duration || 0,
       playbackStatus?.available_duration || 0,
       task.playable_duration || 0,
       Number.isFinite(mediaDuration) ? mediaDuration : 0,
     )
-  }, [mediaDuration, mode, playbackStatus?.available_duration, task.media_duration, task.playable_duration])
+  }, [mediaDuration, mode, playbackStatus?.available_duration, playbackStatus?.total_duration, task.media_duration, task.playable_duration])
 
   const destroyThumbnailDecoder = useCallback(() => {
     thumbnailHlsRef.current?.destroy()
@@ -223,7 +227,7 @@ export default function VideoPlayerModal({ task, onClose }: {
       mainHlsRef.current = hls
       hls.attachMedia(video)
       hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-        hls.loadSource(playbackPlaylistUrl(task.id, session.session_id))
+        hls.loadSource(playbackPlaylistUrl(task.id, session.session_id, true))
       })
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         setLoading(false)
@@ -244,7 +248,7 @@ export default function VideoPlayerModal({ task, onClose }: {
         setError('当前视频编码无法由内置播放器解码，可使用系统播放器打开')
       })
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = playbackPlaylistUrl(task.id, session.session_id)
+      video.src = playbackPlaylistUrl(task.id, session.session_id, true)
       video.load()
     } else {
       setLoading(false)
@@ -331,11 +335,33 @@ export default function VideoPlayerModal({ task, onClose }: {
     if (video.paused) void video.play(); else video.pause()
   }, [])
 
+  const seekTo = useCallback((target: number) => {
+    const video = videoRef.current
+    if (!video || !Number.isFinite(target)) return
+    const bounded = Math.max(0, Math.min(effectiveDuration || target, target))
+    video.currentTime = bounded
+    if (mode !== 'hls' || !session) return
+
+    if (seekTimerRef.current) window.clearTimeout(seekTimerRef.current)
+    seekTimerRef.current = window.setTimeout(() => {
+      void requestPlaybackSeek(task.id, session.session_id, bounded)
+        .then(result => {
+          mainHlsRef.current?.startLoad(result.time)
+          if (videoRef.current && Math.abs(videoRef.current.currentTime - result.time) > 0.2) {
+            videoRef.current.currentTime = result.time
+          }
+        })
+        .catch(() => {
+          // The segment endpoint also prioritizes a requested fragment and hls.js retries it.
+        })
+    }, 120)
+  }, [effectiveDuration, mode, session, task.id])
+
   const seekBy = useCallback((seconds: number) => {
     const video = videoRef.current
     if (!video) return
-    video.currentTime = Math.max(0, Math.min(effectiveDuration, video.currentTime + seconds))
-  }, [effectiveDuration])
+    seekTo(Math.max(0, Math.min(effectiveDuration, video.currentTime + seconds)))
+  }, [effectiveDuration, seekTo])
 
   const toggleMute = useCallback(() => {
     const video = videoRef.current
@@ -413,7 +439,7 @@ export default function VideoPlayerModal({ task, onClose }: {
         })
         hls.attachMedia(video)
         hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-          hls.loadSource(playbackPlaylistUrl(task.id, session.session_id))
+          hls.loadSource(playbackPlaylistUrl(task.id, session.session_id, true))
         })
       })
     }
@@ -503,6 +529,7 @@ export default function VideoPlayerModal({ task, onClose }: {
   }
 
   useEffect(() => () => {
+    if (seekTimerRef.current) window.clearTimeout(seekTimerRef.current)
     if (thumbnailTimerRef.current) window.clearTimeout(thumbnailTimerRef.current)
     if (thumbnailIdleRef.current) window.clearTimeout(thumbnailIdleRef.current)
     destroyThumbnailDecoder()
@@ -520,7 +547,9 @@ export default function VideoPlayerModal({ task, onClose }: {
         <div className="player-title"><strong>{task.title || task.filename || task.id}</strong><span>{mode === 'file' ? '本地文件' : statusLabel(task.status)}</span></div>
         <div className="player-header-stats">
           {isDownloading && <span className="player-speed"><Activity size={14} />{fmtSpeed(task.speed_bytes_per_sec)}</span>}
-          <span>{formatPlayerTime(playbackStatus?.available_duration || task.playable_duration || 0)} 已可播放</span>
+          <span>{mode === 'hls'
+            ? `${formatPlayerTime(playbackStatus?.available_duration || task.playable_duration || 0)} / ${formatPlayerTime(effectiveDuration)} 可用`
+            : '本地文件'}</span>
           <button className="player-icon-button" title="关闭播放器" onClick={onClose}><X size={19} /></button>
         </div>
       </header>
@@ -528,7 +557,7 @@ export default function VideoPlayerModal({ task, onClose }: {
       <div className="player-stage" onDoubleClick={() => void toggleFullscreen()}>
         <video ref={videoRef} className="player-video" playsInline preload="metadata" />
         <video ref={thumbnailVideoRef} className="thumbnail-decoder" muted playsInline preload="none" />
-        {loading && !error && <div className="player-loading"><LoaderCircle className="spin" size={28} /><span>{mode === 'hls' ? '正在读取已下载分片' : '正在打开本地文件'}</span></div>}
+        {loading && !error && <div className="player-loading"><LoaderCircle className="spin" size={28} /><span>{mode === 'hls' ? '正在读取播放清单并准备目标分片' : '正在打开本地文件'}</span></div>}
         {error && <div className="player-error"><strong>无法播放</strong><span>{error}</span></div>}
 
         <div className="player-controls" onDoubleClick={event => event.stopPropagation()}>
@@ -545,7 +574,7 @@ export default function VideoPlayerModal({ task, onClose }: {
               max={Math.max(0.1, effectiveDuration)}
               step="0.05"
               value={Math.min(currentTime, Math.max(0.1, effectiveDuration))}
-              onChange={event => { if (videoRef.current) videoRef.current.currentTime = Number(event.target.value) }}
+              onChange={event => seekTo(Number(event.target.value))}
             />
           </div>
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 USERSCRIPT_FILENAME = "m3u8-sniffer.user.js"
-USERSCRIPT_VERSION = "4.3.0"
+USERSCRIPT_VERSION = "4.4.0"
 
 
 def render_userscript(source: str, host: str, port: int, token: str, version: str = USERSCRIPT_VERSION) -> str:

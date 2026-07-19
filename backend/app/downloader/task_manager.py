@@ -77,6 +77,7 @@ class TaskManager:
         self._event_subscribers: list[asyncio.Queue] = []
         self._sniffed: list[dict] = []
         self._pending_saves: dict[str, asyncio.Task] = {}
+        self._downloaders: dict[str, HLSDownloader] = {}
         self._temp_cleanup_lock = asyncio.Lock()
         self._maintenance_task: asyncio.Task | None = None
 
@@ -271,7 +272,11 @@ class TaskManager:
                         on_progress=self._on_progress,
                         on_log=self._on_log_write,
                     )
-                    await downloader.run()
+                    self._downloaders[task.id] = downloader
+                    try:
+                        await downloader.run()
+                    finally:
+                        self._downloaders.pop(task.id, None)
             except asyncio.CancelledError:
                 task.status = TaskStatus.CANCELED
                 task.stage = "canceled"
@@ -291,6 +296,28 @@ class TaskManager:
         )
         self._broadcast_nowait(self._task_event(task))
         self._broadcast_queue_updates()
+
+    async def request_playback_seek(
+        self,
+        task_id: str,
+        segment_index: int,
+        *,
+        force: bool = True,
+    ) -> None:
+        task = self._get_task(task_id)
+        if segment_index < 0:
+            raise TaskConflictError("播放位置无效")
+        if (
+            not force
+            and task.playback_seek_index is not None
+            and segment_index < task.playback_seek_index
+        ):
+            return
+        task.playback_seek_index = int(segment_index)
+        downloader = self._downloaders.get(task_id)
+        if downloader is not None:
+            downloader.request_seek(segment_index)
+        self._broadcast_nowait(self._task_event(task))
 
     async def pause_task(self, task_id: str) -> None:
         task = self._get_task(task_id)
@@ -349,6 +376,7 @@ class TaskManager:
         task.last_log = "正在重试"
         _clear_task_error(task)
         task.output_path = ""
+        task.playback_seek_index = None
         task.started_at = ""
         task.finished_at = ""
         task.progress = TaskProgress()

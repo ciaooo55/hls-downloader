@@ -136,7 +136,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.1.13
+.\scripts\build_installer.ps1 -Version 1.1.14
 ```
 
 输出位于忽略的 `release` 目录：
@@ -155,8 +155,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.1.13
-git push origin v1.1.13
+git tag v1.1.14
+git push origin v1.1.14
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。

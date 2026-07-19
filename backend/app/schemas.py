@@ -97,6 +97,10 @@ class UserscriptPing(BaseModel):
     page_url: str = Field(default="", max_length=2048)
 
 
+class PlaybackSeekRequest(BaseModel):
+    time: float = Field(ge=0, le=86400)
+
+
 class UrlRecognitionRequest(BaseModel):
     url: str
     referer: str = ""

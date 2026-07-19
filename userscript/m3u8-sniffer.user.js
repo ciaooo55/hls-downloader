@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HLS Downloader - m3u8 一键下载
 // @namespace    hls-downloader
-// @version      4.3.0
+// @version      4.4.0
 // @description  自动发现网页中的 m3u8，折叠悬浮、一键下载并管理下载任务
 // @compatible   Tampermonkey
 // @compatible   ScriptCat
@@ -10,7 +10,6 @@
 // @exclude      http://127.0.0.1/*
 // @exclude      http://localhost/*
 // @grant        GM_xmlhttpRequest
-// @grant        GM_addStyle
 // @grant        GM_setClipboard
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -25,11 +24,16 @@
   // These values are replaced with the current desktop settings when exported.
   const API_BASE = 'http://127.0.0.1:8765/api';
   const TOKEN = '55555'; // Must match config.json token
-  const SCRIPT_VERSION = '4.3.0';
+  const SCRIPT_VERSION = '4.4.0';
 
   const found = new Map();
   const taskStates = new Map();
+  let panelHost = null;
+  let panelRoot = null;
   let panelEl = null;
+  let panelInteracting = false;
+  let panelRenderQueued = false;
+  let panelReleaseTimer = 0;
   let panelCollapsed = GM_getValue('hls_panel_collapsed', true);
   let panelSide = GM_getValue('hls_panel_side', 'right') === 'left' ? 'left' : 'right';
   let activeTab = GM_getValue('hls_panel_tab', 'resources') === 'tasks' ? 'tasks' : 'resources';
@@ -268,8 +272,9 @@
     state.pollTimer = setInterval(poll, 1500);
   }
 
-  GM_addStyle(`
-    #hls-helper-panel { all: initial; }
+  const PANEL_STYLE = `
+    :host { all: initial; display: block; }
+    #hls-helper-panel { all: initial; display: block; position: relative; top: auto; left: auto; right: auto; width: 100%; pointer-events: auto; }
     #hls-helper-panel, #hls-helper-panel * { box-sizing: border-box; letter-spacing: 0; }
     #hls-helper-panel * { font-family: inherit; }
     #hls-helper-panel header, #hls-helper-panel nav, #hls-helper-panel main,
@@ -278,14 +283,12 @@
       --hls-bg: #171a1f; --hls-surface: #20242a; --hls-raised: #292e35;
       --hls-border: #3a414a; --hls-text: #edf1f5; --hls-muted: #98a2ad;
       --hls-accent: #2b8ac6; --hls-green: #39a875; --hls-amber: #d59a3a; --hls-red: #dc6262;
-      position: fixed; top: 18px; z-index: 2147483646; width: 368px;
+      max-width: 100%;
       color: var(--hls-text); background: var(--hls-bg); border: 1px solid var(--hls-border);
       border-radius: 8px; box-shadow: 0 14px 44px rgba(0,0,0,.42);
       font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
       overflow: hidden; transition: width .18s ease, height .18s ease, opacity .18s ease;
     }
-    #hls-helper-panel.hls-side-right { right: 18px; }
-    #hls-helper-panel.hls-side-left { left: 18px; }
     #hls-helper-panel.hls-collapsed { width: 48px; height: 48px; border-radius: 8px; }
     #hls-helper-panel button, #hls-helper-panel input { font: inherit; letter-spacing: 0; }
     #hls-helper-panel button { color: inherit; }
@@ -302,13 +305,13 @@
     .hls-icon-btn:hover { background: var(--hls-raised); color: var(--hls-text)!important; }
     .hls-service-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--hls-red); }
     .hls-service-dot.online { background: var(--hls-green); }
-    .hls-compact-badge { display: none; position: absolute; top: -5px; right: -5px; min-width: 18px; height: 18px; padding: 0 4px; border: 2px solid var(--hls-bg); border-radius: 9px; background: var(--hls-red); color: #fff; font-size: 10px; line-height: 14px; text-align: center; }
+    .hls-compact-badge { display: none; position: absolute; top: 2px; right: 2px; min-width: 18px; height: 18px; padding: 0 4px; border: 2px solid var(--hls-bg); border-radius: 9px; background: var(--hls-red); color: #fff; font-size: 10px; line-height: 14px; text-align: center; }
     .hls-collapsed .hls-head { width: 48px; height: 48px; padding: 9px; border: 0; cursor: pointer; }
     .hls-collapsed .hls-brand { cursor: pointer; }
     .hls-collapsed .hls-logo { width: 30px; height: 30px; }
     .hls-collapsed .hls-title, .hls-collapsed .hls-head-actions, .hls-collapsed .hls-shell { display: none; }
     .hls-collapsed .hls-compact-badge { display: block; }
-    .hls-collapsed.hls-side-left .hls-compact-badge { right: auto; left: -5px; }
+    .hls-collapsed.hls-side-left .hls-compact-badge { right: auto; left: 2px; }
     .hls-shell, .hls-body, .hls-row { display: block; }
     .hls-tabs { display: grid; grid-template-columns: 1fr 1fr; padding: 6px 8px 0!important; background: var(--hls-surface); }
     .hls-tab { height: 32px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--hls-muted)!important; cursor: pointer; }
@@ -353,13 +356,9 @@
     #hls-helper-toast.error { --hls-toast-color: #dc6262; }
     #hls-helper-toast.info { --hls-toast-color: #2b8ac6; }
     @media (max-width: 520px) {
-      #hls-helper-panel { top: 10px; width: calc(100vw - 20px); }
-      #hls-helper-panel.hls-side-right { right: 10px; }
-      #hls-helper-panel.hls-side-left { left: 10px; }
-      #hls-helper-panel.hls-collapsed { width: 46px; height: 46px; }
       .hls-body { max-height: 52vh; }
     }
-  `);
+  `;
 
   function resourceHTML(info) {
     let host = info.url;
@@ -436,16 +435,97 @@
     `;
   }
 
+  function updatePanelPosition() {
+    if (!panelHost) return;
+    const viewportWidth = window.visualViewport?.width || window.innerWidth;
+    const mobile = viewportWidth <= 520;
+    const gap = mobile ? 10 : 18;
+    const width = panelCollapsed ? 48 : Math.max(0, Math.min(368, viewportWidth - gap * 2));
+    panelHost.style.setProperty('top', `${Math.max(8, (window.visualViewport?.offsetTop || 0) + gap)}px`, 'important');
+    panelHost.style.setProperty('left', panelSide === 'left' ? `${gap}px` : 'auto', 'important');
+    panelHost.style.setProperty('right', panelSide === 'right' ? `${gap}px` : 'auto', 'important');
+    panelHost.style.setProperty('width', `${width}px`, 'important');
+    panelHost.style.setProperty('max-width', `calc(100vw - ${gap * 2}px)`, 'important');
+    panelHost.style.setProperty('height', panelCollapsed ? '48px' : 'auto', 'important');
+  }
+
+  function ensurePanel() {
+    if (panelEl) return;
+    panelHost = document.createElement('div');
+    panelHost.id = 'hls-downloader-host';
+    panelHost.setAttribute('aria-label', 'HLS Downloader');
+    panelHost.style.cssText = 'all:initial;display:block;position:fixed;z-index:2147483647;isolation:isolate;contain:layout style;';
+    panelHost.style.setProperty('pointer-events', 'none', 'important');
+    (document.documentElement || document.body).appendChild(panelHost);
+    panelRoot = panelHost.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = PANEL_STYLE;
+    panelRoot.appendChild(style);
+    panelEl = document.createElement('aside');
+    panelEl.id = 'hls-helper-panel';
+    panelEl.setAttribute('aria-label', 'HLS Downloader 嗅探助手');
+    panelRoot.appendChild(panelEl);
+
+    panelEl.addEventListener('pointerdown', () => {
+      panelInteracting = true;
+      if (panelReleaseTimer) window.clearTimeout(panelReleaseTimer);
+    }, true);
+    panelEl.addEventListener('keydown', () => {
+      panelInteracting = true;
+      if (panelReleaseTimer) window.clearTimeout(panelReleaseTimer);
+    }, true);
+    const releaseInteraction = () => {
+      if (panelReleaseTimer) window.clearTimeout(panelReleaseTimer);
+      panelReleaseTimer = window.setTimeout(() => {
+        panelInteracting = false;
+        panelReleaseTimer = 0;
+        if (panelRenderQueued) {
+          panelRenderQueued = false;
+          renderPanel();
+        }
+      }, 0);
+    };
+    window.addEventListener('pointerup', releaseInteraction, true);
+    window.addEventListener('pointercancel', releaseInteraction, true);
+    window.addEventListener('keyup', releaseInteraction, true);
+    panelEl.addEventListener('click', event => {
+      if (panelCollapsed && event.target.closest?.('.hls-head')) setCollapsed(false);
+      event.stopPropagation();
+    });
+    window.addEventListener('resize', updatePanelPosition, { passive: true });
+    window.visualViewport?.addEventListener('resize', updatePanelPosition, { passive: true });
+    window.visualViewport?.addEventListener('scroll', updatePanelPosition, { passive: true });
+    document.addEventListener('fullscreenchange', updatePanelPosition, { passive: true });
+    const hostObserver = new MutationObserver(() => {
+      if (panelHost && !panelHost.isConnected) {
+        (document.documentElement || document.body)?.appendChild(panelHost);
+        updatePanelPosition();
+      }
+    });
+    hostObserver.observe(document.documentElement, { childList: true });
+  }
+
   function renderPanel() {
-    if (!document.body) return;
+    if (!document.documentElement && !document.body) return;
+    if (panelInteracting) {
+      panelRenderQueued = true;
+      return;
+    }
+    panelRenderQueued = false;
+    ensurePanel();
     const draft = panelEl?.querySelector('#hls-manual-url')?.value || '';
     const oldBody = panelEl?.querySelector('.hls-body');
     const oldScroll = oldBody?.scrollTop || 0;
-    if (!panelEl) {
-      panelEl = document.createElement('aside');
-      panelEl.id = 'hls-helper-panel';
-      panelEl.setAttribute('aria-label', 'HLS Downloader 嗅探助手');
-      document.body.appendChild(panelEl);
+    if (panelCollapsed && panelEl.querySelector('#hls-expand')) {
+      panelEl.className = `hls-side-${panelSide} hls-collapsed`;
+      const badge = panelEl.querySelector('.hls-compact-badge');
+      if (badge) badge.textContent = String(found.size);
+      panelEl.querySelectorAll('.hls-service-dot').forEach(dot => {
+        dot.classList.toggle('online', serviceOnline);
+        dot.setAttribute('title', serviceOnline ? '本地下载器已连接' : '本地下载器未连接');
+      });
+      updatePanelPosition();
+      return;
     }
 
     panelEl.className = `hls-side-${panelSide}${panelCollapsed ? ' hls-collapsed' : ''}`;
@@ -508,6 +588,7 @@
     bindPanelEvents();
     const newBody = panelEl.querySelector('.hls-body');
     if (newBody) newBody.scrollTop = oldScroll;
+    updatePanelPosition();
   }
 
   function setCollapsed(value) {
@@ -688,12 +769,12 @@
   }
 
   function toast(message, type = 'info') {
-    document.querySelector('#hls-helper-toast')?.remove();
+    panelRoot?.querySelector('#hls-helper-toast')?.remove();
     const element = document.createElement('div');
     element.id = 'hls-helper-toast';
     element.className = type;
     element.textContent = message;
-    document.body.appendChild(element);
+    (panelRoot || document.body).appendChild(element);
     setTimeout(() => element.remove(), 2600);
   }
 

@@ -70,3 +70,4 @@ class Task:
     cancel_event: Optional[asyncio.Event] = field(default=None, repr=False)
     pause_event: Optional[asyncio.Event] = field(default=None, repr=False)
     task_handle: Optional[asyncio.Task] = field(default=None, repr=False)
+    playback_seek_index: Optional[int] = field(default=None, repr=False)

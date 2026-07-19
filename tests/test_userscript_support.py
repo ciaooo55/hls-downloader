@@ -58,7 +58,7 @@ def test_userscript_sends_startup_ping_and_periodic_heartbeat():
     root = Path(__file__).resolve().parent.parent
     source = (root / "userscript" / "m3u8-sniffer.user.js").read_text(encoding="utf-8")
 
-    assert "const SCRIPT_VERSION = '4.3.0';" in source
+    assert "const SCRIPT_VERSION = '4.4.0';" in source
     assert "// @compatible   Tampermonkey" in source
     assert "// @compatible   ScriptCat" in source
     assert "apiPost('/userscript/ping'" in source
@@ -77,6 +77,11 @@ def test_userscript_panel_is_collapsible_and_remembers_its_position():
     assert "hls-collapsed" in source
     assert "data-tab=\"resources\"" in source
     assert "data-tab=\"tasks\"" in source
+    assert "attachShadow({ mode: 'open' })" in source
+    assert "hls-downloader-host" in source
+    assert "panelInteracting" in source
+    assert "updatePanelPosition" in source
+    assert "width: 46px" not in source
 
 
 def test_userscript_exposes_common_resource_and_task_actions():

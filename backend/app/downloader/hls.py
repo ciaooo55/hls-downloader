@@ -136,6 +136,12 @@ class HLSDownloader:
         self._failed_indexes: list[int] = []
         self._key_cache: dict[str, bytes] = {}
         self._last_segment_error: Exception | None = None
+        self._playback_priority_index: int | None = task.playback_seek_index
+
+    def request_seek(self, segment_index: int) -> None:
+        if segment_index >= 0:
+            self._playback_priority_index = int(segment_index)
+            self.task.playback_seek_index = int(segment_index)
 
     def _headers(self) -> dict[str, str]:
         headers = {"Accept": "*/*"}
@@ -445,23 +451,39 @@ class HLSDownloader:
         headers: dict[str, str],
         concurrency: int,
     ) -> bool:
-        queue: asyncio.Queue[dict] = asyncio.Queue()
-        for segment in segments:
-            queue.put_nowait(segment)
-
         self.tracker.start(len(segments))
         self._completed_count = 0
         self._failed_indexes = []
         self._last_segment_error = None
         self.task.progress.failed_segments = 0
+        pending: dict[int, dict] = {}
+        for segment in segments:
+            destination = self._seg_dir() / f"{segment['index']:06d}.seg"
+            if destination.exists() and destination.stat().st_size > 0:
+                self.tracker.add_completed(destination.stat().st_size)
+                self._completed_count += 1
+            else:
+                pending[segment["index"]] = segment
+        claim_lock = asyncio.Lock()
+
+        async def claim_segment() -> dict | None:
+            async with claim_lock:
+                if not pending:
+                    return None
+                priority = self._playback_priority_index
+                if priority is not None:
+                    forward = [index for index in pending if index >= priority]
+                    index = min(forward) if forward else min(pending)
+                else:
+                    index = min(pending)
+                return pending.pop(index)
 
         async def worker() -> None:
-            while not queue.empty():
+            while True:
                 if self._is_canceled() or self._is_pausing():
                     return
-                try:
-                    segment = queue.get_nowait()
-                except asyncio.QueueEmpty:
+                segment = await claim_segment()
+                if segment is None:
                     return
                 index = segment["index"]
                 self.task.progress.active_workers += 1
@@ -492,7 +514,6 @@ class HLSDownloader:
                     self.task.progress.active_slots -= 1
                     if index in self.task.progress.active_segment_indexes:
                         self.task.progress.active_segment_indexes.remove(index)
-                    queue.task_done()
                     self._emit_progress()
 
         workers = [
@@ -507,6 +528,9 @@ class HLSDownloader:
                     worker_task.cancel()
             await asyncio.gather(*workers, return_exceptions=True)
 
+        if not pending and not self._is_pausing() and not self._is_canceled():
+            self._playback_priority_index = None
+            self.task.playback_seek_index = None
         return not self._is_canceled() and not self._is_pausing()
 
     async def _download_one_segment(

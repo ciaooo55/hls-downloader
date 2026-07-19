@@ -82,6 +82,57 @@ def test_incremental_playlist_only_exposes_contiguous_local_media(tmp_path, monk
     assert completed.rstrip().endswith("#EXT-X-ENDLIST")
 
 
+def test_full_playlist_reports_total_duration_and_seek_target(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "token", "play-token")
+    task = Task(
+        id="seekplay",
+        url="https://example.test/video.m3u8",
+        status=TaskStatus.DOWNLOADING_SEGMENTS,
+    )
+    task_dir = tmp_path / ".tasks" / task.id
+    segments = _segments(task_dir, durations=(6.0, 7.0, 8.0, 9.0))
+    write_playback_plan(task_dir, segments, total_duration=30.0)
+    seg_dir = task_dir / "segments"
+    seg_dir.mkdir(parents=True, exist_ok=True)
+    (seg_dir / "000000.seg").write_bytes(b"first")
+
+    previous = manager.tasks
+    manager.tasks = {task.id: task}
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        with TestClient(app) as client:
+            opened = client.post(
+                f"/api/tasks/{task.id}/playback",
+                headers={"X-Token": "play-token"},
+            )
+            assert opened.status_code == 200
+            session = opened.json()["session_id"]
+            seek = client.post(
+                f"/api/tasks/{task.id}/playback/seek",
+                params={"session": session},
+                headers={"X-Token": "play-token"},
+                json={"time": 20},
+            )
+            assert seek.status_code == 200
+            assert seek.json()["index"] == 2
+            assert seek.json()["segment_start"] == 13
+
+            playlist = client.get(
+                f"/api/tasks/{task.id}/playback/index.m3u8",
+                params={"session": session, "token": "play-token", "full": "true"},
+            )
+            assert playlist.status_code == 200
+            assert "#EXT-X-START:TIME-OFFSET=20.000000" in playlist.text
+            assert "segments/000003.seg" in playlist.text
+            assert "segments/000002.seg" in playlist.text
+            assert "full=1" in playlist.text
+    finally:
+        playback_service.close_task(task.id)
+        manager.tasks = previous
+
+
 def test_completed_media_endpoint_supports_byte_ranges(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "download_dir", str(tmp_path))
     monkeypatch.setattr(settings, "token", "play-token")

@@ -48,6 +48,14 @@ export interface PlaybackStatus {
   complete: boolean
 }
 
+export interface PlaybackSeek {
+  time: number
+  index: number
+  segment_start: number
+  segment_end: number
+  total_duration: number
+}
+
 export interface PlaybackSession extends PlaybackStatus {
   session_id: string
 }

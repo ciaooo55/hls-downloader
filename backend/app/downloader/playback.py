@@ -1,3 +1,4 @@
+import asyncio
 import json
 import math
 import re
@@ -63,6 +64,8 @@ class PlaybackSnapshot:
 class _PlaybackSession:
     task_id: str
     last_seen: float
+    requested_index: int | None = None
+    requested_time: float = 0.0
 
 
 def _safe_task_dir(task_id: str) -> Path:
@@ -268,6 +271,40 @@ class PlaybackService:
             )
             return session_id, snapshot
 
+    def request_seek(self, task_id: str, session_id: str, target_time: float) -> dict:
+        """Record a seek target and return its exact HLS segment location."""
+        self.touch(task_id, session_id)
+        if not math.isfinite(target_time):
+            raise PlaybackError("播放位置无效")
+        plan, _ = self._load_plan(task_id)
+        if not plan.segments:
+            raise PlaybackNotReadyError("播放清单尚未准备好")
+
+        bounded = max(0.0, min(float(target_time), max(0.0, plan.total_duration - 0.001)))
+        elapsed = 0.0
+        target_index = len(plan.segments) - 1
+        segment_start = 0.0
+        for index, segment in enumerate(plan.segments):
+            if bounded < elapsed + segment.duration or index == len(plan.segments) - 1:
+                target_index = index
+                segment_start = elapsed
+                break
+            elapsed += segment.duration
+
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None or session.task_id != task_id:
+                raise PlaybackSessionError("播放会话已失效，请重新打开播放器")
+            session.requested_index = target_index
+            session.requested_time = bounded
+        return {
+            "time": bounded,
+            "index": target_index,
+            "segment_start": segment_start,
+            "segment_end": segment_start + plan.segments[target_index].duration,
+            "total_duration": plan.total_duration,
+        }
+
     def touch(self, task_id: str, session_id: str) -> None:
         now = time.monotonic()
         with self._lock:
@@ -336,6 +373,7 @@ class PlaybackService:
         session_id: str,
         *,
         access_token: str = "",
+        full: bool = False,
     ) -> str:
         self.touch(task_id, session_id)
         plan, stamp = self._load_plan(task_id)
@@ -343,8 +381,15 @@ class PlaybackService:
         if count <= 0:
             raise PlaybackNotReadyError("首个连续分片尚未下载完成")
 
+        requested_time = 0.0
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is not None:
+                requested_time = session.requested_time
+
         session_query = quote(session_id, safe="")
         token_query = f"&token={quote(access_token, safe='')}" if access_token else ""
+        mode_query = "&full=1" if full else ""
         lines = [
             "#EXTM3U",
             f"#EXT-X-VERSION:{7 if plan.is_fmp4 else 3}",
@@ -352,35 +397,66 @@ class PlaybackService:
             "#EXT-X-MEDIA-SEQUENCE:0",
             "#EXT-X-PLAYLIST-TYPE:EVENT",
         ]
+        if full and requested_time > 0:
+            lines.append(f"#EXT-X-START:TIME-OFFSET={requested_time:.6f},PRECISE=YES")
         active_map = ""
-        for segment in plan.segments[:count]:
+        visible_segments = plan.segments if full else plan.segments[:count]
+        for segment in visible_segments:
             if segment.discontinuity:
                 lines.append("#EXT-X-DISCONTINUITY")
             if segment.init_name and segment.init_name != active_map:
                 lines.append(
-                    f'#EXT-X-MAP:URI="maps/{segment.init_name}?session={session_query}{token_query}"'
+                    f'#EXT-X-MAP:URI="maps/{segment.init_name}?session={session_query}{token_query}{mode_query}"'
                 )
             active_map = segment.init_name
             lines.append(f"#EXTINF:{segment.duration:.6f},")
             lines.append(
-                f"segments/{segment.index:06d}.seg?session={session_query}{token_query}"
+                f"segments/{segment.index:06d}.seg?session={session_query}{token_query}{mode_query}"
             )
         terminal = status in {"done", "failed", "canceled", "unsupported"}
         if terminal or count == len(plan.segments):
             lines.append("#EXT-X-ENDLIST")
         return "\n".join(lines) + "\n"
 
-    def segment_path(self, task_id: str, index: int, session_id: str) -> tuple[Path, bool]:
+    def segment_path(
+        self,
+        task_id: str,
+        index: int,
+        session_id: str,
+        *,
+        sparse: bool = False,
+    ) -> tuple[Path, bool]:
         self.touch(task_id, session_id)
         plan, stamp = self._load_plan(task_id)
-        count, _ = self._available_prefix(task_id, plan, stamp)
-        if index < 0 or index >= count:
+        if index < 0 or index >= len(plan.segments):
             raise PlaybackNotReadyError("该分片尚未准备好")
+        if not sparse:
+            count, _ = self._available_prefix(task_id, plan, stamp)
+            if index >= count:
+                raise PlaybackNotReadyError("该分片尚未准备好")
         segment = plan.segments[index]
         path = _safe_task_dir(task_id) / "segments" / f"{index:06d}.seg"
         if not path.exists() or path.stat().st_size <= 0:
             raise PlaybackNotReadyError("该分片尚未准备好")
         return path, bool(segment.init_name)
+
+    async def wait_for_segment(
+        self,
+        task_id: str,
+        index: int,
+        session_id: str,
+        *,
+        sparse: bool = False,
+        timeout: float = 45.0,
+    ) -> tuple[Path, bool]:
+        deadline = time.monotonic() + max(0.1, timeout)
+        while True:
+            try:
+                return self.segment_path(task_id, index, session_id, sparse=sparse)
+            except PlaybackNotReadyError:
+                if time.monotonic() >= deadline:
+                    raise
+                await asyncio.sleep(0.2)
 
     def map_path(self, task_id: str, map_name: str, session_id: str) -> Path:
         self.touch(task_id, session_id)
