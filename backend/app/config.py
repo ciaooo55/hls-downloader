@@ -28,7 +28,9 @@ class Settings(BaseSettings):
     browser_takeover_enabled: bool = True
     browser_takeover_min_mb: int = 1
 
-    model_config = {"env_prefix": "HLS_"}
+    # Ignore fields written by a newer release so downgrade/upgrade helpers can
+    # still start far enough to close the running application cleanly.
+    model_config = {"env_prefix": "HLS_", "extra": "ignore"}
 
 def _resolve_path(v: str, base: Path = PROJECT_ROOT) -> str:
     if not v:

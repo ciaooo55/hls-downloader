@@ -19,8 +19,8 @@
 ```powershell
 git switch main
 git pull --ff-only
-git tag v1.1.13
-git push origin v1.1.13
+git tag v1.2.1
+git push origin v1.2.1
 ```
 
 `v*` 标签会触发完整 Windows 构建。成功后工作流自动创建同名 GitHub Release，并上传：
@@ -29,8 +29,14 @@ git push origin v1.1.13
 HLSDownloader-Windows-x64-Setup.exe
 HLSDownloader-Windows-x64-Portable.zip
 m3u8-sniffer.user.js
+HLSDownloader-Chrome.zip
+HLSDownloader-Firefox-Unsigned.zip
 SHA256SUMS.txt
 ```
+
+Firefox 正式版只接受 Mozilla 签名的扩展。给仓库配置 AMO 的
+`WEB_EXT_API_KEY` 与 `WEB_EXT_API_SECRET` 后，工作流还会生成
+`HLSDownloader-Firefox-Signed.xpi`；没有密钥时只发布明确标注的未签名提交包。
 
 ## 失败处理
 

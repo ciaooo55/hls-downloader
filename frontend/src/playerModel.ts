@@ -31,6 +31,20 @@ export function thumbnailLeft(
   return clamp(raw, previewWidth / 2, Math.max(previewWidth / 2, trackWidth - previewWidth / 2))
 }
 
+export function isTimeSeekable(
+  ranges: Pick<TimeRanges, 'length' | 'start' | 'end'>,
+  time: number,
+  tolerance = 0.25,
+): boolean {
+  if (!Number.isFinite(time) || time < 0) return false
+  for (let index = 0; index < ranges.length; index += 1) {
+    if (time >= ranges.start(index) - tolerance && time <= ranges.end(index) + tolerance) {
+      return true
+    }
+  }
+  return false
+}
+
 export function formatPlayerTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
   const whole = Math.floor(seconds)

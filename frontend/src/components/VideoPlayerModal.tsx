@@ -31,6 +31,7 @@ import { isRunningStatus } from '../taskState'
 import {
   PLAYBACK_RATES,
   formatPlayerTime,
+  isTimeSeekable,
   thumbnailBucket,
   thumbnailLeft,
   timelineTime,
@@ -81,6 +82,7 @@ export default function VideoPlayerModal({ task, onClose }: {
   const thumbnailBusyRef = useRef(false)
   const pendingThumbnailRef = useRef<{ time: number; key: number } | null>(null)
   const seekTimerRef = useRef<number | null>(null)
+  const seekRequestRef = useRef(0)
   const resumePositionRef = useRef(0)
   const mediaErrorRecoveries = useRef(0)
 
@@ -256,6 +258,7 @@ export default function VideoPlayerModal({ task, onClose }: {
     }
 
     return () => {
+      seekRequestRef.current += 1
       if (mainHlsRef.current) {
         mainHlsRef.current.destroy()
         mainHlsRef.current = null
@@ -339,20 +342,46 @@ export default function VideoPlayerModal({ task, onClose }: {
     const video = videoRef.current
     if (!video || !Number.isFinite(target)) return
     const bounded = Math.max(0, Math.min(effectiveDuration || target, target))
-    video.currentTime = bounded
-    if (mode !== 'hls' || !session) return
+    if (mode !== 'hls' || !session) {
+      video.currentTime = bounded
+      return
+    }
 
     if (seekTimerRef.current) window.clearTimeout(seekTimerRef.current)
+    const requestNumber = ++seekRequestRef.current
+    setError('')
+    setLoading(true)
     seekTimerRef.current = window.setTimeout(() => {
       void requestPlaybackSeek(task.id, session.session_id, bounded)
-        .then(result => {
-          mainHlsRef.current?.startLoad(result.time)
-          if (videoRef.current && Math.abs(videoRef.current.currentTime - result.time) > 0.2) {
-            videoRef.current.currentTime = result.time
+        .then(async result => {
+          if (requestNumber !== seekRequestRef.current) return
+          const hls = mainHlsRef.current
+          hls?.stopLoad()
+          hls?.startLoad(result.time)
+
+          const deadline = Date.now() + 45_000
+          while (requestNumber === seekRequestRef.current && Date.now() < deadline) {
+            const currentVideo = videoRef.current
+            if (currentVideo && isTimeSeekable(currentVideo.seekable, result.time)) {
+              resumePositionRef.current = result.time
+              currentVideo.currentTime = result.time
+              setCurrentTime(result.time)
+              setLoading(false)
+              void currentVideo.play().catch(() => setPaused(true))
+              return
+            }
+            await new Promise(resolve => window.setTimeout(resolve, 150))
+          }
+          if (requestNumber === seekRequestRef.current) {
+            setLoading(false)
+            setError('目标位置下载超时，请稍后重试')
           }
         })
-        .catch(() => {
-          // The segment endpoint also prioritizes a requested fragment and hls.js retries it.
+        .catch(reason => {
+          if (requestNumber === seekRequestRef.current) {
+            setLoading(false)
+            setError(reason?.message || '无法跳转到目标位置')
+          }
         })
     }, 120)
   }, [effectiveDuration, mode, session, task.id])
@@ -529,6 +558,7 @@ export default function VideoPlayerModal({ task, onClose }: {
   }
 
   useEffect(() => () => {
+    seekRequestRef.current += 1
     if (seekTimerRef.current) window.clearTimeout(seekTimerRef.current)
     if (thumbnailTimerRef.current) window.clearTimeout(thumbnailTimerRef.current)
     if (thumbnailIdleRef.current) window.clearTimeout(thumbnailIdleRef.current)

@@ -4,6 +4,7 @@ import {
   formatPlayerTime,
   thumbnailBucket,
   thumbnailLeft,
+  isTimeSeekable,
   timelineTime,
 } from './playerModel'
 
@@ -23,5 +24,16 @@ describe('player timeline model', () => {
   it('formats short and long media durations', () => {
     expect(formatPlayerTime(65)).toBe('1:05')
     expect(formatPlayerTime(3723)).toBe('1:02:03')
+  })
+
+  it('only accepts positions inside a seekable media range', () => {
+    const ranges = {
+      length: 2,
+      start: (index: number) => [0, 120][index],
+      end: (index: number) => [18, 132][index],
+    }
+    expect(isTimeSeekable(ranges, 10)).toBe(true)
+    expect(isTimeSeekable(ranges, 125)).toBe(true)
+    expect(isTimeSeekable(ranges, 60)).toBe(false)
   })
 })

@@ -148,7 +148,10 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     assert "curl_cffi==0.14.0" in requirements
     assert "--collect-all pystray" in build_script
     assert "--collect-all curl_cffi" in build_script
-    assert 'HLSDownloader.exe$\\" --shutdown' in nsis_script
+    assert 'HLSDownloader.exe$\\" --shutdown' not in nsis_script
+    assert 'shutdown-running.ps1' in nsis_script
+    shutdown_script = (root / "scripts" / "shutdown-running.ps1").read_text(encoding="utf-8")
+    assert "api/app/shutdown" in shutdown_script
     assert "taskkill /IM HLSDownloader.exe /F" in nsis_script
     assert 'RMDir /r "$LOCALAPPDATA\\HLS Downloader"' in nsis_script
     assert nsis_script.count('RMDir /r "$LOCALAPPDATA\\HLS Downloader"') >= 3
@@ -166,7 +169,9 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     assert 'Join-Path $StageDir ".webview"' in build_script
     assert '!insertmacro CloseRunningApp Install' in nsis_script
     assert '!insertmacro CloseRunningApp Uninstall' in nsis_script
-    assert "Sleep 3500" in nsis_script
+    install_cleanup = nsis_script.index('RMDir /r "$INSTDIR\\_internal"')
+    install_copy = nsis_script.index('SetOutPath "$INSTDIR\\_internal"')
+    assert install_cleanup < install_copy
     assert '"/DELETESELF="' in nsis_script
     assert "Wait-Process -Id $0" in nsis_script
     assert "Remove-Item -LiteralPath '$EXEPATH'" in nsis_script
@@ -183,6 +188,8 @@ def test_windows_package_uses_onedir_and_smoke_tests_graceful_shutdown():
     assert "--onefile" in build_script
     assert 'dist\\HLSDownloader\\*' in build_script
     assert 'api/app/shutdown' in build_script
+    assert 'Packaged Settings schema is missing field' in build_script
+    assert '$env:PYTHONPATH = ""' in build_script
     assert 'Graceful shutdown failed' in build_script
     assert "Single-instance check failed" in build_script
     assert "$secondProc.WaitForExit(12000)" in build_script

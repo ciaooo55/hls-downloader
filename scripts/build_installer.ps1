@@ -1,7 +1,7 @@
 param(
     [switch]$SkipFrontend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.2.0"
+    [string]$Version = "1.2.1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,7 +32,7 @@ $InstallerOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Setup.exe"
 $PortableOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Portable.zip"
 $UserscriptOut = Join-Path $ReleaseDir "m3u8-sniffer.user.js"
 $ChromeExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Chrome.zip"
-$FirefoxExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Firefox.zip"
+$FirefoxExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-Unsigned.zip"
 $ChecksumsOut = Join-Path $ReleaseDir "SHA256SUMS.txt"
 
 function Invoke-Step($Name, [scriptblock]$Block) {
@@ -201,7 +201,10 @@ if (-not $SkipFrontend) {
 
 Invoke-Step "Build backend executable" {
     Push-Location $BackendDir
+    $previousPythonPath = $env:PYTHONPATH
     try {
+        # Keep unrelated local projects out of PyInstaller's module graph.
+        $env:PYTHONPATH = ""
         python -m PyInstaller `
             --noconfirm `
             --clean `
@@ -231,6 +234,7 @@ Invoke-Step "Build backend executable" {
             --name HLSDownloaderNativeHost `
             native_host.py
     } finally {
+        $env:PYTHONPATH = $previousPythonPath
         Pop-Location
     }
 }
@@ -258,7 +262,10 @@ Invoke-Step "Stage application files" {
     New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "native-host") | Out-Null
     Copy-Item -Force -Path (Join-Path $ExtensionDir "native-host\chrome.json"), (Join-Path $ExtensionDir "native-host\firefox.json") -Destination (Join-Path $StageDir "native-host")
     New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "scripts") | Out-Null
-    Copy-Item -Force -Path (Join-Path $Root "scripts\register-native-host.ps1") -Destination (Join-Path $StageDir "scripts")
+    Copy-Item -Force -Path `
+        (Join-Path $Root "scripts\register-native-host.ps1"), `
+        (Join-Path $Root "scripts\shutdown-running.ps1") `
+        -Destination (Join-Path $StageDir "scripts")
 }
 
 if (-not $SkipSmoke) {
@@ -283,6 +290,22 @@ if (-not $SkipSmoke) {
                 }
                 if (-not $ok) {
                     throw "Packaged app did not respond on /api/health"
+                }
+                $packagedSettings = Invoke-RestMethod `
+                    -Uri "http://127.0.0.1:8765/api/settings" `
+                    -Headers @{ "X-Token" = "55555" } `
+                    -TimeoutSec 2
+                foreach ($field in @(
+                    "http_chunk_size_mb",
+                    "bt_upload_limit_kib",
+                    "bt_max_connections",
+                    "bt_enable_dht",
+                    "browser_takeover_enabled",
+                    "browser_takeover_min_mb"
+                )) {
+                    if ($null -eq $packagedSettings.PSObject.Properties[$field]) {
+                        throw "Packaged Settings schema is missing field: $field"
+                    }
                 }
 
                 $secondProc = Start-Process -FilePath $smokeExe -WorkingDirectory $StageDir -PassThru -WindowStyle Hidden

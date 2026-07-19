@@ -111,6 +111,15 @@ def test_repository_default_config_uses_missav_request_headers():
     assert data["max_concurrent_tasks"] == 3
 
 
+def test_settings_ignores_fields_written_by_a_future_release():
+    from backend.app.config import Settings
+
+    loaded = Settings(config_version=999, future_download_engine=True)
+
+    assert loaded.config_version == 999
+    assert not hasattr(loaded, "future_download_engine")
+
+
 def test_old_blank_request_defaults_migrate_to_missav(tmp_path, monkeypatch):
     config_path = tmp_path / "config.json"
     config_path.write_text(

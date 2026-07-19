@@ -7,7 +7,7 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.2.0"
+  !define APP_VERSION "1.2.1"
 !endif
 !define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
@@ -64,19 +64,26 @@ Function ScheduleSelfDelete
 FunctionEnd
 
 !macro CloseRunningApp Suffix
-  IfFileExists "$INSTDIR\HLSDownloader.exe" 0 CloseRunningAppForce${Suffix}
+  IfFileExists "$INSTDIR\HLSDownloader.exe" 0 CloseRunningAppDone${Suffix}
     DetailPrint "正在关闭运行中的 HLS Downloader..."
-    ExecWait '$\"$INSTDIR\HLSDownloader.exe$\" --shutdown'
-    Sleep 3500
+    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\shutdown-running.ps1"'
+    Pop $0
+    Pop $1
 CloseRunningAppForce${Suffix}:
     nsExec::ExecToStack 'taskkill /IM HLSDownloader.exe /F'
     Pop $0
     Pop $1
     Sleep 500
+CloseRunningAppDone${Suffix}:
 !macroend
 
 Section "Install" SecInstall
+  SetOutPath "$PLUGINSDIR"
+  File /oname=shutdown-running.ps1 "${STAGE_DIR}\scripts\shutdown-running.ps1"
   !insertmacro CloseRunningApp Install
+  ; A clean runtime directory prevents modules left by an older onedir build
+  ; from shadowing files in the new package.
+  RMDir /r "$INSTDIR\_internal"
   SetOutPath "$INSTDIR"
 
   File "${STAGE_DIR}\HLSDownloader.exe"
@@ -121,6 +128,7 @@ Section "Install" SecInstall
   File "${STAGE_DIR}\native-host\firefox.json"
   SetOutPath "$INSTDIR\scripts"
   File "${STAGE_DIR}\scripts\register-native-host.ps1"
+  File "${STAGE_DIR}\scripts\shutdown-running.ps1"
 
   WriteRegStr HKCU "Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader" "" "$INSTDIR\native-host\chrome.json"
   WriteRegStr HKCU "Software\Mozilla\NativeMessagingHosts\com.ciaooo55.hls_downloader" "" "$INSTDIR\native-host\firefox.json"
@@ -150,6 +158,8 @@ Section "Install" SecInstall
 SectionEnd
 
 Section "Uninstall"
+  InitPluginsDir
+  CopyFiles /SILENT "$INSTDIR\scripts\shutdown-running.ps1" "$PLUGINSDIR\shutdown-running.ps1"
   !insertmacro CloseRunningApp Uninstall
 
   StrCpy $0 "preserve"
