@@ -19,6 +19,7 @@ from backend.desktop import (
     StartupExitController,
     SingleInstanceLock,
     UvicornServerThread,
+    _activate_windows_window,
     desktop_ui_url,
     public_base_url,
 )
@@ -91,6 +92,25 @@ class FakeKernel32:
 
     def CloseHandle(self, handle):
         self.closed.append(handle)
+
+
+class FakeUser32:
+    def __init__(self, hwnd=42) -> None:
+        self.hwnd = hwnd
+        self.calls = []
+
+    def FindWindowW(self, class_name, title):
+        self.calls.append(("find", class_name, title))
+        return self.hwnd
+
+    def ShowWindow(self, hwnd, mode):
+        self.calls.append(("show", hwnd, mode))
+
+    def SetWindowPos(self, hwnd, insert_after, x, y, width, height, flags):
+        self.calls.append(("position", hwnd, insert_after, flags))
+
+    def SetForegroundWindow(self, hwnd):
+        self.calls.append(("foreground", hwnd))
 
 
 def test_window_close_hides_to_tray_and_keeps_server_running():
@@ -275,7 +295,11 @@ def test_startup_exit_is_disabled_after_desktop_controller_takes_over():
 
 def test_activation_restores_and_shows_registered_window():
     window = FakeWindow()
-    controller = DesktopController(window, FakeServer())
+    controller = DesktopController(
+        window,
+        FakeServer(),
+        native_window_activator=lambda _window: False,
+    )
     register_activation(controller.activate)
 
     assert activate_window() is True
@@ -284,6 +308,19 @@ def test_activation_restores_and_shows_registered_window():
             break
         threading.Event().wait(0.01)
     assert window.calls == ["restore", "show", "on-top:True", "on-top:False"]
+
+
+def test_windows_activation_uses_native_window_api_without_webview_calls():
+    user32 = FakeUser32()
+
+    assert _activate_windows_window(user32=user32) is True
+    assert user32.calls == [
+        ("find", None, "HLS Downloader"),
+        ("show", 42, 9),
+        ("position", 42, -1, 0x0001 | 0x0002 | 0x0040),
+        ("position", 42, -2, 0x0001 | 0x0002 | 0x0040),
+        ("foreground", 42),
+    ]
 
 
 def test_activation_returns_without_waiting_for_blocked_window():

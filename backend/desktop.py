@@ -204,6 +204,27 @@ def _create_tray_image():
     return image
 
 
+def _activate_windows_window(_window=None, user32=None) -> bool:
+    if os.name != "nt" and user32 is None:
+        return False
+    if user32 is None:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+    hwnd = user32.FindWindowW(None, "HLS Downloader")
+    if not hwnd:
+        return False
+    sw_restore = 9
+    hwnd_topmost = -1
+    hwnd_notopmost = -2
+    flags = 0x0001 | 0x0002 | 0x0040
+    user32.ShowWindow(hwnd, sw_restore)
+    user32.SetWindowPos(hwnd, hwnd_topmost, 0, 0, 0, 0, flags)
+    user32.SetWindowPos(hwnd, hwnd_notopmost, 0, 0, 0, 0, flags)
+    user32.SetForegroundWindow(hwnd)
+    return True
+
+
 class DesktopTray:
     def __init__(self, on_open, on_exit) -> None:
         self._on_open = on_open
@@ -245,6 +266,7 @@ class DesktopController:
         shutdown_timeout: float = 20,
         force_exit=None,
         force_exit_delay: float = 3,
+        native_window_activator=None,
     ) -> None:
         self.window = window
         self.server = server
@@ -252,6 +274,7 @@ class DesktopController:
         self.shutdown_timeout = shutdown_timeout
         self.force_exit = force_exit
         self.force_exit_delay = force_exit_delay
+        self.native_window_activator = native_window_activator or _activate_windows_window
         self._allow_close = False
         self._shutdown_started = False
         self._shutdown_done = threading.Event()
@@ -301,6 +324,10 @@ class DesktopController:
         return self._shutdown_done.wait(timeout)
 
     def activate(self) -> None:
+        if self.native_window_activator(self.window):
+            return
+        if os.name == "nt" and self.native_window_activator is _activate_windows_window:
+            return
         self.window.restore()
         self.window.show()
         try:
