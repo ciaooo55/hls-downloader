@@ -40,7 +40,7 @@ function App() {
     }
   }
   return <main>
-    <header><div><h1>HLS Downloader</h1><span className={online ? 'online' : ''}>{online ? '桌面端已连接' : '桌面端离线'}</span></div><div className="header-actions"><button title="打开桌面端" onClick={() => browser.runtime.sendNativeMessage('com.ciaooo55.hls_downloader', { op: 'activate' })}><ExternalLink size={17}/></button><button className="close-button" title="关闭" onClick={() => window.close()}><X size={18}/></button></div></header>
+    <header><div><h1>HLS Downloader</h1><span className={online ? 'online' : ''}>{online ? '桌面端已连接' : '桌面端离线'}</span></div><div className="header-actions"><button title="打开桌面端" onClick={() => browser.runtime.sendMessage({ type: 'activate' })}><ExternalLink size={17}/></button><button className="close-button" title="关闭" onClick={() => window.close()}><X size={18}/></button></div></header>
     <div className="controls"><button onClick={async () => { const value = !enabled; setEnabled(value); await browser.storage.local.set({ enabled: value }) }}><Power size={16}/>{enabled ? '自动接管已开启' : '自动接管已关闭'}</button><button onClick={toggleCookie}><ShieldCheck size={16}/>{authorized.includes(host) ? '已授权本站 Cookie' : '授权本站 Cookie'}</button></div>
     {error && <div className="send-error">{error}</div>}
     <section><div className="section-title">当前页面资源 <b>{resources.length}</b></div>{resources.length ? resources.map(item => <ResourceRow key={item.id} item={item} status={sending[item.id]} onSend={() => send(item)} />) : <p className="empty">播放媒体后，这里会显示可下载资源。</p>}</section>

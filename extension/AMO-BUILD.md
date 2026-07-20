@@ -32,10 +32,12 @@ npm registry. Exact direct and transitive dependency versions are recorded in
 
 - `downloads`: after an explicit user click, observe the real browser download
   (including redirects and response filenames), pause it, and show a desktop
-  confirmation before takeover. Once the desktop app receives the handoff, the
-  browser copy is canceled and erased; it is restored only when delivery to the
-  desktop app fails.
-- `nativeMessaging`: communicate with the locally installed HLS Downloader.
+  confirmation before takeover. The browser copy remains paused until the user
+  accepts the desktop dialog, then it is canceled and erased. It is restored only
+  when delivery to the desktop app fails or the handoff expires.
+- `nativeMessaging`: communicate with the locally installed HLS Downloader over
+  a persistent Native Messaging connection so browser downloads can be paused
+  and transferred without launching a new helper process for every request.
 - `webRequest` and `<all_urls>`: observe response metadata to identify downloadable
   files and media on the page the user visits.
 - `cookies`: read cookies only for hosts the user explicitly authorizes in the

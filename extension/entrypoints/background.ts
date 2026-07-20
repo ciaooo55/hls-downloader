@@ -1,11 +1,17 @@
 import { browser } from 'wxt/browser'
+import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
 import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, resourceId, shouldTakeover, type DownloadClickIntent, type MediaResource } from '../lib/resources'
-import { browserCleanupAction, shouldResumeBrowserDownload } from '../lib/takeover'
+import { browserCleanupAction, handoffOutcome, shouldResumeBrowserDownload } from '../lib/takeover'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 let clickIntents: DownloadClickIntent[] = []
 let browserFallbacks: Array<{ url: string, at: number }> = []
 const firefoxRequestIntents = new Map<string, DownloadClickIntent>()
+const determinedDownloads = new Map<number, browser.downloads.DownloadItem>()
+const determinationWaiters = new Map<number, (item: browser.downloads.DownloadItem) => void>()
+let nativeBridge: NativeBridge | null = null
+let concealedDownloadCount = 0
+let downloadUiFailsafe: ReturnType<typeof setTimeout> | null = null
 
 async function settings() {
   const data = await browser.storage.local.get(['enabled', 'minimumBytes', 'excludedHosts', 'authorizedCookieHosts'])
@@ -48,8 +54,50 @@ async function cookiesFor(url: string, pageUrl = ''): Promise<string> {
   return values.map(cookie => `${cookie.name}=${cookie.value}`).join('; ')
 }
 
-function native(message: Record<string, unknown>): Promise<any> {
-  return browser.runtime.sendNativeMessage(HOST, message)
+function native(message: Record<string, unknown>, timeoutMs?: number): Promise<any> {
+  if (!nativeBridge) return Promise.reject(new Error('Native Messaging 尚未初始化'))
+  return nativeBridge.request(message, timeoutMs)
+}
+
+async function waitForHandoff(handoffId: string): Promise<any> {
+  return native({
+    op: 'wait_handoff',
+    handoff_id: handoffId,
+    version: browser.runtime.getManifest().version,
+  }, 130_000)
+}
+
+async function setBrowserDownloadUi(enabled: boolean): Promise<void> {
+  if (!import.meta.env.CHROME) return
+  const downloads = browser.downloads as typeof browser.downloads & {
+    setUiOptions?: (options: { enabled: boolean }) => Promise<void>
+    setShelfEnabled?: (enabled: boolean) => Promise<void>
+  }
+  try {
+    if (downloads.setUiOptions) await downloads.setUiOptions({ enabled })
+    else if (downloads.setShelfEnabled) await downloads.setShelfEnabled(enabled)
+  } catch {
+    // UI suppression is best-effort; download ownership is enforced separately.
+  }
+}
+
+function concealBrowserDownload(): void {
+  concealedDownloadCount += 1
+  void setBrowserDownloadUi(false)
+  if (downloadUiFailsafe) clearTimeout(downloadUiFailsafe)
+  downloadUiFailsafe = setTimeout(() => {
+    concealedDownloadCount = 0
+    downloadUiFailsafe = null
+    void setBrowserDownloadUi(true)
+  }, 130_000)
+}
+
+function revealBrowserDownload(): void {
+  concealedDownloadCount = Math.max(0, concealedDownloadCount - 1)
+  if (concealedDownloadCount) return
+  if (downloadUiFailsafe) clearTimeout(downloadUiFailsafe)
+  downloadUiFailsafe = null
+  void setBrowserDownloadUi(true)
 }
 
 async function resourcePayload(resource: MediaResource) {
@@ -81,9 +129,22 @@ async function offer(resource: MediaResource) {
 }
 
 async function refreshedDownload(downloadId: number, original: browser.downloads.DownloadItem) {
-  await new Promise(resolve => setTimeout(resolve, 150))
+  let determined = determinedDownloads.get(downloadId)
+  if (!determined) {
+    determined = await new Promise<browser.downloads.DownloadItem | undefined>(resolve => {
+      const timeout = setTimeout(() => {
+        determinationWaiters.delete(downloadId)
+        resolve(undefined)
+      }, 500)
+      determinationWaiters.set(downloadId, item => {
+        clearTimeout(timeout)
+        determinationWaiters.delete(downloadId)
+        resolve(item)
+      })
+    })
+  }
   const [current] = await browser.downloads.search({ id: downloadId })
-  return current || original
+  return determined || current || original
 }
 
 async function pauseDownload(downloadId: number): Promise<boolean> {
@@ -109,17 +170,17 @@ async function removeBrowserDownload(item: browser.downloads.DownloadItem): Prom
   await browser.downloads.erase({ id: item.id }).catch(() => undefined)
 }
 
-function consumeClickIntent(url: string, finalUrl = ''): DownloadClickIntent | undefined {
+function consumeClickIntent(url: string, finalUrl = '', referrer = ''): DownloadClickIntent | undefined {
   const now = Date.now()
   clickIntents = clickIntents.filter(intent => now - intent.at <= 7000)
-  const index = clickIntents.findIndex(intent => matchesDownloadClick(intent, { url, finalUrl }, now))
+  const index = clickIntents.findIndex(intent => matchesDownloadClick(intent, { url, finalUrl, referrer }, now))
   if (index < 0) return undefined
   return clickIntents.splice(index, 1)[0]
 }
 
-async function waitForClickIntent(url: string, finalUrl = ''): Promise<DownloadClickIntent | undefined> {
+async function waitForClickIntent(url: string, finalUrl = '', referrer = ''): Promise<DownloadClickIntent | undefined> {
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    const intent = consumeClickIntent(url, finalUrl)
+    const intent = consumeClickIntent(url, finalUrl, referrer)
     if (intent) return intent
     await new Promise(resolve => setTimeout(resolve, 50))
   }
@@ -136,6 +197,7 @@ function consumeBrowserFallback(url: string): boolean {
 }
 
 async function startBrowserFallback(url: string, filename = ''): Promise<number> {
+  revealBrowserDownload()
   browserFallbacks.unshift({ url, at: Date.now() })
   try {
     return await browser.downloads.download({ url, ...(filename ? { filename } : {}) })
@@ -181,6 +243,15 @@ function isDownloadResponse(disposition: string, resource: { mimeType?: string, 
 }
 
 export default defineBackground(() => {
+  nativeBridge = new NativeBridge(
+    () => browser.runtime.connectNative(HOST) as unknown as NativePortLike,
+    30_000,
+    () => {
+      concealedDownloadCount = 0
+      revealBrowserDownload()
+    },
+  )
+  void setBrowserDownloadUi(true)
   void native({ op: 'ping', version: browser.runtime.getManifest().version }).catch(() => undefined)
   browser.runtime.onInstalled.addListener(() => {
     browser.contextMenus.create({ id: 'hls-download-link', title: '使用 HLS Downloader 下载', contexts: ['link', 'video', 'audio'] })
@@ -190,7 +261,7 @@ export default defineBackground(() => {
   if (import.meta.env.FIREFOX) {
     ;(browser.webRequest.onBeforeRequest.addListener as any)((details: any) => {
       if (firefoxRequestIntents.has(details.requestId)) return
-      const intent = consumeClickIntent(details.url)
+      const intent = consumeClickIntent(details.url, '', details.documentUrl || details.initiator || '')
       if (intent) firefoxRequestIntents.set(details.requestId, intent)
     }, { urls: ['<all_urls>'] })
     ;(browser.webRequest.onHeadersReceived.addListener as any)(async (details: any) => {
@@ -217,9 +288,12 @@ export default defineBackground(() => {
       }
       try {
         const response = await offer({ ...resource, id: resourceId(resource.url), seenAt: Date.now() })
-        if (!response?.ok || !response?.handoff?.id) return {}
+        const handoffId = String(response?.handoff?.id || '')
+        if (!response?.ok || !handoffId) return {}
+        const decision = await waitForHandoff(handoffId)
+        const outcome = handoffOutcome(String(decision?.handoff?.status || ''))
         firefoxRequestIntents.delete(details.requestId)
-        return { cancel: true }
+        return outcome === 'desktop' || outcome === 'cancel' ? { cancel: true } : {}
       } catch (error) {
         console.warn('HLS Downloader could not preempt Firefox response', error)
         firefoxRequestIntents.delete(details.requestId)
@@ -235,23 +309,37 @@ export default defineBackground(() => {
     }, { urls: ['<all_urls>'] }, ['responseHeaders'])
   }
 
+  browser.downloads.onDeterminingFilename.addListener((item, suggest) => {
+    determinedDownloads.set(item.id, item)
+    setTimeout(() => determinedDownloads.delete(item.id), 30_000)
+    determinationWaiters.get(item.id)?.(item)
+    suggest()
+  })
+
   browser.downloads.onCreated.addListener(async item => {
     if (!item.url || item.url.startsWith('blob:')) return
-    if (consumeBrowserFallback(item.url)) return
+    if (consumeBrowserFallback(item.url)) {
+      revealBrowserDownload()
+      return
+    }
     console.debug('HLS Downloader observed browser download', item.url)
-    const config = await settings()
-    if (!config.enabled) return
+    concealBrowserDownload()
     let paused = false
     let handedOff = false
     try {
-      paused = await pauseDownload(item.id)
+      const [pauseResult, config] = await Promise.all([pauseDownload(item.id), settings()])
+      paused = pauseResult
+      if (!paused || !config.enabled) {
+        if (paused) await browser.downloads.resume(item.id).catch(() => undefined)
+        return
+      }
       const actual = await refreshedDownload(item.id, item)
       const url = actual.finalUrl || actual.url
       const filename = actual.filename.split(/[\\/]/).pop() || ''
       const mimeType = actual.mime || ''
       const kind = classifyDownload(url, mimeType, filename) || 'file'
       const resource: MediaResource = { id: resourceId(url), url, kind, mimeType, size: actual.fileSize || actual.totalBytes, title: filename, filename, pageUrl: actual.referrer, seenAt: Date.now() }
-      const intent = await waitForClickIntent(actual.url, actual.finalUrl)
+      const intent = await waitForClickIntent(actual.url, actual.finalUrl, actual.referrer)
       if (!intent || !shouldTakeover({ url: resource.url, size: resource.size, mimeType, filename, ...config, ...intent, explicitClick: true })) {
         await browser.downloads.resume(item.id).catch(() => undefined)
         return
@@ -260,11 +348,19 @@ export default defineBackground(() => {
       const response = await offer(resource)
       const handoffId = String(response?.handoff?.id || '')
       if (!response?.ok || !handoffId) throw new Error(response?.error || 'desktop rejected')
+      const decision = await waitForHandoff(handoffId)
+      const status = String(decision?.handoff?.status || '')
+      const outcome = handoffOutcome(status)
+      if (outcome === 'browser') throw new Error(`desktop handoff ended with ${status || 'unknown status'}`)
       handedOff = true
       await removeBrowserDownload(actual)
     } catch (error) {
       console.warn('HLS Downloader takeover failed; returning download to browser', error)
       if (shouldResumeBrowserDownload(paused, handedOff)) await browser.downloads.resume(item.id).catch(() => undefined)
+    } finally {
+      determinedDownloads.delete(item.id)
+      determinationWaiters.delete(item.id)
+      revealBrowserDownload()
     }
   })
 
@@ -281,6 +377,7 @@ export default defineBackground(() => {
         pageUrl: String(message.pageUrl || sender.tab?.url || ''),
         altBypass: Boolean(message.altBypass),
         ctrlForce: Boolean(message.ctrlForce),
+        generic: Boolean(message.generic),
         at: Date.now(),
       })
       clickIntents = clickIntents.slice(0, 20)
@@ -290,36 +387,6 @@ export default defineBackground(() => {
     if (message?.type === 'resource') {
       void saveResource({ ...message.resource, pageUrl: message.resource.pageUrl || sender.tab?.url }, sender.tab?.id ?? -1)
       return
-    }
-    if (message?.type === 'preempt-download') {
-      void (async () => {
-        const resource = message.resource as MediaResource
-        const intent = message.intent as DownloadClickIntent
-        const config = await settings()
-        const takeover = shouldTakeover({
-          url: resource.url,
-          size: resource.size,
-          mimeType: resource.mimeType,
-          filename: resource.filename,
-          ...config,
-          ...intent,
-          explicitClick: true,
-        })
-        if (!takeover) {
-          const downloadId = await startBrowserFallback(resource.url, resource.filename)
-          return { ok: false, fallback: true, downloadId }
-        }
-        try {
-          const response = await offer(resource)
-          if (!response?.ok || !response?.handoff?.id) throw new Error(response?.error || 'desktop rejected')
-          return response
-        } catch (error) {
-          console.warn('HLS Downloader pre-click takeover failed; returning link to browser', error)
-          const downloadId = await startBrowserFallback(resource.url, resource.filename)
-          return { ok: false, fallback: true, downloadId, error: String(error) }
-        }
-      })().then(sendResponse).catch(error => sendResponse({ ok: false, error: String(error) }))
-      return true
     }
     if (message?.type === 'download' || message?.type === 'offer') {
       const request = message.type === 'offer' ? offer(message.resource) : downloadNow(message.resource)
@@ -344,6 +411,12 @@ export default defineBackground(() => {
     }
     if (message?.type === 'ping') {
       void native({ op: 'ping' })
+        .then(response => sendResponse(response))
+        .catch(error => sendResponse({ ok: false, error: String(error) }))
+      return true
+    }
+    if (message?.type === 'activate') {
+      void native({ op: 'activate' })
         .then(response => sendResponse(response))
         .catch(error => sendResponse({ ok: false, error: String(error) }))
       return true

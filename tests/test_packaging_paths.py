@@ -222,6 +222,10 @@ def test_native_host_registration_writes_absolute_executable_path():
     assert "RegistryPrefix" in script
     assert "smoke_native_host.py" in build_script
     assert "Native Messaging protocol smoke test failed" in build_script
+    assert "[System.IO.File]::ReadAllText($manifestPath, [System.Text.Encoding]::UTF8)" in build_script
+    smoke_cleanup = build_script.index('RegistryPrefix "HKCU:\\Software\\HLSDownloaderBuildSmoke" | Out-Null')
+    installer_build = build_script.index('Invoke-Step "Build NSIS installer"')
+    assert build_script.index('(Join-Path $ExtensionDir "native-host\\chrome.json")', smoke_cleanup) < installer_build
     assert "正在注册 Chrome/Edge/Firefox 浏览器连接" in nsis_script
     assert r'Software\Microsoft\Edge\NativeMessagingHosts' in nsis_script
 

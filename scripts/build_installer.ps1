@@ -1,7 +1,7 @@
 param(
     [switch]$SkipFrontend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.2.8"
+    [string]$Version = "1.2.9"
 )
 
 $ErrorActionPreference = "Stop"
@@ -335,7 +335,9 @@ if (-not $SkipSmoke) {
                 }
                 $expectedNativeHost = Join-Path $StageDir "HLSDownloaderNativeHost.exe"
                 foreach ($manifestName in @("chrome.json", "firefox.json")) {
-                    $manifest = Get-Content -LiteralPath (Join-Path $StageDir "native-host\$manifestName") -Raw | ConvertFrom-Json
+                    $manifestPath = Join-Path $StageDir "native-host\$manifestName"
+                    $manifestJson = [System.IO.File]::ReadAllText($manifestPath, [System.Text.Encoding]::UTF8)
+                    $manifest = $manifestJson | ConvertFrom-Json
                     if ($manifest.path -ne $expectedNativeHost) {
                         throw "Native Messaging manifest contains the wrong host path: $($manifest.path)"
                     }
@@ -423,6 +425,10 @@ if (-not $SkipSmoke) {
             if (Test-Path -LiteralPath $nativeRegistrationScript) {
                 & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $nativeRegistrationScript -Unregister -RegistryPrefix "HKCU:\Software\HLSDownloaderBuildSmoke" | Out-Null
             }
+            Copy-Item -Force -Path `
+                (Join-Path $ExtensionDir "native-host\chrome.json"), `
+                (Join-Path $ExtensionDir "native-host\firefox.json") `
+                -Destination (Join-Path $StageDir "native-host")
             Remove-Item -LiteralPath $smokePortableMarker -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath (Join-Path $StageDir "data.db"), (Join-Path $StageDir "data.db-shm"), (Join-Path $StageDir "data.db-wal") -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath (Join-Path $StageDir ".webview"), (Join-Path $StageDir "downloads") -Recurse -Force -ErrorAction SilentlyContinue

@@ -61,3 +61,14 @@ def test_native_host_waits_for_handoff_with_one_long_request(monkeypatch):
     assert result["handoff"]["status"] == "accepted"
     waits = [call for call in calls if call[1].endswith("/wait")]
     assert waits == [("GET", "/browser/handoffs/handoff-1/wait", None, 125)]
+
+
+def test_native_host_process_handles_multiple_messages(monkeypatch):
+    messages = iter([{"op": "ping"}, {"op": "ping"}, None])
+    responses = []
+    monkeypatch.setattr(native_host, "_read_message", lambda: next(messages))
+    monkeypatch.setattr(native_host, "_write_message", responses.append)
+    monkeypatch.setattr(native_host, "dispatch", lambda message: {"ok": True, "op": message["op"]})
+
+    assert native_host.main() == 0
+    assert responses == [{"ok": True, "op": "ping"}, {"ok": True, "op": "ping"}]

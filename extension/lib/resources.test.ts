@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyDownload, classifyResource, isDirectDownloadLink, matchesDownloadClick, mergeResources, shouldTakeover } from './resources'
+import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, shouldTakeover } from './resources'
 
 describe('resource rules', () => {
   it('filters HLS segments but retains manifests', () => {
@@ -45,6 +45,10 @@ describe('resource rules', () => {
       finalUrl: 'https://cdn.test/final.zip',
     }, 2000)).toBe(true)
     expect(matchesDownloadClick(intent, {
+      url: 'https://cdn.test/start',
+      referrer: 'https://other.test/download',
+    }, 2000)).toBe(false)
+    expect(matchesDownloadClick(intent, {
       url: 'https://cdn.test/final.zip',
       finalUrl: 'https://cdn.test/mirror.zip',
     }, 2000)).toBe(false)
@@ -54,14 +58,17 @@ describe('resource rules', () => {
     expect(matchesDownloadClick({ ...intent, href: '' }, {
       url: 'https://cdn.test/advert.php',
     }, 2000)).toBe(false)
-  })
-  it('only preempts links that clearly represent downloads', () => {
-    expect(isDirectDownloadLink('https://cdn.test/setup.exe')).toBe(true)
-    expect(isDirectDownloadLink('https://cdn.test/get?id=1', true)).toBe(true)
-    expect(isDirectDownloadLink('https://cdn.test/download.php?id=1')).toBe(true)
-    expect(isDirectDownloadLink('https://cdn.test/get.php?action=download&id=1')).toBe(true)
-    expect(isDirectDownloadLink('https://cdn.test/get.php?file=setup.exe')).toBe(true)
-    expect(isDirectDownloadLink('https://cdn.test/article.php?id=1')).toBe(false)
-    expect(isDirectDownloadLink('https://site.test/article')).toBe(false)
+    expect(matchesDownloadClick({ ...intent, href: '', generic: true }, {
+      url: 'https://cdn.test/generated.zip',
+      referrer: 'https://site.test/download',
+    }, 2000)).toBe(true)
+    expect(matchesDownloadClick({ ...intent, href: 'https://site.test/download#', generic: true }, {
+      url: 'https://cdn.test/generated.zip',
+      referrer: 'https://site.test/download',
+    }, 2000)).toBe(true)
+    expect(matchesDownloadClick({ ...intent, href: '', generic: true }, {
+      url: 'https://cdn.test/generated.zip',
+      referrer: 'https://site.test/download',
+    }, 3000)).toBe(false)
   })
 })

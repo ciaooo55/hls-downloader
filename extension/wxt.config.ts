@@ -5,13 +5,14 @@ export default defineConfig({
   manifest: ({ browser }) => ({
     name: 'HLS Downloader 浏览器接管',
     description: '嗅探媒体、接管普通下载并发送到 HLS Downloader 桌面端。',
-    version: '1.2.8',
+    version: '1.2.9',
     icons: {
       512: 'icon.png',
     },
     key: browser === 'chrome' ? 'MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDrOsVh5DPI4QgwtSbk3r66RoLAceY4j7bcvB74L8oJizTtjWwbvE31KFOR1c3qTZJUjtFgN2UDVCYThiS79RJosEDwvdeaTZPt4cwNdKINVKTcGGI8T4Pl7cqTl45IDBxUgAayjJ26YEC542os/dfVmRaZO1hDwFFhyM9AousNUwIDAQAB' : undefined,
     permissions: [
       'downloads', 'contextMenus', 'nativeMessaging', 'storage', 'cookies', 'webRequest',
+      ...(browser === 'chrome' ? ['downloads.ui', 'downloads.shelf'] : []),
       ...(browser === 'firefox' ? ['webRequestBlocking'] : []),
     ],
     host_permissions: ['<all_urls>'],
