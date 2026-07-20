@@ -34,22 +34,6 @@ export default defineContentScript({
       },
     })
     ui.mount()
-    window.addEventListener('click', event => {
-      if (!event.isTrusted || event.button !== 0) return
-      const path = event.composedPath()
-      const anchor = path.find(value => value instanceof HTMLAnchorElement) as HTMLAnchorElement | undefined
-      const control = path.find(value => value instanceof HTMLElement
-        && value.matches('button, input[type="button"], input[type="submit"], [role="button"]'))
-      if (!anchor && !control) return
-      void browser.runtime.sendMessage({
-        type: 'click-intent',
-        href: anchor?.href || '',
-        pageUrl: location.href,
-        altBypass: event.altKey,
-        ctrlForce: event.ctrlKey,
-      })
-    }, true)
-
     const wrap = ui.shadow.querySelector<HTMLElement>('.wrap')
     const dragHandles = ui.shadow.querySelectorAll<HTMLElement>('.toggle, header')
     let dragged = false

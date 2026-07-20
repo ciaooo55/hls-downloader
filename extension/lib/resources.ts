@@ -24,6 +24,9 @@ export interface DownloadClickIntent {
 
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
 const SEGMENT_EXT = /\.(?:ts|m4s|cmfv|cmfa|aac)(?:$|[?#])/i
+const DOWNLOAD_PATH_HINT = /(?:^|\/)(?:download|downloads|dl|export)(?:\.[a-z0-9]+)?(?:\/|$)/i
+const DOWNLOAD_QUERY_HINT = /^(?:download|dl|attachment|export)$/i
+const FILE_QUERY_HINT = /^(?:file|filename|path)$/i
 
 export function classifyResource(url: string, mimeType = ''): ResourceKind | null {
   if (url.startsWith('magnet:')) return 'magnet'
@@ -90,18 +93,33 @@ export function shouldTakeover(input: {
 }
 
 export function isDirectDownloadLink(url: string, hasDownloadAttribute = false): boolean {
-  return hasDownloadAttribute || classifyDownload(url) !== null
+  if (hasDownloadAttribute || classifyDownload(url) !== null) return true
+  try {
+    const parsed = new URL(url)
+    if (!['http:', 'https:'].includes(parsed.protocol)) return false
+    if (DOWNLOAD_PATH_HINT.test(parsed.pathname)) return true
+    for (const [key, value] of parsed.searchParams) {
+      if (DOWNLOAD_QUERY_HINT.test(key) && !/^(?:0|false|no)$/i.test(value)) return true
+      if (FILE_QUERY_HINT.test(key) && classifyDownload(`https://download.invalid/${value}`) !== null) return true
+      if (/^(?:action|do|mode)$/i.test(key) && /^(?:download|export)$/i.test(value)) return true
+    }
+  } catch {
+    return false
+  }
+  return false
 }
 
 export function matchesDownloadClick(
   intent: DownloadClickIntent,
-  download: { url: string; referrer?: string },
+  download: { url: string; finalUrl?: string },
   now = Date.now(),
 ): boolean {
   if (now - intent.at < 0 || now - intent.at > 7000) return false
-  if (intent.href && stripHash(intent.href) === stripHash(download.url)) return true
-  if (intent.pageUrl && download.referrer && stripHash(intent.pageUrl) === stripHash(download.referrer)) return true
-  return !download.referrer
+  if (!intent.href) return false
+  const clicked = stripHash(intent.href)
+  return [download.url, download.finalUrl]
+    .filter((value): value is string => Boolean(value))
+    .some(value => stripHash(value) === clicked)
 }
 
 function stripHash(value: string): string {

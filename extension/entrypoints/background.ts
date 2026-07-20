@@ -5,6 +5,7 @@ import { browserCleanupAction, shouldResumeBrowserDownload } from '../lib/takeov
 const HOST = 'com.ciaooo55.hls_downloader'
 let clickIntents: DownloadClickIntent[] = []
 let browserFallbacks: Array<{ url: string, at: number }> = []
+const firefoxRequestIntents = new Map<string, DownloadClickIntent>()
 
 async function settings() {
   const data = await browser.storage.local.get(['enabled', 'minimumBytes', 'excludedHosts', 'authorizedCookieHosts'])
@@ -108,17 +109,17 @@ async function removeBrowserDownload(item: browser.downloads.DownloadItem): Prom
   await browser.downloads.erase({ id: item.id }).catch(() => undefined)
 }
 
-function consumeClickIntent(url: string, referrer = ''): DownloadClickIntent | undefined {
+function consumeClickIntent(url: string, finalUrl = ''): DownloadClickIntent | undefined {
   const now = Date.now()
   clickIntents = clickIntents.filter(intent => now - intent.at <= 7000)
-  const index = clickIntents.findIndex(intent => matchesDownloadClick(intent, { url, referrer }, now))
+  const index = clickIntents.findIndex(intent => matchesDownloadClick(intent, { url, finalUrl }, now))
   if (index < 0) return undefined
   return clickIntents.splice(index, 1)[0]
 }
 
-async function waitForClickIntent(url: string, referrer = ''): Promise<DownloadClickIntent | undefined> {
+async function waitForClickIntent(url: string, finalUrl = ''): Promise<DownloadClickIntent | undefined> {
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    const intent = consumeClickIntent(url, referrer)
+    const intent = consumeClickIntent(url, finalUrl)
     if (intent) return intent
     await new Promise(resolve => setTimeout(resolve, 50))
   }
@@ -134,6 +135,51 @@ function consumeBrowserFallback(url: string): boolean {
   return true
 }
 
+async function startBrowserFallback(url: string, filename = ''): Promise<number> {
+  browserFallbacks.unshift({ url, at: Date.now() })
+  try {
+    return await browser.downloads.download({ url, ...(filename ? { filename } : {}) })
+  } catch (error) {
+    consumeBrowserFallback(url)
+    throw error
+  }
+}
+
+function observedResponse(details: any) {
+  const headers = details.responseHeaders || []
+  const header = (name: string) => headers.find((item: any) => item.name?.toLowerCase() === name)?.value || ''
+  const mimeType = header('content-type')
+  const contentRange = header('content-range')
+  const rangeTotal = Number(contentRange.match(/\/(\d+)$/)?.[1] || 0)
+  const length = rangeTotal || Number(header('content-length') || 0)
+  const disposition = header('content-disposition')
+  const filename = responseFilename(disposition)
+  const kind = disposition
+    ? classifyDownload(details.url, mimeType, filename)
+    : classifyResource(details.url, mimeType)
+  if (!kind) return { disposition, resource: null }
+  const resource = {
+    url: details.url,
+    kind,
+    mimeType,
+    size: length,
+    filename,
+    statusCode: details.statusCode,
+    method: details.method,
+    pageUrl: details.documentUrl || details.initiator || '',
+  }
+  void saveResource(resource, details.tabId)
+  if (details.tabId >= 0) void browser.tabs.sendMessage(details.tabId, { type: 'captured-resource', resource }).catch(() => undefined)
+  return { disposition, resource }
+}
+
+function isDownloadResponse(disposition: string, resource: { mimeType?: string, filename?: string } | null): boolean {
+  if (!resource) return false
+  return /(?:^|;)\s*attachment(?:;|$)/i.test(disposition)
+    || Boolean(resource.filename)
+    || resource.mimeType?.toLowerCase().includes('application/octet-stream') === true
+}
+
 export default defineBackground(() => {
   void native({ op: 'ping', version: browser.runtime.getManifest().version }).catch(() => undefined)
   browser.runtime.onInstalled.addListener(() => {
@@ -141,23 +187,53 @@ export default defineBackground(() => {
     browser.contextMenus.create({ id: 'hls-download-selection', title: '批量发送选中的链接', contexts: ['selection'] })
   })
 
-  browser.webRequest.onHeadersReceived.addListener(details => {
-    const headers = details.responseHeaders || []
-    const mimeType = headers.find(header => header.name?.toLowerCase() === 'content-type')?.value || ''
-    const contentRange = headers.find(header => header.name?.toLowerCase() === 'content-range')?.value || ''
-    const rangeTotal = Number(contentRange.match(/\/(\d+)$/)?.[1] || 0)
-    const length = rangeTotal || Number(headers.find(header => header.name?.toLowerCase() === 'content-length')?.value || 0)
-    const disposition = headers.find(header => header.name?.toLowerCase() === 'content-disposition')?.value || ''
-    const filename = responseFilename(disposition)
-    const kind = disposition
-      ? classifyDownload(details.url, mimeType, filename)
-      : classifyResource(details.url, mimeType)
-    if (kind) {
-      const resource = { url: details.url, kind, mimeType, size: length, filename, statusCode: details.statusCode, method: details.method, pageUrl: details.documentUrl || details.initiator || '' }
-      void saveResource(resource, details.tabId)
-      if (details.tabId >= 0) void browser.tabs.sendMessage(details.tabId, { type: 'captured-resource', resource }).catch(() => undefined)
-    }
-  }, { urls: ['<all_urls>'] }, ['responseHeaders'])
+  if (import.meta.env.FIREFOX) {
+    ;(browser.webRequest.onBeforeRequest.addListener as any)((details: any) => {
+      if (firefoxRequestIntents.has(details.requestId)) return
+      const intent = consumeClickIntent(details.url)
+      if (intent) firefoxRequestIntents.set(details.requestId, intent)
+    }, { urls: ['<all_urls>'] })
+    ;(browser.webRequest.onHeadersReceived.addListener as any)(async (details: any) => {
+      const observed = observedResponse(details)
+      const intent = firefoxRequestIntents.get(details.requestId)
+      if (!intent || details.statusCode >= 300 && details.statusCode < 400) return {}
+      if (!isDownloadResponse(observed.disposition, observed.resource)) {
+        firefoxRequestIntents.delete(details.requestId)
+        return {}
+      }
+      const config = await settings()
+      const resource = observed.resource!
+      if (!shouldTakeover({
+        url: resource.url,
+        size: resource.size,
+        mimeType: resource.mimeType,
+        filename: resource.filename,
+        ...config,
+        ...intent,
+        explicitClick: true,
+      })) {
+        firefoxRequestIntents.delete(details.requestId)
+        return {}
+      }
+      try {
+        const response = await offer({ ...resource, id: resourceId(resource.url), seenAt: Date.now() })
+        if (!response?.ok || !response?.handoff?.id) return {}
+        firefoxRequestIntents.delete(details.requestId)
+        return { cancel: true }
+      } catch (error) {
+        console.warn('HLS Downloader could not preempt Firefox response', error)
+        firefoxRequestIntents.delete(details.requestId)
+        return {}
+      }
+    }, { urls: ['<all_urls>'] }, ['blocking', 'responseHeaders'])
+    const clearFirefoxIntent = (details: any) => firefoxRequestIntents.delete(details.requestId)
+    browser.webRequest.onCompleted.addListener(clearFirefoxIntent, { urls: ['<all_urls>'] })
+    browser.webRequest.onErrorOccurred.addListener(clearFirefoxIntent, { urls: ['<all_urls>'] })
+  } else {
+    browser.webRequest.onHeadersReceived.addListener(details => {
+      observedResponse(details)
+    }, { urls: ['<all_urls>'] }, ['responseHeaders'])
+  }
 
   browser.downloads.onCreated.addListener(async item => {
     if (!item.url || item.url.startsWith('blob:')) return
@@ -175,7 +251,7 @@ export default defineBackground(() => {
       const mimeType = actual.mime || ''
       const kind = classifyDownload(url, mimeType, filename) || 'file'
       const resource: MediaResource = { id: resourceId(url), url, kind, mimeType, size: actual.fileSize || actual.totalBytes, title: filename, filename, pageUrl: actual.referrer, seenAt: Date.now() }
-      const intent = await waitForClickIntent(url, item.referrer)
+      const intent = await waitForClickIntent(actual.url, actual.finalUrl)
       if (!intent || !shouldTakeover({ url: resource.url, size: resource.size, mimeType, filename, ...config, ...intent, explicitClick: true })) {
         await browser.downloads.resume(item.id).catch(() => undefined)
         return
@@ -215,6 +291,36 @@ export default defineBackground(() => {
       void saveResource({ ...message.resource, pageUrl: message.resource.pageUrl || sender.tab?.url }, sender.tab?.id ?? -1)
       return
     }
+    if (message?.type === 'preempt-download') {
+      void (async () => {
+        const resource = message.resource as MediaResource
+        const intent = message.intent as DownloadClickIntent
+        const config = await settings()
+        const takeover = shouldTakeover({
+          url: resource.url,
+          size: resource.size,
+          mimeType: resource.mimeType,
+          filename: resource.filename,
+          ...config,
+          ...intent,
+          explicitClick: true,
+        })
+        if (!takeover) {
+          const downloadId = await startBrowserFallback(resource.url, resource.filename)
+          return { ok: false, fallback: true, downloadId }
+        }
+        try {
+          const response = await offer(resource)
+          if (!response?.ok || !response?.handoff?.id) throw new Error(response?.error || 'desktop rejected')
+          return response
+        } catch (error) {
+          console.warn('HLS Downloader pre-click takeover failed; returning link to browser', error)
+          const downloadId = await startBrowserFallback(resource.url, resource.filename)
+          return { ok: false, fallback: true, downloadId, error: String(error) }
+        }
+      })().then(sendResponse).catch(error => sendResponse({ ok: false, error: String(error) }))
+      return true
+    }
     if (message?.type === 'download' || message?.type === 'offer') {
       const request = message.type === 'offer' ? offer(message.resource) : downloadNow(message.resource)
       void request
@@ -224,14 +330,9 @@ export default defineBackground(() => {
     }
     if (message?.type === 'browser-download') {
       const url = String(message.url || '')
-      browserFallbacks.unshift({ url, at: Date.now() })
-      void browser.downloads.download({
-        url,
-        ...(message.filename ? { filename: String(message.filename) } : {}),
-      }).then(downloadId => sendResponse({ ok: true, downloadId })).catch(error => {
-        consumeBrowserFallback(url)
-        sendResponse({ ok: false, error: String(error) })
-      })
+      void startBrowserFallback(url, String(message.filename || ''))
+        .then(downloadId => sendResponse({ ok: true, downloadId }))
+        .catch(error => sendResponse({ ok: false, error: String(error) }))
       return true
     }
     if (message?.type === 'list') {

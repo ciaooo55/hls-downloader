@@ -41,21 +41,27 @@ describe('resource rules', () => {
       at: 1000,
     }
     expect(matchesDownloadClick(intent, {
-      url: 'https://cdn.test/final.zip',
-      referrer: 'https://site.test/download',
+      url: 'https://cdn.test/start',
+      finalUrl: 'https://cdn.test/final.zip',
     }, 2000)).toBe(true)
     expect(matchesDownloadClick(intent, {
       url: 'https://cdn.test/final.zip',
-      referrer: 'https://other.test/',
+      finalUrl: 'https://cdn.test/mirror.zip',
     }, 2000)).toBe(false)
     expect(matchesDownloadClick(intent, {
-      url: 'https://cdn.test/final.zip',
-      referrer: 'https://site.test/download',
+      url: 'https://cdn.test/start',
     }, 9000)).toBe(false)
+    expect(matchesDownloadClick({ ...intent, href: '' }, {
+      url: 'https://cdn.test/advert.php',
+    }, 2000)).toBe(false)
   })
   it('only preempts links that clearly represent downloads', () => {
     expect(isDirectDownloadLink('https://cdn.test/setup.exe')).toBe(true)
     expect(isDirectDownloadLink('https://cdn.test/get?id=1', true)).toBe(true)
+    expect(isDirectDownloadLink('https://cdn.test/download.php?id=1')).toBe(true)
+    expect(isDirectDownloadLink('https://cdn.test/get.php?action=download&id=1')).toBe(true)
+    expect(isDirectDownloadLink('https://cdn.test/get.php?file=setup.exe')).toBe(true)
+    expect(isDirectDownloadLink('https://cdn.test/article.php?id=1')).toBe(false)
     expect(isDirectDownloadLink('https://site.test/article')).toBe(false)
   })
 })
