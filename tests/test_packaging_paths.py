@@ -125,6 +125,9 @@ def test_windows_build_uses_tools_from_path_on_clean_runner():
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
 
     assert 'Get-Command "makensis.exe"' in build_script
+    assert 'Get-Command "choco.exe"' in build_script
+    assert 'Get-Command "conda.exe"' in build_script
+    assert 'attempt $attempt/3' in build_script
     assert 'Copy-MediaTool "ffmpeg.exe"' in build_script
     assert 'Copy-MediaTool "ffprobe.exe"' in build_script
     assert "Get-Command $Name" in build_script

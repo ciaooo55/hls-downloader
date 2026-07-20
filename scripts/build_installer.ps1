@@ -1,7 +1,7 @@
 param(
     [switch]$SkipFrontend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.2.3"
+    [string]$Version = "1.2.4"
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,15 +63,21 @@ function Get-MakeNsis {
 
     New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
     $downloadedZip = $false
-    try {
-        if (-not (Test-Path $NsisZip)) {
-            Write-Host "Downloading NSIS $NsisVersion..."
-            Invoke-WebRequest -Uri $NsisUrl -OutFile $NsisZip -MaximumRedirection 10
+    for ($attempt = 1; $attempt -le 3 -and -not $downloadedZip; $attempt++) {
+        try {
+            if (-not (Test-Path $NsisZip)) {
+                Write-Host "Downloading NSIS $NsisVersion (attempt $attempt/3)..."
+                Invoke-WebRequest -Uri $NsisUrl -OutFile $NsisZip -MaximumRedirection 10
+            }
+            $signature = [System.IO.File]::ReadAllBytes($NsisZip)[0..3]
+            $downloadedZip = ($signature[0] -eq 0x50 -and $signature[1] -eq 0x4B)
+        } catch {
+            $downloadedZip = $false
         }
-        $signature = [System.IO.File]::ReadAllBytes($NsisZip)[0..3]
-        $downloadedZip = ($signature[0] -eq 0x50 -and $signature[1] -eq 0x4B)
-    } catch {
-        $downloadedZip = $false
+        if (-not $downloadedZip) {
+            Remove-Item -Force $NsisZip -ErrorAction SilentlyContinue
+            if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
+        }
     }
 
     if ($downloadedZip) {
@@ -82,17 +88,29 @@ function Get-MakeNsis {
         }
     }
 
-    Remove-Item -Force $NsisZip -ErrorAction SilentlyContinue
-    Write-Host "SourceForge did not return a usable zip; creating project-local conda NSIS environment..."
-    & conda create -y -p $NsisCondaPrefix "nsis=$NsisVersion" | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "conda failed to install NSIS into $NsisCondaPrefix"
+    $choco = Get-Command "choco.exe" -ErrorAction SilentlyContinue
+    if ($choco) {
+        Write-Host "SourceForge did not return a usable zip; installing NSIS with Chocolatey..."
+        & $choco.Source install nsis --yes --no-progress --limit-output | Out-Host
+        if ($LASTEXITCODE -eq 0) {
+            $chocoCandidate = @(
+                (Join-Path ${env:ProgramFiles(x86)} "NSIS\makensis.exe"),
+                (Join-Path $env:ProgramFiles "NSIS\makensis.exe")
+            ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+            if ($chocoCandidate) { return $chocoCandidate }
+        }
     }
-    $makensis = Get-ChildItem -Path $ToolsDir -Recurse -Filter "makensis.exe" | Select-Object -First 1
-    if (-not $makensis) {
-        throw "makensis.exe not found after installing NSIS into $ToolsDir"
+
+    $conda = Get-Command "conda.exe" -ErrorAction SilentlyContinue
+    if ($conda) {
+        Write-Host "Installing NSIS into a project-local conda environment..."
+        & $conda.Source create -y -p $NsisCondaPrefix "nsis=$NsisVersion" | Out-Host
+        if ($LASTEXITCODE -eq 0) {
+            $makensis = Get-ChildItem -Path $NsisCondaPrefix -Recurse -Filter "makensis.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($makensis) { return $makensis.FullName }
+        }
     }
-    return $makensis.FullName
+    throw "Unable to install NSIS: SourceForge, Chocolatey and conda methods all failed."
 }
 
 function Find-MediaTool($Name) {
