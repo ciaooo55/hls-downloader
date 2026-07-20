@@ -42,7 +42,7 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve }
   }
   return <div className="modal-overlay browser-handoff-overlay">
     <section className="modal browser-handoff-dialog" role="dialog" aria-modal="true" aria-label="浏览器下载接管">
-      <header><div><h2>下载文件信息</h2><p>浏览器下载已暂停，确认后由 HLS Downloader 接管</p></div><button className="modal-close-button" title="取消下载" disabled={busy} onClick={() => onResolve('cancel')}><X size={18} /></button></header>
+      <header><div><h2>下载文件信息</h2><p>浏览器副本已停止，这次下载由 HLS Downloader 处理</p></div><button className="modal-close-button" title="取消下载" disabled={busy} onClick={() => onResolve('cancel')}><X size={18} /></button></header>
       <div className="browser-handoff-body">
         <div className="browser-handoff-file"><Download size={24} /><div><strong>{filename || host}</strong><span>{item.mime_type || '类型未知'}{item.size ? ` · ${fmtBytes(item.size)}` : ' · 大小未知'}</span></div></div>
         <div className="browser-handoff-source"><Globe2 size={15} /><span>{host}</span></div>

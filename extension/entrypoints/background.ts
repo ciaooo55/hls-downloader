@@ -1,7 +1,8 @@
 import { browser } from 'wxt/browser'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
 import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, resourceId, shouldTakeover, type DownloadClickIntent, type MediaResource } from '../lib/resources'
-import { browserCleanupAction, handoffOutcome, shouldResumeBrowserDownload } from '../lib/takeover'
+import { RequestChainStore, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
+import { browserCleanupAction, desktopAcceptedHandoff, shouldResumeBrowserDownload } from '../lib/takeover'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 let clickIntents: DownloadClickIntent[] = []
@@ -9,6 +10,7 @@ let browserFallbacks: Array<{ url: string, at: number }> = []
 const firefoxRequestIntents = new Map<string, DownloadClickIntent>()
 const determinedDownloads = new Map<number, browser.downloads.DownloadItem>()
 const determinationWaiters = new Map<number, (item: browser.downloads.DownloadItem) => void>()
+const requestChains = new RequestChainStore()
 let nativeBridge: NativeBridge | null = null
 let concealedDownloadCount = 0
 let downloadUiFailsafe: ReturnType<typeof setTimeout> | null = null
@@ -59,14 +61,6 @@ function native(message: Record<string, unknown>, timeoutMs?: number): Promise<a
   return nativeBridge.request(message, timeoutMs)
 }
 
-async function waitForHandoff(handoffId: string): Promise<any> {
-  return native({
-    op: 'wait_handoff',
-    handoff_id: handoffId,
-    version: browser.runtime.getManifest().version,
-  }, 130_000)
-}
-
 async function setBrowserDownloadUi(enabled: boolean): Promise<void> {
   if (!import.meta.env.CHROME) return
   const downloads = browser.downloads as typeof browser.downloads & {
@@ -102,6 +96,9 @@ function revealBrowserDownload(): void {
 
 async function resourcePayload(resource: MediaResource) {
   const pageUrl = resource.pageUrl || ''
+  const capturedReferer = resource.requestHeaders?.referer || ''
+  const capturedOrigin = resource.requestHeaders?.origin || ''
+  const capturedUserAgent = resource.requestHeaders?.['user-agent'] || ''
   let pageOrigin = ''
   try { pageOrigin = pageUrl ? new URL(pageUrl).origin : '' } catch {}
   return {
@@ -110,10 +107,10 @@ async function resourcePayload(resource: MediaResource) {
     mime_type: resource.mimeType || '',
     size: resource.size || 0,
     source_page_url: pageUrl,
-    referer: pageUrl,
-    origin: pageOrigin,
+    referer: capturedReferer || pageUrl,
+    origin: capturedOrigin || pageOrigin,
     cookie: await cookiesFor(resource.url, pageUrl),
-    user_agent: navigator.userAgent,
+    user_agent: capturedUserAgent || navigator.userAgent,
     extension_version: browser.runtime.getManifest().version,
   }
 }
@@ -135,7 +132,7 @@ async function refreshedDownload(downloadId: number, original: browser.downloads
       const timeout = setTimeout(() => {
         determinationWaiters.delete(downloadId)
         resolve(undefined)
-      }, 500)
+      }, 2_000)
       determinationWaiters.set(downloadId, item => {
         clearTimeout(timeout)
         determinationWaiters.delete(downloadId)
@@ -144,7 +141,7 @@ async function refreshedDownload(downloadId: number, original: browser.downloads
     })
   }
   const [current] = await browser.downloads.search({ id: downloadId })
-  return determined || current || original
+  return { ...original, ...(current || {}), ...(determined || {}) }
 }
 
 async function pauseDownload(downloadId: number): Promise<boolean> {
@@ -170,17 +167,23 @@ async function removeBrowserDownload(item: browser.downloads.DownloadItem): Prom
   await browser.downloads.erase({ id: item.id }).catch(() => undefined)
 }
 
-function consumeClickIntent(url: string, finalUrl = '', referrer = ''): DownloadClickIntent | undefined {
+function consumeClickIntent(url: string, finalUrl = '', referrer = '', chain?: RequestChain): DownloadClickIntent | undefined {
   const now = Date.now()
   clickIntents = clickIntents.filter(intent => now - intent.at <= 7000)
-  const index = clickIntents.findIndex(intent => matchesDownloadClick(intent, { url, finalUrl, referrer }, now))
+  const index = clickIntents.findIndex(intent => matchesDownloadClick(intent, {
+    url,
+    finalUrl,
+    referrer: referrer || chain?.pageUrl || '',
+    chainUrls: chain?.urls,
+    tabId: chain?.tabId,
+  }, now))
   if (index < 0) return undefined
   return clickIntents.splice(index, 1)[0]
 }
 
-async function waitForClickIntent(url: string, finalUrl = '', referrer = ''): Promise<DownloadClickIntent | undefined> {
+async function waitForClickIntent(url: string, finalUrl = '', referrer = '', chain?: RequestChain): Promise<DownloadClickIntent | undefined> {
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    const intent = consumeClickIntent(url, finalUrl, referrer)
+    const intent = consumeClickIntent(url, finalUrl, referrer, chain)
     if (intent) return intent
     await new Promise(resolve => setTimeout(resolve, 50))
   }
@@ -235,6 +238,12 @@ function observedResponse(details: any) {
   return { disposition, resource }
 }
 
+function trackedSize(chain: RequestChain | undefined): number {
+  const contentRange = responseHeader(chain, 'content-range')
+  const rangeTotal = Number(contentRange.match(/\/(\d+)$/)?.[1] || 0)
+  return rangeTotal || Number(responseHeader(chain, 'content-length') || 0)
+}
+
 function isDownloadResponse(disposition: string, resource: { mimeType?: string, filename?: string } | null): boolean {
   if (!resource) return false
   return /(?:^|;)\s*attachment(?:;|$)/i.test(disposition)
@@ -253,18 +262,34 @@ export default defineBackground(() => {
   )
   void setBrowserDownloadUi(true)
   void native({ op: 'ping', version: browser.runtime.getManifest().version }).catch(() => undefined)
+  browser.alarms.create('desktop-heartbeat', { periodInMinutes: 0.5 })
+  browser.alarms.onAlarm.addListener(alarm => {
+    if (alarm.name === 'desktop-heartbeat') {
+      requestChains.cleanup()
+      void native({ op: 'ping', version: browser.runtime.getManifest().version }).catch(() => undefined)
+    }
+  })
   browser.runtime.onInstalled.addListener(() => {
     browser.contextMenus.create({ id: 'hls-download-link', title: '使用 HLS Downloader 下载', contexts: ['link', 'video', 'audio'] })
     browser.contextMenus.create({ id: 'hls-download-selection', title: '批量发送选中的链接', contexts: ['selection'] })
   })
 
+  ;(browser.webRequest.onSendHeaders.addListener as any)((details: any) => {
+    requestChains.observeRequest(details)
+  }, { urls: ['<all_urls>'] }, ['requestHeaders', 'extraHeaders'])
+  browser.webRequest.onBeforeRedirect.addListener(details => {
+    requestChains.observeRedirect(details as any)
+  }, { urls: ['<all_urls>'] }, ['responseHeaders'])
+
   if (import.meta.env.FIREFOX) {
     ;(browser.webRequest.onBeforeRequest.addListener as any)((details: any) => {
+      const chain = requestChains.observeRequest(details)
       if (firefoxRequestIntents.has(details.requestId)) return
-      const intent = consumeClickIntent(details.url, '', details.documentUrl || details.initiator || '')
+      const intent = consumeClickIntent(details.url, '', details.documentUrl || details.initiator || '', chain)
       if (intent) firefoxRequestIntents.set(details.requestId, intent)
     }, { urls: ['<all_urls>'] })
     ;(browser.webRequest.onHeadersReceived.addListener as any)(async (details: any) => {
+      requestChains.observeResponse(details)
       const observed = observedResponse(details)
       const intent = firefoxRequestIntents.get(details.requestId)
       if (!intent || details.statusCode >= 300 && details.statusCode < 400) return {}
@@ -288,12 +313,9 @@ export default defineBackground(() => {
       }
       try {
         const response = await offer({ ...resource, id: resourceId(resource.url), seenAt: Date.now() })
-        const handoffId = String(response?.handoff?.id || '')
-        if (!response?.ok || !handoffId) return {}
-        const decision = await waitForHandoff(handoffId)
-        const outcome = handoffOutcome(String(decision?.handoff?.status || ''))
+        const transferred = desktopAcceptedHandoff(response)
         firefoxRequestIntents.delete(details.requestId)
-        return outcome === 'desktop' || outcome === 'cancel' ? { cancel: true } : {}
+        return transferred ? { cancel: true } : {}
       } catch (error) {
         console.warn('HLS Downloader could not preempt Firefox response', error)
         firefoxRequestIntents.delete(details.requestId)
@@ -305,6 +327,7 @@ export default defineBackground(() => {
     browser.webRequest.onErrorOccurred.addListener(clearFirefoxIntent, { urls: ['<all_urls>'] })
   } else {
     browser.webRequest.onHeadersReceived.addListener(details => {
+      requestChains.observeResponse(details as any)
       observedResponse(details)
     }, { urls: ['<all_urls>'] }, ['responseHeaders'])
   }
@@ -334,24 +357,28 @@ export default defineBackground(() => {
         return
       }
       const actual = await refreshedDownload(item.id, item)
-      const url = actual.finalUrl || actual.url
-      const filename = actual.filename.split(/[\\/]/).pop() || ''
-      const mimeType = actual.mime || ''
+      const chain = requestChains.find(actual)
+      const url = chain?.finalUrl || actual.finalUrl || actual.url
+      const responseName = responseFilename(responseHeader(chain, 'content-disposition'))
+      const filename = responseName || actual.filename.split(/[\\/]/).pop() || ''
+      const mimeType = actual.mime || responseHeader(chain, 'content-type')
       const kind = classifyDownload(url, mimeType, filename) || 'file'
-      const resource: MediaResource = { id: resourceId(url), url, kind, mimeType, size: actual.fileSize || actual.totalBytes, title: filename, filename, pageUrl: actual.referrer, seenAt: Date.now() }
-      const intent = await waitForClickIntent(actual.url, actual.finalUrl, actual.referrer)
+      const size = (actual.fileSize && actual.fileSize > 0 ? actual.fileSize : 0)
+        || (actual.totalBytes && actual.totalBytes > 0 ? actual.totalBytes : 0)
+        || trackedSize(chain)
+      const pageUrl = actual.referrer || chain?.pageUrl || requestHeader(chain, 'referer')
+      const resource: MediaResource = {
+        id: resourceId(url), url, kind, mimeType, size, title: filename, filename,
+        pageUrl, requestHeaders: chain?.requestHeaders, seenAt: Date.now(),
+      }
+      const intent = await waitForClickIntent(actual.url, actual.finalUrl, pageUrl, chain)
       if (!intent || !shouldTakeover({ url: resource.url, size: resource.size, mimeType, filename, ...config, ...intent, explicitClick: true })) {
         await browser.downloads.resume(item.id).catch(() => undefined)
         return
       }
       console.debug('HLS Downloader taking over explicit browser download', url)
       const response = await offer(resource)
-      const handoffId = String(response?.handoff?.id || '')
-      if (!response?.ok || !handoffId) throw new Error(response?.error || 'desktop rejected')
-      const decision = await waitForHandoff(handoffId)
-      const status = String(decision?.handoff?.status || '')
-      const outcome = handoffOutcome(status)
-      if (outcome === 'browser') throw new Error(`desktop handoff ended with ${status || 'unknown status'}`)
+      if (!desktopAcceptedHandoff(response)) throw new Error(response?.error || 'desktop rejected')
       handedOff = true
       await removeBrowserDownload(actual)
     } catch (error) {
@@ -378,6 +405,8 @@ export default defineBackground(() => {
         altBypass: Boolean(message.altBypass),
         ctrlForce: Boolean(message.ctrlForce),
         generic: Boolean(message.generic),
+        tabId: sender.tab?.id,
+        frameId: sender.frameId,
         at: Date.now(),
       })
       clickIntents = clickIntents.slice(0, 20)

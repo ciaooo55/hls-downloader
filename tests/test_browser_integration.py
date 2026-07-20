@@ -18,6 +18,18 @@ def test_browser_handoff_confirmation_and_expiry():
     assert service.get(expired.id).status == "expired"
 
 
+def test_browser_status_explains_when_extension_has_never_connected():
+    service = BrowserHandoffService()
+
+    assert service.status() == {
+        "detected": False,
+        "seen_before": False,
+        "version": "",
+        "state": "not_detected",
+        "message": "未检测到浏览器扩展；浏览器下载不会被接管",
+    }
+
+
 def test_task_cookie_uses_dpapi_on_windows():
     protected = protect_secret("session=secret")
     assert unprotect_secret(protected) == "session=secret"

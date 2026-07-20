@@ -7,7 +7,7 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.2.9"
+  !define APP_VERSION "1.2.10"
 !endif
 !define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
@@ -119,6 +119,9 @@ Section "Install" SecInstall
   SetOutPath "$INSTDIR\userscript"
   File "${STAGE_DIR}\userscript\m3u8-sniffer.user.js"
 
+  SetOutPath "$INSTDIR\browser-extension\chrome"
+  File /r "${STAGE_DIR}\browser-extension\chrome\*"
+
   SetOutPath "$INSTDIR\assets"
   File "${STAGE_DIR}\assets\app-icon.png"
   File "${STAGE_DIR}\assets\app-icon.ico"
@@ -192,6 +195,7 @@ RemoveApplicationData:
   Delete "$INSTDIR\Uninstall.exe"
   RMDir /r "$INSTDIR\frontend"
   RMDir /r "$INSTDIR\userscript"
+  RMDir /r "$INSTDIR\browser-extension"
   RMDir /r "$INSTDIR\assets"
   RMDir /r "$INSTDIR\native-host"
   RMDir /r "$INSTDIR\scripts"

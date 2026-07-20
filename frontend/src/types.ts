@@ -109,6 +109,8 @@ export interface BrowserStatus {
   detected: boolean
   seen_before: boolean
   version?: string
+  state?: 'connected' | 'inactive' | 'not_detected'
+  message?: string
 }
 
 export interface UpdateInfo {

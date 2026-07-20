@@ -51,7 +51,7 @@ export default function DesktopToolbar(props: Props) {
       </div>
       <div className="toolbar-spacer" />
       <div className="tool-group">
-        <ToolButton title="浏览器脚本工具" onClick={props.onUserscript}><Users size={18} /></ToolButton>
+        <ToolButton title="浏览器扩展与脚本" onClick={props.onUserscript}><Users size={18} /></ToolButton>
         <ToolButton title="刷新任务" onClick={props.onRefresh}><RefreshCw size={18} /></ToolButton>
         <button className="tool-button update-button" title="检查软件更新" aria-label="检查软件更新" onClick={props.onUpdate}><CircleArrowUp size={18} /><span>更新</span></button>
         <ToolButton title={props.theme === 'dark' ? '切换浅色主题' : '切换深色主题'} onClick={props.onToggleTheme}>{props.theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</ToolButton>

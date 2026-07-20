@@ -1,7 +1,7 @@
 param(
     [switch]$SkipFrontend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.2.9"
+    [string]$Version = "1.2.10"
 )
 
 $ErrorActionPreference = "Stop"
@@ -278,6 +278,10 @@ Invoke-Step "Stage application files" {
     New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "userscript") | Out-Null
     Copy-Item -Force -Path (Join-Path $UserscriptDir "m3u8-sniffer.user.js") -Destination (Join-Path $StageDir "userscript")
 
+    $bundledChromeExtension = Join-Path $StageDir "browser-extension\chrome"
+    New-Item -ItemType Directory -Force -Path $bundledChromeExtension | Out-Null
+    Copy-Item -Recurse -Force -Path (Join-Path $ExtensionDir ".output\chrome-mv3\*") -Destination $bundledChromeExtension
+
     New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "native-host") | Out-Null
     Copy-Item -Force -Path (Join-Path $ExtensionDir "native-host\chrome.json"), (Join-Path $ExtensionDir "native-host\firefox.json") -Destination (Join-Path $StageDir "native-host")
     New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "scripts") | Out-Null
@@ -460,6 +464,9 @@ MicrosoftEdgeWebview2Setup.exe once before starting the downloader.
 To enable Chrome/Firefox integration, run:
 powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1
 To remove the registration, add -Unregister.
+
+For Chrome, open chrome://extensions, enable Developer mode, choose Load unpacked,
+then select browser-extension\chrome.
 "@ | Set-Content -LiteralPath (Join-Path $PortableStage "README-PORTABLE.txt") -Encoding UTF8
     Compress-Archive -Path (Join-Path $PortableStage "*") -DestinationPath $PortableOut -CompressionLevel Optimal
     if (-not (Test-Path -LiteralPath $PortableOut)) {

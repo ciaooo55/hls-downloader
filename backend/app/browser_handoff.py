@@ -41,7 +41,22 @@ class BrowserHandoffService:
 
     def status(self) -> dict:
         detected = bool(self.last_seen and time.time() - self.last_seen < 90)
-        return {"detected": detected, "seen_before": bool(self.last_seen), "version": self.version}
+        seen_before = bool(self.last_seen)
+        state = "connected" if detected else "inactive" if seen_before else "not_detected"
+        message = (
+            "浏览器扩展已连接"
+            if detected
+            else "扩展此前连接过，目前没有心跳"
+            if seen_before
+            else "未检测到浏览器扩展；浏览器下载不会被接管"
+        )
+        return {
+            "detected": detected,
+            "seen_before": seen_before,
+            "version": self.version,
+            "state": state,
+            "message": message,
+        }
 
     def create(self, payload: dict) -> BrowserHandoff:
         self.record_ping(str(payload.get("extension_version", "")))

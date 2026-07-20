@@ -52,6 +52,8 @@ class DesktopBridge:
         uninstaller_path: Path | None = None,
         process_starter=None,
         exit_request=None,
+        browser_extension_path: Path | None = None,
+        browser_executable: Path | None = None,
     ) -> None:
         self._window = window
         self._folder_dialog_type = folder_dialog_type
@@ -60,6 +62,8 @@ class DesktopBridge:
         self._uninstaller_path = uninstaller_path or Path(PROJECT_ROOT) / "Uninstall.exe"
         self._process_starter = process_starter or subprocess.Popen
         self._exit_request = exit_request
+        self._browser_extension_path = browser_extension_path or Path(PROJECT_ROOT) / "browser-extension" / "chrome"
+        self._browser_executable = browser_executable
 
     def _set_window(self, window) -> None:
         self._window = window
@@ -99,6 +103,26 @@ class DesktopBridge:
     def open_userscript_installer(self) -> dict:
         self._url_opener(f"{public_base_url()}/userscript/m3u8-sniffer.user.js")
         return {"ok": True}
+
+    def open_browser_extension_installer(self) -> dict:
+        manifest = self._browser_extension_path / "manifest.json"
+        if not manifest.is_file():
+            return {"ok": False, "error": "安装包中缺少浏览器扩展，请重新安装最新版"}
+        browser = self._browser_executable
+        if browser is None:
+            candidates = [
+                Path(os.environ.get("PROGRAMFILES", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+                Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+                Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+            ]
+            browser = next((path for path in candidates if path.is_file()), None)
+        try:
+            if browser is not None:
+                self._process_starter([str(browser), "chrome://extensions"])
+            self._process_starter(["explorer.exe", str(self._browser_extension_path)])
+        except OSError as exc:
+            return {"ok": False, "error": f"无法打开扩展安装位置：{exc}"}
+        return {"ok": True, "path": str(self._browser_extension_path), "browser_opened": browser is not None}
 
     def get_desktop_info(self) -> dict:
         installed = self._uninstaller_path.is_file()

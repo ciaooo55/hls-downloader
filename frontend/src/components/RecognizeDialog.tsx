@@ -8,7 +8,7 @@ import { LEGACY_REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 export default function RecognizeDialog({ settings, initialUrl = '', onClose, onAdded, onNeedUserscript }: { settings: Settings; initialUrl?: string; onClose: () => void; onAdded: () => void; onNeedUserscript: () => void }) {
   const [url, setUrl] = useState(initialUrl)
   const [filename, setFilename] = useState('')
-  const [concurrency, setConcurrency] = useState(settings.default_concurrency || 8)
+  const [concurrency, setConcurrency] = useState(settings.default_concurrency || 12)
   const [advanced, setAdvanced] = useState(false)
   const [referer, setReferer] = useState(settings.default_referer || '')
   const [origin, setOrigin] = useState(settings.default_origin || '')
@@ -61,7 +61,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
     <header><div><h2>新建下载</h2><p>支持普通文件、HLS、DASH、magnet 和 .torrent</p></div><button className="icon-button" title="关闭" onClick={onClose}><X size={18} /></button></header>
     <label>链接</label><div className="url-entry"><Link size={18} /><input autoFocus value={url} onChange={event => setUrl(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') recognize() }} placeholder="粘贴文件、m3u8、mpd、网页或 magnet 链接" /></div>
     <div className="torrent-import"><input ref={torrentInput} type="file" accept=".torrent,application/x-bittorrent" hidden onChange={event => importTorrent(event.target.files?.[0])} /><button className="secondary-button" disabled={busy} onClick={() => torrentInput.current?.click()}><FileUp size={15} />导入 .torrent</button><span>磁力链接可直接粘贴到上方</span></div>
-    <div className="form-row"><div><label>输出文件名（可选）</label><input value={filename} onChange={event => setFilename(event.target.value)} placeholder="自动生成" /></div><div className="short-field"><label>并发</label><input type="number" min={1} max={64} value={concurrency} onChange={event => setConcurrency(Math.max(1, Math.min(64, Number(event.target.value))))} /></div></div>
+    <div className="form-row"><div><label>输出文件名（可选）</label><input value={filename} onChange={event => setFilename(event.target.value)} placeholder="自动生成" /></div><div className="short-field"><label>并发</label><input type="number" min={1} max={256} value={concurrency} onChange={event => setConcurrency(Math.max(1, Math.min(256, Number(event.target.value))))} /></div></div>
     <button className="text-button" onClick={() => setAdvanced(value => !value)}>{advanced ? '收起请求选项' : '请求选项（Referer / Origin / Cookie）'}</button>
     {advanced && <div className="advanced-grid request-options">
       <div className="request-field"><label>Referer</label><input value={referer} onChange={event => setReferer(event.target.value)} placeholder={LEGACY_REQUEST_EXAMPLES.referer} /><small>{REQUEST_FIELD_HELP.referer}</small></div>

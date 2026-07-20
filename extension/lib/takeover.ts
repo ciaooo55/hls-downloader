@@ -1,5 +1,4 @@
 export type BrowserDownloadState = 'in_progress' | 'interrupted' | 'complete'
-export type HandoffOutcome = 'desktop' | 'cancel' | 'browser'
 
 export function browserCleanupAction(state: BrowserDownloadState): 'remove-file' | 'cancel' {
   return state === 'complete' ? 'remove-file' : 'cancel'
@@ -9,8 +8,8 @@ export function shouldResumeBrowserDownload(paused: boolean, handedOff: boolean)
   return paused && !handedOff
 }
 
-export function handoffOutcome(status: string): HandoffOutcome {
-  if (status === 'accepted') return 'desktop'
-  if (status === 'canceled') return 'cancel'
-  return 'browser'
+export function desktopAcceptedHandoff(response: unknown): boolean {
+  if (!response || typeof response !== 'object') return false
+  const value = response as { ok?: boolean; handoff?: { id?: string } }
+  return value.ok === true && Boolean(value.handoff?.id)
 }

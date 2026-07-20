@@ -5,11 +5,13 @@ interface NativeResult {
   error?: string
   installed?: boolean
   mode?: string
+  browser_opened?: boolean
 }
 
 interface NativeApi {
   export_userscript(): Promise<NativeResult>
   open_userscript_installer(): Promise<NativeResult>
+  open_browser_extension_installer(): Promise<NativeResult>
   get_desktop_info(): Promise<NativeResult>
   begin_uninstall(): Promise<NativeResult>
 }
@@ -50,6 +52,16 @@ export async function openUserscriptInstaller(): Promise<NativeResult> {
     return { ok: true }
   } catch (reason) {
     return { ok: false, error: reason instanceof Error ? reason.message : '无法打开安装地址' }
+  }
+}
+
+export async function openBrowserExtensionInstaller(): Promise<NativeResult> {
+  try {
+    const api = await waitForNativeApi()
+    if (!api) return { ok: false, error: '扩展安装工具仅在桌面版中可用' }
+    return await api.open_browser_extension_installer()
+  } catch (reason) {
+    return { ok: false, error: reason instanceof Error ? reason.message : '无法打开扩展安装工具' }
   }
 }
 

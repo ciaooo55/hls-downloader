@@ -470,6 +470,37 @@ def test_desktop_bridge_opens_userscript_installer_in_default_browser():
     assert opened == [f"{public_base_url()}/userscript/m3u8-sniffer.user.js"]
 
 
+def test_desktop_bridge_opens_chrome_and_bundled_extension_folder(tmp_path):
+    extension = tmp_path / "browser-extension" / "chrome"
+    extension.mkdir(parents=True)
+    (extension / "manifest.json").write_text("{}", encoding="utf-8")
+    browser = tmp_path / "chrome.exe"
+    browser.write_bytes(b"chrome")
+    started: list[list[str]] = []
+    bridge = DesktopBridge(
+        browser_extension_path=extension,
+        browser_executable=browser,
+        process_starter=lambda command: started.append(command),
+    )
+
+    result = bridge.open_browser_extension_installer()
+
+    assert result == {"ok": True, "path": str(extension), "browser_opened": True}
+    assert started == [
+        [str(browser), "chrome://extensions"],
+        ["explorer.exe", str(extension)],
+    ]
+
+
+def test_desktop_bridge_reports_missing_bundled_extension(tmp_path):
+    bridge = DesktopBridge(browser_extension_path=tmp_path / "missing")
+
+    assert bridge.open_browser_extension_installer() == {
+        "ok": False,
+        "error": "安装包中缺少浏览器扩展，请重新安装最新版",
+    }
+
+
 def test_desktop_bridge_keeps_native_objects_private_from_js_discovery():
     bridge = DesktopBridge(window=FakeWindow(), folder_dialog_type="folder")
 

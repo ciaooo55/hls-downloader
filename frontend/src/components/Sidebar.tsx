@@ -31,8 +31,8 @@ export default function Sidebar({ tasks, active, onChange, userscript, browserSt
         })}
       </nav>
       <div className="sidebar-script">
-        <span className="sidebar-caption">{browserStatus?.detected ? '浏览器扩展' : '浏览器脚本'}</span>
-        <div className={`script-state ${browserStatus?.detected || userscript?.detected ? 'online' : browserStatus?.seen_before || userscript?.seen_before ? 'seen' : ''}`}><Radio size={15} /><span>{browserStatus?.detected ? '正式扩展已连接' : userscript?.detected ? '后备脚本已连接' : browserStatus?.seen_before || userscript?.seen_before ? '此前运行过' : '尚未检测'}</span></div>
+        <span className="sidebar-caption">浏览器接管</span>
+        <div className={`script-state ${browserStatus?.detected || userscript?.detected ? 'online' : browserStatus?.seen_before || userscript?.seen_before ? 'seen' : ''}`} title={browserStatus?.message || ''}><Radio size={15} /><span>{browserStatus?.detected ? '正式扩展已连接' : userscript?.detected ? '仅后备脚本已连接' : browserStatus?.seen_before ? '扩展连接已断开' : '扩展未安装或未连接'}</span></div>
         {(browserStatus?.version || userscript?.version) && <small>版本 {browserStatus?.version || userscript?.version}</small>}
       </div>
     </aside>

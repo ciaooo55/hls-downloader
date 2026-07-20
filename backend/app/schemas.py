@@ -17,7 +17,7 @@ class TaskCreate(BaseModel):
     title: str = ""
     filename: str = ""
     download_dir: str = ""
-    concurrency: int = Field(default=0, ge=0, le=64)
+    concurrency: int = Field(default=0, ge=0, le=256)
 
     @field_validator("url")
     @classmethod
@@ -94,7 +94,7 @@ class SettingsUpdate(BaseModel):
     port: Optional[int] = Field(default=None, ge=1, le=65535)
     token: Optional[str] = Field(default=None, min_length=1, max_length=256)
     download_dir: Optional[str] = None
-    default_concurrency: Optional[int] = Field(default=None, ge=1, le=64)
+    default_concurrency: Optional[int] = Field(default=None, ge=1, le=256)
     default_user_agent: Optional[str] = None
     default_referer: Optional[str] = None
     default_origin: Optional[str] = None

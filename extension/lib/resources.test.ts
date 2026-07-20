@@ -52,6 +52,23 @@ describe('resource rules', () => {
       url: 'https://cdn.test/final.zip',
       finalUrl: 'https://cdn.test/mirror.zip',
     }, 2000)).toBe(false)
+    expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
+      url: 'https://cdn.test/final.zip',
+      finalUrl: 'https://cdn.test/mirror.zip',
+      chainUrls: ['https://cdn.test/start', 'https://cdn.test/final.zip'],
+      referrer: 'https://site.test/download',
+      tabId: 8,
+    }, 2000)).toBe(true)
+    expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
+      url: 'https://cdn.test/generated.zip',
+      referrer: 'https://site.test/download',
+      tabId: 8,
+    }, 2000)).toBe(true)
+    expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
+      url: 'https://cdn.test/generated.zip',
+      referrer: 'https://site.test/download',
+      tabId: 9,
+    }, 2000)).toBe(false)
     expect(matchesDownloadClick(intent, {
       url: 'https://cdn.test/start',
     }, 9000)).toBe(false)

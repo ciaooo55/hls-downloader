@@ -11,6 +11,7 @@ export interface MediaResource {
   filename?: string
   statusCode?: number
   method?: string
+  requestHeaders?: Record<string, string>
   seenAt: number
 }
 
@@ -21,6 +22,8 @@ export interface DownloadClickIntent {
   ctrlForce: boolean
   at: number
   generic?: boolean
+  tabId?: number
+  frameId?: number
 }
 
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
@@ -92,25 +95,25 @@ export function shouldTakeover(input: {
 
 export function matchesDownloadClick(
   intent: DownloadClickIntent,
-  download: { url: string; finalUrl?: string; referrer?: string },
+  download: { url: string; finalUrl?: string; referrer?: string; chainUrls?: string[]; tabId?: number },
   now = Date.now(),
 ): boolean {
   const age = now - intent.at
   if (age < 0 || age > 7000) return false
+  const sameTab = intent.tabId !== undefined && download.tabId !== undefined && intent.tabId === download.tabId
+  if (intent.tabId !== undefined && download.tabId !== undefined && !sameTab) return false
+  const samePage = Boolean(intent.pageUrl && download.referrer
+    && stripHash(intent.pageUrl) === stripHash(download.referrer))
   if (intent.href) {
-    if (intent.pageUrl && download.referrer
-      && stripHash(intent.pageUrl) !== stripHash(download.referrer)) return false
+    if (intent.pageUrl && download.referrer && !samePage) return false
     const clicked = stripHash(intent.href)
-    const exact = [download.url, download.finalUrl]
+    const exact = [download.url, download.finalUrl, ...(download.chainUrls || [])]
       .filter((value): value is string => Boolean(value))
       .some(value => stripHash(value) === clicked)
     if (exact) return true
   }
-  return Boolean(intent.generic
-    && age <= 1500
-    && intent.pageUrl
-    && download.referrer
-    && stripHash(intent.pageUrl) === stripHash(download.referrer))
+  if (intent.generic) return age <= 1500 && (samePage || sameTab)
+  return age <= 3000 && samePage && (sameTab || intent.tabId === undefined || download.tabId === undefined)
 }
 
 function stripHash(value: string): string {

@@ -270,7 +270,7 @@ class TaskManager:
             cookie=cookie or settings.default_cookie,
             title=title,
             filename=filename,
-            concurrency=concurrency or settings.default_concurrency,
+            concurrency=min(256, max(1, int(concurrency or settings.default_concurrency or 12))),
             status=TaskStatus.QUEUED,
             stage="queued",
             last_log="等待开始",

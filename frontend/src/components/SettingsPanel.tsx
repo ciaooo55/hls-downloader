@@ -48,7 +48,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const doSave = async () => {
     setError('')
     if (!String(settings.download_dir || '').trim()) { setError('下载保存目录不能为空'); return }
-    if (settings.default_concurrency < 1 || settings.default_concurrency > 64) { setError('默认并发数必须在 1 到 64 之间'); return }
+    if (settings.default_concurrency < 1 || settings.default_concurrency > 256) { setError('默认并发数必须在 1 到 256 之间'); return }
     if (settings.max_concurrent_tasks < 1 || settings.max_concurrent_tasks > 16) { setError('最大同时任务数必须在 1 到 16 之间'); return }
     if (settings.http_chunk_size_mb < 1 || settings.http_chunk_size_mb > 64) { setError('HTTP 分段大小必须在 1 到 64 MiB 之间'); return }
     if (settings.bt_upload_limit_kib < 0) { setError('BT 上传限制不能小于 0'); return }
@@ -121,7 +121,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
       <p className="field-note">临时分片保存在下载目录的 .tasks 子目录，完成后按设置清理。</p>
 
       <div className="form-row settings-number-row">
-        <div><label>默认并发数</label><input type="number" min={1} max={64} value={settings.default_concurrency ?? 8} onChange={event => update('default_concurrency', Number(event.target.value))} /><p className="field-note">{REQUEST_FIELD_HELP.concurrency}</p></div>
+        <div><label>默认并发数</label><input type="number" min={1} max={256} value={settings.default_concurrency ?? 12} onChange={event => update('default_concurrency', Number(event.target.value))} /><p className="field-note">{REQUEST_FIELD_HELP.concurrency}</p></div>
         <div><label>最大同时任务数</label><input type="number" min={1} max={16} value={settings.max_concurrent_tasks ?? 3} onChange={event => update('max_concurrent_tasks', Number(event.target.value))} /><p className="field-note">{REQUEST_FIELD_HELP.maxTasks}</p></div>
       </div>
       <div className="settings-section-title">普通文件</div>

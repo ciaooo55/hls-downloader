@@ -62,6 +62,50 @@ def test_http_range_downloader_writes_one_sparse_file_and_validates_ranges(tmp_p
     asyncio.run(run())
 
 
+def test_http_range_downloader_uses_twelve_workers_by_default(tmp_path, monkeypatch):
+    chunk_size = 1024 * 1024
+    total = chunk_size * 13
+    active = 0
+    peak = 0
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
+    task = Task(
+        id="http12",
+        url="https://files.test/archive.bin",
+        task_type=TaskType.HTTP,
+        concurrency=12,
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal active, peak
+        start_text, end_text = request.headers["range"].removeprefix("bytes=").split("-", 1)
+        start, end = int(start_text), int(end_text)
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+        return httpx.Response(
+            206,
+            content=b"x" * (end - start + 1),
+            headers={"Content-Range": f"bytes {start}-{end}/{total}"},
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_ranges(
+                client,
+                {},
+                tmp_path / "payload.downloading",
+                tmp_path / "resume.json",
+                {"total": total, "etag": '"v1"', "last_modified": "now"},
+            )
+
+    asyncio.run(run())
+    assert task.progress.max_workers == 12
+    assert peak == 12
+
+
 def test_http_resume_is_discarded_when_etag_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
     part = tmp_path / "payload.downloading"

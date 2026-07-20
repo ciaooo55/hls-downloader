@@ -8,12 +8,12 @@ PROJECT_ROOT = RUNTIME_PATHS.project_root
 CONFIG_PATH = RUNTIME_PATHS.config_path
 
 class Settings(BaseSettings):
-    config_version: int = 5
+    config_version: int = 6
     host: str = "127.0.0.1"
     port: int = 8765
     token: str = "55555"
     download_dir: str = "downloads"
-    default_concurrency: int = 8
+    default_concurrency: int = 12
     default_user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
     default_referer: str = "https://missav.ai/"
     default_origin: str = "https://missav.ai"
@@ -81,6 +81,12 @@ def load_settings() -> Settings:
         if version < 5:
             data["browser_category_dirs"] = {}
             data["config_version"] = 5
+            version = 5
+            migrated = True
+        if version < 6:
+            if int(data.get("default_concurrency", 8) or 8) == 8:
+                data["default_concurrency"] = 12
+            data["config_version"] = 6
             migrated = True
         s = Settings(**data)
         if migrated:

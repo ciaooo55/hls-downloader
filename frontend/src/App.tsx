@@ -92,8 +92,15 @@ export default function App() {
       void fetchBrowserHandoffs().then(setHandoffs).catch(() => {}).finally(() => { handoffRefreshInFlight.current = false })
     }
     refresh()
-    const timer = window.setInterval(refresh, 3000)
-    return () => window.clearInterval(timer)
+    const onVisible = () => { if (!document.hidden) refresh() }
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', onVisible)
+    const timer = window.setInterval(refresh, 1000)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [])
 
   useEffect(() => { document.documentElement.dataset.theme = theme }, [theme])

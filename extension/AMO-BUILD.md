@@ -31,10 +31,10 @@ npm registry. Exact direct and transitive dependency versions are recorded in
 ## Permission notes
 
 - `downloads`: after an explicit user click, observe the real browser download
-  (including redirects and response filenames), pause it, and show a desktop
-  confirmation before takeover. The browser copy remains paused until the user
-  accepts the desktop dialog, then it is canceled and erased. It is restored only
-  when delivery to the desktop app fails or the handoff expires.
+  (including redirects and response filenames), pause it, and send it to the
+  desktop confirmation dialog. Once the desktop acknowledges that the dialog is
+  open, the browser copy is canceled and erased. It is restored only when the
+  desktop app cannot receive the handoff.
 - `nativeMessaging`: communicate with the locally installed HLS Downloader over
   a persistent Native Messaging connection so browser downloads can be paused
   and transferred without launching a new helper process for every request.

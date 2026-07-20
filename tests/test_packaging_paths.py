@@ -67,6 +67,17 @@ def test_installer_build_and_nsis_include_userscript():
     assert 'RMDir /r "$INSTDIR\\userscript"' in nsis_script
 
 
+def test_installer_bundles_loadable_edge_extension_and_removes_it_on_uninstall():
+    root = Path(__file__).resolve().parent.parent
+    build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
+    nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
+
+    assert 'Join-Path $StageDir "browser-extension\\chrome"' in build_script
+    assert 'Join-Path $ExtensionDir ".output\\chrome-mv3\\*"' in build_script
+    assert '${STAGE_DIR}\\browser-extension\\chrome\\*' in nsis_script
+    assert 'RMDir /r "$INSTDIR\\browser-extension"' in nsis_script
+
+
 def test_app_icon_is_used_by_executable_tray_ui_and_installer():
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
