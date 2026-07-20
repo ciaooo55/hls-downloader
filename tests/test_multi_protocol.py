@@ -198,3 +198,38 @@ def test_torrent_downloads_from_local_peer_and_stops_at_completion(tmp_path, mon
     output = Path(task.output_path)
     assert output.read_bytes() == content
     assert task.progress.progress_percent == 100
+
+
+def test_torrent_waits_for_disk_cache_before_finalizing():
+    class Handle:
+        def __init__(self):
+            self.flush_calls = 0
+
+        def flush_cache(self):
+            self.flush_calls += 1
+
+    handle = Handle()
+
+    class CacheFlushedAlert:
+        def __init__(self):
+            self.handle = handle
+
+    class Libtorrent:
+        cache_flushed_alert = CacheFlushedAlert
+
+    class Session:
+        def __init__(self):
+            self.polls = 0
+
+        def pop_alerts(self):
+            self.polls += 1
+            return [] if self.polls == 1 else [CacheFlushedAlert()]
+
+    task = Task(id="bt-flush", url="magnet:?xt=urn:btih:test", task_type=TaskType.TORRENT)
+    downloader = TorrentDownloader(task)
+    session = Session()
+
+    asyncio.run(downloader._flush_storage(Libtorrent, session, handle, timeout=1))
+
+    assert handle.flush_calls == 1
+    assert session.polls == 2

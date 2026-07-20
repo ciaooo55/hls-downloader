@@ -276,13 +276,14 @@ class TorrentDownloader:
                 self._publish()
                 if self._priority_piece is not None:
                     self._prioritize_piece(self._priority_piece)
-                if status.is_seeding or task.progress.progress_percent >= 100.0:
+                if status.is_seeding or status.is_finished:
                     break
                 error = getattr(status, "errc", None)
                 if error and error.value() != 0:
                     raise RuntimeError(error.message())
                 await asyncio.sleep(0.75)
 
+            await self._flush_storage(lt, session, handle)
             handle.pause()
             await self._save_resume(lt, session, handle, resume_path)
             session.remove_torrent(handle)
@@ -393,6 +394,21 @@ class TorrentDownloader:
                     await asyncio.sleep(0.1)
             except Exception:
                 return
+
+    async def _flush_storage(self, lt, session, handle, timeout: float = 30.0) -> None:
+        """Wait until completed pieces are physically committed before moving files."""
+        async with _RESUME_ALERT_LOCK:
+            handle.flush_cache()
+            deadline = asyncio.get_running_loop().time() + timeout
+            while asyncio.get_running_loop().time() < deadline:
+                for alert in session.pop_alerts():
+                    alert_handle = getattr(alert, "handle", None)
+                    if alert_handle is not None and alert_handle != handle:
+                        continue
+                    if isinstance(alert, lt.cache_flushed_alert):
+                        return
+                await asyncio.sleep(0.1)
+        raise RuntimeError("BT 数据写入磁盘超时，临时文件已保留，可重试任务")
 
     def _move_payload(self, info, payload_dir: Path) -> Path:
         root = payload_dir / info.name()
