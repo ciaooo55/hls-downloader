@@ -1,5 +1,6 @@
 import { browser } from 'wxt/browser'
 import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, resourceId, shouldTakeover, type DownloadClickIntent, type MediaResource } from '../lib/resources'
+import { browserCleanupAction, shouldResumeBrowserDownload } from '../lib/takeover'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 let clickIntents: DownloadClickIntent[] = []
@@ -84,21 +85,27 @@ async function refreshedDownload(downloadId: number, original: browser.downloads
   return current || original
 }
 
-async function waitForHandoff(handoffId: string): Promise<string> {
-  const response = await native({ op: 'wait_handoff', handoff_id: handoffId })
-  return String(response?.handoff?.status || 'expired')
-}
-
-async function pauseDownload(downloadId: number): Promise<void> {
+async function pauseDownload(downloadId: number): Promise<boolean> {
   for (let attempt = 0; attempt < 12; attempt += 1) {
     try {
       await browser.downloads.pause(downloadId)
-      return
+      return true
     } catch {
       await new Promise(resolve => setTimeout(resolve, 100))
     }
   }
-  throw new Error('浏览器下载无法暂停')
+  return false
+}
+
+async function removeBrowserDownload(item: browser.downloads.DownloadItem): Promise<void> {
+  const [current] = await browser.downloads.search({ id: item.id })
+  const state = current?.state || item.state
+  if (browserCleanupAction(state) === 'remove-file') {
+    await browser.downloads.removeFile(item.id).catch(() => undefined)
+  } else {
+    await browser.downloads.cancel(item.id).catch(() => undefined)
+  }
+  await browser.downloads.erase({ id: item.id }).catch(() => undefined)
 }
 
 function consumeClickIntent(url: string, referrer = ''): DownloadClickIntent | undefined {
@@ -159,9 +166,9 @@ export default defineBackground(() => {
     const config = await settings()
     if (!config.enabled) return
     let paused = false
+    let handedOff = false
     try {
-      await pauseDownload(item.id)
-      paused = true
+      paused = await pauseDownload(item.id)
       const actual = await refreshedDownload(item.id, item)
       const url = actual.finalUrl || actual.url
       const filename = actual.filename.split(/[\\/]/).pop() || ''
@@ -177,16 +184,11 @@ export default defineBackground(() => {
       const response = await offer(resource)
       const handoffId = String(response?.handoff?.id || '')
       if (!response?.ok || !handoffId) throw new Error(response?.error || 'desktop rejected')
-      const status = await waitForHandoff(handoffId)
-      if (status === 'accepted' || status === 'canceled') {
-        await browser.downloads.cancel(item.id)
-        await browser.downloads.erase({ id: item.id }).catch(() => undefined)
-      } else {
-        await browser.downloads.resume(item.id).catch(() => undefined)
-      }
+      handedOff = true
+      await removeBrowserDownload(actual)
     } catch (error) {
       console.warn('HLS Downloader takeover failed; returning download to browser', error)
-      if (paused) await browser.downloads.resume(item.id).catch(() => undefined)
+      if (shouldResumeBrowserDownload(paused, handedOff)) await browser.downloads.resume(item.id).catch(() => undefined)
     }
   })
 

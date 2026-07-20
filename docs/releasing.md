@@ -19,8 +19,8 @@
 ```powershell
 git switch main
 git pull --ff-only
-git tag v1.2.5
-git push origin v1.2.5
+git tag v1.2.6
+git push origin v1.2.6
 ```
 
 `v*` 标签会触发完整 Windows 构建。成功后工作流自动创建同名 GitHub Release，并上传：

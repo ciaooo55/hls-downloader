@@ -75,7 +75,7 @@
 
 ## 浏览器扩展
 
-Release 同时生成 Chrome 和 Firefox MV3 提交包，Chrome 包也可加载到 Edge。安装版会自动为 Chrome、Edge 和 Firefox 注册 `com.ciaooo55.hls_downloader` Native Messaging Host，扩展不会接触本地 API Token。用户明确点击下载后，扩展等待浏览器解析重定向和 `Content-Disposition`，再暂停真实下载并在桌面端显示文件名、类型、大小与保存位置确认；不会把中间的 PHP 页面地址提前当成文件。确认接管后取消浏览器副本，取消则不下载，桌面端离线、拒绝或超时会恢复浏览器下载。页面嗅探只登记资源，不会自行启动下载，按住 Alt 点击可临时绕过接管。
+Release 同时生成 Chrome 和 Firefox MV3 提交包，Chrome 包也可加载到 Edge。安装版会自动为 Chrome、Edge 和 Firefox 注册 `com.ciaooo55.hls_downloader` Native Messaging Host，扩展不会接触本地 API Token。用户明确点击下载后，扩展等待浏览器解析重定向和 `Content-Disposition`，再暂停真实下载并在桌面端显示文件名、类型、大小与保存位置确认；不会把中间的 PHP 页面地址提前当成文件。桌面端收到接管请求后立即取消并清除浏览器副本，之后只由软件下载；桌面端离线或未能收到请求时才恢复浏览器下载。页面嗅探只登记资源，不会自行启动下载，按住 Alt 点击可临时绕过接管。
 
 扩展支持响应嗅探、页面 fetch/XHR/media/Performance 观察、右键下载和 magnet 链接。Cookie 必须按站点单独授权，桌面任务中的 Cookie 使用 Windows DPAPI 加密后再写入数据库。Chrome 正式安装需要 Chrome Web Store，Firefox 永久安装需要 Mozilla 签名。
 
@@ -150,7 +150,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.2.5
+.\scripts\build_installer.ps1 -Version 1.2.6
 ```
 
 输出位于忽略的 `release` 目录：
@@ -169,8 +169,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.2.5
-git push origin v1.2.5
+git tag v1.2.6
+git push origin v1.2.6
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。
