@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parent.parent
 ASSET_DIR = ROOT / "assets"
 FRONTEND_PUBLIC = ROOT / "frontend" / "public"
+EXTENSION_PUBLIC = ROOT / "extension" / "public"
 CANVAS_SIZE = 1024
 
 
@@ -16,30 +17,32 @@ def build_icon() -> Image.Image:
     draw.rounded_rectangle(
         (36, 36, 988, 988),
         radius=218,
-        fill=(31, 36, 43, 255),
-        outline=(72, 82, 94, 255),
-        width=18,
+        fill=(239, 252, 255, 255),
+        outline=(14, 165, 233, 255),
+        width=22,
     )
-    draw.rounded_rectangle((154, 170, 350, 226), radius=28, fill=(48, 155, 218, 255))
-    draw.rounded_rectangle((674, 170, 870, 226), radius=28, fill=(221, 166, 61, 255))
+    draw.rounded_rectangle((152, 170, 350, 226), radius=28, fill=(250, 204, 21, 255))
+    draw.rounded_rectangle((674, 170, 872, 226), radius=28, fill=(251, 113, 133, 255))
 
-    green = (57, 201, 132, 255)
-    draw.rounded_rectangle((453, 174, 571, 574), radius=58, fill=green)
-    draw.polygon(((302, 500), (512, 720), (722, 500)), fill=green)
+    blue = (14, 165, 233, 255)
+    draw.rounded_rectangle((453, 164, 571, 574), radius=58, fill=blue)
+    draw.polygon(((298, 500), (512, 724), (726, 500)), fill=blue)
 
-    draw.rounded_rectangle((210, 742, 814, 838), radius=48, fill=(235, 240, 245, 255))
-    draw.rounded_rectangle((292, 768, 732, 812), radius=22, fill=(65, 75, 85, 255))
+    draw.rounded_rectangle((204, 742, 820, 842), radius=50, fill=(255, 255, 255, 255), outline=(16, 185, 129, 255), width=18)
+    draw.rounded_rectangle((292, 775, 732, 809), radius=17, fill=(16, 185, 129, 255))
     return image
 
 
 def main() -> None:
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
     FRONTEND_PUBLIC.mkdir(parents=True, exist_ok=True)
+    EXTENSION_PUBLIC.mkdir(parents=True, exist_ok=True)
 
     source = build_icon()
     png = source.resize((512, 512), Image.Resampling.LANCZOS)
     png.save(ASSET_DIR / "app-icon.png", optimize=True)
     png.save(FRONTEND_PUBLIC / "app-icon.png", optimize=True)
+    png.save(EXTENSION_PUBLIC / "icon.png", optimize=True)
     source.save(
         ASSET_DIR / "app-icon.ico",
         format="ICO",

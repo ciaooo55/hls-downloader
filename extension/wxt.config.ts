@@ -5,7 +5,7 @@ export default defineConfig({
   manifest: ({ browser }) => ({
     name: 'HLS Downloader 浏览器接管',
     description: '嗅探媒体、接管普通下载并发送到 HLS Downloader 桌面端。',
-    version: '1.2.11',
+    version: '1.2.12',
     icons: {
       512: 'icon.png',
     },
@@ -16,6 +16,7 @@ export default defineConfig({
       ...(browser === 'firefox' ? ['webRequestBlocking'] : []),
     ],
     host_permissions: ['<all_urls>'],
+    web_accessible_resources: [{ resources: ['icon.png'], matches: ['<all_urls>'] }],
     action: { default_title: 'HLS Downloader' },
     commands: {
       'send-current-page': { suggested_key: { default: 'Ctrl+Shift+Y' }, description: '嗅探当前页面' },

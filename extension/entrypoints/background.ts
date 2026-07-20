@@ -3,17 +3,19 @@ import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
 import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, resourceId, shouldTakeover, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, shouldResumeBrowserDownload } from '../lib/takeover'
+import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
+import { parseHlsManifest, resourceQuality } from '../lib/hlsManifest'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 let clickIntents: DownloadClickIntent[] = []
 let browserFallbacks: Array<{ url: string, at: number }> = []
-const firefoxRequestIntents = new Map<string, DownloadClickIntent>()
 const determinedDownloads = new Map<number, browser.downloads.DownloadItem>()
 const determinationWaiters = new Map<number, (item: browser.downloads.DownloadItem) => void>()
 const requestChains = new RequestChainStore()
 let nativeBridge: NativeBridge | null = null
 let concealedDownloadCount = 0
 let downloadUiFailsafe: ReturnType<typeof setTimeout> | null = null
+const inspectedHls = new Set<string>()
 
 async function settings() {
   const data = await browser.storage.local.get(['enabled', 'minimumBytes', 'excludedHosts', 'authorizedCookieHosts'])
@@ -59,6 +61,36 @@ async function cookiesFor(url: string, pageUrl = ''): Promise<string> {
 function native(message: Record<string, unknown>, timeoutMs?: number): Promise<any> {
   if (!nativeBridge) return Promise.reject(new Error('Native Messaging 尚未初始化'))
   return nativeBridge.request(message, timeoutMs)
+}
+
+async function inspectHls(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1): Promise<void> {
+  if (resource.kind !== 'hls' || inspectedHls.has(resource.url)) return
+  inspectedHls.add(resource.url)
+  try {
+    const response = await fetch(resource.url, { credentials: 'include', signal: AbortSignal.timeout(5_000) })
+    if (!response.ok) return
+    const info = parseHlsManifest(await response.text(), response.url || resource.url)
+    if (info.duration) {
+      const enriched = { ...resource, duration: info.duration, quality: resourceQuality(resource.url, resource.height) }
+      await saveResource(enriched, tabId)
+      if (tabId >= 0) await browser.tabs.sendMessage(tabId, { type: 'captured-resource', resource: enriched }).catch(() => undefined)
+    }
+    for (const variant of info.variants) {
+      const enriched = {
+        ...resource,
+        ...variant,
+        url: variant.url,
+        size: 0,
+        statusCode: undefined,
+        filename: decodeURIComponent(new URL(variant.url).pathname.split('/').pop() || ''),
+        title: variant.quality ? `${variant.quality} HLS 视频流` : 'HLS 视频流',
+      }
+      await saveResource(enriched, tabId)
+      if (tabId >= 0) await browser.tabs.sendMessage(tabId, { type: 'captured-resource', resource: enriched }).catch(() => undefined)
+    }
+  } catch {
+    // Playlist inspection is best-effort; the captured URL remains downloadable.
+  }
 }
 
 async function setBrowserDownloadUi(enabled: boolean): Promise<void> {
@@ -234,6 +266,7 @@ function observedResponse(details: any) {
     pageUrl: details.documentUrl || details.initiator || '',
   }
   void saveResource(resource, details.tabId)
+  void inspectHls(resource, details.tabId)
   if (details.tabId >= 0) void browser.tabs.sendMessage(details.tabId, { type: 'captured-resource', resource }).catch(() => undefined)
   return { disposition, resource }
 }
@@ -276,27 +309,27 @@ export default defineBackground(() => {
 
   ;(browser.webRequest.onSendHeaders.addListener as any)((details: any) => {
     requestChains.observeRequest(details)
-  }, { urls: ['<all_urls>'] }, ['requestHeaders', 'extraHeaders'])
+  }, { urls: ['<all_urls>'] }, requestHeaderExtraInfo(import.meta.env.CHROME))
   browser.webRequest.onBeforeRedirect.addListener(details => {
     requestChains.observeRedirect(details as any)
   }, { urls: ['<all_urls>'] }, ['responseHeaders'])
 
   if (import.meta.env.FIREFOX) {
-    ;(browser.webRequest.onBeforeRequest.addListener as any)((details: any) => {
-      const chain = requestChains.observeRequest(details)
-      if (firefoxRequestIntents.has(details.requestId)) return
-      const intent = consumeClickIntent(details.url, '', details.documentUrl || details.initiator || '', chain)
-      if (intent) firefoxRequestIntents.set(details.requestId, intent)
-    }, { urls: ['<all_urls>'] })
     ;(browser.webRequest.onHeadersReceived.addListener as any)(async (details: any) => {
-      requestChains.observeResponse(details)
+      const chain = requestChains.observeResponse(details)
       const observed = observedResponse(details)
-      const intent = firefoxRequestIntents.get(details.requestId)
-      if (!intent || details.statusCode >= 300 && details.statusCode < 400) return {}
-      if (!isDownloadResponse(observed.disposition, observed.resource)) {
-        firefoxRequestIntents.delete(details.requestId)
-        return {}
-      }
+      if (details.statusCode >= 300 && details.statusCode < 400) return {}
+      if (!isDownloadResponse(observed.disposition, observed.resource)) return {}
+      const intent = await resolveFirefoxClickIntent(
+        undefined,
+        () => waitForClickIntent(
+          details.url,
+          '',
+          details.documentUrl || details.initiator || requestHeader(chain, 'referer'),
+          chain,
+        ),
+      )
+      if (!intent) return {}
       const config = await settings()
       const resource = observed.resource!
       if (!shouldTakeover({
@@ -308,23 +341,17 @@ export default defineBackground(() => {
         ...intent,
         explicitClick: true,
       })) {
-        firefoxRequestIntents.delete(details.requestId)
         return {}
       }
       try {
         const response = await offer({ ...resource, id: resourceId(resource.url), seenAt: Date.now() })
         const transferred = desktopAcceptedHandoff(response)
-        firefoxRequestIntents.delete(details.requestId)
         return transferred ? { cancel: true } : {}
       } catch (error) {
         console.warn('HLS Downloader could not preempt Firefox response', error)
-        firefoxRequestIntents.delete(details.requestId)
         return {}
       }
     }, { urls: ['<all_urls>'] }, ['blocking', 'responseHeaders'])
-    const clearFirefoxIntent = (details: any) => firefoxRequestIntents.delete(details.requestId)
-    browser.webRequest.onCompleted.addListener(clearFirefoxIntent, { urls: ['<all_urls>'] })
-    browser.webRequest.onErrorOccurred.addListener(clearFirefoxIntent, { urls: ['<all_urls>'] })
   } else {
     browser.webRequest.onHeadersReceived.addListener(details => {
       requestChains.observeResponse(details as any)
@@ -332,7 +359,7 @@ export default defineBackground(() => {
     }, { urls: ['<all_urls>'] }, ['responseHeaders'])
   }
 
-  browser.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  filenameDeterminationEvent(import.meta.env.CHROME, browser.downloads as any)?.addListener((item: any, suggest: any) => {
     determinedDownloads.set(item.id, item)
     setTimeout(() => determinedDownloads.delete(item.id), 30_000)
     determinationWaiters.get(item.id)?.(item)
@@ -415,7 +442,9 @@ export default defineBackground(() => {
       return
     }
     if (message?.type === 'resource') {
-      void saveResource({ ...message.resource, pageUrl: message.resource.pageUrl || sender.tab?.url }, sender.tab?.id ?? -1)
+      const resource = { ...message.resource, pageUrl: message.resource.pageUrl || sender.tab?.url }
+      void saveResource(resource, sender.tab?.id ?? -1)
+      void inspectHls(resource, sender.tab?.id ?? -1)
       return
     }
     if (message?.type === 'download' || message?.type === 'offer') {

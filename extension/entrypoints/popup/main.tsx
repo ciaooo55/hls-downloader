@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { browser } from 'wxt/browser'
 import { Download, ExternalLink, Power, ShieldCheck, X } from 'lucide-react'
 import type { MediaResource } from '../../lib/resources'
+import { resourceQuality } from '../../lib/hlsManifest'
 import './style.css'
 
 function App() {
@@ -40,7 +41,7 @@ function App() {
     }
   }
   return <main>
-    <header><div><h1>HLS Downloader</h1><span className={online ? 'online' : ''}>{online ? '桌面端已连接' : '桌面端离线'}</span></div><div className="header-actions"><button title="打开桌面端" onClick={() => browser.runtime.sendMessage({ type: 'activate' })}><ExternalLink size={17}/></button><button className="close-button" title="关闭" onClick={() => window.close()}><X size={18}/></button></div></header>
+    <header><div className="brand"><img src="/icon.png" alt=""/><div><h1>HLS Downloader</h1><span className={online ? 'online' : ''}>{online ? '桌面端已连接' : '桌面端离线'}</span></div></div><div className="header-actions"><button title="打开桌面端" onClick={() => browser.runtime.sendMessage({ type: 'activate' })}><ExternalLink size={17}/></button><button className="close-button" title="关闭" onClick={() => window.close()}><X size={18}/></button></div></header>
     <div className="controls"><button onClick={async () => { const value = !enabled; setEnabled(value); await browser.storage.local.set({ enabled: value }) }}><Power size={16}/>{enabled ? '自动接管已开启' : '自动接管已关闭'}</button><button onClick={toggleCookie}><ShieldCheck size={16}/>{authorized.includes(host) ? '已授权本站 Cookie' : '授权本站 Cookie'}</button></div>
     {error && <div className="send-error">{error}</div>}
     <section><div className="section-title">当前页面资源 <b>{resources.length}</b></div>{resources.length ? resources.map(item => <ResourceRow key={item.id} item={item} status={sending[item.id]} onSend={() => send(item)} />) : <p className="empty">播放媒体后，这里会显示可下载资源。</p>}</section>
@@ -52,7 +53,10 @@ function ResourceRow({ item, status, onSend }: { item: MediaResource; status?: s
   let host = item.url
   try { host = new URL(item.url).host } catch {}
   const size = item.size && item.size > 0 ? formatSize(item.size) : '大小未知'
-  return <article><div><strong title={item.filename || item.title || item.url}>{item.filename || item.title || item.url.split('/').pop() || item.url}</strong><span>{[item.kind.toUpperCase(), size, item.statusCode ? `HTTP ${item.statusCode}` : '', item.method].filter(Boolean).join(' · ')}</span><small title={[item.mimeType, host].filter(Boolean).join(' · ')}>{[item.mimeType, host].filter(Boolean).join(' · ')}</small><small className="resource-url" title={item.url}>{item.url}</small></div><button disabled={status === '发送中' || status === '已加入'} title="发送到下载器" onClick={onSend}>{status ? <em>{status}</em> : <Download size={16}/>}</button></article>
+  const quality = item.quality || resourceQuality(item.url, item.height)
+  const resolution = item.width && item.height ? `${item.width}×${item.height}` : ''
+  const bandwidth = item.bandwidth ? `${(item.bandwidth / 1_000_000).toFixed(1)} Mbps` : ''
+  return <article><div><strong title={item.filename || item.title || item.url}>{item.title || item.filename || item.url.split('/').pop() || item.url}</strong><span>{[item.kind.toUpperCase(), quality, resolution, bandwidth, size, item.statusCode ? `HTTP ${item.statusCode}` : '', item.method].filter(Boolean).join(' · ')}</span><small title={[item.mimeType, host].filter(Boolean).join(' · ')}>{[item.mimeType, host].filter(Boolean).join(' · ')}</small><small className="resource-url" title={item.url}>{item.url}</small></div><button disabled={status === '发送中' || status === '已加入'} title="发送到下载器" onClick={onSend}>{status ? <em>{status}</em> : <Download size={16}/>}</button></article>
 }
 
 function formatSize(size: number) {

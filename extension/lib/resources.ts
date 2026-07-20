@@ -12,6 +12,11 @@ export interface MediaResource {
   statusCode?: number
   method?: string
   requestHeaders?: Record<string, string>
+  width?: number
+  height?: number
+  bandwidth?: number
+  quality?: string
+  duration?: number
   seenAt: number
 }
 
