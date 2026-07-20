@@ -15,12 +15,14 @@ from .schemas import (
     UserscriptPing,
     PlaybackSeekRequest,
     TorrentFileSelection,
+    BrowserHandoffAccept,
 )
 from .config import apply_settings_update, settings, save_settings
 from .downloader.task_manager import (
     TaskConflictError,
     TaskNotFoundError,
     manager,
+    task_output_is_file,
 )
 from .downloader.playback import (
     PlaybackError,
@@ -77,7 +79,9 @@ async def create_browser_handoff(request: Request, x_token: str = Header(default
     if not url.startswith(("http://", "https://", "magnet:")):
         raise HTTPException(status_code=422, detail="浏览器资源地址无效")
     _check_host(url)
-    return browser_handoffs.create(payload).public()
+    item = browser_handoffs.create(payload)
+    activate_window()
+    return item.public()
 
 
 @router.post("/browser/ping")
@@ -110,20 +114,46 @@ async def get_browser_handoff(handoff_id: str, x_token: str = Header(default="")
 
 
 @router.post("/browser/handoffs/{handoff_id}/accept")
-async def accept_browser_handoff(handoff_id: str, x_token: str = Header(default="")):
+async def accept_browser_handoff(handoff_id: str, body: BrowserHandoffAccept | None = None, x_token: str = Header(default="")):
     _check_token(x_token)
+    body = body or BrowserHandoffAccept()
     item = browser_handoffs.get(handoff_id)
     if not item:
         raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
     if item.status != "pending":
         raise HTTPException(status_code=409, detail=f"接管请求当前状态为 {item.status}")
-    task = await _create_browser_task(item)
+    output_dir = Path(body.download_dir or settings.browser_category_dirs.get(body.category) or settings.download_dir).expanduser().resolve()
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"无法使用保存目录: {exc}") from exc
+    if not output_dir.is_dir():
+        raise HTTPException(status_code=400, detail="保存位置不是文件夹")
+    if body.filename.strip():
+        item.filename = body.filename.strip()
+    task = await _create_browser_task(item, output_dir=str(output_dir))
+    if body.remember:
+        settings.browser_category_dirs[body.category] = str(output_dir)
+        save_settings(settings)
     item.status = "accepted"
     item.task_id = task.id
     return item.public()
 
 
-async def _create_browser_task(item):
+@router.get("/browser/handoffs/{handoff_id}/wait")
+async def wait_browser_handoff(handoff_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    deadline = asyncio.get_running_loop().time() + browser_handoffs.ttl + 2
+    while True:
+        item = browser_handoffs.get(handoff_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
+        if item.status != "pending" or asyncio.get_running_loop().time() >= deadline:
+            return item.public()
+        await asyncio.sleep(0.25)
+
+
+async def _create_browser_task(item, output_dir: str = ""):
     task = await manager.create_task(
         url=item.url,
         task_type=TaskType.AUTO,
@@ -134,6 +164,7 @@ async def _create_browser_task(item):
         user_agent=item.user_agent,
         cookie=item.cookie,
         filename=item.filename,
+        output_dir=output_dir,
         auto_start=True,
     )
     return task
@@ -159,6 +190,15 @@ async def create_browser_download(request: Request, x_token: str = Header(defaul
 async def reject_browser_handoff(handoff_id: str, x_token: str = Header(default="")):
     _check_token(x_token)
     item = browser_handoffs.reject(handoff_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
+    return item.public()
+
+
+@router.post("/browser/handoffs/{handoff_id}/cancel")
+async def cancel_browser_handoff(handoff_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    item = browser_handoffs.cancel(handoff_id)
     if not item:
         raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
     return item.public()
@@ -272,6 +312,7 @@ async def create_task(body: TaskCreate, x_token: str = Header(default="")):
         user_agent=body.user_agent, cookie=body.cookie,
         title=body.title, filename=body.filename,
         concurrency=body.concurrency,
+        output_dir=body.download_dir,
         auto_start=True,
     )
     return _to_resp(task)
@@ -290,6 +331,7 @@ async def create_batch(body: TaskBatchCreate, x_token: str = Header(default=""))
             user_agent=t.user_agent, cookie=t.cookie,
             title=t.title, filename=t.filename,
             concurrency=t.concurrency,
+            output_dir=t.download_dir,
             auto_start=True,
         )
         results.append(_to_resp(task))
@@ -833,7 +875,7 @@ def _to_resp(task) -> TaskResponse:
         title=task.title, url=task.url,
         referer=task.referer, origin=task.origin,
         user_agent=task.user_agent, cookie="",
-        filename=task.filename, concurrency=task.concurrency,
+        filename=task.filename, download_dir=str(task.engine_state.get("output_dir") or settings.download_dir), concurrency=task.concurrency,
         status=task.status.value, stage=task.stage, last_log=task.last_log,
         total_segments=task.progress.total_segments,
         completed_segments=task.progress.completed_segments,
@@ -874,7 +916,7 @@ def _to_resp(task) -> TaskResponse:
         http_status=task.http_status,
         error_attempt=task.error_attempt,
         output_path=task.output_path,
-        output_is_file=bool(task.output_path and Path(task.output_path).is_file()),
+        output_is_file=task_output_is_file(task),
         created_at=task.created_at or "",
         updated_at=task.updated_at or "",
         started_at=task.started_at or "",

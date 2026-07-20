@@ -77,6 +77,12 @@ class BrowserHandoffService:
             item.status = "rejected"
         return item
 
+    def cancel(self, handoff_id: str) -> BrowserHandoff | None:
+        item = self.get(handoff_id)
+        if item and item.status == "pending":
+            item.status = "canceled"
+        return item
+
     def cleanup(self) -> None:
         now = time.time()
         for item in self._items.values():

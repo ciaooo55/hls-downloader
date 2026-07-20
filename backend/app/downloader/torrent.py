@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -12,6 +13,45 @@ from ..config import settings
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
 from .errors import diagnose_download_error, format_download_error
+from .engine import task_output_dir
+
+
+_SESSION_LOCK = threading.Lock()
+_SHARED_SESSION = None
+_RESUME_ALERT_LOCK = asyncio.Lock()
+
+
+def _torrent_session(lt):
+    global _SHARED_SESSION
+    with _SESSION_LOCK:
+        created = _SHARED_SESSION is None
+        if _SHARED_SESSION is None:
+            _SHARED_SESSION = lt.session()
+        session = _SHARED_SESSION
+        per_torrent = max(50, int(settings.bt_max_connections))
+        session_settings = {
+            "connections_limit": per_torrent * max(1, int(settings.max_concurrent_tasks)),
+            "connection_speed": 50,
+            "upload_rate_limit": int(settings.bt_upload_limit_kib) * 1024,
+            "download_rate_limit": 0,
+            "active_downloads": max(1, int(settings.max_concurrent_tasks)),
+            "active_limit": max(2, int(settings.max_concurrent_tasks) + 1),
+            "enable_dht": bool(settings.bt_enable_dht),
+            "enable_lsd": True,
+            "enable_upnp": True,
+            "enable_natpmp": True,
+            "enable_incoming_tcp": True,
+            "enable_outgoing_tcp": True,
+            "enable_incoming_utp": True,
+            "enable_outgoing_utp": True,
+            "announce_to_all_trackers": True,
+            "announce_to_all_tiers": True,
+            "alert_mask": int(lt.alert.category_t.error_notification | lt.alert.category_t.storage_notification),
+        }
+        if created:
+            session_settings["listen_interfaces"] = "0.0.0.0:0"
+        session.apply_settings(session_settings)
+        return session
 
 
 class TorrentDownloader:
@@ -43,12 +83,15 @@ class TorrentDownloader:
             )
         else:
             self._priority_piece = max(0, int(value))
+        self._prioritize_piece(self._priority_piece)
+
+    def _prioritize_piece(self, piece: int) -> None:
         handle = self._handle
         if handle is None or not handle.is_valid():
             return
         try:
             for offset in range(12):
-                handle.set_piece_deadline(self._priority_piece + offset, offset * 250)
+                handle.set_piece_deadline(piece + offset, offset * 250)
         except Exception:
             return
 
@@ -103,19 +146,7 @@ class TorrentDownloader:
             task.status = TaskStatus.FETCHING_METADATA
             task.progress.connection_status = "connecting"
             self._set_stage("fetching_metadata", "正在获取 BT 元数据")
-            session = lt.session()
-            session.apply_settings(
-                {
-                    "listen_interfaces": "0.0.0.0:0",
-                    "connections_limit": int(settings.bt_max_connections),
-                    "upload_rate_limit": int(settings.bt_upload_limit_kib) * 1024,
-                    "enable_dht": bool(settings.bt_enable_dht),
-                    "enable_lsd": True,
-                    "enable_upnp": True,
-                    "enable_natpmp": True,
-                    "alert_mask": int(lt.alert.category_t.error_notification | lt.alert.category_t.storage_notification),
-                }
-            )
+            session = _torrent_session(lt)
             self._session = session
             params = None
             if resume_path.exists():
@@ -140,6 +171,10 @@ class TorrentDownloader:
                 params.save_path = str(payload_dir)
             handle = session.add_torrent(params)
             self._handle = handle
+            try:
+                handle.set_max_connections(max(50, int(settings.bt_max_connections)))
+            except Exception:
+                pass
             for peer in task.engine_state.get("peers", []):
                 try:
                     host, port = str(peer).rsplit(":", 1)
@@ -153,6 +188,8 @@ class TorrentDownloader:
                     raise asyncio.CancelledError
                 if self._is_pausing():
                     handle.pause()
+                    session.remove_torrent(handle)
+                    self._handle = None
                     task.status = TaskStatus.PAUSED
                     self._set_stage("paused", "已暂停，BT 元数据将在恢复后继续获取")
                     return
@@ -212,6 +249,8 @@ class TorrentDownloader:
                 if self._is_pausing():
                     handle.pause()
                     await self._save_resume(lt, session, handle, resume_path)
+                    session.remove_torrent(handle)
+                    self._handle = None
                     task.status = TaskStatus.PAUSED
                     task.progress.connection_status = "idle"
                     self._set_stage("paused", "已暂停，BT 断点已保存")
@@ -236,7 +275,7 @@ class TorrentDownloader:
                 )
                 self._publish()
                 if self._priority_piece is not None:
-                    self.request_seek(self._priority_piece)
+                    self._prioritize_piece(self._priority_piece)
                 if status.is_seeding or task.progress.progress_percent >= 100.0:
                     break
                 error = getattr(status, "errc", None)
@@ -250,6 +289,7 @@ class TorrentDownloader:
             self._handle = None
             destination = self._move_payload(info, payload_dir)
             task.output_path = str(destination)
+            task.engine_state["output_is_file"] = destination.is_file()
             if destination.is_file():
                 task.engine_state["stream_path"] = str(destination)
             elif stream_entry is not None:
@@ -302,6 +342,11 @@ class TorrentDownloader:
             task.progress.connection_status = "error"
             self._set_stage("failed", task.error_message)
         finally:
+            if self._handle is not None and self._session is not None:
+                try:
+                    self._session.remove_torrent(self._handle)
+                except Exception:
+                    pass
             self._handle = None
             self._session = None
 
@@ -331,23 +376,27 @@ class TorrentDownloader:
         self._handle.prioritize_files(priorities)
 
     async def _save_resume(self, lt, session, handle, destination: Path) -> None:
-        try:
-            handle.save_resume_data()
-            deadline = asyncio.get_running_loop().time() + 10
-            while asyncio.get_running_loop().time() < deadline:
-                for alert in session.pop_alerts():
-                    if isinstance(alert, lt.save_resume_data_alert):
-                        destination.write_bytes(bytes(lt.write_resume_data_buf(alert.params)))
-                        return
-                    if isinstance(alert, lt.save_resume_data_failed_alert):
-                        return
-                await asyncio.sleep(0.1)
-        except Exception:
-            return
+        async with _RESUME_ALERT_LOCK:
+            try:
+                handle.save_resume_data()
+                deadline = asyncio.get_running_loop().time() + 10
+                while asyncio.get_running_loop().time() < deadline:
+                    for alert in session.pop_alerts():
+                        alert_handle = getattr(alert, "handle", None)
+                        if alert_handle is not None and alert_handle != handle:
+                            continue
+                        if isinstance(alert, lt.save_resume_data_alert):
+                            destination.write_bytes(bytes(lt.write_resume_data_buf(alert.params)))
+                            return
+                        if isinstance(alert, lt.save_resume_data_failed_alert):
+                            return
+                    await asyncio.sleep(0.1)
+            except Exception:
+                return
 
     def _move_payload(self, info, payload_dir: Path) -> Path:
         root = payload_dir / info.name()
-        destination = Path(settings.download_dir) / sanitize_filename(info.name())
+        destination = task_output_dir(self.task) / sanitize_filename(info.name())
         for index in range(10000):
             candidate = destination if index == 0 else destination.with_name(f"{destination.stem}_{index}{destination.suffix}")
             if not candidate.exists():

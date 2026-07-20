@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AppWindow, Archive, File, FileAudio, FileCode2, FileImage, FileText, FileVideo, Film, FolderOpen, Globe2, Info, LoaderCircle, Magnet, MonitorPlay, MoreHorizontal, Pause, Play, PlayCircle, RadioTower, RotateCcw, Trash2, XCircle } from 'lucide-react'
+import { AppWindow, Archive, CheckCircle2, File, FileAudio, FileCode2, FileImage, FileText, FileVideo, Film, FolderOpen, Globe2, Info, LoaderCircle, Magnet, MonitorPlay, MoreHorizontal, Pause, Play, PlayCircle, RadioTower, RotateCcw, Trash2, XCircle } from 'lucide-react'
 import { getDisplayedProgress } from '../taskState'
 import { fmtBytes, fmtDate, fmtEta, fmtSpeed } from '../format'
 import { taskContextActions, type TaskContextAction } from '../taskContextActions'
@@ -30,7 +30,7 @@ const typeIcons = {
   torrent: <Magnet size={15} />,
 }
 
-export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTasksAction, onOpenLog, onOpenFile, onLaunchFile, onPreview }: {
+export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTasksAction, onOpenLog, onOpenFile, onLaunchFile, onPreview, onPreviewImage }: {
   tasks: Task[]
   selected: Set<string>
   pending: Set<string>
@@ -41,9 +41,12 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
   onOpenFile: (task: Task) => void
   onLaunchFile: (task: Task) => void
   onPreview: (task: Task) => void
+  onPreviewImage: (task: Task) => void
 }) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
   const selectionAnchor = useRef<string | null>(null)
+  const dragStart = useRef<{ index: number; x: number; y: number; base: Set<string> } | null>(null)
+  const suppressClick = useRef(false)
   const allSelected = tasks.length > 0 && tasks.every(task => selected.has(task.id))
   const toggleAll = () => onSelect(allSelected ? new Set() : new Set(tasks.map(task => task.id)))
   const toggleOne = (id: string) => {
@@ -71,6 +74,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
   }, [menu])
 
   const selectRow = (event: React.MouseEvent, task: Task) => {
+    if (suppressClick.current) { suppressClick.current = false; return }
     if (event.shiftKey && selectionAnchor.current) {
       const start = tasks.findIndex(value => value.id === selectionAnchor.current)
       const end = tasks.findIndex(value => value.id === task.id)
@@ -83,6 +87,30 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
     selectionAnchor.current = task.id
     if (event.ctrlKey || event.metaKey) toggleOne(task.id)
     else onSelect(new Set([task.id]))
+  }
+
+  const beginRangeSelection = (event: React.PointerEvent, index: number) => {
+    if (event.button !== 0 || (event.target as HTMLElement).closest('input,button,a')) return
+    dragStart.current = { index, x: event.clientX, y: event.clientY, base: new Set(event.ctrlKey || event.metaKey ? selected : []) }
+    const move = (next: PointerEvent) => {
+      const start = dragStart.current
+      if (!start || Math.abs(next.clientX - start.x) + Math.abs(next.clientY - start.y) < 6) return
+      suppressClick.current = true
+      document.body.classList.add('task-range-selecting')
+      const row = (document.elementFromPoint(next.clientX, next.clientY) as HTMLElement | null)?.closest<HTMLTableRowElement>('tr[data-task-index]')
+      const end = Number(row?.dataset.taskIndex ?? start.index)
+      const selection = new Set(start.base)
+      tasks.slice(Math.min(start.index, end), Math.max(start.index, end) + 1).forEach(task => selection.add(task.id))
+      onSelect(selection)
+    }
+    const finish = () => {
+      dragStart.current = null
+      document.body.classList.remove('task-range-selecting')
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', finish)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', finish, { once: true })
   }
 
   const openMenu = (event: React.MouseEvent, task: Task) => {
@@ -121,33 +149,41 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
     <div className="table-scroll">
       <table className="task-table">
         <thead><tr><th className="check-col"><input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="选择全部任务" /></th><th>文件名</th><th>状态</th><th>进度</th><th>速度 / 剩余</th><th className="segments-col">分片</th><th className="updated-col">更新时间</th><th className="menu-col" /></tr></thead>
-        <tbody>{tasks.map(task => {
+        <tbody>{tasks.map((task, taskIndex) => {
           const progress = getDisplayedProgress(task)
           const visual = filePresentation(task.output_path || task.filename || task.url, task.mime_type)
           const displayName = task.title || task.filename || task.id
-          return <tr key={task.id} className={`${selected.has(task.id) ? 'selected ' : ''}${pending.has(task.id) ? 'pending' : ''}${task.output_is_file ? ' draggable-file' : ''}`.trim()}
-            draggable={task.status === 'done' && task.output_is_file}
-            title={task.status === 'done' && task.output_is_file ? '可拖到桌面或资源管理器复制文件' : undefined}
-            onDragStart={event => {
+          const postProcessing = task.status === 'merging' || task.status === 'remuxing'
+          return <tr key={task.id} data-task-index={taskIndex} className={`${selected.has(task.id) ? 'selected ' : ''}${pending.has(task.id) ? 'pending' : ''}`.trim()}
+            onClick={event => {
+              if ((event.target as HTMLElement).closest('input')) return
+              selectRow(event, task)
+            }}
+            onPointerDown={event => beginRangeSelection(event, taskIndex)}
+            onContextMenu={event => openMenu(event, task)}
+            onDoubleClick={() => {
+              if (task.status === 'done' && visual.kind === 'image' && task.output_is_file) onPreviewImage(task)
+              else if ((visual.kind === 'video' || visual.kind === 'audio') && task.available_actions?.includes('preview')) onPreview(task)
+              else if (task.status === 'done' && task.output_is_file) onLaunchFile(task)
+              else onOpenDetails(task)
+            }}>
+            <td className="check-col"><input type="checkbox" checked={selected.has(task.id)} onChange={() => toggleOne(task.id)} aria-label={`选择 ${task.title || task.filename || task.id}`} /></td>
+            <td className={`name-cell${task.output_is_file ? ' draggable-file' : ''}`} draggable={task.status === 'done' && task.output_is_file} title={task.output_is_file ? '从文件名拖到桌面或资源管理器可复制文件' : undefined} onDragStart={event => {
               if (!task.output_is_file) { event.preventDefault(); return }
               const filename = task.output_path.split(/[\\/]/).pop() || task.filename || task.id
               const url = new URL(taskFileUrl(task.id), window.location.href).href
               event.dataTransfer.effectAllowed = 'copy'
               event.dataTransfer.setData('DownloadURL', `${task.mime_type || 'application/octet-stream'}:${filename}:${url}`)
               event.dataTransfer.setData('text/uri-list', url)
-            }}
-            onClick={event => {
-              if ((event.target as HTMLElement).closest('input')) return
-              selectRow(event, task)
-            }}
-            onContextMenu={event => openMenu(event, task)}
-            onDoubleClick={() => task.available_actions?.includes('preview') ? onPreview(task) : onOpenDetails(task)}>
-            <td className="check-col"><input type="checkbox" checked={selected.has(task.id)} onChange={() => toggleOne(task.id)} aria-label={`选择 ${task.title || task.filename || task.id}`} /></td>
-            <td className="name-cell"><span title={displayName}><TaskFileIcon kind={visual.kind} extension={visual.extension} /><b>{displayName}</b><i className={`task-type type-${task.task_type}`} title={typeLabels[task.task_type]}>{typeIcons[task.task_type]}</i></span><small title={task.url}>{task.url}</small></td>
+            }}><span title={displayName}><TaskFileIcon kind={visual.kind} extension={visual.extension} /><b>{displayName}</b><i className={`task-type type-${task.task_type}`} title={typeLabels[task.task_type]}>{typeIcons[task.task_type]}</i></span><small title={task.url}>{task.url}</small></td>
             <td><span className={`status status-${task.status}`}>{pending.has(task.id) && <LoaderCircle className="spin" size={12} />}{task.status === 'queued' && task.queue_position ? `排队中 · 第 ${task.queue_position} 位` : statusLabel(task.status)}</span>{task.error_code && <small className="failure-code" title={task.error_message}>{task.error_code}</small>}</td>
-            <td><div className="table-progress"><div><i style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div><span>{progress.toFixed(1)}%</span></div><small className="progress-bytes">{fmtBytes(task.downloaded_bytes)} / {fmtBytes(task.total_bytes)}</small></td>
+            <td>{task.status === 'done'
+              ? <span className="completed-progress"><CheckCircle2 size={15} />已完成</span>
+              : postProcessing
+                ? <div className="phase-progress"><ProgressLine label="下载" value={100} /><ProgressLine label={task.status === 'merging' ? '拼接' : '转封装'} value={task.post_percent || 0} /></div>
+                : <><ProgressLine value={progress} /><small className="progress-bytes">{fmtBytes(task.downloaded_bytes)} / {task.total_bytes ? fmtBytes(task.total_bytes) : '--'}</small></>}</td>
             <td><span className="speed-cell">{fmtSpeed(task.speed_bytes_per_sec)}</span><small className="eta-cell">{task.task_type === 'torrent' && task.upload_speed_bytes_per_sec > 0 ? `↑ ${fmtSpeed(task.upload_speed_bytes_per_sec)}` : fmtEta(task.eta_seconds)}</small></td>
-            <td className="segments-col" title={task.task_type === 'torrent' ? `Peer ${task.peer_count} · Seed ${task.seed_count}` : undefined}>{task.total_segments ? `${task.completed_segments}/${task.total_segments}` : '--'}</td><td className="updated-col">{fmtDate(task.updated_at)}</td>
+            <td className="segments-col" title={task.task_type === 'torrent' ? `Peer ${task.peer_count} · Seed ${task.seed_count}` : `${task.active_workers || task.active_slots || 0}/${task.max_workers || task.concurrency || 0} 个连接`}>{task.task_type === 'torrent' ? `${task.peer_count} Peer` : task.total_segments ? <><span>{task.completed_segments}/{task.total_segments}</span><small>{task.active_workers || task.active_slots || 0} 连接</small></> : '--'}</td><td className="updated-col">{fmtDate(task.updated_at)}</td>
             <td className="menu-col"><button className="row-menu-button" title="任务操作" onClick={event => { event.stopPropagation(); openMenu(event, task) }}><MoreHorizontal size={17} /></button></td>
           </tr>
         })}</tbody>
@@ -162,6 +198,11 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
       )}
     </div>
   )
+}
+
+function ProgressLine({ value, label }: { value: number; label?: string }) {
+  const safe = Math.max(0, Math.min(100, Number(value) || 0))
+  return <div className="table-progress">{label && <b>{label}</b>}<div><i style={{ width: `${safe}%` }} /></div><span>{safe.toFixed(1)}%</span></div>
 }
 
 const fileKindIcons: Record<FileKind, React.ReactNode> = {

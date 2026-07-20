@@ -32,4 +32,13 @@ describe('task presentation', () => {
     expect(statusLabel('downloading_segments')).toBe('下载分片')
     expect(stageLabel('merging')).toBe('合并视频')
   })
+
+  it('filters by simplified file category', () => {
+    const tasks = [
+      { ...task('video', 'done', '2026-01-01T00:00:00'), filename: 'video.mp4', task_type: 'http' },
+      { ...task('setup', 'done', '2026-01-01T00:00:01'), filename: 'setup.exe', task_type: 'http' },
+    ]
+    expect(filterAndSortTasks(tasks, 'media', '').map(item => item.id)).toEqual(['video'])
+    expect(filterAndSortTasks(tasks, 'program', '').map(item => item.id)).toEqual(['setup'])
+  })
 })

@@ -91,6 +91,15 @@ def _row_value(row, key: str, default=None):
         return default
 
 
+def task_output_is_file(task: Task) -> bool:
+    if not task.output_path or task.status is not TaskStatus.DONE:
+        return False
+    cached = task.engine_state.get("output_is_file")
+    if cached is not None:
+        return bool(cached)
+    return task.task_type is not TaskType.TORRENT or task.engine_state.get("stream_path") == task.output_path
+
+
 class TaskManager:
     def __init__(self):
         self.tasks: dict[str, Task] = {}
@@ -239,6 +248,7 @@ class TaskManager:
         title="",
         filename="",
         concurrency=0,
+        output_dir="",
         auto_start=False,
     ) -> Task:
         task_id = str(uuid.uuid4())[:8]
@@ -266,6 +276,7 @@ class TaskManager:
             last_log="等待开始",
             created_at=now,
             updated_at=now,
+            engine_state={"output_dir": str(Path(output_dir).expanduser().resolve())} if output_dir else {},
         )
         async with self._temp_cleanup_lock:
             self.tasks[task_id] = task
@@ -293,7 +304,7 @@ class TaskManager:
                 "",
                 "",
                 0,
-                "{}",
+                json.dumps(task.engine_state, ensure_ascii=False),
             ),
         )
         if auto_start:
@@ -523,7 +534,7 @@ class TaskManager:
         await self._cleanup_temp_root_if_all_done()
 
     async def _delete_task_outputs(self, task: Task) -> None:
-        download_root = Path(settings.download_dir).resolve()
+        download_root = Path(task.engine_state.get("output_dir") or settings.download_dir).resolve()
         candidates = {
             str(task.output_path or ""),
             str(task.engine_state.get("reserved_output_path", "") or ""),
@@ -824,6 +835,7 @@ class TaskManager:
             "user_agent": task.user_agent,
             "cookie": "",
             "filename": task.filename,
+            "download_dir": str(task.engine_state.get("output_dir") or settings.download_dir),
             "concurrency": task.concurrency,
             "status": task.status.value,
             "stage": task.stage,
@@ -860,7 +872,7 @@ class TaskManager:
             "http_status": task.http_status,
             "error_attempt": task.error_attempt,
             "output_path": task.output_path,
-            "output_is_file": bool(task.output_path and Path(task.output_path).is_file()),
+            "output_is_file": task_output_is_file(task),
             "created_at": task.created_at,
             "updated_at": task.updated_at,
             "started_at": task.started_at,

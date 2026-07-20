@@ -28,13 +28,13 @@ def _settings() -> tuple[str, str]:
     return "http://127.0.0.1:8765/api", "55555"
 
 
-def _request(method: str, path: str, payload: dict | None = None) -> dict | list:
+def _request(method: str, path: str, payload: dict | None = None, timeout: float = 4) -> dict | list:
     base, token = _settings()
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     request = urllib.request.Request(base + path, data=body, method=method)
     request.add_header("X-Token", token)
     request.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(request, timeout=4) as response:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -70,7 +70,7 @@ def _ensure_app() -> None:
 
 def dispatch(message: dict) -> dict:
     operation = message.get("op")
-    if operation not in {"ping", "activate", "offer", "download", "handoff_status"}:
+    if operation not in {"ping", "activate", "offer", "download", "handoff_status", "wait_handoff"}:
         raise ValueError("不支持的 Native Messaging 操作")
     _ensure_app()
     _request("POST", "/browser/ping", {"version": str(message.get("version", ""))})
@@ -85,6 +85,8 @@ def dispatch(message: dict) -> dict:
         activated = _request("POST", "/app/activate", {})
         return {"ok": True, "task": task, "activated": bool(activated.get("ok"))}
     handoff_id = str(message.get("handoff_id", ""))
+    if operation == "wait_handoff":
+        return {"ok": True, "handoff": _request("GET", f"/browser/handoffs/{handoff_id}/wait", timeout=125)}
     return {"ok": True, "handoff": _request("GET", f"/browser/handoffs/{handoff_id}")}
 
 

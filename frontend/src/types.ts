@@ -5,6 +5,7 @@ export interface Task {
   mime_type: string
   title: string
   filename: string
+  download_dir: string
   url: string
   status: string
   stage: string
@@ -18,6 +19,8 @@ export interface Task {
   eta_seconds: number
   active_workers: number
   max_workers: number
+  active_slots: number
+  concurrency: number
   reconnect_count: number
   connection_status: string
   post_percent: number
@@ -84,6 +87,7 @@ export interface Settings {
   bt_enable_dht?: boolean
   browser_takeover_enabled?: boolean
   browser_takeover_min_mb?: number
+  browser_category_dirs?: Record<string, string>
 }
 
 export interface TorrentFileEntry {

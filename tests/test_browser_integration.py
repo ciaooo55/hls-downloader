@@ -43,3 +43,21 @@ def test_native_host_manual_download_creates_task_immediately(monkeypatch):
     assert result["activated"] is True
     assert ("POST", "/browser/downloads", {"url": "https://cdn.test/setup.exe"}) in calls
     assert ("POST", "/app/activate", {}) in calls
+
+
+def test_native_host_waits_for_handoff_with_one_long_request(monkeypatch):
+    calls = []
+    monkeypatch.setattr(native_host, "_ensure_app", lambda: None)
+
+    def request(method, path, payload=None, timeout=4):
+        calls.append((method, path, payload, timeout))
+        if path.endswith("/wait"):
+            return {"id": "handoff-1", "status": "accepted"}
+        return {"ok": True}
+
+    monkeypatch.setattr(native_host, "_request", request)
+    result = native_host.dispatch({"op": "wait_handoff", "handoff_id": "handoff-1"})
+
+    assert result["handoff"]["status"] == "accepted"
+    waits = [call for call in calls if call[1].endswith("/wait")]
+    assert waits == [("GET", "/browser/handoffs/handoff-1/wait", None, 125)]

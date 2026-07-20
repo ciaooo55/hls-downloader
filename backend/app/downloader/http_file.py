@@ -14,7 +14,7 @@ import httpx
 from ..config import settings
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
-from .engine import SeeklessEngine
+from .engine import SeeklessEngine, task_output_dir
 from .errors import diagnose_download_error, format_download_error
 
 
@@ -163,7 +163,7 @@ class HTTPDownloader(SeeklessEngine):
                 task.progress.total_bytes = total
                 name = metadata["filename"] or Path(urlparse(task.url).path).name or task.filename or task.id
                 task.filename = sanitize_filename(task.filename or name)
-                output = _reserve_output_path(Path(settings.download_dir) / task.filename)
+                output = _reserve_output_path(task_output_dir(task) / task.filename)
                 task.engine_state["reserved_output_path"] = str(output)
 
                 if total <= 0 or not metadata["ranges"]:
@@ -190,6 +190,7 @@ class HTTPDownloader(SeeklessEngine):
             part_path.replace(output)
             state_path.unlink(missing_ok=True)
             task.output_path = str(output)
+            task.engine_state["output_is_file"] = True
             task.engine_state.pop("reserved_output_path", None)
             task.engine_state["stream_path"] = str(output)
             task.engine_state["total_size"] = output.stat().st_size

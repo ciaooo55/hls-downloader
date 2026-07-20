@@ -18,6 +18,7 @@ from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
 from .merge import merge_segments
 from .errors import as_download_error, diagnose_download_error, format_download_error
+from .engine import task_output_dir
 from .parser import UnsupportedPlaylistError, parse_m3u8
 from .playback import playback_service, write_playback_plan
 from .progress import ProgressTracker
@@ -164,7 +165,7 @@ class HLSDownloader:
         filename = sanitize_filename(self.task.filename or self.task.title or self.task.id)
         if not filename.lower().endswith(".mp4"):
             filename += ".mp4"
-        return _reserve_output_path(Path(settings.download_dir) / filename)
+        return _reserve_output_path(task_output_dir(self.task) / filename)
 
     def _publish(self) -> None:
         self.on_progress(self.task)
@@ -336,6 +337,7 @@ class HLSDownloader:
             )
 
             task.output_path = str(output)
+            task.engine_state["output_is_file"] = True
             task.engine_state.pop("reserved_output_path", None)
             task.status = TaskStatus.DONE
             task.finished_at = datetime.now().isoformat()

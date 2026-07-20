@@ -1,5 +1,5 @@
 {
-  "config_version": 4,
+  "config_version": 5,
   "host": "127.0.0.1",
   "port": 8765,
   "token": "55555",
@@ -18,5 +18,6 @@
   "bt_max_connections": 80,
   "bt_enable_dht": true,
   "browser_takeover_enabled": true,
-  "browser_takeover_min_mb": 1
+  "browser_takeover_min_mb": 1,
+  "browser_category_dirs": {}
 }

@@ -49,7 +49,9 @@
 - 固定 worker 队列并发下载
 - 暂停、恢复、取消、重试和批量任务
 - 任务列表右键快捷操作
+- 全部/进行中/已完成与媒体/程序/压缩包/其他分类，支持 Ctrl、Shift 和拖动范围多选
 - 分片、速度、ETA、合并与转封装进度
+- 浏览器下载确认可预览类型和大小、修改文件名、选择并记忆分类保存目录
 - 内置播放器：边下边播、完成后本地 Range 播放、下载速度、缩略图预览和 0.5x-3x 倍速
 - 播放器按需加载，缩略图只在悬停时解码并限制缓存，不占用下载 worker
 - 断点续传和原子临时文件
@@ -73,7 +75,7 @@
 
 ## 浏览器扩展
 
-Release 同时生成 Chrome 和 Firefox MV3 提交包，Chrome 包也可加载到 Edge。安装版会自动为 Chrome、Edge 和 Firefox 注册 `com.ciaooo55.hls_downloader` Native Messaging Host，扩展不会接触本地 API Token。用户明确点击可识别的文件链接时，扩展会阻止浏览器副本并直接加入桌面下载器；按钮、重定向等动态下载由浏览器下载事件兜底接管。接管成功后下载器窗口置前，桌面端离线或接管失败时恢复浏览器下载。页面嗅探只登记资源，不会自行启动下载，按住 Alt 点击可临时绕过接管。
+Release 同时生成 Chrome 和 Firefox MV3 提交包，Chrome 包也可加载到 Edge。安装版会自动为 Chrome、Edge 和 Firefox 注册 `com.ciaooo55.hls_downloader` Native Messaging Host，扩展不会接触本地 API Token。用户明确点击下载后，扩展等待浏览器解析重定向和 `Content-Disposition`，再暂停真实下载并在桌面端显示文件名、类型、大小与保存位置确认；不会把中间的 PHP 页面地址提前当成文件。确认接管后取消浏览器副本，取消则不下载，桌面端离线、拒绝或超时会恢复浏览器下载。页面嗅探只登记资源，不会自行启动下载，按住 Alt 点击可临时绕过接管。
 
 扩展支持响应嗅探、页面 fetch/XHR/media/Performance 观察、右键下载和 magnet 链接。Cookie 必须按站点单独授权，桌面任务中的 Cookie 使用 Windows DPAPI 加密后再写入数据库。Chrome 正式安装需要 Chrome Web Store，Firefox 永久安装需要 Mozilla 签名。
 
@@ -148,7 +150,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.2.4
+.\scripts\build_installer.ps1 -Version 1.2.5
 ```
 
 输出位于忽略的 `release` 目录：
@@ -167,8 +169,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.2.4
-git push origin v1.2.4
+git tag v1.2.5
+git push origin v1.2.5
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。

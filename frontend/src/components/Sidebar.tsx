@@ -1,25 +1,23 @@
-import { CheckCircle2, CirclePause, CircleX, Download, Film, Globe2, List, Magnet, Radio, RadioTower, XCircle } from 'lucide-react'
+import { AppWindow, Archive, CheckCircle2, Download, File, Images, List, Radio } from 'lucide-react'
 import type { BrowserStatus, Task, UserscriptStatus } from '../types'
+import { downloadCategory } from '../downloadCategory'
 
-export type TaskFilter = 'all' | 'running' | 'paused' | 'done' | 'failed' | 'canceled' | 'hls' | 'dash' | 'http' | 'torrent'
+export type TaskFilter = 'all' | 'running' | 'done' | 'media' | 'program' | 'archive' | 'other'
 
 const filters: Array<{ id: TaskFilter; label: string; icon: typeof List }> = [
   { id: 'all', label: '全部任务', icon: List },
-  { id: 'running', label: '下载中', icon: Download },
-  { id: 'paused', label: '已暂停', icon: CirclePause },
+  { id: 'running', label: '进行中', icon: Download },
   { id: 'done', label: '已完成', icon: CheckCircle2 },
-  { id: 'failed', label: '失败', icon: CircleX },
-  { id: 'canceled', label: '已取消', icon: XCircle },
-  { id: 'hls', label: 'HLS 视频', icon: Film },
-  { id: 'dash', label: 'DASH 视频', icon: RadioTower },
-  { id: 'http', label: '普通文件', icon: Globe2 },
-  { id: 'torrent', label: 'BT 下载', icon: Magnet },
+  { id: 'media', label: '媒体', icon: Images },
+  { id: 'program', label: '程序', icon: AppWindow },
+  { id: 'archive', label: '压缩包', icon: Archive },
+  { id: 'other', label: '其他', icon: File },
 ]
 
 function countFor(tasks: Task[], filter: TaskFilter): number {
   if (filter === 'all') return tasks.length
   if (filter === 'running') return tasks.filter(task => ['queued', 'fetching_metadata', 'checking', 'downloading', 'downloading_m3u8', 'parsing', 'downloading_segments', 'pausing', 'merging', 'remuxing'].includes(task.status)).length
-  if (['hls', 'dash', 'http', 'torrent'].includes(filter)) return tasks.filter(task => task.task_type === filter).length
+  if (['media', 'program', 'archive', 'other'].includes(filter)) return tasks.filter(task => downloadCategory(task.output_path || task.filename || task.url, task.mime_type, task.task_type) === filter).length
   return tasks.filter(task => task.status === filter).length
 }
 
@@ -27,9 +25,9 @@ export default function Sidebar({ tasks, active, onChange, userscript, browserSt
   return (
     <aside className="sidebar">
       <nav>
-        {filters.map(item => {
+        {filters.map((item, index) => {
           const Icon = item.icon
-          return <button key={item.id} className={`sidebar-item${active === item.id ? ' active' : ''}`} onClick={() => onChange(item.id)}><Icon size={16} /><span>{item.label}</span><b>{countFor(tasks, item.id)}</b></button>
+          return <div key={item.id}>{index === 3 && <span className="sidebar-group-label">分类</span>}<button className={`sidebar-item${active === item.id ? ' active' : ''}`} onClick={() => onChange(item.id)}><Icon size={16} /><span>{item.label}</span><b>{countFor(tasks, item.id)}</b></button></div>
         })}
       </nav>
       <div className="sidebar-script">

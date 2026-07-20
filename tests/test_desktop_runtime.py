@@ -279,7 +279,31 @@ def test_activation_restores_and_shows_registered_window():
     register_activation(controller.activate)
 
     assert activate_window() is True
+    for _ in range(100):
+        if len(window.calls) == 4:
+            break
+        threading.Event().wait(0.01)
     assert window.calls == ["restore", "show", "on-top:True", "on-top:False"]
+
+
+def test_activation_returns_without_waiting_for_blocked_window():
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked_activation():
+        started.set()
+        release.wait(timeout=2)
+
+    register_activation(blocked_activation)
+    try:
+        before = threading.Event()
+        before.set()
+        assert activate_window() is True
+        assert started.wait(timeout=0.2)
+        assert activate_window() is True
+    finally:
+        release.set()
+        register_activation(None)
 
 
 def test_activation_reports_false_when_no_window_is_registered():

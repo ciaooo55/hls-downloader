@@ -8,7 +8,7 @@ from pathlib import Path
 from ..config import settings
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
-from .engine import SeeklessEngine
+from .engine import SeeklessEngine, task_output_dir
 from .errors import diagnose_download_error, format_download_error
 
 
@@ -64,10 +64,11 @@ class DashDownloader(SeeklessEngine):
             final_name = sanitize_filename(task.filename or output.name)
             if not Path(final_name).suffix:
                 final_name += output.suffix or ".mp4"
-            destination = self._unique_path(Path(settings.download_dir) / final_name)
+            destination = self._unique_path(task_output_dir(task) / final_name)
             output.replace(destination)
             task.filename = destination.name
             task.output_path = str(destination)
+            task.engine_state["output_is_file"] = True
             task.engine_state["stream_path"] = str(destination)
             task.engine_state["total_size"] = destination.stat().st_size
             task.progress.downloaded_bytes = destination.stat().st_size

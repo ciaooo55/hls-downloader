@@ -73,6 +73,22 @@ async function downloadNow(resource: MediaResource) {
   return native({ op: 'download', resource: payload })
 }
 
+async function offer(resource: MediaResource) {
+  const payload = await resourcePayload(resource)
+  return native({ op: 'offer', resource: payload })
+}
+
+async function refreshedDownload(downloadId: number, original: browser.downloads.DownloadItem) {
+  await new Promise(resolve => setTimeout(resolve, 150))
+  const [current] = await browser.downloads.search({ id: downloadId })
+  return current || original
+}
+
+async function waitForHandoff(handoffId: string): Promise<string> {
+  const response = await native({ op: 'wait_handoff', handoff_id: handoffId })
+  return String(response?.handoff?.status || 'expired')
+}
+
 async function pauseDownload(downloadId: number): Promise<void> {
   for (let attempt = 0; attempt < 12; attempt += 1) {
     try {
@@ -142,25 +158,32 @@ export default defineBackground(() => {
     console.debug('HLS Downloader observed browser download', item.url)
     const config = await settings()
     if (!config.enabled) return
-    const url = item.finalUrl || item.url
-    const filename = item.filename.split(/[\\/]/).pop() || ''
-    const mimeType = item.mime || ''
-    const kind = classifyDownload(url, mimeType, filename) || 'file'
-    const resource: MediaResource = { id: resourceId(url), url, kind, mimeType, size: item.fileSize, title: filename, filename, pageUrl: item.referrer, seenAt: Date.now() }
     let paused = false
     try {
       await pauseDownload(item.id)
       paused = true
+      const actual = await refreshedDownload(item.id, item)
+      const url = actual.finalUrl || actual.url
+      const filename = actual.filename.split(/[\\/]/).pop() || ''
+      const mimeType = actual.mime || ''
+      const kind = classifyDownload(url, mimeType, filename) || 'file'
+      const resource: MediaResource = { id: resourceId(url), url, kind, mimeType, size: actual.fileSize || actual.totalBytes, title: filename, filename, pageUrl: actual.referrer, seenAt: Date.now() }
       const intent = await waitForClickIntent(url, item.referrer)
       if (!intent || !shouldTakeover({ url: resource.url, size: resource.size, mimeType, filename, ...config, ...intent, explicitClick: true })) {
         await browser.downloads.resume(item.id).catch(() => undefined)
         return
       }
       console.debug('HLS Downloader taking over explicit browser download', url)
-      const response = await downloadNow(resource)
-      if (!response?.ok || !response?.task?.id) throw new Error(response?.error || 'desktop rejected')
-      await browser.downloads.cancel(item.id)
-      await browser.downloads.erase({ id: item.id }).catch(() => undefined)
+      const response = await offer(resource)
+      const handoffId = String(response?.handoff?.id || '')
+      if (!response?.ok || !handoffId) throw new Error(response?.error || 'desktop rejected')
+      const status = await waitForHandoff(handoffId)
+      if (status === 'accepted' || status === 'canceled') {
+        await browser.downloads.cancel(item.id)
+        await browser.downloads.erase({ id: item.id }).catch(() => undefined)
+      } else {
+        await browser.downloads.resume(item.id).catch(() => undefined)
+      }
     } catch (error) {
       console.warn('HLS Downloader takeover failed; returning download to browser', error)
       if (paused) await browser.downloads.resume(item.id).catch(() => undefined)
@@ -169,7 +192,7 @@ export default defineBackground(() => {
 
   browser.contextMenus.onClicked.addListener((info, tab) => {
     const url = info.linkUrl || info.srcUrl
-    if (url) void downloadNow({ id: resourceId(url), url, kind: classifyResource(url) || 'file', pageUrl: tab?.url, seenAt: Date.now() })
+    if (url) void offer({ id: resourceId(url), url, kind: classifyResource(url) || 'file', pageUrl: tab?.url, seenAt: Date.now() })
     if (info.menuItemId === 'hls-download-selection' && tab?.id) void browser.tabs.sendMessage(tab.id, { type: 'collect-selection' })
   })
 
@@ -190,13 +213,8 @@ export default defineBackground(() => {
       void saveResource({ ...message.resource, pageUrl: message.resource.pageUrl || sender.tab?.url }, sender.tab?.id ?? -1)
       return
     }
-    if (message?.type === 'download' || message?.type === 'direct-click-download') {
-      const request = message.type === 'direct-click-download'
-        ? settings().then(config => shouldTakeover({
-            url: String(message.resource?.url || ''), ...config,
-            explicitClick: true, altBypass: Boolean(message.altBypass), ctrlForce: Boolean(message.ctrlForce),
-          }) ? downloadNow(message.resource) : ({ ok: false, bypass: true }))
-        : downloadNow(message.resource)
+    if (message?.type === 'download' || message?.type === 'offer') {
+      const request = message.type === 'offer' ? offer(message.resource) : downloadNow(message.resource)
       void request
         .then(response => sendResponse(response))
         .catch(error => sendResponse({ ok: false, error: String(error) }))

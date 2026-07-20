@@ -16,6 +16,7 @@ class TaskCreate(BaseModel):
     cookie: str = ""
     title: str = ""
     filename: str = ""
+    download_dir: str = ""
     concurrency: int = Field(default=0, ge=0, le=64)
 
     @field_validator("url")
@@ -43,6 +44,7 @@ class TaskResponse(BaseModel):
     user_agent: str
     cookie: str
     filename: str
+    download_dir: str = ""
     concurrency: int
     status: str
     stage: str
@@ -107,6 +109,14 @@ class SettingsUpdate(BaseModel):
     bt_enable_dht: Optional[bool] = None
     browser_takeover_enabled: Optional[bool] = None
     browser_takeover_min_mb: Optional[int] = Field(default=None, ge=0, le=10240)
+    browser_category_dirs: Optional[dict[str, str]] = None
+
+
+class BrowserHandoffAccept(BaseModel):
+    filename: str = Field(default="", max_length=255)
+    download_dir: str = Field(default="", max_length=2048)
+    category: str = Field(default="other", pattern="^(media|program|archive|other)$")
+    remember: bool = True
 
 class HealthResponse(BaseModel):
     status: str = "ok"

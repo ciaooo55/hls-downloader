@@ -1,4 +1,5 @@
 import { isRunningStatus } from './taskState'
+import { downloadCategory } from './downloadCategory'
 
 const STATUS_LABELS: Record<string, string> = {
   queued: '排队中',
@@ -59,15 +60,16 @@ export function filterAndSortTasks<T extends Record<string, any>>(
   const needle = query.trim().toLocaleLowerCase()
   return tasks.filter(task => {
     if (filter === 'running' && !(isRunningStatus(task.status) || task.status === 'queued')) return false
-    if (['hls', 'dash', 'http', 'torrent'].includes(filter)) {
-      if (task.task_type !== filter) return false
+    if (['media', 'program', 'archive', 'other'].includes(filter)) {
+      if (downloadCategory(task.output_path || task.filename || task.url, task.mime_type, task.task_type) !== filter) return false
     } else if (filter !== 'all' && filter !== 'running' && task.status !== filter) return false
     if (!needle) return true
     return [task.id, task.title, task.filename, task.url, task.error_code, task.error_message]
       .some(value => String(value || '').toLocaleLowerCase().includes(needle))
   }).sort((a, b) => {
-    const activeDifference = Number(ACTIVE.has(b.status)) - Number(ACTIVE.has(a.status))
-    if (activeDifference) return activeDifference
+    const priority = (status: string) => ACTIVE.has(status) ? 0 : status === 'failed' || status === 'unsupported' ? 1 : status === 'canceled' ? 2 : 3
+    const priorityDifference = priority(a.status) - priority(b.status)
+    if (priorityDifference) return priorityDifference
     const createdDifference = String(b.created_at || '').localeCompare(String(a.created_at || ''))
     return createdDifference || String(a.id).localeCompare(String(b.id))
   })

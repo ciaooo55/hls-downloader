@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from pydantic import Field
 from pydantic_settings import BaseSettings
 from .paths import RUNTIME_PATHS
 
@@ -7,7 +8,7 @@ PROJECT_ROOT = RUNTIME_PATHS.project_root
 CONFIG_PATH = RUNTIME_PATHS.config_path
 
 class Settings(BaseSettings):
-    config_version: int = 4
+    config_version: int = 5
     host: str = "127.0.0.1"
     port: int = 8765
     token: str = "55555"
@@ -27,6 +28,7 @@ class Settings(BaseSettings):
     bt_enable_dht: bool = True
     browser_takeover_enabled: bool = True
     browser_takeover_min_mb: int = 1
+    browser_category_dirs: dict[str, str] = Field(default_factory=dict)
 
     # Ignore fields written by a newer release so downgrade/upgrade helpers can
     # still start far enough to close the running application cleanly.
@@ -74,6 +76,11 @@ def load_settings() -> Settings:
             migrated = True
         if version < 4:
             data["config_version"] = 4
+            version = 4
+            migrated = True
+        if version < 5:
+            data["browser_category_dirs"] = {}
+            data["config_version"] = 5
             migrated = True
         s = Settings(**data)
         if migrated:

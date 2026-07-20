@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { classifyResource, isDirectDownloadLink, resourceId, type MediaResource } from '../lib/resources'
+import { classifyResource, resourceId, type MediaResource } from '../lib/resources'
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -41,30 +41,6 @@ export default defineContentScript({
       const control = path.find(value => value instanceof HTMLElement
         && value.matches('button, input[type="button"], input[type="submit"], [role="button"]'))
       if (!anchor && !control) return
-      if (anchor && !event.altKey && (event.ctrlKey || isDirectDownloadLink(anchor.href, anchor.hasAttribute('download')))) {
-        event.preventDefault()
-        event.stopImmediatePropagation()
-        const filename = anchor.download || anchor.href.split(/[?#]/, 1)[0].split('/').pop() || ''
-        const resource = {
-          id: resourceId(anchor.href), url: anchor.href, kind: classifyResource(anchor.href) || 'file' as const,
-          filename, title: anchor.textContent?.trim() || filename, pageUrl: location.href, seenAt: Date.now(),
-        }
-        const fallbackToBrowser = () => {
-          void browser.runtime.sendMessage({
-            type: 'browser-download', url: anchor.href, filename: anchor.download || '',
-          }).then(response => {
-            if (!response?.ok) location.assign(anchor.href)
-          }).catch(() => location.assign(anchor.href))
-        }
-        void browser.runtime.sendMessage({
-          type: 'direct-click-download', resource,
-          altBypass: false, ctrlForce: event.ctrlKey,
-        }).then(response => {
-          if (response?.ok && response?.task?.id) return
-          fallbackToBrowser()
-        }).catch(fallbackToBrowser)
-        return
-      }
       void browser.runtime.sendMessage({
         type: 'click-intent',
         href: anchor?.href || '',
@@ -119,10 +95,10 @@ export default defineContentScript({
         button.addEventListener('click', () => {
           const result = ui.shadow.querySelector<HTMLElement>('.result')
           button.setAttribute('disabled', ''); button.textContent = '发送中'
-          void browser.runtime.sendMessage({ type: 'download', resource }).then(response => {
-            if (!response?.ok || !response?.task?.id) throw new Error(response?.error || '桌面端未接受任务')
-            button.textContent = '已加入'
-            if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `已加入桌面下载器：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
+          void browser.runtime.sendMessage({ type: 'offer', resource }).then(response => {
+            if (!response?.ok || !response?.handoff?.id) throw new Error(response?.error || '桌面端未接受请求')
+            button.textContent = '待确认'
+            if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `请在桌面下载器确认：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
           }).catch(reason => {
             button.removeAttribute('disabled'); button.textContent = '重试'
             if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '发送失败' }
