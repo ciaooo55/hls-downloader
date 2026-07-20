@@ -303,6 +303,11 @@ class DesktopController:
     def activate(self) -> None:
         self.window.restore()
         self.window.show()
+        try:
+            self.window.on_top = True
+            self.window.on_top = False
+        except Exception:
+            logger.exception("failed to bring desktop window to foreground")
 
     def _shutdown_then_destroy(self) -> None:
         try:

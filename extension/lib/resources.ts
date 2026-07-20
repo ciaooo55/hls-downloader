@@ -14,6 +14,14 @@ export interface MediaResource {
   seenAt: number
 }
 
+export interface DownloadClickIntent {
+  href: string
+  pageUrl: string
+  altBypass: boolean
+  ctrlForce: boolean
+  at: number
+}
+
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
 const SEGMENT_EXT = /\.(?:ts|m4s|cmfv|cmfa|aac)(?:$|[?#])/i
 
@@ -64,13 +72,44 @@ export function shouldTakeover(input: {
   enabled: boolean
   minimumBytes: number
   excludedHosts: string[]
+  explicitClick?: boolean
   altBypass?: boolean
   ctrlForce?: boolean
 }): boolean {
   if (input.altBypass) return false
   if (input.ctrlForce) return true
-  const sizeKnown = typeof input.size === 'number' && input.size >= 0
-  if (!input.enabled || (sizeKnown && input.size! < input.minimumBytes)) return false
-  try { if (input.excludedHosts.includes(new URL(input.url).host)) return false } catch { return false }
-  return classifyDownload(input.url, input.mimeType, input.filename) !== null
+  if (!input.explicitClick) return false
+  if (!input.enabled) return false
+  try {
+    const url = new URL(input.url)
+    if (!['http:', 'https:'].includes(url.protocol) || input.excludedHosts.includes(url.host)) return false
+  } catch {
+    return false
+  }
+  return true
+}
+
+export function isDirectDownloadLink(url: string, hasDownloadAttribute = false): boolean {
+  return hasDownloadAttribute || classifyDownload(url) !== null
+}
+
+export function matchesDownloadClick(
+  intent: DownloadClickIntent,
+  download: { url: string; referrer?: string },
+  now = Date.now(),
+): boolean {
+  if (now - intent.at < 0 || now - intent.at > 7000) return false
+  if (intent.href && stripHash(intent.href) === stripHash(download.url)) return true
+  if (intent.pageUrl && download.referrer && stripHash(intent.pageUrl) === stripHash(download.referrer)) return true
+  return !download.referrer
+}
+
+function stripHash(value: string): string {
+  try {
+    const url = new URL(value)
+    url.hash = ''
+    return url.href
+  } catch {
+    return value.split('#', 1)[0]
+  }
 }

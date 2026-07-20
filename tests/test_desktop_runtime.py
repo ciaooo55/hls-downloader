@@ -40,6 +40,14 @@ class FakeWindow:
     def show(self) -> None:
         self.calls.append("show")
 
+    @property
+    def on_top(self) -> bool:
+        return False
+
+    @on_top.setter
+    def on_top(self, value: bool) -> None:
+        self.calls.append(f"on-top:{value}")
+
     def hide(self) -> None:
         self.calls.append("hide")
 
@@ -271,7 +279,7 @@ def test_activation_restores_and_shows_registered_window():
     register_activation(controller.activate)
 
     assert activate_window() is True
-    assert window.calls == ["restore", "show"]
+    assert window.calls == ["restore", "show", "on-top:True", "on-top:False"]
 
 
 def test_activation_reports_false_when_no_window_is_registered():

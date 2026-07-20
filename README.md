@@ -73,7 +73,7 @@
 
 ## 浏览器扩展
 
-Release 同时生成 Chrome 和 Firefox MV3 提交包。安装版会自动注册 `com.ciaooo55.hls_downloader` Native Messaging Host，扩展不会接触本地 API Token。普通浏览器下载会先暂停；只有桌面端点击“立即下载”后才取消浏览器任务，拒绝、超时或桌面端离线都会恢复浏览器下载。
+Release 同时生成 Chrome 和 Firefox MV3 提交包，Chrome 包也可加载到 Edge。安装版会自动为 Chrome、Edge 和 Firefox 注册 `com.ciaooo55.hls_downloader` Native Messaging Host，扩展不会接触本地 API Token。用户明确点击可识别的文件链接时，扩展会阻止浏览器副本并直接加入桌面下载器；按钮、重定向等动态下载由浏览器下载事件兜底接管。接管成功后下载器窗口置前，桌面端离线或接管失败时恢复浏览器下载。页面嗅探只登记资源，不会自行启动下载，按住 Alt 点击可临时绕过接管。
 
 扩展支持响应嗅探、页面 fetch/XHR/media/Performance 观察、右键下载和 magnet 链接。Cookie 必须按站点单独授权，桌面任务中的 Cookie 使用 Windows DPAPI 加密后再写入数据库。Chrome 正式安装需要 Chrome Web Store，Firefox 永久安装需要 Mozilla 签名。
 
@@ -148,7 +148,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.2.2
+.\scripts\build_installer.ps1 -Version 1.2.3
 ```
 
 输出位于忽略的 `release` 目录：
@@ -167,8 +167,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.2.2
-git push origin v1.2.2
+git tag v1.2.3
+git push origin v1.2.3
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。

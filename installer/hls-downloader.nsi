@@ -7,7 +7,7 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.2.2"
+  !define APP_VERSION "1.2.3"
 !endif
 !define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
@@ -130,7 +130,7 @@ Section "Install" SecInstall
   File "${STAGE_DIR}\scripts\register-native-host.ps1"
   File "${STAGE_DIR}\scripts\shutdown-running.ps1"
 
-  DetailPrint "正在注册 Chrome/Firefox 浏览器连接..."
+  DetailPrint "正在注册 Chrome/Edge/Firefox 浏览器连接..."
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\scripts\register-native-host.ps1"'
   Pop $0
   Pop $1
@@ -203,6 +203,7 @@ RemoveApplicationData:
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
   DeleteRegKey HKCU "Software\${APP_NAME}"
   DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader"
+  DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.ciaooo55.hls_downloader"
   DeleteRegKey HKCU "Software\Mozilla\NativeMessagingHosts\com.ciaooo55.hls_downloader"
 
   ${If} $0 == "delete"

@@ -151,6 +151,7 @@ async def create_browser_download(request: Request, x_token: str = Header(defaul
     task = await _create_browser_task(item)
     item.status = "accepted"
     item.task_id = task.id
+    activate_window()
     return _to_resp(task)
 
 

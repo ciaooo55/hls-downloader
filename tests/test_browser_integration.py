@@ -40,4 +40,6 @@ def test_native_host_manual_download_creates_task_immediately(monkeypatch):
     )
 
     assert result["task"]["id"] == "task-1"
+    assert result["activated"] is True
     assert ("POST", "/browser/downloads", {"url": "https://cdn.test/setup.exe"}) in calls
+    assert ("POST", "/app/activate", {}) in calls

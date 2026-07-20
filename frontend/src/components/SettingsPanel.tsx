@@ -124,12 +124,10 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
         <div><label>默认并发数</label><input type="number" min={1} max={64} value={settings.default_concurrency ?? 8} onChange={event => update('default_concurrency', Number(event.target.value))} /><p className="field-note">{REQUEST_FIELD_HELP.concurrency}</p></div>
         <div><label>最大同时任务数</label><input type="number" min={1} max={16} value={settings.max_concurrent_tasks ?? 3} onChange={event => update('max_concurrent_tasks', Number(event.target.value))} /><p className="field-note">{REQUEST_FIELD_HELP.maxTasks}</p></div>
       </div>
-      <div className="settings-section-title">普通文件与浏览器接管</div>
+      <div className="settings-section-title">普通文件</div>
       <div className="form-row settings-number-row">
         <div><label>HTTP 分段大小（MiB）</label><input type="number" min={1} max={64} value={settings.http_chunk_size_mb ?? 8} onChange={event => update('http_chunk_size_mb', Number(event.target.value))} /><p className="field-note">每段完成后可安全暂停；较小更灵活，较大请求更少。</p></div>
-        <div><label>接管最小大小（MiB）</label><input type="number" min={0} max={10240} value={settings.browser_takeover_min_mb ?? 1} onChange={event => update('browser_takeover_min_mb', Number(event.target.value))} /><p className="field-note">小于该大小的普通文件继续交给浏览器。</p></div>
       </div>
-      <label className="checkbox-label"><input type="checkbox" checked={settings.browser_takeover_enabled ?? true} onChange={event => update('browser_takeover_enabled', event.target.checked)} />启用浏览器普通文件接管</label>
 
       <div className="settings-section-title">BT 下载</div>
       <div className="form-row settings-number-row">

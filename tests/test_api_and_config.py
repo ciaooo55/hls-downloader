@@ -113,6 +113,7 @@ def test_browser_direct_download_creates_and_starts_desktop_task(monkeypatch):
     from backend.app import api as api_module
 
     captured = {}
+    activated = []
 
     async def create_task(**kwargs):
         captured.update(kwargs)
@@ -126,6 +127,7 @@ def test_browser_direct_download_creates_and_starts_desktop_task(monkeypatch):
         )
 
     monkeypatch.setattr(api_module.manager, "create_task", create_task)
+    monkeypatch.setattr(api_module, "activate_window", lambda: activated.append(True) or True)
     response = TestClient(app).post(
         "/api/browser/downloads",
         headers={"X-Token": "55555"},
@@ -144,6 +146,7 @@ def test_browser_direct_download_creates_and_starts_desktop_task(monkeypatch):
     assert captured["auto_start"] is True
     assert captured["referer"] == "https://example.test/downloads"
     assert captured["origin"] == "https://example.test"
+    assert activated == [True]
 
 
 def test_launch_file_requires_an_existing_file(tmp_path, monkeypatch):

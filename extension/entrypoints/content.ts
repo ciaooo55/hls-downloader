@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { classifyResource, resourceId, type MediaResource } from '../lib/resources'
+import { classifyResource, isDirectDownloadLink, resourceId, type MediaResource } from '../lib/resources'
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -35,7 +35,43 @@ export default defineContentScript({
     })
     ui.mount()
     window.addEventListener('click', event => {
-      if (event.altKey || event.ctrlKey) void browser.runtime.sendMessage({ type: 'modifier', altKey: event.altKey, ctrlKey: event.ctrlKey })
+      if (!event.isTrusted || event.button !== 0) return
+      const path = event.composedPath()
+      const anchor = path.find(value => value instanceof HTMLAnchorElement) as HTMLAnchorElement | undefined
+      const control = path.find(value => value instanceof HTMLElement
+        && value.matches('button, input[type="button"], input[type="submit"], [role="button"]'))
+      if (!anchor && !control) return
+      if (anchor && !event.altKey && (event.ctrlKey || isDirectDownloadLink(anchor.href, anchor.hasAttribute('download')))) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        const filename = anchor.download || anchor.href.split(/[?#]/, 1)[0].split('/').pop() || ''
+        const resource = {
+          id: resourceId(anchor.href), url: anchor.href, kind: classifyResource(anchor.href) || 'file' as const,
+          filename, title: anchor.textContent?.trim() || filename, pageUrl: location.href, seenAt: Date.now(),
+        }
+        const fallbackToBrowser = () => {
+          void browser.runtime.sendMessage({
+            type: 'browser-download', url: anchor.href, filename: anchor.download || '',
+          }).then(response => {
+            if (!response?.ok) location.assign(anchor.href)
+          }).catch(() => location.assign(anchor.href))
+        }
+        void browser.runtime.sendMessage({
+          type: 'direct-click-download', resource,
+          altBypass: false, ctrlForce: event.ctrlKey,
+        }).then(response => {
+          if (response?.ok && response?.task?.id) return
+          fallbackToBrowser()
+        }).catch(fallbackToBrowser)
+        return
+      }
+      void browser.runtime.sendMessage({
+        type: 'click-intent',
+        href: anchor?.href || '',
+        pageUrl: location.href,
+        altBypass: event.altKey,
+        ctrlForce: event.ctrlKey,
+      })
     }, true)
 
     const wrap = ui.shadow.querySelector<HTMLElement>('.wrap')

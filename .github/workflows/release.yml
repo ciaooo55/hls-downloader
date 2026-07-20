@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version used in the installer, for example 1.2.2
+        description: Version used in the installer, for example 1.2.3
         required: false
-        default: "1.2.2"
+        default: "1.2.3"
   push:
     tags:
       - "v*"

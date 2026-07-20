@@ -30,8 +30,9 @@ npm registry. Exact direct and transitive dependency versions are recorded in
 
 ## Permission notes
 
-- `downloads`: pause a browser download while the desktop app asks whether to
-  take it over, then cancel it only after acceptance or resume it on failure.
+- `downloads`: use an explicit file-link click to hand off directly to the
+  desktop app, and pause dynamic browser downloads as a fallback. The browser
+  copy is restored when the local handoff fails.
 - `nativeMessaging`: communicate with the locally installed HLS Downloader.
 - `webRequest` and `<all_urls>`: observe response metadata to identify downloadable
   files and media on the page the user visits.

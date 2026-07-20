@@ -215,10 +215,12 @@ def test_native_host_registration_writes_absolute_executable_path():
 
     assert 'Join-Path $root "HLSDownloaderNativeHost.exe"' in script
     assert "$manifest.path = $hostExecutable" in script
+    assert r'Microsoft\Edge\NativeMessagingHosts' in script
     assert "RegistryPrefix" in script
     assert "smoke_native_host.py" in build_script
     assert "Native Messaging protocol smoke test failed" in build_script
-    assert "正在注册 Chrome/Firefox 浏览器连接" in nsis_script
+    assert "正在注册 Chrome/Edge/Firefox 浏览器连接" in nsis_script
+    assert r'Software\Microsoft\Edge\NativeMessagingHosts' in nsis_script
 
 
 def test_firefox_release_includes_reviewable_source_archive():

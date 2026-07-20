@@ -81,7 +81,9 @@ def dispatch(message: dict) -> dict:
     if operation == "offer":
         return {"ok": True, "handoff": _request("POST", "/browser/handoffs", message.get("resource", {}))}
     if operation == "download":
-        return {"ok": True, "task": _request("POST", "/browser/downloads", message.get("resource", {}))}
+        task = _request("POST", "/browser/downloads", message.get("resource", {}))
+        activated = _request("POST", "/app/activate", {})
+        return {"ok": True, "task": task, "activated": bool(activated.get("ok"))}
     handoff_id = str(message.get("handoff_id", ""))
     return {"ok": True, "handoff": _request("GET", f"/browser/handoffs/{handoff_id}")}
 

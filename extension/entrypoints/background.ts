@@ -1,9 +1,9 @@
 import { browser } from 'wxt/browser'
-import { classifyDownload, classifyResource, mergeResources, resourceId, shouldTakeover, type MediaResource } from '../lib/resources'
+import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, resourceId, shouldTakeover, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 
 const HOST = 'com.ciaooo55.hls_downloader'
-const pending = new Map<number, string>()
-let lastModifier = { altBypass: false, ctrlForce: false, at: 0 }
+let clickIntents: DownloadClickIntent[] = []
+let browserFallbacks: Array<{ url: string, at: number }> = []
 
 async function settings() {
   const data = await browser.storage.local.get(['enabled', 'minimumBytes', 'excludedHosts', 'authorizedCookieHosts'])
@@ -50,10 +50,6 @@ function native(message: Record<string, unknown>): Promise<any> {
   return browser.runtime.sendNativeMessage(HOST, message)
 }
 
-async function offer(resource: MediaResource) {
-  return native({ op: 'offer', resource: await resourcePayload(resource) })
-}
-
 async function resourcePayload(resource: MediaResource) {
   const pageUrl = resource.pageUrl || ''
   let pageOrigin = ''
@@ -89,24 +85,30 @@ async function pauseDownload(downloadId: number): Promise<void> {
   throw new Error('浏览器下载无法暂停')
 }
 
-async function watchHandoff(downloadId: number, handoffId: string) {
-  pending.set(downloadId, handoffId)
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    await new Promise(resolve => setTimeout(resolve, 1500))
-    try {
-      const response = await native({ op: 'handoff_status', handoff_id: handoffId })
-      const status = response?.handoff?.status
-      if (status === 'accepted') {
-        await browser.downloads.cancel(downloadId).catch(() => undefined)
-        await browser.downloads.erase({ id: downloadId }).catch(() => undefined)
-        pending.delete(downloadId)
-        return
-      }
-      if (status === 'rejected' || status === 'expired') break
-    } catch { break }
+function consumeClickIntent(url: string, referrer = ''): DownloadClickIntent | undefined {
+  const now = Date.now()
+  clickIntents = clickIntents.filter(intent => now - intent.at <= 7000)
+  const index = clickIntents.findIndex(intent => matchesDownloadClick(intent, { url, referrer }, now))
+  if (index < 0) return undefined
+  return clickIntents.splice(index, 1)[0]
+}
+
+async function waitForClickIntent(url: string, referrer = ''): Promise<DownloadClickIntent | undefined> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const intent = consumeClickIntent(url, referrer)
+    if (intent) return intent
+    await new Promise(resolve => setTimeout(resolve, 50))
   }
-  await browser.downloads.resume(downloadId).catch(() => undefined)
-  pending.delete(downloadId)
+  return undefined
+}
+
+function consumeBrowserFallback(url: string): boolean {
+  const now = Date.now()
+  browserFallbacks = browserFallbacks.filter(item => now - item.at <= 7000)
+  const index = browserFallbacks.findIndex(item => item.url === url)
+  if (index < 0) return false
+  browserFallbacks.splice(index, 1)
+  return true
 }
 
 export default defineBackground(() => {
@@ -136,22 +138,32 @@ export default defineBackground(() => {
 
   browser.downloads.onCreated.addListener(async item => {
     if (!item.url || item.url.startsWith('blob:')) return
+    if (consumeBrowserFallback(item.url)) return
+    console.debug('HLS Downloader observed browser download', item.url)
     const config = await settings()
+    if (!config.enabled) return
     const url = item.finalUrl || item.url
     const filename = item.filename.split(/[\\/]/).pop() || ''
     const mimeType = item.mime || ''
-    const kind = classifyDownload(url, mimeType, filename)
-    if (!kind) return
+    const kind = classifyDownload(url, mimeType, filename) || 'file'
     const resource: MediaResource = { id: resourceId(url), url, kind, mimeType, size: item.fileSize, title: filename, filename, pageUrl: item.referrer, seenAt: Date.now() }
-    const modifiers = Date.now() - lastModifier.at < 2500 ? lastModifier : { altBypass: false, ctrlForce: false }
-    if (!shouldTakeover({ url: resource.url, size: resource.size, mimeType, filename, ...config, ...modifiers })) return
+    let paused = false
     try {
       await pauseDownload(item.id)
-      const response = await offer(resource)
-      if (!response?.ok || !response?.handoff?.id) throw new Error(response?.error || 'desktop rejected')
-      void watchHandoff(item.id, response.handoff.id)
-    } catch {
-      await browser.downloads.resume(item.id).catch(() => undefined)
+      paused = true
+      const intent = await waitForClickIntent(url, item.referrer)
+      if (!intent || !shouldTakeover({ url: resource.url, size: resource.size, mimeType, filename, ...config, ...intent, explicitClick: true })) {
+        await browser.downloads.resume(item.id).catch(() => undefined)
+        return
+      }
+      console.debug('HLS Downloader taking over explicit browser download', url)
+      const response = await downloadNow(resource)
+      if (!response?.ok || !response?.task?.id) throw new Error(response?.error || 'desktop rejected')
+      await browser.downloads.cancel(item.id)
+      await browser.downloads.erase({ id: item.id }).catch(() => undefined)
+    } catch (error) {
+      console.warn('HLS Downloader takeover failed; returning download to browser', error)
+      if (paused) await browser.downloads.resume(item.id).catch(() => undefined)
     }
   })
 
@@ -161,21 +173,59 @@ export default defineBackground(() => {
     if (info.menuItemId === 'hls-download-selection' && tab?.id) void browser.tabs.sendMessage(tab.id, { type: 'collect-selection' })
   })
 
-  browser.runtime.onMessage.addListener((message, sender) => {
-    if (message?.type === 'modifier') {
-      lastModifier = { altBypass: Boolean(message.altKey), ctrlForce: Boolean(message.ctrlKey), at: Date.now() }
+  browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type === 'click-intent') {
+      clickIntents.unshift({
+        href: String(message.href || ''),
+        pageUrl: String(message.pageUrl || sender.tab?.url || ''),
+        altBypass: Boolean(message.altBypass),
+        ctrlForce: Boolean(message.ctrlForce),
+        at: Date.now(),
+      })
+      clickIntents = clickIntents.slice(0, 20)
+      console.debug('HLS Downloader received explicit click intent', message.href || sender.tab?.url || '')
       return
     }
     if (message?.type === 'resource') {
       void saveResource({ ...message.resource, pageUrl: message.resource.pageUrl || sender.tab?.url }, sender.tab?.id ?? -1)
       return
     }
-    if (message?.type === 'offer') return offer(message.resource)
-    if (message?.type === 'download') return downloadNow(message.resource)
+    if (message?.type === 'download' || message?.type === 'direct-click-download') {
+      const request = message.type === 'direct-click-download'
+        ? settings().then(config => shouldTakeover({
+            url: String(message.resource?.url || ''), ...config,
+            explicitClick: true, altBypass: Boolean(message.altBypass), ctrlForce: Boolean(message.ctrlForce),
+          }) ? downloadNow(message.resource) : ({ ok: false, bypass: true }))
+        : downloadNow(message.resource)
+      void request
+        .then(response => sendResponse(response))
+        .catch(error => sendResponse({ ok: false, error: String(error) }))
+      return true
+    }
+    if (message?.type === 'browser-download') {
+      const url = String(message.url || '')
+      browserFallbacks.unshift({ url, at: Date.now() })
+      void browser.downloads.download({
+        url,
+        ...(message.filename ? { filename: String(message.filename) } : {}),
+      }).then(downloadId => sendResponse({ ok: true, downloadId })).catch(error => {
+        consumeBrowserFallback(url)
+        sendResponse({ ok: false, error: String(error) })
+      })
+      return true
+    }
     if (message?.type === 'list') {
       const key = storageKey(Number(message.tabId ?? -1), message.pageUrl)
-      return browser.storage.session.get(key).then(value => value[key] || [])
+      void browser.storage.session.get(key)
+        .then(value => sendResponse(value[key] || []))
+        .catch(error => sendResponse({ ok: false, error: String(error) }))
+      return true
     }
-    if (message?.type === 'ping') return native({ op: 'ping' }).catch(error => ({ ok: false, error: String(error) }))
+    if (message?.type === 'ping') {
+      void native({ op: 'ping' })
+        .then(response => sendResponse(response))
+        .catch(error => sendResponse({ ok: false, error: String(error) }))
+      return true
+    }
   })
 })
