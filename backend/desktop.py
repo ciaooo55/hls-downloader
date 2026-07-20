@@ -228,7 +228,17 @@ def _create_tray_image():
     return image
 
 
-def _activate_windows_window(_window=None, user32=None) -> bool:
+_attention_timer_lock = threading.Lock()
+_attention_timer = None
+
+
+def _activate_windows_window(
+    _window=None,
+    user32=None,
+    *,
+    release_delay: float = 2.5,
+    timer_factory=threading.Timer,
+) -> bool:
     if os.name != "nt" and user32 is None:
         return False
     if user32 is None:
@@ -244,8 +254,30 @@ def _activate_windows_window(_window=None, user32=None) -> bool:
     flags = 0x0001 | 0x0002 | 0x0040
     user32.ShowWindow(hwnd, sw_restore)
     user32.SetWindowPos(hwnd, hwnd_topmost, 0, 0, 0, 0, flags)
-    user32.SetWindowPos(hwnd, hwnd_notopmost, 0, 0, 0, 0, flags)
+    bring_to_top = getattr(user32, "BringWindowToTop", None)
+    if bring_to_top is not None:
+        bring_to_top(hwnd)
     user32.SetForegroundWindow(hwnd)
+
+    # Browser handoffs are polled by the UI, so the confirmation dialog is
+    # rendered shortly after activation. Keep the window above others until then.
+    def release_topmost() -> None:
+        try:
+            user32.SetWindowPos(hwnd, hwnd_notopmost, 0, 0, 0, 0, flags)
+        except Exception:
+            logger.exception("failed to release temporary topmost window state")
+
+    global _attention_timer
+    timer = timer_factory(release_delay, release_topmost)
+    try:
+        timer.daemon = True
+    except Exception:
+        pass
+    with _attention_timer_lock:
+        if _attention_timer is not None:
+            _attention_timer.cancel()
+        _attention_timer = timer
+        timer.start()
     return True
 
 

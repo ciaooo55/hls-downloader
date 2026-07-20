@@ -112,6 +112,9 @@ class FakeUser32:
     def SetForegroundWindow(self, hwnd):
         self.calls.append(("foreground", hwnd))
 
+    def BringWindowToTop(self, hwnd):
+        self.calls.append(("bring-to-top", hwnd))
+
 
 def test_window_close_hides_to_tray_and_keeps_server_running():
     window = FakeWindow()
@@ -312,15 +315,34 @@ def test_activation_restores_and_shows_registered_window():
 
 def test_windows_activation_uses_native_window_api_without_webview_calls():
     user32 = FakeUser32()
+    timers = []
 
-    assert _activate_windows_window(user32=user32) is True
+    class FakeTimer:
+        def __init__(self, delay, callback):
+            self.delay = delay
+            self.callback = callback
+            self.daemon = False
+            self.canceled = False
+            timers.append(self)
+
+        def start(self):
+            pass
+
+        def cancel(self):
+            self.canceled = True
+
+    assert _activate_windows_window(user32=user32, timer_factory=FakeTimer) is True
     assert user32.calls == [
         ("find", None, "HLS Downloader"),
         ("show", 42, 9),
         ("position", 42, -1, 0x0001 | 0x0002 | 0x0040),
-        ("position", 42, -2, 0x0001 | 0x0002 | 0x0040),
+        ("bring-to-top", 42),
         ("foreground", 42),
     ]
+    assert timers[0].delay == 2.5
+    assert timers[0].daemon is True
+    timers[0].callback()
+    assert user32.calls[-1] == ("position", 42, -2, 0x0001 | 0x0002 | 0x0040)
 
 
 def test_activation_returns_without_waiting_for_blocked_window():

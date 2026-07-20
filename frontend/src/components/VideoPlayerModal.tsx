@@ -30,6 +30,7 @@ import { fmtSpeed } from '../format'
 import { isRunningStatus } from '../taskState'
 import {
   PLAYBACK_RATES,
+  effectivePlaybackDuration,
   formatPlayerTime,
   isTimeSeekable,
   thumbnailBucket,
@@ -107,13 +108,13 @@ export default function VideoPlayerModal({ task, onClose }: {
   } | null>(null)
 
   const effectiveDuration = useMemo(() => {
-    if (mode === 'file') return Math.max(mediaDuration, task.media_duration || 0)
-    return Math.max(
+    return effectivePlaybackDuration(
+      mode,
       playbackStatus?.total_duration || 0,
       task.media_duration || 0,
       playbackStatus?.available_duration || 0,
       task.playable_duration || 0,
-      Number.isFinite(mediaDuration) ? mediaDuration : 0,
+      mediaDuration,
     )
   }, [mediaDuration, mode, playbackStatus?.available_duration, playbackStatus?.total_duration, task.media_duration, task.playable_duration])
 

@@ -382,11 +382,8 @@ class TaskManager:
         task = self._get_task(task_id)
         if segment_index < 0:
             raise TaskConflictError("播放位置无效")
-        if (
-            not force
-            and task.playback_seek_index is not None
-            and segment_index < task.playback_seek_index
-        ):
+        # Speculative requests from hls.js must not replace an explicit user seek.
+        if not force and task.playback_seek_index is not None:
             return
         task.playback_seek_index = int(segment_index)
         downloader = self._downloaders.get(task_id)

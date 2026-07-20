@@ -381,12 +381,6 @@ class PlaybackService:
         if count <= 0:
             raise PlaybackNotReadyError("首个连续分片尚未下载完成")
 
-        requested_time = 0.0
-        with self._lock:
-            session = self._sessions.get(session_id)
-            if session is not None:
-                requested_time = session.requested_time
-
         session_query = quote(session_id, safe="")
         token_query = f"&token={quote(access_token, safe='')}" if access_token else ""
         mode_query = "&full=1" if full else ""
@@ -395,10 +389,8 @@ class PlaybackService:
             f"#EXT-X-VERSION:{7 if plan.is_fmp4 else 3}",
             f"#EXT-X-TARGETDURATION:{plan.target_duration}",
             "#EXT-X-MEDIA-SEQUENCE:0",
-            "#EXT-X-PLAYLIST-TYPE:EVENT",
+            f"#EXT-X-PLAYLIST-TYPE:{'VOD' if full else 'EVENT'}",
         ]
-        if full and requested_time > 0:
-            lines.append(f"#EXT-X-START:TIME-OFFSET={requested_time:.6f},PRECISE=YES")
         active_map = ""
         visible_segments = plan.segments if full else plan.segments[:count]
         for segment in visible_segments:
@@ -414,7 +406,7 @@ class PlaybackService:
                 f"segments/{segment.index:06d}.seg?session={session_query}{token_query}{mode_query}"
             )
         terminal = status in {"done", "failed", "canceled", "unsupported"}
-        if terminal or count == len(plan.segments):
+        if full or terminal or count == len(plan.segments):
             lines.append("#EXT-X-ENDLIST")
         return "\n".join(lines) + "\n"
 

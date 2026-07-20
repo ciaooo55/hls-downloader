@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  effectivePlaybackDuration,
   formatPlayerTime,
   thumbnailBucket,
   thumbnailLeft,
@@ -13,6 +14,12 @@ describe('player timeline model', () => {
     expect(timelineTime(150, 100, 200, 120)).toBe(30)
     expect(timelineTime(20, 100, 200, 120)).toBe(0)
     expect(timelineTime(400, 100, 200, 120)).toBe(120)
+  })
+
+  it('uses the HLS plan duration instead of a browser live-edge duration', () => {
+    expect(effectivePlaybackDuration('hls', 1200, 0, 24, 24, 4_294_967_296)).toBe(1200)
+    expect(effectivePlaybackDuration('hls', 0, 900, 24, 24, Number.POSITIVE_INFINITY)).toBe(900)
+    expect(effectivePlaybackDuration('file', 0, 900, 0, 0, 960)).toBe(960)
   })
 
   it('uses sparse thumbnail buckets and keeps previews inside the track', () => {

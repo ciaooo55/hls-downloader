@@ -14,6 +14,30 @@ export function timelineTime(
   return clamp((clientX - left) / width, 0, 1) * duration
 }
 
+export function effectivePlaybackDuration(
+  mode: 'hls' | 'file',
+  backendTotal: number,
+  taskTotal: number,
+  availableDuration: number,
+  playableDuration: number,
+  mediaDuration: number,
+): number {
+  const finitePositive = (value: number) => Number.isFinite(value) && value > 0 ? value : 0
+  if (mode === 'file') {
+    return Math.max(finitePositive(mediaDuration), finitePositive(taskTotal))
+  }
+
+  // The browser can expose a live-edge duration for an incomplete HLS manifest.
+  // Prefer the duration calculated from the original VOD playlist when available.
+  const authoritative = finitePositive(backendTotal) || finitePositive(taskTotal)
+  if (authoritative > 0) return authoritative
+  return Math.max(
+    finitePositive(availableDuration),
+    finitePositive(playableDuration),
+    finitePositive(mediaDuration),
+  )
+}
+
 export function thumbnailBucket(time: number, duration: number, interval = 10): number {
   if (!Number.isFinite(time) || !Number.isFinite(duration) || duration <= 0) return 0
   const bounded = clamp(time, 0, Math.max(0, duration - 0.05))
