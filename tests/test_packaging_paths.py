@@ -205,3 +205,29 @@ def test_source_only_gitignore_excludes_generated_binaries():
     assert "release/" in ignore
     assert "backend/dist/" in ignore
     assert "frontend/dist/" in ignore
+
+
+def test_native_host_registration_writes_absolute_executable_path():
+    root = Path(__file__).resolve().parent.parent
+    script = (root / "scripts" / "register-native-host.ps1").read_text(encoding="utf-8")
+    nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
+    build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
+
+    assert 'Join-Path $root "HLSDownloaderNativeHost.exe"' in script
+    assert "$manifest.path = $hostExecutable" in script
+    assert "RegistryPrefix" in script
+    assert "smoke_native_host.py" in build_script
+    assert "Native Messaging protocol smoke test failed" in build_script
+    assert "正在注册 Chrome/Firefox 浏览器连接" in nsis_script
+
+
+def test_firefox_release_includes_reviewable_source_archive():
+    root = Path(__file__).resolve().parent.parent
+    build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
+    reviewer_notes = (root / "extension" / "AMO-BUILD.md").read_text(encoding="utf-8")
+
+    assert "HLSDownloader-Firefox-Source.zip" in build_script
+    for source in ("entrypoints", "lib", "public", "package.json", "pnpm-lock.yaml", "wxt.config.ts", "AMO-BUILD.md"):
+        assert source in build_script
+    assert "pnpm install --frozen-lockfile" in reviewer_notes
+    assert "pnpm run build:firefox" in reviewer_notes

@@ -7,7 +7,7 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.2.1"
+  !define APP_VERSION "1.2.2"
 !endif
 !define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
@@ -130,8 +130,13 @@ Section "Install" SecInstall
   File "${STAGE_DIR}\scripts\register-native-host.ps1"
   File "${STAGE_DIR}\scripts\shutdown-running.ps1"
 
-  WriteRegStr HKCU "Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader" "" "$INSTDIR\native-host\chrome.json"
-  WriteRegStr HKCU "Software\Mozilla\NativeMessagingHosts\com.ciaooo55.hls_downloader" "" "$INSTDIR\native-host\firefox.json"
+  DetailPrint "正在注册 Chrome/Firefox 浏览器连接..."
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\scripts\register-native-host.ps1"'
+  Pop $0
+  Pop $1
+  ${If} $0 != 0
+    MessageBox MB_ICONEXCLAMATION|MB_OK "浏览器连接注册失败，安装完成后可在设置中重新注册。"
+  ${EndIf}
 
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\Uninstall.exe"

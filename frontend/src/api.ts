@@ -58,8 +58,10 @@ export const selectTorrentFiles = (id: string, indexes: number[]) =>
   })
 export const taskAction = (id: string, action: string) =>
   request<{ ok: boolean }>(`/tasks/${id}/${action}`, { method: 'POST' })
-export const deleteTask = (id: string) =>
-  request<{ ok: boolean }>(`/tasks/${id}`, { method: 'DELETE' })
+export const deleteTask = (id: string, deleteFiles = false) =>
+  request<{ ok: boolean }>(`/tasks/${id}${deleteFiles ? '?delete_files=true' : ''}`, { method: 'DELETE' })
+export const taskFileUrl = (id: string) =>
+  `${BASE}/tasks/${encodeURIComponent(id)}/file?token=${encodeURIComponent(getToken())}`
 export const clearCompletedTasks = () =>
   request<{ ok: boolean; count: number }>('/tasks/completed', { method: 'DELETE' })
 export const fetchLog = (id: string) => request<{ log: string }>(`/tasks/${id}/log`)

@@ -1,24 +1,26 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { FileText, Film, FolderOpen, Globe2, Info, LoaderCircle, Magnet, MonitorPlay, MoreHorizontal, Pause, Play, PlayCircle, RadioTower, RotateCcw, Trash2, XCircle } from 'lucide-react'
+import { AppWindow, Archive, File, FileAudio, FileCode2, FileImage, FileText, FileVideo, Film, FolderOpen, Globe2, Info, LoaderCircle, Magnet, MonitorPlay, MoreHorizontal, Pause, Play, PlayCircle, RadioTower, RotateCcw, Trash2, XCircle } from 'lucide-react'
 import { getDisplayedProgress } from '../taskState'
 import { fmtBytes, fmtDate, fmtEta, fmtSpeed } from '../format'
 import { taskContextActions, type TaskContextAction } from '../taskContextActions'
 import { statusLabel } from '../taskPresentation'
 import type { Task } from '../types'
+import { filePresentation, type FileKind } from '../filePresentation'
+import { taskFileUrl } from '../api'
 
 const menuLabels: Record<TaskContextAction, string> = {
   details: '查看详情', start: '开始下载', pause: '暂停', resume: '恢复',
-  cancel: '取消任务', retry: '重试', preview: '内置播放', launch: '系统播放', open: '打开文件位置', log: '查看日志', delete: '删除任务',
+  cancel: '取消任务', retry: '重试', preview: '内置播放', launch: '系统播放', open: '打开文件位置', log: '查看日志', delete: '仅删除任务记录', deleteFiles: '删除任务及文件',
 }
 
 const menuIcons: Record<TaskContextAction, React.ReactNode> = {
   details: <Info size={16} />, start: <Play size={16} />, pause: <Pause size={16} />,
   resume: <RotateCcw size={16} />, cancel: <XCircle size={16} />, retry: <RotateCcw size={16} />,
-  preview: <MonitorPlay size={16} />, launch: <PlayCircle size={16} />, open: <FolderOpen size={16} />, log: <FileText size={16} />, delete: <Trash2 size={16} />,
+  preview: <MonitorPlay size={16} />, launch: <PlayCircle size={16} />, open: <FolderOpen size={16} />, log: <FileText size={16} />, delete: <Trash2 size={16} />, deleteFiles: <Trash2 size={16} />,
 }
 
-interface ContextMenuState { task: Task; x: number; y: number }
+interface ContextMenuState { task: Task; taskIds: string[]; actions: TaskContextAction[]; x: number; y: number }
 
 const typeLabels = { hls: 'HLS', dash: 'DASH', http: 'HTTP', torrent: 'BT' }
 const typeIcons = {
@@ -28,19 +30,20 @@ const typeIcons = {
   torrent: <Magnet size={15} />,
 }
 
-export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTaskAction, onOpenLog, onOpenFile, onLaunchFile, onPreview }: {
+export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTasksAction, onOpenLog, onOpenFile, onLaunchFile, onPreview }: {
   tasks: Task[]
   selected: Set<string>
   pending: Set<string>
   onSelect: (ids: Set<string>) => void
   onOpenDetails: (task: Task) => void
-  onTaskAction: (task: Task, action: string) => void
+  onTasksAction: (tasks: Task[], action: string) => void
   onOpenLog: (task: Task) => void
   onOpenFile: (task: Task) => void
   onLaunchFile: (task: Task) => void
   onPreview: (task: Task) => void
 }) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
+  const selectionAnchor = useRef<string | null>(null)
   const allSelected = tasks.length > 0 && tasks.every(task => selected.has(task.id))
   const toggleAll = () => onSelect(allSelected ? new Set() : new Set(tasks.map(task => task.id)))
   const toggleOne = (id: string) => {
@@ -67,14 +70,34 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
     }
   }, [menu])
 
+  const selectRow = (event: React.MouseEvent, task: Task) => {
+    if (event.shiftKey && selectionAnchor.current) {
+      const start = tasks.findIndex(value => value.id === selectionAnchor.current)
+      const end = tasks.findIndex(value => value.id === task.id)
+      if (start >= 0 && end >= 0) {
+        const next = new Set(event.ctrlKey || event.metaKey ? selected : [])
+        tasks.slice(Math.min(start, end), Math.max(start, end) + 1).forEach(value => next.add(value.id))
+        onSelect(next); return
+      }
+    }
+    selectionAnchor.current = task.id
+    if (event.ctrlKey || event.metaKey) toggleOne(task.id)
+    else onSelect(new Set([task.id]))
+  }
+
   const openMenu = (event: React.MouseEvent, task: Task) => {
     event.preventDefault()
-    onSelect(new Set([task.id]))
-    const actions = pending.has(task.id) ? ['details', 'log'] : taskContextActions(task)
+    const next = selected.has(task.id) ? new Set(selected) : new Set([task.id])
+    onSelect(next)
+    const targets = tasks.filter(value => next.has(value.id))
+    const hasPending = targets.some(value => pending.has(value.id))
+    const actions = hasPending ? (targets.length === 1 ? ['details', 'log'] as TaskContextAction[] : []) : taskContextActions(targets)
     const width = 184
     const height = actions.length * 36 + 12
     setMenu({
       task,
+      taskIds: targets.map(value => value.id),
+      actions,
       x: Math.max(6, Math.min(event.clientX, window.innerWidth - width - 6)),
       y: Math.max(6, Math.min(event.clientY, window.innerHeight - height - 6)),
     })
@@ -83,13 +106,14 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
   const runMenuAction = (action: TaskContextAction) => {
     if (!menu) return
     const task = menu.task
+    const targets = tasks.filter(value => menu.taskIds.includes(value.id))
     setMenu(null)
     if (action === 'details') onOpenDetails(task)
     else if (action === 'preview') onPreview(task)
     else if (action === 'launch') onLaunchFile(task)
     else if (action === 'open') onOpenFile(task)
     else if (action === 'log') onOpenLog(task)
-    else onTaskAction(task, action)
+    else onTasksAction(targets, action)
   }
 
   if (!tasks.length) return <div className="empty-state"><DownloadCloudIcon /><strong>暂无任务</strong><span>点击“新建”添加文件、HLS、DASH、magnet 或种子</span></div>
@@ -99,16 +123,27 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
         <thead><tr><th className="check-col"><input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="选择全部任务" /></th><th>文件名</th><th>状态</th><th>进度</th><th>速度 / 剩余</th><th className="segments-col">分片</th><th className="updated-col">更新时间</th><th className="menu-col" /></tr></thead>
         <tbody>{tasks.map(task => {
           const progress = getDisplayedProgress(task)
-          return <tr key={task.id} className={`${selected.has(task.id) ? 'selected ' : ''}${pending.has(task.id) ? 'pending' : ''}`.trim()}
+          const visual = filePresentation(task.output_path || task.filename || task.url, task.mime_type)
+          const displayName = task.title || task.filename || task.id
+          return <tr key={task.id} className={`${selected.has(task.id) ? 'selected ' : ''}${pending.has(task.id) ? 'pending' : ''}${task.output_is_file ? ' draggable-file' : ''}`.trim()}
+            draggable={task.status === 'done' && task.output_is_file}
+            title={task.status === 'done' && task.output_is_file ? '可拖到桌面或资源管理器复制文件' : undefined}
+            onDragStart={event => {
+              if (!task.output_is_file) { event.preventDefault(); return }
+              const filename = task.output_path.split(/[\\/]/).pop() || task.filename || task.id
+              const url = new URL(taskFileUrl(task.id), window.location.href).href
+              event.dataTransfer.effectAllowed = 'copy'
+              event.dataTransfer.setData('DownloadURL', `${task.mime_type || 'application/octet-stream'}:${filename}:${url}`)
+              event.dataTransfer.setData('text/uri-list', url)
+            }}
             onClick={event => {
               if ((event.target as HTMLElement).closest('input')) return
-              if (event.ctrlKey || event.metaKey) toggleOne(task.id)
-              else onSelect(new Set([task.id]))
+              selectRow(event, task)
             }}
             onContextMenu={event => openMenu(event, task)}
             onDoubleClick={() => task.available_actions?.includes('preview') ? onPreview(task) : onOpenDetails(task)}>
             <td className="check-col"><input type="checkbox" checked={selected.has(task.id)} onChange={() => toggleOne(task.id)} aria-label={`选择 ${task.title || task.filename || task.id}`} /></td>
-            <td className="name-cell"><span title={task.title || task.filename || task.id}><i className={`task-type type-${task.task_type}`} title={typeLabels[task.task_type]}>{typeIcons[task.task_type]}</i>{task.title || task.filename || task.id}</span><small title={task.url}>{task.url}</small></td>
+            <td className="name-cell"><span title={displayName}><TaskFileIcon kind={visual.kind} extension={visual.extension} /><b>{displayName}</b><i className={`task-type type-${task.task_type}`} title={typeLabels[task.task_type]}>{typeIcons[task.task_type]}</i></span><small title={task.url}>{task.url}</small></td>
             <td><span className={`status status-${task.status}`}>{pending.has(task.id) && <LoaderCircle className="spin" size={12} />}{task.status === 'queued' && task.queue_position ? `排队中 · 第 ${task.queue_position} 位` : statusLabel(task.status)}</span>{task.error_code && <small className="failure-code" title={task.error_message}>{task.error_code}</small>}</td>
             <td><div className="table-progress"><div><i style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div><span>{progress.toFixed(1)}%</span></div><small className="progress-bytes">{fmtBytes(task.downloaded_bytes)} / {fmtBytes(task.total_bytes)}</small></td>
             <td><span className="speed-cell">{fmtSpeed(task.speed_bytes_per_sec)}</span><small className="eta-cell">{task.task_type === 'torrent' && task.upload_speed_bytes_per_sec > 0 ? `↑ ${fmtSpeed(task.upload_speed_bytes_per_sec)}` : fmtEta(task.eta_seconds)}</small></td>
@@ -119,14 +154,24 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
       </table>
       {menu && createPortal(
         <div className="task-context-menu" role="menu" style={{ left: menu.x, top: menu.y }} onPointerDown={event => event.stopPropagation()}>
-          {(pending.has(menu.task.id) ? ['details', 'log'] as TaskContextAction[] : taskContextActions(menu.task)).map(action => <button key={action} role="menuitem" className={action === 'delete' ? 'danger' : ''} onClick={() => runMenuAction(action)}>
-            {menuIcons[action]}<span>{action === 'preview' && menu.task.status !== 'done' ? '边下边播' : menuLabels[action]}</span>
+          {menu.actions.map(action => <button key={action} role="menuitem" className={action === 'deleteFiles' ? 'danger' : ''} onClick={() => runMenuAction(action)}>
+            {menuIcons[action]}<span>{action === 'preview' && menu.task.status !== 'done' ? '边下边播' : action === 'deleteFiles' && menu.taskIds.some(id => tasks.find(task => task.id === id)?.status !== 'done') ? '停止并删除任务及文件' : menuLabels[action]}</span>
           </button>)}
         </div>,
         document.body,
       )}
     </div>
   )
+}
+
+const fileKindIcons: Record<FileKind, React.ReactNode> = {
+  archive: <Archive size={19} />, executable: <AppWindow size={19} />, video: <FileVideo size={19} />,
+  audio: <FileAudio size={19} />, image: <FileImage size={19} />, document: <FileText size={19} />,
+  code: <FileCode2 size={19} />, generic: <File size={19} />,
+}
+
+function TaskFileIcon({ kind, extension }: { kind: FileKind; extension: string }) {
+  return <i className={`file-kind file-kind-${kind}`} title={extension ? `${extension.toUpperCase()} 文件` : '文件'}>{fileKindIcons[kind]}{extension && <em>{extension.slice(0, 4)}</em>}</i>
 }
 
 function DownloadCloudIcon() {

@@ -1,4 +1,4 @@
-import { Download, Globe2, Undo2 } from 'lucide-react'
+import { Download, Globe2, Undo2, X } from 'lucide-react'
 import { fmtBytes } from '../format'
 
 export interface BrowserHandoff {
@@ -19,7 +19,7 @@ export default function BrowserHandoffDialog({ item, busy, onResolve }: {
   try { host = new URL(item.url).host } catch {}
   return <div className="modal-overlay browser-handoff-overlay">
     <section className="modal browser-handoff-dialog" role="dialog" aria-modal="true" aria-label="浏览器下载接管">
-      <header><div><h2>接管浏览器下载</h2><p>浏览器下载已暂停，选择由谁继续</p></div></header>
+      <header><div><h2>接管浏览器下载</h2><p>浏览器下载已暂停，选择由谁继续</p></div><button className="modal-close-button" title="关闭并交给浏览器" disabled={busy} onClick={() => onResolve('reject')}><X size={18} /></button></header>
       <div className="browser-handoff-body">
         <div className="browser-handoff-file"><Download size={24} /><div><strong>{item.filename || host}</strong><span>{item.mime_type || '普通文件'}{item.size ? ` · ${fmtBytes(item.size)}` : ''}</span></div></div>
         <div className="browser-handoff-source"><Globe2 size={15} /><span>{host}</span></div>

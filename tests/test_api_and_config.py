@@ -67,6 +67,85 @@ def test_clear_completed_only_deletes_finished_records(monkeypatch):
     assert deleted == ["done"]
 
 
+def test_delete_task_can_request_output_file_removal(monkeypatch):
+    from backend.app import api as api_module
+
+    deleted = []
+
+    async def delete(task_id, *, delete_files=False):
+        deleted.append((task_id, delete_files))
+
+    monkeypatch.setattr(api_module.manager, "delete_task", delete)
+    response = TestClient(app).delete(
+        "/api/tasks/task1?delete_files=true",
+        headers={"X-Token": "55555"},
+    )
+
+    assert response.status_code == 200
+    assert deleted == [("task1", True)]
+
+
+def test_completed_task_file_endpoint_serves_drag_download(tmp_path, monkeypatch):
+    from backend.app import api as api_module
+
+    output = tmp_path / "setup.exe"
+    output.write_bytes(b"binary")
+    task = Task(
+        id="drag-file",
+        url="https://cdn.test/setup.exe",
+        status=TaskStatus.DONE,
+        output_path=str(output),
+    )
+    previous = api_module.manager.tasks
+    monkeypatch.setattr(api_module.manager, "tasks", {task.id: task})
+    try:
+        response = TestClient(app).get(
+            f"/api/tasks/{task.id}/file?token=55555",
+        )
+        assert response.status_code == 200
+        assert response.content == b"binary"
+        assert "setup.exe" in response.headers["content-disposition"]
+    finally:
+        api_module.manager.tasks = previous
+
+
+def test_browser_direct_download_creates_and_starts_desktop_task(monkeypatch):
+    from backend.app import api as api_module
+
+    captured = {}
+
+    async def create_task(**kwargs):
+        captured.update(kwargs)
+        return Task(
+            id="browser-task",
+            url=kwargs["url"],
+            title=kwargs["filename"],
+            filename=kwargs["filename"],
+            referer=kwargs["referer"],
+            origin=kwargs["origin"],
+        )
+
+    monkeypatch.setattr(api_module.manager, "create_task", create_task)
+    response = TestClient(app).post(
+        "/api/browser/downloads",
+        headers={"X-Token": "55555"},
+        json={
+            "url": "https://cdn.example.test/setup.exe",
+            "filename": "setup.exe",
+            "source_page_url": "https://example.test/downloads",
+            "referer": "https://example.test/downloads",
+            "origin": "https://example.test",
+            "mime_type": "application/octet-stream",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "browser-task"
+    assert captured["auto_start"] is True
+    assert captured["referer"] == "https://example.test/downloads"
+    assert captured["origin"] == "https://example.test"
+
+
 def test_launch_file_requires_an_existing_file(tmp_path, monkeypatch):
     import os
 

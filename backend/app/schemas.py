@@ -79,6 +79,7 @@ class TaskResponse(BaseModel):
     http_status: int = 0
     error_attempt: int = 0
     output_path: str
+    output_is_file: bool = False
     created_at: str
     updated_at: str
     started_at: str = ""

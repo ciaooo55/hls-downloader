@@ -1,7 +1,7 @@
 param(
     [switch]$SkipFrontend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.2.1"
+    [string]$Version = "1.2.2"
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,6 +33,7 @@ $PortableOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Portable.zip"
 $UserscriptOut = Join-Path $ReleaseDir "m3u8-sniffer.user.js"
 $ChromeExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Chrome.zip"
 $FirefoxExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-Unsigned.zip"
+$FirefoxSourceOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-Source.zip"
 $ChecksumsOut = Join-Path $ReleaseDir "SHA256SUMS.txt"
 
 function Invoke-Step($Name, [scriptblock]$Block) {
@@ -308,6 +309,24 @@ if (-not $SkipSmoke) {
                     }
                 }
 
+                $nativeRegistrationScript = Join-Path $StageDir "scripts\register-native-host.ps1"
+                $nativeRegistryPrefix = "HKCU:\Software\HLSDownloaderBuildSmoke"
+                & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $nativeRegistrationScript -RegistryPrefix $nativeRegistryPrefix
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Native Messaging registration smoke test failed"
+                }
+                $expectedNativeHost = Join-Path $StageDir "HLSDownloaderNativeHost.exe"
+                foreach ($manifestName in @("chrome.json", "firefox.json")) {
+                    $manifest = Get-Content -LiteralPath (Join-Path $StageDir "native-host\$manifestName") -Raw | ConvertFrom-Json
+                    if ($manifest.path -ne $expectedNativeHost) {
+                        throw "Native Messaging manifest contains the wrong host path: $($manifest.path)"
+                    }
+                }
+                python (Join-Path $Root "scripts\smoke_native_host.py") --exe $expectedNativeHost
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Native Messaging protocol smoke test failed"
+                }
+
                 $secondProc = Start-Process -FilePath $smokeExe -WorkingDirectory $StageDir -PassThru -WindowStyle Hidden
                 if (-not $secondProc.WaitForExit(12000)) {
                     Stop-Process -Id $secondProc.Id -Force -ErrorAction SilentlyContinue
@@ -382,6 +401,10 @@ if (-not $SkipSmoke) {
                 }
             }
         } finally {
+            $nativeRegistrationScript = Join-Path $StageDir "scripts\register-native-host.ps1"
+            if (Test-Path -LiteralPath $nativeRegistrationScript) {
+                & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $nativeRegistrationScript -Unregister -RegistryPrefix "HKCU:\Software\HLSDownloaderBuildSmoke" | Out-Null
+            }
             Remove-Item -LiteralPath $smokePortableMarker -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath (Join-Path $StageDir "data.db"), (Join-Path $StageDir "data.db-shm"), (Join-Path $StageDir "data.db-wal") -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath (Join-Path $StageDir ".webview"), (Join-Path $StageDir "downloads") -Recurse -Force -ErrorAction SilentlyContinue
@@ -424,7 +447,20 @@ Invoke-Step "Assemble release files" {
     Copy-Item -LiteralPath (Join-Path $UserscriptDir "m3u8-sniffer.user.js") -Destination $UserscriptOut -Force
     Compress-Archive -Path (Join-Path $ExtensionDir ".output\chrome-mv3\*") -DestinationPath $ChromeExtensionOut -CompressionLevel Optimal
     Compress-Archive -Path (Join-Path $ExtensionDir ".output\firefox-mv3\*") -DestinationPath $FirefoxExtensionOut -CompressionLevel Optimal
-    $expected = @($InstallerOut, $PortableOut, $UserscriptOut, $ChromeExtensionOut, $FirefoxExtensionOut)
+    Compress-Archive -Path @(
+        (Join-Path $ExtensionDir "entrypoints"),
+        (Join-Path $ExtensionDir "lib"),
+        (Join-Path $ExtensionDir "native-host"),
+        (Join-Path $ExtensionDir "public"),
+        (Join-Path $ExtensionDir "AMO-BUILD.md"),
+        (Join-Path $ExtensionDir "package.json"),
+        (Join-Path $ExtensionDir "pnpm-lock.yaml"),
+        (Join-Path $ExtensionDir "pnpm-workspace.yaml"),
+        (Join-Path $ExtensionDir "tsconfig.json"),
+        (Join-Path $ExtensionDir "wxt.config.ts"),
+        (Join-Path $Root "PRIVACY.md")
+    ) -DestinationPath $FirefoxSourceOut -CompressionLevel Optimal
+    $expected = @($InstallerOut, $PortableOut, $UserscriptOut, $ChromeExtensionOut, $FirefoxExtensionOut, $FirefoxSourceOut)
     foreach ($path in $expected) {
         if (-not (Test-Path -LiteralPath $path)) {
             throw "Missing release file: $path"
@@ -447,4 +483,5 @@ Write-Host $PortableOut
 Write-Host $UserscriptOut
 Write-Host $ChromeExtensionOut
 Write-Host $FirefoxExtensionOut
+Write-Host $FirefoxSourceOut
 Write-Host $ChecksumsOut

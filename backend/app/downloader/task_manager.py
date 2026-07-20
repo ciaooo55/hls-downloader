@@ -179,8 +179,9 @@ class TaskManager:
         if task.status is TaskStatus.DONE and task.output_path:
             actions.extend(("launch", "open"))
         actions.append("log")
-        if task.status in TERMINAL_STATUSES and not live:
-            actions.append("delete")
+        actions.append("delete")
+        if task.status is not TaskStatus.DONE or task.output_path:
+            actions.append("delete_files")
         return actions
 
     @staticmethod
@@ -502,21 +503,46 @@ class TaskManager:
         await self._save_db(task)
         await self.start_task(task_id)
 
-    async def delete_task(self, task_id: str) -> None:
+    async def delete_task(self, task_id: str, *, delete_files: bool = False) -> None:
         task = self._get_task(task_id)
+        was_complete = task.status is TaskStatus.DONE
         if task.task_handle and not task.task_handle.done():
             await self.cancel_task(task_id)
         playback_service.close_task(task_id)
+        if delete_files or not was_complete:
+            await self._delete_task_outputs(task)
         self.tasks.pop(task_id, None)
         pending = self._pending_saves.pop(task_id, None)
         if pending and not pending.done():
             pending.cancel()
         await run_db("DELETE FROM tasks WHERE id=?", (task_id,))
         task_dir = Path(settings.download_dir) / ".tasks" / task_id
-        if task_dir.exists() and not settings.keep_temp_files:
+        if task_dir.exists():
             await asyncio.to_thread(shutil.rmtree, task_dir, True)
         self._broadcast_nowait({"type": "task_deleted", "task_id": task_id})
         await self._cleanup_temp_root_if_all_done()
+
+    async def _delete_task_outputs(self, task: Task) -> None:
+        download_root = Path(settings.download_dir).resolve()
+        candidates = {
+            str(task.output_path or ""),
+            str(task.engine_state.get("reserved_output_path", "") or ""),
+        }
+
+        def remove() -> None:
+            for raw_path in candidates:
+                if not raw_path:
+                    continue
+                path = Path(raw_path).resolve()
+                if path == download_root or download_root not in path.parents:
+                    logger.warning("refusing to delete task output outside download directory: %s", path)
+                    continue
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    path.unlink(missing_ok=True)
+
+        await asyncio.to_thread(remove)
 
     async def release_playback(self, task_id: str, session_id: str) -> bool:
         task = self._get_task(task_id)
@@ -834,6 +860,7 @@ class TaskManager:
             "http_status": task.http_status,
             "error_attempt": task.error_attempt,
             "output_path": task.output_path,
+            "output_is_file": bool(task.output_path and Path(task.output_path).is_file()),
             "created_at": task.created_at,
             "updated_at": task.updated_at,
             "started_at": task.started_at,

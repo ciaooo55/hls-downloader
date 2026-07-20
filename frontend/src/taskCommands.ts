@@ -23,7 +23,6 @@ const CANCELABLE = new Set([
   'awaiting_confirmation', 'pausing', 'paused', 'merging', 'remuxing',
 ])
 const RETRYABLE = new Set(['failed', 'canceled', 'unsupported'])
-const DELETABLE = new Set(['done', 'failed', 'canceled', 'unsupported'])
 
 export function commandState(tasks: TaskLike[]): CommandState {
   if (!tasks.length) {
@@ -42,7 +41,7 @@ export function commandState(tasks: TaskLike[]): CommandState {
     resume: allowed('resume') ?? tasks.every(task => task.status === 'paused'),
     cancel: allowed('cancel') ?? tasks.every(task => CANCELABLE.has(task.status)),
     retry: allowed('retry') ?? tasks.every(task => RETRYABLE.has(task.status)),
-    delete: allowed('delete') ?? tasks.every(task => DELETABLE.has(task.status)),
+    delete: allowed('delete') ?? true,
     open: tasks.length === 1 && (allowed('open') ?? tasks[0].status === 'done'),
     log: tasks.length === 1 && (allowed('log') ?? true),
   }

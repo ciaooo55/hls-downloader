@@ -8,6 +8,9 @@ export interface MediaResource {
   size?: number
   pageUrl?: string
   title?: string
+  filename?: string
+  statusCode?: number
+  method?: string
   seenAt: number
 }
 
@@ -23,6 +26,17 @@ export function classifyResource(url: string, mimeType = ''): ResourceKind | nul
   if (/\.mpd(?:$|[?#])/i.test(url) || mime.includes('dash+xml')) return 'dash'
   if (mime.startsWith('video/') || mime.startsWith('audio/')) return 'media'
   return MEDIA_EXT.test(url) || mime.includes('octet-stream') ? 'file' : null
+}
+
+export function classifyDownload(url: string, mimeType = '', filename = ''): ResourceKind | null {
+  const classified = classifyResource(url, mimeType)
+    || classifyResource(`https://download.invalid/${encodeURIComponent(filename)}`, mimeType)
+  if (classified) return classified
+  const extension = filename.split(/[\\/]/).pop()?.match(/\.([A-Za-z0-9]{1,10})$/)?.[1]?.toLowerCase()
+  if (extension && !['htm', 'html', 'xhtml'].includes(extension)) return 'file'
+  const mime = mimeType.toLowerCase()
+  if (mime && !mime.includes('text/html') && !mime.includes('application/xhtml')) return 'file'
+  return null
 }
 
 export function resourceId(url: string): string {
@@ -45,6 +59,8 @@ export function mergeResources(current: MediaResource[], incoming: MediaResource
 export function shouldTakeover(input: {
   url: string
   size?: number
+  mimeType?: string
+  filename?: string
   enabled: boolean
   minimumBytes: number
   excludedHosts: string[]
@@ -53,7 +69,8 @@ export function shouldTakeover(input: {
 }): boolean {
   if (input.altBypass) return false
   if (input.ctrlForce) return true
-  if (!input.enabled || (input.size || 0) < input.minimumBytes) return false
+  const sizeKnown = typeof input.size === 'number' && input.size >= 0
+  if (!input.enabled || (sizeKnown && input.size! < input.minimumBytes)) return false
   try { if (input.excludedHosts.includes(new URL(input.url).host)) return false } catch { return false }
-  return classifyResource(input.url) !== null
+  return classifyDownload(input.url, input.mimeType, input.filename) !== null
 }

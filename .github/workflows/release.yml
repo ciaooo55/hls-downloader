@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version used in the installer, for example 1.2.1
+        description: Version used in the installer, for example 1.2.2
         required: false
-        default: "1.2.1"
+        default: "1.2.2"
   push:
     tags:
       - "v*"
@@ -112,7 +112,8 @@ jobs:
             "HLSDownloader-Windows-x64-Portable.zip",
             "m3u8-sniffer.user.js",
             "HLSDownloader-Chrome.zip",
-            "HLSDownloader-Firefox-Unsigned.zip"
+            "HLSDownloader-Firefox-Unsigned.zip",
+            "HLSDownloader-Firefox-Source.zip"
           )
           foreach ($name in $expected) {
             if (-not (Test-Path -LiteralPath (Join-Path .\release $name))) {

@@ -70,7 +70,7 @@ def _ensure_app() -> None:
 
 def dispatch(message: dict) -> dict:
     operation = message.get("op")
-    if operation not in {"ping", "activate", "offer", "handoff_status"}:
+    if operation not in {"ping", "activate", "offer", "download", "handoff_status"}:
         raise ValueError("不支持的 Native Messaging 操作")
     _ensure_app()
     _request("POST", "/browser/ping", {"version": str(message.get("version", ""))})
@@ -80,6 +80,8 @@ def dispatch(message: dict) -> dict:
         return {"ok": True, "result": _request("POST", "/app/activate", {})}
     if operation == "offer":
         return {"ok": True, "handoff": _request("POST", "/browser/handoffs", message.get("resource", {}))}
+    if operation == "download":
+        return {"ok": True, "task": _request("POST", "/browser/downloads", message.get("resource", {}))}
     handoff_id = str(message.get("handoff_id", ""))
     return {"ok": True, "handoff": _request("GET", f"/browser/handoffs/{handoff_id}")}
 

@@ -324,6 +324,7 @@ class HLSDownloader:
             task.progress.post_percent = 0.0
             self._set_stage("merging", f"正在准备 {len(segments)} 个分片")
             output = self._output_path()
+            task.engine_state["reserved_output_path"] = str(output)
             await merge_segments(
                 seg_dir=seg_dir,
                 output_path=output,
@@ -335,6 +336,7 @@ class HLSDownloader:
             )
 
             task.output_path = str(output)
+            task.engine_state.pop("reserved_output_path", None)
             task.status = TaskStatus.DONE
             task.finished_at = datetime.now().isoformat()
             task.progress.post_percent = 100.0

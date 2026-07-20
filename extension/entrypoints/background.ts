@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { classifyResource, mergeResources, resourceId, shouldTakeover, type MediaResource } from '../lib/resources'
+import { classifyDownload, classifyResource, mergeResources, resourceId, shouldTakeover, type MediaResource } from '../lib/resources'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 const pending = new Map<number, string>()
@@ -9,20 +9,33 @@ async function settings() {
   const data = await browser.storage.local.get(['enabled', 'minimumBytes', 'excludedHosts', 'authorizedCookieHosts'])
   return {
     enabled: data.enabled !== false,
-    minimumBytes: Number(data.minimumBytes || 1024 * 1024),
+    minimumBytes: Number(data.minimumBytes ?? 1024 * 1024),
     excludedHosts: Array.isArray(data.excludedHosts) ? data.excludedHosts : [],
     authorizedCookieHosts: Array.isArray(data.authorizedCookieHosts) ? data.authorizedCookieHosts : [],
   }
 }
 
-async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>) {
+function storageKey(tabId: number, pageUrl = '') {
+  return tabId >= 0 ? `resources:tab:${tabId}` : `resources:${pageUrl || 'global'}`
+}
+
+function responseFilename(value: string): string {
+  const encoded = value.match(/filename\*=UTF-8''([^;]+)/i)?.[1] || ''
+  if (encoded) {
+    try { return decodeURIComponent(encoded).replace(/^"|"$/g, '') } catch { return encoded }
+  }
+  return value.match(/filename\s*=\s*"?([^";]+)/i)?.[1]?.trim() || ''
+}
+
+async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1) {
   const kind = resource.kind || classifyResource(resource.url, resource.mimeType)
   if (!kind) return
-  const key = `resources:${resource.pageUrl || 'global'}`
+  const key = storageKey(tabId, resource.pageUrl)
   const stored = await browser.storage.session.get(key)
   const resources = Array.isArray(stored[key]) ? stored[key] : []
-  await browser.storage.session.set({ [key]: mergeResources(resources, { ...resource, kind, id: resourceId(resource.url), seenAt: Date.now() }) })
-  await browser.action.setBadgeText({ text: String(Math.min(99, resources.length + 1)) })
+  const merged = mergeResources(resources, { ...resource, kind, id: resourceId(resource.url), seenAt: Date.now() })
+  await browser.storage.session.set({ [key]: merged })
+  await browser.action.setBadgeText({ text: String(Math.min(99, merged.length)), ...(tabId >= 0 ? { tabId } : {}) })
 }
 
 async function cookiesFor(url: string, pageUrl = ''): Promise<string> {
@@ -38,11 +51,16 @@ function native(message: Record<string, unknown>): Promise<any> {
 }
 
 async function offer(resource: MediaResource) {
+  return native({ op: 'offer', resource: await resourcePayload(resource) })
+}
+
+async function resourcePayload(resource: MediaResource) {
   const pageUrl = resource.pageUrl || ''
-  const pageOrigin = pageUrl ? new URL(pageUrl).origin : ''
-  return native({ op: 'offer', resource: {
+  let pageOrigin = ''
+  try { pageOrigin = pageUrl ? new URL(pageUrl).origin : '' } catch {}
+  return {
     url: resource.url,
-    filename: resource.title || '',
+    filename: resource.filename || resource.title || '',
     mime_type: resource.mimeType || '',
     size: resource.size || 0,
     source_page_url: pageUrl,
@@ -50,7 +68,25 @@ async function offer(resource: MediaResource) {
     origin: pageOrigin,
     cookie: await cookiesFor(resource.url, pageUrl),
     user_agent: navigator.userAgent,
-  } })
+    extension_version: browser.runtime.getManifest().version,
+  }
+}
+
+async function downloadNow(resource: MediaResource) {
+  const payload = await resourcePayload(resource)
+  return native({ op: 'download', resource: payload })
+}
+
+async function pauseDownload(downloadId: number): Promise<void> {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    try {
+      await browser.downloads.pause(downloadId)
+      return
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+  }
+  throw new Error('浏览器下载无法暂停')
 }
 
 async function watchHandoff(downloadId: number, handoffId: string) {
@@ -83,19 +119,34 @@ export default defineBackground(() => {
   browser.webRequest.onHeadersReceived.addListener(details => {
     const headers = details.responseHeaders || []
     const mimeType = headers.find(header => header.name?.toLowerCase() === 'content-type')?.value || ''
-    const length = Number(headers.find(header => header.name?.toLowerCase() === 'content-length')?.value || 0)
-    const kind = classifyResource(details.url, mimeType)
-    if (kind) void saveResource({ url: details.url, kind, mimeType, size: length, pageUrl: details.documentUrl || details.initiator || '' })
+    const contentRange = headers.find(header => header.name?.toLowerCase() === 'content-range')?.value || ''
+    const rangeTotal = Number(contentRange.match(/\/(\d+)$/)?.[1] || 0)
+    const length = rangeTotal || Number(headers.find(header => header.name?.toLowerCase() === 'content-length')?.value || 0)
+    const disposition = headers.find(header => header.name?.toLowerCase() === 'content-disposition')?.value || ''
+    const filename = responseFilename(disposition)
+    const kind = disposition
+      ? classifyDownload(details.url, mimeType, filename)
+      : classifyResource(details.url, mimeType)
+    if (kind) {
+      const resource = { url: details.url, kind, mimeType, size: length, filename, statusCode: details.statusCode, method: details.method, pageUrl: details.documentUrl || details.initiator || '' }
+      void saveResource(resource, details.tabId)
+      if (details.tabId >= 0) void browser.tabs.sendMessage(details.tabId, { type: 'captured-resource', resource }).catch(() => undefined)
+    }
   }, { urls: ['<all_urls>'] }, ['responseHeaders'])
 
   browser.downloads.onCreated.addListener(async item => {
     if (!item.url || item.url.startsWith('blob:')) return
     const config = await settings()
-    const resource: MediaResource = { id: resourceId(item.url), url: item.finalUrl || item.url, kind: classifyResource(item.url) || 'file', size: item.fileSize, title: item.filename.split(/[\\/]/).pop(), pageUrl: item.referrer, seenAt: Date.now() }
+    const url = item.finalUrl || item.url
+    const filename = item.filename.split(/[\\/]/).pop() || ''
+    const mimeType = item.mime || ''
+    const kind = classifyDownload(url, mimeType, filename)
+    if (!kind) return
+    const resource: MediaResource = { id: resourceId(url), url, kind, mimeType, size: item.fileSize, title: filename, filename, pageUrl: item.referrer, seenAt: Date.now() }
     const modifiers = Date.now() - lastModifier.at < 2500 ? lastModifier : { altBypass: false, ctrlForce: false }
-    if (!shouldTakeover({ url: resource.url, size: resource.size, ...config, ...modifiers })) return
+    if (!shouldTakeover({ url: resource.url, size: resource.size, mimeType, filename, ...config, ...modifiers })) return
     try {
-      await browser.downloads.pause(item.id)
+      await pauseDownload(item.id)
       const response = await offer(resource)
       if (!response?.ok || !response?.handoff?.id) throw new Error(response?.error || 'desktop rejected')
       void watchHandoff(item.id, response.handoff.id)
@@ -106,7 +157,7 @@ export default defineBackground(() => {
 
   browser.contextMenus.onClicked.addListener((info, tab) => {
     const url = info.linkUrl || info.srcUrl
-    if (url) void offer({ id: resourceId(url), url, kind: classifyResource(url) || 'file', pageUrl: tab?.url, seenAt: Date.now() })
+    if (url) void downloadNow({ id: resourceId(url), url, kind: classifyResource(url) || 'file', pageUrl: tab?.url, seenAt: Date.now() })
     if (info.menuItemId === 'hls-download-selection' && tab?.id) void browser.tabs.sendMessage(tab.id, { type: 'collect-selection' })
   })
 
@@ -116,12 +167,13 @@ export default defineBackground(() => {
       return
     }
     if (message?.type === 'resource') {
-      void saveResource({ ...message.resource, pageUrl: message.resource.pageUrl || sender.tab?.url })
+      void saveResource({ ...message.resource, pageUrl: message.resource.pageUrl || sender.tab?.url }, sender.tab?.id ?? -1)
       return
     }
     if (message?.type === 'offer') return offer(message.resource)
+    if (message?.type === 'download') return downloadNow(message.resource)
     if (message?.type === 'list') {
-      const key = `resources:${message.pageUrl || 'global'}`
+      const key = storageKey(Number(message.tabId ?? -1), message.pageUrl)
       return browser.storage.session.get(key).then(value => value[key] || [])
     }
     if (message?.type === 'ping') return native({ op: 'ping' }).catch(error => ({ ok: false, error: String(error) }))

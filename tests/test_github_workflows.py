@@ -27,7 +27,7 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     workflow = _workflow("release.yml")
 
     assert "workflow_dispatch:" in workflow
-    assert 'default: "1.2.1"' in workflow
+    assert 'default: "1.2.2"' in workflow
     assert "tags:" in workflow and "v*" in workflow
     assert "windows-latest" in workflow
     assert "ubuntu-latest" not in workflow
@@ -37,6 +37,7 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "HLSDownloader-Windows-x64-Portable.zip" in workflow
     assert "m3u8-sniffer.user.js" in workflow
     assert "HLSDownloader-Firefox-Unsigned.zip" in workflow
+    assert "HLSDownloader-Firefox-Source.zip" in workflow
     assert "HLSDownloader-Firefox-Signed.xpi" in workflow
     assert "web-ext sign" in workflow
     assert "SHA256SUMS.txt" in workflow
@@ -64,6 +65,7 @@ def test_readme_documents_windows_release_assets():
     assert "HLSDownloader-Windows-x64-Portable.zip" in readme
     assert "m3u8-sniffer.user.js" in readme
     assert "HLSDownloader-Firefox-Unsigned.zip" in readme
+    assert "HLSDownloader-Firefox-Source.zip" in readme
     assert "SHA256SUMS.txt" in readme
     assert "Windows 10/11" in readme
-    assert "git tag v1.2.1" in readme
+    assert "git tag v1.2.2" in readme

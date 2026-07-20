@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyResource, mergeResources, shouldTakeover } from './resources'
+import { classifyDownload, classifyResource, mergeResources, shouldTakeover } from './resources'
 
 describe('resource rules', () => {
   it('filters HLS segments but retains manifests', () => {
@@ -15,5 +15,12 @@ describe('resource rules', () => {
     const base = { url: 'https://a.test/file.zip', size: 20, enabled: true, minimumBytes: 10, excludedHosts: [] }
     expect(shouldTakeover({ ...base, altBypass: true })).toBe(false)
     expect(shouldTakeover({ ...base, enabled: false, ctrlForce: true })).toBe(true)
+  })
+  it('takes over unknown-size downloads and classifies response filenames', () => {
+    expect(classifyDownload('https://cdn.test/get?id=1', 'application/octet-stream', 'setup.exe')).toBe('file')
+    expect(shouldTakeover({
+      url: 'https://cdn.test/get?id=1', filename: 'archive.zip', size: -1,
+      enabled: true, minimumBytes: 1024 * 1024, excludedHosts: [],
+    })).toBe(true)
   })
 })

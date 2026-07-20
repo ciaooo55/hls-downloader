@@ -29,6 +29,7 @@ export interface Task {
   http_status: number
   error_attempt: number
   output_path: string
+  output_is_file: boolean
   created_at: string
   updated_at: string
   started_at: string

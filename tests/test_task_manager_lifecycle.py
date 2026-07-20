@@ -211,6 +211,8 @@ def test_available_actions_follow_backend_state_and_live_handle():
 
     downloading.progress.playable_duration = 2
     assert "preview" not in manager.get_available_actions(downloading)
+    assert "delete" in manager.get_available_actions(downloading)
+    assert "delete_files" in manager.get_available_actions(downloading)
 
 
 def test_task_event_contains_available_actions_and_queue_position():
@@ -230,7 +232,7 @@ def test_task_event_contains_available_actions_and_queue_position():
 
     event = manager._task_event(second)
 
-    assert event["available_actions"] == ["cancel", "log"]
+    assert event["available_actions"] == ["cancel", "log", "delete", "delete_files"]
     assert event["queue_position"] == 2
 
 
@@ -353,6 +355,50 @@ def test_deleting_last_task_removes_temp_root(tmp_path, monkeypatch):
 
         await manager.delete_task(task.id)
         assert not temp_root.exists()
+
+    asyncio.run(run())
+
+
+def test_delete_task_and_files_removes_completed_output(tmp_path, monkeypatch):
+    async def fake_run_db(*args, **kwargs):
+        return None
+
+    async def run():
+        manager = TaskManager()
+        output = tmp_path / "archive.zip"
+        output.write_bytes(b"payload")
+        task = _task("complete", TaskStatus.DONE)
+        task.output_path = str(output)
+        manager.tasks[task.id] = task
+        monkeypatch.setattr(manager_module.settings, "download_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+
+        await manager.delete_task(task.id, delete_files=True)
+
+        assert not output.exists()
+        assert task.id not in manager.tasks
+
+    asyncio.run(run())
+
+
+def test_delete_incomplete_task_always_removes_reserved_output(tmp_path, monkeypatch):
+    async def fake_run_db(*args, **kwargs):
+        return None
+
+    async def run():
+        manager = TaskManager()
+        reserved = tmp_path / "partial.exe"
+        reserved.write_bytes(b"")
+        task = _task("partial", TaskStatus.PAUSED)
+        task.engine_state["reserved_output_path"] = str(reserved)
+        manager.tasks[task.id] = task
+        monkeypatch.setattr(manager_module.settings, "download_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module.settings, "keep_temp_files", True)
+        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+
+        await manager.delete_task(task.id)
+
+        assert not reserved.exists()
 
     asyncio.run(run())
 

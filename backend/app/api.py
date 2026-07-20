@@ -117,6 +117,13 @@ async def accept_browser_handoff(handoff_id: str, x_token: str = Header(default=
         raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
     if item.status != "pending":
         raise HTTPException(status_code=409, detail=f"接管请求当前状态为 {item.status}")
+    task = await _create_browser_task(item)
+    item.status = "accepted"
+    item.task_id = task.id
+    return item.public()
+
+
+async def _create_browser_task(item):
     task = await manager.create_task(
         url=item.url,
         task_type=TaskType.AUTO,
@@ -129,9 +136,22 @@ async def accept_browser_handoff(handoff_id: str, x_token: str = Header(default=
         filename=item.filename,
         auto_start=True,
     )
+    return task
+
+
+@router.post("/browser/downloads")
+async def create_browser_download(request: Request, x_token: str = Header(default="")):
+    _check_token(x_token)
+    payload = await request.json()
+    url = str(payload.get("url", ""))
+    if not url.startswith(("http://", "https://", "magnet:")):
+        raise HTTPException(status_code=422, detail="浏览器资源地址无效")
+    _check_host(url)
+    item = browser_handoffs.create(payload)
+    task = await _create_browser_task(item)
     item.status = "accepted"
     item.task_id = task.id
-    return item.public()
+    return _to_resp(task)
 
 
 @router.post("/browser/handoffs/{handoff_id}/reject")
@@ -381,10 +401,28 @@ async def retry_task(task_id: str, x_token: str = Header(default="")):
     return {"ok": True}
 
 @router.delete("/tasks/{task_id}")
-async def delete_task(task_id: str, x_token: str = Header(default="")):
+async def delete_task(task_id: str, delete_files: bool = False, x_token: str = Header(default="")):
     _check_token(x_token)
-    await _manager_action(manager.delete_task(task_id))
+    await _manager_action(manager.delete_task(task_id, delete_files=delete_files))
     return {"ok": True}
+
+
+@router.get("/tasks/{task_id}/file")
+async def download_task_file(
+    task_id: str,
+    token: str = "",
+    x_token: str = Header(default=""),
+):
+    _check_playback_token(x_token, token)
+    task = manager.tasks.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status is not TaskStatus.DONE or not task.output_path:
+        raise HTTPException(status_code=409, detail="任务尚未下载完成")
+    path = Path(task.output_path)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="下载文件不存在或该任务包含多个文件")
+    return FileResponse(path, filename=path.name, headers={"Cache-Control": "private, no-store"})
 
 @router.get("/tasks/{task_id}/log")
 async def get_task_log(task_id: str, x_token: str = Header(default="")):
@@ -835,6 +873,7 @@ def _to_resp(task) -> TaskResponse:
         http_status=task.http_status,
         error_attempt=task.error_attempt,
         output_path=task.output_path,
+        output_is_file=bool(task.output_path and Path(task.output_path).is_file()),
         created_at=task.created_at or "",
         updated_at=task.updated_at or "",
         started_at=task.started_at or "",

@@ -109,20 +109,21 @@ export default function App() {
 
   const perform = async (action: string, targets: Task[] = selectedTasks) => {
     if (!targets.length) return
-    if (action === 'delete' && !confirm(`确定删除 ${targets.length} 个任务？`)) return
+    if (action === 'delete' && !confirm(`确定删除 ${targets.length} 条任务记录？未完成任务会停止并清理临时文件，已完成文件会保留。`)) return
+    if (action === 'deleteFiles' && !confirm(`确定删除 ${targets.length} 个任务及其下载文件？此操作无法撤销。`)) return
     const fresh = targets.filter(task => !pending.has(task.id))
     if (!fresh.length) return
     setError('')
     setPending(current => new Set([...current, ...fresh.map(task => task.id)]))
     try {
-      const results = await Promise.allSettled(fresh.map(task => action === 'delete' ? deleteTask(task.id) : taskAction(task.id, action)))
+      const results = await Promise.allSettled(fresh.map(task => action === 'delete' || action === 'deleteFiles' ? deleteTask(task.id, action === 'deleteFiles') : taskAction(task.id, action)))
       const failures = results.filter(result => result.status === 'rejected') as PromiseRejectedResult[]
       const successCount = results.length - failures.length
       if (failures.length) {
         const reason = failures[0].reason
         setError(`成功 ${successCount} 项，失败 ${failures.length} 项：${reason?.message || '任务操作失败'}`)
       } else {
-        showFeedback(`${action === 'delete' ? '已删除' : '操作完成'} ${successCount} 项`)
+        showFeedback(`${action === 'delete' || action === 'deleteFiles' ? '已删除' : '操作完成'} ${successCount} 项`)
         setSelected(new Set())
       }
     } finally {
@@ -178,7 +179,7 @@ export default function App() {
         <UpdateNotice />
         <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} ({filtered.length})</strong><div className="list-tools"><label className="task-search"><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务、链接或错误码" aria-label="搜索任务" /></label><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={clearCompleted}><Trash2 size={14} />清理已完成</button></div></div>
         {error && <div className="action-error">{error}</div>}
-        <TaskTable tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTaskAction={(task, action) => perform(action, [task])} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openExplorer(task.output_path)} onLaunchFile={launchOutput} onPreview={setPlaying} />
+        <TaskTable tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openExplorer(task.output_path)} onLaunchFile={launchOutput} onPreview={setPlaying} />
       </main>
     </div>
     <footer className="statusbar"><span>活动任务 <b>{running.length}</b></span><span>队列 <b>{queued}</b></span><span>总速度 <b>{fmtSpeed(totalSpeed)}</b></span><span>已完成 <b>{fmtBytes(completedSize)}</b></span><span>{userscript?.detected ? '浏览器脚本已连接' : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span></footer>

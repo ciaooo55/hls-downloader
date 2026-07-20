@@ -57,6 +57,7 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
       {!pending && actions.includes('retry') && <button className="primary-button" onClick={() => onAction('retry')}><RotateCcw size={16} />重试</button>}
       {!pending && actions.includes('cancel') && <button className="secondary-button" onClick={() => onAction('cancel')}><XCircle size={16} />取消</button>}
       {!pending && actions.includes('delete') && <button className="danger-button" onClick={() => onAction('delete')}><Trash2 size={16} />删除记录</button>}
+      {!pending && actions.includes('delete_files') && <button className="danger-button" onClick={() => onAction('deleteFiles')}><Trash2 size={16} />{task.status === 'done' ? '删除任务及文件' : '停止并删除'}</button>}
       {actions.includes('open') && <button className="secondary-button" onClick={onOpenFile}><FolderOpen size={16} />所在位置</button>}
       {actions.includes('launch') && <button className="secondary-button" onClick={onLaunchFile}><PlayCircle size={16} />系统播放</button>}
       {actions.includes('preview') && <button className="primary-button" onClick={onPreview}><MonitorPlay size={16} />{task.status === 'done' ? '内置播放' : '边下边播'}</button>}

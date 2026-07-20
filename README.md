@@ -19,7 +19,8 @@
 | `m3u8-sniffer.user.js` | 可单独导入 ScriptCat 或 Tampermonkey 的浏览器脚本 |
 | `HLSDownloader-Chrome.zip` | Chrome MV3 商店/开发者模式提交包 |
 | `HLSDownloader-Firefox-Signed.xpi` | 可直接安装的 Firefox 扩展；仅在 Mozilla 签名成功后生成 |
-| `HLSDownloader-Firefox-Unsigned.zip` | Firefox 源码提交包，正式版 Firefox 不能直接安装 |
+| `HLSDownloader-Firefox-Unsigned.zip` | Firefox 的 AMO 上传包和临时测试包，尚未经过 Mozilla 签名 |
+| `HLSDownloader-Firefox-Source.zip` | Mozilla 审核所需的对应源码与可复现构建说明 |
 | `SHA256SUMS.txt` | Release 文件的 SHA256 校验值 |
 
 安装包和便携包由 GitHub Actions 从源码自动构建，不保存在 Git 仓库中。程序内已包含 FFmpeg、ffprobe、前端资源和浏览器脚本。
@@ -76,7 +77,7 @@ Release 同时生成 Chrome 和 Firefox MV3 提交包。安装版会自动注册
 
 扩展支持响应嗅探、页面 fetch/XHR/media/Performance 观察、右键下载和 magnet 链接。Cookie 必须按站点单独授权，桌面任务中的 Cookie 使用 Windows DPAPI 加密后再写入数据库。Chrome 正式安装需要 Chrome Web Store，Firefox 永久安装需要 Mozilla 签名。
 
-`HLSDownloader-Firefox-Unsigned.zip` 不能拖进正式版 Firefox。临时测试时先解压，在 `about:debugging#/runtime/this-firefox` 中选择“临时载入附加组件”，再选择解压目录里的 `manifest.json`；重启 Firefox 后会自动移除。仓库配置 `WEB_EXT_API_KEY` 和 `WEB_EXT_API_SECRET` 后，Release 工作流会通过 AMO 的 unlisted 渠道生成可永久安装的 `HLSDownloader-Firefox-Signed.xpi`。
+在 AMO 的“Upload Version”页面上传 `HLSDownloader-Firefox-Unsigned.zip`；校验通过后，源码问题选择“是”，再上传 `HLSDownloader-Firefox-Source.zip`。审核说明见源码包内的 `AMO-BUILD.md`，隐私政策见 [PRIVACY.md](PRIVACY.md)。未签名 ZIP 不能拖进正式版 Firefox；临时测试时先解压，在 `about:debugging#/runtime/this-firefox` 中选择“临时载入附加组件”，再选择解压目录里的 `manifest.json`。
 
 ## 浏览器脚本
 
@@ -147,7 +148,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.2.1
+.\scripts\build_installer.ps1 -Version 1.2.2
 ```
 
 输出位于忽略的 `release` 目录：
@@ -166,8 +167,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.2.1
-git push origin v1.2.1
+git tag v1.2.2
+git push origin v1.2.2
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。
