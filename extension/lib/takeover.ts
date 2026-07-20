@@ -8,6 +8,10 @@ export function shouldResumeBrowserDownload(paused: boolean, handedOff: boolean)
   return paused && !handedOff
 }
 
+export function canContinueTakeover(paused: boolean, state: BrowserDownloadState): boolean {
+  return paused || state === 'complete'
+}
+
 export function desktopAcceptedHandoff(response: unknown): boolean {
   if (!response || typeof response !== 'object') return false
   const value = response as { ok?: boolean; handoff?: { id?: string } }

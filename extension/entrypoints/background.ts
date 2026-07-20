@@ -2,7 +2,7 @@ import { browser } from 'wxt/browser'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
 import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, resourceId, shouldTakeover, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
-import { browserCleanupAction, desktopAcceptedHandoff, shouldResumeBrowserDownload } from '../lib/takeover'
+import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, shouldResumeBrowserDownload } from '../lib/takeover'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 let clickIntents: DownloadClickIntent[] = []
@@ -352,11 +352,12 @@ export default defineBackground(() => {
     try {
       const [pauseResult, config] = await Promise.all([pauseDownload(item.id), settings()])
       paused = pauseResult
-      if (!paused || !config.enabled) {
+      if (!config.enabled) {
         if (paused) await browser.downloads.resume(item.id).catch(() => undefined)
         return
       }
       const actual = await refreshedDownload(item.id, item)
+      if (!canContinueTakeover(paused, actual.state)) return
       const chain = requestChains.find(actual)
       const url = chain?.finalUrl || actual.finalUrl || actual.url
       const responseName = responseFilename(responseHeader(chain, 'content-disposition'))
@@ -432,7 +433,7 @@ export default defineBackground(() => {
       return true
     }
     if (message?.type === 'list') {
-      const key = storageKey(Number(message.tabId ?? -1), message.pageUrl)
+      const key = storageKey(Number(message.tabId ?? sender.tab?.id ?? -1), message.pageUrl)
       void browser.storage.session.get(key)
         .then(value => sendResponse(value[key] || []))
         .catch(error => sendResponse({ ok: false, error: String(error) }))

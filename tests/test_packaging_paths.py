@@ -166,7 +166,12 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     assert 'shutdown-running.ps1' in nsis_script
     shutdown_script = (root / "scripts" / "shutdown-running.ps1").read_text(encoding="utf-8")
     assert "api/app/shutdown" in shutdown_script
-    assert "taskkill /IM HLSDownloader.exe /F" in nsis_script
+    assert "taskkill.exe\" /IM HLSDownloader.exe /T /F" in shutdown_script
+    assert '[System.IO.FileShare]::None' in shutdown_script
+    assert '-InstallDir "$INSTDIR" -TimeoutSeconds 20' in nsis_script
+    assert 'CloseRunningAppRetry${Suffix}' in nsis_script
+    assert 'MB_RETRYCANCEL' in nsis_script
+    assert 'CloseRunningAppAbort${Suffix}' in nsis_script
     assert 'RMDir /r "$LOCALAPPDATA\\HLS Downloader"' in nsis_script
     assert nsis_script.count('RMDir /r "$LOCALAPPDATA\\HLS Downloader"') >= 3
     assert 'Sleep 1000' in nsis_script

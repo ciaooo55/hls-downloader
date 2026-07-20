@@ -56,7 +56,7 @@ describe('resource rules', () => {
       url: 'https://cdn.test/final.zip',
       finalUrl: 'https://cdn.test/mirror.zip',
       chainUrls: ['https://cdn.test/start', 'https://cdn.test/final.zip'],
-      referrer: 'https://site.test/download',
+      referrer: 'https://github.test/redirected-download',
       tabId: 8,
     }, 2000)).toBe(true)
     expect(matchesDownloadClick({ ...intent, tabId: 8 }, {

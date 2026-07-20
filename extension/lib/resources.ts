@@ -105,12 +105,12 @@ export function matchesDownloadClick(
   const samePage = Boolean(intent.pageUrl && download.referrer
     && stripHash(intent.pageUrl) === stripHash(download.referrer))
   if (intent.href) {
-    if (intent.pageUrl && download.referrer && !samePage) return false
     const clicked = stripHash(intent.href)
     const exact = [download.url, download.finalUrl, ...(download.chainUrls || [])]
       .filter((value): value is string => Boolean(value))
       .some(value => stripHash(value) === clicked)
-    if (exact) return true
+    if (exact && (sameTab || !intent.pageUrl || !download.referrer || samePage)) return true
+    if (exact) return false
   }
   if (intent.generic) return age <= 1500 && (samePage || sameTab)
   return age <= 3000 && samePage && (sameTab || intent.tabId === undefined || download.tabId === undefined)

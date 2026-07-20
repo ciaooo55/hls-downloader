@@ -1,6 +1,23 @@
 import { browser } from 'wxt/browser'
 import { classifyResource, resourceId, type MediaResource } from '../lib/resources'
 
+async function runtimeMessage(message: Record<string, unknown>, retries = 1): Promise<any> {
+  let lastError: unknown
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await browser.runtime.sendMessage(message)
+    } catch (error) {
+      lastError = error
+      if (attempt < retries) await new Promise(resolve => setTimeout(resolve, 180))
+    }
+  }
+  const detail = lastError instanceof Error ? lastError.message : String(lastError || '')
+  if (/receiving end does not exist|extension context invalidated/i.test(detail)) {
+    throw new Error('扩展已更新或后台未连接，请刷新当前网页后重试')
+  }
+  throw lastError
+}
+
 export default defineContentScript({
   matches: ['<all_urls>'],
   cssInjectionMode: 'ui',
@@ -15,11 +32,11 @@ export default defineContentScript({
           :host{all:initial}*{box-sizing:border-box}button{font:13px system-ui,sans-serif;letter-spacing:0}
           .wrap{position:fixed;right:14px;top:35%;z-index:2147483647;color:#17202a;filter:drop-shadow(0 4px 12px #0003)}
           .toggle{width:42px;height:42px;border:0;border-radius:7px;background:#1267a8;color:white;cursor:pointer;font-weight:700}
-          .panel{display:none;width:min(340px,calc(100vw - 20px));max-height:60vh;background:#fff;border:1px solid #ccd3da;border-radius:7px;overflow:hidden}.open .panel{display:block}.open .toggle{display:none}
-          header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #e4e8ec;background:#f7f9fa;font:600 14px system-ui}
-          .close{display:grid;place-items:center;width:30px;height:30px;border:0;border-radius:5px;background:#e7ebee;color:#25313a;cursor:pointer;font:700 20px/1 system-ui}.list{overflow:auto;max-height:49vh}.empty{padding:18px;color:#68727c;font:13px system-ui}
-          .item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;padding:10px 12px;border-bottom:1px solid #edf0f2}.meta{min-width:0}.name,.url{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.name{font:600 13px system-ui}.url{color:#84909a;font:11px system-ui;margin-top:3px}.kind{color:#5f6d77;font:12px system-ui;margin-top:3px}.download{min-width:58px;height:30px;border:0;border-radius:5px;background:#176b48;color:white;padding:6px 9px;cursor:pointer}.download[disabled]{cursor:default;opacity:.7}.result{padding:7px 12px;background:#eef6f1;color:#176b48;font:12px system-ui}.result.error{background:#fff0f0;color:#a13737}
-        </style><div class="wrap"><button class="toggle" title="媒体嗅探">DL</button><div class="panel"><header><span>检测到的媒体</span><button class="close" title="关闭并折叠" aria-label="关闭并折叠">×</button></header><div class="result" hidden></div><div class="list"><div class="empty">播放视频后会显示资源</div></div></div></div>`
+          .panel{display:none;width:min(410px,calc(100vw - 20px));max-height:68vh;background:#fff;border:1px solid #ccd3da;border-radius:7px;overflow:hidden}.open .panel{display:block}.open .toggle{display:none}
+          header{display:flex;align-items:center;justify-content:space-between;padding:9px 10px 9px 12px;border-bottom:1px solid #e4e8ec;background:#f7f9fa;font:600 14px system-ui}.head-actions{display:flex;align-items:center;gap:5px}
+          .pin,.close{height:30px;border:0;border-radius:5px;background:#e7ebee;color:#25313a;cursor:pointer}.pin{padding:0 9px;font:12px system-ui}.pin.active{background:#d9eee4;color:#176b48}.close{display:grid;place-items:center;width:30px;font:700 20px/1 system-ui}.list{overflow:auto;max-height:57vh}.empty{padding:18px;color:#68727c;font:13px system-ui}
+          .item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:11px 12px;border-bottom:1px solid #edf0f2}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 13px/1.35 system-ui;overflow-wrap:anywhere}.url{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:#71808c;font:11px/1.35 system-ui;margin-top:4px;overflow-wrap:anywhere}.kind{color:#4f5e69;font:12px system-ui;margin-top:4px}.download{align-self:center;min-width:58px;height:30px;border:0;border-radius:5px;background:#176b48;color:white;padding:6px 9px;cursor:pointer}.download[disabled]{cursor:default;opacity:.7}.result{padding:8px 12px;background:#eef6f1;color:#176b48;font:12px/1.4 system-ui}.result.error{background:#fff0f0;color:#a13737}
+        </style><div class="wrap"><button class="toggle" title="媒体嗅探：悬停展开">DL</button><div class="panel"><header><span>检测到的媒体</span><div class="head-actions"><button class="pin" title="固定展开">固定</button><button class="close" title="折叠" aria-label="折叠">×</button></div></header><div class="result" hidden></div><div class="list"><div class="empty">播放视频后会显示资源</div></div></div></div>`
         container.append(root)
         const wrap = root.querySelector('.wrap')!
         root.querySelector('.toggle')!.addEventListener('click', () => {
@@ -29,7 +46,6 @@ export default defineContentScript({
           wrap.style.top = `${Math.max(10, Math.min(rect.top, innerHeight - rect.height - 10))}px`
           wrap.style.right = 'auto'
         })
-        root.querySelector('.close')!.addEventListener('click', () => wrap.classList.remove('open'))
         return root
       },
     })
@@ -37,14 +53,54 @@ export default defineContentScript({
     const wrap = ui.shadow.querySelector<HTMLElement>('.wrap')
     const dragHandles = ui.shadow.querySelectorAll<HTMLElement>('.toggle, header')
     let dragged = false
-    void browser.storage.local.get('panelPosition').then(value => {
+    let pinned = false
+    let collapseTimer: ReturnType<typeof setTimeout> | null = null
+    const fitPanel = () => {
+      if (!wrap) return
+      const rect = wrap.getBoundingClientRect()
+      if (rect.right > innerWidth - 10 || rect.bottom > innerHeight - 10 || rect.left < 10 || rect.top < 10) {
+        wrap.style.left = `${Math.max(10, Math.min(rect.left, innerWidth - rect.width - 10))}px`
+        wrap.style.top = `${Math.max(10, Math.min(rect.top, innerHeight - rect.height - 10))}px`
+        wrap.style.right = 'auto'
+      }
+    }
+    const setOpen = (open: boolean) => {
+      wrap?.classList.toggle('open', open)
+      if (open) requestAnimationFrame(fitPanel)
+    }
+    const pinButton = ui.shadow.querySelector<HTMLButtonElement>('.pin')
+    const setPinned = (value: boolean) => {
+      pinned = value
+      pinButton?.classList.toggle('active', value)
+      if (pinButton) pinButton.textContent = value ? '已固定' : '固定'
+      if (value) setOpen(true)
+      void browser.storage.local.set({ panelPinned: value })
+    }
+    wrap?.addEventListener('mouseenter', () => {
+      if (collapseTimer) clearTimeout(collapseTimer)
+      setOpen(true)
+    })
+    wrap?.addEventListener('mouseleave', () => {
+      if (pinned || dragged) return
+      collapseTimer = setTimeout(() => setOpen(false), 450)
+    })
+    pinButton?.addEventListener('click', () => setPinned(!pinned))
+    ui.shadow.querySelector('.close')?.addEventListener('click', () => {
+      if (pinned) setPinned(false)
+      setOpen(false)
+    })
+    void browser.storage.local.get(['panelPosition', 'panelPinned']).then(value => {
       const position = value.panelPosition
+      pinned = value.panelPinned === true
+      pinButton?.classList.toggle('active', pinned)
+      if (pinButton) pinButton.textContent = pinned ? '已固定' : '固定'
+      if (pinned) setOpen(true)
       if (wrap && position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
         wrap.style.left = `${Math.max(0, position.x)}px`; wrap.style.top = `${Math.max(0, position.y)}px`; wrap.style.right = 'auto'
       }
     })
     dragHandles.forEach(handle => handle.addEventListener('pointerdown', event => {
-      if (!wrap || (event.target as HTMLElement).closest('.close')) return
+      if (!wrap || (event.target as HTMLElement).closest('.close, .pin')) return
       dragged = false
       const startX = event.clientX; const startY = event.clientY
       const rect = wrap.getBoundingClientRect(); const startLeft = rect.left; const startTop = rect.top
@@ -57,12 +113,14 @@ export default defineContentScript({
       const finish = () => {
         window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish)
         void browser.storage.local.set({ panelPosition: { x: wrap.offsetLeft, y: wrap.offsetTop } })
+        setTimeout(() => { dragged = false }, 0)
       }
       window.addEventListener('pointermove', move); window.addEventListener('pointerup', finish, { once: true })
     }))
     ui.shadow.querySelector('.toggle')?.addEventListener('click', event => {
       if (dragged) event.stopImmediatePropagation()
     }, true)
+    window.addEventListener('resize', fitPanel)
 
     const render = () => {
       const list = ui.shadow.querySelector('.list')
@@ -79,7 +137,7 @@ export default defineContentScript({
         button.addEventListener('click', () => {
           const result = ui.shadow.querySelector<HTMLElement>('.result')
           button.setAttribute('disabled', ''); button.textContent = '发送中'
-          void browser.runtime.sendMessage({ type: 'offer', resource }).then(response => {
+          void runtimeMessage({ type: 'offer', resource }).then(response => {
             if (!response?.ok || !response?.handoff?.id) throw new Error(response?.error || '桌面端未接受请求')
             button.textContent = '待确认'
             if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `请在桌面下载器确认：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
@@ -93,8 +151,10 @@ export default defineContentScript({
     }
     const add = (url: string, mimeType = '') => {
       const kind = classifyResource(url, mimeType); if (!kind) return
-      const resource = { id: resourceId(url), url, kind, mimeType, pageUrl: location.href, title: document.title, seenAt: Date.now() }
-      resources.set(url, resource); render(); void browser.runtime.sendMessage({ type: 'resource', resource })
+      let filename = ''
+      try { filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch {}
+      const resource = { id: resourceId(url), url, kind, mimeType, pageUrl: location.href, title: filename || document.title, filename, seenAt: Date.now() }
+      resources.set(url, resource); render(); void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
     }
     window.addEventListener('__hls_downloader_resource__', ((event: CustomEvent) => add(event.detail?.url, event.detail?.mimeType)) as EventListener)
     document.querySelectorAll<HTMLMediaElement>('video[src],audio[src],source[src]').forEach(media => add(media.currentSrc || media.src))
@@ -111,6 +171,13 @@ export default defineContentScript({
         root.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => add(anchor.href))
       }
     })
+    void runtimeMessage({ type: 'list', pageUrl: location.href }).then((stored: MediaResource[]) => {
+      if (!Array.isArray(stored)) return
+      stored.forEach(resource => {
+        if (resource?.url) resources.set(resource.url, resource)
+      })
+      render()
+    }).catch(() => undefined)
   },
 })
 

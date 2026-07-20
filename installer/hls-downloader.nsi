@@ -7,7 +7,7 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.2.10"
+  !define APP_VERSION "1.2.11"
 !endif
 !define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
@@ -65,15 +65,17 @@ FunctionEnd
 
 !macro CloseRunningApp Suffix
   IfFileExists "$INSTDIR\HLSDownloader.exe" 0 CloseRunningAppDone${Suffix}
+CloseRunningAppRetry${Suffix}:
     DetailPrint "正在关闭运行中的 HLS Downloader..."
-    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\shutdown-running.ps1"'
+    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\shutdown-running.ps1" -InstallDir "$INSTDIR" -TimeoutSeconds 20'
     Pop $0
     Pop $1
-CloseRunningAppForce${Suffix}:
-    nsExec::ExecToStack 'taskkill /IM HLSDownloader.exe /F'
-    Pop $0
-    Pop $1
-    Sleep 500
+    ${If} $0 != 0
+      MessageBox MB_ICONSTOP|MB_RETRYCANCEL "无法关闭正在运行的 HLS Downloader，或程序文件仍被其他进程占用。$\r$\n$\r$\n请关闭下载器、文件管理器预览和安全软件扫描后重试。" IDRETRY CloseRunningAppRetry${Suffix} IDCANCEL CloseRunningAppAbort${Suffix}
+    ${EndIf}
+    Goto CloseRunningAppDone${Suffix}
+CloseRunningAppAbort${Suffix}:
+    Abort
 CloseRunningAppDone${Suffix}:
 !macroend
 

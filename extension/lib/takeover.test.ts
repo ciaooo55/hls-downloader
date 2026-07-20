@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { browserCleanupAction, desktopAcceptedHandoff, shouldResumeBrowserDownload } from './takeover'
+import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, shouldResumeBrowserDownload } from './takeover'
 
 describe('browser takeover ownership', () => {
   it('never resumes the browser copy after desktop ownership transfers', () => {
@@ -17,5 +17,11 @@ describe('browser takeover ownership', () => {
     expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one' } })).toBe(true)
     expect(desktopAcceptedHandoff({ ok: false, handoff: { id: 'one' } })).toBe(false)
     expect(desktopAcceptedHandoff({ ok: true })).toBe(false)
+  })
+
+  it('still hands off a fast file that completed before pause succeeded', () => {
+    expect(canContinueTakeover(true, 'in_progress')).toBe(true)
+    expect(canContinueTakeover(false, 'complete')).toBe(true)
+    expect(canContinueTakeover(false, 'in_progress')).toBe(false)
   })
 })
