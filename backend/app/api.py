@@ -32,7 +32,7 @@ from .downloader.playback import (
 )
 from .utils import get_domain
 from .userscript_monitor import userscript_monitor
-from .desktop_runtime import activate_window, present_browser_handoff, request_shutdown
+from .desktop_runtime import activate_window, present_browser_handoff, has_browser_handoff_presenter, is_desktop_handoff_session, request_shutdown
 from .url_recognition import RecognitionError, recognize_url
 from .updater import UpdateError, update_service
 from .models import TaskStatus, TaskType
@@ -71,6 +71,50 @@ async def health():
     return HealthResponse()
 
 
+
+def _normalize_resource_url(url: str) -> str:
+    value = str(url or '').strip()
+    if not value:
+        return ''
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+        parts = urlsplit(value)
+        path = parts.path.rstrip('/') or '/'
+        return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, parts.query, ''))
+    except Exception:
+        return value.rstrip('/')
+
+
+def _duplicate_task_payload(url: str) -> list[dict]:
+    matches = manager.find_tasks_by_url(url, limit=5)
+    payload = []
+    for task in matches:
+        payload.append({
+            'id': task.id,
+            'status': task.status.value,
+            'filename': task.filename or task.title or '',
+            'output_path': task.output_path or '',
+            'updated_at': task.updated_at or task.created_at or '',
+        })
+    return payload
+
+
+def _handoff_public(item) -> dict:
+    body = item.public()
+    duplicates = _duplicate_task_payload(item.url)
+    body['duplicate'] = bool(duplicates)
+    body['duplicates'] = duplicates
+    if duplicates:
+        top = duplicates[0]
+        status = top.get('status') or ''
+        name = top.get('filename') or '已有任务'
+        body['duplicate_message'] = (
+            f'下载列表中已有相同链接（{name} · {status}）。仍可继续下载，也可取消。'
+        )
+    else:
+        body['duplicate_message'] = ''
+    return body
+
 @router.post("/browser/handoffs")
 async def create_browser_handoff(request: Request, x_token: str = Header(default="")):
     _check_token(x_token)
@@ -93,7 +137,7 @@ async def create_browser_handoff(request: Request, x_token: str = Header(default
     else:
         browser_handoffs.mark_presentation(item.id, "failed", "no presenter")
     item = browser_handoffs.get(item.id) or item
-    body = item.public()
+    body = _handoff_public(item)
     body["presentation_mode"] = mode
     body["presentation_ok"] = bool(presentation.get("ok"))
     body["presentation_queued"] = bool(presentation.get("queued"))
@@ -108,6 +152,20 @@ async def browser_extension_ping(request: Request, x_token: str = Header(default
     return {"ok": True}
 
 
+@router.get("/browser/presenter")
+async def browser_presenter_status(x_token: str = Header(default="")):
+    """Desktop shell readiness for cold-start handoffs."""
+    _check_token(x_token)
+    ready = has_browser_handoff_presenter()
+    session = is_desktop_handoff_session()
+    return {
+        "ok": True,
+        "ready": ready,
+        "session": session,
+        "mode": "desktop" if ready else ("desktop-pending" if session else "ui-fallback"),
+    }
+
+
 @router.get("/browser/status")
 async def browser_extension_status(x_token: str = Header(default="")):
     _check_token(x_token)
@@ -117,7 +175,11 @@ async def browser_extension_status(x_token: str = Header(default="")):
 @router.get("/browser/handoffs")
 async def list_browser_handoffs(x_token: str = Header(default="")):
     _check_token(x_token)
-    return browser_handoffs.pending()
+    return [
+        _handoff_public(browser_handoffs.get(item["id"]))
+        for item in browser_handoffs.pending()
+        if browser_handoffs.get(item["id"]) is not None
+    ]
 
 
 @router.get("/browser/handoffs/{handoff_id}")
@@ -126,7 +188,7 @@ async def get_browser_handoff(handoff_id: str, x_token: str = Header(default="")
     item = browser_handoffs.get(handoff_id)
     if not item:
         raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
-    return item.public()
+    return _handoff_public(item)
 
 
 @router.post("/browser/handoffs/{handoff_id}/accept")

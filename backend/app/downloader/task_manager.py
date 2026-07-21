@@ -151,6 +151,29 @@ class TaskManager:
     async def _broadcast(self, event: dict) -> None:
         self._broadcast_nowait(event)
 
+    def find_tasks_by_url(self, url: str, *, limit: int = 8) -> list[Task]:
+        """Return recent tasks that match the same download URL (IDM-style duplicate check)."""
+        target = str(url or '').strip()
+        if not target:
+            return []
+        # Normalize trivial differences that still mean the same resource.
+        def normalize(value: str) -> str:
+            value = value.strip()
+            try:
+                from urllib.parse import urlsplit, urlunsplit
+                parts = urlsplit(value)
+                path = parts.path.rstrip('/') or '/'
+                return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, parts.query, ''))
+            except Exception:
+                return value.rstrip('/')
+        key = normalize(target)
+        matches = [
+            task for task in self.tasks.values()
+            if normalize(task.url) == key
+        ]
+        matches.sort(key=lambda task: task.updated_at or task.created_at or '', reverse=True)
+        return matches[: max(1, int(limit))]
+
     def _get_task(self, task_id: str) -> Task:
         task = self.tasks.get(task_id)
         if task is None:

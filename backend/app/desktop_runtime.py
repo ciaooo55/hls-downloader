@@ -142,6 +142,11 @@ def has_browser_handoff_presenter() -> bool:
         return _handoff_callback is not None
 
 
+def is_desktop_handoff_session() -> bool:
+    with _handoff_lock:
+        return _desktop_session_active
+
+
 def register_shutdown(callback: Callable[[], bool | None] | None) -> None:
     global _shutdown_callback
     _shutdown_callback = callback

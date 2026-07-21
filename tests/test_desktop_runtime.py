@@ -694,3 +694,40 @@ def test_background_controller_defers_manager_ui_until_opened():
 
     assert window.calls[0].startswith("load-url:http://")
     assert window.calls[1:5] == ["restore", "show", "on-top:True", "on-top:False"]
+
+
+def test_presenter_status_endpoint_reflects_desktop_session():
+    from backend.app.desktop_runtime import (
+        has_browser_handoff_presenter,
+        is_desktop_handoff_session,
+        register_browser_handoff,
+        set_desktop_handoff_session,
+    )
+
+    register_browser_handoff(None)
+    set_desktop_handoff_session(False)
+    client = TestClient(app)
+    try:
+        idle = client.get("/api/browser/presenter", headers={"X-Token": "55555"})
+        assert idle.status_code == 200
+        assert idle.json()["ready"] is False
+        assert idle.json()["session"] is False
+        assert idle.json()["mode"] == "ui-fallback"
+
+        set_desktop_handoff_session(True)
+        pending = client.get("/api/browser/presenter", headers={"X-Token": "55555"})
+        body = pending.json()
+        assert body["session"] is True
+        assert body["ready"] is False
+        assert body["mode"] == "desktop-pending"
+
+        register_browser_handoff(lambda _handoff_id: None)
+        ready = client.get("/api/browser/presenter", headers={"X-Token": "55555"})
+        ready_body = ready.json()
+        assert ready_body["ready"] is True
+        assert ready_body["mode"] == "desktop"
+        assert has_browser_handoff_presenter() is True
+        assert is_desktop_handoff_session() is True
+    finally:
+        register_browser_handoff(None)
+        set_desktop_handoff_session(False)

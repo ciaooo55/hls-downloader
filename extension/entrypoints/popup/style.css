@@ -1,9 +1,9 @@
 * { box-sizing: border-box; }
-body { margin: 0; width: 400px; color: #102a3a; background: #f4fbfe; font: 13px/1.4 system-ui, sans-serif; }
+body { margin: 0; width: 380px; color: #102a3a; background: #f4fbfe; font: 13px/1.4 system-ui, sans-serif; }
 main { display: flex; min-height: 430px; max-height: 600px; flex-direction: column; }
 header { display: flex; justify-content: space-between; align-items: center; padding: 13px 14px; background: #fff; border-bottom: 1px solid #d5eff9; }
 .brand { display: flex; align-items: center; gap: 9px; }
-.brand > img { width: 22px; height: 22px; border-radius: 5px; }
+.brand > img { width: 18px; height: 18px; border-radius: 4px; }
 h1 { font-size: 15px; margin: 0; letter-spacing: 0; }
 header span { display: block; color: #a13737; font-size: 11px; margin-top: 2px; }
 header span.online { color: #16704d; }

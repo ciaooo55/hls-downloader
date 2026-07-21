@@ -84,3 +84,55 @@ def test_native_host_process_handles_multiple_messages(monkeypatch):
 
     assert native_host.main() == 0
     assert responses == [{"ok": True, "op": "ping"}, {"ok": True, "op": "ping"}]
+
+
+def test_task_manager_finds_duplicate_urls():
+    from backend.app.downloader.task_manager import TaskManager
+    from backend.app.models import Task, TaskStatus, TaskType
+
+    manager = TaskManager.__new__(TaskManager)
+    manager.tasks = {}
+    manager.tasks['a'] = Task(
+        id='a',
+        url='https://CDN.Example.com/video/File.mp4?x=1',
+        task_type=TaskType.HTTP,
+        status=TaskStatus.DONE,
+        filename='File.mp4',
+        updated_at='2026-01-02',
+    )
+    manager.tasks['b'] = Task(
+        id='b',
+        url='https://cdn.example.com/video/File.mp4?x=1',
+        task_type=TaskType.HTTP,
+        status=TaskStatus.DOWNLOADING,
+        filename='File-copy.mp4',
+        updated_at='2026-01-03',
+    )
+    matches = manager.find_tasks_by_url('https://cdn.example.com/video/File.mp4/?x=1')
+    assert [item.id for item in matches] == ['b', 'a']
+    assert manager.find_tasks_by_url('https://cdn.example.com/other.mp4') == []
+
+
+def test_native_host_waits_for_presenter_after_cold_start(monkeypatch):
+    calls = []
+    health_hits = {'n': 0}
+
+    def request(method, path, payload=None, timeout=4):
+        calls.append((method, path))
+        if path == '/health':
+            health_hits['n'] += 1
+            if health_hits['n'] == 1:
+                raise RuntimeError('down')
+            return {'ok': True, 'version': '1.3.0'}
+        if path == '/browser/presenter':
+            # First poll: session only; second poll: ready.
+            ready_hits = sum(1 for item in calls if item[1] == '/browser/presenter')
+            return {'ok': True, 'session': True, 'ready': ready_hits >= 2, 'mode': 'desktop' if ready_hits >= 2 else 'desktop-pending'}
+        return {'ok': True}
+
+    monkeypatch.setattr(native_host, '_request', request)
+    monkeypatch.setattr(native_host, '_start_app', lambda: calls.append(('start', 'app')))
+    monkeypatch.setattr(native_host.time, 'sleep', lambda _seconds: None)
+    native_host._ensure_app()
+    assert ('start', 'app') in calls
+    assert any(path == '/browser/presenter' for _method, path in calls)

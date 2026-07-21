@@ -289,11 +289,11 @@ class BrowserHandoffWindowManager:
                     title,
                     self.url_builder(handoff_id),
                     js_api=bridge,
-                    width=500,
-                    height=620,
+                    width=400,
+                    height=520,
                     x=x,
                     y=y,
-                    min_size=(420, 520),
+                    min_size=(360, 460),
                     resizable=True,
                     on_top=True,
                     focus=True,
@@ -771,7 +771,11 @@ def _run_desktop(*, start_hidden: bool = False) -> int:
 
     server = UvicornServerThread()
     server.start()
+    # Mark the desktop session before /health becomes usable so cold-start
+    # handoffs queue as desktop-pending instead of falsely using ui-fallback.
+    set_desktop_handoff_session(True)
     if not server.wait_until_ready():
+        set_desktop_handoff_session(False)
         server.stop()
         server.join(timeout=5)
         _show_startup_error(
@@ -784,6 +788,7 @@ def _run_desktop(*, start_hidden: bool = False) -> int:
     try:
         import webview
     except ImportError:
+        set_desktop_handoff_session(False)
         register_shutdown(None)
         server.stop()
         server.join(timeout=5)
@@ -803,7 +808,6 @@ def _run_desktop(*, start_hidden: bool = False) -> int:
         hidden=start_hidden,
     )
     bridge._set_window(window)
-    set_desktop_handoff_session(True)
     handoff_windows = BrowserHandoffWindowManager(
         window,
         webview.create_window,
@@ -821,17 +825,35 @@ def _run_desktop(*, start_hidden: bool = False) -> int:
     controller.set_tray(tray)
     bridge._set_exit_request(controller.request_exit)
     register_activation(controller.activate)
-    register_browser_handoff(handoff_windows.show)
+    # Defer presenter registration until the GUI loop is running so cold-start
+    # offers are not dropped by create_window calls made too early.
     register_shutdown(controller.request_exit)
     startup_exit.disarm()
     window.events.closing += controller.on_closing
     window.events.restored += controller.on_restored
 
+    def boot() -> None:
+        tray.start()
+        register_browser_handoff(handoff_windows.show)
+        # Recover any pending service items that arrived before the GUI loop.
+        try:
+            from backend.app.browser_handoff import browser_handoffs
+        except ImportError:
+            from app.browser_handoff import browser_handoffs
+        try:
+            from backend.app.desktop_runtime import present_browser_handoff
+        except ImportError:
+            from app.desktop_runtime import present_browser_handoff
+        for item in browser_handoffs.pending():
+            presentation = str(item.get("presentation") or "")
+            if presentation in {"pending", "queued"} and not item.get("presented"):
+                present_browser_handoff(str(item.get("id") or ""))
+
     try:
         storage_path = RUNTIME_PATHS.webview_path
         storage_path.mkdir(parents=True, exist_ok=True)
         webview.start(
-            tray.start,
+            boot,
             gui="edgechromium",
             private_mode=False,
             storage_path=str(storage_path),

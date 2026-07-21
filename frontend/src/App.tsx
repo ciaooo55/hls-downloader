@@ -206,7 +206,7 @@ export default function App() {
       <Sidebar tasks={tasks} active={filter} onChange={setFilter} userscript={userscript} browserStatus={browserStatus} />
       <main className="content">
         <UpdateNotice />
-        <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} ({filtered.length})</strong><div className="list-tools"><label className="task-search"><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务、链接或错误码" aria-label="搜索任务" /></label><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={clearCompleted}><Trash2 size={14} />清理已完成</button></div></div>
+        <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} ({filtered.length}){selected.size > 0 ? <span> · 已选 {selected.size}</span> : null}</strong><div className="list-tools"><label className="task-search"><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务、链接或错误码" aria-label="搜索任务" /></label><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={clearCompleted}><Trash2 size={14} />清理已完成</button></div></div>
         {error && <div className="action-error">{error}</div>}
         <TaskTable tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openExplorer(task.output_path)} onLaunchFile={launchOutput} onPreview={setPlaying} onPreviewImage={setPreviewImage} />
       </main>

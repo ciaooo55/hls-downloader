@@ -165,7 +165,7 @@ async function offer(resource: MediaResource) {
     || handoff.presentation_mode === 'desktop-pending'
     || handoff.presentation === 'queued'
   ) {
-    const deadline = Date.now() + (handoff.presentation_mode === 'desktop-pending' ? 10_000 : 4_000)
+    const deadline = Date.now() + (handoff.presentation_mode === 'desktop-pending' ? 25_000 : 8_000)
     while (Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 250))
       try {

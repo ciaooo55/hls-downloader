@@ -48,10 +48,32 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
   const dragStart = useRef<{ index: number; x: number; y: number; base: Set<string> } | null>(null)
   const suppressClick = useRef(false)
   const allSelected = tasks.length > 0 && tasks.every(task => selected.has(task.id))
-  const toggleAll = () => onSelect(allSelected ? new Set() : new Set(tasks.map(task => task.id)))
+  const toggleAll = () => {
+    if (allSelected) {
+      onSelect(new Set())
+      selectionAnchor.current = null
+      return
+    }
+    const next = new Set(tasks.map(task => task.id))
+    onSelect(next)
+    selectionAnchor.current = tasks[tasks.length - 1]?.id || null
+  }
   const toggleOne = (id: string) => {
     const next = new Set(selected)
     if (next.has(id)) next.delete(id); else next.add(id)
+    selectionAnchor.current = id
+    onSelect(next)
+  }
+  const selectRangeTo = (taskId: string, additive: boolean) => {
+    const start = tasks.findIndex(value => value.id === selectionAnchor.current)
+    const end = tasks.findIndex(value => value.id === taskId)
+    if (start < 0 || end < 0) {
+      selectionAnchor.current = taskId
+      onSelect(new Set([taskId]))
+      return
+    }
+    const next = new Set(additive ? selected : [])
+    tasks.slice(Math.min(start, end), Math.max(start, end) + 1).forEach(value => next.add(value.id))
     onSelect(next)
   }
 
@@ -73,37 +95,70 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
     }
   }, [menu])
 
-  const selectRow = (event: React.MouseEvent, task: Task) => {
-    if (suppressClick.current) { suppressClick.current = false; return }
-    if (event.shiftKey && selectionAnchor.current) {
-      const start = tasks.findIndex(value => value.id === selectionAnchor.current)
-      const end = tasks.findIndex(value => value.id === task.id)
-      if (start >= 0 && end >= 0) {
-        const next = new Set(event.ctrlKey || event.metaKey ? selected : [])
-        tasks.slice(Math.min(start, end), Math.max(start, end) + 1).forEach(value => next.add(value.id))
-        onSelect(next); return
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a' && tasks.length) {
+        event.preventDefault()
+        onSelect(new Set(tasks.map(task => task.id)))
+        selectionAnchor.current = tasks[tasks.length - 1]?.id || null
+      }
+      if (event.key === 'Escape' && selected.size && !menu) {
+        onSelect(new Set())
+        selectionAnchor.current = null
       }
     }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [tasks, selected, onSelect, menu])
+
+  const selectRow = (event: React.MouseEvent, task: Task) => {
+    if (suppressClick.current) { suppressClick.current = false; return }
+    if (event.shiftKey) {
+      selectRangeTo(task.id, event.ctrlKey || event.metaKey)
+      return
+    }
+    if (event.ctrlKey || event.metaKey) {
+      toggleOne(task.id)
+      return
+    }
     selectionAnchor.current = task.id
-    if (event.ctrlKey || event.metaKey) toggleOne(task.id)
-    else onSelect(new Set([task.id]))
+    onSelect(new Set([task.id]))
   }
 
   const beginRangeSelection = (event: React.PointerEvent, index: number) => {
     if (event.button !== 0 || (event.target as HTMLElement).closest('input,button,a')) return
-    dragStart.current = { index, x: event.clientX, y: event.clientY, base: new Set(event.ctrlKey || event.metaKey ? selected : []) }
+    const additive = event.ctrlKey || event.metaKey
+    let rangeStart = index
+    if (event.shiftKey && selectionAnchor.current) {
+      const anchorIndex = tasks.findIndex(value => value.id === selectionAnchor.current)
+      if (anchorIndex >= 0) rangeStart = anchorIndex
+    }
+    dragStart.current = { index: rangeStart, x: event.clientX, y: event.clientY, base: new Set(additive ? selected : []) }
+    let lastEnd = index
+    const applyRange = (end: number) => {
+      const start = dragStart.current
+      if (!start) return
+      lastEnd = end
+      const selection = new Set(start.base)
+      tasks.slice(Math.min(start.index, end), Math.max(start.index, end) + 1).forEach(task => selection.add(task.id))
+      onSelect(selection)
+    }
     const move = (next: PointerEvent) => {
       const start = dragStart.current
       if (!start || Math.abs(next.clientX - start.x) + Math.abs(next.clientY - start.y) < 6) return
       suppressClick.current = true
       document.body.classList.add('task-range-selecting')
       const row = (document.elementFromPoint(next.clientX, next.clientY) as HTMLElement | null)?.closest<HTMLTableRowElement>('tr[data-task-index]')
-      const end = Number(row?.dataset.taskIndex ?? start.index)
-      const selection = new Set(start.base)
-      tasks.slice(Math.min(start.index, end), Math.max(start.index, end) + 1).forEach(task => selection.add(task.id))
-      onSelect(selection)
+      const end = Number(row?.dataset.taskIndex ?? index)
+      applyRange(Number.isFinite(end) ? end : index)
     }
     const finish = () => {
+      if (suppressClick.current) {
+        const endTask = tasks[lastEnd]
+        if (endTask) selectionAnchor.current = endTask.id
+      }
       dragStart.current = null
       document.body.classList.remove('task-range-selecting')
       window.removeEventListener('pointermove', move)
@@ -116,6 +171,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
   const openMenu = (event: React.MouseEvent, task: Task) => {
     event.preventDefault()
     const next = selected.has(task.id) ? new Set(selected) : new Set([task.id])
+    if (!selected.has(task.id)) selectionAnchor.current = task.id
     onSelect(next)
     const targets = tasks.filter(value => next.has(value.id))
     const hasPending = targets.some(value => pending.has(value.id))
@@ -148,7 +204,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
   return (
     <div className="table-scroll">
       <table className="task-table">
-        <thead><tr><th className="check-col"><input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="选择全部任务" /></th><th>文件名</th><th>状态</th><th>进度</th><th>速度 / 剩余</th><th className="segments-col">分片</th><th className="updated-col">更新时间</th><th className="menu-col" /></tr></thead>
+        <thead><tr><th className="check-col"><input type="checkbox" checked={allSelected} ref={element => { if (element) element.indeterminate = selected.size > 0 && !allSelected }} onChange={toggleAll} aria-label="选择全部任务" /></th><th>文件名</th><th>状态</th><th>进度</th><th>速度 / 剩余</th><th className="segments-col">分片</th><th className="updated-col">更新时间</th><th className="menu-col" /></tr></thead>
         <tbody>{tasks.map((task, taskIndex) => {
           const progress = getDisplayedProgress(task)
           const visual = filePresentation(task.output_path || task.filename || task.url, task.mime_type)
@@ -167,7 +223,12 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
               else if (task.status === 'done' && task.output_is_file) onLaunchFile(task)
               else onOpenDetails(task)
             }}>
-            <td className="check-col"><input type="checkbox" checked={selected.has(task.id)} onChange={() => toggleOne(task.id)} aria-label={`选择 ${task.title || task.filename || task.id}`} /></td>
+            <td className="check-col"><input type="checkbox" checked={selected.has(task.id)} onClick={event => {
+              event.stopPropagation()
+              event.preventDefault()
+              if (event.shiftKey) selectRangeTo(task.id, true)
+              else toggleOne(task.id)
+            }} onChange={() => { /* selection is controlled by onClick */ }} aria-label={`选择 ${task.title || task.filename || task.id}`} /></td>
             <td className={`name-cell${task.output_is_file ? ' draggable-file' : ''}`} draggable={task.status === 'done' && task.output_is_file} title={task.output_is_file ? '从文件名拖到桌面或资源管理器可复制文件' : undefined} onDragStart={event => {
               if (!task.output_is_file) { event.preventDefault(); return }
               const filename = task.output_path.split(/[\\/]/).pop() || task.filename || task.id

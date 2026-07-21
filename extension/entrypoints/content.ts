@@ -29,13 +29,13 @@ export default defineContentScript({
       name: 'hls-downloader-media-panel', position: 'inline', anchor: 'body',
       onMount(container) {
         const root = document.createElement('div')
-        const iconUrl = browser.runtime.getURL('/icon.png')
+        const iconUrl = browser.runtime.getURL('/icon-32.png')
         root.innerHTML = `<style>
           :host{all:initial}*{box-sizing:border-box}button{font:13px system-ui,sans-serif;letter-spacing:0}
           .wrap{position:fixed;right:14px;top:35%;z-index:2147483647;color:#102a3a;filter:drop-shadow(0 5px 8px #07598529)}
-          .toggle{display:grid;place-items:center;width:46px;height:46px;padding:3px;border:2px solid #38bdf8;border-radius:11px;background:#f0fbff;cursor:pointer}.toggle img{width:38px;height:38px}
+          .toggle{display:grid;place-items:center;width:34px;height:34px;padding:2px;border:1.5px solid #38bdf8;border-radius:9px;background:#f0fbff;cursor:pointer}.toggle img{width:24px;height:24px;border-radius:5px}
           .panel{display:none;width:min(420px,calc(100vw - 20px));max-height:70vh;background:#fff;border:1px solid #bae6fd;border-radius:9px;overflow:hidden}.open .panel{display:block}.open .toggle{display:none}
-          header{display:flex;align-items:center;justify-content:space-between;padding:9px 10px 9px 12px;border-bottom:1px solid #dff5ff;background:#f0fbff;font:600 14px system-ui}.title{display:flex;align-items:center;gap:8px}.title img{width:24px;height:24px}.head-actions{display:flex;align-items:center;gap:5px}
+          header{display:flex;align-items:center;justify-content:space-between;padding:8px 9px 8px 10px;border-bottom:1px solid #dff5ff;background:#f0fbff;font:600 13px system-ui}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:5px}
           .pin,.close{height:30px;border:0;border-radius:5px;background:#e0f2fe;color:#075985;cursor:pointer}.pin{padding:0 9px;font:12px system-ui}.pin.active{background:#d1fae5;color:#047857}.close{display:grid;place-items:center;width:30px;font:700 20px/1 system-ui}.list{overflow:auto;max-height:58vh}.empty{padding:20px;color:#526b79;font:13px system-ui}
           .item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:12px;border-bottom:1px solid #e7f4f8}.item:hover{background:#f7fcff}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 13px/1.35 system-ui;overflow-wrap:anywhere}.url{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:#54717f;font:11px/1.35 system-ui;margin-top:4px;overflow-wrap:anywhere}.item:hover .name,.item:hover .url{-webkit-line-clamp:unset}.kind{color:#25627b;font:12px system-ui;margin-top:4px}.download{align-self:center;min-width:58px;height:32px;border:0;border-radius:6px;background:#0ea5e9;color:white;padding:6px 10px;cursor:pointer;font-weight:600}.download:hover{background:#0284c7}.download[disabled]{cursor:default;opacity:.65}.result{padding:8px 12px;background:#ecfdf5;color:#047857;font:12px/1.4 system-ui}.result.error{background:#fff1f2;color:#be123c}
           button:focus-visible{outline:2px solid #0369a1;outline-offset:2px}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -109,8 +109,8 @@ export default defineContentScript({
       const rect = wrap.getBoundingClientRect(); const startLeft = rect.left; const startTop = rect.top
       const move = (next: PointerEvent) => {
         if (Math.abs(next.clientX - startX) + Math.abs(next.clientY - startY) > 4) dragged = true
-        wrap.style.left = `${Math.max(0, Math.min(innerWidth - 42, startLeft + next.clientX - startX))}px`
-        wrap.style.top = `${Math.max(0, Math.min(innerHeight - 42, startTop + next.clientY - startY))}px`
+        wrap.style.left = `${Math.max(0, Math.min(innerWidth - 34, startLeft + next.clientX - startX))}px`
+        wrap.style.top = `${Math.max(0, Math.min(innerHeight - 34, startTop + next.clientY - startY))}px`
         wrap.style.right = 'auto'
       }
       const finish = () => {
