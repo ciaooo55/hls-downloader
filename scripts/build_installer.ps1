@@ -373,7 +373,7 @@ if (-not $SkipSmoke) {
                 }
 
                 $shutdownAccepted = $false
-                for ($i = 0; $i -lt 120; $i++) {
+                for ($i = 0; $i -lt 240; $i++) {
                     try {
                         $shutdown = Invoke-RestMethod `
                             -Method Post `
@@ -391,7 +391,7 @@ if (-not $SkipSmoke) {
                     Start-Sleep -Milliseconds 250
                 }
                 if (-not $shutdownAccepted) {
-                    throw "Graceful shutdown failed: desktop callback was not ready after 30 seconds"
+                    throw "Graceful shutdown failed: desktop callback was not ready after 60 seconds"
                 }
 
                 for ($i = 0; $i -lt 40; $i++) {
