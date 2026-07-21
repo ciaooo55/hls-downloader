@@ -57,6 +57,13 @@ export default function App() {
     const request = (async () => { try {
       const [taskData, settingData, scriptData, browserData, healthData] = await Promise.all([fetchTasks(), fetchSettings(), fetchUserscriptStatus(), fetchBrowserStatus(), fetchHealth()])
       setTasks(taskData); setSettings(settingData); setUserscript(scriptData); setBrowserStatus(browserData); setAppVersion(healthData.version || ''); setError('')
+      try {
+        if ('Notification' in window && Notification.permission === 'default') {
+          void Notification.requestPermission()
+        }
+      } catch {
+        // Optional desktop notifications; list state remains authoritative.
+      }
     } catch (reason: any) { setError(reason.message || '无法连接本地下载服务') } })()
     loadInFlight.current = request
     try { await request } finally { loadInFlight.current = null }
@@ -116,6 +123,16 @@ export default function App() {
   }, [])
 
   useEffect(() => { document.documentElement.dataset.theme = theme }, [theme])
+  useEffect(() => {
+    // Escape for surfaces owned directly by App (child modals handle themselves).
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (previewImage) { setPreviewImage(null); return }
+      if (showBatch) { setShowBatch(false) }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [previewImage, showBatch])
   useEffect(() => { setSelected(current => new Set([...current].filter(id => tasks.some(task => task.id === id)))) }, [tasks])
   useEffect(() => () => { if (feedbackTimer.current) window.clearTimeout(feedbackTimer.current) }, [])
 
@@ -160,6 +177,19 @@ export default function App() {
       await load()
     }
   }
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      if (!(event.key === 'Delete' || event.key === 'Backspace') || !selected.size) return
+      if (selectedTasks.some(task => pending.has(task.id))) return
+      event.preventDefault()
+      void perform(event.shiftKey ? 'deleteFiles' : 'delete')
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [selected, selectedTasks, pending])
+
   const clearCompleted = async () => {
     if (!completed.length || !confirm(`清除 ${completed.length} 条已完成记录？不会删除视频文件。`)) return
     try {
@@ -206,12 +236,12 @@ export default function App() {
       <Sidebar tasks={tasks} active={filter} onChange={setFilter} userscript={userscript} browserStatus={browserStatus} />
       <main className="content">
         <UpdateNotice />
-        <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} ({filtered.length}){selected.size > 0 ? <span> · 已选 {selected.size}</span> : null}</strong><div className="list-tools"><label className="task-search"><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务、链接或错误码" aria-label="搜索任务" /></label><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={clearCompleted}><Trash2 size={14} />清理已完成</button></div></div>
-        {error && <div className="action-error">{error}</div>}
+        <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} ({filtered.length}){selected.size > 0 ? <span> · 已选 {selected.size}</span> : null}</strong><div className="list-tools"><label className="task-search"><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务、链接或错误码" aria-label="搜索任务" />{query ? <button type="button" className="task-search-clear" title="清除搜索" aria-label="清除搜索" onClick={() => setQuery('')}><X size={13} /></button> : null}</label><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={clearCompleted}><Trash2 size={14} />清理已完成</button></div></div>
+        {error && <div className="action-error" role="alert"><span>{error}</span><div className="action-error-actions"><button type="button" className="secondary-button" onClick={() => void load()}>重试</button><button type="button" className="icon-button action-error-dismiss" title="关闭提示" onClick={() => setError('')}><X size={15} /></button></div></div>}
         <TaskTable tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openExplorer(task.output_path)} onLaunchFile={launchOutput} onPreview={setPlaying} onPreviewImage={setPreviewImage} />
       </main>
     </div>
-    <footer className="statusbar"><span>活动任务 <b>{running.length}</b></span><span>队列 <b>{queued}</b></span><span>总速度 <b>{fmtSpeed(totalSpeed)}</b></span><span>已完成 <b>{fmtBytes(completedSize)}</b></span><span>{userscript?.detected ? '浏览器脚本已连接' : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span></footer>
+    <footer className="statusbar"><span>活动任务 <b>{running.length}</b></span><span>队列 <b>{queued}</b></span><span>总速度 <b>{fmtSpeed(totalSpeed)}</b></span><span>已完成 <b>{fmtBytes(completedSize)}</b></span><span>{browserStatus?.detected ? `扩展已连接${browserStatus.version ? ` · v${browserStatus.version}` : ''}` : userscript?.detected ? '后备脚本已连接' : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span></footer>
     {showRecognize && <RecognizeDialog settings={settings} initialUrl={recognizeInitialUrl} onClose={() => setShowRecognize(false)} onAdded={load} onNeedUserscript={() => { setShowRecognize(false); setShowUserscript(true) }} />}
     {showBatch && <div className="modal-overlay" onMouseDown={() => setShowBatch(false)}><section className="modal" onMouseDown={event => event.stopPropagation()}><header><div><h2>批量添加</h2><p>每行输入一个 m3u8 链接</p></div></header><BatchAddPanel settings={settings} onAdded={() => { setShowBatch(false); load() }} /><footer><button className="secondary-button" onClick={() => setShowBatch(false)}>关闭</button></footer></section></div>}
     {showUserscript && <UserscriptDialog onClose={() => { setShowUserscript(false); load() }} />}
@@ -222,6 +252,6 @@ export default function App() {
     {previewImage && <div className="modal-overlay image-preview-overlay" onMouseDown={() => setPreviewImage(null)}><section className="image-preview" onMouseDown={event => event.stopPropagation()}><header><strong>{previewImage.title || previewImage.filename}</strong><button className="modal-close-button" title="关闭预览" onClick={() => setPreviewImage(null)}><X size={18} /></button></header><img src={taskFileUrl(previewImage.id)} alt={previewImage.title || previewImage.filename} /></section></div>}
     {logTaskId && <LogModal taskId={logTaskId} onClose={() => setLogTaskId(null)} />}
     {feedback && <div className="toast" role="status">{feedback}</div>}
-    {handoffs[0] && <BrowserHandoffDialog item={handoffs[0]} busy={handoffBusy} settings={settings} onResolve={resolveHandoff} />}
+    {handoffs[0] && <BrowserHandoffDialog key={handoffs[0].id} item={handoffs[0]} busy={handoffBusy} settings={settings} onResolve={resolveHandoff} queueRemaining={Math.max(0, handoffs.length - 1)} />}
   </div>
 }

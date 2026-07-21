@@ -4,9 +4,15 @@ import { fetchSettings, fetchUpdateInfo, installUpdate, openExplorer, saveSettin
 import { beginUninstall, getDesktopInfo } from '../desktop'
 import { LEGACY_REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 import type { UpdateInfo } from '../types'
+import { pickFolder } from '../desktop'
 import FolderPicker from './FolderPicker'
 
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
   const [settings, setSettings] = useState<any>({})
   const [original, setOriginal] = useState<any>({})
   const [saved, setSaved] = useState(false)
@@ -117,7 +123,12 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
       <div className="input-action"><input value={settings.token || ''} readOnly /><button className="secondary-button" title="复制 Token" onClick={copyToken}><Copy size={15} />{copied ? '已复制' : '复制'}</button></div>
 
       <label>下载保存目录</label>
-      <div className="input-action"><input value={settings.download_dir || ''} onChange={event => update('download_dir', event.target.value)} /><button className="secondary-button" onClick={() => setShowPicker(true)}>选择目录</button><button className="icon-button bordered" title="打开目录" onClick={() => openExplorer(settings.download_dir || '')}><FolderOpen size={17} /></button></div>
+      <div className="input-action"><input value={settings.download_dir || ''} onChange={event => update('download_dir', event.target.value)} /><button className="secondary-button" onClick={() => void (async () => {
+          const native = await pickFolder(settings.download_dir || '')
+          if (native.ok && native.path) { update('download_dir', native.path); return }
+          if (native.canceled) return
+          setShowPicker(true)
+        })()}>选择目录</button><button className="icon-button bordered" title="打开目录" onClick={() => openExplorer(settings.download_dir || '')}><FolderOpen size={17} /></button></div>
       <p className="field-note">临时分片保存在下载目录的 .tasks 子目录，完成后按设置清理。</p>
 
       <div className="form-row settings-number-row">

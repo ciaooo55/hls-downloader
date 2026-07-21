@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import { FileUp, Link, X } from 'lucide-react'
 import { createTask, recognizeUrl, uploadTorrent } from '../api'
 import { recognitionView, type RecognitionResult } from '../recognition'
@@ -6,6 +6,12 @@ import type { Settings } from '../types'
 import { LEGACY_REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 
 export default function RecognizeDialog({ settings, initialUrl = '', onClose, onAdded, onNeedUserscript }: { settings: Settings; initialUrl?: string; onClose: () => void; onAdded: () => void; onNeedUserscript: () => void }) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
   const [url, setUrl] = useState(initialUrl)
   const [filename, setFilename] = useState('')
   const [concurrency, setConcurrency] = useState(settings.default_concurrency || 12)

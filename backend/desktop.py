@@ -153,6 +153,29 @@ class DesktopBridge:
         timer.start()
         return {"ok": True}
 
+    def choose_folder(self, directory: str = "") -> dict:
+        """Open the native folder dialog for handoff/settings path selection."""
+        if self._window is None:
+            return {"ok": False, "error": "桌面窗口尚未就绪"}
+        if self._folder_dialog_type is None:
+            return {"ok": False, "error": "当前环境不支持选择文件夹"}
+        try:
+            # pywebview accepts an optional directory argument on some backends.
+            try:
+                selected = self._window.create_file_dialog(
+                    self._folder_dialog_type,
+                    directory=str(directory or "") or None,
+                )
+            except TypeError:
+                selected = self._window.create_file_dialog(self._folder_dialog_type)
+        except Exception as exc:
+            logger.exception("failed to open folder dialog")
+            return {"ok": False, "error": f"无法打开文件夹选择对话框：{exc}"}
+        if not selected:
+            return {"ok": False, "canceled": True}
+        path = selected[0] if isinstance(selected, (list, tuple)) else selected
+        return {"ok": True, "path": str(path)}
+
     def begin_uninstall(self) -> dict:
         if not self._uninstaller_path.is_file():
             return {"ok": False, "error": "当前版本无需卸载"}

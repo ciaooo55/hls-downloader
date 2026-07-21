@@ -465,6 +465,21 @@ def test_desktop_server_configures_without_console_streams(monkeypatch):
     assert server.is_alive() is False
 
 
+def test_desktop_bridge_choose_folder(tmp_path):
+    window = FakeWindow()
+    window.selected_folders = (str(tmp_path),)
+    bridge = DesktopBridge(window, folder_dialog_type="folder")
+
+    result = bridge.choose_folder(str(tmp_path))
+
+    assert result == {"ok": True, "path": str(tmp_path)}
+    assert "file-dialog:folder" in window.calls
+
+    window.selected_folders = None
+    canceled = bridge.choose_folder()
+    assert canceled == {"ok": False, "canceled": True}
+
+
 def test_desktop_bridge_exports_configured_userscript(tmp_path):
     source = tmp_path / "source.user.js"
     source.write_text(

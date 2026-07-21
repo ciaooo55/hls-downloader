@@ -123,7 +123,7 @@ def test_native_host_waits_for_presenter_after_cold_start(monkeypatch):
             health_hits['n'] += 1
             if health_hits['n'] == 1:
                 raise RuntimeError('down')
-            return {'ok': True, 'version': '1.3.0'}
+            return {'ok': True, 'version': '1.3.2'}
         if path == '/browser/presenter':
             # First poll: session only; second poll: ready.
             ready_hits = sum(1 for item in calls if item[1] == '/browser/presenter')

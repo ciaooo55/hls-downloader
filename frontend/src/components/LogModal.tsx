@@ -8,6 +8,11 @@ export default function LogModal({ taskId, onClose }: { taskId: string; onClose:
   const containerRef = useRef<HTMLPreElement | null>(null)
   const reload = () => fetchLog(taskId).then(data => setLog(data.log || '(empty)')).catch(reason => setLog(`加载日志失败: ${reason.message || reason}`))
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
   useEffect(() => { void reload() }, [taskId])
   useEffect(() => {
     const events = connectSSE(event => {

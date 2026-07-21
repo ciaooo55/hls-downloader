@@ -15,6 +15,7 @@ interface NativeApi {
   get_desktop_info(): Promise<NativeResult>
   begin_uninstall(): Promise<NativeResult>
   close_window(): Promise<NativeResult>
+  choose_folder?(directory?: string): Promise<NativeResult>
 }
 
 declare global {
@@ -86,6 +87,18 @@ export async function beginUninstall(): Promise<NativeResult> {
   }
 }
 
+
+
+
+export async function pickFolder(directory = ''): Promise<NativeResult> {
+  try {
+    const api = await waitForNativeApi(1000)
+    if (!api?.choose_folder) return { ok: false, error: 'native-folder-unavailable' }
+    return await api.choose_folder(directory)
+  } catch (reason) {
+    return { ok: false, error: reason instanceof Error ? reason.message : '无法打开文件夹选择对话框' }
+  }
+}
 
 export async function closeDesktopWindow(): Promise<NativeResult> {
   try {

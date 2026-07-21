@@ -5,6 +5,11 @@ import { exportUserscript, openBrowserExtensionInstaller, openUserscriptInstalle
 import type { BrowserStatus, UserscriptStatus } from '../types'
 
 export default function UserscriptDialog({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
   const [status, setStatus] = useState<UserscriptStatus | null>(null)
   const [browserStatus, setBrowserStatus] = useState<BrowserStatus | null>(null)
   const [message, setMessage] = useState('')

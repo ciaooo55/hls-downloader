@@ -10,6 +10,11 @@ export default function UpdateDialog({ onClose }: { onClose: () => void }) {
   const [confirming, setConfirming] = useState(false)
   const [phase, setPhase] = useState('')
   const [error, setError] = useState('')
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape' && !installing) onClose() }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose, installing])
 
   const check = async (force = true) => {
     setChecking(true)

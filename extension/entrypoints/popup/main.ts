@@ -195,7 +195,7 @@ async function main() {
         // Keep waiting while the native host briefly restarts.
       }
     }))
-  }, 1200)
+  }, 800)
 }
 
 void main()
