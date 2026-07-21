@@ -2,7 +2,7 @@ import { browser } from 'wxt/browser'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
 import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, resourceId, shouldTakeover, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
-import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, shouldResumeBrowserDownload } from '../lib/takeover'
+import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus, shouldResumeBrowserDownload } from '../lib/takeover'
 import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
 import { parseHlsManifest, resourceQuality } from '../lib/hlsManifest'
 
@@ -154,7 +154,52 @@ async function downloadNow(resource: MediaResource) {
 
 async function offer(resource: MediaResource) {
   const payload = await resourcePayload(resource)
-  return native({ op: 'offer', resource: payload })
+  const response = await native({ op: 'offer', resource: payload })
+  const handoff = response?.handoff
+  if (!response?.ok || !handoff?.id) return response
+
+  // Desktop presentation is asynchronous. Wait briefly for the confirm UI so the
+  // browser can still roll back if the window never appears.
+  if (
+    handoff.presentation_mode === 'desktop'
+    || handoff.presentation_mode === 'desktop-pending'
+    || handoff.presentation === 'queued'
+  ) {
+    const deadline = Date.now() + (handoff.presentation_mode === 'desktop-pending' ? 10_000 : 4_000)
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 250))
+      try {
+        const status = await native({ op: 'handoff_status', handoff_id: handoff.id }, 2_000)
+        const current = status?.handoff || status
+        if (current?.presentation === 'presented' || current?.presented) {
+          return {
+            ...response,
+            handoff: {
+              ...handoff,
+              ...current,
+              presentation_mode: current.presentation_mode || handoff.presentation_mode || 'desktop',
+              presentation_ok: true,
+            },
+          }
+        }
+        if (current?.presentation === 'failed' || handoffTerminalStatus(current?.status)) {
+          return {
+            ok: false,
+            error: current?.presentation_error || `接管请求${handoffStatusLabel(current?.status)}`,
+            handoff: { ...handoff, ...current },
+          }
+        }
+      } catch {
+        // Keep waiting until the short presentation window expires.
+      }
+    }
+    return { ok: false, error: '桌面端未能打开下载确认窗口', handoff }
+  }
+  return response
+}
+
+async function handoffStatus(handoffId: string) {
+  return native({ op: 'handoff_status', handoff_id: handoffId }, 2_000)
 }
 
 async function refreshedDownload(downloadId: number, original: browser.downloads.DownloadItem) {
@@ -450,6 +495,12 @@ export default defineBackground(() => {
     if (message?.type === 'download' || message?.type === 'offer') {
       const request = message.type === 'offer' ? offer(message.resource) : downloadNow(message.resource)
       void request
+        .then(response => sendResponse(response))
+        .catch(error => sendResponse({ ok: false, error: String(error) }))
+      return true
+    }
+    if (message?.type === 'handoff-status') {
+      void handoffStatus(String(message.handoffId || message.handoff_id || ''))
         .then(response => sendResponse(response))
         .catch(error => sendResponse({ ok: false, error: String(error) }))
       return true

@@ -82,20 +82,32 @@ export default function App() {
       }
     }, load)
     const timer = window.setInterval(load, 30000)
-    return () => { events.close(); window.clearInterval(timer) }
+    const onActivated = () => { void load() }
+    window.addEventListener('desktop-activated', onActivated)
+    return () => {
+      events.close()
+      window.clearInterval(timer)
+      window.removeEventListener('desktop-activated', onActivated)
+    }
   }, [load])
 
   useEffect(() => {
+    // Desktop owns dedicated handoff windows. Only pure /ui (no pywebview) needs the manager modal fallback.
+    const desktopShell = Boolean((window as any).pywebview || (window as any).chrome?.webview)
+    if (desktopShell) return
     const refresh = () => {
       if (handoffRefreshInFlight.current) return
       handoffRefreshInFlight.current = true
-      void fetchBrowserHandoffs().then(setHandoffs).catch(() => {}).finally(() => { handoffRefreshInFlight.current = false })
+      void fetchBrowserHandoffs()
+        .then(items => setHandoffs((items || []).filter(item => !item.status || item.status === 'pending')))
+        .catch(() => {})
+        .finally(() => { handoffRefreshInFlight.current = false })
     }
     refresh()
     const onVisible = () => { if (!document.hidden) refresh() }
     window.addEventListener('focus', refresh)
     document.addEventListener('visibilitychange', onVisible)
-    const timer = window.setInterval(refresh, 1000)
+    const timer = window.setInterval(refresh, 1500)
     return () => {
       window.clearInterval(timer)
       window.removeEventListener('focus', refresh)

@@ -277,3 +277,51 @@ def test_v2_custom_concurrency_values_are_preserved_during_migration(tmp_path, m
     assert loaded.config_version == 6
     assert loaded.default_concurrency == 6
     assert loaded.max_concurrent_tasks == 5
+
+
+def test_create_browser_handoff_reports_ui_fallback(monkeypatch):
+    from backend.app import api as api_module
+    from backend.app import desktop_runtime as runtime
+    from backend.app.browser_handoff import browser_handoffs
+
+    runtime.register_browser_handoff(None)
+    runtime.set_desktop_handoff_session(False)
+    monkeypatch.setattr(api_module, "_check_token", lambda _token: None)
+    monkeypatch.setattr(api_module, "_check_host", lambda _url: None)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/browser/handoffs",
+        json={"url": "https://cdn.example.test/video.mp4", "filename": "video.mp4"},
+        headers={"X-Token": "test"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "pending"
+    assert body["presentation_mode"] == "ui-fallback"
+    assert body["presentation"] == "presented"
+    assert body["presented"] is True
+    assert browser_handoffs.get(body["id"]).presented is True
+
+
+def test_create_browser_handoff_queues_while_desktop_session_starts(monkeypatch):
+    from backend.app import api as api_module
+    from backend.app import desktop_runtime as runtime
+
+    runtime.register_browser_handoff(None)
+    runtime.set_desktop_handoff_session(True)
+    monkeypatch.setattr(api_module, "_check_token", lambda _token: None)
+    monkeypatch.setattr(api_module, "_check_host", lambda _url: None)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/browser/handoffs",
+        json={"url": "https://cdn.example.test/clip.mp4", "filename": "clip.mp4"},
+        headers={"X-Token": "test"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["presentation_mode"] == "desktop-pending"
+    assert body["presentation"] == "queued"
+    assert body["presentation_queued"] is True
+    runtime.set_desktop_handoff_session(False)

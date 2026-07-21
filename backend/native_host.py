@@ -42,7 +42,7 @@ def _start_app() -> None:
     executable = ROOT / "HLSDownloader.exe"
     if executable.exists():
         subprocess.Popen(
-            [str(executable), "--activate"],
+            [str(executable), "--background"],
             cwd=ROOT,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,

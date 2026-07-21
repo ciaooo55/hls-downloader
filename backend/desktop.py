@@ -19,14 +19,14 @@ try:
     from .app.config import PROJECT_ROOT, settings
     from .app.paths import RUNTIME_PATHS
     from .app.version import APP_VERSION
-    from .app.desktop_runtime import register_activation, register_shutdown
+    from .app.desktop_runtime import register_activation, register_browser_handoff, register_shutdown, set_desktop_handoff_session
     from .app.main import app
     from .app.userscript_service import USERSCRIPT_FILENAME, export_userscript, render_userscript
 except ImportError:
     from app.config import PROJECT_ROOT, settings
     from app.paths import RUNTIME_PATHS
     from app.version import APP_VERSION
-    from app.desktop_runtime import register_activation, register_shutdown
+    from app.desktop_runtime import register_activation, register_browser_handoff, register_shutdown, set_desktop_handoff_session
     from app.main import app
     from app.userscript_service import USERSCRIPT_FILENAME, export_userscript, render_userscript
 
@@ -40,6 +40,14 @@ def public_base_url() -> str:
 
 def desktop_ui_url() -> str:
     return f"{public_base_url()}/ui?version={APP_VERSION}"
+
+
+def browser_handoff_ui_url(handoff_id: str) -> str:
+    return f"{public_base_url()}/ui?handoff={handoff_id}&version={APP_VERSION}"
+
+
+def desktop_host_url() -> str:
+    return f"{public_base_url()}/ui?host=1&version={APP_VERSION}"
 
 
 class DesktopBridge:
@@ -129,6 +137,22 @@ class DesktopBridge:
         mode = "installed" if installed else RUNTIME_PATHS.mode
         return {"ok": True, "installed": installed, "mode": mode}
 
+    def close_window(self) -> dict:
+        window = self._window
+        if window is None:
+            return {"ok": False, "error": "桌面窗口尚未就绪"}
+
+        def close() -> None:
+            try:
+                window.destroy()
+            except Exception:
+                logger.exception("failed to close desktop child window")
+
+        timer = threading.Timer(0.05, close)
+        timer.daemon = True
+        timer.start()
+        return {"ok": True}
+
     def begin_uninstall(self) -> dict:
         if not self._uninstaller_path.is_file():
             return {"ok": False, "error": "当前版本无需卸载"}
@@ -147,6 +171,201 @@ class DesktopBridge:
         if self._exit_request is not None:
             self._exit_request()
         return {"ok": True}
+
+
+
+
+def _mark_browser_handoff_presented(handoff_id: str) -> None:
+    try:
+        from .app.browser_handoff import browser_handoffs
+    except ImportError:
+        from app.browser_handoff import browser_handoffs
+    browser_handoffs.mark_presentation(handoff_id, "presented")
+
+
+def _cancel_browser_handoff(handoff_id: str) -> None:
+    try:
+        request = urllib.request.Request(
+            f"{public_base_url()}/api/browser/handoffs/{handoff_id}/cancel",
+            data=b"{}",
+            headers={"Content-Type": "application/json", "X-Token": settings.token},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=1):
+            pass
+    except (OSError, urllib.error.URLError):
+        # Closing an already accepted/expired window is harmless.
+        pass
+
+
+class BrowserHandoffWindowManager:
+    """Owns one independent native window for every browser download offer."""
+
+    def __init__(
+        self,
+        master_window,
+        create_window,
+        folder_dialog_type,
+        *,
+        url_builder=browser_handoff_ui_url,
+        cancel_handoff=_cancel_browser_handoff,
+        mark_presented=None,
+    ) -> None:
+        self.master_window = master_window
+        self.create_window = create_window
+        self.folder_dialog_type = folder_dialog_type
+        self.url_builder = url_builder
+        self.cancel_handoff = cancel_handoff
+        self.mark_presented = mark_presented
+        self._windows: dict[str, object] = {}
+        self._closing: set[str] = set()
+        self._resolved: set[str] = set()
+        self._lock = threading.RLock()
+        self._create_lock = threading.Lock()
+        self._sequence = 0
+
+    def _position(self) -> tuple[int, int]:
+        with self._lock:
+            slot = self._sequence % 9
+            self._sequence += 1
+        try:
+            base_x = int(getattr(self.master_window, "x", 120) or 120)
+            base_y = int(getattr(self.master_window, "y", 80) or 80)
+        except (TypeError, ValueError):
+            base_x, base_y = 120, 80
+        return max(20, base_x + 70 + slot * 28), max(20, base_y + 55 + slot * 24)
+
+    @staticmethod
+    def _raise(window) -> None:
+        try:
+            window.restore()
+        except Exception:
+            pass
+        try:
+            window.show()
+        except Exception:
+            pass
+        try:
+            window.on_top = False
+            window.on_top = True
+        except Exception:
+            logger.exception("failed to foreground browser handoff window")
+
+    def _mark_presented(self, handoff_id: str) -> None:
+        if self.mark_presented is None:
+            return
+        try:
+            self.mark_presented(handoff_id)
+        except Exception:
+            logger.exception("failed to mark browser handoff presented %s", handoff_id)
+
+    def mark_resolved(self, handoff_id: str) -> None:
+        handoff_id = str(handoff_id).strip()
+        if not handoff_id:
+            return
+        with self._lock:
+            self._resolved.add(handoff_id)
+
+    def show(self, handoff_id: str) -> None:
+        handoff_id = str(handoff_id).strip()
+        if not handoff_id:
+            return
+        with self._create_lock:
+            with self._lock:
+                existing = self._windows.get(handoff_id)
+            if existing is not None:
+                self._raise(existing)
+                self._mark_presented(handoff_id)
+                return
+
+            x, y = self._position()
+            bridge = DesktopBridge(folder_dialog_type=self.folder_dialog_type)
+            title = f"下载文件信息 - HLS Downloader [{handoff_id[:6]}]"
+            try:
+                window = self.create_window(
+                    title,
+                    self.url_builder(handoff_id),
+                    js_api=bridge,
+                    width=520,
+                    height=650,
+                    x=x,
+                    y=y,
+                    min_size=(430, 540),
+                    resizable=True,
+                    on_top=True,
+                    focus=True,
+                    background_color="#17191d",
+                    text_select=True,
+                )
+            except Exception:
+                logger.exception("failed to create browser handoff window %s", handoff_id)
+                try:
+                    from backend.app.browser_handoff import browser_handoffs
+                except ImportError:
+                    from app.browser_handoff import browser_handoffs
+                browser_handoffs.mark_presentation(handoff_id, "failed", "window create failed")
+                raise
+            if window is None:
+                try:
+                    from backend.app.browser_handoff import browser_handoffs
+                except ImportError:
+                    from app.browser_handoff import browser_handoffs
+                browser_handoffs.mark_presentation(handoff_id, "failed", "window create cancelled")
+                raise RuntimeError(f"browser handoff window was not created for {handoff_id}")
+            bridge._set_window(window)
+
+            def on_closing(*_args) -> None:
+                with self._lock:
+                    if handoff_id in self._closing:
+                        return
+                    self._closing.add(handoff_id)
+                    resolved = handoff_id in self._resolved
+                if resolved:
+                    return
+                threading.Thread(
+                    target=self.cancel_handoff,
+                    args=(handoff_id,),
+                    name=f"cancel-handoff-{handoff_id[:8]}",
+                    daemon=True,
+                ).start()
+
+            def on_closed(*_args) -> None:
+                with self._lock:
+                    self._windows.pop(handoff_id, None)
+                    self._closing.discard(handoff_id)
+                    self._resolved.discard(handoff_id)
+
+            window.events.closing += on_closing
+            window.events.closed += on_closed
+            with self._lock:
+                self._windows[handoff_id] = window
+            self._raise(window)
+            self._mark_presented(handoff_id)
+
+    def close(self, handoff_id: str) -> None:
+        handoff_id = str(handoff_id).strip()
+        if not handoff_id:
+            return
+        self.mark_resolved(handoff_id)
+        with self._lock:
+            window = self._windows.get(handoff_id)
+        if window is None:
+            return
+        try:
+            window.destroy()
+        except Exception:
+            logger.exception("failed to close browser handoff window %s", handoff_id)
+
+    def close_all(self) -> None:
+        with self._lock:
+            windows = list(self._windows.items())
+            for handoff_id, _window in windows:
+                self._resolved.add(handoff_id)
+        for _handoff_id, window in windows:
+            try:
+                window.destroy()
+            except Exception:
+                logger.exception("failed to close browser handoff window")
 
 
 class UvicornServerThread:
@@ -232,6 +451,23 @@ _attention_timer_lock = threading.Lock()
 _attention_timer = None
 
 
+def _redraw_windows_window(user32=None) -> bool:
+    if os.name != "nt" and user32 is None:
+        return False
+    if user32 is None:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+    redraw = getattr(user32, "RedrawWindow", None)
+    if redraw is None:
+        return False
+    hwnd = user32.FindWindowW(None, "HLS Downloader")
+    if not hwnd:
+        return False
+    redraw(hwnd, None, None, 0x0001 | 0x0100 | 0x0080)
+    return True
+
+
 def _activate_windows_window(
     _window=None,
     user32=None,
@@ -258,9 +494,11 @@ def _activate_windows_window(
     if bring_to_top is not None:
         bring_to_top(hwnd)
     user32.SetForegroundWindow(hwnd)
+    # Force WebView2 and its child HWND to repaint after a tray hide/show cycle.
+    _redraw_windows_window(user32)
 
-    # Browser handoffs are polled by the UI, so the confirmation dialog is
-    # rendered shortly after activation. Keep the window above others until then.
+    # Keep the restored manager briefly above other applications while Windows
+    # transfers foreground ownership back from the browser.
     def release_topmost() -> None:
         try:
             user32.SetWindowPos(hwnd, hwnd_notopmost, 0, 0, 0, 0, flags)
@@ -323,6 +561,8 @@ class DesktopController:
         force_exit=None,
         force_exit_delay: float = 3,
         native_window_activator=None,
+        handoff_windows=None,
+        deferred_ui: bool = False,
     ) -> None:
         self.window = window
         self.server = server
@@ -331,6 +571,8 @@ class DesktopController:
         self.force_exit = force_exit
         self.force_exit_delay = force_exit_delay
         self.native_window_activator = native_window_activator or _activate_windows_window
+        self.handoff_windows = handoff_windows
+        self._deferred_ui = deferred_ui
         self._allow_close = False
         self._shutdown_started = False
         self._shutdown_done = threading.Event()
@@ -369,6 +611,11 @@ class DesktopController:
                 tray.stop()
             except Exception:
                 logger.exception("failed to stop tray icon during shutdown")
+        if self.handoff_windows is not None:
+            try:
+                self.handoff_windows.close_all()
+            except Exception:
+                logger.exception("failed to close browser handoff windows during shutdown")
         try:
             self.window.hide()
         except Exception:
@@ -379,18 +626,50 @@ class DesktopController:
     def wait_for_shutdown(self, timeout: float | None = None) -> bool:
         return self._shutdown_done.wait(timeout)
 
-    def activate(self) -> None:
-        if self.native_window_activator(self.window):
-            return
-        if os.name == "nt" and self.native_window_activator is _activate_windows_window:
-            return
-        self.window.restore()
-        self.window.show()
+    def _refresh_surface(self) -> None:
         try:
-            self.window.on_top = True
-            self.window.on_top = False
+            _redraw_windows_window()
         except Exception:
-            logger.exception("failed to bring desktop window to foreground")
+            logger.exception("failed to redraw desktop window")
+        try:
+            self.window.run_js(
+                "window.dispatchEvent(new Event('desktop-activated'));"
+                "requestAnimationFrame(() => document.body && document.body.getBoundingClientRect());"
+            )
+        except Exception:
+            # The DOM may still be starting during a cold launch.
+            pass
+
+    def on_restored(self, *_args) -> None:
+        self._refresh_surface()
+
+    def activate(self) -> None:
+        with self._state_lock:
+            load_manager_ui = self._deferred_ui
+            self._deferred_ui = False
+        if load_manager_ui:
+            try:
+                self.window.load_url(desktop_ui_url())
+            except Exception:
+                logger.exception("failed to load deferred desktop UI")
+
+        # Keep pywebview's own visibility state in sync. Calling ShowWindow only
+        # on the native HWND leaves EdgeChromium thinking the host is hidden and
+        # is a common source of a black/stale surface after restoring from tray.
+        try:
+            self.window.restore()
+            self.window.show()
+        except Exception:
+            logger.exception("failed to restore desktop window")
+
+        native_activated = self.native_window_activator(self.window)
+        if not native_activated and not (os.name == "nt" and self.native_window_activator is _activate_windows_window):
+            try:
+                self.window.on_top = True
+                self.window.on_top = False
+            except Exception:
+                logger.exception("failed to bring desktop window to foreground")
+        self._refresh_surface()
 
     def _shutdown_then_destroy(self) -> None:
         try:
@@ -483,8 +762,8 @@ def _show_startup_error(message: str) -> None:
         print(message, flush=True)
 
 
-def _run_desktop() -> int:
-    if activate_existing_instance():
+def _run_desktop(*, start_hidden: bool = False) -> int:
+    if not start_hidden and activate_existing_instance():
         return 0
 
     server = UvicornServerThread()
@@ -511,23 +790,39 @@ def _run_desktop() -> int:
     bridge = DesktopBridge(folder_dialog_type=webview.FileDialog.FOLDER)
     window = webview.create_window(
         "HLS Downloader",
-        desktop_ui_url(),
+        desktop_host_url() if start_hidden else desktop_ui_url(),
         js_api=bridge,
         width=1180,
         height=760,
         min_size=(900, 600),
         background_color="#17191d",
         text_select=True,
+        hidden=start_hidden,
     )
     bridge._set_window(window)
-    controller = DesktopController(window, server, force_exit=os._exit)
+    set_desktop_handoff_session(True)
+    handoff_windows = BrowserHandoffWindowManager(
+        window,
+        webview.create_window,
+        webview.FileDialog.FOLDER,
+        mark_presented=_mark_browser_handoff_presented,
+    )
+    controller = DesktopController(
+        window,
+        server,
+        force_exit=os._exit,
+        handoff_windows=handoff_windows,
+        deferred_ui=start_hidden,
+    )
     tray = DesktopTray(controller.activate, controller.request_exit)
     controller.set_tray(tray)
     bridge._set_exit_request(controller.request_exit)
     register_activation(controller.activate)
+    register_browser_handoff(handoff_windows.show)
     register_shutdown(controller.request_exit)
     startup_exit.disarm()
     window.events.closing += controller.on_closing
+    window.events.restored += controller.on_restored
 
     try:
         storage_path = RUNTIME_PATHS.webview_path
@@ -540,7 +835,10 @@ def _run_desktop() -> int:
         )
     finally:
         register_activation(None)
+        register_browser_handoff(None)
+        set_desktop_handoff_session(False)
         register_shutdown(None)
+        handoff_windows.close_all()
         if not controller.wait_for_shutdown(timeout=0):
             controller.request_exit()
             controller.wait_for_shutdown(timeout=20)
@@ -548,15 +846,18 @@ def _run_desktop() -> int:
 
 
 def main() -> int:
-    if "--shutdown" in sys.argv[1:]:
+    args = set(sys.argv[1:])
+    if "--shutdown" in args:
         shutdown_existing_instance()
         return 0
 
+    start_hidden = "--background" in args or "--native-host" in args
     instance_lock = SingleInstanceLock()
     if not instance_lock.acquire():
-        _activate_existing_with_retry()
+        if not start_hidden:
+            _activate_existing_with_retry()
         return 0
     try:
-        return _run_desktop()
+        return _run_desktop(start_hidden=start_hidden)
     finally:
         instance_lock.release()

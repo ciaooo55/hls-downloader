@@ -144,10 +144,30 @@ export default defineContentScript({
         button.addEventListener('click', () => {
           const result = ui.shadow.querySelector<HTMLElement>('.result')
           button.setAttribute('disabled', ''); button.textContent = '发送中'
-          void runtimeMessage({ type: 'offer', resource }).then(response => {
+          void runtimeMessage({ type: 'offer', resource }).then(async response => {
             if (!response?.ok || !response?.handoff?.id) throw new Error(response?.error || '桌面端未接受请求')
             button.textContent = '待确认'
             if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `请在桌面下载器确认：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
+            const handoffId = response.handoff.id
+            const deadline = Date.now() + 130_000
+            while (Date.now() < deadline) {
+              await new Promise(resolve => setTimeout(resolve, 1000))
+              const statusResponse = await runtimeMessage({ type: 'handoff-status', handoffId }).catch(() => null)
+              const handoff = statusResponse?.handoff || statusResponse
+              const status = String(handoff?.status || '')
+              if (!status || status === 'pending' || status === 'accepting') continue
+              if (status === 'accepted') {
+                button.textContent = '已加入'
+                if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `已加入下载队列：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
+              } else {
+                button.removeAttribute('disabled')
+                button.textContent = status === 'expired' ? '已过期' : '重试'
+                if (result) { result.hidden = false; result.classList.add('error'); result.textContent = status === 'canceled' || status === 'rejected' ? '已取消下载确认' : `确认已${status}` }
+              }
+              return
+            }
+            button.removeAttribute('disabled')
+            button.textContent = '重试'
           }).catch(reason => {
             button.removeAttribute('disabled'); button.textContent = '重试'
             if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '发送失败' }

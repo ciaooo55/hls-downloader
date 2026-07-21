@@ -3,8 +3,8 @@ body { margin: 0; width: 400px; color: #102a3a; background: #f4fbfe; font: 13px/
 main { display: flex; min-height: 430px; max-height: 600px; flex-direction: column; }
 header { display: flex; justify-content: space-between; align-items: center; padding: 13px 14px; background: #fff; border-bottom: 1px solid #d5eff9; }
 .brand { display: flex; align-items: center; gap: 9px; }
-.brand > img { width: 36px; height: 36px; }
-h1 { font-size: 17px; margin: 0; letter-spacing: 0; }
+.brand > img { width: 22px; height: 22px; border-radius: 5px; }
+h1 { font-size: 15px; margin: 0; letter-spacing: 0; }
 header span { display: block; color: #a13737; font-size: 11px; margin-top: 2px; }
 header span.online { color: #16704d; }
 button { border: 0; border-radius: 6px; cursor: pointer; letter-spacing: 0; }
@@ -14,7 +14,7 @@ button { border: 0; border-radius: 6px; cursor: pointer; letter-spacing: 0; }
 section { min-height: 0; overflow: auto; }
 .section-title { padding: 5px 14px 9px; color: #58646e; }
 .section-title b { color: #0284c7; }
-article { display: grid; grid-template-columns: minmax(0, 1fr) 58px; gap: 9px; align-items: center; padding: 10px 14px; background: #fff; border-top: 1px solid #e8ecef; }
+article { display: grid; grid-template-columns: minmax(0, 1fr) 48px; gap: 9px; align-items: center; padding: 10px 14px; background: #fff; border-top: 1px solid #e8ecef; }
 article > div { min-width: 0; }
 article strong,
 article span,
@@ -23,10 +23,10 @@ article span { color: #5f6d77; font-size: 11px; margin-top: 3px; }
 article small { color: #76828c; font-size: 10px; margin-top: 2px; }
 article .resource-url { display: -webkit-box; white-space: normal; overflow-wrap: anywhere; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 article button,
-header button { height: 32px; background: #0ea5e9; color: #fff; display: grid; place-items: center; }
+header button { height: 28px; background: #0ea5e9; color: #fff; display: grid; place-items: center; }
 article button:hover,
 header button:hover { background: #0284c7; }
-header button { width: 32px; }
+header button { width: 28px; }
 .close-button { background: #e0f2fe; color: #075985; }
 article button[disabled] { cursor: default; opacity: .72; }
 article button em { font-style: normal; font-size: 11px; }

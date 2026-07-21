@@ -6,14 +6,18 @@ from fastapi.testclient import TestClient
 
 from backend.app.desktop_runtime import (
     activate_window,
+    present_browser_handoff,
     register_activation,
+    register_browser_handoff,
     register_shutdown,
     request_shutdown,
+    set_desktop_handoff_session,
 )
 from backend.app import main as main_module
 from backend.app.main import app
 import backend.desktop as desktop_module
 from backend.desktop import (
+    BrowserHandoffWindowManager,
     DesktopBridge,
     DesktopController,
     StartupExitController,
@@ -40,6 +44,9 @@ class FakeWindow:
 
     def show(self) -> None:
         self.calls.append("show")
+
+    def load_url(self, url: str) -> None:
+        self.calls.append(f"load-url:{url}")
 
     @property
     def on_top(self) -> bool:
@@ -555,3 +562,135 @@ def test_desktop_bridge_does_not_offer_uninstall_without_uninstaller(tmp_path):
 
     assert bridge.get_desktop_info()["installed"] is False
     assert bridge.begin_uninstall() == {"ok": False, "error": "当前版本无需卸载"}
+
+
+class FakeEventHook:
+    def __init__(self) -> None:
+        self.handlers = []
+
+    def __iadd__(self, handler):
+        self.handlers.append(handler)
+        return self
+
+    def emit(self):
+        for handler in list(self.handlers):
+            handler()
+
+
+class FakeChildEvents:
+    def __init__(self) -> None:
+        self.closing = FakeEventHook()
+        self.closed = FakeEventHook()
+
+
+class FakeChildWindow(FakeWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events = FakeChildEvents()
+        self._on_top = False
+
+    @property
+    def on_top(self) -> bool:
+        return self._on_top
+
+    @on_top.setter
+    def on_top(self, value: bool) -> None:
+        self._on_top = value
+        self.calls.append(f"on-top:{value}")
+
+
+def test_browser_handoffs_queue_during_cold_start_and_flush_independently():
+    shown: list[str] = []
+    ready = threading.Event()
+    register_browser_handoff(None)
+    set_desktop_handoff_session(False)
+    try:
+        # Pure backend mode falls back to manager/web UI instead of silently queueing.
+        fallback = present_browser_handoff("web-only")
+        assert fallback["mode"] == "ui-fallback"
+        assert fallback["queued"] is False
+
+        set_desktop_handoff_session(True)
+        queued_one = present_browser_handoff("queued-one")
+        queued_two = present_browser_handoff("queued-two")
+        assert queued_one["ok"] is True and queued_one["queued"] is True
+        assert queued_two["mode"] == "desktop-pending"
+
+        def show(handoff_id: str) -> None:
+            shown.append(handoff_id)
+            if {"queued-one", "queued-two"}.issubset(shown):
+                ready.set()
+
+        register_browser_handoff(show)
+        assert ready.wait(timeout=1)
+        assert "queued-one" in shown
+        assert "queued-two" in shown
+    finally:
+        register_browser_handoff(None)
+        set_desktop_handoff_session(False)
+
+
+def test_browser_handoff_window_manager_creates_one_window_per_request():
+    created = []
+    canceled: list[str] = []
+    presented: list[str] = []
+
+    class MasterWindow:
+        x = 100
+        y = 60
+
+    def create_window(title, url, **kwargs):
+        window = FakeChildWindow()
+        created.append((title, url, kwargs, window))
+        return window
+
+    manager = BrowserHandoffWindowManager(
+        MasterWindow(),
+        create_window,
+        "folder",
+        url_builder=lambda handoff_id: f"http://local/ui?handoff={handoff_id}",
+        cancel_handoff=canceled.append,
+        mark_presented=presented.append,
+    )
+
+    manager.show("one")
+    manager.show("two")
+    manager.show("one")
+
+    assert len(created) == 2
+    assert created[0][1].endswith("handoff=one")
+    assert created[1][1].endswith("handoff=two")
+    assert created[0][2]["on_top"] is True
+    assert created[0][2]["x"] != created[1][2]["x"]
+    assert created[0][3].calls[:2] == ["restore", "show"]
+    assert presented == ["one", "two", "one"]
+
+    created[0][3].events.closing.emit()
+    for _ in range(50):
+        if canceled:
+            break
+        threading.Event().wait(0.01)
+    assert canceled == ["one"]
+
+    manager.mark_resolved("two")
+    created[1][3].events.closing.emit()
+    for _ in range(20):
+        if "two" in canceled:
+            break
+        threading.Event().wait(0.01)
+    assert canceled == ["one"]
+
+
+def test_background_controller_defers_manager_ui_until_opened():
+    window = FakeWindow()
+    controller = DesktopController(
+        window,
+        FakeServer(),
+        native_window_activator=lambda _window: False,
+        deferred_ui=True,
+    )
+
+    controller.activate()
+
+    assert window.calls[0].startswith("load-url:http://")
+    assert window.calls[1:5] == ["restore", "show", "on-top:True", "on-top:False"]

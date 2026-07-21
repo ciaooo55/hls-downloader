@@ -12,6 +12,7 @@ export interface BrowserHandoff {
   mime_type: string
   source_page_url: string
   size: number
+  status?: string
 }
 
 export interface BrowserHandoffDecision {
@@ -21,11 +22,12 @@ export interface BrowserHandoffDecision {
   remember: boolean
 }
 
-export default function BrowserHandoffDialog({ item, busy, settings, onResolve }: {
+export default function BrowserHandoffDialog({ item, busy, settings, onResolve, standalone = false }: {
   item: BrowserHandoff
   busy: boolean
   settings: Settings
   onResolve: (action: 'accept' | 'cancel', decision?: BrowserHandoffDecision) => void
+  standalone?: boolean
 }) {
   let host = item.url
   try { host = new URL(item.url).host } catch {}
@@ -40,7 +42,7 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve }
     setCategory(value)
     setDirectory(settings.browser_category_dirs?.[value] || settings.download_dir || '')
   }
-  return <div className="modal-overlay browser-handoff-overlay">
+  return <div className={`modal-overlay browser-handoff-overlay${standalone ? ' browser-handoff-standalone' : ''}`}>
     <section className="modal browser-handoff-dialog" role="dialog" aria-modal="true" aria-label="浏览器下载接管">
       <header><div><h2>下载文件信息</h2><p>浏览器副本已停止，这次下载由 HLS Downloader 处理</p></div><button className="modal-close-button" title="取消下载" disabled={busy} onClick={() => onResolve('cancel')}><X size={18} /></button></header>
       <div className="browser-handoff-body">

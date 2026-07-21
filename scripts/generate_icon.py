@@ -8,6 +8,7 @@ ASSET_DIR = ROOT / "assets"
 FRONTEND_PUBLIC = ROOT / "frontend" / "public"
 EXTENSION_PUBLIC = ROOT / "extension" / "public"
 CANVAS_SIZE = 1024
+EXTENSION_ICON_SIZES = (16, 32, 48, 128)
 
 
 def build_icon() -> Image.Image:
@@ -43,6 +44,9 @@ def main() -> None:
     png.save(ASSET_DIR / "app-icon.png", optimize=True)
     png.save(FRONTEND_PUBLIC / "app-icon.png", optimize=True)
     png.save(EXTENSION_PUBLIC / "icon.png", optimize=True)
+    for size in EXTENSION_ICON_SIZES:
+        sized = source.resize((size, size), Image.Resampling.LANCZOS)
+        sized.save(EXTENSION_PUBLIC / f"icon-{size}.png", optimize=True)
     source.save(
         ASSET_DIR / "app-icon.ico",
         format="ICO",

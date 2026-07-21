@@ -81,6 +81,7 @@ export const testConnection = () => request<any>('/test')
 export const recognizeUrl = (data: any) => request<any>('/recognize', { method: 'POST', body: JSON.stringify(data) })
 export const fetchUserscriptStatus = () => request<any>('/userscript/status')
 export const fetchBrowserHandoffs = () => request<any[]>('/browser/handoffs')
+export const fetchBrowserHandoff = (id: string) => request<any>(`/browser/handoffs/${encodeURIComponent(id)}`)
 export const fetchBrowserStatus = () => request<any>('/browser/status')
 export const resolveBrowserHandoff = (id: string, action: 'accept' | 'reject' | 'cancel', data?: object) =>
   request<any>(`/browser/handoffs/${encodeURIComponent(id)}/${action}`, {

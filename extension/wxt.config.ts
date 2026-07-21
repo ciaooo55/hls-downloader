@@ -7,7 +7,10 @@ export default defineConfig({
     description: '嗅探媒体、接管普通下载并发送到 HLS Downloader 桌面端。',
     version: '1.2.14',
     icons: {
-      512: 'icon.png',
+      16: 'icon-16.png',
+      32: 'icon-32.png',
+      48: 'icon-48.png',
+      128: 'icon-128.png',
     },
     key: browser === 'chrome' ? 'MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDrOsVh5DPI4QgwtSbk3r66RoLAceY4j7bcvB74L8oJizTtjWwbvE31KFOR1c3qTZJUjtFgN2UDVCYThiS79RJosEDwvdeaTZPt4cwNdKINVKTcGGI8T4Pl7cqTl45IDBxUgAayjJ26YEC542os/dfVmRaZO1hDwFFhyM9AousNUwIDAQAB' : undefined,
     permissions: [
@@ -16,8 +19,8 @@ export default defineConfig({
       ...(browser === 'firefox' ? ['webRequestBlocking'] : []),
     ],
     host_permissions: ['<all_urls>'],
-    web_accessible_resources: [{ resources: ['icon.png'], matches: ['<all_urls>'] }],
-    action: { default_title: 'HLS Downloader' },
+    web_accessible_resources: [{ resources: ['icon.png', 'icon-16.png', 'icon-32.png', 'icon-48.png', 'icon-128.png'], matches: ['<all_urls>'] }],
+    action: { default_title: 'HLS Downloader', default_icon: { 16: 'icon-16.png', 32: 'icon-32.png', 48: 'icon-48.png' } },
     commands: {
       'send-current-page': { suggested_key: { default: 'Ctrl+Shift+Y' }, description: '嗅探当前页面' },
     },

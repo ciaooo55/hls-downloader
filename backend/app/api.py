@@ -32,7 +32,7 @@ from .downloader.playback import (
 )
 from .utils import get_domain
 from .userscript_monitor import userscript_monitor
-from .desktop_runtime import activate_window, request_shutdown
+from .desktop_runtime import activate_window, present_browser_handoff, request_shutdown
 from .url_recognition import RecognitionError, recognize_url
 from .updater import UpdateError, update_service
 from .models import TaskStatus, TaskType
@@ -80,8 +80,24 @@ async def create_browser_handoff(request: Request, x_token: str = Header(default
         raise HTTPException(status_code=422, detail="浏览器资源地址无效")
     _check_host(url)
     item = browser_handoffs.create(payload)
-    activate_window()
-    return item.public()
+    presentation = present_browser_handoff(item.id)
+    mode = str(presentation.get("mode") or "none")
+    if mode == "desktop-pending":
+        browser_handoffs.mark_presentation(item.id, "queued")
+    elif mode == "desktop":
+        # Presenter thread will upgrade this to presented; do not overwrite later.
+        browser_handoffs.mark_presentation(item.id, "queued")
+    elif mode == "ui-fallback":
+        # Manager UI / browser tab will show the offer; treat that as presented.
+        browser_handoffs.mark_presentation(item.id, "presented")
+    else:
+        browser_handoffs.mark_presentation(item.id, "failed", "no presenter")
+    item = browser_handoffs.get(item.id) or item
+    body = item.public()
+    body["presentation_mode"] = mode
+    body["presentation_ok"] = bool(presentation.get("ok"))
+    body["presentation_queued"] = bool(presentation.get("queued"))
+    return body
 
 
 @router.post("/browser/ping")
@@ -117,27 +133,33 @@ async def get_browser_handoff(handoff_id: str, x_token: str = Header(default="")
 async def accept_browser_handoff(handoff_id: str, body: BrowserHandoffAccept | None = None, x_token: str = Header(default="")):
     _check_token(x_token)
     body = body or BrowserHandoffAccept()
-    item = browser_handoffs.get(handoff_id)
+    item = browser_handoffs.claim(handoff_id)
     if not item:
-        raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
-    if item.status != "pending":
-        raise HTTPException(status_code=409, detail=f"接管请求当前状态为 {item.status}")
+        existing = browser_handoffs.get(handoff_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
+        raise HTTPException(status_code=409, detail=f"接管请求当前状态为 {existing.status}")
     output_dir = Path(body.download_dir or settings.browser_category_dirs.get(body.category) or settings.download_dir).expanduser().resolve()
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
+        browser_handoffs.fail_accept(handoff_id)
         raise HTTPException(status_code=400, detail=f"无法使用保存目录: {exc}") from exc
     if not output_dir.is_dir():
+        browser_handoffs.fail_accept(handoff_id)
         raise HTTPException(status_code=400, detail="保存位置不是文件夹")
     if body.filename.strip():
         item.filename = body.filename.strip()
-    task = await _create_browser_task(item, output_dir=str(output_dir))
+    try:
+        task = await _create_browser_task(item, output_dir=str(output_dir))
+    except Exception:
+        browser_handoffs.fail_accept(handoff_id)
+        raise
     if body.remember:
         settings.browser_category_dirs[body.category] = str(output_dir)
         save_settings(settings)
-    item.status = "accepted"
-    item.task_id = task.id
-    return item.public()
+    accepted = browser_handoffs.complete_accept(handoff_id, task.id)
+    return (accepted or item).public()
 
 
 @router.get("/browser/handoffs/{handoff_id}/wait")

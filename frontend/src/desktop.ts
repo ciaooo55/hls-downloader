@@ -14,6 +14,7 @@ interface NativeApi {
   open_browser_extension_installer(): Promise<NativeResult>
   get_desktop_info(): Promise<NativeResult>
   begin_uninstall(): Promise<NativeResult>
+  close_window(): Promise<NativeResult>
 }
 
 declare global {
@@ -82,5 +83,17 @@ export async function beginUninstall(): Promise<NativeResult> {
     return await api.begin_uninstall()
   } catch (reason) {
     return { ok: false, error: reason instanceof Error ? reason.message : '无法启动卸载程序' }
+  }
+}
+
+
+export async function closeDesktopWindow(): Promise<NativeResult> {
+  try {
+    const api = await waitForNativeApi(1000)
+    if (api?.close_window) return await api.close_window()
+    window.close()
+    return { ok: true }
+  } catch (reason) {
+    return { ok: false, error: reason instanceof Error ? reason.message : '无法关闭窗口' }
   }
 }
