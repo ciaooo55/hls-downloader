@@ -236,7 +236,7 @@ class BrowserHandoffWindowManager:
         return max(20, base_x + 70 + slot * 28), max(20, base_y + 55 + slot * 24)
 
     @staticmethod
-    def _raise(window) -> None:
+    def _raise(window, *, keep_on_top: bool = True) -> None:
         try:
             window.restore()
         except Exception:
@@ -246,8 +246,11 @@ class BrowserHandoffWindowManager:
         except Exception:
             pass
         try:
+            # Newest confirm dialog should win focus over the browser and siblings.
             window.on_top = False
             window.on_top = True
+            if not keep_on_top:
+                window.on_top = False
         except Exception:
             logger.exception("failed to foreground browser handoff window")
 
@@ -286,11 +289,11 @@ class BrowserHandoffWindowManager:
                     title,
                     self.url_builder(handoff_id),
                     js_api=bridge,
-                    width=520,
-                    height=650,
+                    width=500,
+                    height=620,
                     x=x,
                     y=y,
-                    min_size=(430, 540),
+                    min_size=(420, 520),
                     resizable=True,
                     on_top=True,
                     focus=True,

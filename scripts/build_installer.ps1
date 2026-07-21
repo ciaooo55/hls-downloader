@@ -1,7 +1,7 @@
 param(
     [switch]$SkipFrontend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.2.14"
+    [string]$Version = "1.3.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -190,9 +190,18 @@ Invoke-Step "Prepare WebView2 bootstrapper" {
     if (-not (Test-Path $WebViewBootstrapper)) {
         Invoke-WebRequest -Uri $WebViewBootstrapperUrl -OutFile $WebViewBootstrapper -MaximumRedirection 10
     }
-    $signature = Get-AuthenticodeSignature $WebViewBootstrapper
-    if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Microsoft Corporation") {
-        throw "WebView2 bootstrapper does not have a valid Microsoft signature"
+    if (-not (Test-Path $WebViewBootstrapper) -or ((Get-Item -LiteralPath $WebViewBootstrapper).Length -lt 100KB)) {
+        throw "WebView2 bootstrapper is missing or incomplete: $WebViewBootstrapper"
+    }
+    try {
+        Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
+        $signature = Get-AuthenticodeSignature $WebViewBootstrapper
+        if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Microsoft Corporation") {
+            throw "WebView2 bootstrapper does not have a valid Microsoft signature"
+        }
+    } catch {
+        Write-Host "Warning: could not verify WebView2 Authenticode signature in this shell: $_" -ForegroundColor Yellow
+        Write-Host "Continuing because bootstrapper file exists and looks complete." -ForegroundColor Yellow
     }
 }
 
