@@ -52,7 +52,7 @@ def _start_app() -> None:
         )
 
 
-def _wait_presenter(timeout: float = 20.0) -> None:
+def _wait_presenter(timeout: float = 18.0) -> None:
     """Wait until the desktop shell can queue or show handoff windows."""
     deadline = time.monotonic() + timeout
     saw_session = False
@@ -65,7 +65,7 @@ def _wait_presenter(timeout: float = 20.0) -> None:
                 saw_session = True
         except Exception:
             pass
-        time.sleep(0.2)
+        time.sleep(0.12)
     # Session alone is enough for queuing; presenter attaches when GUI boots.
     if saw_session:
         return
@@ -79,7 +79,7 @@ def _ensure_app() -> None:
         _start_app()
         started = True
         for _ in range(80):
-            time.sleep(0.25)
+            time.sleep(0.15)
             try:
                 _request("GET", "/health")
                 break
@@ -89,7 +89,7 @@ def _ensure_app() -> None:
             raise RuntimeError("桌面下载器未启动或无法连接")
     # Cold start: health is live before the pywebview GUI loop, so wait for
     # desktop session/presenter before accepting handoff offers.
-    _wait_presenter(20.0 if started else 4.0)
+    _wait_presenter(18.0 if started else 2.5)
 
 
 def dispatch(message: dict) -> dict:

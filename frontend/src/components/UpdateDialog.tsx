@@ -7,11 +7,14 @@ export default function UpdateDialog({ onClose }: { onClose: () => void }) {
   const [info, setInfo] = useState<UpdateInfo | null>(null)
   const [checking, setChecking] = useState(true)
   const [installing, setInstalling] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [phase, setPhase] = useState('')
   const [error, setError] = useState('')
 
   const check = async (force = true) => {
     setChecking(true)
     setError('')
+    setConfirming(false)
     try {
       setInfo(await fetchUpdateInfo(force))
     } catch (reason: any) {
@@ -29,22 +32,29 @@ export default function UpdateDialog({ onClose }: { onClose: () => void }) {
       window.open(info.release_url, '_blank', 'noopener')
       return
     }
-    if (!window.confirm(`下载安装 v${info.latest_version}？安装程序启动后下载器会自动关闭。`)) return
+    if (!confirming) {
+      setConfirming(true)
+      return
+    }
     setInstalling(true)
+    setPhase('正在从 GitHub 下载安装包…')
     setError('')
     try {
       await installUpdate()
+      setPhase('安装程序已启动，下载器即将退出…')
     } catch (reason: any) {
       setError(reason.message || '更新失败')
       setInstalling(false)
+      setPhase('')
+      setConfirming(false)
     }
   }
 
   return <div className="modal-overlay" onMouseDown={onClose}>
     <section className="modal update-modal" onMouseDown={event => event.stopPropagation()}>
       <header>
-        <div><h2>软件更新</h2><p>检查并安装 HLS Downloader 新版本</p></div>
-        <button className="icon-button" title="关闭" onClick={onClose}><X size={18} /></button>
+        <div><h2>软件更新</h2><p>检查、下载并安装最新版 · 任务与已下载文件会保留</p></div>
+        <button className="icon-button" title="关闭" onClick={onClose} disabled={installing}><X size={18} /></button>
       </header>
 
       <div className="update-version-row">
@@ -55,18 +65,22 @@ export default function UpdateDialog({ onClose }: { onClose: () => void }) {
         </span>
       </div>
 
+      {info?.notes && <div className="update-notes"><b>更新说明</b><pre>{info.notes.slice(0, 600)}{info.notes.length > 600 ? '…' : ''}</pre></div>}
       {info?.download_directory && <div className="update-path">
         <div><span>安装包下载目录</span><strong title={info.download_directory}>{info.download_directory}</strong></div>
         <button className="icon-button bordered" title="打开下载目录" onClick={() => openExplorer(info.download_directory)}><FolderOpen size={17} /></button>
       </div>}
-      <p className="field-note">自动更新完成后会删除下载的安装包。已下载的视频和任务历史不会被删除。</p>
+      <p className="field-note">自动更新完成后会删除下载的安装包。视频文件与任务历史不会被删除。</p>
+      {phase && <div className="inline-message update-phase">{phase}</div>}
+      {confirming && !installing && <div className="inline-message">确认后下载器会关闭并启动安装程序，请保存当前操作。</div>}
       {error && <div className="inline-error">{error}</div>}
 
       <footer>
         <button className="secondary-button" disabled={checking || installing} onClick={() => check(true)}><RefreshCw size={15} />{checking ? '检查中…' : '重新检查'}</button>
-        {info?.available && <button className="primary-button" disabled={installing} onClick={update}>
+        {confirming && !installing && <button className="secondary-button" onClick={() => setConfirming(false)}>取消</button>}
+        {info?.available && <button className="primary-button" disabled={installing || checking} onClick={update}>
           {info.can_auto_install ? <Download size={15} /> : <ExternalLink size={15} />}
-          {installing ? '正在下载…' : info.can_auto_install ? '下载并安装' : '打开下载页'}
+          {installing ? '更新中…' : confirming ? '确认并安装' : info.can_auto_install ? '下载并安装' : '打开下载页'}
         </button>}
       </footer>
     </section>

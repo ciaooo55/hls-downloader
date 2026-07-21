@@ -289,11 +289,11 @@ class BrowserHandoffWindowManager:
                     title,
                     self.url_builder(handoff_id),
                     js_api=bridge,
-                    width=400,
-                    height=520,
+                    width=380,
+                    height=500,
                     x=x,
                     y=y,
-                    min_size=(360, 460),
+                    min_size=(340, 440),
                     resizable=True,
                     on_top=True,
                     focus=True,
@@ -406,7 +406,7 @@ class UvicornServerThread:
                     if response.status == 200:
                         return True
             except (OSError, urllib.error.URLError):
-                time.sleep(0.1)
+                time.sleep(0.05)
         return False
 
 
