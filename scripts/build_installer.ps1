@@ -174,7 +174,7 @@ Invoke-Step "Stop running packaged app" {
 
 Invoke-Step "Prepare directories" {
     Remove-Item -Recurse -Force $StageDir, $PortableStage -ErrorAction SilentlyContinue
-    Remove-Item -Force $InstallerOut, $PortableOut, $UserscriptOut, $ChromeExtensionOut, $FirefoxExtensionOut, $ChecksumsOut -ErrorAction SilentlyContinue
+    Remove-Item -Force $InstallerOut, $PortableOut, $UserscriptOut, $ChromeExtensionOut, $FirefoxExtensionOut, $FirefoxSourceOut, $ChecksumsOut -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $StageDir, $ReleaseDir, $BinDir, $ToolsDir | Out-Null
     if (-not (Test-Path -LiteralPath $IconFile)) {
         throw "Application icon is missing: $IconFile"
