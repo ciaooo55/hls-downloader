@@ -161,7 +161,11 @@ export function matchesDownloadClick(
     if (exact && (sameTab || !intent.pageUrl || !download.referrer || samePage)) return true
     if (exact) return false
   }
-  if (intent.generic) return age <= 1500 && (samePage || sameTab)
+  if (intent.generic) {
+    return age <= 1000
+      && samePage
+      && (sameTab || intent.tabId === undefined || download.tabId === undefined)
+  }
   return age <= 3000 && samePage && (sameTab || intent.tabId === undefined || download.tabId === undefined)
 }
 

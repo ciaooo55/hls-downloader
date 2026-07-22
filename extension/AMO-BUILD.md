@@ -30,7 +30,8 @@ npm registry. Exact direct and transitive dependency versions are recorded in
 
 ## Permission notes
 
-- `downloads`: after an explicit user click, observe the real browser download
+- `downloads`: after a real link or an explicit download control is clicked,
+  observe the real browser download
   (including redirects and response filenames), pause it, and send it to the
   desktop confirmation dialog. Once the desktop acknowledges that the dialog is
   open, the browser copy is canceled and erased. It is restored only when the

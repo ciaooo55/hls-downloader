@@ -94,6 +94,14 @@ describe('resource rules', () => {
       url: 'https://cdn.test/generated.zip',
       referrer: 'https://site.test/download',
     }, 2000)).toBe(true)
+    expect(matchesDownloadClick({ ...intent, href: '', generic: true, tabId: 8 }, {
+      url: 'https://cdn.test/unrelated.zip',
+      tabId: 8,
+    }, 1800)).toBe(false)
+    expect(matchesDownloadClick({ ...intent, href: '', generic: true }, {
+      url: 'https://cdn.test/generated.zip',
+      referrer: 'https://site.test/download',
+    }, 2101)).toBe(false)
     expect(matchesDownloadClick({ ...intent, href: 'https://site.test/download#', generic: true }, {
       url: 'https://cdn.test/generated.zip',
       referrer: 'https://site.test/download',
