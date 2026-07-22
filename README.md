@@ -79,7 +79,9 @@ Release 同时生成 Chrome 和 Firefox 扩展包。安装版内置 Chromium 扩
 
 扩展支持响应嗅探、页面 fetch/XHR/media/Performance 观察、右键下载和 magnet 链接。页面媒体面板默认悬停展开、移开收起，也可以点击“固定”保持展开；重新打开页面时会补拉后台已经捕获的资源。Cookie 必须按站点单独授权，桌面任务中的 Cookie 使用 Windows DPAPI 加密后再写入数据库。Chrome 正式安装需要 Chrome Web Store，Firefox 永久安装需要 Mozilla 签名。
 
-在 AMO 的“Upload Version”页面上传 `HLSDownloader-Firefox-Unsigned.zip`；校验通过后，源码问题选择“是”，再上传 `HLSDownloader-Firefox-Source.zip`。审核说明见源码包内的 `AMO-BUILD.md`，隐私政策见 [PRIVACY.md](PRIVACY.md)。未签名 ZIP 不能拖进正式版 Firefox；临时测试时先解压，在 `about:debugging#/runtime/this-firefox` 中选择“临时载入附加组件”，再选择解压目录里的 `manifest.json`。
+首次提交时，在 AMO 的“提交新附加组件”页面上传 `HLSDownloader-Firefox-Unsigned.zip`。以后更新必须进入“我的附加组件 → 原来的 HLS Downloader → 状态和版本 → 上传新版本”，不要再次选择“提交新附加组件”；否则相同的扩展 ID 会被提示为“发现重复的附加组件 ID”。扩展 ID 必须保持不变，每次上传前只提高版本号。
+
+校验通过后，源码问题选择“是”，再上传同一 Release 的 `HLSDownloader-Firefox-Source.zip`。审核说明见源码包内的 `AMO-BUILD.md`，隐私政策见 [PRIVACY.md](PRIVACY.md)。未签名 ZIP 不能拖进正式版 Firefox；临时测试时先解压，在 `about:debugging#/runtime/this-firefox` 中选择“临时载入附加组件”，再选择解压目录里的 `manifest.json`。
 
 ## 浏览器脚本
 
@@ -150,7 +152,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.3.2
+.\scripts\build_installer.ps1 -Version 1.3.3
 ```
 
 输出位于忽略的 `release` 目录：
@@ -169,8 +171,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.3.2
-git push origin v1.3.2
+git tag v1.3.3
+git push origin v1.3.3
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。

@@ -19,8 +19,8 @@
 ```powershell
 git switch main
 git pull --ff-only
-git tag v1.2.14
-git push origin v1.2.14
+git tag v1.3.3
+git push origin v1.3.3
 ```
 
 `v*` 标签会触发完整 Windows 构建。成功后工作流自动创建同名 GitHub Release，并上传：
@@ -38,6 +38,11 @@ SHA256SUMS.txt
 Firefox 正式版只接受 Mozilla 签名的扩展。给仓库配置 AMO 的
 `WEB_EXT_API_KEY` 与 `WEB_EXT_API_SECRET` 后，工作流还会生成
 `HLSDownloader-Firefox-Signed.xpi`；没有密钥时只发布明确标注的未签名提交包。
+
+同一个 Firefox 扩展必须始终保留 `browser@hls-downloader.ciaooo55.com` ID。
+首次提交使用 AMO 的“提交新附加组件”；后续版本从原附加组件的“状态和版本”
+页面上传。若在新附加组件页面上传，会出现“发现重复的附加组件 ID”，这表示
+入口选错，不应通过修改扩展 ID 规避。
 
 ## 失败处理
 

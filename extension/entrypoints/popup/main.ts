@@ -38,7 +38,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text 
 }
 
 async function main() {
-  root.innerHTML = ''
+  root.replaceChildren()
   const mainEl = el('main')
   const header = el('header')
   const brand = el('div', 'brand')

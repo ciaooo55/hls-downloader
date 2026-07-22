@@ -256,3 +256,14 @@ def test_firefox_release_includes_reviewable_source_archive():
         assert source in build_script
     assert "pnpm install --frozen-lockfile" in reviewer_notes
     assert "pnpm run build:firefox" in reviewer_notes
+
+
+def test_extension_source_does_not_assign_untrusted_html():
+    root = Path(__file__).resolve().parent.parent
+    sources = [
+        root / "extension" / "entrypoints" / "content.ts",
+        root / "extension" / "entrypoints" / "popup" / "main.ts",
+    ]
+
+    for source in sources:
+        assert ".innerHTML" not in source.read_text(encoding="utf-8")

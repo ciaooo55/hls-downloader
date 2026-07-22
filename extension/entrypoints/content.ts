@@ -28,9 +28,16 @@ export default defineContentScript({
     const ui = await createShadowRootUi(ctx, {
       name: 'hls-downloader-media-panel', position: 'inline', anchor: 'body',
       onMount(container) {
+        const element = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') => {
+          const node = document.createElement(tag)
+          if (className) node.className = className
+          if (text) node.textContent = text
+          return node
+        }
         const root = document.createElement('div')
         const iconUrl = browser.runtime.getURL('/icon-32.png')
-        root.innerHTML = `<style>
+        const style = element('style')
+        style.textContent = `
           :host{all:initial}*{box-sizing:border-box}button{font:13px system-ui,sans-serif;letter-spacing:0}
           .wrap{position:fixed;right:14px;top:35%;z-index:2147483647;color:#102a3a;filter:drop-shadow(0 5px 8px #07598529)}
           .toggle{display:grid;place-items:center;width:34px;height:34px;padding:2px;border:1.5px solid #38bdf8;border-radius:9px;background:#f0fbff;cursor:pointer}.toggle img{width:24px;height:24px;border-radius:5px}
@@ -39,7 +46,40 @@ export default defineContentScript({
           .pin,.close{height:30px;border:0;border-radius:5px;background:#e0f2fe;color:#075985;cursor:pointer}.pin{padding:0 9px;font:12px system-ui}.pin.active{background:#d1fae5;color:#047857}.close{display:grid;place-items:center;width:30px;font:700 20px/1 system-ui}.list{overflow:auto;max-height:58vh}.empty{padding:20px;color:#526b79;font:13px system-ui}
           .item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:12px;border-bottom:1px solid #e7f4f8}.item:hover{background:#f7fcff}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 13px/1.35 system-ui;overflow-wrap:anywhere}.url{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:#54717f;font:11px/1.35 system-ui;margin-top:4px;overflow-wrap:anywhere}.item:hover .name,.item:hover .url{-webkit-line-clamp:unset}.kind{color:#25627b;font:12px system-ui;margin-top:4px}.download{align-self:center;min-width:58px;height:32px;border:0;border-radius:6px;background:#0ea5e9;color:white;padding:6px 10px;cursor:pointer;font-weight:600}.download:hover{background:#0284c7}.download[disabled]{cursor:default;opacity:.65}.result{padding:8px 12px;background:#ecfdf5;color:#047857;font:12px/1.4 system-ui}.result.error{background:#fff1f2;color:#be123c}
           button:focus-visible{outline:2px solid #0369a1;outline-offset:2px}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
-        </style><div class="wrap"><button class="toggle" title="媒体嗅探：悬停展开" aria-label="展开媒体嗅探"><img src="${iconUrl}" alt=""></button><div class="panel"><header><span class="title"><img src="${iconUrl}" alt="">检测到的媒体</span><div class="head-actions"><button class="pin" title="固定展开">固定</button><button class="close" title="折叠" aria-label="折叠">×</button></div></header><div class="result" hidden></div><div class="list"><div class="empty">播放视频后会显示资源</div></div></div></div>`
+        `
+        const image = () => {
+          const icon = element('img') as HTMLImageElement
+          icon.src = iconUrl
+          icon.alt = ''
+          return icon
+        }
+        const panelWrap = element('div', 'wrap')
+        const toggle = element('button', 'toggle') as HTMLButtonElement
+        toggle.type = 'button'
+        toggle.title = '媒体嗅探：悬停展开'
+        toggle.setAttribute('aria-label', '展开媒体嗅探')
+        toggle.append(image())
+        const panel = element('div', 'panel')
+        const header = element('header')
+        const title = element('span', 'title', '检测到的媒体')
+        title.prepend(image())
+        const headActions = element('div', 'head-actions')
+        const pin = element('button', 'pin', '固定') as HTMLButtonElement
+        pin.type = 'button'
+        pin.title = '固定展开'
+        const close = element('button', 'close', '×') as HTMLButtonElement
+        close.type = 'button'
+        close.title = '折叠'
+        close.setAttribute('aria-label', '折叠')
+        headActions.append(pin, close)
+        header.append(title, headActions)
+        const result = element('div', 'result')
+        result.hidden = true
+        const list = element('div', 'list')
+        list.append(element('div', 'empty', '播放视频后会显示资源'))
+        panel.append(header, result, list)
+        panelWrap.append(toggle, panel)
+        root.append(style, panelWrap)
         container.append(root)
         const wrap = root.querySelector('.wrap')!
         root.querySelector('.toggle')!.addEventListener('click', () => {
@@ -129,7 +169,13 @@ export default defineContentScript({
       const list = ui.shadow.querySelector('.list')
       if (!list) return
       const entries = [...resources.values()]
-      list.innerHTML = entries.length ? '' : '<div class="empty">播放视频后会显示资源</div>'
+      list.replaceChildren()
+      if (!entries.length) {
+        const empty = document.createElement('div')
+        empty.className = 'empty'
+        empty.textContent = '播放视频后会显示资源'
+        list.append(empty)
+      }
       entries.forEach(resource => {
         const row = document.createElement('div'); row.className = 'item'
         const meta = document.createElement('div'); meta.className = 'meta'

@@ -49,7 +49,6 @@ No analytics, advertising, telemetry, or remote code is used. URLs and optionall
 authorized cookies are sent only to the Native Messaging application on the same
 Windows computer.
 
-`web-ext lint` reports `UNSAFE_VAR_ASSIGNMENT` warnings for the static Shadow DOM
-template and React's bundled DOM runtime. Resource names, URLs, MIME values, and
-native-host errors are rendered through `textContent` or React text nodes; no
-captured page value is assigned to `innerHTML`.
+The content script builds its Shadow DOM with DOM APIs and renders resource names,
+URLs, MIME values, and native-host errors through `textContent`. No captured page
+value is assigned to HTML parsing APIs.

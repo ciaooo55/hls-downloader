@@ -20,6 +20,8 @@ def test_ci_runs_windows_python_and_frontend_checks():
     assert "python -m pytest -q" in workflow
     assert "pnpm test" in workflow
     assert "pnpm run build" in workflow
+    assert "working-directory: extension" in workflow
+    assert "web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors" in workflow
     assert "permissions:\n  contents: read" in workflow
 
 
@@ -40,6 +42,7 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "HLSDownloader-Firefox-Source.zip" in workflow
     assert "HLSDownloader-Firefox-Signed.xpi" in workflow
     assert "web-ext sign" in workflow
+    assert "web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors" in workflow
     assert "SHA256SUMS.txt" in workflow
     assert "actions/upload-artifact@v7" in workflow
     assert "actions/download-artifact@v7" in workflow
