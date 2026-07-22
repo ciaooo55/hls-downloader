@@ -267,3 +267,16 @@ def test_extension_source_does_not_assign_untrusted_html():
 
     for source in sources:
         assert ".innerHTML" not in source.read_text(encoding="utf-8")
+
+
+def test_firefox_store_id_matches_native_host_and_keeps_legacy_compatibility():
+    root = Path(__file__).resolve().parent.parent
+    config = (root / "extension" / "wxt.config.ts").read_text(encoding="utf-8")
+    native_host = (root / "extension" / "native-host" / "firefox.json").read_text(encoding="utf-8")
+
+    store_id = "hls-downloader-store@ciaooo55.com"
+    legacy_id = "browser@hls-downloader.ciaooo55.com"
+    assert store_id in config
+    assert store_id in native_host
+    assert legacy_id not in config
+    assert legacy_id in native_host

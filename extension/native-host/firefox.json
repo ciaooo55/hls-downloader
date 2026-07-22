@@ -3,5 +3,8 @@
   "description": "HLS Downloader Native Messaging Host",
   "path": "HLSDownloaderNativeHost.exe",
   "type": "stdio",
-  "allowed_extensions": ["browser@hls-downloader.ciaooo55.com"]
+  "allowed_extensions": [
+    "hls-downloader-store@ciaooo55.com",
+    "browser@hls-downloader.ciaooo55.com"
+  ]
 }

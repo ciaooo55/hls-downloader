@@ -19,8 +19,8 @@
 ```powershell
 git switch main
 git pull --ff-only
-git tag v1.3.3
-git push origin v1.3.3
+git tag v1.3.4
+git push origin v1.3.4
 ```
 
 `v*` 标签会触发完整 Windows 构建。成功后工作流自动创建同名 GitHub Release，并上传：
@@ -35,14 +35,16 @@ HLSDownloader-Firefox-Source.zip
 SHA256SUMS.txt
 ```
 
-Firefox 正式版只接受 Mozilla 签名的扩展。给仓库配置 AMO 的
-`WEB_EXT_API_KEY` 与 `WEB_EXT_API_SECRET` 后，工作流还会生成
-`HLSDownloader-Firefox-Signed.xpi`；没有密钥时只发布明确标注的未签名提交包。
+Firefox 商店版使用 `hls-downloader-store@ciaooo55.com` ID。首次提交时在 AMO
+的“提交新附加组件”页面选择“在此网站上”，上传
+`HLSDownloader-Firefox-Unsigned.zip`，由 Mozilla 审核和签名。不要先使用同一 ID
+执行 `web-ext sign --channel unlisted`；该通道用于自分发，会预先占用 ID，导致
+创建公开商店条目时出现“发现重复的附加组件 ID”。后续版本从原附加组件的
+“状态和版本”页面上传并保持 ID 不变。
 
-同一个 Firefox 扩展必须始终保留 `browser@hls-downloader.ciaooo55.com` ID。
-首次提交使用 AMO 的“提交新附加组件”；后续版本从原附加组件的“状态和版本”
-页面上传。若在新附加组件页面上传，会出现“发现重复的附加组件 ID”，这表示
-入口选错，不应通过修改扩展 ID 规避。
+旧的自分发版 ID `browser@hls-downloader.ciaooo55.com` 仍保留在桌面端 Native
+Messaging 允许列表中，避免已安装用户失去连接；新商店版需要 v1.3.4 或更高版本
+的桌面端。
 
 ## 失败处理
 

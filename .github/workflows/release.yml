@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version used in the installer, for example 1.3.3
+        description: Version used in the installer, for example 1.3.4
         required: false
-        default: "1.3.3"
+        default: "1.3.4"
   push:
     tags:
       - "v*"
@@ -80,29 +80,6 @@ jobs:
             $version = "${{ github.ref_name }}".TrimStart("v")
           }
           & .\scripts\build_installer.ps1 -Version $version
-
-      - name: Sign Firefox extension for self-distribution
-        if: ${{ env.WEB_EXT_API_KEY != '' && env.WEB_EXT_API_SECRET != '' }}
-        shell: pwsh
-        env:
-          WEB_EXT_API_KEY: ${{ secrets.WEB_EXT_API_KEY }}
-          WEB_EXT_API_SECRET: ${{ secrets.WEB_EXT_API_SECRET }}
-        run: |
-          Push-Location extension
-          try {
-            pnpm exec web-ext sign `
-              --source-dir .output/firefox-mv3 `
-              --artifacts-dir ../release/firefox-signed `
-              --channel unlisted `
-              --api-key $env:WEB_EXT_API_KEY `
-              --api-secret $env:WEB_EXT_API_SECRET
-          } finally {
-            Pop-Location
-          }
-          $signed = Get-ChildItem .\release\firefox-signed -Filter *.xpi | Select-Object -First 1
-          if (-not $signed) { throw "Mozilla did not return a signed Firefox XPI" }
-          Copy-Item -LiteralPath $signed.FullName -Destination .\release\HLSDownloader-Firefox-Signed.xpi
-          Remove-Item .\release\firefox-signed -Recurse -Force
 
       - name: Assemble and verify release files
         shell: pwsh

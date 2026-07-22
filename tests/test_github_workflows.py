@@ -40,8 +40,8 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "m3u8-sniffer.user.js" in workflow
     assert "HLSDownloader-Firefox-Unsigned.zip" in workflow
     assert "HLSDownloader-Firefox-Source.zip" in workflow
-    assert "HLSDownloader-Firefox-Signed.xpi" in workflow
-    assert "web-ext sign" in workflow
+    assert "web-ext sign" not in workflow
+    assert "--channel unlisted" not in workflow
     assert "web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors" in workflow
     assert "SHA256SUMS.txt" in workflow
     assert "actions/upload-artifact@v7" in workflow
