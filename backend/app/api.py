@@ -248,6 +248,7 @@ async def _create_browser_task(item, output_dir: str = ""):
         origin=item.origin,
         user_agent=item.user_agent,
         cookie=item.cookie,
+        title=item.title,
         filename=item.filename,
         output_dir=output_dir,
         auto_start=True,

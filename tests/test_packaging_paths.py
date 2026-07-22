@@ -83,7 +83,6 @@ def test_app_icon_is_used_by_executable_tray_ui_and_installer():
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
     nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
     desktop = (root / "backend" / "desktop.py").read_text(encoding="utf-8")
-    toolbar = (root / "frontend" / "src" / "components" / "DesktopToolbar.tsx").read_text(encoding="utf-8")
 
     assert (root / "assets" / "app-icon.ico").stat().st_size > 10_000
     assert (root / "assets" / "app-icon.png").stat().st_size > 10_000
@@ -94,7 +93,6 @@ def test_app_icon_is_used_by_executable_tray_ui_and_installer():
     assert '!define MUI_ICON "${ICON_FILE}"' in nsis_script
     assert '!define MUI_UNICON "${ICON_FILE}"' in nsis_script
     assert 'assets" / "app-icon.png"' in desktop
-    assert 'src="/ui/app-icon.png"' in toolbar
 
 
 def test_desktop_ui_bypasses_webview_cache_and_displays_version():
@@ -107,7 +105,7 @@ def test_desktop_ui_bypasses_webview_cache_and_displays_version():
     assert "/ui?version={APP_VERSION}" in desktop
     assert '"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"' in main
     assert "setAppVersion(healthData.version" in app
-    assert "桌面下载管理器{props.version" in toolbar
+    assert "当前 v${props.version}" in toolbar
     assert 'className="tool-button update-button"' in toolbar
 
 

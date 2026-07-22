@@ -10,6 +10,7 @@ from pathlib import Path
 from ..config import settings
 from ..database import run_db
 from ..models import Task, TaskProgress, TaskStatus, TaskType
+from ..naming import suggest_manifest_name
 from ..credentials import protect_secret, unprotect_secret
 from ..utils import sanitize_filename
 from .hls import HLSDownloader
@@ -277,9 +278,16 @@ class TaskManager:
     ) -> Task:
         task_id = str(uuid.uuid4())[:8]
         resolved_type = resolve_task_type(task_type, url)
-        requested_name = filename or title or (
-            task_id if resolved_type is TaskType.HLS else ""
-        )
+        if resolved_type in {TaskType.HLS, TaskType.DASH}:
+            requested_name = suggest_manifest_name(
+                url,
+                filename=filename,
+                title=title,
+                source_page_url=source_page_url,
+                fallback=task_id,
+            )
+        else:
+            requested_name = filename or title
         filename = sanitize_filename(requested_name) if requested_name else ""
         now = datetime.now().isoformat()
         task = Task(

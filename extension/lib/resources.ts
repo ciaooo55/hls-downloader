@@ -9,6 +9,7 @@ export interface MediaResource {
   pageUrl?: string
   title?: string
   filename?: string
+  tabId?: number
   statusCode?: number
   method?: string
   requestHeaders?: Record<string, string>
@@ -33,6 +34,49 @@ export interface DownloadClickIntent {
 
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
 const SEGMENT_EXT = /\.(?:ts|m4s|cmfv|cmfa|aac)(?:$|[?#])/i
+const MANIFEST_EXT = /\.(?:m3u8?|mpd)$/i
+const GENERIC_MEDIA_NAME = /^(?:video|stream|master|index|playlist|manifest|chunklist|media|output|download|file|vod|live)[-_ ]*\d*$/i
+const OPAQUE_MEDIA_NAME = /^(?:[a-f0-9]{16,}|[a-z0-9_-]{28,})$/i
+
+function cleanName(value = '', pathValue = false): string {
+  let result = value.trim()
+  try { result = decodeURIComponent(result) } catch {}
+  if (pathValue) result = result.replace(/\\/g, '/').split('/').pop() || ''
+  result = result.split(/[?#]/, 1)[0].replace(MANIFEST_EXT, '').replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, ' ').trim().replace(/^[. ]+|[. ]+$/g, '')
+  return result.slice(0, 200)
+}
+
+export function isGenericMediaName(value = ''): boolean {
+  const name = cleanName(value, true)
+  if (!name) return true
+  const stem = name.includes('.') ? name.slice(0, name.lastIndexOf('.')) : name
+  const compact = stem.replace(/\s+/g, '')
+  return GENERIC_MEDIA_NAME.test(stem) || OPAQUE_MEDIA_NAME.test(compact) || /^\d+$/.test(compact)
+}
+
+function urlNames(value = ''): string[] {
+  try {
+    const url = new URL(value)
+    const candidates = ['filename', 'file', 'title', 'name', 'download']
+      .map(key => cleanName(url.searchParams.get(key) || '', true))
+      .filter(Boolean)
+    const leaf = cleanName(url.pathname, true)
+    return leaf ? [...candidates, leaf] : candidates
+  } catch {
+    return []
+  }
+}
+
+export function suggestedResourceFilename(resource: Pick<MediaResource, 'kind' | 'url' | 'pageUrl' | 'title' | 'filename'>): string {
+  if (resource.kind !== 'hls' && resource.kind !== 'dash') return cleanName(resource.filename || resource.title || '', true)
+  const candidates = [
+    cleanName(resource.filename || '', true),
+    cleanName(resource.title || ''),
+    ...urlNames(resource.pageUrl),
+    ...urlNames(resource.url),
+  ].filter(Boolean)
+  return candidates.find(value => !isGenericMediaName(value)) || candidates[0] || 'download'
+}
 
 export function classifyResource(url: string, mimeType = ''): ResourceKind | null {
   if (url.startsWith('magnet:')) return 'magnet'

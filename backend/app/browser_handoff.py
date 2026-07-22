@@ -11,6 +11,7 @@ class BrowserHandoff:
     id: str
     url: str
     filename: str
+    title: str
     mime_type: str
     source_page_url: str
     referer: str
@@ -74,6 +75,7 @@ class BrowserHandoffService:
             id=secrets.token_urlsafe(12),
             url=str(payload.get("url", "")),
             filename=str(payload.get("filename", "")),
+            title=str(payload.get("title", "")),
             mime_type=str(payload.get("mime_type", "")),
             source_page_url=str(payload.get("source_page_url", "")),
             referer=str(payload.get("referer", "")),

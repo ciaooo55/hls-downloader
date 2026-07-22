@@ -1,9 +1,24 @@
+import re
 from urllib.parse import urljoin
 
 import m3u8
 
 
 DRM_METHODS = {"sample-aes", "sample-aes-ctr"}
+
+
+def _playlist_title(content: str) -> str:
+    for line in content.splitlines():
+        line = line.strip()
+        if line.upper().startswith(("#EXT-X-TITLE:", "#TITLE:")):
+            return line.split(":", 1)[1].strip().strip('"')
+        if not line.upper().startswith("#EXT-X-SESSION-DATA:"):
+            continue
+        data_id = re.search(r'DATA-ID="([^"]+)"', line, re.IGNORECASE)
+        value = re.search(r'VALUE="([^"]+)"', line, re.IGNORECASE)
+        if data_id and value and re.search(r"(?:title|name|filename)", data_id.group(1), re.IGNORECASE):
+            return value.group(1).replace(r'\"', '"').strip()
+    return ""
 
 
 class UnsupportedPlaylistError(Exception):
@@ -77,6 +92,7 @@ def is_drm_protected(playlist: m3u8.M3U8) -> bool:
 
 def parse_m3u8(url: str, content: str) -> dict:
     playlist = m3u8.loads(content, uri=url)
+    playlist_title = _playlist_title(content)
 
     if playlist.is_variant:
         best = None
@@ -96,6 +112,7 @@ def parse_m3u8(url: str, content: str) -> dict:
             "base_url": _resolve_url(url, best.uri),
             "external_audio": bool(getattr(info, "audio", None)),
             "external_subtitles": bool(getattr(info, "subtitles", None)),
+            "title": playlist_title,
         }
 
     if not playlist.is_endlist:
@@ -151,4 +168,5 @@ def parse_m3u8(url: str, content: str) -> dict:
         "total_duration": sum(segment["duration"] for segment in segments),
         "is_fmp4": any(segment["init_map"] is not None for segment in segments),
         "external_subtitles": bool(playlist.media),
+        "title": playlist_title,
     }

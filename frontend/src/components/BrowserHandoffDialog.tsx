@@ -18,6 +18,7 @@ export interface BrowserHandoff {
   id: string
   url: string
   filename: string
+  title?: string
   mime_type: string
   source_page_url: string
   size: number

@@ -16,6 +16,8 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from ..config import settings
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
+from ..naming import is_generic_media_name, suggest_manifest_name
+from .http_file import _content_disposition_filename
 from .merge import merge_segments
 from .errors import as_download_error, diagnose_download_error, format_download_error
 from .engine import task_output_dir, task_work_dir
@@ -241,15 +243,25 @@ class HLSDownloader:
     ) -> dict:
         visited: set[str] = set()
         current_url = url
+        manifest_title = ""
+        response_filename = ""
         for depth in range(MAX_PLAYLIST_DEPTH + 1):
             if current_url in visited:
                 raise ValueError(f"主清单存在循环引用: {current_url}")
             visited.add(current_url)
             response = await client.get(current_url, headers=headers)
             response.raise_for_status()
-            parsed = parse_m3u8(current_url, response.text)
+            final_url = str(getattr(response, "url", "") or current_url)
+            parsed = parse_m3u8(final_url, response.text)
+            manifest_title = manifest_title or parsed.get("title", "")
+            response_filename = response_filename or _content_disposition_filename(
+                response.headers.get("content-disposition", "")
+            )
             if parsed["type"] == "media":
                 parsed["content"] = response.text
+                parsed["title"] = manifest_title
+                parsed["response_filename"] = response_filename
+                parsed["final_url"] = final_url
                 return parsed
             if parsed.get("external_audio"):
                 raise UnsupportedPlaylistError("暂不支持独立 HLS 音轨")
@@ -281,6 +293,16 @@ class HLSDownloader:
                 task.status = TaskStatus.PARSING
                 self._set_stage("parsing", "正在解析 HLS 清单")
                 parsed = await self._load_media_playlist(client, task.url, headers)
+                if is_generic_media_name(task.filename):
+                    task.filename = suggest_manifest_name(
+                        parsed.get("final_url") or task.url,
+                        filename=task.filename,
+                        title=task.title,
+                        source_page_url=task.source_page_url,
+                        manifest_title=parsed.get("title", ""),
+                        response_filename=parsed.get("response_filename", ""),
+                        fallback=task.id,
+                    )
                 (task_dir / "playlist.m3u8").write_text(parsed["content"], encoding="utf-8")
                 segments = parsed["segments"]
                 if not segments:

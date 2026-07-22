@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, shouldTakeover } from './resources'
+import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, shouldTakeover, suggestedResourceFilename } from './resources'
 
 describe('resource rules', () => {
   it('filters HLS segments but retains manifests', () => {
@@ -22,6 +22,21 @@ describe('resource rules', () => {
       url: 'https://cdn.test/get?id=1', filename: 'archive.zip', size: -1,
       enabled: true, minimumBytes: 1024 * 1024, excludedHosts: [], explicitClick: true,
     })).toBe(true)
+  })
+  it('uses a page title when an HLS manifest has a generic filename', () => {
+    expect(suggestedResourceFilename({
+      kind: 'hls',
+      url: 'https://cdn.test/video.m3u8?token=1',
+      pageUrl: 'https://site.test/watch/episode-12',
+      title: '第十二集：重新出发',
+      filename: 'video.m3u8',
+    })).toBe('第十二集：重新出发')
+    expect(suggestedResourceFilename({
+      kind: 'hls',
+      url: 'https://cdn.test/series/episode-07.m3u8',
+      title: '网页标题',
+      filename: 'episode-07.m3u8',
+    })).toBe('episode-07')
   })
   it('requires and matches a recent explicit click', () => {
     const base = { url: 'https://cdn.test/file.zip', size: 10, enabled: true, minimumBytes: 1024, excludedHosts: [] }

@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { classifyResource, resourceId, type MediaResource } from '../lib/resources'
+import { classifyResource, isGenericMediaName, resourceId, type MediaResource } from '../lib/resources'
 import { resourceQuality } from '../lib/hlsManifest'
 
 async function runtimeMessage(message: Record<string, unknown>, retries = 1): Promise<any> {
@@ -25,6 +25,16 @@ export default defineContentScript({
   async main(ctx) {
     document.documentElement.setAttribute('data-hls-downloader-extension', '1')
     const resources = new Map<string, MediaResource>()
+    const pageMediaTitle = () => {
+      const metadata = [
+        document.querySelector<HTMLMetaElement>('meta[property="og:title"]')?.content,
+        document.querySelector<HTMLMetaElement>('meta[name="twitter:title"]')?.content,
+        document.querySelector<HTMLElement>('[itemprop="name"]')?.getAttribute('content'),
+        document.title,
+        document.querySelector<HTMLElement>('h1')?.innerText,
+      ]
+      return metadata.find(value => value?.trim())?.trim().replace(/^\(\d+\)\s*/, '') || ''
+    }
     const ui = await createShadowRootUi(ctx, {
       name: 'hls-downloader-media-panel', position: 'inline', anchor: 'body',
       onMount(container) {
@@ -226,7 +236,7 @@ export default defineContentScript({
       const kind = classifyResource(url, mimeType); if (!kind) return
       let filename = ''
       try { filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch {}
-      const resource = { id: resourceId(url), url, kind, mimeType, pageUrl: location.href, title: filename || document.title, filename, seenAt: Date.now() }
+      const resource = { id: resourceId(url), url, kind, mimeType, pageUrl: location.href, title: pageMediaTitle() || filename, filename, seenAt: Date.now() }
       resources.set(url, resource); render(); void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
     }
     window.addEventListener('__hls_downloader_resource__', ((event: CustomEvent) => add(event.detail?.url, event.detail?.mimeType)) as EventListener)
@@ -234,8 +244,15 @@ export default defineContentScript({
     new PerformanceObserver(list => list.getEntries().forEach(entry => add(entry.name))).observe({ type: 'resource', buffered: true })
     browser.runtime.onMessage.addListener(message => {
       if (message?.type === 'captured-resource' && message.resource?.url) {
-        const resource = { ...message.resource, id: resourceId(message.resource.url), seenAt: Date.now() } as MediaResource
+        const pageTitle = pageMediaTitle()
+        const resource = {
+          ...message.resource,
+          title: !message.resource.title || isGenericMediaName(message.resource.title) ? pageTitle || message.resource.title : message.resource.title,
+          id: resourceId(message.resource.url),
+          seenAt: Date.now(),
+        } as MediaResource
         resources.set(resource.url, resource); render()
+        void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
         return
       }
       if (message?.type === 'collect-selection') {
@@ -247,7 +264,10 @@ export default defineContentScript({
     void runtimeMessage({ type: 'list', pageUrl: location.href }).then((stored: MediaResource[]) => {
       if (!Array.isArray(stored)) return
       stored.forEach(resource => {
-        if (resource?.url) resources.set(resource.url, resource)
+        if (resource?.url) resources.set(resource.url, {
+          ...resource,
+          title: !resource.title || isGenericMediaName(resource.title) ? pageMediaTitle() || resource.title : resource.title,
+        })
       })
       render()
     }).catch(() => undefined)

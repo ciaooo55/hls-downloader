@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
-import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, resourceId, shouldTakeover, type DownloadClickIntent, type MediaResource } from '../lib/resources'
+import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, resourceId, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus, shouldResumeBrowserDownload } from '../lib/takeover'
 import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
@@ -82,8 +82,8 @@ async function inspectHls(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId 
         url: variant.url,
         size: 0,
         statusCode: undefined,
-        filename: decodeURIComponent(new URL(variant.url).pathname.split('/').pop() || ''),
-        title: variant.quality ? `${variant.quality} HLS 视频流` : 'HLS 视频流',
+        filename: resource.filename || decodeURIComponent(new URL(variant.url).pathname.split('/').pop() || ''),
+        title: resource.title || (variant.quality ? `${variant.quality} HLS 视频流` : 'HLS 视频流'),
       }
       await saveResource(enriched, tabId)
       if (tabId >= 0) await browser.tabs.sendMessage(tabId, { type: 'captured-resource', resource: enriched }).catch(() => undefined)
@@ -135,7 +135,8 @@ async function resourcePayload(resource: MediaResource) {
   try { pageOrigin = pageUrl ? new URL(pageUrl).origin : '' } catch {}
   return {
     url: resource.url,
-    filename: resource.filename || resource.title || '',
+    filename: suggestedResourceFilename(resource),
+    title: resource.title || '',
     mime_type: resource.mimeType || '',
     size: resource.size || 0,
     source_page_url: pageUrl,
@@ -309,6 +310,7 @@ function observedResponse(details: any) {
     statusCode: details.statusCode,
     method: details.method,
     pageUrl: details.documentUrl || details.initiator || '',
+    tabId: details.tabId,
   }
   void saveResource(resource, details.tabId)
   void inspectHls(resource, details.tabId)
@@ -442,7 +444,7 @@ export default defineBackground(() => {
       const pageUrl = actual.referrer || chain?.pageUrl || requestHeader(chain, 'referer')
       const resource: MediaResource = {
         id: resourceId(url), url, kind, mimeType, size, title: filename, filename,
-        pageUrl, requestHeaders: chain?.requestHeaders, seenAt: Date.now(),
+        pageUrl, tabId: chain?.tabId, requestHeaders: chain?.requestHeaders, seenAt: Date.now(),
       }
       const intent = await waitForClickIntent(actual.url, actual.finalUrl, pageUrl, chain)
       if (!intent || !shouldTakeover({ url: resource.url, size: resource.size, mimeType, filename, ...config, ...intent, explicitClick: true })) {
@@ -466,7 +468,7 @@ export default defineBackground(() => {
 
   browser.contextMenus.onClicked.addListener((info, tab) => {
     const url = info.linkUrl || info.srcUrl
-    if (url) void offer({ id: resourceId(url), url, kind: classifyResource(url) || 'file', pageUrl: tab?.url, seenAt: Date.now() })
+    if (url) void offer({ id: resourceId(url), url, kind: classifyResource(url) || 'file', pageUrl: tab?.url, title: tab?.title, tabId: tab?.id, seenAt: Date.now() })
     if (info.menuItemId === 'hls-download-selection' && tab?.id) void browser.tabs.sendMessage(tab.id, { type: 'collect-selection' })
   })
 

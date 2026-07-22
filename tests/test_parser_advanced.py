@@ -66,3 +66,13 @@ media.mp4
 """
     with pytest.raises(ValueError, match="BYTERANGE"):
         parse_m3u8("https://example.test/vod.m3u8", content)
+
+
+def test_parse_extracts_session_title_metadata():
+    content = """#EXTM3U
+#EXT-X-SESSION-DATA:DATA-ID="com.example.video-title",VALUE="真实片名"
+#EXTINF:4,
+one.ts
+#EXT-X-ENDLIST
+"""
+    assert parse_m3u8("https://example.test/video.m3u8", content)["title"] == "真实片名"
