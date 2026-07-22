@@ -94,7 +94,7 @@ Firefox 商店版使用专用 ID `hls-downloader-store@ciaooo55.com`。首次提
 
 脚本发送任务时自动使用当前网页的 Referer、Origin、User-Agent 和 Cookie。例如在 `https://123.com` 页面捕获到 `https://456.com/video.m3u8`，请求来源会使用 `123.com`，不会沿用设置中的 missav 默认值。浏览器扩展不允许普通程序读取其脚本安装列表，因此下载器通过脚本向本地服务报到来判断它是否正在运行。
 
-默认每个任务使用 12 个分片并发，最高可配置为 256，最多同时下载 3 个任务。普通 HTTP 文件使用严格 Range 分段并发，源站不支持 Range 时自动退回单连接。成功任务会立即清理自己的分片缓存；所有任务成功完成后，下载目录中的内部 `.tasks` 缓存目录也会删除。暂停或失败任务会保留续传和诊断文件。
+默认每个任务使用 12 个分片并发，最高可配置为 256，最多同时下载 3 个任务。普通 HTTP 文件使用严格 Range 分段并发，源站不支持 Range 时自动退回单连接。设置中可单独指定“缓存与过程文件目录”，默认使用软件安装目录；分片、断点、BT 数据和日志保存在其中的 `.tasks` 子目录。成功任务会立即清理自己的过程文件；暂停或失败任务会保留续传和诊断文件。最终文件位于其他磁盘时会安全复制到目标盘后再原子完成，不会因 Windows 跨盘重命名失败。
 
 播放器使用已下载的连续分片生成临时本地 HLS 清单，默认至少积累 6 秒后开放播放；下载完成后使用带 `faststart` 的 MP4 和 HTTP Range，避免再次读取源站。关闭播放器会释放会话，空闲会话超时后自动清理临时文件。
 
@@ -151,7 +151,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.3.4
+.\scripts\build_installer.ps1 -Version 1.3.5
 ```
 
 输出位于忽略的 `release` 目录：
@@ -170,8 +170,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.3.4
-git push origin v1.3.4
+git tag v1.3.5
+git push origin v1.3.5
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。

@@ -18,7 +18,7 @@ from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
 from .merge import merge_segments
 from .errors import as_download_error, diagnose_download_error, format_download_error
-from .engine import task_output_dir
+from .engine import task_output_dir, task_work_dir
 from .parser import UnsupportedPlaylistError, parse_m3u8
 from .playback import playback_service, write_playback_plan
 from .progress import ProgressTracker
@@ -156,7 +156,7 @@ class HLSDownloader:
         return headers
 
     def _task_dir(self) -> Path:
-        return Path(settings.download_dir) / ".tasks" / self.task.id
+        return task_work_dir(self.task)
 
     def _seg_dir(self) -> Path:
         return self._task_dir() / "segments"

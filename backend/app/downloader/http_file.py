@@ -14,7 +14,7 @@ import httpx
 from ..config import settings
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
-from .engine import SeeklessEngine, task_output_dir
+from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
 from .errors import diagnose_download_error, format_download_error
 
 
@@ -141,7 +141,7 @@ class HTTPDownloader(SeeklessEngine):
 
     async def run(self) -> None:
         task = self.task
-        task_dir = Path(settings.download_dir) / ".tasks" / task.id
+        task_dir = task_work_dir(task)
         task_dir.mkdir(parents=True, exist_ok=True)
         part_path = task_dir / "payload.downloading"
         self._part_path = part_path
@@ -187,7 +187,7 @@ class HTTPDownloader(SeeklessEngine):
                 raise RuntimeError(
                     f"文件长度不匹配，期望 {task.progress.total_bytes}，实际 {part_path.stat().st_size}"
                 )
-            part_path.replace(output)
+            await asyncio.to_thread(publish_path, part_path, output)
             state_path.unlink(missing_ok=True)
             task.output_path = str(output)
             task.engine_state["output_is_file"] = True

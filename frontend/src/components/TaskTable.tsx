@@ -44,8 +44,8 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
   onPreviewImage: (task: Task) => void
 }) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
+  const [selectionBox, setSelectionBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const selectionAnchor = useRef<string | null>(null)
-  const dragStart = useRef<{ index: number; x: number; y: number; base: Set<string> } | null>(null)
   const suppressClick = useRef(false)
   const allSelected = tasks.length > 0 && tasks.every(task => selected.has(task.id))
   const toggleAll = () => {
@@ -127,39 +127,50 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
     onSelect(new Set([task.id]))
   }
 
-  const beginRangeSelection = (event: React.PointerEvent, index: number) => {
-    if (event.button !== 0 || (event.target as HTMLElement).closest('input,button,a')) return
-    const additive = event.ctrlKey || event.metaKey
-    let rangeStart = index
-    if (event.shiftKey && selectionAnchor.current) {
-      const anchorIndex = tasks.findIndex(value => value.id === selectionAnchor.current)
-      if (anchorIndex >= 0) rangeStart = anchorIndex
-    }
-    dragStart.current = { index: rangeStart, x: event.clientX, y: event.clientY, base: new Set(additive ? selected : []) }
-    let lastEnd = index
-    const applyRange = (end: number) => {
-      const start = dragStart.current
-      if (!start) return
-      lastEnd = end
-      const selection = new Set(start.base)
-      tasks.slice(Math.min(start.index, end), Math.max(start.index, end) + 1).forEach(task => selection.add(task.id))
-      onSelect(selection)
-    }
+  const beginMarqueeSelection = (event: React.PointerEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement
+    if (event.button !== 0 || target.closest('input,button,a,.draggable-file')) return
+    const container = event.currentTarget
+    const startX = event.clientX
+    const startY = event.clientY
+    const base = new Set(event.ctrlKey || event.metaKey ? selected : [])
+    let active = false
+    let lastSelectedId = ""
+
     const move = (next: PointerEvent) => {
-      const start = dragStart.current
-      if (!start || Math.abs(next.clientX - start.x) + Math.abs(next.clientY - start.y) < 6) return
-      suppressClick.current = true
-      document.body.classList.add('task-range-selecting')
-      const row = (document.elementFromPoint(next.clientX, next.clientY) as HTMLElement | null)?.closest<HTMLTableRowElement>('tr[data-task-index]')
-      const end = Number(row?.dataset.taskIndex ?? index)
-      applyRange(Number.isFinite(end) ? end : index)
+      if (!active && Math.abs(next.clientX - startX) + Math.abs(next.clientY - startY) < 6) return
+      if (!active) {
+        active = true
+        suppressClick.current = true
+        document.body.classList.add('task-range-selecting')
+      }
+      const bounds = container.getBoundingClientRect()
+      if (next.clientY < bounds.top + 24) container.scrollTop -= 12
+      else if (next.clientY > bounds.bottom - 24) container.scrollTop += 12
+      const box = {
+        left: Math.min(startX, next.clientX),
+        top: Math.min(startY, next.clientY),
+        width: Math.abs(next.clientX - startX),
+        height: Math.abs(next.clientY - startY),
+      }
+      setSelectionBox(box)
+      const nextSelection = new Set(base)
+      container.querySelectorAll<HTMLTableRowElement>('tr[data-task-id]').forEach(row => {
+        const rect = row.getBoundingClientRect()
+        const intersects = rect.right >= box.left && rect.left <= box.left + box.width && rect.bottom >= box.top && rect.top <= box.top + box.height
+        if (intersects && row.dataset.taskId) {
+          nextSelection.add(row.dataset.taskId)
+          lastSelectedId = row.dataset.taskId
+        }
+      })
+      onSelect(nextSelection)
     }
     const finish = () => {
-      if (suppressClick.current) {
-        const endTask = tasks[lastEnd]
-        if (endTask) selectionAnchor.current = endTask.id
+      if (active) {
+        if (lastSelectedId) selectionAnchor.current = lastSelectedId
+        window.setTimeout(() => { suppressClick.current = false }, 0)
       }
-      dragStart.current = null
+      setSelectionBox(null)
       document.body.classList.remove('task-range-selecting')
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', finish)
@@ -202,20 +213,19 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
 
   if (!tasks.length) return <div className="empty-state"><DownloadCloudIcon /><strong>暂无任务</strong><span>点击“新建”添加文件、HLS、DASH、magnet 或种子</span></div>
   return (
-    <div className="table-scroll">
+    <div className="table-scroll" onPointerDown={beginMarqueeSelection}>
       <table className="task-table">
         <thead><tr><th className="check-col"><input type="checkbox" checked={allSelected} ref={element => { if (element) element.indeterminate = selected.size > 0 && !allSelected }} onChange={toggleAll} aria-label="选择全部任务" /></th><th>文件名</th><th>状态</th><th>进度</th><th>速度 / 剩余</th><th className="segments-col">分片</th><th className="updated-col">更新时间</th><th className="menu-col" /></tr></thead>
-        <tbody>{tasks.map((task, taskIndex) => {
+        <tbody>{tasks.map(task => {
           const progress = getDisplayedProgress(task)
           const visual = filePresentation(task.output_path || task.filename || task.url, task.mime_type)
           const displayName = task.title || task.filename || task.id
           const postProcessing = task.status === 'merging' || task.status === 'remuxing'
-          return <tr key={task.id} data-task-index={taskIndex} className={`${selected.has(task.id) ? 'selected ' : ''}${pending.has(task.id) ? 'pending' : ''}`.trim()}
+          return <tr key={task.id} data-task-id={task.id} className={`${selected.has(task.id) ? 'selected ' : ''}${pending.has(task.id) ? 'pending' : ''}`.trim()}
             onClick={event => {
               if ((event.target as HTMLElement).closest('input')) return
               selectRow(event, task)
             }}
-            onPointerDown={event => beginRangeSelection(event, taskIndex)}
             onContextMenu={event => openMenu(event, task)}
             onDoubleClick={() => {
               if (task.status === 'done' && visual.kind === 'image' && task.output_is_file) onPreviewImage(task)
@@ -257,6 +267,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
         </div>,
         document.body,
       )}
+      {selectionBox && createPortal(<div className="task-selection-box" style={selectionBox} />, document.body)}
     </div>
   )
 }

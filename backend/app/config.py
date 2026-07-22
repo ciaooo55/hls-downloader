@@ -8,11 +8,12 @@ PROJECT_ROOT = RUNTIME_PATHS.project_root
 CONFIG_PATH = RUNTIME_PATHS.config_path
 
 class Settings(BaseSettings):
-    config_version: int = 6
+    config_version: int = 7
     host: str = "127.0.0.1"
     port: int = 8765
     token: str = "55555"
     download_dir: str = "downloads"
+    temp_dir: str = "."
     default_concurrency: int = 12
     default_user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
     default_referer: str = "https://missav.ai/"
@@ -87,15 +88,25 @@ def load_settings() -> Settings:
             if int(data.get("default_concurrency", 8) or 8) == 8:
                 data["default_concurrency"] = 12
             data["config_version"] = 6
+            version = 6
+            migrated = True
+        if version < 7:
+            data["temp_dir"] = str(RUNTIME_PATHS.default_temp_dir)
+            data["config_version"] = 7
             migrated = True
         s = Settings(**data)
         if migrated:
             save_settings(s)
     else:
-        s = Settings(download_dir=str(RUNTIME_PATHS.default_download_dir))
+        s = Settings(
+            download_dir=str(RUNTIME_PATHS.default_download_dir),
+            temp_dir=str(RUNTIME_PATHS.default_temp_dir),
+        )
         save_settings(s)
     s.download_dir = _resolve_path(s.download_dir, PROJECT_ROOT)
+    s.temp_dir = _resolve_path(s.temp_dir, PROJECT_ROOT)
     Path(s.download_dir).mkdir(parents=True, exist_ok=True)
+    Path(s.temp_dir).mkdir(parents=True, exist_ok=True)
     s.ffmpeg_path = _resolve_path(s.ffmpeg_path)
     return s
 
@@ -103,6 +114,7 @@ def save_settings(s: Settings) -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = s.model_dump()
     data["download_dir"] = _serialize_path(data["download_dir"])
+    data["temp_dir"] = _serialize_path(data["temp_dir"])
     data["ffmpeg_path"] = _serialize_path(data["ffmpeg_path"])
     CONFIG_PATH.write_text(
         json.dumps(data, indent=2, ensure_ascii=False),
@@ -115,7 +127,9 @@ def apply_settings_update(s: Settings, data: dict) -> None:
         if hasattr(s, key):
             setattr(s, key, value)
     s.download_dir = _resolve_path(s.download_dir)
+    s.temp_dir = _resolve_path(s.temp_dir)
     s.ffmpeg_path = _resolve_path(s.ffmpeg_path, PROJECT_ROOT)
     Path(s.download_dir).mkdir(parents=True, exist_ok=True)
+    Path(s.temp_dir).mkdir(parents=True, exist_ok=True)
 
 settings = load_settings()

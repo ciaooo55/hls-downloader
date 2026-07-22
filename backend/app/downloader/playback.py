@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from ..config import settings
+from .engine import task_work_dir
 
 
 PLAN_FILENAME = "playback-plan.json"
@@ -71,11 +72,10 @@ class _PlaybackSession:
 def _safe_task_dir(task_id: str) -> Path:
     if not _TASK_ID_RE.fullmatch(task_id):
         raise PlaybackError("无效的任务编号")
-    download_dir = Path(settings.download_dir).resolve()
-    task_dir = (download_dir / ".tasks" / task_id).resolve()
-    if task_dir.parent != (download_dir / ".tasks").resolve():
-        raise PlaybackError("无效的任务目录")
-    return task_dir
+    try:
+        return task_work_dir(task_id)
+    except ValueError as exc:
+        raise PlaybackError("无效的任务目录") from exc
 
 
 def write_playback_plan(

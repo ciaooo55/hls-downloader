@@ -17,6 +17,7 @@ from .http_file import HTTPDownloader
 from .dash import DashDownloader
 from .torrent import TorrentDownloader
 from .playback import MIN_START_DURATION, PlaybackError, playback_service
+from .engine import task_work_dir, temp_roots
 
 
 logger = logging.getLogger(__name__)
@@ -299,7 +300,10 @@ class TaskManager:
             last_log="等待开始",
             created_at=now,
             updated_at=now,
-            engine_state={"output_dir": str(Path(output_dir).expanduser().resolve())} if output_dir else {},
+            engine_state={
+                **({"output_dir": str(Path(output_dir).expanduser().resolve())} if output_dir else {}),
+                "temp_dir": str(Path(settings.temp_dir).expanduser().resolve()),
+            },
         )
         async with self._temp_cleanup_lock:
             self.tasks[task_id] = task
@@ -547,7 +551,7 @@ class TaskManager:
         if pending and not pending.done():
             pending.cancel()
         await run_db("DELETE FROM tasks WHERE id=?", (task_id,))
-        task_dir = Path(settings.download_dir) / ".tasks" / task_id
+        task_dir = task_work_dir(task)
         if task_dir.exists():
             await asyncio.to_thread(shutil.rmtree, task_dir, True)
         self._broadcast_nowait({"type": "task_deleted", "task_id": task_id})
@@ -586,7 +590,7 @@ class TaskManager:
     async def _cleanup_task_temp(self, task: Task) -> None:
         if settings.keep_temp_files:
             return
-        task_dir = Path(settings.download_dir) / ".tasks" / task.id
+        task_dir = task_work_dir(task)
         if not task_dir.exists():
             return
         cleanup = None
@@ -623,30 +627,31 @@ class TaskManager:
             if self.tasks and any(task.status is not TaskStatus.DONE for task in self.tasks.values()):
                 return
 
-            download_dir = Path(settings.download_dir).resolve()
-            temp_root = (download_dir / ".tasks").resolve()
-            if temp_root.name != ".tasks" or temp_root.parent != download_dir:
-                logger.error("refusing to clean unexpected temp path: %s", temp_root)
-                return
-            if temp_root.exists():
-                await asyncio.to_thread(
-                    playback_service.cleanup_if_no_active,
-                    set(self.tasks),
-                    lambda: shutil.rmtree(temp_root, ignore_errors=True),
-                )
+            for temp_root in temp_roots():
+                if temp_root.name != ".tasks":
+                    logger.error("refusing to clean unexpected temp path: %s", temp_root)
+                    continue
+                if temp_root.exists():
+                    await asyncio.to_thread(
+                        playback_service.cleanup_if_no_active,
+                        set(self.tasks),
+                        lambda root=temp_root: shutil.rmtree(root, ignore_errors=True),
+                    )
 
     async def cleanup_orphan_temp_dirs(self) -> None:
-        base = Path(settings.download_dir) / ".tasks"
-        if not base.exists() or settings.keep_temp_files:
+        if settings.keep_temp_files:
             return
-        for child in base.iterdir():
-            if not child.is_dir():
+        for base in temp_roots():
+            if not base.exists():
                 continue
-            task = self.tasks.get(child.name)
-            if task is None:
-                shutil.rmtree(child, ignore_errors=True)
-            elif task.status in {TaskStatus.DONE, TaskStatus.CANCELED}:
-                await self._cleanup_task_temp(task)
+            for child in base.iterdir():
+                if not child.is_dir():
+                    continue
+                task = self.tasks.get(child.name)
+                if task is None:
+                    shutil.rmtree(child, ignore_errors=True)
+                elif task.status in {TaskStatus.DONE, TaskStatus.CANCELED}:
+                    await self._cleanup_task_temp(task)
         await self._cleanup_temp_root_if_all_done()
 
     async def load_from_db(self) -> None:
@@ -906,7 +911,8 @@ class TaskManager:
             {"type": "task_log", "task_id": task_id, "message": message}
         )
         try:
-            log_dir = Path(settings.download_dir) / ".tasks" / task_id
+            task = self.tasks.get(task_id)
+            log_dir = task_work_dir(task or task_id)
             log_dir.mkdir(parents=True, exist_ok=True)
             with (log_dir / "download.log").open("a", encoding="utf-8") as log_file:
                 log_file.write(message + "\n")

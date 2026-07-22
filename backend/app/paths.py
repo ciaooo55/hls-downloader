@@ -15,6 +15,7 @@ class RuntimePaths:
     database_path: Path
     webview_path: Path
     default_download_dir: Path
+    default_temp_dir: Path
 
 
 def resolve_runtime_paths(
@@ -42,6 +43,7 @@ def resolve_runtime_paths(
             database_path=source_root / "backend" / "data.db",
             webview_path=source_root / ".webview",
             default_download_dir=source_root / "downloads",
+            default_temp_dir=source_root,
         )
 
     app_root = executable_path.parent
@@ -54,6 +56,7 @@ def resolve_runtime_paths(
             database_path=app_root / "data.db",
             webview_path=app_root / ".webview",
             default_download_dir=app_root / "downloads",
+            default_temp_dir=app_root,
         )
 
     local_app_data = environment.get("LOCALAPPDATA")
@@ -72,6 +75,7 @@ def resolve_runtime_paths(
         database_path=data_root / "data.db",
         webview_path=data_root / "WebView",
         default_download_dir=downloads,
+        default_temp_dir=app_root,
     )
 
 

@@ -17,6 +17,7 @@ def test_source_runtime_keeps_project_relative_state(tmp_path):
     assert paths.config_path == tmp_path / "source" / "config.json"
     assert paths.database_path == tmp_path / "source" / "backend" / "data.db"
     assert paths.default_download_dir == tmp_path / "source" / "downloads"
+    assert paths.default_temp_dir == tmp_path / "source"
 
 
 def test_portable_runtime_uses_executable_directory(tmp_path):
@@ -36,6 +37,7 @@ def test_portable_runtime_uses_executable_directory(tmp_path):
     assert paths.data_root == app_dir
     assert paths.database_path == app_dir / "data.db"
     assert paths.webview_path == app_dir / ".webview"
+    assert paths.default_temp_dir == app_dir
 
 
 def test_installed_runtime_separates_program_data_and_downloads(tmp_path):
@@ -57,6 +59,7 @@ def test_installed_runtime_separates_program_data_and_downloads(tmp_path):
     assert paths.database_path == local / "HLS Downloader" / "data.db"
     assert paths.webview_path == local / "HLS Downloader" / "WebView"
     assert paths.default_download_dir == profile / "Downloads" / "HLS Downloader"
+    assert paths.default_temp_dir == app_dir
 
 
 def test_installed_runtime_falls_back_when_windows_environment_is_missing(tmp_path):
@@ -71,6 +74,7 @@ def test_installed_runtime_falls_back_when_windows_environment_is_missing(tmp_pa
 
     assert paths.data_root == app_dir / ".data"
     assert paths.default_download_dir == app_dir / "downloads"
+    assert paths.default_temp_dir == app_dir
 
 
 def test_legacy_state_is_copied_once_without_overwriting_new_state(tmp_path):

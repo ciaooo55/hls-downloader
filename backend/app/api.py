@@ -24,6 +24,7 @@ from .downloader.task_manager import (
     manager,
     task_output_is_file,
 )
+from .downloader.engine import task_work_dir
 from .downloader.playback import (
     PlaybackError,
     PlaybackNotReadyError,
@@ -368,6 +369,7 @@ async def test_connection(x_token: str = Header(default="")):
     results["ffmpeg"] = ffmpeg_found
     results["ffmpeg_path"] = settings.ffmpeg_path
     results["download_dir"] = settings.download_dir
+    results["temp_dir"] = settings.temp_dir
     results["concurrency"] = settings.default_concurrency
     results["max_tasks"] = settings.max_concurrent_tasks
     return results
@@ -442,7 +444,7 @@ async def create_torrent_file_task(
         filename=Path(name).stem,
         auto_start=False,
     )
-    task_dir = Path(settings.download_dir) / ".tasks" / task.id
+    task_dir = task_work_dir(task)
     task_dir.mkdir(parents=True, exist_ok=True)
     source = task_dir / "uploaded.torrent"
     source.write_bytes(content)
@@ -557,7 +559,7 @@ async def get_task_log(task_id: str, x_token: str = Header(default="")):
     task = manager.tasks.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    log_file = Path(settings.download_dir) / ".tasks" / task_id / "download.log"
+    log_file = task_work_dir(task) / "download.log"
     if log_file.exists():
         return {"log": log_file.read_text(encoding="utf-8", errors="replace")}
     return {

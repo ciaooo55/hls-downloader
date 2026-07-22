@@ -6,13 +6,9 @@ import { LEGACY_REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 import type { UpdateInfo } from '../types'
 import { pickFolder } from '../desktop'
 import FolderPicker from './FolderPicker'
+import ConfirmDialog from './ConfirmDialog'
 
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
   const [settings, setSettings] = useState<any>({})
   const [original, setOriginal] = useState<any>({})
   const [saved, setSaved] = useState(false)
@@ -21,6 +17,8 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
+  const [showTempPicker, setShowTempPicker] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<'close' | 'update' | null>(null)
   const [uninstallAvailable, setUninstallAvailable] = useState(false)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
@@ -36,24 +34,27 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   }, [])
 
   const requestClose = () => {
-    if (dirty && !window.confirm('设置尚未保存，确定关闭吗？')) return
+    if (dirty) { setConfirmAction('close'); return }
     onClose()
   }
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
-      if (showPicker) setShowPicker(false)
+      if (confirmAction) setConfirmAction(null)
+      else if (showTempPicker) setShowTempPicker(false)
+      else if (showPicker) setShowPicker(false)
       else requestClose()
     }
     window.addEventListener('keydown', close)
     return () => window.removeEventListener('keydown', close)
-  }, [dirty, showPicker])
+  }, [dirty, showPicker, showTempPicker, confirmAction])
 
   const update = (key: string, value: unknown) => setSettings((current: any) => ({ ...current, [key]: value }))
   const doSave = async () => {
     setError('')
     if (!String(settings.download_dir || '').trim()) { setError('下载保存目录不能为空'); return }
+    if (!String(settings.temp_dir || '').trim()) { setError('缓存与过程文件目录不能为空'); return }
     if (settings.default_concurrency < 1 || settings.default_concurrency > 256) { setError('默认并发数必须在 1 到 256 之间'); return }
     if (settings.max_concurrent_tasks < 1 || settings.max_concurrent_tasks > 16) { setError('最大同时任务数必须在 1 到 16 之间'); return }
     if (settings.http_chunk_size_mb < 1 || settings.http_chunk_size_mb > 64) { setError('HTTP 分段大小必须在 1 到 64 MiB 之间'); return }
@@ -101,9 +102,9 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
       setCheckingUpdate(false)
     }
   }
-  const updateApp = async () => {
+  const updateApp = async (confirmed = false) => {
     if (!updateInfo?.available) return
-    if (!window.confirm(`下载安装 v${updateInfo.latest_version}？下载器将在安装前自动关闭。`)) return
+    if (!confirmed) { setConfirmAction('update'); return }
     setInstallingUpdate(true)
     setError('')
     try {
@@ -129,7 +130,16 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
           if (native.canceled) return
           setShowPicker(true)
         })()}>选择目录</button><button className="icon-button bordered" title="打开目录" onClick={() => openExplorer(settings.download_dir || '')}><FolderOpen size={17} /></button></div>
-      <p className="field-note">临时分片保存在下载目录的 .tasks 子目录，完成后按设置清理。</p>
+      <p className="field-note">最终文件保存到这里；浏览器接管时也可以为单个任务另选目录。</p>
+
+      <label>缓存与过程文件目录</label>
+      <div className="input-action"><input value={settings.temp_dir || ''} onChange={event => update('temp_dir', event.target.value)} /><button className="secondary-button" onClick={() => void (async () => {
+          const native = await pickFolder(settings.temp_dir || '')
+          if (native.ok && native.path) { update('temp_dir', native.path); return }
+          if (native.canceled) return
+          setShowTempPicker(true)
+        })()}>选择目录</button><button className="icon-button bordered" title="打开目录" onClick={() => openExplorer(settings.temp_dir || '')}><FolderOpen size={17} /></button></div>
+      <p className="field-note">分片、断点、BT 数据和任务日志保存在该目录的 .tasks 中；默认使用软件安装目录。</p>
 
       <div className="form-row settings-number-row">
         <div><label>默认并发数</label><input type="number" min={1} max={256} value={settings.default_concurrency ?? 12} onChange={event => update('default_concurrency', Number(event.target.value))} /><p className="field-note">{REQUEST_FIELD_HELP.concurrency}</p></div>
@@ -172,7 +182,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
       <div className="app-management">
         <div><strong>软件更新</strong><span>{updateInfo ? `当前 v${updateInfo.current_version} · ${updateInfo.available ? `可更新到 v${updateInfo.latest_version}` : '已是最新版本'}` : '尚未检查'}</span></div>
         {updateInfo?.available && updateInfo.can_auto_install
-          ? <button className="primary-button" disabled={installingUpdate} onClick={updateApp}><Download size={15} />{installingUpdate ? '正在下载…' : '下载安装'}</button>
+          ? <button className="primary-button" disabled={installingUpdate} onClick={() => void updateApp()}><Download size={15} />{installingUpdate ? '正在下载…' : '下载安装'}</button>
           : <button className="secondary-button" disabled={checkingUpdate} onClick={checkUpdate}><RefreshCw size={15} />{checkingUpdate ? '检查中…' : '检查更新'}</button>}
       </div>
       {uninstallAvailable && <div className="app-management">
@@ -183,5 +193,8 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
       <footer><button className="secondary-button" onClick={requestClose}>关闭</button><button className="primary-button" disabled={!dirty || saving} onClick={doSave}>{saving ? '保存中…' : saved ? '已保存' : '保存设置'}</button></footer>
     </section>
     {showPicker && <FolderPicker initialPath={settings.download_dir || ''} onSelect={path => { update('download_dir', path); setShowPicker(false) }} onClose={() => setShowPicker(false)} />}
+    {showTempPicker && <FolderPicker initialPath={settings.temp_dir || ''} onSelect={path => { update('temp_dir', path); setShowTempPicker(false) }} onClose={() => setShowTempPicker(false)} />}
+    {confirmAction === 'close' && <ConfirmDialog title="放弃未保存的设置？" message="关闭后，本次修改不会生效。" confirmLabel="放弃修改" danger onCancel={() => setConfirmAction(null)} onConfirm={onClose} />}
+    {confirmAction === 'update' && updateInfo && <ConfirmDialog title={`安装 v${updateInfo.latest_version}？`} message="安装包下载完成后，下载器会自动关闭并启动安装程序。" confirmLabel="下载安装" onCancel={() => setConfirmAction(null)} onConfirm={() => { setConfirmAction(null); void updateApp(true) }} />}
   </div>
 }

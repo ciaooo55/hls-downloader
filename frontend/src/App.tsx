@@ -19,6 +19,7 @@ import LogModal from './components/LogModal'
 import UpdateNotice from './components/UpdateNotice'
 import UpdateDialog from './components/UpdateDialog'
 import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
+import ConfirmDialog from './components/ConfirmDialog'
 
 const VideoPlayerModal = lazy(() => import('./components/VideoPlayerModal'))
 
@@ -46,6 +47,7 @@ export default function App() {
   const [handoffs, setHandoffs] = useState<BrowserHandoff[]>([])
   const [handoffBusy, setHandoffBusy] = useState(false)
   const [error, setError] = useState('')
+  const [confirmation, setConfirmation] = useState<{ title: string; message: string; confirmLabel: string; danger: boolean; run: () => void } | null>(null)
   const [theme, setTheme] = useState<Theme>(() => resolveTheme(localStorage.getItem('hls_theme'), matchMedia('(prefers-color-scheme: dark)').matches))
   const lastStatuses = useRef<Record<string, string>>({})
   const feedbackTimer = useRef<number | null>(null)
@@ -153,10 +155,19 @@ export default function App() {
     feedbackTimer.current = window.setTimeout(() => setFeedback(''), 3500)
   }
 
-  const perform = async (action: string, targets: Task[] = selectedTasks) => {
+  const perform = async (action: string, targets: Task[] = selectedTasks, confirmed = false) => {
     if (!targets.length) return
-    if (action === 'delete' && !confirm(`确定删除 ${targets.length} 条任务记录？未完成任务会停止并清理临时文件，已完成文件会保留。`)) return
-    if (action === 'deleteFiles' && !confirm(`确定删除 ${targets.length} 个任务及其下载文件？此操作无法撤销。`)) return
+    if (!confirmed && (action === 'delete' || action === 'deleteFiles')) {
+      const deletesFiles = action === 'deleteFiles'
+      setConfirmation({
+        title: deletesFiles ? '删除任务和文件？' : '删除任务记录？',
+        message: deletesFiles ? `将删除 ${targets.length} 个任务及其下载文件，此操作无法撤销。` : `将删除 ${targets.length} 条任务记录；未完成任务会停止并清理过程文件，已完成文件会保留。`,
+        confirmLabel: deletesFiles ? '删除文件' : '删除记录',
+        danger: true,
+        run: () => { setConfirmation(null); void perform(action, targets, true) },
+      })
+      return
+    }
     const fresh = targets.filter(task => !pending.has(task.id))
     if (!fresh.length) return
     setError('')
@@ -190,8 +201,18 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [selected, selectedTasks, pending])
 
-  const clearCompleted = async () => {
-    if (!completed.length || !confirm(`清除 ${completed.length} 条已完成记录？不会删除视频文件。`)) return
+  const clearCompleted = async (confirmed = false) => {
+    if (!completed.length) return
+    if (!confirmed) {
+      setConfirmation({
+        title: '清理已完成记录？',
+        message: `将从列表移除 ${completed.length} 条已完成记录，已下载文件不会被删除。`,
+        confirmLabel: '清理记录',
+        danger: false,
+        run: () => { setConfirmation(null); void clearCompleted(true) },
+      })
+      return
+    }
     try {
       const result = await clearCompletedTasks()
       showFeedback(`已清除 ${result.count} 条完成记录`)
@@ -236,7 +257,7 @@ export default function App() {
       <Sidebar tasks={tasks} active={filter} onChange={setFilter} userscript={userscript} browserStatus={browserStatus} />
       <main className="content">
         <UpdateNotice />
-        <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} ({filtered.length}){selected.size > 0 ? <span> · 已选 {selected.size}</span> : null}</strong><div className="list-tools"><label className="task-search"><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务、链接或错误码" aria-label="搜索任务" />{query ? <button type="button" className="task-search-clear" title="清除搜索" aria-label="清除搜索" onClick={() => setQuery('')}><X size={13} /></button> : null}</label><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={clearCompleted}><Trash2 size={14} />清理已完成</button></div></div>
+        <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} ({filtered.length}){selected.size > 0 ? <span> · 已选 {selected.size}</span> : null}</strong><div className="list-tools"><label className="task-search"><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务、链接或错误码" aria-label="搜索任务" />{query ? <button type="button" className="task-search-clear" title="清除搜索" aria-label="清除搜索" onClick={() => setQuery('')}><X size={13} /></button> : null}</label><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={() => void clearCompleted()}><Trash2 size={14} />清理已完成</button></div></div>
         {error && <div className="action-error" role="alert"><span>{error}</span><div className="action-error-actions"><button type="button" className="secondary-button" onClick={() => void load()}>重试</button><button type="button" className="icon-button action-error-dismiss" title="关闭提示" onClick={() => setError('')}><X size={15} /></button></div></div>}
         <TaskTable tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openExplorer(task.output_path)} onLaunchFile={launchOutput} onPreview={setPlaying} onPreviewImage={setPreviewImage} />
       </main>
@@ -253,5 +274,6 @@ export default function App() {
     {logTaskId && <LogModal taskId={logTaskId} onClose={() => setLogTaskId(null)} />}
     {feedback && <div className="toast" role="status">{feedback}</div>}
     {handoffs[0] && <BrowserHandoffDialog key={handoffs[0].id} item={handoffs[0]} busy={handoffBusy} settings={settings} onResolve={resolveHandoff} queueRemaining={Math.max(0, handoffs.length - 1)} />}
+    {confirmation && <ConfirmDialog title={confirmation.title} message={confirmation.message} confirmLabel={confirmation.confirmLabel} danger={confirmation.danger} onCancel={() => setConfirmation(null)} onConfirm={confirmation.run} />}
   </div>
 }

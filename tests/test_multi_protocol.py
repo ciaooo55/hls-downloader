@@ -1,10 +1,13 @@
 import asyncio
+import errno
+import os
 from pathlib import Path
 
 import httpx
 
 from backend.app.config import settings
 from backend.app.downloader.http_file import HTTPDownloader
+from backend.app.downloader.engine import publish_path, task_work_dir
 from backend.app.downloader.torrent import TorrentDownloader
 from backend.app.downloader.task_manager import resolve_task_type
 from backend.app.models import Task, TaskType
@@ -16,6 +19,45 @@ def test_auto_task_type_recognizes_supported_sources():
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/archive.zip") is TaskType.HTTP
     assert resolve_task_type(TaskType.AUTO, "magnet:?xt=urn:btih:abc") is TaskType.TORRENT
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/file.torrent") is TaskType.TORRENT
+
+
+def test_task_process_files_use_configured_temp_directory(tmp_path):
+    task = Task(
+        id="temp-location",
+        url="https://files.test/archive.zip",
+        task_type=TaskType.HTTP,
+        engine_state={"temp_dir": str(tmp_path / "process")},
+    )
+
+    assert task_work_dir(task) == tmp_path / "process" / ".tasks" / task.id
+
+
+def test_publish_path_falls_back_to_copy_for_cross_drive_errors(tmp_path, monkeypatch):
+    source = tmp_path / "cache" / "payload.downloading"
+    destination = tmp_path / "output" / "archive.zip"
+    source.parent.mkdir()
+    destination.parent.mkdir()
+    source.write_bytes(b"downloaded payload")
+    destination.write_bytes(b"")
+    real_replace = os.replace
+    attempts = 0
+
+    def cross_drive_once(src, dst):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            error = OSError(errno.EACCES, "different drive")
+            error.winerror = 17
+            raise error
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", cross_drive_once)
+
+    publish_path(source, destination)
+
+    assert destination.read_bytes() == b"downloaded payload"
+    assert not source.exists()
+    assert attempts == 2
 
 
 def test_http_range_downloader_writes_one_sparse_file_and_validates_ranges(tmp_path, monkeypatch):

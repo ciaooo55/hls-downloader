@@ -174,6 +174,7 @@ def test_save_settings_serializes_project_paths_as_relative(tmp_path, monkeypatc
     monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
     settings = config_module.Settings(
         download_dir=str(config_module.PROJECT_ROOT / "downloads"),
+        temp_dir=str(config_module.PROJECT_ROOT),
         ffmpeg_path=str(config_module.PROJECT_ROOT / "bin" / "ffmpeg.exe"),
     )
 
@@ -181,6 +182,7 @@ def test_save_settings_serializes_project_paths_as_relative(tmp_path, monkeypatc
 
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["download_dir"] == "downloads"
+    assert saved["temp_dir"] == "."
     assert saved["ffmpeg_path"] == "bin\\ffmpeg.exe"
 
 
@@ -188,7 +190,8 @@ def test_repository_default_config_uses_missav_request_headers():
     config_path = config_module.PROJECT_ROOT / "config.json"
     data = json.loads(config_path.read_text(encoding="utf-8"))
 
-    assert data["config_version"] == 6
+    assert data["config_version"] == 7
+    assert data["temp_dir"] == "."
     assert data["default_referer"] == "https://missav.ai/"
     assert data["default_origin"] == "https://missav.ai"
     assert data["default_cookie"] == ""
@@ -224,11 +227,12 @@ def test_old_blank_request_defaults_migrate_to_missav(tmp_path, monkeypatch):
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 6
+    assert loaded.config_version == 7
     assert loaded.default_referer == "https://missav.ai/"
     assert loaded.default_origin == "https://missav.ai"
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["config_version"] == 6
+    assert saved["config_version"] == 7
+    assert saved["temp_dir"] == "."
     assert saved["default_concurrency"] == 12
     assert saved["max_concurrent_tasks"] == 3
 
@@ -251,7 +255,7 @@ def test_v2_legacy_concurrency_defaults_migrate_to_new_defaults(tmp_path, monkey
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 6
+    assert loaded.config_version == 7
     assert loaded.default_concurrency == 12
     assert loaded.max_concurrent_tasks == 3
 
@@ -274,7 +278,7 @@ def test_v2_custom_concurrency_values_are_preserved_during_migration(tmp_path, m
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 6
+    assert loaded.config_version == 7
     assert loaded.default_concurrency == 6
     assert loaded.max_concurrent_tasks == 5
 

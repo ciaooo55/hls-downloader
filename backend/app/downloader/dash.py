@@ -8,7 +8,7 @@ from pathlib import Path
 from ..config import settings
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
-from .engine import SeeklessEngine, task_output_dir
+from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
 from .errors import diagnose_download_error, format_download_error
 
 
@@ -39,7 +39,7 @@ class DashDownloader(SeeklessEngine):
 
     async def run(self) -> None:
         task = self.task
-        task_dir = Path(settings.download_dir) / ".tasks" / task.id
+        task_dir = task_work_dir(task)
         task_dir.mkdir(parents=True, exist_ok=True)
         try:
             task.status = TaskStatus.DOWNLOADING
@@ -65,7 +65,7 @@ class DashDownloader(SeeklessEngine):
             if not Path(final_name).suffix:
                 final_name += output.suffix or ".mp4"
             destination = self._unique_path(task_output_dir(task) / final_name)
-            output.replace(destination)
+            await asyncio.to_thread(publish_path, output, destination)
             task.filename = destination.name
             task.output_path = str(destination)
             task.engine_state["output_is_file"] = True

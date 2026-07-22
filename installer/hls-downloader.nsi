@@ -7,7 +7,7 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.3.4"
+  !define APP_VERSION "1.3.5"
 !endif
 !define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
@@ -180,6 +180,8 @@ Section "Uninstall"
   RMDir /r "$INSTDIR\downloads"
 
 RemoveApplicationData:
+  ; Process files live here by default and must never keep the install directory behind.
+  RMDir /r "$INSTDIR\.tasks"
   Delete "$DESKTOP\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk"

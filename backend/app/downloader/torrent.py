@@ -13,7 +13,7 @@ from ..config import settings
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
 from .errors import diagnose_download_error, format_download_error
-from .engine import task_output_dir
+from .engine import publish_path, task_output_dir, task_work_dir
 
 
 _SESSION_LOCK = threading.Lock()
@@ -135,7 +135,7 @@ class TorrentDownloader:
 
     async def run(self) -> None:
         task = self.task
-        task_dir = Path(settings.download_dir) / ".tasks" / task.id
+        task_dir = task_work_dir(task)
         payload_dir = task_dir / "payload"
         resume_path = task_dir / "torrent.fastresume"
         torrent_path = task_dir / "source.torrent"
@@ -419,16 +419,16 @@ class TorrentDownloader:
                 destination = candidate
                 break
         if root.exists():
-            root.replace(destination)
+            publish_path(root, destination)
             return destination
         files = [path for path in payload_dir.rglob("*") if path.is_file()]
         if len(files) == 1:
-            files[0].replace(destination)
+            publish_path(files[0], destination)
             return destination
         destination.mkdir(parents=True, exist_ok=False)
         for path in files:
             relative = path.relative_to(payload_dir)
             target = destination / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            path.replace(target)
+            publish_path(path, target)
         return destination
