@@ -8,6 +8,7 @@ import type { UpdateInfo } from '../types'
 import { pickFolder } from '../desktop'
 import FolderPicker from './FolderPicker'
 import ConfirmDialog from './ConfirmDialog'
+import { Button } from './ui'
 
 type SettingsSection = 'general' | 'network' | 'maintenance'
 
@@ -134,7 +135,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
           <button type="button" className={activeSection === 'network' ? 'active' : ''} onClick={() => setActiveSection('network')}>网络与下载</button>
           <button type="button" className={activeSection === 'maintenance' ? 'active' : ''} onClick={() => setActiveSection('maintenance')}>维护</button>
         </nav>
-        <button className="icon-button settings-close" title="关闭" onClick={requestClose}><X size={18} /></button>
+        <Button variant="ghost" size="icon" className="icon-button settings-close" title="关闭" aria-label="关闭" onClick={requestClose}><X size={18} /></Button>
       </header>
       <div className="settings-body">
         {activeSection === 'general' && <div className="settings-page">
@@ -182,7 +183,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
           <h3 className="settings-group-label">定时队列</h3>
           <section className="settings-group settings-grid-group">
             <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={settings.queue_auto_start_enabled ?? false} onChange={event => update('queue_auto_start_enabled', event.target.checked)} />在指定时间自动开始新队列</label>
-            <div className="settings-field"><label htmlFor="setting-queue-auto-start">自动开始时间</label><input id="setting-queue-auto-start" type="time" disabled={!settings.queue_auto_start_enabled} value={settings.queue_auto_start_time ?? '00:00'} onChange={event => update('queue_auto_start_time', event.target.value)} /><p>开启后，之前添加的新任务会保持排队，直到当天该时间开始。</p></div>
+            <div className="settings-field"><label htmlFor="setting-queue-auto-start">自动开始时间</label><input id="setting-queue-auto-start" type="time" disabled={!settings.queue_auto_start_enabled} value={settings.queue_auto_start_time ?? '00:00'} onChange={event => update('queue_auto_start_time', event.target.value)} /><p>开启后，新任务保持排队，直到当天该时间开始。排队中可右键调整优先级（上移/下移/队首/队尾）。</p></div>
           </section>
         </div>}
 
@@ -219,7 +220,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
         </div>}
         {error && <div className="inline-error settings-error" role="alert">{error}</div>}
       </div>
-      <footer><span className="settings-save-note">{dirty ? '有未保存的下载设置' : saved ? '设置已保存' : '更改主题会立即生效'}</span><button className="secondary-button" onClick={requestClose}>关闭</button><button className="primary-button" disabled={!dirty || saving} onClick={doSave}>{saving ? '保存中…' : saved ? '已保存' : '保存设置'}</button></footer>
+      <footer><span className="settings-save-note">{dirty ? '有未保存的下载设置' : saved ? '设置已保存' : '更改主题会立即生效'}</span><Button variant="secondary" className="secondary-button" onClick={requestClose}>关闭</Button><Button className="primary-button" disabled={!dirty || saving} onClick={doSave}>{saving ? '保存中…' : saved ? '已保存' : '保存设置'}</Button></footer>
     </section>
     {showPicker && <FolderPicker initialPath={settings.download_dir || ''} onSelect={path => { update('download_dir', path); setShowPicker(false) }} onClose={() => setShowPicker(false)} />}
     {showTempPicker && <FolderPicker initialPath={settings.temp_dir || ''} onSelect={path => { update('temp_dir', path); setShowTempPicker(false) }} onClose={() => setShowTempPicker(false)} />}

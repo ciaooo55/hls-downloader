@@ -248,7 +248,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
               event.dataTransfer.setData('DownloadURL', `${task.mime_type || 'application/octet-stream'}:${filename}:${url}`)
               event.dataTransfer.setData('text/uri-list', url)
             }}><span title={displayName}><TaskFileIcon kind={visual.kind} extension={visual.extension} /><b>{displayName}</b><i className={`task-type type-${task.task_type}`} title={typeLabels[task.task_type]}>{typeIcons[task.task_type]}</i></span><small title={task.url}>{task.url}</small></td>
-            <td><span className={`status status-${task.status}`}>{pending.has(task.id) && <LoaderCircle className="spin" size={12} />}{task.status === 'queued' && task.queue_position ? `排队中 · 第 ${task.queue_position} 位` : statusLabel(task.status)}</span>{task.error_code && <small className="failure-code" title={task.error_message}>{task.error_code}</small>}</td>
+            <td><span className={`status status-${task.status}`}>{pending.has(task.id) && <LoaderCircle className="spin" size={12} />}<Badge tone={statusTone(task.status)}>{task.status === 'queued' && task.queue_position ? `排队中 · 第 ${task.queue_position} 位` : statusLabel(task.status)}</Badge></span>{task.error_code && <small className="failure-code" title={task.error_message}>{task.error_code}</small>}</td>
             <td>{task.status === 'done'
               ? <span className="completed-progress"><CheckCircle2 size={15} />已完成</span>
               : postProcessing

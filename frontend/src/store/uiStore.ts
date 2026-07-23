@@ -11,13 +11,32 @@ interface UiState {
   setQuery: (query: string) => void
   setThemePreference: (preference: ThemePreference) => void
   setSystemDark: (value: boolean) => void
-  theme: () => Theme
   toggleTheme: () => void
 }
 
-const initialPreference = resolveThemePreference(
-  typeof localStorage !== 'undefined' ? localStorage.getItem('hls_theme') : null,
-)
+function readStoredTheme(): string | null {
+  try {
+    if (typeof globalThis.localStorage === 'undefined') return null
+    const storage = globalThis.localStorage as Storage | undefined
+    if (!storage || typeof storage.getItem !== 'function') return null
+    return storage.getItem('hls_theme')
+  } catch {
+    return null
+  }
+}
+
+function writeStoredTheme(preference: string) {
+  try {
+    if (typeof globalThis.localStorage === 'undefined') return
+    const storage = globalThis.localStorage as Storage | undefined
+    if (!storage || typeof storage.setItem !== 'function') return
+    storage.setItem('hls_theme', preference)
+  } catch {
+    // ignore storage failures in restricted environments
+  }
+}
+
+const initialPreference = resolveThemePreference(readStoredTheme())
 
 export const useUiStore = create<UiState>((set, get) => ({
   filter: 'all',
@@ -27,13 +46,16 @@ export const useUiStore = create<UiState>((set, get) => ({
   setFilter: filter => set({ filter }),
   setQuery: query => set({ query }),
   setThemePreference: preference => {
-    localStorage.setItem('hls_theme', preference)
+    writeStoredTheme(preference)
     set({ themePreference: preference })
   },
   setSystemDark: value => set({ systemDark: value }),
-  theme: () => resolveTheme(get().themePreference, get().systemDark),
   toggleTheme: () => {
-    const next = get().theme() === 'dark' ? 'light' : 'dark'
-    get().setThemePreference(next)
+    const current = resolveTheme(get().themePreference, get().systemDark)
+    get().setThemePreference(current === 'dark' ? 'light' : 'dark')
   },
 }))
+
+export function selectTheme(state: Pick<UiState, 'themePreference' | 'systemDark'>): Theme {
+  return resolveTheme(state.themePreference, state.systemDark)
+}

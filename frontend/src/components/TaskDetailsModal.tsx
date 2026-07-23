@@ -6,6 +6,7 @@ import { getDisplayedProgress } from '../taskState'
 import { stageLabel, statusLabel } from '../taskPresentation'
 import type { Task } from '../types'
 import { fetchTorrentFiles, selectTorrentFiles } from '../api'
+import { Button, Dialog, DialogOverlay } from './ui'
 
 export default function TaskDetailsModal({ task, pending, onClose, onLog, onAction, onOpenFile, onLaunchFile, onPreview }: {
   task: Task
@@ -34,7 +35,7 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
       setSelectedFiles(result.selected || [])
     }).catch(() => {})
   }, [task.id, task.task_type, task.status])
-  return <div className="modal-overlay" onMouseDown={onClose}><section className="modal task-details" role="dialog" aria-modal="true" aria-label="任务详情" onMouseDown={event => event.stopPropagation()}>
+  return <DialogOverlay onClose={onClose}><Dialog className="task-details" label="任务详情">
     <header><div><h2>{task.title || task.filename || task.id}</h2><p title={task.url}>{task.url}</p></div><button className="modal-close-button" title="关闭" onClick={onClose}><X size={18} /></button></header>
     <div className="task-details-body">
       <div className="detail-grid"><Detail label="类型" value={task.task_type.toUpperCase()} /><Detail label="状态" value={statusLabel(task.status)} /><Detail label="阶段" value={stageLabel(task.stage)} /><Detail label="进度" value={`${getDisplayedProgress(task).toFixed(1)}%`} /><Detail label="总大小" value={fmtBytes(task.total_bytes)} /><Detail label="已下载" value={fmtBytes(task.downloaded_bytes)} /><Detail label="下载速度" value={fmtSpeed(task.speed_bytes_per_sec)} /><Detail label="剩余时间" value={fmtEta(task.eta_seconds)} /><Detail label={task.task_type === 'torrent' ? 'Piece' : '分片'} value={`${task.completed_segments}/${task.total_segments}`} /><Detail label={task.task_type === 'torrent' ? 'Peer / Seed' : '活动线程'} value={task.task_type === 'torrent' ? `${task.peer_count} / ${task.seed_count}` : `${task.active_workers}/${task.max_workers}`} /><Detail label="上传速度" value={task.task_type === 'torrent' ? fmtSpeed(task.upload_speed_bytes_per_sec) : '--'} /><Detail label="更新时间" value={fmtDate(task.updated_at)} /></div>
@@ -72,7 +73,7 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
       {actions.includes('preview') && <button className="primary-button" onClick={onPreview}><MonitorPlay size={16} />{task.status === 'done' ? '内置播放' : '边下边播'}</button>}
       {pending && <span className="pending-label"><LoaderCircle className="spin" size={15} />正在处理</span>}
     </footer>
-  </section></div>
+  </Dialog></DialogOverlay>
 }
 
 function Detail({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div> }

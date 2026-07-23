@@ -10,11 +10,7 @@ export function DialogOverlay({
   ...props
 }: HTMLAttributes<HTMLDivElement> & { onClose?: () => void }) {
   return (
-    <div
-      className={cn('modal-overlay', className)}
-      onMouseDown={onClose}
-      {...props}
-    >
+    <div className={cn('modal-overlay', className)} onMouseDown={onClose} {...props}>
       {children}
     </div>
   )
@@ -25,12 +21,13 @@ export function Dialog({
   children,
   onClose,
   label,
+  role = 'dialog',
   ...props
 }: HTMLAttributes<HTMLElement> & { onClose?: () => void; label?: string }) {
   return (
     <section
       className={cn('modal', className)}
-      role="dialog"
+      role={role}
       aria-modal="true"
       aria-label={label}
       onMouseDown={event => event.stopPropagation()}

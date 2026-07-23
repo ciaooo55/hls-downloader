@@ -22,6 +22,6 @@ describe('request field guidance', () => {
     expect(REQUEST_FIELD_HELP.origin).toContain('不会凭空生成 Origin')
     expect(REQUEST_FIELD_HELP.concurrency).toContain('默认 12')
     expect(REQUEST_FIELD_HELP.concurrency).toContain('最高 256')
-    expect(REQUEST_FIELD_HELP.maxTasks).toContain('当前默认 3')
+    expect(REQUEST_FIELD_HELP.maxTasks).toContain('默认 3')
   })
 })
