@@ -571,6 +571,21 @@ async def retry_task(task_id: str, x_token: str = Header(default="")):
     await _manager_action(manager.retry_task(task_id))
     return {"ok": True}
 
+
+@router.post("/tasks/{task_id}/queue/{direction}", response_model=TaskResponse)
+async def reorder_task_queue(task_id: str, direction: str, x_token: str = Header(default="")):
+    """Move a queued task up/down/top/bottom. Direction is part of the path for simple clients."""
+    _check_token(x_token)
+    if direction not in {"up", "down", "top", "bottom"}:
+        raise HTTPException(status_code=422, detail="direction must be up, down, top, or bottom")
+    try:
+        task = await manager.reorder_queue(task_id, direction)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TaskConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _to_resp(task)
+
 @router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str, delete_files: bool = False, x_token: str = Header(default="")):
     _check_token(x_token)

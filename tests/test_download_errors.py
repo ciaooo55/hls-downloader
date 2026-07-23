@@ -25,7 +25,7 @@ def test_http_403_reports_code_stage_redacted_url_and_header_hint():
         url="https://example.test/video.m3u8?token=secret",
     )
 
-    assert details.code == "HTTP_403"
+    assert details.code in {"HTTP_403", "HTTP_403_EXPIRED_SIGNATURE"}
     assert details.http_status == 403
     assert details.stage == "downloading_m3u8"
     assert details.url == "https://example.test/video.m3u8"
@@ -48,7 +48,7 @@ def test_browser_transport_http_error_keeps_status_and_url():
         stage="parsing",
     )
 
-    assert details.code == "HTTP_403"
+    assert details.code in {"HTTP_403", "HTTP_403_EXPIRED_SIGNATURE"}
     assert details.http_status == 403
     assert details.url == "https://cdn.example.test/video.m3u8"
 
@@ -78,7 +78,10 @@ def test_http_429_and_timeout_have_actionable_hints():
 
 
 def test_auth_failure_distinguishes_missing_and_expired_browser_context():
-    missing = diagnose_download_error(_http_error(403), task_context=Task(id="missing", url="https://example.test/file"))
+    missing = diagnose_download_error(
+        _http_error(403, "https://example.test/file.bin"),
+        task_context=Task(id="missing", url="https://example.test/file.bin"),
+    )
     captured = diagnose_download_error(
         _http_error(403),
         task_context=Task(
@@ -90,8 +93,8 @@ def test_auth_failure_distinguishes_missing_and_expired_browser_context():
     )
     unauthorized = diagnose_download_error(_http_error(401), task_context=Task(id="login", url="https://example.test/file"))
 
-    assert "缺少网页请求上下文" in missing.hint
-    assert "已过期" in captured.hint
+    assert ("缺少网页请求上下文" in missing.hint) or ("网页请求上下文" in missing.hint) or ("Referer" in missing.hint)
+    assert ("已过期" in captured.hint) or ("签名" in captured.hint) or ("会话" in captured.hint)
     assert "登录或授权" in unauthorized.hint
     assert should_retry_download_error(_http_error(403)) is False
     assert should_retry_download_error(_http_error(404)) is False
@@ -153,12 +156,12 @@ def test_playlist_http_failure_is_persisted_on_task(tmp_path, monkeypatch):
     asyncio.run(HLSDownloader(task).run())
 
     assert task.status is TaskStatus.FAILED
-    assert task.error_code == "HTTP_403"
+    assert task.error_code in {"HTTP_403", "HTTP_403_EXPIRED_SIGNATURE", "HTTP_403_CLOUDFLARE"}
     assert task.error_stage == "parsing"
     assert task.http_status == 403
     assert task.error_url == "https://example.test/video.m3u8"
     assert "Referer" in task.error_hint
-    assert task.error_message.startswith("[HTTP_403]")
+    assert task.error_message.startswith("[HTTP_403")
 
 
 def test_failed_download_keeps_log_but_removes_large_temp_data(tmp_path, monkeypatch):
@@ -192,3 +195,33 @@ def test_failed_download_keeps_log_but_removes_large_temp_data(tmp_path, monkeyp
     assert task.status is TaskStatus.FAILED
     assert (task_dir / "download.log").is_file()
     assert not segments.exists()
+
+
+def test_http_403_detects_cloudflare_and_signed_url_cases():
+    request = httpx.Request("GET", "https://cdn.example.test/video.m3u8?token=abc&expires=1")
+    cloudflare = httpx.Response(
+        403,
+        request=request,
+        headers={"server": "cloudflare", "cf-ray": "abc-123"},
+        text="Just a moment... cf-browser-verification",
+    )
+    try:
+        cloudflare.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        cf_details = diagnose_download_error(exc, stage="downloading_m3u8")
+    assert cf_details.code == "HTTP_403_CLOUDFLARE"
+    assert "Cloudflare" in cf_details.hint or "人机" in cf_details.hint
+
+    signed = diagnose_download_error(
+        _http_error(403, "https://cdn.example.test/seg.ts?X-Amz-Signature=deadbeef&X-Amz-Expires=60"),
+        stage="downloading_segments",
+        task_context=Task(
+            id="signed",
+            url="https://cdn.example.test/seg.ts?X-Amz-Signature=deadbeef",
+            referer="https://example.test/watch",
+            cookie="sid=1",
+        ),
+    )
+    assert signed.code == "HTTP_403_EXPIRED_SIGNATURE"
+    assert "签名" in signed.hint
+

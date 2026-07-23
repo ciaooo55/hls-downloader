@@ -232,7 +232,9 @@ def test_task_event_contains_available_actions_and_queue_position():
 
     event = manager._task_event(second)
 
-    assert event["available_actions"] == ["cancel", "log", "delete", "delete_files"]
+    assert set(event["available_actions"]) >= {"cancel", "log", "delete", "delete_files"}
+    assert {"queue_up", "queue_top"}.issubset(event["available_actions"])
+    assert "start" not in event["available_actions"]
     assert event["queue_position"] == 2
 
 

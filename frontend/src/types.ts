@@ -93,6 +93,8 @@ export interface Settings {
   browser_takeover_enabled?: boolean
   browser_takeover_min_mb?: number
   browser_category_dirs?: Record<string, string>
+  queue_auto_start_enabled?: boolean
+  queue_auto_start_time?: string
 }
 
 export interface TorrentFileEntry {

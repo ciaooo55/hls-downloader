@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import httpx
 try:
@@ -56,7 +56,77 @@ def _exception_chain(exc: BaseException):
         current = current.__cause__ or current.__context__
 
 
-def _http_hint(status: int, task_context=None) -> str:
+def _response_headers(response) -> dict[str, str]:
+    raw = getattr(response, "headers", None) or {}
+    try:
+        items = dict(raw).items()
+    except Exception:
+        try:
+            items = raw.items()
+        except Exception:
+            return {}
+    return {str(name).lower(): str(value) for name, value in items}
+
+
+def _response_snippet(response, limit: int = 800) -> str:
+    for attr in ("text", "content"):
+        value = getattr(response, attr, None)
+        if value is None:
+            continue
+        try:
+            if isinstance(value, bytes):
+                return value[:limit].decode("utf-8", errors="ignore")
+            return str(value)[:limit]
+        except Exception:
+            continue
+    return ""
+
+
+def _looks_like_signed_url(url: str) -> bool:
+    if not url:
+        return False
+    try:
+        parsed = urlsplit(url)
+        query = parse_qs(parsed.query, keep_blank_values=True)
+    except ValueError:
+        return False
+    keys = {str(key).lower() for key in query}
+    markers = {
+        "token", "sig", "signature", "expires", "expire", "exp", "key",
+        "auth", "authorization", "hdnts", "policy", "x-amz-signature",
+        "x-amz-credential", "x-amz-expires", "x-amz-date", "x-amz-security-token",
+        "verify", "hash", "jwt",
+    }
+    if keys & markers:
+        return True
+    joined = "&".join(keys)
+    return "x-amz-" in joined or "signature" in joined
+
+
+def _looks_like_cloudflare(headers: dict[str, str], body: str) -> bool:
+    server = headers.get("server", "").lower()
+    if "cloudflare" in server or headers.get("cf-ray"):
+        return True
+    sample = body.lower()
+    needles = (
+        "cf-browser-verification",
+        "cf-challenge",
+        "attention required",
+        "just a moment",
+        "cloudflare",
+        "checking your browser",
+        "turnstile",
+    )
+    return any(item in sample for item in needles)
+
+
+def _http_hint(
+    status: int,
+    task_context=None,
+    *,
+    response=None,
+    request_url: str = "",
+) -> str:
     headers = {
         str(name).lower(): str(value)
         for name, value in dict(getattr(task_context, "request_headers", {}) or {}).items()
@@ -68,14 +138,32 @@ def _http_hint(status: int, task_context=None) -> str:
         or getattr(task_context, "origin", "")
     )
     has_credentials = bool(getattr(task_context, "cookie", "") or headers.get("authorization"))
+    response_headers = _response_headers(response) if response is not None else {}
+    body = _response_snippet(response) if response is not None else ""
+    signed = _looks_like_signed_url(request_url or getattr(task_context, "url", "") or "")
+    cloudflare = _looks_like_cloudflare(response_headers, body)
+    has_referer = bool(getattr(task_context, "referer", "") or headers.get("referer"))
+
     if status == 401:
         if has_credentials:
             return "登录凭据或授权令牌已失效。回到原网页刷新并重新识别后再下载；重复点击重试不会更新令牌。"
         return "资源需要登录或授权。请从原网页用浏览器扩展重新发送，并在扩展面板授权本页 Cookie。"
+
     if status == 403:
-        if has_browser_context or has_credentials:
-            return "网站仍拒绝已携带的网页请求上下文，通常是签名链接或登录会话已过期。回到原网页刷新并重新发送，避免直接重试旧任务。"
-        return "资源缺少网页请求上下文。请从原网页用浏览器扩展重新发送；必要时授权本页 Cookie，不要手工套用其他站点的 Referer/Origin。"
+        parts: list[str] = []
+        if cloudflare:
+            parts.append("响应像是 Cloudflare / 人机验证拦截，直接重试旧任务通常无效。")
+        if signed:
+            parts.append("链接含签名/过期参数，签名 URL 过期后必须回到原网页重新获取。")
+        if not has_referer and not has_browser_context:
+            parts.append("资源缺少 Referer/Origin/Cookie 等网页请求上下文，常见于防盗链。")
+        elif has_browser_context or has_credentials:
+            parts.append("已携带网页上下文仍被拒绝，多半是会话、签名或临时令牌过期。")
+        if not parts:
+            parts.append("服务器拒绝访问该资源。")
+        parts.append("处理：用浏览器扩展从原页面重新发送；需要登录时先授权本页 Cookie；不要套用其他站点的 Referer/Origin；降低并发后重试。")
+        return "".join(parts)
+
     if status == 407:
         return "代理服务器要求认证。检查系统/网络代理的账号密码，或临时关闭 VPN、代理和 HTTPS 检查后再试。"
     if status in {404, 410}:
@@ -122,10 +210,17 @@ def diagnose_download_error(
             if request is not None
             else str(getattr(response, "url", "") or url)
         )
+        headers = _response_headers(response)
+        body = _response_snippet(response)
+        code = f"HTTP_{status}"
+        if status == 403 and _looks_like_cloudflare(headers, body):
+            code = "HTTP_403_CLOUDFLARE"
+        elif status == 403 and _looks_like_signed_url(request_url):
+            code = "HTTP_403_EXPIRED_SIGNATURE"
         return DownloadErrorDetails(
-            code=f"HTTP_{status}",
+            code=code,
             message=f"HTTP {status} {reason}",
-            hint=_http_hint(status, task_context),
+            hint=_http_hint(status, task_context, response=response, request_url=request_url),
             stage=stage,
             url=redact_url(request_url),
             http_status=status,

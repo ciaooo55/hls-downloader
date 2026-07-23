@@ -200,7 +200,8 @@ export default function App() {
     setError('')
     setPending(current => new Set([...current, ...fresh.map(task => task.id)]))
     try {
-      const results = await Promise.allSettled(fresh.map(task => action === 'delete' || action === 'deleteFiles' ? deleteTask(task.id, action === 'deleteFiles') : taskAction(task.id, action)))
+      const apiAction = action.startsWith('queue_') ? `queue/${action.slice('queue_'.length)}` : action
+      const results = await Promise.allSettled(fresh.map(task => action === 'delete' || action === 'deleteFiles' ? deleteTask(task.id, action === 'deleteFiles') : taskAction(task.id, apiAction)))
       const failures = results.filter(result => result.status === 'rejected') as PromiseRejectedResult[]
       const successCount = results.length - failures.length
       if (failures.length) {

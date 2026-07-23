@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 
 import { getFailureDetails } from './failureDetails'
 
-
 describe('failure details', () => {
   it('formats structured downloader diagnostics for display', () => {
     const details = getFailureDetails({
@@ -19,11 +18,14 @@ describe('failure details', () => {
     expect(details.items).toEqual([
       { label: '发生阶段', value: '下载分片' },
       { label: 'HTTP 状态', value: '403' },
+      { label: '错误代码', value: 'HTTP_403' },
       { label: '尝试次数', value: '5 次' },
       { label: '资源地址', value: 'https://cdn.example.test/1.ts' },
     ])
     expect(details.message).toContain('403')
     expect(details.hint).toContain('Referer')
+    expect(details.steps?.length).toBeGreaterThan(0)
+    expect(details.steps?.some(step => step.includes('扩展'))).toBe(true)
   })
 
   it('keeps old task history readable when only error_message exists', () => {

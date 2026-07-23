@@ -556,3 +556,5 @@ code,
 .browser-handoff-standalone .nested-modal {
   padding: 8px;
 }
+
+.failure-steps{margin-top:10px}.failure-steps>b{display:block;margin-bottom:6px;color:var(--muted);font-size:11px}.failure-steps ol{margin:0;padding-left:18px}.failure-steps li{margin:4px 0;color:var(--text);font-size:12px;line-height:1.45}

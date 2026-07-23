@@ -8,6 +8,11 @@
 
 程序只监听 `127.0.0.1`，任务、配置和视频均保存在本机。关闭主窗口后程序会留在系统托盘继续下载，可从托盘重新打开或彻底退出。
 
+
+## 技术架构
+
+桌面主程序锁定 **Tauri 2 + React 19 + Vite + Tailwind CSS v4 + Zustand**，下载核心为 **FastAPI**，浏览器扩展为 **WXT**。详见 [docs/architecture.md](docs/architecture.md) 与 [DESIGN.md](DESIGN.md)。
+
 ## 下载
 
 从 [Releases](https://github.com/ciaooo55/hls-downloader/releases/latest) 下载最新版：
@@ -140,7 +145,7 @@ pnpm run tauri:build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.4.2
+.\scripts\build_installer.ps1 -Version 1.4.3
 ```
 
 输出位于忽略的 `release` 目录：
@@ -159,8 +164,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.4.2
-git push origin v1.4.2
+git tag v1.4.3
+git push origin v1.4.3
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。

@@ -45,6 +45,12 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
       {failure.items.length > 0 && <dl>{failure.items.map(item => <div key={item.label}><dt>{item.label}</dt><dd title={item.value}>{item.value}</dd></div>)}</dl>}
       {failure.message && <div className="failure-message"><b>失败原因</b><code>{failure.message}</code></div>}
       {failure.hint && <div className="failure-hint"><b>处理建议</b><span>{failure.hint}</span></div>}
+      {failure.steps && failure.steps.length > 0 && (
+        <div className="failure-steps">
+          <b>建议步骤</b>
+          <ol>{failure.steps.map((step: string) => <li key={step}>{step}</li>)}</ol>
+        </div>
+      )}
       </section>}
       {task.task_type === 'torrent' && torrentFiles.length > 0 && <section className="torrent-files">
       <div className="torrent-files-head"><h3>BT 文件选择</h3><span>{selectedFiles.length}/{torrentFiles.length}</span></div>

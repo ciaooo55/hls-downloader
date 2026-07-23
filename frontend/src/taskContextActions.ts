@@ -3,7 +3,7 @@ import { commandState, type TaskLike } from './taskCommands'
 export type TaskContextAction =
   | 'details' | 'start' | 'pause' | 'resume' | 'cancel'
   | 'retry' | 'preview' | 'launch' | 'open' | 'log' | 'delete'
-  | 'deleteFiles'
+  | 'deleteFiles' | 'queue_up' | 'queue_down' | 'queue_top' | 'queue_bottom'
 
 export function taskContextActions(input: TaskLike | TaskLike[]): TaskContextAction[] {
   const tasks = Array.isArray(input) ? input : [input]
@@ -17,6 +17,12 @@ export function taskContextActions(input: TaskLike | TaskLike[]): TaskContextAct
   if (commands.resume) actions.push('resume')
   if (commands.cancel) actions.push('cancel')
   if (commands.retry) actions.push('retry')
+  if (tasks.length === 1) {
+    if (task.available_actions?.includes('queue_up')) actions.push('queue_up')
+    if (task.available_actions?.includes('queue_top')) actions.push('queue_top')
+    if (task.available_actions?.includes('queue_down')) actions.push('queue_down')
+    if (task.available_actions?.includes('queue_bottom')) actions.push('queue_bottom')
+  }
   if (tasks.length === 1 && task.available_actions?.includes('launch')) actions.push('launch')
   if (commands.open) actions.push('open')
   if (commands.log) actions.push('log')

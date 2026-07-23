@@ -221,6 +221,17 @@ class TaskManager:
         actions: list[str] = []
         if task.status is TaskStatus.QUEUED and not live:
             actions.append("start")
+        if task.status is TaskStatus.QUEUED:
+            position = self.get_queue_position(task)
+            queued_count = max(
+                len(self._queued_tasks()),
+                len([item for item in self.tasks.values() if item.status is TaskStatus.QUEUED]),
+            )
+            if queued_count > 1:
+                if position != 1:
+                    actions.extend(["queue_up", "queue_top"])
+                if position != queued_count:
+                    actions.extend(["queue_down", "queue_bottom"])
         if (
             task.status in {
                 TaskStatus.DOWNLOADING_SEGMENTS,
@@ -270,20 +281,96 @@ class TaskManager:
             )
         )
 
+    @staticmethod
+    def _queue_sort_key(item: Task):
+        priority = int((item.engine_state or {}).get("queue_priority", 0) or 0)
+        return (-priority, item.created_at or "", item.id)
+
+    def _queued_tasks(self) -> list[Task]:
+        """Tasks waiting for a download slot or scheduled start."""
+        result: list[Task] = []
+        for item in self.tasks.values():
+            if item.status is not TaskStatus.QUEUED:
+                continue
+            if (
+                self._has_live_handle(item)
+                or item.engine_state.get("awaiting_slot")
+                or item.engine_state.get("queue_waiting_for_schedule")
+            ):
+                result.append(item)
+        result.sort(key=self._queue_sort_key)
+        return result
+
     def get_queue_position(self, task: Task) -> int:
-        if task.status is not TaskStatus.QUEUED or not self._has_live_handle(task):
+        if task.status is not TaskStatus.QUEUED:
             return 0
-        queued = sorted(
-            (
-                item for item in self.tasks.values()
-                if item.status is TaskStatus.QUEUED and self._has_live_handle(item)
-            ),
-            key=lambda item: (item.created_at or "", item.id),
-        )
+        queued = self._queued_tasks()
         try:
             return queued.index(task) + 1
         except ValueError:
             return 0
+
+    async def _acquire_run_slot(self, task: Task) -> bool:
+        """Wait until priority order allows this task under max_concurrent_tasks."""
+        task.engine_state["awaiting_slot"] = True
+        self._broadcast_queue_updates()
+        try:
+            while True:
+                if task.cancel_event is not None and task.cancel_event.is_set():
+                    return False
+                limit = max(1, int(settings.max_concurrent_tasks))
+                active = len(self._downloaders)
+                free = limit - active
+                if free > 0:
+                    waiting = [
+                        item for item in self.tasks.values()
+                        if item.engine_state.get("awaiting_slot") and self._has_live_handle(item)
+                    ]
+                    waiting.sort(key=self._queue_sort_key)
+                    if task in waiting[:free]:
+                        return True
+                await asyncio.sleep(0.12)
+        finally:
+            task.engine_state.pop("awaiting_slot", None)
+            self._broadcast_queue_updates()
+
+    async def reorder_queue(self, task_id: str, direction: str) -> Task:
+        task = self._get_task(task_id)
+        if task.status is not TaskStatus.QUEUED:
+            raise TaskConflictError("只有排队中的任务可以调整顺序")
+        direction = str(direction or "").strip().lower()
+        if direction not in {"up", "down", "top", "bottom"}:
+            raise TaskConflictError("队列方向无效")
+        queued = self._queued_tasks()
+        if task not in queued:
+            queued = sorted(
+                (item for item in self.tasks.values() if item.status is TaskStatus.QUEUED),
+                key=self._queue_sort_key,
+            )
+        if task not in queued:
+            raise TaskConflictError("任务不在队列中")
+        index = queued.index(task)
+        if direction == "up" and index > 0:
+            queued[index - 1], queued[index] = queued[index], queued[index - 1]
+        elif direction == "down" and index < len(queued) - 1:
+            queued[index + 1], queued[index] = queued[index], queued[index + 1]
+        elif direction == "top" and index > 0:
+            queued.pop(index)
+            queued.insert(0, task)
+        elif direction == "bottom" and index < len(queued) - 1:
+            queued.pop(index)
+            queued.append(task)
+        else:
+            return task
+        total = len(queued)
+        for rank, item in enumerate(queued):
+            item.engine_state["queue_priority"] = total - rank
+            item.updated_at = datetime.now().isoformat()
+            await self._save_db(item)
+            self._broadcast_nowait(self._task_event(item))
+        self._broadcast_queue_updates()
+        return task
+
 
     def _broadcast_queue_updates(self) -> None:
         for task in self.tasks.values():
@@ -420,7 +507,14 @@ class TaskManager:
 
         async def run_task() -> None:
             try:
-                async with self._get_sem():
+                if not await self._acquire_run_slot(task):
+                    if task.cancel_event and task.cancel_event.is_set():
+                        task.status = TaskStatus.CANCELED
+                        task.stage = "canceled"
+                        task.last_log = "已取消"
+                        task.finished_at = datetime.now().isoformat()
+                    return
+                try:
                     if task.cancel_event and task.cancel_event.is_set():
                         return
                     downloader_class = {
@@ -439,6 +533,8 @@ class TaskManager:
                         await downloader.run()
                     finally:
                         self._downloaders.pop(task.id, None)
+                finally:
+                    self._broadcast_queue_updates()
             except asyncio.CancelledError:
                 if task.cancel_event and task.cancel_event.is_set():
                     task.status = TaskStatus.CANCELED

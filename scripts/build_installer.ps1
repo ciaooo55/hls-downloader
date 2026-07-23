@@ -2,7 +2,7 @@ param(
     [switch]$SkipFrontend,
     [switch]$SkipBackend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.4.2"
+    [string]$Version = "1.4.3"
 )
 
 $ErrorActionPreference = "Stop"
