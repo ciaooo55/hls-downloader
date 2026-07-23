@@ -1,9 +1,13 @@
 [package]
 name = "hls-downloader-desktop"
-version = "1.4.0"
+version = "1.4.1"
 description = "Tauri desktop shell for HLS Downloader"
 authors = ["HLS Downloader"]
 edition = "2021"
+
+[[bin]]
+name = "HLSDownloader"
+path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

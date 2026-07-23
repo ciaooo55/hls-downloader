@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.ciaooo55.hlsdownloader"
-version = "1.4.0"
+version = "1.4.1"
 
 kotlin {
     jvmToolchain(21)

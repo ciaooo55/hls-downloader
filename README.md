@@ -21,7 +21,7 @@
 | `HLSDownloader-Firefox-Source.zip` | Mozilla 审核所需的对应源码与可复现构建说明 |
 | `SHA256SUMS.txt` | Release 文件的 SHA256 校验值 |
 
-安装包和便携包由 GitHub Actions 从源码自动构建，不保存在 Git 仓库中。程序内已包含 Compose Desktop 运行时、下载核心、FFmpeg、ffprobe、播放器资源和 Chromium 浏览器插件，不需要另装 Java 或 WebView2。
+安装包和便携包由 GitHub Actions 从源码自动构建，不保存在 Git 仓库中。桌面主程序使用 Cockpit Tools 同类的 Tauri + React 架构，包含下载核心、FFmpeg、ffprobe、播放器资源和 Chromium 浏览器插件；Windows 10/11 自带的 Microsoft Edge WebView2 运行时为其渲染界面。
 
 > 当前安装包没有商业代码签名证书。Windows SmartScreen 首次运行时可能显示未知发布者，请只从本仓库 Releases 下载并核对 SHA256。
 
@@ -47,7 +47,7 @@
 - 浏览器兼容 TLS 指纹，减少 CDN/Cloudflare 对安装包网络栈的误拦截
 - 固定 worker 队列并发下载，默认每任务 12 路、可配置到 256 路
 - 暂停、恢复、取消、重试和批量任务
-- 原生 Compose Desktop 主窗口、任务列表、设置、日志和浏览器接管确认
+- Tauri + React 桌面主窗口、任务列表、设置、日志和浏览器接管确认（Cockpit 风格悬浮工作区）
 - 全部/进行中/已完成与媒体/程序/压缩包/其他分类，支持 Ctrl、Shift 和拖动范围多选
 - 分片、速度、ETA、合并与转封装进度
 - 浏览器下载确认可预览类型和大小、修改文件名、选择并记忆分类保存目录
@@ -91,7 +91,7 @@ Firefox 商店版使用专用 ID `hls-downloader-store@ciaooo55.com`。首次提
 
 - Windows 10/11 x64
 - Python 3.12
-- JDK 21（仅构建原生桌面端需要）
+- Rust stable（构建 Tauri 桌面端需要）
 - Node.js 24
 - pnpm 11
 - FFmpeg 与 ffprobe
@@ -127,11 +127,10 @@ cd ..
 ```powershell
 python -m pytest -q
 
-.\desktop-compose\gradlew.bat -p .\desktop-compose test
-
 cd frontend
 pnpm test
 pnpm run build
+pnpm run tauri:build
 ```
 
 ## 本地打包
@@ -141,7 +140,7 @@ pnpm run build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.4.0
+.\scripts\build_installer.ps1 -Version 1.4.1
 ```
 
 输出位于忽略的 `release` 目录：
@@ -160,8 +159,8 @@ HLSDownloader-Windows-x64-Portable.zip
 发布示例：
 
 ```powershell
-git tag v1.4.0
-git push origin v1.4.0
+git tag v1.4.1
+git push origin v1.4.1
 ```
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。
@@ -170,9 +169,8 @@ git push origin v1.4.0
 
 ```text
 backend/       FastAPI、统一任务调度、下载核心与 Native Host
-desktop-compose/ Kotlin/Compose Desktop 原生主程序
 extension/     WXT/React Chrome 与 Firefox MV3 扩展
-frontend/      React/TypeScript 内置播放器与本地服务回退页面
+frontend/      React/TypeScript + Tauri 桌面界面与内置播放器
 installer/     NSIS 安装程序定义
 scripts/       Windows 打包脚本
 tests/         Python 自动化测试

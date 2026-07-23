@@ -22,8 +22,9 @@ def test_ci_runs_windows_python_and_frontend_checks():
     assert "pnpm run build" in workflow
     assert "working-directory: extension" in workflow
     assert "web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors" in workflow
-    assert "actions/setup-java@v5" in workflow
-    assert "desktop-compose\\gradlew.bat" in workflow
+    assert "dtolnay/rust-toolchain@stable" in workflow
+    assert "pnpm run tauri:build" in workflow
+    assert "actions/setup-java@v5" not in workflow
     assert "permissions:\n  contents: read" in workflow
 
 
@@ -34,7 +35,8 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert 'default:' in workflow and '1.4.' in workflow
     assert "tags:" in workflow and "v*" in workflow
     assert "windows-latest" in workflow
-    assert "actions/setup-java@v5" in workflow
+    assert "dtolnay/rust-toolchain@stable" in workflow
+    assert "actions/setup-java@v5" not in workflow
     assert "ubuntu-latest" not in workflow
     assert "choco install ffmpeg nsis" in workflow
     assert "scripts\\build_installer.ps1" in workflow

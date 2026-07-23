@@ -7,10 +7,10 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.4.0"
+  !define APP_VERSION "1.4.1"
 !endif
 !ifndef APP_FILE_VERSION
-  !define APP_FILE_VERSION "1.4.0.0"
+  !define APP_FILE_VERSION "1.4.1.0"
 !endif
 
 !ifndef STAGE_DIR
@@ -94,20 +94,12 @@ Section "Install" SecInstall
   ; A clean runtime directory prevents modules left by an older onedir build
   ; from shadowing files in the new package.
   RMDir /r "$INSTDIR\_internal"
-  RMDir /r "$INSTDIR\app"
-  RMDir /r "$INSTDIR\runtime"
   SetOutPath "$INSTDIR"
 
   File "${STAGE_DIR}\HLSDownloader.exe"
   File "${STAGE_DIR}\HLSDownloaderCore.exe"
   File "${STAGE_DIR}\HLSDownloaderNativeHost.exe"
   File /oname=config.default.json "${STAGE_DIR}\config.json"
-
-  SetOutPath "$INSTDIR\app"
-  File /r "${STAGE_DIR}\app\*"
-
-  SetOutPath "$INSTDIR\runtime"
-  File /r "${STAGE_DIR}\runtime\*"
 
   SetOutPath "$INSTDIR\_internal"
   File /r "${STAGE_DIR}\_internal\*"
@@ -202,8 +194,6 @@ RemoveApplicationData:
   RMDir /r "$INSTDIR\scripts"
   RMDir /r "$INSTDIR\bin"
   RMDir /r "$INSTDIR\_internal"
-  RMDir /r "$INSTDIR\app"
-  RMDir /r "$INSTDIR\runtime"
   RMDir /r "$INSTDIR\.data"
 
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"

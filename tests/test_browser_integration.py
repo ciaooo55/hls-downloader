@@ -92,7 +92,7 @@ def test_native_host_ping_and_takeover_settings_share_desktop_source_of_truth(mo
     def request(method, path, payload=None, timeout=4):
         calls.append((method, path, payload))
         if path == "/health":
-            return {"version": "1.4.0"}
+            return {"version": "1.4.1"}
         if path == "/settings" and method == "GET":
             return {"browser_takeover_enabled": False, "browser_takeover_min_mb": 3}
         if path == "/settings" and method == "POST":
@@ -101,7 +101,7 @@ def test_native_host_ping_and_takeover_settings_share_desktop_source_of_truth(mo
 
     monkeypatch.setattr(native_host, "_request", request)
 
-    ping = native_host.dispatch({"op": "ping", "version": "1.4.0"})
+    ping = native_host.dispatch({"op": "ping", "version": "1.4.1"})
     updated = native_host.dispatch({"op": "set_takeover_settings", "enabled": True})
 
     assert ping["takeover_enabled"] is False

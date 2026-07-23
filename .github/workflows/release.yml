@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version used in the installer, for example 1.4.0
+        description: Version used in the installer, for example 1.4.1
         required: false
-        default: "1.4.0"
+        default: "1.4.1"
   push:
     tags:
       - "v*"
@@ -20,13 +20,6 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
-
-      - name: Set up Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "21"
-          cache: gradle
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -43,6 +36,9 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "24"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Enable pnpm
         shell: pwsh

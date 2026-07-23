@@ -161,7 +161,8 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
 
     assert "pystray==" in requirements
     assert "curl_cffi==0.14.0" in requirements
-    assert "createDistributable" in build_script
+    assert "pnpm run tauri:build" in build_script
+    assert "src-tauri\\target\\release\\HLSDownloader.exe" in build_script
     assert "--name HLSDownloaderCore" in build_script
     assert "--collect-all pystray" not in build_script
     assert "--collect-all curl_cffi" in build_script
@@ -188,7 +189,7 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     assert "$smokePortableMarker" in build_script
     assert 'Set-Content -LiteralPath $smokePortableMarker' in build_script
     assert 'Remove-Item -LiteralPath $smokePortableMarker' in build_script
-    assert 'compose\\binaries\\main\\app\\HLSDownloader' in build_script
+    assert 'compose\\binaries\\main\\app\\HLSDownloader' not in build_script
     assert '!insertmacro CloseRunningApp Install' in nsis_script
     assert '!insertmacro CloseRunningApp Uninstall' in nsis_script
     install_cleanup = nsis_script.index('RMDir /r "$INSTDIR\\_internal"')
@@ -216,8 +217,8 @@ def test_windows_package_uses_onedir_and_smoke_tests_graceful_shutdown():
     assert "Single-instance check failed" in build_script
     assert "$secondProc.WaitForExit(12000)" in build_script
     assert '${STAGE_DIR}\\_internal' in nsis_script
-    assert '${STAGE_DIR}\\app\\*' in nsis_script
-    assert '${STAGE_DIR}\\runtime\\*' in nsis_script
+    assert '${STAGE_DIR}\\app\\*' not in nsis_script
+    assert '${STAGE_DIR}\\runtime\\*' not in nsis_script
     assert 'HLSDownloaderCore.exe' in nsis_script
     assert 'RMDir /r "$INSTDIR\\_internal"' in nsis_script
 

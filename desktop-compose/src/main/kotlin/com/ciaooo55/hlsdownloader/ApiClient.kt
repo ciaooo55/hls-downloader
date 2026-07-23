@@ -5,9 +5,12 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -22,6 +25,31 @@ import java.nio.file.Path
 import java.time.Duration
 
 class ApiException(val status: Int, message: String) : RuntimeException(message)
+
+/**
+ * FastAPI returns `detail` as either a string or a structured validation error
+ * array.  Never assume it is a JsonPrimitive: doing so masks the useful HTTP
+ * error with a Kotlin serialization exception.
+ */
+internal fun apiErrorMessage(parsed: JsonElement, status: Int): String {
+    val detail = (parsed as? JsonObject)?.get("detail") ?: return "HTTP $status"
+    return when (detail) {
+        is JsonPrimitive -> detail.contentOrNull?.takeIf { it.isNotBlank() } ?: "HTTP $status"
+        is JsonArray -> detail.joinToString("；") { item ->
+            when (item) {
+                is JsonObject -> item["msg"]?.let { value ->
+                    (value as? JsonPrimitive)?.contentOrNull
+                } ?: item.toString()
+                is JsonPrimitive -> item.contentOrNull ?: item.toString()
+                else -> item.toString()
+            }
+        }.takeIf { it.isNotBlank() } ?: "HTTP $status"
+        is JsonObject -> detail["message"]?.let { value ->
+            (value as? JsonPrimitive)?.contentOrNull
+        } ?: detail.toString()
+        else -> detail.toString()
+    }
+}
 
 class ApiClient(
     private var port: Int = 8765,
@@ -53,9 +81,7 @@ class ApiClient(
         val response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
         val parsed = runCatching { json.parseToJsonElement(response.body()) }.getOrElse { buildJsonObject {} }
         if (response.statusCode() !in 200..299) {
-            val message = (parsed as? JsonObject)?.get("detail")?.jsonPrimitive?.content
-                ?: "HTTP ${response.statusCode()}"
-            throw ApiException(response.statusCode(), message)
+            throw ApiException(response.statusCode(), apiErrorMessage(parsed, response.statusCode()))
         }
         parsed
     }
@@ -151,10 +177,9 @@ class ApiClient(
                 HttpRequest.BodyPublishers.ofByteArray(suffix),
             )).build()
         val response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
-        val parsed = json.parseToJsonElement(response.body())
+        val parsed = runCatching { json.parseToJsonElement(response.body()) }.getOrElse { buildJsonObject {} }
         if (response.statusCode() !in 200..299) {
-            val message = (parsed as? JsonObject)?.get("detail")?.jsonPrimitive?.content ?: "HTTP ${response.statusCode()}"
-            throw ApiException(response.statusCode(), message)
+            throw ApiException(response.statusCode(), apiErrorMessage(parsed, response.statusCode()))
         }
         parsed.decode<TaskItem>()
     }

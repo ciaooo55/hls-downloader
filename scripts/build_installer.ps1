@@ -2,7 +2,7 @@ param(
     [switch]$SkipFrontend,
     [switch]$SkipBackend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.4.0"
+    [string]$Version = "1.4.1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,7 +18,6 @@ $FileVersion = ($versionParts | ForEach-Object { [int]$_ }) -join "."
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $FrontendDir = Join-Path $Root "frontend"
 $BackendDir = Join-Path $Root "backend"
-$ComposeDir = Join-Path $Root "desktop-compose"
 $ExtensionDir = Join-Path $Root "extension"
 $AssetsDir = Join-Path $Root "assets"
 $IconFile = Join-Path $AssetsDir "app-icon.ico"
@@ -220,36 +219,16 @@ if (-not $SkipFrontend) {
     }
 }
 
-Invoke-Step "Build native Compose desktop" {
-    $gradleRoot = $Root
-    $temporaryDrive = ""
-    if ($Root.Path -match '[^\x00-\x7F]') {
-        foreach ($letter in @("R", "Q", "P", "O")) {
-            if (-not (Test-Path "${letter}:\")) {
-                & subst.exe "${letter}:" $Root.Path
-                if ($LASTEXITCODE -eq 0) {
-                    $gradleRoot = "${letter}:\"
-                    $temporaryDrive = $letter
-                    break
-                }
-            }
-        }
-    }
-    $gradleProject = Join-Path $gradleRoot "desktop-compose"
-    $gradle = Join-Path $gradleProject "gradlew.bat"
+Invoke-Step "Build Tauri desktop shell" {
+    Push-Location $FrontendDir
     try {
-        if (-not (Test-Path -LiteralPath $gradle)) { throw "Gradle wrapper is missing: $gradle" }
-        if (-not $env:JAVA_HOME) {
-            $projectJdk = Join-Path $gradleRoot "tools\compose-runtime\jdk-21"
-            if (Test-Path -LiteralPath (Join-Path $projectJdk "bin\java.exe")) {
-                $env:JAVA_HOME = $projectJdk
-                $env:PATH = "$(Join-Path $projectJdk 'bin');$env:PATH"
-            }
+        if (-not (Get-Command cargo.exe -ErrorAction SilentlyContinue)) {
+            throw "Rust/Cargo is required to build the Tauri desktop shell. Install rustup before packaging."
         }
-        & $gradle -p $gradleProject clean test createDistributable
-        if ($LASTEXITCODE -ne 0) { throw "Compose Desktop build failed with exit code $LASTEXITCODE" }
+        pnpm run tauri:build
+        if ($LASTEXITCODE -ne 0) { throw "Tauri desktop build failed with exit code $LASTEXITCODE" }
     } finally {
-        if ($temporaryDrive) { & subst.exe "${temporaryDrive}:" /D }
+        Pop-Location
     }
 }
 
@@ -292,11 +271,11 @@ Invoke-Step "Build backend executable" {
 }
 
 Invoke-Step "Stage application files" {
-    $composeImage = Join-Path $ComposeDir "build\compose\binaries\main\app\HLSDownloader"
-    if (-not (Test-Path -LiteralPath (Join-Path $composeImage "HLSDownloader.exe"))) {
-        throw "Compose app image is missing: $composeImage"
+    $tauriExecutable = Join-Path $FrontendDir "src-tauri\target\release\HLSDownloader.exe"
+    if (-not (Test-Path -LiteralPath $tauriExecutable)) {
+        throw "Tauri desktop executable is missing: $tauriExecutable"
     }
-    Copy-Item -Path (Join-Path $composeImage "*") -Destination $StageDir -Recurse -Force
+    Copy-Item -LiteralPath $tauriExecutable -Destination (Join-Path $StageDir "HLSDownloader.exe")
     Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloaderCore\*") -Destination $StageDir -Recurse -Force
     Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloaderNativeHost.exe") -Destination $StageDir
     Copy-Item -Path (Join-Path $Root "config.json") -Destination $StageDir
@@ -501,8 +480,8 @@ Invoke-Step "Build portable archive" {
     @"
 HLS Downloader portable edition
 
-Run HLSDownloader.exe. The desktop interface and Java runtime are bundled;
-Microsoft Edge WebView2 is not required.
+Run HLSDownloader.exe. The application uses the Microsoft Edge WebView2
+runtime that is included with supported Windows 10/11 installations.
 
 To enable Chrome/Firefox integration, run:
 powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1
