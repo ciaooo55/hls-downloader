@@ -113,6 +113,8 @@ class SettingsUpdate(BaseModel):
     browser_takeover_enabled: Optional[bool] = None
     browser_takeover_min_mb: Optional[int] = Field(default=None, ge=0, le=10240)
     browser_category_dirs: Optional[dict[str, str]] = None
+    queue_auto_start_enabled: Optional[bool] = None
+    queue_auto_start_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 class BrowserHandoffAccept(BaseModel):

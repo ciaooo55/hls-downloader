@@ -131,6 +131,18 @@ class TaskManager:
         self._temp_cleanup_lock = asyncio.Lock()
         self._maintenance_task: asyncio.Task | None = None
 
+    @staticmethod
+    def _queue_auto_start_due(now: datetime | None = None) -> bool:
+        """Return whether a scheduled queue may start today; invalid values fail closed."""
+        if not settings.queue_auto_start_enabled:
+            return True
+        try:
+            hour, minute = (int(value) for value in settings.queue_auto_start_time.split(":", 1))
+            current = now or datetime.now()
+            return (current.hour, current.minute) >= (hour, minute)
+        except (AttributeError, TypeError, ValueError):
+            return False
+
     def _get_sem(self) -> asyncio.Semaphore:
         limit = max(1, int(settings.max_concurrent_tasks))
         if self._sem is None:
@@ -371,7 +383,12 @@ class TaskManager:
             ),
         )
         if auto_start:
-            await self.start_task(task_id)
+            if self._queue_auto_start_due():
+                await self.start_task(task_id)
+            else:
+                task.engine_state["queue_waiting_for_schedule"] = True
+                task.last_log = f"等待定时队列 {settings.queue_auto_start_time}"
+                await self._save_db(task)
         self._broadcast_nowait(self._task_event(task, event_type="task_created"))
         return task
 
@@ -868,6 +885,13 @@ class TaskManager:
         async def maintain() -> None:
             while True:
                 await asyncio.sleep(30)
+                if self._queue_auto_start_due():
+                    for task in list(self.tasks.values()):
+                        if not task.engine_state.pop("queue_waiting_for_schedule", False):
+                            continue
+                        if task.status is TaskStatus.QUEUED and not self._has_live_handle(task):
+                            task.last_log = "定时队列已开始"
+                            await self.start_task(task.id)
                 for task_id in playback_service.expire():
                     task = self.tasks.get(task_id)
                     if task is not None:

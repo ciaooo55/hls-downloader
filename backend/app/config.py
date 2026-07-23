@@ -8,7 +8,7 @@ PROJECT_ROOT = RUNTIME_PATHS.project_root
 CONFIG_PATH = RUNTIME_PATHS.config_path
 
 class Settings(BaseSettings):
-    config_version: int = 8
+    config_version: int = 9
     host: str = "127.0.0.1"
     port: int = 8765
     token: str = "55555"
@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     browser_takeover_enabled: bool = True
     browser_takeover_min_mb: int = 1
     browser_category_dirs: dict[str, str] = Field(default_factory=dict)
+    queue_auto_start_enabled: bool = False
+    queue_auto_start_time: str = "00:00"
 
     # Ignore fields written by a newer release so downgrade/upgrade helpers can
     # still start far enough to close the running application cleanly.
@@ -103,6 +105,11 @@ def load_settings() -> Settings:
             if data.get("default_origin") == "https://missav.ai":
                 data["default_origin"] = ""
             data["config_version"] = 8
+            migrated = True
+        if version < 9:
+            data["queue_auto_start_enabled"] = False
+            data["queue_auto_start_time"] = "00:00"
+            data["config_version"] = 9
             migrated = True
         s = Settings(**data)
         if migrated:

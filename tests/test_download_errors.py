@@ -99,6 +99,15 @@ def test_auth_failure_distinguishes_missing_and_expired_browser_context():
     assert should_retry_download_error(_http_error(503)) is True
 
 
+def test_proxy_authentication_has_a_specific_recovery_hint():
+    details = diagnose_download_error(_http_error(407), stage="downloading_segments")
+
+    assert details.code == "HTTP_407"
+    assert "代理服务器" in details.hint
+    assert "账号密码" in details.hint
+    assert should_retry_download_error(_http_error(407)) is False
+
+
 def test_range_and_merge_failures_get_stable_codes():
     ranged = diagnose_download_error(
         RuntimeError("Content-Range 不匹配，期望 2-5，实际 0-3"),

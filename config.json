@@ -1,5 +1,5 @@
 {
-  "config_version": 8,
+  "config_version": 9,
   "host": "127.0.0.1",
   "port": 8765,
   "token": "55555",
@@ -20,5 +20,7 @@
   "bt_enable_dht": true,
   "browser_takeover_enabled": true,
   "browser_takeover_min_mb": 1,
-  "browser_category_dirs": {}
+  "browser_category_dirs": {},
+  "queue_auto_start_enabled": false,
+  "queue_auto_start_time": "00:00"
 }

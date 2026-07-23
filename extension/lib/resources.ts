@@ -225,6 +225,10 @@ export function matchesDownloadClick(
       .some(value => stripHash(value) === clicked)
     if (exact && (sameTab || permittedNewTab || !intent.pageUrl || !download.referrer || samePage)) return true
     if (exact) return false
+    // A concrete link click is stronger evidence than page proximity.  Do not
+    // fall through to the generic same-page window, otherwise a second,
+    // unrelated download created by the page can be incorrectly taken over.
+    return false
   }
   if (intent.generic) {
     const limit = intent.ctrlForce ? 7000 : intent.controlHint ? 4000 : 1000

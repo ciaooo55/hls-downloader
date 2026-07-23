@@ -76,6 +76,8 @@ def _http_hint(status: int, task_context=None) -> str:
         if has_browser_context or has_credentials:
             return "网站仍拒绝已携带的网页请求上下文，通常是签名链接或登录会话已过期。回到原网页刷新并重新发送，避免直接重试旧任务。"
         return "资源缺少网页请求上下文。请从原网页用浏览器扩展重新发送；必要时授权本页 Cookie，不要手工套用其他站点的 Referer/Origin。"
+    if status == 407:
+        return "代理服务器要求认证。检查系统/网络代理的账号密码，或临时关闭 VPN、代理和 HTTPS 检查后再试。"
     if status in {404, 410}:
         return "资源不存在或链接已经过期。请回到视频页面重新获取 m3u8 地址。"
     if status == 429:
