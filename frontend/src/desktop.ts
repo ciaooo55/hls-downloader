@@ -7,6 +7,8 @@ interface NativeResult {
   error?: string
   installed?: boolean
   mode?: string
+  shell?: string
+  desktop_version?: string
   browser_opened?: boolean
 }
 

@@ -437,6 +437,7 @@ async def create_task(body: TaskCreate, x_token: str = Header(default="")):
         request_headers=body.request_headers,
         title=body.title, filename=body.filename,
         concurrency=body.concurrency,
+        checksum=body.checksum,
         output_dir=body.download_dir,
         auto_start=True,
     )
@@ -457,6 +458,7 @@ async def create_batch(body: TaskBatchCreate, x_token: str = Header(default=""))
             request_headers=t.request_headers,
             title=t.title, filename=t.filename,
             concurrency=t.concurrency,
+            checksum=t.checksum,
             output_dir=t.download_dir,
             auto_start=True,
         )
@@ -1042,6 +1044,10 @@ def _to_resp(task) -> TaskResponse:
         http_status=task.http_status,
         error_attempt=task.error_attempt,
         output_path=task.output_path,
+        expected_checksum=task.expected_checksum,
+        checksum_algorithm=task.checksum_algorithm,
+        checksum_actual=task.checksum_actual,
+        checksum_verified=task.checksum_verified,
         output_is_file=task_output_is_file(task),
         created_at=task.created_at or "",
         updated_at=task.updated_at or "",

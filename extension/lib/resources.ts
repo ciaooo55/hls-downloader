@@ -220,15 +220,21 @@ export function matchesDownloadClick(
     && stripHash(intent.pageUrl) === stripHash(download.referrer))
   if (intent.href) {
     const clicked = stripHash(intent.href)
-    const exact = [download.url, download.finalUrl, ...(download.chainUrls || [])]
-      .filter((value): value is string => Boolean(value))
-      .some(value => stripHash(value) === clicked)
-    if (exact && (sameTab || permittedNewTab || !intent.pageUrl || !download.referrer || samePage)) return true
-    if (exact) return false
-    // A concrete link click is stronger evidence than page proximity.  Do not
-    // fall through to the generic same-page window, otherwise a second,
-    // unrelated download created by the page can be incorrectly taken over.
-    return false
+    const page = intent.pageUrl ? stripHash(intent.pageUrl) : ''
+    // Same-page anchors (# / page-local href) are not concrete download targets.
+    // Keep generic same-page matching for those; only hard-fail concrete hrefs.
+    const pageLocalHref = Boolean(page && clicked === page)
+    if (!pageLocalHref) {
+      const exact = [download.url, download.finalUrl, ...(download.chainUrls || [])]
+        .filter((value): value is string => Boolean(value))
+        .some(value => stripHash(value) === clicked)
+      if (exact && (sameTab || permittedNewTab || !intent.pageUrl || !download.referrer || samePage)) return true
+      if (exact) return false
+      // A concrete link click is stronger evidence than page proximity.  Do not
+      // fall through to the generic same-page window, otherwise a second,
+      // unrelated download created by the page can be incorrectly taken over.
+      return false
+    }
   }
   if (intent.generic) {
     const limit = intent.ctrlForce ? 7000 : intent.controlHint ? 4000 : 1000

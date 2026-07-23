@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 
 from .version import APP_VERSION
 from .models import TaskType
+from .checksum import normalize_checksum
 
 class TaskCreate(BaseModel):
     url: str
@@ -20,6 +21,7 @@ class TaskCreate(BaseModel):
     filename: str = ""
     download_dir: str = ""
     concurrency: int = Field(default=0, ge=0, le=256)
+    checksum: str = Field(default="", max_length=80)
 
     @field_validator("url")
     @classmethod
@@ -30,6 +32,15 @@ class TaskCreate(BaseModel):
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ValueError("url 必须是有效的 HTTP(S) 或 magnet 地址")
         return value
+
+    @field_validator("checksum")
+    @classmethod
+    def validate_checksum(cls, value: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        algorithm, digest = normalize_checksum(raw)
+        return f"{algorithm}:{digest}"
 
 class TaskBatchCreate(BaseModel):
     tasks: list[TaskCreate] = Field(min_length=1, max_length=100)
@@ -83,6 +94,10 @@ class TaskResponse(BaseModel):
     http_status: int = 0
     error_attempt: int = 0
     output_path: str
+    expected_checksum: str = ""
+    checksum_algorithm: str = ""
+    checksum_actual: str = ""
+    checksum_verified: Optional[bool] = None
     output_is_file: bool = False
     created_at: str
     updated_at: str

@@ -22,7 +22,7 @@ class DesktopCommand:
 
 
 class NativeDesktopSession:
-    """Thread-safe command bridge for the out-of-process Compose desktop UI."""
+    """Thread-safe command bridge for the out-of-process desktop UI."""
 
     def __init__(self, history_size: int = 128) -> None:
         self._lock = threading.RLock()
@@ -71,7 +71,7 @@ class NativeDesktopSession:
 
     def handoff(self, handoff_id: str) -> None:
         if not self.push("handoff", str(handoff_id)):
-            raise RuntimeError("Compose desktop session is not active")
+            raise RuntimeError("桌面界面尚未就绪")
 
     def poll(self, after: int = 0, timeout: float = 20.0) -> dict:
         timeout = max(0.0, min(float(timeout), 25.0))

@@ -7,10 +7,10 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.4.1"
+  !define APP_VERSION "1.4.2"
 !endif
 !ifndef APP_FILE_VERSION
-  !define APP_FILE_VERSION "1.4.1.0"
+  !define APP_FILE_VERSION "1.4.2.0"
 !endif
 
 !ifndef STAGE_DIR
@@ -91,9 +91,13 @@ Section "Install" SecInstall
   SetOutPath "$PLUGINSDIR"
   File /oname=shutdown-running.ps1 "${STAGE_DIR}\scripts\shutdown-running.ps1"
   !insertmacro CloseRunningApp Install
-  ; A clean runtime directory prevents modules left by an older onedir build
-  ; from shadowing files in the new package.
+  ; Remove both generations of the old desktop shell before writing Tauri.
+  ; v1.4.0 shipped a Kotlin/Compose image in app/ and runtime/.  Leaving it
+  ; behind made a half-updated install easy to launch from a stale shortcut.
+  ; The current shell is the single HLSDownloader.exe in $INSTDIR.
   RMDir /r "$INSTDIR\_internal"
+  RMDir /r "$INSTDIR\app"
+  RMDir /r "$INSTDIR\runtime"
   SetOutPath "$INSTDIR"
 
   File "${STAGE_DIR}\HLSDownloader.exe"
@@ -194,6 +198,8 @@ RemoveApplicationData:
   RMDir /r "$INSTDIR\scripts"
   RMDir /r "$INSTDIR\bin"
   RMDir /r "$INSTDIR\_internal"
+  RMDir /r "$INSTDIR\app"
+  RMDir /r "$INSTDIR\runtime"
   RMDir /r "$INSTDIR\.data"
 
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"

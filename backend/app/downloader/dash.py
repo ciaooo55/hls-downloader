@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..config import settings
+from ..checksum import verify_task_checksum
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
 from ..request_context import build_task_headers
@@ -77,6 +78,8 @@ class DashDownloader(SeeklessEngine):
             task.progress.progress_percent = 100.0
             task.progress.post_percent = 100.0
             task.progress.connection_status = "idle"
+            if not await verify_task_checksum(task, destination, on_progress=self.on_progress, on_log=self.on_log):
+                return
             task.status = TaskStatus.DONE
             task.finished_at = datetime.now().isoformat()
             self._set_stage("done", f"完成: {destination.name}")

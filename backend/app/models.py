@@ -82,6 +82,10 @@ class Task:
     error_hint: str = ""
     http_status: int = 0
     error_attempt: int = 0
+    expected_checksum: str = ""
+    checksum_algorithm: str = ""
+    checksum_actual: str = ""
+    checksum_verified: bool | None = None
     output_path: str = ""
     stage: str = ""
     last_log: str = ""

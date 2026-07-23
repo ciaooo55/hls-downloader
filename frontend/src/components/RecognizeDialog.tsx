@@ -15,6 +15,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const [url, setUrl] = useState(initialUrl)
   const [filename, setFilename] = useState('')
   const [concurrency, setConcurrency] = useState(settings.default_concurrency || 12)
+  const [checksum, setChecksum] = useState('')
   const [advanced, setAdvanced] = useState(false)
   const [referer, setReferer] = useState(settings.default_referer || '')
   const [origin, setOrigin] = useState(settings.default_origin || '')
@@ -26,7 +27,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const torrentInput = useRef<HTMLInputElement>(null)
 
   const startCandidate = async (candidate: string) => {
-    await createTask({ url: candidate, task_type: 'auto', filename, concurrency, referer, origin, user_agent: userAgent, cookie })
+    await createTask({ url: candidate, task_type: 'auto', filename, concurrency, checksum, referer, origin, user_agent: userAgent, cookie })
     onAdded(); onClose()
   }
   const directType = (value: string) => {
@@ -68,6 +69,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
     <label>链接</label><div className="url-entry"><Link size={18} /><input autoFocus value={url} onChange={event => setUrl(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') recognize() }} placeholder="粘贴文件、m3u8、mpd、网页或 magnet 链接" /></div>
     <div className="torrent-import"><input ref={torrentInput} type="file" accept=".torrent,application/x-bittorrent" hidden onChange={event => importTorrent(event.target.files?.[0])} /><button className="secondary-button" disabled={busy} onClick={() => torrentInput.current?.click()}><FileUp size={15} />导入 .torrent</button><span>磁力链接可直接粘贴到上方</span></div>
     <div className="form-row"><div><label>输出文件名（可选）</label><input value={filename} onChange={event => setFilename(event.target.value)} placeholder="自动生成" /></div><div className="short-field"><label>并发</label><input type="number" min={1} max={256} value={concurrency} onChange={event => setConcurrency(Math.max(1, Math.min(256, Number(event.target.value))))} /></div></div>
+    <label>校验和（可选）</label><input value={checksum} onChange={event => setChecksum(event.target.value)} placeholder="SHA-256、SHA-1 或 MD5；可写 sha256:..." /><p className="field-note">仅在最终文件写入后核对；不匹配会保留文件并标记失败。多文件 BT 不支持单一校验和。</p>
     <button className="text-button" onClick={() => setAdvanced(value => !value)}>{advanced ? '收起请求选项' : '请求选项（Referer / Origin / Cookie）'}</button>
     {advanced && <div className="advanced-grid request-options">
       <div className="request-field"><label>Referer</label><input value={referer} onChange={event => setReferer(event.target.value)} placeholder={REQUEST_EXAMPLES.referer} /><small>{REQUEST_FIELD_HELP.referer}</small></div>

@@ -12,6 +12,7 @@ from urllib.parse import unquote, urlparse
 import httpx
 
 from ..config import settings
+from ..checksum import verify_task_checksum
 from ..models import Task, TaskStatus
 from ..naming import is_generic_media_name
 from ..request_context import build_task_headers
@@ -228,6 +229,8 @@ class HTTPDownloader(SeeklessEngine):
             task.engine_state.pop("reserved_output_path", None)
             task.engine_state["stream_path"] = str(output)
             task.engine_state["total_size"] = output.stat().st_size
+            if not await verify_task_checksum(task, output, on_progress=self.on_progress, on_log=self.on_log):
+                return
             task.status = TaskStatus.DONE
             task.finished_at = datetime.now().isoformat()
             task.progress.progress_percent = 100.0

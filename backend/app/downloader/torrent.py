@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 
 from ..config import settings
+from ..checksum import verify_task_checksum
 from ..request_context import build_task_headers
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
@@ -301,6 +302,8 @@ class TorrentDownloader:
                 task.engine_state["stream_path"] = str(destination / relative)
             task.progress.progress_percent = 100.0
             task.progress.connection_status = "idle"
+            if not await verify_task_checksum(task, destination, on_progress=self.on_progress, on_log=self.on_log):
+                return
             task.status = TaskStatus.DONE
             task.finished_at = datetime.now().isoformat()
             self._set_stage("done", f"BT 下载完成: {destination.name}")

@@ -32,6 +32,10 @@ export interface Task {
   http_status: number
   error_attempt: number
   output_path: string
+  expected_checksum: string
+  checksum_algorithm: string
+  checksum_actual: string
+  checksum_verified: boolean | null
   output_is_file: boolean
   created_at: string
   updated_at: string

@@ -27,6 +27,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   const [showTempPicker, setShowTempPicker] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'close' | 'update' | null>(null)
   const [uninstallAvailable, setUninstallAvailable] = useState(false)
+  const [desktopInfo, setDesktopInfo] = useState<{ shell?: string; desktop_version?: string } | null>(null)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
   const [installingUpdate, setInstallingUpdate] = useState(false)
@@ -37,7 +38,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
 
   useEffect(() => {
     fetchSettings().then(data => { setSettings(data); setOriginal(data) }).catch(reason => setError(reason.message || '加载设置失败'))
-    getDesktopInfo().then(info => setUninstallAvailable(info.installed === true))
+    getDesktopInfo().then(info => { setUninstallAvailable(info.installed === true); setDesktopInfo(info) })
     fetchUpdateInfo().then(setUpdateInfo).catch(() => {})
   }, [])
 
@@ -145,7 +146,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
               </select>
             </div>
             <div className="settings-row settings-row-stack">
-              <div><strong>浏览器连接 Token</strong><span>扩展与脚本使用此值连接本地服务</span></div>
+              <div><strong>浏览器连接 Token</strong><span>浏览器扩展使用此值连接本地服务</span></div>
               <div className="input-action"><input aria-label="浏览器连接 Token" value={settings.token || ''} readOnly /><button className="secondary-button" title="复制 Token" onClick={copyToken}><Copy size={15} />{copied ? '已复制' : '复制'}</button></div>
             </div>
           </section>
@@ -211,6 +212,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
         {activeSection === 'maintenance' && <div className="settings-page settings-maintenance-page">
           <section className="settings-group">
             <div className="settings-row settings-row-control"><div><strong>运行环境</strong><span>{environment ? `FFmpeg ${environment.ffmpeg ? '正常' : '未找到'} · 并发 ${environment.concurrency} · 同时任务 ${environment.max_tasks}` : '检查 FFmpeg、目录权限和当前并发设置'}</span></div><button className="secondary-button" disabled={checkingEnvironment || dirty} title={dirty ? '请先保存设置' : '检查运行环境'} onClick={checkEnvironment}><RefreshCw size={15} />{dirty ? '保存后检查' : checkingEnvironment ? '检查中…' : '检查环境'}</button></div>
+            {desktopInfo?.shell && <div className="settings-row"><div><strong>桌面界面</strong><span>{desktopInfo.shell === 'tauri' ? `Tauri + React · 桌面壳 v${desktopInfo.desktop_version || '未知'}` : desktopInfo.shell}</span></div></div>}
             <div className="settings-row settings-row-control"><div><strong>软件更新</strong><span>{updateInfo ? `当前 v${updateInfo.current_version} · ${updateInfo.available ? `可更新到 v${updateInfo.latest_version}` : '已是最新版本'}` : '尚未检查'}</span></div>{updateInfo?.available && updateInfo.can_auto_install ? <button className="primary-button" disabled={installingUpdate} onClick={() => void updateApp()}><Download size={15} />{installingUpdate ? '正在下载…' : '下载安装'}</button> : <button className="secondary-button" disabled={checkingUpdate} onClick={checkUpdate}><RefreshCw size={15} />{checkingUpdate ? '检查中…' : '检查更新'}</button>}</div>
             {uninstallAvailable && <div className="settings-row settings-row-control"><div><strong>卸载程序</strong><span>删除程序、设置、任务历史和缓存</span></div><button className="danger-button" onClick={uninstall}><Trash2 size={15} />卸载</button></div>}
           </section>

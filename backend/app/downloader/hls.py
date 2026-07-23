@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from ..config import settings
+from ..checksum import verify_task_checksum
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
 from ..naming import is_generic_media_name, suggest_manifest_name
@@ -385,6 +386,8 @@ class HLSDownloader:
             task.output_path = str(output)
             task.engine_state["output_is_file"] = True
             task.engine_state.pop("reserved_output_path", None)
+            if not await verify_task_checksum(task, output, on_progress=self.on_progress, on_log=self.on_log):
+                return
             task.status = TaskStatus.DONE
             task.finished_at = datetime.now().isoformat()
             task.progress.post_percent = 100.0

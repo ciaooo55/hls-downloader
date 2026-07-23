@@ -87,7 +87,7 @@ def _ensure_app() -> None:
                 pass
         else:
             raise RuntimeError("桌面下载器未启动或无法连接")
-    # Cold start: health is live before the Compose shell registers its session,
+    # Cold start: health is live before the desktop shell registers its session,
     # so wait for the desktop presenter before accepting handoff offers.
     _wait_presenter(18.0 if started else 2.5)
 

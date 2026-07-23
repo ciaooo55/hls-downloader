@@ -50,7 +50,9 @@ fn get_desktop_info(paths: tauri::State<'_, DesktopPaths>) -> serde_json::Value 
     serde_json::json!({
         "ok": true,
         "installed": installed,
-        "mode": if installed { "installed" } else { "portable" }
+        "mode": if installed { "installed" } else { "portable" },
+        "shell": "tauri",
+        "desktop_version": env!("CARGO_PKG_VERSION"),
     })
 }
 

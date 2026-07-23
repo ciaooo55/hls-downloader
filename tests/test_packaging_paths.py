@@ -221,6 +221,8 @@ def test_windows_package_uses_onedir_and_smoke_tests_graceful_shutdown():
     assert '${STAGE_DIR}\\runtime\\*' not in nsis_script
     assert 'HLSDownloaderCore.exe' in nsis_script
     assert 'RMDir /r "$INSTDIR\\_internal"' in nsis_script
+    assert 'RMDir /r "$INSTDIR\\app"' in nsis_script
+    assert 'RMDir /r "$INSTDIR\\runtime"' in nsis_script
 
 
 def test_source_only_gitignore_excludes_generated_binaries():

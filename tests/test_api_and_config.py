@@ -17,6 +17,8 @@ def test_task_schema_rejects_invalid_url_concurrency_and_oversized_batch():
     with pytest.raises(ValidationError):
         TaskCreate(url="https://example.test/video.m3u8", concurrency=257)
     with pytest.raises(ValidationError):
+        TaskCreate(url="https://example.test/file.bin", checksum="sha256:bad")
+    with pytest.raises(ValidationError):
         TaskBatchCreate(
             tasks=[
                 TaskCreate(url=f"https://example.test/{index}.m3u8")
@@ -27,6 +29,7 @@ def test_task_schema_rejects_invalid_url_concurrency_and_oversized_batch():
         SettingsUpdate(max_concurrent_tasks=0)
 
     assert TaskCreate(url="https://example.test/file.bin", concurrency=256).concurrency == 256
+    assert TaskCreate(url="https://example.test/file.bin", checksum="A" * 64).checksum == "sha256:" + "a" * 64
     assert SettingsUpdate(default_concurrency=256).default_concurrency == 256
 
 

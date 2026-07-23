@@ -13,6 +13,7 @@ from ..models import Task, TaskProgress, TaskStatus, TaskType
 from ..naming import suggest_manifest_name
 from ..request_context import sanitize_request_contexts, sanitize_request_headers
 from ..credentials import protect_secret, unprotect_secret
+from ..checksum import normalize_checksum
 from ..utils import sanitize_filename
 from .hls import HLSDownloader
 from .http_file import HTTPDownloader
@@ -305,6 +306,7 @@ class TaskManager:
         filename="",
         concurrency=0,
         output_dir="",
+        checksum="",
         auto_start=False,
         inherit_default_headers=True,
     ) -> Task:
@@ -325,6 +327,11 @@ class TaskManager:
         inherit_identity_defaults = bool(
             inherit_default_headers and not (source_page_url or request_headers or request_contexts)
         )
+        expected_checksum = ""
+        checksum_algorithm = ""
+        if checksum:
+            checksum_algorithm, checksum_digest = normalize_checksum(checksum)
+            expected_checksum = f"{checksum_algorithm}:{checksum_digest}"
         task = Task(
             id=task_id,
             url=url,
@@ -339,6 +346,8 @@ class TaskManager:
             request_contexts=sanitize_request_contexts(request_contexts),
             title=title,
             filename=filename,
+            expected_checksum=expected_checksum,
+            checksum_algorithm=checksum_algorithm,
             concurrency=min(256, max(1, int(concurrency or settings.default_concurrency or 12))),
             status=TaskStatus.QUEUED,
             stage="queued",
@@ -356,8 +365,8 @@ class TaskManager:
         await run_db(
             "INSERT INTO tasks "
             "(id,task_type,source_page_url,mime_type,title,url,referer,origin,user_agent,cookie,request_headers,request_contexts,filename,concurrency,"
-            "status,stage,last_log,started_at,finished_at,post_percent,engine_state) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "status,stage,last_log,started_at,finished_at,post_percent,expected_checksum,checksum_algorithm,checksum_actual,checksum_verified,engine_state) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task.id,
                 task.task_type.value,
@@ -379,6 +388,10 @@ class TaskManager:
                 "",
                 "",
                 0,
+                task.expected_checksum,
+                task.checksum_algorithm,
+                "",
+                None,
                 json.dumps(task.engine_state, ensure_ascii=False),
             ),
         )
@@ -402,6 +415,8 @@ class TaskManager:
         task.cancel_event = asyncio.Event()
         task.pause_event = asyncio.Event()
         _clear_task_error(task)
+        task.checksum_actual = ""
+        task.checksum_verified = None
 
         async def run_task() -> None:
             try:
@@ -765,6 +780,10 @@ class TaskManager:
                 error_hint=_row_value(row, "error_hint", "") or "",
                 http_status=int(_row_value(row, "http_status", 0) or 0),
                 error_attempt=int(_row_value(row, "error_attempt", 0) or 0),
+                expected_checksum=_row_value(row, "expected_checksum", "") or "",
+                checksum_algorithm=_row_value(row, "checksum_algorithm", "") or "",
+                checksum_actual=_row_value(row, "checksum_actual", "") or "",
+                checksum_verified=(None if _row_value(row, "checksum_verified", None) is None else bool(_row_value(row, "checksum_verified", 0))),
                 output_path=_row_value(row, "output_path", "") or "",
                 created_at=_row_value(row, "created_at", "") or "",
                 updated_at=_row_value(row, "updated_at", "") or "",
@@ -796,7 +815,7 @@ class TaskManager:
                 "speed_bytes_per_sec=?,eta_seconds=?,post_percent=?,error_message=?,"
                 "playable_segments=?,playable_duration=?,media_duration=?,"
                 "error_code=?,error_stage=?,error_url=?,error_hint=?,http_status=?,"
-                "error_attempt=?,output_path=?,updated_at=?,started_at=?,finished_at=?,"
+                "error_attempt=?,expected_checksum=?,checksum_algorithm=?,checksum_actual=?,checksum_verified=?,output_path=?,updated_at=?,started_at=?,finished_at=?,"
                 "task_type=?,source_page_url=?,mime_type=?,progress_percent=?,uploaded_bytes=?,"
                 "upload_speed_bytes_per_sec=?,peer_count=?,seed_count=?,engine_state=? WHERE id=?",
                 (
@@ -821,6 +840,10 @@ class TaskManager:
                     task.error_hint,
                     task.http_status,
                     task.error_attempt,
+                    task.expected_checksum,
+                    task.checksum_algorithm,
+                    task.checksum_actual,
+                    None if task.checksum_verified is None else int(task.checksum_verified),
                     task.output_path,
                     task.updated_at,
                     task.started_at or "",
@@ -958,6 +981,10 @@ class TaskManager:
             "error_hint": task.error_hint,
             "http_status": task.http_status,
             "error_attempt": task.error_attempt,
+            "expected_checksum": task.expected_checksum,
+            "checksum_algorithm": task.checksum_algorithm,
+            "checksum_actual": task.checksum_actual,
+            "checksum_verified": task.checksum_verified,
             "output_path": task.output_path,
             "output_is_file": task_output_is_file(task),
             "created_at": task.created_at,

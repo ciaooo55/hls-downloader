@@ -131,7 +131,7 @@ describe('resource rules', () => {
       url: 'https://cdn.test/generated.zip',
       referrer: 'https://site.test/download',
       tabId: 8,
-    }, 2000)).toBe(true)
+    }, 2000)).toBe(false)
     expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
       url: 'https://cdn.test/generated.zip',
       referrer: 'https://site.test/download',
