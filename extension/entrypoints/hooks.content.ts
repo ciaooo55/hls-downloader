@@ -14,9 +14,24 @@ export default defineContentScript({
       return response
     }
     const open = XMLHttpRequest.prototype.open
-    XMLHttpRequest.prototype.open = function (method, url, ...args) {
+    const invokeOpen = open as unknown as (
+      this: XMLHttpRequest,
+      method: string,
+      url: string | URL,
+      async?: boolean,
+      username?: string | null,
+      password?: string | null,
+    ) => void
+    XMLHttpRequest.prototype.open = function (
+      method: string,
+      url: string | URL,
+      async?: boolean,
+      username?: string | null,
+      password?: string | null,
+    ) {
       this.addEventListener('load', () => report(this.responseURL || String(url), this.getResponseHeader('content-type') || ''))
-      return open.call(this, method, url, ...args)
+      if (async === undefined) return invokeOpen.call(this, method, url)
+      return invokeOpen.call(this, method, url, async, username, password)
     }
   },
 })

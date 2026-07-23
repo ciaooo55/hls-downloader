@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 
 from ..config import settings
+from ..request_context import build_task_headers
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
 from .errors import diagnose_download_error, format_download_error
@@ -324,7 +325,7 @@ class TorrentDownloader:
                 self._publish()
             raise
         except Exception as exc:
-            details = diagnose_download_error(exc, stage=task.stage, url=task.url)
+            details = diagnose_download_error(exc, stage=task.stage, url=task.url, task_context=task)
             task.error_code = "BT_DOWNLOAD_FAILED" if details.code == "DOWNLOAD_FAILED" else details.code
             task.error_stage = details.stage
             task.error_url = details.url
@@ -352,13 +353,9 @@ class TorrentDownloader:
             self._session = None
 
     async def _download_torrent_file(self, destination: Path) -> None:
-        headers = {
-            "User-Agent": self.task.user_agent or settings.default_user_agent,
-            "Referer": self.task.referer or settings.default_referer,
-            "Cookie": self.task.cookie or settings.default_cookie,
-        }
+        headers = build_task_headers(self.task)
         async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
-            response = await client.get(self.task.url, headers={key: value for key, value in headers.items() if value})
+            response = await client.get(self.task.url, headers=headers)
             response.raise_for_status()
             if len(response.content) > 16 * 1024 * 1024:
                 raise RuntimeError(".torrent 文件超过 16 MiB 限制")

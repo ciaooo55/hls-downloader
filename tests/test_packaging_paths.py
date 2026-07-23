@@ -56,15 +56,14 @@ def test_ui_dist_uses_project_root(monkeypatch, tmp_path):
         importlib.reload(main)
 
 
-def test_installer_build_and_nsis_include_userscript():
+def test_installer_and_release_exclude_legacy_userscript():
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
     nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
 
-    assert 'Join-Path $Root "userscript"' in build_script
-    assert 'Join-Path $StageDir "userscript"' in build_script
-    assert '${STAGE_DIR}\\userscript\\m3u8-sniffer.user.js' in nsis_script
-    assert 'RMDir /r "$INSTDIR\\userscript"' in nsis_script
+    assert "userscript" not in build_script.lower()
+    assert "userscript" not in nsis_script.lower()
+    assert "m3u8-sniffer.user.js" not in build_script
 
 
 def test_installer_bundles_loadable_edge_extension_and_removes_it_on_uninstall():
@@ -92,6 +91,9 @@ def test_app_icon_is_used_by_executable_tray_ui_and_installer():
     assert 'UninstallIcon "${ICON_FILE}"' in nsis_script
     assert '!define MUI_ICON "${ICON_FILE}"' in nsis_script
     assert '!define MUI_UNICON "${ICON_FILE}"' in nsis_script
+    assert 'VIProductVersion "${APP_FILE_VERSION}"' in nsis_script
+    assert '"FileVersion" "${APP_FILE_VERSION}"' in nsis_script
+    assert '"/DAPP_FILE_VERSION=$FileVersion"' in build_script
     assert 'assets" / "app-icon.png"' in desktop
 
 
@@ -119,11 +121,12 @@ def test_windows_build_emits_setup_and_portable_assets():
     assert "Compress-Archive" in build_script
 
 
-def test_windows_build_emits_userscript_and_current_checksums():
+def test_windows_build_emits_extension_packages_and_current_checksums():
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
 
-    assert 'Join-Path $ReleaseDir "m3u8-sniffer.user.js"' in build_script
+    assert 'Join-Path $ReleaseDir "HLSDownloader-Chrome.zip"' in build_script
+    assert 'Join-Path $ReleaseDir "HLSDownloader-Firefox-Unsigned.zip"' in build_script
     assert 'Join-Path $ReleaseDir "SHA256SUMS.txt"' in build_script
     assert "Get-FileHash -LiteralPath" in build_script
     assert "Where-Object Name -ne \"SHA256SUMS.txt\"" in build_script
@@ -158,7 +161,9 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
 
     assert "pystray==" in requirements
     assert "curl_cffi==0.14.0" in requirements
-    assert "--collect-all pystray" in build_script
+    assert "createDistributable" in build_script
+    assert "--name HLSDownloaderCore" in build_script
+    assert "--collect-all pystray" not in build_script
     assert "--collect-all curl_cffi" in build_script
     assert 'HLSDownloader.exe$\\" --shutdown' not in nsis_script
     assert 'shutdown-running.ps1' in nsis_script
@@ -183,7 +188,7 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     assert "$smokePortableMarker" in build_script
     assert 'Set-Content -LiteralPath $smokePortableMarker' in build_script
     assert 'Remove-Item -LiteralPath $smokePortableMarker' in build_script
-    assert 'Join-Path $StageDir ".webview"' in build_script
+    assert 'compose\\binaries\\main\\app\\HLSDownloader' in build_script
     assert '!insertmacro CloseRunningApp Install' in nsis_script
     assert '!insertmacro CloseRunningApp Uninstall' in nsis_script
     install_cleanup = nsis_script.index('RMDir /r "$INSTDIR\\_internal"')
@@ -203,7 +208,7 @@ def test_windows_package_uses_onedir_and_smoke_tests_graceful_shutdown():
     assert "--onedir" in build_script
     assert "--name HLSDownloaderNativeHost" in build_script
     assert "--onefile" in build_script
-    assert 'dist\\HLSDownloader\\*' in build_script
+    assert 'dist\\HLSDownloaderCore\\*' in build_script
     assert 'api/app/shutdown' in build_script
     assert 'Packaged Settings schema is missing field' in build_script
     assert '$env:PYTHONPATH = ""' in build_script
@@ -211,6 +216,9 @@ def test_windows_package_uses_onedir_and_smoke_tests_graceful_shutdown():
     assert "Single-instance check failed" in build_script
     assert "$secondProc.WaitForExit(12000)" in build_script
     assert '${STAGE_DIR}\\_internal' in nsis_script
+    assert '${STAGE_DIR}\\app\\*' in nsis_script
+    assert '${STAGE_DIR}\\runtime\\*' in nsis_script
+    assert 'HLSDownloaderCore.exe' in nsis_script
     assert 'RMDir /r "$INSTDIR\\_internal"' in nsis_script
 
 

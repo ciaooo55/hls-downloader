@@ -8,7 +8,7 @@ PROJECT_ROOT = RUNTIME_PATHS.project_root
 CONFIG_PATH = RUNTIME_PATHS.config_path
 
 class Settings(BaseSettings):
-    config_version: int = 7
+    config_version: int = 8
     host: str = "127.0.0.1"
     port: int = 8765
     token: str = "55555"
@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     temp_dir: str = "."
     default_concurrency: int = 12
     default_user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
-    default_referer: str = "https://missav.ai/"
-    default_origin: str = "https://missav.ai"
+    default_referer: str = ""
+    default_origin: str = ""
     default_cookie: str = ""
     ffmpeg_path: str = "bin\\ffmpeg.exe"
     allowed_hosts: list[str] = []
@@ -93,6 +93,16 @@ def load_settings() -> Settings:
         if version < 7:
             data["temp_dir"] = str(RUNTIME_PATHS.default_temp_dir)
             data["config_version"] = 7
+            version = 7
+            migrated = True
+        if version < 8:
+            # Old builds applied one site's Referer/Origin to every manual URL,
+            # which causes unrelated CDNs to reject otherwise valid downloads.
+            if data.get("default_referer") == "https://missav.ai/":
+                data["default_referer"] = ""
+            if data.get("default_origin") == "https://missav.ai":
+                data["default_origin"] = ""
+            data["config_version"] = 8
             migrated = True
         s = Settings(**data)
         if migrated:

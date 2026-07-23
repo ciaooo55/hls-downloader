@@ -9,6 +9,7 @@ _shutdown_callback: Callable[[], bool | None] | None = None
 _handoff_callback: Callable[[str], None] | None = None
 _activation_lock = threading.Lock()
 _activation_running = False
+_activation_generation = 0
 _handoff_lock = threading.Lock()
 _pending_handoffs: deque[str] = deque()
 _pending_handoff_ids: set[str] = set()
@@ -17,16 +18,22 @@ logger = logging.getLogger(__name__)
 
 
 def register_activation(callback: Callable[[], None] | None) -> None:
-    global _activation_callback
-    _activation_callback = callback
+    global _activation_callback, _activation_generation, _activation_running
+    with _activation_lock:
+        _activation_callback = callback
+        # A replaced desktop presenter must not remain suppressed by an older
+        # callback that is still unwinding on another thread.
+        _activation_generation += 1
+        _activation_running = False
 
 
 def activate_window() -> bool:
     global _activation_running
-    callback = _activation_callback
-    if callback is None:
-        return False
     with _activation_lock:
+        callback = _activation_callback
+        generation = _activation_generation
+        if callback is None:
+            return False
         if _activation_running:
             return True
         _activation_running = True
@@ -37,7 +44,8 @@ def activate_window() -> bool:
             callback()
         finally:
             with _activation_lock:
-                _activation_running = False
+                if generation == _activation_generation:
+                    _activation_running = False
 
     threading.Thread(target=run, name="desktop-activate", daemon=True).start()
     return True

@@ -8,7 +8,10 @@ from .utils import sanitize_filename
 
 _MANIFEST_EXTENSIONS = re.compile(r"\.(?:m3u8?|mpd)$", re.IGNORECASE)
 _GENERIC_STEM = re.compile(
-    r"^(?:video|stream|master|index|playlist|manifest|chunklist|media|output|download|file|vod|live)[-_ ]*\d*$",
+    r"^(?:(?:video|stream|master|index|playlist|manifest|chunklist|media|output|download|file|vod|live)"
+    r"(?:[-_ ]*(?:\d{3,4}p?|low|medium|high|sd|hd|fhd|uhd|4k))?|"
+    r"(?:hls[-_ ]*)?(?:\d{3,4}p[-_ ]*)?(?:hls[-_ ]*)?(?:video[-_ ]*stream|视频流)?|"
+    r"(?:hls[-_ ]*)?\d{3,4}p)$",
     re.IGNORECASE,
 )
 _OPAQUE_STEM = re.compile(r"^(?:[a-f0-9]{16,}|[a-z0-9_-]{28,})$", re.IGNORECASE)

@@ -1,18 +1,18 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LoaderCircle, Trash2, X } from 'lucide-react'
-import { clearCompletedTasks, connectSSE, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchSettings, fetchTasks, fetchUserscriptStatus, launchFile, openExplorer, resolveBrowserHandoff, taskAction, taskFileUrl } from './api'
+import { clearCompletedTasks, connectSSE, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchSettings, fetchTasks, launchFile, openExplorer, resolveBrowserHandoff, taskAction, taskFileUrl } from './api'
 import { fmtBytes, fmtSpeed } from './format'
 import { isRunningStatus, mergeTaskEvent } from './taskState'
 import { commandState } from './taskCommands'
 import { filterAndSortTasks } from './taskPresentation'
-import { resolveTheme, type Theme } from './theme'
-import type { BrowserStatus, Settings, Task, UserscriptStatus } from './types'
+import { resolveTheme, resolveThemePreference, type ThemePreference } from './theme'
+import type { BrowserStatus, Settings, Task } from './types'
 import DesktopToolbar from './components/DesktopToolbar'
 import Sidebar, { type TaskFilter } from './components/Sidebar'
 import TaskTable from './components/TaskTable'
 import TaskDetailsModal from './components/TaskDetailsModal'
 import RecognizeDialog from './components/RecognizeDialog'
-import UserscriptDialog from './components/UserscriptDialog'
+import BrowserExtensionDialog from './components/BrowserExtensionDialog'
 import SettingsPanel from './components/SettingsPanel'
 import BatchAddPanel from './components/BatchAddPanel'
 import LogModal from './components/LogModal'
@@ -20,14 +20,17 @@ import UpdateNotice from './components/UpdateNotice'
 import UpdateDialog from './components/UpdateDialog'
 import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
 import ConfirmDialog from './components/ConfirmDialog'
+import { isTauriDesktop, startTauriDesktopSession } from './tauri'
 
 const VideoPlayerModal = lazy(() => import('./components/VideoPlayerModal'))
+const launchParams = new URLSearchParams(window.location.search)
+const launchToken = launchParams.get('token')
+if (launchToken) localStorage.setItem('hls_token', launchToken)
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [settings, setSettings] = useState<Settings>({})
   const [appVersion, setAppVersion] = useState('')
-  const [userscript, setUserscript] = useState<UserscriptStatus | null>(null)
   const [browserStatus, setBrowserStatus] = useState<BrowserStatus | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [filter, setFilter] = useState<TaskFilter>('all')
@@ -41,24 +44,35 @@ export default function App() {
   const [showRecognize, setShowRecognize] = useState(false)
   const [recognizeInitialUrl, setRecognizeInitialUrl] = useState('')
   const [showBatch, setShowBatch] = useState(false)
-  const [showUserscript, setShowUserscript] = useState(false)
+  const [showBrowserExtension, setShowBrowserExtension] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showUpdate, setShowUpdate] = useState(false)
   const [handoffs, setHandoffs] = useState<BrowserHandoff[]>([])
   const [handoffBusy, setHandoffBusy] = useState(false)
   const [error, setError] = useState('')
   const [confirmation, setConfirmation] = useState<{ title: string; message: string; confirmLabel: string; danger: boolean; run: () => void } | null>(null)
-  const [theme, setTheme] = useState<Theme>(() => resolveTheme(localStorage.getItem('hls_theme'), matchMedia('(prefers-color-scheme: dark)').matches))
+  const [themePreference, setThemePreference] = useState<ThemePreference>(() => resolveThemePreference(localStorage.getItem('hls_theme')))
+  const [systemDark, setSystemDark] = useState(() => matchMedia('(prefers-color-scheme: dark)').matches)
+  const theme = resolveTheme(themePreference, systemDark)
   const lastStatuses = useRef<Record<string, string>>({})
   const feedbackTimer = useRef<number | null>(null)
   const loadInFlight = useRef<Promise<void> | null>(null)
   const handoffRefreshInFlight = useRef(false)
+  const autoPlayHandled = useRef(false)
+
+  useEffect(() => {
+    let stop: (() => void) | undefined
+    void startTauriDesktopSession()
+      .then(cleanup => { stop = cleanup })
+      .catch(reason => setError(reason?.message || '无法启动桌面会话'))
+    return () => stop?.()
+  }, [])
 
   const load = useCallback(async () => {
     if (loadInFlight.current) return loadInFlight.current
     const request = (async () => { try {
-      const [taskData, settingData, scriptData, browserData, healthData] = await Promise.all([fetchTasks(), fetchSettings(), fetchUserscriptStatus(), fetchBrowserStatus(), fetchHealth()])
-      setTasks(taskData); setSettings(settingData); setUserscript(scriptData); setBrowserStatus(browserData); setAppVersion(healthData.version || ''); setError('')
+      const [taskData, settingData, browserData, healthData] = await Promise.all([fetchTasks(), fetchSettings(), fetchBrowserStatus(), fetchHealth()])
+      setTasks(taskData); setSettings(settingData); setBrowserStatus(browserData); setAppVersion(healthData.version || ''); setError('')
       try {
         if ('Notification' in window && Notification.permission === 'default') {
           void Notification.requestPermission()
@@ -102,7 +116,7 @@ export default function App() {
 
   useEffect(() => {
     // Desktop owns dedicated handoff windows. Only pure /ui (no pywebview) needs the manager modal fallback.
-    const desktopShell = Boolean((window as any).pywebview || (window as any).chrome?.webview)
+    const desktopShell = Boolean((window as any).pywebview || (window as any).chrome?.webview || isTauriDesktop())
     if (desktopShell) return
     const refresh = () => {
       if (handoffRefreshInFlight.current) return
@@ -126,6 +140,13 @@ export default function App() {
 
   useEffect(() => { document.documentElement.dataset.theme = theme }, [theme])
   useEffect(() => {
+    const media = matchMedia('(prefers-color-scheme: dark)')
+    const onChange = (event: MediaQueryListEvent) => setSystemDark(event.matches)
+    setSystemDark(media.matches)
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [])
+  useEffect(() => {
     // Escape for surfaces owned directly by App (child modals handle themselves).
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
@@ -136,6 +157,12 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [previewImage, showBatch])
   useEffect(() => { setSelected(current => new Set([...current].filter(id => tasks.some(task => task.id === id)))) }, [tasks])
+  useEffect(() => {
+    const requestedTask = launchParams.get('play')
+    if (!requestedTask || playing || autoPlayHandled.current) return
+    const task = tasks.find(item => item.id === requestedTask)
+    if (task) { autoPlayHandled.current = true; setPlaying(task) }
+  }, [tasks, playing])
   useEffect(() => () => { if (feedbackTimer.current) window.clearTimeout(feedbackTimer.current) }, [])
 
   const filtered = useMemo(() => filterAndSortTasks(tasks, filter, query), [tasks, filter, query])
@@ -237,7 +264,11 @@ export default function App() {
   }
   const toggleTheme = () => {
     const next = theme === 'dark' ? 'light' : 'dark'
-    localStorage.setItem('hls_theme', next); setTheme(next)
+    localStorage.setItem('hls_theme', next); setThemePreference(next)
+  }
+  const changeThemePreference = (next: ThemePreference) => {
+    localStorage.setItem('hls_theme', next)
+    setThemePreference(next)
   }
   const openRecognize = () => { setRecognizeInitialUrl(''); setShowRecognize(true) }
   const pasteAndRecognize = async () => {
@@ -252,9 +283,10 @@ export default function App() {
   }
 
   return <div className="desktop-app">
-    <DesktopToolbar commands={commands} theme={theme} version={appVersion} query={query} onQueryChange={setQuery} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onOpen={() => selectedTasks[0]?.output_path && openExplorer(selectedTasks[0].output_path)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onUserscript={() => setShowUserscript(true)} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
+    {isTauriDesktop() && <div className="tauri-drag-region" data-tauri-drag-region />}
+    <DesktopToolbar commands={commands} theme={theme} version={appVersion} query={query} onQueryChange={setQuery} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onOpen={() => selectedTasks[0]?.output_path && openExplorer(selectedTasks[0].output_path)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onBrowserExtension={() => setShowBrowserExtension(true)} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
     <div className="workspace">
-      <Sidebar tasks={tasks} active={filter} onChange={setFilter} userscript={userscript} browserStatus={browserStatus} />
+      <Sidebar tasks={tasks} active={filter} onChange={setFilter} browserStatus={browserStatus} />
       <main className="content">
         <UpdateNotice />
         <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} <span>{filtered.length} 项{selected.size > 0 ? ` · 已选 ${selected.size}` : ''}</span></strong><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={() => void clearCompleted()}><Trash2 size={14} />清理已完成</button></div>
@@ -262,11 +294,11 @@ export default function App() {
         <TaskTable tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openExplorer(task.output_path)} onLaunchFile={launchOutput} onPreview={setPlaying} onPreviewImage={setPreviewImage} />
       </main>
     </div>
-    <footer className="statusbar"><span>活动任务 <b>{running.length}</b></span><span>队列 <b>{queued}</b></span><span>总速度 <b>{fmtSpeed(totalSpeed)}</b></span><span>已完成 <b>{fmtBytes(completedSize)}</b></span><span>{browserStatus?.detected ? `扩展已连接${browserStatus.version ? ` · v${browserStatus.version}` : ''}` : userscript?.detected ? '后备脚本已连接' : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span></footer>
-    {showRecognize && <RecognizeDialog settings={settings} initialUrl={recognizeInitialUrl} onClose={() => setShowRecognize(false)} onAdded={load} onNeedUserscript={() => { setShowRecognize(false); setShowUserscript(true) }} />}
+    <footer className="statusbar"><span>活动任务 <b>{running.length}</b></span><span>队列 <b>{queued}</b></span><span>总速度 <b>{fmtSpeed(totalSpeed)}</b></span><span>已完成 <b>{fmtBytes(completedSize)}</b></span><span>{browserStatus?.detected ? `插件已连接${browserStatus.version ? ` · v${browserStatus.version}` : ''}` : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span></footer>
+    {showRecognize && <RecognizeDialog settings={settings} initialUrl={recognizeInitialUrl} onClose={() => setShowRecognize(false)} onAdded={load} onNeedExtension={() => { setShowRecognize(false); setShowBrowserExtension(true) }} />}
     {showBatch && <div className="modal-overlay" onMouseDown={() => setShowBatch(false)}><section className="modal" onMouseDown={event => event.stopPropagation()}><header><div><h2>批量添加</h2><p>每行输入一个 m3u8 链接</p></div></header><BatchAddPanel settings={settings} onAdded={() => { setShowBatch(false); load() }} /><footer><button className="secondary-button" onClick={() => setShowBatch(false)}>关闭</button></footer></section></div>}
-    {showUserscript && <UserscriptDialog onClose={() => { setShowUserscript(false); load() }} />}
-    {showSettings && <SettingsPanel onClose={() => { setShowSettings(false); load() }} />}
+    {showBrowserExtension && <BrowserExtensionDialog onClose={() => { setShowBrowserExtension(false); load() }} />}
+    {showSettings && <SettingsPanel themePreference={themePreference} onThemePreferenceChange={changeThemePreference} onClose={() => { setShowSettings(false); load() }} />}
     {showUpdate && <UpdateDialog onClose={() => setShowUpdate(false)} />}
     {detailTask && <TaskDetailsModal task={detailTask} pending={pending.has(detailTask.id)} onClose={() => setDetails(null)} onLog={() => setLogTaskId(detailTask.id)} onAction={action => perform(action, [detailTask])} onOpenFile={() => detailTask.output_path && openExplorer(detailTask.output_path)} onLaunchFile={() => launchOutput(detailTask)} onPreview={() => { setDetails(null); setPlaying(detailTask) }} />}
     {playingTask && <Suspense fallback={<div className="modal-overlay player-overlay"><div className="player-chunk-loading"><LoaderCircle className="spin" size={24} /><span>正在打开播放器</span></div></div>}><VideoPlayerModal task={playingTask} onClose={() => setPlaying(null)} /></Suspense>}

@@ -273,6 +273,90 @@ def test_structured_failure_details_survive_database_reload(tmp_path, monkeypatc
     asyncio.run(run())
 
 
+def test_private_browser_request_headers_are_encrypted_and_survive_reload(tmp_path, monkeypatch):
+    from backend.app import database as database_module
+
+    async def run():
+        monkeypatch.setattr(database_module, "DB_PATH", tmp_path / "tasks.db")
+        manager = TaskManager()
+        task = await manager.create_task(
+            "https://cdn.example.test/protected.bin",
+            request_headers={
+                "Authorization": "Bearer signed-token",
+                "Sec-CH-UA": '"Chromium";v="140"',
+                "X-Playback-Token": "opaque",
+                "Host": "attacker.test",
+                "Range": "bytes=0-1",
+                "Cookie": "must-use-cookie-field=1",
+            },
+            cookie="session=secret",
+            request_contexts={
+                "https://segments.example.test": {
+                    "request_headers": {"Authorization": "Bearer segments"},
+                    "cookie": "segment_session=private",
+                }
+            },
+        )
+
+        rows = await database_module.run_db(
+            "SELECT request_headers, request_contexts, cookie FROM tasks WHERE id=?", (task.id,)
+        )
+        stored = rows[0]
+        assert "signed-token" not in stored["request_headers"]
+        assert "Bearer segments" not in stored["request_contexts"]
+        assert "segment_session=private" not in stored["request_contexts"]
+        assert "session=secret" not in stored["cookie"]
+
+        restored = TaskManager()
+        await restored.load_from_db()
+        loaded = restored.tasks[task.id]
+        assert loaded.request_headers == {
+            "authorization": "Bearer signed-token",
+            "sec-ch-ua": '"Chromium";v="140"',
+            "x-playback-token": "opaque",
+        }
+        assert loaded.cookie == "session=secret"
+        assert loaded.request_contexts["https://segments.example.test"] == {
+            "request_headers": {"authorization": "Bearer segments"},
+            "referer": "",
+            "origin": "",
+            "user_agent": "",
+            "cookie": "segment_session=private",
+        }
+        event = restored._task_event(loaded)
+        assert "request_headers" not in event
+        assert event["cookie"] == ""
+
+    asyncio.run(run())
+
+
+def test_browser_task_does_not_store_global_request_identity(tmp_path, monkeypatch):
+    from backend.app import database as database_module
+
+    async def run():
+        monkeypatch.setattr(database_module, "DB_PATH", tmp_path / "tasks.db")
+        monkeypatch.setattr(manager_module.settings, "default_referer", "https://global.test/page")
+        monkeypatch.setattr(manager_module.settings, "default_origin", "https://global.test")
+        monkeypatch.setattr(manager_module.settings, "default_cookie", "global=secret")
+        manager = TaskManager()
+
+        browser_task = await manager.create_task(
+            "https://cdn.example.test/protected.bin",
+            inherit_default_headers=False,
+        )
+        manual_task = await manager.create_task("https://downloads.example.test/manual.bin")
+
+        assert browser_task.referer == ""
+        assert browser_task.origin == ""
+        assert browser_task.cookie == ""
+        assert browser_task.engine_state["inherit_default_headers"] is False
+        assert manual_task.referer == "https://global.test/page"
+        assert manual_task.origin == "https://global.test"
+        assert manual_task.cookie == "global=secret"
+
+    asyncio.run(run())
+
+
 def test_downloader_shutdown_cancellation_preserves_partial_files(tmp_path, monkeypatch):
     from backend.app.downloader import hls as hls_module
 

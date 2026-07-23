@@ -12,7 +12,6 @@ from .schemas import (
     TaskCreate,
     TaskResponse,
     UrlRecognitionRequest,
-    UserscriptPing,
     PlaybackSeekRequest,
     TorrentFileSelection,
     BrowserHandoffAccept,
@@ -32,8 +31,9 @@ from .downloader.playback import (
     playback_service,
 )
 from .utils import get_domain
-from .userscript_monitor import userscript_monitor
 from .desktop_runtime import activate_window, present_browser_handoff, has_browser_handoff_presenter, is_desktop_handoff_session, request_shutdown
+from .desktop_runtime import register_activation, register_browser_handoff, register_shutdown, set_desktop_handoff_session
+from .native_desktop import native_desktop_session, request_core_shutdown
 from .url_recognition import RecognitionError, recognize_url
 from .updater import UpdateError, update_service
 from .models import TaskStatus, TaskType
@@ -248,10 +248,13 @@ async def _create_browser_task(item, output_dir: str = ""):
         origin=item.origin,
         user_agent=item.user_agent,
         cookie=item.cookie,
+        request_headers=item.request_headers,
+        request_contexts=item.request_contexts,
         title=item.title,
         filename=item.filename,
         output_dir=output_dir,
         auto_start=True,
+        inherit_default_headers=False,
     )
     return task
 
@@ -302,6 +305,52 @@ async def shutdown_desktop_app(x_token: str = Header(default="")):
     return {"ok": request_shutdown()}
 
 
+@router.post("/desktop/session/start")
+async def start_native_desktop_session(x_token: str = Header(default="")):
+    _check_token(x_token)
+    status = native_desktop_session.start()
+    set_desktop_handoff_session(True)
+    register_activation(native_desktop_session.activate)
+    register_shutdown(native_desktop_session.shutdown)
+    register_browser_handoff(native_desktop_session.handoff)
+    return status
+
+
+@router.post("/desktop/session/stop")
+async def stop_native_desktop_session(x_token: str = Header(default="")):
+    _check_token(x_token)
+    register_activation(None)
+    register_browser_handoff(None)
+    register_shutdown(None)
+    set_desktop_handoff_session(False)
+    return native_desktop_session.stop()
+
+
+@router.get("/desktop/session/commands")
+async def poll_native_desktop_commands(
+    after: int = 0,
+    timeout: float = 20.0,
+    x_token: str = Header(default=""),
+):
+    _check_token(x_token)
+    return await asyncio.to_thread(native_desktop_session.poll, after, timeout)
+
+
+@router.post("/desktop/handoffs/{handoff_id}/presented")
+async def mark_native_handoff_presented(handoff_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    item = browser_handoffs.mark_presentation(handoff_id, "presented")
+    if item is None:
+        raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
+    return item.public()
+
+
+@router.post("/desktop/core/shutdown")
+async def shutdown_native_core(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return {"ok": request_core_shutdown()}
+
+
 @router.get("/update/check")
 async def check_update(force: bool = False, x_token: str = Header(default="")):
     _check_token(x_token)
@@ -347,18 +396,6 @@ async def recognize_input_url(body: UrlRecognitionRequest, x_token: str = Header
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/userscript/ping")
-async def userscript_ping(body: UserscriptPing, x_token: str = Header(default="")):
-    _check_token(x_token)
-    userscript_monitor.record(version=body.version, page_url=body.page_url)
-    return {"ok": True}
-
-
-@router.get("/userscript/status")
-async def userscript_status(x_token: str = Header(default="")):
-    _check_token(x_token)
-    return userscript_monitor.snapshot()
-
 @router.get("/test")
 async def test_connection(x_token: str = Header(default="")):
     import shutil
@@ -397,6 +434,7 @@ async def create_task(body: TaskCreate, x_token: str = Header(default="")):
         source_page_url=body.source_page_url, mime_type=body.mime_type,
         referer=body.referer, origin=body.origin,
         user_agent=body.user_agent, cookie=body.cookie,
+        request_headers=body.request_headers,
         title=body.title, filename=body.filename,
         concurrency=body.concurrency,
         output_dir=body.download_dir,
@@ -416,6 +454,7 @@ async def create_batch(body: TaskBatchCreate, x_token: str = Header(default=""))
             source_page_url=t.source_page_url, mime_type=t.mime_type,
             referer=t.referer, origin=t.origin,
             user_agent=t.user_agent, cookie=t.cookie,
+            request_headers=t.request_headers,
             title=t.title, filename=t.filename,
             concurrency=t.concurrency,
             output_dir=t.download_dir,

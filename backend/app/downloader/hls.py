@@ -17,9 +17,10 @@ from ..config import settings
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
 from ..naming import is_generic_media_name, suggest_manifest_name
+from ..request_context import build_task_headers
 from .http_file import _content_disposition_filename
 from .merge import merge_segments
-from .errors import as_download_error, diagnose_download_error, format_download_error
+from .errors import as_download_error, diagnose_download_error, format_download_error, should_retry_download_error
 from .engine import task_output_dir, task_work_dir
 from .parser import UnsupportedPlaylistError, parse_m3u8
 from .playback import playback_service, write_playback_plan
@@ -36,7 +37,6 @@ class _BrowserHLSClient:
     def __init__(self, concurrency: int) -> None:
         self._session = CurlAsyncSession(
             max_clients=concurrency + 4,
-            impersonate="firefox",
             default_headers=False,
             http_version="v1",
             timeout=(10, 60),
@@ -51,6 +51,7 @@ class _BrowserHLSClient:
         return await self._session.__aexit__(*args)
 
     async def get(self, url: str, **kwargs):
+        kwargs.setdefault("impersonate", _browser_impersonation(kwargs.get("headers")))
         return await self._session.get(url, **kwargs)
 
     async def download_to_file(
@@ -61,7 +62,12 @@ class _BrowserHLSClient:
         cancel_check,
     ) -> tuple[Any, int]:
         written = 0
-        response = await self._session.get(url, headers=headers, stream=True)
+        response = await self._session.get(
+            url,
+            headers=headers,
+            stream=True,
+            impersonate=_browser_impersonation(headers),
+        )
         try:
             with destination.open("wb") as output:
                 async for chunk in response.aiter_content():
@@ -77,6 +83,16 @@ class _BrowserHLSClient:
                     response.quit_now.set()
                 await response.aclose()
         return response, written
+
+
+def _browser_impersonation(headers: dict[str, str] | None) -> str:
+    values = {str(name).lower(): str(value) for name, value in dict(headers or {}).items()}
+    user_agent = values.get("user-agent", "").lower()
+    if "edg/" in user_agent or "chrome/" in user_agent or "chromium/" in user_agent:
+        return "chrome"
+    if "safari/" in user_agent and "chrome/" not in user_agent:
+        return "safari"
+    return "firefox"
 
 
 def _create_hls_client(concurrency: int):
@@ -146,16 +162,16 @@ class HLSDownloader:
             self._playback_priority_index = int(segment_index)
             self.task.playback_seek_index = int(segment_index)
 
-    def _headers(self) -> dict[str, str]:
-        headers = {"Accept": "*/*"}
-        values = {
-            "User-Agent": self.task.user_agent or settings.default_user_agent,
-            "Referer": self.task.referer or settings.default_referer,
-            "Origin": self.task.origin or settings.default_origin,
-            "Cookie": self.task.cookie or settings.default_cookie,
-        }
-        headers.update({name: value for name, value in values.items() if value})
-        return headers
+    def _headers(
+        self,
+        request_url: str = "",
+        base_headers: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        return build_task_headers(
+            self.task,
+            request_url=request_url,
+            base_headers=base_headers,
+        )
 
     def _task_dir(self) -> Path:
         return task_work_dir(self.task)
@@ -197,7 +213,12 @@ class HLSDownloader:
         self.task.error_attempt = 0
 
     def _record_failure(self, exc: BaseException, *, stage: str, url: str = "") -> None:
-        details = diagnose_download_error(exc, stage=stage, url=url or self.task.url)
+        details = diagnose_download_error(
+            exc,
+            stage=stage,
+            url=url or self.task.url,
+            task_context=self.task,
+        )
         self.task.error_code = details.code
         self.task.error_stage = details.stage
         self.task.error_url = details.url
@@ -249,7 +270,10 @@ class HLSDownloader:
             if current_url in visited:
                 raise ValueError(f"主清单存在循环引用: {current_url}")
             visited.add(current_url)
-            response = await client.get(current_url, headers=headers)
+            response = await client.get(
+                current_url,
+                headers=self._headers(current_url, headers),
+            )
             response.raise_for_status()
             final_url = str(getattr(response, "url", "") or current_url)
             parsed = parse_m3u8(final_url, response.text)
@@ -288,7 +312,7 @@ class HLSDownloader:
 
             concurrency = min(256, max(1, int(task.concurrency or settings.default_concurrency or 12)))
             task.concurrency = concurrency
-            headers = self._headers()
+            headers = self._headers(task.url)
             async with _create_hls_client(concurrency) as client:
                 task.status = TaskStatus.PARSING
                 self._set_stage("parsing", "正在解析 HLS 清单")
@@ -528,6 +552,7 @@ class HLSDownloader:
                         stage="downloading_segments",
                         url=segment["url"],
                         attempt=MAX_RETRIES,
+                        task_context=self.task,
                     )
                     if self._last_segment_error is None:
                         self._last_segment_error = failure
@@ -573,7 +598,9 @@ class HLSDownloader:
             return True
 
         last_error: Exception | None = None
+        attempts_made = 0
         for attempt in range(MAX_RETRIES):
+            attempts_made = attempt + 1
             if self._is_canceled() or self._is_pausing():
                 return False
             try:
@@ -623,6 +650,8 @@ class HLSDownloader:
                 self.task.progress.connection_status = "reconnecting"
                 destination.unlink(missing_ok=True)
                 destination.with_name(destination.name + ".tmp").unlink(missing_ok=True)
+                if not should_retry_download_error(exc):
+                    break
                 if attempt < MAX_RETRIES - 1:
                     self._log(
                         f"[segment {index}] 第 {attempt + 1}/{MAX_RETRIES} 次失败: {exc}"
@@ -634,7 +663,8 @@ class HLSDownloader:
             last_error,
             stage="downloading_segments",
             url=segment["url"],
-            attempt=MAX_RETRIES,
+            attempt=attempts_made,
+            task_context=self.task,
         ) from last_error
 
     def _refresh_playback_progress(self) -> None:
@@ -658,7 +688,7 @@ class HLSDownloader:
         headers: dict[str, str],
     ) -> bytes:
         if url not in self._key_cache:
-            response = await client.get(url, headers=headers)
+            response = await client.get(url, headers=self._headers(url, headers))
             response.raise_for_status()
             if len(response.content) != 16:
                 raise ValueError(
@@ -678,7 +708,7 @@ class HLSDownloader:
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_name(destination.name + ".tmp")
         temporary.unlink(missing_ok=True)
-        request_headers = dict(headers)
+        request_headers = self._headers(url, headers)
         expected_length = None
         if byte_range:
             start = int(byte_range["offset"])

@@ -30,12 +30,14 @@ export interface DownloadClickIntent {
   generic?: boolean
   tabId?: number
   frameId?: number
+  opensNewTab?: boolean
+  controlHint?: boolean
 }
 
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
 const SEGMENT_EXT = /\.(?:ts|m4s|cmfv|cmfa|aac)(?:$|[?#])/i
 const MANIFEST_EXT = /\.(?:m3u8?|mpd)$/i
-const GENERIC_MEDIA_NAME = /^(?:video|stream|master|index|playlist|manifest|chunklist|media|output|download|file|vod|live)[-_ ]*\d*$/i
+const GENERIC_MEDIA_NAME = /^(?:(?:video|stream|master|index|playlist|manifest|chunklist|media|output|download|file|vod|live)(?:[-_ ]*(?:\d{3,4}p?|low|medium|high|sd|hd|fhd|uhd|4k))?|(?:hls[-_ ]*)?(?:\d{3,4}p[-_ ]*)?(?:hls[-_ ]*)?(?:video[-_ ]*stream|视频流)?|(?:hls[-_ ]*)?\d{3,4}p)$/i
 const OPAQUE_MEDIA_NAME = /^(?:[a-f0-9]{16,}|[a-z0-9_-]{28,})$/i
 
 function cleanName(value = '', pathValue = false): string {
@@ -135,11 +137,73 @@ export function shouldTakeover(input: {
   if (!input.enabled) return false
   try {
     const url = new URL(input.url)
-    if (!['http:', 'https:'].includes(url.protocol) || input.excludedHosts.includes(url.host)) return false
+    const host = url.host.toLowerCase()
+    const excluded = input.excludedHosts.some(value => {
+      const rule = String(value || '').trim().toLowerCase().replace(/^\*\./, '')
+      return Boolean(rule && (host === rule || host.endsWith(`.${rule}`)))
+    })
+    if (!['http:', 'https:'].includes(url.protocol) || excluded) return false
   } catch {
     return false
   }
+  // Like IDM/AB, an unknown Content-Length is eligible. A known small file is
+  // left in the browser so favicons and tiny export responses are not captured.
+  if (input.minimumBytes > 0 && Number(input.size) > 0 && Number(input.size) < input.minimumBytes) return false
   return true
+}
+
+export function pageIdentity(value = ''): string {
+  if (!value) return ''
+  try {
+    const url = new URL(value)
+    url.hash = ''
+    return url.href
+  } catch {
+    return value.split('#', 1)[0]
+  }
+}
+
+export function pageResourceKey(tabId: number, pageUrl = ''): string {
+  const page = pageIdentity(pageUrl)
+  if (tabId >= 0) return page ? `resources:tab:${tabId}:page:${resourceId(page)}` : `resources:tab:${tabId}`
+  return `resources:page:${resourceId(page || 'global')}`
+}
+
+const UNSAFE_REPLAY_HEADERS = new Set([
+  'accept-encoding', 'connection', 'content-length', 'cookie', 'host', 'keep-alive',
+  'proxy-authenticate', 'proxy-authorization', 'range', 'te', 'trailer',
+  'transfer-encoding', 'upgrade',
+])
+
+export function replayableRequestHeaders(values: Record<string, string> | undefined): Record<string, string> {
+  const result: Record<string, string> = {}
+  let total = 0
+  for (const [rawName, rawValue] of Object.entries(values || {}).slice(0, 64)) {
+    const name = rawName.trim().toLowerCase()
+    const value = String(rawValue || '').trim()
+    if (!name || !value || UNSAFE_REPLAY_HEADERS.has(name) || /[\r\n]/.test(name + value)) continue
+    total += name.length + value.length
+    if (total > 32 * 1024) break
+    result[name] = value
+  }
+  return result
+}
+
+export function resourceRequestIdentity(
+  resource: Pick<MediaResource, 'pageUrl' | 'requestHeaders'>,
+  fallbackUserAgent = '',
+): { referer: string; origin: string; userAgent: string } {
+  const captured = Object.fromEntries(
+    Object.entries(resource.requestHeaders || {}).map(([name, value]) => [name.toLowerCase(), String(value || '')]),
+  )
+  return {
+    // A page URL is a valid fallback for Referer when the resource came from
+    // DOM/performance capture. Origin is deliberately not synthesized: normal
+    // GET navigations/downloads often omit it and some CDNs reject an invented one.
+    referer: captured.referer || resource.pageUrl || '',
+    origin: captured.origin || '',
+    userAgent: captured['user-agent'] || fallbackUserAgent,
+  }
 }
 
 export function matchesDownloadClick(
@@ -150,7 +214,8 @@ export function matchesDownloadClick(
   const age = now - intent.at
   if (age < 0 || age > 7000) return false
   const sameTab = intent.tabId !== undefined && download.tabId !== undefined && intent.tabId === download.tabId
-  if (intent.tabId !== undefined && download.tabId !== undefined && !sameTab) return false
+  const permittedNewTab = Boolean(intent.opensNewTab)
+  if (intent.tabId !== undefined && download.tabId !== undefined && !sameTab && !permittedNewTab) return false
   const samePage = Boolean(intent.pageUrl && download.referrer
     && stripHash(intent.pageUrl) === stripHash(download.referrer))
   if (intent.href) {
@@ -158,15 +223,16 @@ export function matchesDownloadClick(
     const exact = [download.url, download.finalUrl, ...(download.chainUrls || [])]
       .filter((value): value is string => Boolean(value))
       .some(value => stripHash(value) === clicked)
-    if (exact && (sameTab || !intent.pageUrl || !download.referrer || samePage)) return true
+    if (exact && (sameTab || permittedNewTab || !intent.pageUrl || !download.referrer || samePage)) return true
     if (exact) return false
   }
   if (intent.generic) {
-    return age <= 1000
+    const limit = intent.ctrlForce ? 7000 : intent.controlHint ? 4000 : 1000
+    return age <= limit
       && samePage
-      && (sameTab || intent.tabId === undefined || download.tabId === undefined)
+      && (sameTab || permittedNewTab || intent.tabId === undefined || download.tabId === undefined)
   }
-  return age <= 3000 && samePage && (sameTab || intent.tabId === undefined || download.tabId === undefined)
+  return age <= 3000 && samePage && (sameTab || permittedNewTab || intent.tabId === undefined || download.tabId === undefined)
 }
 
 function stripHash(value: string): string {

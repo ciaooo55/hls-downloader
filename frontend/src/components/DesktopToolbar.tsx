@@ -17,7 +17,7 @@ interface Props {
   onAction: (action: string) => void
   onOpen: () => void
   onLog: () => void
-  onUserscript: () => void
+  onBrowserExtension: () => void
   onRefresh: () => void
   onUpdate: () => void
   onSettings: () => void
@@ -34,6 +34,10 @@ export default function DesktopToolbar(props: Props) {
   const c = props.commands
   return (
     <header className="desktop-toolbar">
+      <div className="brand-block">
+        <img className="app-mark" src="./app-icon.png" alt="" />
+        <div><strong>HLS Downloader</strong><span>本地高性能下载管理器</span></div>
+      </div>
       <div className="tool-group">
         <ToolButton title="新建并识别链接" onClick={props.onNew} primary><Plus size={18} /><span>新建</span></ToolButton>
         <ToolButton title="粘贴并识别" onClick={props.onPaste}><ClipboardPaste size={17} /><span className="tool-label">粘贴</span></ToolButton>
@@ -57,7 +61,7 @@ export default function DesktopToolbar(props: Props) {
         {props.query && <button type="button" title="清除搜索" aria-label="清除搜索" onClick={() => props.onQueryChange('')}><X size={13} /></button>}
       </label>
       <div className="tool-group">
-        <ToolButton title="浏览器扩展与脚本" onClick={props.onUserscript}><Users size={18} /></ToolButton>
+        <ToolButton title="浏览器插件" onClick={props.onBrowserExtension}><Users size={18} /></ToolButton>
         <ToolButton title="刷新任务" onClick={props.onRefresh}><RefreshCw size={18} /></ToolButton>
         <button className="tool-button update-button" title={`检查软件更新${props.version ? ` · 当前 v${props.version}` : ''}`} aria-label="检查软件更新" onClick={props.onUpdate}><CircleArrowUp size={18} /></button>
         <ToolButton title={props.theme === 'dark' ? '切换浅色主题' : '切换深色主题'} onClick={props.onToggleTheme}>{props.theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</ToolButton>

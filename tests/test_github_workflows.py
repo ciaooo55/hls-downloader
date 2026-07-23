@@ -22,6 +22,8 @@ def test_ci_runs_windows_python_and_frontend_checks():
     assert "pnpm run build" in workflow
     assert "working-directory: extension" in workflow
     assert "web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors" in workflow
+    assert "actions/setup-java@v5" in workflow
+    assert "desktop-compose\\gradlew.bat" in workflow
     assert "permissions:\n  contents: read" in workflow
 
 
@@ -29,15 +31,16 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     workflow = _workflow("release.yml")
 
     assert "workflow_dispatch:" in workflow
-    assert 'default:' in workflow and '1.3.' in workflow
+    assert 'default:' in workflow and '1.4.' in workflow
     assert "tags:" in workflow and "v*" in workflow
     assert "windows-latest" in workflow
+    assert "actions/setup-java@v5" in workflow
     assert "ubuntu-latest" not in workflow
     assert "choco install ffmpeg nsis" in workflow
     assert "scripts\\build_installer.ps1" in workflow
     assert "HLSDownloader-Windows-x64-Setup.exe" in workflow
     assert "HLSDownloader-Windows-x64-Portable.zip" in workflow
-    assert "m3u8-sniffer.user.js" in workflow
+    assert "m3u8-sniffer.user.js" not in workflow
     assert "HLSDownloader-Firefox-Unsigned.zip" in workflow
     assert "HLSDownloader-Firefox-Source.zip" in workflow
     assert "web-ext sign" not in workflow
@@ -48,9 +51,22 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "actions/download-artifact@v7" in workflow
     assert "softprops/action-gh-release" not in workflow
     assert "gh release create" in workflow
+    assert 'docs\\releases' in workflow
+    assert '"--notes-file"' in workflow
+    assert '"--generate-notes"' in workflow
     assert '--repo "${{ github.repository }}"' in workflow
     assert "startsWith(github.ref, 'refs/tags/v')" in workflow
     assert "contents: write" in workflow
+
+
+def test_v140_release_notes_document_scope_validation_and_limits():
+    notes = (ROOT / "docs" / "releases" / "v1.4.0.md").read_text(encoding="utf-8")
+
+    assert "浏览器接管" in notes
+    assert "403" in notes
+    assert "177" in notes
+    assert "Chrome" in notes and "Firefox" in notes
+    assert "DRM" in notes
 
 
 def test_build_requirements_pin_pyinstaller():
@@ -66,7 +82,7 @@ def test_readme_documents_windows_release_assets():
     assert "ciaooo55/hls-downloader/actions/workflows/ci.yml" in readme
     assert "HLSDownloader-Windows-x64-Setup.exe" in readme
     assert "HLSDownloader-Windows-x64-Portable.zip" in readme
-    assert "m3u8-sniffer.user.js" in readme
+    assert "m3u8-sniffer.user.js" not in readme
     assert "HLSDownloader-Firefox-Unsigned.zip" in readme
     assert "HLSDownloader-Firefox-Source.zip" in readme
     assert "SHA256SUMS.txt" in readme

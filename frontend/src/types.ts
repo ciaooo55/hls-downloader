@@ -98,14 +98,6 @@ export interface TorrentFileEntry {
   offset?: number
 }
 
-export interface UserscriptStatus {
-  detected: boolean
-  seen_before: boolean
-  version: string
-  page_origin: string
-  last_seen_at: string
-}
-
 export interface BrowserStatus {
   detected: boolean
   seen_before: boolean

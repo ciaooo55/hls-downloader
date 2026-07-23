@@ -5,6 +5,8 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 
+from .naming import is_generic_media_name, suggest_manifest_name
+
 
 @dataclass
 class BrowserHandoff:
@@ -18,6 +20,8 @@ class BrowserHandoff:
     origin: str
     cookie: str
     user_agent: str
+    request_headers: dict[str, str]
+    request_contexts: dict[str, dict]
     size: int
     status: str
     created_at: float
@@ -30,6 +34,8 @@ class BrowserHandoff:
         value = asdict(self)
         value.pop("cookie", None)
         value.pop("user_agent", None)
+        value.pop("request_headers", None)
+        value.pop("request_contexts", None)
         return value
 
 
@@ -71,17 +77,35 @@ class BrowserHandoffService:
     def create(self, payload: dict) -> BrowserHandoff:
         self.record_ping(str(payload.get("extension_version", "")))
         self.cleanup()
+        url = str(payload.get("url", ""))
+        filename = str(payload.get("filename", ""))
+        title = str(payload.get("title", ""))
+        mime_type = str(payload.get("mime_type", ""))
+        source_page_url = str(payload.get("source_page_url", ""))
+        manifest = ".m3u8" in url.lower() or url.lower().split("?", 1)[0].endswith(".mpd") or any(
+            marker in mime_type.lower() for marker in ("mpegurl", "dash+xml")
+        )
+        if manifest and is_generic_media_name(filename):
+            filename = suggest_manifest_name(
+                url,
+                filename=filename,
+                title=title,
+                source_page_url=source_page_url,
+                fallback="download",
+            )
         item = BrowserHandoff(
             id=secrets.token_urlsafe(12),
-            url=str(payload.get("url", "")),
-            filename=str(payload.get("filename", "")),
-            title=str(payload.get("title", "")),
-            mime_type=str(payload.get("mime_type", "")),
-            source_page_url=str(payload.get("source_page_url", "")),
+            url=url,
+            filename=filename,
+            title=title,
+            mime_type=mime_type,
+            source_page_url=source_page_url,
             referer=str(payload.get("referer", "")),
             origin=str(payload.get("origin", "")),
             cookie=str(payload.get("cookie", "")),
             user_agent=str(payload.get("user_agent", "")),
+            request_headers={str(key): str(value) for key, value in dict(payload.get("request_headers") or {}).items()},
+            request_contexts={str(key): dict(value) for key, value in dict(payload.get("request_contexts") or {}).items() if isinstance(value, dict)},
             size=max(0, int(payload.get("size", 0) or 0)),
             status="pending",
             created_at=time.time(),

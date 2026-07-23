@@ -3,9 +3,9 @@ import { FileUp, Link, X } from 'lucide-react'
 import { createTask, recognizeUrl, uploadTorrent } from '../api'
 import { recognitionView, type RecognitionResult } from '../recognition'
 import type { Settings } from '../types'
-import { LEGACY_REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
+import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 
-export default function RecognizeDialog({ settings, initialUrl = '', onClose, onAdded, onNeedUserscript }: { settings: Settings; initialUrl?: string; onClose: () => void; onAdded: () => void; onNeedUserscript: () => void }) {
+export default function RecognizeDialog({ settings, initialUrl = '', onClose, onAdded, onNeedExtension }: { settings: Settings; initialUrl?: string; onClose: () => void; onAdded: () => void; onNeedExtension: () => void }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKeyDown)
@@ -70,14 +70,14 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
     <div className="form-row"><div><label>输出文件名（可选）</label><input value={filename} onChange={event => setFilename(event.target.value)} placeholder="自动生成" /></div><div className="short-field"><label>并发</label><input type="number" min={1} max={256} value={concurrency} onChange={event => setConcurrency(Math.max(1, Math.min(256, Number(event.target.value))))} /></div></div>
     <button className="text-button" onClick={() => setAdvanced(value => !value)}>{advanced ? '收起请求选项' : '请求选项（Referer / Origin / Cookie）'}</button>
     {advanced && <div className="advanced-grid request-options">
-      <div className="request-field"><label>Referer</label><input value={referer} onChange={event => setReferer(event.target.value)} placeholder={LEGACY_REQUEST_EXAMPLES.referer} /><small>{REQUEST_FIELD_HELP.referer}</small></div>
-      <div className="request-field"><label>Origin</label><input value={origin} onChange={event => setOrigin(event.target.value)} placeholder={LEGACY_REQUEST_EXAMPLES.origin} /><small>{REQUEST_FIELD_HELP.origin}</small></div>
-      <div className="request-field"><label>User-Agent</label><input value={userAgent} onChange={event => setUserAgent(event.target.value)} placeholder={LEGACY_REQUEST_EXAMPLES.userAgent} /><small>{REQUEST_FIELD_HELP.userAgent}</small></div>
+      <div className="request-field"><label>Referer</label><input value={referer} onChange={event => setReferer(event.target.value)} placeholder={REQUEST_EXAMPLES.referer} /><small>{REQUEST_FIELD_HELP.referer}</small></div>
+      <div className="request-field"><label>Origin</label><input value={origin} onChange={event => setOrigin(event.target.value)} placeholder={REQUEST_EXAMPLES.origin} /><small>{REQUEST_FIELD_HELP.origin}</small></div>
+      <div className="request-field"><label>User-Agent</label><input value={userAgent} onChange={event => setUserAgent(event.target.value)} placeholder={REQUEST_EXAMPLES.userAgent} /><small>{REQUEST_FIELD_HELP.userAgent}</small></div>
       <div className="request-field"><label>Cookie</label><input value={cookie} onChange={event => setCookie(event.target.value)} placeholder="sessionid=abc; token=xyz" /><small>{REQUEST_FIELD_HELP.cookie}</small></div>
     </div>}
     {error && <div className="inline-error">{error}</div>}
     {view?.mode === 'choose' && <div className="candidate-list"><strong>发现 {result?.candidates.length} 个播放清单</strong>{result?.candidates.map(candidate => <button key={candidate.url} title={candidate.url} onClick={() => startCandidate(candidate.url)}>{candidate.url}</button>)}</div>}
-    {view?.mode === 'not-found' && <div className="not-found"><p>{view.message}</p><button className="secondary-button" onClick={onNeedUserscript}>打开浏览器脚本工具</button></div>}
+    {view?.mode === 'not-found' && <div className="not-found"><p>{view.message}</p><button className="secondary-button" onClick={onNeedExtension}>打开浏览器插件工具</button></div>}
     <footer><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={busy || !url.trim()} onClick={recognize}>{busy ? '正在处理...' : directType(url.trim()) ? '开始下载' : '识别并下载'}</button></footer>
   </section></div>
 }

@@ -1,15 +1,12 @@
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, FileResponse
 from contextlib import asynccontextmanager
-from html import escape
-from pathlib import Path
 
 from .config import PROJECT_ROOT, settings
 from .api import router
 from .downloader.task_manager import manager
-from .userscript_monitor import userscript_monitor
-from .userscript_service import render_userscript
 from .updater import cleanup_update_cache
 
 @asynccontextmanager
@@ -27,10 +24,16 @@ async def lifespan(app: FastAPI):
         await manager.shutdown()
 
 app = FastAPI(title="HLS Downloader", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"^(tauri://localhost|https?://tauri\.localhost|https?://(localhost|127\.0\.0\.1)(:\d+)?)$",
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(router)
 
 UI_DIST = PROJECT_ROOT / "frontend" / "dist"
-USERSCRIPT_FILE = PROJECT_ROOT / "userscript" / "m3u8-sniffer.user.js"
 UI_RESPONSE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
     "Pragma": "no-cache",
@@ -38,50 +41,14 @@ UI_RESPONSE_HEADERS = {
 }
 
 
-@app.get("/userscript/m3u8-sniffer.user.js")
-async def serve_userscript():
-    if not USERSCRIPT_FILE.exists():
-        return HTMLResponse("Bundled userscript not found", status_code=404)
-    host = settings.host if settings.host not in {"0.0.0.0", "::"} else "127.0.0.1"
-    source = USERSCRIPT_FILE.read_text(encoding="utf-8")
-    rendered = render_userscript(
-        source,
-        host=host,
-        port=settings.port,
-        token=settings.token,
-    )
-    return PlainTextResponse(
-        rendered,
-        media_type="application/javascript",
-        headers={"Cache-Control": "no-store"},
-    )
-
-
 @app.get("/help")
 async def serve_help():
-    status = userscript_monitor.snapshot()
-    if status.detected:
-        state_class = "detected"
-        state_title = "已检测到浏览器脚本运行"
-        version = escape(status.version or "未知")
-        page_origin = escape(status.page_origin or "未知页面")
-        state_detail = f"版本 {version}，来源 {page_origin}"
-    elif status.seen_before:
-        state_class = "waiting"
-        state_title = "脚本此前运行过，目前未收到报到"
-        state_detail = "请打开一个 HTTPS 视频页面，等待几秒后刷新此页。"
-    else:
-        state_class = "waiting"
-        state_title = "本次启动尚未检测到浏览器脚本"
-        state_detail = "安装脚本后打开一个 HTTPS 视频页面，此页会自动更新。"
-
     return HTMLResponse(
         f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="5">
   <title>HLS Downloader 使用教程</title>
   <style>
     * {{ box-sizing: border-box; }}
@@ -90,8 +57,7 @@ async def serve_help():
     h1 {{ margin: 0 0 8px; font-size: 30px; letter-spacing: 0; }}
     h2 {{ margin: 28px 0 10px; font-size: 19px; letter-spacing: 0; }}
     p {{ margin: 8px 0; }}
-    .status {{ border-left: 4px solid #d49a24; background: #fff; padding: 16px 18px; }}
-    .status.detected {{ border-color: #16845b; }}
+    .status {{ border-left: 4px solid #16845b; background: #fff; padding: 16px 18px; }}
     .status strong {{ display: block; font-size: 18px; }}
     .actions {{ display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }}
     a {{ color: #075ca8; }}
@@ -104,23 +70,22 @@ async def serve_help():
 <body>
   <main>
     <h1>HLS Downloader 使用教程</h1>
-    <p>下载器已经启动。先通过 ScriptCat 或 Tampermonkey 安装浏览器脚本，再打开视频网站。</p>
+    <p>下载器已经启动。请安装 Chrome/Edge 或 Firefox 浏览器插件，再打开需要下载的网页。</p>
     <div class="actions">
-      <a class="button" href="/userscript/m3u8-sniffer.user.js">安装浏览器脚本</a>
       <a class="button" href="/ui">打开下载管理器</a>
     </div>
-    <div class="status {state_class}">
-      <strong>{state_title}</strong>
-      <span>{state_detail}</span>
+    <div class="status">
+      <strong>仅使用正式浏览器插件</strong>
+      <span>安装包内含 Chromium 扩展目录；Firefox 插件包请从 GitHub Release 下载。</span>
     </div>
     <h2>使用步骤</h2>
     <ol>
-      <li>浏览器先安装 ScriptCat 或 Tampermonkey 扩展。</li>
-      <li>点击上面的“安装浏览器脚本”，在扩展页面确认安装。</li>
-      <li>打开 HTTPS 视频页面并播放，页面右上角会出现嗅探结果。</li>
+      <li>在桌面端“浏览器集成”中打开 Chromium 扩展目录并加载插件，或安装经过 Mozilla 签名的 Firefox 版本。</li>
+      <li>打开网页并播放媒体，插件会在当前页面显示捕获结果。</li>
+      <li>点击资源或真实下载链接，确认后交给桌面端下载。</li>
       <li>点击下载后，可回到下载管理器查看分片和合并进度。</li>
     </ol>
-    <p class="note">脚本发送任务时会使用当前网页的 Referer 和 Origin，即使视频链接位于另一个域名。受浏览器安全限制，程序不能读取 ScriptCat 或 Tampermonkey 的安装列表；这里显示的是脚本最近是否向本地下载器报到。</p>
+    <p class="note">插件只重放浏览器实际捕获且适合重放的请求身份。Cookie 需要按站点授权，未捕获来源的 Cookie/Authorization 不会跨域发送。</p>
   </main>
 </body>
 </html>"""

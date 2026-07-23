@@ -63,7 +63,8 @@ async function main() {
   const controls = el('div', 'controls')
   const enableBtn = el('button', '', '\u81ea\u52a8\u63a5\u7ba1')
   const cookieBtn = el('button', '', 'Cookie')
-  controls.append(enableBtn, cookieBtn)
+  const excludeBtn = el('button', '', '\u6392\u9664\u672c\u7ad9')
+  controls.append(enableBtn, cookieBtn, excludeBtn)
 
   const errorBox = el('div', 'send-error')
   errorBox.hidden = true
@@ -79,7 +80,9 @@ async function main() {
 
   let enabled = true
   let host = ''
+  let resourceHosts: string[] = []
   let authorized: string[] = []
+  let excluded: string[] = []
   const sending: Record<string, string> = {}
   const pending: Record<string, string> = {}
   let resources: MediaResource[] = []
@@ -130,9 +133,15 @@ async function main() {
   const refreshButtons = () => {
     enableBtn.textContent = enabled ? '\u81ea\u52a8\u63a5\u7ba1\u5f00' : '\u81ea\u52a8\u63a5\u7ba1\u5173'
     enableBtn.classList.toggle('active', enabled)
-    cookieBtn.textContent = authorized.includes(host) ? 'Cookie \u5df2\u6388' : '\u6388\u6743 Cookie'
-    cookieBtn.classList.toggle('active', authorized.includes(host))
+    const consentHosts = [...new Set([host, ...resourceHosts].filter(Boolean))]
+    const allAuthorized = Boolean(consentHosts.length) && consentHosts.every(value => authorized.includes(value))
+    cookieBtn.textContent = allAuthorized ? `Cookie \u5df2\u6388 (${consentHosts.length})` : '\u6388\u6743\u672c\u9875 Cookie'
+    cookieBtn.classList.toggle('active', allAuthorized)
     cookieBtn.disabled = !host
+    const siteExcluded = excluded.includes(host)
+    excludeBtn.textContent = siteExcluded ? '\u672c\u7ad9\u5df2\u6392\u9664' : '\u6392\u9664\u672c\u7ad9'
+    excludeBtn.classList.toggle('active', siteExcluded)
+    excludeBtn.disabled = !host
   }
 
   const send = async (item: MediaResource) => {
@@ -154,14 +163,29 @@ async function main() {
   }
 
   enableBtn.addEventListener('click', async () => {
-    enabled = !enabled
-    await browser.storage.local.set({ enabled })
+    const requested = !enabled
+    const response = await browser.runtime.sendMessage({ type: 'set-takeover-settings', enabled: requested })
+    if (!response?.ok) {
+      setError(response?.error || '\u4fdd\u5b58\u63a5\u7ba1\u8bbe\u7f6e\u5931\u8d25')
+      return
+    }
+    enabled = response.takeover_enabled === requested
     refreshButtons()
   })
   cookieBtn.addEventListener('click', async () => {
     if (!host) return
-    authorized = authorized.includes(host) ? authorized.filter(value => value !== host) : [...authorized, host]
+    const consentHosts = [...new Set([host, ...resourceHosts].filter(Boolean))]
+    const allAuthorized = consentHosts.every(value => authorized.includes(value))
+    authorized = allAuthorized
+      ? authorized.filter(value => !consentHosts.includes(value))
+      : [...new Set([...authorized, ...consentHosts])]
     await browser.storage.local.set({ authorizedCookieHosts: authorized })
+    refreshButtons()
+  })
+  excludeBtn.addEventListener('click', async () => {
+    if (!host) return
+    excluded = excluded.includes(host) ? excluded.filter(value => value !== host) : [...excluded, host]
+    await browser.storage.local.set({ excludedHosts: excluded })
     refreshButtons()
   })
 
@@ -169,12 +193,16 @@ async function main() {
   const pageUrl = tab?.url || ''
   try { host = new URL(pageUrl).host } catch { host = '' }
   resources = await browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab?.id }) || []
+  resourceHosts = [...new Set(resources.map(item => {
+    try { return new URL(item.url).host } catch { return '' }
+  }).filter(Boolean))]
   const online = Boolean((await browser.runtime.sendMessage({ type: 'ping' }))?.ok)
   statusEl.textContent = online ? '\u684c\u9762\u7aef\u5df2\u8fde\u63a5' : '\u684c\u9762\u7aef\u79bb\u7ebf'
   statusEl.classList.toggle('online', online)
-  const stored = await browser.storage.local.get(['enabled', 'authorizedCookieHosts'])
+  const stored = await browser.storage.local.get(['enabled', 'authorizedCookieHosts', 'excludedHosts'])
   enabled = stored.enabled !== false
   authorized = Array.isArray(stored.authorizedCookieHosts) ? stored.authorizedCookieHosts : []
+  excluded = Array.isArray(stored.excludedHosts) ? stored.excludedHosts : []
   refreshButtons()
   renderList()
 

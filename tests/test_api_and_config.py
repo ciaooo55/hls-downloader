@@ -147,6 +147,7 @@ def test_browser_direct_download_creates_and_starts_desktop_task(monkeypatch):
     assert response.status_code == 200
     assert response.json()["id"] == "browser-task"
     assert captured["auto_start"] is True
+    assert captured["inherit_default_headers"] is False
     assert captured["referer"] == "https://example.test/downloads"
     assert captured["origin"] == "https://example.test"
     assert activated == [True]
@@ -186,14 +187,14 @@ def test_save_settings_serializes_project_paths_as_relative(tmp_path, monkeypatc
     assert saved["ffmpeg_path"] == "bin\\ffmpeg.exe"
 
 
-def test_repository_default_config_uses_missav_request_headers():
+def test_repository_default_config_does_not_force_site_specific_request_headers():
     config_path = config_module.PROJECT_ROOT / "config.json"
     data = json.loads(config_path.read_text(encoding="utf-8"))
 
-    assert data["config_version"] == 7
+    assert data["config_version"] == 8
     assert data["temp_dir"] == "."
-    assert data["default_referer"] == "https://missav.ai/"
-    assert data["default_origin"] == "https://missav.ai"
+    assert data["default_referer"] == ""
+    assert data["default_origin"] == ""
     assert data["default_cookie"] == ""
     assert data["default_concurrency"] == 12
     assert data["max_concurrent_tasks"] == 3
@@ -208,7 +209,7 @@ def test_settings_ignores_fields_written_by_a_future_release():
     assert not hasattr(loaded, "future_download_engine")
 
 
-def test_old_blank_request_defaults_migrate_to_missav(tmp_path, monkeypatch):
+def test_old_blank_request_defaults_remain_blank_after_migration(tmp_path, monkeypatch):
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps(
@@ -227,11 +228,11 @@ def test_old_blank_request_defaults_migrate_to_missav(tmp_path, monkeypatch):
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 7
-    assert loaded.default_referer == "https://missav.ai/"
-    assert loaded.default_origin == "https://missav.ai"
+    assert loaded.config_version == 8
+    assert loaded.default_referer == ""
+    assert loaded.default_origin == ""
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["config_version"] == 7
+    assert saved["config_version"] == 8
     assert saved["temp_dir"] == "."
     assert saved["default_concurrency"] == 12
     assert saved["max_concurrent_tasks"] == 3
@@ -255,7 +256,7 @@ def test_v2_legacy_concurrency_defaults_migrate_to_new_defaults(tmp_path, monkey
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 7
+    assert loaded.config_version == 8
     assert loaded.default_concurrency == 12
     assert loaded.max_concurrent_tasks == 3
 
@@ -278,7 +279,7 @@ def test_v2_custom_concurrency_values_are_preserved_during_migration(tmp_path, m
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 7
+    assert loaded.config_version == 8
     assert loaded.default_concurrency == 6
     assert loaded.max_concurrent_tasks == 5
 

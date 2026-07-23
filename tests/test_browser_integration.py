@@ -7,15 +7,43 @@ from backend import native_host
 
 def test_browser_handoff_confirmation_and_expiry():
     service = BrowserHandoffService(ttl=0.01)
-    item = service.create({"url": "https://cdn.test/file.zip", "cookie": "session=secret", "size": 42})
+    item = service.create({
+        "url": "https://cdn.test/file.zip",
+        "cookie": "session=secret",
+        "request_headers": {"authorization": "Bearer private"},
+        "request_contexts": {
+            "https://segments.test": {
+                "request_headers": {"authorization": "Bearer scoped"},
+                "cookie": "scoped=secret",
+            }
+        },
+        "size": 42,
+    })
     assert item.status == "pending"
     assert "cookie" not in item.public()
+    assert "request_headers" not in item.public()
+    assert "request_contexts" not in item.public()
+    assert item.request_headers == {"authorization": "Bearer private"}
+    assert item.request_contexts["https://segments.test"]["cookie"] == "scoped=secret"
     assert service.pending()[0]["id"] == item.id
     assert service.reject(item.id).status == "rejected"
 
     expired = service.create({"url": "https://cdn.test/old.zip"})
     expired.created_at = time.time() - 0.02
     assert service.get(expired.id).status == "expired"
+
+
+def test_browser_handoff_replaces_generic_manifest_name_with_page_title():
+    service = BrowserHandoffService()
+    item = service.create({
+        "url": "https://cdn.test/video_1080p.m3u8?token=1",
+        "filename": "video_1080p.m3u8",
+        "title": "第十二集：重新出发",
+        "source_page_url": "https://site.test/watch/episode-12",
+        "mime_type": "application/vnd.apple.mpegurl",
+    })
+
+    assert item.filename == "第十二集：重新出发"
 
 
 def test_browser_status_explains_when_extension_has_never_connected():
@@ -55,6 +83,31 @@ def test_native_host_manual_download_creates_task_immediately(monkeypatch):
     assert result["activated"] is True
     assert ("POST", "/browser/downloads", {"url": "https://cdn.test/setup.exe"}) in calls
     assert ("POST", "/app/activate", {}) in calls
+
+
+def test_native_host_ping_and_takeover_settings_share_desktop_source_of_truth(monkeypatch):
+    calls = []
+    monkeypatch.setattr(native_host, "_ensure_app", lambda: None)
+
+    def request(method, path, payload=None, timeout=4):
+        calls.append((method, path, payload))
+        if path == "/health":
+            return {"version": "1.4.0"}
+        if path == "/settings" and method == "GET":
+            return {"browser_takeover_enabled": False, "browser_takeover_min_mb": 3}
+        if path == "/settings" and method == "POST":
+            return {"browser_takeover_enabled": payload["browser_takeover_enabled"], "browser_takeover_min_mb": 3}
+        return {"ok": True}
+
+    monkeypatch.setattr(native_host, "_request", request)
+
+    ping = native_host.dispatch({"op": "ping", "version": "1.4.0"})
+    updated = native_host.dispatch({"op": "set_takeover_settings", "enabled": True})
+
+    assert ping["takeover_enabled"] is False
+    assert ping["takeover_minimum_bytes"] == 3 * 1024 * 1024
+    assert updated["takeover_enabled"] is True
+    assert ("POST", "/settings", {"browser_takeover_enabled": True}) in calls
 
 
 def test_native_host_waits_for_handoff_with_one_long_request(monkeypatch):

@@ -32,6 +32,33 @@ def test_recognizes_extensionless_playlist_from_signature():
     assert [item.url for item in result.candidates] == ["https://media.test/play?id=1"]
 
 
+def test_treats_large_direct_archive_as_file_without_page_size_error():
+    def handler(request: httpx.Request):
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/zip", "Content-Length": str(100 * 1024 * 1024)},
+            content=b"not read as a page",
+            request=request,
+        )
+
+    result = run_recognition("http://ipv4.download.test/100MB.zip", handler)
+
+    assert result.kind == "file"
+    assert result.candidates[0].source == "file"
+
+
+def test_follows_redirect_before_returning_direct_file_candidate():
+    def handler(request: httpx.Request):
+        if request.url.host == "mirror.test":
+            return httpx.Response(302, headers={"Location": "http://cdn.test/releases/system.iso"}, request=request)
+        return httpx.Response(200, headers={"Content-Type": "application/octet-stream"}, content=b"iso", request=request)
+
+    result = run_recognition("https://mirror.test/releases/system.iso", handler)
+
+    assert result.kind == "file"
+    assert result.final_url == "http://cdn.test/releases/system.iso"
+
+
 def test_extracts_resolves_and_deduplicates_page_candidates():
     html = """
     <html><body>
@@ -61,7 +88,7 @@ def test_reports_no_candidate_for_page_without_static_hls():
 
     assert result.kind == "none"
     assert result.candidates == []
-    assert "ScriptCat" in result.message
+    assert "浏览器插件" in result.message
 
 
 def test_rejects_response_over_size_limit():

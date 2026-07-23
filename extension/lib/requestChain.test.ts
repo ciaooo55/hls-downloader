@@ -56,6 +56,55 @@ describe('browser request chains', () => {
     }, 1200)?.requestId).toBe('wanted')
   })
 
+  it('uses the click-intent tab and never borrows headers from another tab', () => {
+    const store = new RequestChainStore()
+    store.observeRequest({
+      requestId: 'tab-one', url: 'https://cdn.test/shared.bin', tabId: 1, timeStamp: 1000,
+      requestHeaders: [{ name: 'Authorization', value: 'Bearer one' }],
+    })
+    store.observeRequest({
+      requestId: 'tab-two', url: 'https://cdn.test/shared.bin', tabId: 2, timeStamp: 1100,
+      requestHeaders: [{ name: 'Authorization', value: 'Bearer two' }],
+    })
+
+    expect(store.find({ url: 'https://cdn.test/shared.bin' }, 1200, 1)?.requestId).toBe('tab-one')
+    expect(store.find({ url: 'https://cdn.test/shared.bin' }, 1200, 3)).toBeUndefined()
+  })
+
+  it('collects only recent media contexts from the active tab and page', () => {
+    const store = new RequestChainStore()
+    store.observeRequest({
+      requestId: 'manifest', url: 'https://media.test/master.m3u8', tabId: 7,
+      type: 'xmlhttprequest', documentUrl: 'https://page.test/watch', timeStamp: 1000,
+      requestHeaders: [{ name: 'Authorization', value: 'Bearer media' }],
+    })
+    store.observeRequest({
+      requestId: 'segment-old', url: 'https://cdn.test/1.ts', tabId: 7,
+      type: 'media', documentUrl: 'https://page.test/watch', timeStamp: 1050,
+      requestHeaders: [{ name: 'X-Playback-Token', value: 'old' }],
+    })
+    store.observeRequest({
+      requestId: 'segment-new', url: 'https://cdn.test/2.ts', tabId: 7,
+      type: 'media', documentUrl: 'https://page.test/watch', timeStamp: 1100,
+      requestHeaders: [{ name: 'X-Playback-Token', value: 'new' }],
+    })
+    store.observeRequest({
+      requestId: 'wrong-page', url: 'https://private.test/secret.ts', tabId: 7,
+      type: 'media', documentUrl: 'https://page.test/other', timeStamp: 1150,
+    })
+    store.observeRequest({
+      requestId: 'wrong-tab', url: 'https://ads.test/ad.ts', tabId: 8,
+      type: 'media', documentUrl: 'https://page.test/watch', timeStamp: 1160,
+    })
+    store.observeRequest({
+      requestId: 'script', url: 'https://static.test/app.js', tabId: 7,
+      type: 'script', documentUrl: 'https://page.test/watch', timeStamp: 1170,
+    })
+
+    const contexts = store.contextsForPage(7, 'https://page.test/watch', 1200)
+    expect(contexts.map(item => item.requestId)).toEqual(['segment-new', 'manifest'])
+  })
+
   it('expires completed request metadata', () => {
     const store = new RequestChainStore()
     store.observeRequest({ requestId: 'old', url: 'https://a.test/file', tabId: 1, timeStamp: 1000 })

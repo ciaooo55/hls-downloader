@@ -1,3 +1,5 @@
+import { coreOrigin, isTauriDesktop } from './tauri'
+
 interface NativeResult {
   ok: boolean
   canceled?: boolean
@@ -9,8 +11,6 @@ interface NativeResult {
 }
 
 interface NativeApi {
-  export_userscript(): Promise<NativeResult>
-  open_userscript_installer(): Promise<NativeResult>
   open_browser_extension_installer(): Promise<NativeResult>
   get_desktop_info(): Promise<NativeResult>
   begin_uninstall(): Promise<NativeResult>
@@ -36,29 +36,19 @@ async function waitForNativeApi(timeoutMs = 2500): Promise<NativeApi | null> {
   })
 }
 
-export async function exportUserscript(): Promise<NativeResult> {
-  try {
-    const api = await waitForNativeApi()
-    if (!api) return { ok: false, error: '脚本导出仅在桌面版中可用' }
-    return await api.export_userscript()
-  } catch (reason) {
-    return { ok: false, error: reason instanceof Error ? reason.message : '脚本导出失败' }
-  }
-}
-
-export async function openUserscriptInstaller(): Promise<NativeResult> {
-  try {
-    const api = await waitForNativeApi()
-    if (api) return await api.open_userscript_installer()
-    window.open('/userscript/m3u8-sniffer.user.js', '_blank', 'noopener')
-    return { ok: true }
-  } catch (reason) {
-    return { ok: false, error: reason instanceof Error ? reason.message : '无法打开安装地址' }
-  }
-}
-
 export async function openBrowserExtensionInstaller(): Promise<NativeResult> {
   try {
+    if (isTauriDesktop()) {
+      const [{ invoke }, { join }, { openPath }] = await Promise.all([
+        import('@tauri-apps/api/core'),
+        import('@tauri-apps/api/path'),
+        import('@tauri-apps/plugin-opener'),
+      ])
+      const root = await invoke<string>('get_app_root')
+      const path = await join(root, 'browser-extension', 'chrome')
+      await openPath(path)
+      return { ok: true, path }
+    }
     const api = await waitForNativeApi()
     if (!api) return { ok: false, error: '扩展安装工具仅在桌面版中可用' }
     return await api.open_browser_extension_installer()
@@ -69,6 +59,10 @@ export async function openBrowserExtensionInstaller(): Promise<NativeResult> {
 
 export async function getDesktopInfo(): Promise<NativeResult> {
   try {
+    if (isTauriDesktop()) {
+      const { invoke } = await import('@tauri-apps/api/core')
+      return await invoke<NativeResult>('get_desktop_info')
+    }
     const api = await waitForNativeApi()
     if (!api) return { ok: true, installed: false, mode: 'web' }
     return await api.get_desktop_info()
@@ -79,6 +73,10 @@ export async function getDesktopInfo(): Promise<NativeResult> {
 
 export async function beginUninstall(): Promise<NativeResult> {
   try {
+    if (isTauriDesktop()) {
+      const { invoke } = await import('@tauri-apps/api/core')
+      return await invoke<NativeResult>('begin_uninstall')
+    }
     const api = await waitForNativeApi()
     if (!api) return { ok: false, error: '卸载仅在安装版中可用' }
     return await api.begin_uninstall()
@@ -92,6 +90,11 @@ export async function beginUninstall(): Promise<NativeResult> {
 
 export async function pickFolder(directory = ''): Promise<NativeResult> {
   try {
+    if (isTauriDesktop()) {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const path = await open({ directory: true, multiple: false, defaultPath: directory || undefined })
+      return path ? { ok: true, path } : { ok: false, canceled: true }
+    }
     const api = await waitForNativeApi(1000)
     if (!api?.choose_folder) return { ok: false, error: 'native-folder-unavailable' }
     return await api.choose_folder(directory)
@@ -102,6 +105,11 @@ export async function pickFolder(directory = ''): Promise<NativeResult> {
 
 export async function closeDesktopWindow(): Promise<NativeResult> {
   try {
+    if (isTauriDesktop()) {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window')
+      await getCurrentWindow().destroy()
+      return { ok: true }
+    }
     const api = await waitForNativeApi(1000)
     if (api?.close_window) return await api.close_window()
     window.close()

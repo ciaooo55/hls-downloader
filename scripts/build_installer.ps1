@@ -1,15 +1,24 @@
 param(
     [switch]$SkipFrontend,
+    [switch]$SkipBackend,
     [switch]$SkipSmoke,
-    [string]$Version = "1.3.7"
+    [string]$Version = "1.4.0"
 )
 
 $ErrorActionPreference = "Stop"
 
+$versionParts = @($Version -split '\.')
+$invalidVersionPart = @($versionParts | Where-Object { $_ -notmatch '^\d+$' }).Count -gt 0
+if ($versionParts.Count -gt 4 -or $versionParts.Count -lt 1 -or $invalidVersionPart) {
+    throw "Version must contain one to four numeric parts: $Version"
+}
+while ($versionParts.Count -lt 4) { $versionParts += "0" }
+$FileVersion = ($versionParts | ForEach-Object { [int]$_ }) -join "."
+
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $FrontendDir = Join-Path $Root "frontend"
 $BackendDir = Join-Path $Root "backend"
-$UserscriptDir = Join-Path $Root "userscript"
+$ComposeDir = Join-Path $Root "desktop-compose"
 $ExtensionDir = Join-Path $Root "extension"
 $AssetsDir = Join-Path $Root "assets"
 $IconFile = Join-Path $AssetsDir "app-icon.ico"
@@ -21,8 +30,6 @@ $BinDir = Join-Path $Root "bin"
 $FFmpegArchive = Join-Path $ToolsDir "ffmpeg-windows.zip"
 $FFmpegToolsDir = Join-Path $ToolsDir "ffmpeg-windows"
 $FFmpegArchiveUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-$WebViewBootstrapper = Join-Path $ToolsDir "MicrosoftEdgeWebview2Setup.exe"
-$WebViewBootstrapperUrl = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
 $NsisCondaPrefix = Join-Path $ToolsDir "nsis-conda"
 $NsisVersion = "3.12"
 $NsisZip = Join-Path $ToolsDir "nsis-$NsisVersion.zip"
@@ -30,7 +37,6 @@ $NsisUrl = "https://downloads.sourceforge.net/project/nsis/NSIS%203/$NsisVersion
 $InstallerScript = Join-Path $Root "installer\hls-downloader.nsi"
 $InstallerOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Setup.exe"
 $PortableOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Portable.zip"
-$UserscriptOut = Join-Path $ReleaseDir "m3u8-sniffer.user.js"
 $ChromeExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Chrome.zip"
 $FirefoxExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-Unsigned.zip"
 $FirefoxSourceOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-Source.zip"
@@ -168,13 +174,19 @@ function Copy-MediaTool($Name) {
 }
 
 Invoke-Step "Stop running packaged app" {
-    Get-Process HLSDownloader -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process HLSDownloader,HLSDownloaderCore -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Milliseconds 500
 }
 
 Invoke-Step "Prepare directories" {
     Remove-Item -Recurse -Force $StageDir, $PortableStage -ErrorAction SilentlyContinue
-    Remove-Item -Force $InstallerOut, $PortableOut, $UserscriptOut, $ChromeExtensionOut, $FirefoxExtensionOut, $FirefoxSourceOut, $ChecksumsOut -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $ReleaseDir) {
+        $resolvedRelease = (Resolve-Path -LiteralPath $ReleaseDir).Path
+        if ((Split-Path $resolvedRelease -Parent) -ne $Root.Path -or (Split-Path $resolvedRelease -Leaf) -ne "release") {
+            throw "Refusing to clean unexpected release directory: $resolvedRelease"
+        }
+        Remove-Item -LiteralPath $resolvedRelease -Recurse -Force
+    }
     New-Item -ItemType Directory -Force -Path $StageDir, $ReleaseDir, $BinDir, $ToolsDir | Out-Null
     if (-not (Test-Path -LiteralPath $IconFile)) {
         throw "Application icon is missing: $IconFile"
@@ -184,25 +196,6 @@ Invoke-Step "Prepare directories" {
 Invoke-Step "Prepare FFmpeg tools" {
     Copy-MediaTool "ffmpeg.exe"
     Copy-MediaTool "ffprobe.exe"
-}
-
-Invoke-Step "Prepare WebView2 bootstrapper" {
-    if (-not (Test-Path $WebViewBootstrapper)) {
-        Invoke-WebRequest -Uri $WebViewBootstrapperUrl -OutFile $WebViewBootstrapper -MaximumRedirection 10
-    }
-    if (-not (Test-Path $WebViewBootstrapper) -or ((Get-Item -LiteralPath $WebViewBootstrapper).Length -lt 100KB)) {
-        throw "WebView2 bootstrapper is missing or incomplete: $WebViewBootstrapper"
-    }
-    try {
-        Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
-        $signature = Get-AuthenticodeSignature $WebViewBootstrapper
-        if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Microsoft Corporation") {
-            throw "WebView2 bootstrapper does not have a valid Microsoft signature"
-        }
-    } catch {
-        Write-Host "Warning: could not verify WebView2 Authenticode signature in this shell: $_" -ForegroundColor Yellow
-        Write-Host "Continuing because bootstrapper file exists and looks complete." -ForegroundColor Yellow
-    }
 }
 
 if (-not $SkipFrontend) {
@@ -227,6 +220,40 @@ if (-not $SkipFrontend) {
     }
 }
 
+Invoke-Step "Build native Compose desktop" {
+    $gradleRoot = $Root
+    $temporaryDrive = ""
+    if ($Root.Path -match '[^\x00-\x7F]') {
+        foreach ($letter in @("R", "Q", "P", "O")) {
+            if (-not (Test-Path "${letter}:\")) {
+                & subst.exe "${letter}:" $Root.Path
+                if ($LASTEXITCODE -eq 0) {
+                    $gradleRoot = "${letter}:\"
+                    $temporaryDrive = $letter
+                    break
+                }
+            }
+        }
+    }
+    $gradleProject = Join-Path $gradleRoot "desktop-compose"
+    $gradle = Join-Path $gradleProject "gradlew.bat"
+    try {
+        if (-not (Test-Path -LiteralPath $gradle)) { throw "Gradle wrapper is missing: $gradle" }
+        if (-not $env:JAVA_HOME) {
+            $projectJdk = Join-Path $gradleRoot "tools\compose-runtime\jdk-21"
+            if (Test-Path -LiteralPath (Join-Path $projectJdk "bin\java.exe")) {
+                $env:JAVA_HOME = $projectJdk
+                $env:PATH = "$(Join-Path $projectJdk 'bin');$env:PATH"
+            }
+        }
+        & $gradle -p $gradleProject clean test createDistributable
+        if ($LASTEXITCODE -ne 0) { throw "Compose Desktop build failed with exit code $LASTEXITCODE" }
+    } finally {
+        if ($temporaryDrive) { & subst.exe "${temporaryDrive}:" /D }
+    }
+}
+
+if (-not $SkipBackend) {
 Invoke-Step "Build backend executable" {
     Push-Location $BackendDir
     $previousPythonPath = $env:PYTHONPATH
@@ -238,22 +265,18 @@ Invoke-Step "Build backend executable" {
             --clean `
             --onedir `
             --noconsole `
-            --name HLSDownloader `
+            --name HLSDownloaderCore `
             --icon $IconFile `
             --paths . `
-            --collect-all webview `
-            --collect-all pystray `
             --collect-all curl_cffi `
             --collect-all libtorrent `
             --collect-all yt_dlp `
             --collect-all multipart `
-            --hidden-import pystray._win32 `
-            --hidden-import webview.platforms.edgechromium `
             --hidden-import uvicorn.lifespan.on `
             --hidden-import uvicorn.loops.auto `
             --hidden-import uvicorn.protocols.http.auto `
             --hidden-import uvicorn.protocols.websockets.auto `
-            run_server.py
+            run_core.py
         python -m PyInstaller `
             --noconfirm `
             --clean `
@@ -266,12 +289,17 @@ Invoke-Step "Build backend executable" {
         Pop-Location
     }
 }
+}
 
 Invoke-Step "Stage application files" {
-    Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloader\*") -Destination $StageDir -Recurse -Force
+    $composeImage = Join-Path $ComposeDir "build\compose\binaries\main\app\HLSDownloader"
+    if (-not (Test-Path -LiteralPath (Join-Path $composeImage "HLSDownloader.exe"))) {
+        throw "Compose app image is missing: $composeImage"
+    }
+    Copy-Item -Path (Join-Path $composeImage "*") -Destination $StageDir -Recurse -Force
+    Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloaderCore\*") -Destination $StageDir -Recurse -Force
     Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloaderNativeHost.exe") -Destination $StageDir
     Copy-Item -Path (Join-Path $Root "config.json") -Destination $StageDir
-    Copy-Item -Path $WebViewBootstrapper -Destination $StageDir
 
     New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "assets") | Out-Null
     Copy-Item -Path (Join-Path $AssetsDir "app-icon.png") -Destination (Join-Path $StageDir "assets")
@@ -283,9 +311,6 @@ Invoke-Step "Stage application files" {
 
     New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "frontend") | Out-Null
     Copy-Item -Recurse -Force -Path (Join-Path $FrontendDir "dist") -Destination (Join-Path $StageDir "frontend")
-
-    New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "userscript") | Out-Null
-    Copy-Item -Force -Path (Join-Path $UserscriptDir "m3u8-sniffer.user.js") -Destination (Join-Path $StageDir "userscript")
 
     $bundledChromeExtension = Join-Path $StageDir "browser-extension\chrome"
     New-Item -ItemType Directory -Force -Path $bundledChromeExtension | Out-Null
@@ -360,6 +385,11 @@ if (-not $SkipSmoke) {
                     throw "Native Messaging protocol smoke test failed"
                 }
 
+                $baselineProcesses = @(Get-Process HLSDownloader -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Path -eq $smokeExe })
+                if ($baselineProcesses.Count -lt 1 -or $baselineProcesses.Count -gt 2) {
+                    throw "Single-instance check failed: unexpected primary process count $($baselineProcesses.Count)"
+                }
                 $secondProc = Start-Process -FilePath $smokeExe -WorkingDirectory $StageDir -PassThru -WindowStyle Hidden
                 if (-not $secondProc.WaitForExit(12000)) {
                     Stop-Process -Id $secondProc.Id -Force -ErrorAction SilentlyContinue
@@ -368,8 +398,8 @@ if (-not $SkipSmoke) {
                 $proc.Refresh()
                 $samePathProcesses = @(Get-Process HLSDownloader -ErrorAction SilentlyContinue |
                     Where-Object { $_.Path -eq $smokeExe })
-                if ($proc.HasExited -or $samePathProcesses.Count -ne 1) {
-                    throw "Single-instance check failed: expected exactly one packaged process"
+                if ($proc.HasExited -or $samePathProcesses.Count -ne $baselineProcesses.Count) {
+                    throw "Single-instance check failed: second launch changed the packaged process count"
                 }
 
                 $shutdownAccepted = $false
@@ -394,7 +424,11 @@ if (-not $SkipSmoke) {
                     throw "Graceful shutdown failed: desktop callback was not ready after 60 seconds"
                 }
 
-                for ($i = 0; $i -lt 40; $i++) {
+                # A signed/unsigned executable may be scanned by Windows
+                # Defender immediately after PyInstaller writes it. Allow the
+                # desktop and core enough time to finish graceful shutdown,
+                # while still requiring every same-path process to disappear.
+                for ($i = 0; $i -lt 120; $i++) {
                     $proc.Refresh()
                     $remaining = Get-Process HLSDownloader -ErrorAction SilentlyContinue |
                         Where-Object { $_.Path -eq $smokeExe }
@@ -405,7 +439,7 @@ if (-not $SkipSmoke) {
                 }
                 $proc.Refresh()
                 if (-not $proc.HasExited -or (Get-Process HLSDownloader -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $smokeExe })) {
-                    throw "Graceful shutdown failed: packaged app process remained after 10 seconds"
+                    throw "Graceful shutdown failed: packaged app process remained after 30 seconds"
                 }
             } finally {
                 if ($proc -and -not $proc.HasExited) {
@@ -423,7 +457,7 @@ if (-not $SkipSmoke) {
                 if (Get-Process HLSDownloader -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $smokeExe }) {
                     throw "Packaged app processes remained after smoke test"
                 }
-                for ($i = 0; $i -lt 20; $i++) {
+                for ($i = 0; $i -lt 80; $i++) {
                     if (-not (Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue)) {
                         break
                     }
@@ -444,14 +478,14 @@ if (-not $SkipSmoke) {
                 -Destination (Join-Path $StageDir "native-host")
             Remove-Item -LiteralPath $smokePortableMarker -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath (Join-Path $StageDir "data.db"), (Join-Path $StageDir "data.db-shm"), (Join-Path $StageDir "data.db-wal") -Force -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath (Join-Path $StageDir ".webview"), (Join-Path $StageDir "downloads") -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath (Join-Path $StageDir "downloads") -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 }
 
 Invoke-Step "Build NSIS installer" {
     $makensis = Get-MakeNsis
-    & $makensis "/INPUTCHARSET" "UTF8" "/DAPP_VERSION=$Version" "/DSTAGE_DIR=$StageDir" "/DICON_FILE=$IconFile" "/DOUT_FILE=$InstallerOut" $InstallerScript
+    & $makensis "/INPUTCHARSET" "UTF8" "/DAPP_VERSION=$Version" "/DAPP_FILE_VERSION=$FileVersion" "/DSTAGE_DIR=$StageDir" "/DICON_FILE=$IconFile" "/DOUT_FILE=$InstallerOut" $InstallerScript
     if ($LASTEXITCODE -ne 0) {
         throw "makensis failed with exit code $LASTEXITCODE"
     }
@@ -467,8 +501,8 @@ Invoke-Step "Build portable archive" {
     @"
 HLS Downloader portable edition
 
-Run HLSDownloader.exe. If Microsoft Edge WebView2 Runtime is missing, run
-MicrosoftEdgeWebview2Setup.exe once before starting the downloader.
+Run HLSDownloader.exe. The desktop interface and Java runtime are bundled;
+Microsoft Edge WebView2 is not required.
 
 To enable Chrome/Firefox integration, run:
 powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1
@@ -484,7 +518,6 @@ then select browser-extension\chrome.
 }
 
 Invoke-Step "Assemble release files" {
-    Copy-Item -LiteralPath (Join-Path $UserscriptDir "m3u8-sniffer.user.js") -Destination $UserscriptOut -Force
     Compress-Archive -Path (Join-Path $ExtensionDir ".output\chrome-mv3\*") -DestinationPath $ChromeExtensionOut -CompressionLevel Optimal
     Compress-Archive -Path (Join-Path $ExtensionDir ".output\firefox-mv3\*") -DestinationPath $FirefoxExtensionOut -CompressionLevel Optimal
     Compress-Archive -Path @(
@@ -500,7 +533,7 @@ Invoke-Step "Assemble release files" {
         (Join-Path $ExtensionDir "wxt.config.ts"),
         (Join-Path $Root "PRIVACY.md")
     ) -DestinationPath $FirefoxSourceOut -CompressionLevel Optimal
-    $expected = @($InstallerOut, $PortableOut, $UserscriptOut, $ChromeExtensionOut, $FirefoxExtensionOut, $FirefoxSourceOut)
+    $expected = @($InstallerOut, $PortableOut, $ChromeExtensionOut, $FirefoxExtensionOut, $FirefoxSourceOut)
     foreach ($path in $expected) {
         if (-not (Test-Path -LiteralPath $path)) {
             throw "Missing release file: $path"
@@ -520,7 +553,6 @@ Write-Host ""
 Write-Host "Windows release assets created:" -ForegroundColor Green
 Write-Host $InstallerOut
 Write-Host $PortableOut
-Write-Host $UserscriptOut
 Write-Host $ChromeExtensionOut
 Write-Host $FirefoxExtensionOut
 Write-Host $FirefoxSourceOut

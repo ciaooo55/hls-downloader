@@ -1,11 +1,14 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const isTauri = Boolean(process.env.TAURI_ENV_PLATFORM)
+
 export default defineConfig({
   plugins: [react()],
-  base: '/ui/',
+  base: isTauri ? './' : '/ui/',
   server: {
-    port: 5173,
+    port: 1420,
+    strictPort: true,
     proxy: {
       '/api': 'http://127.0.0.1:8765',
     },

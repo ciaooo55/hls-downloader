@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, shouldTakeover, suggestedResourceFilename } from './resources'
+import { classifyDownload, classifyResource, isGenericMediaName, matchesDownloadClick, mergeResources, pageResourceKey, replayableRequestHeaders, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename } from './resources'
 
 describe('resource rules', () => {
   it('filters HLS segments but retains manifests', () => {
@@ -15,6 +15,9 @@ describe('resource rules', () => {
     const base = { url: 'https://a.test/file.zip', size: 20, enabled: true, minimumBytes: 10, excludedHosts: [], explicitClick: true }
     expect(shouldTakeover({ ...base, altBypass: true })).toBe(false)
     expect(shouldTakeover({ ...base, enabled: false, ctrlForce: true })).toBe(true)
+    expect(shouldTakeover({ ...base, size: 9 })).toBe(false)
+    expect(shouldTakeover({ ...base, size: 0 })).toBe(true)
+    expect(shouldTakeover({ ...base, url: 'https://sub.blocked.test/file.zip', excludedHosts: ['blocked.test'] })).toBe(false)
   })
   it('takes over unknown-size downloads and classifies response filenames', () => {
     expect(classifyDownload('https://cdn.test/get?id=1', 'application/octet-stream', 'setup.exe')).toBe('file')
@@ -37,9 +40,59 @@ describe('resource rules', () => {
       title: '网页标题',
       filename: 'episode-07.m3u8',
     })).toBe('episode-07')
+    expect(isGenericMediaName('1080p HLS 视频流')).toBe(true)
+    expect(isGenericMediaName('video_1080p.m3u8')).toBe(true)
+    expect(isGenericMediaName('master-high.m3u8')).toBe(true)
+    expect(isGenericMediaName('HLS 720p')).toBe(true)
+    expect(suggestedResourceFilename({
+      kind: 'hls',
+      url: 'https://cdn.test/master.m3u8',
+      pageUrl: 'https://site.test/watch/real-title?episode=12#player',
+      title: '1080p HLS 视频流',
+      filename: 'master.m3u8',
+    })).toBe('real-title')
+  })
+  it('isolates captured resources by current page inside the same tab', () => {
+    expect(pageResourceKey(9, 'https://site.test/watch/1#player')).toBe(pageResourceKey(9, 'https://site.test/watch/1'))
+    expect(pageResourceKey(9, 'https://site.test/watch/1')).not.toBe(pageResourceKey(9, 'https://site.test/watch/2'))
+    expect(pageResourceKey(9, 'https://site.test/watch?id=1')).not.toBe(pageResourceKey(9, 'https://site.test/watch?id=2'))
+    expect(pageResourceKey(9, 'https://site.test/watch/1')).not.toBe(pageResourceKey(10, 'https://site.test/watch/1'))
+  })
+  it('replays authentication and browser context without transport-owned headers', () => {
+    expect(replayableRequestHeaders({
+      Authorization: 'Bearer signed-token',
+      'Sec-CH-UA': '"Chromium";v="140"',
+      'X-Playback-Token': 'abc',
+      Cookie: 'private=1',
+      Host: 'cdn.test',
+      Range: 'bytes=0-1',
+      'Accept-Encoding': 'gzip, br',
+    })).toEqual({
+      authorization: 'Bearer signed-token',
+      'sec-ch-ua': '"Chromium";v="140"',
+      'x-playback-token': 'abc',
+    })
+  })
+  it('never invents an Origin that the browser did not send', () => {
+    expect(resourceRequestIdentity({
+      pageUrl: 'https://page.test/watch/1',
+      requestHeaders: { Referer: 'https://page.test/watch/1', 'User-Agent': 'Browser UA' },
+    }, 'Fallback UA')).toEqual({
+      referer: 'https://page.test/watch/1',
+      origin: '',
+      userAgent: 'Browser UA',
+    })
+    expect(resourceRequestIdentity({
+      pageUrl: 'https://page.test/watch/1',
+      requestHeaders: { Origin: 'https://page.test' },
+    }, 'Fallback UA')).toEqual({
+      referer: 'https://page.test/watch/1',
+      origin: 'https://page.test',
+      userAgent: 'Fallback UA',
+    })
   })
   it('requires and matches a recent explicit click', () => {
-    const base = { url: 'https://cdn.test/file.zip', size: 10, enabled: true, minimumBytes: 1024, excludedHosts: [] }
+    const base = { url: 'https://cdn.test/file.zip', size: 2048, enabled: true, minimumBytes: 1024, excludedHosts: [] }
     expect(shouldTakeover(base)).toBe(false)
     expect(shouldTakeover({ ...base, explicitClick: true })).toBe(true)
     expect(shouldTakeover({
@@ -84,6 +137,16 @@ describe('resource rules', () => {
       referrer: 'https://site.test/download',
       tabId: 9,
     }, 2000)).toBe(false)
+    expect(matchesDownloadClick({ ...intent, tabId: 8, opensNewTab: true }, {
+      url: 'https://cdn.test/start',
+      finalUrl: 'https://cdn.test/file.zip',
+      tabId: 9,
+    }, 2000)).toBe(true)
+    expect(matchesDownloadClick({ ...intent, href: '', generic: true, controlHint: true, tabId: 8 }, {
+      url: 'https://cdn.test/generated.zip',
+      referrer: 'https://site.test/download',
+      tabId: 8,
+    }, 4500)).toBe(true)
     expect(matchesDownloadClick(intent, {
       url: 'https://cdn.test/start',
     }, 9000)).toBe(false)

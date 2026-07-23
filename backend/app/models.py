@@ -68,6 +68,8 @@ class Task:
     origin: str = ""
     user_agent: str = ""
     cookie: str = ""
+    request_headers: dict[str, str] = field(default_factory=dict)
+    request_contexts: dict[str, dict] = field(default_factory=dict, repr=False)
     title: str = ""
     filename: str = ""
     concurrency: int = 0  # 0 = use server default from config

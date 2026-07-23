@@ -1,5 +1,5 @@
 export interface RecognitionResult {
-  kind: 'hls' | 'page' | 'none'
+  kind: 'hls' | 'file' | 'page' | 'none'
   candidates: Array<{ url: string; source?: string }>
   message?: string
 }

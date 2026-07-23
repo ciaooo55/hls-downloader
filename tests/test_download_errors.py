@@ -3,7 +3,7 @@ import asyncio
 import httpx
 from curl_cffi.requests.exceptions import ReadTimeout as CurlReadTimeout
 
-from backend.app.downloader.errors import diagnose_download_error
+from backend.app.downloader.errors import diagnose_download_error, should_retry_download_error
 from backend.app.downloader.hls import HLSDownloader
 from backend.app.models import Task, TaskStatus
 
@@ -29,8 +29,7 @@ def test_http_403_reports_code_stage_redacted_url_and_header_hint():
     assert details.http_status == 403
     assert details.stage == "downloading_m3u8"
     assert details.url == "https://example.test/video.m3u8"
-    assert "Referer" in details.hint
-    assert "Origin" in details.hint
+    assert "浏览器扩展" in details.hint
     assert "Cookie" in details.hint
     assert "403" in details.message
 
@@ -76,6 +75,28 @@ def test_http_429_and_timeout_have_actionable_hints():
         url="https://cdn.example.test/3.ts",
     )
     assert browser_timeout.code == "NETWORK_TIMEOUT"
+
+
+def test_auth_failure_distinguishes_missing_and_expired_browser_context():
+    missing = diagnose_download_error(_http_error(403), task_context=Task(id="missing", url="https://example.test/file"))
+    captured = diagnose_download_error(
+        _http_error(403),
+        task_context=Task(
+            id="captured",
+            url="https://example.test/file",
+            request_headers={"authorization": "Bearer old"},
+            referer="https://example.test/watch",
+        ),
+    )
+    unauthorized = diagnose_download_error(_http_error(401), task_context=Task(id="login", url="https://example.test/file"))
+
+    assert "缺少网页请求上下文" in missing.hint
+    assert "已过期" in captured.hint
+    assert "登录或授权" in unauthorized.hint
+    assert should_retry_download_error(_http_error(403)) is False
+    assert should_retry_download_error(_http_error(404)) is False
+    assert should_retry_download_error(_http_error(429)) is True
+    assert should_retry_download_error(_http_error(503)) is True
 
 
 def test_range_and_merge_failures_get_stable_codes():

@@ -56,9 +56,26 @@ def _exception_chain(exc: BaseException):
         current = current.__cause__ or current.__context__
 
 
-def _http_hint(status: int) -> str:
-    if status in {401, 403}:
-        return "网站拒绝访问。检查 Referer、Origin、Cookie 是否正确，确认登录状态和链接尚未过期。"
+def _http_hint(status: int, task_context=None) -> str:
+    headers = {
+        str(name).lower(): str(value)
+        for name, value in dict(getattr(task_context, "request_headers", {}) or {}).items()
+    }
+    has_browser_context = bool(
+        headers
+        or getattr(task_context, "cookie", "")
+        or getattr(task_context, "referer", "")
+        or getattr(task_context, "origin", "")
+    )
+    has_credentials = bool(getattr(task_context, "cookie", "") or headers.get("authorization"))
+    if status == 401:
+        if has_credentials:
+            return "登录凭据或授权令牌已失效。回到原网页刷新并重新识别后再下载；重复点击重试不会更新令牌。"
+        return "资源需要登录或授权。请从原网页用浏览器扩展重新发送，并在扩展面板授权本页 Cookie。"
+    if status == 403:
+        if has_browser_context or has_credentials:
+            return "网站仍拒绝已携带的网页请求上下文，通常是签名链接或登录会话已过期。回到原网页刷新并重新发送，避免直接重试旧任务。"
+        return "资源缺少网页请求上下文。请从原网页用浏览器扩展重新发送；必要时授权本页 Cookie，不要手工套用其他站点的 Referer/Origin。"
     if status in {404, 410}:
         return "资源不存在或链接已经过期。请回到视频页面重新获取 m3u8 地址。"
     if status == 429:
@@ -74,6 +91,7 @@ def diagnose_download_error(
     stage: str = "",
     url: str = "",
     attempt: int = 0,
+    task_context=None,
 ) -> DownloadErrorDetails:
     chain = list(_exception_chain(exc))
     existing = next((item for item in chain if isinstance(item, DownloadError)), None)
@@ -105,7 +123,7 @@ def diagnose_download_error(
         return DownloadErrorDetails(
             code=f"HTTP_{status}",
             message=f"HTTP {status} {reason}",
-            hint=_http_hint(status),
+            hint=_http_hint(status, task_context),
             stage=stage,
             url=redact_url(request_url),
             http_status=status,
@@ -202,9 +220,33 @@ def as_download_error(
     stage: str,
     url: str = "",
     attempt: int = 0,
+    task_context=None,
 ) -> DownloadError:
     if isinstance(exc, DownloadError):
         return exc
     return DownloadError(
-        diagnose_download_error(exc, stage=stage, url=url, attempt=attempt)
+        diagnose_download_error(
+            exc,
+            stage=stage,
+            url=url,
+            attempt=attempt,
+            task_context=task_context,
+        )
     )
+
+
+def http_status_from_exception(exc: BaseException) -> int:
+    """Return an HTTP status from httpx/curl transports, including wrapped errors."""
+    for item in _exception_chain(exc):
+        status = int(getattr(getattr(item, "response", None), "status_code", 0) or 0)
+        if status:
+            return status
+    return 0
+
+
+def should_retry_download_error(exc: BaseException) -> bool:
+    """Retry transient failures, but never hammer stale/authenticated URLs."""
+    status = http_status_from_exception(exc)
+    if not status:
+        return True
+    return status in {408, 425, 429} or 500 <= status <= 599

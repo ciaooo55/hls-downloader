@@ -87,19 +87,41 @@ def _ensure_app() -> None:
                 pass
         else:
             raise RuntimeError("桌面下载器未启动或无法连接")
-    # Cold start: health is live before the pywebview GUI loop, so wait for
-    # desktop session/presenter before accepting handoff offers.
+    # Cold start: health is live before the Compose shell registers its session,
+    # so wait for the desktop presenter before accepting handoff offers.
     _wait_presenter(18.0 if started else 2.5)
 
 
 def dispatch(message: dict) -> dict:
     operation = message.get("op")
-    if operation not in {"ping", "activate", "offer", "download", "handoff_status", "wait_handoff"}:
+    if operation not in {
+        "ping", "activate", "offer", "download", "handoff_status", "wait_handoff",
+        "set_takeover_settings",
+    }:
         raise ValueError("不支持的 Native Messaging 操作")
     _ensure_app()
     _request("POST", "/browser/ping", {"version": str(message.get("version", ""))})
     if operation == "ping":
-        return {"ok": True, "version": _request("GET", "/health").get("version", "")}
+        health = _request("GET", "/health")
+        current = _request("GET", "/settings")
+        return {
+            "ok": True,
+            "version": health.get("version", ""),
+            "takeover_enabled": bool(current.get("browser_takeover_enabled", True)),
+            "takeover_minimum_bytes": max(0, int(current.get("browser_takeover_min_mb", 0) or 0)) * 1024 * 1024,
+        }
+    if operation == "set_takeover_settings":
+        payload = {}
+        if "enabled" in message:
+            payload["browser_takeover_enabled"] = bool(message["enabled"])
+        if "minimum_bytes" in message:
+            payload["browser_takeover_min_mb"] = max(0, int(message["minimum_bytes"] or 0)) // (1024 * 1024)
+        current = _request("POST", "/settings", payload)
+        return {
+            "ok": True,
+            "takeover_enabled": bool(current.get("browser_takeover_enabled", True)),
+            "takeover_minimum_bytes": max(0, int(current.get("browser_takeover_min_mb", 0) or 0)) * 1024 * 1024,
+        }
     if operation == "activate":
         return {"ok": True, "result": _request("POST", "/app/activate", {})}
     if operation == "offer":

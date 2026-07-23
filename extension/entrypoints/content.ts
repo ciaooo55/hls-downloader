@@ -55,6 +55,7 @@ export default defineContentScript({
           header{display:flex;align-items:center;justify-content:space-between;padding:8px 9px 8px 10px;border-bottom:1px solid #dff5ff;background:#f0fbff;font:600 13px system-ui}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:5px}
           .pin,.close{height:30px;border:0;border-radius:5px;background:#e0f2fe;color:#075985;cursor:pointer}.pin{padding:0 9px;font:12px system-ui}.pin.active{background:#d1fae5;color:#047857}.close{display:grid;place-items:center;width:30px;font:700 20px/1 system-ui}.list{overflow:auto;max-height:58vh}.empty{padding:20px;color:#526b79;font:13px system-ui}
           .item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:12px;border-bottom:1px solid #e7f4f8}.item:hover{background:#f7fcff}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 13px/1.35 system-ui;overflow-wrap:anywhere}.url{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:#54717f;font:11px/1.35 system-ui;margin-top:4px;overflow-wrap:anywhere}.item:hover .name,.item:hover .url{-webkit-line-clamp:unset}.kind{color:#25627b;font:12px system-ui;margin-top:4px}.download{align-self:center;min-width:58px;height:32px;border:0;border-radius:6px;background:#0ea5e9;color:white;padding:6px 10px;cursor:pointer;font-weight:600}.download:hover{background:#0284c7}.download[disabled]{cursor:default;opacity:.65}.result{padding:8px 12px;background:#ecfdf5;color:#047857;font:12px/1.4 system-ui}.result.error{background:#fff1f2;color:#be123c}
+          .video-buttons{position:fixed;inset:0;z-index:2147483646;pointer-events:none}.video-download{position:fixed;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid #38bdf8;border-radius:7px;background:#075985;color:#fff;box-shadow:0 3px 8px #00131f66;pointer-events:auto;cursor:pointer;font:600 12px system-ui}.video-download:hover{background:#0369a1}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#e0f2fe;color:#075985;font:700 10px system-ui}
           button:focus-visible{outline:2px solid #0369a1;outline-offset:2px}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
         `
         const image = () => {
@@ -89,9 +90,10 @@ export default defineContentScript({
         list.append(element('div', 'empty', '播放视频后会显示资源'))
         panel.append(header, result, list)
         panelWrap.append(toggle, panel)
-        root.append(style, panelWrap)
+        const videoButtons = element('div', 'video-buttons')
+        root.append(style, panelWrap, videoButtons)
         container.append(root)
-        const wrap = root.querySelector('.wrap')!
+        const wrap = root.querySelector<HTMLElement>('.wrap')!
         root.querySelector('.toggle')!.addEventListener('click', () => {
           wrap.classList.add('open')
           const rect = wrap.getBoundingClientRect()
@@ -143,12 +145,13 @@ export default defineContentScript({
       setOpen(false)
     })
     void browser.storage.local.get(['panelPosition', 'panelPinned']).then(value => {
-      const position = value.panelPosition
+      const position = value.panelPosition as { x?: unknown; y?: unknown } | undefined
       pinned = value.panelPinned === true
       pinButton?.classList.toggle('active', pinned)
       if (pinButton) pinButton.textContent = pinned ? '已固定' : '固定'
       if (pinned) setOpen(true)
-      if (wrap && position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
+      if (wrap && position && typeof position.x === 'number' && typeof position.y === 'number'
+        && Number.isFinite(position.x) && Number.isFinite(position.y)) {
         wrap.style.left = `${Math.max(0, position.x)}px`; wrap.style.top = `${Math.max(0, position.y)}px`; wrap.style.right = 'auto'
       }
     })
@@ -175,6 +178,77 @@ export default defineContentScript({
     }, true)
     window.addEventListener('resize', fitPanel)
 
+    const sendResource = (resource: MediaResource, button: HTMLButtonElement) => {
+      const result = ui.shadow.querySelector<HTMLElement>('.result')
+      button.setAttribute('disabled', ''); button.textContent = '发送中'
+      void runtimeMessage({ type: 'offer', resource }).then(async response => {
+        if (!response?.ok || !response?.handoff?.id) throw new Error(response?.error || '桌面端未接受请求')
+        button.textContent = '待确认'
+        if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `请在桌面下载器确认：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
+        const handoffId = response.handoff.id
+        const deadline = Date.now() + 130_000
+        while (Date.now() < deadline) {
+          await new Promise(resolve => setTimeout(resolve, 1000))
+          const statusResponse = await runtimeMessage({ type: 'handoff-status', handoffId }).catch(() => null)
+          const handoff = statusResponse?.handoff || statusResponse
+          const status = String(handoff?.status || '')
+          if (!status || status === 'pending' || status === 'accepting') continue
+          if (status === 'accepted') {
+            button.textContent = '已加入'
+            if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `已加入下载队列：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
+          } else {
+            button.removeAttribute('disabled')
+            button.textContent = status === 'expired' ? '已过期' : '重试'
+            if (result) { result.hidden = false; result.classList.add('error'); result.textContent = status === 'canceled' || status === 'rejected' ? '已取消下载确认' : `确认已${status}` }
+          }
+          return
+        }
+        button.removeAttribute('disabled'); button.textContent = '重试'
+      }).catch(reason => {
+        button.removeAttribute('disabled'); button.textContent = '重试'
+        if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '发送失败' }
+      })
+    }
+
+    const updateVideoButtons = () => {
+      const layer = ui.shadow.querySelector<HTMLElement>('.video-buttons')
+      const toggle = ui.shadow.querySelector<HTMLButtonElement>('.toggle')
+      if (!layer) return
+      layer.replaceChildren()
+      const entries = [...resources.values()].filter(item => ['hls', 'dash', 'media'].includes(item.kind))
+      let visible = 0
+      const videos = [...document.querySelectorAll<HTMLVideoElement>('video')]
+        .map(video => ({ video, rect: video.getBoundingClientRect() }))
+        .filter(({ rect }) => rect.width >= 180 && rect.height >= 100 && rect.bottom >= 0 && rect.top <= innerHeight && rect.right >= 0 && rect.left <= innerWidth)
+        .sort((left, right) => right.rect.width * right.rect.height - left.rect.width * left.rect.height)
+      // IDM and AB place one action beside the dominant player. Showing a
+      // duplicate button on every preview/advert video is noisy and ambiguous.
+      videos.slice(0, 1).forEach(({ video, rect }) => {
+        const sourceUrls = [video.currentSrc, video.src, ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')].map(source => source.src)].filter(Boolean)
+        const exact = entries.filter(item => sourceUrls.includes(item.url))
+        const choices = exact.length ? exact : entries
+        if (!choices.length) return
+        visible += 1
+        const button = document.createElement('button')
+        button.type = 'button'; button.className = 'video-download'; button.title = choices.length > 1 ? '选择当前页面检测到的视频资源' : '使用 HLS Downloader 下载此视频'
+        button.style.left = `${Math.max(8, rect.right - 132)}px`; button.style.top = `${Math.max(8, rect.top + 8)}px`
+        const icon = document.createElement('img'); icon.src = browser.runtime.getURL('/icon-32.png'); icon.alt = ''
+        const label = document.createElement('span'); label.textContent = '下载视频'
+        button.append(icon, label)
+        if (choices.length > 1) { const count = document.createElement('b'); count.textContent = String(choices.length); button.append(count) }
+        button.addEventListener('click', () => {
+          if (choices.length === 1) { sendResource(choices[0], button); return }
+          if (wrap) {
+            wrap.style.left = `${Math.max(10, Math.min(rect.right - 420, innerWidth - 430))}px`
+            wrap.style.top = `${Math.max(10, Math.min(rect.top + 50, innerHeight - 420))}px`
+            wrap.style.right = 'auto'; setOpen(true)
+          }
+        })
+        layer.append(button)
+      })
+      if (toggle) toggle.hidden = visible > 0
+    }
+
     const render = () => {
       const list = ui.shadow.querySelector('.list')
       if (!list) return
@@ -197,41 +271,20 @@ export default defineContentScript({
         const kind = document.createElement('div'); kind.className = 'kind'; kind.textContent = [resource.kind.toUpperCase(), quality, resource.width && resource.height ? `${resource.width}×${resource.height}` : '', bandwidth, duration, resource.size ? formatSize(resource.size) : '大小未知', host].filter(Boolean).join(' · ')
         const url = document.createElement('div'); url.className = 'url'; url.title = resource.url; url.textContent = resource.url
         const button = document.createElement('button'); button.className = 'download'; button.textContent = '下载'
-        button.addEventListener('click', () => {
-          const result = ui.shadow.querySelector<HTMLElement>('.result')
-          button.setAttribute('disabled', ''); button.textContent = '发送中'
-          void runtimeMessage({ type: 'offer', resource }).then(async response => {
-            if (!response?.ok || !response?.handoff?.id) throw new Error(response?.error || '桌面端未接受请求')
-            button.textContent = '待确认'
-            if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `请在桌面下载器确认：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
-            const handoffId = response.handoff.id
-            const deadline = Date.now() + 130_000
-            while (Date.now() < deadline) {
-              await new Promise(resolve => setTimeout(resolve, 1000))
-              const statusResponse = await runtimeMessage({ type: 'handoff-status', handoffId }).catch(() => null)
-              const handoff = statusResponse?.handoff || statusResponse
-              const status = String(handoff?.status || '')
-              if (!status || status === 'pending' || status === 'accepting') continue
-              if (status === 'accepted') {
-                button.textContent = '已加入'
-                if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `已加入下载队列：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
-              } else {
-                button.removeAttribute('disabled')
-                button.textContent = status === 'expired' ? '已过期' : '重试'
-                if (result) { result.hidden = false; result.classList.add('error'); result.textContent = status === 'canceled' || status === 'rejected' ? '已取消下载确认' : `确认已${status}` }
-              }
-              return
-            }
-            button.removeAttribute('disabled')
-            button.textContent = '重试'
-          }).catch(reason => {
-            button.removeAttribute('disabled'); button.textContent = '重试'
-            if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '发送失败' }
-          })
-        })
+        button.addEventListener('click', () => sendResource(resource, button))
         meta.append(name, kind, url); row.append(meta, button); list.append(row)
       })
+      updateVideoButtons()
     }
+    let positionFrame = 0
+    const scheduleVideoButtons = () => {
+      if (positionFrame) return
+      positionFrame = requestAnimationFrame(() => { positionFrame = 0; updateVideoButtons() })
+    }
+    window.addEventListener('scroll', scheduleVideoButtons, { capture: true, passive: true })
+    window.addEventListener('resize', scheduleVideoButtons)
+    new MutationObserver(scheduleVideoButtons).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'style', 'class'] })
+
     const add = (url: string, mimeType = '') => {
       const kind = classifyResource(url, mimeType); if (!kind) return
       let filename = ''
@@ -261,18 +314,36 @@ export default defineContentScript({
         root.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => add(anchor.href))
       }
     })
-    void runtimeMessage({ type: 'list', pageUrl: location.href }).then((stored: MediaResource[]) => {
-      if (!Array.isArray(stored)) return
-      stored.forEach(resource => {
-        if (resource?.url) resources.set(resource.url, {
-          ...resource,
-          title: !resource.title || isGenericMediaName(resource.title) ? pageMediaTitle() || resource.title : resource.title,
+    let currentPageUrl = pageKey(location.href)
+    const loadPageResources = (pageUrl: string) => {
+      void runtimeMessage({ type: 'list', pageUrl }).then((stored: MediaResource[]) => {
+        if (!Array.isArray(stored) || pageKey(location.href) !== pageKey(pageUrl)) return
+        stored.forEach(resource => {
+          if (resource?.url) resources.set(resource.url, {
+            ...resource,
+            title: !resource.title || isGenericMediaName(resource.title) ? pageMediaTitle() || resource.title : resource.title,
+          })
         })
-      })
-      render()
-    }).catch(() => undefined)
+        render()
+      }).catch(() => undefined)
+    }
+    const syncPage = () => {
+      const next = pageKey(location.href)
+      if (next === currentPageUrl) return
+      currentPageUrl = next
+      resources.clear(); render(); loadPageResources(location.href)
+      document.querySelectorAll<HTMLMediaElement>('video[src],audio[src],source[src]').forEach(media => add(media.currentSrc || media.src))
+    }
+    loadPageResources(location.href)
+    window.addEventListener('popstate', syncPage)
+    window.addEventListener('hashchange', syncPage)
+    window.setInterval(syncPage, 800)
   },
 })
+
+function pageKey(value: string): string {
+  try { const url = new URL(value); url.hash = ''; return url.href } catch { return value.split('#', 1)[0] }
+}
 
 function formatSize(size: number): string {
   if (!Number.isFinite(size) || size <= 0) return '大小未知'

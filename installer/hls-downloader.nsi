@@ -7,9 +7,11 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-  !define APP_VERSION "1.3.7"
+  !define APP_VERSION "1.4.0"
 !endif
-!define WEBVIEW2_GUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+!ifndef APP_FILE_VERSION
+  !define APP_FILE_VERSION "1.4.0.0"
+!endif
 
 !ifndef STAGE_DIR
   !error "STAGE_DIR is required. Pass /DSTAGE_DIR=<path> to makensis."
@@ -30,6 +32,12 @@ UninstallIcon "${ICON_FILE}"
 InstallDir "$LOCALAPPDATA\Programs\HLS Downloader"
 InstallDirRegKey HKCU "Software\${APP_NAME}" "InstallDir"
 RequestExecutionLevel user
+VIProductVersion "${APP_FILE_VERSION}"
+VIAddVersionKey /LANG=1033 "ProductName" "${APP_NAME}"
+VIAddVersionKey /LANG=1033 "ProductVersion" "${APP_VERSION}"
+VIAddVersionKey /LANG=1033 "FileVersion" "${APP_FILE_VERSION}"
+VIAddVersionKey /LANG=1033 "FileDescription" "${APP_NAME} Windows installer"
+VIAddVersionKey /LANG=1033 "CompanyName" "${COMPANY_NAME}"
 
 Var DeleteSelf
 Var InstallCompleted
@@ -86,30 +94,23 @@ Section "Install" SecInstall
   ; A clean runtime directory prevents modules left by an older onedir build
   ; from shadowing files in the new package.
   RMDir /r "$INSTDIR\_internal"
+  RMDir /r "$INSTDIR\app"
+  RMDir /r "$INSTDIR\runtime"
   SetOutPath "$INSTDIR"
 
   File "${STAGE_DIR}\HLSDownloader.exe"
+  File "${STAGE_DIR}\HLSDownloaderCore.exe"
   File "${STAGE_DIR}\HLSDownloaderNativeHost.exe"
-  File "${STAGE_DIR}\MicrosoftEdgeWebview2Setup.exe"
   File /oname=config.default.json "${STAGE_DIR}\config.json"
+
+  SetOutPath "$INSTDIR\app"
+  File /r "${STAGE_DIR}\app\*"
+
+  SetOutPath "$INSTDIR\runtime"
+  File /r "${STAGE_DIR}\runtime\*"
 
   SetOutPath "$INSTDIR\_internal"
   File /r "${STAGE_DIR}\_internal\*"
-
-  SetRegView 32
-  ReadRegStr $0 HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_GUID}" "pv"
-  ${If} $0 == ""
-    ReadRegStr $0 HKCU "Software\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_GUID}" "pv"
-  ${EndIf}
-  ${If} $0 == ""
-    DetailPrint "正在安装 Microsoft Edge WebView2 Runtime..."
-    ExecWait '"$INSTDIR\MicrosoftEdgeWebview2Setup.exe" /silent /install' $1
-    ${If} $1 != 0
-      MessageBox MB_ICONSTOP|MB_OK "WebView2 Runtime 安装失败（错误码 $1）。请检查网络后重新运行安装程序。"
-      Abort
-    ${EndIf}
-  ${EndIf}
-  Delete "$INSTDIR\MicrosoftEdgeWebview2Setup.exe"
 
   SetOutPath "$INSTDIR\bin"
   File "${STAGE_DIR}\bin\ffmpeg.exe"
@@ -117,9 +118,6 @@ Section "Install" SecInstall
 
   SetOutPath "$INSTDIR\frontend"
   File /r "${STAGE_DIR}\frontend\dist"
-
-  SetOutPath "$INSTDIR\userscript"
-  File "${STAGE_DIR}\userscript\m3u8-sniffer.user.js"
 
   SetOutPath "$INSTDIR\browser-extension\chrome"
   File /r "${STAGE_DIR}\browser-extension\chrome\*"
@@ -189,8 +187,8 @@ RemoveApplicationData:
   RMDir "$SMPROGRAMS\${APP_NAME}"
 
   Delete "$INSTDIR\HLSDownloader.exe"
+  Delete "$INSTDIR\HLSDownloaderCore.exe"
   Delete "$INSTDIR\HLSDownloaderNativeHost.exe"
-  Delete "$INSTDIR\MicrosoftEdgeWebview2Setup.exe"
   Delete "$INSTDIR\config.default.json"
   Delete "$INSTDIR\config.json"
   Delete "$INSTDIR\data.db"
@@ -198,14 +196,14 @@ RemoveApplicationData:
   Delete "$INSTDIR\data.db-wal"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir /r "$INSTDIR\frontend"
-  RMDir /r "$INSTDIR\userscript"
   RMDir /r "$INSTDIR\browser-extension"
   RMDir /r "$INSTDIR\assets"
   RMDir /r "$INSTDIR\native-host"
   RMDir /r "$INSTDIR\scripts"
   RMDir /r "$INSTDIR\bin"
   RMDir /r "$INSTDIR\_internal"
-  RMDir /r "$INSTDIR\.webview"
+  RMDir /r "$INSTDIR\app"
+  RMDir /r "$INSTDIR\runtime"
   RMDir /r "$INSTDIR\.data"
 
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
@@ -220,7 +218,7 @@ RemoveApplicationData:
     RMDir "$INSTDIR"
   ${EndIf}
 
-  ; WebView2 helpers can release cache files just after the main process exits.
+  ; The core may release its database and cache files just after the UI exits.
   RMDir /r "$LOCALAPPDATA\HLS Downloader"
   Sleep 1000
   RMDir /r "$LOCALAPPDATA\HLS Downloader"

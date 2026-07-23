@@ -67,6 +67,15 @@ function appendUrl(values: string[], value: string | undefined): string[] {
   return values.some(item => normalized(item) === key) ? values : [...values, value]
 }
 
+function httpOrigin(value: string): string {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : ''
+  } catch {
+    return ''
+  }
+}
+
 export class RequestChainStore {
   private readonly chains = new Map<string, RequestChain>()
 
@@ -115,7 +124,7 @@ export class RequestChainStore {
     return chain
   }
 
-  find(download: DownloadLike, now = Date.now()): RequestChain | undefined {
+  find(download: DownloadLike, now = Date.now(), preferredTabId?: number): RequestChain | undefined {
     this.cleanup(now)
     const candidates = [download.url, download.finalUrl]
       .filter((value): value is string => Boolean(value))
@@ -123,11 +132,34 @@ export class RequestChainStore {
     const referrer = download.referrer ? normalized(download.referrer) : ''
     return [...this.chains.values()]
       .filter(chain => chain.urls.some(url => candidates.includes(normalized(url))))
+      .filter(chain => preferredTabId === undefined || chain.tabId === preferredTabId)
       .sort((left, right) => {
         const leftPageMatch = referrer && normalized(left.pageUrl) === referrer ? 1 : 0
         const rightPageMatch = referrer && normalized(right.pageUrl) === referrer ? 1 : 0
         return rightPageMatch - leftPageMatch || right.updatedAt - left.updatedAt
       })[0]
+  }
+
+  contextsForPage(tabId: number, pageUrl: string, now = Date.now(), limit = 12): RequestChain[] {
+    this.cleanup(now)
+    const page = normalized(pageUrl)
+    const supportedTypes = new Set(['xmlhttprequest', 'media', 'other'])
+    const selected = new Map<string, RequestChain>()
+    const candidates = [...this.chains.values()]
+      .filter(chain => chain.tabId === tabId && supportedTypes.has(chain.type))
+      .filter(chain => {
+        if (!page) return true
+        return normalized(chain.pageUrl) === page
+          || normalized(chain.requestHeaders.referer || '') === page
+      })
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+    for (const chain of candidates) {
+      const origin = httpOrigin(chain.finalUrl)
+      if (!origin || selected.has(origin)) continue
+      selected.set(origin, chain)
+      if (selected.size >= limit) break
+    }
+    return [...selected.values()]
   }
 
   finish(requestId: string, now = Date.now()): void {

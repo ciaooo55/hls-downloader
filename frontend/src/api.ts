@@ -1,6 +1,7 @@
 import type { PlaybackSeek, PlaybackSession, PlaybackStatus } from './types'
+import { coreOrigin } from './tauri'
 
-const BASE = '/api'
+const BASE = `${coreOrigin()}/api`
 
 export class ApiError extends Error {
   status: number
@@ -79,7 +80,6 @@ export const browseDir = (path: string = '') =>
   request<any>(`/browse-dir?path=${encodeURIComponent(path)}`)
 export const testConnection = () => request<any>('/test')
 export const recognizeUrl = (data: any) => request<any>('/recognize', { method: 'POST', body: JSON.stringify(data) })
-export const fetchUserscriptStatus = () => request<any>('/userscript/status')
 export const fetchBrowserHandoffs = () => request<any[]>('/browser/handoffs')
 export const fetchBrowserHandoff = (id: string) => request<any>(`/browser/handoffs/${encodeURIComponent(id)}`)
 export const fetchBrowserStatus = () => request<any>('/browser/status')

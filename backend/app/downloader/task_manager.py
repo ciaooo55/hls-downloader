@@ -11,6 +11,7 @@ from ..config import settings
 from ..database import run_db
 from ..models import Task, TaskProgress, TaskStatus, TaskType
 from ..naming import suggest_manifest_name
+from ..request_context import sanitize_request_contexts, sanitize_request_headers
 from ..credentials import protect_secret, unprotect_secret
 from ..utils import sanitize_filename
 from .hls import HLSDownloader
@@ -22,6 +23,22 @@ from .engine import task_work_dir, temp_roots
 
 
 logger = logging.getLogger(__name__)
+
+
+def _decode_request_headers(value: str) -> dict[str, str]:
+    try:
+        decoded = json.loads(unprotect_secret(value or "") or "{}")
+        return sanitize_request_headers(decoded if isinstance(decoded, dict) else {})
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def _decode_request_contexts(value: str) -> dict[str, dict]:
+    try:
+        decoded = json.loads(unprotect_secret(value or "") or "{}")
+        return sanitize_request_contexts(decoded if isinstance(decoded, dict) else {})
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
 
 ACTIVE_STATUSES = {
     TaskStatus.FETCHING_METADATA,
@@ -270,11 +287,14 @@ class TaskManager:
         origin="",
         user_agent="",
         cookie="",
+        request_headers=None,
+        request_contexts=None,
         title="",
         filename="",
         concurrency=0,
         output_dir="",
         auto_start=False,
+        inherit_default_headers=True,
     ) -> Task:
         task_id = str(uuid.uuid4())[:8]
         resolved_type = resolve_task_type(task_type, url)
@@ -290,16 +310,21 @@ class TaskManager:
             requested_name = filename or title
         filename = sanitize_filename(requested_name) if requested_name else ""
         now = datetime.now().isoformat()
+        inherit_identity_defaults = bool(
+            inherit_default_headers and not (source_page_url or request_headers or request_contexts)
+        )
         task = Task(
             id=task_id,
             url=url,
             task_type=resolved_type,
             source_page_url=source_page_url,
             mime_type=mime_type,
-            referer=referer or settings.default_referer,
-            origin=origin or settings.default_origin,
+            referer=referer or (settings.default_referer if inherit_identity_defaults else ""),
+            origin=origin or (settings.default_origin if inherit_identity_defaults else ""),
             user_agent=user_agent or settings.default_user_agent,
-            cookie=cookie or settings.default_cookie,
+            cookie=cookie or (settings.default_cookie if inherit_identity_defaults else ""),
+            request_headers=sanitize_request_headers(request_headers),
+            request_contexts=sanitize_request_contexts(request_contexts),
             title=title,
             filename=filename,
             concurrency=min(256, max(1, int(concurrency or settings.default_concurrency or 12))),
@@ -311,15 +336,16 @@ class TaskManager:
             engine_state={
                 **({"output_dir": str(Path(output_dir).expanduser().resolve())} if output_dir else {}),
                 "temp_dir": str(Path(settings.temp_dir).expanduser().resolve()),
+                "inherit_default_headers": inherit_identity_defaults,
             },
         )
         async with self._temp_cleanup_lock:
             self.tasks[task_id] = task
         await run_db(
             "INSERT INTO tasks "
-            "(id,task_type,source_page_url,mime_type,title,url,referer,origin,user_agent,cookie,filename,concurrency,"
+            "(id,task_type,source_page_url,mime_type,title,url,referer,origin,user_agent,cookie,request_headers,request_contexts,filename,concurrency,"
             "status,stage,last_log,started_at,finished_at,post_percent,engine_state) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task.id,
                 task.task_type.value,
@@ -331,6 +357,8 @@ class TaskManager:
                 task.origin,
                 task.user_agent,
                 protect_secret(task.cookie),
+                protect_secret(json.dumps(task.request_headers, ensure_ascii=False)),
+                protect_secret(json.dumps(task.request_contexts, ensure_ascii=False)),
                 task.filename,
                 task.concurrency,
                 task.status.value,
@@ -704,6 +732,8 @@ class TaskManager:
                 origin=_row_value(row, "origin", "") or "",
                 user_agent=_row_value(row, "user_agent", "") or "",
                 cookie=unprotect_secret(_row_value(row, "cookie", "") or ""),
+                request_headers=_decode_request_headers(_row_value(row, "request_headers", "") or ""),
+                request_contexts=_decode_request_contexts(_row_value(row, "request_contexts", "") or ""),
                 title=_row_value(row, "title", "") or "",
                 filename=_row_value(row, "filename", "") or "",
                 concurrency=int(_row_value(row, "concurrency", 0) or 0),

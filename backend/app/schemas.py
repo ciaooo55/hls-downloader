@@ -14,6 +14,8 @@ class TaskCreate(BaseModel):
     origin: str = ""
     user_agent: str = ""
     cookie: str = ""
+    request_headers: dict[str, str] = Field(default_factory=dict)
+    request_contexts: dict[str, dict] = Field(default_factory=dict)
     title: str = ""
     filename: str = ""
     download_dir: str = ""
@@ -122,11 +124,6 @@ class BrowserHandoffAccept(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = APP_VERSION
-
-
-class UserscriptPing(BaseModel):
-    version: str = Field(default="", max_length=64)
-    page_url: str = Field(default="", max_length=2048)
 
 
 class PlaybackSeekRequest(BaseModel):

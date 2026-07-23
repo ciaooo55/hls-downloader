@@ -13,9 +13,11 @@ import httpx
 
 from ..config import settings
 from ..models import Task, TaskStatus
+from ..naming import is_generic_media_name
+from ..request_context import build_task_headers
 from ..utils import sanitize_filename
 from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
-from .errors import diagnose_download_error, format_download_error
+from .errors import diagnose_download_error, format_download_error, should_retry_download_error
 
 
 MAX_RETRIES = 5
@@ -91,13 +93,7 @@ class HTTPDownloader(SeeklessEngine):
         return self._part_path
 
     def _headers(self) -> dict[str, str]:
-        values = {
-            "User-Agent": self.task.user_agent or settings.default_user_agent,
-            "Referer": self.task.referer or settings.default_referer,
-            "Origin": self.task.origin or settings.default_origin,
-            "Cookie": self.task.cookie or settings.default_cookie,
-        }
-        return {name: value for name, value in values.items() if value}
+        return build_task_headers(self.task)
 
     def _publish(self) -> None:
         self.on_progress(self.task)
@@ -115,29 +111,61 @@ class HTTPDownloader(SeeklessEngine):
         return bool(self.task.pause_event and self.task.pause_event.is_set())
 
     async def _probe(self, client: httpx.AsyncClient, headers: dict[str, str]) -> dict:
-        response = await client.head(self.task.url, headers=headers)
-        if response.status_code in {405, 501} or response.status_code >= 500:
+        head: httpx.Response | None = None
+        ranged: httpx.Response | None = None
+        try:
+            try:
+                candidate = await client.head(self.task.url, headers=headers)
+                if candidate.status_code < 400:
+                    head = candidate
+                else:
+                    await candidate.aclose()
+            except httpx.HTTPError:
+                head = None
+
+            # Many download servers support Range but omit Accept-Ranges on HEAD,
+            # while some reject HEAD entirely. Verify with the same one-byte probe
+            # that mature download managers use before choosing sequential mode.
             request = client.build_request(
                 "GET",
                 self.task.url,
                 headers={**headers, "Range": "bytes=0-0"},
             )
-            response = await client.send(request, stream=True)
-        response.raise_for_status()
-        try:
-            content_range = response.headers.get("content-range", "")
-            match = _CONTENT_RANGE_RE.match(content_range)
-            total = int(match.group(3)) if match else int(response.headers.get("content-length", 0) or 0)
+            ranged = await client.send(request, stream=True)
+            if ranged.status_code >= 400:
+                if head is None:
+                    ranged.raise_for_status()
+                await ranged.aclose()
+                ranged = None
+
+            response = ranged or head
+            if response is None:
+                raise RuntimeError("服务器未返回可用的文件信息")
+            response.raise_for_status()
+            match = _CONTENT_RANGE_RE.match(response.headers.get("content-range", ""))
+            range_supported = bool(ranged is not None and ranged.status_code == 206 and match)
+            total = int(match.group(3)) if range_supported and match else int(
+                response.headers.get("content-length", 0)
+                or (head.headers.get("content-length", 0) if head else 0)
+                or 0
+            )
+            filename = _content_disposition_filename(response.headers.get("content-disposition", ""))
+            if not filename and head is not None:
+                filename = _content_disposition_filename(head.headers.get("content-disposition", ""))
             return {
                 "total": total,
-                "ranges": response.status_code == 206 or "bytes" in response.headers.get("accept-ranges", "").lower(),
-                "etag": response.headers.get("etag", ""),
-                "last_modified": response.headers.get("last-modified", ""),
-                "content_type": response.headers.get("content-type", "").split(";", 1)[0],
-                "filename": _content_disposition_filename(response.headers.get("content-disposition", "")),
+                "ranges": range_supported,
+                "etag": response.headers.get("etag", "") or (head.headers.get("etag", "") if head else ""),
+                "last_modified": response.headers.get("last-modified", "") or (head.headers.get("last-modified", "") if head else ""),
+                "content_type": (response.headers.get("content-type", "") or (head.headers.get("content-type", "") if head else "")).split(";", 1)[0],
+                "filename": filename,
+                "final_url": str(response.url),
             }
         finally:
-            await response.aclose()
+            if ranged is not None:
+                await ranged.aclose()
+            if head is not None:
+                await head.aclose()
 
     async def run(self) -> None:
         task = self.task
@@ -161,8 +189,14 @@ class HTTPDownloader(SeeklessEngine):
                 self._total_size = total
                 task.mime_type = task.mime_type or metadata["content_type"]
                 task.progress.total_bytes = total
-                name = metadata["filename"] or Path(urlparse(task.url).path).name or task.filename or task.id
-                task.filename = sanitize_filename(task.filename or name)
+                name = (
+                    metadata["filename"]
+                    or Path(urlparse(metadata.get("final_url", "")).path).name
+                    or Path(urlparse(task.url).path).name
+                    or task.id
+                )
+                requested_name = task.filename.strip()
+                task.filename = sanitize_filename(name if not requested_name or is_generic_media_name(requested_name) else requested_name)
                 output = _reserve_output_path(task_output_dir(task) / task.filename)
                 task.engine_state["reserved_output_path"] = str(output)
 
@@ -217,7 +251,7 @@ class HTTPDownloader(SeeklessEngine):
                 output.unlink(missing_ok=True)
             raise
         except Exception as exc:
-            details = diagnose_download_error(exc, stage=task.stage, url=task.url)
+            details = diagnose_download_error(exc, stage=task.stage, url=task.url, task_context=task)
             task.error_code = details.code
             task.error_stage = details.stage
             task.error_url = details.url
@@ -388,6 +422,8 @@ class HTTPDownloader(SeeklessEngine):
                         break
                     except Exception as exc:
                         last_error = exc
+                        if not should_retry_download_error(exc):
+                            break
                         if attempt < MAX_RETRIES:
                             await asyncio.sleep(min(4, attempt))
                 if last_error is not None:

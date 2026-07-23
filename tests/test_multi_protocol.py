@@ -21,6 +21,49 @@ def test_auto_task_type_recognizes_supported_sources():
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/file.torrent") is TaskType.TORRENT
 
 
+def test_http_probe_verifies_range_when_head_omits_accept_ranges():
+    task = Task(id="probe-range", url="http://files.test/100MB.zip", task_type=TaskType.HTTP)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"Content-Length": "104857600", "Content-Type": "application/zip"}, request=request)
+        assert request.headers["range"] == "bytes=0-0"
+        return httpx.Response(206, content=b"x", headers={"Content-Range": "bytes 0-0/104857600"}, request=request)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
+            return await HTTPDownloader(task)._probe(client, {})
+
+    metadata = asyncio.run(run())
+    assert metadata["ranges"] is True
+    assert metadata["total"] == 104857600
+
+
+def test_http_probe_follows_https_to_http_redirect_and_uses_server_filename():
+    task = Task(id="probe-redirect", url="https://mirror.test/download?id=1", task_type=TaskType.HTTP)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "mirror.test":
+            return httpx.Response(302, headers={"Location": "http://cdn.test/releases/system.iso"}, request=request)
+        if request.method == "HEAD":
+            return httpx.Response(405, request=request)
+        return httpx.Response(206, content=b"x", headers={
+            "Content-Range": "bytes 0-0/5500000000",
+            "Content-Disposition": "attachment; filename=ubuntu-desktop.iso",
+            "Content-Type": "application/octet-stream",
+        }, request=request)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
+            return await HTTPDownloader(task)._probe(client, {})
+
+    metadata = asyncio.run(run())
+    assert metadata["ranges"] is True
+    assert metadata["total"] == 5500000000
+    assert metadata["filename"] == "ubuntu-desktop.iso"
+    assert metadata["final_url"] == "http://cdn.test/releases/system.iso"
+
+
 def test_task_process_files_use_configured_temp_directory(tmp_path):
     task = Task(
         id="temp-location",

@@ -1,5 +1,5 @@
 import { AppWindow, Archive, CheckCircle2, Download, File, Images, List, Radio } from 'lucide-react'
-import type { BrowserStatus, Task, UserscriptStatus } from '../types'
+import type { BrowserStatus, Task } from '../types'
 import { downloadCategory } from '../downloadCategory'
 
 export type TaskFilter = 'all' | 'running' | 'done' | 'media' | 'program' | 'archive' | 'other'
@@ -21,19 +21,20 @@ function countFor(tasks: Task[], filter: TaskFilter): number {
   return tasks.filter(task => task.status === filter).length
 }
 
-export default function Sidebar({ tasks, active, onChange, userscript, browserStatus }: { tasks: Task[]; active: TaskFilter; onChange: (filter: TaskFilter) => void; userscript: UserscriptStatus | null; browserStatus: BrowserStatus | null }) {
+export default function Sidebar({ tasks, active, onChange, browserStatus }: { tasks: Task[]; active: TaskFilter; onChange: (filter: TaskFilter) => void; browserStatus: BrowserStatus | null }) {
   return (
     <aside className="sidebar">
+      <div className="sidebar-brand" title="HLS Downloader"><img src="./app-icon.png" alt="" /></div>
       <nav>
         {filters.map((item, index) => {
           const Icon = item.icon
-          return <div key={item.id}>{index === 3 && <span className="sidebar-group-label">分类</span>}<button className={`sidebar-item${active === item.id ? ' active' : ''}`} onClick={() => onChange(item.id)}><Icon size={16} /><span>{item.label}</span><b>{countFor(tasks, item.id)}</b></button></div>
+          return <div key={item.id}>{index === 3 && <span className="sidebar-group-label">分类</span>}<button title={`${item.label} · ${countFor(tasks, item.id)}`} aria-label={item.label} className={`sidebar-item${active === item.id ? ' active' : ''}`} onClick={() => onChange(item.id)}><Icon size={18} /><span>{item.label}</span><b>{countFor(tasks, item.id)}</b></button></div>
         })}
       </nav>
       <div className="sidebar-script">
         <span className="sidebar-caption">浏览器接管</span>
-        <div className={`script-state ${browserStatus?.detected || userscript?.detected ? 'online' : browserStatus?.seen_before || userscript?.seen_before ? 'seen' : ''}`} title={browserStatus?.message || ''}><Radio size={15} /><span>{browserStatus?.detected ? '正式扩展已连接' : userscript?.detected ? '仅后备脚本已连接' : browserStatus?.seen_before ? '扩展连接已断开' : '扩展未安装或未连接'}</span></div>
-        {(browserStatus?.version || userscript?.version) && <small>版本 {browserStatus?.version || userscript?.version}</small>}
+        <div className={`script-state ${browserStatus?.detected ? 'online' : browserStatus?.seen_before ? 'seen' : ''}`} title={browserStatus?.message || ''}><Radio size={15} /><span>{browserStatus?.detected ? '正式插件已连接' : browserStatus?.seen_before ? '插件连接已断开' : '插件未安装或未连接'}</span></div>
+        {browserStatus?.version && <small>版本 {browserStatus.version}</small>}
       </div>
     </aside>
   )

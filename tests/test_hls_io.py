@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from backend.app.config import settings
 from backend.app.downloader.hls import (
+    _browser_impersonation,
     HLSDownloader,
     _create_hls_client,
     _decrypt_aes128_file,
@@ -19,6 +20,12 @@ from backend.app.models import Task
 
 def _task(url: str = "https://example.test/master.m3u8") -> Task:
     return Task(id="test", url=url, filename="video")
+
+
+def test_browser_transport_matches_the_captured_user_agent_family():
+    assert _browser_impersonation({"User-Agent": "Mozilla/5.0 Chrome/140.0 Safari/537.36"}) == "chrome"
+    assert _browser_impersonation({"user-agent": "Mozilla/5.0 Firefox/152.0"}) == "firefox"
+    assert _browser_impersonation({"User-Agent": "Mozilla/5.0 Version/18.0 Safari/605.1.15"}) == "safari"
 
 
 def test_load_media_playlist_follows_variants_and_rejects_cycles():
@@ -196,10 +203,11 @@ def test_reserve_output_path_is_atomic(tmp_path):
     assert second.exists()
 
 
-def test_browser_transport_uses_firefox_tls_and_streams_to_disk(tmp_path, monkeypatch):
+def test_browser_transport_matches_request_tls_and_streams_to_disk(tmp_path, monkeypatch):
     from backend.app.downloader import hls as hls_module
 
     created = []
+    requested = []
 
     class FakeResponse:
         status_code = 200
@@ -223,6 +231,7 @@ def test_browser_transport_uses_firefox_tls_and_streams_to_disk(tmp_path, monkey
 
         async def get(self, _url, **kwargs):
             assert kwargs["stream"] is True
+            requested.append(kwargs)
             return FakeResponse()
 
     monkeypatch.setattr(hls_module, "CurlAsyncSession", FakeSession)
@@ -236,7 +245,7 @@ def test_browser_transport_uses_firefox_tls_and_streams_to_disk(tmp_path, monkey
                 client,
                 "https://example.test/browser.seg",
                 destination,
-                {},
+                {"User-Agent": "Mozilla/5.0 Chrome/140.0 Safari/537.36"},
             )
         assert written == 6
         assert destination.read_bytes() == b"abcdef"
@@ -245,10 +254,10 @@ def test_browser_transport_uses_firefox_tls_and_streams_to_disk(tmp_path, monkey
     assert created == [
         {
             "max_clients": 8,
-            "impersonate": "firefox",
             "default_headers": False,
             "http_version": "v1",
             "timeout": (10, 60),
             "allow_redirects": True,
         }
     ]
+    assert requested[0]["impersonate"] == "chrome"

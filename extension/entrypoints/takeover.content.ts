@@ -40,6 +40,8 @@ export default defineContentScript({
         altBypass: event.altKey,
         ctrlForce: event.ctrlKey,
         generic: !href,
+        opensNewTab: anchor?.target.toLowerCase() === '_blank',
+        controlHint: downloadControl,
       })
     }, true)
   },

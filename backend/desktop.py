@@ -21,14 +21,12 @@ try:
     from .app.version import APP_VERSION
     from .app.desktop_runtime import register_activation, register_browser_handoff, register_shutdown, set_desktop_handoff_session
     from .app.main import app
-    from .app.userscript_service import USERSCRIPT_FILENAME, export_userscript, render_userscript
 except ImportError:
     from app.config import PROJECT_ROOT, settings
     from app.paths import RUNTIME_PATHS
     from app.version import APP_VERSION
     from app.desktop_runtime import register_activation, register_browser_handoff, register_shutdown, set_desktop_handoff_session
     from app.main import app
-    from app.userscript_service import USERSCRIPT_FILENAME, export_userscript, render_userscript
 
 
 def public_base_url() -> str:
@@ -55,7 +53,6 @@ class DesktopBridge:
         self,
         window=None,
         folder_dialog_type=None,
-        source_path: Path | None = None,
         url_opener=None,
         uninstaller_path: Path | None = None,
         process_starter=None,
@@ -65,7 +62,6 @@ class DesktopBridge:
     ) -> None:
         self._window = window
         self._folder_dialog_type = folder_dialog_type
-        self._source_path = source_path
         self._url_opener = url_opener or webbrowser.open
         self._uninstaller_path = uninstaller_path or Path(PROJECT_ROOT) / "Uninstall.exe"
         self._process_starter = process_starter or subprocess.Popen
@@ -78,39 +74,6 @@ class DesktopBridge:
 
     def _set_exit_request(self, callback) -> None:
         self._exit_request = callback
-
-    def export_userscript(self) -> dict:
-        if self._window is None:
-            return {"ok": False, "error": "桌面窗口尚未就绪"}
-        selected = self._window.create_file_dialog(self._folder_dialog_type)
-        if not selected:
-            return {"ok": False, "canceled": True}
-
-        source_path = self._source_path or Path(PROJECT_ROOT) / "userscript" / USERSCRIPT_FILENAME
-        source = source_path.read_text(encoding="utf-8")
-        host = settings.host if settings.host not in {"0.0.0.0", "::"} else "127.0.0.1"
-        content = render_userscript(
-            source,
-            host=host,
-            port=settings.port,
-            token=settings.token,
-        )
-        directory = Path(selected[0])
-        target = directory / USERSCRIPT_FILENAME
-        overwrite = False
-        if target.exists():
-            overwrite = self._window.create_confirmation_dialog(
-                "覆盖油猴脚本",
-                f"{target.name} 已存在，是否覆盖？",
-            )
-            if not overwrite:
-                return {"ok": False, "canceled": True}
-        exported = export_userscript(directory, content, overwrite=overwrite)
-        return {"ok": True, "path": str(exported)}
-
-    def open_userscript_installer(self) -> dict:
-        self._url_opener(f"{public_base_url()}/userscript/m3u8-sniffer.user.js")
-        return {"ok": True}
 
     def open_browser_extension_installer(self) -> dict:
         manifest = self._browser_extension_path / "manifest.json"

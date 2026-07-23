@@ -8,6 +8,7 @@ from pathlib import Path
 from ..config import settings
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
+from ..request_context import build_task_headers
 from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
 from .errors import diagnose_download_error, format_download_error
 
@@ -99,7 +100,7 @@ class DashDownloader(SeeklessEngine):
                 task.status = TaskStatus.PAUSED
                 self._set_stage("paused", "已暂停，可继续下载")
         except Exception as exc:
-            details = diagnose_download_error(exc, stage=task.stage, url=task.url)
+            details = diagnose_download_error(exc, stage=task.stage, url=task.url, task_context=task)
             if "drm" in str(exc).lower() or "protected" in str(exc).lower():
                 details = details.__class__(
                     code="DASH_DRM_UNSUPPORTED",
@@ -155,12 +156,7 @@ class DashDownloader(SeeklessEngine):
                 task.last_log = "正在合并 DASH 音视频轨"
                 self._publish()
 
-        headers = {
-            "User-Agent": task.user_agent or settings.default_user_agent,
-            "Referer": task.referer or settings.default_referer,
-            "Origin": task.origin or settings.default_origin,
-            "Cookie": task.cookie or settings.default_cookie,
-        }
+        headers = build_task_headers(task)
         options = {
             "outtmpl": str(task_dir / "payload.%(ext)s"),
             "format": "bestvideo+bestaudio/best",
@@ -169,7 +165,7 @@ class DashDownloader(SeeklessEngine):
             "nopart": False,
             "quiet": True,
             "no_warnings": True,
-            "http_headers": {key: value for key, value in headers.items() if value},
+            "http_headers": headers,
             "ffmpeg_location": str(Path(settings.ffmpeg_path).parent),
             "progress_hooks": [progress_hook],
             "noplaylist": True,

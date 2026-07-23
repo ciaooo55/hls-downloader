@@ -5,6 +5,7 @@ import { closeDesktopWindow } from './desktop'
 import { resolveTheme } from './theme'
 import type { Settings } from './types'
 import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
+import { isTauriDesktop } from './tauri'
 
 export default function BrowserHandoffWindow({ handoffId }: { handoffId: string }) {
   const [item, setItem] = useState<BrowserHandoff | null>(null)
@@ -37,6 +38,21 @@ export default function BrowserHandoffWindow({ handoffId }: { handoffId: string 
       setError(reason?.message || '无法读取浏览器下载请求')
     }
   }, [close, handoffId])
+
+  useEffect(() => {
+    if (!isTauriDesktop()) return
+    let unlisten: (() => void) | undefined
+    void import('@tauri-apps/api/window').then(({ getCurrentWindow }) =>
+      getCurrentWindow().onCloseRequested(async event => {
+        if (resolvedRef.current) return
+        event.preventDefault()
+        resolvedRef.current = true
+        await resolveBrowserHandoff(handoffId, 'cancel').catch(() => {})
+        await getCurrentWindow().destroy().catch(() => {})
+      }),
+    ).then(cleanup => { unlisten = cleanup })
+    return () => unlisten?.()
+  }, [handoffId])
 
   useEffect(() => {
     document.documentElement.dataset.surface = 'handoff'

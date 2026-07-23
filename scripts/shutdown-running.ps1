@@ -37,28 +37,31 @@ if (Get-Process HLSDownloader -ErrorAction SilentlyContinue) {
     & "$env:SystemRoot\System32\taskkill.exe" /IM HLSDownloader.exe /T /F | Out-Null
     Get-Process HLSDownloader -ErrorAction SilentlyContinue | Stop-Process -Force
 }
+Get-Process HLSDownloaderCore -ErrorAction SilentlyContinue | Stop-Process -Force
 
 function Test-ExecutableWritable {
     if (-not $InstallDir) { return $true }
-    $target = Join-Path $InstallDir "HLSDownloader.exe"
-    if (-not (Test-Path -LiteralPath $target)) { return $true }
-    try {
-        $stream = [System.IO.File]::Open(
-            $target,
-            [System.IO.FileMode]::Open,
-            [System.IO.FileAccess]::ReadWrite,
-            [System.IO.FileShare]::None
-        )
-        $stream.Dispose()
-        return $true
-    } catch {
-        return $false
+    foreach ($name in @("HLSDownloader.exe", "HLSDownloaderCore.exe")) {
+        $target = Join-Path $InstallDir $name
+        if (-not (Test-Path -LiteralPath $target)) { continue }
+        try {
+            $stream = [System.IO.File]::Open(
+                $target,
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::ReadWrite,
+                [System.IO.FileShare]::None
+            )
+            $stream.Dispose()
+        } catch {
+            return $false
+        }
     }
+    return $true
 }
 
 $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(3, $TimeoutSeconds))
 do {
-    $running = Get-Process HLSDownloader -ErrorAction SilentlyContinue
+    $running = Get-Process HLSDownloader,HLSDownloaderCore -ErrorAction SilentlyContinue
     if (-not $running -and (Test-ExecutableWritable)) { exit 0 }
     if ($running) {
         $running | Stop-Process -Force

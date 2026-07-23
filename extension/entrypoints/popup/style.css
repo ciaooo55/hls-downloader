@@ -12,7 +12,7 @@ button { border: 0; border-radius: 6px; cursor: pointer; letter-spacing: 0; back
 .header-actions { display: flex; gap: 6px; }
 .header-actions button { min-width: 40px; height: 26px; padding: 0 8px; font-size: 11px; background: #0ea5e9; color: #fff; }
 .close-button { background: #e0f2fe !important; color: #075985 !important; font-size: 16px; line-height: 1; }
-.controls { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px 10px; }
+.controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 8px 10px; }
 .controls button { min-height: 32px; padding: 6px 4px; font-size: 11px; }
 .controls button.active { background: #d1fae5; color: #047857; }
 section { min-height: 0; overflow: auto; flex: 1; }

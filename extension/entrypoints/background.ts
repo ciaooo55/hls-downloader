@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
-import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, resourceId, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
+import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, pageResourceKey, replayableRequestHeaders, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus, shouldResumeBrowserDownload } from '../lib/takeover'
 import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
@@ -9,8 +9,8 @@ import { parseHlsManifest, resourceQuality } from '../lib/hlsManifest'
 const HOST = 'com.ciaooo55.hls_downloader'
 let clickIntents: DownloadClickIntent[] = []
 let browserFallbacks: Array<{ url: string, at: number }> = []
-const determinedDownloads = new Map<number, browser.downloads.DownloadItem>()
-const determinationWaiters = new Map<number, (item: browser.downloads.DownloadItem) => void>()
+const determinedDownloads = new Map<number, Browser.downloads.DownloadItem>()
+const determinationWaiters = new Map<number, (item: Browser.downloads.DownloadItem) => void>()
 const requestChains = new RequestChainStore()
 let nativeBridge: NativeBridge | null = null
 let concealedDownloadCount = 0
@@ -28,7 +28,7 @@ async function settings() {
 }
 
 function storageKey(tabId: number, pageUrl = '') {
-  return tabId >= 0 ? `resources:tab:${tabId}` : `resources:${pageUrl || 'global'}`
+  return pageResourceKey(tabId, pageUrl)
 }
 
 function responseFilename(value: string): string {
@@ -42,10 +42,14 @@ function responseFilename(value: string): string {
 async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1) {
   const kind = resource.kind || classifyResource(resource.url, resource.mimeType)
   if (!kind) return
-  const key = storageKey(tabId, resource.pageUrl)
+  let pageUrl = resource.pageUrl || ''
+  if (tabId >= 0 && !pageUrl) {
+    pageUrl = (await browser.tabs.get(tabId).catch(() => null))?.url || ''
+  }
+  const key = storageKey(tabId, pageUrl)
   const stored = await browser.storage.session.get(key)
   const resources = Array.isArray(stored[key]) ? stored[key] : []
-  const merged = mergeResources(resources, { ...resource, kind, id: resourceId(resource.url), seenAt: Date.now() })
+  const merged = mergeResources(resources, { ...resource, pageUrl, kind, id: resourceId(resource.url), seenAt: Date.now() })
   await browser.storage.session.set({ [key]: merged })
   await browser.action.setBadgeText({ text: String(Math.min(99, merged.length)), ...(tabId >= 0 ? { tabId } : {}) })
 }
@@ -53,7 +57,12 @@ async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabI
 async function cookiesFor(url: string, pageUrl = ''): Promise<string> {
   const config = await settings()
   const host = new URL(url).host
-  if (!config.authorizedCookieHosts.includes(host)) return ''
+  let pageHost = ''
+  try { pageHost = pageUrl ? new URL(pageUrl).host : '' } catch {}
+  // Authorizing a page means its detected resources may reuse only cookies
+  // that the browser would send to the resource URL itself. Page cookies are
+  // never copied across origins.
+  if (!config.authorizedCookieHosts.includes(host) && !config.authorizedCookieHosts.includes(pageHost)) return ''
   const values = await browser.cookies.getAll({ url })
   return values.map(cookie => `${cookie.name}=${cookie.value}`).join('; ')
 }
@@ -63,9 +72,24 @@ function native(message: Record<string, unknown>, timeoutMs?: number): Promise<a
   return nativeBridge.request(message, timeoutMs)
 }
 
+async function applyDesktopTakeoverSettings(response: any): Promise<any> {
+  if (typeof response?.takeover_enabled === 'boolean' && Number.isFinite(Number(response?.takeover_minimum_bytes))) {
+    await browser.storage.local.set({
+      enabled: response.takeover_enabled,
+      minimumBytes: Math.max(0, Number(response.takeover_minimum_bytes)),
+    })
+  }
+  return response
+}
+
+async function pingDesktop(): Promise<any> {
+  return applyDesktopTakeoverSettings(await native({ op: 'ping', version: browser.runtime.getManifest().version }))
+}
+
 async function inspectHls(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1): Promise<void> {
-  if (resource.kind !== 'hls' || inspectedHls.has(resource.url)) return
-  inspectedHls.add(resource.url)
+  const inspectionKey = `${tabId}:${resource.pageUrl || ''}:${resource.url}`
+  if (resource.kind !== 'hls' || inspectedHls.has(inspectionKey)) return
+  inspectedHls.add(inspectionKey)
   try {
     const response = await fetch(resource.url, { credentials: 'include', signal: AbortSignal.timeout(5_000) })
     if (!response.ok) return
@@ -83,7 +107,7 @@ async function inspectHls(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId 
         size: 0,
         statusCode: undefined,
         filename: resource.filename || decodeURIComponent(new URL(variant.url).pathname.split('/').pop() || ''),
-        title: resource.title || (variant.quality ? `${variant.quality} HLS 视频流` : 'HLS 视频流'),
+        title: resource.title || '',
       }
       await saveResource(enriched, tabId)
       if (tabId >= 0) await browser.tabs.sendMessage(tabId, { type: 'captured-resource', resource: enriched }).catch(() => undefined)
@@ -128,11 +152,23 @@ function revealBrowserDownload(): void {
 
 async function resourcePayload(resource: MediaResource) {
   const pageUrl = resource.pageUrl || ''
-  const capturedReferer = resource.requestHeaders?.referer || ''
-  const capturedOrigin = resource.requestHeaders?.origin || ''
-  const capturedUserAgent = resource.requestHeaders?.['user-agent'] || ''
-  let pageOrigin = ''
-  try { pageOrigin = pageUrl ? new URL(pageUrl).origin : '' } catch {}
+  const identity = resourceRequestIdentity(resource, navigator.userAgent)
+  const requestContexts: Record<string, Record<string, unknown>> = {}
+  if (resource.tabId !== undefined && resource.tabId >= 0) {
+    for (const chain of requestChains.contextsForPage(resource.tabId, pageUrl)) {
+      let origin = ''
+      try { origin = new URL(chain.finalUrl).origin } catch {}
+      if (!origin) continue
+      const scopedIdentity = resourceRequestIdentity({ pageUrl, requestHeaders: chain.requestHeaders })
+      requestContexts[origin] = {
+        request_headers: replayableRequestHeaders(chain.requestHeaders),
+        referer: scopedIdentity.referer,
+        origin: scopedIdentity.origin,
+        user_agent: scopedIdentity.userAgent,
+        cookie: await cookiesFor(chain.finalUrl, pageUrl),
+      }
+    }
+  }
   return {
     url: resource.url,
     filename: suggestedResourceFilename(resource),
@@ -140,10 +176,12 @@ async function resourcePayload(resource: MediaResource) {
     mime_type: resource.mimeType || '',
     size: resource.size || 0,
     source_page_url: pageUrl,
-    referer: capturedReferer || pageUrl,
-    origin: capturedOrigin || pageOrigin,
+    referer: identity.referer,
+    origin: identity.origin,
     cookie: await cookiesFor(resource.url, pageUrl),
-    user_agent: capturedUserAgent || navigator.userAgent,
+    user_agent: identity.userAgent,
+    request_headers: replayableRequestHeaders(resource.requestHeaders),
+    request_contexts: requestContexts,
     extension_version: browser.runtime.getManifest().version,
   }
 }
@@ -203,10 +241,10 @@ async function handoffStatus(handoffId: string) {
   return native({ op: 'handoff_status', handoff_id: handoffId }, 2_000)
 }
 
-async function refreshedDownload(downloadId: number, original: browser.downloads.DownloadItem) {
+async function refreshedDownload(downloadId: number, original: Browser.downloads.DownloadItem) {
   let determined = determinedDownloads.get(downloadId)
   if (!determined) {
-    determined = await new Promise<browser.downloads.DownloadItem | undefined>(resolve => {
+    determined = await new Promise<Browser.downloads.DownloadItem | undefined>(resolve => {
       const timeout = setTimeout(() => {
         determinationWaiters.delete(downloadId)
         resolve(undefined)
@@ -234,7 +272,7 @@ async function pauseDownload(downloadId: number): Promise<boolean> {
   return false
 }
 
-async function removeBrowserDownload(item: browser.downloads.DownloadItem): Promise<void> {
+async function removeBrowserDownload(item: Browser.downloads.DownloadItem): Promise<void> {
   const [current] = await browser.downloads.search({ id: item.id })
   const state = current?.state || item.state
   if (browserCleanupAction(state) === 'remove-file') {
@@ -288,7 +326,7 @@ async function startBrowserFallback(url: string, filename = ''): Promise<number>
   }
 }
 
-function observedResponse(details: any) {
+function observedResponse(details: any, chain?: RequestChain) {
   const headers = details.responseHeaders || []
   const header = (name: string) => headers.find((item: any) => item.name?.toLowerCase() === name)?.value || ''
   const mimeType = header('content-type')
@@ -309,8 +347,9 @@ function observedResponse(details: any) {
     filename,
     statusCode: details.statusCode,
     method: details.method,
-    pageUrl: details.documentUrl || details.initiator || '',
+    pageUrl: details.documentUrl || details.initiator || chain?.pageUrl || requestHeader(chain, 'referer') || '',
     tabId: details.tabId,
+    requestHeaders: chain?.requestHeaders,
   }
   void saveResource(resource, details.tabId)
   void inspectHls(resource, details.tabId)
@@ -332,6 +371,17 @@ function isDownloadResponse(disposition: string, resource: { mimeType?: string, 
 }
 
 export default defineBackground(() => {
+  browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (changeInfo.status === 'loading' || changeInfo.url) {
+      void browser.action.setBadgeText({ tabId, text: '' }).catch(() => undefined)
+    }
+  })
+  browser.tabs.onRemoved.addListener(tabId => {
+    void browser.storage.session.get(null).then(values => {
+      const keys = Object.keys(values).filter(key => key.startsWith(`resources:tab:${tabId}`))
+      if (keys.length) return browser.storage.session.remove(keys)
+    }).catch(() => undefined)
+  })
   nativeBridge = new NativeBridge(
     () => browser.runtime.connectNative(HOST) as unknown as NativePortLike,
     30_000,
@@ -341,12 +391,12 @@ export default defineBackground(() => {
     },
   )
   void setBrowserDownloadUi(true)
-  void native({ op: 'ping', version: browser.runtime.getManifest().version }).catch(() => undefined)
+  void pingDesktop().catch(() => undefined)
   browser.alarms.create('desktop-heartbeat', { periodInMinutes: 0.5 })
   browser.alarms.onAlarm.addListener(alarm => {
     if (alarm.name === 'desktop-heartbeat') {
       requestChains.cleanup()
-      void native({ op: 'ping', version: browser.runtime.getManifest().version }).catch(() => undefined)
+      void pingDesktop().catch(() => undefined)
     }
   })
   browser.runtime.onInstalled.addListener(() => {
@@ -364,7 +414,7 @@ export default defineBackground(() => {
   if (import.meta.env.FIREFOX) {
     ;(browser.webRequest.onHeadersReceived.addListener as any)(async (details: any) => {
       const chain = requestChains.observeResponse(details)
-      const observed = observedResponse(details)
+      const observed = observedResponse(details, chain)
       if (details.statusCode >= 300 && details.statusCode < 400) return {}
       if (!isDownloadResponse(observed.disposition, observed.resource)) return {}
       const intent = await resolveFirefoxClickIntent(
@@ -391,7 +441,13 @@ export default defineBackground(() => {
         return {}
       }
       try {
-        const response = await offer({ ...resource, id: resourceId(resource.url), seenAt: Date.now() })
+        const response = await offer({
+          ...resource,
+          requestHeaders: chain.requestHeaders,
+          pageUrl: resource.pageUrl || chain.pageUrl || requestHeader(chain, 'referer'),
+          id: resourceId(resource.url),
+          seenAt: Date.now(),
+        })
         const transferred = desktopAcceptedHandoff(response)
         return transferred ? { cancel: true } : {}
       } catch (error) {
@@ -401,8 +457,9 @@ export default defineBackground(() => {
     }, { urls: ['<all_urls>'] }, ['blocking', 'responseHeaders'])
   } else {
     browser.webRequest.onHeadersReceived.addListener(details => {
-      requestChains.observeResponse(details as any)
-      observedResponse(details)
+      const chain = requestChains.observeResponse(details as any)
+      observedResponse(details, chain)
+      return undefined
     }, { urls: ['<all_urls>'] }, ['responseHeaders'])
   }
 
@@ -432,7 +489,23 @@ export default defineBackground(() => {
       }
       const actual = await refreshedDownload(item.id, item)
       if (!canContinueTakeover(paused, actual.state)) return
-      const chain = requestChains.find(actual)
+      // Resolve the user's click before choosing a request chain. The same URL
+      // can be active in several tabs; using the newest chain would otherwise
+      // replay another page's Authorization or anti-bot headers.
+      let intent = await waitForClickIntent(actual.url, actual.finalUrl, actual.referrer || '')
+      let chain = requestChains.find(actual, Date.now(), intent?.tabId)
+      if (!intent) {
+        const provisionalChain = requestChains.find(actual)
+        intent = await waitForClickIntent(
+          actual.url,
+          actual.finalUrl,
+          actual.referrer || provisionalChain?.pageUrl || '',
+          provisionalChain,
+        )
+        chain = intent?.tabId === undefined
+          ? provisionalChain
+          : requestChains.find(actual, Date.now(), intent.tabId)
+      }
       const url = chain?.finalUrl || actual.finalUrl || actual.url
       const responseName = responseFilename(responseHeader(chain, 'content-disposition'))
       const filename = responseName || actual.filename.split(/[\\/]/).pop() || ''
@@ -446,7 +519,6 @@ export default defineBackground(() => {
         id: resourceId(url), url, kind, mimeType, size, title: filename, filename,
         pageUrl, tabId: chain?.tabId, requestHeaders: chain?.requestHeaders, seenAt: Date.now(),
       }
-      const intent = await waitForClickIntent(actual.url, actual.finalUrl, pageUrl, chain)
       if (!intent || !shouldTakeover({ url: resource.url, size: resource.size, mimeType, filename, ...config, ...intent, explicitClick: true })) {
         await browser.downloads.resume(item.id).catch(() => undefined)
         return
@@ -482,6 +554,8 @@ export default defineBackground(() => {
         generic: Boolean(message.generic),
         tabId: sender.tab?.id,
         frameId: sender.frameId,
+        opensNewTab: Boolean(message.opensNewTab),
+        controlHint: Boolean(message.controlHint),
         at: Date.now(),
       })
       clickIntents = clickIntents.slice(0, 20)
@@ -495,7 +569,12 @@ export default defineBackground(() => {
       return
     }
     if (message?.type === 'download' || message?.type === 'offer') {
-      const request = message.type === 'offer' ? offer(message.resource) : downloadNow(message.resource)
+      const resource = {
+        ...message.resource,
+        pageUrl: message.resource.pageUrl || sender.tab?.url || '',
+        tabId: message.resource.tabId ?? sender.tab?.id,
+      }
+      const request = message.type === 'offer' ? offer(resource) : downloadNow(resource)
       void request
         .then(response => sendResponse(response))
         .catch(error => sendResponse({ ok: false, error: String(error) }))
@@ -522,7 +601,17 @@ export default defineBackground(() => {
       return true
     }
     if (message?.type === 'ping') {
-      void native({ op: 'ping' })
+      void pingDesktop()
+        .then(response => sendResponse(response))
+        .catch(error => sendResponse({ ok: false, error: String(error) }))
+      return true
+    }
+    if (message?.type === 'set-takeover-settings') {
+      void native({
+        op: 'set_takeover_settings',
+        ...(typeof message.enabled === 'boolean' ? { enabled: message.enabled } : {}),
+        ...(Number.isFinite(Number(message.minimumBytes)) ? { minimum_bytes: Number(message.minimumBytes) } : {}),
+      }).then(applyDesktopTakeoverSettings)
         .then(response => sendResponse(response))
         .catch(error => sendResponse({ ok: false, error: String(error) }))
       return true

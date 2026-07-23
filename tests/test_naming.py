@@ -3,6 +3,10 @@ from backend.app.naming import is_generic_media_name, suggest_manifest_name
 
 def test_generic_manifest_names_prefer_page_title():
     assert is_generic_media_name("video.m3u8")
+    assert is_generic_media_name("1080p HLS 视频流")
+    assert is_generic_media_name("video_1080p.m3u8")
+    assert is_generic_media_name("master-high.m3u8")
+    assert is_generic_media_name("HLS 720p")
     assert suggest_manifest_name(
         "https://cdn.example/video.m3u8?token=secret",
         filename="video.m3u8",

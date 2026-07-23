@@ -15,9 +15,11 @@ venv/
 # Frontend
 frontend/node_modules/
 frontend/dist/
+frontend/src-tauri/gen/
 extension/node_modules/
 extension/.wxt/
 extension/.output/
+**/.gradle/
 
 # Build and packaging output
 bin/

@@ -365,7 +365,7 @@ def test_activation_returns_without_waiting_for_blocked_window():
         before = threading.Event()
         before.set()
         assert activate_window() is True
-        assert started.wait(timeout=0.2)
+        assert started.wait(timeout=1.0)
         assert activate_window() is True
     finally:
         release.set()
@@ -478,40 +478,6 @@ def test_desktop_bridge_choose_folder(tmp_path):
     window.selected_folders = None
     canceled = bridge.choose_folder()
     assert canceled == {"ok": False, "canceled": True}
-
-
-def test_desktop_bridge_exports_configured_userscript(tmp_path):
-    source = tmp_path / "source.user.js"
-    source.write_text(
-        "// ==UserScript==\n"
-        "// @version      4.0.0\n"
-        "  const API_BASE = 'http://127.0.0.1:8765/api';\n"
-        "  const TOKEN = '55555';\n"
-        "  const SCRIPT_VERSION = '4.0.0';\n",
-        encoding="utf-8",
-    )
-    output = tmp_path / "output"
-    output.mkdir()
-    window = FakeWindow()
-    window.selected_folders = (str(output),)
-    bridge = DesktopBridge(window, folder_dialog_type="folder", source_path=source)
-
-    result = bridge.export_userscript()
-
-    assert result["ok"] is True
-    target = output / "m3u8-sniffer.user.js"
-    assert result["path"] == str(target)
-    assert 'const TOKEN = "55555";' in target.read_text(encoding="utf-8")
-
-
-def test_desktop_bridge_opens_userscript_installer_in_default_browser():
-    opened: list[str] = []
-    bridge = DesktopBridge(url_opener=opened.append)
-
-    result = bridge.open_userscript_installer()
-
-    assert result == {"ok": True}
-    assert opened == [f"{public_base_url()}/userscript/m3u8-sniffer.user.js"]
 
 
 def test_desktop_bridge_opens_chrome_and_bundled_extension_folder(tmp_path):

@@ -1,0 +1,25 @@
+[package]
+name = "hls-downloader-desktop"
+version = "1.4.0"
+description = "Tauri desktop shell for HLS Downloader"
+authors = ["HLS Downloader"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
