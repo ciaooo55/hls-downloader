@@ -7,11 +7,13 @@ from contextlib import asynccontextmanager
 from .config import PROJECT_ROOT, settings
 from .api import router
 from .downloader.task_manager import manager
+from .downloader.throttle import download_throttle
 from .updater import cleanup_update_cache
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cleanup_update_cache()
+    download_throttle.configure(getattr(settings, "download_speed_limit_kib", 0) or 0)
     await manager.load_from_db()
     manager.start_maintenance()
     try:

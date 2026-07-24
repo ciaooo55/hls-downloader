@@ -388,3 +388,26 @@ body,
   .tool-button { transition: none !important; animation: none !important; }
 }
 .browser-status{display:flex;align-items:center;gap:10px;padding:12px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px}.browser-status strong,.browser-status span{display:block}.browser-status span{margin-top:3px;color:var(--muted);font-size:11px}.browser-status.online{border-color:color-mix(in srgb,var(--green) 40%,var(--border))}.extension-actions{display:flex;gap:8px;margin-top:14px}
+
+
+.statusbar .speed-limit-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.statusbar .speed-limit-control select {
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 11px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+
+.statusbar .speed-limit-control select:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}

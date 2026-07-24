@@ -6,19 +6,19 @@ const task = (status: string, output_path = '') => ({ id: status, status, output
 describe('taskContextActions', () => {
   it('offers direct controls for an active task', () => {
     expect(taskContextActions(task('downloading_segments'))).toEqual([
-      'details', 'pause', 'cancel', 'log', 'delete', 'deleteFiles',
+      'details', 'pause', 'cancel', 'copyUrl', 'log', 'delete', 'deleteFiles',
     ])
   })
 
   it('offers retry and deletion for a failed task', () => {
     expect(taskContextActions(task('failed'))).toEqual([
-      'details', 'retry', 'log', 'delete', 'deleteFiles',
+      'details', 'retry', 'copyUrl', 'log', 'delete', 'deleteFiles',
     ])
   })
 
   it('offers file access for a completed task', () => {
     expect(taskContextActions(task('done', 'video.mp4'))).toEqual([
-      'details', 'open', 'log', 'delete', 'deleteFiles',
+      'details', 'open', 'copyUrl', 'log', 'delete', 'deleteFiles',
     ])
   })
 
@@ -27,7 +27,7 @@ describe('taskContextActions', () => {
       id: 'playing',
       status: 'downloading_segments',
       available_actions: ['pause', 'cancel', 'preview', 'log', 'delete', 'delete_files'],
-    })).toEqual(['details', 'preview', 'pause', 'cancel', 'log', 'delete', 'deleteFiles'])
+    })).toEqual(['details', 'preview', 'pause', 'cancel', 'copyUrl', 'log', 'delete', 'deleteFiles'])
   })
 
   it('offers shared operations for a multi-selection without single-item actions', () => {

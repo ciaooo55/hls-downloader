@@ -41,4 +41,13 @@ describe('task presentation', () => {
     expect(filterAndSortTasks(tasks, 'media', '').map(item => item.id)).toEqual(['video'])
     expect(filterAndSortTasks(tasks, 'program', '').map(item => item.id)).toEqual(['setup'])
   })
+
+  it('filters failed and unsupported tasks together', () => {
+    const tasks = [
+      task('a', 'failed', '2026-01-01T00:00:00'),
+      task('b', 'unsupported', '2026-01-01T00:00:01'),
+      task('c', 'done', '2026-01-01T00:00:02'),
+    ]
+    expect(filterAndSortTasks(tasks, 'failed', '').map(item => item.id).sort()).toEqual(['a', 'b'])
+  })
 })

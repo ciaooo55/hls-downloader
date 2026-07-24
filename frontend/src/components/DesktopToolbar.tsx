@@ -17,6 +17,8 @@ interface Props {
   onPaste: () => void
   onBatch: () => void
   onAction: (action: string) => void
+  onPauseAll: () => void
+  onStartAll: () => void
   onOpen: () => void
   onLog: () => void
   onBrowserExtension: () => void
@@ -87,6 +89,14 @@ export default function DesktopToolbar(props: Props) {
         <ToolButton title="暂停" disabled={!c.pause} onClick={() => props.onAction('pause')}>
           <Pause size={17} />
           <span className="tool-label">暂停</span>
+        </ToolButton>
+        <ToolButton title="全部开始（排队/暂停）" onClick={props.onStartAll}>
+          <Play size={17} />
+          <span className="tool-label">全开</span>
+        </ToolButton>
+        <ToolButton title="全部暂停" onClick={props.onPauseAll}>
+          <Pause size={17} />
+          <span className="tool-label">全停</span>
         </ToolButton>
         <ToolButton title="恢复" disabled={!c.resume} onClick={() => props.onAction('resume')}>
           <RotateCcw size={18} />

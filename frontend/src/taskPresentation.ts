@@ -60,7 +60,9 @@ export function filterAndSortTasks<T extends Record<string, any>>(
   const needle = query.trim().toLocaleLowerCase()
   return tasks.filter(task => {
     if (filter === 'running' && !(isRunningStatus(task.status) || task.status === 'queued')) return false
-    if (['media', 'program', 'archive', 'other'].includes(filter)) {
+    if (filter === 'failed') {
+      if (task.status !== 'failed' && task.status !== 'unsupported') return false
+    } else if (['media', 'program', 'archive', 'other'].includes(filter)) {
       if (downloadCategory(task.output_path || task.filename || task.url, task.mime_type, task.task_type) !== filter) return false
     } else if (filter !== 'all' && filter !== 'running' && task.status !== filter) return false
     if (!needle) return true

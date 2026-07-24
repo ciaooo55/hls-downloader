@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AppWindow, Archive, CheckCircle2, File, FileAudio, FileCode2, FileImage, FileText, FileVideo, Film, FolderOpen, Globe2, Info, LoaderCircle, Magnet, MonitorPlay, MoreHorizontal, Pause, Play, PlayCircle, RadioTower, RotateCcw, Trash2, XCircle, ArrowUp, ArrowDown, ChevronsUp, ChevronsDown } from 'lucide-react'
+import { AppWindow, Archive, CheckCircle2, Copy, File, FileAudio, FileCode2, FileImage, FileText, FileVideo, Film, FolderOpen, Globe2, Info, LoaderCircle, Magnet, MonitorPlay, MoreHorizontal, Pause, Play, PlayCircle, RadioTower, RotateCcw, Trash2, XCircle, ArrowUp, ArrowDown, ChevronsUp, ChevronsDown } from 'lucide-react'
 import { getDisplayedProgress } from '../taskState'
 import { fmtBytes, fmtDate, fmtEta, fmtSpeed } from '../format'
 import { taskContextActions, type TaskContextAction } from '../taskContextActions'
@@ -12,13 +12,13 @@ import { taskFileUrl } from '../api'
 
 const menuLabels: Record<TaskContextAction, string> = {
   details: '查看详情', start: '开始下载', pause: '暂停', resume: '恢复',
-  cancel: '取消任务', retry: '重试', preview: '内置播放', launch: '系统播放', open: '打开文件位置', log: '查看日志', delete: '仅删除任务记录', deleteFiles: '删除任务及文件', queue_up: '队列上移', queue_down: '队列下移', queue_top: '移到队首', queue_bottom: '移到队尾',
+  cancel: '取消任务', retry: '重试', preview: '内置播放', launch: '系统播放', open: '打开文件位置', copyUrl: '复制下载链接', log: '查看日志', delete: '仅删除任务记录', deleteFiles: '删除任务及文件', queue_up: '队列上移', queue_down: '队列下移', queue_top: '移到队首', queue_bottom: '移到队尾',
 }
 
 const menuIcons: Record<TaskContextAction, React.ReactNode> = {
   details: <Info size={16} />, start: <Play size={16} />, pause: <Pause size={16} />,
   resume: <RotateCcw size={16} />, cancel: <XCircle size={16} />, retry: <RotateCcw size={16} />,
-  preview: <MonitorPlay size={16} />, launch: <PlayCircle size={16} />, open: <FolderOpen size={16} />, log: <FileText size={16} />, delete: <Trash2 size={16} />, deleteFiles: <Trash2 size={16} />, queue_up: <ArrowUp size={16} />, queue_down: <ArrowDown size={16} />, queue_top: <ChevronsUp size={16} />, queue_bottom: <ChevronsDown size={16} />,
+  preview: <MonitorPlay size={16} />, launch: <PlayCircle size={16} />, open: <FolderOpen size={16} />, copyUrl: <Copy size={16} />, log: <FileText size={16} />, delete: <Trash2 size={16} />, deleteFiles: <Trash2 size={16} />, queue_up: <ArrowUp size={16} />, queue_down: <ArrowDown size={16} />, queue_top: <ChevronsUp size={16} />, queue_bottom: <ChevronsDown size={16} />,
 }
 
 interface ContextMenuState { task: Task; taskIds: string[]; actions: TaskContextAction[]; x: number; y: number }
@@ -31,7 +31,7 @@ const typeIcons = {
   torrent: <Magnet size={15} />,
 }
 
-export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTasksAction, onOpenLog, onOpenFile, onLaunchFile, onPreview, onPreviewImage }: {
+export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTasksAction, onOpenLog, onOpenFile, onLaunchFile, onCopyUrl, onPreview, onPreviewImage }: {
   tasks: Task[]
   selected: Set<string>
   pending: Set<string>
@@ -41,6 +41,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
   onOpenLog: (task: Task) => void
   onOpenFile: (task: Task) => void
   onLaunchFile: (task: Task) => void
+  onCopyUrl: (task: Task) => void
   onPreview: (task: Task) => void
   onPreviewImage: (task: Task) => void
 }) {
@@ -208,6 +209,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
     else if (action === 'preview') onPreview(task)
     else if (action === 'launch') onLaunchFile(task)
     else if (action === 'open') onOpenFile(task)
+    else if (action === 'copyUrl') onCopyUrl(task)
     else if (action === 'log') onOpenLog(task)
     else onTasksAction(targets, action)
   }

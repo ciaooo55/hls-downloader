@@ -3,7 +3,7 @@ import { commandState, type TaskLike } from './taskCommands'
 export type TaskContextAction =
   | 'details' | 'start' | 'pause' | 'resume' | 'cancel'
   | 'retry' | 'preview' | 'launch' | 'open' | 'log' | 'delete'
-  | 'deleteFiles' | 'queue_up' | 'queue_down' | 'queue_top' | 'queue_bottom'
+  | 'deleteFiles' | 'copyUrl' | 'queue_up' | 'queue_down' | 'queue_top' | 'queue_bottom'
 
 export function taskContextActions(input: TaskLike | TaskLike[]): TaskContextAction[] {
   const tasks = Array.isArray(input) ? input : [input]
@@ -25,6 +25,7 @@ export function taskContextActions(input: TaskLike | TaskLike[]): TaskContextAct
   }
   if (tasks.length === 1 && task.available_actions?.includes('launch')) actions.push('launch')
   if (commands.open) actions.push('open')
+  if (tasks.length === 1) actions.push('copyUrl')
   if (commands.log) actions.push('log')
   if (commands.delete) actions.push('delete')
   const canDeleteFiles = tasks.every(value => value.available_actions

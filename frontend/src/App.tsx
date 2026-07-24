@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LoaderCircle, Trash2, X } from 'lucide-react'
-import { clearCompletedTasks, connectSSE, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchSettings, fetchTasks, launchFile, openExplorer, resolveBrowserHandoff, taskAction, taskFileUrl } from './api'
+import { clearCompletedTasks, connectSSE, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchSettings, fetchTasks, launchFile, openExplorer, resolveBrowserHandoff, saveSettings, taskAction, taskFileUrl } from './api'
 import { fmtBytes, fmtSpeed } from './format'
 import { isRunningStatus, mergeTaskEvent } from './taskState'
 import { commandState } from './taskCommands'
@@ -20,6 +20,7 @@ import UpdateNotice from './components/UpdateNotice'
 import UpdateDialog from './components/UpdateDialog'
 import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
 import ConfirmDialog from './components/ConfirmDialog'
+import { Button, Dialog, DialogFooter, DialogHeader, DialogOverlay } from './components/ui'
 import { isTauriDesktop, startTauriDesktopSession } from './tauri'
 import { selectTheme, useUiStore } from './store/uiStore'
 
@@ -272,6 +273,38 @@ export default function App() {
   const changeThemePreference = (next: ThemePreference) => {
     setThemePreference(next)
   }
+  const copyTaskUrl = async (task: Task) => {
+    try {
+      await navigator.clipboard.writeText(task.url || '')
+      showFeedback('已复制下载链接')
+    } catch {
+      setError('无法复制链接，请手动选择地址栏文本')
+    }
+  }
+  const pauseAllActive = async () => {
+    const targets = tasks.filter(task => ['downloading', 'downloading_m3u8', 'downloading_segments', 'fetching_metadata', 'checking', 'parsing'].includes(task.status)
+      || task.available_actions?.includes('pause'))
+    if (!targets.length) { showFeedback('没有可暂停的任务'); return }
+    await perform('pause', targets)
+  }
+  const startAllWaiting = async () => {
+    const targets = tasks.filter(task => task.status === 'queued' || task.status === 'paused'
+      || task.available_actions?.includes('start') || task.available_actions?.includes('resume'))
+    if (!targets.length) { showFeedback('没有可开始的任务'); return }
+    const resumes = targets.filter(task => task.status === 'paused' || task.available_actions?.includes('resume'))
+    const starts = targets.filter(task => !resumes.includes(task))
+    if (starts.length) await perform('start', starts)
+    if (resumes.length) await perform('resume', resumes)
+  }
+  const applySpeedLimit = async (kib: number) => {
+    try {
+      const next = await saveSettings({ download_speed_limit_kib: kib })
+      setSettings(next)
+      showFeedback(kib > 0 ? `已限速 ${kib} KiB/s` : '已取消限速')
+    } catch (reason: any) {
+      setError(reason?.message || '设置限速失败')
+    }
+  }
   const openRecognize = () => { setRecognizeInitialUrl(''); setShowRecognize(true) }
   const pasteAndRecognize = async () => {
     try {
@@ -286,19 +319,54 @@ export default function App() {
 
   return <div className="desktop-app">
     {isTauriDesktop() && <div className="tauri-drag-region" data-tauri-drag-region />}
-    <DesktopToolbar commands={commands} theme={theme} version={appVersion} query={query} onQueryChange={setQuery} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onOpen={() => selectedTasks[0]?.output_path && openExplorer(selectedTasks[0].output_path)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onBrowserExtension={() => setShowBrowserExtension(true)} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
+    <DesktopToolbar commands={commands} theme={theme} version={appVersion} query={query} onQueryChange={setQuery} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onPauseAll={() => void pauseAllActive()} onStartAll={() => void startAllWaiting()} onOpen={() => selectedTasks[0]?.output_path && openExplorer(selectedTasks[0].output_path)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onBrowserExtension={() => setShowBrowserExtension(true)} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
     <div className="workspace">
       <Sidebar tasks={tasks} active={filter} onChange={setFilter} browserStatus={browserStatus} />
       <main className="content">
         <UpdateNotice />
-        <div className="content-head"><strong>{filter === 'all' ? '全部任务' : '任务列表'} <span>{filtered.length} 项{selected.size > 0 ? ` · 已选 ${selected.size}` : ''}</span></strong><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={() => void clearCompleted()}><Trash2 size={14} />清理已完成</button></div>
+        <div className="content-head"><strong>{filter === 'all' ? '全部任务' : filter === 'running' ? '进行中' : filter === 'done' ? '已完成' : filter === 'failed' ? '失败任务' : filter === 'media' ? '媒体' : filter === 'program' ? '程序' : filter === 'archive' ? '压缩包' : filter === 'other' ? '其他' : '任务列表'} <span>{filtered.length} 项{selected.size > 0 ? ` · 已选 ${selected.size}` : ''}</span></strong><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={() => void clearCompleted()}><Trash2 size={14} />清理已完成</button></div>
         {error && <div className="action-error" role="alert"><span>{error}</span><div className="action-error-actions"><button type="button" className="secondary-button" onClick={() => void load()}>重试</button><button type="button" className="icon-button action-error-dismiss" title="关闭提示" onClick={() => setError('')}><X size={15} /></button></div></div>}
-        <TaskTable tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openExplorer(task.output_path)} onLaunchFile={launchOutput} onPreview={setPlaying} onPreviewImage={setPreviewImage} />
+        <TaskTable tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openExplorer(task.output_path)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onPreview={setPlaying} onPreviewImage={setPreviewImage} />
       </main>
     </div>
-    <footer className="statusbar"><span>活动任务 <b>{running.length}</b></span><span>排队 <b>{queued}</b></span><span>总速度 <b>{fmtSpeed(totalSpeed)}</b></span><span>已完成 <b>{fmtBytes(completedSize)}</b></span><span>{browserStatus?.detected ? `插件已连接${browserStatus.version ? ` · v${browserStatus.version}` : ''}` : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span></footer>
+    <footer className="statusbar">
+      <span>活动任务 <b>{running.length}</b></span>
+      <span>排队 <b>{queued}</b></span>
+      <span>总速度 <b>{fmtSpeed(totalSpeed)}</b></span>
+      <span className="speed-limit-control" title="全局下载限速">
+        限速
+        <select
+          aria-label="全局下载限速"
+          value={String(settings.download_speed_limit_kib ?? 0)}
+          onChange={event => void applySpeedLimit(Number(event.target.value))}
+        >
+          <option value="0">不限速</option>
+          <option value="256">256 KiB/s</option>
+          <option value="512">512 KiB/s</option>
+          <option value="1024">1 MiB/s</option>
+          <option value="2048">2 MiB/s</option>
+          <option value="5120">5 MiB/s</option>
+          <option value="10240">10 MiB/s</option>
+          {![0, 256, 512, 1024, 2048, 5120, 10240].includes(Number(settings.download_speed_limit_kib ?? 0)) && (
+            <option value={String(settings.download_speed_limit_kib)}>{settings.download_speed_limit_kib} KiB/s</option>
+          )}
+        </select>
+      </span>
+      <span>已完成 <b>{fmtBytes(completedSize)}</b></span>
+      <span>{browserStatus?.detected ? `插件已连接${browserStatus.version ? ` · v${browserStatus.version}` : ''}` : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span>
+    </footer>
     {showRecognize && <RecognizeDialog settings={settings} initialUrl={recognizeInitialUrl} onClose={() => setShowRecognize(false)} onAdded={load} onNeedExtension={() => { setShowRecognize(false); setShowBrowserExtension(true) }} />}
-    {showBatch && <div className="modal-overlay" onMouseDown={() => setShowBatch(false)}><section className="modal" onMouseDown={event => event.stopPropagation()}><header><div><h2>批量添加</h2><p>每行输入一个 m3u8 链接</p></div></header><BatchAddPanel settings={settings} onAdded={() => { setShowBatch(false); load() }} /><footer><button className="secondary-button" onClick={() => setShowBatch(false)}>关闭</button></footer></section></div>}
+    {showBatch && (
+      <DialogOverlay onClose={() => setShowBatch(false)}>
+        <Dialog className="batch-modal" label="批量添加" onClose={() => setShowBatch(false)}>
+          <DialogHeader title="批量添加" description="每行一个链接：普通文件、HLS、DASH 或 magnet" onClose={() => setShowBatch(false)} />
+          <BatchAddPanel settings={settings} onAdded={() => { setShowBatch(false); void load() }} />
+          <DialogFooter>
+            <Button variant="secondary" className="secondary-button" onClick={() => setShowBatch(false)}>关闭</Button>
+          </DialogFooter>
+        </Dialog>
+      </DialogOverlay>
+    )}
     {showBrowserExtension && <BrowserExtensionDialog onClose={() => { setShowBrowserExtension(false); load() }} />}
     {showSettings && <SettingsPanel themePreference={themePreference} onThemePreferenceChange={changeThemePreference} onClose={() => { setShowSettings(false); load() }} />}
     {showUpdate && <UpdateDialog onClose={() => setShowUpdate(false)} />}

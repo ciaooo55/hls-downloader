@@ -36,3 +36,8 @@ def test_configure_accepts_invalid_as_unlimited():
     throttle = GlobalDownloadThrottle()
     throttle.configure("bad")  # type: ignore[arg-type]
     assert throttle.limit_bps == 0.0
+
+
+def test_settings_speed_limit_field_defaults_unlimited():
+    from backend.app.config import Settings
+    assert Settings().download_speed_limit_kib == 0
