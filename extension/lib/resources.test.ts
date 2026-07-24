@@ -11,6 +11,7 @@ import {
   replayableRequestHeaders,
   resourceFingerprint,
   resourceRequestIdentity,
+  visiblePlaybackResources,
   shouldTakeover,
   suggestedResourceFilename,
   visibleMediaResources,
@@ -167,6 +168,16 @@ describe('resource rules', () => {
     expect(visibleMediaResources([...streams, file], 3).map(item => item.id)).toEqual([
       'stream-9', 'stream-8', 'stream-7',
     ])
+  })
+  it('waits for playback and then sorts current-video candidates by likely size', () => {
+    const now = Date.now()
+    const direct = resource({ id: 'direct', kind: 'media', url: 'https://cdn.test/current.mp4', size: 12 * 1024 * 1024, seenAt: now - 60_000 })
+    const main = resource({ id: 'main', kind: 'hls', url: 'https://cdn.test/main.m3u8', duration: 3_600, bandwidth: 2_000_000, seenAt: now })
+    const bumper = resource({ id: 'bumper', kind: 'hls', url: 'https://cdn.test/bumper.m3u8', duration: 15, bandwidth: 6_000_000, seenAt: now + 1 })
+    const stale = resource({ id: 'stale', kind: 'hls', url: 'https://cdn.test/stale.m3u8', size: 2_000_000_000, seenAt: now - 60_000 })
+
+    expect(visiblePlaybackResources([direct, main, bumper, stale], null)).toEqual([])
+    expect(visiblePlaybackResources([direct, main, bumper, stale], { sourceUrls: [direct.url], startedAt: now }).map(item => item.id)).toEqual(['direct', 'main', 'bumper'])
   })
   it('honors Alt bypass and Ctrl force', () => {
     const base = { url: 'https://a.test/file.zip', size: 20, enabled: true, minimumBytes: 10, excludedHosts: [], explicitClick: true }

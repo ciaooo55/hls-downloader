@@ -18,12 +18,16 @@ let downloadUiFailsafe: ReturnType<typeof setTimeout> | null = null
 const inspectedHls = new Set<string>()
 
 async function settings() {
-  const data = await browser.storage.local.get(['enabled', 'minimumBytes', 'excludedHosts', 'authorizedCookieHosts'])
+  const data = await browser.storage.local.get(['enabled', 'minimumBytes', 'excludedHosts', 'authorizedCookieHosts', 'useBrowserCookies'])
   return {
     enabled: data.enabled !== false,
     minimumBytes: Number(data.minimumBytes ?? 1024 * 1024),
     excludedHosts: Array.isArray(data.excludedHosts) ? data.excludedHosts : [],
     authorizedCookieHosts: Array.isArray(data.authorizedCookieHosts) ? data.authorizedCookieHosts : [],
+    // Media URLs commonly require the logged-in browser session. This is on by
+    // default; cookies are read only for the exact resource when the user
+    // explicitly sends it to the desktop app, never while merely sniffing.
+    useBrowserCookies: data.useBrowserCookies !== false,
   }
 }
 
@@ -62,7 +66,7 @@ async function cookiesFor(url: string, pageUrl = ''): Promise<string> {
   // Authorizing a page means its detected resources may reuse only cookies
   // that the browser would send to the resource URL itself. Page cookies are
   // never copied across origins.
-  if (!config.authorizedCookieHosts.includes(host) && !config.authorizedCookieHosts.includes(pageHost)) return ''
+  if (!config.useBrowserCookies && !config.authorizedCookieHosts.includes(host) && !config.authorizedCookieHosts.includes(pageHost)) return ''
   const values = await browser.cookies.getAll({ url })
   return values.map(cookie => `${cookie.name}=${cookie.value}`).join('; ')
 }
@@ -103,6 +107,10 @@ async function inspectHls(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId 
         ...resource,
         duration: info.duration,
         variants,
+        width: best?.width || resource.width,
+        height: best?.height || resource.height,
+        bandwidth: best?.bandwidth || resource.bandwidth,
+        estimatedSize: info.duration && best?.bandwidth ? Math.round(info.duration * best.bandwidth / 8) : resource.estimatedSize,
         quality: best?.quality ? `最高 ${best.quality}` : resourceQuality(resource.url, resource.height),
       }
       await saveResource(enriched, tabId)

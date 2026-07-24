@@ -26,7 +26,6 @@ function countFor(tasks: Task[], filter: TaskFilter): number {
 export default function Sidebar({ tasks, active, onChange, browserStatus }: { tasks: Task[]; active: TaskFilter; onChange: (filter: TaskFilter) => void; browserStatus: BrowserStatus | null }) {
   return (
     <aside className="sidebar">
-      <div className="sidebar-brand" title="HLS Downloader"><img src="./app-icon.png" alt="" /></div>
       <nav>
         {filters.map((item, index) => {
           const Icon = item.icon

@@ -426,12 +426,14 @@ code,
 .toolbar-search button:hover { background: var(--surface-3); color: var(--text); }
 .workspace { grid-template-columns: 172px minmax(0, 1fr); }
 .sidebar { padding: 8px 7px; background: var(--surface); }
+.sidebar-brand { display: none; }
 .sidebar nav { gap: 2px; }
 .sidebar-item { height: 34px; border-radius: 7px; }
 .sidebar-item.active { background: var(--surface-3); color: var(--text); }
 .sidebar-item.active svg { color: var(--primary); }
 .sidebar-group-label { margin-top: 12px; text-transform: none; }
 .sidebar-caption { text-transform: none; }
+.recognize-modal{width:min(500px,calc(100vw - 40px));}.recognize-modal>header{margin-bottom:14px}.recognize-modal .settings-field>label{margin-bottom:5px}.recognize-quick-actions{display:flex;align-items:center;gap:8px;min-height:26px;margin:1px 0 4px}.recognize-quick-actions .text-button{display:inline-flex;align-items:center;gap:5px;margin:0;padding:3px 0}.recognize-quick-actions span{color:var(--faint);font-size:10px}.recognize-options-toggle{margin-top:2px}.recognize-options{margin-top:7px;padding-top:8px;border-top:1px solid var(--border)}.recognize-options .form-row{margin-top:0}.recognize-options .field-note{margin-top:3px}
 .content-head { min-height: 40px; height: 40px; padding: 0 10px 0 14px; background: var(--bg); }
 .content-head strong { display: inline-flex; align-items: baseline; gap: 7px; font-size: 12px; }
 .content-head strong span { font-weight: 400; }

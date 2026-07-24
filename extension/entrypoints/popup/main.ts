@@ -80,8 +80,7 @@ async function main() {
 
   let enabled = true
   let host = ''
-  let resourceHosts: string[] = []
-  let authorized: string[] = []
+  let useBrowserCookies = true
   let excluded: string[] = []
   const sending: Record<string, string> = {}
   const pending: Record<string, string> = {}
@@ -105,7 +104,8 @@ async function main() {
     for (const item of visible) {
       let itemHost = item.url
       try { itemHost = new URL(item.url).host } catch {}
-      const size = item.size && item.size > 0 ? formatSize(item.size) : '\u5927\u5c0f\u672a\u77e5'
+      const likelySize = item.size || item.estimatedSize || 0
+      const size = item.size && item.size > 0 ? formatSize(item.size) : likelySize > 0 ? `\u7ea6 ${formatSize(likelySize)}` : '\u5927\u5c0f\u672a\u77e5'
       const quality = item.quality || resourceQuality(item.url, item.height)
       const resolution = item.width && item.height ? (item.width + '\u00d7' + item.height) : ''
       const bandwidth = item.bandwidth ? ((item.bandwidth / 1_000_000).toFixed(1) + ' Mbps') : ''
@@ -163,11 +163,10 @@ async function main() {
   const refreshButtons = () => {
     enableBtn.textContent = enabled ? '\u81ea\u52a8\u63a5\u7ba1\u5f00' : '\u81ea\u52a8\u63a5\u7ba1\u5173'
     enableBtn.classList.toggle('active', enabled)
-    const consentHosts = [...new Set([host, ...resourceHosts].filter(Boolean))]
-    const allAuthorized = Boolean(consentHosts.length) && consentHosts.every(value => authorized.includes(value))
-    cookieBtn.textContent = allAuthorized ? `Cookie \u5df2\u6388 (${consentHosts.length})` : '\u6388\u6743\u672c\u9875 Cookie'
-    cookieBtn.classList.toggle('active', allAuthorized)
-    cookieBtn.disabled = !host
+    cookieBtn.textContent = useBrowserCookies ? '\u7f51\u9875 Cookie \u5f00' : '\u7f51\u9875 Cookie \u5173'
+    cookieBtn.title = useBrowserCookies ? '\u53d1\u9001\u5a92\u4f53\u5230\u684c\u9762\u7aef\u65f6\uff0c\u4f7f\u7528\u6d4f\u89c8\u5668\u5bf9\u8be5\u5a92\u4f53\u5730\u5740\u4f1a\u53d1\u9001\u7684 Cookie' : '\u4e0d\u4f20\u9012\u6d4f\u89c8\u5668 Cookie\uff0c\u53ef\u80fd\u964d\u4f4e\u767b\u5f55\u7ad9\u70b9\u4e0b\u8f7d\u6210\u529f\u7387'
+    cookieBtn.classList.toggle('active', useBrowserCookies)
+    cookieBtn.disabled = false
     const siteExcluded = excluded.includes(host)
     excludeBtn.textContent = siteExcluded ? '\u672c\u7ad9\u5df2\u6392\u9664' : '\u6392\u9664\u672c\u7ad9'
     excludeBtn.classList.toggle('active', siteExcluded)
@@ -223,12 +222,8 @@ async function main() {
   })
   cookieBtn.addEventListener('click', async () => {
     if (!host) return
-    const consentHosts = [...new Set([host, ...resourceHosts].filter(Boolean))]
-    const allAuthorized = consentHosts.every(value => authorized.includes(value))
-    authorized = allAuthorized
-      ? authorized.filter(value => !consentHosts.includes(value))
-      : [...new Set([...authorized, ...consentHosts])]
-    await browser.storage.local.set({ authorizedCookieHosts: authorized })
+    useBrowserCookies = !useBrowserCookies
+    await browser.storage.local.set({ useBrowserCookies })
     refreshButtons()
   })
   excludeBtn.addEventListener('click', async () => {
@@ -242,15 +237,12 @@ async function main() {
   const pageUrl = tab?.url || ''
   try { host = new URL(pageUrl).host } catch { host = '' }
   resources = await browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab?.id }) || []
-  resourceHosts = [...new Set(visibleMediaResources(resources).map(item => {
-    try { return new URL(item.url).host } catch { return '' }
-  }).filter(Boolean))]
   const online = Boolean((await browser.runtime.sendMessage({ type: 'ping' }))?.ok)
   statusEl.textContent = online ? '\u684c\u9762\u7aef\u5df2\u8fde\u63a5' : '\u684c\u9762\u7aef\u79bb\u7ebf'
   statusEl.classList.toggle('online', online)
-  const stored = await browser.storage.local.get(['enabled', 'authorizedCookieHosts', 'excludedHosts'])
+  const stored = await browser.storage.local.get(['enabled', 'excludedHosts', 'useBrowserCookies'])
   enabled = stored.enabled !== false
-  authorized = Array.isArray(stored.authorizedCookieHosts) ? stored.authorizedCookieHosts : []
+  useBrowserCookies = stored.useBrowserCookies !== false
   excluded = Array.isArray(stored.excludedHosts) ? stored.excludedHosts : []
   refreshButtons()
   renderList()

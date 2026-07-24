@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { classifyResource, isGenericMediaName, mergeResources, resourceFingerprint, resourceId, visibleMediaResources, type MediaResource } from '../lib/resources'
+import { classifyResource, isGenericMediaName, mergeResources, resourceFingerprint, resourceId, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { resourceQuality } from '../lib/hlsManifest'
 
 async function runtimeMessage(message: Record<string, unknown>, retries = 1): Promise<any> {
@@ -25,6 +25,7 @@ export default defineContentScript({
   async main(ctx) {
     document.documentElement.setAttribute('data-hls-downloader-extension', '1')
     const resources = new Map<string, MediaResource>()
+    let activePlayback: PlaybackContext | null = null
     const replaceResources = (values: MediaResource[]) => {
       resources.clear()
       for (const value of values) resources.set(resourceFingerprint(value), value)
@@ -239,7 +240,7 @@ export default defineContentScript({
       const toggle = ui.shadow.querySelector<HTMLButtonElement>('.toggle')
       if (!layer) return
       layer.replaceChildren()
-      const entries = visibleMediaResources([...resources.values()], 8, false)
+      const entries = visiblePlaybackResources([...resources.values()], activePlayback, 8)
       let visible = 0
       const videos = [...document.querySelectorAll<HTMLVideoElement>('video')]
         .map(video => ({ video, rect: video.getBoundingClientRect() }))
@@ -280,12 +281,12 @@ export default defineContentScript({
     const render = () => {
       const list = ui.shadow.querySelector('.list')
       if (!list) return
-      const entries = visibleMediaResources([...resources.values()], 8, false)
+      const entries = visiblePlaybackResources([...resources.values()], activePlayback, 8)
       list.replaceChildren()
       if (!entries.length) {
         const empty = document.createElement('div')
         empty.className = 'empty'
-        empty.textContent = '播放视频后会显示资源'
+        empty.textContent = activePlayback ? '未找到与本次播放关联的可下载资源' : '请先播放主视频，再显示关联资源'
         list.append(empty)
       }
       entries.forEach(resource => {
@@ -296,7 +297,9 @@ export default defineContentScript({
         const quality = resource.quality || resourceQuality(resource.url, resource.height)
         const duration = resource.duration ? formatDuration(resource.duration) : ''
         const bandwidth = resource.bandwidth ? `${(resource.bandwidth / 1_000_000).toFixed(1)} Mbps` : ''
-        const kind = document.createElement('div'); kind.className = 'kind'; kind.textContent = [resource.kind.toUpperCase(), quality, resource.width && resource.height ? `${resource.width}×${resource.height}` : '', bandwidth, duration, resource.size ? formatSize(resource.size) : '大小未知', host].filter(Boolean).join(' · ')
+        const likelySize = resource.size || resource.estimatedSize || 0
+        const sizeLabel = resource.size ? formatSize(resource.size) : likelySize ? `约 ${formatSize(likelySize)}` : '大小未知'
+        const kind = document.createElement('div'); kind.className = 'kind'; kind.textContent = [resource.kind.toUpperCase(), quality, resource.width && resource.height ? `${resource.width}×${resource.height}` : '', bandwidth, duration, sizeLabel, host].filter(Boolean).join(' · ')
         const url = document.createElement('div'); url.className = 'url'; url.title = resource.url; url.textContent = resource.url
         let selected = resource
         if (resource.variants?.length) {
@@ -340,6 +343,24 @@ export default defineContentScript({
     window.addEventListener('scroll', scheduleVideoButtons, { capture: true, passive: true })
     window.addEventListener('resize', scheduleVideoButtons)
     new MutationObserver(scheduleVideoButtons).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'style', 'class'] })
+
+    const markPlayback = (event: Event) => {
+      const video = event.target instanceof HTMLVideoElement ? event.target : null
+      if (!video) return
+      const rect = video.getBoundingClientRect()
+      if (rect.width < 180 || rect.height < 100 || rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) return
+      const visibleVideos = [...document.querySelectorAll<HTMLVideoElement>('video')]
+        .map(item => ({ item, rect: item.getBoundingClientRect() }))
+        .filter(item => item.rect.width >= 180 && item.rect.height >= 100 && item.rect.bottom >= 0 && item.rect.top <= innerHeight && item.rect.right >= 0 && item.rect.left <= innerWidth)
+        .sort((left, right) => right.rect.width * right.rect.height - left.rect.width * left.rect.height)
+      if (visibleVideos[0]?.item !== video) return
+      const sourceUrls = [video.currentSrc, video.src, ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')].map(source => source.src)].filter(Boolean)
+      const changedSource = sourceUrls.join('\n') !== (activePlayback?.sourceUrls || []).join('\n')
+      if (!activePlayback || changedSource) activePlayback = { sourceUrls, startedAt: Date.now() }
+      render()
+    }
+    document.addEventListener('play', markPlayback, true)
+    document.addEventListener('playing', markPlayback, true)
 
     const add = (url: string, mimeType = '') => {
       const kind = classifyResource(url, mimeType); if (!kind) return
@@ -387,6 +408,7 @@ export default defineContentScript({
       const next = pageKey(location.href)
       if (next === currentPageUrl) return
       currentPageUrl = next
+      activePlayback = null
       resources.clear(); render(); loadPageResources(location.href)
       document.querySelectorAll<HTMLMediaElement>('video[src],audio[src],source[src]').forEach(media => add(media.currentSrc || media.src))
     }

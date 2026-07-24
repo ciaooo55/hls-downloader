@@ -18,6 +18,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const [filename, setFilename] = useState('')
   const [concurrency, setConcurrency] = useState(settings.default_concurrency || 12)
   const [checksum, setChecksum] = useState('')
+  const [showDownloadOptions, setShowDownloadOptions] = useState(false)
   const [advanced, setAdvanced] = useState(false)
   const [referer, setReferer] = useState(settings.default_referer || '')
   const [origin, setOrigin] = useState(settings.default_origin || '')
@@ -128,24 +129,27 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
               <Input id="recognize-url" autoFocus value={url} onChange={event => { setUrl(event.target.value); setResult(null); setError('') }} onKeyDown={event => { if (event.key === 'Enter') void submit() }} placeholder="粘贴文件、m3u8、mpd、网页或 magnet 链接" />
             </div>
           </Field>
-          <div className="torrent-import">
+          <div className="recognize-quick-actions">
             <input ref={torrentInput} type="file" accept=".torrent,application/x-bittorrent" hidden onChange={event => void importTorrent(event.target.files?.[0])} />
-            <Button variant="secondary" className="secondary-button" disabled={busy} onClick={() => torrentInput.current?.click()}><FileUp size={15} />导入 .torrent</Button>
-            <span>磁力链接可直接粘贴到上方</span>
+            <Button variant="ghost" className="text-button" disabled={busy} onClick={() => torrentInput.current?.click()}><FileUp size={14} />导入 .torrent</Button>
+            <span>磁力链接直接粘贴即可</span>
           </div>
-          <div className="form-row">
-            <Field label="输出文件名（可选）" htmlFor="recognize-filename">
-              <Input id="recognize-filename" value={filename} onChange={event => setFilename(event.target.value)} placeholder="自动生成" />
+          <Button variant="ghost" className="text-button recognize-options-toggle" onClick={() => setShowDownloadOptions(value => !value)}>{showDownloadOptions ? '收起下载选项' : '下载选项'}</Button>
+          {showDownloadOptions && <div className="recognize-options">
+            <div className="form-row">
+              <Field label="输出文件名" htmlFor="recognize-filename">
+                <Input id="recognize-filename" value={filename} onChange={event => setFilename(event.target.value)} placeholder="自动生成" />
+              </Field>
+              <Field label="并发" htmlFor="recognize-concurrency" className="short-field">
+                <Input id="recognize-concurrency" type="number" min={1} max={256} value={concurrency} onChange={event => setConcurrency(Math.max(1, Math.min(256, Number(event.target.value))))} />
+              </Field>
+            </div>
+            <Field label="校验和" htmlFor="recognize-checksum" help="可选；下载完成后核对。多文件 BT 不支持单一校验和。">
+              <Input id="recognize-checksum" value={checksum} onChange={event => setChecksum(event.target.value)} placeholder="SHA-256、SHA-1 或 MD5" />
             </Field>
-            <Field label="并发" htmlFor="recognize-concurrency" className="short-field">
-              <Input id="recognize-concurrency" type="number" min={1} max={256} value={concurrency} onChange={event => setConcurrency(Math.max(1, Math.min(256, Number(event.target.value))))} />
-            </Field>
-          </div>
-          <Field label="校验和（可选）" htmlFor="recognize-checksum" help="仅在最终文件写入后核对；不匹配会保留文件并标记失败。多文件 BT 不支持单一校验和。">
-            <Input id="recognize-checksum" value={checksum} onChange={event => setChecksum(event.target.value)} placeholder="SHA-256、SHA-1 或 MD5；可写 sha256:..." />
-          </Field>
-          <Button variant="ghost" className="text-button" onClick={() => setAdvanced(value => !value)}>{advanced ? '收起请求选项' : '请求选项（Referer / Origin / Cookie）'}</Button>
-          {advanced && <div className="advanced-grid request-options">
+            <Button variant="ghost" className="text-button" onClick={() => setAdvanced(value => !value)}>{advanced ? '收起请求上下文' : '请求上下文（Cookie / Referer）'}</Button>
+          </div>}
+          {showDownloadOptions && advanced && <div className="advanced-grid request-options">
             <div className="request-field"><label htmlFor="recognize-referer">Referer</label><Input id="recognize-referer" value={referer} onChange={event => setReferer(event.target.value)} placeholder={REQUEST_EXAMPLES.referer} /><small>{REQUEST_FIELD_HELP.referer}</small></div>
             <div className="request-field"><label htmlFor="recognize-origin">Origin</label><Input id="recognize-origin" value={origin} onChange={event => setOrigin(event.target.value)} placeholder={REQUEST_EXAMPLES.origin} /><small>{REQUEST_FIELD_HELP.origin}</small></div>
             <div className="request-field"><label htmlFor="recognize-ua">User-Agent</label><Input id="recognize-ua" value={userAgent} onChange={event => setUserAgent(event.target.value)} placeholder={REQUEST_EXAMPLES.userAgent} /><small>{REQUEST_FIELD_HELP.userAgent}</small></div>

@@ -14,6 +14,8 @@ export interface MediaResource {
   kind: ResourceKind
   mimeType?: string
   size?: number
+  /** Estimated bytes for an adaptive stream when a manifest exposes duration + bitrate. */
+  estimatedSize?: number
   pageUrl?: string
   title?: string
   filename?: string
@@ -107,6 +109,11 @@ export function classifyResource(url: string, mimeType = ''): ResourceKind | nul
   return MEDIA_EXT.test(url) || mime.includes('octet-stream') ? 'file' : null
 }
 
+export interface PlaybackContext {
+  sourceUrls: string[]
+  startedAt: number
+}
+
 function isNonVideoManifest(resource: Pick<MediaResource, 'url'>): boolean {
   let pathnameAndQuery = resource.url
   try {
@@ -156,8 +163,44 @@ export function resourceRank(resource: MediaResource): number {
   if (resource.height) score += Math.min(50, Math.round(resource.height / 40))
   if (resource.size && resource.size >= 20 * 1024 * 1024) score += 40
   else if (resource.size && resource.size >= 2 * 1024 * 1024) score += 15
+  const likelyBytes = resource.size || resource.estimatedSize || 0
+  if (likelyBytes >= 500 * 1024 * 1024) score += 30
+  else if (likelyBytes >= 100 * 1024 * 1024) score += 20
+  else if (likelyBytes >= 20 * 1024 * 1024) score += 10
   if (resource.title && !isGenericMediaName(resource.title)) score += 20
   return score
+}
+
+export function likelyResourceBytes(resource: Pick<MediaResource, 'size' | 'estimatedSize' | 'duration' | 'bandwidth'>): number {
+  if (Number(resource.size) > 0) return Number(resource.size)
+  if (Number(resource.estimatedSize) > 0) return Number(resource.estimatedSize)
+  if (Number(resource.duration) > 0 && Number(resource.bandwidth) > 0) {
+    return Math.round(Number(resource.duration) * Number(resource.bandwidth) / 8)
+  }
+  return 0
+}
+
+/**
+ * Keep detection quiet until playback starts. Exact media-element sources are
+ * strongest evidence; MSE/blob players fall back to network manifests seen in
+ * the short window around pressing play. Within either evidence tier, likely
+ * stream size is the most useful proxy for the main programme over a bumper.
+ */
+export function visiblePlaybackResources(resources: MediaResource[], playback: PlaybackContext | null, limit = 8): MediaResource[] {
+  if (!playback) return []
+  const sources = new Set(playback.sourceUrls.filter(Boolean))
+  const recentFloor = playback.startedAt - 12_000
+  const recentCeiling = playback.startedAt + 90_000
+  const candidates = compactResources(resources, 40)
+    .filter(item => ['hls', 'dash', 'media'].includes(item.kind))
+    .map(item => ({
+      item,
+      evidence: sources.has(item.url) ? 2 : item.seenAt >= recentFloor && item.seenAt <= recentCeiling ? 1 : 0,
+      bytes: likelyResourceBytes(item),
+    }))
+    .filter(entry => entry.evidence > 0)
+  candidates.sort((left, right) => right.evidence - left.evidence || right.bytes - left.bytes || resourceRank(right.item) - resourceRank(left.item) || right.item.seenAt - left.item.seenAt)
+  return candidates.slice(0, limit).map(entry => entry.item)
 }
 
 export function compactResources(resources: MediaResource[], limit = 40): MediaResource[] {
