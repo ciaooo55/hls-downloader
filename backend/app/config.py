@@ -8,7 +8,7 @@ PROJECT_ROOT = RUNTIME_PATHS.project_root
 CONFIG_PATH = RUNTIME_PATHS.config_path
 
 class Settings(BaseSettings):
-    config_version: int = 10
+    config_version: int = 11
     host: str = "127.0.0.1"
     port: int = 8765
     token: str = "55555"
@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     browser_category_dirs: dict[str, str] = Field(default_factory=dict)
     queue_auto_start_enabled: bool = False
     queue_auto_start_time: str = "00:00"
+    tvbox_endpoint: str = ""
 
     # Ignore fields written by a newer release so downgrade/upgrade helpers can
     # still start far enough to close the running application cleanly.
@@ -117,7 +118,27 @@ def load_settings() -> Settings:
             data.setdefault("download_speed_limit_kib", 0)
             data["config_version"] = 10
             migrated = True
+            version = 10
+        if version < 11:
+            if not isinstance(data.get("tvbox_endpoint"), str):
+                data["tvbox_endpoint"] = ""
+            data["config_version"] = 11
+            migrated = True
+        if not isinstance(data.get("tvbox_endpoint"), str):
+            data["tvbox_endpoint"] = ""
+            migrated = True
         s = Settings(**data)
+        # Keep a manually edited/legacy TVBox address from poisoning startup;
+        # invalid values are cleared and can be selected again in Settings.
+        if s.tvbox_endpoint:
+            try:
+                from .tvbox import normalize_tvbox_endpoint
+                canonical_endpoint = normalize_tvbox_endpoint(s.tvbox_endpoint)
+            except ValueError:
+                canonical_endpoint = ""
+            if canonical_endpoint != s.tvbox_endpoint:
+                s.tvbox_endpoint = canonical_endpoint
+                migrated = True
         if migrated:
             save_settings(s)
     else:

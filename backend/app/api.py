@@ -15,6 +15,7 @@ from .schemas import (
     PlaybackSeekRequest,
     TorrentFileSelection,
     BrowserHandoffAccept,
+    TvboxPush,
 )
 from .config import apply_settings_update, settings, save_settings
 from .downloader.task_manager import (
@@ -39,6 +40,7 @@ from .updater import UpdateError, update_service
 from .models import TaskStatus, TaskType
 from .browser_handoff import browser_handoffs
 from .downloader.throttle import download_throttle
+from .tvbox import push_tvbox, scan_tvboxes
 
 router = APIRouter(prefix="/api")
 
@@ -446,6 +448,23 @@ async def update_settings(body: SettingsUpdate, x_token: str = Header(default=""
     save_settings(settings)
     download_throttle.configure(getattr(settings, "download_speed_limit_kib", 0) or 0)
     return settings.model_dump()
+
+
+@router.get("/tvbox/scan")
+async def scan_tvbox_devices(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return {"devices": await scan_tvboxes()}
+
+
+@router.post("/tvbox/push")
+async def push_tvbox_url(body: TvboxPush, x_token: str = Header(default="")):
+    _check_token(x_token)
+    if not settings.tvbox_endpoint:
+        raise HTTPException(status_code=409, detail="请先在设置中选择电视推送设备")
+    try:
+        return await push_tvbox(settings.tvbox_endpoint, body.url)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"电视推送失败：{exc}") from exc
 
 @router.post("/tasks", response_model=TaskResponse)
 async def create_task(body: TaskCreate, x_token: str = Header(default="")):

@@ -34,8 +34,18 @@ def _request(method: str, path: str, payload: dict | None = None, timeout: float
     request = urllib.request.Request(base + path, data=body, method=method)
     request.add_header("X-Token", token)
     request.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # Surface FastAPI's localized detail to the extension instead of the
+        # unhelpful generic ``HTTP Error 502`` string.
+        try:
+            payload = json.loads(exc.read().decode("utf-8"))
+            detail = payload.get("detail") if isinstance(payload, dict) else None
+        except (ValueError, OSError):
+            detail = None
+        raise RuntimeError(str(detail or f"HTTP {exc.code}")) from exc
 
 
 def _start_app() -> None:
@@ -96,7 +106,7 @@ def dispatch(message: dict) -> dict:
     operation = message.get("op")
     if operation not in {
         "ping", "activate", "offer", "download", "handoff_status", "wait_handoff",
-        "set_takeover_settings",
+        "set_takeover_settings", "push_to_tv",
     }:
         raise ValueError("不支持的 Native Messaging 操作")
     _ensure_app()
@@ -130,6 +140,8 @@ def dispatch(message: dict) -> dict:
         task = _request("POST", "/browser/downloads", message.get("resource", {}))
         activated = _request("POST", "/app/activate", {})
         return {"ok": True, "task": task, "activated": bool(activated.get("ok"))}
+    if operation == "push_to_tv":
+        return _request("POST", "/tvbox/push", {"url": str(message.get("resource", {}).get("url", ""))})
     handoff_id = str(message.get("handoff_id", ""))
     if operation == "wait_handoff":
         return {"ok": True, "handoff": _request("GET", f"/browser/handoffs/{handoff_id}/wait", timeout=125)}

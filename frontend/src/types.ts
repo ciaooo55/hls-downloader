@@ -96,6 +96,7 @@ export interface Settings {
   browser_category_dirs?: Record<string, string>
   queue_auto_start_enabled?: boolean
   queue_auto_start_time?: string
+  tvbox_endpoint?: string
 }
 
 export interface TorrentFileEntry {

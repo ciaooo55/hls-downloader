@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, Copy, Download, FolderOpen, RefreshCw, Trash2, X } from 'lucide-react'
-import { fetchSettings, fetchUpdateInfo, installUpdate, openExplorer, saveSettings, testConnection } from '../api'
+import { fetchSettings, fetchUpdateInfo, installUpdate, openExplorer, saveSettings, scanTvboxDevices, testConnection } from '../api'
 import { beginUninstall, getDesktopInfo } from '../desktop'
 import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 import type { ThemePreference } from '../theme'
@@ -34,6 +34,9 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   const [installingUpdate, setInstallingUpdate] = useState(false)
   const [environment, setEnvironment] = useState<any>(null)
   const [checkingEnvironment, setCheckingEnvironment] = useState(false)
+  const [tvboxDevices, setTvboxDevices] = useState<Array<{ endpoint: string; host: string; port: number; label: string; matched: boolean }>>([])
+  const [scanningTvbox, setScanningTvbox] = useState(false)
+  const [tvboxScanMessage, setTvboxScanMessage] = useState('')
   const [activeSection, setActiveSection] = useState<SettingsSection>('general')
   const dirty = JSON.stringify(settings) !== JSON.stringify(original)
 
@@ -72,6 +75,17 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     if (settings.bt_upload_limit_kib < 0) { setError('BT 上传限制不能小于 0'); return }
     if (settings.queue_auto_start_enabled && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(settings.queue_auto_start_time || ''))) { setError('定时开始时间必须为 HH:MM'); return }
     if (!String(settings.ffmpeg_path || '').trim()) { setError('ffmpeg 路径不能为空'); return }
+    const tvboxEndpoint = String(settings.tvbox_endpoint || '').trim()
+    if (tvboxEndpoint) {
+      try {
+        const parsed = new URL(tvboxEndpoint)
+        if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) throw new Error()
+      } catch {
+        setError('电视推送地址必须是有效的 http:// 或 https:// 地址')
+        setActiveSection('network')
+        return
+      }
+    }
     setSaving(true)
     try {
       const normalized = await saveSettings(settings)
@@ -97,6 +111,21 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     try { setEnvironment(await testConnection()) }
     catch (reason: any) { setError(reason.message || '环境检查失败') }
     finally { setCheckingEnvironment(false) }
+  }
+  const scanTvbox = async () => {
+    setScanningTvbox(true); setError(''); setTvboxScanMessage('正在扫描当前局域网…')
+    try {
+      const result = await scanTvboxDevices()
+      const devices = result.devices || []
+      setTvboxDevices(devices)
+      if (!devices.length) {
+        setTvboxScanMessage('未发现设备。请确认电脑与 TVBox 在同一局域网，或手动填写地址。')
+      } else {
+        setTvboxScanMessage(`发现 ${devices.length} 台设备，请选择后保存设置。`)
+      }
+    } catch (reason: any) {
+      setTvboxScanMessage(reason.message || '扫描电视设备失败')
+    } finally { setScanningTvbox(false) }
   }
   const uninstall = async () => {
     setError('')
@@ -195,6 +224,24 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
             <div className="settings-field"><label htmlFor="setting-bt-upload">上传上限（KiB/s）</label><input id="setting-bt-upload" type="number" min={0} max={1048576} value={settings.bt_upload_limit_kib ?? 1024} onChange={event => update('bt_upload_limit_kib', Number(event.target.value))} /><p>0 表示不限速；完成后会立即停止做种。</p></div>
             <div className="settings-field"><label htmlFor="setting-bt-peers">最大 Peer 连接</label><input id="setting-bt-peers" type="number" min={10} max={1000} value={settings.bt_max_connections ?? 80} onChange={event => update('bt_max_connections', Number(event.target.value))} /><p>限制 BT 网络连接和内存占用。</p></div>
             <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={settings.bt_enable_dht ?? true} onChange={event => update('bt_enable_dht', event.target.checked)} />启用 DHT 节点发现</label>
+          </section>
+
+          <h3 className="settings-group-label">电视推送（TVBox）</h3>
+          <section className="settings-group settings-grid-group">
+            <div className="settings-field settings-field-wide">
+              <label htmlFor="setting-tvbox-endpoint">已选择的电视设备</label>
+              <div className="input-action">
+                <select id="setting-tvbox-endpoint" value={settings.tvbox_endpoint || ''} onChange={event => update('tvbox_endpoint', event.target.value)} aria-label="已选择的电视设备">
+                  <option value="">不使用电视推送</option>
+                  {tvboxDevices.map(device => <option key={device.endpoint} value={device.endpoint}>{device.label} · {device.host}:{device.port}</option>)}
+                  {settings.tvbox_endpoint && !tvboxDevices.some(device => device.endpoint === settings.tvbox_endpoint) ? <option value={settings.tvbox_endpoint}>{settings.tvbox_endpoint}（已记住）</option> : null}
+                </select>
+                <Button variant="secondary" className="secondary-button" disabled={scanningTvbox} title="扫描同一局域网中的 TVBox" onClick={() => void scanTvbox()}><RefreshCw size={15} />{scanningTvbox ? '扫描中…' : '扫描电视'}</Button>
+              </div>
+              <p>桌面端扫描局域网并记住选择；插件只把视频地址交给桌面端，不直接访问电视。扫描不到时可手动填写地址：</p>
+              {tvboxScanMessage && <p className="settings-inline-status" role="status" aria-live="polite">{tvboxScanMessage}</p>}
+              <input aria-label="手动电视推送地址" value={settings.tvbox_endpoint || ''} onChange={event => update('tvbox_endpoint', event.target.value)} placeholder="http://192.168.1.100:9979" />
+            </div>
           </section>
 
           <h3 className="settings-group-label">手工任务请求身份</h3>

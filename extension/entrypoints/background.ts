@@ -5,7 +5,6 @@ import { RequestChainStore, requestHeader, responseHeader, type RequestChain } f
 import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus, shouldResumeBrowserDownload } from '../lib/takeover'
 import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
 import { parseHlsManifest, resourceQuality } from '../lib/hlsManifest'
-import { normalizeTvboxEndpoint, tvboxActionUrl, tvboxPushBody, tvboxPushGetUrl, tvboxResponseError } from '../lib/tvbox'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 let clickIntents: DownloadClickIntent[] = []
@@ -189,46 +188,9 @@ async function downloadNow(resource: MediaResource) {
 }
 
 async function pushToTv(resource: MediaResource): Promise<{ ok: true }> {
-  const data = await browser.storage.local.get(['tvboxEndpoint'])
-  const endpoint = normalizeTvboxEndpoint(String(data.tvboxEndpoint || ''))
-  const pushUrl = resource.url
-  // TVBox standard push: POST /action with form body do=push&url=...
-  // Some forks only accept GET; try POST first, fall back to GET on network error.
-  try {
-    const body = tvboxPushBody(pushUrl)
-    const response = await fetch(tvboxActionUrl(endpoint), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-      signal: AbortSignal.timeout(8_000),
-    })
-    const responseText = await response.text()
-    if (response.ok) {
-      const message = tvboxResponseError(responseText)
-      if (!message) return { ok: true }
-      throw new Error(message)
-    }
-    // 404/405 means this fork doesn't accept POST; try GET
-    if (response.status === 404 || response.status === 405) {
-      const getResponse = await fetch(
-        tvboxPushGetUrl(endpoint, pushUrl),
-        { signal: AbortSignal.timeout(8_000) },
-      )
-      const getText = await getResponse.text()
-      if (getResponse.ok) {
-        const message = tvboxResponseError(getText)
-        if (!message) return { ok: true }
-        throw new Error(message)
-      }
-      throw new Error(`电视返回 HTTP ${getResponse.status}`)
-    }
-    throw new Error(`电视返回 HTTP ${response.status}`)
-  } catch (error) {
-    if (error instanceof TypeError) {
-      throw new Error(`无法连接电视 (${endpoint})，请确认地址和局域网连通性`)
-    }
-    throw error
-  }
+  const response = await native({ op: 'push_to_tv', resource })
+  if (!response?.ok) throw new Error(response?.error || '电视推送失败')
+  return { ok: true }
 }
 
 async function offer(resource: MediaResource) {

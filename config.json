@@ -1,5 +1,5 @@
 {
-  "config_version": 10,
+  "config_version": 11,
   "host": "127.0.0.1",
   "port": 8765,
   "token": "55555",
@@ -23,5 +23,6 @@
   "browser_takeover_min_mb": 1,
   "browser_category_dirs": {},
   "queue_auto_start_enabled": false,
-  "queue_auto_start_time": "00:00"
+  "queue_auto_start_time": "00:00",
+  "tvbox_endpoint": ""
 }

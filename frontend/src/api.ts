@@ -93,6 +93,7 @@ export const launchFile = (path: string) =>
 export const browseDir = (path: string = '') =>
   request<any>(`/browse-dir?path=${encodeURIComponent(path)}`)
 export const testConnection = () => request<any>('/test')
+export const scanTvboxDevices = () => request<{ devices: Array<{ endpoint: string; host: string; port: number; label: string; matched: boolean }> }>('/tvbox/scan')
 export const recognizeUrl = (data: any) => request<any>('/recognize', { method: 'POST', body: JSON.stringify(data) })
 export const fetchBrowserHandoffs = () => request<any[]>('/browser/handoffs')
 export const fetchBrowserHandoff = (id: string) => request<any>(`/browser/handoffs/${encodeURIComponent(id)}`)

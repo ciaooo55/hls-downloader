@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 from .version import APP_VERSION
 from .models import TaskType
 from .checksum import normalize_checksum
+from .tvbox import normalize_tvbox_endpoint
 
 class TaskCreate(BaseModel):
     url: str
@@ -132,6 +133,18 @@ class SettingsUpdate(BaseModel):
     browser_category_dirs: Optional[dict[str, str]] = None
     queue_auto_start_enabled: Optional[bool] = None
     queue_auto_start_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    tvbox_endpoint: Optional[str] = Field(default=None, max_length=512)
+
+    @field_validator("tvbox_endpoint")
+    @classmethod
+    def validate_tvbox_endpoint(cls, value: Optional[str]) -> Optional[str]:
+        value = str(value or "").strip()
+        if not value:
+            return ""
+        try:
+            return normalize_tvbox_endpoint(value)
+        except ValueError as exc:
+            raise ValueError(f"tvbox_endpoint：{exc}") from exc
 
 
 class BrowserHandoffAccept(BaseModel):
@@ -139,6 +152,19 @@ class BrowserHandoffAccept(BaseModel):
     download_dir: str = Field(default="", max_length=2048)
     category: str = Field(default="other", pattern="^(media|program|archive|other)$")
     remember: bool = True
+
+
+class TvboxPush(BaseModel):
+    url: str = Field(min_length=1, max_length=8192)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        value = str(value or "").strip()
+        parsed = urlparse(value)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("待推送的视频地址必须是有效的 HTTP(S) 地址")
+        return value
 
 class HealthResponse(BaseModel):
     status: str = "ok"
