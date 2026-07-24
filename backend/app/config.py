@@ -8,7 +8,7 @@ PROJECT_ROOT = RUNTIME_PATHS.project_root
 CONFIG_PATH = RUNTIME_PATHS.config_path
 
 class Settings(BaseSettings):
-    config_version: int = 9
+    config_version: int = 10
     host: str = "127.0.0.1"
     port: int = 8765
     token: str = "55555"
@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     keep_temp_files: bool = False
     max_concurrent_tasks: int = 3
     http_chunk_size_mb: int = 8
+    download_speed_limit_kib: int = 0
     bt_upload_limit_kib: int = 1024
     bt_max_connections: int = 80
     bt_enable_dht: bool = True
@@ -110,6 +111,11 @@ def load_settings() -> Settings:
             data["queue_auto_start_enabled"] = False
             data["queue_auto_start_time"] = "00:00"
             data["config_version"] = 9
+            version = 9
+            migrated = True
+        if version < 10:
+            data.setdefault("download_speed_limit_kib", 0)
+            data["config_version"] = 10
             migrated = True
         s = Settings(**data)
         if migrated:

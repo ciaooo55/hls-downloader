@@ -1,5 +1,5 @@
 {
-  "config_version": 9,
+  "config_version": 10,
   "host": "127.0.0.1",
   "port": 8765,
   "token": "55555",
@@ -15,6 +15,7 @@
   "keep_temp_files": false,
   "max_concurrent_tasks": 3,
   "http_chunk_size_mb": 8,
+  "download_speed_limit_kib": 0,
   "bt_upload_limit_kib": 1024,
   "bt_max_connections": 80,
   "bt_enable_dht": true,

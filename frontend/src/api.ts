@@ -5,11 +5,20 @@ const BASE = `${coreOrigin()}/api`
 
 export class ApiError extends Error {
   status: number
+  detail: unknown
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, detail: unknown = null) {
     super(message)
     this.status = status
+    this.detail = detail
   }
+}
+
+export function isDuplicateUrlError(error: unknown): error is ApiError {
+  if (!(error instanceof ApiError) || error.status !== 409) return false
+  const detail = error.detail
+  if (detail && typeof detail === 'object' && (detail as { code?: string }).code === 'DUPLICATE_URL') return true
+  return typeof error.message === 'string' && error.message.includes('相同链接')
 }
 
 export function getToken(): string {
@@ -28,9 +37,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init,
     headers: requestHeaders,
   })
-  const body = await response.json().catch(() => ({}))
+  const body = await response.json().catch(() => ({} as any))
   if (!response.ok) {
-    throw new ApiError(response.status, body.detail || `HTTP ${response.status}`)
+    const detail = body?.detail
+    let message = `HTTP ${response.status}`
+    if (typeof detail === 'string') message = detail
+    else if (detail && typeof detail === 'object' && typeof (detail as any).message === 'string') message = (detail as any).message
+    else if (Array.isArray(detail) && detail[0]?.msg) message = detail.map((item: any) => item.msg).join('; ')
+    throw new ApiError(response.status, message, detail ?? body)
   }
   return body as T
 }

@@ -4,7 +4,7 @@ export default defineConfig({
   manifest: ({ browser }) => ({
     name: 'HLS Downloader 浏览器接管',
     description: '嗅探媒体、接管普通下载并发送到 HLS Downloader 桌面端。',
-    version: '1.4.4',
+    version: '1.4.5',
     icons: {
       16: 'icon-16.png',
       32: 'icon-32.png',

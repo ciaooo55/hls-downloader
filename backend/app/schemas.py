@@ -22,6 +22,7 @@ class TaskCreate(BaseModel):
     download_dir: str = ""
     concurrency: int = Field(default=0, ge=0, le=256)
     checksum: str = Field(default="", max_length=80)
+    allow_duplicate: bool = False
 
     @field_validator("url")
     @classmethod
@@ -122,6 +123,7 @@ class SettingsUpdate(BaseModel):
     keep_temp_files: Optional[bool] = None
     max_concurrent_tasks: Optional[int] = Field(default=None, ge=1, le=16)
     http_chunk_size_mb: Optional[int] = Field(default=None, ge=1, le=64)
+    download_speed_limit_kib: Optional[int] = Field(default=None, ge=0, le=1048576)
     bt_upload_limit_kib: Optional[int] = Field(default=None, ge=0, le=1048576)
     bt_max_connections: Optional[int] = Field(default=None, ge=10, le=1000)
     bt_enable_dht: Optional[bool] = None

@@ -38,6 +38,7 @@ from .url_recognition import RecognitionError, recognize_url
 from .updater import UpdateError, update_service
 from .models import TaskStatus, TaskType
 from .browser_handoff import browser_handoffs
+from .downloader.throttle import download_throttle
 
 router = APIRouter(prefix="/api")
 
@@ -98,6 +99,26 @@ def _duplicate_task_payload(url: str) -> list[dict]:
             'updated_at': task.updated_at or task.created_at or '',
         })
     return payload
+
+
+def _require_allow_duplicate(url: str, allow_duplicate: bool) -> None:
+    """IDM-style guard: refuse same-URL create unless the client opts in."""
+    if allow_duplicate:
+        return
+    duplicates = _duplicate_task_payload(url)
+    if not duplicates:
+        return
+    top = duplicates[0]
+    name = top.get('filename') or '已有任务'
+    status = top.get('status') or ''
+    raise HTTPException(
+        status_code=409,
+        detail={
+            'code': 'DUPLICATE_URL',
+            'message': f'下载列表中已有相同链接（{name} · {status}）。若仍要下载，请确认后重试。',
+            'duplicates': duplicates,
+        },
+    )
 
 
 def _handoff_public(item) -> dict:
@@ -423,12 +444,14 @@ async def update_settings(body: SettingsUpdate, x_token: str = Header(default=""
     data = body.model_dump(exclude_none=True)
     apply_settings_update(settings, data)
     save_settings(settings)
+    download_throttle.configure(getattr(settings, "download_speed_limit_kib", 0) or 0)
     return settings.model_dump()
 
 @router.post("/tasks", response_model=TaskResponse)
 async def create_task(body: TaskCreate, x_token: str = Header(default="")):
     _check_token(x_token)
     _check_host(body.url)
+    _require_allow_duplicate(body.url, body.allow_duplicate)
     task = await manager.create_task(
         url=body.url, task_type=body.task_type,
         source_page_url=body.source_page_url, mime_type=body.mime_type,
@@ -448,6 +471,7 @@ async def create_batch(body: TaskBatchCreate, x_token: str = Header(default=""))
     _check_token(x_token)
     for task in body.tasks:
         _check_host(task.url)
+        _require_allow_duplicate(task.url, task.allow_duplicate)
     results = []
     for t in body.tasks:
         task = await manager.create_task(

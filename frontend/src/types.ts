@@ -87,6 +87,7 @@ export interface Settings {
   default_origin?: string
   default_cookie?: string
   http_chunk_size_mb?: number
+  download_speed_limit_kib?: number
   bt_upload_limit_kib?: number
   bt_max_connections?: number
   bt_enable_dht?: boolean

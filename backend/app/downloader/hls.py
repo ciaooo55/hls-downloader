@@ -22,6 +22,7 @@ from ..request_context import build_task_headers
 from .http_file import _content_disposition_filename
 from .merge import merge_segments
 from .errors import as_download_error, diagnose_download_error, format_download_error, should_retry_download_error
+from .throttle import throttle_bytes
 from .engine import task_output_dir, task_work_dir
 from .parser import UnsupportedPlaylistError, parse_m3u8
 from .playback import playback_service, write_playback_plan
@@ -76,6 +77,7 @@ class _BrowserHLSClient:
                         if response.quit_now:
                             response.quit_now.set()
                         raise asyncio.CancelledError
+                    await throttle_bytes(len(chunk))
                     output.write(chunk)
                     written += len(chunk)
         finally:
@@ -755,6 +757,7 @@ class HLSDownloader:
                         async for chunk in response.aiter_bytes(256 * 1024):
                             if self._is_canceled():
                                 raise asyncio.CancelledError
+                            await throttle_bytes(len(chunk))
                             output.write(chunk)
                             written += len(chunk)
 

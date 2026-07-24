@@ -47,4 +47,4 @@ frontend/
 
 - UI talks to local core over `http://127.0.0.1:<port>` with bearer token.
 - Tauri owns windowing, tray, single-instance, folder dialogs, open-path.
-- Core owns downloads, checksums, queue, native messaging, SSE progress.
+- Core owns downloads, checksums, queue, speed throttle, native messaging, SSE progress.

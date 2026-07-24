@@ -14,7 +14,7 @@ export default function BatchAddPanel({ settings, onAdded }: { settings: any; on
     if (!urls.length) return
     setLoading(true); setError('')
     try {
-      await createBatch(urls.map(url => ({ url, referer, concurrency })))
+      await createBatch(urls.map(url => ({ url, referer, concurrency, allow_duplicate: true })))
       setText(''); onAdded()
     } catch (reason: any) {
       setError(reason.message || '批量添加失败')

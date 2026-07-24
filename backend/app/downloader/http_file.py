@@ -19,6 +19,7 @@ from ..request_context import build_task_headers
 from ..utils import sanitize_filename
 from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
 from .errors import diagnose_download_error, format_download_error, should_retry_download_error
+from .throttle import throttle_bytes
 
 
 MAX_RETRIES = 5
@@ -298,6 +299,7 @@ class HTTPDownloader(SeeklessEngine):
                         raise asyncio.CancelledError
                     if self._is_pausing():
                         return
+                    await throttle_bytes(len(chunk))
                     output.write(chunk)
                     task.progress.downloaded_bytes += len(chunk)
                     elapsed = max(0.001, time.monotonic() - started)
@@ -406,6 +408,7 @@ class HTTPDownloader(SeeklessEngine):
                                     received += len(content)
                                     if received > expected:
                                         raise RuntimeError("Range 响应长度超过请求范围")
+                                    await throttle_bytes(len(content))
                                     output_file.write(content)
                         if received != expected:
                             raise RuntimeError(f"Range 长度不匹配，期望 {expected}，实际 {received}")
