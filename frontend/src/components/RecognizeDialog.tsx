@@ -123,17 +123,19 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
       <DialogOverlay onClose={onClose}>
         <Dialog className="recognize-modal" label="新建下载" onClose={onClose}>
           <DialogHeader title="新建下载" description="支持普通文件、HLS、DASH、magnet 和 .torrent" onClose={onClose} />
-          <Field label="链接" htmlFor="recognize-url">
-            <div className="url-entry">
-              <Link size={18} />
-              <Input id="recognize-url" autoFocus value={url} onChange={event => { setUrl(event.target.value); setResult(null); setError('') }} onKeyDown={event => { if (event.key === 'Enter') void submit() }} placeholder="粘贴文件、m3u8、mpd、网页或 magnet 链接" />
+          <section className="download-entry-surface">
+            <Field label="下载链接" htmlFor="recognize-url">
+              <div className="url-entry">
+                <Link size={18} />
+                <Input id="recognize-url" autoFocus value={url} onChange={event => { setUrl(event.target.value); setResult(null); setError('') }} onKeyDown={event => { if (event.key === 'Enter') void submit() }} placeholder="粘贴文件、m3u8、mpd、网页或 magnet 链接" />
+              </div>
+            </Field>
+            <div className="recognize-quick-actions">
+              <input ref={torrentInput} type="file" accept=".torrent,application/x-bittorrent" hidden onChange={event => void importTorrent(event.target.files?.[0])} />
+              <Button variant="ghost" className="text-button" disabled={busy} onClick={() => torrentInput.current?.click()}><FileUp size={14} />导入 .torrent</Button>
+              <span>磁力链接直接粘贴即可</span>
             </div>
-          </Field>
-          <div className="recognize-quick-actions">
-            <input ref={torrentInput} type="file" accept=".torrent,application/x-bittorrent" hidden onChange={event => void importTorrent(event.target.files?.[0])} />
-            <Button variant="ghost" className="text-button" disabled={busy} onClick={() => torrentInput.current?.click()}><FileUp size={14} />导入 .torrent</Button>
-            <span>磁力链接直接粘贴即可</span>
-          </div>
+          </section>
           <Button variant="ghost" className="text-button recognize-options-toggle" onClick={() => setShowDownloadOptions(value => !value)}>{showDownloadOptions ? '收起下载选项' : '下载选项'}</Button>
           {showDownloadOptions && <div className="recognize-options">
             <div className="form-row">

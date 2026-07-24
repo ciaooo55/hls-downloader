@@ -631,3 +631,68 @@ code,
 }
 
 .failure-steps{margin-top:10px}.failure-steps>b{display:block;margin-bottom:6px;color:var(--muted);font-size:11px}.failure-steps ol{margin:0;padding-left:18px}.failure-steps li{margin:4px 0;color:var(--text);font-size:12px;line-height:1.45}
+
+/* One restrained native surface: custom Windows chrome and download dialogs
+   deliberately use the same neutral layers as the task workspace. */
+.desktop-app.has-window-chrome { grid-template-rows: 32px 48px minmax(0, 1fr) 25px; }
+.hls-window-chrome { display: flex; align-items: stretch; min-width: 0; height: 32px; background: var(--surface); border-bottom: 1px solid var(--border); color: var(--muted); }
+.hls-window-drag-region { display: flex; align-items: center; min-width: 0; flex: 1; gap: 7px; padding-left: 10px; font-size: 11px; font-weight: 600; color: var(--text); }
+.hls-window-chrome-mark { width: 18px; height: 18px; object-fit: contain; }
+.hls-window-controls { display: flex; align-items: stretch; flex: 0 0 auto; }
+.hls-window-controls button { display: grid; place-items: center; width: 46px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.hls-window-controls button:hover { background: var(--surface-3); color: var(--text); }
+.hls-window-controls .hls-window-close:hover { background: var(--red); color: #fff; }
+.hls-window-controls button:focus-visible { position: relative; outline: 2px solid var(--primary); outline-offset: -2px; }
+.has-window-chrome .desktop-toolbar .brand-block { display: none; }
+
+.modal { background: var(--surface); }
+.modal > header, .modal > footer { background: var(--surface-2); }
+.recognize-modal { width: min(540px, calc(100vw - 40px)); padding: 0; overflow: hidden; }
+.recognize-modal > header { margin: 0; padding: 15px 17px 12px; border-bottom: 1px solid var(--border); }
+.recognize-modal > footer { margin: 0; padding: 11px 17px; border-top: 1px solid var(--border); }
+.recognize-modal > :not(header):not(footer):not(.modal-overlay) { margin-left: 17px; margin-right: 17px; }
+.download-entry-surface { margin-top: 14px; padding: 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); }
+.download-entry-surface .settings-field > label { margin-top: 0; }
+.download-entry-surface .url-entry { background: var(--surface); }
+.recognize-quick-actions { margin: 7px 0 0; padding-top: 7px; border-top: 1px solid var(--border); }
+.recognize-options-toggle { margin: 10px 17px 0 !important; }
+.recognize-options { margin: 8px 17px 0; padding: 10px 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); }
+.recognize-modal > .advanced-grid { margin: 8px 17px 0; padding: 0 11px 11px; border: 1px solid var(--border); border-top: 0; border-radius: 0 0 7px 7px; background: var(--surface-2); }
+.candidate-list { margin: 12px 17px 0; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); }
+.candidate-options { gap: 6px; max-height: min(282px, 35vh); }
+.candidate-item { border-color: color-mix(in srgb, var(--border) 85%, var(--surface)); background: var(--surface); box-shadow: 0 2px 6px color-mix(in srgb, var(--shadow) 44%, transparent); }
+.candidate-item.is-recommended { border-color: color-mix(in srgb, var(--primary) 65%, var(--border)); background: color-mix(in srgb, var(--primary) 7%, var(--surface)); }
+.candidate-download { min-width: 78px; }
+.recognize-modal > .inline-error, .recognize-modal > .not-found { margin: 10px 17px 0; }
+
+.browser-handoff-dialog { width: min(400px, calc(100vw - 28px)); padding: 0; border-radius: 8px; background: var(--surface); }
+.browser-handoff-dialog > header { margin: 0; padding: 15px 16px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.browser-handoff-dialog > footer { margin: 0; padding: 11px 16px; border-top: 1px solid var(--border); background: var(--surface-2); }
+.browser-handoff-body { padding: 12px 16px; }
+.browser-handoff-summary { display: grid; gap: 7px; padding: 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); }
+.browser-handoff-file { padding: 0; }
+.browser-handoff-source { padding-top: 7px; border-top: 1px solid var(--border); }
+.browser-handoff-body > label { margin-top: 12px; }
+.handoff-categories button { background: var(--surface); }
+
+.confirm-modal { overflow: hidden; padding: 0; border-radius: 8px; }
+.confirm-modal > header { margin: 0; padding: 16px 17px 13px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.confirm-modal > footer { margin: 0; padding: 11px 17px; border-top: 1px solid var(--border); background: var(--surface-2); }
+
+@media (max-width: 900px) {
+  .desktop-app.has-window-chrome { grid-template-rows: 30px 44px minmax(0, 1fr) 22px; }
+  .hls-window-chrome { height: 30px; }
+  .hls-window-controls button { width: 39px; }
+}
+@media (max-height: 620px) {
+  .desktop-app.has-window-chrome { grid-template-rows: 30px 42px minmax(0, 1fr) 22px; }
+}
+
+.handoff-window-root.has-window-chrome { display: grid; grid-template-rows: 32px minmax(0, 1fr); }
+.handoff-window-root.has-window-chrome .browser-handoff-standalone { min-height: 0; height: auto; padding: 0; background: var(--bg); }
+.handoff-window-root.has-window-chrome .browser-handoff-dialog { width: 100%; height: 100%; max-height: 100%; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+.handoff-window-root.has-window-chrome .browser-handoff-dialog > header,
+.handoff-window-root.has-window-chrome .browser-handoff-dialog > footer { background: var(--surface); }
+.handoff-window-root.has-window-chrome .browser-handoff-body { background: var(--bg); }
+.handoff-window-root.has-window-chrome.handoff-window-loading { align-items: stretch; justify-items: stretch; padding: 0; }
+.handoff-window-root.has-window-chrome.handoff-window-loading > section { align-self: center; justify-self: center; padding: 24px; }

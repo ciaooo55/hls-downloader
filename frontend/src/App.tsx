@@ -8,6 +8,7 @@ import { filterAndSortTasks } from './taskPresentation'
 import type { ThemePreference } from './theme'
 import type { BrowserStatus, Settings, Task } from './types'
 import DesktopToolbar from './components/DesktopToolbar'
+import WindowChrome from './components/WindowChrome'
 import Sidebar, { type TaskFilter } from './components/Sidebar'
 import TaskTable from './components/TaskTable'
 import TaskDetailsModal from './components/TaskDetailsModal'
@@ -382,8 +383,9 @@ export default function App() {
     }
   }
 
-  return <div className="desktop-app">
-    {isTauriDesktop() && <div className="tauri-drag-region" data-tauri-drag-region />}
+  const desktopShell = isTauriDesktop()
+  return <div className={`desktop-app${desktopShell ? ' has-window-chrome' : ''}`}>
+    {desktopShell && <WindowChrome />}
     <DesktopToolbar commands={commands} theme={theme} version={appVersion} query={query} onQueryChange={setQuery} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onPauseAll={() => void pauseAllActive()} onStartAll={() => void startAllWaiting()} onOpen={() => selectedTasks[0]?.output_path && openExplorer(selectedTasks[0].output_path)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onBrowserExtension={() => setShowBrowserExtension(true)} onPushLocalMedia={() => void confirmLocalMediaPush()} pushLocalMediaBusy={localPushBusy} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
     <div className="workspace">
       <Sidebar tasks={tasks} active={filter} onChange={setFilter} browserStatus={browserStatus} />

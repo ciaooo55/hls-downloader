@@ -5,6 +5,7 @@ import { closeDesktopWindow } from './desktop'
 import { resolveTheme } from './theme'
 import type { Settings } from './types'
 import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
+import WindowChrome from './components/WindowChrome'
 import { isTauriDesktop } from './tauri'
 
 export default function BrowserHandoffWindow({ handoffId }: { handoffId: string }) {
@@ -88,13 +89,15 @@ export default function BrowserHandoffWindow({ handoffId }: { handoffId: string 
   }
 
   if (item) {
-    return <main className="handoff-window-root">
+    return <main className="handoff-window-root has-window-chrome">
+      <WindowChrome />
       {error && <div className="handoff-window-error">{error}</div>}
       <BrowserHandoffDialog item={item} busy={busy} settings={settings} onResolve={resolve} standalone />
     </main>
   }
 
-  return <main className="handoff-window-root handoff-window-loading">
+  return <main className="handoff-window-root has-window-chrome handoff-window-loading">
+    <WindowChrome />
     <section>
       {error ? <>
         <X size={28} />

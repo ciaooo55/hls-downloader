@@ -133,8 +133,10 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
               <span>{duplicateHint}</span>
             </div>
           </div>}
-          <div className="browser-handoff-file"><Download size={20} /><div><strong>{filename || host}</strong><span>{item.mime_type || '类型未知'}{item.size ? ` · ${fmtBytes(item.size)}` : ' · 大小未知'}</span></div></div>
-          <div className="browser-handoff-source"><Globe2 size={14} /><span title={item.url}>{host}</span></div>
+          <section className="browser-handoff-summary">
+            <div className="browser-handoff-file"><Download size={20} /><div><strong>{filename || host}</strong><span>{item.mime_type || '类型未知'}{item.size ? ` · ${fmtBytes(item.size)}` : ' · 大小未知'}</span></div></div>
+            <div className="browser-handoff-source"><Globe2 size={14} /><span title={item.url}>{host}</span></div>
+          </section>
           <label htmlFor="handoff-filename">文件名</label>
           <Input id="handoff-filename" value={filename} onChange={event => setFilename(event.target.value)} autoFocus disabled={busy} />
           <label>分类</label>

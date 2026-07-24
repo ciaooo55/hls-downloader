@@ -427,3 +427,18 @@ body,
   outline: 2px solid var(--primary);
   outline-offset: 1px;
 }
+
+/* Frameless Tauri windows reserve their own first grid row; do not inherit
+   Cockpit's legacy system-titlebar spacer or two-column placement. */
+.desktop-app.has-window-chrome {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 32px 52px minmax(0, 1fr) 28px;
+  padding-top: 0;
+}
+.desktop-app.has-window-chrome > .hls-window-chrome,
+.desktop-app.has-window-chrome > .desktop-toolbar,
+.desktop-app.has-window-chrome > .workspace,
+.desktop-app.has-window-chrome > .statusbar { grid-column: 1 / -1; }
+@media (max-width: 900px) {
+  .desktop-app.has-window-chrome { grid-template-rows: 30px 44px minmax(0, 1fr) 22px; }
+}

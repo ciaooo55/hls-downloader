@@ -82,6 +82,7 @@ export async function startTauriDesktopSession(): Promise<() => void> {
       minHeight: 600,
       center: true,
       resizable: true,
+      decorations: false,
       alwaysOnTop: true,
       focus: true,
     })
