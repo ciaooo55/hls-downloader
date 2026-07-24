@@ -56,8 +56,8 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
       </section>}
       {task.task_type === 'torrent' && torrentFiles.length > 0 && <section className="torrent-files">
       <div className="torrent-files-head"><h3>BT 文件选择</h3><span>{selectedFiles.length}/{torrentFiles.length}</span></div>
-      <div className="torrent-file-list">{torrentFiles.map(file => <label key={file.index}><input type="checkbox" checked={selectedFiles.includes(file.index)} disabled={task.status === 'downloading' || task.status === 'done'} onChange={event => setSelectedFiles(current => event.target.checked ? [...current, file.index] : current.filter(index => index !== file.index))} /><span title={file.path}>{file.path}</span><b>{fmtBytes(file.size)}</b></label>)}</div>
-      {task.status !== 'downloading' && task.status !== 'done' && <button className="secondary-button" disabled={selectionBusy || !selectedFiles.length} onClick={async () => { setSelectionBusy(true); try { await selectTorrentFiles(task.id, selectedFiles) } finally { setSelectionBusy(false) } }}>保存文件选择</button>}
+      <div className="torrent-file-list">{torrentFiles.map(file => <label key={file.index}><input type="checkbox" checked={selectedFiles.includes(file.index)} disabled={task.status === 'done'} onChange={event => setSelectedFiles(current => event.target.checked ? [...current, file.index] : current.filter(index => index !== file.index))} /><span title={file.path}>{file.path}</span><b>{fmtBytes(file.size)}</b></label>)}</div>
+      {task.status !== 'done' && <><p className="field-note">下载中也可以更新选择；未选文件会停止请求，已下载的数据会保留在此任务中。</p><button className="secondary-button" disabled={selectionBusy || !selectedFiles.length} onClick={async () => { setSelectionBusy(true); try { await selectTorrentFiles(task.id, selectedFiles) } finally { setSelectionBusy(false) } }}>{selectionBusy ? '正在保存…' : '保存文件选择'}</button></>}
       </section>}
       {task.output_path && <div className="output-path" title={task.output_path}>{task.output_path}</div>}
     </div>

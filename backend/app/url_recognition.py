@@ -24,7 +24,7 @@ class HlsCandidate(BaseModel):
 
 
 class RecognitionResult(BaseModel):
-    kind: Literal["hls", "file", "page", "none"]
+    kind: Literal["hls", "dash", "file", "page", "none"]
     final_url: str
     candidates: list[HlsCandidate]
     message: str = ""
@@ -35,13 +35,13 @@ MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_CANDIDATES = 12
 MAX_RAW_CANDIDATES = 512
 
-_SCRIPT_HLS_PATTERN = re.compile(
-    r"(?P<url>(?:(?:https?:)?//|\.\.?/|/)[^\s\"'<>\\]+?\.m3u8"
+_SCRIPT_MANIFEST_PATTERN = re.compile(
+    r"(?P<url>(?:(?:https?:)?//|\.\.?/|/)[^\s\"'<>\\]+?\.(?:m3u8|mpd)"
     r"(?=\?|[\s\"'<>\\,;\)\]}]|$)(?:\?[^\s\"'<>\\]*)?)",
     re.IGNORECASE,
 )
-_QUOTED_HLS_PATTERN = re.compile(
-    r"(?P<quote>[\"'])(?P<url>[^\"'<>\r\n]*?\.m3u8(?:\?[^\"'<>\r\n]*)?)(?P=quote)",
+_QUOTED_MANIFEST_PATTERN = re.compile(
+    r"(?P<quote>[\"'])(?P<url>[^\"'<>\r\n]*?\.(?:m3u8|mpd)(?:\?[^\"'<>\r\n]*)?)(?P=quote)",
     re.IGNORECASE,
 )
 _DOWNLOAD_EXTENSIONS = re.compile(
@@ -114,6 +114,17 @@ def _is_direct_file_response(content_type: str, disposition: str, final_url: str
     ))
 
 
+def _manifest_format(url: str) -> Literal["hls", "dash"]:
+    return "dash" if unquote(urlparse(url).path).lower().endswith(".mpd") else "hls"
+
+
+def _is_dash_manifest(signature: str, content_type: str) -> bool:
+    if "dash+xml" in content_type.lower():
+        return True
+    # A namespace prefix is legal, although MPD is normally the document root.
+    return bool(re.search(r"<\s*(?:[a-z0-9_-]+:)?mpd(?:\s|>)", signature, re.IGNORECASE))
+
+
 class _CandidateParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -123,7 +134,7 @@ class _CandidateParser(HTMLParser):
         if len(self.values) >= MAX_RAW_CANDIDATES:
             return
         for _, value in attrs:
-            if value and ".m3u8" in value.lower():
+            if value and (".m3u8" in value.lower() or ".mpd" in value.lower()):
                 self.values.append(value)
                 if len(self.values) >= MAX_RAW_CANDIDATES:
                     return
@@ -167,8 +178,8 @@ def _normalized_candidate_url(raw_value: str, base_url: str) -> str | None:
         return None
     decoded_path = unquote(parsed.path)
     if (
-        not decoded_path.lower().endswith(".m3u8")
-        or decoded_path.rsplit("/", 1)[-1].lower() == ".m3u8"
+        not decoded_path.lower().endswith((".m3u8", ".mpd"))
+        or decoded_path.rsplit("/", 1)[-1].lower() in {".m3u8", ".mpd"}
     ):
         return None
     searchable = f"{decoded_path}?{unquote(parsed.query)}"
@@ -320,15 +331,23 @@ class _RankedCandidate:
 
 
 def _rank_html_candidate(url: str, origin: str, order: int) -> _RankedCandidate:
+    manifest_format = _manifest_format(url)
     is_master = _is_master_url(url)
     height, bitrate = _quality_details(url)
     confidence = 0.92 if origin == "attribute" else 0.82
-    if is_master:
+    if manifest_format == "dash":
+        # Every MPD is an adaptive presentation manifest, unlike a media HLS
+        # playlist which may be one rendition only.
+        is_master = True
+        confidence += 0.05
+    elif is_master:
         confidence += 0.06
     elif height or bitrate:
         confidence += 0.03
     confidence = round(min(confidence, 0.99), 2)
-    if is_master:
+    if manifest_format == "dash":
+        label, quality = "DASH 播放清单", "dash"
+    elif is_master:
         label, quality = "主播放清单", "master"
     elif height:
         label = quality = f"{height}p"
@@ -349,10 +368,10 @@ def _rank_html_candidate(url: str, origin: str, order: int) -> _RankedCandidate:
 def _attribute_matches(value: str) -> list[str]:
     value = _decode_url_escapes(value)
     matches = [value]
-    matches.extend(match.group("url") for match in _SCRIPT_HLS_PATTERN.finditer(value))
-    matches.extend(match.group("url") for match in _QUOTED_HLS_PATTERN.finditer(value))
+    matches.extend(match.group("url") for match in _SCRIPT_MANIFEST_PATTERN.finditer(value))
+    matches.extend(match.group("url") for match in _QUOTED_MANIFEST_PATTERN.finditer(value))
     # srcset-like attributes otherwise leave a density suffix on the URL.
-    matches.extend(part for part in re.split(r"[\s,]+", value) if ".m3u8" in part.lower())
+    matches.extend(part for part in re.split(r"[\s,]+", value) if any(ext in part.lower() for ext in (".m3u8", ".mpd")))
     # Direct attributes are also found by the regexes; keep their first form so
     # they do not consume the raw inspection budget three times over.
     return list(dict.fromkeys(matches))
@@ -386,10 +405,10 @@ def extract_html_candidates(text: str, base_url: str, limit: int = MAX_CANDIDATE
             add(value, "attribute")
 
     normalized = _decode_url_escapes(text)
-    for match in _QUOTED_HLS_PATTERN.finditer(normalized):
+    for match in _QUOTED_MANIFEST_PATTERN.finditer(normalized):
         if not _is_concatenated_match(normalized, match.start(), match.end()):
             add(match.group("url"), "script")
-    for match in _SCRIPT_HLS_PATTERN.finditer(normalized):
+    for match in _SCRIPT_MANIFEST_PATTERN.finditer(normalized):
         if not _is_concatenated_match(normalized, match.start(), match.end()):
             add(match.group("url"), "script")
 
@@ -419,11 +438,14 @@ def extract_html_candidates(text: str, base_url: str, limit: int = MAX_CANDIDATE
 
 
 def _direct_candidate(url: str, source: str, playlist_text: str = "") -> HlsCandidate:
+    manifest_format = _manifest_format(url)
     is_master = source == "playlist" and (
         "#EXT-X-STREAM-INF" in playlist_text.upper() or _is_master_url(url)
     )
     height, bitrate = _quality_details(url)
-    if is_master:
+    if source == "dash" or manifest_format == "dash" and source != "file":
+        label, quality = "DASH 播放清单", "dash"
+    elif is_master:
         label, quality = "主播放清单", "master"
     elif height:
         label = quality = f"{height}p"
@@ -487,6 +509,12 @@ async def recognize_url(url: str, headers: dict[str, str], client=None) -> Recog
                 kind="hls",
                 final_url=final_url,
                 candidates=[_direct_candidate(final_url, "playlist", signature)],
+            )
+        if _is_dash_manifest(signature, content_type):
+            return RecognitionResult(
+                kind="dash",
+                final_url=final_url,
+                candidates=[_direct_candidate(final_url, "dash", signature)],
             )
 
         if _is_direct_file_response(content_type, disposition, final_url):

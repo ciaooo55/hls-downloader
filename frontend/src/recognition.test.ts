@@ -52,6 +52,16 @@ describe('recognitionCandidateViews', () => {
     expect(candidates[0].recommended).toBe(true)
   })
 
+  it('labels a DASH manifest as an adaptive media resource', () => {
+    const [candidate] = recognitionCandidateViews([
+      { url: 'https://cdn.example.com/video/manifest.mpd', source: 'dash', quality: 'dash' },
+    ])
+
+    expect(candidate.filename).toBe('manifest.mpd')
+    expect(candidate.qualityLabel).toBe('自适应清晰度')
+    expect(candidate.sourceLabel).toBe('DASH 播放清单')
+  })
+
   it('uses optional backend quality metadata while remaining compatible with old responses', () => {
     const candidates = recognitionCandidateViews([
       { url: 'https://cdn.example.com/play?id=high', label: '1080p', quality: '1080p', confidence: 0.97 },

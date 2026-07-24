@@ -37,7 +37,7 @@ from .desktop_runtime import activate_window, present_browser_handoff, has_brows
 from .desktop_runtime import register_activation, register_browser_handoff, register_shutdown, set_desktop_handoff_session
 from .native_desktop import native_desktop_session, request_core_shutdown
 from .url_recognition import RecognitionError, recognize_url
-from .updater import UpdateError, update_service
+from .updater import UpdateCheckError, UpdateError, update_service
 from .models import TaskStatus, TaskType
 from .browser_handoff import browser_handoffs
 from .downloader.throttle import download_throttle
@@ -380,6 +380,8 @@ async def check_update(force: bool = False, x_token: str = Header(default="")):
     _check_token(x_token)
     try:
         info = await asyncio.to_thread(update_service.check, force=force)
+    except UpdateCheckError as exc:
+        raise HTTPException(status_code=503, detail=exc.to_dict()) from exc
     except UpdateError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return info.to_dict()
@@ -554,6 +556,13 @@ async def create_torrent_file_task(
     content = await file.read(16 * 1024 * 1024 + 1)
     if not content or len(content) > 16 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="种子文件为空或超过 16 MiB")
+    try:
+        from .downloader.torrent import TorrentDownloader
+        TorrentDownloader.validate_torrent_bytes(content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="BT 下载组件不可用，请修复安装后重试") from exc
     task = await manager.create_task(
         url=f"torrent-file:{name}",
         task_type=TaskType.TORRENT,

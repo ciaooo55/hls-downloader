@@ -190,6 +190,38 @@ def test_marks_direct_multivariant_playlist_with_frontend_metadata():
     assert result.candidates[0].confidence == 1.0
 
 
+def test_recognizes_direct_dash_manifest_by_mime_and_xml_signature():
+    def handler(request: httpx.Request):
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/dash+xml"},
+            text='<?xml version="1.0"?><MPD type="static"></MPD>',
+            request=request,
+        )
+
+    result = run_recognition("https://media.test/manifest?id=1", handler)
+
+    assert result.kind == "dash"
+    assert result.candidates[0].source == "dash"
+    assert result.candidates[0].label == "DASH 播放清单"
+    assert result.candidates[0].quality == "dash"
+
+
+def test_extracts_dash_from_page_and_filters_dash_audio_tracks():
+    html = """
+    <video data-manifest="/video/main.mpd?token=abc"></video>
+    <script>const audio = '/tracks/audio.mpd'; const video = '/video/backup.mpd';</script>
+    """
+
+    candidates = extract_html_candidates(html, "https://site.test/watch")
+
+    assert [candidate.url for candidate in candidates] == [
+        "https://site.test/video/main.mpd?token=abc",
+        "https://site.test/video/backup.mpd",
+    ]
+    assert candidates[0].label == "DASH 播放清单"
+
+
 def test_reports_no_candidate_for_page_without_static_hls():
     def handler(request: httpx.Request):
         return httpx.Response(200, headers={"Content-Type": "text/html"}, text="<video src='blob:abc'>", request=request)

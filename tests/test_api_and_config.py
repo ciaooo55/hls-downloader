@@ -33,6 +33,17 @@ def test_task_schema_rejects_invalid_url_concurrency_and_oversized_batch():
     assert SettingsUpdate(default_concurrency=256).default_concurrency == 256
 
 
+def test_torrent_upload_rejects_invalid_seed_before_creating_a_task():
+    response = TestClient(app).post(
+        "/api/tasks/torrent-file",
+        headers={"X-Token": "55555"},
+        files={"file": ("not-a-torrent.torrent", b"<html>blocked</html>", "application/x-bittorrent")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "种子文件无效、已损坏，或下载到的不是 BT 种子"
+
+
 def test_task_action_maps_manager_errors_to_http_status(monkeypatch):
     from backend.app import api as api_module
 

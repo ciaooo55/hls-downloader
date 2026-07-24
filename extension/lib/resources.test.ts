@@ -31,6 +31,8 @@ describe('resource rules', () => {
   it('filters HLS segments but retains manifests', () => {
     expect(classifyResource('https://cdn.test/a.m3u8')).toBe('hls')
     expect(classifyResource('https://cdn.test/0001.ts')).toBeNull()
+    expect(classifyResource('https://cdn.test/file.torrent?token=1')).toBe('file')
+    expect(classifyResource('https://cdn.test/get?id=1', 'application/x-bittorrent')).toBe('file')
   })
   it('deduplicates resources', () => {
     const item = { id: '1', url: 'https://a.test/v.mp4', kind: 'media' as const, seenAt: Date.now() }
@@ -70,6 +72,14 @@ describe('resource rules', () => {
       mimeType: 'video/mp4',
       size: 20 * 1024 * 1024,
     }))).toBe(true)
+  })
+  it('filters non-video HLS and DASH tracks before they reach the media panel', () => {
+    expect(isUsefulResource(resource({ kind: 'hls', url: 'https://cdn.test/tracks/audio/master.m3u8' }))).toBe(false)
+    expect(isUsefulResource(resource({ kind: 'dash', url: 'https://cdn.test/subtitles/track.mpd' }))).toBe(false)
+    expect(isUsefulResource(resource({ kind: 'hls', url: 'https://cdn.test/ads/preroll.m3u8' }))).toBe(false)
+    expect(isUsefulResource(resource({ kind: 'dash', url: 'https://cdn.test/video/manifest.mpd?track=audio' }))).toBe(false)
+    expect(isUsefulResource(resource({ kind: 'hls', url: 'https://cdn.test/video/master.m3u8' }))).toBe(true)
+    expect(isUsefulResource(resource({ kind: 'hls', url: 'https://cdn.test/adventure/master.m3u8' }))).toBe(true)
   })
   it('stably deduplicates refreshed signed URLs while preserving meaningful query parameters', () => {
     const now = Date.now()

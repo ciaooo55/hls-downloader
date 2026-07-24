@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import { Download, ExternalLink, FolderOpen, RefreshCw, X } from 'lucide-react'
 import { fetchUpdateInfo, installUpdate, openExplorer } from '../api'
 import type { UpdateInfo } from '../types'
+import { friendlyUpdateError } from '../updateError'
+
+const RELEASES_URL = 'https://github.com/ciaooo55/hls-downloader/releases/latest'
 
 export default function UpdateDialog({ onClose }: { onClose: () => void }) {
   const [info, setInfo] = useState<UpdateInfo | null>(null)
@@ -10,6 +13,7 @@ export default function UpdateDialog({ onClose }: { onClose: () => void }) {
   const [confirming, setConfirming] = useState(false)
   const [phase, setPhase] = useState('')
   const [error, setError] = useState('')
+  const [checkWarning, setCheckWarning] = useState('')
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape' && !installing) onClose() }
     window.addEventListener('keydown', onKeyDown)
@@ -18,12 +22,12 @@ export default function UpdateDialog({ onClose }: { onClose: () => void }) {
 
   const check = async (force = true) => {
     setChecking(true)
-    setError('')
+    setCheckWarning('')
     setConfirming(false)
     try {
       setInfo(await fetchUpdateInfo(force))
     } catch (reason: any) {
-      setError(reason.message || '检查更新失败')
+      setCheckWarning(friendlyUpdateError(reason, '暂时无法检查更新，请稍后重试。'))
     } finally {
       setChecking(false)
     }
@@ -44,11 +48,12 @@ export default function UpdateDialog({ onClose }: { onClose: () => void }) {
     setInstalling(true)
     setPhase('正在从 GitHub 下载安装包…')
     setError('')
+    setCheckWarning('')
     try {
       await installUpdate()
       setPhase('安装程序已启动，下载器即将退出…')
     } catch (reason: any) {
-      setError(reason.message || '更新失败')
+      setError(friendlyUpdateError(reason, '安装包下载或启动失败，请稍后重试。'))
       setInstalling(false)
       setPhase('')
       setConfirming(false)
@@ -78,10 +83,15 @@ export default function UpdateDialog({ onClose }: { onClose: () => void }) {
       <p className="field-note">自动更新完成后会删除下载的安装包。视频文件与任务历史不会被删除。</p>
       {phase && <div className="inline-message update-phase">{phase}</div>}
       {confirming && !installing && <div className="inline-message">确认后下载器会关闭并启动安装程序，请保存当前操作。</div>}
-      {error && <div className="inline-error">{error}</div>}
+      {checkWarning && info?.available && <div className="inline-message update-warning" role="status">
+        无法刷新更新信息，正在使用上次已验证的 v{info.latest_version} 信息。可以直接安装，或稍后重新检查。
+      </div>}
+      {checkWarning && !info?.available && <div className="inline-error" role="alert">{checkWarning}</div>}
+      {error && <div className="inline-error" role="alert">{error}</div>}
 
       <footer>
         <button className="secondary-button" disabled={checking || installing} onClick={() => check(true)}><RefreshCw size={15} />{checking ? '检查中…' : '重新检查'}</button>
+        {!info && !checking && <button className="secondary-button" onClick={() => window.open(RELEASES_URL, '_blank', 'noopener')}><ExternalLink size={15} />打开 Release 页面</button>}
         {confirming && !installing && <button className="secondary-button" onClick={() => setConfirming(false)}>取消</button>}
         {info?.available && <button className="primary-button" disabled={installing || checking} onClick={update}>
           {info.can_auto_install ? <Download size={15} /> : <ExternalLink size={15} />}

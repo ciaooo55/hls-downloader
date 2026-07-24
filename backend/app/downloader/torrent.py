@@ -135,6 +135,16 @@ class TorrentDownloader:
             raise RuntimeError("BT 下载组件 libtorrent 未安装") from exc
         return lt
 
+    @classmethod
+    def validate_torrent_bytes(cls, content: bytes) -> None:
+        """Fail fast for HTML/error pages renamed to ``.torrent`` files."""
+        lt = cls._load_libtorrent()
+        try:
+            data = lt.bdecode(content)
+            lt.torrent_info(data)
+        except Exception as exc:
+            raise ValueError("种子文件无效、已损坏，或下载到的不是 BT 种子") from exc
+
     async def run(self) -> None:
         task = self.task
         task_dir = task_work_dir(task)
@@ -167,7 +177,10 @@ class TorrentDownloader:
                     shutil.copy2(source_path, torrent_path)
                 else:
                     await self._download_torrent_file(torrent_path)
-                info = lt.torrent_info(str(torrent_path))
+                try:
+                    info = lt.torrent_info(str(torrent_path))
+                except Exception as exc:
+                    raise RuntimeError("服务器返回的不是有效 BT 种子，可能需要登录、Cookie 或 Referer") from exc
                 params = lt.add_torrent_params()
                 params.ti = info
                 params.save_path = str(payload_dir)

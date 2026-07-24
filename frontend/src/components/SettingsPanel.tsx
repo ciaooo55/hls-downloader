@@ -5,6 +5,7 @@ import { beginUninstall, getDesktopInfo } from '../desktop'
 import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 import type { ThemePreference } from '../theme'
 import type { UpdateInfo } from '../types'
+import { friendlyUpdateError } from '../updateError'
 import { pickFolder } from '../desktop'
 import FolderPicker from './FolderPicker'
 import ConfirmDialog from './ConfirmDialog'
@@ -31,6 +32,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   const [uninstallAvailable, setUninstallAvailable] = useState(false)
   const [desktopInfo, setDesktopInfo] = useState<{ shell?: string; desktop_version?: string } | null>(null)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
+  const [updateError, setUpdateError] = useState('')
   const [checkingUpdate, setCheckingUpdate] = useState(false)
   const [installingUpdate, setInstallingUpdate] = useState(false)
   const [environment, setEnvironment] = useState<any>(null)
@@ -180,11 +182,11 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   }
   const checkUpdate = async () => {
     setCheckingUpdate(true)
-    setError('')
+    setUpdateError('')
     try {
       setUpdateInfo(await fetchUpdateInfo(true))
     } catch (reason: any) {
-      setError(reason.message || '检查更新失败')
+      setUpdateError(friendlyUpdateError(reason, '暂时无法检查更新，请稍后重试。'))
     } finally {
       setCheckingUpdate(false)
     }
@@ -193,11 +195,11 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     if (!updateInfo?.available) return
     if (!confirmed) { setConfirmAction('update'); return }
     setInstallingUpdate(true)
-    setError('')
+    setUpdateError('')
     try {
       await installUpdate()
     } catch (reason: any) {
-      setError(reason.message || '更新失败')
+      setUpdateError(friendlyUpdateError(reason, '安装包下载或启动失败，请稍后重试。'))
       setInstallingUpdate(false)
     }
   }
@@ -316,6 +318,8 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
             <div className="settings-row settings-row-control"><div><strong>运行环境</strong><span>{environment ? `FFmpeg ${environment.ffmpeg ? '正常' : '未找到'} · 并发 ${environment.concurrency} · 同时任务 ${environment.max_tasks}` : '检查 FFmpeg、目录权限和当前并发设置'}</span></div><button className="secondary-button" disabled={checkingEnvironment || dirty} title={dirty ? '请先保存设置' : '检查运行环境'} onClick={checkEnvironment}><RefreshCw size={15} />{dirty ? '保存后检查' : checkingEnvironment ? '检查中…' : '检查环境'}</button></div>
             {desktopInfo?.shell && <div className="settings-row"><div><strong>桌面界面</strong><span>{desktopInfo.shell === 'tauri' ? `Tauri + React · 桌面壳 v${desktopInfo.desktop_version || '未知'}` : desktopInfo.shell}</span></div></div>}
             <div className="settings-row settings-row-control"><div><strong>软件更新</strong><span>{updateInfo ? `当前 v${updateInfo.current_version} · ${updateInfo.available ? `可更新到 v${updateInfo.latest_version}` : '已是最新版本'}` : '尚未检查'}</span></div>{updateInfo?.available && updateInfo.can_auto_install ? <button className="primary-button" disabled={installingUpdate} onClick={() => void updateApp()}><Download size={15} />{installingUpdate ? '正在下载…' : '下载安装'}</button> : <button className="secondary-button" disabled={checkingUpdate} onClick={checkUpdate}><RefreshCw size={15} />{checkingUpdate ? '检查中…' : '检查更新'}</button>}</div>
+            {updateError && updateInfo?.available && <div className="inline-message update-warning" role="status">无法刷新更新信息，正在使用上次已验证的 v{updateInfo.latest_version} 信息。可以直接安装，或稍后重新检查。</div>}
+            {updateError && !updateInfo?.available && <div className="inline-error settings-error" role="alert">{updateError}</div>}
             {uninstallAvailable && <div className="settings-row settings-row-control"><div><strong>卸载程序</strong><span>删除程序、设置、任务历史和缓存</span></div><button className="danger-button" onClick={uninstall}><Trash2 size={15} />卸载</button></div>}
           </section>
         </div>}

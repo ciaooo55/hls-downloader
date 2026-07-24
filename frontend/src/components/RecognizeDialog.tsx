@@ -156,7 +156,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
             <section className="candidate-list" aria-labelledby="candidate-list-title">
               <div className="candidate-list-heading">
                 <div>
-                  <strong id="candidate-list-title">发现 {candidateViews.length} 个候选播放清单</strong>
+                  <strong id="candidate-list-title">发现 {candidateViews.length} 个候选媒体资源</strong>
                   <span>{view.message || '已结合清晰度和链接特征排序，可直接下载推荐项。'}</span>
                 </div>
               </div>

@@ -43,13 +43,15 @@ export interface DownloadClickIntent {
   controlHint?: boolean
 }
 
-const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
+const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|torrent|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
 const SEGMENT_EXT = /\.(?:ts|m4s|cmfv|cmfa|aac)(?:$|[?#])/i
 const MANIFEST_EXT = /\.(?:m3u8?|mpd)$/i
 const SEGMENT_PATH = /(?:^|[\/_-])(?:init|segment|seg|fragment|frag|chunk|part)[-_]?(?:\d{1,8}|video|audio)?(?:\.|[\/_-]|$)/i
 const SEGMENT_MIME = /^(?:video\/mp2t|audio\/(?:aac|mp4a-latm))\b/i
 const VOLATILE_QUERY = /^(?:token|auth|authorization|signature|sig|expires?|expiry|policy|key-pair-id|hdnea|hmac|jwt|session|sessionid|access[_-]?key|x-amz-.+)$/i
 const AD_SIGNAL = /(?:^|[\/_-])(?:ad|ads|advert|advertisement|preroll|midroll|postroll|promo)(?:[\/_-]|$)/i
+const NON_VIDEO_MANIFEST_SIGNAL = /(?:^|[\/_.-])(?:audio(?:only|track)?|subtitle(?:s)?|caption(?:s)?|thumbnail(?:s)?|thumb(?:s)?|sprite(?:s)?|storyboard(?:s)?|preview(?:s)?|iframe|trickplay|ad(?:s)?|advert(?:s|ising)?|preroll|midroll|postroll)(?:[\/_.-]|$)/i
+const NON_VIDEO_MANIFEST_QUERY = new Set(['audio', 'subtitle', 'subtitles', 'caption', 'captions', 'ad', 'ads', 'advertisement', 'iframe'])
 const GENERIC_MEDIA_NAME = /^(?:(?:video|stream|master|index|playlist|manifest|chunklist|media|output|download|file|vod|live)(?:[-_ ]*(?:\d{3,4}p?|low|medium|high|sd|hd|fhd|uhd|4k))?|(?:hls[-_ ]*)?(?:\d{3,4}p[-_ ]*)?(?:hls[-_ ]*)?(?:video[-_ ]*stream|视频流)?|(?:hls[-_ ]*)?\d{3,4}p)$/i
 const OPAQUE_MEDIA_NAME = /^(?:[a-f0-9]{16,}|[a-z0-9_-]{28,})$/i
 
@@ -101,7 +103,20 @@ export function classifyResource(url: string, mimeType = ''): ResourceKind | nul
   if (/\.m3u8(?:$|[?#])/i.test(url) || mime.includes('mpegurl')) return 'hls'
   if (/\.mpd(?:$|[?#])/i.test(url) || mime.includes('dash+xml')) return 'dash'
   if (mime.startsWith('video/') || mime.startsWith('audio/')) return 'media'
+  if (/\.torrent(?:$|[?#])/i.test(url) || mime.includes('bittorrent')) return 'file'
   return MEDIA_EXT.test(url) || mime.includes('octet-stream') ? 'file' : null
+}
+
+function isNonVideoManifest(resource: Pick<MediaResource, 'url'>): boolean {
+  let pathnameAndQuery = resource.url
+  try {
+    const url = new URL(resource.url)
+    pathnameAndQuery = `${decodeURIComponent(url.pathname)}?${decodeURIComponent(url.search)}`
+    for (const [key, value] of url.searchParams) {
+      if (['type', 'track', 'kind', 'media'].includes(key.toLowerCase()) && NON_VIDEO_MANIFEST_QUERY.has(value.toLowerCase())) return true
+    }
+  } catch {}
+  return NON_VIDEO_MANIFEST_SIGNAL.test(pathnameAndQuery)
 }
 
 export function resourceFingerprint(resource: Pick<MediaResource, 'url' | 'kind'>): string {
@@ -122,7 +137,9 @@ export function isUsefulResource(resource: MediaResource): boolean {
   if (!resource.url || !resource.kind) return false
   if (resource.statusCode && (resource.statusCode < 200 || resource.statusCode >= 400)) return false
   if (resource.method && !['GET', 'POST'].includes(resource.method.toUpperCase())) return false
-  if (resource.kind === 'hls' || resource.kind === 'dash' || resource.kind === 'magnet') return true
+  if (resource.kind === 'magnet') return true
+  if ((resource.kind === 'hls' || resource.kind === 'dash') && isNonVideoManifest(resource)) return false
+  if (resource.kind === 'hls' || resource.kind === 'dash') return true
   let path = resource.url
   try { path = decodeURIComponent(new URL(resource.url).pathname) } catch {}
   if (SEGMENT_EXT.test(resource.url) || SEGMENT_MIME.test(resource.mimeType || '')) return false

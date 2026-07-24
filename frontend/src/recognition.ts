@@ -1,5 +1,5 @@
 export interface RecognitionResult {
-  kind: 'hls' | 'file' | 'page' | 'none'
+  kind: 'hls' | 'dash' | 'file' | 'page' | 'none'
   candidates: Array<{
     url: string
     source?: string
@@ -71,7 +71,7 @@ function candidateParts(value: string) {
 function candidateFilename(pathname: string) {
   const parts = pathname.split('/').filter(Boolean)
   const filename = parts[parts.length - 1]?.trim()
-  return filename || 'HLS 播放清单'
+  return filename || '播放清单'
 }
 
 function inferredHeight(text: string) {
@@ -108,15 +108,15 @@ function metadataBitrate(quality?: string | null) {
 
 function candidateScore(qualityText: string, height: number, quality?: string | null, confidence?: number) {
   let score = height + Math.min(metadataBitrate(quality) / 10, 900)
-  if (quality === 'master' || isAdaptivePlaylist(qualityText)) score += 10_000
-  if (/\.m3u8(?:$|[/?#])/i.test(qualityText)) score += 10
+  if (quality === 'master' || quality === 'dash' || isAdaptivePlaylist(qualityText)) score += 10_000
+  if (/\.(?:m3u8|mpd)(?:$|[/?#])/i.test(qualityText)) score += 10
   if (/(?:^|[/_.?&=+\-])(audio|aac|subtitle|subtitles|caption|captions|preview|thumbnail|sprite|advert|ads)(?=$|[/_.?&=+\-])/i.test(qualityText)) score -= 100_000
   if (Number.isFinite(confidence)) score += Math.max(0, Math.min(1, confidence || 0))
   return score
 }
 
 function qualityLabel(quality: string | null | undefined, height: number, adaptive: boolean) {
-  if (quality === 'master' || adaptive) return '自适应清晰度'
+  if (quality === 'master' || quality === 'dash' || adaptive) return '自适应清晰度'
   if (/^\d{3,4}p$/i.test(quality || '')) return `推测 ${quality}`
   const bitrate = quality?.match(/^(\d{2,6})\s*kbps$/i)?.[1]
   if (bitrate) return `推测 ${bitrate} kbps`
@@ -126,6 +126,7 @@ function qualityLabel(quality: string | null | undefined, height: number, adapti
 function sourceLabel(source?: string) {
   if (source === 'file') return '文件直链'
   if (source === 'playlist') return 'HLS 播放清单'
+  if (source === 'dash') return 'DASH 播放清单'
   if (source === 'html') return '网页内发现'
   return '已识别资源'
 }

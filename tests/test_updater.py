@@ -1,7 +1,10 @@
 import hashlib
 import io
 import json
+import time
+import urllib.error
 from dataclasses import replace
+from email.message import Message
 from types import SimpleNamespace
 
 import pytest
@@ -128,6 +131,45 @@ def test_update_check_falls_back_to_release_checksums_when_api_is_limited(monkey
     assert calls[-1].endswith("/v9.0.0/SHA256SUMS.txt")
 
 
+def test_rate_limited_check_returns_a_safe_actionable_error(monkeypatch):
+    headers = Message()
+    headers["X-RateLimit-Remaining"] = "0"
+    headers["X-RateLimit-Reset"] = str(int(time.time()) + 120)
+
+    def opener(request, timeout):
+        if request.full_url == updater.LATEST_RELEASE_API:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                403,
+                "Forbidden",
+                headers,
+                io.BytesIO(b'{"message":"API rate limit exceeded"}'),
+            )
+        raise urllib.error.URLError("[SSL: UNEXPECTED_EOF_WHILE_READING] eof")
+
+    with pytest.raises(updater.UpdateCheckError) as raised:
+        updater.check_for_update(opener=opener)
+
+    error = raised.value
+    assert error.code == "GITHUB_RATE_LIMITED"
+    assert error.retry_after_seconds is not None
+    assert "GitHub" in str(error)
+    assert "SSL" not in str(error)
+    assert "urlopen" not in str(error)
+
+
+def test_release_checksum_tls_error_is_not_exposed_to_clients():
+    def opener(request, timeout):
+        raise urllib.error.URLError("<urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING]>")
+
+    with pytest.raises(updater.UpdateCheckError) as raised:
+        updater.check_for_update(opener=opener)
+
+    assert raised.value.code == "NETWORK_ERROR"
+    assert "SSL" not in str(raised.value)
+    assert "urlopen" not in str(raised.value)
+
+
 def test_installer_download_is_atomic_and_sha256_verified(tmp_path):
     data = b"MZ" + b"installer" * 100
     info = _info(data)
@@ -211,6 +253,21 @@ def test_update_service_never_launches_installer_twice(monkeypatch, tmp_path):
         service.download_and_launch(process_starter=lambda args: launched.append(args))
 
     assert launched == [[str(installer), "/DELETESELF=1"]]
+
+
+def test_update_service_installs_from_recent_verified_cache_without_rechecking(monkeypatch, tmp_path):
+    data = b"MZsetup"
+    info = _info(data)
+    service = updater.UpdateService()
+    service._cache = (time.monotonic(), info)
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(data)
+    monkeypatch.setattr(service, "check", lambda force: pytest.fail("must use trusted cache"))
+    monkeypatch.setattr(updater, "download_installer", lambda cached: installer)
+
+    result = service.download_and_launch(process_starter=lambda _args: None)
+
+    assert result == info
 
 
 def test_update_api_requires_token_and_returns_release_state(monkeypatch):

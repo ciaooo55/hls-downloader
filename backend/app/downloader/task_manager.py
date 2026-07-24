@@ -68,16 +68,19 @@ PLAYBACK_STATUSES = {
 }
 
 
-def resolve_task_type(value: TaskType | str, url: str) -> TaskType:
+def resolve_task_type(value: TaskType | str, url: str, mime_type: str = "") -> TaskType:
     requested = TaskType(value)
     if requested is not TaskType.AUTO:
         return requested
     lowered = url.lower().split("#", 1)[0].split("?", 1)[0]
+    mime = mime_type.lower().split(";", 1)[0].strip()
     if url.lower().startswith("magnet:") or lowered.endswith(".torrent"):
         return TaskType.TORRENT
-    if lowered.endswith(".mpd"):
+    if lowered.endswith(".mpd") or mime == "application/dash+xml":
         return TaskType.DASH
-    if ".m3u8" in lowered:
+    if ".m3u8" in lowered or mime in {
+        "application/vnd.apple.mpegurl", "application/x-mpegurl", "application/mpegurl",
+    }:
         return TaskType.HLS
     return TaskType.HTTP
 
@@ -398,7 +401,7 @@ class TaskManager:
         inherit_default_headers=True,
     ) -> Task:
         task_id = str(uuid.uuid4())[:8]
-        resolved_type = resolve_task_type(task_type, url)
+        resolved_type = resolve_task_type(task_type, url, mime_type)
         if resolved_type in {TaskType.HLS, TaskType.DASH}:
             requested_name = suggest_manifest_name(
                 url,

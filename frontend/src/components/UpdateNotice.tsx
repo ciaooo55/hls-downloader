@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Download, ExternalLink, X } from 'lucide-react'
 import { fetchUpdateInfo, installUpdate } from '../api'
 import type { UpdateInfo } from '../types'
+import { friendlyUpdateError } from '../updateError'
 
 const dismissKey = (version: string) => `hls_update_dismissed_${version}`
 
@@ -45,7 +46,7 @@ export default function UpdateNotice() {
       await installUpdate()
       setPhase('安装程序已启动，本窗口即将关闭…')
     } catch (reason: any) {
-      setError(reason.message || '更新失败')
+      setError(friendlyUpdateError(reason, '安装包下载或启动失败，请稍后重试。'))
       setInstalling(false)
       setPhase('')
       setConfirming(false)

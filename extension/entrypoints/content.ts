@@ -250,18 +250,22 @@ export default defineContentScript({
       videos.slice(0, 1).forEach(({ video, rect }) => {
         const sourceUrls = [video.currentSrc, video.src, ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')].map(source => source.src)].filter(Boolean)
         const exact = entries.filter(item => sourceUrls.includes(item.url))
-        const choices = exact.length ? exact : entries
+        const hasExactPlayerMatch = exact.length > 0
+        const choices = hasExactPlayerMatch ? exact : entries
         if (!choices.length) return
         visible += 1
         const button = document.createElement('button')
-        button.type = 'button'; button.className = 'video-download'; button.title = choices.length > 1 ? '选择当前页面检测到的视频资源' : '使用 HLS Downloader 下载此视频'
+        button.type = 'button'; button.className = 'video-download'; button.title = hasExactPlayerMatch && choices.length === 1 ? '使用 HLS Downloader 下载此视频' : '选择当前页面检测到的视频资源'
         button.style.left = `${Math.max(8, rect.right - 132)}px`; button.style.top = `${Math.max(8, rect.top + 8)}px`
         const icon = document.createElement('img'); icon.src = browser.runtime.getURL('/icon-32.png'); icon.alt = ''
-        const label = document.createElement('span'); label.textContent = '下载视频'
+        const label = document.createElement('span'); label.textContent = hasExactPlayerMatch && choices.length === 1 ? '下载视频' : '选择资源'
         button.append(icon, label)
         if (choices.length > 1) { const count = document.createElement('b'); count.textContent = String(choices.length); button.append(count) }
         button.addEventListener('click', () => {
-          if (choices.length === 1) { sendResource(choices[0], button); return }
+          // MSE/blob players do not expose the actual manifest as currentSrc.
+          // Never turn an unrelated single network entry into a one-click
+          // download: opening the chooser lets the user see the evidence first.
+          if (hasExactPlayerMatch && choices.length === 1) { sendResource(choices[0], button); return }
           if (wrap) {
             wrap.style.left = `${Math.max(10, Math.min(rect.right - 420, innerWidth - 430))}px`
             wrap.style.top = `${Math.max(10, Math.min(rect.top + 50, innerHeight - 420))}px`
