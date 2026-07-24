@@ -1,8 +1,9 @@
 param(
     [switch]$SkipFrontend,
     [switch]$SkipBackend,
+    [switch]$SkipDesktop,
     [switch]$SkipSmoke,
-    [string]$Version = "1.6.2"
+    [string]$Version = "1.6.3"
 )
 
 $ErrorActionPreference = "Stop"
@@ -173,8 +174,25 @@ function Copy-MediaTool($Name) {
 }
 
 Invoke-Step "Stop running packaged app" {
-    Get-Process HLSDownloader,HLSDownloaderCore -ErrorAction SilentlyContinue | Stop-Process -Force
-    Start-Sleep -Milliseconds 500
+    $running = @(Get-Process HLSDownloader,HLSDownloaderCore -ErrorAction SilentlyContinue)
+    if ($running.Count) {
+        $running | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    # Tauri's single-instance guard can forward a smoke launch to an old install
+    # while its companion backend is still releasing 8765. Wait for both before
+    # starting the staged executable, otherwise the smoke test could validate the
+    # old install instead of this build.
+    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        $left = @(Get-Process HLSDownloader,HLSDownloaderCore -ErrorAction SilentlyContinue)
+        $listener = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
+        if (-not $left.Count -and -not $listener) { break }
+        Start-Sleep -Milliseconds 250
+    }
+    $left = @(Get-Process HLSDownloader,HLSDownloaderCore -ErrorAction SilentlyContinue)
+    $listener = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
+    if ($left.Count -or $listener) {
+        throw "Existing HLS Downloader process or port 8765 did not exit; refusing to smoke-test against an old install."
+    }
 }
 
 Invoke-Step "Prepare directories" {
@@ -219,16 +237,18 @@ if (-not $SkipFrontend) {
     }
 }
 
-Invoke-Step "Build Tauri desktop shell" {
-    Push-Location $FrontendDir
-    try {
-        if (-not (Get-Command cargo.exe -ErrorAction SilentlyContinue)) {
-            throw "Rust/Cargo is required to build the Tauri desktop shell. Install rustup before packaging."
+if (-not $SkipDesktop) {
+    Invoke-Step "Build Tauri desktop shell" {
+        Push-Location $FrontendDir
+        try {
+            if (-not (Get-Command cargo.exe -ErrorAction SilentlyContinue)) {
+                throw "Rust/Cargo is required to build the Tauri desktop shell. Install rustup before packaging."
+            }
+            pnpm run tauri:build
+            if ($LASTEXITCODE -ne 0) { throw "Tauri desktop build failed with exit code $LASTEXITCODE" }
+        } finally {
+            Pop-Location
         }
-        pnpm run tauri:build
-        if ($LASTEXITCODE -ne 0) { throw "Tauri desktop build failed with exit code $LASTEXITCODE" }
-    } finally {
-        Pop-Location
     }
 }
 
@@ -256,6 +276,7 @@ Invoke-Step "Build backend executable" {
             --hidden-import uvicorn.protocols.http.auto `
             --hidden-import uvicorn.protocols.websockets.auto `
             run_core.py
+        if ($LASTEXITCODE -ne 0) { throw "Core executable build failed with exit code $LASTEXITCODE" }
         python -m PyInstaller `
             --noconfirm `
             --clean `
@@ -263,6 +284,7 @@ Invoke-Step "Build backend executable" {
             --console `
             --name HLSDownloaderNativeHost `
             native_host.py
+        if ($LASTEXITCODE -ne 0) { throw "Native host executable build failed with exit code $LASTEXITCODE" }
     } finally {
         $env:PYTHONPATH = $previousPythonPath
         Pop-Location
@@ -326,6 +348,12 @@ if (-not $SkipSmoke) {
                 }
                 if (-not $ok) {
                     throw "Packaged app did not respond on /api/health"
+                }
+                $stageCoreExe = Join-Path $StageDir "HLSDownloaderCore.exe"
+                $stageCore = @(Get-Process HLSDownloaderCore -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Path -eq $stageCoreExe })
+                if (-not $stageCore.Count) {
+                    throw "Smoke test reached a different HLS Downloader core instead of the staged build."
                 }
                 $packagedSettings = Invoke-RestMethod `
                     -Uri "http://127.0.0.1:8765/api/settings" `

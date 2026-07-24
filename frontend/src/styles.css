@@ -1,7 +1,7 @@
 :root { font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif; font-size: 14px; color-scheme: dark; --bg:#17191d; --surface:#202328; --surface-2:#272b31; --surface-3:#30353c; --border:#383d45; --text:#e3e7ec; --muted:#97a0ab; --faint:#68727e; --primary:#2583c5; --primary-hover:#3092d6; --green:#39a875; --amber:#d69b3a; --red:#dc5c5c; --purple:#9c72d2; --shadow:rgba(0,0,0,.35); }
 :root[data-theme="light"] { color-scheme: light; --bg:#edf0f3; --surface:#fff; --surface-2:#f5f7f9; --surface-3:#e8edf1; --border:#cfd6dd; --text:#202831; --muted:#5d6874; --faint:#7d8791; --primary:#126fae; --primary-hover:#0f6098; --green:#267957; --amber:#93671c; --red:#bd4640; --purple:#74509e; --shadow:rgba(31,42,54,.18); }
 * { box-sizing:border-box; }
-html, body, #root { margin:0; width:100%; height:100%; min-width:900px; min-height:600px; overflow:hidden; background:var(--bg); color:var(--text); }
+html, body, #root { margin:0; width:100%; height:100%; min-width:760px; min-height:540px; overflow:hidden; background:var(--bg); color:var(--text); }
 button, input, textarea { font:inherit; letter-spacing:0; }
 button { color:inherit; }
 button:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px solid var(--primary); outline-offset:1px; }
@@ -88,6 +88,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px 
 .torrent-file-list label { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: center; min-height: 34px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .torrent-file-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .torrent-file-list b { color: var(--text-muted); font-weight: 500; }
+.torrent-selection-notice { margin: 8px 0 0; color: var(--green); font-size: 11px; line-height: 1.45; }
 
 /* Dedicated IDM-style handoff windows use the same UI bundle without the manager shell. */
 html[data-surface="handoff"],
@@ -424,6 +425,18 @@ code,
 .toolbar-search input::placeholder { color: var(--muted); }
 .toolbar-search button { display: grid; place-items: center; width: 19px; height: 19px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
 .toolbar-search button:hover { background: var(--surface-3); color: var(--text); }
+.toolbar-overflow { position: relative; display: none; flex: 0 0 auto; }
+.toolbar-overflow > summary { display: grid; place-items: center; width: 32px; height: 32px; list-style: none; border-radius: 6px; color: var(--muted); cursor: pointer; }
+.toolbar-overflow > summary::-webkit-details-marker { display: none; }
+.toolbar-overflow > summary:hover { background: var(--surface-3); color: var(--text); }
+.toolbar-overflow > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.toolbar-overflow[open] > summary { background: color-mix(in srgb, var(--primary) 14%, var(--surface-2)); color: var(--primary); }
+.toolbar-overflow-menu { position: absolute; z-index: 40; top: calc(100% + 7px); right: 0; display: grid; width: 194px; padding: 5px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); box-shadow: 0 4px 8px var(--shadow); }
+.toolbar-overflow-menu button { display: flex; align-items: center; gap: 9px; width: 100%; height: 33px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: var(--text); text-align: left; font-size: 12px; cursor: pointer; }
+.toolbar-overflow-menu button:hover:not(:disabled) { background: var(--surface-3); }
+.toolbar-overflow-menu button:disabled { color: var(--faint); cursor: default; }
+.toolbar-overflow-menu button.danger { color: var(--red); }
+.toolbar-overflow-separator { height: 1px; margin: 4px 5px; background: var(--border); }
 .workspace { grid-template-columns: 172px minmax(0, 1fr); }
 .sidebar { padding: 8px 7px; background: var(--surface); }
 .sidebar-brand { display: none; }
@@ -544,6 +557,63 @@ code,
 @media (max-width: 1180px) {
   .tool-label { display: none; }
   .toolbar-search { width: 190px; }
+}
+
+/* Compact desktop: preserve the download workflow, progressively hide only
+   secondary toolbar and table detail instead of clipping the whole window. */
+@media (max-width: 980px) {
+  .brand-block { min-width: 42px; }
+  .brand-block > div { display: none; }
+  .toolbar-search { flex: 1 1 150px; width: auto; min-width: 130px; max-width: 220px; }
+  .desktop-toolbar > .tool-group:nth-child(2) > .tool-button:nth-child(3) { display: none; }
+  .desktop-toolbar > .tool-group:nth-child(4) > .tool-button:nth-child(3),
+  .desktop-toolbar > .tool-group:nth-child(4) > .tool-button:nth-child(4),
+  .desktop-toolbar > .tool-group:nth-child(4) > .tool-button:nth-child(5),
+  .desktop-toolbar > .tool-group:nth-child(4) > .tool-button:nth-child(6),
+  .desktop-toolbar > .tool-group:nth-child(4) > .tool-button:nth-child(8),
+  .desktop-toolbar > .tool-group:nth-child(4) > .tool-button:nth-child(9),
+  .desktop-toolbar > .tool-group:nth-child(4) > .tool-button:nth-child(10) { display: none; }
+  .toolbar-overflow { display: block; }
+}
+@media (max-width: 900px) {
+  .workspace { grid-template-columns: 52px minmax(0, 1fr); }
+  .sidebar { padding: 7px 6px; }
+  .sidebar-item { grid-template-columns: 1fr; justify-items: center; width: 40px; padding: 0; }
+  .sidebar-item > span, .sidebar-item > b, .sidebar-group-label,
+  .sidebar-caption, .script-state > span, .sidebar-script small { display: none; }
+  .sidebar-script { display: flex; justify-content: center; margin-inline: 2px; padding: 10px 0 4px; }
+  .script-state { justify-content: center; }
+  .desktop-toolbar { gap: 4px; padding-inline: 7px; }
+  .desktop-toolbar > .tool-group:nth-child(7) > .tool-button:nth-child(1),
+  .desktop-toolbar > .tool-group:nth-child(7) > .tool-button:nth-child(2),
+  .desktop-toolbar > .tool-group:nth-child(7) > .tool-button:nth-child(3),
+  .desktop-toolbar > .tool-group:nth-child(7) > .tool-button:nth-child(4) { display: none; }
+  .toolbar-search { min-width: 110px; }
+  .content-head { padding-inline: 10px; }
+  .content-head .compact-button { width: 31px; padding: 0; font-size: 0; }
+  .content-head .compact-button svg { width: 15px; height: 15px; }
+  .table-scroll { padding: 0 4px 4px; }
+  .task-table { min-width: 0; table-layout: fixed; }
+  .task-table th:nth-child(1), .task-table td:nth-child(1),
+  .task-table th:nth-child(5), .task-table td:nth-child(5),
+  .task-table th:nth-child(6), .task-table td:nth-child(6),
+  .task-table th:nth-child(7), .task-table td:nth-child(7) { display: none; }
+  .task-table th:nth-child(2) { min-width: 210px; }
+  .task-table th:nth-child(3) { width: 94px; }
+  .task-table th:nth-child(4) { width: 146px; }
+  .task-table .menu-col { width: 36px!important; }
+  .statusbar { gap: 9px; padding-inline: 7px; }
+  .statusbar > span:nth-child(1), .statusbar > span:nth-child(2), .statusbar > span:nth-child(5) { display: none; }
+  .statusbar > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .local-share-status { display: flex; align-items: center; gap: 6px; }
+  .local-share-status em { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+@media (max-height: 620px) {
+  .desktop-app { grid-template-rows: 44px minmax(0, 1fr) 22px; }
+  .tool-button { height: 30px; min-width: 30px; }
+  .content-head { min-height: 36px; height: 36px; }
+  .sidebar-item { height: 31px; }
+  .sidebar-group-label { margin-top: 8px; }
 }
 
 

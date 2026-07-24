@@ -9,7 +9,8 @@ from backend.app.config import settings
 from backend.app.downloader.http_file import HTTPDownloader
 from backend.app.downloader.engine import publish_path, task_work_dir
 from backend.app.downloader.torrent import TorrentDownloader
-from backend.app.downloader.task_manager import resolve_task_type
+from backend.app.downloader import task_manager as task_manager_module
+from backend.app.downloader.task_manager import TaskManager, resolve_task_type
 from backend.app.models import Task, TaskType
 
 
@@ -21,6 +22,27 @@ def test_auto_task_type_recognizes_supported_sources():
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/file.torrent") is TaskType.TORRENT
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/stream?id=1", "application/vnd.apple.mpegurl") is TaskType.HLS
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/manifest?id=1", "application/dash+xml; charset=utf-8") is TaskType.DASH
+
+
+def test_create_task_uses_captured_manifest_mime_when_url_has_no_extension(monkeypatch):
+    async def no_db(*args, **kwargs):
+        return None
+
+    async def run():
+        manager = TaskManager()
+        monkeypatch.setattr(task_manager_module, "run_db", no_db)
+        hls = await manager.create_task(
+            "https://cdn.test/play?id=one",
+            mime_type="application/vnd.apple.mpegurl; charset=utf-8",
+        )
+        dash = await manager.create_task(
+            "https://cdn.test/manifest?id=two",
+            mime_type="application/dash+xml",
+        )
+        assert hls.task_type is TaskType.HLS
+        assert dash.task_type is TaskType.DASH
+
+    asyncio.run(run())
 
 
 def test_http_probe_verifies_range_when_head_omits_accept_ranges():

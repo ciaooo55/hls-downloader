@@ -5,7 +5,7 @@ import pytest
 from backend.app.downloader import task_manager as manager_module
 from backend.app.downloader.hls import HLSDownloader
 from backend.app.downloader.task_manager import TaskConflictError, TaskManager
-from backend.app.models import Task, TaskStatus
+from backend.app.models import Task, TaskStatus, TaskType
 
 
 def _task(task_id: str = "task1", status: TaskStatus = TaskStatus.QUEUED) -> Task:
@@ -63,6 +63,44 @@ def test_pause_transitions_to_pausing_and_rejects_wrong_stage(monkeypatch):
         manager.tasks[queued.id] = queued
         with pytest.raises(TaskConflictError):
             await manager.pause_task(queued.id)
+
+    asyncio.run(run())
+
+
+def test_torrent_file_selection_can_change_while_downloading(monkeypatch):
+    class LiveTorrentDownloader:
+        def __init__(self):
+            self.selected = None
+
+        def select_files(self, indexes):
+            self.selected = indexes
+
+    async def run():
+        manager = TaskManager()
+        task = Task(
+            id="torrent-live-selection",
+            url="magnet:?xt=urn:btih:test",
+            task_type=TaskType.TORRENT,
+            status=TaskStatus.DOWNLOADING,
+            engine_state={
+                "files": [
+                    {"index": 0, "path": "episode-01.mkv", "size": 100},
+                    {"index": 1, "path": "extras.txt", "size": 10},
+                ],
+                "selected_files": [0, 1],
+            },
+        )
+        downloader = LiveTorrentDownloader()
+        manager.tasks[task.id] = task
+        manager._downloaders[task.id] = downloader
+        monkeypatch.setattr(manager_module, "TorrentDownloader", LiveTorrentDownloader)
+        monkeypatch.setattr(manager, "_save_db", _async_noop)
+
+        await manager.select_torrent_files(task.id, [0])
+
+        assert task.status is TaskStatus.DOWNLOADING
+        assert task.engine_state["selected_files"] == [0]
+        assert downloader.selected == [0]
 
     asyncio.run(run())
 

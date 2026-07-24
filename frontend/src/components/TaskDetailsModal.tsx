@@ -24,6 +24,7 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
   const [torrentFiles, setTorrentFiles] = useState<Array<{ index: number; path: string; size: number }>>([])
   const [selectedFiles, setSelectedFiles] = useState<number[]>([])
   const [selectionBusy, setSelectionBusy] = useState(false)
+  const [selectionNotice, setSelectionNotice] = useState('')
   useEffect(() => {
     const close = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
     window.addEventListener('keydown', close)
@@ -56,8 +57,8 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
       </section>}
       {task.task_type === 'torrent' && torrentFiles.length > 0 && <section className="torrent-files">
       <div className="torrent-files-head"><h3>BT 文件选择</h3><span>{selectedFiles.length}/{torrentFiles.length}</span></div>
-      <div className="torrent-file-list">{torrentFiles.map(file => <label key={file.index}><input type="checkbox" checked={selectedFiles.includes(file.index)} disabled={task.status === 'done'} onChange={event => setSelectedFiles(current => event.target.checked ? [...current, file.index] : current.filter(index => index !== file.index))} /><span title={file.path}>{file.path}</span><b>{fmtBytes(file.size)}</b></label>)}</div>
-      {task.status !== 'done' && <><p className="field-note">下载中也可以更新选择；未选文件会停止请求，已下载的数据会保留在此任务中。</p><button className="secondary-button" disabled={selectionBusy || !selectedFiles.length} onClick={async () => { setSelectionBusy(true); try { await selectTorrentFiles(task.id, selectedFiles) } finally { setSelectionBusy(false) } }}>{selectionBusy ? '正在保存…' : '保存文件选择'}</button></>}
+      <div className="torrent-file-list">{torrentFiles.map(file => <label key={file.index}><input type="checkbox" checked={selectedFiles.includes(file.index)} disabled={task.status === 'done'} onChange={event => { setSelectionNotice(''); setSelectedFiles(current => event.target.checked ? [...current, file.index] : current.filter(index => index !== file.index)) }} /><span title={file.path}>{file.path}</span><b>{fmtBytes(file.size)}</b></label>)}</div>
+      {task.status !== 'done' && <><p className="field-note">下载中也可以更新选择；未选文件会停止请求，已下载的数据会保留在此任务中。</p><button className="secondary-button" disabled={selectionBusy || !selectedFiles.length} onClick={async () => { setSelectionBusy(true); setSelectionNotice(''); try { await selectTorrentFiles(task.id, selectedFiles); setSelectionNotice(task.status === 'downloading' ? '选择已生效：新增文件已排入下载，取消项不再请求；已有数据不会删除。' : '文件选择已保存，将在开始或恢复时生效。') } catch { setSelectionNotice('保存文件选择失败，请检查连接后重试。') } finally { setSelectionBusy(false) } }}>{selectionBusy ? '正在保存…' : '保存文件选择'}</button>{selectionNotice && <p className="torrent-selection-notice" role="status">{selectionNotice}</p>}</>}
       </section>}
       {task.output_path && <div className="output-path" title={task.output_path}>{task.output_path}</div>}
     </div>

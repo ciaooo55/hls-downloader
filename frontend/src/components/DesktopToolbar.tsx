@@ -1,5 +1,5 @@
 import {
-  ClipboardPaste, FileText, FolderOpen, Layers3, Moon, Pause, Play,
+  ClipboardPaste, FileText, FolderOpen, Layers3, Moon, MoreHorizontal, Pause, Play,
   CircleArrowUp, Plus, RefreshCw, RotateCcw, Search, Settings, Sun, Trash2, Tv, Users, X, XCircle,
 } from 'lucide-react'
 import type { CommandState } from '../taskCommands'
@@ -59,6 +59,9 @@ function ToolButton({
 
 export default function DesktopToolbar(props: Props) {
   const c = props.commands
+  const closeOverflow = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.currentTarget.closest('details')?.removeAttribute('open')
+  }
   return (
     <header className="desktop-toolbar">
       <div className="brand-block">
@@ -161,6 +164,23 @@ export default function DesktopToolbar(props: Props) {
           <Settings size={18} />
         </ToolButton>
       </div>
+      <details className="toolbar-overflow">
+        <summary title="更多操作" aria-label="更多操作"><MoreHorizontal size={18} /></summary>
+        <div className="toolbar-overflow-menu" role="menu" aria-label="更多操作">
+          <button type="button" role="menuitem" onClick={event => { closeOverflow(event); props.onBatch() }}><Layers3 size={16} />批量添加</button>
+          <button type="button" role="menuitem" onClick={event => { closeOverflow(event); props.onStartAll() }}><Play size={16} />全部开始</button>
+          <button type="button" role="menuitem" onClick={event => { closeOverflow(event); props.onPauseAll() }}><Pause size={16} />全部暂停</button>
+          <button type="button" disabled={!c.resume} role="menuitem" onClick={event => { closeOverflow(event); props.onAction('resume') }}><RotateCcw size={16} />恢复任务</button>
+          <button type="button" disabled={!c.cancel} role="menuitem" onClick={event => { closeOverflow(event); props.onAction('cancel') }}><XCircle size={16} />取消任务</button>
+          <button type="button" disabled={!c.open} role="menuitem" onClick={event => { closeOverflow(event); props.onOpen() }}><FolderOpen size={16} />打开文件位置</button>
+          <button type="button" disabled={!c.log} role="menuitem" onClick={event => { closeOverflow(event); props.onLog() }}><FileText size={16} />查看日志</button>
+          <button type="button" disabled={!c.delete} role="menuitem" className="danger" onClick={event => { closeOverflow(event); props.onAction('delete') }}><Trash2 size={16} />删除任务</button>
+          <span className="toolbar-overflow-separator" />
+          <button type="button" role="menuitem" onClick={event => { closeOverflow(event); props.onBrowserExtension() }}><Users size={16} />浏览器插件</button>
+          <button type="button" disabled={props.pushLocalMediaBusy} role="menuitem" onClick={event => { closeOverflow(event); props.onPushLocalMedia() }}><Tv size={16} />推送本机文件</button>
+          <button type="button" role="menuitem" onClick={event => { closeOverflow(event); props.onUpdate() }}><CircleArrowUp size={16} />检查更新</button>
+        </div>
+      </details>
     </header>
   )
 }
