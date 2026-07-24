@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { ChevronDown, ChevronRight, Copy, Download, FolderOpen, RefreshCw, Trash2, X } from 'lucide-react'
 import { fetchSettings, fetchUpdateInfo, installUpdate, openExplorer, saveSettings, scanTvboxDevices, testConnection } from '../api'
 import { beginUninstall, getDesktopInfo } from '../desktop'
@@ -11,6 +11,7 @@ import ConfirmDialog from './ConfirmDialog'
 import { Button } from './ui'
 
 type SettingsSection = 'general' | 'network' | 'maintenance'
+const SETTINGS_SECTIONS: SettingsSection[] = ['general', 'network', 'maintenance']
 
 export default function SettingsPanel({ themePreference, onThemePreferenceChange, onClose }: {
   themePreference: ThemePreference
@@ -38,12 +39,28 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   const [scanningTvbox, setScanningTvbox] = useState(false)
   const [tvboxScanMessage, setTvboxScanMessage] = useState('')
   const [activeSection, setActiveSection] = useState<SettingsSection>('general')
+  const dialogRef = useRef<HTMLElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const previousFocusRef = useRef<HTMLElement | null>(null)
   const dirty = JSON.stringify(settings) !== JSON.stringify(original)
+  const selectedTvboxDevice = tvboxDevices.some(device => device.endpoint === settings.tvbox_endpoint)
+  const tvboxSelectValue = settings.tvbox_endpoint
+    ? (selectedTvboxDevice ? settings.tvbox_endpoint : '__manual__')
+    : ''
 
   useEffect(() => {
     fetchSettings().then(data => { setSettings(data); setOriginal(data) }).catch(reason => setError(reason.message || '加载设置失败'))
     getDesktopInfo().then(info => { setUninstallAvailable(info.installed === true); setDesktopInfo(info) })
     fetchUpdateInfo().then(setUpdateInfo).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const timer = window.setTimeout(() => closeButtonRef.current?.focus(), 0)
+    return () => {
+      window.clearTimeout(timer)
+      previousFocusRef.current?.focus()
+    }
   }, [])
 
   const requestClose = () => {
@@ -53,17 +70,46 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      if (confirmAction) setConfirmAction(null)
-      else if (showTempPicker) setShowTempPicker(false)
-      else if (showPicker) setShowPicker(false)
-      else requestClose()
+      if (event.key === 'Tab' && !confirmAction && !showTempPicker && !showPicker) {
+        const focusable = dialogRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')
+        if (!focusable?.length) return
+        const items = Array.from(focusable)
+        const first = items[0]
+        const last = items[items.length - 1]
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault()
+          last.focus()
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault()
+          first.focus()
+        }
+        return
+      }
+      if (event.key === 'Escape') {
+        if (confirmAction) setConfirmAction(null)
+        else if (showTempPicker) setShowTempPicker(false)
+        else if (showPicker) setShowPicker(false)
+        else requestClose()
+      }
     }
     window.addEventListener('keydown', close)
     return () => window.removeEventListener('keydown', close)
   }, [dirty, showPicker, showTempPicker, confirmAction])
 
   const update = (key: string, value: unknown) => setSettings((current: any) => ({ ...current, [key]: value }))
+  const moveSettingsTab = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    event.preventDefault()
+    const currentIndex = SETTINGS_SECTIONS.indexOf(activeSection)
+    const nextIndex = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? SETTINGS_SECTIONS.length - 1
+        : (currentIndex + (event.key === 'ArrowRight' ? 1 : SETTINGS_SECTIONS.length - 1)) % SETTINGS_SECTIONS.length
+    const next = SETTINGS_SECTIONS[nextIndex]
+    setActiveSection(next)
+    window.requestAnimationFrame(() => document.getElementById(`settings-tab-${next}`)?.focus())
+  }
   const doSave = async () => {
     setError('')
     if (!String(settings.download_dir || '').trim()) { setError('下载保存目录不能为空'); return }
@@ -157,18 +203,18 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   }
 
   return <div className="modal-overlay settings-overlay" onMouseDown={requestClose}>
-    <section className="modal settings-modal" onMouseDown={event => event.stopPropagation()}>
+    <section ref={dialogRef} className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title" onMouseDown={event => event.stopPropagation()}>
       <header className="settings-header">
-        <div className="settings-title"><h2>应用设置{dirty ? ' *' : ''}</h2><p>界面、下载行为与运行环境</p></div>
-        <nav className="settings-tabs" aria-label="设置分区">
-          <button type="button" className={activeSection === 'general' ? 'active' : ''} onClick={() => setActiveSection('general')}>通用</button>
-          <button type="button" className={activeSection === 'network' ? 'active' : ''} onClick={() => setActiveSection('network')}>网络与下载</button>
-          <button type="button" className={activeSection === 'maintenance' ? 'active' : ''} onClick={() => setActiveSection('maintenance')}>维护</button>
+        <div className="settings-title"><h2 id="settings-dialog-title">应用设置{dirty ? ' *' : ''}</h2><p>界面、下载行为与运行环境</p></div>
+        <nav className="settings-tabs" role="tablist" aria-label="设置分区" onKeyDown={moveSettingsTab}>
+          <button id="settings-tab-general" type="button" role="tab" aria-selected={activeSection === 'general'} aria-controls="settings-general" className={activeSection === 'general' ? 'active' : ''} onClick={() => setActiveSection('general')}>通用</button>
+          <button id="settings-tab-network" type="button" role="tab" aria-selected={activeSection === 'network'} aria-controls="settings-network" className={activeSection === 'network' ? 'active' : ''} onClick={() => setActiveSection('network')}>网络与下载</button>
+          <button id="settings-tab-maintenance" type="button" role="tab" aria-selected={activeSection === 'maintenance'} aria-controls="settings-maintenance" className={activeSection === 'maintenance' ? 'active' : ''} onClick={() => setActiveSection('maintenance')}>维护</button>
         </nav>
-        <Button variant="ghost" size="icon" className="icon-button settings-close" title="关闭" aria-label="关闭" onClick={requestClose}><X size={18} /></Button>
+        <Button ref={closeButtonRef} variant="ghost" size="icon" className="icon-button settings-close" title="关闭" aria-label="关闭" onClick={requestClose}><X size={18} /></Button>
       </header>
       <div className="settings-body">
-        {activeSection === 'general' && <div className="settings-page">
+        {activeSection === 'general' && <div id="settings-general" role="tabpanel" aria-labelledby="settings-tab-general" className="settings-page">
           <section className="settings-group">
             <div className="settings-row settings-row-control">
               <div><strong>应用主题</strong><span>跟随系统，或固定使用浅色/深色外观</span></div>
@@ -218,7 +264,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
           </section>
         </div>}
 
-        {activeSection === 'network' && <div className="settings-page">
+        {activeSection === 'network' && <div id="settings-network" role="tabpanel" aria-labelledby="settings-tab-network" className="settings-page">
           <h3 className="settings-group-label settings-group-label-first">BT 下载</h3>
           <section className="settings-group settings-grid-group">
             <div className="settings-field"><label htmlFor="setting-bt-upload">上传上限（KiB/s）</label><input id="setting-bt-upload" type="number" min={0} max={1048576} value={settings.bt_upload_limit_kib ?? 1024} onChange={event => update('bt_upload_limit_kib', Number(event.target.value))} /><p>0 表示不限速；完成后会立即停止做种。</p></div>
@@ -231,16 +277,22 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
             <div className="settings-field settings-field-wide">
               <label htmlFor="setting-tvbox-endpoint">已选择的电视设备</label>
               <div className="input-action">
-                <select id="setting-tvbox-endpoint" value={settings.tvbox_endpoint || ''} onChange={event => update('tvbox_endpoint', event.target.value)} aria-label="已选择的电视设备">
+                <select id="setting-tvbox-endpoint" value={tvboxSelectValue} onChange={event => {
+                  const value = event.target.value
+                  if (value === '') update('tvbox_endpoint', '')
+                  else if (value === '__manual__') {
+                    if (selectedTvboxDevice) update('tvbox_endpoint', '')
+                  } else update('tvbox_endpoint', value)
+                }} aria-label="已选择的电视设备">
                   <option value="">不使用电视推送</option>
                   {tvboxDevices.map(device => <option key={device.endpoint} value={device.endpoint}>{device.label} · {device.host}:{device.port}</option>)}
-                  {settings.tvbox_endpoint && !tvboxDevices.some(device => device.endpoint === settings.tvbox_endpoint) ? <option value={settings.tvbox_endpoint}>{settings.tvbox_endpoint}（已记住）</option> : null}
+                  <option value="__manual__">手动填写地址</option>
                 </select>
                 <Button variant="secondary" className="secondary-button" disabled={scanningTvbox} title="扫描同一局域网中的 TVBox" onClick={() => void scanTvbox()}><RefreshCw size={15} />{scanningTvbox ? '扫描中…' : '扫描电视'}</Button>
               </div>
-              <p>桌面端扫描局域网并记住选择；插件只把视频地址交给桌面端，不直接访问电视。扫描不到时可手动填写地址：</p>
+              <p>桌面端扫描并记住设备；插件只交给桌面端当前视频地址，不直接访问电视。</p>
               {tvboxScanMessage && <p className="settings-inline-status" role="status" aria-live="polite">{tvboxScanMessage}</p>}
-              <input aria-label="手动电视推送地址" value={settings.tvbox_endpoint || ''} onChange={event => update('tvbox_endpoint', event.target.value)} placeholder="http://192.168.1.100:9979" />
+              {tvboxSelectValue === '__manual__' && <input aria-label="手动电视推送地址" value={settings.tvbox_endpoint || ''} onChange={event => update('tvbox_endpoint', event.target.value)} placeholder="http://192.168.1.100:9979 或 http://192.168.1.100:9979/action" />}
             </div>
           </section>
 
@@ -259,7 +311,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
           </section>
         </div>}
 
-        {activeSection === 'maintenance' && <div className="settings-page settings-maintenance-page">
+        {activeSection === 'maintenance' && <div id="settings-maintenance" role="tabpanel" aria-labelledby="settings-tab-maintenance" className="settings-page settings-maintenance-page">
           <section className="settings-group">
             <div className="settings-row settings-row-control"><div><strong>运行环境</strong><span>{environment ? `FFmpeg ${environment.ffmpeg ? '正常' : '未找到'} · 并发 ${environment.concurrency} · 同时任务 ${environment.max_tasks}` : '检查 FFmpeg、目录权限和当前并发设置'}</span></div><button className="secondary-button" disabled={checkingEnvironment || dirty} title={dirty ? '请先保存设置' : '检查运行环境'} onClick={checkEnvironment}><RefreshCw size={15} />{dirty ? '保存后检查' : checkingEnvironment ? '检查中…' : '检查环境'}</button></div>
             {desktopInfo?.shell && <div className="settings-row"><div><strong>桌面界面</strong><span>{desktopInfo.shell === 'tauri' ? `Tauri + React · 桌面壳 v${desktopInfo.desktop_version || '未知'}` : desktopInfo.shell}</span></div></div>}

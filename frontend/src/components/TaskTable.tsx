@@ -277,7 +277,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
 
 function ProgressLine({ value, label }: { value: number; label?: string }) {
   const safe = Math.max(0, Math.min(100, Number(value) || 0))
-  return <div className="table-progress">{label && <b>{label}</b>}<div><i style={{ width: `${safe}%` }} /></div><span>{safe.toFixed(1)}%</span></div>
+  return <div className="table-progress">{label && <b>{label}</b>}<div><i style={{ transform: `scaleX(${safe / 100})` }} /></div><span>{safe.toFixed(1)}%</span></div>
 }
 
 const fileKindIcons: Record<FileKind, React.ReactNode> = {

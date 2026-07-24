@@ -1,5 +1,5 @@
 import { cva, type VariantProps } from 'class-variance-authority'
-import type { ButtonHTMLAttributes } from 'react'
+import { forwardRef, type ButtonHTMLAttributes } from 'react'
 import { cn } from '@/lib/cn'
 
 const buttonVariants = cva(
@@ -12,7 +12,7 @@ const buttonVariants = cva(
         ghost: 'h-[34px] px-2 border border-transparent bg-transparent text-[var(--muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]',
         danger: 'h-[34px] px-3 border border-[color-mix(in_srgb,var(--red)_55%,var(--border))] bg-[color-mix(in_srgb,var(--red)_12%,var(--surface))] text-[var(--red)] hover:bg-[color-mix(in_srgb,var(--red)_18%,var(--surface))]',
         tool: 'h-[34px] min-w-[34px] px-2 border border-transparent bg-transparent text-[var(--muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]',
-        primaryTool: 'h-[34px] min-w-[34px] px-3 border border-transparent text-white bg-[linear-gradient(135deg,var(--primary),#0f766e)] shadow-[0_3px_8px_color-mix(in_srgb,var(--primary)_28%,transparent)] hover:brightness-[1.04]',
+        primaryTool: 'h-[34px] min-w-[34px] px-3 border border-transparent text-white bg-[var(--primary)] shadow-[0_3px_8px_color-mix(in_srgb,var(--primary)_28%,transparent)] hover:bg-[var(--primary-hover)]',
       },
       size: {
         default: '',
@@ -31,8 +31,11 @@ export interface ButtonProps
   extends ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {}
 
-export function Button({ className, variant, size, type = 'button', ...props }: ButtonProps) {
-  return <button type={type} className={cn(buttonVariants({ variant, size }), className)} {...props} />
-}
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
+  { className, variant, size, type = 'button', ...props },
+  ref,
+) {
+  return <button ref={ref} type={type} className={cn(buttonVariants({ variant, size }), className)} {...props} />
+})
 
 export { buttonVariants }
