@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
-import { classifyDownload, classifyResource, matchesDownloadClick, mergeResources, pageResourceKey, replayableRequestHeaders, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
+import { classifyDownload, classifyResource, compactResources, matchesDownloadClick, mergeResources, pageResourceKey, replayableRequestHeaders, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus, shouldResumeBrowserDownload } from '../lib/takeover'
 import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
@@ -94,20 +94,16 @@ async function inspectHls(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId 
     const response = await fetch(resource.url, { credentials: 'include', signal: AbortSignal.timeout(5_000) })
     if (!response.ok) return
     const info = parseHlsManifest(await response.text(), response.url || resource.url)
-    if (info.duration) {
-      const enriched = { ...resource, duration: info.duration, quality: resourceQuality(resource.url, resource.height) }
-      await saveResource(enriched, tabId)
-      if (tabId >= 0) await browser.tabs.sendMessage(tabId, { type: 'captured-resource', resource: enriched }).catch(() => undefined)
-    }
-    for (const variant of info.variants) {
+    if (info.duration || info.variants.length) {
+      const variants = [...info.variants]
+        .sort((left, right) => (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0))
+        .slice(0, 12)
+      const best = variants[0]
       const enriched = {
         ...resource,
-        ...variant,
-        url: variant.url,
-        size: 0,
-        statusCode: undefined,
-        filename: resource.filename || decodeURIComponent(new URL(variant.url).pathname.split('/').pop() || ''),
-        title: resource.title || '',
+        duration: info.duration,
+        variants,
+        quality: best?.quality ? `最高 ${best.quality}` : resourceQuality(resource.url, resource.height),
       }
       await saveResource(enriched, tabId)
       if (tabId >= 0) await browser.tabs.sendMessage(tabId, { type: 'captured-resource', resource: enriched }).catch(() => undefined)
@@ -327,6 +323,9 @@ async function startBrowserFallback(url: string, filename = ''): Promise<number>
 }
 
 function observedResponse(details: any, chain?: RequestChain) {
+  if (details.statusCode < 200 || details.statusCode >= 400 || !['GET', 'POST'].includes(String(details.method || 'GET').toUpperCase())) {
+    return { disposition: '', resource: null }
+  }
   const headers = details.responseHeaders || []
   const header = (name: string) => headers.find((item: any) => item.name?.toLowerCase() === name)?.value || ''
   const mimeType = header('content-type')
@@ -594,9 +593,16 @@ export default defineBackground(() => {
       return true
     }
     if (message?.type === 'list') {
-      const key = storageKey(Number(message.tabId ?? sender.tab?.id ?? -1), message.pageUrl)
+      const tabId = Number(message.tabId ?? sender.tab?.id ?? -1)
+      const key = storageKey(tabId, message.pageUrl)
       void browser.storage.session.get(key)
-        .then(value => sendResponse(value[key] || []))
+        .then(async value => {
+          const raw = Array.isArray(value[key]) ? value[key] : []
+          const cleaned = compactResources(raw, 40)
+          if (cleaned.length !== raw.length) await browser.storage.session.set({ [key]: cleaned })
+          if (tabId >= 0) await browser.action.setBadgeText({ tabId, text: cleaned.length ? String(Math.min(99, cleaned.length)) : '' })
+          sendResponse(cleaned)
+        })
         .catch(error => sendResponse({ ok: false, error: String(error) }))
       return true
     }

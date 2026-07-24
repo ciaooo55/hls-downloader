@@ -1,5 +1,13 @@
 export type ResourceKind = 'hls' | 'dash' | 'media' | 'file' | 'magnet'
 
+export interface MediaVariant {
+  url: string
+  width?: number
+  height?: number
+  bandwidth?: number
+  quality?: string
+}
+
 export interface MediaResource {
   id: string
   url: string
@@ -18,6 +26,7 @@ export interface MediaResource {
   bandwidth?: number
   quality?: string
   duration?: number
+  variants?: MediaVariant[]
   seenAt: number
 }
 
@@ -37,6 +46,10 @@ export interface DownloadClickIntent {
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
 const SEGMENT_EXT = /\.(?:ts|m4s|cmfv|cmfa|aac)(?:$|[?#])/i
 const MANIFEST_EXT = /\.(?:m3u8?|mpd)$/i
+const SEGMENT_PATH = /(?:^|[\/_-])(?:init|segment|seg|fragment|frag|chunk|part)[-_]?(?:\d{1,8}|video|audio)?(?:\.|[\/_-]|$)/i
+const SEGMENT_MIME = /^(?:video\/mp2t|audio\/(?:aac|mp4a-latm))\b/i
+const VOLATILE_QUERY = /^(?:token|auth|authorization|signature|sig|expires?|expiry|policy|key-pair-id|hdnea|hmac|jwt|session|sessionid|access[_-]?key|x-amz-.+)$/i
+const AD_SIGNAL = /(?:^|[\/_-])(?:ad|ads|advert|advertisement|preroll|midroll|postroll|promo)(?:[\/_-]|$)/i
 const GENERIC_MEDIA_NAME = /^(?:(?:video|stream|master|index|playlist|manifest|chunklist|media|output|download|file|vod|live)(?:[-_ ]*(?:\d{3,4}p?|low|medium|high|sd|hd|fhd|uhd|4k))?|(?:hls[-_ ]*)?(?:\d{3,4}p[-_ ]*)?(?:hls[-_ ]*)?(?:video[-_ ]*stream|视频流)?|(?:hls[-_ ]*)?\d{3,4}p)$/i
 const OPAQUE_MEDIA_NAME = /^(?:[a-f0-9]{16,}|[a-z0-9_-]{28,})$/i
 
@@ -91,6 +104,78 @@ export function classifyResource(url: string, mimeType = ''): ResourceKind | nul
   return MEDIA_EXT.test(url) || mime.includes('octet-stream') ? 'file' : null
 }
 
+export function resourceFingerprint(resource: Pick<MediaResource, 'url' | 'kind'>): string {
+  try {
+    const url = new URL(resource.url)
+    url.hash = ''
+    for (const key of [...url.searchParams.keys()]) {
+      if (VOLATILE_QUERY.test(key)) url.searchParams.delete(key)
+    }
+    url.searchParams.sort()
+    return `${resource.kind}:${url.href}`
+  } catch {
+    return `${resource.kind}:${resource.url.split('#', 1)[0]}`
+  }
+}
+
+export function isUsefulResource(resource: MediaResource): boolean {
+  if (!resource.url || !resource.kind) return false
+  if (resource.statusCode && (resource.statusCode < 200 || resource.statusCode >= 400)) return false
+  if (resource.method && !['GET', 'POST'].includes(resource.method.toUpperCase())) return false
+  if (resource.kind === 'hls' || resource.kind === 'dash' || resource.kind === 'magnet') return true
+  let path = resource.url
+  try { path = decodeURIComponent(new URL(resource.url).pathname) } catch {}
+  if (SEGMENT_EXT.test(resource.url) || SEGMENT_MIME.test(resource.mimeType || '')) return false
+  if (SEGMENT_PATH.test(path) && (!resource.size || resource.size < 8 * 1024 * 1024)) return false
+  if (AD_SIGNAL.test(path) && (!resource.duration || resource.duration < 60) && (!resource.size || resource.size < 20 * 1024 * 1024)) return false
+  return true
+}
+
+export function resourceRank(resource: MediaResource): number {
+  let score = resource.kind === 'hls' ? 500 : resource.kind === 'dash' ? 480 : resource.kind === 'media' ? 300 : resource.kind === 'magnet' ? 250 : 100
+  if (resource.variants?.length) score += 80
+  if (resource.duration && resource.duration >= 60) score += 60
+  else if (resource.duration && resource.duration >= 10) score += 20
+  if (resource.height) score += Math.min(50, Math.round(resource.height / 40))
+  if (resource.size && resource.size >= 20 * 1024 * 1024) score += 40
+  else if (resource.size && resource.size >= 2 * 1024 * 1024) score += 15
+  if (resource.title && !isGenericMediaName(resource.title)) score += 20
+  return score
+}
+
+export function compactResources(resources: MediaResource[], limit = 40): MediaResource[] {
+  const byKey = new Map<string, MediaResource>()
+  for (const resource of resources) {
+    if (!isUsefulResource(resource)) continue
+    const key = resourceFingerprint(resource)
+    const previous = byKey.get(key)
+    if (!previous) {
+      byKey.set(key, resource)
+      continue
+    }
+    const newer = (resource.seenAt || 0) >= (previous.seenAt || 0) ? resource : previous
+    const older = newer === resource ? previous : resource
+    byKey.set(key, {
+      ...older,
+      ...newer,
+      variants: newer.variants?.length ? newer.variants : older.variants,
+      seenAt: Math.max(previous.seenAt || 0, resource.seenAt || 0),
+    })
+  }
+  const result = [...byKey.values()]
+  const childVariants = new Set(result.flatMap(item => item.variants || []).map(item => resourceFingerprint({ url: item.url, kind: 'hls' })))
+  return result
+    .filter(item => Boolean(item.variants?.length) || !childVariants.has(resourceFingerprint(item)))
+    .sort((left, right) => resourceRank(right) - resourceRank(left) || right.seenAt - left.seenAt)
+    .slice(0, limit)
+}
+
+export function visibleMediaResources(resources: MediaResource[], limit = 8, fallbackToFiles = true): MediaResource[] {
+  const compact = compactResources(resources, 40)
+  const video = compact.filter(item => ['hls', 'dash', 'media'].includes(item.kind))
+  return (video.length || !fallbackToFiles ? video : compact).slice(0, limit)
+}
+
 export function classifyDownload(url: string, mimeType = '', filename = ''): ResourceKind | null {
   const classified = classifyResource(url, mimeType)
     || classifyResource(`https://download.invalid/${encodeURIComponent(filename)}`, mimeType)
@@ -112,11 +197,9 @@ export function resourceId(url: string): string {
 }
 
 export function mergeResources(current: MediaResource[], incoming: MediaResource, limit = 100): MediaResource[] {
-  const previous = current.find(item => item.url === incoming.url)
-  const merged = previous ? { ...previous, ...incoming, seenAt: Date.now() } : incoming
-  return [merged, ...current.filter(item => item.url !== incoming.url)]
-    .filter(item => Date.now() - item.seenAt < 30 * 60_000)
-    .slice(0, limit)
+  const now = Date.now()
+  return compactResources([incoming, ...current]
+    .filter(item => now - item.seenAt < 30 * 60_000), limit)
 }
 
 export function shouldTakeover(input: {

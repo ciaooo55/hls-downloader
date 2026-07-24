@@ -5,7 +5,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
-from backend.app.url_recognition import RecognitionError, recognize_url
+from backend.app.url_recognition import (
+    MAX_CANDIDATES,
+    RecognitionError,
+    extract_html_candidates,
+    recognize_url,
+)
 
 
 def run_recognition(url: str, handler):
@@ -78,6 +83,111 @@ def test_extracts_resolves_and_deduplicates_page_candidates():
         "https://site.test/hls/master.m3u8?token=abc",
         "https://site.test/watch/video/alt.m3u8",
     ]
+
+
+def test_deduplicates_rotating_signatures_but_preserves_meaningful_query_values():
+    html = """
+    <script>
+      const sources = [
+        "https://cdn.test/watch.m3u8?id=episode-1&token=first&expires=100",
+        "https://cdn.test/watch.m3u8?expires=200&id=episode-1&token=second",
+        "https://cdn.test/watch.m3u8?id=episode-2&token=third"
+      ];
+    </script>
+    """
+
+    candidates = extract_html_candidates(html, "https://site.test/watch")
+
+    assert [candidate.url for candidate in candidates] == [
+        "https://cdn.test/watch.m3u8?id=episode-1&token=first&expires=100",
+        "https://cdn.test/watch.m3u8?id=episode-2&token=third",
+    ]
+
+
+def test_prefers_master_over_renditions_from_the_same_quality_family():
+    html = """
+    <script>
+      const low = "/hls/movie-360p.m3u8";
+      const high = "/hls/movie-1080p.m3u8";
+      const auto = "/hls/movie-master.m3u8";
+    </script>
+    """
+
+    candidates = extract_html_candidates(html, "https://site.test/watch")
+
+    assert len(candidates) == 1
+    assert candidates[0].url == "https://site.test/hls/movie-master.m3u8"
+    assert candidates[0].label == "主播放清单"
+    assert candidates[0].quality == "master"
+    assert 0.0 < candidates[0].confidence <= 1.0
+
+
+def test_keeps_highest_rendition_and_does_not_merge_unrelated_families():
+    html = """
+    <script>
+      const movieLow = "/hls/movie_480p.m3u8";
+      const movieHigh = "/hls/movie_1080p.m3u8";
+      const trailer = "/hls/trailer_720p.m3u8";
+    </script>
+    """
+
+    candidates = extract_html_candidates(html, "https://site.test/watch")
+
+    assert [(candidate.url, candidate.quality) for candidate in candidates] == [
+        ("https://site.test/hls/movie_1080p.m3u8", "1080p"),
+        ("https://site.test/hls/trailer_720p.m3u8", "720p"),
+    ]
+
+
+def test_filters_obvious_non_video_placeholders_and_extension_prefixes():
+    html = r"""
+    <script>
+      const audio = "/tracks/audio/master.m3u8";
+      const captions = "/tracks/subtitles-en.m3u8";
+      const advertisement = "/ads/preroll.m3u8";
+      const template = "/hls/${quality}.m3u8";
+      const concatenated = "/hls/" + quality + ".m3u8";
+      const javascript = "/assets/player.m3u8.js";
+      const video = "https:\/\/cdn.test\/video\/master.m3u8?token=ok\u0026expires=2";
+    </script>
+    """
+
+    candidates = extract_html_candidates(html, "https://site.test/watch")
+
+    assert [candidate.url for candidate in candidates] == [
+        "https://cdn.test/video/master.m3u8?token=ok&expires=2",
+    ]
+
+
+def test_candidate_count_is_capped_after_reduction():
+    html = "<script>" + "\n".join(
+        f'const stream{i} = "https://cdn.test/title-{i}/master.m3u8";'
+        for i in range(MAX_CANDIDATES + 20)
+    ) + "</script>"
+
+    candidates = extract_html_candidates(html, "https://site.test/watch", limit=10_000)
+
+    assert len(candidates) == MAX_CANDIDATES
+    assert candidates[0].url == "https://cdn.test/title-0/master.m3u8"
+    assert candidates[-1].url == f"https://cdn.test/title-{MAX_CANDIDATES - 1}/master.m3u8"
+
+
+def test_marks_direct_multivariant_playlist_with_frontend_metadata():
+    def handler(request: httpx.Request):
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/vnd.apple.mpegurl"},
+            text="#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=1280x720\n720.m3u8\n",
+            request=request,
+        )
+
+    result = run_recognition("https://media.test/play", handler)
+
+    assert result.kind == "hls"
+    assert result.candidates[0].source == "playlist"
+    assert result.candidates[0].label == "主播放清单"
+    assert result.candidates[0].quality == "master"
+    assert result.candidates[0].confidence == 1.0
 
 
 def test_reports_no_candidate_for_page_without_static_hls():

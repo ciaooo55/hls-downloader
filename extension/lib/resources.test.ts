@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest'
-import { classifyDownload, classifyResource, isGenericMediaName, matchesDownloadClick, mergeResources, pageResourceKey, replayableRequestHeaders, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename } from './resources'
+import {
+  classifyDownload,
+  classifyResource,
+  compactResources,
+  isGenericMediaName,
+  isUsefulResource,
+  matchesDownloadClick,
+  mergeResources,
+  pageResourceKey,
+  replayableRequestHeaders,
+  resourceFingerprint,
+  resourceRequestIdentity,
+  shouldTakeover,
+  suggestedResourceFilename,
+  visibleMediaResources,
+  type MediaResource,
+} from './resources'
+
+function resource(overrides: Partial<MediaResource> = {}): MediaResource {
+  return {
+    id: 'resource',
+    url: 'https://cdn.test/movie.mp4',
+    kind: 'media',
+    seenAt: Date.now(),
+    ...overrides,
+  }
+}
 
 describe('resource rules', () => {
   it('filters HLS segments but retains manifests', () => {
@@ -10,6 +36,127 @@ describe('resource rules', () => {
     const item = { id: '1', url: 'https://a.test/v.mp4', kind: 'media' as const, seenAt: Date.now() }
     expect(mergeResources([item], { ...item, size: 20 })).toHaveLength(1)
     expect(mergeResources([item], { ...item, size: 20 })[0].size).toBe(20)
+  })
+  it('rejects failed responses and irrelevant request methods', () => {
+    const successfulGet = resource({ statusCode: 206, method: 'get', size: 20 * 1024 * 1024 })
+    expect(isUsefulResource(successfulGet)).toBe(true)
+    expect(isUsefulResource({ ...successfulGet, statusCode: 404 })).toBe(false)
+    expect(isUsefulResource({ ...successfulGet, statusCode: 500 })).toBe(false)
+    expect(isUsefulResource({ ...successfulGet, method: 'POST' })).toBe(true)
+    expect(isUsefulResource({ ...successfulGet, method: 'HEAD' })).toBe(false)
+    expect(isUsefulResource({ ...successfulGet, method: 'OPTIONS' })).toBe(false)
+  })
+  it('filters media fragments identified by MIME type or init/segment URLs', () => {
+    expect(isUsefulResource(resource({
+      url: 'https://cdn.test/delivery?id=42',
+      mimeType: 'video/mp2t; charset=binary',
+    }))).toBe(false)
+    expect(isUsefulResource(resource({
+      url: 'https://cdn.test/audio/chunk?id=42',
+      mimeType: 'audio/aac',
+    }))).toBe(false)
+    expect(isUsefulResource(resource({
+      url: 'https://cdn.test/vod/init.mp4',
+      mimeType: 'video/mp4',
+      size: 32 * 1024,
+    }))).toBe(false)
+    expect(isUsefulResource(resource({
+      url: 'https://cdn.test/vod/segment-000042.mp4',
+      mimeType: 'video/mp4',
+      size: 512 * 1024,
+    }))).toBe(false)
+    expect(isUsefulResource(resource({
+      url: 'https://cdn.test/vod/movie.mp4',
+      mimeType: 'video/mp4',
+      size: 20 * 1024 * 1024,
+    }))).toBe(true)
+  })
+  it('stably deduplicates refreshed signed URLs while preserving meaningful query parameters', () => {
+    const now = Date.now()
+    const previous = resource({
+      id: 'old-signature',
+      kind: 'hls',
+      url: 'https://cdn.test/master.m3u8?quality=1080&token=old&expires=100',
+      seenAt: now - 1_000,
+    })
+    const refreshed = resource({
+      id: 'new-signature',
+      kind: 'hls',
+      url: 'https://cdn.test/master.m3u8?X-Amz-Signature=new&quality=1080&X-Amz-Expires=900',
+      seenAt: now,
+    })
+
+    expect(resourceFingerprint(previous)).toBe(resourceFingerprint(refreshed))
+    expect(resourceFingerprint(previous)).not.toBe(resourceFingerprint({
+      ...refreshed,
+      url: 'https://cdn.test/master.m3u8?quality=720&token=new',
+    }))
+    const merged = mergeResources([previous], refreshed)
+    expect(merged).toHaveLength(1)
+    expect(merged[0]).toMatchObject({ id: 'new-signature', url: refreshed.url, seenAt: now })
+  })
+  it('folds captured HLS variants into their master manifest', () => {
+    const master = resource({
+      id: 'master',
+      kind: 'hls',
+      url: 'https://cdn.test/master.m3u8?token=master',
+      variants: [
+        { url: 'https://cdn.test/1080p/index.m3u8?token=from-manifest', height: 1080 },
+        { url: 'https://cdn.test/720p/index.m3u8?token=from-manifest', height: 720 },
+      ],
+    })
+    const high = resource({
+      id: '1080p-child',
+      kind: 'hls',
+      url: 'https://cdn.test/1080p/index.m3u8?token=observed',
+    })
+    const medium = resource({
+      id: '720p-child',
+      kind: 'hls',
+      url: 'https://cdn.test/720p/index.m3u8?token=refreshed',
+    })
+
+    expect(compactResources([high, master, medium])).toEqual([master])
+  })
+  it('sorts useful resources by relevance and recency', () => {
+    const now = Date.now()
+    const master = resource({
+      id: 'master', kind: 'hls', url: 'https://cdn.test/master.m3u8', seenAt: now - 10_000,
+      variants: [{ url: 'https://cdn.test/high.m3u8', height: 1080 }],
+    })
+    const recentHls = resource({ id: 'recent-hls', kind: 'hls', url: 'https://cdn.test/recent.m3u8', seenAt: now })
+    const olderHls = resource({ id: 'older-hls', kind: 'hls', url: 'https://cdn.test/older.m3u8', seenAt: now - 1_000 })
+    const largeMedia = resource({
+      id: 'large-media', url: 'https://cdn.test/movie.mp4', seenAt: now + 1_000,
+      size: 100 * 1024 * 1024, duration: 3_600, height: 1080,
+    })
+
+    expect(compactResources([largeMedia, olderHls, master, recentHls]).map(item => item.id)).toEqual([
+      'master', 'recent-hls', 'older-hls', 'large-media',
+    ])
+  })
+  it('limits visible media resources and omits file noise when video exists', () => {
+    const now = Date.now()
+    const streams = Array.from({ length: 10 }, (_, index) => resource({
+      id: `stream-${index}`,
+      kind: 'hls',
+      url: `https://cdn.test/stream-${index}.m3u8`,
+      seenAt: now + index,
+    }))
+    const file = resource({
+      id: 'unrelated-file',
+      kind: 'file',
+      url: 'https://cdn.test/unrelated.zip',
+      seenAt: now + 100,
+    })
+
+    expect(visibleMediaResources([...streams, file])).toHaveLength(8)
+    expect(visibleMediaResources([...streams, file]).map(item => item.id)).toEqual([
+      'stream-9', 'stream-8', 'stream-7', 'stream-6', 'stream-5', 'stream-4', 'stream-3', 'stream-2',
+    ])
+    expect(visibleMediaResources([...streams, file], 3).map(item => item.id)).toEqual([
+      'stream-9', 'stream-8', 'stream-7',
+    ])
   })
   it('honors Alt bypass and Ctrl force', () => {
     const base = { url: 'https://a.test/file.zip', size: 20, enabled: true, minimumBytes: 10, excludedHosts: [], explicitClick: true }

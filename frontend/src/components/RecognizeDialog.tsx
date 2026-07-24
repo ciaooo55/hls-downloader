@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect } from 'react'
-import { FileUp, Link } from 'lucide-react'
+import { Download, FileUp, Globe2, Link } from 'lucide-react'
 import { ApiError, createTask, isDuplicateUrlError, recognizeUrl, uploadTorrent } from '../api'
-import { recognitionView, type RecognitionResult } from '../recognition'
+import { recognitionCandidateViews, recognitionView, type RecognitionResult } from '../recognition'
 import type { Settings } from '../types'
 import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 import ConfirmDialog from './ConfirmDialog'
@@ -25,6 +25,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const [cookie, setCookie] = useState(settings.default_cookie || '')
   const [result, setResult] = useState<RecognitionResult | null>(null)
   const [busy, setBusy] = useState(false)
+  const [startingCandidate, setStartingCandidate] = useState('')
   const [error, setError] = useState('')
   const [duplicatePrompt, setDuplicatePrompt] = useState<{ message: string; candidate: string } | null>(null)
   const torrentInput = useRef<HTMLInputElement>(null)
@@ -53,6 +54,20 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
         return
       }
       throw reason
+    }
+  }
+
+  const downloadCandidate = async (candidate: string) => {
+    setBusy(true)
+    setStartingCandidate(candidate)
+    setError('')
+    try {
+      await startCandidate(candidate)
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : '添加失败')
+    } finally {
+      setBusy(false)
+      setStartingCandidate('')
     }
   }
 
@@ -88,6 +103,11 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   }
 
   const view = result ? recognitionView(result) : null
+  const candidateViews = result ? recognitionCandidateViews(result.candidates) : []
+  const recommendedCandidate = candidateViews.find(candidate => candidate.recommended)
+  const submit = () => view?.mode === 'choose' && recommendedCandidate
+    ? downloadCandidate(recommendedCandidate.url)
+    : recognize()
 
   const importTorrent = async (file?: File) => {
     if (!file) return
@@ -105,7 +125,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
           <Field label="链接" htmlFor="recognize-url">
             <div className="url-entry">
               <Link size={18} />
-              <Input id="recognize-url" autoFocus value={url} onChange={event => setUrl(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void recognize() }} placeholder="粘贴文件、m3u8、mpd、网页或 magnet 链接" />
+              <Input id="recognize-url" autoFocus value={url} onChange={event => { setUrl(event.target.value); setResult(null); setError('') }} onKeyDown={event => { if (event.key === 'Enter') void submit() }} placeholder="粘贴文件、m3u8、mpd、网页或 magnet 链接" />
             </div>
           </Field>
           <div className="torrent-import">
@@ -132,11 +152,56 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
             <div className="request-field"><label htmlFor="recognize-cookie">Cookie</label><Input id="recognize-cookie" value={cookie} onChange={event => setCookie(event.target.value)} placeholder="sessionid=abc; token=xyz" /><small>{REQUEST_FIELD_HELP.cookie}</small></div>
           </div>}
           {error && <div className="inline-error" role="alert">{error}</div>}
-          {view?.mode === 'choose' && <div className="candidate-list"><strong>发现 {result?.candidates.length} 个播放清单</strong>{result?.candidates.map(candidate => <Button key={candidate.url} variant="secondary" className="secondary-button" title={candidate.url} onClick={() => void startCandidate(candidate.url).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : '添加失败'))}>{candidate.url}</Button>)}</div>}
+          {view?.mode === 'choose' && (
+            <section className="candidate-list" aria-labelledby="candidate-list-title">
+              <div className="candidate-list-heading">
+                <div>
+                  <strong id="candidate-list-title">发现 {candidateViews.length} 个候选播放清单</strong>
+                  <span>{view.message || '已结合清晰度和链接特征排序，可直接下载推荐项。'}</span>
+                </div>
+              </div>
+              <div className="candidate-options">
+                {candidateViews.map((candidate, index) => (
+                  <article className={`candidate-item${candidate.recommended ? ' is-recommended' : ''}`} key={`${candidate.url}-${index}`}>
+                    <div className="candidate-main">
+                      <div className="candidate-description">
+                        <div className="candidate-title-line">
+                          <strong title={candidate.filename}>{candidate.filename}</strong>
+                          {candidate.recommended && <span className="candidate-recommendation">推荐</span>}
+                        </div>
+                        <div className="candidate-meta">
+                          <span title={candidate.host}><Globe2 size={13} aria-hidden="true" />{candidate.host}</span>
+                          <span>{candidate.qualityLabel}</span>
+                          <span>{candidate.sourceLabel}</span>
+                        </div>
+                      </div>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="candidate-download"
+                        disabled={busy}
+                        aria-label={`下载 ${candidate.filename}，来源 ${candidate.host}`}
+                        onClick={() => void downloadCandidate(candidate.url)}
+                      >
+                        <Download size={14} aria-hidden="true" />
+                        {startingCandidate === candidate.url ? '正在添加...' : '下载此项'}
+                      </Button>
+                    </div>
+                    <details className="candidate-technical">
+                      <summary>查看技术链接</summary>
+                      <code>{candidate.url}</code>
+                    </details>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
           {view?.mode === 'not-found' && <div className="not-found"><p>{view.message}</p><Button variant="secondary" className="secondary-button" onClick={onNeedExtension}>打开浏览器插件工具</Button></div>}
           <DialogFooter>
             <Button variant="secondary" className="secondary-button" onClick={onClose}>取消</Button>
-            <Button className="primary-button" disabled={busy || !url.trim()} onClick={() => void recognize()}>{busy ? '正在处理...' : directType(url.trim()) ? '开始下载' : '识别并下载'}</Button>
+            <Button className="primary-button" disabled={busy || !url.trim()} onClick={() => void submit()}>
+              {busy ? '正在处理...' : view?.mode === 'choose' && recommendedCandidate ? '下载推荐项' : directType(url.trim()) ? '开始下载' : '识别并下载'}
+            </Button>
           </DialogFooter>
         </Dialog>
       </DialogOverlay>

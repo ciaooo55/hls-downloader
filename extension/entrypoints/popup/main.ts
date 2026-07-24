@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import type { MediaResource } from '../../lib/resources'
+import { visibleMediaResources, type MediaResource } from '../../lib/resources'
 import { resourceQuality } from '../../lib/hlsManifest'
 import { handoffStatusLabel, handoffTerminalStatus } from '../../lib/takeover'
 import './style.css'
@@ -94,13 +94,14 @@ async function main() {
   }
 
   const renderList = () => {
-    count.textContent = String(resources.length)
+    const visible = visibleMediaResources(resources)
+    count.textContent = String(visible.length)
     list.replaceChildren()
-    if (!resources.length) {
+    if (!visible.length) {
       list.append(el('p', 'empty', '\u64ad\u653e\u5a92\u4f53\u540e\uff0c\u8fd9\u91cc\u4f1a\u663e\u793a\u53ef\u4e0b\u8f7d\u8d44\u6e90\u3002'))
       return
     }
-    for (const item of resources) {
+    for (const item of visible) {
       let itemHost = item.url
       try { itemHost = new URL(item.url).host } catch {}
       const size = item.size && item.size > 0 ? formatSize(item.size) : '\u5927\u5c0f\u672a\u77e5'
@@ -117,14 +118,34 @@ async function main() {
       const mime = el('small', '', [item.mimeType, itemHost].filter(Boolean).join(' \u00b7 '))
       const url = el('small', 'resource-url', item.url)
       url.title = item.url
-      body.append(name, line, mime, url)
+      let selected = item
+      body.append(name, line)
+      if (item.variants?.length) {
+        const select = el('select', 'quality-select') as HTMLSelectElement
+        select.setAttribute('aria-label', '\u9009\u62e9\u89c6\u9891\u6e05\u6670\u5ea6')
+        const automatic = el('option', '', '\u81ea\u52a8\uff08\u6700\u9ad8\uff09') as HTMLOptionElement
+        automatic.value = item.url
+        select.append(automatic)
+        for (const variant of item.variants) {
+          const option = el('option') as HTMLOptionElement
+          option.value = variant.url
+          option.textContent = [variant.quality || (variant.height ? `${variant.height}p` : '\u7ebf\u8def'), variant.bandwidth ? `${(variant.bandwidth / 1_000_000).toFixed(1)} Mbps` : ''].filter(Boolean).join(' \u00b7 ')
+          select.append(option)
+        }
+        select.addEventListener('change', () => {
+          const variant = item.variants?.find(value => value.url === select.value)
+          selected = variant ? { ...item, ...variant, url: variant.url, variants: undefined } : item
+        })
+        body.append(select)
+      }
+      body.append(mime, url)
       const label = sending[item.id] || '\u4e0b\u8f7d'
       const button = el('button', '', label)
       const locked = ['\u53d1\u9001\u4e2d', '\u5f85\u786e\u8ba4', '\u786e\u8ba4\u4e2d', '\u5df2\u52a0\u5165'].includes(sending[item.id] || '')
       button.disabled = locked
       if (sending[item.id]) button.classList.add('busy')
       button.title = '\u53d1\u9001\u5230\u4e0b\u8f7d\u5668'
-      button.addEventListener('click', () => void send(item))
+      button.addEventListener('click', () => void send(selected))
       article.append(body, button)
       list.append(article)
     }
@@ -193,7 +214,7 @@ async function main() {
   const pageUrl = tab?.url || ''
   try { host = new URL(pageUrl).host } catch { host = '' }
   resources = await browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab?.id }) || []
-  resourceHosts = [...new Set(resources.map(item => {
+  resourceHosts = [...new Set(visibleMediaResources(resources).map(item => {
     try { return new URL(item.url).host } catch { return '' }
   }).filter(Boolean))]
   const online = Boolean((await browser.runtime.sendMessage({ type: 'ping' }))?.ok)
