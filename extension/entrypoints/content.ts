@@ -61,7 +61,7 @@ export default defineContentScript({
           .panel{display:none;width:min(420px,calc(100vw - 20px));max-height:70vh;background:#fff;border:1px solid #bae6fd;border-radius:9px;overflow:hidden}.open .panel{display:block}.open .toggle{display:none}
           header{display:flex;align-items:center;justify-content:space-between;padding:8px 9px 8px 10px;border-bottom:1px solid #dff5ff;background:#f0fbff;font:600 13px system-ui}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:5px}
           .pin,.close{height:30px;border:0;border-radius:5px;background:#e0f2fe;color:#075985;cursor:pointer}.pin{padding:0 9px;font:12px system-ui}.pin.active{background:#d1fae5;color:#047857}.close{display:grid;place-items:center;width:30px;font:700 20px/1 system-ui}.list{overflow:auto;max-height:58vh}.empty{padding:20px;color:#526b79;font:13px system-ui}
-          .item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:12px;border-bottom:1px solid #e7f4f8}.item:hover{background:#f7fcff}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 13px/1.35 system-ui;overflow-wrap:anywhere}.url{display:-webkit-box;overflow:hidden;-webkit-line-clamp:1;-webkit-box-orient:vertical;color:#54717f;font:11px/1.35 system-ui;margin-top:4px;overflow-wrap:anywhere}.item:hover .name,.item:hover .url{-webkit-line-clamp:unset}.kind{color:#25627b;font:12px system-ui;margin-top:4px}.quality-select{width:min(190px,100%);height:27px;margin-top:6px;border:1px solid #bae6fd;border-radius:5px;background:#f0fbff;color:#075985;padding:0 6px;font:11px system-ui}.download{align-self:center;min-width:58px;height:32px;border:0;border-radius:6px;background:#0ea5e9;color:white;padding:6px 10px;cursor:pointer;font-weight:600}.download:hover{background:#0284c7}.download[disabled]{cursor:default;opacity:.65}.result{padding:8px 12px;background:#ecfdf5;color:#047857;font:12px/1.4 system-ui}.result.error{background:#fff1f2;color:#be123c}
+          .item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:12px;border-bottom:1px solid #e7f4f8}.item:hover{background:#f7fcff}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 13px/1.35 system-ui;overflow-wrap:anywhere}.url{display:-webkit-box;overflow:hidden;-webkit-line-clamp:1;-webkit-box-orient:vertical;color:#54717f;font:11px/1.35 system-ui;margin-top:4px;overflow-wrap:anywhere}.item:hover .name,.item:hover .url{-webkit-line-clamp:unset}.kind{color:#25627b;font:12px system-ui;margin-top:4px}.quality-select{width:min(190px,100%);height:27px;margin-top:6px;border:1px solid #bae6fd;border-radius:5px;background:#f0fbff;color:#075985;padding:0 6px;font:11px system-ui}.item-actions{display:flex;flex-direction:column;gap:5px;align-self:center}.download{min-width:58px;height:30px;border:0;border-radius:6px;background:#0ea5e9;color:white;padding:5px 10px;cursor:pointer;font-weight:600;font-size:12px}.download:hover{background:#0284c7}.download[disabled]{cursor:default;opacity:.65}.download.push-tv{background:#6366f1}.download.push-tv:hover{background:#4f46e5}.result{padding:8px 12px;background:#ecfdf5;color:#047857;font:12px/1.4 system-ui}.result.error{background:#fff1f2;color:#be123c}
           .video-buttons{position:fixed;inset:0;z-index:2147483646;pointer-events:none}.video-download{position:fixed;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid #38bdf8;border-radius:7px;background:#075985;color:#fff;box-shadow:0 3px 8px #00131f66;pointer-events:auto;cursor:pointer;font:600 12px system-ui}.video-download:hover{background:#0369a1}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#e0f2fe;color:#075985;font:700 10px system-ui}
           button:focus-visible{outline:2px solid #0369a1;outline-offset:2px}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
         `
@@ -217,6 +217,21 @@ export default defineContentScript({
       })
     }
 
+    const pushToTv = (resource: MediaResource, button: HTMLButtonElement) => {
+      const result = ui.shadow.querySelector<HTMLElement>('.result')
+      button.setAttribute('disabled', ''); button.textContent = '推送中'
+      void runtimeMessage({ type: 'push-to-tv', resource }).then(response => {
+        if (!response?.ok) throw new Error(response?.error || '电视推送失败')
+        button.textContent = '已推送'
+        if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `已推送到电视：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
+      }).catch(reason => {
+        button.removeAttribute('disabled'); button.textContent = '推电视'
+        if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '推送失败' }
+      }).finally(() => {
+        setTimeout(() => { if (button.textContent === '已推送') { button.textContent = '推电视' } }, 2000)
+      })
+    }
+
     const updateVideoButtons = () => {
       const layer = ui.shadow.querySelector<HTMLElement>('.video-buttons')
       const toggle = ui.shadow.querySelector<HTMLButtonElement>('.toggle')
@@ -300,9 +315,14 @@ export default defineContentScript({
         } else {
           meta.append(name, kind, url)
         }
+        const actions = document.createElement('div'); actions.className = 'item-actions'
         const button = document.createElement('button'); button.className = 'download'; button.textContent = '下载'
         button.addEventListener('click', () => sendResource(selected, button))
-        row.append(meta, button); list.append(row)
+        const pushButton = document.createElement('button'); pushButton.className = 'download push-tv'; pushButton.textContent = '推电视'
+        pushButton.title = '推送到电视播放'
+        pushButton.addEventListener('click', () => pushToTv(selected, pushButton))
+        actions.append(button, pushButton)
+        row.append(meta, actions); list.append(row)
       })
       updateVideoButtons()
     }

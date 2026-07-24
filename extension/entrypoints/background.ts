@@ -187,6 +187,44 @@ async function downloadNow(resource: MediaResource) {
   return native({ op: 'download', resource: payload })
 }
 
+async function pushToTv(resource: MediaResource): Promise<{ ok: true }> {
+  const data = await browser.storage.local.get(['tvboxEndpoint'])
+  const endpoint = String(data.tvboxEndpoint || '').trim().replace(/\/+$/, '')
+  if (!endpoint) throw new Error('请先在插件面板设置电视推送地址')
+  try { new URL(endpoint) } catch { throw new Error('电视推送地址格式不正确') }
+  if (!endpoint.startsWith('http://') && !endpoint.startsWith('https://')) {
+    throw new Error('电视推送地址需以 http:// 或 https:// 开头')
+  }
+  const pushUrl = resource.url
+  // TVBox standard push: POST /action with form body do=push&url=...
+  // Some forks only accept GET; try POST first, fall back to GET on network error.
+  try {
+    const body = new URLSearchParams({ do: 'push', url: pushUrl })
+    const response = await fetch(`${endpoint}/action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      signal: AbortSignal.timeout(8_000),
+    })
+    if (response.ok) return { ok: true }
+    // 404/405 means this fork doesn't accept POST; try GET
+    if (response.status === 404 || response.status === 405) {
+      const getResponse = await fetch(
+        `${endpoint}/action?do=push&url=${encodeURIComponent(pushUrl)}`,
+        { signal: AbortSignal.timeout(8_000) },
+      )
+      if (getResponse.ok) return { ok: true }
+      throw new Error(`电视返回 HTTP ${getResponse.status}`)
+    }
+    throw new Error(`电视返回 HTTP ${response.status}`)
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(`无法连接电视 (${endpoint})，请确认地址和局域网连通性`)
+    }
+    throw error
+  }
+}
+
 async function offer(resource: MediaResource) {
   const payload = await resourcePayload(resource)
   const response = await native({ op: 'offer', resource: payload })
@@ -618,6 +656,13 @@ export default defineBackground(() => {
         ...(typeof message.enabled === 'boolean' ? { enabled: message.enabled } : {}),
         ...(Number.isFinite(Number(message.minimumBytes)) ? { minimum_bytes: Number(message.minimumBytes) } : {}),
       }).then(applyDesktopTakeoverSettings)
+        .then(response => sendResponse(response))
+        .catch(error => sendResponse({ ok: false, error: String(error) }))
+      return true
+    }
+    if (message?.type === 'push-to-tv') {
+      const resource = { ...message.resource }
+      void pushToTv(resource)
         .then(response => sendResponse(response))
         .catch(error => sendResponse({ ok: false, error: String(error) }))
       return true

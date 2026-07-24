@@ -64,7 +64,8 @@ async function main() {
   const enableBtn = el('button', '', '\u81ea\u52a8\u63a5\u7ba1')
   const cookieBtn = el('button', '', 'Cookie')
   const excludeBtn = el('button', '', '\u6392\u9664\u672c\u7ad9')
-  controls.append(enableBtn, cookieBtn, excludeBtn)
+  const tvBtn = el('button', '', '电视')
+  controls.append(enableBtn, cookieBtn, excludeBtn, tvBtn)
 
   const errorBox = el('div', 'send-error')
   errorBox.hidden = true
@@ -85,6 +86,8 @@ async function main() {
   let excluded: string[] = []
   const sending: Record<string, string> = {}
   const pending: Record<string, string> = {}
+  const pushing: Record<string, string> = {}
+  let tvEndpoint = ''
   let resources: MediaResource[] = []
 
   const statusEl = brandText.querySelector('.status') as HTMLSpanElement
@@ -146,7 +149,15 @@ async function main() {
       if (sending[item.id]) button.classList.add('busy')
       button.title = '\u53d1\u9001\u5230\u4e0b\u8f7d\u5668'
       button.addEventListener('click', () => void send(selected))
-      article.append(body, button)
+      const pushLabel = pushing[item.id] || '推电视'
+      const pushButton = el('button', 'push-button', pushLabel)
+      pushButton.disabled = pushing[item.id] === '推送中'
+      if (pushing[item.id]) pushButton.classList.add('busy')
+      pushButton.title = '推送到电视播放'
+      pushButton.addEventListener('click', () => void pushToTv(selected))
+      const actionCol = el('div', 'article-actions')
+      actionCol.append(button, pushButton)
+      article.append(body, actionCol)
       list.append(article)
     }
   }
@@ -163,6 +174,26 @@ async function main() {
     excludeBtn.textContent = siteExcluded ? '\u672c\u7ad9\u5df2\u6392\u9664' : '\u6392\u9664\u672c\u7ad9'
     excludeBtn.classList.toggle('active', siteExcluded)
     excludeBtn.disabled = !host
+    tvBtn.textContent = tvEndpoint ? '电视已设' : '设置电视'
+    tvBtn.classList.toggle('active', Boolean(tvEndpoint))
+    tvBtn.disabled = false
+  }
+
+  const pushToTv = async (item: MediaResource) => {
+    setError('')
+    pushing[item.id] = '推送中'
+    renderList()
+    try {
+      const response = await browser.runtime.sendMessage({ type: 'push-to-tv', resource: item })
+      if (!response?.ok) throw new Error(response?.error || '电视推送失败')
+      pushing[item.id] = '已推送'
+    } catch (reason) {
+      pushing[item.id] = '重试'
+      setError(reason instanceof Error ? reason.message : '推送到电视失败')
+    } finally {
+      renderList()
+      setTimeout(() => { delete pushing[item.id]; renderList() }, 1500)
+    }
   }
 
   const send = async (item: MediaResource) => {
@@ -209,6 +240,12 @@ async function main() {
     await browser.storage.local.set({ excludedHosts: excluded })
     refreshButtons()
   })
+  tvBtn.addEventListener('click', () => {
+    const input = window.prompt('请输入电视推送地址（TVBox/影视 接口）\n例如：http://192.168.1.100:9979', tvEndpoint || 'http://192.168.1.100:9979')
+    if (input === null) return
+    tvEndpoint = input.trim().replace(/\/+$/, '')
+    void browser.storage.local.set({ tvboxEndpoint: tvEndpoint }).then(() => refreshButtons())
+  })
 
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true })
   const pageUrl = tab?.url || ''
@@ -220,10 +257,11 @@ async function main() {
   const online = Boolean((await browser.runtime.sendMessage({ type: 'ping' }))?.ok)
   statusEl.textContent = online ? '\u684c\u9762\u7aef\u5df2\u8fde\u63a5' : '\u684c\u9762\u7aef\u79bb\u7ebf'
   statusEl.classList.toggle('online', online)
-  const stored = await browser.storage.local.get(['enabled', 'authorizedCookieHosts', 'excludedHosts'])
+  const stored = await browser.storage.local.get(['enabled', 'authorizedCookieHosts', 'excludedHosts', 'tvboxEndpoint'])
   enabled = stored.enabled !== false
   authorized = Array.isArray(stored.authorizedCookieHosts) ? stored.authorizedCookieHosts : []
   excluded = Array.isArray(stored.excludedHosts) ? stored.excludedHosts : []
+  tvEndpoint = String(stored.tvboxEndpoint || '').trim().replace(/\/+$/, '')
   refreshButtons()
   renderList()
 
