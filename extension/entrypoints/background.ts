@@ -5,6 +5,7 @@ import { RequestChainStore, requestHeader, responseHeader, type RequestChain } f
 import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus, shouldResumeBrowserDownload } from '../lib/takeover'
 import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
 import { parseHlsManifest, resourceQuality } from '../lib/hlsManifest'
+import { normalizeTvboxEndpoint, tvboxActionUrl, tvboxPushBody, tvboxPushGetUrl, tvboxResponseError } from '../lib/tvbox'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 let clickIntents: DownloadClickIntent[] = []
@@ -189,31 +190,36 @@ async function downloadNow(resource: MediaResource) {
 
 async function pushToTv(resource: MediaResource): Promise<{ ok: true }> {
   const data = await browser.storage.local.get(['tvboxEndpoint'])
-  const endpoint = String(data.tvboxEndpoint || '').trim().replace(/\/+$/, '')
-  if (!endpoint) throw new Error('请先在插件面板设置电视推送地址')
-  try { new URL(endpoint) } catch { throw new Error('电视推送地址格式不正确') }
-  if (!endpoint.startsWith('http://') && !endpoint.startsWith('https://')) {
-    throw new Error('电视推送地址需以 http:// 或 https:// 开头')
-  }
+  const endpoint = normalizeTvboxEndpoint(String(data.tvboxEndpoint || ''))
   const pushUrl = resource.url
   // TVBox standard push: POST /action with form body do=push&url=...
   // Some forks only accept GET; try POST first, fall back to GET on network error.
   try {
-    const body = new URLSearchParams({ do: 'push', url: pushUrl })
-    const response = await fetch(`${endpoint}/action`, {
+    const body = tvboxPushBody(pushUrl)
+    const response = await fetch(tvboxActionUrl(endpoint), {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
       signal: AbortSignal.timeout(8_000),
     })
-    if (response.ok) return { ok: true }
+    const responseText = await response.text()
+    if (response.ok) {
+      const message = tvboxResponseError(responseText)
+      if (!message) return { ok: true }
+      throw new Error(message)
+    }
     // 404/405 means this fork doesn't accept POST; try GET
     if (response.status === 404 || response.status === 405) {
       const getResponse = await fetch(
-        `${endpoint}/action?do=push&url=${encodeURIComponent(pushUrl)}`,
+        tvboxPushGetUrl(endpoint, pushUrl),
         { signal: AbortSignal.timeout(8_000) },
       )
-      if (getResponse.ok) return { ok: true }
+      const getText = await getResponse.text()
+      if (getResponse.ok) {
+        const message = tvboxResponseError(getText)
+        if (!message) return { ok: true }
+        throw new Error(message)
+      }
       throw new Error(`电视返回 HTTP ${getResponse.status}`)
     }
     throw new Error(`电视返回 HTTP ${response.status}`)
