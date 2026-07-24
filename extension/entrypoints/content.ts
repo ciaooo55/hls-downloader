@@ -218,6 +218,8 @@ export default defineContentScript({
     }
 
     const pushToTv = (resource: MediaResource, button: HTMLButtonElement) => {
+      const name = resource.filename || resource.title || resource.kind.toUpperCase()
+      if (!window.confirm(`确认推送到电视？\n\n${name}\n\n电视将直接打开该媒体地址。`)) return
       const result = ui.shadow.querySelector<HTMLElement>('.result')
       button.setAttribute('disabled', ''); button.textContent = '推送中'
       void runtimeMessage({ type: 'push-to-tv', resource }).then(response => {

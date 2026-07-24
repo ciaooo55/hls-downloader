@@ -166,6 +166,18 @@ class TvboxPush(BaseModel):
             raise ValueError("待推送的视频地址必须是有效的 HTTP(S) 地址")
         return value
 
+
+class TvboxLocalPush(BaseModel):
+    path: str = Field(min_length=1, max_length=32767)
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("请先选择要推送的本机文件")
+        return value
+
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = APP_VERSION

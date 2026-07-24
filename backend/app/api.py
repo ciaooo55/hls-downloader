@@ -15,6 +15,7 @@ from .schemas import (
     PlaybackSeekRequest,
     TorrentFileSelection,
     BrowserHandoffAccept,
+    TvboxLocalPush,
     TvboxPush,
 )
 from .config import apply_settings_update, settings, save_settings
@@ -40,7 +41,7 @@ from .updater import UpdateError, update_service
 from .models import TaskStatus, TaskType
 from .browser_handoff import browser_handoffs
 from .downloader.throttle import download_throttle
-from .tvbox import push_tvbox, scan_tvboxes
+from .tvbox import local_media_server, push_tvbox, scan_tvboxes
 
 router = APIRouter(prefix="/api")
 
@@ -465,6 +466,37 @@ async def push_tvbox_url(body: TvboxPush, x_token: str = Header(default="")):
         return await push_tvbox(settings.tvbox_endpoint, body.url)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"电视推送失败：{exc}") from exc
+
+
+@router.post("/tvbox/push-local")
+async def push_local_tvbox_file(body: TvboxLocalPush, x_token: str = Header(default="")):
+    _check_token(x_token)
+    if not settings.tvbox_endpoint:
+        raise HTTPException(status_code=409, detail="请先在设置中选择电视推送设备")
+    share: dict | None = None
+    try:
+        share = local_media_server.share(body.path, settings.tvbox_endpoint)
+        result = await push_tvbox(settings.tvbox_endpoint, share["url"])
+        return {**result, "share": share}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        if share:
+            local_media_server.revoke(share.get("id", ""))
+        raise HTTPException(status_code=502, detail=f"本机文件推送失败：{exc}") from exc
+
+
+@router.post("/tvbox/shares/{share_id}/stop")
+async def stop_local_tvbox_share(share_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    local_media_server.revoke(share_id)
+    return {"ok": True}
+
+
+@router.get("/tvbox/shares/{share_id}")
+async def get_local_tvbox_share(share_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    return local_media_server.status(share_id)
 
 @router.post("/tasks", response_model=TaskResponse)
 async def create_task(body: TaskCreate, x_token: str = Header(default="")):

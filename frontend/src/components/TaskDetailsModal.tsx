@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, FileText, FolderOpen, LoaderCircle, MonitorPlay, Pause, PlayCircle, RotateCcw, Trash2, X, XCircle } from 'lucide-react'
+import { AlertTriangle, FileText, FolderOpen, LoaderCircle, MonitorPlay, Pause, PlayCircle, RotateCcw, Trash2, Tv, X, XCircle } from 'lucide-react'
 import { getFailureDetails } from '../failureDetails'
 import { fmtBytes, fmtDate, fmtEta, fmtSpeed } from '../format'
 import { getDisplayedProgress } from '../taskState'
@@ -8,7 +8,7 @@ import type { Task } from '../types'
 import { fetchTorrentFiles, selectTorrentFiles } from '../api'
 import { Button, Dialog, DialogOverlay } from './ui'
 
-export default function TaskDetailsModal({ task, pending, onClose, onLog, onAction, onOpenFile, onLaunchFile, onPreview }: {
+export default function TaskDetailsModal({ task, pending, onClose, onLog, onAction, onOpenFile, onLaunchFile, onPushToTv, onPreview }: {
   task: Task
   pending: boolean
   onClose: () => void
@@ -16,6 +16,7 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
   onAction: (action: string) => void
   onOpenFile: () => void
   onLaunchFile: () => void
+  onPushToTv: () => void
   onPreview: () => void
 }) {
   const failure = task.error_message || task.error_code ? getFailureDetails(task) : null
@@ -70,6 +71,7 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
       {!pending && actions.includes('delete_files') && <button className="danger-button" onClick={() => onAction('deleteFiles')}><Trash2 size={16} />{task.status === 'done' ? '删除任务及文件' : '停止并删除'}</button>}
       {actions.includes('open') && <button className="secondary-button" onClick={onOpenFile}><FolderOpen size={16} />所在位置</button>}
       {actions.includes('launch') && <button className="secondary-button" onClick={onLaunchFile}><PlayCircle size={16} />系统播放</button>}
+      {task.status === 'done' && task.output_is_file && <button className="secondary-button" onClick={onPushToTv}><Tv size={16} />推送到电视</button>}
       {actions.includes('preview') && <button className="primary-button" onClick={onPreview}><MonitorPlay size={16} />{task.status === 'done' ? '内置播放' : '边下边播'}</button>}
       {pending && <span className="pending-label"><LoaderCircle className="spin" size={15} />正在处理</span>}
     </footer>

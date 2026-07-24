@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LoaderCircle, Trash2, X } from 'lucide-react'
-import { clearCompletedTasks, connectSSE, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchSettings, fetchTasks, launchFile, openExplorer, resolveBrowserHandoff, saveSettings, taskAction, taskFileUrl } from './api'
+import { clearCompletedTasks, connectSSE, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLocalTvboxShare, fetchSettings, fetchTasks, launchFile, openExplorer, pushLocalTvboxFile, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
 import { fmtBytes, fmtSpeed } from './format'
 import { isRunningStatus, mergeTaskEvent } from './taskState'
 import { commandState } from './taskCommands'
@@ -23,6 +23,7 @@ import ConfirmDialog from './components/ConfirmDialog'
 import { Button, Dialog, DialogFooter, DialogHeader, DialogOverlay } from './components/ui'
 import { isTauriDesktop, startTauriDesktopSession } from './tauri'
 import { selectTheme, useUiStore } from './store/uiStore'
+import { pickLocalMediaFile } from './desktop'
 
 const VideoPlayerModal = lazy(() => import('./components/VideoPlayerModal'))
 const launchParams = new URLSearchParams(window.location.search)
@@ -57,6 +58,8 @@ export default function App() {
   const [showBrowserExtension, setShowBrowserExtension] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showUpdate, setShowUpdate] = useState(false)
+  const [localPushBusy, setLocalPushBusy] = useState(false)
+  const [localShare, setLocalShare] = useState<{ id: string; filename: string; idleCleanupSeconds: number } | null>(null)
   const [handoffs, setHandoffs] = useState<BrowserHandoff[]>([])
   const [handoffBusy, setHandoffBusy] = useState(false)
   const [error, setError] = useState('')
@@ -171,6 +174,23 @@ export default function App() {
     if (task) { autoPlayHandled.current = true; setPlaying(task) }
   }, [tasks, playing])
   useEffect(() => () => { if (feedbackTimer.current) window.clearTimeout(feedbackTimer.current) }, [])
+  useEffect(() => {
+    if (!localShare) return
+    let stopped = false
+    const refresh = async () => {
+      try {
+        const status = await fetchLocalTvboxShare(localShare.id)
+        if (!stopped && !status.active) {
+          setLocalShare(null)
+          showFeedback('电视访问结束，已自动清理本机文件共享')
+        }
+      } catch {
+        // A transient local API failure should not falsely claim cleanup.
+      }
+    }
+    const timer = window.setInterval(() => { void refresh() }, 20_000)
+    return () => { stopped = true; window.clearInterval(timer) }
+  }, [localShare])
 
   const filtered = useMemo(() => filterAndSortTasks(tasks, filter, query), [tasks, filter, query])
   const selectedTasks = tasks.filter(task => selected.has(task.id))
@@ -316,10 +336,55 @@ export default function App() {
       setError('无法读取剪贴板，请在新建窗口中手动粘贴链接')
     }
   }
+  const confirmLocalMediaPush = async (path?: string) => {
+    let selectedPath = path || ''
+    if (!selectedPath) {
+      const result = await pickLocalMediaFile()
+      if (result.canceled) return
+      if (!result.ok || !result.path) { setError(result.error || '无法选择本机文件'); return }
+      selectedPath = result.path
+    }
+    const filename = selectedPath.split(/[\\/]/).pop() || selectedPath
+    setConfirmation({
+      title: '推送本机文件到电视？',
+      message: `将临时通过局域网共享“${filename}”给已选择的电视设备。电视会按自身支持的格式播放；播放停止后约 2 分钟会自动撤销共享，最长保留 2 小时。`,
+      confirmLabel: '确认推送',
+      danger: false,
+      run: () => {
+        setConfirmation(null)
+        void (async () => {
+          setLocalPushBusy(true)
+          setError('')
+          try {
+            const result = await pushLocalTvboxFile(selectedPath)
+            setLocalShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds })
+            showFeedback(`已推送到电视：${result.share.filename}`)
+          } catch (reason: any) {
+            setError(reason.message || '本机文件推送失败')
+          } finally {
+            setLocalPushBusy(false)
+          }
+        })()
+      },
+    })
+  }
+  const stopLocalShare = async () => {
+    if (!localShare || localPushBusy) return
+    setLocalPushBusy(true)
+    try {
+      await stopLocalTvboxShare(localShare.id)
+      setLocalShare(null)
+      showFeedback('已停止本机文件共享')
+    } catch (reason: any) {
+      setError(reason.message || '停止本机文件共享失败')
+    } finally {
+      setLocalPushBusy(false)
+    }
+  }
 
   return <div className="desktop-app">
     {isTauriDesktop() && <div className="tauri-drag-region" data-tauri-drag-region />}
-    <DesktopToolbar commands={commands} theme={theme} version={appVersion} query={query} onQueryChange={setQuery} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onPauseAll={() => void pauseAllActive()} onStartAll={() => void startAllWaiting()} onOpen={() => selectedTasks[0]?.output_path && openExplorer(selectedTasks[0].output_path)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onBrowserExtension={() => setShowBrowserExtension(true)} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
+    <DesktopToolbar commands={commands} theme={theme} version={appVersion} query={query} onQueryChange={setQuery} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onPauseAll={() => void pauseAllActive()} onStartAll={() => void startAllWaiting()} onOpen={() => selectedTasks[0]?.output_path && openExplorer(selectedTasks[0].output_path)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onBrowserExtension={() => setShowBrowserExtension(true)} onPushLocalMedia={() => void confirmLocalMediaPush()} pushLocalMediaBusy={localPushBusy} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
     <div className="workspace">
       <Sidebar tasks={tasks} active={filter} onChange={setFilter} browserStatus={browserStatus} />
       <main className="content">
@@ -353,7 +418,7 @@ export default function App() {
         </select>
       </span>
       <span>已完成 <b>{fmtBytes(completedSize)}</b></span>
-      <span>{browserStatus?.detected ? `插件已连接${browserStatus.version ? ` · v${browserStatus.version}` : ''}` : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span>
+      {localShare ? <span className="local-share-status" title="电视停止访问文件约 2 分钟后会自动撤销共享；也可立即停止"><b>电视共享中</b><em>{localShare.filename}</em><button type="button" disabled={localPushBusy} onClick={() => void stopLocalShare()}>停止共享</button></span> : <span>{browserStatus?.detected ? `插件已连接${browserStatus.version ? ` · v${browserStatus.version}` : ''}` : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span>}
     </footer>
     {showRecognize && <RecognizeDialog settings={settings} initialUrl={recognizeInitialUrl} onClose={() => setShowRecognize(false)} onAdded={load} onNeedExtension={() => { setShowRecognize(false); setShowBrowserExtension(true) }} />}
     {showBatch && (
@@ -370,7 +435,7 @@ export default function App() {
     {showBrowserExtension && <BrowserExtensionDialog onClose={() => { setShowBrowserExtension(false); load() }} />}
     {showSettings && <SettingsPanel themePreference={themePreference} onThemePreferenceChange={changeThemePreference} onClose={() => { setShowSettings(false); load() }} />}
     {showUpdate && <UpdateDialog onClose={() => setShowUpdate(false)} />}
-    {detailTask && <TaskDetailsModal task={detailTask} pending={pending.has(detailTask.id)} onClose={() => setDetails(null)} onLog={() => setLogTaskId(detailTask.id)} onAction={action => perform(action, [detailTask])} onOpenFile={() => detailTask.output_path && openExplorer(detailTask.output_path)} onLaunchFile={() => launchOutput(detailTask)} onPreview={() => { setDetails(null); setPlaying(detailTask) }} />}
+    {detailTask && <TaskDetailsModal task={detailTask} pending={pending.has(detailTask.id)} onClose={() => setDetails(null)} onLog={() => setLogTaskId(detailTask.id)} onAction={action => perform(action, [detailTask])} onOpenFile={() => detailTask.output_path && openExplorer(detailTask.output_path)} onLaunchFile={() => launchOutput(detailTask)} onPushToTv={() => void confirmLocalMediaPush(detailTask.output_path)} onPreview={() => { setDetails(null); setPlaying(detailTask) }} />}
     {playingTask && <Suspense fallback={<div className="modal-overlay player-overlay"><div className="player-chunk-loading"><LoaderCircle className="spin" size={24} /><span>正在打开播放器</span></div></div>}><VideoPlayerModal task={playingTask} onClose={() => setPlaying(null)} /></Suspense>}
     {previewImage && <div className="modal-overlay image-preview-overlay" onMouseDown={() => setPreviewImage(null)}><section className="image-preview" onMouseDown={event => event.stopPropagation()}><header><strong>{previewImage.title || previewImage.filename}</strong><button className="modal-close-button" title="关闭预览" onClick={() => setPreviewImage(null)}><X size={18} /></button></header><img src={taskFileUrl(previewImage.id)} alt={previewImage.title || previewImage.filename} /></section></div>}
     {logTaskId && <LogModal taskId={logTaskId} onClose={() => setLogTaskId(null)} />}

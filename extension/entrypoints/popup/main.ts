@@ -175,6 +175,8 @@ async function main() {
   }
 
   const pushToTv = async (item: MediaResource) => {
+    const name = item.filename || item.title || item.kind.toUpperCase()
+    if (!window.confirm(`确认推送到电视？\n\n${name}\n\n电视将直接打开该媒体地址。`)) return
     setError('')
     pushing[item.id] = '推送中'
     renderList()

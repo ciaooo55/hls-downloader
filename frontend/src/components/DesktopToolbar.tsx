@@ -1,6 +1,6 @@
 import {
   ClipboardPaste, FileText, FolderOpen, Layers3, Moon, Pause, Play,
-  CircleArrowUp, Plus, RefreshCw, RotateCcw, Search, Settings, Sun, Trash2, Users, X, XCircle,
+  CircleArrowUp, Plus, RefreshCw, RotateCcw, Search, Settings, Sun, Trash2, Tv, Users, X, XCircle,
 } from 'lucide-react'
 import type { CommandState } from '../taskCommands'
 import type { Theme } from '../theme'
@@ -22,6 +22,8 @@ interface Props {
   onOpen: () => void
   onLog: () => void
   onBrowserExtension: () => void
+  onPushLocalMedia: () => void
+  pushLocalMediaBusy: boolean
   onRefresh: () => void
   onUpdate: () => void
   onSettings: () => void
@@ -135,6 +137,10 @@ export default function DesktopToolbar(props: Props) {
       <div className="tool-group">
         <ToolButton title="浏览器插件" onClick={props.onBrowserExtension}>
           <Users size={18} />
+        </ToolButton>
+        <ToolButton title="选择本机文件推送到电视" disabled={props.pushLocalMediaBusy} onClick={props.onPushLocalMedia}>
+          <Tv size={18} />
+          <span className="tool-label">推电视</span>
         </ToolButton>
         <ToolButton title="刷新任务" onClick={props.onRefresh}>
           <RefreshCw size={18} />
