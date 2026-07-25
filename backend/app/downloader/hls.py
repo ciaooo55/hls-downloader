@@ -21,7 +21,7 @@ from ..naming import is_generic_media_name, suggest_manifest_name
 from ..request_context import build_task_headers
 from .http_file import _content_disposition_filename
 from .merge import merge_segments
-from .errors import as_download_error, diagnose_download_error, format_download_error, should_retry_download_error
+from .errors import as_download_error, diagnose_download_error, format_download_error, retry_delay_seconds, should_retry_download_error
 from .throttle import throttle_bytes
 from .engine import task_output_dir, task_work_dir
 from .parser import UnsupportedPlaylistError, parse_m3u8
@@ -661,7 +661,7 @@ class HLSDownloader:
                     self._log(
                         f"[segment {index}] 第 {attempt + 1}/{MAX_RETRIES} 次失败: {exc}"
                     )
-                    await asyncio.sleep(min(2**attempt, 10))
+                    await asyncio.sleep(retry_delay_seconds(exc, min(2**attempt, 10)))
         if last_error is None:
             raise RuntimeError(f"分片 {index} 下载失败")
         raise as_download_error(

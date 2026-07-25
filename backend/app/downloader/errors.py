@@ -1,4 +1,7 @@
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
+import math
+import time
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import httpx
@@ -347,3 +350,25 @@ def should_retry_download_error(exc: BaseException) -> bool:
     if not status:
         return True
     return status in {408, 425, 429} or 500 <= status <= 599
+
+
+def retry_delay_seconds(exc: BaseException, fallback: float, maximum: float = 60.0) -> float:
+    """Honor a bounded HTTP Retry-After delay when the server supplies one."""
+    default = max(0.0, min(float(fallback), float(maximum)))
+    for item in _exception_chain(exc):
+        value = _response_headers(getattr(item, "response", None)).get("retry-after", "").strip()
+        if not value:
+            continue
+        try:
+            seconds = float(value)
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(value)
+                if retry_at.tzinfo is None:
+                    continue
+                seconds = retry_at.timestamp() - time.time()
+            except (TypeError, ValueError, IndexError, OverflowError):
+                continue
+        if math.isfinite(seconds) and seconds >= 0:
+            return min(float(maximum), seconds)
+    return default

@@ -3,7 +3,7 @@ import asyncio
 import httpx
 from curl_cffi.requests.exceptions import ReadTimeout as CurlReadTimeout
 
-from backend.app.downloader.errors import diagnose_download_error, should_retry_download_error
+from backend.app.downloader.errors import diagnose_download_error, retry_delay_seconds, should_retry_download_error
 from backend.app.downloader.hls import HLSDownloader
 from backend.app.models import Task, TaskStatus
 
@@ -109,6 +109,26 @@ def test_proxy_authentication_has_a_specific_recovery_hint():
     assert "代理服务器" in details.hint
     assert "账号密码" in details.hint
     assert should_retry_download_error(_http_error(407)) is False
+
+
+def test_retry_delay_honors_valid_retry_after_and_bounds_it():
+    request = httpx.Request("GET", "https://example.test/file")
+    throttled = httpx.HTTPStatusError(
+        "too many", request=request,
+        response=httpx.Response(429, headers={"Retry-After": "12"}, request=request),
+    )
+    excessive = httpx.HTTPStatusError(
+        "too many", request=request,
+        response=httpx.Response(429, headers={"Retry-After": "999"}, request=request),
+    )
+    invalid = httpx.HTTPStatusError(
+        "too many", request=request,
+        response=httpx.Response(429, headers={"Retry-After": "later"}, request=request),
+    )
+
+    assert retry_delay_seconds(throttled, 2, maximum=30) == 12
+    assert retry_delay_seconds(excessive, 2, maximum=30) == 30
+    assert retry_delay_seconds(invalid, 2, maximum=30) == 2
 
 
 def test_range_and_merge_failures_get_stable_codes():

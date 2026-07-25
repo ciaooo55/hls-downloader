@@ -18,7 +18,7 @@ from ..naming import is_generic_media_name
 from ..request_context import build_task_headers
 from ..utils import sanitize_filename
 from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
-from .errors import diagnose_download_error, format_download_error, should_retry_download_error
+from .errors import diagnose_download_error, format_download_error, retry_delay_seconds, should_retry_download_error
 from .throttle import throttle_bytes
 
 
@@ -463,7 +463,7 @@ class HTTPDownloader(SeeklessEngine):
                         if not should_retry_download_error(exc):
                             break
                         if attempt < MAX_RETRIES:
-                            await asyncio.sleep(min(4, attempt))
+                            await asyncio.sleep(retry_delay_seconds(exc, min(4, attempt)))
                 if last_error is not None:
                     self._claimed_chunks.discard(index)
                     raise last_error
