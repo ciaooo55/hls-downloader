@@ -223,10 +223,22 @@ export default defineContentScript({
     const pushToTv = (resource: MediaResource, button: HTMLButtonElement) => {
       const result = ui.shadow.querySelector<HTMLElement>('.result')
       button.setAttribute('disabled', ''); button.textContent = '等待选择'
-      void runtimeMessage({ type: 'push-to-tv', resource }).then(response => {
+      const waitForResult = async (requestId: string) => {
+        const deadline = Date.now() + 130_000
+        while (Date.now() < deadline) {
+          await new Promise(resolve => setTimeout(resolve, 1_000))
+          const status = await runtimeMessage({ type: 'media-push-status', requestId }).catch(() => null)
+          if (['done', 'failed', 'canceled'].includes(String(status?.status || ''))) return status
+        }
+        return { status: 'pending', message: '桌面端尚未完成设备选择' }
+      }
+      void runtimeMessage({ type: 'push-to-tv', resource }).then(async response => {
         if (!response?.ok) throw new Error(response?.error || '电视推送失败')
-        button.textContent = '已发送'
         if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = '请在桌面下载器选择 TVBox 设备' }
+        const status = await waitForResult(String(response.id || ''))
+        if (status.status !== 'done') throw new Error(status.message || '电视推送未完成')
+        button.textContent = '已发送'
+        if (result) result.textContent = status.message || 'TVBox 推送成功'
       }).catch(reason => {
         button.removeAttribute('disabled'); button.textContent = '推电视'
         if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '推送失败' }
@@ -238,10 +250,19 @@ export default defineContentScript({
     const castResource = (resource: MediaResource, button: HTMLButtonElement) => {
       const result = ui.shadow.querySelector<HTMLElement>('.result')
       button.setAttribute('disabled', ''); button.textContent = '等待选择'
-      void runtimeMessage({ type: 'cast-to-device', resource }).then(response => {
+      void runtimeMessage({ type: 'cast-to-device', resource }).then(async response => {
         if (!response?.ok) throw new Error(response?.error || '投屏请求失败')
-        button.textContent = '已发送'
         if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = '请在桌面下载器选择投屏设备' }
+        const deadline = Date.now() + 130_000
+        let status: any = null
+        while (Date.now() < deadline) {
+          await new Promise(resolve => setTimeout(resolve, 1_000))
+          status = await runtimeMessage({ type: 'media-push-status', requestId: String(response.id || '') }).catch(() => null)
+          if (['done', 'failed', 'canceled'].includes(String(status?.status || ''))) break
+        }
+        if (status?.status !== 'done') throw new Error(status?.message || '投屏未完成')
+        button.textContent = '已发送'
+        if (result) result.textContent = status.message || '投屏成功'
       }).catch(reason => {
         button.removeAttribute('disabled'); button.textContent = '投屏'
         if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '投屏请求失败' }

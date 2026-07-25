@@ -750,6 +750,12 @@ export default defineBackground(() => {
         .catch(error => sendResponse({ ok: false, error: String(error) }))
       return true
     }
+    if (message?.type === 'media-push-status') {
+      void native({ op: 'media_push_status', request_id: String(message.requestId || '') })
+        .then(response => sendResponse(response))
+        .catch(error => sendResponse({ ok: false, error: String(error) }))
+      return true
+    }
     if (message?.type === 'activate') {
       void native({ op: 'activate' })
         .then(response => sendResponse(response))

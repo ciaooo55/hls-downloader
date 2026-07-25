@@ -292,6 +292,54 @@ def download_installer(
         temporary.unlink(missing_ok=True)
 
 
+async def queue_update_download(info: UpdateInfo, manager) -> object:
+    """Create a real, persisted HTTP task for the installer download.
+
+    Updates must have the same pause/resume, queue and progress semantics as
+    user downloads. The task identity is stable for a version+digest pair so a
+    restart can resume the partial installer instead of starting over.
+    """
+    from .models import TaskStatus, TaskType
+
+    if not info.available:
+        raise UpdateError("当前已经是最新版本")
+    if not info.can_auto_install:
+        raise UpdateError("自动安装仅适用于安装版")
+    identity = f"{info.latest_version}:{info.digest.lower()}"
+    for task in manager.tasks.values():
+        if task.engine_state.get("update_identity") != identity:
+            continue
+        if task.status is TaskStatus.DONE and task.output_path and Path(task.output_path).is_file():
+            return task
+        if task.status is TaskStatus.PAUSED:
+            await manager.resume_task(task.id)
+        elif task.status is TaskStatus.QUEUED and not task.task_handle:
+            await manager.start_task(task.id)
+        return task
+
+    task = await manager.create_task(
+        url=info.download_url,
+        task_type=TaskType.HTTP,
+        title=f"HLS Downloader v{info.latest_version} 更新",
+        filename=f"HLSDownloader-Update-{info.latest_version}.exe",
+        checksum=f"sha256:{info.digest}",
+        output_dir=str(get_update_directory()),
+        auto_start=False,
+        inherit_default_headers=False,
+    )
+    task.engine_state.update({
+        "is_update": True,
+        "update_identity": identity,
+        "update_version": info.latest_version,
+        "update_expected_size": info.size,
+        "temp_dir": str(RUNTIME_PATHS.data_root / "updates"),
+    })
+    task.last_log = f"正在下载 v{info.latest_version} 更新安装包"
+    await manager._save_db(task)
+    await manager.start_task(task.id)
+    return task
+
+
 def cleanup_update_cache() -> None:
     roots = {get_update_directory(), RUNTIME_PATHS.data_root / "updates"}
     for root in roots:
@@ -341,6 +389,12 @@ class UpdateService:
         if len(info.digest) != 64 or any(char not in "0123456789abcdef" for char in info.digest.lower()):
             return None
         return info
+
+    def prepare_managed_download(self) -> UpdateInfo:
+        """Get a verified update descriptor without creating a transient task."""
+        if self._install_started:
+            raise UpdateError("更新安装程序已经启动")
+        return self._cached_installable_update() or self.check(force=True)
 
     def download_and_launch(self, *, process_starter=subprocess.Popen) -> UpdateInfo:
         if not self._install_lock.acquire(blocking=False):

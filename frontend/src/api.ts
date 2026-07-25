@@ -106,6 +106,7 @@ export const fetchLocalTvboxShare = (shareId: string) => request<{ active: boole
 export const recognizeUrl = (data: any) => request<any>('/recognize', { method: 'POST', body: JSON.stringify(data) })
 export const fetchBrowserHandoffs = () => request<any[]>('/browser/handoffs')
 export const fetchBrowserHandoff = (id: string) => request<any>(`/browser/handoffs/${encodeURIComponent(id)}`)
+export const completeBrowserMediaPush = (id: string, status: 'done' | 'failed' | 'canceled', message = '') => request<{ ok: boolean }>(`/browser/media-push/${encodeURIComponent(id)}/complete`, { method: 'POST', body: JSON.stringify({ status, message }) })
 export const fetchBrowserStatus = () => request<any>('/browser/status')
 export const resolveBrowserHandoff = (id: string, action: 'accept' | 'reject' | 'cancel', data?: object) =>
   request<any>(`/browser/handoffs/${encodeURIComponent(id)}/${action}`, {
@@ -115,7 +116,7 @@ export const resolveBrowserHandoff = (id: string, action: 'accept' | 'reject' | 
 export const fetchUpdateInfo = (force = false) =>
   request<any>(`/update/check${force ? '?force=true' : ''}`)
 export const installUpdate = () =>
-  request<{ ok: boolean; version: string }>('/update/install', { method: 'POST' })
+  request<{ ok: boolean; version: string; task_id: string }>('/update/install', { method: 'POST' })
 export const createPlaybackSession = (id: string) =>
   request<PlaybackSession>(`/tasks/${id}/playback`, { method: 'POST' })
 export const fetchPlaybackStatus = (id: string, session: string) =>

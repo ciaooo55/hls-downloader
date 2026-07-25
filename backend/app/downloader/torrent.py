@@ -30,7 +30,7 @@ def _torrent_session(lt):
         if _SHARED_SESSION is None:
             _SHARED_SESSION = lt.session()
         session = _SHARED_SESSION
-        per_torrent = max(100, int(settings.bt_max_connections))
+        per_torrent = max(10, int(settings.bt_max_connections))
         session_settings = {
             "connections_limit": per_torrent * max(1, int(settings.max_concurrent_tasks)),
             # 50 connection attempts/s leaves sparse public swarms idle for a
@@ -141,12 +141,32 @@ class TorrentDownloader:
     @classmethod
     def validate_torrent_bytes(cls, content: bytes) -> None:
         """Fail fast for HTML/error pages renamed to ``.torrent`` files."""
+        cls.inspect_torrent_bytes(content)
+
+    @classmethod
+    def inspect_torrent_bytes(cls, content: bytes) -> dict:
+        """Read local torrent metadata before any peer connection is started."""
         lt = cls._load_libtorrent()
         try:
             data = lt.bdecode(content)
-            lt.torrent_info(data)
+            info = lt.torrent_info(data)
         except Exception as exc:
             raise ValueError("种子文件无效、已损坏，或下载到的不是 BT 种子") from exc
+        storage = info.files()
+        files = [
+            {
+                "index": index,
+                "path": storage.file_path(index).replace("\\", "/"),
+                "size": int(storage.file_size(index)),
+                "offset": int(storage.file_offset(index)),
+            }
+            for index in range(storage.num_files())
+        ]
+        return {
+            "name": str(info.name() or ""),
+            "files": files,
+            "piece_count": int(info.num_pieces()),
+        }
 
     async def run(self) -> None:
         task = self.task
@@ -190,7 +210,7 @@ class TorrentDownloader:
             handle = session.add_torrent(params)
             self._handle = handle
             try:
-                handle.set_max_connections(max(50, int(settings.bt_max_connections)))
+                handle.set_max_connections(max(10, int(settings.bt_max_connections)))
             except Exception:
                 pass
             for peer in task.engine_state.get("peers", []):

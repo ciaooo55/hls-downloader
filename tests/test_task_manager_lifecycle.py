@@ -105,6 +105,25 @@ def test_torrent_file_selection_can_change_while_downloading(monkeypatch):
     asyncio.run(run())
 
 
+def test_torrent_waits_for_explicit_file_selection_before_it_can_start():
+    async def scenario():
+        manager = TaskManager()
+        task = Task(
+            id="torrent-awaiting-selection",
+            url="torrent-file:bundle.torrent",
+            task_type=TaskType.TORRENT,
+            status=TaskStatus.AWAITING_SELECTION,
+            engine_state={
+                "files": [{"index": 0, "path": "movie.mkv", "size": 1}],
+                "selected_files": [0],
+            },
+        )
+        manager.tasks[task.id] = task
+        assert "start" in manager.get_available_actions(task)
+
+    asyncio.run(scenario())
+
+
 def test_cancel_waits_for_running_coroutine(monkeypatch):
     cleanup_finished = asyncio.Event()
 

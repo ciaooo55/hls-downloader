@@ -2,12 +2,12 @@ import { useRef, useState, useEffect } from 'react'
 import { Download, FileUp, Globe2, Link } from 'lucide-react'
 import { ApiError, createTask, isDuplicateUrlError, recognizeUrl, uploadTorrent } from '../api'
 import { recognitionCandidateViews, recognitionView, type RecognitionResult } from '../recognition'
-import type { Settings } from '../types'
+import type { Settings, Task } from '../types'
 import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 import ConfirmDialog from './ConfirmDialog'
 import { Button, Dialog, DialogFooter, DialogHeader, DialogOverlay, Field, Input } from './ui'
 
-export default function RecognizeDialog({ settings, initialUrl = '', onClose, onAdded, onNeedExtension }: { settings: Settings; initialUrl?: string; onClose: () => void; onAdded: () => void; onNeedExtension: () => void }) {
+export default function RecognizeDialog({ settings, initialUrl = '', onClose, onAdded, onNeedExtension }: { settings: Settings; initialUrl?: string; onClose: () => void; onAdded: (task?: Task) => void; onNeedExtension: () => void }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKeyDown)
@@ -113,7 +113,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const importTorrent = async (file?: File) => {
     if (!file) return
     setBusy(true); setError('')
-    try { await uploadTorrent(file, filename); onAdded(); onClose() }
+    try { const task = await uploadTorrent(file, filename); onAdded(task); onClose() }
     catch (reason: any) { setError(reason.message || '种子文件导入失败') }
     finally { setBusy(false) }
   }

@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from backend.app import updater
 from backend.app import api as api_module
 from backend.app.config import settings
+from backend.app.models import Task
 from backend.app.updater import UpdateError, UpdateInfo
 
 
@@ -270,7 +271,7 @@ def test_update_api_rejects_duplicate_installer_launch(monkeypatch):
     def duplicate():
         raise UpdateError("更新安装程序已经启动")
 
-    monkeypatch.setattr(api_module.update_service, "download_and_launch", duplicate)
+    monkeypatch.setattr(api_module.update_service, "prepare_managed_download", duplicate)
     test_app = FastAPI()
     test_app.include_router(api_module.router)
 
@@ -279,3 +280,40 @@ def test_update_api_rejects_duplicate_installer_launch(monkeypatch):
 
     assert response.status_code == 409
     assert "已经启动" in response.json()["detail"]
+
+
+def test_managed_update_is_a_resumable_download_task(monkeypatch, tmp_path):
+    info = _info(b"MZsetup")
+
+    class FakeManager:
+        def __init__(self):
+            self.tasks = {}
+            self.started = []
+
+        async def create_task(self, **kwargs):
+            task = Task(
+                id="managed-update",
+                url=kwargs["url"],
+                task_type=kwargs["task_type"],
+                filename=kwargs["filename"],
+                expected_checksum=kwargs["checksum"],
+            )
+            self.tasks[task.id] = task
+            return task
+
+        async def _save_db(self, _task):
+            return None
+
+        async def start_task(self, task_id):
+            self.started.append(task_id)
+
+        async def resume_task(self, task_id):
+            self.started.append(task_id)
+
+    monkeypatch.setattr(updater, "get_update_directory", lambda: tmp_path)
+    manager = FakeManager()
+    task = __import__("asyncio").run(updater.queue_update_download(info, manager))
+
+    assert task.engine_state["is_update"] is True
+    assert task.engine_state["update_identity"] == f"{info.latest_version}:{info.digest}"
+    assert manager.started == [task.id]

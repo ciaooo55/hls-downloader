@@ -222,7 +222,7 @@ class TaskManager:
     def get_available_actions(self, task: Task) -> list[str]:
         live = self._has_live_handle(task)
         actions: list[str] = []
-        if task.status is TaskStatus.QUEUED and not live:
+        if task.status in {TaskStatus.QUEUED, TaskStatus.AWAITING_SELECTION} and not live:
             actions.append("start")
         if task.status is TaskStatus.QUEUED:
             position = self.get_queue_position(task)
@@ -499,8 +499,14 @@ class TaskManager:
         task = self._get_task(task_id)
         if task.task_handle and not task.task_handle.done():
             raise TaskConflictError("任务已经在运行")
-        if task.status not in {TaskStatus.QUEUED, TaskStatus.PAUSED}:
+        if task.status not in {TaskStatus.QUEUED, TaskStatus.PAUSED, TaskStatus.AWAITING_SELECTION}:
             raise TaskConflictError(f"任务状态 {task.status.value} 不能开始")
+        if task.status is TaskStatus.AWAITING_SELECTION:
+            if task.task_type is not TaskType.TORRENT or not task.engine_state.get("selected_files"):
+                raise TaskConflictError("请至少选择一个 BT 文件后再开始下载")
+            task.status = TaskStatus.QUEUED
+            task.stage = "queued"
+            task.last_log = "BT 文件已确认，等待下载队列"
 
         task.cancel_event = asyncio.Event()
         task.pause_event = asyncio.Event()

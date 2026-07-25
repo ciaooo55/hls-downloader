@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FastForward, LoaderCircle, Pause, Play, Trash2, X } from 'lucide-react'
-import { castLocalFile, castMediaUrl, clearCompletedTasks, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLocalTvboxShare, fetchSettings, fetchTasks, importTorrentPath, launchFile, openExplorer, pushLocalTvboxFile, pushTvboxUrl, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
+import { castLocalFile, castMediaUrl, clearCompletedTasks, completeBrowserMediaPush, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLocalTvboxShare, fetchSettings, fetchTasks, importTorrentPath, launchFile, openExplorer, pushLocalTvboxFile, pushTvboxUrl, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
 import { fmtBytes, fmtSpeed } from './format'
 import { isRunningStatus, mergeTaskEvent } from './taskState'
 import { commandState } from './taskCommands'
@@ -66,7 +66,7 @@ export default function App() {
   const [handoffBusy, setHandoffBusy] = useState(false)
   const [error, setError] = useState('')
   const [confirmation, setConfirmation] = useState<{ title: string; message: string; confirmLabel: string; danger: boolean; run: () => void } | null>(null)
-  const [devicePick, setDevicePick] = useState<{ kind: 'cast' | 'tvbox'; path?: string; url?: string; filename: string } | null>(null)
+  const [devicePick, setDevicePick] = useState<{ kind: 'cast' | 'tvbox'; path?: string; url?: string; filename: string; requestId?: string } | null>(null)
   const lastStatuses = useRef<Record<string, string>>({})
   const feedbackTimer = useRef<number | null>(null)
   const loadInFlight = useRef<Promise<void> | null>(null)
@@ -86,7 +86,7 @@ export default function App() {
       const item = (event as CustomEvent).detail
       const resource = item?.resource || {}
       if ((item?.kind === 'cast' || item?.kind === 'tvbox') && resource.url) {
-        setDevicePick({ kind: item.kind, url: String(resource.url), filename: String(resource.filename || resource.title || '网页视频') })
+        setDevicePick({ kind: item.kind, url: String(resource.url), filename: String(resource.filename || resource.title || '网页视频'), requestId: String(item.id || '') || undefined })
       }
     }
     window.addEventListener('hls-browser-media-push', receive)
@@ -427,7 +427,8 @@ export default function App() {
           setLocalShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'tvbox' })
           showFeedback(`已 TVBox 推送：${pick.filename}`)
         }
-      } catch (reason: any) { setError(reason.message || '发送失败') }
+        if (pick.requestId) await completeBrowserMediaPush(pick.requestId, 'done', `已发送到 ${device.label || device.host || '所选设备'}`)
+      } catch (reason: any) { setError(reason.message || '发送失败'); if (pick.requestId) void completeBrowserMediaPush(pick.requestId, 'failed', reason.message || '发送失败') }
       finally { setBusy(false) }
     })()
   }
@@ -471,7 +472,7 @@ export default function App() {
       <span>已完成 <b>{fmtBytes(completedSize)}</b></span>
       {localShare ? <span className="local-share-status" title={localShare.kind === 'cast' ? 'DLNA 投屏支持暂停、继续和快进；停止共享会立即取消本机媒体链接。' : 'TVBox 推送不定义通用播放控制；停止共享会立即取消本机媒体链接。'}><b>{localShare.kind === 'cast' ? '投屏共享中' : 'TVBox 共享中'}</b><em>{localShare.filename}</em>{localShare.kind === 'cast' && <span className="cast-controls"><button type="button" disabled={castControlBusy || castBusy} title="暂停投屏播放" aria-label="暂停投屏播放" onClick={() => void runCastControl('pause')}><Pause size={13} /></button><button type="button" disabled={castControlBusy || castBusy} title="继续投屏播放" aria-label="继续投屏播放" onClick={() => void runCastControl('play')}><Play size={13} /></button><button type="button" disabled={castControlBusy || castBusy} title="快进 10 秒" aria-label="快进 10 秒" onClick={() => void runCastControl('seek')}><FastForward size={13} /></button></span>}<button type="button" disabled={localPushBusy || castBusy || castControlBusy} onClick={() => void stopLocalShare()}>停止共享</button></span> : <span>{browserStatus?.detected ? `插件已连接${browserStatus.version ? ` · v${browserStatus.version}` : ''}` : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span>}
     </footer>
-    {showRecognize && <RecognizeDialog settings={settings} initialUrl={recognizeInitialUrl} onClose={() => setShowRecognize(false)} onAdded={load} onNeedExtension={() => { setShowRecognize(false); setShowBrowserExtension(true) }} />}
+    {showRecognize && <RecognizeDialog settings={settings} initialUrl={recognizeInitialUrl} onClose={() => setShowRecognize(false)} onAdded={task => { void load(); if (task?.task_type === 'torrent') setDetails(task) }} onNeedExtension={() => { setShowRecognize(false); setShowBrowserExtension(true) }} />}
     {showBatch && (
       <DialogOverlay onClose={() => setShowBatch(false)}>
         <Dialog className="batch-modal" label="批量添加" onClose={() => setShowBatch(false)}>
@@ -493,6 +494,6 @@ export default function App() {
     {feedback && <div className="toast" role="status">{feedback}</div>}
     {handoffs[0] && <BrowserHandoffDialog key={handoffs[0].id} item={handoffs[0]} busy={handoffBusy} settings={settings} onResolve={resolveHandoff} queueRemaining={Math.max(0, handoffs.length - 1)} />}
     {confirmation && <ConfirmDialog title={confirmation.title} message={confirmation.message} confirmLabel={confirmation.confirmLabel} danger={confirmation.danger} onCancel={() => setConfirmation(null)} onConfirm={confirmation.run} />}
-    {devicePick && <DevicePickerDialog mode={devicePick.kind} onClose={() => setDevicePick(null)} onChoose={completeDevicePick} />}
+    {devicePick && <DevicePickerDialog mode={devicePick.kind} onClose={() => { if (devicePick.requestId) void completeBrowserMediaPush(devicePick.requestId, 'canceled', '已取消设备选择'); setDevicePick(null) }} onChoose={completeDevicePick} />}
   </div>
 }

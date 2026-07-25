@@ -110,7 +110,7 @@ def dispatch(message: dict) -> dict:
     operation = message.get("op")
     if operation not in {
         "ping", "activate", "offer", "download", "handoff_status", "wait_handoff",
-        "set_takeover_settings", "push_to_tv", "media_push",
+        "set_takeover_settings", "push_to_tv", "media_push", "media_push_status",
     }:
         raise ValueError("不支持的 Native Messaging 操作")
     _ensure_app()
@@ -151,6 +151,9 @@ def dispatch(message: dict) -> dict:
             "kind": str(message.get("kind", "")),
             "resource": message.get("resource", {}),
         })
+    if operation == "media_push_status":
+        request_id = str(message.get("request_id", ""))
+        return _request("GET", f"/browser/media-push/{request_id}/status")
     handoff_id = str(message.get("handoff_id", ""))
     if operation == "wait_handoff":
         return {"ok": True, "handoff": _request("GET", f"/browser/handoffs/{handoff_id}/wait", timeout=125)}

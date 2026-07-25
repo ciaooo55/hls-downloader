@@ -1,7 +1,10 @@
 import asyncio
+import contextlib
 import json
 import re
+import subprocess
 import threading
+import time
 import uuid
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Header, Request, UploadFile, File, Form
@@ -42,7 +45,7 @@ from .desktop_runtime import activate_window, present_browser_handoff, has_brows
 from .desktop_runtime import register_activation, register_browser_handoff, register_shutdown, set_desktop_handoff_session
 from .native_desktop import native_desktop_session, request_core_shutdown
 from .url_recognition import RecognitionError, recognize_url
-from .updater import UpdateCheckError, UpdateError, update_service
+from .updater import UpdateCheckError, UpdateError, queue_update_download, update_service
 from .models import TaskStatus, TaskType
 from .browser_handoff import browser_handoffs
 from .downloader.throttle import download_throttle
@@ -52,6 +55,7 @@ from .dlna import cast_control, cast_media, normalize_cast_device, scan_cast_dev
 router = APIRouter(prefix="/api")
 _browser_media_pushes: dict[str, dict] = {}
 _browser_media_push_lock = threading.Lock()
+_update_launch_tasks: set[str] = set()
 
 def _check_token(x_token: str = Header(default="")):
     if x_token != settings.token:
@@ -404,16 +408,51 @@ async def check_update(force: bool = False, x_token: str = Header(default="")):
 async def install_update(x_token: str = Header(default="")):
     _check_token(x_token)
     try:
-        info = await asyncio.to_thread(update_service.download_and_launch)
+        info = await asyncio.to_thread(update_service.prepare_managed_download)
+        task = await queue_update_download(info, manager)
     except UpdateError as exc:
         status = 409 if any(
             marker in str(exc) for marker in ("重复", "正在下载", "已经启动")
         ) else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc
+    if task.status is TaskStatus.DONE and task.output_path:
+        await _launch_managed_update(task.id)
+    elif task.id not in _update_launch_tasks:
+        _update_launch_tasks.add(task.id)
+        asyncio.create_task(_wait_and_launch_managed_update(task.id))
+    return {"ok": True, "version": info.latest_version, "task_id": task.id}
+
+
+async def _wait_and_launch_managed_update(task_id: str) -> None:
+    try:
+        task = manager.tasks.get(task_id)
+        if task and task.task_handle:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task.task_handle
+        if task and task.status is TaskStatus.DONE and task.output_path:
+            await _launch_managed_update(task_id)
+    finally:
+        _update_launch_tasks.discard(task_id)
+
+
+async def _launch_managed_update(task_id: str) -> None:
+    task = manager.tasks.get(task_id)
+    if not task or task.status is not TaskStatus.DONE or not task.output_path:
+        return
+    installer = Path(task.output_path)
+    try:
+        with installer.open("rb") as handle:
+            if handle.read(2) != b"MZ":
+                raise OSError("不是有效的 Windows 安装程序")
+        subprocess.Popen([str(installer), "/DELETESELF=1"])
+    except OSError as exc:
+        task.last_log = f"更新安装包已下载，但无法自动启动：{exc}"
+        await manager._save_db(task)
+        return
+    update_service._install_started = True
     timer = threading.Timer(0.75, request_shutdown)
     timer.daemon = True
     timer.start()
-    return {"ok": True, "version": info.latest_version}
 
 
 @router.post("/recognize")
@@ -555,7 +594,11 @@ async def create_browser_media_push(request: Request, x_token: str = Header(defa
         raise HTTPException(status_code=422, detail="浏览器投送请求无效")
     request_id = uuid.uuid4().hex
     with _browser_media_push_lock:
-        _browser_media_pushes[request_id] = {"id": request_id, "kind": kind, "resource": resource}
+        now = time.monotonic()
+        for stale_id, item in list(_browser_media_pushes.items()):
+            if now - float(item.get("created_at", now)) > 180:
+                _browser_media_pushes.pop(stale_id, None)
+        _browser_media_pushes[request_id] = {"id": request_id, "kind": kind, "resource": resource, "created_at": now, "status": "pending", "message": "等待在桌面端选择设备"}
     if not native_desktop_session.push("media_push", request_id):
         with _browser_media_push_lock:
             _browser_media_pushes.pop(request_id, None)
@@ -568,10 +611,37 @@ async def create_browser_media_push(request: Request, x_token: str = Header(defa
 async def get_browser_media_push(request_id: str, x_token: str = Header(default="")):
     _check_token(x_token)
     with _browser_media_push_lock:
-        item = _browser_media_pushes.pop(request_id, None)
+        item = _browser_media_pushes.get(request_id)
     if not item:
         raise HTTPException(status_code=404, detail="投送请求不存在或已过期")
-    return item
+    return {key: value for key, value in item.items() if key != "created_at"}
+
+
+@router.get("/browser/media-push/{request_id}/status")
+async def get_browser_media_push_status(request_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    with _browser_media_push_lock:
+        item = _browser_media_pushes.get(request_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="投送请求不存在或已过期")
+    return {key: value for key, value in item.items() if key in {"id", "status", "message"}}
+
+
+@router.post("/browser/media-push/{request_id}/complete")
+async def complete_browser_media_push(request_id: str, request: Request, x_token: str = Header(default="")):
+    _check_token(x_token)
+    payload = await request.json()
+    status = str(payload.get("status", "")).strip().lower()
+    if status not in {"done", "failed", "canceled"}:
+        raise HTTPException(status_code=422, detail="投送完成状态无效")
+    message = str(payload.get("message", "")).strip()[:300]
+    with _browser_media_push_lock:
+        item = _browser_media_pushes.get(request_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="投送请求不存在或已过期")
+        item["status"] = status
+        item["message"] = message or ("已完成" if status == "done" else "投送失败" if status == "failed" else "已取消")
+    return {"ok": True}
 
 
 @router.post("/cast/control")
@@ -658,7 +728,7 @@ async def create_torrent_file_task(
         raise HTTPException(status_code=400, detail="种子文件为空或超过 16 MiB")
     try:
         from .downloader.torrent import TorrentDownloader
-        TorrentDownloader.validate_torrent_bytes(content)
+        metadata = TorrentDownloader.inspect_torrent_bytes(content)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -674,9 +744,20 @@ async def create_torrent_file_task(
     task_dir.mkdir(parents=True, exist_ok=True)
     source = task_dir / "uploaded.torrent"
     source.write_bytes(content)
-    task.engine_state["torrent_path"] = str(source)
+    files = metadata["files"]
+    task.engine_state.update({
+        "torrent_path": str(source),
+        "files": files,
+        "selected_files": [entry["index"] for entry in files],
+    })
+    task.title = title or metadata["name"] or task.title
+    task.filename = task.title or task.filename
+    task.progress.total_bytes = sum(int(entry["size"]) for entry in files)
+    task.progress.total_segments = int(metadata["piece_count"])
+    task.status = TaskStatus.AWAITING_SELECTION
+    task.stage = "awaiting_selection"
+    task.last_log = "请选择要下载的 BT 文件，然后点击开始下载"
     await manager._save_db(task)
-    await manager.start_task(task.id)
     return _to_resp(task)
 
 
@@ -689,14 +770,26 @@ async def create_torrent_path_task(body: TorrentPathImport, x_token: str = Heade
     try:
         content = source.read_bytes()
         from .downloader.torrent import TorrentDownloader
-        TorrentDownloader.validate_torrent_bytes(content)
+        metadata = TorrentDownloader.inspect_torrent_bytes(content)
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="种子文件无法读取或已损坏") from exc
     task = await manager.create_task(url=f"torrent-file:{source.name}", task_type=TaskType.TORRENT, title=source.stem, filename=source.stem, auto_start=False)
     task_dir = task_work_dir(task); task_dir.mkdir(parents=True, exist_ok=True)
     saved = task_dir / "uploaded.torrent"; saved.write_bytes(content)
-    task.engine_state["torrent_path"] = str(saved)
-    await manager._save_db(task); await manager.start_task(task.id)
+    files = metadata["files"]
+    task.engine_state.update({
+        "torrent_path": str(saved),
+        "files": files,
+        "selected_files": [entry["index"] for entry in files],
+    })
+    task.title = metadata["name"] or task.title
+    task.filename = task.title or task.filename
+    task.progress.total_bytes = sum(int(entry["size"]) for entry in files)
+    task.progress.total_segments = int(metadata["piece_count"])
+    task.status = TaskStatus.AWAITING_SELECTION
+    task.stage = "awaiting_selection"
+    task.last_log = "请选择要下载的 BT 文件，然后点击开始下载"
+    await manager._save_db(task)
     return _to_resp(task)
 
 

@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from backend.app import config as config_module
 from backend.app.downloader.task_manager import TaskConflictError, TaskNotFoundError
 from backend.app.main import app
-from backend.app.models import Task, TaskStatus
+from backend.app.models import Task, TaskStatus, TaskType
 from backend.app.schemas import SettingsUpdate, TaskBatchCreate, TaskCreate
 
 AUTH = {"X-Token": config_module.settings.token}
@@ -68,6 +68,71 @@ def test_torrent_upload_rejects_invalid_seed_before_creating_a_task():
 
     assert response.status_code == 400
     assert response.json()["detail"] == "种子文件无效、已损坏，或下载到的不是 BT 种子"
+
+
+def test_torrent_upload_inspects_files_and_waits_for_explicit_start(monkeypatch, tmp_path):
+    """Uploading a seed must never join the swarm before the file picker confirms."""
+    from backend.app import api as api_module
+    from backend.app.downloader.torrent import TorrentDownloader
+
+    created: list[Task] = []
+    started: list[str] = []
+
+    async def create_task(**_kwargs):
+        task = Task(id="torrent-picker", url="torrent-file:movie.torrent", task_type=TaskType.TORRENT)
+        created.append(task)
+        return task
+
+    async def save_task(_task):
+        return None
+
+    async def start_task(task_id):
+        started.append(task_id)
+
+    monkeypatch.setattr(api_module.manager, "create_task", create_task)
+    monkeypatch.setattr(api_module.manager, "_save_db", save_task)
+    monkeypatch.setattr(api_module.manager, "start_task", start_task)
+    monkeypatch.setattr(api_module, "task_work_dir", lambda _task: tmp_path / "torrent-picker")
+    monkeypatch.setattr(TorrentDownloader, "inspect_torrent_bytes", staticmethod(lambda _content: {
+        "name": "movie", "piece_count": 3,
+        "files": [{"index": 0, "path": "movie.mkv", "size": 42}],
+    }))
+
+    response = TestClient(app).post(
+        "/api/tasks/torrent-file",
+        headers=AUTH,
+        files={"file": ("movie.torrent", b"torrent-bytes", "application/x-bittorrent")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "awaiting_selection"
+    assert created[0].engine_state["selected_files"] == [0]
+    assert started == []
+
+
+def test_browser_media_push_reports_final_desktop_result(monkeypatch):
+    from backend.app import api as api_module
+
+    monkeypatch.setattr(api_module.native_desktop_session, "push", lambda *_args: True)
+    client = TestClient(app)
+    created = client.post(
+        "/api/browser/media-push",
+        headers=AUTH,
+        json={"kind": "cast", "resource": {"url": "https://media.example/video.mp4", "filename": "video.mp4"}},
+    )
+
+    assert created.status_code == 200
+    request_id = created.json()["id"]
+    pending = client.get(f"/api/browser/media-push/{request_id}/status", headers=AUTH)
+    assert pending.json()["status"] == "pending"
+    completed = client.post(
+        f"/api/browser/media-push/{request_id}/complete",
+        headers=AUTH,
+        json={"status": "canceled", "message": "用户取消"},
+    )
+    assert completed.status_code == 200
+    final = client.get(f"/api/browser/media-push/{request_id}/status", headers=AUTH)
+    assert final.json() == {"id": request_id, "status": "canceled", "message": "用户取消"}
 
 
 def test_task_action_maps_manager_errors_to_http_status(monkeypatch):
