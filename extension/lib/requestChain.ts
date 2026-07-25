@@ -3,6 +3,11 @@ export interface HeaderLike {
   value?: string
 }
 
+export interface RequestBodyLike {
+  formData?: Record<string, string[]>
+  raw?: Array<{ bytes?: ArrayBufferLike | Uint8Array }>
+}
+
 export interface RequestDetailsLike {
   requestId: string
   url: string
@@ -14,6 +19,7 @@ export interface RequestDetailsLike {
   documentUrl?: string
   timeStamp?: number
   requestHeaders?: HeaderLike[]
+  requestBody?: RequestBodyLike
   responseHeaders?: HeaderLike[]
   statusCode?: number
   redirectUrl?: string
@@ -30,11 +36,19 @@ export interface RequestChain {
   urls: string[]
   pageUrl: string
   requestHeaders: Record<string, string>
+  /** Base64 body held in memory only; it is never written to extension storage. */
+  requestBody: string
   responseHeaders: Record<string, string>
   statusCode: number
   startedAt: number
   updatedAt: number
 }
+
+const MAX_REPLAY_BODY_BYTES = 128 * 1024
+const REPLAYABLE_POST_CONTENT_TYPES = new Set([
+  'application/json',
+  'application/x-www-form-urlencoded',
+])
 
 export interface DownloadLike {
   url: string
@@ -49,6 +63,52 @@ function headers(values: HeaderLike[] | undefined): Record<string, string> {
     if (name && header.value !== undefined) result[name] = String(header.value)
   }
   return result
+}
+
+function base64(bytes: Uint8Array): string {
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x4000) {
+    const chunk = bytes.subarray(offset, Math.min(bytes.length, offset + 0x4000))
+    for (const value of chunk) binary += String.fromCharCode(value)
+  }
+  return btoa(binary)
+}
+
+/**
+ * Keep a small exact request payload in the worker only. Multipart/file bodies
+ * and multi-part raw data are deliberately not reconstructed or replayed.
+ */
+export function captureReplayableRequestBody(body?: RequestBodyLike): string {
+  if (!body) return ''
+  const raw = body.raw || []
+  if (raw.length === 1 && raw[0]?.bytes) {
+    const bytes = raw[0].bytes instanceof Uint8Array
+      ? raw[0].bytes
+      : new Uint8Array(raw[0].bytes)
+    return bytes.length && bytes.length <= MAX_REPLAY_BODY_BYTES ? base64(bytes) : ''
+  }
+  if (raw.length) return ''
+  if (!body.formData) return ''
+  const params = new URLSearchParams()
+  for (const [name, values] of Object.entries(body.formData)) {
+    if (!Array.isArray(values)) return ''
+    for (const value of values) params.append(name, String(value))
+  }
+  const bytes = new TextEncoder().encode(params.toString())
+  return bytes.length && bytes.length <= MAX_REPLAY_BODY_BYTES ? base64(bytes) : ''
+}
+
+export function replayablePostRequest(chain: RequestChain | undefined): {
+  request_method?: 'POST'
+  request_body?: string
+} {
+  const contentType = requestHeader(chain, 'content-type').split(';', 1)[0].trim().toLowerCase()
+  if (
+    chain?.method.toUpperCase() !== 'POST'
+    || !chain.requestBody
+    || !REPLAYABLE_POST_CONTENT_TYPES.has(contentType)
+  ) return {}
+  return { request_method: 'POST', request_body: chain.requestBody }
 }
 
 function normalized(value: string): string {
@@ -84,6 +144,7 @@ export class RequestChainStore {
     const previous = this.chains.get(details.requestId)
     const urls = appendUrl(previous?.urls || [], details.url)
     const capturedHeaders = headers(details.requestHeaders)
+    const capturedBody = captureReplayableRequestBody(details.requestBody)
     const chain: RequestChain = {
       requestId: details.requestId,
       tabId: details.tabId,
@@ -97,6 +158,7 @@ export class RequestChainStore {
       requestHeaders: Object.keys(capturedHeaders).length
         ? capturedHeaders
         : previous?.requestHeaders || {},
+      requestBody: capturedBody || previous?.requestBody || '',
       responseHeaders: previous?.responseHeaders || {},
       statusCode: previous?.statusCode || 0,
       startedAt: previous?.startedAt || now,

@@ -1,3 +1,5 @@
+import base64
+
 from backend.app import request_context
 from backend.app.models import Task
 
@@ -220,3 +222,24 @@ def test_exact_origin_context_overrides_supplied_credentials(monkeypatch):
     assert headers["User-Agent"] == "CDN Browser UA"
     assert headers["authorization"] == "Bearer cdn"
     assert headers["Cookie"] == "cdn=secret"
+
+
+def test_request_replay_allows_only_bounded_json_or_form_post_bodies():
+    payload = base64.b64encode(b'{"export":"episode-12"}').decode("ascii")
+    method, body = request_context.sanitize_request_replay(
+        "post", payload, {"Content-Type": "application/json; charset=utf-8"}
+    )
+
+    assert method == "POST"
+    assert body == payload
+    assert request_context.replay_request_body(method, body, {"content-type": "application/json"}) == b'{"export":"episode-12"}'
+
+    assert request_context.sanitize_request_replay(
+        "POST", payload, {"Content-Type": "multipart/form-data; boundary=test"}
+    ) == ("GET", "")
+    assert request_context.sanitize_request_replay(
+        "DELETE", payload, {"Content-Type": "application/json"}
+    ) == ("GET", "")
+    assert request_context.sanitize_request_replay(
+        "POST", "not-base64", {"Content-Type": "application/json"}
+    ) == ("GET", "")

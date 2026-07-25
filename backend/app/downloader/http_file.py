@@ -15,7 +15,7 @@ from ..config import settings
 from ..checksum import verify_task_checksum
 from ..models import Task, TaskStatus
 from ..naming import is_generic_media_name
-from ..request_context import build_task_headers
+from ..request_context import build_task_headers, replay_request_body
 from ..utils import sanitize_filename
 from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
 from .errors import diagnose_download_error, format_download_error, retry_delay_seconds, should_retry_download_error
@@ -123,6 +123,9 @@ class HTTPDownloader(SeeklessEngine):
     def _headers(self) -> dict[str, str]:
         return build_task_headers(self.task)
 
+    def _is_replay_post(self) -> bool:
+        return str(self.task.request_method or "GET").upper() == "POST"
+
     def _publish(self) -> None:
         self.on_progress(self.task)
 
@@ -195,6 +198,65 @@ class HTTPDownloader(SeeklessEngine):
             if head is not None:
                 await head.aclose()
 
+    async def _download_replay_post(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        part_path: Path,
+    ) -> Path:
+        """Download a captured POST response exactly once.
+
+        Replaying a form/API request for every range would duplicate side
+        effects (and frequently invalidates one-time links). It therefore uses
+        one streaming POST with no metadata probe, Range or resume reuse.
+        """
+        task = self.task
+        body = replay_request_body(task.request_method, task.request_body, task.request_headers)
+        if not body:
+            raise RuntimeError("浏览器 POST 请求体无效或不允许重放")
+        self._sequential = True
+        task.progress.total_segments = 1
+        task.progress.max_workers = 1
+        task.progress.connection_status = "running"
+        task.progress.downloaded_bytes = 0
+        task.progress.total_bytes = 0
+        task.progress.progress_percent = 0.0
+        self._set_stage("downloading", "正在安全重放浏览器 POST 下载（单连接）")
+        task.engine_state["stream_path"] = str(part_path)
+        task.engine_state["post_replay"] = True
+        started = time.monotonic()
+        async with client.stream("POST", task.url, headers=headers, content=body) as response:
+            response.raise_for_status()
+            task.mime_type = task.mime_type or response.headers.get("content-type", "").split(";", 1)[0]
+            task.progress.total_bytes = int(response.headers.get("content-length", 0) or 0)
+            task.engine_state["total_size"] = task.progress.total_bytes
+            filename = (
+                _content_disposition_filename(response.headers.get("content-disposition", ""))
+                or Path(urlparse(str(response.url)).path).name
+                or Path(urlparse(task.url).path).name
+                or task.id
+            )
+            requested_name = task.filename.strip()
+            task.filename = sanitize_filename(filename if not requested_name or is_generic_media_name(requested_name) else requested_name)
+            output = _reserve_output_path(task_output_dir(task) / task.filename)
+            task.engine_state["reserved_output_path"] = str(output)
+            with part_path.open("wb") as stream:
+                async for chunk in response.aiter_bytes(256 * 1024):
+                    if self._is_canceled():
+                        raise asyncio.CancelledError
+                    if self._is_pausing():
+                        return output
+                    await throttle_bytes(len(chunk))
+                    stream.write(chunk)
+                    task.progress.downloaded_bytes += len(chunk)
+                    elapsed = max(0.001, time.monotonic() - started)
+                    task.progress.speed_bytes_per_sec = task.progress.downloaded_bytes / elapsed
+                    if task.progress.total_bytes:
+                        task.progress.progress_percent = min(100.0, task.progress.downloaded_bytes * 100 / task.progress.total_bytes)
+                    self._publish()
+        task.progress.completed_segments = 1
+        return output
+
     async def run(self) -> None:
         task = self.task
         task_dir = task_work_dir(task)
@@ -212,27 +274,30 @@ class HTTPDownloader(SeeklessEngine):
             timeout = httpx.Timeout(connect=15, read=60, write=30, pool=30)
             headers = self._headers()
             async with httpx.AsyncClient(follow_redirects=True, timeout=timeout, limits=limits) as client:
-                metadata = await self._probe(client, headers)
-                total = int(metadata["total"])
-                self._total_size = total
-                task.mime_type = task.mime_type or metadata["content_type"]
-                task.progress.total_bytes = total
-                name = (
-                    metadata["filename"]
-                    or Path(urlparse(metadata.get("final_url", "")).path).name
-                    or Path(urlparse(task.url).path).name
-                    or task.id
-                )
-                requested_name = task.filename.strip()
-                task.filename = sanitize_filename(name if not requested_name or is_generic_media_name(requested_name) else requested_name)
-                output = _reserve_output_path(task_output_dir(task) / task.filename)
-                task.engine_state["reserved_output_path"] = str(output)
-
-                if total <= 0 or not metadata["ranges"]:
-                    self._sequential = True
-                    await self._download_sequential(client, headers, part_path)
+                if self._is_replay_post():
+                    output = await self._download_replay_post(client, headers, part_path)
                 else:
-                    await self._download_ranges(client, headers, part_path, state_path, metadata)
+                    metadata = await self._probe(client, headers)
+                    total = int(metadata["total"])
+                    self._total_size = total
+                    task.mime_type = task.mime_type or metadata["content_type"]
+                    task.progress.total_bytes = total
+                    name = (
+                        metadata["filename"]
+                        or Path(urlparse(metadata.get("final_url", "")).path).name
+                        or Path(urlparse(task.url).path).name
+                        or task.id
+                    )
+                    requested_name = task.filename.strip()
+                    task.filename = sanitize_filename(name if not requested_name or is_generic_media_name(requested_name) else requested_name)
+                    output = _reserve_output_path(task_output_dir(task) / task.filename)
+                    task.engine_state["reserved_output_path"] = str(output)
+
+                    if total <= 0 or not metadata["ranges"]:
+                        self._sequential = True
+                        await self._download_sequential(client, headers, part_path)
+                    else:
+                        await self._download_ranges(client, headers, part_path, state_path, metadata)
 
             if self._is_canceled():
                 task.status = TaskStatus.CANCELED

@@ -11,7 +11,7 @@ from ..config import settings
 from ..database import run_db
 from ..models import Task, TaskProgress, TaskStatus, TaskType
 from ..naming import suggest_manifest_name
-from ..request_context import sanitize_request_contexts, sanitize_request_headers
+from ..request_context import sanitize_request_contexts, sanitize_request_headers, sanitize_request_replay
 from ..credentials import protect_secret, unprotect_secret
 from ..checksum import normalize_checksum
 from ..utils import sanitize_filename
@@ -40,6 +40,13 @@ def _decode_request_contexts(value: str) -> dict[str, dict]:
         return sanitize_request_contexts(decoded if isinstance(decoded, dict) else {})
     except (TypeError, ValueError, json.JSONDecodeError):
         return {}
+
+
+def _decode_request_body(value: str) -> str:
+    try:
+        return unprotect_secret(value or "") or ""
+    except (TypeError, ValueError):
+        return ""
 
 ACTIVE_STATUSES = {
     TaskStatus.FETCHING_METADATA,
@@ -392,6 +399,8 @@ class TaskManager:
         cookie="",
         request_headers=None,
         request_contexts=None,
+        request_method="GET",
+        request_body="",
         title="",
         filename="",
         concurrency=0,
@@ -401,7 +410,14 @@ class TaskManager:
         inherit_default_headers=True,
     ) -> Task:
         task_id = str(uuid.uuid4())[:8]
+        safe_headers = sanitize_request_headers(request_headers)
+        safe_method, safe_body = sanitize_request_replay(request_method, request_body, safe_headers)
         resolved_type = resolve_task_type(task_type, url, mime_type)
+        # HLS/DASH parsers perform several independent GET requests. A captured
+        # POST is safe only as one direct response download, so keep it in the
+        # HTTP engine rather than silently dropping the original request body.
+        if safe_method == "POST":
+            resolved_type = TaskType.HTTP
         if resolved_type in {TaskType.HLS, TaskType.DASH}:
             requested_name = suggest_manifest_name(
                 url,
@@ -432,8 +448,10 @@ class TaskManager:
             origin=origin or (settings.default_origin if inherit_identity_defaults else ""),
             user_agent=user_agent or settings.default_user_agent,
             cookie=cookie or (settings.default_cookie if inherit_identity_defaults else ""),
-            request_headers=sanitize_request_headers(request_headers),
+            request_headers=safe_headers,
             request_contexts=sanitize_request_contexts(request_contexts),
+            request_method=safe_method,
+            request_body=safe_body,
             title=title,
             filename=filename,
             expected_checksum=expected_checksum,
@@ -454,9 +472,9 @@ class TaskManager:
             self.tasks[task_id] = task
         await run_db(
             "INSERT INTO tasks "
-            "(id,task_type,source_page_url,mime_type,title,url,referer,origin,user_agent,cookie,request_headers,request_contexts,filename,concurrency,"
+            "(id,task_type,source_page_url,mime_type,title,url,referer,origin,user_agent,cookie,request_headers,request_contexts,request_method,request_body,filename,concurrency,"
             "status,stage,last_log,started_at,finished_at,post_percent,expected_checksum,checksum_algorithm,checksum_actual,checksum_verified,engine_state) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (" + ",".join("?" for _ in range(27)) + ")",
             (
                 task.id,
                 task.task_type.value,
@@ -470,6 +488,8 @@ class TaskManager:
                 protect_secret(task.cookie),
                 protect_secret(json.dumps(task.request_headers, ensure_ascii=False)),
                 protect_secret(json.dumps(task.request_contexts, ensure_ascii=False)),
+                task.request_method,
+                protect_secret(task.request_body),
                 task.filename,
                 task.concurrency,
                 task.status.value,
@@ -859,6 +879,12 @@ class TaskManager:
                 seed_count=int(_row_value(row, "seed_count", 0) or 0),
                 connection_status="idle",
             )
+            request_headers = _decode_request_headers(_row_value(row, "request_headers", "") or "")
+            request_method, request_body = sanitize_request_replay(
+                _row_value(row, "request_method", "GET") or "GET",
+                _decode_request_body(_row_value(row, "request_body", "") or ""),
+                request_headers,
+            )
             task = Task(
                 id=row["id"],
                 url=row["url"],
@@ -869,8 +895,10 @@ class TaskManager:
                 origin=_row_value(row, "origin", "") or "",
                 user_agent=_row_value(row, "user_agent", "") or "",
                 cookie=unprotect_secret(_row_value(row, "cookie", "") or ""),
-                request_headers=_decode_request_headers(_row_value(row, "request_headers", "") or ""),
+                request_headers=request_headers,
                 request_contexts=_decode_request_contexts(_row_value(row, "request_contexts", "") or ""),
+                request_method=request_method,
+                request_body=request_body,
                 title=_row_value(row, "title", "") or "",
                 filename=_row_value(row, "filename", "") or "",
                 concurrency=int(_row_value(row, "concurrency", 0) or 0),

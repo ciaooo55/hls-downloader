@@ -1,7 +1,7 @@
 import { browser } from 'wxt/browser'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
 import { classifyDownload, classifyResource, compactResources, matchesDownloadClick, mergeResources, pageResourceKey, replayableRequestHeaders, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
-import { RequestChainStore, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
+import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus, shouldResumeBrowserDownload } from '../lib/takeover'
 import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
 import { parseHlsManifest, resourceQuality } from '../lib/hlsManifest'
@@ -164,9 +164,12 @@ function revealBrowserDownload(): void {
   void setBrowserDownloadUi(true)
 }
 
-async function resourcePayload(resource: MediaResource) {
+async function resourcePayload(resource: MediaResource, explicitChain?: RequestChain) {
   const pageUrl = resource.pageUrl || ''
   const identity = resourceRequestIdentity(resource, navigator.userAgent)
+  const chain = explicitChain || (resource.tabId !== undefined && resource.tabId >= 0
+    ? requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), resource.tabId)
+    : requestChains.find({ url: resource.url, referrer: pageUrl }))
   const requestContexts: Record<string, Record<string, unknown>> = {}
   if (resource.tabId !== undefined && resource.tabId >= 0) {
     for (const chain of requestChains.contextsForPage(resource.tabId, pageUrl)) {
@@ -183,6 +186,10 @@ async function resourcePayload(resource: MediaResource) {
       }
     }
   }
+  const replay = replayablePostRequest(chain)
+  if (String(resource.method || '').toUpperCase() === 'POST' && !replay.request_body) {
+    throw new Error('此 POST 下载包含无法安全重放的请求体；请让浏览器完成本次下载后再导入文件')
+  }
   return {
     url: resource.url,
     filename: suggestedResourceFilename(resource),
@@ -196,12 +203,13 @@ async function resourcePayload(resource: MediaResource) {
     user_agent: identity.userAgent,
     request_headers: replayableRequestHeaders(resource.requestHeaders),
     request_contexts: requestContexts,
+    ...replay,
     extension_version: browser.runtime.getManifest().version,
   }
 }
 
-async function downloadNow(resource: MediaResource) {
-  const payload = await resourcePayload(resource)
+async function downloadNow(resource: MediaResource, chain?: RequestChain) {
+  const payload = await resourcePayload(resource, chain)
   return native({ op: 'download', resource: payload })
 }
 
@@ -217,8 +225,8 @@ async function castToDevice(resource: MediaResource): Promise<{ ok: true }> {
   return { ok: true }
 }
 
-async function offer(resource: MediaResource) {
-  const payload = await resourcePayload(resource)
+async function offer(resource: MediaResource, chain?: RequestChain) {
+  const payload = await resourcePayload(resource, chain)
   const response = await native({ op: 'offer', resource: payload })
   const handoff = response?.handoff
   if (!response?.ok || !handoff?.id) return response
@@ -506,6 +514,9 @@ export default defineBackground(() => {
   ;(browser.webRequest.onSendHeaders.addListener as any)((details: any) => {
     requestChains.observeRequest(details)
   }, { urls: ['<all_urls>'] }, requestHeaderExtraInfo(import.meta.env.CHROME))
+  ;(browser.webRequest.onBeforeRequest.addListener as any)((details: any) => {
+    requestChains.observeRequest(details)
+  }, { urls: ['<all_urls>'] }, ['requestBody'])
   browser.webRequest.onBeforeRedirect.addListener(details => {
     requestChains.observeRedirect(details as any)
   }, { urls: ['<all_urls>'] }, ['responseHeaders'])
@@ -528,6 +539,10 @@ export default defineBackground(() => {
       if (!intent) return {}
       const config = await settings()
       const resource = observed.resource!
+      if (String(chain.method || '').toUpperCase() === 'POST' && !replayablePostRequest(chain).request_body) {
+        // Never cancel a browser POST that cannot be reproduced exactly.
+        return {}
+      }
       if (!shouldTakeover({
         url: resource.url,
         size: resource.size,
@@ -546,7 +561,7 @@ export default defineBackground(() => {
           pageUrl: resource.pageUrl || chain.pageUrl || requestHeader(chain, 'referer'),
           id: resourceId(resource.url),
           seenAt: Date.now(),
-        })
+        }, chain)
         const transferred = desktopAcceptedHandoff(response)
         return transferred ? { cancel: true } : {}
       } catch (error) {
@@ -619,14 +634,18 @@ export default defineBackground(() => {
       const pageUrl = actual.referrer || chain?.pageUrl || requestHeader(chain, 'referer')
       const resource: MediaResource = {
         id: resourceId(url), url, kind, mimeType, size, title: filename, filename,
-        pageUrl, tabId: chain?.tabId, requestHeaders: chain?.requestHeaders, seenAt: Date.now(),
+        pageUrl, tabId: chain?.tabId, method: chain?.method, requestHeaders: chain?.requestHeaders, seenAt: Date.now(),
+      }
+      if (String(chain?.method || '').toUpperCase() === 'POST' && !replayablePostRequest(chain).request_body) {
+        if (paused) await browser.downloads.resume(item.id).catch(() => undefined)
+        return
       }
       if (!intent || !shouldTakeover({ url: resource.url, size: resource.size, mimeType, filename, ...config, ...intent, explicitClick: true })) {
         await browser.downloads.resume(item.id).catch(() => undefined)
         return
       }
       console.debug('HLS Downloader taking over explicit browser download', url)
-      const response = await offer(resource)
+      const response = await offer(resource, chain)
       if (!desktopAcceptedHandoff(response)) throw new Error(response?.error || 'desktop rejected')
       handedOff = true
       await removeBrowserDownload(actual)

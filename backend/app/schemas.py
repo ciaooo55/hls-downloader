@@ -19,6 +19,8 @@ class TaskCreate(BaseModel):
     cookie: str = ""
     request_headers: dict[str, str] = Field(default_factory=dict)
     request_contexts: dict[str, dict] = Field(default_factory=dict)
+    request_method: str = Field(default="GET", max_length=16)
+    request_body: str = Field(default="", max_length=175000)
     title: str = ""
     filename: str = ""
     download_dir: str = ""

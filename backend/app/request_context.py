@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from collections.abc import Mapping
 from urllib.parse import urlsplit
@@ -22,6 +24,15 @@ _HOP_BY_HOP = {
     "upgrade",
 }
 _CLIENT_MANAGED = {"accept-encoding", "cookie"}
+_REPLAYABLE_POST_CONTENT_TYPES = {
+    "application/json",
+    "application/x-www-form-urlencoded",
+}
+# A browser handoff is sent through Native Messaging and later persisted with
+# DPAPI. Keeping it bounded prevents a page from turning the downloader into a
+# general-purpose form/file uploader while still covering signed JSON/form
+# download endpoints.
+MAX_REPLAY_REQUEST_BODY_BYTES = 128 * 1024
 
 
 def request_origin(value: str) -> str:
@@ -65,6 +76,46 @@ def sanitize_request_headers(values: Mapping[str, str] | None) -> dict[str, str]
         # under different casing.
         result[lowered] = value
     return result
+
+
+def sanitize_request_replay(
+    method: object,
+    body: object,
+    request_headers: Mapping[str, str] | None,
+) -> tuple[str, str]:
+    """Return a bounded, safe-to-repeat browser download request.
+
+    Only explicit JSON and URL-encoded POST download requests are replayable.
+    File uploads, multipart forms, arbitrary methods and malformed payloads are
+    intentionally downgraded to a normal GET instead of being guessed or
+    repeated with potentially destructive side effects.
+    """
+    if str(method or "GET").strip().upper() != "POST" or not isinstance(body, str):
+        return "GET", ""
+    headers = sanitize_request_headers(request_headers)
+    content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type not in _REPLAYABLE_POST_CONTENT_TYPES:
+        return "GET", ""
+    # Base64 overhead is 4/3; reject before decoding to bound CPU and memory.
+    if not body or len(body) > ((MAX_REPLAY_REQUEST_BODY_BYTES + 2) // 3) * 4:
+        return "GET", ""
+    try:
+        decoded = base64.b64decode(body.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, ValueError, binascii.Error):
+        return "GET", ""
+    if not decoded or len(decoded) > MAX_REPLAY_REQUEST_BODY_BYTES:
+        return "GET", ""
+    # Canonical encoding keeps database comparisons deterministic and prevents
+    # whitespace/newline variants from crossing the JSON/native boundary.
+    return "POST", base64.b64encode(decoded).decode("ascii")
+
+
+def replay_request_body(method: object, body: object, request_headers: Mapping[str, str] | None) -> bytes:
+    """Decode a previously validated POST payload, or return an empty body."""
+    safe_method, safe_body = sanitize_request_replay(method, body, request_headers)
+    if safe_method != "POST":
+        return b""
+    return base64.b64decode(safe_body)
 
 
 def sanitize_request_contexts(values: Mapping | None) -> dict[str, dict]:

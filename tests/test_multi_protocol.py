@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import errno
 import os
 from pathlib import Path
@@ -86,6 +87,55 @@ def test_http_probe_follows_https_to_http_redirect_and_uses_server_filename():
     assert metadata["total"] == 5500000000
     assert metadata["filename"] == "ubuntu-desktop.iso"
     assert metadata["final_url"] == "http://cdn.test/releases/system.iso"
+
+
+def test_http_post_replay_uses_one_post_without_probe_or_ranges(tmp_path, monkeypatch):
+    from backend.app.downloader import http_file as http_file_module
+
+    payload = b'{"file":"report-2026"}'
+    body = b"downloaded through post"
+    requests = []
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path / "downloads"))
+    monkeypatch.setattr(settings, "temp_dir", str(tmp_path / "temp"))
+    task = Task(
+        id="post-replay",
+        url="https://api.test/reports/export",
+        task_type=TaskType.HTTP,
+        request_method="POST",
+        request_body=base64.b64encode(payload).decode("ascii"),
+        request_headers={"content-type": "application/json"},
+        concurrency=12,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.method == "POST"
+        assert request.content == payload
+        assert "range" not in request.headers
+        return httpx.Response(
+            200,
+            content=body,
+            headers={
+                "Content-Length": str(len(body)),
+                "Content-Type": "application/pdf",
+                "Content-Disposition": "attachment; filename=report.pdf",
+            },
+            request=request,
+        )
+
+    class MockClient(httpx.AsyncClient):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(http_file_module.httpx, "AsyncClient", MockClient)
+    asyncio.run(HTTPDownloader(task).run())
+
+    assert [request.method for request in requests] == ["POST"]
+    assert task.status.value == "done"
+    assert Path(task.output_path).name == "report.pdf"
+    assert Path(task.output_path).read_bytes() == body
+    assert task.progress.max_workers == 1
 
 
 def test_content_disposition_handles_rfc5987_and_quoted_semicolons():

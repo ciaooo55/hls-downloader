@@ -24,3 +24,13 @@ export function shouldTrackDownloadIntent(input: {
     || isLikelyDownloadControl(input.hints || []),
   )
 }
+
+/** Resolve only resource schemes that the desktop downloader can own. */
+export function resolveDownloadTarget(value: string, baseUrl: string): string {
+  try {
+    const target = new URL(String(value || '').trim(), baseUrl)
+    return ['http:', 'https:', 'magnet:'].includes(target.protocol) ? target.href : ''
+  } catch {
+    return ''
+  }
+}

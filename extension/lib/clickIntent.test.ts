@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isLikelyDownloadControl, shouldTrackDownloadIntent } from './clickIntent'
+import { isLikelyDownloadControl, resolveDownloadTarget, shouldTrackDownloadIntent } from './clickIntent'
 import { matchesDownloadClick, type DownloadClickIntent } from './resources'
 
 function intent(overrides: Partial<DownloadClickIntent> = {}): DownloadClickIntent {
@@ -31,6 +31,13 @@ describe('download click intent', () => {
     expect(shouldTrackDownloadIntent({ hints: ['下载资源', 'javascript-link'] })).toBe(true)
     expect(shouldTrackDownloadIntent({ hints: ['展开详情', 'javascript-link'] })).toBe(false)
     expect(shouldTrackDownloadIntent({ ctrlForce: true })).toBe(true)
+  })
+
+  it('accepts only downloader-owned schemes from data download targets', () => {
+    expect(resolveDownloadTarget('../file.zip', 'https://site.test/watch/page')).toBe('https://site.test/file.zip')
+    expect(resolveDownloadTarget('magnet:?xt=urn:btih:abc', 'https://site.test/watch')).toBe('magnet:?xt=urn:btih:abc')
+    expect(resolveDownloadTarget('javascript:download()', 'https://site.test/watch')).toBe('')
+    expect(resolveDownloadTarget('data:text/plain,nope', 'https://site.test/watch')).toBe('')
   })
 
   it('never lets a generic click consume an unrelated tab download', () => {

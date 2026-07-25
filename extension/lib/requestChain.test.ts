@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { RequestChainStore, requestHeader, responseHeader } from './requestChain'
+import { captureReplayableRequestBody, replayablePostRequest, RequestChainStore, requestHeader, responseHeader } from './requestChain'
 
 describe('browser request chains', () => {
   it('keeps the initial PHP URL and the final redirected file together', () => {
@@ -109,5 +109,39 @@ describe('browser request chains', () => {
     const store = new RequestChainStore()
     store.observeRequest({ requestId: 'old', url: 'https://a.test/file', tabId: 1, timeStamp: 1000 })
     expect(store.find({ url: 'https://a.test/file' }, 32_000)).toBeUndefined()
+  })
+
+  it('keeps a small JSON POST body only for a matching replayable download request', () => {
+    const store = new RequestChainStore()
+    const bytes = new TextEncoder().encode('{"asset":"episode-12","token":"short-lived"}')
+    store.observeRequest({
+      requestId: 'post-download', url: 'https://api.test/export', tabId: 3,
+      method: 'POST', timeStamp: 1000,
+      requestBody: { raw: [{ bytes: bytes.buffer }] },
+    })
+    const chain = store.observeRequest({
+      requestId: 'post-download', url: 'https://api.test/export', tabId: 3,
+      method: 'POST', timeStamp: 1001,
+      requestHeaders: [{ name: 'Content-Type', value: 'application/json; charset=utf-8' }],
+    })
+
+    expect(atob(chain.requestBody)).toBe('{"asset":"episode-12","token":"short-lived"}')
+    expect(replayablePostRequest(chain)).toEqual({ request_method: 'POST', request_body: chain.requestBody })
+  })
+
+  it('never reconstructs multipart uploads or hands them to the desktop app', () => {
+    const body = captureReplayableRequestBody({ raw: [{ bytes: new Uint8Array([1, 2]).buffer }, { bytes: new Uint8Array([3]).buffer }] })
+    expect(body).toBe('')
+
+    const store = new RequestChainStore()
+    store.observeRequest({
+      requestId: 'upload', url: 'https://api.test/export', tabId: 3, method: 'POST', timeStamp: 1000,
+      requestBody: { raw: [{ bytes: new Uint8Array([1, 2]).buffer }] },
+    })
+    const chain = store.observeRequest({
+      requestId: 'upload', url: 'https://api.test/export', tabId: 3, method: 'POST', timeStamp: 1001,
+      requestHeaders: [{ name: 'Content-Type', value: 'multipart/form-data; boundary=browser' }],
+    })
+    expect(replayablePostRequest(chain)).toEqual({})
   })
 })

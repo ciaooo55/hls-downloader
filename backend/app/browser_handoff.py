@@ -6,6 +6,7 @@ import time
 from dataclasses import asdict, dataclass
 
 from .naming import is_generic_media_name, suggest_manifest_name
+from .request_context import sanitize_request_headers, sanitize_request_replay
 
 
 @dataclass
@@ -22,6 +23,8 @@ class BrowserHandoff:
     user_agent: str
     request_headers: dict[str, str]
     request_contexts: dict[str, dict]
+    request_method: str
+    request_body: str
     size: int
     status: str
     created_at: float
@@ -36,6 +39,7 @@ class BrowserHandoff:
         value.pop("user_agent", None)
         value.pop("request_headers", None)
         value.pop("request_contexts", None)
+        value.pop("request_body", None)
         return value
 
 
@@ -93,6 +97,10 @@ class BrowserHandoffService:
                 source_page_url=source_page_url,
                 fallback="download",
             )
+        request_headers = sanitize_request_headers(payload.get("request_headers"))
+        request_method, request_body = sanitize_request_replay(
+            payload.get("request_method", "GET"), payload.get("request_body", ""), request_headers
+        )
         item = BrowserHandoff(
             id=secrets.token_urlsafe(12),
             url=url,
@@ -104,8 +112,10 @@ class BrowserHandoffService:
             origin=str(payload.get("origin", "")),
             cookie=str(payload.get("cookie", "")),
             user_agent=str(payload.get("user_agent", "")),
-            request_headers={str(key): str(value) for key, value in dict(payload.get("request_headers") or {}).items()},
+            request_headers=request_headers,
             request_contexts={str(key): dict(value) for key, value in dict(payload.get("request_contexts") or {}).items() if isinstance(value, dict)},
+            request_method=request_method,
+            request_body=request_body,
             size=max(0, int(payload.get("size", 0) or 0)),
             status="pending",
             created_at=time.time(),

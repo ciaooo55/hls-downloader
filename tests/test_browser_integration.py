@@ -1,4 +1,5 @@
 import time
+import base64
 
 from backend.app.browser_handoff import BrowserHandoffService
 from backend.app.credentials import PREFIX, protect_secret, unprotect_secret
@@ -10,12 +11,17 @@ def test_browser_handoff_confirmation_and_expiry():
     item = service.create({
         "url": "https://cdn.test/file.zip",
         "cookie": "session=secret",
-        "request_headers": {"authorization": "Bearer private"},
         "request_contexts": {
             "https://segments.test": {
                 "request_headers": {"authorization": "Bearer scoped"},
                 "cookie": "scoped=secret",
             }
+        },
+        "request_method": "POST",
+        "request_body": base64.b64encode(b'{"download":"protected"}').decode("ascii"),
+        "request_headers": {
+            "authorization": "Bearer private",
+            "content-type": "application/json",
         },
         "size": 42,
     })
@@ -23,8 +29,11 @@ def test_browser_handoff_confirmation_and_expiry():
     assert "cookie" not in item.public()
     assert "request_headers" not in item.public()
     assert "request_contexts" not in item.public()
-    assert item.request_headers == {"authorization": "Bearer private"}
+    assert "request_body" not in item.public()
+    assert item.request_headers == {"authorization": "Bearer private", "content-type": "application/json"}
     assert item.request_contexts["https://segments.test"]["cookie"] == "scoped=secret"
+    assert item.request_method == "POST"
+    assert item.request_body
     assert service.pending()[0]["id"] == item.id
     assert service.reject(item.id).status == "rejected"
 

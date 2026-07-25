@@ -334,6 +334,7 @@ def test_structured_failure_details_survive_database_reload(tmp_path, monkeypatc
 
 def test_private_browser_request_headers_are_encrypted_and_survive_reload(tmp_path, monkeypatch):
     from backend.app import database as database_module
+    import base64
 
     async def run():
         monkeypatch.setattr(database_module, "DB_PATH", tmp_path / "tasks.db")
@@ -347,7 +348,10 @@ def test_private_browser_request_headers_are_encrypted_and_survive_reload(tmp_pa
                 "Host": "attacker.test",
                 "Range": "bytes=0-1",
                 "Cookie": "must-use-cookie-field=1",
+                "Content-Type": "application/json",
             },
+            request_method="POST",
+            request_body=base64.b64encode(b'{"token":"post-secret"}').decode("ascii"),
             cookie="session=secret",
             request_contexts={
                 "https://segments.example.test": {
@@ -358,12 +362,13 @@ def test_private_browser_request_headers_are_encrypted_and_survive_reload(tmp_pa
         )
 
         rows = await database_module.run_db(
-            "SELECT request_headers, request_contexts, cookie FROM tasks WHERE id=?", (task.id,)
+            "SELECT request_headers, request_contexts, request_body, cookie FROM tasks WHERE id=?", (task.id,)
         )
         stored = rows[0]
         assert "signed-token" not in stored["request_headers"]
         assert "Bearer segments" not in stored["request_contexts"]
         assert "segment_session=private" not in stored["request_contexts"]
+        assert "post-secret" not in stored["request_body"]
         assert "session=secret" not in stored["cookie"]
 
         restored = TaskManager()
@@ -373,7 +378,10 @@ def test_private_browser_request_headers_are_encrypted_and_survive_reload(tmp_pa
             "authorization": "Bearer signed-token",
             "sec-ch-ua": '"Chromium";v="140"',
             "x-playback-token": "opaque",
+            "content-type": "application/json",
         }
+        assert loaded.request_method == "POST"
+        assert base64.b64decode(loaded.request_body) == b'{"token":"post-secret"}'
         assert loaded.cookie == "session=secret"
         assert loaded.request_contexts["https://segments.example.test"] == {
             "request_headers": {"authorization": "Bearer segments"},

@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { isLikelyDownloadControl, shouldTrackDownloadIntent } from '../lib/clickIntent'
+import { isLikelyDownloadControl, resolveDownloadTarget, shouldTrackDownloadIntent } from '../lib/clickIntent'
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -15,13 +15,14 @@ export default defineContentScript({
       if (!anchor?.href && !control) return
       const rawHref = anchor?.getAttribute('href')?.trim() || ''
       const directHref = rawHref && !rawHref.startsWith('#') && !/^javascript:/i.test(rawHref) ? anchor?.href || '' : ''
-      const hintedHref = anchor?.getAttribute('data-download-url')
+      const rawHintedHref = anchor?.getAttribute('data-download-url')
         || anchor?.getAttribute('data-url')
         || anchor?.getAttribute('data-href')
         || control?.getAttribute('data-download-url')
         || control?.getAttribute('data-url')
         || control?.getAttribute('data-href')
         || ''
+      const hintedHref = resolveDownloadTarget(rawHintedHref, location.href)
       const downloadHint = isLikelyDownloadControl([
         anchor?.textContent,
         anchor?.getAttribute('aria-label'),
@@ -41,10 +42,7 @@ export default defineContentScript({
         control?.getAttribute('data-testid'),
       ])
       if (!shouldTrackDownloadIntent({ directHref, hintedHref, ctrlForce: event.ctrlKey, hints: [downloadHint ? 'download' : ''] })) return
-      let href = directHref
-      if (!href && hintedHref) {
-        try { href = new URL(hintedHref, location.href).href } catch {}
-      }
+      const href = directHref || hintedHref
       void browser.runtime.sendMessage({
         type: 'click-intent',
         href,

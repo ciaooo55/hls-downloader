@@ -17,6 +17,8 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS tasks (
     cookie TEXT DEFAULT '',
     request_headers TEXT DEFAULT '',
     request_contexts TEXT DEFAULT '',
+    request_method TEXT DEFAULT 'GET',
+    request_body TEXT DEFAULT '',
     filename TEXT DEFAULT '',
     concurrency INTEGER DEFAULT 4,
     status TEXT DEFAULT 'queued',
@@ -86,6 +88,8 @@ MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN checksum_verified INTEGER",
     "ALTER TABLE tasks ADD COLUMN request_headers TEXT DEFAULT ''",
     "ALTER TABLE tasks ADD COLUMN request_contexts TEXT DEFAULT ''",
+    "ALTER TABLE tasks ADD COLUMN request_method TEXT DEFAULT 'GET'",
+    "ALTER TABLE tasks ADD COLUMN request_body TEXT DEFAULT ''",
 ]
 
 _lock = asyncio.Lock()
