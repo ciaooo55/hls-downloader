@@ -1,4 +1,5 @@
 import json
+import secrets
 from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -7,11 +8,16 @@ from .paths import RUNTIME_PATHS
 PROJECT_ROOT = RUNTIME_PATHS.project_root
 CONFIG_PATH = RUNTIME_PATHS.config_path
 
+
+def _new_internal_token() -> str:
+    """Create an installation-local credential that is never user managed."""
+    return secrets.token_urlsafe(32)
+
 class Settings(BaseSettings):
-    config_version: int = 13
+    config_version: int = 14
     host: str = "127.0.0.1"
     port: int = 8765
-    token: str = "55555"
+    token: str = Field(default_factory=_new_internal_token, min_length=32)
     download_dir: str = "downloads"
     temp_dir: str = "."
     default_concurrency: int = 12
@@ -141,6 +147,18 @@ def load_settings() -> Settings:
             data["config_version"] = 13
             migrated = True
             version = 13
+        if version < 14:
+            # The legacy fixed value was exposed in Settings and shared by all
+            # installations. Replace it with an implementation detail used only
+            # by the desktop shell and Native Messaging host.
+            if not isinstance(data.get("token"), str) or len(data.get("token", "")) < 32 or data.get("token") == "55555":
+                data["token"] = _new_internal_token()
+            # Browser integration is Native Messaging only. The privileged
+            # control API is an internal desktop transport, never a LAN API.
+            data["host"] = "127.0.0.1"
+            data["config_version"] = 14
+            migrated = True
+            version = 14
         if not isinstance(data.get("tvbox_endpoint"), str):
             data["tvbox_endpoint"] = ""
             migrated = True

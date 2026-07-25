@@ -10,6 +10,8 @@ from backend.app.main import app
 from backend.app.models import Task, TaskStatus
 from backend.app.schemas import SettingsUpdate, TaskBatchCreate, TaskCreate
 
+AUTH = {"X-Token": config_module.settings.token}
+
 
 def test_task_schema_rejects_invalid_url_concurrency_and_oversized_batch():
     with pytest.raises(ValidationError):
@@ -33,10 +35,34 @@ def test_task_schema_rejects_invalid_url_concurrency_and_oversized_batch():
     assert SettingsUpdate(default_concurrency=256).default_concurrency == 256
 
 
+def test_settings_api_keeps_native_transport_credentials_internal():
+    client = TestClient(app)
+
+    response = client.get("/api/settings", headers=AUTH)
+    assert response.status_code == 200
+    assert {"token", "host", "port"}.isdisjoint(response.json())
+
+    original = config_module.settings.token
+    updated = client.post(
+        "/api/settings",
+        headers=AUTH,
+        json={"token": "attacker-controlled", "host": "0.0.0.0"},
+    )
+    assert updated.status_code == 200
+    assert config_module.settings.token == original
+    assert config_module.settings.host == "127.0.0.1"
+    assert {"token", "host", "port"}.isdisjoint(updated.json())
+
+    assert client.get("/api/test").status_code == 401
+    checked = client.get("/api/test", headers=AUTH)
+    assert checked.status_code == 200
+    assert checked.json()["browser_bridge"] == "native-messaging"
+
+
 def test_torrent_upload_rejects_invalid_seed_before_creating_a_task():
     response = TestClient(app).post(
         "/api/tasks/torrent-file",
-        headers={"X-Token": "55555"},
+        headers=AUTH,
         files={"file": ("not-a-torrent.torrent", b"<html>blocked</html>", "application/x-bittorrent")},
     )
 
@@ -55,12 +81,12 @@ def test_task_action_maps_manager_errors_to_http_status(monkeypatch):
 
     client = TestClient(app)
     monkeypatch.setattr(api_module.manager, "pause_task", conflict)
-    response = client.post("/api/tasks/task1/pause", headers={"X-Token": "55555"})
+    response = client.post("/api/tasks/task1/pause", headers=AUTH)
     assert response.status_code == 409
     assert response.json()["detail"] == "wrong state"
 
     monkeypatch.setattr(api_module.manager, "pause_task", missing)
-    response = client.post("/api/tasks/task1/pause", headers={"X-Token": "55555"})
+    response = client.post("/api/tasks/task1/pause", headers=AUTH)
     assert response.status_code == 404
 
 
@@ -77,7 +103,7 @@ def test_clear_completed_only_deletes_finished_records(monkeypatch):
     monkeypatch.setattr(api_module.manager, "tasks", {done.id: done, failed.id: failed})
     monkeypatch.setattr(api_module.manager, "delete_task", delete)
 
-    response = TestClient(app).delete("/api/tasks/completed", headers={"X-Token": "55555"})
+    response = TestClient(app).delete("/api/tasks/completed", headers=AUTH)
 
     assert response.status_code == 200
     assert response.json() == {"ok": True, "count": 1}
@@ -95,7 +121,7 @@ def test_delete_task_can_request_output_file_removal(monkeypatch):
     monkeypatch.setattr(api_module.manager, "delete_task", delete)
     response = TestClient(app).delete(
         "/api/tasks/task1?delete_files=true",
-        headers={"X-Token": "55555"},
+        headers=AUTH,
     )
 
     assert response.status_code == 200
@@ -117,7 +143,7 @@ def test_completed_task_file_endpoint_serves_drag_download(tmp_path, monkeypatch
     monkeypatch.setattr(api_module.manager, "tasks", {task.id: task})
     try:
         response = TestClient(app).get(
-            f"/api/tasks/{task.id}/file?token=55555",
+            f"/api/tasks/{task.id}/file?token={config_module.settings.token}",
         )
         assert response.status_code == 200
         assert response.content == b"binary"
@@ -147,7 +173,7 @@ def test_browser_direct_download_creates_and_starts_desktop_task(monkeypatch):
     monkeypatch.setattr(api_module, "activate_window", lambda: activated.append(True) or True)
     response = TestClient(app).post(
         "/api/browser/downloads",
-        headers={"X-Token": "55555"},
+        headers=AUTH,
         json={
             "url": "https://cdn.example.test/setup.exe",
             "filename": "setup.exe",
@@ -176,8 +202,8 @@ def test_launch_file_requires_an_existing_file(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "startfile", lambda path: opened.append(path), raising=False)
     client = TestClient(app)
 
-    missing = client.post("/api/launch-file", json={"path": str(tmp_path / "missing.mp4")}, headers={"X-Token": "55555"})
-    response = client.post("/api/launch-file", json={"path": str(media)}, headers={"X-Token": "55555"})
+    missing = client.post("/api/launch-file", json={"path": str(tmp_path / "missing.mp4")}, headers=AUTH)
+    response = client.post("/api/launch-file", json={"path": str(media)}, headers=AUTH)
 
     assert missing.status_code == 404
     assert response.status_code == 200
@@ -205,7 +231,7 @@ def test_repository_default_config_does_not_force_site_specific_request_headers(
     config_path = config_module.PROJECT_ROOT / "config.json"
     data = json.loads(config_path.read_text(encoding="utf-8"))
 
-    assert data["config_version"] == 13
+    assert data["config_version"] == 14
     assert data["temp_dir"] == "."
     assert data["default_referer"] == ""
     assert data["default_origin"] == ""
@@ -242,11 +268,13 @@ def test_old_blank_request_defaults_remain_blank_after_migration(tmp_path, monke
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 13
+    assert loaded.config_version == 14
     assert loaded.default_referer == ""
     assert loaded.default_origin == ""
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["config_version"] == 13
+    assert saved["config_version"] == 14
+    assert saved["token"] != "55555"
+    assert len(saved["token"]) >= 32
     assert saved["temp_dir"] == "."
     assert saved["default_concurrency"] == 12
     assert saved["max_concurrent_tasks"] == 3
@@ -270,7 +298,7 @@ def test_v2_legacy_concurrency_defaults_migrate_to_new_defaults(tmp_path, monkey
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 13
+    assert loaded.config_version == 14
     assert loaded.default_concurrency == 12
     assert loaded.max_concurrent_tasks == 3
 
@@ -293,7 +321,7 @@ def test_v2_custom_concurrency_values_are_preserved_during_migration(tmp_path, m
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 13
+    assert loaded.config_version == 14
     assert loaded.default_concurrency == 6
     assert loaded.max_concurrent_tasks == 5
 
@@ -315,7 +343,7 @@ def test_v11_legacy_takeover_default_migrates_to_capture_all_explicit_downloads(
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 13
+    assert loaded.config_version == 14
     assert loaded.browser_takeover_min_mb == 0
 
 
@@ -336,7 +364,7 @@ def test_v11_custom_takeover_threshold_is_preserved(tmp_path, monkeypatch):
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 13
+    assert loaded.config_version == 14
     assert loaded.browser_takeover_min_mb == 3
 
 

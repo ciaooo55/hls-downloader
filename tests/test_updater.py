@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import updater
 from backend.app import api as api_module
+from backend.app.config import settings
 from backend.app.updater import UpdateError, UpdateInfo
 
 
@@ -102,33 +103,12 @@ def test_update_check_rejects_untrusted_download_host():
         )
 
 
-def test_update_check_falls_back_to_release_checksums_when_api_is_limited(monkeypatch):
-    digest = "a" * 64
-    calls: list[str] = []
-
+def test_update_check_does_not_depend_on_an_unpublished_checksum_asset():
     def opener(request, timeout):
-        calls.append(request.full_url)
-        if request.full_url == updater.LATEST_RELEASE_API:
-            raise OSError("rate limit")
-        if request.full_url == updater.LATEST_RELEASE_PAGE:
-            return FakeResponse(
-                b"",
-                "https://github.com/ciaooo55/hls-downloader/releases/tag/v9.0.0",
-            )
-        return FakeResponse(f"{digest}  {updater.SETUP_ASSET_NAME}\n".encode())
+        raise OSError("offline")
 
-    monkeypatch.setattr(
-        updater,
-        "RUNTIME_PATHS",
-        SimpleNamespace(mode="installed", data_root=None),
-    )
-    info = updater.check_for_update(opener=opener)
-
-    assert info.latest_version == "9.0.0"
-    assert info.digest == digest
-    assert info.size == 0
-    assert info.can_auto_install is True
-    assert calls[-1].endswith("/v9.0.0/SHA256SUMS.txt")
+    with pytest.raises(updater.UpdateCheckError, match="网络"):
+        updater.check_for_update(opener=opener)
 
 
 def test_rate_limited_check_returns_a_safe_actionable_error(monkeypatch):
@@ -278,7 +258,7 @@ def test_update_api_requires_token_and_returns_release_state(monkeypatch):
 
     with TestClient(test_app) as client:
         unauthorized = client.get("/api/update/check")
-        response = client.get("/api/update/check?force=true", headers={"X-Token": "55555"})
+        response = client.get("/api/update/check?force=true", headers={"X-Token": settings.token})
 
     assert unauthorized.status_code == 401
     assert response.status_code == 200
@@ -295,7 +275,7 @@ def test_update_api_rejects_duplicate_installer_launch(monkeypatch):
     test_app.include_router(api_module.router)
 
     with TestClient(test_app) as client:
-        response = client.post("/api/update/install", headers={"X-Token": "55555"})
+        response = client.post("/api/update/install", headers={"X-Token": settings.token})
 
     assert response.status_code == 409
     assert "已经启动" in response.json()["detail"]

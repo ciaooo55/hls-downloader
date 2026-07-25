@@ -29,8 +29,6 @@ import { pickLocalMediaFile } from './desktop'
 
 const VideoPlayerModal = lazy(() => import('./components/VideoPlayerModal'))
 const launchParams = new URLSearchParams(window.location.search)
-const launchToken = launchParams.get('token')
-if (launchToken) localStorage.setItem('hls_token', launchToken)
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([])

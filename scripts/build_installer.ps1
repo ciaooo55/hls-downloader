@@ -3,7 +3,7 @@ param(
     [switch]$SkipBackend,
     [switch]$SkipDesktop,
     [switch]$SkipSmoke,
-    [string]$Version = "1.6.7"
+    [string]$Version = "1.6.8"
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,10 +37,15 @@ $NsisUrl = "https://downloads.sourceforge.net/project/nsis/NSIS%203/$NsisVersion
 $InstallerScript = Join-Path $Root "installer\hls-downloader.nsi"
 $InstallerOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Setup.exe"
 $PortableOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Portable.zip"
-$ChromeExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Chrome.zip"
-$FirefoxExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-Unsigned.zip"
-$FirefoxSourceOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-Source.zip"
-$ChecksumsOut = Join-Path $ReleaseDir "SHA256SUMS.txt"
+$FirefoxWebId = "hls-downloader-store@ciaooo55.com"
+$FirefoxNoWebId = "browser@hls-downloader.ciaooo55.com"
+$ExtensionBuildDir = Join-Path $Root "build\installer\extensions"
+$FirefoxWebStage = Join-Path $ExtensionBuildDir "firefox-web-ui"
+$FirefoxNoWebStage = Join-Path $ExtensionBuildDir "firefox-no-web-ui"
+$FirefoxWebExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-Web-UI-Unsigned.zip"
+$FirefoxWebSourceOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-Web-UI-Source.zip"
+$FirefoxNoWebExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-No-Web-UI-Unsigned.zip"
+$FirefoxNoWebSourceOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-No-Web-UI-Source.zip"
 
 function Invoke-Step($Name, [scriptblock]$Block) {
     Write-Host ""
@@ -229,11 +234,35 @@ if (-not $SkipFrontend) {
     }
     Invoke-Step "Build browser extensions" {
         Push-Location $ExtensionDir
+        $previousFirefoxId = $env:HLS_FIREFOX_EXTENSION_ID
         try {
             if (-not (Test-Path "node_modules")) { pnpm install --frozen-lockfile }
             pnpm test
-            pnpm run build
-        } finally { Pop-Location }
+            pnpm run build:chrome
+            Remove-Item -Recurse -Force $FirefoxWebStage, $FirefoxNoWebStage -ErrorAction SilentlyContinue
+            foreach ($variant in @(
+                @{ Id = $FirefoxWebId; Stage = $FirefoxWebStage; Label = "web UI" },
+                @{ Id = $FirefoxNoWebId; Stage = $FirefoxNoWebStage; Label = "no web UI" }
+            )) {
+                $env:HLS_FIREFOX_EXTENSION_ID = $variant.Id
+                pnpm run build:firefox
+                pnpm exec web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors
+                $manifest = Get-Content -LiteralPath .output/firefox-mv3/manifest.json -Raw | ConvertFrom-Json
+                if ($manifest.browser_specific_settings.gecko.id -ne $variant.Id) {
+                    throw "Firefox $($variant.Label) build used the wrong extension ID"
+                }
+                $mediaScript = @($manifest.content_scripts | Where-Object { $_.js -contains "content-scripts/content.js" })
+                $hookScript = @($manifest.content_scripts | Where-Object { $_.js -contains "content-scripts/hooks.js" })
+                if ($mediaScript.Count -ne 1 -or $mediaScript[0].all_frames -ne $true -or $hookScript.Count -ne 1 -or $hookScript[0].all_frames -ne $true) {
+                    throw "Firefox $($variant.Label) build does not capture media in every frame"
+                }
+                New-Item -ItemType Directory -Force -Path $variant.Stage | Out-Null
+                Copy-Item -Recurse -Force -Path .output/firefox-mv3/* -Destination $variant.Stage
+            }
+        } finally {
+            $env:HLS_FIREFOX_EXTENSION_ID = $previousFirefoxId
+            Pop-Location
+        }
     }
 }
 
@@ -303,7 +332,7 @@ Invoke-Step "Stage application files" {
     Copy-Item -LiteralPath $tauriExecutable -Destination (Join-Path $StageDir "HLSDownloader.exe")
     Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloaderCore\*") -Destination $StageDir -Recurse -Force
     Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloaderNativeHost.exe") -Destination $StageDir
-    Copy-Item -Path (Join-Path $Root "config.json") -Destination $StageDir
+    Copy-Item -LiteralPath (Join-Path $Root "config.default.json") -Destination (Join-Path $StageDir "config.json")
 
     New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "assets") | Out-Null
     Copy-Item -Path (Join-Path $AssetsDir "app-icon.png") -Destination (Join-Path $StageDir "assets")
@@ -352,6 +381,12 @@ if (-not $SkipSmoke) {
                 if (-not $ok) {
                     throw "Packaged app did not respond on /api/health"
                 }
+                $packagedConfigPath = Join-Path $StageDir "config.json"
+                $packagedConfig = Get-Content -LiteralPath $packagedConfigPath -Raw | ConvertFrom-Json
+                $packagedToken = [string]$packagedConfig.token
+                if ($packagedToken.Length -lt 32 -or $packagedToken -eq "55555") {
+                    throw "Packaged app did not generate a secure internal credential"
+                }
                 $stageCoreExe = Join-Path $StageDir "HLSDownloaderCore.exe"
                 $stageCore = @(Get-Process HLSDownloaderCore -ErrorAction SilentlyContinue |
                     Where-Object { $_.Path -eq $stageCoreExe })
@@ -360,8 +395,11 @@ if (-not $SkipSmoke) {
                 }
                 $packagedSettings = Invoke-RestMethod `
                     -Uri "http://127.0.0.1:8765/api/settings" `
-                    -Headers @{ "X-Token" = "55555" } `
+                    -Headers @{ "X-Token" = $packagedToken } `
                     -TimeoutSec 2
+                if ($null -ne $packagedSettings.PSObject.Properties["token"]) {
+                    throw "Internal credential leaked through the Settings API"
+                }
                 foreach ($field in @(
                     "http_chunk_size_mb",
                     "bt_upload_limit_kib",
@@ -418,7 +456,7 @@ if (-not $SkipSmoke) {
                         $shutdown = Invoke-RestMethod `
                             -Method Post `
                             -Uri "http://127.0.0.1:8765/api/app/shutdown" `
-                            -Headers @{ "X-Token" = "55555" } `
+                            -Headers @{ "X-Token" = $packagedToken } `
                             -ContentType "application/json" `
                             -Body "{}" `
                             -TimeoutSec 2
@@ -487,6 +525,7 @@ if (-not $SkipSmoke) {
                 (Join-Path $ExtensionDir "native-host\firefox.json") `
                 -Destination (Join-Path $StageDir "native-host")
             Remove-Item -LiteralPath $smokePortableMarker -Force -ErrorAction SilentlyContinue
+            Copy-Item -Force -LiteralPath (Join-Path $Root "config.default.json") -Destination (Join-Path $StageDir "config.json")
             Remove-Item -LiteralPath (Join-Path $StageDir "data.db"), (Join-Path $StageDir "data.db-shm"), (Join-Path $StageDir "data.db-wal") -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath (Join-Path $StageDir "downloads") -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -528,9 +567,9 @@ then select browser-extension\chrome.
 }
 
 Invoke-Step "Assemble release files" {
-    Compress-Archive -Path (Join-Path $ExtensionDir ".output\chrome-mv3\*") -DestinationPath $ChromeExtensionOut -CompressionLevel Optimal
-    Compress-Archive -Path (Join-Path $ExtensionDir ".output\firefox-mv3\*") -DestinationPath $FirefoxExtensionOut -CompressionLevel Optimal
-    Compress-Archive -Path @(
+    Compress-Archive -Path (Join-Path $FirefoxWebStage "*") -DestinationPath $FirefoxWebExtensionOut -CompressionLevel Optimal
+    Compress-Archive -Path (Join-Path $FirefoxNoWebStage "*") -DestinationPath $FirefoxNoWebExtensionOut -CompressionLevel Optimal
+    $sourceInputs = @(
         (Join-Path $ExtensionDir "entrypoints"),
         (Join-Path $ExtensionDir "lib"),
         (Join-Path $ExtensionDir "native-host"),
@@ -542,28 +581,38 @@ Invoke-Step "Assemble release files" {
         (Join-Path $ExtensionDir "tsconfig.json"),
         (Join-Path $ExtensionDir "wxt.config.ts"),
         (Join-Path $Root "PRIVACY.md")
-    ) -DestinationPath $FirefoxSourceOut -CompressionLevel Optimal
-    $expected = @($InstallerOut, $PortableOut, $ChromeExtensionOut, $FirefoxExtensionOut, $FirefoxSourceOut)
+    )
+    foreach ($sourceVariant in @(
+        @{ Id = $FirefoxWebId; Out = $FirefoxWebSourceOut; Stage = (Join-Path $ExtensionBuildDir "source-web-ui"); Label = "网页显示" },
+        @{ Id = $FirefoxNoWebId; Out = $FirefoxNoWebSourceOut; Stage = (Join-Path $ExtensionBuildDir "source-no-web-ui"); Label = "网页不显示" }
+    )) {
+        Remove-Item -Recurse -Force $sourceVariant.Stage -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $sourceVariant.Stage | Out-Null
+        Copy-Item -Recurse -Force -Path $sourceInputs -Destination $sourceVariant.Stage
+        @"
+Firefox 发布变体：$($sourceVariant.Label)
+扩展 ID：$($sourceVariant.Id)
+构建命令：`$env:HLS_FIREFOX_EXTENSION_ID='$($sourceVariant.Id)'; pnpm run build:firefox
+
+两个发布变体的功能源码完全相同，仅 Mozilla 发布 ID 不同。
+"@ | Set-Content -LiteralPath (Join-Path $sourceVariant.Stage "BUILD-VARIANT.txt") -Encoding UTF8
+        Compress-Archive -Path (Join-Path $sourceVariant.Stage "*") -DestinationPath $sourceVariant.Out -CompressionLevel Optimal
+    }
+    $expected = @($InstallerOut, $PortableOut, $FirefoxWebExtensionOut, $FirefoxWebSourceOut, $FirefoxNoWebExtensionOut, $FirefoxNoWebSourceOut)
     foreach ($path in $expected) {
         if (-not (Test-Path -LiteralPath $path)) {
             throw "Missing release file: $path"
         }
     }
-    $lines = Get-ChildItem -LiteralPath $ReleaseDir -File |
-        Where-Object Name -ne "SHA256SUMS.txt" |
-        Sort-Object Name |
-        ForEach-Object {
-            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($_.Name)"
-        }
-    $lines | Set-Content -LiteralPath $ChecksumsOut -Encoding ASCII
+    $actual = @(Get-ChildItem -LiteralPath $ReleaseDir -File)
+    if ($actual.Count -ne 6) { throw "Release directory must contain exactly six files; found $($actual.Count)" }
 }
 
 Write-Host ""
 Write-Host "Windows release assets created:" -ForegroundColor Green
 Write-Host $InstallerOut
 Write-Host $PortableOut
-Write-Host $ChromeExtensionOut
-Write-Host $FirefoxExtensionOut
-Write-Host $FirefoxSourceOut
-Write-Host $ChecksumsOut
+Write-Host $FirefoxWebExtensionOut
+Write-Host $FirefoxWebSourceOut
+Write-Host $FirefoxNoWebExtensionOut
+Write-Host $FirefoxNoWebSourceOut

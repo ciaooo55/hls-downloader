@@ -179,6 +179,15 @@ describe('resource rules', () => {
     expect(visiblePlaybackResources([direct, main, bumper, stale], null)).toEqual([])
     expect(visiblePlaybackResources([direct, main, bumper, stale], { sourceUrls: [direct.url], startedAt: now }).map(item => item.id)).toEqual(['direct', 'main', 'bumper'])
   })
+  it('does not fall back to unrelated page media when playback has no evidence', () => {
+    const now = Date.now()
+    const unrelated = resource({
+      id: 'unrelated', kind: 'hls', url: 'https://ads.test/background/master.m3u8',
+      duration: 3_600, seenAt: now - 5 * 60_000,
+    })
+
+    expect(visiblePlaybackResources([unrelated], { sourceUrls: ['blob:https://site.test/player'], startedAt: now })).toEqual([])
+  })
   it('keeps images and ambiguous dynamic documents in the browser', () => {
     expect(classifyDownload('https://cdn.test/photo.jpg', 'application/octet-stream', 'photo.jpg')).toBeNull()
     expect(classifyDownload('https://site.test/advert.php', 'application/octet-stream')).toBeNull()

@@ -21,14 +21,14 @@
 | --- | --- |
 | `HLSDownloader-Windows-x64-Setup.exe` | Windows 10/11 x64 安装版，带在线更新、卸载程序和快捷方式 |
 | `HLSDownloader-Windows-x64-Portable.zip` | Windows 10/11 x64 便携版，解压后直接运行 |
-| `HLSDownloader-Chrome.zip` | Chrome MV3 商店/开发者模式提交包 |
-| `HLSDownloader-Firefox-Unsigned.zip` | Firefox 的 AMO 上传包和临时测试包，尚未经过 Mozilla 签名 |
-| `HLSDownloader-Firefox-Source.zip` | Mozilla 审核所需的对应源码与可复现构建说明 |
-| `SHA256SUMS.txt` | Release 文件的 SHA256 校验值 |
+| `HLSDownloader-Firefox-Web-UI-Unsigned.zip` | 网页显示版 Firefox 插件，AMO 上传或临时测试用 |
+| `HLSDownloader-Firefox-Web-UI-Source.zip` | 网页显示版对应的 AMO 审核源码包 |
+| `HLSDownloader-Firefox-No-Web-UI-Unsigned.zip` | 网页不显示版 Firefox 插件，功能与显示版完全一致，仅发布 ID 不同 |
+| `HLSDownloader-Firefox-No-Web-UI-Source.zip` | 网页不显示版对应的 AMO 审核源码包 |
 
 安装包和便携包由 GitHub Actions 从源码自动构建，不保存在 Git 仓库中。桌面主程序使用 Cockpit Tools 同类的 Tauri + React 架构，包含下载核心、FFmpeg、ffprobe、播放器资源和 Chromium 浏览器插件；Windows 10/11 自带的 Microsoft Edge WebView2 运行时为其渲染界面。
 
-> 当前安装包没有商业代码签名证书。Windows SmartScreen 首次运行时可能显示未知发布者，请只从本仓库 Releases 下载并核对 SHA256。
+> 当前安装包没有商业代码签名证书。Windows SmartScreen 首次运行时可能显示未知发布者，请只从本仓库 Releases 下载；应用更新使用 GitHub Release 资产提供的 SHA-256 digest 校验安装包。
 
 ## 使用
 
@@ -66,7 +66,7 @@
 - fMP4 init map、map 切换和 discontinuity
 - 重启恢复任务历史
 - Windows 系统托盘、单实例唤醒和可靠退出
-- 工具栏检查更新、启动更新提示、SHA256 校验和一键下载安装
+- 工具栏检查更新、启动更新提示、GitHub SHA256 digest 校验和一键下载安装
 - 更新包保存到下载目录并在安装成功后自动删除
 - 安装或升级前自动关闭正在运行的安装版或便携版实例
 - 设置页、开始菜单和 Windows“已安装的应用”卸载入口
@@ -78,13 +78,13 @@
 
 ## 浏览器插件
 
-Release 同时生成 Chrome 和 Firefox 插件包。安装版内置 Chromium 插件目录并自动注册 `com.ciaooo55.hls_downloader` Native Messaging Host；首次使用时在工具栏打开“浏览器插件”，按界面提示完成一次性加载。用户点击真实链接或带有下载语义的按钮后，插件才会登记接管意图；随后浏览器创建真实 `DownloadItem` 时，插件立即暂停并暂时隐藏浏览器下载 UI，并按 `webRequest.requestId` 跟踪 PHP/脚本跳转的完整重定向链、`Content-Disposition`、最终文件名、类型和大小。普通的播放、展开、登录等页面按钮不会登记接管意图。桌面端成功打开下载确认对话框后，插件立即取消并清除浏览器副本；用户之后选择下载或取消都只由桌面软件处理。只有桌面端离线或无法接收接管请求时才恢复浏览器下载。页面嗅探只登记资源，不会自行启动下载，按住 Alt 点击可临时绕过接管。
+Release 同时生成两个 Firefox 插件包：网页显示版与网页不显示版。它们功能和源码完全一致，仅 Mozilla 发布 ID 不同。安装版内置 Chromium 插件目录并自动注册 `com.ciaooo55.hls_downloader` Native Messaging Host；首次使用时在工具栏打开“浏览器插件”，按界面提示完成一次性加载。插件与桌面程序通过 Native Messaging 自动连接，用户不需要复制或配置 Token。用户点击真实链接或带有下载语义的按钮后，插件才会登记接管意图；随后浏览器创建真实 `DownloadItem` 时，插件立即暂停并暂时隐藏浏览器下载 UI，并按 `webRequest.requestId` 跟踪 PHP/脚本跳转的完整重定向链、`Content-Disposition`、最终文件名、类型和大小。普通的播放、展开、登录等页面按钮不会登记接管意图。桌面端成功打开下载确认对话框后，插件立即取消并清除浏览器副本；用户之后选择下载或取消都只由桌面软件处理。只有桌面端离线或无法接收接管请求时才恢复浏览器下载。页面嗅探只登记资源，不会自行启动下载，按住 Alt 点击可临时绕过接管。
 
-扩展支持响应嗅探、页面 fetch/XHR/media/Performance 观察、右键下载和 magnet 链接。识别结果按“标签页 + 当前页面 URL”隔离，不会把其他页面的视频混进来；检测到可见视频后，下载按钮会贴在视频右上角，多清晰度时点击选择。无可见视频时仍可使用右侧折叠资源面板。Cookie 必须按站点单独授权，桌面任务中的 Cookie 使用 Windows DPAPI 加密后再写入数据库。Chrome 正式安装需要 Chrome Web Store，Firefox 永久安装需要 Mozilla 签名。
+扩展支持响应嗅探、页面 fetch/XHR/media/Performance 观察、右键下载和 magnet 链接，主检测器与 MAIN-world 监听器均在 iframe 内运行。识别结果按“标签页 + 当前页面 URL + frame”隔离；只有媒体元素地址精确匹配，或播放前后短时间内同 frame 捕获到的资源才会显示，避免把广告、图片、PHP 页面或后台预览流误认为目标视频。检测到可见视频后，下载按钮会贴在视频右上角，多清晰度时点击选择。无可见视频时仍可使用右侧折叠资源面板。Cookie 必须按站点单独授权，桌面任务中的 Cookie 使用 Windows DPAPI 加密后再写入数据库。Chrome 正式安装需要 Chrome Web Store，Firefox 永久安装需要 Mozilla 签名。
 
-Firefox 商店版使用专用 ID `hls-downloader-store@ciaooo55.com`。首次提交时，在 AMO 的“提交新附加组件”页面选择“在此网站上”，再上传 `HLSDownloader-Firefox-Unsigned.zip`。不要先用该 ID 执行 `web-ext sign --channel unlisted`，否则它会被注册为自分发扩展，随后创建公开商店条目会提示“发现重复的附加组件 ID”。以后更新必须进入“我的附加组件 → HLS Downloader → 状态和版本 → 上传新版本”，保持 ID 不变并提高版本号。
+Firefox 网页显示版使用 ID `hls-downloader-store@ciaooo55.com`，网页不显示版使用 `browser@hls-downloader.ciaooo55.com`。首次提交时，在 AMO 的“提交新附加组件”页面选择“在此网站上”，上传对应的 `Unsigned.zip`。不要先对商店 ID 执行 `web-ext sign --channel unlisted`，否则它会被注册为自分发扩展，随后创建公开商店条目会提示“发现重复的附加组件 ID”。以后更新必须进入“我的附加组件 → HLS Downloader → 状态和版本 → 上传新版本”，保持该版本对应的 ID 不变并提高版本号。
 
-校验通过后，源码问题选择“是”，再上传同一 Release 的 `HLSDownloader-Firefox-Source.zip`。审核说明见源码包内的 `AMO-BUILD.md`，隐私政策见 [PRIVACY.md](PRIVACY.md)。未签名 ZIP 不能拖进正式版 Firefox；临时测试时先解压，在 `about:debugging#/runtime/this-firefox` 中选择“临时载入附加组件”，再选择解压目录里的 `manifest.json`。
+校验通过后，源码问题选择“是”，再上传同一 Release、同一变体对应的 `Source.zip`。审核说明见源码包内的 `AMO-BUILD.md`，隐私政策见 [PRIVACY.md](PRIVACY.md)。未签名 ZIP 不能拖进正式版 Firefox；临时测试时先解压，在 `about:debugging#/runtime/this-firefox` 中选择“临时载入附加组件”，再选择解压目录里的 `manifest.json`。
 
 默认每个任务使用 12 个分片并发，最高可配置为 256，最多同时下载 3 个任务。普通 HTTP 文件使用严格 Range 分段并发，源站不支持 Range 时自动退回单连接。设置中可单独指定“缓存与过程文件目录”，默认使用软件安装目录；分片、断点、BT 数据和日志保存在其中的 `.tasks` 子目录。成功任务会立即清理自己的过程文件；暂停或失败任务会保留续传和诊断文件。最终文件位于其他磁盘时会安全复制到目标盘后再原子完成，不会因 Windows 跨盘重命名失败。
 

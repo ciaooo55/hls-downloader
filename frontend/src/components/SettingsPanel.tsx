@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { ChevronDown, ChevronRight, Copy, Download, FolderOpen, RefreshCw, Trash2, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Download, FolderOpen, RefreshCw, Trash2, X } from 'lucide-react'
 import { fetchSettings, fetchUpdateInfo, installUpdate, openExplorer, saveSettings, scanCastDevices, scanTvboxDevices, testConnection } from '../api'
 import { beginUninstall, getDesktopInfo } from '../desktop'
 import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
@@ -22,7 +22,6 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   const [settings, setSettings] = useState<any>({})
   const [original, setOriginal] = useState<any>({})
   const [saved, setSaved] = useState(false)
-  const [copied, setCopied] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -145,21 +144,11 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     try {
       const normalized = await saveSettings(settings)
       setSettings(normalized); setOriginal(normalized)
-      localStorage.setItem('hls_token', normalized.token || '55555')
       setSaved(true)
       window.setTimeout(() => setSaved(false), 2000)
     } catch (reason: any) {
       setError(reason.message || '保存设置失败')
     } finally { setSaving(false) }
-  }
-  const copyToken = async () => {
-    try {
-      await navigator.clipboard.writeText(settings.token || '')
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1200)
-    } catch {
-      setError('无法复制，请手动选择 Token')
-    }
   }
   const checkEnvironment = async () => {
     setCheckingEnvironment(true); setError('')
@@ -241,10 +230,6 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
               <select aria-label="应用主题" value={themePreference} onChange={event => onThemePreferenceChange(event.target.value as ThemePreference)}>
                 <option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option>
               </select>
-            </div>
-            <div className="settings-row settings-row-stack">
-              <div><strong>浏览器连接 Token</strong><span>浏览器扩展使用此值连接本地服务</span></div>
-              <div className="input-action"><input aria-label="浏览器连接 Token" value={settings.token || ''} readOnly /><button className="secondary-button" title="复制 Token" onClick={copyToken}><Copy size={15} />{copied ? '已复制' : '复制'}</button></div>
             </div>
           </section>
 

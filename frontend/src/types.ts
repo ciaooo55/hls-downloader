@@ -77,7 +77,6 @@ export interface PlaybackSession extends PlaybackStatus {
 }
 
 export interface Settings {
-  token?: string
   download_dir?: string
   temp_dir?: string
   default_concurrency?: number

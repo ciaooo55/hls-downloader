@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
+from backend.app.config import settings
 from backend.app.models import Task, TaskStatus, TaskType
 
 
@@ -19,7 +20,7 @@ def test_create_task_rejects_duplicate_url_without_opt_in(monkeypatch):
     client = TestClient(app)
     response = client.post(
         "/api/tasks",
-        headers={"X-Token": "55555"},
+        headers={"X-Token": settings.token},
         json={"url": "https://cdn.example.test/video.mp4"},
     )
     assert response.status_code == 409
@@ -57,7 +58,7 @@ def test_create_task_allows_duplicate_when_flag_set(monkeypatch):
     # find_tasks_by_url uses manager.tasks
     response = TestClient(app).post(
         "/api/tasks",
-        headers={"X-Token": "55555"},
+        headers={"X-Token": settings.token},
         json={"url": "https://cdn.example.test/file.bin", "allow_duplicate": True},
     )
     assert response.status_code == 200

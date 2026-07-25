@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import html
+import ipaddress
 import mimetypes
+import selectors
 import socket
 import time
 import xml.etree.ElementTree as ET
@@ -89,14 +91,28 @@ def _parse_ssdp_location(payload: bytes) -> str:
 
 def _search_ssdp(timeout: float) -> list[str]:
     locations: set[str] = set()
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as client:
-        # VPN/proxy adapters (for example Mihomo) can become the default route.
-        # Bind multicast discovery to every real private LAN address so TVs on
-        # Wi-Fi receive the M-SEARCH request rather than a virtual adapter.
-        local_addresses = _private_lan_addresses()
-        if local_addresses:
-            client.bind((local_addresses[0], 0))
-            client.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(local_addresses[0]))
+    clients: list[socket.socket] = []
+    selector = selectors.DefaultSelector()
+    try:
+        # SSDP replies are unicast to the source address. Sending only through
+        # the first adapter misses TVs whenever Wi-Fi, Ethernet and virtual
+        # adapters coexist, so probe every eligible private IPv4 interface.
+        local_addresses = _private_lan_addresses() or [""]
+        for address in local_addresses:
+            client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            try:
+                if address:
+                    client.bind((address, 0))
+                    client.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(address))
+                client.setblocking(False)
+                selector.register(client, selectors.EVENT_READ)
+                clients.append(client)
+            except OSError:
+                # A stale adapter can remain visible while Windows has already
+                # removed its address. Continue with the working interfaces.
+                client.close()
+        if not clients:
+            return []
         for target in SSDP_TARGETS:
             request = (
                 "M-SEARCH * HTTP/1.1\r\n"
@@ -106,20 +122,28 @@ def _search_ssdp(timeout: float) -> list[str]:
                 "USER-AGENT: HLSDownloader/1.6 UPnP/1.1\r\n"
                 f"ST: {target}\r\n\r\n"
             ).encode("ascii")
-            client.sendto(request, SSDP_ADDRESS)
+            for client in clients:
+                client.sendto(request, SSDP_ADDRESS)
         deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            client.settimeout(remaining)
-            try:
-                response, _address = client.recvfrom(65535)
-            except (OSError, TimeoutError):
-                break
-            location = _parse_ssdp_location(response)
-            if location:
-                locations.add(location)
+            for key, _event in selector.select(remaining):
+                while True:
+                    try:
+                        response, _address = key.fileobj.recvfrom(65535)
+                    except BlockingIOError:
+                        break
+                    except OSError:
+                        break
+                    location = _parse_ssdp_location(response)
+                    if location:
+                        locations.add(location)
+    finally:
+        selector.close()
+        for client in clients:
+            client.close()
     return sorted(locations)
 
 
@@ -135,7 +159,8 @@ def _private_lan_addresses() -> list[str]:
             for item in adapter.ips:
                 address = item.ip if isinstance(item.ip, str) else ""
                 try:
-                    if address and address != "127.0.0.1" and address.startswith(("10.", "172.", "192.168.")):
+                    parsed = ipaddress.ip_address(address)
+                    if parsed.version == 4 and parsed.is_private and not parsed.is_loopback and not parsed.is_link_local:
                         if address not in addresses:
                             addresses.append(address)
                 except ValueError:

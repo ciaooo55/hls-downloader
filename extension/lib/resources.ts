@@ -20,6 +20,7 @@ export interface MediaResource {
   title?: string
   filename?: string
   tabId?: number
+  frameId?: number
   statusCode?: number
   method?: string
   requestHeaders?: Record<string, string>
@@ -189,23 +190,17 @@ export function likelyResourceBytes(resource: Pick<MediaResource, 'size' | 'esti
  * stream size is the most useful proxy for the main programme over a bumper.
  */
 export function visiblePlaybackResources(resources: MediaResource[], playback: PlaybackContext | null, limit = 8): MediaResource[] {
-  const fallback = compactResources(resources, 40)
-    .filter(item => ['hls', 'dash', 'media'].includes(item.kind))
-    .sort((left, right) => resourceRank(right) - resourceRank(left)
-      || (right.height || 0) - (left.height || 0)
-      || (right.bandwidth || 0) - (left.bandwidth || 0)
-      || likelyResourceBytes(right) - likelyResourceBytes(left)
-      || right.seenAt - left.seenAt)
-    .slice(0, limit)
   if (!playback) return []
   const sources = new Set(playback.sourceUrls.filter(Boolean))
-  const recentFloor = playback.startedAt - 12_000
+  const recentFloor = playback.startedAt - 20_000
   const recentCeiling = playback.startedAt + 90_000
   const candidates = compactResources(resources, 40)
     .filter(item => ['hls', 'dash', 'media'].includes(item.kind))
     .map(item => ({
       item,
-      evidence: sources.has(item.url) ? 2 : item.seenAt >= recentFloor && item.seenAt <= recentCeiling ? 1 : 0,
+      evidence: sources.has(item.url) ? 3
+        : item.seenAt >= recentFloor && item.seenAt <= recentCeiling && (item.kind === 'hls' || item.kind === 'dash') ? 2
+          : item.seenAt >= recentFloor && item.seenAt <= recentCeiling ? 1 : 0,
       bytes: likelyResourceBytes(item),
     }))
     .filter(entry => entry.evidence > 0)
@@ -215,7 +210,9 @@ export function visiblePlaybackResources(resources: MediaResource[], playback: P
     || (right.item.bandwidth || 0) - (left.item.bandwidth || 0)
     || right.bytes - left.bytes
     || right.item.seenAt - left.item.seenAt)
-  return candidates.length ? candidates.slice(0, limit).map(entry => entry.item) : fallback
+  // Without playback evidence, previews, adverts and background players must
+  // never become the default one-click target.
+  return candidates.slice(0, limit).map(entry => entry.item)
 }
 
 export function compactResources(resources: MediaResource[], limit = 40): MediaResource[] {

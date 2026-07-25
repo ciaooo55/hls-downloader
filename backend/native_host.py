@@ -16,16 +16,20 @@ ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) el
 
 def _settings() -> tuple[str, str]:
     local_app_data = os.environ.get("LOCALAPPDATA", "")
-    candidates = [
-        Path(local_app_data) / "HLS Downloader" / "config.json" if local_app_data else ROOT / ".missing",
-        ROOT / "config.json",
-        ROOT / "config.default.json",
-    ]
+    if (ROOT / "portable").is_file():
+        candidates = [ROOT / "config.json"]
+    else:
+        candidates = [
+            Path(local_app_data) / "HLS Downloader" / "config.json" if local_app_data else ROOT / ".missing",
+            ROOT / "config.json",
+        ]
     for path in candidates:
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
-            return f"http://127.0.0.1:{int(data.get('port', 8765))}/api", str(data.get("token", "55555"))
-    return "http://127.0.0.1:8765/api", "55555"
+            return f"http://127.0.0.1:{int(data.get('port', 8765))}/api", str(data.get("token", ""))
+    # A cold launch reaches this branch before the desktop core creates its
+    # config. Every retry re-reads the file and picks up the generated secret.
+    return "http://127.0.0.1:8765/api", ""
 
 
 def _request(method: str, path: str, payload: dict | None = None, timeout: float = 4) -> dict | list:

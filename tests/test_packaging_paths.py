@@ -24,7 +24,8 @@ def test_project_root_uses_executable_directory_when_frozen(monkeypatch, tmp_pat
         assert reloaded.settings.download_dir == str(
             (tmp_path / "user" / "Downloads" / "HLS Downloader").resolve()
         )
-        assert reloaded.settings.token == "55555"
+        assert len(reloaded.settings.token) >= 32
+        assert reloaded.settings.token != "55555"
         assert reloaded.settings.ffmpeg_path == str((exe.parent / "bin" / "ffmpeg.exe").resolve())
     finally:
         monkeypatch.delattr(sys, "frozen", raising=False)
@@ -121,15 +122,18 @@ def test_windows_build_emits_setup_and_portable_assets():
     assert "Compress-Archive" in build_script
 
 
-def test_windows_build_emits_extension_packages_and_current_checksums():
+def test_windows_build_emits_two_firefox_variants_and_exactly_six_release_files():
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
 
-    assert 'Join-Path $ReleaseDir "HLSDownloader-Chrome.zip"' in build_script
-    assert 'Join-Path $ReleaseDir "HLSDownloader-Firefox-Unsigned.zip"' in build_script
-    assert 'Join-Path $ReleaseDir "SHA256SUMS.txt"' in build_script
-    assert "Get-FileHash -LiteralPath" in build_script
-    assert "Where-Object Name -ne \"SHA256SUMS.txt\"" in build_script
+    assert 'Join-Path $ReleaseDir "HLSDownloader-Firefox-Web-UI-Unsigned.zip"' in build_script
+    assert 'Join-Path $ReleaseDir "HLSDownloader-Firefox-Web-UI-Source.zip"' in build_script
+    assert 'Join-Path $ReleaseDir "HLSDownloader-Firefox-No-Web-UI-Unsigned.zip"' in build_script
+    assert 'Join-Path $ReleaseDir "HLSDownloader-Firefox-No-Web-UI-Source.zip"' in build_script
+    assert "$FirefoxWebId" in build_script and "$FirefoxNoWebId" in build_script
+    assert "HLS_FIREFOX_EXTENSION_ID" in build_script
+    assert "Release directory must contain exactly six files" in build_script
+    assert "SHA256SUMS.txt" not in build_script
 
 
 def test_windows_build_uses_tools_from_path_on_clean_runner():
@@ -186,6 +190,10 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     assert "QuietUninstallString" in nsis_script
     assert 'File /oname=config.default.json "${STAGE_DIR}\\config.json"' in nsis_script
     assert 'CopyFiles /SILENT "$INSTDIR\\config.default.json" "$INSTDIR\\config.json"' not in nsis_script
+    assert 'PreviousTorrentProgId' in nsis_script
+    assert 'DeleteRegValue HKCU "Software\\Classes\\.torrent" ""' in nsis_script
+    assert 'DeleteRegKey HKCU "Software\\Classes\\.torrent"' not in nsis_script
+    assert "HLSDownloader.exe$\\\" $\\\"%1$\\\"" in nsis_script
     assert "$smokePortableMarker" in build_script
     assert 'Set-Content -LiteralPath $smokePortableMarker' in build_script
     assert 'Remove-Item -LiteralPath $smokePortableMarker' in build_script
@@ -260,7 +268,9 @@ def test_firefox_release_includes_reviewable_source_archive():
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
     reviewer_notes = (root / "extension" / "AMO-BUILD.md").read_text(encoding="utf-8")
 
-    assert "HLSDownloader-Firefox-Source.zip" in build_script
+    assert "HLSDownloader-Firefox-Web-UI-Source.zip" in build_script
+    assert "HLSDownloader-Firefox-No-Web-UI-Source.zip" in build_script
+    assert "BUILD-VARIANT.txt" in build_script
     for source in ("entrypoints", "lib", "public", "package.json", "pnpm-lock.yaml", "wxt.config.ts", "AMO-BUILD.md"):
         assert source in build_script
     assert "pnpm install --frozen-lockfile" in reviewer_notes

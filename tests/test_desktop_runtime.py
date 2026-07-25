@@ -14,6 +14,7 @@ from backend.app.desktop_runtime import (
     set_desktop_handoff_session,
 )
 from backend.app import main as main_module
+from backend.app.config import settings
 from backend.app.main import app
 import backend.desktop as desktop_module
 from backend.desktop import (
@@ -402,7 +403,7 @@ def test_activation_api_requires_token_and_calls_registered_window():
 
     with TestClient(app) as client:
         unauthorized = client.post("/api/app/activate")
-        activated = client.post("/api/app/activate", headers={"X-Token": "55555"})
+        activated = client.post("/api/app/activate", headers={"X-Token": settings.token})
 
     assert unauthorized.status_code == 401
     assert activated.status_code == 200
@@ -416,7 +417,7 @@ def test_shutdown_api_requires_token_and_calls_registered_shutdown():
 
     with TestClient(app) as client:
         unauthorized = client.post("/api/app/shutdown")
-        stopped = client.post("/api/app/shutdown", headers={"X-Token": "55555"})
+        stopped = client.post("/api/app/shutdown", headers={"X-Token": settings.token})
 
     assert unauthorized.status_code == 401
     assert stopped.status_code == 200
@@ -689,21 +690,21 @@ def test_presenter_status_endpoint_reflects_desktop_session():
     set_desktop_handoff_session(False)
     client = TestClient(app)
     try:
-        idle = client.get("/api/browser/presenter", headers={"X-Token": "55555"})
+        idle = client.get("/api/browser/presenter", headers={"X-Token": settings.token})
         assert idle.status_code == 200
         assert idle.json()["ready"] is False
         assert idle.json()["session"] is False
         assert idle.json()["mode"] == "ui-fallback"
 
         set_desktop_handoff_session(True)
-        pending = client.get("/api/browser/presenter", headers={"X-Token": "55555"})
+        pending = client.get("/api/browser/presenter", headers={"X-Token": settings.token})
         body = pending.json()
         assert body["session"] is True
         assert body["ready"] is False
         assert body["mode"] == "desktop-pending"
 
         register_browser_handoff(lambda _handoff_id: None)
-        ready = client.get("/api/browser/presenter", headers={"X-Token": "55555"})
+        ready = client.get("/api/browser/presenter", headers={"X-Token": settings.token})
         ready_body = ready.json()
         assert ready_body["ready"] is True
         assert ready_body["mode"] == "desktop"

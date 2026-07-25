@@ -62,6 +62,11 @@ def _check_playback_token(x_token: str = "", token: str = ""):
     """Allow native HLS clients to carry the local token in the media URL."""
     _check_token(x_token or token)
 
+
+def _public_settings() -> dict:
+    """Return user-configurable settings without the internal IPC credential."""
+    return settings.model_dump(exclude={"token", "host", "port"})
+
 def _check_host(url: str):
     if url.lower().startswith("magnet:") or url.lower().startswith("torrent-file:"):
         return
@@ -433,8 +438,9 @@ async def recognize_input_url(body: UrlRecognitionRequest, x_token: str = Header
 @router.get("/test")
 async def test_connection(x_token: str = Header(default="")):
     import shutil
+    _check_token(x_token)
     results = {"health": True}
-    results["token_valid"] = (x_token == settings.token)
+    results["browser_bridge"] = "native-messaging"
     ffmpeg_found = shutil.which(settings.ffmpeg_path) is not None
     if not ffmpeg_found:
         ffmpeg_found = Path(settings.ffmpeg_path).exists()
@@ -449,7 +455,7 @@ async def test_connection(x_token: str = Header(default="")):
 @router.get("/settings")
 async def get_settings(x_token: str = Header(default="")):
     _check_token(x_token)
-    return settings.model_dump()
+    return _public_settings()
 
 @router.post("/settings")
 async def update_settings(body: SettingsUpdate, x_token: str = Header(default="")):
@@ -458,7 +464,7 @@ async def update_settings(body: SettingsUpdate, x_token: str = Header(default=""
     apply_settings_update(settings, data)
     save_settings(settings)
     download_throttle.configure(getattr(settings, "download_speed_limit_kib", 0) or 0)
-    return settings.model_dump()
+    return _public_settings()
 
 
 @router.get("/tvbox/scan")

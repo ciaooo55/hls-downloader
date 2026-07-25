@@ -174,15 +174,13 @@ async function main() {
   }
 
   const pushToTv = async (item: MediaResource) => {
-    const name = item.filename || item.title || item.kind.toUpperCase()
-    if (!window.confirm(`确认推送到电视？\n\n${name}\n\n电视将直接打开该媒体地址。`)) return
     setError('')
-    pushing[item.id] = '推送中'
+    pushing[item.id] = '等待选择'
     renderList()
     try {
       const response = await browser.runtime.sendMessage({ type: 'push-to-tv', resource: item })
       if (!response?.ok) throw new Error(response?.error || '电视推送失败')
-      pushing[item.id] = '已推送'
+      pushing[item.id] = '已发送'
     } catch (reason) {
       pushing[item.id] = '重试'
       setError(reason instanceof Error ? reason.message : '推送到电视失败')

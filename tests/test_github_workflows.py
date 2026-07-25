@@ -32,7 +32,7 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     workflow = _workflow("release.yml")
 
     assert "workflow_dispatch:" in workflow
-    assert 'default:' in workflow and '1.4.' in workflow
+    assert 'default:' in workflow and '1.6.' in workflow
     assert "tags:" in workflow and "v*" in workflow
     assert "windows-latest" in workflow
     assert "dtolnay/rust-toolchain@stable" in workflow
@@ -43,16 +43,20 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "HLSDownloader-Windows-x64-Setup.exe" in workflow
     assert "HLSDownloader-Windows-x64-Portable.zip" in workflow
     assert "m3u8-sniffer.user.js" not in workflow
-    assert "HLSDownloader-Firefox-Unsigned.zip" in workflow
-    assert "HLSDownloader-Firefox-Source.zip" in workflow
+    assert "HLSDownloader-Firefox-Web-UI-Unsigned.zip" in workflow
+    assert "HLSDownloader-Firefox-Web-UI-Source.zip" in workflow
+    assert "HLSDownloader-Firefox-No-Web-UI-Unsigned.zip" in workflow
+    assert "HLSDownloader-Firefox-No-Web-UI-Source.zip" in workflow
     assert "web-ext sign" not in workflow
     assert "--channel unlisted" not in workflow
     assert "web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors" in workflow
-    assert "SHA256SUMS.txt" in workflow
+    assert "SHA256SUMS.txt" not in workflow
     assert "actions/upload-artifact@v7" in workflow
     assert "actions/download-artifact@v7" in workflow
     assert "softprops/action-gh-release" not in workflow
     assert "gh release create" in workflow
+    assert "gh release upload" in workflow
+    assert "--clobber" in workflow
     assert 'docs\\releases' in workflow
     assert '"--notes-file"' in workflow
     assert '"--generate-notes"' in workflow
@@ -85,8 +89,10 @@ def test_readme_documents_windows_release_assets():
     assert "HLSDownloader-Windows-x64-Setup.exe" in readme
     assert "HLSDownloader-Windows-x64-Portable.zip" in readme
     assert "m3u8-sniffer.user.js" not in readme
-    assert "HLSDownloader-Firefox-Unsigned.zip" in readme
-    assert "HLSDownloader-Firefox-Source.zip" in readme
-    assert "SHA256SUMS.txt" in readme
+    assert "HLSDownloader-Firefox-Web-UI-Unsigned.zip" in readme
+    assert "HLSDownloader-Firefox-Web-UI-Source.zip" in readme
+    assert "HLSDownloader-Firefox-No-Web-UI-Unsigned.zip" in readme
+    assert "HLSDownloader-Firefox-No-Web-UI-Source.zip" in readme
+    assert "SHA256SUMS.txt" not in readme
     assert "Windows 10/11" in readme
     assert "git tag v" in readme

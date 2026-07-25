@@ -60,6 +60,17 @@ async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabI
   await browser.action.setBadgeText({ text: String(Math.min(99, merged.length)), ...(tabId >= 0 ? { tabId } : {}) })
 }
 
+async function sendCapturedResource(tabId: number, resource: Omit<MediaResource, 'id' | 'seenAt'>): Promise<void> {
+  if (tabId < 0) return
+  const message = { type: 'captured-resource', resource }
+  const frameId = Number(resource.frameId)
+  if (Number.isInteger(frameId) && frameId >= 0) {
+    await browser.tabs.sendMessage(tabId, message, { frameId }).catch(() => undefined)
+    return
+  }
+  await browser.tabs.sendMessage(tabId, message).catch(() => undefined)
+}
+
 async function cookiesFor(url: string, pageUrl = ''): Promise<string> {
   const config = await settings()
   const host = new URL(url).host
@@ -116,7 +127,7 @@ async function inspectHls(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId 
         quality: best?.quality ? `最高 ${best.quality}` : resourceQuality(resource.url, resource.height),
       }
       await saveResource(enriched, tabId)
-      if (tabId >= 0) await browser.tabs.sendMessage(tabId, { type: 'captured-resource', resource: enriched }).catch(() => undefined)
+      await sendCapturedResource(tabId, enriched)
     }
   } catch {
     // Playlist inspection is best-effort; the captured URL remains downloadable.
@@ -438,11 +449,12 @@ function observedResponse(details: any, chain?: RequestChain) {
     method: details.method,
     pageUrl: details.documentUrl || details.initiator || chain?.pageUrl || requestHeader(chain, 'referer') || '',
     tabId: details.tabId,
+    frameId: details.frameId,
     requestHeaders: chain?.requestHeaders,
   }
   void saveResource(resource, details.tabId)
   void inspectHls(resource, details.tabId)
-  if (details.tabId >= 0) void browser.tabs.sendMessage(details.tabId, { type: 'captured-resource', resource }).catch(() => undefined)
+  void sendCapturedResource(details.tabId, resource)
   return { disposition, resource }
 }
 
@@ -659,7 +671,11 @@ export default defineBackground(() => {
       return true
     }
     if (message?.type === 'resource') {
-      const resource = { ...message.resource, pageUrl: message.resource.pageUrl || sender.tab?.url }
+      const resource = {
+        ...message.resource,
+        pageUrl: message.resource.pageUrl || sender.url || sender.tab?.url,
+        frameId: message.resource.frameId ?? sender.frameId,
+      }
       void saveResource(resource, sender.tab?.id ?? -1)
       void inspectHls(resource, sender.tab?.id ?? -1)
       return
@@ -667,8 +683,9 @@ export default defineBackground(() => {
     if (message?.type === 'download' || message?.type === 'offer') {
       const resource = {
         ...message.resource,
-        pageUrl: message.resource.pageUrl || sender.tab?.url || '',
+        pageUrl: message.resource.pageUrl || sender.url || sender.tab?.url || '',
         tabId: message.resource.tabId ?? sender.tab?.id,
+        frameId: message.resource.frameId ?? sender.frameId,
       }
       const request = message.type === 'offer' ? offer(resource) : downloadNow(resource)
       void request

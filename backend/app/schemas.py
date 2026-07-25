@@ -110,9 +110,6 @@ class TaskResponse(BaseModel):
     queue_position: int = 0
 
 class SettingsUpdate(BaseModel):
-    host: Optional[str] = None
-    port: Optional[int] = Field(default=None, ge=1, le=65535)
-    token: Optional[str] = Field(default=None, min_length=1, max_length=256)
     download_dir: Optional[str] = None
     temp_dir: Optional[str] = None
     default_concurrency: Optional[int] = Field(default=None, ge=1, le=256)

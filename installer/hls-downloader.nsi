@@ -7,10 +7,10 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-!define APP_VERSION "1.6.7"
+!define APP_VERSION "1.6.8"
 !endif
 !ifndef APP_FILE_VERSION
-!define APP_FILE_VERSION "1.6.7.0"
+!define APP_FILE_VERSION "1.6.8.0"
 !endif
 
 !ifndef STAGE_DIR
@@ -151,10 +151,20 @@ Section "Install" SecInstall
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "NoRepair" 1
 
+  ; Preserve the user's existing BT client. Reinstalling our own association
+  ; keeps the original value stored during the first install.
+  ReadRegStr $0 HKCU "Software\Classes\.torrent" ""
+  ${If} $0 != "HLSDownloader.Torrent"
+    ${If} $0 == ""
+      WriteRegStr HKCU "Software\${APP_NAME}" "PreviousTorrentProgId" "__none__"
+    ${Else}
+      WriteRegStr HKCU "Software\${APP_NAME}" "PreviousTorrentProgId" "$0"
+    ${EndIf}
+  ${EndIf}
   WriteRegStr HKCU "Software\Classes\.torrent" "" "HLSDownloader.Torrent"
   WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent" "" "BT 种子文件"
   WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent\DefaultIcon" "" "$INSTDIR\HLSDownloader.exe,0"
-  WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent\shell\open\command" "" '$"$INSTDIR\HLSDownloader.exe$" $"%1$"'
+  WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent\shell\open\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
 
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\HLSDownloader.exe" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
@@ -207,10 +217,20 @@ RemoveApplicationData:
   RMDir /r "$INSTDIR\runtime"
   RMDir /r "$INSTDIR\.data"
 
+  ReadRegStr $0 HKCU "Software\Classes\.torrent" ""
+  ${If} $0 == "HLSDownloader.Torrent"
+    ReadRegStr $1 HKCU "Software\${APP_NAME}" "PreviousTorrentProgId"
+    ${If} $1 == "__none__"
+      DeleteRegValue HKCU "Software\Classes\.torrent" ""
+    ${ElseIf} $1 != ""
+      WriteRegStr HKCU "Software\Classes\.torrent" "" "$1"
+    ${Else}
+      DeleteRegValue HKCU "Software\Classes\.torrent" ""
+    ${EndIf}
+  ${EndIf}
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
   DeleteRegKey HKCU "Software\${APP_NAME}"
   DeleteRegKey HKCU "Software\Classes\HLSDownloader.Torrent"
-  DeleteRegKey HKCU "Software\Classes\.torrent"
   DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader"
   DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.ciaooo55.hls_downloader"
   DeleteRegKey HKCU "Software\Mozilla\NativeMessagingHosts\com.ciaooo55.hls_downloader"

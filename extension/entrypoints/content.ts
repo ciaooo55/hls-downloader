@@ -21,6 +21,7 @@ async function runtimeMessage(message: Record<string, unknown>, retries = 1): Pr
 
 export default defineContentScript({
   matches: ['<all_urls>'],
+  allFrames: true,
   cssInjectionMode: 'ui',
   async main(ctx) {
     document.documentElement.setAttribute('data-hls-downloader-extension', '1')
@@ -220,19 +221,17 @@ export default defineContentScript({
     }
 
     const pushToTv = (resource: MediaResource, button: HTMLButtonElement) => {
-      const name = resource.filename || resource.title || resource.kind.toUpperCase()
-      if (!window.confirm(`确认推送到电视？\n\n${name}\n\n电视将直接打开该媒体地址。`)) return
       const result = ui.shadow.querySelector<HTMLElement>('.result')
-      button.setAttribute('disabled', ''); button.textContent = '推送中'
+      button.setAttribute('disabled', ''); button.textContent = '等待选择'
       void runtimeMessage({ type: 'push-to-tv', resource }).then(response => {
         if (!response?.ok) throw new Error(response?.error || '电视推送失败')
-        button.textContent = '已推送'
-        if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `已推送到电视：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
+        button.textContent = '已发送'
+        if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = '请在桌面下载器选择 TVBox 设备' }
       }).catch(reason => {
         button.removeAttribute('disabled'); button.textContent = '推电视'
         if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '推送失败' }
       }).finally(() => {
-        setTimeout(() => { if (button.textContent === '已推送') { button.textContent = '推电视' } }, 2000)
+        setTimeout(() => { if (button.textContent === '已发送') { button.removeAttribute('disabled'); button.textContent = '推电视' } }, 2000)
       })
     }
 
@@ -373,10 +372,16 @@ export default defineContentScript({
       if (rect.width < 180 || rect.height < 100 || rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) return
       // MSE and nested players can fire on a non-dominant video node. Anchor
       // to the element that is actually advancing, not the largest rectangle.
+      const changedVideo = activeVideo !== video
       activeVideo = video
       const sourceUrls = [video.currentSrc, video.src, ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')].map(source => source.src)].filter(Boolean)
       const changedSource = sourceUrls.join('\n') !== (activePlayback?.sourceUrls || []).join('\n')
-      if (!activePlayback || changedSource) activePlayback = { sourceUrls, startedAt: Date.now() }
+      if (!activePlayback || changedSource || changedVideo) {
+        activePlayback = { sourceUrls, startedAt: Date.now() }
+      } else if (event.type === 'timeupdate') {
+        scheduleVideoButtons()
+        return
+      }
       render()
     }
     document.addEventListener('play', markPlayback, true)

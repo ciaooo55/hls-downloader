@@ -16,7 +16,6 @@ from .version import APP_VERSION
 
 
 LATEST_RELEASE_API = "https://api.github.com/repos/ciaooo55/hls-downloader/releases/latest"
-LATEST_RELEASE_PAGE = "https://github.com/ciaooo55/hls-downloader/releases/latest"
 RELEASE_DOWNLOAD_PREFIX = "/ciaooo55/hls-downloader/releases/download/"
 SETUP_ASSET_NAME = "HLSDownloader-Windows-x64-Setup.exe"
 MAX_INSTALLER_BYTES = 400 * 1024 * 1024
@@ -163,15 +162,11 @@ def check_for_update(*, opener=urllib.request.urlopen) -> UpdateInfo:
     try:
         payload = _request_json(LATEST_RELEASE_API, opener=opener)
     except UpdateError as api_error:
-        try:
-            return _check_from_release_files(opener=opener)
-        except UpdateError as fallback_error:
-            # Both routes use GitHub, so retrying immediately will rarely help.
-            # Preserve the rate-limit guidance when available; otherwise expose
-            # one concise failure rather than two chained transport exceptions.
-            if isinstance(api_error, UpdateCheckError) and api_error.code == "GITHUB_RATE_LIMITED":
-                raise api_error from fallback_error
-            raise fallback_error from api_error
+        # GitHub's release API supplies the asset digest used before install.
+        # The old HTML fallback depended on a seventh SHA256SUMS asset, which
+        # conflicts with the six-file release contract and cannot provide an
+        # equally trustworthy digest when absent.
+        raise api_error
 
     latest = str(payload.get("tag_name", "")).strip().lstrip("v")
     if not latest:
@@ -211,65 +206,6 @@ def check_for_update(*, opener=urllib.request.urlopen) -> UpdateInfo:
         size=size,
         digest=digest.removeprefix("sha256:"),
         notes=str(payload.get("body", ""))[:4000],
-        download_directory=str(get_update_directory()),
-    )
-
-
-def _check_from_release_files(*, opener=urllib.request.urlopen) -> UpdateInfo:
-    page_request = urllib.request.Request(
-        LATEST_RELEASE_PAGE,
-        headers={"User-Agent": f"HLS-Downloader/{APP_VERSION}"},
-    )
-    try:
-        with opener(page_request, timeout=15) as response:
-            final_url = response.geturl()
-    except urllib.error.HTTPError as exc:
-        raise _network_error(exc) from exc
-    except (OSError, urllib.error.URLError) as exc:
-        raise _network_error(exc) from exc
-
-    parsed_release = urlparse(final_url)
-    tag_prefix = "/ciaooo55/hls-downloader/releases/tag/"
-    if parsed_release.hostname != "github.com" or not parsed_release.path.startswith(tag_prefix):
-        raise UpdateError("GitHub 最新 Release 跳转地址无效")
-    tag = parsed_release.path.removeprefix(tag_prefix).split("/", 1)[0]
-    latest = tag.lstrip("v")
-    _version_parts(latest)
-
-    base = f"https://github.com/ciaooo55/hls-downloader/releases/download/{tag}"
-    checksums_request = urllib.request.Request(
-        f"{base}/SHA256SUMS.txt",
-        headers={"User-Agent": f"HLS-Downloader/{APP_VERSION}"},
-    )
-    try:
-        with opener(checksums_request, timeout=15) as response:
-            checksums = response.read(64 * 1024 + 1)
-    except urllib.error.HTTPError as exc:
-        raise _network_error(exc) from exc
-    except (OSError, urllib.error.URLError) as exc:
-        raise _network_error(exc) from exc
-    if len(checksums) > 64 * 1024:
-        raise UpdateError("最新版本校验文件过大")
-
-    digest = ""
-    for line in checksums.decode("ascii", errors="ignore").splitlines():
-        parts = line.strip().split()
-        if len(parts) == 2 and parts[1] == SETUP_ASSET_NAME:
-            digest = parts[0].lower()
-            break
-    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
-        raise UpdateError("校验文件中没有 Windows 安装包的 SHA-256")
-
-    return UpdateInfo(
-        current_version=APP_VERSION,
-        latest_version=latest,
-        available=is_newer_version(latest, APP_VERSION),
-        can_auto_install=RUNTIME_PATHS.mode == "installed",
-        release_url=final_url,
-        download_url=f"{base}/{SETUP_ASSET_NAME}",
-        size=0,
-        digest=digest,
-        notes="",
         download_directory=str(get_update_directory()),
     )
 

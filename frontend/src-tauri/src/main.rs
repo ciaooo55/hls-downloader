@@ -19,15 +19,14 @@ use std::os::windows::process::CommandExt;
 struct LocalConfig {
     #[serde(default = "default_port")]
     port: u16,
-    #[serde(default = "default_token")]
+    #[serde(default)]
     token: String,
 }
 
 fn default_port() -> u16 { 8765 }
-fn default_token() -> String { "55555".to_string() }
 
 impl Default for LocalConfig {
-    fn default() -> Self { Self { port: default_port(), token: default_token() } }
+    fn default() -> Self { Self { port: default_port(), token: String::new() } }
 }
 
 struct CoreRuntime {
@@ -58,7 +57,7 @@ fn get_desktop_info(paths: tauri::State<'_, DesktopPaths>) -> serde_json::Value 
 
 #[tauri::command]
 fn get_core_config(runtime: tauri::State<'_, Arc<CoreRuntime>>) -> serde_json::Value {
-    serde_json::json!({ "port": runtime.config.port, "token": runtime.config.token })
+    serde_json::json!({ "port": runtime.config.port, "credential": runtime.config.token })
 }
 
 #[tauri::command]
@@ -91,10 +90,28 @@ fn app_root() -> PathBuf {
 }
 
 fn load_config(root: &Path) -> LocalConfig {
-    std::fs::read_to_string(root.join("config.json"))
-        .ok()
-        .and_then(|value| serde_json::from_str(&value).ok())
-        .unwrap_or_default()
+    let mut candidates = Vec::new();
+    if root.join("portable").is_file() {
+        candidates.push(root.join("config.json"));
+    } else if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(local).join("HLS Downloader").join("config.json"));
+        candidates.push(root.join("config.json"));
+    } else {
+        candidates.push(root.join("config.json"));
+    }
+    candidates.into_iter().find_map(|path| {
+        std::fs::read_to_string(path).ok().and_then(|value| serde_json::from_str(&value).ok())
+    }).unwrap_or_default()
+}
+
+fn wait_for_runtime_config(root: &Path, port: u16) -> LocalConfig {
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < deadline {
+        let config = load_config(root);
+        if config.port == port && !config.token.is_empty() { return config; }
+        std::thread::sleep(Duration::from_millis(80));
+    }
+    load_config(root)
 }
 
 fn core_alive(port: u16) -> bool {
@@ -162,11 +179,12 @@ fn show_main(app: &tauri::AppHandle) {
 
 fn main() {
     let root = app_root();
-    let config = load_config(&root);
-    let child = start_core(&root, &config).unwrap_or_else(|reason| {
+    let startup_config = load_config(&root);
+    let child = start_core(&root, &startup_config).unwrap_or_else(|reason| {
         eprintln!("{reason}");
         None
     });
+    let config = wait_for_runtime_config(&root, startup_config.port);
     let runtime = Arc::new(CoreRuntime { child: Mutex::new(child), config });
     let exit_runtime = Arc::clone(&runtime);
     let background = std::env::args().any(|arg| arg == "--background" || arg == "--native-host");

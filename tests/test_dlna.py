@@ -1,6 +1,22 @@
 import asyncio
+import sys
+from types import SimpleNamespace
 
 from backend.app import dlna
+
+
+def test_private_lan_addresses_excludes_link_local_and_virtual_adapters(monkeypatch):
+    adapters = [
+        SimpleNamespace(name="Wi-Fi", nice_name="WLAN", ips=[
+            SimpleNamespace(ip="169.254.1.9"),
+            SimpleNamespace(ip="192.168.2.14"),
+        ]),
+        SimpleNamespace(name="VPN adapter", nice_name="Mihomo", ips=[SimpleNamespace(ip="10.0.0.2")]),
+        SimpleNamespace(name="Ethernet", nice_name="Ethernet", ips=[SimpleNamespace(ip="172.20.0.8")]),
+    ]
+    monkeypatch.setitem(sys.modules, "ifaddr", SimpleNamespace(get_adapters=lambda: adapters))
+
+    assert dlna._private_lan_addresses() == ["192.168.2.14", "172.20.0.8"]
 
 
 def test_normalize_cast_device_keeps_a_discovered_renderer():

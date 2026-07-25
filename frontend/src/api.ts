@@ -1,5 +1,5 @@
 import type { PlaybackSeek, PlaybackSession, PlaybackStatus } from './types'
-import { coreOrigin } from './tauri'
+import { coreOrigin, internalCredential } from './tauri'
 
 const BASE = `${coreOrigin()}/api`
 
@@ -22,7 +22,7 @@ export function isDuplicateUrlError(error: unknown): error is ApiError {
 }
 
 export function getToken(): string {
-  return localStorage.getItem('hls_token') || '55555'
+  return internalCredential()
 }
 
 function headers(): Record<string, string> {

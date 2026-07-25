@@ -1,12 +1,13 @@
 export interface CoreConfig {
   port: number
-  token: string
+  credential: string
 }
+
+let runtimeConfig: CoreConfig | null = null
 
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown
-    __HLS_CORE__?: CoreConfig
   }
 }
 
@@ -15,22 +16,24 @@ export function isTauriDesktop(): boolean {
 }
 
 export function coreOrigin(): string {
-  const port = window.__HLS_CORE__?.port || 8765
+  const port = runtimeConfig?.port || 8765
   return isTauriDesktop() ? `http://127.0.0.1:${port}` : ''
+}
+
+export function internalCredential(): string {
+  return runtimeConfig?.credential || ''
 }
 
 export async function prepareTauriRuntime(): Promise<void> {
   if (!isTauriDesktop()) return
   const { invoke } = await import('@tauri-apps/api/core')
-  const config = await invoke<CoreConfig>('get_core_config')
-  window.__HLS_CORE__ = config
-  localStorage.setItem('hls_token', config.token)
+  runtimeConfig = await invoke<CoreConfig>('get_core_config')
 }
 
 function apiHeaders(): Record<string, string> {
   return {
     'Content-Type': 'application/json',
-    'X-Token': window.__HLS_CORE__?.token || localStorage.getItem('hls_token') || '55555',
+    'X-Token': internalCredential(),
   }
 }
 
@@ -72,9 +75,8 @@ export async function startTauriDesktopSession(): Promise<() => void> {
       await existing.setFocus().catch(() => {})
       return
     }
-    const token = encodeURIComponent(window.__HLS_CORE__?.token || '55555')
     const child = new WebviewWindow(label, {
-      url: `index.html?handoff=${encodeURIComponent(id)}&token=${token}`,
+      url: `index.html?handoff=${encodeURIComponent(id)}`,
       title: '下载文件信息 - HLS Downloader',
       width: 560,
       height: 680,

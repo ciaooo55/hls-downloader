@@ -4,27 +4,33 @@ param(
 )
 
 $ErrorActionPreference = "SilentlyContinue"
-$configPath = Join-Path $env:LOCALAPPDATA "HLS Downloader\config.json"
-$token = "55555"
+$configPaths = @()
+if ($env:LOCALAPPDATA) { $configPaths += Join-Path $env:LOCALAPPDATA "HLS Downloader\config.json" }
+if ($InstallDir) { $configPaths += Join-Path $InstallDir "config.json" }
+$token = ""
 $port = 8765
-if (Test-Path -LiteralPath $configPath) {
+foreach ($configPath in $configPaths) {
+    if (-not (Test-Path -LiteralPath $configPath)) { continue }
     try {
         $configured = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
         if ($configured.token) { $token = [string]$configured.token }
         if ($configured.port) { $port = [int]$configured.port }
+        break
     } catch {
     }
 }
 
-try {
-    Invoke-RestMethod `
-        -Method Post `
-        -Uri "http://127.0.0.1:$port/api/app/shutdown" `
-        -Headers @{ "X-Token" = $token } `
-        -ContentType "application/json" `
-        -Body "{}" `
-        -TimeoutSec 2 | Out-Null
-} catch {
+if ($token) {
+    try {
+        Invoke-RestMethod `
+            -Method Post `
+            -Uri "http://127.0.0.1:$port/api/app/shutdown" `
+            -Headers @{ "X-Token" = $token } `
+            -ContentType "application/json" `
+            -Body "{}" `
+            -TimeoutSec 2 | Out-Null
+    } catch {
+    }
 }
 
 $gracefulDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Min(8, [Math]::Max(1, $TimeoutSeconds)))

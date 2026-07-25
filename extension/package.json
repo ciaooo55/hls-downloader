@@ -1,7 +1,7 @@
 {
   "name": "hls-downloader-extension",
   "private": true,
-  "version": "1.6.7",
+  "version": "1.6.8",
   "type": "module",
   "scripts": {
     "build:chrome": "wxt build -b chrome",
@@ -12,14 +12,12 @@
     "typecheck": "wxt prepare && tsc --noEmit",
     "test": "wxt prepare && tsc --noEmit && vitest run"
   },
-  "dependencies": {
-    "wxt": "0.20.27"
-  },
   "devDependencies": {
     "@types/chrome": "0.0.326",
     "typescript": "5.8.3",
     "vitest": "3.2.4",
-    "web-ext": "10.5.0"
+    "web-ext": "10.5.0",
+    "wxt": "0.20.27"
   },
   "packageManager": "pnpm@11.7.0"
 }

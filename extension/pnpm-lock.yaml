@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      wxt:
-        specifier: 0.20.27
-        version: 0.20.27(@types/node@26.1.1)(eslint@9.39.4(jiti@2.7.0))(jiti@2.7.0)(rolldown@1.1.5)(rollup@4.62.2)
     devDependencies:
       '@types/chrome':
         specifier: 0.0.326
@@ -24,6 +20,9 @@ importers:
       web-ext:
         specifier: 10.5.0
         version: 10.5.0(jiti@2.7.0)
+      wxt:
+        specifier: 0.20.27
+        version: 0.20.27(@types/node@26.1.1)(eslint@9.39.4(jiti@2.7.0))(jiti@2.7.0)(rolldown@1.1.5)(rollup@4.62.2)
 
 packages:
 
