@@ -5,6 +5,8 @@ import { RequestChainStore, requestHeader, responseHeader, type RequestChain } f
 import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus, shouldResumeBrowserDownload } from '../lib/takeover'
 import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
 import { parseHlsManifest, resourceQuality } from '../lib/hlsManifest'
+import { contentDispositionFilename } from '../lib/contentDisposition'
+import { InspectionCache } from '../lib/inspectionCache'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 const CLICK_INTENT_STORAGE_KEY = 'click-intents'
@@ -17,7 +19,7 @@ const requestChains = new RequestChainStore()
 let nativeBridge: NativeBridge | null = null
 let concealedDownloadCount = 0
 let downloadUiFailsafe: ReturnType<typeof setTimeout> | null = null
-const inspectedHls = new Set<string>()
+const inspectedHls = new InspectionCache()
 
 async function settings() {
   const data = await browser.storage.local.get(['enabled', 'minimumBytes', 'excludedHosts', 'authorizedCookieHosts', 'useBrowserCookies'])
@@ -37,13 +39,7 @@ function storageKey(tabId: number, pageUrl = '') {
   return pageResourceKey(tabId, pageUrl)
 }
 
-function responseFilename(value: string): string {
-  const encoded = value.match(/filename\*=UTF-8''([^;]+)/i)?.[1] || ''
-  if (encoded) {
-    try { return decodeURIComponent(encoded).replace(/^"|"$/g, '') } catch { return encoded }
-  }
-  return value.match(/filename\s*=\s*"?([^";]+)/i)?.[1]?.trim() || ''
-}
+const responseFilename = contentDispositionFilename
 
 async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1) {
   const kind = resource.kind || classifyResource(resource.url, resource.mimeType)
@@ -105,8 +101,7 @@ async function pingDesktop(): Promise<any> {
 
 async function inspectHls(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1): Promise<void> {
   const inspectionKey = `${tabId}:${resource.pageUrl || ''}:${resource.url}`
-  if (resource.kind !== 'hls' || inspectedHls.has(inspectionKey)) return
-  inspectedHls.add(inspectionKey)
+  if (resource.kind !== 'hls' || !inspectedHls.claim(inspectionKey)) return
   try {
     const response = await fetch(resource.url, { credentials: 'include', signal: AbortSignal.timeout(5_000) })
     if (!response.ok) return
@@ -130,7 +125,9 @@ async function inspectHls(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId 
       await sendCapturedResource(tabId, enriched)
     }
   } catch {
-    // Playlist inspection is best-effort; the captured URL remains downloadable.
+    // A transient CDN/auth failure must not permanently suppress inspection.
+    // The captured manifest remains downloadable and the next observation can retry.
+    inspectedHls.release(inspectionKey)
   }
 }
 
@@ -478,6 +475,7 @@ export default defineBackground(() => {
     }
   })
   browser.tabs.onRemoved.addListener(tabId => {
+    inspectedHls.releasePrefix(`${tabId}:`)
     void browser.storage.session.get(null).then(values => {
       const keys = Object.keys(values).filter(key => key.startsWith(`resources:tab:${tabId}`))
       if (keys.length) return browser.storage.session.remove(keys)

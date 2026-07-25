@@ -135,6 +135,35 @@ def test_browser_media_push_reports_final_desktop_result(monkeypatch):
     assert final.json() == {"id": request_id, "status": "canceled", "message": "用户取消"}
 
 
+def test_task_api_preserves_cross_origin_request_contexts(monkeypatch):
+    """Manual/API clients need the same CDN authentication path as the extension."""
+    from backend.app import api as api_module
+
+    captured: list[dict] = []
+
+    async def create_task(**kwargs):
+        captured.append(kwargs)
+        return Task(id=f"context-{len(captured)}", url=kwargs["url"], task_type=TaskType.HTTP)
+
+    monkeypatch.setattr(api_module.manager, "create_task", create_task)
+    payload = {
+        "url": "https://manifest.example.test/master.m3u8",
+        "request_contexts": {
+            "https://cdn.example.test": {
+                "request_headers": {"Authorization": "Bearer segment"},
+                "cookie": "cdn_session=private",
+            }
+        },
+    }
+    client = TestClient(app)
+    single = client.post("/api/tasks", headers=AUTH, json=payload)
+    batch = client.post("/api/tasks/batch", headers=AUTH, json={"tasks": [payload]})
+
+    assert single.status_code == 200
+    assert batch.status_code == 200
+    assert [item["request_contexts"] for item in captured] == [payload["request_contexts"], payload["request_contexts"]]
+
+
 def test_task_action_maps_manager_errors_to_http_status(monkeypatch):
     from backend.app import api as api_module
 

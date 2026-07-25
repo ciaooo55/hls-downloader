@@ -6,7 +6,7 @@ from pathlib import Path
 import httpx
 
 from backend.app.config import settings
-from backend.app.downloader.http_file import HTTPDownloader
+from backend.app.downloader.http_file import HTTPDownloader, _content_disposition_filename
 from backend.app.downloader.engine import publish_path, task_work_dir
 from backend.app.downloader.torrent import TorrentDownloader
 from backend.app.downloader import task_manager as task_manager_module
@@ -86,6 +86,12 @@ def test_http_probe_follows_https_to_http_redirect_and_uses_server_filename():
     assert metadata["total"] == 5500000000
     assert metadata["filename"] == "ubuntu-desktop.iso"
     assert metadata["final_url"] == "http://cdn.test/releases/system.iso"
+
+
+def test_content_disposition_handles_rfc5987_and_quoted_semicolons():
+    assert _content_disposition_filename("attachment; filename*=UTF-8''%E4%B8%8B%E8%BD%BD%3B%E6%B5%8B%E8%AF%95.iso") == "下载;测试.iso"
+    assert _content_disposition_filename("attachment; filename*=ISO-8859-1''caf%E9.pdf") == "café.pdf"
+    assert _content_disposition_filename('attachment; filename="archive; final.zip"') == "archive; final.zip"
 
 
 def test_task_process_files_use_configured_temp_directory(tmp_path):

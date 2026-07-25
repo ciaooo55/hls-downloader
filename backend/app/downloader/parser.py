@@ -90,18 +90,58 @@ def is_drm_protected(playlist: m3u8.M3U8) -> bool:
     return any(key and key.method and key.method.lower() in DRM_METHODS for key in keys)
 
 
+def _variant_dimensions(info) -> tuple[int, int]:
+    """Read m3u8's resolution value without depending on its concrete type."""
+    resolution = getattr(info, "resolution", None)
+    if isinstance(resolution, (tuple, list)) and len(resolution) >= 2:
+        try:
+            return max(0, int(resolution[0])), max(0, int(resolution[1]))
+        except (TypeError, ValueError):
+            return 0, 0
+    if isinstance(resolution, str):
+        match = re.fullmatch(r"\s*(\d+)x(\d+)\s*", resolution, re.IGNORECASE)
+        if match:
+            return int(match.group(1)), int(match.group(2))
+    return 0, 0
+
+
+def _is_audio_only_variant(info, width: int, height: int) -> bool:
+    if width or height:
+        return False
+    codecs = str(getattr(info, "codecs", "") or "").lower()
+    if not codecs:
+        # Old/simple HLS masters often omit CODECS and RESOLUTION. Do not
+        # discard them as audio based on missing metadata alone.
+        return False
+    return not any(marker in codecs for marker in (
+        "avc", "hev", "hvc", "vp8", "vp9", "av01", "theora",
+    ))
+
+
 def parse_m3u8(url: str, content: str) -> dict:
     playlist = m3u8.loads(content, uri=url)
     playlist_title = _playlist_title(content)
 
     if playlist.is_variant:
         best = None
-        best_bw = -1
+        best_rank = (-1, -1, -1, -1)
         for candidate in playlist.playlists:
             info = candidate.stream_info
             bandwidth = getattr(info, "average_bandwidth", None) or info.bandwidth or 0
-            if bandwidth > best_bw:
-                best_bw = bandwidth
+            width, height = _variant_dimensions(info)
+            # Highest advertised bitrate is not necessarily the clearest
+            # stream: a 720p high-frame-rate rendition can exceed a 1080p
+            # rendition, and audio-only variants can have a high bitrate too.
+            # IDM-like one-click behavior should prefer an actual video and
+            # the largest resolution before bitrate.
+            rank = (
+                0 if _is_audio_only_variant(info, width, height) else 1,
+                height,
+                width,
+                int(bandwidth),
+            )
+            if rank > best_rank:
+                best_rank = rank
                 best = candidate
         if best is None or not best.uri:
             raise ValueError("主清单中没有可用视频变体")

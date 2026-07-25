@@ -76,3 +76,19 @@ one.ts
 #EXT-X-ENDLIST
 """
     assert parse_m3u8("https://example.test/video.m3u8", content)["title"] == "真实片名"
+
+
+def test_master_playlist_prefers_video_resolution_before_bitrate():
+    content = """#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=12000000,CODECS="mp4a.40.2"
+audio-only.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=1280x720,CODECS="avc1.64001f,mp4a.40.2"
+720p.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=4200000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2"
+1080p.m3u8
+"""
+
+    parsed = parse_m3u8("https://example.test/master.m3u8", content)
+
+    assert parsed["type"] == "variant"
+    assert parsed["url"] == "https://example.test/1080p.m3u8"

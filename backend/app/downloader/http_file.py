@@ -7,7 +7,7 @@ import shutil
 import time
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, unquote_to_bytes, urlparse
 
 import httpx
 
@@ -39,14 +39,40 @@ def _reserve_output_path(path: Path) -> Path:
 
 
 def _content_disposition_filename(value: str) -> str:
+    """Return a safe display name from legacy or RFC 5987 disposition fields."""
     if not value:
         return ""
-    encoded = re.search(r"filename\*=UTF-8''([^;]+)", value, re.IGNORECASE)
-    if encoded:
-        return unquote(encoded.group(1).strip())
-    plain = re.search(r'filename\s*=\s*(?:"([^"]+)"|([^;]+))', value, re.IGNORECASE)
+    extended = re.search(
+        r'(?:^|;)\s*filename\*\s*=\s*(?:"(?P<quoted>(?:\\.|[^"])*)"|(?P<plain>[^;]*))',
+        value,
+        re.IGNORECASE,
+    )
+    if extended:
+        raw = (extended.group("quoted") if extended.group("quoted") is not None else extended.group("plain") or "").strip()
+        parts = raw.split("'", 2)
+        if len(parts) == 3:
+            charset = parts[0].strip().lower().replace("utf8", "utf-8") or "utf-8"
+            # RFC 5987 permits many charset labels, but accepting an arbitrary
+            # codec here is unnecessary. Keep common browser/server labels and
+            # make unknown labels deterministic rather than failing downloads.
+            if charset not in {"utf-8", "iso-8859-1", "latin-1", "latin1", "us-ascii"}:
+                charset = "utf-8"
+            try:
+                raw = unquote_to_bytes(parts[2]).decode(charset, errors="replace")
+            except (LookupError, UnicodeError):
+                raw = unquote(parts[2])
+        else:
+            raw = unquote(raw)
+        return re.sub(r"[\x00-\x1f\x7f]", "", raw).strip()[:512]
+    plain = re.search(
+        r'(?:^|;)\s*filename\s*=\s*(?:"(?P<quoted>(?:\\.|[^"])*)"|(?P<plain>[^;]*))',
+        value,
+        re.IGNORECASE,
+    )
     if plain:
-        return (plain.group(1) or plain.group(2) or "").strip()
+        raw = plain.group("quoted") if plain.group("quoted") is not None else plain.group("plain") or ""
+        raw = re.sub(r"\\(.)", r"\1", raw) if plain.group("quoted") is not None else raw
+        return re.sub(r"[\x00-\x1f\x7f]", "", raw).strip()[:512]
     return ""
 
 
