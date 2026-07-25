@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { ChevronDown, ChevronRight, Copy, Download, FolderOpen, RefreshCw, Trash2, X } from 'lucide-react'
-import { fetchSettings, fetchUpdateInfo, installUpdate, openExplorer, saveSettings, scanTvboxDevices, testConnection } from '../api'
+import { fetchSettings, fetchUpdateInfo, installUpdate, openExplorer, saveSettings, scanCastDevices, scanTvboxDevices, testConnection } from '../api'
 import { beginUninstall, getDesktopInfo } from '../desktop'
 import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 import type { ThemePreference } from '../theme'
@@ -40,6 +40,9 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   const [tvboxDevices, setTvboxDevices] = useState<Array<{ endpoint: string; host: string; port: number; label: string; matched: boolean }>>([])
   const [scanningTvbox, setScanningTvbox] = useState(false)
   const [tvboxScanMessage, setTvboxScanMessage] = useState('')
+  const [castDevices, setCastDevices] = useState<Array<{ id: string; protocol: 'dlna' | 'chromecast'; location: string; control_url: string; service_type: string; label: string; host: string }>>([])
+  const [scanningCast, setScanningCast] = useState(false)
+  const [castScanMessage, setCastScanMessage] = useState('')
   const [activeSection, setActiveSection] = useState<SettingsSection>('general')
   const dialogRef = useRef<HTMLElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
@@ -48,6 +51,10 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   const selectedTvboxDevice = tvboxDevices.some(device => device.endpoint === settings.tvbox_endpoint)
   const tvboxSelectValue = settings.tvbox_endpoint
     ? (selectedTvboxDevice ? settings.tvbox_endpoint : '__manual__')
+    : ''
+  const selectedCastDevice = castDevices.find(device => device.id === settings.cast_device?.id)
+  const castSelectValue = settings.cast_device?.id
+    ? (selectedCastDevice ? settings.cast_device.id : '__saved__')
     : ''
 
   useEffect(() => {
@@ -175,6 +182,17 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
       setTvboxScanMessage(reason.message || '扫描电视设备失败')
     } finally { setScanningTvbox(false) }
   }
+  const scanCast = async () => {
+    setScanningCast(true); setError(''); setCastScanMessage('正在搜索支持 DLNA 的播放设备…')
+    try {
+      const result = await scanCastDevices()
+      const devices = result.devices || []
+      setCastDevices(devices)
+      setCastScanMessage(devices.length ? `发现 ${devices.length} 台投屏设备，请选择后保存设置。` : '未发现投屏设备。请确认电视已开启 DLNA/媒体渲染且和电脑处于同一局域网。')
+    } catch (reason: any) {
+      setCastScanMessage(reason.message || '搜索投屏设备失败')
+    } finally { setScanningCast(false) }
+  }
   const uninstall = async () => {
     setError('')
     const result = await beginUninstall()
@@ -295,6 +313,30 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
               <p>桌面端扫描并记住设备；插件只交给桌面端当前视频地址，不直接访问电视。</p>
               {tvboxScanMessage && <p className="settings-inline-status" role="status" aria-live="polite">{tvboxScanMessage}</p>}
               {tvboxSelectValue === '__manual__' && <input aria-label="手动电视推送地址" value={settings.tvbox_endpoint || ''} onChange={event => update('tvbox_endpoint', event.target.value)} placeholder="http://192.168.1.100:9979 或 http://192.168.1.100:9979/action" />}
+            </div>
+          </section>
+
+          <h3 className="settings-group-label">投屏（DLNA/UPnP）</h3>
+          <section className="settings-group settings-grid-group">
+            <div className="settings-field settings-field-wide">
+              <label htmlFor="setting-cast-device">默认投屏设备</label>
+              <div className="input-action">
+                <select id="setting-cast-device" value={castSelectValue} onChange={event => {
+                  const value = event.target.value
+                  if (value === '') update('cast_device', {})
+                  else {
+                    const device = castDevices.find(item => item.id === value)
+                    if (device) update('cast_device', device)
+                  }
+                }} aria-label="默认投屏设备">
+                  <option value="">不使用投屏</option>
+                  {castSelectValue === '__saved__' && <option value="__saved__" disabled>{settings.cast_device?.label || '已保存的投屏设备'} · {settings.cast_device?.host}</option>}
+                  {castDevices.map(device => <option key={device.id} value={device.id}>{device.label} · {device.protocol === 'chromecast' ? 'Chromecast' : 'DLNA'} · {device.host}</option>)}
+                </select>
+                <Button variant="secondary" className="secondary-button" disabled={scanningCast} title="搜索同一局域网中的 DLNA 与 Chromecast 播放设备" onClick={() => void scanCast()}><RefreshCw size={15} />{scanningCast ? '搜索中…' : '搜索设备'}</Button>
+              </div>
+              <p>投屏会将选中的本机媒体文件通过临时局域网链接交给电视播放；支持 DLNA/UPnP 与 Chromecast。</p>
+              {castScanMessage && <p className="settings-inline-status" role="status" aria-live="polite">{castScanMessage}</p>}
             </div>
           </section>
 

@@ -109,10 +109,10 @@ export async function pickLocalMediaFile(): Promise<NativeResult> {
   try {
     if (isTauriDesktop()) {
       const { open } = await import('@tauri-apps/plugin-dialog')
-      const path = await open({ multiple: false, title: '选择要推送到电视的本机文件' })
+      const path = await open({ multiple: false, title: '选择要投屏或 TVBox 推送的本机文件' })
       return path ? { ok: true, path } : { ok: false, canceled: true }
     }
-    return { ok: false, error: '本机文件推送仅在桌面版中可用' }
+    return { ok: false, error: '本机文件投屏仅在桌面版中可用' }
   } catch (reason) {
     return { ok: false, error: reason instanceof Error ? reason.message : '无法打开文件选择对话框' }
   }

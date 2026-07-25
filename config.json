@@ -1,5 +1,5 @@
 {
-  "config_version": 11,
+  "config_version": 13,
   "host": "127.0.0.1",
   "port": 8765,
   "token": "55555",
@@ -20,9 +20,10 @@
   "bt_max_connections": 80,
   "bt_enable_dht": true,
   "browser_takeover_enabled": true,
-  "browser_takeover_min_mb": 1,
+  "browser_takeover_min_mb": 0,
   "browser_category_dirs": {},
   "queue_auto_start_enabled": false,
   "queue_auto_start_time": "00:00",
-  "tvbox_endpoint": ""
+  "tvbox_endpoint": "",
+  "cast_device": {}
 }

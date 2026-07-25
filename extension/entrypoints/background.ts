@@ -7,7 +7,9 @@ import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClick
 import { parseHlsManifest, resourceQuality } from '../lib/hlsManifest'
 
 const HOST = 'com.ciaooo55.hls_downloader'
+const CLICK_INTENT_STORAGE_KEY = 'click-intents'
 let clickIntents: DownloadClickIntent[] = []
+let clickIntentsHydrated = false
 let browserFallbacks: Array<{ url: string, at: number }> = []
 const determinedDownloads = new Map<number, Browser.downloads.DownloadItem>()
 const determinationWaiters = new Map<number, (item: Browser.downloads.DownloadItem) => void>()
@@ -21,7 +23,7 @@ async function settings() {
   const data = await browser.storage.local.get(['enabled', 'minimumBytes', 'excludedHosts', 'authorizedCookieHosts', 'useBrowserCookies'])
   return {
     enabled: data.enabled !== false,
-    minimumBytes: Number(data.minimumBytes ?? 1024 * 1024),
+    minimumBytes: Number(data.minimumBytes ?? 0),
     excludedHosts: Array.isArray(data.excludedHosts) ? data.excludedHosts : [],
     authorizedCookieHosts: Array.isArray(data.authorizedCookieHosts) ? data.authorizedCookieHosts : [],
     // Media URLs commonly require the logged-in browser session. This is on by
@@ -293,7 +295,68 @@ async function removeBrowserDownload(item: Browser.downloads.DownloadItem): Prom
   await browser.downloads.erase({ id: item.id }).catch(() => undefined)
 }
 
-function consumeClickIntent(url: string, finalUrl = '', referrer = '', chain?: RequestChain): DownloadClickIntent | undefined {
+async function hydrateClickIntents(): Promise<void> {
+  if (clickIntentsHydrated) return
+  clickIntentsHydrated = true
+  try {
+    const stored = await browser.storage.session.get(CLICK_INTENT_STORAGE_KEY)
+    const values = Array.isArray(stored[CLICK_INTENT_STORAGE_KEY]) ? stored[CLICK_INTENT_STORAGE_KEY] : []
+    const now = Date.now()
+    const restored = values
+      .filter((item: any) => item && typeof item === 'object')
+      .map((item: any) => ({
+        href: String(item.href || ''),
+        pageUrl: String(item.pageUrl || ''),
+        altBypass: Boolean(item.altBypass),
+        ctrlForce: Boolean(item.ctrlForce),
+        generic: Boolean(item.generic),
+        tabId: Number.isFinite(Number(item.tabId)) ? Number(item.tabId) : undefined,
+        frameId: Number.isFinite(Number(item.frameId)) ? Number(item.frameId) : undefined,
+        opensNewTab: Boolean(item.opensNewTab),
+        controlHint: Boolean(item.controlHint),
+        at: Number(item.at) || now,
+      }))
+      .filter((item: DownloadClickIntent) => now - item.at <= 7000)
+    // Prefer fresher in-memory intents if both exist after a race.
+    const merged = [...clickIntents, ...restored]
+    const seen = new Set<string>()
+    clickIntents = []
+    for (const intent of merged) {
+      const key = [intent.at, intent.href, intent.pageUrl, intent.tabId ?? '', intent.generic ? 1 : 0].join('|')
+      if (seen.has(key)) continue
+      seen.add(key)
+      clickIntents.push(intent)
+    }
+    clickIntents = clickIntents
+      .sort((left, right) => right.at - left.at)
+      .slice(0, 20)
+  } catch {
+    // Session storage may be unavailable in rare test/host environments.
+  }
+}
+
+async function persistClickIntents(): Promise<void> {
+  const now = Date.now()
+  clickIntents = clickIntents
+    .filter(intent => now - intent.at <= 7000)
+    .sort((left, right) => right.at - left.at)
+    .slice(0, 20)
+  try {
+    await browser.storage.session.set({ [CLICK_INTENT_STORAGE_KEY]: clickIntents })
+  } catch {
+    // Ignore persistence failures; in-memory intents still work for the current worker.
+  }
+}
+
+async function rememberClickIntent(intent: DownloadClickIntent): Promise<void> {
+  await hydrateClickIntents()
+  clickIntents.unshift(intent)
+  await persistClickIntents()
+  console.debug('HLS Downloader received explicit click intent', intent.href || intent.pageUrl || '')
+}
+
+async function consumeClickIntent(url: string, finalUrl = '', referrer = '', chain?: RequestChain): Promise<DownloadClickIntent | undefined> {
+  await hydrateClickIntents()
   const now = Date.now()
   clickIntents = clickIntents.filter(intent => now - intent.at <= 7000)
   const index = clickIntents.findIndex(intent => matchesDownloadClick(intent, {
@@ -303,13 +366,20 @@ function consumeClickIntent(url: string, finalUrl = '', referrer = '', chain?: R
     chainUrls: chain?.urls,
     tabId: chain?.tabId,
   }, now))
-  if (index < 0) return undefined
-  return clickIntents.splice(index, 1)[0]
+  if (index < 0) {
+    await persistClickIntents()
+    return undefined
+  }
+  const [matched] = clickIntents.splice(index, 1)
+  await persistClickIntents()
+  return matched
 }
 
 async function waitForClickIntent(url: string, finalUrl = '', referrer = '', chain?: RequestChain): Promise<DownloadClickIntent | undefined> {
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const intent = consumeClickIntent(url, finalUrl, referrer, chain)
+  // Downloads can lag behind click-intent by a few hundred ms on slow pages,
+  // and Chrome may wake the service worker after the click message arrives.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const intent = await consumeClickIntent(url, finalUrl, referrer, chain)
     if (intent) return intent
     await new Promise(resolve => setTimeout(resolve, 50))
   }
@@ -502,22 +572,21 @@ export default defineBackground(() => {
       }
       const actual = await refreshedDownload(item.id, item)
       if (!canContinueTakeover(paused, actual.state)) return
-      // Resolve the user's click before choosing a request chain. The same URL
-      // can be active in several tabs; using the newest chain would otherwise
-      // replay another page's Authorization or anti-bot headers.
-      let intent = await waitForClickIntent(actual.url, actual.finalUrl, actual.referrer || '')
-      let chain = requestChains.find(actual, Date.now(), intent?.tabId)
+      // Prefer the request chain first so click matching can use tabId even when
+      // Chrome leaves DownloadItem.referrer empty. After a click is known, re-bind
+      // the chain to that tab so we never replay another page's auth headers.
+      const provisionalChain = requestChains.find(actual)
+      let intent = await waitForClickIntent(
+        actual.url,
+        actual.finalUrl,
+        actual.referrer || provisionalChain?.pageUrl || '',
+        provisionalChain,
+      )
+      let chain = intent?.tabId === undefined
+        ? provisionalChain
+        : requestChains.find(actual, Date.now(), intent.tabId) || provisionalChain
       if (!intent) {
-        const provisionalChain = requestChains.find(actual)
-        intent = await waitForClickIntent(
-          actual.url,
-          actual.finalUrl,
-          actual.referrer || provisionalChain?.pageUrl || '',
-          provisionalChain,
-        )
-        chain = intent?.tabId === undefined
-          ? provisionalChain
-          : requestChains.find(actual, Date.now(), intent.tabId)
+        intent = await waitForClickIntent(actual.url, actual.finalUrl, actual.referrer || '')
       }
       const url = chain?.finalUrl || actual.finalUrl || actual.url
       const responseName = responseFilename(responseHeader(chain, 'content-disposition'))
@@ -559,7 +628,11 @@ export default defineBackground(() => {
 
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === 'click-intent') {
-      clickIntents.unshift({
+      // Keep the MV3 worker alive until the intent is durable. Without an
+      // asynchronous response, Chrome may suspend the worker between the
+      // click and downloads.onCreated, which makes normal file downloads look
+      // unrelated and leaves them in the browser.
+      void rememberClickIntent({
         href: String(message.href || ''),
         pageUrl: String(message.pageUrl || sender.tab?.url || ''),
         altBypass: Boolean(message.altBypass),
@@ -571,9 +644,9 @@ export default defineBackground(() => {
         controlHint: Boolean(message.controlHint),
         at: Date.now(),
       })
-      clickIntents = clickIntents.slice(0, 20)
-      console.debug('HLS Downloader received explicit click intent', message.href || sender.tab?.url || '')
-      return
+        .then(() => sendResponse({ ok: true }))
+        .catch(error => sendResponse({ ok: false, error: String(error) }))
+      return true
     }
     if (message?.type === 'resource') {
       const resource = { ...message.resource, pageUrl: message.resource.pageUrl || sender.tab?.url }

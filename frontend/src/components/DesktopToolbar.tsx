@@ -1,6 +1,6 @@
 import {
   ClipboardPaste, FileText, FolderOpen, Layers3, Moon, MoreHorizontal, Pause, Play,
-  CircleArrowUp, Plus, RefreshCw, RotateCcw, Search, Settings, Sun, Trash2, Tv, Users, X, XCircle,
+  CircleArrowUp, Plus, RefreshCw, RotateCcw, ScreenShare, Search, Settings, Sun, Trash2, Tv, Users, X, XCircle,
 } from 'lucide-react'
 import type { CommandState } from '../taskCommands'
 import type { Theme } from '../theme'
@@ -24,6 +24,8 @@ interface Props {
   onBrowserExtension: () => void
   onPushLocalMedia: () => void
   pushLocalMediaBusy: boolean
+  onCastLocalMedia: () => void
+  castLocalMediaBusy: boolean
   onRefresh: () => void
   onUpdate: () => void
   onSettings: () => void
@@ -141,9 +143,13 @@ export default function DesktopToolbar(props: Props) {
         <ToolButton title="浏览器插件" onClick={props.onBrowserExtension}>
           <Users size={18} />
         </ToolButton>
-        <ToolButton title="选择本机文件推送到电视" disabled={props.pushLocalMediaBusy} onClick={props.onPushLocalMedia}>
+        <ToolButton title="选择本机文件投屏到默认 DLNA 设备" disabled={props.castLocalMediaBusy} onClick={props.onCastLocalMedia}>
+          <ScreenShare size={18} />
+          <span className="tool-label">投屏</span>
+        </ToolButton>
+        <ToolButton title="选择本机文件推送到 TVBox" disabled={props.pushLocalMediaBusy} onClick={props.onPushLocalMedia}>
           <Tv size={18} />
-          <span className="tool-label">推电视</span>
+          <span className="tool-label">TVBox</span>
         </ToolButton>
         <ToolButton title="刷新任务" onClick={props.onRefresh}>
           <RefreshCw size={18} />
@@ -177,7 +183,8 @@ export default function DesktopToolbar(props: Props) {
           <button type="button" disabled={!c.delete} role="menuitem" className="danger" onClick={event => { closeOverflow(event); props.onAction('delete') }}><Trash2 size={16} />删除任务</button>
           <span className="toolbar-overflow-separator" />
           <button type="button" role="menuitem" onClick={event => { closeOverflow(event); props.onBrowserExtension() }}><Users size={16} />浏览器插件</button>
-          <button type="button" disabled={props.pushLocalMediaBusy} role="menuitem" onClick={event => { closeOverflow(event); props.onPushLocalMedia() }}><Tv size={16} />推送本机文件</button>
+          <button type="button" disabled={props.castLocalMediaBusy} role="menuitem" onClick={event => { closeOverflow(event); props.onCastLocalMedia() }}><ScreenShare size={16} />投屏本机文件</button>
+          <button type="button" disabled={props.pushLocalMediaBusy} role="menuitem" onClick={event => { closeOverflow(event); props.onPushLocalMedia() }}><Tv size={16} />TVBox 推送本机文件</button>
           <button type="button" role="menuitem" onClick={event => { closeOverflow(event); props.onUpdate() }}><CircleArrowUp size={16} />检查更新</button>
         </div>
       </details>

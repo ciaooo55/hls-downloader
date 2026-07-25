@@ -32,15 +32,24 @@ describe('download click intent', () => {
     }, 10_200)).toBe(false)
   })
 
-  it('accepts a redirected download only when its chain contains the clicked URL', () => {
+  it('accepts redirected or generated downloads for the same tab click window', () => {
     const clicked = intent({ href: 'https://site.test/download?id=7', generic: false })
     expect(matchesDownloadClick(clicked, {
       url: 'https://cdn.test/file.zip', finalUrl: 'https://cdn.test/file.zip',
       chainUrls: ['https://site.test/download?id=7', 'https://cdn.test/file.zip'],
       referrer: 'https://site.test/page', tabId: 7,
     }, 11_000)).toBe(true)
+    // Final CDN URL may not include the gateway href; same-tab recent click still matches.
     expect(matchesDownloadClick(clicked, {
       url: 'https://cdn.test/other.zip', referrer: 'https://site.test/page', tabId: 7,
+    }, 11_000)).toBe(true)
+    // Different tab must never inherit the click intent.
+    expect(matchesDownloadClick(clicked, {
+      url: 'https://cdn.test/other.zip', referrer: 'https://site.test/page', tabId: 8,
     }, 11_000)).toBe(false)
+    // Outside the short click window, generated URLs require an exact chain match.
+    expect(matchesDownloadClick(clicked, {
+      url: 'https://cdn.test/other.zip', referrer: 'https://site.test/page', tabId: 7,
+    }, 13_000)).toBe(false)
   })
 })

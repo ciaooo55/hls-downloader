@@ -215,6 +215,9 @@ body,
 .local-share-status em { overflow: hidden; max-width: min(28vw, 280px); color: var(--muted); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 .local-share-status button { height: 22px; padding: 0 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; cursor: pointer; }
 .local-share-status button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--red) 50%, var(--border)); color: var(--red); }
+.cast-controls { display: inline-flex; gap: 2px; }
+.local-share-status .cast-controls button { display: grid; width: 22px; padding: 0; place-items: center; }
+.local-share-status .cast-controls button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); color: var(--primary); }
 
 .modal-overlay { background: rgba(8, 15, 25, .48); backdrop-filter: blur(5px); }
 .modal {

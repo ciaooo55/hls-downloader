@@ -359,33 +359,44 @@ export function matchesDownloadClick(
   const sameTab = intent.tabId !== undefined && download.tabId !== undefined && intent.tabId === download.tabId
   const permittedNewTab = Boolean(intent.opensNewTab)
   if (intent.tabId !== undefined && download.tabId !== undefined && !sameTab && !permittedNewTab) return false
+  const tabCompatible = sameTab || permittedNewTab || intent.tabId === undefined || download.tabId === undefined
   const samePage = Boolean(intent.pageUrl && download.referrer
     && stripHash(intent.pageUrl) === stripHash(download.referrer))
+  // Positive evidence only: same page referrer, or same tab (Chrome often omits
+  // DownloadItem.referrer but still exposes the initiating tab via webRequest).
+  // Missing both is not enough to claim an unrelated generated download.
+  const linked = samePage || sameTab
   if (intent.href) {
     const clicked = stripHash(intent.href)
     const page = intent.pageUrl ? stripHash(intent.pageUrl) : ''
     // Same-page anchors (# / page-local href) are not concrete download targets.
-    // Keep generic same-page matching for those; only hard-fail concrete hrefs.
+    // Keep generic same-page matching for those; only hard-fail concrete hrefs
+    // that clearly point at a different tab.
     const pageLocalHref = Boolean(page && clicked === page)
     if (!pageLocalHref) {
-      const exact = [download.url, download.finalUrl, ...(download.chainUrls || [])]
+      const candidates = [download.url, download.finalUrl, ...(download.chainUrls || [])]
         .filter((value): value is string => Boolean(value))
-        .some(value => stripHash(value) === clicked)
+      const exact = candidates.some(value => stripHash(value) === clicked)
+      // Exact gateway/CDN match: allow when tabs are compatible, even if Chrome
+      // left referrer empty.
       if (exact && (sameTab || permittedNewTab || !intent.pageUrl || !download.referrer || samePage)) return true
       if (exact) return false
-      // A concrete link click is stronger evidence than page proximity.  Do not
-      // fall through to the generic same-page window, otherwise a second,
-      // unrelated download created by the page can be incorrectly taken over.
+      // Many download buttons open a short-lived gateway URL, then the browser
+      // reports only the final CDN file. Require same-tab or same-page evidence
+      // so a random background download is never claimed.
+      if (linked && tabCompatible && age <= 2500) return true
       return false
     }
   }
   if (intent.generic) {
-    const limit = intent.ctrlForce ? 7000 : intent.controlHint ? 4000 : 1000
-    return age <= limit
-      && samePage
-      && (sameTab || permittedNewTab || intent.tabId === undefined || download.tabId === undefined)
+    // Generic/button clicks have no concrete href. Prefer same-page evidence.
+    // Chrome may omit referrer: allow only download-looking controls on the same
+    // tab, never a bare "any click on this tab" claim.
+    const limit = intent.ctrlForce ? 7000 : intent.controlHint ? 4500 : 2500
+    const genericLinked = samePage || (Boolean(intent.controlHint) && sameTab)
+    return age <= limit && genericLinked && tabCompatible
   }
-  return age <= 3000 && samePage && (sameTab || permittedNewTab || intent.tabId === undefined || download.tabId === undefined)
+  return age <= 3000 && samePage && tabCompatible
 }
 
 function stripHash(value: string): string {

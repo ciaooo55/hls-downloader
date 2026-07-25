@@ -205,7 +205,7 @@ def test_repository_default_config_does_not_force_site_specific_request_headers(
     config_path = config_module.PROJECT_ROOT / "config.json"
     data = json.loads(config_path.read_text(encoding="utf-8"))
 
-    assert data["config_version"] == 11
+    assert data["config_version"] == 13
     assert data["temp_dir"] == "."
     assert data["default_referer"] == ""
     assert data["default_origin"] == ""
@@ -242,11 +242,11 @@ def test_old_blank_request_defaults_remain_blank_after_migration(tmp_path, monke
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 11
+    assert loaded.config_version == 13
     assert loaded.default_referer == ""
     assert loaded.default_origin == ""
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["config_version"] == 11
+    assert saved["config_version"] == 13
     assert saved["temp_dir"] == "."
     assert saved["default_concurrency"] == 12
     assert saved["max_concurrent_tasks"] == 3
@@ -270,7 +270,7 @@ def test_v2_legacy_concurrency_defaults_migrate_to_new_defaults(tmp_path, monkey
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 11
+    assert loaded.config_version == 13
     assert loaded.default_concurrency == 12
     assert loaded.max_concurrent_tasks == 3
 
@@ -293,9 +293,51 @@ def test_v2_custom_concurrency_values_are_preserved_during_migration(tmp_path, m
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 11
+    assert loaded.config_version == 13
     assert loaded.default_concurrency == 6
     assert loaded.max_concurrent_tasks == 5
+
+
+def test_v11_legacy_takeover_default_migrates_to_capture_all_explicit_downloads(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "config_version": 11,
+                "download_dir": str(tmp_path / "downloads"),
+                "ffmpeg_path": str(tmp_path / "ffmpeg.exe"),
+                "browser_takeover_min_mb": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+
+    loaded = config_module.load_settings()
+
+    assert loaded.config_version == 13
+    assert loaded.browser_takeover_min_mb == 0
+
+
+def test_v11_custom_takeover_threshold_is_preserved(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "config_version": 11,
+                "download_dir": str(tmp_path / "downloads"),
+                "ffmpeg_path": str(tmp_path / "ffmpeg.exe"),
+                "browser_takeover_min_mb": 3,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+
+    loaded = config_module.load_settings()
+
+    assert loaded.config_version == 13
+    assert loaded.browser_takeover_min_mb == 3
 
 
 def test_create_browser_handoff_reports_ui_fallback(monkeypatch):

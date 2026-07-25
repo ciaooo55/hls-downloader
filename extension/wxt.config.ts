@@ -1,10 +1,12 @@
 import { defineConfig } from 'wxt'
+const firefoxId = process.env.HLS_FIREFOX_EXTENSION_ID || 'hls-downloader-store@ciaooo55.com'
+
 export default defineConfig({
   manifestVersion: 3,
   manifest: ({ browser }) => ({
     name: 'HLS Downloader 浏览器接管',
     description: '嗅探媒体、接管普通下载并发送到 HLS Downloader 桌面端。',
-    version: '1.6.4',
+    version: '1.6.5',
     icons: {
       16: 'icon-16.png',
       32: 'icon-32.png',
@@ -25,11 +27,10 @@ export default defineConfig({
     },
     browser_specific_settings: browser === 'firefox' ? {
       gecko: {
-        id: 'hls-downloader-store@ciaooo55.com',
+        id: firefoxId,
         strict_min_version: '142.0',
         data_collection_permissions: { required: ['none'] },
       },
     } : undefined,
   }),
 })
-

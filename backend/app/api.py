@@ -15,6 +15,8 @@ from .schemas import (
     PlaybackSeekRequest,
     TorrentFileSelection,
     BrowserHandoffAccept,
+    CastLocalPush,
+    CastControl,
     TvboxLocalPush,
     TvboxPush,
 )
@@ -42,6 +44,7 @@ from .models import TaskStatus, TaskType
 from .browser_handoff import browser_handoffs
 from .downloader.throttle import download_throttle
 from .tvbox import local_media_server, push_tvbox, scan_tvboxes
+from .dlna import cast_control, cast_media, scan_cast_devices
 
 router = APIRouter(prefix="/api")
 
@@ -459,6 +462,12 @@ async def scan_tvbox_devices(x_token: str = Header(default="")):
     return {"devices": await scan_tvboxes()}
 
 
+@router.get("/cast/scan")
+async def scan_cast_devices_endpoint(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return {"devices": await scan_cast_devices()}
+
+
 @router.post("/tvbox/push")
 async def push_tvbox_url(body: TvboxPush, x_token: str = Header(default="")):
     _check_token(x_token)
@@ -486,6 +495,37 @@ async def push_local_tvbox_file(body: TvboxLocalPush, x_token: str = Header(defa
         if share:
             local_media_server.revoke(share.get("id", ""))
         raise HTTPException(status_code=502, detail=f"本机文件推送失败：{exc}") from exc
+
+
+@router.post("/cast/push-local")
+async def cast_local_file(body: CastLocalPush, x_token: str = Header(default="")):
+    _check_token(x_token)
+    if not settings.cast_device:
+        raise HTTPException(status_code=409, detail="请先在设置中扫描并选择投屏设备")
+    share: dict | None = None
+    try:
+        share = local_media_server.share(body.path, settings.cast_device["location"])
+        result = await cast_media(settings.cast_device, share["url"], share["filename"])
+        return {**result, "share": share}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        if share:
+            local_media_server.revoke(share.get("id", ""))
+        raise HTTPException(status_code=502, detail=f"投屏失败：{exc}") from exc
+
+
+@router.post("/cast/control")
+async def control_cast(body: CastControl, x_token: str = Header(default="")):
+    _check_token(x_token)
+    if not settings.cast_device:
+        raise HTTPException(status_code=409, detail="请先在设置中扫描并选择投屏设备")
+    try:
+        return await cast_control(settings.cast_device, body.action, body.seconds)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"投屏控制失败：{exc}") from exc
 
 
 @router.post("/tvbox/shares/{share_id}/stop")

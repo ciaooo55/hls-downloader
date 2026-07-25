@@ -295,16 +295,27 @@ describe('resource rules', () => {
       referrer: 'https://github.test/redirected-download',
       tabId: 8,
     }, 2000)).toBe(true)
+    // Gateway/JS downloads often report a final CDN URL that differs from the
+    // clicked href. Same-tab + same-page (or missing Chrome referrer) still
+    // counts as the user's click; cross-tab must stay rejected.
     expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
       url: 'https://cdn.test/generated.zip',
       referrer: 'https://site.test/download',
       tabId: 8,
-    }, 2000)).toBe(false)
+    }, 2000)).toBe(true)
     expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
       url: 'https://cdn.test/generated.zip',
       referrer: 'https://site.test/download',
       tabId: 9,
     }, 2000)).toBe(false)
+    expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
+      url: 'https://cdn.test/generated.zip',
+      tabId: 8,
+    }, 2000)).toBe(true)
+    expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
+      url: 'https://cdn.test/generated.zip',
+      tabId: 8,
+    }, 4000)).toBe(false)
     expect(matchesDownloadClick({ ...intent, tabId: 8, opensNewTab: true }, {
       url: 'https://cdn.test/start',
       finalUrl: 'https://cdn.test/file.zip',
@@ -332,7 +343,11 @@ describe('resource rules', () => {
     expect(matchesDownloadClick({ ...intent, href: '', generic: true }, {
       url: 'https://cdn.test/generated.zip',
       referrer: 'https://site.test/download',
-    }, 2101)).toBe(false)
+    }, 2101)).toBe(true)
+    expect(matchesDownloadClick({ ...intent, href: '', generic: true }, {
+      url: 'https://cdn.test/generated.zip',
+      referrer: 'https://site.test/download',
+    }, 3600)).toBe(false)
     expect(matchesDownloadClick({ ...intent, href: 'https://site.test/download#', generic: true }, {
       url: 'https://cdn.test/generated.zip',
       referrer: 'https://site.test/download',
@@ -340,6 +355,10 @@ describe('resource rules', () => {
     expect(matchesDownloadClick({ ...intent, href: '', generic: true }, {
       url: 'https://cdn.test/generated.zip',
       referrer: 'https://site.test/download',
-    }, 3000)).toBe(false)
+    }, 3000)).toBe(true)
+    expect(matchesDownloadClick({ ...intent, href: '', generic: true }, {
+      url: 'https://cdn.test/generated.zip',
+      referrer: 'https://site.test/download',
+    }, 4000)).toBe(false)
   })
 })

@@ -3,7 +3,7 @@ param(
     [switch]$SkipBackend,
     [switch]$SkipDesktop,
     [switch]$SkipSmoke,
-    [string]$Version = "1.6.4"
+    [string]$Version = "1.6.5"
 )
 
 $ErrorActionPreference = "Stop"
@@ -271,6 +271,9 @@ Invoke-Step "Build backend executable" {
             --collect-all libtorrent `
             --collect-all yt_dlp `
             --collect-all multipart `
+            --collect-all pychromecast `
+            --collect-all zeroconf `
+            --collect-all casttube `
             --hidden-import uvicorn.lifespan.on `
             --hidden-import uvicorn.loops.auto `
             --hidden-import uvicorn.protocols.http.auto `

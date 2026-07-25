@@ -6,6 +6,7 @@ from .version import APP_VERSION
 from .models import TaskType
 from .checksum import normalize_checksum
 from .tvbox import normalize_tvbox_endpoint
+from .dlna import normalize_cast_device
 
 class TaskCreate(BaseModel):
     url: str
@@ -134,6 +135,7 @@ class SettingsUpdate(BaseModel):
     queue_auto_start_enabled: Optional[bool] = None
     queue_auto_start_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     tvbox_endpoint: Optional[str] = Field(default=None, max_length=512)
+    cast_device: Optional[dict[str, str]] = None
 
     @field_validator("tvbox_endpoint")
     @classmethod
@@ -145,6 +147,14 @@ class SettingsUpdate(BaseModel):
             return normalize_tvbox_endpoint(value)
         except ValueError as exc:
             raise ValueError(f"tvbox_endpoint：{exc}") from exc
+
+    @field_validator("cast_device")
+    @classmethod
+    def validate_cast_device(cls, value: Optional[dict[str, str]]) -> dict[str, str]:
+        try:
+            return normalize_cast_device(value)
+        except ValueError as exc:
+            raise ValueError(f"cast_device：{exc}") from exc
 
 
 class BrowserHandoffAccept(BaseModel):
@@ -177,6 +187,23 @@ class TvboxLocalPush(BaseModel):
         if not value:
             raise ValueError("请先选择要推送的本机文件")
         return value
+
+
+class CastLocalPush(BaseModel):
+    path: str = Field(min_length=1, max_length=32767)
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("请先选择要投屏的本机文件")
+        return value
+
+
+class CastControl(BaseModel):
+    action: str = Field(pattern="^(play|pause|seek)$")
+    seconds: int = Field(default=0, ge=-86400, le=86400)
 
 class HealthResponse(BaseModel):
     status: str = "ok"

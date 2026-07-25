@@ -8,7 +8,7 @@ PROJECT_ROOT = RUNTIME_PATHS.project_root
 CONFIG_PATH = RUNTIME_PATHS.config_path
 
 class Settings(BaseSettings):
-    config_version: int = 11
+    config_version: int = 13
     host: str = "127.0.0.1"
     port: int = 8765
     token: str = "55555"
@@ -29,11 +29,12 @@ class Settings(BaseSettings):
     bt_max_connections: int = 80
     bt_enable_dht: bool = True
     browser_takeover_enabled: bool = True
-    browser_takeover_min_mb: int = 1
+    browser_takeover_min_mb: int = 0
     browser_category_dirs: dict[str, str] = Field(default_factory=dict)
     queue_auto_start_enabled: bool = False
     queue_auto_start_time: str = "00:00"
     tvbox_endpoint: str = ""
+    cast_device: dict[str, str] = Field(default_factory=dict)
 
     # Ignore fields written by a newer release so downgrade/upgrade helpers can
     # still start far enough to close the running application cleanly.
@@ -124,6 +125,22 @@ def load_settings() -> Settings:
                 data["tvbox_endpoint"] = ""
             data["config_version"] = 11
             migrated = True
+            version = 11
+        if version < 12:
+            # v1.6.4 exposed a 1 MB takeover default without a settings control.
+            # Move only that legacy default to IDM-style capture of all explicit
+            # browser downloads; non-default values remain the user's choice.
+            if int(data.get("browser_takeover_min_mb", 1) or 0) == 1:
+                data["browser_takeover_min_mb"] = 0
+            data["config_version"] = 12
+            migrated = True
+            version = 12
+        if version < 13:
+            if not isinstance(data.get("cast_device"), dict):
+                data["cast_device"] = {}
+            data["config_version"] = 13
+            migrated = True
+            version = 13
         if not isinstance(data.get("tvbox_endpoint"), str):
             data["tvbox_endpoint"] = ""
             migrated = True
@@ -138,6 +155,18 @@ def load_settings() -> Settings:
                 canonical_endpoint = ""
             if canonical_endpoint != s.tvbox_endpoint:
                 s.tvbox_endpoint = canonical_endpoint
+                migrated = True
+        if not isinstance(s.cast_device, dict):
+            s.cast_device = {}
+            migrated = True
+        elif s.cast_device:
+            try:
+                from .dlna import normalize_cast_device
+                canonical_cast_device = normalize_cast_device(s.cast_device)
+            except ValueError:
+                canonical_cast_device = {}
+            if canonical_cast_device != s.cast_device:
+                s.cast_device = canonical_cast_device
                 migrated = True
         if migrated:
             save_settings(s)

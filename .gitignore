@@ -16,6 +16,7 @@ venv/
 frontend/node_modules/
 frontend/dist/
 frontend/src-tauri/gen/
+frontend/src-tauri/target/
 extension/node_modules/
 extension/.wxt/
 extension/.output/

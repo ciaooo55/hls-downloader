@@ -3,6 +3,7 @@ import { isLikelyDownloadControl } from '../lib/clickIntent'
 
 export default defineContentScript({
   matches: ['<all_urls>'],
+  allFrames: true,
   runAt: 'document_start',
   main() {
     window.addEventListener('click', event => {
