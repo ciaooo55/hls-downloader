@@ -47,6 +47,8 @@ export interface DownloadClickIntent {
 
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|torrent|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
 const SEGMENT_EXT = /\.(?:ts|m4s|cmfv|cmfa|aac)(?:$|[?#])/i
+const IMAGE_EXT = /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)(?:$|[?#])/i
+const DYNAMIC_DOCUMENT_EXT = /\.(?:asp|aspx|cfm|cgi|do|action|jsp|php\d?)(?:$|[?#])/i
 const MANIFEST_EXT = /\.(?:m3u8?|mpd)$/i
 const SEGMENT_PATH = /(?:^|[\/_-])(?:init|segment|seg|fragment|frag|chunk|part)[-_]?(?:\d{1,8}|video|audio)?(?:\.|[\/_-]|$)/i
 const SEGMENT_MIME = /^(?:video\/mp2t|audio\/(?:aac|mp4a-latm))\b/i
@@ -187,7 +189,11 @@ export function likelyResourceBytes(resource: Pick<MediaResource, 'size' | 'esti
  * stream size is the most useful proxy for the main programme over a bumper.
  */
 export function visiblePlaybackResources(resources: MediaResource[], playback: PlaybackContext | null, limit = 8): MediaResource[] {
-  if (!playback) return []
+  const fallback = compactResources(resources, 40)
+    .filter(item => ['hls', 'dash', 'media'].includes(item.kind))
+    .sort((left, right) => right.seenAt - left.seenAt || resourceRank(right) - resourceRank(left))
+    .slice(0, limit)
+  if (!playback) return fallback
   const sources = new Set(playback.sourceUrls.filter(Boolean))
   const recentFloor = playback.startedAt - 12_000
   const recentCeiling = playback.startedAt + 90_000
@@ -200,7 +206,7 @@ export function visiblePlaybackResources(resources: MediaResource[], playback: P
     }))
     .filter(entry => entry.evidence > 0)
   candidates.sort((left, right) => right.evidence - left.evidence || right.bytes - left.bytes || resourceRank(right.item) - resourceRank(left.item) || right.item.seenAt - left.item.seenAt)
-  return candidates.slice(0, limit).map(entry => entry.item)
+  return candidates.length ? candidates.slice(0, limit).map(entry => entry.item) : fallback
 }
 
 export function compactResources(resources: MediaResource[], limit = 40): MediaResource[] {
@@ -237,12 +243,21 @@ export function visibleMediaResources(resources: MediaResource[], limit = 8, fal
 }
 
 export function classifyDownload(url: string, mimeType = '', filename = ''): ResourceKind | null {
+  const mime = mimeType.toLowerCase()
+  const suppliedName = filename.split(/[\\/]/).pop() || ''
+  const suppliedIsImage = IMAGE_EXT.test(suppliedName)
+  const suppliedIsDocument = DYNAMIC_DOCUMENT_EXT.test(suppliedName)
+  const suppliedHasExtension = /\.[A-Za-z0-9]{1,10}(?:$|[?#])/.test(suppliedName)
+  if (mime.startsWith('image/') || suppliedIsImage) return null
+  // Dynamic endpoints are common navigation and ad targets. Only take one over
+  // when the server explicitly gives it a real, non-web download filename.
+  if (DYNAMIC_DOCUMENT_EXT.test(url) && (!suppliedHasExtension || suppliedIsDocument)) return null
+  if (mime.includes('octet-stream') && !MEDIA_EXT.test(url) && (!suppliedHasExtension || suppliedIsDocument)) return null
   const classified = classifyResource(url, mimeType)
     || classifyResource(`https://download.invalid/${encodeURIComponent(filename)}`, mimeType)
   if (classified) return classified
   const extension = filename.split(/[\\/]/).pop()?.match(/\.([A-Za-z0-9]{1,10})$/)?.[1]?.toLowerCase()
   if (extension && !['htm', 'html', 'xhtml'].includes(extension)) return 'file'
-  const mime = mimeType.toLowerCase()
   if (mime && !mime.includes('text/html') && !mime.includes('application/xhtml')) return 'file'
   return null
 }

@@ -418,7 +418,7 @@ function observedResponse(details: any, chain?: RequestChain) {
   const length = rangeTotal || Number(header('content-length') || 0)
   const disposition = header('content-disposition')
   const filename = responseFilename(disposition)
-  const kind = disposition
+  const kind = disposition || mimeType.toLowerCase().includes('octet-stream')
     ? classifyDownload(details.url, mimeType, filename)
     : classifyResource(details.url, mimeType)
   if (!kind) return { disposition, resource: null }
@@ -592,7 +592,11 @@ export default defineBackground(() => {
       const responseName = responseFilename(responseHeader(chain, 'content-disposition'))
       const filename = responseName || actual.filename.split(/[\\/]/).pop() || ''
       const mimeType = actual.mime || responseHeader(chain, 'content-type')
-      const kind = classifyDownload(url, mimeType, filename) || 'file'
+      const kind = classifyDownload(url, mimeType, filename)
+      if (!kind) {
+        if (paused) await browser.downloads.resume(item.id).catch(() => undefined)
+        return
+      }
       const size = (actual.fileSize && actual.fileSize > 0 ? actual.fileSize : 0)
         || (actual.totalBytes && actual.totalBytes > 0 ? actual.totalBytes : 0)
         || trackedSize(chain)
