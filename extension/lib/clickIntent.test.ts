@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isLikelyDownloadControl } from './clickIntent'
+import { isLikelyDownloadControl, shouldTrackDownloadIntent } from './clickIntent'
 import { matchesDownloadClick, type DownloadClickIntent } from './resources'
 
 function intent(overrides: Partial<DownloadClickIntent> = {}): DownloadClickIntent {
@@ -24,6 +24,13 @@ describe('download click intent', () => {
     expect(isLikelyDownloadControl(['展开详情', 'btn primary'])).toBe(false)
     expect(isLikelyDownloadControl(['下一集', 'nextEpisode'])).toBe(false)
     expect(isLikelyDownloadControl(['登录', 'submit'])).toBe(false)
+  })
+
+  it('tracks JavaScript links only when they carry a concrete or download-specific signal', () => {
+    expect(shouldTrackDownloadIntent({ hintedHref: 'https://cdn.test/file.zip' })).toBe(true)
+    expect(shouldTrackDownloadIntent({ hints: ['下载资源', 'javascript-link'] })).toBe(true)
+    expect(shouldTrackDownloadIntent({ hints: ['展开详情', 'javascript-link'] })).toBe(false)
+    expect(shouldTrackDownloadIntent({ ctrlForce: true })).toBe(true)
   })
 
   it('never lets a generic click consume an unrelated tab download', () => {

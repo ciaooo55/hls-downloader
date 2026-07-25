@@ -4,3 +4,23 @@ export function isLikelyDownloadControl(hints: Array<string | null | undefined>)
   const value = hints.filter(Boolean).join(' ').replace(/([a-z])([A-Z])/g, '$1 $2')
   return DOWNLOAD_HINT.test(` ${value} `)
 }
+
+/**
+ * A page may expose a download as a normal link, a JavaScript link, or a
+ * button.  Record only concrete destinations, explicit download wording, or
+ * a user-forced Ctrl click; this gives generated downloads an intent trail
+ * without treating ordinary navigation as a download request.
+ */
+export function shouldTrackDownloadIntent(input: {
+  directHref?: string
+  hintedHref?: string
+  ctrlForce?: boolean
+  hints?: Array<string | null | undefined>
+}): boolean {
+  return Boolean(
+    input.directHref
+    || input.hintedHref
+    || input.ctrlForce
+    || isLikelyDownloadControl(input.hints || []),
+  )
+}

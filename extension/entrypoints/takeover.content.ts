@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { isLikelyDownloadControl } from '../lib/clickIntent'
+import { isLikelyDownloadControl, shouldTrackDownloadIntent } from '../lib/clickIntent'
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -15,21 +15,32 @@ export default defineContentScript({
       if (!anchor?.href && !control) return
       const rawHref = anchor?.getAttribute('href')?.trim() || ''
       const directHref = rawHref && !rawHref.startsWith('#') && !/^javascript:/i.test(rawHref) ? anchor?.href || '' : ''
-      const hintedHref = control?.getAttribute('data-download-url')
+      const hintedHref = anchor?.getAttribute('data-download-url')
+        || anchor?.getAttribute('data-url')
+        || anchor?.getAttribute('data-href')
+        || control?.getAttribute('data-download-url')
         || control?.getAttribute('data-url')
         || control?.getAttribute('data-href')
         || ''
-      const downloadControl = Boolean(control && isLikelyDownloadControl([
-        control.textContent,
-        control.getAttribute('aria-label'),
-        control.getAttribute('title'),
-        control.getAttribute('name'),
-        control.getAttribute('value'),
-        control.id,
-        control.className,
-        control.getAttribute('data-testid'),
-      ]))
-      if (!directHref && !hintedHref && !downloadControl && !event.ctrlKey) return
+      const downloadHint = isLikelyDownloadControl([
+        anchor?.textContent,
+        anchor?.getAttribute('aria-label'),
+        anchor?.getAttribute('title'),
+        anchor?.getAttribute('name'),
+        anchor?.id,
+        anchor?.className,
+        anchor?.getAttribute('data-testid'),
+        anchor?.hasAttribute('download') ? 'download' : '',
+        control?.textContent,
+        control?.getAttribute('aria-label'),
+        control?.getAttribute('title'),
+        control?.getAttribute('name'),
+        control?.getAttribute('value'),
+        control?.id,
+        control?.className,
+        control?.getAttribute('data-testid'),
+      ])
+      if (!shouldTrackDownloadIntent({ directHref, hintedHref, ctrlForce: event.ctrlKey, hints: [downloadHint ? 'download' : ''] })) return
       let href = directHref
       if (!href && hintedHref) {
         try { href = new URL(hintedHref, location.href).href } catch {}
@@ -42,7 +53,7 @@ export default defineContentScript({
         ctrlForce: event.ctrlKey,
         generic: !href,
         opensNewTab: anchor?.target.toLowerCase() === '_blank',
-        controlHint: downloadControl,
+        controlHint: downloadHint,
       })
     }, true)
   },

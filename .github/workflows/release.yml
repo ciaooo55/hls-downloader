@@ -6,7 +6,7 @@ on:
       version:
         description: Version used in the installer, for example 1.6.8
         required: false
-        default: "1.6.12"
+        default: "1.6.13"
   push:
     tags:
       - "v*"
