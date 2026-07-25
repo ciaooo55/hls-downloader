@@ -255,10 +255,46 @@ def test_http_resume_is_discarded_when_etag_changes(tmp_path, monkeypatch):
                 state,
                 {"total": 32, "etag": "new", "last_modified": ""},
             )
-        assert part.read_bytes() == b"z" * 32
-        assert task.progress.downloaded_bytes == 32
+    asyncio.run(run())
+    assert part.read_bytes() == b"z" * 32
+    assert task.progress.downloaded_bytes == 32
+
+
+def test_http_resume_without_a_server_validator_is_discarded(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
+    part = tmp_path / "payload.downloading"
+    # A stale same-size source must not become an apparently complete result.
+    part.write_bytes(b"old-old")
+    state = tmp_path / "resume.json"
+    state.write_text(
+        '{"url":"https://files.test/a.bin","total":7,"etag":"","last_modified":"","completed":[0]}',
+        encoding="utf-8",
+    )
+    task = Task(id="http-no-validator", url="https://files.test/a.bin", task_type=TaskType.HTTP, concurrency=1)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["range"] == "bytes=0-6"
+        return httpx.Response(
+            206,
+            content=b"current",
+            headers={"Content-Range": "bytes 0-6/7"},
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_ranges(
+                client,
+                {},
+                part,
+                state,
+                {"total": 7, "etag": "", "last_modified": ""},
+            )
 
     asyncio.run(run())
+    assert part.read_bytes() == b"current"
+    assert task.progress.downloaded_bytes == 7
 
 
 def test_torrent_downloads_from_local_peer_and_stops_at_completion(tmp_path, monkeypatch):

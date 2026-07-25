@@ -352,8 +352,14 @@ class HTTPDownloader(SeeklessEngine):
         if state_path.exists() and part_path.exists():
             try:
                 saved = json.loads(state_path.read_text(encoding="utf-8"))
+                # A matching URL and length alone cannot prove a partial file
+                # belongs to the current server object. Reusing it without an
+                # ETag or Last-Modified can silently stitch two same-size
+                # versions together after a CDN update.
+                has_validator = bool(metadata["etag"] or metadata["last_modified"])
                 if (
-                    saved.get("url") == task.url
+                    has_validator
+                    and saved.get("url") == task.url
                     and saved.get("total") == total
                     and saved.get("etag", "") == metadata["etag"]
                     and saved.get("last_modified", "") == metadata["last_modified"]
