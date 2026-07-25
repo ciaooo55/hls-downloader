@@ -164,6 +164,18 @@ def test_task_api_preserves_cross_origin_request_contexts(monkeypatch):
     assert [item["request_contexts"] for item in captured] == [payload["request_contexts"], payload["request_contexts"]]
 
 
+def test_task_response_exposes_safe_request_method_but_never_replay_body():
+    from backend.app import api as api_module
+
+    response = api_module._to_resp(Task(
+        id="post-task", url="https://api.example.test/export", task_type=TaskType.HTTP,
+        request_method="POST", request_body="private-base64-body",
+    )).model_dump()
+
+    assert response["request_method"] == "POST"
+    assert "request_body" not in response
+
+
 def test_task_action_maps_manager_errors_to_http_status(monkeypatch):
     from backend.app import api as api_module
 

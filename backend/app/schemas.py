@@ -53,6 +53,7 @@ class TaskBatchCreate(BaseModel):
 class TaskResponse(BaseModel):
     id: str
     task_type: str = "hls"
+    request_method: str = "GET"
     source_page_url: str = ""
     mime_type: str = ""
     title: str

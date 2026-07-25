@@ -1319,6 +1319,7 @@ async def browse_dir(path: str = "", x_token: str = Header(default="")):
 def _to_resp(task) -> TaskResponse:
     return TaskResponse(
         id=task.id, task_type=task.task_type.value,
+        request_method=task.request_method,
         source_page_url=task.source_page_url, mime_type=task.mime_type,
         title=task.title, url=task.url,
         referer=task.referer, origin=task.origin,

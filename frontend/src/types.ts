@@ -1,6 +1,7 @@
 export interface Task {
   id: string
   task_type: 'hls' | 'dash' | 'http' | 'torrent'
+  request_method?: 'GET' | 'POST'
   source_page_url: string
   mime_type: string
   title: string
