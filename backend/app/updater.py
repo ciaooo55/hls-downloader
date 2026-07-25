@@ -1,10 +1,12 @@
 import hashlib
+import asyncio
 import json
 import subprocess
 import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -285,6 +287,42 @@ def download_installer(
 
     root = destination_root or get_update_directory()
     root.mkdir(parents=True, exist_ok=True)
+    # Production updates use the same range probing, concurrent chunks,
+    # retries, throttling and checksum path as ordinary HTTP tasks. Keep the
+    # injected opener path below for deterministic transport unit tests.
+    if opener is urllib.request.urlopen:
+        from .config import settings
+        from .downloader.http_file import HTTPDownloader
+        from .models import Task, TaskStatus, TaskType
+
+        task = Task(
+            id=f"update-{uuid.uuid4().hex}",
+            url=info.download_url,
+            task_type=TaskType.HTTP,
+            title=f"HLS Downloader v{info.latest_version} 更新",
+            filename=f"HLSDownloader-Update-{info.latest_version}.exe",
+            concurrency=max(1, int(settings.default_concurrency)),
+            expected_checksum=f"sha256:{info.digest}",
+            engine_state={
+                "output_dir": str(root),
+                "temp_dir": str(RUNTIME_PATHS.data_root / "updates"),
+            },
+        )
+        task.cancel_event = asyncio.Event()
+        task.pause_event = asyncio.Event()
+        asyncio.run(HTTPDownloader(task).run())
+        if task.status is not TaskStatus.DONE or not task.output_path:
+            raise UpdateError(task.error_message or "安装包下载失败，请检查网络后重试。")
+        destination = Path(task.output_path)
+        if info.size and destination.stat().st_size != info.size:
+            destination.unlink(missing_ok=True)
+            raise UpdateError(f"安装包大小不匹配：期望 {info.size}，实际 {destination.stat().st_size if destination.exists() else 0}")
+        with destination.open("rb") as handle:
+            if handle.read(2) != b"MZ":
+                destination.unlink(missing_ok=True)
+                raise UpdateError("下载结果不是有效的 Windows 安装程序")
+        return destination
+
     destination = root / f"HLSDownloader-Update-{info.latest_version}.exe"
     temporary = destination.with_suffix(".exe.part")
     temporary.unlink(missing_ok=True)

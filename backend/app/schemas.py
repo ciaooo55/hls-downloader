@@ -166,6 +166,7 @@ class BrowserHandoffAccept(BaseModel):
 
 class TvboxPush(BaseModel):
     url: str = Field(min_length=1, max_length=8192)
+    endpoint: str = Field(default="", max_length=512)
 
     @field_validator("url")
     @classmethod
@@ -179,6 +180,7 @@ class TvboxPush(BaseModel):
 
 class TvboxLocalPush(BaseModel):
     path: str = Field(min_length=1, max_length=32767)
+    endpoint: str = Field(default="", max_length=512)
 
     @field_validator("path")
     @classmethod
@@ -191,6 +193,7 @@ class TvboxLocalPush(BaseModel):
 
 class CastLocalPush(BaseModel):
     path: str = Field(min_length=1, max_length=32767)
+    device: dict[str, str] | None = None
 
     @field_validator("path")
     @classmethod
@@ -201,9 +204,25 @@ class CastLocalPush(BaseModel):
         return value
 
 
+class CastUrlPush(BaseModel):
+    url: str = Field(min_length=1, max_length=8192)
+    filename: str = Field(default="", max_length=255)
+    device: dict[str, str] | None = None
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        value = str(value or "").strip()
+        parsed = urlparse(value)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("待投屏地址必须是有效的 HTTP(S) 地址")
+        return value
+
+
 class CastControl(BaseModel):
     action: str = Field(pattern="^(play|pause|seek)$")
     seconds: int = Field(default=0, ge=-86400, le=86400)
+    device: dict[str, str] | None = None
 
 class HealthResponse(BaseModel):
     status: str = "ok"
@@ -216,6 +235,10 @@ class PlaybackSeekRequest(BaseModel):
 
 class TorrentFileSelection(BaseModel):
     indexes: list[int] = Field(min_length=1, max_length=10000)
+
+
+class TorrentPathImport(BaseModel):
+    path: str = Field(min_length=1, max_length=32767)
 
 
 class UrlRecognitionRequest(BaseModel):

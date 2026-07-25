@@ -103,6 +103,11 @@ export async function startTauriDesktopSession(): Promise<() => void> {
         for (const command of commands) {
           if (command.kind === 'activate') await showMain()
           else if (command.kind === 'handoff') await openHandoff(String(command.handoff_id || ''))
+          else if (command.kind === 'media_push') {
+            await showMain()
+            const item = await localRequest(`/browser/media-push/${encodeURIComponent(String(command.handoff_id || ''))}`)
+            window.dispatchEvent(new CustomEvent('hls-browser-media-push', { detail: item }))
+          }
           else if (command.kind === 'shutdown') {
             stopped = true
             await process.exit(0)

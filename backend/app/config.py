@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     http_chunk_size_mb: int = 8
     download_speed_limit_kib: int = 0
     bt_upload_limit_kib: int = 1024
-    bt_max_connections: int = 80
+    bt_max_connections: int = 200
     bt_enable_dht: bool = True
     browser_takeover_enabled: bool = True
     browser_takeover_min_mb: int = 0

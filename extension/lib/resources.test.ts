@@ -176,7 +176,7 @@ describe('resource rules', () => {
     const bumper = resource({ id: 'bumper', kind: 'hls', url: 'https://cdn.test/bumper.m3u8', duration: 15, bandwidth: 6_000_000, seenAt: now + 1 })
     const stale = resource({ id: 'stale', kind: 'hls', url: 'https://cdn.test/stale.m3u8', size: 2_000_000_000, seenAt: now - 60_000 })
 
-    expect(visiblePlaybackResources([direct, main, bumper, stale], null).map(item => item.id)).toEqual(['bumper', 'main', 'stale', 'direct'])
+    expect(visiblePlaybackResources([direct, main, bumper, stale], null)).toEqual([])
     expect(visiblePlaybackResources([direct, main, bumper, stale], { sourceUrls: [direct.url], startedAt: now }).map(item => item.id)).toEqual(['direct', 'main', 'bumper'])
   })
   it('keeps images and ambiguous dynamic documents in the browser', () => {

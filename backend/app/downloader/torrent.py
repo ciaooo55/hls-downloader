@@ -30,10 +30,13 @@ def _torrent_session(lt):
         if _SHARED_SESSION is None:
             _SHARED_SESSION = lt.session()
         session = _SHARED_SESSION
-        per_torrent = max(50, int(settings.bt_max_connections))
+        per_torrent = max(100, int(settings.bt_max_connections))
         session_settings = {
             "connections_limit": per_torrent * max(1, int(settings.max_concurrent_tasks)),
-            "connection_speed": 50,
+            # 50 connection attempts/s leaves sparse public swarms idle for a
+            # long time. Keep this bounded but allow a fresh torrent to find
+            # peers quickly, especially after resume.
+            "connection_speed": 200,
             "upload_rate_limit": int(settings.bt_upload_limit_kib) * 1024,
             "download_rate_limit": 0,
             "active_downloads": max(1, int(settings.max_concurrent_tasks)),

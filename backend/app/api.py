@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 import threading
+import uuid
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Header, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse, Response
@@ -14,8 +15,10 @@ from .schemas import (
     UrlRecognitionRequest,
     PlaybackSeekRequest,
     TorrentFileSelection,
+    TorrentPathImport,
     BrowserHandoffAccept,
     CastLocalPush,
+    CastUrlPush,
     CastControl,
     TvboxLocalPush,
     TvboxPush,
@@ -44,9 +47,11 @@ from .models import TaskStatus, TaskType
 from .browser_handoff import browser_handoffs
 from .downloader.throttle import download_throttle
 from .tvbox import local_media_server, push_tvbox, scan_tvboxes
-from .dlna import cast_control, cast_media, scan_cast_devices
+from .dlna import cast_control, cast_media, normalize_cast_device, scan_cast_devices
 
 router = APIRouter(prefix="/api")
+_browser_media_pushes: dict[str, dict] = {}
+_browser_media_push_lock = threading.Lock()
 
 def _check_token(x_token: str = Header(default="")):
     if x_token != settings.token:
@@ -471,10 +476,11 @@ async def scan_cast_devices_endpoint(x_token: str = Header(default="")):
 @router.post("/tvbox/push")
 async def push_tvbox_url(body: TvboxPush, x_token: str = Header(default="")):
     _check_token(x_token)
-    if not settings.tvbox_endpoint:
+    endpoint = body.endpoint or settings.tvbox_endpoint
+    if not endpoint:
         raise HTTPException(status_code=409, detail="请先在设置中选择电视推送设备")
     try:
-        return await push_tvbox(settings.tvbox_endpoint, body.url)
+        return await push_tvbox(endpoint, body.url)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"电视推送失败：{exc}") from exc
 
@@ -482,12 +488,13 @@ async def push_tvbox_url(body: TvboxPush, x_token: str = Header(default="")):
 @router.post("/tvbox/push-local")
 async def push_local_tvbox_file(body: TvboxLocalPush, x_token: str = Header(default="")):
     _check_token(x_token)
-    if not settings.tvbox_endpoint:
+    endpoint = body.endpoint or settings.tvbox_endpoint
+    if not endpoint:
         raise HTTPException(status_code=409, detail="请先在设置中选择电视推送设备")
     share: dict | None = None
     try:
-        share = local_media_server.share(body.path, settings.tvbox_endpoint)
-        result = await push_tvbox(settings.tvbox_endpoint, share["url"])
+        share = local_media_server.share(body.path, endpoint)
+        result = await push_tvbox(endpoint, share["url"])
         return {**result, "share": share}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -500,12 +507,14 @@ async def push_local_tvbox_file(body: TvboxLocalPush, x_token: str = Header(defa
 @router.post("/cast/push-local")
 async def cast_local_file(body: CastLocalPush, x_token: str = Header(default="")):
     _check_token(x_token)
-    if not settings.cast_device:
+    device = body.device or settings.cast_device
+    if not device:
         raise HTTPException(status_code=409, detail="请先在设置中扫描并选择投屏设备")
     share: dict | None = None
     try:
-        share = local_media_server.share(body.path, settings.cast_device["location"])
-        result = await cast_media(settings.cast_device, share["url"], share["filename"])
+        selected = normalize_cast_device(device)
+        share = local_media_server.share(body.path, selected["location"])
+        result = await cast_media(selected, share["url"], share["filename"])
         return {**result, "share": share}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -515,13 +524,58 @@ async def cast_local_file(body: CastLocalPush, x_token: str = Header(default="")
         raise HTTPException(status_code=502, detail=f"投屏失败：{exc}") from exc
 
 
+@router.post("/cast/push")
+async def cast_url(body: CastUrlPush, x_token: str = Header(default="")):
+    _check_token(x_token)
+    device = body.device or settings.cast_device
+    if not device:
+        raise HTTPException(status_code=409, detail="请选择投屏设备")
+    try:
+        return await cast_media(normalize_cast_device(device), body.url, body.filename or "video")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"投屏失败：{exc}") from exc
+
+
+@router.post("/browser/media-push")
+async def create_browser_media_push(request: Request, x_token: str = Header(default="")):
+    _check_token(x_token)
+    payload = await request.json()
+    kind = str(payload.get("kind", ""))
+    resource = payload.get("resource") if isinstance(payload.get("resource"), dict) else {}
+    url = str(resource.get("url", ""))
+    if kind not in {"cast", "tvbox"} or not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=422, detail="浏览器投送请求无效")
+    request_id = uuid.uuid4().hex
+    with _browser_media_push_lock:
+        _browser_media_pushes[request_id] = {"id": request_id, "kind": kind, "resource": resource}
+    if not native_desktop_session.push("media_push", request_id):
+        with _browser_media_push_lock:
+            _browser_media_pushes.pop(request_id, None)
+        raise HTTPException(status_code=409, detail="桌面界面尚未就绪")
+    activate_window()
+    return {"ok": True, "id": request_id}
+
+
+@router.get("/browser/media-push/{request_id}")
+async def get_browser_media_push(request_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    with _browser_media_push_lock:
+        item = _browser_media_pushes.pop(request_id, None)
+    if not item:
+        raise HTTPException(status_code=404, detail="投送请求不存在或已过期")
+    return item
+
+
 @router.post("/cast/control")
 async def control_cast(body: CastControl, x_token: str = Header(default="")):
     _check_token(x_token)
-    if not settings.cast_device:
+    device = body.device or settings.cast_device
+    if not device:
         raise HTTPException(status_code=409, detail="请先在设置中扫描并选择投屏设备")
     try:
-        return await cast_control(settings.cast_device, body.action, body.seconds)
+        return await cast_control(device, body.action, body.seconds)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
@@ -617,6 +671,26 @@ async def create_torrent_file_task(
     task.engine_state["torrent_path"] = str(source)
     await manager._save_db(task)
     await manager.start_task(task.id)
+    return _to_resp(task)
+
+
+@router.post("/tasks/torrent-path", response_model=TaskResponse)
+async def create_torrent_path_task(body: TorrentPathImport, x_token: str = Header(default="")):
+    _check_token(x_token)
+    source = Path(body.path).expanduser()
+    if source.suffix.lower() != ".torrent" or not source.is_file():
+        raise HTTPException(status_code=400, detail="请选择有效的 .torrent 文件")
+    try:
+        content = source.read_bytes()
+        from .downloader.torrent import TorrentDownloader
+        TorrentDownloader.validate_torrent_bytes(content)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="种子文件无法读取或已损坏") from exc
+    task = await manager.create_task(url=f"torrent-file:{source.name}", task_type=TaskType.TORRENT, title=source.stem, filename=source.stem, auto_start=False)
+    task_dir = task_work_dir(task); task_dir.mkdir(parents=True, exist_ok=True)
+    saved = task_dir / "uploaded.torrent"; saved.write_bytes(content)
+    task.engine_state["torrent_path"] = str(saved)
+    await manager._save_db(task); await manager.start_task(task.id)
     return _to_resp(task)
 
 

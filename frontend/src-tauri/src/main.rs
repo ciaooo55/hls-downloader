@@ -140,6 +140,18 @@ fn request_core_shutdown(config: &LocalConfig) {
     }
 }
 
+fn import_torrent_path(config: &LocalConfig, path: &str) {
+    if !path.to_ascii_lowercase().ends_with(".torrent") { return; }
+    let body = serde_json::json!({ "path": path }).to_string();
+    if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", config.port)) {
+        let request = format!(
+            "POST /api/tasks/torrent-path HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Token: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            config.port, config.token, body.as_bytes().len(), body
+        );
+        let _ = stream.write_all(request.as_bytes());
+    }
+}
+
 fn show_main(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -160,7 +172,11 @@ fn main() {
     let background = std::env::args().any(|arg| arg == "--background" || arg == "--native-host");
 
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            show_main(app);
+            let runtime = app.state::<Arc<CoreRuntime>>();
+            for arg in args.iter().skip(1) { import_torrent_path(&runtime.config, arg); }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
@@ -169,6 +185,8 @@ fn main() {
         .manage(DesktopPaths { root: root.clone() })
         .invoke_handler(tauri::generate_handler![get_app_root, get_desktop_info, get_core_config, begin_uninstall])
         .setup(move |app| {
+            let startup_runtime = app.state::<Arc<CoreRuntime>>();
+            for arg in std::env::args().skip(1) { import_torrent_path(&startup_runtime.config, &arg); }
             let open = MenuItem::with_id(app, "open", "打开下载器", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;

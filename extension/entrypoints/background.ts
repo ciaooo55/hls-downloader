@@ -198,8 +198,14 @@ async function downloadNow(resource: MediaResource) {
 }
 
 async function pushToTv(resource: MediaResource): Promise<{ ok: true }> {
-  const response = await native({ op: 'push_to_tv', resource })
+  const response = await native({ op: 'media_push', kind: 'tvbox', resource: await resourcePayload(resource) })
   if (!response?.ok) throw new Error(response?.error || '电视推送失败')
+  return { ok: true }
+}
+
+async function castToDevice(resource: MediaResource): Promise<{ ok: true }> {
+  const response = await native({ op: 'media_push', kind: 'cast', resource: await resourcePayload(resource) })
+  if (!response?.ok) throw new Error(response?.error || '投屏请求失败')
   return { ok: true }
 }
 
@@ -716,6 +722,13 @@ export default defineBackground(() => {
     if (message?.type === 'push-to-tv') {
       const resource = { ...message.resource }
       void pushToTv(resource)
+        .then(response => sendResponse(response))
+        .catch(error => sendResponse({ ok: false, error: String(error) }))
+      return true
+    }
+    if (message?.type === 'cast-to-device') {
+      const resource = { ...message.resource }
+      void castToDevice(resource)
         .then(response => sendResponse(response))
         .catch(error => sendResponse({ ok: false, error: String(error) }))
       return true

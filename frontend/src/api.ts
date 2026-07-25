@@ -64,6 +64,7 @@ export const uploadTorrent = (file: File, title = '') => {
   body.append('title', title)
   return request<any>('/tasks/torrent-file', { method: 'POST', body, headers: {} })
 }
+export const importTorrentPath = (path: string) => request<any>('/tasks/torrent-path', { method: 'POST', body: JSON.stringify({ path }) })
 export const fetchTorrentFiles = (id: string) =>
   request<{ files: any[]; selected: number[] }>(`/tasks/${id}/files`)
 export const selectTorrentFiles = (id: string, indexes: number[]) =>
@@ -95,9 +96,11 @@ export const browseDir = (path: string = '') =>
 export const testConnection = () => request<any>('/test')
 export const scanTvboxDevices = () => request<{ devices: Array<{ endpoint: string; host: string; port: number; label: string; matched: boolean }> }>('/tvbox/scan')
 export const scanCastDevices = () => request<{ devices: Array<{ id: string; protocol: 'dlna' | 'chromecast'; location: string; control_url: string; service_type: string; label: string; host: string }> }>('/cast/scan')
-export const pushLocalTvboxFile = (path: string) => request<{ ok: boolean; endpoint: string; share: { id: string; url: string; filename: string; size: number; expires_in_seconds: number; idle_cleanup_seconds: number } }>('/tvbox/push-local', { method: 'POST', body: JSON.stringify({ path }) })
-export const castLocalFile = (path: string) => request<{ ok: boolean; label: string; share: { id: string; url: string; filename: string; size: number; expires_in_seconds: number; idle_cleanup_seconds: number } }>('/cast/push-local', { method: 'POST', body: JSON.stringify({ path }) })
-export const controlCast = (action: 'play' | 'pause' | 'seek', seconds = 0) => request<{ ok: boolean; label: string }>('/cast/control', { method: 'POST', body: JSON.stringify({ action, seconds }) })
+export const pushLocalTvboxFile = (path: string, endpoint = '') => request<{ ok: boolean; endpoint: string; share: { id: string; url: string; filename: string; size: number; expires_in_seconds: number; idle_cleanup_seconds: number } }>('/tvbox/push-local', { method: 'POST', body: JSON.stringify({ path, endpoint }) })
+export const castLocalFile = (path: string, device?: object) => request<{ ok: boolean; label: string; share: { id: string; url: string; filename: string; size: number; expires_in_seconds: number; idle_cleanup_seconds: number } }>('/cast/push-local', { method: 'POST', body: JSON.stringify({ path, device }) })
+export const pushTvboxUrl = (url: string, endpoint: string) => request<{ ok: boolean; endpoint: string }>('/tvbox/push', { method: 'POST', body: JSON.stringify({ url, endpoint }) })
+export const castMediaUrl = (url: string, filename: string, device: object) => request<{ ok: boolean; label: string }>('/cast/push', { method: 'POST', body: JSON.stringify({ url, filename, device }) })
+export const controlCast = (action: 'play' | 'pause' | 'seek', seconds = 0, device?: object) => request<{ ok: boolean; label: string }>('/cast/control', { method: 'POST', body: JSON.stringify({ action, seconds, device }) })
 export const stopLocalTvboxShare = (shareId: string) => request<{ ok: boolean }>(`/tvbox/shares/${encodeURIComponent(shareId)}/stop`, { method: 'POST' })
 export const fetchLocalTvboxShare = (shareId: string) => request<{ active: boolean; filename?: string; active_streams?: number; expires_in_seconds?: number }>(`/tvbox/shares/${encodeURIComponent(shareId)}`)
 export const recognizeUrl = (data: any) => request<any>('/recognize', { method: 'POST', body: JSON.stringify(data) })

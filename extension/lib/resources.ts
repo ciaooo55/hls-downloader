@@ -191,9 +191,13 @@ export function likelyResourceBytes(resource: Pick<MediaResource, 'size' | 'esti
 export function visiblePlaybackResources(resources: MediaResource[], playback: PlaybackContext | null, limit = 8): MediaResource[] {
   const fallback = compactResources(resources, 40)
     .filter(item => ['hls', 'dash', 'media'].includes(item.kind))
-    .sort((left, right) => right.seenAt - left.seenAt || resourceRank(right) - resourceRank(left))
+    .sort((left, right) => resourceRank(right) - resourceRank(left)
+      || (right.height || 0) - (left.height || 0)
+      || (right.bandwidth || 0) - (left.bandwidth || 0)
+      || likelyResourceBytes(right) - likelyResourceBytes(left)
+      || right.seenAt - left.seenAt)
     .slice(0, limit)
-  if (!playback) return fallback
+  if (!playback) return []
   const sources = new Set(playback.sourceUrls.filter(Boolean))
   const recentFloor = playback.startedAt - 12_000
   const recentCeiling = playback.startedAt + 90_000
@@ -205,7 +209,12 @@ export function visiblePlaybackResources(resources: MediaResource[], playback: P
       bytes: likelyResourceBytes(item),
     }))
     .filter(entry => entry.evidence > 0)
-  candidates.sort((left, right) => right.evidence - left.evidence || right.bytes - left.bytes || resourceRank(right.item) - resourceRank(left.item) || right.item.seenAt - left.item.seenAt)
+  candidates.sort((left, right) => right.evidence - left.evidence
+    || resourceRank(right.item) - resourceRank(left.item)
+    || (right.item.height || 0) - (left.item.height || 0)
+    || (right.item.bandwidth || 0) - (left.item.bandwidth || 0)
+    || right.bytes - left.bytes
+    || right.item.seenAt - left.item.seenAt)
   return candidates.length ? candidates.slice(0, limit).map(entry => entry.item) : fallback
 }
 

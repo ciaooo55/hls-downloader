@@ -7,10 +7,10 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-!define APP_VERSION "1.6.6"
+!define APP_VERSION "1.6.7"
 !endif
 !ifndef APP_FILE_VERSION
-!define APP_FILE_VERSION "1.6.6.0"
+!define APP_FILE_VERSION "1.6.7.0"
 !endif
 
 !ifndef STAGE_DIR
@@ -151,6 +151,11 @@ Section "Install" SecInstall
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "NoRepair" 1
 
+  WriteRegStr HKCU "Software\Classes\.torrent" "" "HLSDownloader.Torrent"
+  WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent" "" "BT 种子文件"
+  WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent\DefaultIcon" "" "$INSTDIR\HLSDownloader.exe,0"
+  WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent\shell\open\command" "" '$"$INSTDIR\HLSDownloader.exe$" $"%1$"'
+
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\HLSDownloader.exe" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\卸载 ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
@@ -204,6 +209,8 @@ RemoveApplicationData:
 
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
   DeleteRegKey HKCU "Software\${APP_NAME}"
+  DeleteRegKey HKCU "Software\Classes\HLSDownloader.Torrent"
+  DeleteRegKey HKCU "Software\Classes\.torrent"
   DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader"
   DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.ciaooo55.hls_downloader"
   DeleteRegKey HKCU "Software\Mozilla\NativeMessagingHosts\com.ciaooo55.hls_downloader"

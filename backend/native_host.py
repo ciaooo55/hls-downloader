@@ -106,7 +106,7 @@ def dispatch(message: dict) -> dict:
     operation = message.get("op")
     if operation not in {
         "ping", "activate", "offer", "download", "handoff_status", "wait_handoff",
-        "set_takeover_settings", "push_to_tv",
+        "set_takeover_settings", "push_to_tv", "media_push",
     }:
         raise ValueError("不支持的 Native Messaging 操作")
     _ensure_app()
@@ -142,6 +142,11 @@ def dispatch(message: dict) -> dict:
         return {"ok": True, "task": task, "activated": bool(activated.get("ok"))}
     if operation == "push_to_tv":
         return _request("POST", "/tvbox/push", {"url": str(message.get("resource", {}).get("url", ""))})
+    if operation == "media_push":
+        return _request("POST", "/browser/media-push", {
+            "kind": str(message.get("kind", "")),
+            "resource": message.get("resource", {}),
+        })
     handoff_id = str(message.get("handoff_id", ""))
     if operation == "wait_handoff":
         return {"ok": True, "handoff": _request("GET", f"/browser/handoffs/{handoff_id}/wait", timeout=125)}

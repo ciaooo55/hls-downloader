@@ -288,7 +288,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
           <h3 className="settings-group-label settings-group-label-first">BT 下载</h3>
           <section className="settings-group settings-grid-group">
             <div className="settings-field"><label htmlFor="setting-bt-upload">上传上限（KiB/s）</label><input id="setting-bt-upload" type="number" min={0} max={1048576} value={settings.bt_upload_limit_kib ?? 1024} onChange={event => update('bt_upload_limit_kib', Number(event.target.value))} /><p>0 表示不限速；完成后会立即停止做种。</p></div>
-            <div className="settings-field"><label htmlFor="setting-bt-peers">最大 Peer 连接</label><input id="setting-bt-peers" type="number" min={10} max={1000} value={settings.bt_max_connections ?? 80} onChange={event => update('bt_max_connections', Number(event.target.value))} /><p>限制 BT 网络连接和内存占用。</p></div>
+            <div className="settings-field"><label htmlFor="setting-bt-peers">最大 Peer 连接</label><input id="setting-bt-peers" type="number" min={10} max={1000} value={settings.bt_max_connections ?? 200} onChange={event => update('bt_max_connections', Number(event.target.value))} /><p>默认 200；种子稀少时可提高连接发现速度，网络受限时再降低。</p></div>
             <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={settings.bt_enable_dht ?? true} onChange={event => update('bt_enable_dht', event.target.checked)} />启用 DHT 节点发现</label>
           </section>
 

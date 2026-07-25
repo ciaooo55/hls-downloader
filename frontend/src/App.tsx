@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FastForward, LoaderCircle, Pause, Play, Trash2, X } from 'lucide-react'
-import { castLocalFile, clearCompletedTasks, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLocalTvboxShare, fetchSettings, fetchTasks, launchFile, openExplorer, pushLocalTvboxFile, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
+import { castLocalFile, castMediaUrl, clearCompletedTasks, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLocalTvboxShare, fetchSettings, fetchTasks, importTorrentPath, launchFile, openExplorer, pushLocalTvboxFile, pushTvboxUrl, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
 import { fmtBytes, fmtSpeed } from './format'
 import { isRunningStatus, mergeTaskEvent } from './taskState'
 import { commandState } from './taskCommands'
@@ -21,6 +21,7 @@ import UpdateNotice from './components/UpdateNotice'
 import UpdateDialog from './components/UpdateDialog'
 import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
 import ConfirmDialog from './components/ConfirmDialog'
+import DevicePickerDialog from './components/DevicePickerDialog'
 import { Button, Dialog, DialogFooter, DialogHeader, DialogOverlay } from './components/ui'
 import { isTauriDesktop, startTauriDesktopSession } from './tauri'
 import { selectTheme, useUiStore } from './store/uiStore'
@@ -62,12 +63,13 @@ export default function App() {
   const [localPushBusy, setLocalPushBusy] = useState(false)
   const [castBusy, setCastBusy] = useState(false)
   const [castControlBusy, setCastControlBusy] = useState(false)
-  const [localShare, setLocalShare] = useState<{ id: string; filename: string; idleCleanupSeconds: number; kind: 'cast' | 'tvbox' } | null>(null)
+  const [localShare, setLocalShare] = useState<{ id: string; filename: string; idleCleanupSeconds: number; kind: 'cast' | 'tvbox'; device?: object } | null>(null)
   const [handoffs, setHandoffs] = useState<BrowserHandoff[]>([])
   const [handoffBusy, setHandoffBusy] = useState(false)
   const [error, setError] = useState('')
   const [confirmation, setConfirmation] = useState<{ title: string; message: string; confirmLabel: string; danger: boolean; run: () => void } | null>(null)
-    const lastStatuses = useRef<Record<string, string>>({})
+  const [devicePick, setDevicePick] = useState<{ kind: 'cast' | 'tvbox'; path?: string; url?: string; filename: string } | null>(null)
+  const lastStatuses = useRef<Record<string, string>>({})
   const feedbackTimer = useRef<number | null>(null)
   const loadInFlight = useRef<Promise<void> | null>(null)
   const handoffRefreshInFlight = useRef(false)
@@ -79,6 +81,18 @@ export default function App() {
       .then(cleanup => { stop = cleanup })
       .catch(reason => setError(reason?.message || '无法启动桌面会话'))
     return () => stop?.()
+  }, [])
+
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const item = (event as CustomEvent).detail
+      const resource = item?.resource || {}
+      if ((item?.kind === 'cast' || item?.kind === 'tvbox') && resource.url) {
+        setDevicePick({ kind: item.kind, url: String(resource.url), filename: String(resource.filename || resource.title || '网页视频') })
+      }
+    }
+    window.addEventListener('hls-browser-media-push', receive)
+    return () => window.removeEventListener('hls-browser-media-push', receive)
   }, [])
 
   const load = useCallback(async () => {
@@ -279,7 +293,10 @@ export default function App() {
   }
   const launchOutput = async (task: Task) => {
     if (!task.output_path) return
-    try { await launchFile(task.output_path) } catch (reason: any) { setError(reason.message || '无法打开文件') }
+    try {
+      if (/\.torrent$/i.test(task.output_path)) { await importTorrentPath(task.output_path); showFeedback('已解析种子并创建 BT 下载任务'); await load(); return }
+      await launchFile(task.output_path)
+    } catch (reason: any) { setError(reason.message || '无法打开文件') }
   }
   const resolveHandoff = async (action: 'accept' | 'cancel', decision?: BrowserHandoffDecision) => {
     const item = handoffs[0]
@@ -352,62 +369,18 @@ export default function App() {
   const confirmLocalMediaPush = async (path?: string) => {
     const selected = await chooseLocalMedia(path)
     if (!selected) return
-    const { selectedPath, filename } = { selectedPath: selected.path, filename: selected.filename }
-    setConfirmation({
-      title: 'TVBox 推送本机文件？',
-      message: `将临时通过局域网共享“${filename}”给已选择的电视设备。电视会按自身支持的格式播放；播放停止后约 2 分钟会自动撤销共享，最长保留 2 小时。`,
-      confirmLabel: '确认 TVBox 推送',
-      danger: false,
-      run: () => {
-        setConfirmation(null)
-        void (async () => {
-          setLocalPushBusy(true)
-          setError('')
-          try {
-            const result = await pushLocalTvboxFile(selectedPath)
-            setLocalShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'tvbox' })
-            showFeedback(`已 TVBox 推送：${result.share.filename}`)
-          } catch (reason: any) {
-            setError(reason.message || '本机文件推送失败')
-          } finally {
-            setLocalPushBusy(false)
-          }
-        })()
-      },
-    })
+    setDevicePick({ kind: 'tvbox', path: selected.path, filename: selected.filename })
   }
   const confirmLocalCast = async (path?: string) => {
     const selected = await chooseLocalMedia(path)
     if (!selected) return
-    const { selectedPath, filename } = { selectedPath: selected.path, filename: selected.filename }
-    setConfirmation({
-      title: '投屏本机文件？',
-      message: `将把“${filename}”投放到默认 DLNA 设备。文件会通过临时局域网链接播放；电视停止访问后约 2 分钟自动撤销共享，最长保留 2 小时。`,
-      confirmLabel: '确认投屏',
-      danger: false,
-      run: () => {
-        setConfirmation(null)
-        void (async () => {
-          setCastBusy(true)
-          setError('')
-          try {
-            const result = await castLocalFile(selectedPath)
-            setLocalShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'cast' })
-            showFeedback(`已投屏到 ${result.label}：${result.share.filename}`)
-          } catch (reason: any) {
-            setError(reason.message || '投屏失败')
-          } finally {
-            setCastBusy(false)
-          }
-        })()
-      },
-    })
+    setDevicePick({ kind: 'cast', path: selected.path, filename: selected.filename })
   }
   const stopLocalShare = async () => {
     if (!localShare || localPushBusy || castBusy || castControlBusy) return
     setLocalPushBusy(true)
     try {
-      await stopLocalTvboxShare(localShare.id)
+      if (localShare.id) await stopLocalTvboxShare(localShare.id)
       setLocalShare(null)
       showFeedback('已停止本机文件共享')
     } catch (reason: any) {
@@ -421,13 +394,44 @@ export default function App() {
     setCastControlBusy(true)
     setError('')
     try {
-      const result = await controlCast(action, action === 'seek' ? 10 : 0)
+      const result = await controlCast(action, action === 'seek' ? 10 : 0, localShare.device)
       showFeedback(action === 'pause' ? `已暂停 ${result.label}` : action === 'play' ? `已继续播放 ${result.label}` : `已快进 10 秒：${result.label}`)
     } catch (reason: any) {
       setError(reason.message || '投屏控制失败')
     } finally {
       setCastControlBusy(false)
     }
+  }
+
+  const completeDevicePick = (device: any) => {
+    if (!devicePick) return
+    const pick = devicePick
+    setDevicePick(null)
+    void (async () => {
+      const setBusy = pick.kind === 'cast' ? setCastBusy : setLocalPushBusy
+      setBusy(true); setError('')
+      try {
+        if (pick.kind === 'cast') {
+          if (pick.url) {
+            const result = await castMediaUrl(pick.url, pick.filename, device)
+            setLocalShare({ id: '', filename: pick.filename, idleCleanupSeconds: 0, kind: 'cast', device })
+            showFeedback(`已投屏到 ${result.label}：${pick.filename}`)
+          } else if (pick.path) {
+            const result = await castLocalFile(pick.path, device)
+            setLocalShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'cast', device })
+            showFeedback(`已投屏到 ${result.label}：${pick.filename}`)
+          }
+        } else if (pick.url) {
+          await pushTvboxUrl(pick.url, device.endpoint)
+          showFeedback(`已 TVBox 推送：${pick.filename}`)
+        } else if (pick.path) {
+          const result = await pushLocalTvboxFile(pick.path, device.endpoint)
+          setLocalShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'tvbox' })
+          showFeedback(`已 TVBox 推送：${pick.filename}`)
+        }
+      } catch (reason: any) { setError(reason.message || '发送失败') }
+      finally { setBusy(false) }
+    })()
   }
 
   const desktopShell = isTauriDesktop()
@@ -491,5 +495,6 @@ export default function App() {
     {feedback && <div className="toast" role="status">{feedback}</div>}
     {handoffs[0] && <BrowserHandoffDialog key={handoffs[0].id} item={handoffs[0]} busy={handoffBusy} settings={settings} onResolve={resolveHandoff} queueRemaining={Math.max(0, handoffs.length - 1)} />}
     {confirmation && <ConfirmDialog title={confirmation.title} message={confirmation.message} confirmLabel={confirmation.confirmLabel} danger={confirmation.danger} onCancel={() => setConfirmation(null)} onConfirm={confirmation.run} />}
+    {devicePick && <DevicePickerDialog mode={devicePick.kind} onClose={() => setDevicePick(null)} onChoose={completeDevicePick} />}
   </div>
 }

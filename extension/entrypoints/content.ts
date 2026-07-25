@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { classifyResource, isGenericMediaName, mergeResources, resourceFingerprint, resourceId, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
+import { classifyResource, isGenericMediaName, mergeResources, resourceFingerprint, resourceId, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { resourceQuality } from '../lib/hlsManifest'
 
 async function runtimeMessage(message: Record<string, unknown>, retries = 1): Promise<any> {
@@ -26,6 +26,7 @@ export default defineContentScript({
     document.documentElement.setAttribute('data-hls-downloader-extension', '1')
     const resources = new Map<string, MediaResource>()
     let activePlayback: PlaybackContext | null = null
+    let activeVideo: HTMLVideoElement | null = null
     const replaceResources = (values: MediaResource[]) => {
       resources.clear()
       for (const value of values) resources.set(resourceFingerprint(value), value)
@@ -57,8 +58,8 @@ export default defineContentScript({
         const style = element('style')
         style.textContent = `
           :host{all:initial}*{box-sizing:border-box}button{font:13px system-ui,sans-serif;letter-spacing:0}
-          .wrap{position:fixed;right:14px;top:35%;z-index:2147483647;color:#102a3a;filter:drop-shadow(0 5px 8px #07598529)}
-          .toggle{display:grid;place-items:center;width:34px;height:34px;padding:2px;border:1.5px solid #38bdf8;border-radius:9px;background:#f0fbff;cursor:pointer}.toggle img{width:24px;height:24px;border-radius:5px}
+          .wrap{display:none;position:fixed;right:14px;top:35%;z-index:2147483647;color:#102a3a;filter:drop-shadow(0 5px 8px #07598529)}.wrap.open{display:block}
+          .toggle{display:none}
           .panel{display:none;width:min(420px,calc(100vw - 20px));max-height:70vh;background:#fff;border:1px solid #bae6fd;border-radius:9px;overflow:hidden}.open .panel{display:block}.open .toggle{display:none}
           header{display:flex;align-items:center;justify-content:space-between;padding:8px 9px 8px 10px;border-bottom:1px solid #dff5ff;background:#f0fbff;font:600 13px system-ui}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:5px}
           .pin,.close{height:30px;border:0;border-radius:5px;background:#e0f2fe;color:#075985;cursor:pointer}.pin{padding:0 9px;font:12px system-ui}.pin.active{background:#d1fae5;color:#047857}.close{display:grid;place-items:center;width:30px;font:700 20px/1 system-ui}.list{overflow:auto;max-height:58vh}.empty{padding:20px;color:#526b79;font:13px system-ui}
@@ -235,14 +236,31 @@ export default defineContentScript({
       })
     }
 
+    const castResource = (resource: MediaResource, button: HTMLButtonElement) => {
+      const result = ui.shadow.querySelector<HTMLElement>('.result')
+      button.setAttribute('disabled', ''); button.textContent = '等待选择'
+      void runtimeMessage({ type: 'cast-to-device', resource }).then(response => {
+        if (!response?.ok) throw new Error(response?.error || '投屏请求失败')
+        button.textContent = '已发送'
+        if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = '请在桌面下载器选择投屏设备' }
+      }).catch(reason => {
+        button.removeAttribute('disabled'); button.textContent = '投屏'
+        if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '投屏请求失败' }
+      })
+    }
+
     const updateVideoButtons = () => {
       const layer = ui.shadow.querySelector<HTMLElement>('.video-buttons')
       const toggle = ui.shadow.querySelector<HTMLButtonElement>('.toggle')
       if (!layer) return
       layer.replaceChildren()
+      if (!activePlayback || !activeVideo) {
+        if (toggle) toggle.hidden = true
+        return
+      }
       const entries = visiblePlaybackResources([...resources.values()], activePlayback, 8)
       let visible = 0
-      const videos = [...document.querySelectorAll<HTMLVideoElement>('video')]
+      const videos = (activeVideo && document.contains(activeVideo) ? [activeVideo] : [...document.querySelectorAll<HTMLVideoElement>('video')])
         .map(video => ({ video, rect: video.getBoundingClientRect() }))
         .filter(({ rect }) => rect.width >= 180 && rect.height >= 100 && rect.bottom >= 0 && rect.top <= innerHeight && rect.right >= 0 && rect.left <= innerWidth)
         .sort((left, right) => right.rect.width * right.rect.height - left.rect.width * left.rect.height)
@@ -252,7 +270,8 @@ export default defineContentScript({
         const sourceUrls = [video.currentSrc, video.src, ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')].map(source => source.src)].filter(Boolean)
         const exact = entries.filter(item => sourceUrls.includes(item.url))
         const hasExactPlayerMatch = exact.length > 0
-        const choices = hasExactPlayerMatch ? exact : entries
+        const choices = (hasExactPlayerMatch ? exact : entries)
+          .sort((left, right) => resourceRank(right) - resourceRank(left) || (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0) || (right.size || right.estimatedSize || 0) - (left.size || left.estimatedSize || 0))
         if (!choices.length) return
         visible += 1
         const button = document.createElement('button')
@@ -275,7 +294,7 @@ export default defineContentScript({
         })
         layer.append(button)
       })
-      if (toggle) toggle.hidden = visible > 0
+      if (toggle) toggle.hidden = true
     }
 
     const render = () => {
@@ -330,7 +349,10 @@ export default defineContentScript({
         const pushButton = document.createElement('button'); pushButton.className = 'download push-tv'; pushButton.textContent = '推电视'
         pushButton.title = '推送到电视播放'
         pushButton.addEventListener('click', () => pushToTv(selected, pushButton))
-        actions.append(button, pushButton)
+        const castButton = document.createElement('button'); castButton.className = 'download push-tv'; castButton.textContent = '投屏'
+        castButton.title = '选择 DLNA 或 Chromecast 设备投屏'
+        castButton.addEventListener('click', () => castResource(selected, castButton))
+        actions.append(button, pushButton, castButton)
         row.append(meta, actions); list.append(row)
       })
       updateVideoButtons()
@@ -349,11 +371,9 @@ export default defineContentScript({
       if (!video) return
       const rect = video.getBoundingClientRect()
       if (rect.width < 180 || rect.height < 100 || rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) return
-      const visibleVideos = [...document.querySelectorAll<HTMLVideoElement>('video')]
-        .map(item => ({ item, rect: item.getBoundingClientRect() }))
-        .filter(item => item.rect.width >= 180 && item.rect.height >= 100 && item.rect.bottom >= 0 && item.rect.top <= innerHeight && item.rect.right >= 0 && item.rect.left <= innerWidth)
-        .sort((left, right) => right.rect.width * right.rect.height - left.rect.width * left.rect.height)
-      if (visibleVideos[0]?.item !== video) return
+      // MSE and nested players can fire on a non-dominant video node. Anchor
+      // to the element that is actually advancing, not the largest rectangle.
+      activeVideo = video
       const sourceUrls = [video.currentSrc, video.src, ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')].map(source => source.src)].filter(Boolean)
       const changedSource = sourceUrls.join('\n') !== (activePlayback?.sourceUrls || []).join('\n')
       if (!activePlayback || changedSource) activePlayback = { sourceUrls, startedAt: Date.now() }
@@ -361,6 +381,7 @@ export default defineContentScript({
     }
     document.addEventListener('play', markPlayback, true)
     document.addEventListener('playing', markPlayback, true)
+    document.addEventListener('timeupdate', markPlayback, true)
 
     const add = (url: string, mimeType = '') => {
       const kind = classifyResource(url, mimeType); if (!kind) return

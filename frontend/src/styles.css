@@ -89,6 +89,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px 
 .torrent-file-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .torrent-file-list b { color: var(--text-muted); font-weight: 500; }
 .torrent-selection-notice { margin: 8px 0 0; color: var(--green); font-size: 11px; line-height: 1.45; }
+.device-picker{width:min(520px,calc(100vw - 40px))}.device-picker-list{display:grid;gap:7px;max-height:min(360px,48vh);overflow:auto;padding:4px 0}.device-picker-list>button{display:grid;grid-template-columns:32px minmax(0,1fr);gap:10px;align-items:center;min-height:58px;padding:9px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);color:var(--text);text-align:left;cursor:pointer}.device-picker-list>button:hover,.device-picker-list>button.selected{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 12%,var(--surface-2))}.device-picker-list>button>span{display:grid;place-items:center;color:var(--primary)}.device-picker-list b,.device-picker-list small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.device-picker-list small{margin-top:3px;color:var(--muted)}.device-picker-message{margin:10px 0;color:var(--amber);font-size:12px;line-height:1.45}.device-picker footer{display:flex;justify-content:space-between;gap:8px;margin-top:16px}
 
 /* Dedicated IDM-style handoff windows use the same UI bundle without the manager shell. */
 html[data-surface="handoff"],
