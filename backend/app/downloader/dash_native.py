@@ -133,7 +133,12 @@ class NativeDashEngine:
             if "<MPD" not in text[:4096]:
                 raise NativeDashUnsupported("清单不是 MPD 格式")
             manifest_url = str(response.url or task.url)
-            parsed = parse_mpd(manifest_url, text)
+            parsed = parse_mpd(
+                manifest_url,
+                text,
+                preferred_video=task.selected_video,
+                preferred_audio=task.selected_audio,
+            )
             tracks = {
                 kind: parsed[kind]
                 for kind in ("video", "audio")

@@ -408,6 +408,8 @@ class TaskManager:
         checksum="",
         auto_start=False,
         inherit_default_headers=True,
+        selected_video="",
+        selected_audio="",
     ) -> Task:
         task_id = str(uuid.uuid4())[:8]
         safe_headers = sanitize_request_headers(request_headers)
@@ -456,6 +458,8 @@ class TaskManager:
             filename=filename,
             expected_checksum=expected_checksum,
             checksum_algorithm=checksum_algorithm,
+            selected_video=str(selected_video or "")[:2048],
+            selected_audio=str(selected_audio or "")[:256],
             concurrency=min(256, max(1, int(concurrency or settings.default_concurrency or 12))),
             status=TaskStatus.QUEUED,
             stage="queued",
@@ -473,8 +477,8 @@ class TaskManager:
         await run_db(
             "INSERT INTO tasks "
             "(id,task_type,source_page_url,mime_type,title,url,referer,origin,user_agent,cookie,request_headers,request_contexts,request_method,request_body,filename,concurrency,"
-            "status,stage,last_log,started_at,finished_at,post_percent,expected_checksum,checksum_algorithm,checksum_actual,checksum_verified,engine_state) "
-            "VALUES (" + ",".join("?" for _ in range(27)) + ")",
+            "status,stage,last_log,started_at,finished_at,post_percent,expected_checksum,checksum_algorithm,checksum_actual,checksum_verified,selected_video,selected_audio,engine_state) "
+            "VALUES (" + ",".join("?" for _ in range(29)) + ")",
             (
                 task.id,
                 task.task_type.value,
@@ -502,6 +506,8 @@ class TaskManager:
                 task.checksum_algorithm,
                 "",
                 None,
+                task.selected_video,
+                task.selected_audio,
                 json.dumps(task.engine_state, ensure_ascii=False),
             ),
         )
@@ -929,6 +935,8 @@ class TaskManager:
                 filename=_row_value(row, "filename", "") or "",
                 concurrency=int(_row_value(row, "concurrency", 0) or 0),
                 speed_limit_kib=int(_row_value(row, "speed_limit_kib", 0) or 0),
+                selected_video=str(_row_value(row, "selected_video", "") or ""),
+                selected_audio=str(_row_value(row, "selected_audio", "") or ""),
                 status=status,
                 progress=progress,
                 stage=stage,

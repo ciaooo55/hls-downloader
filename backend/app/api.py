@@ -7,6 +7,8 @@ import threading
 import time
 import uuid
 from pathlib import Path
+
+import httpx
 from fastapi import APIRouter, HTTPException, Header, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse, Response
 from .schemas import (
@@ -477,6 +479,72 @@ async def recognize_input_url(body: UrlRecognitionRequest, x_token: str = Header
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/manifest/tracks")
+async def manifest_tracks(body: UrlRecognitionRequest, x_token: str = Header(default="")):
+    """List user-selectable renditions of an HLS master or DASH MPD.
+
+    Best-effort: any fetch/parse problem returns empty lists so the client
+    simply falls back to automatic selection.
+    """
+    _check_token(x_token)
+    _check_host(body.url)
+    headers = {"User-Agent": body.user_agent or settings.default_user_agent}
+    if body.referer:
+        headers["Referer"] = body.referer
+    if body.origin:
+        headers["Origin"] = body.origin
+    if body.cookie:
+        headers["Cookie"] = body.cookie
+    empty = {"format": "", "video": [], "audio": []}
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=httpx.Timeout(10)
+        ) as client:
+            response = await client.get(body.url, headers=headers)
+            response.raise_for_status()
+            text = response.text
+            final_url = str(response.url or body.url)
+    except Exception:
+        return empty
+    stripped = text.lstrip("﻿ \t\r\n")
+    try:
+        if stripped.startswith("#EXTM3U"):
+            from .downloader.parser import list_hls_video_tracks
+
+            return {
+                "format": "hls",
+                "video": list_hls_video_tracks(final_url, text),
+                # HLS audio renditions are downloaded automatically by the
+                # compatibility engine; no manual selection is offered yet.
+                "audio": [],
+            }
+        if "<MPD" in text[:4096]:
+            from .downloader.mpd import NativeDashUnsupported, parse_mpd
+
+            try:
+                parsed = parse_mpd(final_url, text)
+            except NativeDashUnsupported:
+                return {"format": "dash", "video": [], "audio": []}
+            audio_by_choice: dict[str, dict] = {}
+            for option in parsed.get("audio_options") or []:
+                choice = option["lang"] or option["id"]
+                current = audio_by_choice.get(choice)
+                if current is None or option["bandwidth"] > current["bandwidth"]:
+                    audio_by_choice[choice] = {**option, "id": choice}
+            return {
+                "format": "dash",
+                "video": sorted(
+                    parsed.get("video_options") or [],
+                    key=lambda item: (item["height"], item["bandwidth"]),
+                    reverse=True,
+                ),
+                "audio": list(audio_by_choice.values()),
+            }
+    except Exception:
+        return empty
+    return empty
+
+
 @router.get("/test")
 async def test_connection(x_token: str = Header(default="")):
     import shutil
@@ -692,6 +760,8 @@ async def create_task(body: TaskCreate, x_token: str = Header(default="")):
         checksum=body.checksum,
         output_dir=body.download_dir,
         auto_start=True,
+        selected_video=body.selected_video,
+        selected_audio=body.selected_audio,
     )
     return _to_resp(task)
 

@@ -27,6 +27,8 @@ class TaskCreate(BaseModel):
     concurrency: int = Field(default=0, ge=0, le=256)
     checksum: str = Field(default="", max_length=80)
     allow_duplicate: bool = False
+    selected_video: str = Field(default="", max_length=2048)
+    selected_audio: str = Field(default="", max_length=256)
 
     @field_validator("url")
     @classmethod

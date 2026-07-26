@@ -263,7 +263,19 @@ def _is_audio(adaptation: ElementTree.Element, representation: ElementTree.Eleme
     return codecs.startswith(("mp4a", "opus", "vorbis", "ac-3", "ec-3", "flac"))
 
 
-def parse_mpd(url: str, content: str) -> dict:
+def parse_mpd(
+    url: str,
+    content: str,
+    preferred_video: str = "",
+    preferred_audio: str = "",
+) -> dict:
+    """Parse a static MPD into downloadable best/selected tracks.
+
+    preferred_video matches a Representation id; preferred_audio matches a
+    Representation id or an AdaptationSet language. Unmatched preferences
+    fall back to the automatic best pick so a stale selection can never
+    break a retry.
+    """
     try:
         root = ElementTree.fromstring(content)
     except ElementTree.ParseError as exc:
@@ -284,6 +296,10 @@ def parse_mpd(url: str, content: str) -> dict:
 
     best_video: dict | None = None
     best_audio: dict | None = None
+    forced_video: dict | None = None
+    forced_audio: dict | None = None
+    video_options: list[dict] = []
+    audio_options: list[dict] = []
     for adaptation in _children(period, "AdaptationSet"):
         for representation in _children(adaptation, "Representation"):
             if _has_content_protection(adaptation, representation):
@@ -345,7 +361,18 @@ def parse_mpd(url: str, content: str) -> dict:
                 "single_file": single_file,
                 "segments": segments,
             }
+            option = {
+                "id": candidate["id"],
+                "height": candidate["height"],
+                "width": candidate["width"],
+                "bandwidth": candidate["bandwidth"],
+                "codecs": candidate["codecs"],
+                "lang": candidate["lang"],
+            }
             if is_video:
+                video_options.append(option)
+                if preferred_video and candidate["id"] == preferred_video:
+                    forced_video = candidate
                 rank = (candidate["height"], candidate["width"], candidate["bandwidth"])
                 current = (
                     (best_video["height"], best_video["width"], best_video["bandwidth"])
@@ -354,8 +381,19 @@ def parse_mpd(url: str, content: str) -> dict:
                 if rank > current:
                     best_video = candidate
             else:
+                audio_options.append(option)
+                if preferred_audio and (
+                    candidate["id"] == preferred_audio
+                    or (candidate["lang"] and candidate["lang"] == preferred_audio)
+                ):
+                    # Among several bitrates of the selected language, keep
+                    # the best one.
+                    if forced_audio is None or candidate["bandwidth"] > forced_audio["bandwidth"]:
+                        forced_audio = candidate
                 if best_audio is None or candidate["bandwidth"] > best_audio["bandwidth"]:
                     best_audio = candidate
+    best_video = forced_video or best_video
+    best_audio = forced_audio or best_audio
     if best_video is None and best_audio is None:
         raise NativeDashUnsupported("MPD 中没有可下载的音视频轨道")
     if total_duration <= 0:
@@ -370,4 +408,6 @@ def parse_mpd(url: str, content: str) -> dict:
         "duration": total_duration,
         "video": best_video,
         "audio": best_audio,
+        "video_options": video_options,
+        "audio_options": audio_options,
     }

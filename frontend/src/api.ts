@@ -109,6 +109,9 @@ export const controlCast = (action: 'play' | 'pause' | 'seek', seconds = 0, devi
 export const stopLocalTvboxShare = (shareId: string) => request<{ ok: boolean }>(`/tvbox/shares/${encodeURIComponent(shareId)}/stop`, { method: 'POST' })
 export const fetchLocalTvboxShare = (shareId: string) => request<{ active: boolean; filename?: string; active_streams?: number; expires_in_seconds?: number }>(`/tvbox/shares/${encodeURIComponent(shareId)}`)
 export const recognizeUrl = (data: any) => request<any>('/recognize', { method: 'POST', body: JSON.stringify(data) })
+export interface ManifestTrackOption { id: string; width?: number; height?: number; bandwidth?: number; codecs?: string; lang?: string }
+export const fetchManifestTracks = (data: any) =>
+  request<{ format: string; video: ManifestTrackOption[]; audio: ManifestTrackOption[] }>('/manifest/tracks', { method: 'POST', body: JSON.stringify(data) })
 export const fetchBrowserHandoffs = () => request<any[]>('/browser/handoffs')
 export const fetchBrowserHandoff = (id: string) => request<any>(`/browser/handoffs/${encodeURIComponent(id)}`)
 export const completeBrowserMediaPush = (id: string, status: 'done' | 'failed' | 'canceled', message = '') => request<{ ok: boolean }>(`/browser/media-push/${encodeURIComponent(id)}/complete`, { method: 'POST', body: JSON.stringify({ status, message }) })

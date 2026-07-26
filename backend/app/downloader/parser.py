@@ -118,6 +118,44 @@ def _is_audio_only_variant(info, width: int, height: int) -> bool:
     ))
 
 
+def list_hls_video_tracks(url: str, content: str) -> list[dict]:
+    """Enumerate a master playlist's selectable video renditions.
+
+    Returned ids are resolved media-playlist URLs — exactly what the
+    download engine consumes as a selected rendition.
+    """
+    playlist = m3u8.loads(content, uri=url)
+    if not playlist.is_variant:
+        return []
+    tracks: list[dict] = []
+    seen: set[str] = set()
+    for candidate in playlist.playlists:
+        if not candidate.uri:
+            continue
+        info = candidate.stream_info
+        width, height = _variant_dimensions(info)
+        if _is_audio_only_variant(info, width, height):
+            continue
+        resolved = _resolve_url(url, candidate.uri)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        tracks.append(
+            {
+                "id": resolved,
+                "width": width,
+                "height": height,
+                "bandwidth": int(
+                    getattr(info, "average_bandwidth", None) or info.bandwidth or 0
+                ),
+                "codecs": str(getattr(info, "codecs", "") or ""),
+                "lang": "",
+            }
+        )
+    tracks.sort(key=lambda item: (item["height"], item["bandwidth"]), reverse=True)
+    return tracks
+
+
 def parse_m3u8(url: str, content: str) -> dict:
     playlist = m3u8.loads(content, uri=url)
     playlist_title = _playlist_title(content)

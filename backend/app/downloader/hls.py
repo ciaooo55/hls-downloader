@@ -483,7 +483,11 @@ class HLSDownloader:
                 self._set_stage("parsing", "正在解析 HLS 清单")
                 saved_live_state = self._load_live_state()
                 try:
-                    parsed = await self._load_media_playlist(client, task.url, headers)
+                    parsed = await self._load_media_playlist(
+                        # A user-selected rendition URL takes precedence over
+                        # the master's automatic best pick.
+                        client, task.selected_video or task.url, headers
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception:

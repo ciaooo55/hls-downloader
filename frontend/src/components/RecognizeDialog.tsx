@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react'
 import { Download, FileUp, Globe2, Link } from 'lucide-react'
-import { ApiError, createTask, isDuplicateUrlError, recognizeUrl, uploadTorrent } from '../api'
+import { ApiError, createTask, fetchManifestTracks, isDuplicateUrlError, recognizeUrl, uploadTorrent, type ManifestTrackOption } from '../api'
 import { recognitionCandidateViews, recognitionView, type RecognitionResult } from '../recognition'
 import type { Settings, Task } from '../types'
 import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
@@ -29,9 +29,12 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const [startingCandidate, setStartingCandidate] = useState('')
   const [error, setError] = useState('')
   const [duplicatePrompt, setDuplicatePrompt] = useState<{ message: string; candidate: string } | null>(null)
+  const [trackChoice, setTrackChoice] = useState<{ candidate: string; format: string; video: ManifestTrackOption[]; audio: ManifestTrackOption[] } | null>(null)
+  const [selectedVideo, setSelectedVideo] = useState('')
+  const [selectedAudio, setSelectedAudio] = useState('')
   const torrentInput = useRef<HTMLInputElement>(null)
 
-  const taskPayload = (candidate: string, allowDuplicate = false) => ({
+  const taskPayload = (candidate: string, allowDuplicate = false, video = '', audio = '') => ({
     url: candidate,
     task_type: 'auto' as const,
     filename,
@@ -42,11 +45,28 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
     user_agent: userAgent,
     cookie,
     allow_duplicate: allowDuplicate,
+    selected_video: video,
+    selected_audio: audio,
   })
 
-  const startCandidate = async (candidate: string, allowDuplicate = false) => {
+  const startCandidate = async (candidate: string, allowDuplicate = false, video = '', audio = '', skipTrackProbe = false) => {
+    // A manifest with multiple renditions gets a one-step chooser first;
+    // failures or single-rendition manifests download immediately as before.
+    if (!skipTrackProbe && !video && !audio && ['hls', 'dash'].includes(directType(candidate))) {
+      try {
+        const tracks = await fetchManifestTracks({ url: candidate, referer, origin, user_agent: userAgent, cookie })
+        if ((tracks.video?.length || 0) > 1 || (tracks.audio?.length || 0) > 1) {
+          setTrackChoice({ candidate, format: tracks.format, video: tracks.video || [], audio: tracks.audio || [] })
+          setSelectedVideo('')
+          setSelectedAudio('')
+          return
+        }
+      } catch {
+        // Track listing is best-effort only.
+      }
+    }
     try {
-      await createTask(taskPayload(candidate, allowDuplicate))
+      await createTask(taskPayload(candidate, allowDuplicate, video, audio))
       onAdded()
       onClose()
     } catch (reason: unknown) {
@@ -56,6 +76,29 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
       }
       throw reason
     }
+  }
+
+  const confirmTrackChoice = async () => {
+    if (!trackChoice) return
+    setBusy(true)
+    setError('')
+    try {
+      await startCandidate(trackChoice.candidate, false, selectedVideo, selectedAudio, true)
+      setTrackChoice(null)
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : '添加失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const trackLabel = (option: ManifestTrackOption) => {
+    const parts = [
+      option.height ? `${option.height}p` : '',
+      option.bandwidth ? `${(option.bandwidth / 1_000_000).toFixed(1)} Mbps` : '',
+      (option.codecs || '').split('.', 1)[0],
+    ].filter(Boolean)
+    return parts.join(' · ') || option.id
   }
 
   const downloadCandidate = async (candidate: string) => {
@@ -158,6 +201,37 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
             <div className="request-field"><label htmlFor="recognize-cookie">Cookie</label><Input id="recognize-cookie" value={cookie} onChange={event => setCookie(event.target.value)} placeholder="sessionid=abc; token=xyz" /><small>{REQUEST_FIELD_HELP.cookie}</small></div>
           </div>}
           {error && <div className="inline-error" role="alert">{error}</div>}
+          {trackChoice && (
+            <section className="track-choice" aria-label="选择清晰度与音轨">
+              <strong>选择要下载的轨道</strong>
+              <div className="track-choice-grid">
+                {trackChoice.video.length > 1 && (
+                  <label>清晰度
+                    <select value={selectedVideo} onChange={event => setSelectedVideo(event.target.value)}>
+                      <option value="">自动（最高清晰度）</option>
+                      {trackChoice.video.map(option => (
+                        <option key={option.id} value={option.id}>{trackLabel(option)}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {trackChoice.audio.length > 1 && (
+                  <label>音轨
+                    <select value={selectedAudio} onChange={event => setSelectedAudio(event.target.value)}>
+                      <option value="">自动（最高码率）</option>
+                      {trackChoice.audio.map(option => (
+                        <option key={option.id} value={option.id}>{option.lang || option.id}{option.bandwidth ? ` · ${Math.round(option.bandwidth / 1000)} kbps` : ''}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
+              <div className="track-choice-actions">
+                <Button variant="default" disabled={busy} onClick={() => void confirmTrackChoice()}>{busy ? '正在添加…' : '开始下载'}</Button>
+                <Button variant="ghost" disabled={busy} onClick={() => setTrackChoice(null)}>取消</Button>
+              </div>
+            </section>
+          )}
           {view?.mode === 'choose' && (
             <section className="candidate-list" aria-labelledby="candidate-list-title">
               <div className="candidate-list-heading">

@@ -76,6 +76,8 @@ class Task:
     filename: str = ""
     concurrency: int = 0  # 0 = use server default from config
     speed_limit_kib: int = 0  # 0 = no per-task limit (global limit still applies)
+    selected_video: str = ""  # HLS variant URL / DASH representation id; "" = auto best
+    selected_audio: str = ""  # DASH representation id or language; "" = auto best
     status: TaskStatus = TaskStatus.QUEUED
     progress: TaskProgress = field(default_factory=TaskProgress)
     error_message: str = ""
