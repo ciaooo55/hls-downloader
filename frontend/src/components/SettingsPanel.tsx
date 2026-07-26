@@ -263,6 +263,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
             <div className="settings-field"><label htmlFor="setting-speed-limit">全局下载限速（KiB/s）</label><input id="setting-speed-limit" type="number" min={0} max={1048576} value={settings.download_speed_limit_kib ?? 0} onChange={event => update('download_speed_limit_kib', Number(event.target.value))} /><p>{REQUEST_FIELD_HELP.speedLimit}</p></div>
             <div className="settings-field"><label htmlFor="setting-http-chunk">HTTP 分段大小（MiB）</label><input id="setting-http-chunk" type="number" min={1} max={64} value={settings.http_chunk_size_mb ?? 8} onChange={event => update('http_chunk_size_mb', Number(event.target.value))} /><p>每段完成后可安全暂停；较小更灵活，较大请求更少。</p></div>
             <div className="settings-field"><label htmlFor="setting-live-max">直播录制时长上限（分钟）</label><input id="setting-live-max" type="number" min={0} max={2880} value={settings.live_record_max_minutes ?? 0} onChange={event => update('live_record_max_minutes', Number(event.target.value))} /><p>录制直播 HLS 达到该时长后自动停止并合并；0 表示不限制，随时可手动停止录制。</p></div>
+            <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={settings.download_subtitles ?? true} onChange={event => update('download_subtitles', event.target.checked)} />下载 HLS 外挂字幕（保存为 .vtt / .srt）</label>
           </section>
           <h3 className="settings-group-label">定时队列</h3>
           <section className="settings-group settings-grid-group">

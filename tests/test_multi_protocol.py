@@ -6,9 +6,11 @@ import time
 from pathlib import Path
 
 import httpx
+import pytest
 
 from backend.app.config import settings
-from backend.app.downloader.http_file import HTTPDownloader, _content_disposition_filename
+from backend.app.downloader import http_file as http_file_module
+from backend.app.downloader.http_file import HTTPDownloader, _content_disposition_filename, _SpeedWindow
 from backend.app.downloader.engine import publish_path, task_work_dir
 from backend.app.downloader.torrent import TorrentDownloader
 from backend.app.downloader import task_manager as task_manager_module
@@ -182,6 +184,37 @@ def test_publish_path_falls_back_to_copy_for_cross_drive_errors(tmp_path, monkey
     assert destination.read_bytes() == b"downloaded payload"
     assert not source.exists()
     assert attempts == 2
+
+
+def test_speed_window_measures_only_recent_transfer(monkeypatch):
+    clock = {"now": 100.0}
+    monkeypatch.setattr(http_file_module.time, "monotonic", lambda: clock["now"])
+    window = _SpeedWindow(span_seconds=8.0)
+    window.add(1024)
+    clock["now"] = 101.0
+    window.add(1024)
+    assert window.speed() == pytest.approx(2048.0)
+    # Samples older than the span age out entirely: after a stall the shown
+    # speed drops to zero instead of clinging to a lifetime average.
+    clock["now"] = 120.0
+    assert window.speed() == 0.0
+
+
+def test_resumed_bytes_do_not_inflate_speed_or_eta(monkeypatch):
+    clock = {"now": 50.0}
+    monkeypatch.setattr(http_file_module.time, "monotonic", lambda: clock["now"])
+    task = Task(id="eta", url="https://files.test/f.bin", task_type=TaskType.HTTP)
+    downloader = HTTPDownloader(task)
+    window = _SpeedWindow()
+    task.progress.total_bytes = 10 * 1024
+    # Half the file was restored from a previous session; only 1 KiB has
+    # actually been transferred in this one.
+    task.progress.downloaded_bytes = 5 * 1024
+    window.add(1024)
+    clock["now"] = 51.0
+    downloader._apply_speed(window)
+    assert task.progress.speed_bytes_per_sec == pytest.approx(1024.0)
+    assert task.progress.eta_seconds == pytest.approx(5.0)
 
 
 def test_http_range_downloader_writes_one_sparse_file_and_validates_ranges(tmp_path, monkeypatch):

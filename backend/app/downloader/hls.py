@@ -39,6 +39,7 @@ from .engine import task_output_dir, task_work_dir
 from .parser import UnsupportedPlaylistError, parse_m3u8
 from .playback import playback_service, write_playback_plan
 from .progress import ProgressTracker
+from .subtitles import has_cues, merge_webvtt_segments, webvtt_to_srt
 
 
 MAX_RETRIES = 5
@@ -205,6 +206,7 @@ class HLSDownloader:
         self._playback_priority_index: int | None = task.playback_seek_index
         self._retry_window = SharedRetryWindow()
         self._last_rate_limit_notice = 0.0
+        self._subtitle_tracks: list[dict] = []
 
     def request_seek(self, segment_index: int) -> None:
         if segment_index >= 0:
@@ -404,6 +406,7 @@ class HLSDownloader:
         manifest_title = ""
         response_filename = ""
         external_audio = False
+        subtitle_tracks: list[dict] = []
         for depth in range(MAX_PLAYLIST_DEPTH + 1):
             if current_url in visited:
                 raise ValueError(f"主清单存在循环引用: {current_url}")
@@ -434,7 +437,10 @@ class HLSDownloader:
                 parsed["response_filename"] = response_filename
                 parsed["final_url"] = final_url
                 parsed["external_audio"] = external_audio
+                parsed["subtitle_tracks"] = subtitle_tracks
                 return parsed
+            if parsed.get("subtitle_tracks") and not subtitle_tracks:
+                subtitle_tracks = list(parsed["subtitle_tracks"])
             if parsed.get("external_audio"):
                 # The native segment engine intentionally keeps one media
                 # timeline at a time.  A master with a separate audio
@@ -443,7 +449,13 @@ class HLSDownloader:
                 # matching best video/audio pair without dropping auth context.
                 external_audio = True
             if parsed.get("external_subtitles"):
-                self._log("[parsing] 外部字幕轨道已忽略")
+                if subtitle_tracks and getattr(settings, "download_subtitles", True):
+                    self._log(
+                        f"[parsing] 检测到 {len(subtitle_tracks)} 条外部字幕，"
+                        "下载完成后将保存为独立字幕文件"
+                    )
+                else:
+                    self._log("[parsing] 外部字幕轨道已忽略")
             if depth >= MAX_PLAYLIST_DEPTH:
                 raise ValueError(f"主清单递归超过 {MAX_PLAYLIST_DEPTH} 层")
             current_url = parsed["url"]
@@ -486,6 +498,7 @@ class HLSDownloader:
                 # must stay in recording mode so earlier segments are kept.
                 is_live = parsed is None or bool(parsed.get("is_live")) or saved_live_state is not None
                 if parsed is not None:
+                    self._subtitle_tracks = list(parsed.get("subtitle_tracks") or [])
                     if parsed.get("external_audio"):
                         if is_live:
                             raise UnsupportedPlaylistError(
@@ -513,6 +526,8 @@ class HLSDownloader:
 
                 if is_live:
                     task.engine_state["live"] = True
+                    if self._subtitle_tracks:
+                        self._log("[subtitles] 直播录制暂不保存外部字幕")
                     if parsed is None:
                         recovered: list[dict] = []
                         total_duration = self._restore_live_segments(
@@ -601,6 +616,10 @@ class HLSDownloader:
             task.engine_state.pop("reserved_output_path", None)
             if not await verify_task_checksum(task, output, on_progress=self.on_progress, on_log=self.on_log):
                 return
+            if not task.engine_state.get("live"):
+                # Sidecar subtitles are best-effort: a subtitle CDN failure
+                # must never fail a fully merged, verified video.
+                await self._download_subtitles(headers)
             task.status = TaskStatus.DONE
             task.finished_at = datetime.now().isoformat()
             task.progress.post_percent = 100.0
@@ -652,6 +671,112 @@ class HLSDownloader:
             task.progress.active_slots = 0
             task.progress.active_segment_indexes = []
             self._publish()
+
+    def _subtitle_label(self, track: dict, position: int, used: set[str]) -> str:
+        raw = str(track.get("language") or track.get("name") or f"sub{position}")
+        label = sanitize_filename(raw).strip(". ") or f"sub{position}"
+        if track.get("forced"):
+            label += ".forced"
+        candidate = label
+        suffix = 2
+        while candidate.lower() in used:
+            candidate = f"{label}.{suffix}"
+            suffix += 1
+        used.add(candidate.lower())
+        return candidate
+
+    async def _download_subtitles(self, headers: dict[str, str]) -> None:
+        """Save each subtitle rendition as sidecar .vtt and .srt files.
+
+        Runs after the video is merged and verified, so every failure here
+        only logs — the downloaded video is never put at risk.
+        """
+        tracks = self._subtitle_tracks
+        if not tracks or not getattr(settings, "download_subtitles", True):
+            return
+        if not self.task.output_path:
+            return
+        output = Path(self.task.output_path)
+        base = output.with_suffix("")
+        used_labels: set[str] = set()
+        saved = 0
+        try:
+            async with _create_hls_client(2) as client:
+                for position, track in enumerate(tracks, 1):
+                    label = self._subtitle_label(track, position, used_labels)
+                    try:
+                        texts = await self._fetch_subtitle_track(
+                            client, track, headers
+                        )
+                        merged = merge_webvtt_segments(texts)
+                        if not has_cues(merged):
+                            self._log(f"[subtitles] 字幕 {label} 没有有效内容，跳过")
+                            continue
+                        vtt_path = base.with_name(f"{base.name}.{label}.vtt")
+                        vtt_path.write_text(merged, encoding="utf-8")
+                        srt_path = vtt_path.with_suffix(".srt")
+                        srt_path.write_text(webvtt_to_srt(merged), encoding="utf-8")
+                        saved += 1
+                        self._log(f"[subtitles] 已保存字幕: {vtt_path.name} / {srt_path.name}")
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        self._log(f"[subtitles] 字幕 {label} 下载失败: {exc}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._log(f"[subtitles] 字幕处理失败: {exc}")
+        if saved:
+            self._log(f"[subtitles] 共保存 {saved} 条字幕轨道")
+
+    async def _fetch_subtitle_track(
+        self,
+        client: Any,
+        track: dict,
+        headers: dict[str, str],
+    ) -> list[str]:
+        url = str(track["uri"])
+
+        async def load_playlist():
+            response = await client.get(url, headers=self._headers(url, headers))
+            response.raise_for_status()
+            return response
+
+        response = await self._retry_control_request(
+            load_playlist,
+            stage="verifying",
+            url=url,
+            label="字幕清单",
+        )
+        text = response.text
+        if text.lstrip("﻿ \t\r\n").startswith("WEBVTT"):
+            # The rendition URI may point straight at a single VTT document.
+            return [text]
+        final_url = str(getattr(response, "url", "") or url)
+        parsed = parse_m3u8(final_url, text)
+        if parsed["type"] != "media":
+            raise RuntimeError("字幕清单不是媒体清单")
+        if any(segment.get("key") for segment in parsed["segments"]):
+            raise RuntimeError("暂不支持加密字幕")
+        texts: list[str] = []
+        for segment in parsed["segments"]:
+            segment_url = segment["url"]
+
+            async def load_segment(segment_url=segment_url):
+                response = await client.get(
+                    segment_url, headers=self._headers(segment_url, headers)
+                )
+                response.raise_for_status()
+                return response
+
+            segment_response = await self._retry_control_request(
+                load_segment,
+                stage="verifying",
+                url=segment_url,
+                label="字幕分片",
+            )
+            texts.append(segment_response.text)
+        return texts
 
     async def _download_init_maps(
         self,

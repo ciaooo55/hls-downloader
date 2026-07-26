@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote, unquote_to_bytes, urlparse
@@ -31,6 +32,41 @@ from .throttle import throttle_bytes
 
 MAX_RETRIES = 5
 _CONTENT_RANGE_RE = re.compile(r"^bytes (\d+)-(\d+)/(\d+)$", re.IGNORECASE)
+
+
+class _SpeedWindow:
+    """Rolling transfer rate over the last few seconds.
+
+    An average since task start misleads twice: it counts bytes restored
+    from a previous session as if they were just transferred, and it hides
+    stalls long after they begin.  Only bytes that actually crossed the
+    wire inside the window are counted here.
+    """
+
+    def __init__(self, span_seconds: float = 8.0) -> None:
+        self._span = span_seconds
+        self._samples: deque[tuple[float, int]] = deque()
+        self._window_bytes = 0
+
+    def _trim(self, now: float) -> None:
+        cutoff = now - self._span
+        while self._samples and self._samples[0][0] < cutoff:
+            _, size = self._samples.popleft()
+            self._window_bytes -= size
+
+    def add(self, size: int) -> None:
+        now = time.monotonic()
+        self._samples.append((now, size))
+        self._window_bytes += size
+        self._trim(now)
+
+    def speed(self) -> float:
+        now = time.monotonic()
+        self._trim(now)
+        if not self._samples:
+            return 0.0
+        elapsed = max(now - self._samples[0][0], 0.25)
+        return self._window_bytes / elapsed
 
 
 def _reserve_output_path(path: Path) -> Path:
@@ -137,6 +173,20 @@ class HTTPDownloader(SeeklessEngine):
 
     def _publish(self) -> None:
         self.on_progress(self.task)
+
+    def _apply_speed(self, window: _SpeedWindow) -> None:
+        progress = self.task.progress
+        speed = window.speed()
+        progress.speed_bytes_per_sec = speed
+        total = progress.total_bytes
+        if total:
+            progress.progress_percent = min(
+                100.0, progress.downloaded_bytes * 100 / total
+            )
+            remaining = max(0, total - progress.downloaded_bytes)
+            progress.eta_seconds = remaining / speed if speed > 0 else 0.0
+        else:
+            progress.eta_seconds = 0.0
 
     def _set_stage(self, stage: str, message: str) -> None:
         self.task.stage = stage
@@ -249,7 +299,7 @@ class HTTPDownloader(SeeklessEngine):
         self._set_stage("downloading", "正在安全重放浏览器 POST 下载（单连接）")
         task.engine_state["stream_path"] = str(part_path)
         task.engine_state["post_replay"] = True
-        started = time.monotonic()
+        window = _SpeedWindow()
         async with client.stream("POST", task.url, headers=headers, content=body) as response:
             response.raise_for_status()
             task.mime_type = task.mime_type or response.headers.get("content-type", "").split(";", 1)[0]
@@ -274,10 +324,8 @@ class HTTPDownloader(SeeklessEngine):
                     await throttle_bytes(len(chunk))
                     stream.write(chunk)
                     task.progress.downloaded_bytes += len(chunk)
-                    elapsed = max(0.001, time.monotonic() - started)
-                    task.progress.speed_bytes_per_sec = task.progress.downloaded_bytes / elapsed
-                    if task.progress.total_bytes:
-                        task.progress.progress_percent = min(100.0, task.progress.downloaded_bytes * 100 / task.progress.total_bytes)
+                    window.add(len(chunk))
+                    self._apply_speed(window)
                     self._publish()
         task.progress.completed_segments = 1
         return output
@@ -406,7 +454,7 @@ class HTTPDownloader(SeeklessEngine):
         self._set_stage("downloading", "服务器不支持分段，正在单连接下载")
         task.engine_state["stream_path"] = str(part_path)
         task.engine_state["total_size"] = task.progress.total_bytes
-        started = time.monotonic()
+        window = _SpeedWindow()
         async with client.stream("GET", task.url, headers=headers) as response:
             response.raise_for_status()
             with part_path.open("wb") as output:
@@ -418,10 +466,8 @@ class HTTPDownloader(SeeklessEngine):
                     await throttle_bytes(len(chunk))
                     output.write(chunk)
                     task.progress.downloaded_bytes += len(chunk)
-                    elapsed = max(0.001, time.monotonic() - started)
-                    task.progress.speed_bytes_per_sec = task.progress.downloaded_bytes / elapsed
-                    if task.progress.total_bytes:
-                        task.progress.progress_percent = min(100.0, task.progress.downloaded_bytes * 100 / task.progress.total_bytes)
+                    window.add(len(chunk))
+                    self._apply_speed(window)
                     self._publish()
         task.progress.completed_segments = 1
 
@@ -462,6 +508,7 @@ class HTTPDownloader(SeeklessEngine):
             with part_path.open("wb") as output:
                 output.truncate(total)
         task.progress.total_segments = len(chunks)
+        task.progress.total_bytes = total
         self._completed_chunks = completed
         self._total_size = total
         task.engine_state["stream_path"] = str(part_path)
@@ -481,9 +528,25 @@ class HTTPDownloader(SeeklessEngine):
         for order, index in enumerate(pending):
             queue.put_nowait((order, index))
         state_lock = asyncio.Lock()
-        started = time.monotonic()
         self._retry_window = SharedRetryWindow()
         retry_window = self._retry_window
+        window = _SpeedWindow()
+        # Bytes from finished chunks (including a resumed session's) are
+        # "committed"; in-flight chunk bytes are tracked separately so a
+        # failed chunk retracts cleanly and resumed bytes never inflate the
+        # displayed transfer rate.
+        committed_bytes = task.progress.downloaded_bytes
+        partials: dict[int, int] = {}
+        last_publish = 0.0
+
+        def refresh_progress(publish: bool = False) -> None:
+            nonlocal last_publish
+            task.progress.downloaded_bytes = committed_bytes + sum(partials.values())
+            self._apply_speed(window)
+            now = time.monotonic()
+            if publish or now - last_publish >= 0.5:
+                last_publish = now
+                self._publish()
 
         async def save_state() -> None:
             payload = {
@@ -498,6 +561,7 @@ class HTTPDownloader(SeeklessEngine):
             temporary.replace(state_path)
 
         async def worker() -> None:
+            nonlocal committed_bytes
             while not queue.empty() and not self._is_canceled() and not self._is_pausing():
                 try:
                     _, index = queue.get_nowait()
@@ -539,6 +603,9 @@ class HTTPDownloader(SeeklessEngine):
                                         raise RuntimeError("Range 响应长度超过请求范围")
                                     await throttle_bytes(len(content))
                                     output_file.write(content)
+                                    partials[index] = received
+                                    window.add(len(content))
+                                    refresh_progress()
                         if received != expected:
                             raise RuntimeError(f"Range 长度不匹配，期望 {expected}，实际 {received}")
                         async with state_lock:
@@ -547,16 +614,15 @@ class HTTPDownloader(SeeklessEngine):
                             self._claimed_chunks.discard(index)
                             task.engine_state["completed_chunks"] = sorted(completed)
                             task.progress.completed_segments = len(completed)
-                            task.progress.downloaded_bytes += expected
-                            task.progress.progress_percent = task.progress.downloaded_bytes * 100 / total
-                            elapsed = max(0.001, time.monotonic() - started)
-                            task.progress.speed_bytes_per_sec = task.progress.downloaded_bytes / elapsed
+                            committed_bytes += expected
+                            partials.pop(index, None)
+                            refresh_progress(publish=True)
                             await save_state()
-                            self._publish()
                         last_error = None
                         break
                     except Exception as exc:
                         last_error = exc
+                        partials.pop(index, None)
                         if not should_retry_download_error(exc):
                             break
                         if attempt < MAX_RETRIES:
@@ -574,6 +640,10 @@ class HTTPDownloader(SeeklessEngine):
 
         workers = [asyncio.create_task(worker()) for _ in range(task.progress.max_workers)]
         results = await asyncio.gather(*workers, return_exceptions=True)
+        # In-flight chunk bytes are not resumable; drop them so the shown
+        # progress matches exactly what a resume will restore.
+        partials.clear()
+        task.progress.downloaded_bytes = committed_bytes
         error = next((result for result in results if isinstance(result, Exception)), None)
         if error:
             raise error

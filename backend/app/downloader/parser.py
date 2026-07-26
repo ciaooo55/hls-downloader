@@ -146,12 +146,29 @@ def parse_m3u8(url: str, content: str) -> dict:
         if best is None or not best.uri:
             raise ValueError("主清单中没有可用视频变体")
         info = best.stream_info
+        subtitle_tracks = []
+        for media in playlist.media or []:
+            if str(getattr(media, "type", "") or "").upper() != "SUBTITLES":
+                continue
+            if not getattr(media, "uri", None):
+                continue
+            subtitle_tracks.append(
+                {
+                    "uri": _resolve_url(url, media.uri),
+                    "language": str(getattr(media, "language", "") or ""),
+                    "name": str(getattr(media, "name", "") or ""),
+                    "default": str(getattr(media, "default", "") or "").upper() == "YES",
+                    "forced": str(getattr(media, "forced", "") or "").upper() == "YES",
+                }
+            )
         return {
             "type": "variant",
             "url": _resolve_url(url, best.uri),
             "base_url": _resolve_url(url, best.uri),
             "external_audio": bool(getattr(info, "audio", None)),
-            "external_subtitles": bool(getattr(info, "subtitles", None)),
+            "external_subtitles": bool(getattr(info, "subtitles", None))
+            or bool(subtitle_tracks),
+            "subtitle_tracks": subtitle_tracks,
             "title": playlist_title,
         }
 

@@ -74,7 +74,7 @@
 
 ## 支持范围
 
-支持点播 HLS、直播 HLS 录制（可手动停止或设置时长上限）、非 DRM DASH、严格 Range 的 HTTP 续传和 libtorrent BT。SAMPLE-AES/DRM、受保护 EME、无法重放的 `blob:`/POST 下载不会尝试绕过。
+支持点播 HLS（含外挂字幕自动保存为 .vtt/.srt）、直播 HLS 录制（可手动停止或设置时长上限）、非 DRM DASH、严格 Range 的 HTTP 续传和 libtorrent BT。SAMPLE-AES/DRM、受保护 EME、无法重放的 `blob:`/POST 下载不会尝试绕过。
 
 ## 浏览器插件
 

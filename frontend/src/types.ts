@@ -98,6 +98,7 @@ export interface Settings {
   queue_auto_start_enabled?: boolean
   queue_auto_start_time?: string
   live_record_max_minutes?: number
+  download_subtitles?: boolean
   tvbox_endpoint?: string
   cast_device?: { id: string; protocol: 'dlna' | 'chromecast'; location: string; control_url: string; service_type: string; label: string; host: string }
 }
