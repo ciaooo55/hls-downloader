@@ -2,9 +2,28 @@ import { browser } from 'wxt/browser'
 import { visibleMediaResources, type MediaResource } from '../../lib/resources'
 import { resourceQuality } from '../../lib/hlsManifest'
 import { handoffStatusLabel, handoffTerminalStatus } from '../../lib/takeover'
+import {
+  THEME_BASE_CSS,
+  THEME_STORAGE_KEY,
+  THEME_TOKENS_CSS,
+  applyTheme,
+  normalizeThemePreference,
+  type ThemePreference,
+} from '../../lib/theme'
 import './style.css'
 
 const root = document.getElementById('root')!
+const tokenStyle = document.createElement('style')
+tokenStyle.textContent = THEME_TOKENS_CSS + THEME_BASE_CSS
+document.head.append(tokenStyle)
+
+const THEME_LABELS: Record<ThemePreference, string> = {
+  auto: '主题：自动',
+  dark: '主题：深色',
+  light: '主题：浅色',
+}
+const THEME_ORDER: ThemePreference[] = ['auto', 'dark', 'light']
+const THEME_GLYPHS: Record<ThemePreference, string> = { auto: '◐', dark: '●', light: '○' }
 
 function formatDuration(seconds?: number) {
   if (!seconds || seconds <= 0) return ''
@@ -51,19 +70,33 @@ async function main() {
   brandText.append(el('h1', '', 'HLS Downloader'), el('span', 'status', '\u8fde\u63a5\u4e2d\u2026'))
   brand.append(logo, brandText)
   const actions = el('div', 'header-actions')
-  const openBtn = el('button', '', '\u6253\u5f00')
+  let themePreference = normalizeThemePreference(
+    (await browser.storage.local.get(THEME_STORAGE_KEY))[THEME_STORAGE_KEY],
+  )
+  let removeThemeListener = applyTheme(document.documentElement, themePreference)
+  const themeBtn = el('button', 'hlsd-button subtle', THEME_GLYPHS[themePreference])
+  themeBtn.title = THEME_LABELS[themePreference]
+  themeBtn.addEventListener('click', async () => {
+    themePreference = THEME_ORDER[(THEME_ORDER.indexOf(themePreference) + 1) % THEME_ORDER.length]
+    removeThemeListener()
+    removeThemeListener = applyTheme(document.documentElement, themePreference)
+    themeBtn.textContent = THEME_GLYPHS[themePreference]
+    themeBtn.title = THEME_LABELS[themePreference]
+    await browser.storage.local.set({ [THEME_STORAGE_KEY]: themePreference })
+  })
+  const openBtn = el('button', 'hlsd-button primary', '\u6253\u5f00')
   openBtn.title = '\u6253\u5f00\u684c\u9762\u7aef'
   openBtn.addEventListener('click', () => void browser.runtime.sendMessage({ type: 'activate' }))
-  const closeBtn = el('button', 'close-button', '\u00d7')
+  const closeBtn = el('button', 'hlsd-button subtle', '\u00d7')
   closeBtn.title = '\u5173\u95ed'
   closeBtn.addEventListener('click', () => window.close())
-  actions.append(openBtn, closeBtn)
+  actions.append(themeBtn, openBtn, closeBtn)
   header.append(brand, actions)
 
   const controls = el('div', 'controls')
-  const enableBtn = el('button', '', '\u81ea\u52a8\u63a5\u7ba1')
-  const cookieBtn = el('button', '', 'Cookie')
-  const excludeBtn = el('button', '', '\u6392\u9664\u672c\u7ad9')
+  const enableBtn = el('button', 'hlsd-button', '\u81ea\u52a8\u63a5\u7ba1')
+  const cookieBtn = el('button', 'hlsd-button', 'Cookie')
+  const excludeBtn = el('button', 'hlsd-button', '\u6392\u9664\u672c\u7ad9')
   controls.append(enableBtn, cookieBtn, excludeBtn)
 
   const errorBox = el('div', 'send-error')
@@ -120,7 +153,7 @@ async function main() {
       let selected = item
       body.append(name, line)
       if (item.variants?.length) {
-        const select = el('select', 'quality-select') as HTMLSelectElement
+        const select = el('select', 'hlsd-select quality-select') as HTMLSelectElement
         select.setAttribute('aria-label', '\u9009\u62e9\u89c6\u9891\u6e05\u6670\u5ea6')
         const automatic = el('option', '', '\u81ea\u52a8\uff08\u6700\u9ad8\uff09') as HTMLOptionElement
         automatic.value = item.url
@@ -139,14 +172,14 @@ async function main() {
       }
       body.append(mime)
       const label = sending[item.id] || '\u4e0b\u8f7d'
-      const button = el('button', '', label)
+      const button = el('button', 'hlsd-button primary', label)
       const locked = ['\u53d1\u9001\u4e2d', '\u5f85\u786e\u8ba4', '\u786e\u8ba4\u4e2d', '\u5df2\u52a0\u5165'].includes(sending[item.id] || '')
       button.disabled = locked
       if (sending[item.id]) button.classList.add('busy')
       button.title = '\u53d1\u9001\u5230\u4e0b\u8f7d\u5668'
       button.addEventListener('click', () => void send(selected))
       const pushLabel = pushing[item.id] || '推电视'
-      const pushButton = el('button', 'push-button', pushLabel)
+      const pushButton = el('button', 'hlsd-button push-button', pushLabel)
       pushButton.disabled = pushing[item.id] === '推送中'
       if (pushing[item.id]) pushButton.classList.add('busy')
       pushButton.title = '推送到电视播放'
