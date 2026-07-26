@@ -217,6 +217,54 @@ def test_resumed_bytes_do_not_inflate_speed_or_eta(monkeypatch):
     assert task.progress.eta_seconds == pytest.approx(5.0)
 
 
+def test_endgame_splits_tail_of_last_slow_chunk(tmp_path, monkeypatch):
+    body = bytes(range(256)) * 32768  # 8 MiB
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 8)
+    task = Task(
+        id="endgame",
+        url="https://files.test/big.bin",
+        task_type=TaskType.HTTP,
+        concurrency=2,
+    )
+    ranges: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        value = request.headers.get("range", "")
+        ranges.append(value)
+        start_text, end_text = value.removeprefix("bytes=").split("-", 1)
+        start, end = int(start_text), int(end_text)
+        if start == 0:
+            # The primary connection is slow; idle workers must claim the
+            # tail instead of waiting for it.
+            await asyncio.sleep(0.25)
+        return httpx.Response(
+            206,
+            content=body[start : end + 1],
+            headers={"Content-Range": f"bytes {start}-{end}/{len(body)}"},
+            request=request,
+        )
+
+    async def run():
+        part = tmp_path / "payload.downloading"
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_ranges(
+                client,
+                {},
+                part,
+                tmp_path / "resume.json",
+                {"total": len(body), "etag": '"v1"', "last_modified": "now"},
+            )
+        assert part.read_bytes() == body
+        assert task.progress.completed_segments == 1
+        assert task.progress.downloaded_bytes == len(body)
+        # The idle worker split the in-flight chunk at least once.
+        assert len(ranges) >= 2
+        assert any(not value.startswith("bytes=0-") for value in ranges)
+
+    asyncio.run(run())
+
+
 def test_http_range_downloader_writes_one_sparse_file_and_validates_ranges(tmp_path, monkeypatch):
     body = (b"0123456789abcdef" * 131072) + b"tail"
     monkeypatch.setattr(settings, "http_chunk_size_mb", 1)

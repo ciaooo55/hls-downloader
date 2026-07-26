@@ -516,7 +516,12 @@ class HTTPDownloader(SeeklessEngine):
         task.engine_state["total_size"] = total
         task.progress.completed_segments = len(completed)
         task.progress.downloaded_bytes = sum(chunks[index][1] - chunks[index][0] + 1 for index in completed)
-        task.progress.max_workers = min(task.concurrency, len(chunks))
+        # Enough workers to also split in-flight chunk tails (end-game), so
+        # even a single-chunk file can use several connections.
+        task.progress.max_workers = min(
+            task.concurrency,
+            max(len(chunks), total // (4 * 1024 * 1024) + 1),
+        )
         task.progress.connection_status = "running"
         self._set_stage("downloading", f"正在分段下载，并发={task.progress.max_workers}")
         queue: asyncio.PriorityQueue[tuple[int, int]] = asyncio.PriorityQueue()
@@ -560,83 +565,142 @@ class HTTPDownloader(SeeklessEngine):
             temporary.write_text(json.dumps(payload), encoding="utf-8")
             temporary.replace(state_path)
 
-        async def worker() -> None:
+        # IDM-style end-game: when the queue drains, idle workers split the
+        # remaining half of the largest in-flight chunk instead of exiting,
+        # so the tail of a large file is never limited to one connection.
+        # A chunk is only recorded as completed (resumable) when every part
+        # of it has finished, so the on-disk state format is unchanged.
+        SPLIT_MIN_BYTES = 4 * 1024 * 1024
+        stop_at: dict[int, int] = {}
+        parts_open: dict[int, int] = {}
+
+        async def finish_part(index: int, part_key: tuple[int, int], size: int) -> None:
             nonlocal committed_bytes
+            async with state_lock:
+                committed_bytes += size
+                partials.pop(part_key, None)
+                parts_open[index] -= 1
+                if parts_open[index] <= 0:
+                    completed.add(index)
+                    self._completed_chunks.add(index)
+                    self._claimed_chunks.discard(index)
+                    task.engine_state["completed_chunks"] = sorted(completed)
+                    task.progress.completed_segments = len(completed)
+                    await save_state()
+                refresh_progress(publish=True)
+
+        async def fetch_range(index: int, start: int, end: int, dynamic_stop: bool) -> bool:
+            """Download one byte range. Returns False on a pause/cancel exit.
+
+            With dynamic_stop the range belongs to a primary chunk whose end
+            may shrink while streaming (an idle worker claimed its tail); the
+            stream then finishes early at the shrunk boundary.
+            """
+            part_key = (index, start)
+            last_error: Exception | None = None
+            for attempt in range(1, MAX_RETRIES + 1):
+                if self._is_canceled():
+                    raise asyncio.CancelledError
+                if not await retry_window.wait(lambda: self._is_canceled() or self._is_pausing()):
+                    return False
+                self._clear_rate_limit_notice()
+                try:
+                    received = 0
+                    async with client.stream(
+                        "GET",
+                        task.url,
+                        headers={**headers, "Range": f"bytes={start}-{end}"},
+                    ) as response:
+                        response.raise_for_status()
+                        match = _CONTENT_RANGE_RE.match(response.headers.get("content-range", ""))
+                        if response.status_code != 206 or not match:
+                            raise RuntimeError("Range 响应缺少有效 Content-Range")
+                        if int(match.group(1)) != start or int(match.group(2)) != end or int(match.group(3)) != total:
+                            raise RuntimeError("Range 响应范围与请求不一致")
+                        with part_path.open("r+b", buffering=0) as output_file:
+                            output_file.seek(start)
+                            async for content in response.aiter_bytes(256 * 1024):
+                                expected = (stop_at[index] if dynamic_stop else end) - start + 1
+                                needed = expected - received
+                                if needed <= 0:
+                                    break
+                                data = content[:needed]
+                                if len(content) > needed and not dynamic_stop:
+                                    raise RuntimeError("Range 响应长度超过请求范围")
+                                await throttle_bytes(len(data), task)
+                                output_file.write(data)
+                                received += len(data)
+                                partials[part_key] = received
+                                window.add(len(data))
+                                refresh_progress()
+                                if received >= expected:
+                                    break
+                    expected = (stop_at[index] if dynamic_stop else end) - start + 1
+                    if received != expected:
+                        raise RuntimeError(f"Range 长度不匹配，期望 {expected}，实际 {received}")
+                    await finish_part(index, part_key, expected)
+                    return True
+                except Exception as exc:
+                    last_error = exc
+                    partials.pop(part_key, None)
+                    if not should_retry_download_error(exc):
+                        break
+                    if attempt < MAX_RETRIES:
+                        delay = retry_delay_seconds(exc, min(4, attempt))
+                        if should_share_retry_window(exc):
+                            remaining, extended = await retry_window.extend(delay)
+                            if extended:
+                                self._announce_rate_limit(remaining)
+                        else:
+                            await asyncio.sleep(delay)
+            if last_error is not None:
+                self._claimed_chunks.discard(index)
+                raise last_error
+            return True
+
+        def pick_split() -> tuple[int, int, int] | None:
+            best: tuple[int, int, int] | None = None
+            best_remaining = SPLIT_MIN_BYTES - 1
+            for index in self._claimed_chunks:
+                if index not in stop_at or index in completed:
+                    continue
+                chunk_start = chunks[index][0]
+                received = partials.get((index, chunk_start), 0)
+                remaining = stop_at[index] - (chunk_start + received) + 1
+                if remaining > best_remaining:
+                    split_start = chunk_start + received + remaining // 2
+                    best = (index, split_start, stop_at[index])
+                    best_remaining = remaining
+            return best
+
+        async def worker() -> None:
             while not queue.empty() and not self._is_canceled() and not self._is_pausing():
                 try:
                     _, index = queue.get_nowait()
                 except asyncio.QueueEmpty:
-                    return
+                    break
                 if index in completed or index in self._claimed_chunks or index >= len(chunks):
                     queue.task_done()
                     continue
                 self._claimed_chunks.add(index)
                 start, end = chunks[index]
-                last_error: Exception | None = None
-                for attempt in range(1, MAX_RETRIES + 1):
-                    if self._is_canceled():
-                        raise asyncio.CancelledError
-                    if not await retry_window.wait(lambda: self._is_canceled() or self._is_pausing()):
-                        self._claimed_chunks.discard(index)
-                        queue.task_done()
-                        return
-                    self._clear_rate_limit_notice()
-                    try:
-                        expected = end - start + 1
-                        received = 0
-                        async with client.stream(
-                            "GET",
-                            task.url,
-                            headers={**headers, "Range": f"bytes={start}-{end}"},
-                        ) as response:
-                            response.raise_for_status()
-                            match = _CONTENT_RANGE_RE.match(response.headers.get("content-range", ""))
-                            if response.status_code != 206 or not match:
-                                raise RuntimeError("Range 响应缺少有效 Content-Range")
-                            if int(match.group(1)) != start or int(match.group(2)) != end or int(match.group(3)) != total:
-                                raise RuntimeError("Range 响应范围与请求不一致")
-                            with part_path.open("r+b", buffering=0) as output_file:
-                                output_file.seek(start)
-                                async for content in response.aiter_bytes(256 * 1024):
-                                    received += len(content)
-                                    if received > expected:
-                                        raise RuntimeError("Range 响应长度超过请求范围")
-                                    await throttle_bytes(len(content), task)
-                                    output_file.write(content)
-                                    partials[index] = received
-                                    window.add(len(content))
-                                    refresh_progress()
-                        if received != expected:
-                            raise RuntimeError(f"Range 长度不匹配，期望 {expected}，实际 {received}")
-                        async with state_lock:
-                            completed.add(index)
-                            self._completed_chunks.add(index)
-                            self._claimed_chunks.discard(index)
-                            task.engine_state["completed_chunks"] = sorted(completed)
-                            task.progress.completed_segments = len(completed)
-                            committed_bytes += expected
-                            partials.pop(index, None)
-                            refresh_progress(publish=True)
-                            await save_state()
-                        last_error = None
-                        break
-                    except Exception as exc:
-                        last_error = exc
-                        partials.pop(index, None)
-                        if not should_retry_download_error(exc):
-                            break
-                        if attempt < MAX_RETRIES:
-                            delay = retry_delay_seconds(exc, min(4, attempt))
-                            if should_share_retry_window(exc):
-                                remaining, extended = await retry_window.extend(delay)
-                                if extended:
-                                    self._announce_rate_limit(remaining)
-                            else:
-                                await asyncio.sleep(delay)
-                if last_error is not None:
+                stop_at[index] = end
+                parts_open[index] = 1
+                if not await fetch_range(index, start, end, dynamic_stop=True):
                     self._claimed_chunks.discard(index)
-                    raise last_error
+                    queue.task_done()
+                    return
                 queue.task_done()
+            # End-game: assist the slowest remaining chunk instead of idling.
+            while not self._is_canceled() and not self._is_pausing():
+                target = pick_split()
+                if target is None:
+                    return
+                index, split_start, split_end = target
+                stop_at[index] = split_start - 1
+                parts_open[index] += 1
+                if not await fetch_range(index, split_start, split_end, dynamic_stop=False):
+                    return
 
         workers = [asyncio.create_task(worker()) for _ in range(task.progress.max_workers)]
         results = await asyncio.gather(*workers, return_exceptions=True)
