@@ -10,6 +10,7 @@ import {
   pageResourceKey,
   replayableRequestHeaders,
   resourceFingerprint,
+  resourceMatchesPlaybackSource,
   resourceRequestIdentity,
   visiblePlaybackResources,
   shouldTakeover,
@@ -106,6 +107,16 @@ describe('resource rules', () => {
     expect(merged).toHaveLength(1)
     expect(merged[0]).toMatchObject({ id: 'new-signature', url: refreshed.url, seenAt: now })
   })
+  it('matches the current player across refreshed signatures without merging distinct renditions', () => {
+    const captured = resource({
+      kind: 'hls',
+      url: 'https://cdn.test/master.m3u8?quality=1080&token=renewed&expires=900',
+    })
+
+    expect(resourceMatchesPlaybackSource(captured, 'https://cdn.test/master.m3u8?expires=100&token=old&quality=1080')).toBe(true)
+    expect(resourceMatchesPlaybackSource(captured, 'https://cdn.test/master.m3u8?quality=720&token=renewed')).toBe(false)
+    expect(resourceMatchesPlaybackSource(captured, 'blob:https://site.test/current-player')).toBe(false)
+  })
   it('folds captured HLS variants into their master manifest', () => {
     const master = resource({
       id: 'master',
@@ -178,6 +189,21 @@ describe('resource rules', () => {
 
     expect(visiblePlaybackResources([direct, main, bumper, stale], null)).toEqual([])
     expect(visiblePlaybackResources([direct, main, bumper, stale], { sourceUrls: [direct.url], startedAt: now }).map(item => item.id)).toEqual(['direct', 'main', 'bumper'])
+  })
+  it('keeps a signed direct player URL at the exact-evidence tier after its token refreshes', () => {
+    const now = Date.now()
+    const refreshed = resource({
+      id: 'refreshed-direct', kind: 'media', size: 20 * 1024 * 1024,
+      url: 'https://cdn.test/movie.mp4?quality=1080&token=new&expires=900', seenAt: now - 30_000,
+    })
+    const recentFallback = resource({
+      id: 'fallback', kind: 'hls', duration: 3600, bandwidth: 1_000_000,
+      url: 'https://cdn.test/other/master.m3u8', seenAt: now,
+    })
+
+    expect(visiblePlaybackResources([recentFallback, refreshed], {
+      sourceUrls: ['https://cdn.test/movie.mp4?expires=100&quality=1080&token=old'], startedAt: now,
+    }).map(item => item.id)).toEqual(['refreshed-direct', 'fallback'])
   })
   it('does not fall back to unrelated page media when playback has no evidence', () => {
     const now = Date.now()

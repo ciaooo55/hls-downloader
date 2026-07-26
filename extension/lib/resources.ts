@@ -143,6 +143,25 @@ export function resourceFingerprint(resource: Pick<MediaResource, 'url' | 'kind'
   }
 }
 
+/**
+ * Browser media elements and network observers can see the same stream with
+ * different short-lived signatures (or a differently ordered query string).
+ * Compare their stable fingerprint instead of demanding byte-for-byte URL
+ * equality, but keep meaningful parameters such as quality in the key so two
+ * separate renditions never become one-click equivalents.
+ */
+export function resourceMatchesPlaybackSource(resource: Pick<MediaResource, 'url' | 'kind'>, sourceUrl: string): boolean {
+  if (!sourceUrl || sourceUrl.startsWith('blob:')) return false
+  if (sourceUrl === resource.url) return true
+  try {
+    const source = new URL(sourceUrl)
+    if (!['http:', 'https:'].includes(source.protocol)) return false
+  } catch {
+    return false
+  }
+  return resourceFingerprint(resource) === resourceFingerprint({ ...resource, url: sourceUrl })
+}
+
 export function isUsefulResource(resource: MediaResource): boolean {
   if (!resource.url || !resource.kind) return false
   if (resource.statusCode && (resource.statusCode < 200 || resource.statusCode >= 400)) return false
@@ -191,14 +210,14 @@ export function likelyResourceBytes(resource: Pick<MediaResource, 'size' | 'esti
  */
 export function visiblePlaybackResources(resources: MediaResource[], playback: PlaybackContext | null, limit = 8): MediaResource[] {
   if (!playback) return []
-  const sources = new Set(playback.sourceUrls.filter(Boolean))
+  const sources = playback.sourceUrls.filter(Boolean)
   const recentFloor = playback.startedAt - 20_000
   const recentCeiling = playback.startedAt + 90_000
   const candidates = compactResources(resources, 40)
     .filter(item => ['hls', 'dash', 'media'].includes(item.kind))
     .map(item => ({
       item,
-      evidence: sources.has(item.url) ? 3
+      evidence: sources.some(source => resourceMatchesPlaybackSource(item, source)) ? 3
         : item.seenAt >= recentFloor && item.seenAt <= recentCeiling && (item.kind === 'hls' || item.kind === 'dash') ? 2
           : item.seenAt >= recentFloor && item.seenAt <= recentCeiling ? 1 : 0,
       bytes: likelyResourceBytes(item),

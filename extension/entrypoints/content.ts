@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { classifyResource, isGenericMediaName, mergeResources, resourceFingerprint, resourceId, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
+import { classifyResource, isGenericMediaName, mergeResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { resourceQuality } from '../lib/hlsManifest'
 
 async function runtimeMessage(message: Record<string, unknown>, retries = 1): Promise<any> {
@@ -288,7 +288,7 @@ export default defineContentScript({
       // duplicate button on every preview/advert video is noisy and ambiguous.
       videos.slice(0, 1).forEach(({ video, rect }) => {
         const sourceUrls = [video.currentSrc, video.src, ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')].map(source => source.src)].filter(Boolean)
-        const exact = entries.filter(item => sourceUrls.includes(item.url))
+        const exact = entries.filter(item => sourceUrls.some(source => resourceMatchesPlaybackSource(item, source)))
         const hasExactPlayerMatch = exact.length > 0
         const choices = (hasExactPlayerMatch ? exact : entries)
           .sort((left, right) => resourceRank(right) - resourceRank(left) || (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0) || (right.size || right.estimatedSize || 0) - (left.size || left.estimatedSize || 0))
