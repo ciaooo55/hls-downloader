@@ -18,7 +18,14 @@ from ..naming import is_generic_media_name
 from ..request_context import build_task_headers, replay_request_body
 from ..utils import sanitize_filename
 from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
-from .errors import diagnose_download_error, format_download_error, retry_delay_seconds, should_retry_download_error
+from .errors import (
+    SharedRetryWindow,
+    diagnose_download_error,
+    format_download_error,
+    retry_delay_seconds,
+    should_retry_download_error,
+    should_share_retry_window,
+)
 from .throttle import throttle_bytes
 
 
@@ -89,6 +96,8 @@ class HTTPDownloader(SeeklessEngine):
         self._part_path: Path | None = None
         self._total_size = 0
         self._sequential = False
+        self._retry_window = SharedRetryWindow()
+        self._last_rate_limit_notice = 0.0
 
     def request_seek(self, value: int) -> None:
         if value >= 0:
@@ -140,6 +149,22 @@ class HTTPDownloader(SeeklessEngine):
 
     def _is_pausing(self) -> bool:
         return bool(self.task.pause_event and self.task.pause_event.is_set())
+
+    def _announce_rate_limit(self, remaining: float) -> None:
+        """Expose one concise task-level signal for a shared server cooldown."""
+        now = time.monotonic()
+        if now - self._last_rate_limit_notice < 0.5:
+            return
+        self._last_rate_limit_notice = now
+        seconds = max(1, int(remaining + 0.999))
+        self.task.progress.connection_status = "rate_limited"
+        self._set_stage("downloading", f"服务器限流，所有分片等待约 {seconds} 秒")
+
+    def _clear_rate_limit_notice(self) -> None:
+        if self.task.progress.connection_status != "rate_limited":
+            return
+        self.task.progress.connection_status = "running"
+        self._set_stage("downloading", "服务器限流结束，继续分段下载")
 
     async def _probe(self, client: httpx.AsyncClient, headers: dict[str, str]) -> dict:
         head: httpx.Response | None = None
@@ -457,6 +482,8 @@ class HTTPDownloader(SeeklessEngine):
             queue.put_nowait((order, index))
         state_lock = asyncio.Lock()
         started = time.monotonic()
+        self._retry_window = SharedRetryWindow()
+        retry_window = self._retry_window
 
         async def save_state() -> None:
             payload = {
@@ -485,6 +512,11 @@ class HTTPDownloader(SeeklessEngine):
                 for attempt in range(1, MAX_RETRIES + 1):
                     if self._is_canceled():
                         raise asyncio.CancelledError
+                    if not await retry_window.wait(lambda: self._is_canceled() or self._is_pausing()):
+                        self._claimed_chunks.discard(index)
+                        queue.task_done()
+                        return
+                    self._clear_rate_limit_notice()
                     try:
                         expected = end - start + 1
                         received = 0
@@ -528,7 +560,13 @@ class HTTPDownloader(SeeklessEngine):
                         if not should_retry_download_error(exc):
                             break
                         if attempt < MAX_RETRIES:
-                            await asyncio.sleep(retry_delay_seconds(exc, min(4, attempt)))
+                            delay = retry_delay_seconds(exc, min(4, attempt))
+                            if should_share_retry_window(exc):
+                                remaining, extended = await retry_window.extend(delay)
+                                if extended:
+                                    self._announce_rate_limit(remaining)
+                            else:
+                                await asyncio.sleep(delay)
                 if last_error is not None:
                     self._claimed_chunks.discard(index)
                     raise last_error

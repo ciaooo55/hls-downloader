@@ -2,6 +2,7 @@ import asyncio
 import base64
 import errno
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -308,6 +309,73 @@ def test_http_resume_is_discarded_when_etag_changes(tmp_path, monkeypatch):
     asyncio.run(run())
     assert part.read_bytes() == b"z" * 32
     assert task.progress.downloaded_bytes == 32
+
+
+def test_http_range_429_holds_new_workers_until_shared_retry_after(tmp_path, monkeypatch):
+    """A completed worker must not start its next range during a peer's 429 window."""
+    from backend.app.downloader import http_file as http_file_module
+    from backend.app.downloader.errors import SharedRetryWindow
+
+    chunk_size = 1024 * 1024
+    total = chunk_size * 3
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
+    state = {"limited": False, "deadline": 0.0, "requests": []}
+
+    class RecordingRetryWindow(SharedRetryWindow):
+        async def extend(self, delay: float):
+            remaining, extended = await super().extend(delay)
+            if extended:
+                state["deadline"] = time.monotonic() + remaining
+            return remaining, extended
+
+    monkeypatch.setattr(http_file_module, "SharedRetryWindow", RecordingRetryWindow)
+    task = Task(
+        id="http-rate-limit",
+        url="https://files.test/rate-limited.bin",
+        task_type=TaskType.HTTP,
+        concurrency=2,
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        start_text, end_text = request.headers["range"].removeprefix("bytes=").split("-", 1)
+        start, end = int(start_text), int(end_text)
+        requested_at = time.monotonic()
+        # Requests already in flight before the response is handled are valid;
+        # every new request after the gate is armed must wait for its deadline.
+        if state["deadline"]:
+            assert requested_at >= state["deadline"] - 0.003
+        state["requests"].append((start, requested_at))
+        if start == 0 and not state["limited"]:
+            state["limited"] = True
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "0.05"},
+                request=request,
+            )
+        # Let the 429 worker arm the shared window before this worker takes
+        # another item from the range queue.
+        await asyncio.sleep(0.005)
+        return httpx.Response(
+            206,
+            content=b"x" * (end - start + 1),
+            headers={"Content-Range": f"bytes {start}-{end}/{total}"},
+            request=request,
+        )
+
+    async def run() -> None:
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_ranges(
+                client,
+                {},
+                tmp_path / "payload.downloading",
+                tmp_path / "resume.json",
+                {"total": total, "etag": '"v1"', "last_modified": "now"},
+            )
+
+    asyncio.run(run())
+    assert task.progress.completed_segments == 3
+    assert len(state["requests"]) >= 4
 
 
 def test_http_resume_without_a_server_validator_is_discarded(tmp_path, monkeypatch):

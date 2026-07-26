@@ -1,8 +1,7 @@
 {
-  "config_version": 14,
+  "config_version": 13,
   "host": "127.0.0.1",
   "port": 8765,
-  "token": "ktHjYK8MXbRKgH0QtuGQl1n4duHVHAMECEbOpiTNCqM",
   "download_dir": "downloads",
   "temp_dir": ".",
   "default_concurrency": 12,

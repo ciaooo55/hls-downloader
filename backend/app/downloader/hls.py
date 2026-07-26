@@ -21,7 +21,15 @@ from ..naming import is_generic_media_name, suggest_manifest_name
 from ..request_context import build_task_headers
 from .http_file import _content_disposition_filename
 from .merge import merge_segments
-from .errors import as_download_error, diagnose_download_error, format_download_error, retry_delay_seconds, should_retry_download_error
+from .errors import (
+    SharedRetryWindow,
+    as_download_error,
+    diagnose_download_error,
+    format_download_error,
+    retry_delay_seconds,
+    should_retry_download_error,
+    should_share_retry_window,
+)
 from .throttle import throttle_bytes
 from .engine import task_output_dir, task_work_dir
 from .parser import UnsupportedPlaylistError, parse_m3u8
@@ -159,6 +167,8 @@ class HLSDownloader:
         self._key_cache: dict[str, bytes] = {}
         self._last_segment_error: Exception | None = None
         self._playback_priority_index: int | None = task.playback_seek_index
+        self._retry_window = SharedRetryWindow()
+        self._last_rate_limit_notice = 0.0
 
     def request_seek(self, segment_index: int) -> None:
         if segment_index >= 0:
@@ -205,6 +215,21 @@ class HLSDownloader:
 
     def _is_pausing(self) -> bool:
         return bool(self.task.pause_event and self.task.pause_event.is_set())
+
+    def _announce_rate_limit(self, remaining: float) -> None:
+        now = asyncio.get_running_loop().time()
+        if now - self._last_rate_limit_notice < 0.5:
+            return
+        self._last_rate_limit_notice = now
+        seconds = max(1, int(remaining + 0.999))
+        self.task.progress.connection_status = "rate_limited"
+        self._set_stage("downloading_segments", f"服务器限流，所有分片等待约 {seconds} 秒")
+
+    def _clear_rate_limit_notice(self) -> None:
+        if self.task.progress.connection_status != "rate_limited":
+            return
+        self.task.progress.connection_status = "running"
+        self._set_stage("downloading_segments", "服务器限流结束，继续下载")
 
     def _clear_failure(self) -> None:
         self.task.error_message = ""
@@ -511,6 +536,7 @@ class HLSDownloader:
         self._failed_indexes = []
         self._last_segment_error = None
         self.task.progress.failed_segments = 0
+        self._retry_window = SharedRetryWindow()
         pending: dict[int, dict] = {}
         for segment in segments:
             destination = self._seg_dir() / f"{segment['index']:06d}.seg"
@@ -608,6 +634,9 @@ class HLSDownloader:
             attempts_made = attempt + 1
             if self._is_canceled() or self._is_pausing():
                 return False
+            if not await self._retry_window.wait(lambda: self._is_canceled() or self._is_pausing()):
+                return False
+            self._clear_rate_limit_notice()
             try:
                 key_info = segment.get("key")
                 if key_info:
@@ -661,7 +690,13 @@ class HLSDownloader:
                     self._log(
                         f"[segment {index}] 第 {attempt + 1}/{MAX_RETRIES} 次失败: {exc}"
                     )
-                    await asyncio.sleep(retry_delay_seconds(exc, min(2**attempt, 10)))
+                    delay = retry_delay_seconds(exc, min(2**attempt, 10))
+                    if should_share_retry_window(exc):
+                        remaining, extended = await self._retry_window.extend(delay)
+                        if extended:
+                            self._announce_rate_limit(remaining)
+                    else:
+                        await asyncio.sleep(delay)
         if last_error is None:
             raise RuntimeError(f"分片 {index} 下载失败")
         raise as_download_error(

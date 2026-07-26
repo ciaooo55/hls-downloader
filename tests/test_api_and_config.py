@@ -333,11 +333,14 @@ def test_save_settings_serializes_project_paths_as_relative(tmp_path, monkeypatc
     assert saved["ffmpeg_path"] == "bin\\ffmpeg.exe"
 
 
-def test_repository_default_config_does_not_force_site_specific_request_headers():
-    config_path = config_module.PROJECT_ROOT / "config.json"
+def test_distributable_default_config_does_not_force_site_specific_request_headers():
+    config_path = config_module.PROJECT_ROOT / "config.default.json"
     data = json.loads(config_path.read_text(encoding="utf-8"))
 
-    assert data["config_version"] == 14
+    # The checked-in template must not ship a reusable privileged credential.
+    # First launch migrates this v13 template and persists a per-install token.
+    assert data["config_version"] == 13
+    assert "token" not in data
     assert data["temp_dir"] == "."
     assert data["default_referer"] == ""
     assert data["default_origin"] == ""
@@ -384,6 +387,28 @@ def test_old_blank_request_defaults_remain_blank_after_migration(tmp_path, monke
     assert saved["temp_dir"] == "."
     assert saved["default_concurrency"] == 12
     assert saved["max_concurrent_tasks"] == 3
+
+
+def test_v13_template_generates_a_per_install_native_transport_token(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "config_version": 13,
+                "download_dir": str(tmp_path / "downloads"),
+                "ffmpeg_path": str(tmp_path / "ffmpeg.exe"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+
+    loaded = config_module.load_settings()
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert loaded.config_version == 14
+    assert saved["config_version"] == 14
+    assert len(saved["token"]) >= 32
 
 
 def test_v2_legacy_concurrency_defaults_migrate_to_new_defaults(tmp_path, monkeypatch):

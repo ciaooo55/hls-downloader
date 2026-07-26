@@ -1,3 +1,5 @@
+import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 import math
@@ -352,9 +354,9 @@ def should_retry_download_error(exc: BaseException) -> bool:
     return status in {408, 425, 429} or 500 <= status <= 599
 
 
-def retry_delay_seconds(exc: BaseException, fallback: float, maximum: float = 60.0) -> float:
-    """Honor a bounded HTTP Retry-After delay when the server supplies one."""
-    default = max(0.0, min(float(fallback), float(maximum)))
+def retry_after_seconds(exc: BaseException, maximum: float = 60.0) -> float | None:
+    """Return a bounded valid ``Retry-After`` value, if a response supplied one."""
+    cap = max(0.0, float(maximum))
     for item in _exception_chain(exc):
         value = _response_headers(getattr(item, "response", None)).get("retry-after", "").strip()
         if not value:
@@ -370,5 +372,71 @@ def retry_delay_seconds(exc: BaseException, fallback: float, maximum: float = 60
             except (TypeError, ValueError, IndexError, OverflowError):
                 continue
         if math.isfinite(seconds) and seconds >= 0:
-            return min(float(maximum), seconds)
-    return default
+            return min(cap, seconds)
+    return None
+
+
+def should_share_retry_window(exc: BaseException) -> bool:
+    """Whether a retry represents server-wide throttling rather than a local blip."""
+    return http_status_from_exception(exc) == 429 or retry_after_seconds(exc) is not None
+
+
+def retry_delay_seconds(exc: BaseException, fallback: float, maximum: float = 60.0) -> float:
+    """Honor a bounded HTTP Retry-After delay when the server supplies one."""
+    default = max(0.0, min(float(fallback), float(maximum)))
+    server_delay = retry_after_seconds(exc, maximum)
+    return server_delay if server_delay is not None else default
+
+
+class SharedRetryWindow:
+    """A task-local, cancellation-aware cooldown shared by concurrent workers.
+
+    A multi-range HTTP or HLS download can issue many requests at once.  If one
+    receives 429/Retry-After, letting every other worker continue immediately
+    tends to extend the server's penalty.  This small gate keeps the latest
+    monotonic deadline for the whole task.  It intentionally has no global
+    state: unrelated downloads must never slow one another down.
+    """
+
+    def __init__(
+        self,
+        *,
+        poll_interval: float = 0.05,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self._clock = clock
+        self._sleep = sleep
+        self._poll_interval = max(0.01, float(poll_interval))
+        self._not_before = 0.0
+        self._lock = asyncio.Lock()
+
+    async def extend(self, delay: float) -> tuple[float, bool]:
+        """Push the window out by ``delay`` when it exceeds the existing one.
+
+        Returns ``(remaining_seconds, was_extended)`` so callers can emit one
+        meaningful status update without guessing whether another worker had
+        already set a longer deadline.
+        """
+        bounded_delay = max(0.0, float(delay))
+        async with self._lock:
+            now = self._clock()
+            deadline = now + bounded_delay
+            extended = deadline > self._not_before
+            if extended:
+                self._not_before = deadline
+            return max(0.0, self._not_before - now), extended
+
+    async def remaining(self) -> float:
+        async with self._lock:
+            return max(0.0, self._not_before - self._clock())
+
+    async def wait(self, stop_check: Callable[[], bool] | None = None) -> bool:
+        """Wait for the shared cooldown, returning false promptly on stop/pause."""
+        while True:
+            if stop_check is not None and stop_check():
+                return False
+            remaining = await self.remaining()
+            if remaining <= 0:
+                return True
+            await self._sleep(min(self._poll_interval, remaining))

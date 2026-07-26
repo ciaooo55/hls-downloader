@@ -1,9 +1,16 @@
 import asyncio
+import time
 
 import httpx
 from curl_cffi.requests.exceptions import ReadTimeout as CurlReadTimeout
 
-from backend.app.downloader.errors import diagnose_download_error, retry_delay_seconds, should_retry_download_error
+from backend.app.downloader.errors import (
+    SharedRetryWindow,
+    diagnose_download_error,
+    retry_delay_seconds,
+    should_retry_download_error,
+    should_share_retry_window,
+)
 from backend.app.downloader.hls import HLSDownloader
 from backend.app.models import Task, TaskStatus
 
@@ -129,6 +136,56 @@ def test_retry_delay_honors_valid_retry_after_and_bounds_it():
     assert retry_delay_seconds(throttled, 2, maximum=30) == 12
     assert retry_delay_seconds(excessive, 2, maximum=30) == 30
     assert retry_delay_seconds(invalid, 2, maximum=30) == 2
+
+
+def test_rate_limit_retry_window_is_shared_and_interruptible():
+    async def run() -> None:
+        window = SharedRetryWindow(poll_interval=0.005)
+        await window.extend(0.02)
+        started = time.monotonic()
+        first = asyncio.create_task(window.wait())
+        await asyncio.sleep(0.01)
+        remaining, extended = await window.extend(0.05)
+        second = asyncio.create_task(window.wait())
+        assert extended is True
+        assert remaining > 0.04
+        assert await first is True
+        assert await second is True
+        # The second 429 pushed out the first wait rather than each worker
+        # continuing independently after its own original backoff.
+        assert time.monotonic() - started >= 0.045
+
+        stopped = False
+        await window.extend(0.5)
+
+        def stop_check() -> bool:
+            return stopped
+
+        waiter = asyncio.create_task(window.wait(stop_check))
+        await asyncio.sleep(0.01)
+        stopped = True
+        assert await waiter is False
+
+    asyncio.run(run())
+
+
+def test_rate_limit_window_only_applies_to_429_or_retry_after():
+    request = httpx.Request("GET", "https://example.test/file")
+    limited = httpx.HTTPStatusError(
+        "limited", request=request, response=httpx.Response(429, request=request)
+    )
+    delayed = httpx.HTTPStatusError(
+        "busy",
+        request=request,
+        response=httpx.Response(503, headers={"Retry-After": "1"}, request=request),
+    )
+    transient = httpx.HTTPStatusError(
+        "busy", request=request, response=httpx.Response(503, request=request)
+    )
+
+    assert should_share_retry_window(limited) is True
+    assert should_share_retry_window(delayed) is True
+    assert should_share_retry_window(transient) is False
 
 
 def test_range_and_merge_failures_get_stable_codes():
