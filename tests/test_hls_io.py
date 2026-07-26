@@ -65,6 +65,69 @@ one.ts
     asyncio.run(run())
 
 
+def test_load_media_playlist_retries_a_transient_origin_failure(monkeypatch):
+    from backend.app.downloader import hls as hls_module
+
+    calls = []
+    monkeypatch.setattr(hls_module, "retry_delay_seconds", lambda *_args: 0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if len(calls) == 1:
+            return httpx.Response(503, request=request)
+        return httpx.Response(
+            200,
+            request=request,
+            text="#EXTM3U\n#EXTINF:4,\none.ts\n#EXT-X-ENDLIST\n",
+        )
+
+    async def run():
+        downloader = HLSDownloader(_task())
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            parsed = await downloader._load_media_playlist(
+                client,
+                "https://example.test/master.m3u8",
+                {},
+            )
+        assert len(parsed["segments"]) == 1
+
+    asyncio.run(run())
+    assert calls == [
+        "https://example.test/master.m3u8",
+        "https://example.test/master.m3u8",
+    ]
+
+
+def test_hls_control_resources_retry_transient_failures(tmp_path, monkeypatch):
+    from backend.app.downloader import hls as hls_module
+
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path))
+    monkeypatch.setattr(hls_module, "retry_delay_seconds", lambda *_args: 0)
+    key = b"0123456789abcdef"
+    calls = {"init": 0, "key": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        name = request.url.path.rsplit("/", 1)[-1]
+        calls[name.split(".", 1)[0]] += 1
+        if calls[name.split(".", 1)[0]] == 1:
+            return httpx.Response(503, request=request)
+        return httpx.Response(200, request=request, content=key if name == "key.bin" else b"init")
+
+    async def run():
+        downloader = HLSDownloader(_task())
+        segment = {
+            "index": 0,
+            "init_map": {"uri": "https://example.test/init.mp4", "byte_range": None},
+        }
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_init_maps(client, [segment], {})
+            assert Path(segment["init_path"]).read_bytes() == b"init"
+            assert await downloader._fetch_key(client, "https://example.test/key.bin", {}) == key
+
+    asyncio.run(run())
+    assert calls == {"init": 2, "key": 2}
+
+
 def test_hls_with_external_audio_uses_adaptive_compatibility_engine(tmp_path, monkeypatch):
     from backend.app.downloader import hls as hls_module
 

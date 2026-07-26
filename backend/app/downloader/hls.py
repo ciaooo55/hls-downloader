@@ -1,6 +1,7 @@
 import asyncio
 import re
 import shutil
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -285,6 +286,74 @@ class HLSDownloader:
             lambda: shutil.rmtree(task_dir, ignore_errors=True),
         )
 
+    async def _retry_control_request(
+        self,
+        operation: Callable[[], Awaitable[Any]],
+        *,
+        stage: str,
+        url: str,
+        label: str,
+    ) -> Any:
+        """Retry small HLS control resources without treating auth failures as transient.
+
+        A playlist, AES key, or fMP4 init map is fetched before (or outside)
+        the normal segment worker pool.  Those requests previously bypassed
+        the segment retry logic, so one brief 429/503/timeout could discard an
+        otherwise healthy video.  Keep the retry policy identical to segments,
+        including Retry-After and the task-local cooldown, while preserving
+        non-retryable 401/403/404 failures for actionable diagnostics.
+        """
+        last_error: Exception | None = None
+        attempts_made = 0
+        for attempt in range(MAX_RETRIES):
+            attempts_made = attempt + 1
+            if self._is_canceled() or self._is_pausing():
+                raise asyncio.CancelledError
+            if not await self._retry_window.wait(
+                lambda: self._is_canceled() or self._is_pausing()
+            ):
+                raise asyncio.CancelledError
+            try:
+                value = await operation()
+                if self.task.progress.connection_status == "rate_limited":
+                    self.task.progress.connection_status = (
+                        "running" if stage == "downloading_segments" else "connecting"
+                    )
+                    self._set_stage(stage, f"{label}限流结束，继续请求")
+                return value
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                if not should_retry_download_error(exc):
+                    break
+                if attempt >= MAX_RETRIES - 1:
+                    break
+                delay = retry_delay_seconds(exc, min(2**attempt, 10))
+                if should_share_retry_window(exc):
+                    remaining, extended = await self._retry_window.extend(delay)
+                    if extended:
+                        seconds = max(1, int(remaining + 0.999))
+                        self.task.progress.connection_status = "rate_limited"
+                        self._set_stage(
+                            stage,
+                            f"服务器限流，{label}等待约 {seconds} 秒",
+                        )
+                else:
+                    self._log(
+                        f"[{label}] 第 {attempt + 1}/{MAX_RETRIES} 次失败: {exc}"
+                    )
+                    await asyncio.sleep(delay)
+        if last_error is None:
+            raise RuntimeError(f"{label}请求失败")
+        raise as_download_error(
+            last_error,
+            stage=stage,
+            url=url,
+            attempt=attempts_made,
+            task_context=self.task,
+        ) from last_error
+
     async def _load_media_playlist(
         self,
         client: Any,
@@ -300,11 +369,20 @@ class HLSDownloader:
             if current_url in visited:
                 raise ValueError(f"主清单存在循环引用: {current_url}")
             visited.add(current_url)
-            response = await client.get(
-                current_url,
-                headers=self._headers(current_url, headers),
+            async def load_playlist():
+                response = await client.get(
+                    current_url,
+                    headers=self._headers(current_url, headers),
+                )
+                response.raise_for_status()
+                return response
+
+            response = await self._retry_control_request(
+                load_playlist,
+                stage="parsing",
+                url=current_url,
+                label="HLS 清单",
             )
-            response.raise_for_status()
             final_url = str(getattr(response, "url", "") or current_url)
             parsed = parse_m3u8(final_url, response.text)
             manifest_title = manifest_title or parsed.get("title", "")
@@ -513,12 +591,17 @@ class HLSDownloader:
                     if key_info:
                         encrypted = destination.with_name(destination.name + ".enc")
                         try:
-                            await self._download_resource(
-                                client,
-                                descriptor["uri"],
-                                encrypted,
-                                headers,
-                                byte_range,
+                            await self._retry_control_request(
+                                lambda: self._download_resource(
+                                    client,
+                                    descriptor["uri"],
+                                    encrypted,
+                                    headers,
+                                    byte_range,
+                                ),
+                                stage="parsing",
+                                url=descriptor["uri"],
+                                label="初始化片段",
                             )
                             key = await self._fetch_key(client, key_info["uri"], headers)
                             await asyncio.to_thread(
@@ -531,12 +614,17 @@ class HLSDownloader:
                         finally:
                             encrypted.unlink(missing_ok=True)
                     else:
-                        await self._download_resource(
-                            client,
-                            descriptor["uri"],
-                            destination,
-                            headers,
-                            byte_range,
+                        await self._retry_control_request(
+                            lambda: self._download_resource(
+                                client,
+                                descriptor["uri"],
+                                destination,
+                                headers,
+                                byte_range,
+                            ),
+                            stage="parsing",
+                            url=descriptor["uri"],
+                            label="初始化片段",
                         )
                 cache[cache_key] = destination
             segment["init_path"] = str(cache[cache_key])
@@ -745,8 +833,17 @@ class HLSDownloader:
         headers: dict[str, str],
     ) -> bytes:
         if url not in self._key_cache:
-            response = await client.get(url, headers=self._headers(url, headers))
-            response.raise_for_status()
+            async def load_key():
+                response = await client.get(url, headers=self._headers(url, headers))
+                response.raise_for_status()
+                return response
+
+            response = await self._retry_control_request(
+                load_key,
+                stage=self.task.stage or "parsing",
+                url=url,
+                label="AES 密钥",
+            )
             if len(response.content) != 16:
                 raise ValueError(
                     f"AES-128 密钥长度必须是 16 字节，实际为 {len(response.content)}"
