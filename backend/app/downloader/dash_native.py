@@ -1,0 +1,376 @@
+"""Native MPEG-DASH segment engine.
+
+Downloads the best video and audio representations of a static VOD MPD
+with the same segment-level machinery the HLS engine has: shared retry
+policy with rate-limit cooldowns, byte-accurate progress, pause that
+keeps completed segments, and resume that skips them.  The tracks are
+then concatenated and muxed losslessly with ffmpeg.
+
+The engine deliberately reports NativeDashUnsupported before the first
+media byte is downloaded whenever the manifest is outside its scope, so
+the caller can fall back to the bundled yt-dlp engine with nothing lost.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import shutil
+from datetime import datetime
+from pathlib import Path
+
+import httpx
+
+from ..config import settings
+from ..checksum import verify_task_checksum
+from ..models import Task, TaskStatus
+from ..request_context import build_task_headers
+from .engine import task_output_dir, task_work_dir
+from .errors import (
+    SharedRetryWindow,
+    retry_delay_seconds,
+    should_retry_download_error,
+    should_share_retry_window,
+)
+from .merge import _run_ffmpeg, _verify_output
+from .mpd import NativeDashUnsupported, parse_mpd
+from .progress import ProgressTracker
+from .throttle import throttle_bytes
+
+MAX_RETRIES = 5
+DASH_TIMEOUT = httpx.Timeout(connect=10, read=60, write=30, pool=30)
+TRACK_DIRS = {"video": "v", "audio": "a"}
+
+
+class NativeDashEngine:
+    def __init__(self, task: Task, on_progress=None, on_log=None) -> None:
+        self.task = task
+        self.on_progress = on_progress or (lambda task: None)
+        self.on_log = on_log or (lambda task_id, message: None)
+        self._retry_window = SharedRetryWindow()
+        self.tracker = ProgressTracker()
+        self._header_cache: dict[str, dict[str, str]] = {}
+
+    def _publish(self) -> None:
+        self.on_progress(self.task)
+
+    def _log(self, message: str) -> None:
+        self.on_log(self.task.id, message)
+
+    def _set_stage(self, stage: str, message: str) -> None:
+        self.task.stage = stage
+        self.task.last_log = message
+        self.on_log(self.task.id, f"[{stage}] {message}")
+        self._publish()
+
+    def _is_canceled(self) -> bool:
+        return bool(self.task.cancel_event and self.task.cancel_event.is_set())
+
+    def _is_pausing(self) -> bool:
+        return bool(self.task.pause_event and self.task.pause_event.is_set())
+
+    def _headers(self, request_url: str = "") -> dict[str, str]:
+        """Per-URL headers so manifest-origin cookies never leak to CDNs.
+
+        build_task_headers scopes cookies/authorization by request origin;
+        memoized per origin because a stream has thousands of same-origin
+        segment requests.
+        """
+        origin = ""
+        if request_url:
+            try:
+                parsed = httpx.URL(request_url)
+                origin = f"{parsed.scheme}://{parsed.host}:{parsed.port or ''}"
+            except Exception:
+                origin = request_url
+        cached = self._header_cache.get(origin)
+        if cached is None:
+            cached = build_task_headers(self.task, request_url=request_url)
+            self._header_cache[origin] = cached
+        return cached
+
+    async def run(self) -> bool:
+        """Download, concat and mux the manifest's best tracks.
+
+        Returns True when the task reached a terminal or paused state here.
+        Raises NativeDashUnsupported (before any media download) when the
+        manifest needs the fallback engine.
+        """
+        task = self.task
+        task_dir = task_work_dir(task)
+        task_dir.mkdir(parents=True, exist_ok=True)
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=DASH_TIMEOUT
+        ) as client:
+            response = await client.get(task.url, headers=self._headers(task.url))
+            response.raise_for_status()
+            text = response.text
+            if "<MPD" not in text[:4096]:
+                raise NativeDashUnsupported("清单不是 MPD 格式")
+            manifest_url = str(response.url or task.url)
+            parsed = parse_mpd(manifest_url, text)
+            tracks = {
+                kind: parsed[kind]
+                for kind in ("video", "audio")
+                if parsed.get(kind)
+            }
+            if not tracks:
+                raise NativeDashUnsupported("MPD 中没有可下载轨道")
+            (task_dir / "manifest.mpd").write_text(text, encoding="utf-8")
+
+            total_segments = sum(
+                len(track["segments"]) + (1 if track["init_url"] else 0)
+                for track in tracks.values()
+            )
+            duration = float(parsed.get("duration") or 0)
+            task.progress.total_segments = total_segments
+            task.progress.completed_segments = 0
+            task.progress.media_duration = duration
+            task.progress.max_workers = min(max(1, task.concurrency), 8)
+            task.progress.connection_status = "running"
+            task.status = TaskStatus.DOWNLOADING_SEGMENTS
+            quality = ""
+            video = tracks.get("video")
+            if video and video.get("height"):
+                quality = f"{video['height']}p "
+            self._set_stage(
+                "downloading_segments",
+                f"原生 DASH 引擎：{quality}{len(tracks)} 条轨道，共 {total_segments} 个分片",
+            )
+
+            jobs: list[tuple[Path, str]] = []
+            for kind, track in tracks.items():
+                track_dir = task_dir / TRACK_DIRS[kind]
+                track_dir.mkdir(parents=True, exist_ok=True)
+                if track["init_url"]:
+                    jobs.append((track_dir / "init.mp4", track["init_url"]))
+                for index, segment in enumerate(track["segments"]):
+                    jobs.append((track_dir / f"{index:06d}.m4s", segment["url"]))
+
+            semaphore = asyncio.Semaphore(task.progress.max_workers)
+            self.tracker.start(total_segments)
+            stopped = False
+
+            async def fetch(destination: Path, url: str) -> None:
+                nonlocal stopped
+                async with semaphore:
+                    if stopped or self._is_canceled() or self._is_pausing():
+                        stopped = True
+                        return
+                    task.progress.active_workers += 1
+                    task.progress.active_slots += 1
+                    try:
+                        await self._download_one(client, url, destination)
+                        if not destination.exists():
+                            stopped = True
+                            return
+                        self.tracker.add_completed(destination.stat().st_size)
+                        snapshot = self.tracker.snapshot()
+                        task.progress.completed_segments = snapshot["completed"]
+                        task.progress.downloaded_bytes = snapshot["downloaded_bytes"]
+                        task.progress.speed_bytes_per_sec = snapshot["speed"]
+                        task.progress.eta_seconds = snapshot["eta"]
+                        if total_segments:
+                            task.progress.progress_percent = (
+                                snapshot["completed"] * 100 / total_segments
+                            )
+                    finally:
+                        task.progress.active_workers -= 1
+                        task.progress.active_slots -= 1
+                        self._publish()
+
+            results = await asyncio.gather(
+                *(fetch(path, url) for path, url in jobs), return_exceptions=True
+            )
+            if self._is_canceled():
+                raise asyncio.CancelledError
+            error = next(
+                (item for item in results if isinstance(item, Exception)), None
+            )
+            if error is not None:
+                raise error
+            if stopped or self._is_pausing():
+                if task.pause_event is not None:
+                    task.pause_event.clear()
+                task.status = TaskStatus.PAUSED
+                task.progress.connection_status = "idle"
+                self._set_stage("paused", "已暂停，已完成的分片会在继续时复用")
+                return True
+
+        task.status = TaskStatus.MERGING
+        task.progress.post_percent = 5.0
+        self._set_stage("merging", "正在拼接 DASH 轨道")
+        track_files: list[Path] = []
+        for kind, track in tracks.items():
+            track_dir = task_dir / TRACK_DIRS[kind]
+            joined = task_dir / f"{kind}.track.mp4"
+            await asyncio.to_thread(
+                self._concat_track, track_dir, track, joined
+            )
+            track_files.append(joined)
+
+        # VP8 (and some VP9) streams are WebM-only; Matroska accepts any
+        # codec losslessly, so it is the safe container for those.
+        container = ".mkv" if any(
+            "webm" in str(track.get("mime") or "").lower()
+            or str(track.get("codecs") or "").lower().startswith("vp0")
+            or str(track.get("codecs") or "").lower().startswith("vp8")
+            for track in tracks.values()
+        ) else ".mp4"
+        output = self._reserve_output(task, container)
+        task.engine_state["reserved_output_path"] = str(output)
+        task.status = TaskStatus.REMUXING
+        self._set_stage("remuxing", "正在无损合并音视频轨")
+        temporary = output.with_name(f"{output.stem}.merging{output.suffix}")
+        temporary.unlink(missing_ok=True)
+        command = [settings.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error"]
+        for path in track_files:
+            command += ["-i", str(path)]
+        command += ["-c", "copy"]
+        if container == ".mp4":
+            command += ["-movflags", "+faststart"]
+        command += ["-progress", "pipe:1", str(temporary)]
+        try:
+            success = await _run_ffmpeg(
+                command, task=task, duration_sec=duration, on_progress=self.on_progress
+            )
+            if not success or not temporary.exists() or temporary.stat().st_size <= 0:
+                raise RuntimeError("ffmpeg 合并 DASH 轨道失败")
+            if duration > 0:
+                await _verify_output(settings.ffmpeg_path, temporary, duration)
+            temporary.replace(output)
+        except BaseException:
+            # Never leave a zero-byte reservation or half-written file in
+            # the user's download directory on failure/cancel/shutdown.
+            temporary.unlink(missing_ok=True)
+            if output.exists() and output.stat().st_size == 0:
+                output.unlink(missing_ok=True)
+            raise
+        task.engine_state.pop("reserved_output_path", None)
+
+        task.filename = output.name
+        task.output_path = str(output)
+        task.engine_state["output_is_file"] = True
+        task.engine_state["stream_path"] = str(output)
+        size = output.stat().st_size
+        task.engine_state["total_size"] = size
+        task.progress.downloaded_bytes = max(task.progress.downloaded_bytes, size)
+        task.progress.total_bytes = task.progress.downloaded_bytes
+        task.progress.progress_percent = 100.0
+        task.progress.post_percent = 100.0
+        task.progress.connection_status = "idle"
+        if not await verify_task_checksum(
+            task, output, on_progress=self.on_progress, on_log=self.on_log
+        ):
+            return True
+        task.status = TaskStatus.DONE
+        task.finished_at = datetime.now().isoformat()
+        self._set_stage("done", f"完成: {output.name} ({size / 1048576:.1f} MB)")
+        if not settings.keep_temp_files:
+            import shutil
+
+            await asyncio.to_thread(shutil.rmtree, task_dir, True)
+        return True
+
+    async def _download_one(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        destination: Path,
+    ) -> None:
+        task = self.task
+        headers = self._headers(url)
+        if destination.exists() and destination.stat().st_size > 0:
+            # Byte accounting happens in the caller via the tracker.
+            return
+        last_error: Exception | None = None
+        for attempt in range(MAX_RETRIES):
+            if self._is_canceled() or self._is_pausing():
+                return
+            if not await self._retry_window.wait(
+                lambda: self._is_canceled() or self._is_pausing()
+            ):
+                return
+            temporary = destination.with_name(destination.name + ".tmp")
+            try:
+                received = 0
+                async with client.stream("GET", url, headers=headers) as response:
+                    response.raise_for_status()
+                    with temporary.open("wb") as stream:
+                        async for chunk in response.aiter_bytes(256 * 1024):
+                            if self._is_canceled() or self._is_pausing():
+                                raise asyncio.CancelledError
+                            await throttle_bytes(len(chunk))
+                            stream.write(chunk)
+                            received += len(chunk)
+                if received <= 0:
+                    raise RuntimeError("分片响应为空")
+                temporary.replace(destination)
+                return
+            except asyncio.CancelledError:
+                temporary.unlink(missing_ok=True)
+                if self._is_pausing() and not self._is_canceled():
+                    return
+                raise
+            except Exception as exc:
+                temporary.unlink(missing_ok=True)
+                last_error = exc
+                task.progress.reconnect_count += 1
+                task.progress.connection_status = "reconnecting"
+                if not should_retry_download_error(exc):
+                    break
+                if attempt < MAX_RETRIES - 1:
+                    delay = retry_delay_seconds(exc, min(2**attempt, 10))
+                    if should_share_retry_window(exc):
+                        remaining, extended = await self._retry_window.extend(delay)
+                        if extended:
+                            self._set_stage(
+                                "downloading_segments",
+                                f"源站限流，共同等待 {max(1, int(remaining))} 秒",
+                            )
+                    else:
+                        await asyncio.sleep(delay)
+        if last_error is not None:
+            raise last_error
+
+    @staticmethod
+    def _concat_track(track_dir: Path, track: dict, destination: Path) -> None:
+        """Join init + media segments into one continuous fMP4 track file."""
+        with destination.open("wb") as output:
+            init_path = track_dir / "init.mp4"
+            if track["init_url"] and init_path.exists():
+                output.write(init_path.read_bytes())
+            for index in range(len(track["segments"])):
+                segment_path = track_dir / f"{index:06d}.m4s"
+                with segment_path.open("rb") as source:
+                    while True:
+                        block = source.read(1024 * 1024)
+                        if not block:
+                            break
+                        output.write(block)
+
+    @staticmethod
+    def _reserve_output(task: Task, container: str = ".mp4") -> Path:
+        from ..utils import sanitize_filename
+
+        name = sanitize_filename(task.filename or task.title or task.id)
+        if Path(name).suffix.lower() in {".mpd", ".xml"}:
+            name = Path(name).stem or task.id
+        # Dotted display names ("Show.S01E02.1080p") are not containers;
+        # ffmpeg picks its muxer from the extension, so always force one.
+        if not name.lower().endswith(container):
+            name += container
+        directory = task_output_dir(task)
+        directory.mkdir(parents=True, exist_ok=True)
+        base = directory / name
+        for index in range(10000):
+            candidate = base if index == 0 else base.with_name(
+                f"{base.stem}_{index}{base.suffix}"
+            )
+            try:
+                # Atomically claim the name so two same-named tasks can
+                # never write the same output file concurrently.
+                candidate.open("xb").close()
+                return candidate
+            except FileExistsError:
+                continue
+        raise RuntimeError(f"无法分配输出名称: {base.name}")

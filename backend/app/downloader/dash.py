@@ -10,8 +10,10 @@ from ..checksum import verify_task_checksum
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
 from ..request_context import build_task_headers
+from .dash_native import NativeDashEngine
 from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
 from .errors import diagnose_download_error, format_download_error
+from .mpd import NativeDashUnsupported
 
 
 class _StopDownload(Exception):
@@ -49,6 +51,22 @@ class DashDownloader(SeeklessEngine):
             task.started_at = task.started_at or datetime.now().isoformat()
             task.progress.connection_status = "connecting"
             self._set_stage("parsing", f"正在解析 {self.source_label} 清单")
+            if self.source_label == "DASH":
+                # The native engine covers static VOD MPDs with full
+                # segment-level progress/pause/resume; anything outside its
+                # scope reports back before any media download so the
+                # yt-dlp fallback loses nothing.
+                try:
+                    handled = await NativeDashEngine(
+                        task, self.on_progress, self.on_log
+                    ).run()
+                except NativeDashUnsupported as exc:
+                    self._set_stage(
+                        "parsing", f"使用兼容引擎下载（{exc}）"
+                    )
+                else:
+                    if handled:
+                        return
             result = await asyncio.to_thread(self._run_ytdlp, task_dir)
             if self._stopping():
                 if task.cancel_event and task.cancel_event.is_set():
