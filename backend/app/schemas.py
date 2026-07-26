@@ -137,6 +137,7 @@ class SettingsUpdate(BaseModel):
     queue_auto_start_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     live_record_max_minutes: Optional[int] = Field(default=None, ge=0, le=2880)
     download_subtitles: Optional[bool] = None
+    clipboard_watch: Optional[bool] = None
     tvbox_endpoint: Optional[str] = Field(default=None, max_length=512)
     cast_device: Optional[dict[str, str]] = None
 

@@ -67,8 +67,12 @@ export default function App() {
   const [error, setError] = useState('')
   const [confirmation, setConfirmation] = useState<{ title: string; message: string; confirmLabel: string; danger: boolean; run: () => void } | null>(null)
   const [devicePick, setDevicePick] = useState<{ kind: 'cast' | 'tvbox'; path?: string; url?: string; filename: string; requestId?: string } | null>(null)
+  const [clipboardOffer, setClipboardOffer] = useState('')
   const lastStatuses = useRef<Record<string, string>>({})
   const feedbackTimer = useRef<number | null>(null)
+  const clipboardOfferTimer = useRef<number | null>(null)
+  const lastClipboardOffer = useRef('')
+  const tasksRef = useRef<Task[]>([])
   const loadInFlight = useRef<Promise<void> | null>(null)
   const handoffRefreshInFlight = useRef(false)
   const autoPlayHandled = useRef(false)
@@ -189,6 +193,31 @@ export default function App() {
     if (task) { autoPlayHandled.current = true; setPlaying(task) }
   }, [tasks, playing])
   useEffect(() => () => { if (feedbackTimer.current) window.clearTimeout(feedbackTimer.current) }, [])
+  useEffect(() => { tasksRef.current = tasks }, [tasks])
+  useEffect(() => {
+    // IDM-style clipboard watching, desktop shell only: the Rust side emits
+    // an event when copied text looks like a downloadable link.
+    if (!isTauriDesktop() || settings.clipboard_watch === false) return
+    let disposed = false
+    let unlisten: (() => void) | null = null
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) => listen<string>('clipboard-url', event => {
+        const url = String(event.payload || '').trim()
+        if (!url || url === lastClipboardOffer.current) return
+        if (tasksRef.current.some(task => task.url === url)) return
+        lastClipboardOffer.current = url
+        setClipboardOffer(url)
+        if (clipboardOfferTimer.current) window.clearTimeout(clipboardOfferTimer.current)
+        clipboardOfferTimer.current = window.setTimeout(() => setClipboardOffer(''), 15_000)
+      }))
+      .then(fn => { if (disposed) fn?.(); else unlisten = fn ?? null })
+      .catch(() => {})
+    return () => {
+      disposed = true
+      unlisten?.()
+      if (clipboardOfferTimer.current) window.clearTimeout(clipboardOfferTimer.current)
+    }
+  }, [settings.clipboard_watch])
   useEffect(() => {
     if (!localShare) return
     let stopped = false
@@ -492,6 +521,11 @@ export default function App() {
     {previewImage && <div className="modal-overlay image-preview-overlay" onMouseDown={() => setPreviewImage(null)}><section className="image-preview" onMouseDown={event => event.stopPropagation()}><header><strong>{previewImage.title || previewImage.filename}</strong><button className="modal-close-button" title="关闭预览" onClick={() => setPreviewImage(null)}><X size={18} /></button></header><img src={taskFileUrl(previewImage.id)} alt={previewImage.title || previewImage.filename} /></section></div>}
     {logTaskId && <LogModal taskId={logTaskId} onClose={() => setLogTaskId(null)} />}
     {feedback && <div className="toast" role="status">{feedback}</div>}
+    {clipboardOffer && <div className="toast clipboard-toast" role="status">
+      <span className="clipboard-toast-url" title={clipboardOffer}>检测到可下载链接：{clipboardOffer}</span>
+      <button className="primary-button" onClick={() => { setRecognizeInitialUrl(clipboardOffer); setShowRecognize(true); setClipboardOffer('') }}>下载</button>
+      <button className="secondary-button" onClick={() => setClipboardOffer('')}>忽略</button>
+    </div>}
     {handoffs[0] && <BrowserHandoffDialog key={handoffs[0].id} item={handoffs[0]} busy={handoffBusy} settings={settings} onResolve={resolveHandoff} queueRemaining={Math.max(0, handoffs.length - 1)} />}
     {confirmation && <ConfirmDialog title={confirmation.title} message={confirmation.message} confirmLabel={confirmation.confirmLabel} danger={confirmation.danger} onCancel={() => setConfirmation(null)} onConfirm={confirmation.run} />}
     {devicePick && <DevicePickerDialog mode={devicePick.kind} onClose={() => { if (devicePick.requestId) void completeBrowserMediaPush(devicePick.requestId, 'canceled', '已取消设备选择'); setDevicePick(null) }} onChoose={completeDevicePick} />}

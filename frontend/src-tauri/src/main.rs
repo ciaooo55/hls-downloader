@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, WindowEvent};
+use tauri::{Emitter, Manager, WindowEvent};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -177,6 +177,63 @@ fn show_main(app: &tauri::AppHandle) {
     }
 }
 
+/// Return the clipboard text when it is a link the downloader can handle.
+///
+/// Deliberately conservative: one line, an http(s)/magnet scheme, and a
+/// path ending in a known media/archive extension. Ordinary copied prose
+/// or web-page links never trigger a suggestion.
+fn downloadable_clipboard_text(raw: &str) -> Option<String> {
+    let text = raw.trim();
+    if text.is_empty() || text.len() > 2048 || text.contains(char::is_whitespace) {
+        return None;
+    }
+    let lowered = text.to_ascii_lowercase();
+    if lowered.starts_with("magnet:?xt=") {
+        return Some(text.to_string());
+    }
+    if !lowered.starts_with("http://") && !lowered.starts_with("https://") {
+        return None;
+    }
+    let path = lowered.split(['?', '#']).next().unwrap_or("");
+    const EXTENSIONS: [&str; 24] = [
+        ".m3u8", ".mpd", ".mp4", ".mkv", ".mov", ".webm", ".flv", ".m4v", ".avi",
+        ".mp3", ".m4a", ".flac", ".wav", ".zip", ".7z", ".rar", ".gz", ".iso",
+        ".exe", ".msi", ".apk", ".torrent", ".pdf", ".dmg",
+    ];
+    if EXTENSIONS.iter().any(|extension| path.ends_with(extension)) {
+        return Some(text.to_string());
+    }
+    None
+}
+
+fn watch_clipboard(handle: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let Ok(mut clipboard) = arboard::Clipboard::new() else { return };
+        // Seed with the current content so a link copied before launch does
+        // not immediately pop a suggestion.
+        let mut last = clipboard.get_text().unwrap_or_default();
+        loop {
+            std::thread::sleep(Duration::from_millis(1200));
+            let text = match clipboard.get_text() {
+                Ok(value) => value,
+                Err(_) => {
+                    // Non-text content (or a busy clipboard). The frontend
+                    // dedupes repeated URLs, so resetting is safe.
+                    last.clear();
+                    continue;
+                }
+            };
+            if text == last {
+                continue;
+            }
+            last = text.clone();
+            if let Some(url) = downloadable_clipboard_text(&text) {
+                let _ = handle.emit_to("main", "clipboard-url", url);
+            }
+        }
+    });
+}
+
 fn main() {
     let root = app_root();
     let startup_config = load_config(&root);
@@ -221,6 +278,7 @@ fn main() {
                 }
             })
             .build(app)?;
+            watch_clipboard(app.handle().clone());
             if !background { show_main(app.handle()); }
             Ok(())
         })
@@ -246,4 +304,36 @@ fn main() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::downloadable_clipboard_text;
+
+    #[test]
+    fn accepts_media_archive_and_magnet_links() {
+        for text in [
+            "https://cdn.example.com/video/master.m3u8",
+            "https://cdn.example.com/movie.mp4?token=abc",
+            "http://mirror.example.com/tool.zip",
+            "magnet:?xt=urn:btih:0123456789abcdef",
+            "  https://cdn.example.com/show.mkv  ",
+        ] {
+            assert!(downloadable_clipboard_text(text).is_some(), "{text}");
+        }
+    }
+
+    #[test]
+    fn rejects_prose_pages_and_multiline_text() {
+        for text in [
+            "",
+            "普通复制的一段文字",
+            "https://example.com/article/how-to-download",
+            "https://example.com/watch?v=abc123",
+            "https://example.com/a.mp4\nhttps://example.com/b.mp4",
+            "ftp://example.com/file.zip",
+        ] {
+            assert!(downloadable_clipboard_text(text).is_none(), "{text:?}");
+        }
+    }
 }
