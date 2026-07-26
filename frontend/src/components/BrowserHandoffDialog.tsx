@@ -54,6 +54,7 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
   const [remember, setRemember] = useState(true)
   const [showPicker, setShowPicker] = useState(false)
   const canAccept = Boolean(filename.trim() && directory.trim() && !busy)
+  const directoryLabel = directory.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || directory || '未设置保存位置'
 
   const chooseCategory = (value: DownloadCategory) => {
     setCategory(value)
@@ -121,8 +122,8 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
     <DialogOverlay className={`browser-handoff-overlay${standalone ? ' browser-handoff-standalone' : ''}`}>
       <Dialog className="browser-handoff-dialog" label="浏览器下载接管">
         <DialogHeader
-          title="下载文件信息"
-          description={`浏览器已暂停，由 HLS Downloader 接管${queueRemaining > 0 ? ` · 还有 ${queueRemaining} 个待确认` : ''}`}
+          title="浏览器下载"
+          description={`确认后加入下载队列${queueRemaining > 0 ? ` · 还有 ${queueRemaining} 个待确认` : ''}`}
           onClose={busy ? undefined : cancel}
         />
         <div className="browser-handoff-body">
@@ -137,25 +138,32 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
             <div className="browser-handoff-file"><Download size={20} /><div><strong>{filename || host}</strong><span>{item.mime_type || '类型未知'}{item.size ? ` · ${fmtBytes(item.size)}` : ' · 大小未知'}</span></div></div>
             <div className="browser-handoff-source"><Globe2 size={14} /><span title={item.url}>{host}</span></div>
           </section>
-          <label htmlFor="handoff-filename">文件名</label>
-          <Input id="handoff-filename" value={filename} onChange={event => setFilename(event.target.value)} autoFocus disabled={busy} />
-          <label>分类</label>
-          <div className="handoff-categories">{(['media', 'program', 'archive', 'other'] as DownloadCategory[]).map(value => (
-            <Button key={value} type="button" variant={category === value ? 'default' : 'secondary'} className={category === value ? 'active' : ''} size="sm" disabled={busy} onClick={() => chooseCategory(value)}>{DOWNLOAD_CATEGORY_LABELS[value]}</Button>
-          ))}</div>
-          <label htmlFor="handoff-directory">保存到</label>
-          <div className="path-bar">
-            <Input id="handoff-directory" value={directory} onChange={event => setDirectory(event.target.value)} disabled={busy} />
-            <Button type="button" variant="ghost" size="icon" className="icon-button bordered" title="选择保存文件夹" disabled={busy} onClick={() => void openDirectoryPicker()}><FolderOpen size={16} /></Button>
-          </div>
-          <label className="checkbox-label">
-            <input type="checkbox" checked={remember} disabled={busy} onChange={event => setRemember(event.target.checked)} />
-            记住“{DOWNLOAD_CATEGORY_LABELS[category]}”文件的保存位置
-          </label>
+          <details className="browser-handoff-options">
+            <summary title={`保存为${DOWNLOAD_CATEGORY_LABELS[category]} · ${directory || directoryLabel}`}>
+              <span>保存选项</span><small>{DOWNLOAD_CATEGORY_LABELS[category]} · {directoryLabel}</small>
+            </summary>
+            <div className="browser-handoff-option-fields">
+              <label htmlFor="handoff-filename">文件名</label>
+              <Input id="handoff-filename" value={filename} onChange={event => setFilename(event.target.value)} disabled={busy} />
+              <label>分类</label>
+              <div className="handoff-categories">{(['media', 'program', 'archive', 'other'] as DownloadCategory[]).map(value => (
+                <Button key={value} type="button" variant={category === value ? 'default' : 'secondary'} className={category === value ? 'active' : ''} size="sm" disabled={busy} onClick={() => chooseCategory(value)}>{DOWNLOAD_CATEGORY_LABELS[value]}</Button>
+              ))}</div>
+              <label htmlFor="handoff-directory">保存到</label>
+              <div className="path-bar">
+                <Input id="handoff-directory" value={directory} onChange={event => setDirectory(event.target.value)} disabled={busy} />
+                <Button type="button" variant="ghost" size="icon" className="icon-button bordered" title="选择保存文件夹" disabled={busy} onClick={() => void openDirectoryPicker()}><FolderOpen size={16} /></Button>
+              </div>
+              <label className="checkbox-label">
+                <input type="checkbox" checked={remember} disabled={busy} onChange={event => setRemember(event.target.checked)} />
+                记住“{DOWNLOAD_CATEGORY_LABELS[category]}”文件的保存位置
+              </label>
+            </div>
+          </details>
         </div>
         <DialogFooter>
           <Button type="button" variant="secondary" className="secondary-button" disabled={busy} onClick={cancel}>取消</Button>
-          <Button type="button" className="primary-button" disabled={!canAccept} onClick={accept}><Download size={15} />{busy ? '处理中…' : '开始下载'}</Button>
+          <Button type="button" className="primary-button" disabled={!canAccept} onClick={accept}><Download size={15} />{busy ? '处理中…' : '下载'}</Button>
         </DialogFooter>
       </Dialog>
     </DialogOverlay>

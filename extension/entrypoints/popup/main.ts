@@ -117,8 +117,6 @@ async function main() {
       name.title = item.filename || item.title || item.url
       const line = el('span', '', meta)
       const mime = el('small', '', [item.mimeType, itemHost].filter(Boolean).join(' \u00b7 '))
-      const url = el('small', 'resource-url', item.url)
-      url.title = item.url
       let selected = item
       body.append(name, line)
       if (item.variants?.length) {
@@ -139,7 +137,7 @@ async function main() {
         })
         body.append(select)
       }
-      body.append(mime, url)
+      body.append(mime)
       const label = sending[item.id] || '\u4e0b\u8f7d'
       const button = el('button', '', label)
       const locked = ['\u53d1\u9001\u4e2d', '\u5f85\u786e\u8ba4', '\u786e\u8ba4\u4e2d', '\u5df2\u52a0\u5165'].includes(sending[item.id] || '')

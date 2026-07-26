@@ -143,11 +143,11 @@ export default function DesktopToolbar(props: Props) {
         <ToolButton title="浏览器插件" onClick={props.onBrowserExtension}>
           <Users size={18} />
         </ToolButton>
-        <ToolButton title="选择本机文件投屏到默认 DLNA 设备" disabled={props.castLocalMediaBusy} onClick={props.onCastLocalMedia}>
+        <ToolButton title="选择本机文件并投屏到 DLNA 设备" disabled={props.castLocalMediaBusy} onClick={props.onCastLocalMedia}>
           <ScreenShare size={18} />
           <span className="tool-label">投屏</span>
         </ToolButton>
-        <ToolButton title="选择本机文件推送到 TVBox" disabled={props.pushLocalMediaBusy} onClick={props.onPushLocalMedia}>
+        <ToolButton title="选择本机文件并推送到 TVBox" disabled={props.pushLocalMediaBusy} onClick={props.onPushLocalMedia}>
           <Tv size={18} />
           <span className="tool-label">TVBox</span>
         </ToolButton>

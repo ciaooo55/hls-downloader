@@ -61,10 +61,10 @@ export default defineContentScript({
           :host{all:initial}*{box-sizing:border-box}button{font:13px system-ui,sans-serif;letter-spacing:0}
           .wrap{display:none;position:fixed;right:14px;top:35%;z-index:2147483647;color:#102a3a;filter:drop-shadow(0 5px 8px #07598529)}.wrap.open{display:block}
           .toggle{display:none}
-          .panel{display:none;width:min(420px,calc(100vw - 20px));max-height:70vh;background:#fff;border:1px solid #bae6fd;border-radius:9px;overflow:hidden}.open .panel{display:block}.open .toggle{display:none}
-          header{display:flex;align-items:center;justify-content:space-between;padding:8px 9px 8px 10px;border-bottom:1px solid #dff5ff;background:#f0fbff;font:600 13px system-ui}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:5px}
-          .pin,.close{height:30px;border:0;border-radius:5px;background:#e0f2fe;color:#075985;cursor:pointer}.pin{padding:0 9px;font:12px system-ui}.pin.active{background:#d1fae5;color:#047857}.close{display:grid;place-items:center;width:30px;font:700 20px/1 system-ui}.list{overflow:auto;max-height:58vh}.empty{padding:20px;color:#526b79;font:13px system-ui}
-          .item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:12px;border-bottom:1px solid #e7f4f8}.item:hover{background:#f7fcff}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 13px/1.35 system-ui;overflow-wrap:anywhere}.url{display:-webkit-box;overflow:hidden;-webkit-line-clamp:1;-webkit-box-orient:vertical;color:#54717f;font:11px/1.35 system-ui;margin-top:4px;overflow-wrap:anywhere}.item:hover .name,.item:hover .url{-webkit-line-clamp:unset}.kind{color:#25627b;font:12px system-ui;margin-top:4px}.quality-select{width:min(190px,100%);height:27px;margin-top:6px;border:1px solid #bae6fd;border-radius:5px;background:#f0fbff;color:#075985;padding:0 6px;font:11px system-ui}.item-actions{display:flex;flex-direction:column;gap:5px;align-self:center}.download{min-width:58px;height:30px;border:0;border-radius:6px;background:#0ea5e9;color:white;padding:5px 10px;cursor:pointer;font-weight:600;font-size:12px}.download:hover{background:#0284c7}.download[disabled]{cursor:default;opacity:.65}.download.push-tv{background:#6366f1}.download.push-tv:hover{background:#4f46e5}.result{padding:8px 12px;background:#ecfdf5;color:#047857;font:12px/1.4 system-ui}.result.error{background:#fff1f2;color:#be123c}
+          .panel{display:none;width:min(344px,calc(100vw - 20px));max-height:min(480px,62vh);background:#fff;border:1px solid #bae6fd;border-radius:9px;overflow:hidden}.open .panel{display:block}.open .toggle{display:none}
+          header{display:flex;align-items:center;justify-content:space-between;padding:7px 8px 7px 9px;border-bottom:1px solid #dff5ff;background:#f0fbff;font:600 12px system-ui}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:4px}
+          .pin,.close{height:27px;border:0;border-radius:5px;background:#e0f2fe;color:#075985;cursor:pointer}.pin{padding:0 8px;font:11px system-ui}.pin.active{background:#d1fae5;color:#047857}.close{display:grid;place-items:center;width:27px;font:700 18px/1 system-ui}.list{overflow:auto;max-height:50vh}.empty{padding:18px 14px;color:#526b79;font:12px/1.45 system-ui;text-align:center}
+          .item{padding:9px 10px;border-bottom:1px solid #e7f4f8}.item:hover{background:#f7fcff}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12px/1.35 system-ui;overflow-wrap:anywhere}.kind{overflow:hidden;color:#54717f;font:10.5px/1.35 system-ui;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.quality-select{width:min(184px,100%);height:26px;margin-top:6px;border:1px solid #bae6fd;border-radius:5px;background:#f0fbff;color:#075985;padding:0 6px;font:10.5px system-ui}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:29px;border:0;border-radius:6px;background:#0ea5e9;color:white;padding:4px 6px;cursor:pointer;font-weight:600;font-size:11px}.download:hover{background:#0284c7}.download[disabled]{cursor:default;opacity:.65}.download.push-tv{background:#6366f1}.download.push-tv:hover{background:#4f46e5}.download.cast{background:#0f766e}.download.cast:hover{background:#0d5f59}.result{padding:7px 10px;background:#ecfdf5;color:#047857;font:11px/1.4 system-ui}.result.error{background:#fff1f2;color:#be123c}
           .video-buttons{position:fixed;inset:0;z-index:2147483646;pointer-events:none}.video-download{position:fixed;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid #38bdf8;border-radius:7px;background:#075985;color:#fff;box-shadow:0 3px 8px #00131f66;pointer-events:auto;cursor:pointer;font:600 12px system-ui}.video-download:hover{background:#0369a1}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#e0f2fe;color:#075985;font:700 10px system-ui}
           button:focus-visible{outline:2px solid #0369a1;outline-offset:2px}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
         `
@@ -82,7 +82,7 @@ export default defineContentScript({
         toggle.append(image())
         const panel = element('div', 'panel')
         const header = element('header')
-        const title = element('span', 'title', '检测到的媒体')
+        const title = element('span', 'title', '当前视频')
         title.prepend(image())
         const headActions = element('div', 'head-actions')
         const pin = element('button', 'pin', '固定') as HTMLButtonElement
@@ -307,8 +307,8 @@ export default defineContentScript({
           // download: opening the chooser lets the user see the evidence first.
           if (hasExactPlayerMatch && choices.length === 1) { sendResource(choices[0], button); return }
           if (wrap) {
-            wrap.style.left = `${Math.max(10, Math.min(rect.right - 420, innerWidth - 430))}px`
-            wrap.style.top = `${Math.max(10, Math.min(rect.top + 50, innerHeight - 420))}px`
+            wrap.style.left = `${Math.max(10, Math.min(rect.right - 344, innerWidth - 354))}px`
+            wrap.style.top = `${Math.max(10, Math.min(rect.top + 44, innerHeight - 480))}px`
             wrap.style.right = 'auto'; setOpen(true)
           }
         })
@@ -339,7 +339,6 @@ export default defineContentScript({
         const likelySize = resource.size || resource.estimatedSize || 0
         const sizeLabel = resource.size ? formatSize(resource.size) : likelySize ? `约 ${formatSize(likelySize)}` : '大小未知'
         const kind = document.createElement('div'); kind.className = 'kind'; kind.textContent = [resource.kind.toUpperCase(), quality, resource.width && resource.height ? `${resource.width}×${resource.height}` : '', bandwidth, duration, sizeLabel, host].filter(Boolean).join(' · ')
-        const url = document.createElement('div'); url.className = 'url'; url.title = resource.url; url.textContent = resource.url
         let selected = resource
         if (resource.variants?.length) {
           const select = document.createElement('select')
@@ -359,9 +358,9 @@ export default defineContentScript({
             const variant = resource.variants?.find(item => item.url === select.value)
             selected = variant ? { ...resource, ...variant, url: variant.url, variants: undefined } : resource
           })
-          meta.append(name, kind, select, url)
+          meta.append(name, kind, select)
         } else {
-          meta.append(name, kind, url)
+          meta.append(name, kind)
         }
         const actions = document.createElement('div'); actions.className = 'item-actions'
         const button = document.createElement('button'); button.className = 'download'; button.textContent = '下载'
@@ -369,7 +368,7 @@ export default defineContentScript({
         const pushButton = document.createElement('button'); pushButton.className = 'download push-tv'; pushButton.textContent = '推电视'
         pushButton.title = '推送到电视播放'
         pushButton.addEventListener('click', () => pushToTv(selected, pushButton))
-        const castButton = document.createElement('button'); castButton.className = 'download push-tv'; castButton.textContent = '投屏'
+        const castButton = document.createElement('button'); castButton.className = 'download cast'; castButton.textContent = '投屏'
         castButton.title = '选择 DLNA 或 Chromecast 设备投屏'
         castButton.addEventListener('click', () => castResource(selected, castButton))
         actions.append(button, pushButton, castButton)

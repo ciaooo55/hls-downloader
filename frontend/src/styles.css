@@ -90,7 +90,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px 
 .torrent-file-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .torrent-file-list b { color: var(--text-muted); font-weight: 500; }
 .torrent-selection-notice { margin: 8px 0 0; color: var(--green); font-size: 11px; line-height: 1.45; }
-.device-picker{width:min(520px,calc(100vw - 40px))}.device-picker-list{display:grid;gap:7px;max-height:min(360px,48vh);overflow:auto;padding:4px 0}.device-picker-list>button{display:grid;grid-template-columns:32px minmax(0,1fr);gap:10px;align-items:center;min-height:58px;padding:9px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);color:var(--text);text-align:left;cursor:pointer}.device-picker-list>button:hover,.device-picker-list>button.selected{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 12%,var(--surface-2))}.device-picker-list>button>span{display:grid;place-items:center;color:var(--primary)}.device-picker-list b,.device-picker-list small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.device-picker-list small{margin-top:3px;color:var(--muted)}.device-picker-message{margin:10px 0;color:var(--amber);font-size:12px;line-height:1.45}.device-picker footer{display:flex;justify-content:space-between;gap:8px;margin-top:16px}
+.device-picker{width:min(520px,calc(100vw - 40px))}.device-picker-list{display:grid;gap:7px;max-height:min(360px,48vh);overflow:auto;padding:4px 0}.device-picker-list>button{display:grid;grid-template-columns:32px minmax(0,1fr) 20px;gap:10px;align-items:center;min-height:58px;padding:9px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);color:var(--text);text-align:left;cursor:pointer}.device-picker-list>button:hover,.device-picker-list>button.selected{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 12%,var(--surface-2))}.device-picker-list>button>span{display:grid;place-items:center;color:var(--primary)}.device-picker-list b,.device-picker-list small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.device-picker-list small{margin-top:3px;color:var(--muted)}.device-picker-check{justify-self:end;color:var(--primary)}.device-picker-empty{display:grid;grid-template-columns:28px minmax(0,1fr);column-gap:9px;align-items:center;min-height:74px;margin-top:4px;padding:12px;border:1px dashed color-mix(in srgb,var(--border) 82%,var(--muted));border-radius:7px;background:var(--surface-2)}.device-picker-empty>span{display:grid;grid-row:1 / span 2;place-items:center;color:var(--faint)}.device-picker-empty b{font-size:12px}.device-picker-empty small{margin-top:3px;color:var(--muted);font-size:11px;line-height:1.45}.device-picker-message{margin:10px 0;color:var(--amber);font-size:12px;line-height:1.45}.device-picker footer{display:flex;justify-content:space-between;gap:8px;margin-top:16px}
 
 /* Dedicated IDM-style handoff windows use the same UI bundle without the manager shell. */
 html[data-surface="handoff"],
@@ -674,7 +674,15 @@ code,
 .browser-handoff-summary { display: grid; gap: 7px; padding: 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); }
 .browser-handoff-file { padding: 0; }
 .browser-handoff-source { padding-top: 7px; border-top: 1px solid var(--border); }
-.browser-handoff-body > label { margin-top: 12px; }
+.browser-handoff-options { margin-top: 8px; border-top: 1px solid var(--border); }
+.browser-handoff-options > summary { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; min-height: 34px; color: var(--text); cursor: pointer; list-style: none; }
+.browser-handoff-options > summary::-webkit-details-marker { display: none; }
+.browser-handoff-options > summary::before { content: '⌄'; color: var(--muted); font-size: 14px; transition: transform .15s ease-out; }
+.browser-handoff-options[open] > summary::before { transform: rotate(180deg); }
+.browser-handoff-options > summary span { font-size: 11px; font-weight: 650; }
+.browser-handoff-options > summary small { min-width: 0; overflow: hidden; color: var(--muted); font-size: 10px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.browser-handoff-option-fields { padding: 2px 0 2px; }
+.browser-handoff-option-fields > label { margin-top: 11px; }
 .handoff-categories button { background: var(--surface); }
 
 .confirm-modal { overflow: hidden; padding: 0; border-radius: 8px; }
@@ -691,10 +699,29 @@ code,
 }
 
 .handoff-window-root.has-window-chrome { display: grid; grid-template-rows: 32px minmax(0, 1fr); }
-.handoff-window-root.has-window-chrome .browser-handoff-standalone { min-height: 0; height: auto; padding: 0; background: var(--bg); }
-.handoff-window-root.has-window-chrome .browser-handoff-dialog { width: 100%; height: 100%; max-height: 100%; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+.handoff-window-root.has-window-chrome .browser-handoff-standalone { align-self: start; min-height: 0; height: auto; padding: 0; background: var(--bg); }
+.handoff-window-root.has-window-chrome .browser-handoff-dialog { width: 100%; height: auto; max-height: 100%; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
 .handoff-window-root.has-window-chrome .browser-handoff-dialog > header,
 .handoff-window-root.has-window-chrome .browser-handoff-dialog > footer { background: var(--surface); }
 .handoff-window-root.has-window-chrome .browser-handoff-body { background: var(--bg); }
 .handoff-window-root.has-window-chrome.handoff-window-loading { align-items: stretch; justify-items: stretch; padding: 0; }
 .handoff-window-root.has-window-chrome.handoff-window-loading > section { align-self: center; justify-self: center; padding: 24px; }
+
+/* Browser connection remains a compact status card; release variants are
+   visible only where users actually choose an install package. */
+.firefox-release-variants { display: grid; gap: 7px; margin: 14px 0 0; }
+.firefox-release-variants-heading strong,
+.firefox-release-variants-heading span { display: block; }
+.firefox-release-variants-heading strong { color: var(--text); font-size: 12px; }
+.firefox-release-variants-heading span { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.firefox-release-variant { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 52px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); }
+.firefox-release-variant b,
+.firefox-release-variant small { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.firefox-release-variant b { font-size: 12px; }
+.firefox-release-variant small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.firefox-release-variant code { max-width: 210px; overflow: hidden; padding: 4px 6px; border-radius: 5px; background: var(--surface); color: var(--primary); font: 10px/1.25 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 540px) {
+  .firefox-release-variant { grid-template-columns: 1fr; gap: 7px; }
+  .firefox-release-variant code { max-width: 100%; width: max-content; }
+}

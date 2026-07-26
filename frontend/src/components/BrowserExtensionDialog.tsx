@@ -37,8 +37,22 @@ export default function BrowserExtensionDialog({ onClose }: { onClose: () => voi
         <div className="extension-actions">
           <Button className="primary-button" onClick={() => void installExtension()}><FolderOpen size={16} />加载 Chromium 插件</Button>
         </div>
+        <section className="firefox-release-variants" aria-labelledby="firefox-release-variants-title">
+          <div className="firefox-release-variants-heading">
+            <strong id="firefox-release-variants-title">Firefox 发布包</strong>
+            <span>功能完全相同，仅发布入口与扩展 ID 不同</span>
+          </div>
+          <div className="firefox-release-variant">
+            <div><b>网页显示版（Firefox 商店）</b><small>用于已发布的 AMO 条目</small></div>
+            <code>browser@hls-downloader.ciaooo55.com</code>
+          </div>
+          <div className="firefox-release-variant">
+            <div><b>网页不显示版（独立包）</b><small>用于 GitHub Release 独立发布</small></div>
+            <code>hls-downloader-store@ciaooo55.com</code>
+          </div>
+        </section>
         {message && <div className="inline-message">{message}</div>}
-        <p className="fine-print">安装包内置 Chromium 插件目录。Firefox 请从同版本 GitHub Release 下载插件包，并使用 Mozilla 签名版长期安装。Cookie 只在你对站点明确授权后读取。</p>
+        <p className="fine-print">安装包内置 Chromium 插件目录。Firefox 请从同版本 GitHub Release 选择对应变体，并使用 Mozilla 签名版长期安装；不要把一个 ID 的更新上传到另一个 ID 的商店条目。Cookie 只在你对站点明确授权后读取。</p>
         <DialogFooter>
           <Button variant="secondary" className="secondary-button" onClick={onClose}>关闭</Button>
         </DialogFooter>
