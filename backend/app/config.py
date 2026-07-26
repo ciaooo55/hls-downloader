@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     browser_category_dirs: dict[str, str] = Field(default_factory=dict)
     queue_auto_start_enabled: bool = False
     queue_auto_start_time: str = "00:00"
+    live_record_max_minutes: int = 0
     tvbox_endpoint: str = ""
     cast_device: dict[str, str] = Field(default_factory=dict)
 

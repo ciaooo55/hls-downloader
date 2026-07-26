@@ -1357,6 +1357,7 @@ def _to_resp(task) -> TaskResponse:
         peer_count=task.progress.peer_count,
         seed_count=task.progress.seed_count,
         playback_ready=manager._playback_ready(task),
+        is_live=bool(task.engine_state.get("live")),
         error_message=task.error_message,
         error_code=task.error_code,
         error_stage=task.error_stage,

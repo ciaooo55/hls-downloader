@@ -3,6 +3,7 @@ export interface TaskLike {
   status: string
   output_path?: string
   available_actions?: string[]
+  is_live?: boolean
 }
 
 export interface CommandState {
@@ -14,6 +15,24 @@ export interface CommandState {
   delete: boolean
   open: boolean
   log: boolean
+  pauseLabel: string
+  resumeLabel: string
+}
+
+/** Stopping a live recording is irreversible, so the pause/resume wording
+ *  must reflect every targeted task, not just the clicked row. */
+export function pauseLabelFor(tasks: Pick<TaskLike, 'is_live'>[]): string {
+  const liveCount = tasks.filter(task => task.is_live).length
+  if (!liveCount) return '暂停'
+  if (liveCount === tasks.length) return '停止录制'
+  return '暂停 / 停止录制'
+}
+
+export function resumeLabelFor(tasks: Pick<TaskLike, 'is_live'>[]): string {
+  const liveCount = tasks.filter(task => task.is_live).length
+  if (!liveCount) return '恢复'
+  if (liveCount === tasks.length) return '继续录制'
+  return '恢复 / 继续录制'
 }
 
 const PAUSABLE = new Set(['downloading_segments', 'downloading', 'fetching_metadata', 'checking'])
@@ -29,6 +48,7 @@ export function commandState(tasks: TaskLike[]): CommandState {
     return {
       start: false, pause: false, resume: false, cancel: false,
       retry: false, delete: false, open: false, log: false,
+      pauseLabel: '暂停', resumeLabel: '恢复',
     }
   }
   const backendActions = tasks.every(task => Array.isArray(task.available_actions))
@@ -44,5 +64,7 @@ export function commandState(tasks: TaskLike[]): CommandState {
     delete: allowed('delete') ?? true,
     open: tasks.length === 1 && (allowed('open') ?? tasks[0].status === 'done'),
     log: tasks.length === 1 && (allowed('log') ?? true),
+    pauseLabel: pauseLabelFor(tasks),
+    resumeLabel: resumeLabelFor(tasks),
   }
 }

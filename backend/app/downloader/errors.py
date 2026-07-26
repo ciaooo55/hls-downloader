@@ -274,7 +274,7 @@ def diagnose_download_error(
     lowered = raw.lower()
     if root.__class__.__name__ == "UnsupportedPlaylistError":
         code = "HLS_UNSUPPORTED"
-        hint = "该播放列表使用了当前不支持的直播、DRM、SAMPLE-AES 或独立音轨格式。"
+        hint = "该播放列表使用了当前不支持的 DRM、SAMPLE-AES 或音视频分离的直播格式。"
     elif "content-range" in lowered or "byterange" in lowered or "range" in lowered:
         code = "HLS_RANGE_INVALID"
         hint = "服务器没有正确支持 Range 请求。重新获取链接，或确认 CDN 没有拦截分段请求。"
@@ -286,7 +286,7 @@ def diagnose_download_error(
         hint = "分片解密失败。链接、密钥或 IV 可能已过期，请重新获取 m3u8。"
     elif "没有分片" in raw:
         code = "HLS_EMPTY_PLAYLIST"
-        hint = "播放列表中没有可下载分片，可能是直播、空清单或地址已失效。"
+        hint = "播放列表中没有可下载分片，清单可能为空或地址已失效。"
     elif stage in {"merging", "remuxing", "verifying"} or "ffmpeg" in lowered or "ffprobe" in lowered:
         code = "FFMPEG_MERGE_FAILED"
         hint = "FFmpeg 合并或输出验证失败。查看任务日志，并确认磁盘空间和输出目录可写。"

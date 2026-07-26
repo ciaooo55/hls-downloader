@@ -32,6 +32,7 @@ const STAGE_LABELS: Record<string, string> = {
   downloading_m3u8: '获取播放清单',
   parsing: '解析播放清单',
   downloading_segments: '下载媒体分片',
+  recording: '直播录制中',
   pausing: '等待当前分片完成',
   paused: '已暂停',
   merging: '合并视频',

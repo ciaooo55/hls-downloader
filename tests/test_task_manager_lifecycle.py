@@ -592,6 +592,37 @@ def test_new_task_registration_waits_for_final_temp_cleanup(tmp_path, monkeypatc
     asyncio.run(run())
 
 
+def test_failed_live_recording_survives_playback_cleanup(tmp_path):
+    async def run():
+        manager = TaskManager()
+        task = Task(
+            id="live-cleanup",
+            url="https://example.test/live.m3u8",
+            status=TaskStatus.FAILED,
+        )
+        task.engine_state["temp_dir"] = str(tmp_path)
+        task.engine_state["live"] = True
+        task_dir = manager_module.task_work_dir(task)
+        seg_dir = task_dir / "segments"
+        seg_dir.mkdir(parents=True, exist_ok=True)
+        (seg_dir / "000000.seg").write_bytes(b"precious")
+        (task_dir / "live_state.json").write_text("{}", encoding="utf-8")
+
+        # The preview-session cleanup path must not trim a failed live
+        # recording: its segments are the only copy that will ever exist.
+        await manager._cleanup_task_temp(task)
+        assert (seg_dir / "000000.seg").exists()
+        assert (task_dir / "live_state.json").exists()
+
+        # A failed VOD task is still trimmed as before.
+        task.engine_state.pop("live")
+        await manager._cleanup_task_temp(task)
+        assert not seg_dir.exists()
+        assert not (task_dir / "live_state.json").exists()
+
+    asyncio.run(run())
+
+
 async def _async_noop(*args, **kwargs):
     return None
 

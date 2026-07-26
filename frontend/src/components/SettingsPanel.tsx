@@ -126,6 +126,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     if (settings.max_concurrent_tasks < 1 || settings.max_concurrent_tasks > 16) { setError('最大同时任务数必须在 1 到 16 之间'); return }
     if (settings.http_chunk_size_mb < 1 || settings.http_chunk_size_mb > 64) { setError('HTTP 分段大小必须在 1 到 64 MiB 之间'); return }
     if (settings.download_speed_limit_kib != null && settings.download_speed_limit_kib < 0) { setError('下载限速不能小于 0'); return }
+    if (settings.live_record_max_minutes != null && (settings.live_record_max_minutes < 0 || settings.live_record_max_minutes > 2880)) { setError('直播录制时长上限必须在 0 到 2880 分钟之间'); return }
     if (settings.bt_upload_limit_kib < 0) { setError('BT 上传限制不能小于 0'); return }
     if (settings.queue_auto_start_enabled && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(settings.queue_auto_start_time || ''))) { setError('定时开始时间必须为 HH:MM'); return }
     if (!String(settings.ffmpeg_path || '').trim()) { setError('ffmpeg 路径不能为空'); return }
@@ -261,6 +262,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
             <div className="settings-field"><label htmlFor="setting-max-tasks">最大同时任务数</label><input id="setting-max-tasks" type="number" min={1} max={16} value={settings.max_concurrent_tasks ?? 3} onChange={event => update('max_concurrent_tasks', Number(event.target.value))} /><p>{REQUEST_FIELD_HELP.maxTasks}</p></div>
             <div className="settings-field"><label htmlFor="setting-speed-limit">全局下载限速（KiB/s）</label><input id="setting-speed-limit" type="number" min={0} max={1048576} value={settings.download_speed_limit_kib ?? 0} onChange={event => update('download_speed_limit_kib', Number(event.target.value))} /><p>{REQUEST_FIELD_HELP.speedLimit}</p></div>
             <div className="settings-field"><label htmlFor="setting-http-chunk">HTTP 分段大小（MiB）</label><input id="setting-http-chunk" type="number" min={1} max={64} value={settings.http_chunk_size_mb ?? 8} onChange={event => update('http_chunk_size_mb', Number(event.target.value))} /><p>每段完成后可安全暂停；较小更灵活，较大请求更少。</p></div>
+            <div className="settings-field"><label htmlFor="setting-live-max">直播录制时长上限（分钟）</label><input id="setting-live-max" type="number" min={0} max={2880} value={settings.live_record_max_minutes ?? 0} onChange={event => update('live_record_max_minutes', Number(event.target.value))} /><p>录制直播 HLS 达到该时长后自动停止并合并；0 表示不限制，随时可手动停止录制。</p></div>
           </section>
           <h3 className="settings-group-label">定时队列</h3>
           <section className="settings-group settings-grid-group">

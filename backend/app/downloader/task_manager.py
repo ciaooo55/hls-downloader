@@ -660,7 +660,12 @@ class TaskManager:
         task.pause_event.set()
         task.status = TaskStatus.PAUSING
         task.stage = "pausing"
-        task.last_log = "正在等待当前分片完成"
+        if task.engine_state.get("live"):
+            # Live recording has no resumable middle state: the stop request
+            # finalizes and merges everything captured so far.
+            task.last_log = "正在停止录制，稍后自动合并已录制内容"
+        else:
+            task.last_log = "正在等待当前分片完成"
         await self._save_db(task)
 
     async def select_torrent_files(self, task_id: str, indexes: list[int]) -> None:
@@ -790,6 +795,11 @@ class TaskManager:
         if task.status in {TaskStatus.DONE, TaskStatus.CANCELED}:
             cleanup = lambda: shutil.rmtree(task_dir, ignore_errors=True)
         elif task.status in {TaskStatus.FAILED, TaskStatus.UNSUPPORTED}:
+            if task.engine_state.get("live"):
+                # A failed live recording's temp dir holds the only copy of
+                # the captured segments; retry re-finalizes them (same guard
+                # as HLSDownloader._cleanup_failed_temp).
+                return
             cleanup = lambda: self._trim_failed_task_dir(task_dir)
         if cleanup is not None:
             await asyncio.to_thread(
@@ -1107,6 +1117,7 @@ class TaskManager:
             "peer_count": progress.peer_count,
             "seed_count": progress.seed_count,
             "playback_ready": self._playback_ready(task),
+            "is_live": bool(task.engine_state.get("live")),
             "error_message": task.error_message,
             "error_code": task.error_code,
             "error_stage": task.error_stage,

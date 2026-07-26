@@ -93,9 +93,9 @@ export default function DesktopToolbar(props: Props) {
           <Play size={17} />
           <span className="tool-label">开始</span>
         </ToolButton>
-        <ToolButton title="暂停" disabled={!c.pause} onClick={() => props.onAction('pause')}>
+        <ToolButton title={c.pauseLabel} disabled={!c.pause} onClick={() => props.onAction('pause')}>
           <Pause size={17} />
-          <span className="tool-label">暂停</span>
+          <span className="tool-label">{c.pauseLabel === '停止录制' ? '停止' : '暂停'}</span>
         </ToolButton>
         <ToolButton title="全部开始（排队/暂停）" onClick={props.onStartAll}>
           <Play size={17} />
@@ -105,7 +105,7 @@ export default function DesktopToolbar(props: Props) {
           <Pause size={17} />
           <span className="tool-label">全停</span>
         </ToolButton>
-        <ToolButton title="恢复" disabled={!c.resume} onClick={() => props.onAction('resume')}>
+        <ToolButton title={c.resumeLabel} disabled={!c.resume} onClick={() => props.onAction('resume')}>
           <RotateCcw size={18} />
         </ToolButton>
         <ToolButton title="取消" disabled={!c.cancel} onClick={() => props.onAction('cancel')}>

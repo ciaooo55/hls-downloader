@@ -66,9 +66,9 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
     </div>
     <footer className="detail-actions">
       <button className="secondary-button" onClick={onLog}><FileText size={16} />查看日志</button>
-      {!pending && actions.includes('pause') && <button className="secondary-button" onClick={() => onAction('pause')}><Pause size={16} />暂停</button>}
+      {!pending && actions.includes('pause') && <button className="secondary-button" onClick={() => onAction('pause')}><Pause size={16} />{task.is_live ? '停止录制' : '暂停'}</button>}
       {!pending && actions.includes('start') && task.task_type !== 'torrent' && <button className="primary-button" onClick={() => onAction('start')}><PlayCircle size={16} />开始下载</button>}
-      {!pending && actions.includes('resume') && <button className="primary-button" onClick={() => onAction('resume')}><RotateCcw size={16} />恢复</button>}
+      {!pending && actions.includes('resume') && <button className="primary-button" onClick={() => onAction('resume')}><RotateCcw size={16} />{task.is_live ? '继续录制' : '恢复'}</button>}
       {!pending && actions.includes('retry') && <button className="primary-button" onClick={() => onAction('retry')}><RotateCcw size={16} />重试</button>}
       {!pending && actions.includes('cancel') && <button className="secondary-button" onClick={() => onAction('cancel')}><XCircle size={16} />取消</button>}
       {!pending && actions.includes('delete') && <button className="danger-button" onClick={() => onAction('delete')}><Trash2 size={16} />删除记录</button>}

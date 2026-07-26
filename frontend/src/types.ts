@@ -48,6 +48,7 @@ export interface Task {
   playable_duration: number
   media_duration: number
   playback_ready: boolean
+  is_live?: boolean
   progress_percent: number
   uploaded_bytes: number
   upload_speed_bytes_per_sec: number
@@ -96,6 +97,7 @@ export interface Settings {
   browser_category_dirs?: Record<string, string>
   queue_auto_start_enabled?: boolean
   queue_auto_start_time?: string
+  live_record_max_minutes?: number
   tvbox_endpoint?: string
   cast_device?: { id: string; protocol: 'dlna' | 'chromecast'; location: string; control_url: string; service_type: string; label: string; host: string }
 }

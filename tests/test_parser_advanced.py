@@ -39,13 +39,32 @@ media.mp4
     assert second["discontinuity"] is True
 
 
-def test_parse_rejects_live_and_sample_aes_playlists():
+def test_parse_marks_live_playlists_and_rejects_sample_aes():
     live = """#EXTM3U
+#EXT-X-TARGETDURATION:5
+#EXT-X-MEDIA-SEQUENCE:7
 #EXTINF:4,
 one.ts
 """
-    with pytest.raises(UnsupportedPlaylistError, match="点播"):
-        parse_m3u8("https://example.test/live.m3u8", live)
+    parsed = parse_m3u8("https://example.test/live.m3u8", live)
+    assert parsed["is_live"] is True
+    assert parsed["target_duration"] == 5
+    assert parsed["segments"][0]["media_sequence"] == 7
+
+    vod = """#EXTM3U
+#EXTINF:4,
+one.ts
+#EXT-X-ENDLIST
+"""
+    assert parse_m3u8("https://example.test/vod.m3u8", vod)["is_live"] is False
+
+    live_sample_aes = """#EXTM3U
+#EXT-X-KEY:METHOD=SAMPLE-AES,URI="key.bin"
+#EXTINF:4,
+one.ts
+"""
+    with pytest.raises(UnsupportedPlaylistError, match="SAMPLE-AES"):
+        parse_m3u8("https://example.test/live.m3u8", live_sample_aes)
 
     sample_aes = """#EXTM3U
 #EXT-X-KEY:METHOD=SAMPLE-AES,URI="key.bin"

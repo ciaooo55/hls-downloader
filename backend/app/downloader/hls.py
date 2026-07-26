@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import re
 import shutil
 from collections.abc import Awaitable, Callable
@@ -43,6 +45,16 @@ MAX_RETRIES = 5
 MAX_PLAYLIST_DEPTH = 5
 SEG_TIMEOUT = httpx.Timeout(connect=10, read=60, write=30, pool=30)
 _CONTENT_RANGE_RE = re.compile(r"^bytes (\d+)-(\d+)/(\d+|\*)$", re.IGNORECASE)
+
+# Live/event playlists keep growing, so recording polls the manifest instead
+# of trusting a fixed segment list.  The stall window follows the HLS client
+# guidance of several target durations: past it the origin has stopped
+# publishing and the recording is finalized rather than left running forever.
+LIVE_STATE_FILENAME = "live_state.json"
+LIVE_STALL_MIN_SECONDS = 90.0
+LIVE_STALL_TARGET_MULTIPLIER = 6.0
+LIVE_BATCH_CONCURRENCY = 3
+LIVE_MAX_POLL_SECONDS = 10.0
 
 
 class _BrowserHLSClient:
@@ -132,6 +144,28 @@ def _reserve_output_path(path: Path) -> Path:
         except FileExistsError:
             continue
     raise RuntimeError(f"无法为输出文件分配唯一名称: {path.name}")
+
+
+def _externally_cancelled() -> bool:
+    """True when the running asyncio task itself has a pending cancel.
+
+    A pause-abort raised inside a control request and a genuine
+    task_handle.cancel() (e.g. app shutdown) both surface as
+    CancelledError; only the latter increments the task's cancelling
+    counter and must keep propagating, or shutdown would be blocked by a
+    full merge of the recording.
+    """
+    current = asyncio.current_task()
+    return bool(current is not None and current.cancelling())
+
+
+def _format_clock(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
 
 
 def _decrypt_aes128_file(source: Path, destination: Path, key: bytes, iv: bytes) -> None:
@@ -259,6 +293,11 @@ class HLSDownloader:
 
     async def _cleanup_failed_temp(self, task_dir: Path) -> None:
         if settings.keep_temp_files or not task_dir.exists():
+            return
+        if self.task.engine_state.get("live"):
+            # A live stream cannot be downloaded again: keep the captured
+            # segments and live_state.json so retry can finalize them even
+            # after a merge failure or a dead manifest.
             return
 
         def cleanup() -> None:
@@ -430,60 +469,112 @@ class HLSDownloader:
             async with _create_hls_client(concurrency) as client:
                 task.status = TaskStatus.PARSING
                 self._set_stage("parsing", "正在解析 HLS 清单")
-                parsed = await self._load_media_playlist(client, task.url, headers)
-                if parsed.get("external_audio"):
-                    self._set_stage("parsing", "检测到独立 HLS 音轨，正在使用兼容合并引擎")
-                    await DashDownloader(
-                        task,
-                        on_progress=self.on_progress,
-                        on_log=self.on_log,
-                        source_label="HLS 独立音轨",
-                    ).run()
-                    return
-                if is_generic_media_name(task.filename):
-                    task.filename = suggest_manifest_name(
-                        parsed.get("final_url") or task.url,
-                        filename=task.filename,
-                        title=task.title,
-                        source_page_url=task.source_page_url,
-                        manifest_title=parsed.get("title", ""),
-                        response_filename=parsed.get("response_filename", ""),
-                        fallback=task.id,
+                saved_live_state = self._load_live_state()
+                try:
+                    parsed = await self._load_media_playlist(client, task.url, headers)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # A finished live stream often takes its manifest offline.
+                    # The captured segments are the only copy that will ever
+                    # exist, so finalize them instead of failing the task.
+                    if not (saved_live_state and saved_live_state.get("segments")):
+                        raise
+                    self._log("[recording] 直播清单已不可用，直接合并已录制的内容")
+                    parsed = None
+                # A finished stream may replay as VOD, but a resumed recording
+                # must stay in recording mode so earlier segments are kept.
+                is_live = parsed is None or bool(parsed.get("is_live")) or saved_live_state is not None
+                if parsed is not None:
+                    if parsed.get("external_audio"):
+                        if is_live:
+                            raise UnsupportedPlaylistError(
+                                "直播流暂不支持视频与音频分离的清单"
+                            )
+                        self._set_stage("parsing", "检测到独立 HLS 音轨，正在使用兼容合并引擎")
+                        await DashDownloader(
+                            task,
+                            on_progress=self.on_progress,
+                            on_log=self.on_log,
+                            source_label="HLS 独立音轨",
+                        ).run()
+                        return
+                    if is_generic_media_name(task.filename):
+                        task.filename = suggest_manifest_name(
+                            parsed.get("final_url") or task.url,
+                            filename=task.filename,
+                            title=task.title,
+                            source_page_url=task.source_page_url,
+                            manifest_title=parsed.get("title", ""),
+                            response_filename=parsed.get("response_filename", ""),
+                            fallback=task.id,
+                        )
+                    (task_dir / "playlist.m3u8").write_text(parsed["content"], encoding="utf-8")
+
+                if is_live:
+                    task.engine_state["live"] = True
+                    if parsed is None:
+                        recovered: list[dict] = []
+                        total_duration = self._restore_live_segments(
+                            saved_live_state, recovered
+                        )
+                        if not recovered:
+                            raise RuntimeError("直播源已不可用，且没有可合并的已录制分片")
+                        self._compact_recorded(recovered)
+                        self._save_live_state(recovered, total_duration)
+                        segments = recovered
+                        task.progress.total_segments = len(segments)
+                        task.progress.media_duration = total_duration
+                        write_playback_plan(task_dir, segments, total_duration)
+                    else:
+                        recorded = await self._record_live(
+                            client, parsed, headers, saved_live_state
+                        )
+                        if recorded is None:
+                            return
+                        segments, total_duration = recorded
+                else:
+                    # A retried task whose stream has since ended downloads as
+                    # plain VOD; drop the stale live marker so the UI stops
+                    # presenting it as a recording.
+                    task.engine_state.pop("live", None)
+                    segments = parsed["segments"]
+                    if not segments:
+                        raise ValueError("m3u8 中没有分片")
+                    total_duration = float(parsed["total_duration"] or 0)
+
+                    task.progress.total_segments = len(segments)
+                    self._set_stage("parsing", f"解析完成，共 {len(segments)} 个分片")
+                    await self._download_init_maps(client, segments, headers)
+                    write_playback_plan(task_dir, segments, total_duration)
+                    task.progress.media_duration = total_duration
+                    self._refresh_playback_progress()
+
+                    task.status = TaskStatus.DOWNLOADING_SEGMENTS
+                    task.progress.max_workers = concurrency
+                    task.progress.connection_status = "running"
+                    self._set_stage(
+                        "downloading_segments",
+                        f"开始下载 {len(segments)} 个分片，并发={concurrency}",
                     )
-                (task_dir / "playlist.m3u8").write_text(parsed["content"], encoding="utf-8")
-                segments = parsed["segments"]
-                if not segments:
-                    raise ValueError("m3u8 中没有分片")
+                    completed = await self._download_segments(client, segments, headers, concurrency)
+                    if not completed:
+                        if self._is_canceled():
+                            task.status = TaskStatus.CANCELED
+                            self._set_stage("canceled", "已取消")
+                        elif self._is_pausing():
+                            task.status = TaskStatus.PAUSED
+                            task.progress.connection_status = "idle"
+                            self._set_stage("paused", "已暂停，可继续下载")
+                        return
 
-                task.progress.total_segments = len(segments)
-                self._set_stage("parsing", f"解析完成，共 {len(segments)} 个分片")
-                await self._download_init_maps(client, segments, headers)
-                write_playback_plan(task_dir, segments, parsed["total_duration"])
-                task.progress.media_duration = float(parsed["total_duration"] or 0)
-                self._refresh_playback_progress()
+                    if self._failed_indexes:
+                        if self._last_segment_error is not None:
+                            raise self._last_segment_error
+                        raise RuntimeError(
+                            f"{len(self._failed_indexes)} 个分片下载失败，共 {len(segments)} 个"
+                        )
 
-                task.status = TaskStatus.DOWNLOADING_SEGMENTS
-                task.progress.max_workers = concurrency
-                task.progress.connection_status = "running"
-                self._set_stage(
-                    "downloading_segments",
-                    f"开始下载 {len(segments)} 个分片，并发={concurrency}",
-                )
-                completed = await self._download_segments(client, segments, headers, concurrency)
-                if not completed:
-                    if self._is_canceled():
-                        task.status = TaskStatus.CANCELED
-                        self._set_stage("canceled", "已取消")
-                    elif self._is_pausing():
-                        task.status = TaskStatus.PAUSED
-                        task.progress.connection_status = "idle"
-                        self._set_stage("paused", "已暂停，可继续下载")
-                    return
-
-            if self._failed_indexes:
-                if self._last_segment_error is not None:
-                    raise self._last_segment_error
-                raise RuntimeError(f"{len(self._failed_indexes)} 个分片下载失败，共 {len(segments)} 个")
             if self._is_canceled():
                 task.status = TaskStatus.CANCELED
                 self._set_stage("canceled", "已取消")
@@ -501,7 +592,7 @@ class HLSDownloader:
                 segments=segments,
                 ffmpeg_path=settings.ffmpeg_path,
                 task=task,
-                total_duration=parsed["total_duration"],
+                total_duration=total_duration,
                 on_progress=self.on_progress,
             )
 
@@ -567,9 +658,11 @@ class HLSDownloader:
         client: Any,
         segments: list[dict],
         headers: dict[str, str],
+        cache: dict[tuple, Path] | None = None,
     ) -> None:
         map_dir = self._task_dir() / "maps"
-        cache: dict[tuple, Path] = {}
+        if cache is None:
+            cache = {}
         for segment in segments:
             descriptor = segment.get("init_map")
             if not descriptor:
@@ -586,7 +679,11 @@ class HLSDownloader:
             )
             if cache_key not in cache:
                 map_dir.mkdir(parents=True, exist_ok=True)
-                destination = map_dir / f"{len(cache):04d}.init"
+                # Content-addressed file names keep repeated calls (live
+                # recording polls, resumed sessions) from reusing a slot
+                # number that already belongs to a different init map.
+                digest = hashlib.sha1(repr(cache_key).encode("utf-8")).hexdigest()[:16]
+                destination = map_dir / f"{digest}.init"
                 if not destination.exists():
                     if key_info:
                         encrypted = destination.with_name(destination.name + ".enc")
@@ -628,6 +725,492 @@ class HLSDownloader:
                         )
                 cache[cache_key] = destination
             segment["init_path"] = str(cache[cache_key])
+
+    def _load_live_state(self) -> dict | None:
+        path = self._task_dir() / LIVE_STATE_FILENAME
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(payload, dict) or not isinstance(payload.get("segments"), list):
+            return None
+        return payload
+
+    def _save_live_state(self, recorded: list[dict], total_duration: float) -> None:
+        payload = {
+            "version": 1,
+            "total_duration": float(total_duration or 0),
+            "segments": [
+                {
+                    "index": int(entry["index"]),
+                    "url": str(entry.get("url") or ""),
+                    "duration": float(entry.get("duration") or 0),
+                    "media_sequence": int(entry.get("media_sequence") or 0),
+                    "discontinuity": bool(entry.get("discontinuity")),
+                    "init_path": str(entry.get("init_path") or ""),
+                }
+                for entry in recorded
+            ],
+        }
+        destination = self._task_dir() / LIVE_STATE_FILENAME
+        temporary = destination.with_name(destination.name + ".tmp")
+        try:
+            temporary.write_text(
+                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+            )
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _restore_live_segments(
+        self,
+        saved_state: dict,
+        recorded: list[dict],
+    ) -> float:
+        """Rebuild the recorded segment list from a previous session.
+
+        Only segments whose files are still complete are kept, so a crash in
+        the middle of a batch shrinks the recording instead of corrupting the
+        final merge.  A dropped segment marks the next kept one with a
+        discontinuity so the playback timeline reflects the gap.
+        """
+        seg_dir = self._seg_dir()
+        total_duration = 0.0
+        gap = False
+        for item in saved_state.get("segments", []):
+            try:
+                index = int(item["index"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            segment_path = seg_dir / f"{index:06d}.seg"
+            if not segment_path.exists() or segment_path.stat().st_size == 0:
+                gap = True
+                continue
+            init_path = str(item.get("init_path") or "")
+            if init_path and not Path(init_path).exists():
+                gap = True
+                continue
+            entry = {
+                "index": index,
+                "url": str(item.get("url") or ""),
+                "duration": float(item.get("duration") or 0),
+                "media_sequence": int(item.get("media_sequence") or 0),
+                "discontinuity": bool(item.get("discontinuity")) or gap,
+                "init_path": init_path or None,
+                "init_map": None,
+                "key": None,
+                "byte_range": None,
+            }
+            gap = False
+            recorded.append(entry)
+            total_duration += entry["duration"]
+        recorded.sort(key=lambda entry: entry["index"])
+        return total_duration
+
+    def _compact_recorded(self, recorded: list[dict]) -> int:
+        """Renumber recorded segments 0..n-1, renaming files to match.
+
+        The playback service requires plan index == list position to map
+        segment URLs onto disk files, so a recorded list must never keep the
+        holes left by dropped segments.  Holes only ever close downward, so
+        renaming in ascending order is collision-free.
+        """
+        seg_dir = self._seg_dir()
+        for position, entry in enumerate(recorded):
+            old = int(entry["index"])
+            if old == position:
+                continue
+            source = seg_dir / f"{old:06d}.seg"
+            destination = seg_dir / f"{position:06d}.seg"
+            if source.exists():
+                try:
+                    source.replace(destination)
+                except OSError:
+                    # An open playback handle can block the rename on
+                    # Windows; copy so the plan stays consistent either way.
+                    shutil.copyfile(source, destination)
+                    source.unlink(missing_ok=True)
+            entry["index"] = position
+        return len(recorded)
+
+    def _purge_orphan_live_segments(self, next_index: int) -> None:
+        """Delete segment files above the last persisted index.
+
+        A crash between a segment download and the next live_state.json write
+        leaves files whose indexes will be reassigned to *new* media
+        sequences; without this purge the exists-shortcut in
+        _download_one_segment would silently splice stale pre-crash bytes
+        into the new positions.
+        """
+        for stray in self._seg_dir().glob("*.seg"):
+            try:
+                index = int(stray.stem)
+            except ValueError:
+                continue
+            if index >= next_index:
+                stray.unlink(missing_ok=True)
+
+    async def _reload_live_playlist(
+        self,
+        client: Any,
+        url: str,
+        headers: dict[str, str],
+    ) -> dict:
+        async def load_playlist():
+            response = await client.get(url, headers=self._headers(url, headers))
+            response.raise_for_status()
+            return response
+
+        response = await self._retry_control_request(
+            load_playlist,
+            stage="downloading_segments",
+            url=url,
+            label="直播清单",
+        )
+        final_url = str(getattr(response, "url", "") or url)
+        parsed = parse_m3u8(final_url, response.text)
+        if parsed["type"] != "media":
+            raise RuntimeError("直播清单刷新后不再是媒体清单")
+        parsed["final_url"] = final_url
+        return parsed
+
+    async def _live_wait(self, seconds: float) -> None:
+        deadline = asyncio.get_running_loop().time() + max(0.0, seconds)
+        while asyncio.get_running_loop().time() < deadline:
+            if self._is_canceled() or self._is_pausing():
+                return
+            await asyncio.sleep(0.2)
+
+    async def _download_live_batch(
+        self,
+        client: Any,
+        batch: list[dict],
+        headers: dict[str, str],
+        pending_gap: bool = False,
+    ) -> tuple[list[dict], bool]:
+        """Download one poll's worth of new segments, skipping hard failures.
+
+        A live window keeps sliding, so a segment that still fails after the
+        shared retry policy is dropped (with a discontinuity marker on the
+        next kept segment) instead of aborting the whole recording.  The gap
+        flag is carried across batches so a failure at a batch boundary still
+        marks the next kept segment.
+        """
+        semaphore = asyncio.Semaphore(LIVE_BATCH_CONCURRENCY)
+        outcomes: dict[int, bool] = {}
+
+        async def fetch(entry: dict) -> None:
+            async with semaphore:
+                if self._is_canceled() or self._is_pausing():
+                    outcomes[entry["index"]] = False
+                    return
+                try:
+                    outcomes[entry["index"]] = bool(
+                        await self._download_one_segment(client, entry, headers)
+                    )
+                except asyncio.CancelledError:
+                    # A stop request during an AES-key fetch must not abort
+                    # the recording; drop the segment and let the loop
+                    # finalize what was captured.
+                    if self._is_pausing() and not self._is_canceled():
+                        outcomes[entry["index"]] = False
+                        return
+                    raise
+                except Exception as exc:
+                    outcomes[entry["index"]] = False
+                    self.task.progress.failed_segments += 1
+                    self.task.progress.last_worker_error = (
+                        f"[{entry['index']}] {str(exc)[:120]}"
+                    )
+                    self._log(f"[segment {entry['index']}] 直播分片下载失败，已跳过: {exc}")
+
+        await asyncio.gather(*(fetch(entry) for entry in batch))
+
+        kept: list[dict] = []
+        gap = pending_gap
+        for entry in batch:
+            if outcomes.get(entry["index"]):
+                if gap:
+                    entry["discontinuity"] = True
+                    gap = False
+                kept.append(entry)
+            else:
+                gap = True
+        return kept, gap
+
+    async def _record_live(
+        self,
+        client: Any,
+        parsed: dict,
+        headers: dict[str, str],
+        saved_state: dict | None,
+    ) -> tuple[list[dict], float] | None:
+        task = self.task
+        task_dir = self._task_dir()
+        playlist_url = str(parsed.get("final_url") or parsed["url"])
+        target_duration = max(1.0, float(parsed.get("target_duration") or 6.0))
+        max_minutes = max(0, int(getattr(settings, "live_record_max_minutes", 0) or 0))
+        max_seconds = max_minutes * 60.0
+        stall_window = max(
+            LIVE_STALL_MIN_SECONDS,
+            LIVE_STALL_TARGET_MULTIPLIER * target_duration,
+        )
+
+        recorded: list[dict] = []
+        init_cache: dict[tuple, Path] = {}
+        total_duration = 0.0
+        session_boundary = False
+        if saved_state:
+            total_duration = self._restore_live_segments(saved_state, recorded)
+            session_boundary = bool(recorded)
+            if recorded:
+                self._log(
+                    f"[recording] 继续上次录制：已有 {len(recorded)} 个分片"
+                    f"（{_format_clock(total_duration)}）"
+                )
+        next_index = self._compact_recorded(recorded)
+        self._purge_orphan_live_segments(next_index)
+        if recorded:
+            # Compaction may have renamed segment files; persist the new
+            # index mapping immediately so a crash before the next batch
+            # cannot resurrect the stale layout.
+            self._save_live_state(recorded, total_duration)
+        recorded_urls = {
+            str(entry.get("url") or "") for entry in recorded if entry.get("url")
+        }
+        last_sequence = max(
+            (int(entry.get("media_sequence") or 0) for entry in recorded),
+            default=-1,
+        )
+
+        self.tracker.start(len(recorded))
+        self._completed_count = 0
+        for entry in recorded:
+            segment_path = self._seg_dir() / f"{entry['index']:06d}.seg"
+            self.tracker.add_completed(segment_path.stat().st_size)
+            self._completed_count += 1
+
+        task.status = TaskStatus.DOWNLOADING_SEGMENTS
+        task.progress.total_segments = len(recorded)
+        task.progress.max_workers = LIVE_BATCH_CONCURRENCY
+        task.progress.connection_status = "running"
+        task.progress.media_duration = total_duration
+        if recorded:
+            write_playback_plan(task_dir, recorded, total_duration)
+            self._refresh_playback_progress()
+        self._set_stage("recording", "直播流录制中，停止录制后自动合并")
+
+        loop = asyncio.get_running_loop()
+        last_new_segment = loop.time()
+        current = parsed
+        finish_reason = ""
+        pending_gap = False
+
+        while True:
+            if self._is_canceled():
+                raise asyncio.CancelledError
+            if self._is_pausing():
+                finish_reason = "已停止录制"
+                break
+
+            window = [
+                segment
+                for segment in current.get("segments", [])
+                if segment.get("url")
+            ]
+            window_sequences = [
+                int(segment.get("media_sequence") or 0) for segment in window
+            ]
+            # An encoder restart resets EXT-X-MEDIA-SEQUENCE; treat the whole
+            # window as fresh content instead of skipping it until the stall
+            # timeout ends a stream that is actually still live.  A stale CDN
+            # edge replaying an old window looks identical sequence-wise, so
+            # a reset also requires at least one URL never recorded before.
+            epoch_reset = bool(
+                window_sequences
+                and last_sequence >= 0
+                and max(window_sequences) < last_sequence - len(window_sequences)
+                and any(
+                    segment.get("url") not in recorded_urls for segment in window
+                )
+            )
+            if epoch_reset:
+                self._log(
+                    "[recording] 直播序号已重置"
+                    f"（{last_sequence} → {max(window_sequences)}），继续录制新片段"
+                )
+            new_batch: list[dict] = []
+            capped = False
+            projected = total_duration
+            for segment in window:
+                sequence = int(segment.get("media_sequence") or 0)
+                if not epoch_reset and sequence <= last_sequence:
+                    continue
+                if epoch_reset and segment.get("url") in recorded_urls:
+                    continue
+                if max_seconds and projected >= max_seconds:
+                    # An event playlist can list hours of backlog in a single
+                    # window; stop queueing at the cap so the output actually
+                    # honors the configured limit.
+                    capped = True
+                    break
+                entry = dict(segment)
+                entry["index"] = next_index
+                next_index += 1
+                if session_boundary or (epoch_reset and not new_batch):
+                    entry["discontinuity"] = True
+                    session_boundary = False
+                projected += float(entry.get("duration") or 0)
+                new_batch.append(entry)
+            if capped:
+                # Only sequences actually queued count as consumed, so a
+                # capped batch whose downloads fail can still re-fetch them.
+                last_sequence = max(
+                    (int(entry.get("media_sequence") or 0) for entry in new_batch),
+                    default=last_sequence,
+                )
+            elif window_sequences:
+                if epoch_reset:
+                    last_sequence = max(window_sequences)
+                else:
+                    last_sequence = max(last_sequence, max(window_sequences))
+
+            if new_batch:
+                task.progress.total_segments = len(recorded) + len(new_batch)
+                try:
+                    await self._download_init_maps(
+                        client, new_batch, headers, cache=init_cache
+                    )
+                except asyncio.CancelledError:
+                    # A stop request during a control fetch surfaces as a
+                    # cancellation; it must finalize the recording, not leave
+                    # the task in an interrupted state.
+                    if (
+                        self._is_pausing()
+                        and not self._is_canceled()
+                        and not _externally_cancelled()
+                    ):
+                        finish_reason = "已停止录制"
+                        break
+                    raise
+                except Exception as exc:
+                    if recorded:
+                        self._log(f"[recording] 初始化片段获取失败，结束录制: {exc}")
+                        finish_reason = "直播源资源已不可用，录制结束"
+                        break
+                    raise
+                kept, pending_gap = await self._download_live_batch(
+                    client, new_batch, headers, pending_gap
+                )
+                if kept:
+                    recorded.extend(kept)
+                    recorded_urls.update(
+                        str(entry.get("url") or "")
+                        for entry in kept
+                        if entry.get("url")
+                    )
+                    total_duration += sum(
+                        float(entry.get("duration") or 0) for entry in kept
+                    )
+                    last_new_segment = loop.time()
+                    # Dropped segments burn indexes; renumber so the playback
+                    # plan keeps its index == position invariant.
+                    next_index = self._compact_recorded(recorded)
+                    self._purge_orphan_live_segments(next_index)
+                    self.tracker.total = len(recorded)
+                    task.progress.media_duration = total_duration
+                    write_playback_plan(task_dir, recorded, total_duration)
+                    self._save_live_state(recorded, total_duration)
+                    self._refresh_playback_progress()
+                    self._emit_progress()
+                    task.progress.connection_status = "running"
+                    self._set_stage(
+                        "recording",
+                        f"直播录制中：已录制 {_format_clock(total_duration)}"
+                        f"（{len(recorded)} 分片）",
+                    )
+                task.progress.total_segments = len(recorded)
+
+            if not current.get("is_live", True):
+                finish_reason = "直播已结束"
+                break
+            if max_seconds and total_duration >= max_seconds:
+                finish_reason = f"已达到录制时长上限 {max_minutes} 分钟"
+                break
+            if loop.time() - last_new_segment > stall_window:
+                if recorded:
+                    finish_reason = "直播源已停止更新，自动结束录制"
+                    break
+                raise RuntimeError("直播清单长时间没有新分片，直播源可能已停止")
+
+            delay = target_duration if new_batch else max(1.0, target_duration / 2)
+            await self._live_wait(min(delay, LIVE_MAX_POLL_SECONDS))
+            if self._is_canceled():
+                raise asyncio.CancelledError
+            if self._is_pausing():
+                finish_reason = "已停止录制"
+                break
+
+            try:
+                current = await self._reload_live_playlist(
+                    client, playlist_url, headers
+                )
+                playlist_url = str(current.get("final_url") or playlist_url)
+            except asyncio.CancelledError:
+                if (
+                    self._is_pausing()
+                    and not self._is_canceled()
+                    and not _externally_cancelled()
+                ):
+                    finish_reason = "已停止录制"
+                    break
+                raise
+            except Exception as exc:
+                if recorded:
+                    self._log(f"[recording] 直播清单刷新失败，结束录制: {exc}")
+                    finish_reason = "直播清单已不可用，录制结束"
+                    break
+                raise
+
+        if not recorded:
+            if task.pause_event is not None:
+                task.pause_event.clear()
+            task.status = TaskStatus.PAUSED
+            task.progress.connection_status = "idle"
+            self._set_stage("paused", "已停止，尚未录制到内容，可重新开始")
+            return None
+
+        # A stop request can land mid-batch; keep only complete files so the
+        # final merge never trips over a truncated tail segment.
+        seg_dir = self._seg_dir()
+        final_segments = []
+        dropped = 0
+        for entry in recorded:
+            segment_path = seg_dir / f"{entry['index']:06d}.seg"
+            if segment_path.exists() and segment_path.stat().st_size > 0:
+                final_segments.append(entry)
+            else:
+                dropped += 1
+        if dropped:
+            self._log(f"[recording] 丢弃 {dropped} 个未完成分片")
+        if not final_segments:
+            raise RuntimeError("直播录制没有可用分片")
+        self._compact_recorded(final_segments)
+
+        final_duration = sum(
+            float(entry.get("duration") or 0) for entry in final_segments
+        )
+        task.progress.total_segments = len(final_segments)
+        task.progress.media_duration = final_duration
+        write_playback_plan(task_dir, final_segments, final_duration)
+        self._save_live_state(final_segments, final_duration)
+        self._set_stage(
+            "recording",
+            f"{finish_reason}，共录制 {_format_clock(final_duration)}，正在合并",
+        )
+        return final_segments, final_duration
 
     async def _download_segments(
         self,
@@ -773,7 +1356,11 @@ class HLSDownloader:
                 size = destination.stat().st_size
                 self.tracker.add_completed(size)
                 self._completed_count += 1
-                if self._completed_count % 10 == 0 or self._completed_count == self.task.progress.total_segments:
+                if (
+                    self._completed_count % 10 == 0
+                    or self._completed_count == self.task.progress.total_segments
+                ) and self.task.stage != "recording":
+                    # The live loop owns the stage line while recording.
                     snapshot = self.tracker.snapshot()
                     self._set_stage(
                         "downloading_segments",

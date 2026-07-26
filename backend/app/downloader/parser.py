@@ -155,8 +155,6 @@ def parse_m3u8(url: str, content: str) -> dict:
             "title": playlist_title,
         }
 
-    if not playlist.is_endlist:
-        raise UnsupportedPlaylistError("当前仅支持点播 HLS，不支持直播清单")
     if is_drm_protected(playlist):
         raise UnsupportedPlaylistError("不支持 SAMPLE-AES / DRM 加密")
 
@@ -201,6 +199,13 @@ def parse_m3u8(url: str, content: str) -> dict:
             }
         )
 
+    target_duration = float(playlist.target_duration or 0)
+    if target_duration <= 0:
+        target_duration = max(
+            (segment["duration"] for segment in segments),
+            default=6.0,
+        ) or 6.0
+
     return {
         "type": "media",
         "url": url,
@@ -209,4 +214,10 @@ def parse_m3u8(url: str, content: str) -> dict:
         "is_fmp4": any(segment["init_map"] is not None for segment in segments),
         "external_subtitles": bool(playlist.media),
         "title": playlist_title,
+        # A media playlist without EXT-X-ENDLIST is a live/event stream that
+        # keeps growing; downstream engines record it instead of assuming a
+        # fixed segment list.
+        "is_live": not playlist.is_endlist,
+        "target_duration": target_duration,
+        "media_sequence": int(playlist.media_sequence or 0),
     }
