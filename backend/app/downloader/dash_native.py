@@ -33,12 +33,24 @@ from .errors import (
 )
 from .merge import _run_ffmpeg, _verify_output
 from .mpd import NativeDashUnsupported, parse_mpd
+from .playback import playback_service, write_playback_plan
 from .progress import ProgressTracker
 from .throttle import throttle_bytes
 
 MAX_RETRIES = 5
 DASH_TIMEOUT = httpx.Timeout(connect=10, read=60, write=30, pool=30)
-TRACK_DIRS = {"video": "v", "audio": "a"}
+# The video track lives in the playback service's expected layout
+# (segments/*.seg + maps/*.init) so an in-progress download is previewable
+# and castable exactly like an HLS task; audio keeps a private directory.
+VIDEO_SEG_DIR = "segments"
+VIDEO_INIT_NAME = "dash-video.init"
+AUDIO_DIR = "a"
+
+
+def _is_webm_track(track: dict) -> bool:
+    mime = str(track.get("mime") or "").lower()
+    codecs = str(track.get("codecs") or "").lower()
+    return "webm" in mime or codecs.startswith(("vp8", "vp09", "vp9", "vp0"))
 
 
 class NativeDashEngine:
@@ -64,6 +76,20 @@ class NativeDashEngine:
 
     def _is_canceled(self) -> bool:
         return bool(self.task.cancel_event and self.task.cancel_event.is_set())
+
+    def _refresh_playback_progress(self) -> None:
+        try:
+            snapshot = playback_service.snapshot(
+                self.task.id,
+                self.task.status.value,
+                self.task.output_path,
+            )
+        except Exception:
+            return
+        progress = self.task.progress
+        progress.playable_segments = snapshot.available_segments
+        progress.playable_duration = snapshot.available_duration
+        progress.media_duration = snapshot.total_duration
 
     def _is_pausing(self) -> bool:
         return bool(self.task.pause_event and self.task.pause_event.is_set())
@@ -138,12 +164,45 @@ class NativeDashEngine:
             )
 
             jobs: list[tuple[Path, str]] = []
-            for kind, track in tracks.items():
-                track_dir = task_dir / TRACK_DIRS[kind]
+            video = tracks.get("video")
+            if video:
+                seg_dir = task_dir / VIDEO_SEG_DIR
+                seg_dir.mkdir(parents=True, exist_ok=True)
+                init_path: Path | None = None
+                if video["init_url"]:
+                    (task_dir / "maps").mkdir(parents=True, exist_ok=True)
+                    init_path = task_dir / "maps" / VIDEO_INIT_NAME
+                    jobs.append((init_path, video["init_url"]))
+                for index, segment in enumerate(video["segments"]):
+                    jobs.append((seg_dir / f"{index:06d}.seg", segment["url"]))
+                if (
+                    init_path is not None
+                    and not video.get("single_file")
+                    and not _is_webm_track(video)
+                ):
+                    # Full plan up front: the playback service serves the
+                    # contiguous prefix of files as they land, so preview
+                    # works while the download runs — same as HLS.
+                    write_playback_plan(
+                        task_dir,
+                        [
+                            {
+                                "index": index,
+                                "duration": float(segment.get("duration") or 0),
+                                "discontinuity": False,
+                                "init_path": str(init_path),
+                            }
+                            for index, segment in enumerate(video["segments"])
+                        ],
+                        duration,
+                    )
+            audio = tracks.get("audio")
+            if audio:
+                track_dir = task_dir / AUDIO_DIR
                 track_dir.mkdir(parents=True, exist_ok=True)
-                if track["init_url"]:
-                    jobs.append((track_dir / "init.mp4", track["init_url"]))
-                for index, segment in enumerate(track["segments"]):
+                if audio["init_url"]:
+                    jobs.append((track_dir / "init.mp4", audio["init_url"]))
+                for index, segment in enumerate(audio["segments"]):
                     jobs.append((track_dir / f"{index:06d}.m4s", segment["url"]))
 
             semaphore = asyncio.Semaphore(task.progress.max_workers)
@@ -173,6 +232,8 @@ class NativeDashEngine:
                             task.progress.progress_percent = (
                                 snapshot["completed"] * 100 / total_segments
                             )
+                        if destination.suffix == ".seg":
+                            self._refresh_playback_progress()
                     finally:
                         task.progress.active_workers -= 1
                         task.progress.active_slots -= 1
@@ -201,10 +262,26 @@ class NativeDashEngine:
         self._set_stage("merging", "正在拼接 DASH 轨道")
         track_files: list[Path] = []
         for kind, track in tracks.items():
-            track_dir = task_dir / TRACK_DIRS[kind]
             joined = task_dir / f"{kind}.track.mp4"
+            if kind == "video":
+                seg_dir = task_dir / VIDEO_SEG_DIR
+                init_path = (
+                    task_dir / "maps" / VIDEO_INIT_NAME if track["init_url"] else None
+                )
+                extension = ".seg"
+            else:
+                seg_dir = task_dir / AUDIO_DIR
+                init_path = (
+                    task_dir / AUDIO_DIR / "init.mp4" if track["init_url"] else None
+                )
+                extension = ".m4s"
             await asyncio.to_thread(
-                self._concat_track, track_dir, track, joined
+                self._concat_track,
+                seg_dir,
+                init_path,
+                len(track["segments"]),
+                extension,
+                joined,
             )
             track_files.append(joined)
 
@@ -333,14 +410,19 @@ class NativeDashEngine:
             raise last_error
 
     @staticmethod
-    def _concat_track(track_dir: Path, track: dict, destination: Path) -> None:
+    def _concat_track(
+        seg_dir: Path,
+        init_path: Path | None,
+        count: int,
+        extension: str,
+        destination: Path,
+    ) -> None:
         """Join init + media segments into one continuous fMP4 track file."""
         with destination.open("wb") as output:
-            init_path = track_dir / "init.mp4"
-            if track["init_url"] and init_path.exists():
+            if init_path is not None and init_path.exists():
                 output.write(init_path.read_bytes())
-            for index in range(len(track["segments"])):
-                segment_path = track_dir / f"{index:06d}.m4s"
+            for index in range(count):
+                segment_path = seg_dir / f"{index:06d}{extension}"
                 with segment_path.open("rb") as source:
                     while True:
                         block = source.read(1024 * 1024)

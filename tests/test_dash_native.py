@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 import httpx
@@ -332,6 +333,47 @@ def test_facade_falls_back_when_response_is_not_mpd(tmp_path, monkeypatch):
         await DashDownloader(task).run()
         assert fallback["count"] == 1
         assert task.status is TaskStatus.DONE
+
+    asyncio.run(run())
+
+
+def test_video_track_is_previewable_while_downloading(tmp_path, monkeypatch):
+    from backend.app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "keep_temp_files", True, raising=False)
+    # The playback service resolves task dirs from global settings.
+    monkeypatch.setattr(app_settings, "download_dir", str(tmp_path / "temp"), raising=False)
+    monkeypatch.setattr(app_settings, "temp_dir", str(tmp_path / "temp"), raising=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        target = str(request.url)
+        if target.endswith("manifest.mpd"):
+            return httpx.Response(200, text=TEMPLATE_MPD)
+        name = target.rsplit("/", 2)[-2] + "/" + target.rsplit("/", 1)[-1]
+        return httpx.Response(200, content=name.encode())
+
+    _install_transport(monkeypatch, handler)
+    _install_fake_mux(monkeypatch)
+
+    async def run():
+        task = _task(tmp_path)
+        handled = await NativeDashEngine(task).run()
+        assert handled is True
+        assert task.status is TaskStatus.DONE
+        task_dir = tmp_path / "temp" / ".tasks" / task.id
+        # The video track lands in the playback service layout with a full
+        # plan, so preview/casting work while the download is running.
+        plan = json.loads(
+            (task_dir / "playback-plan.json").read_text(encoding="utf-8")
+        )
+        assert [entry["index"] for entry in plan["segments"]] == [0, 1]
+        assert all(
+            entry["init_name"] == "dash-video.init" for entry in plan["segments"]
+        )
+        assert (task_dir / "segments" / "000000.seg").read_bytes() == b"v/1.m4s"
+        assert (task_dir / "maps" / "dash-video.init").read_bytes() == b"v/init.mp4"
+        assert task.progress.playable_segments == 2
+        assert task.progress.playable_duration == pytest.approx(8.0)
 
     asyncio.run(run())
 
