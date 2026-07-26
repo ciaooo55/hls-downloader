@@ -14,6 +14,7 @@ the caller can fall back to the bundled yt-dlp engine with nothing lost.
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -45,6 +46,11 @@ DASH_TIMEOUT = httpx.Timeout(connect=10, read=60, write=30, pool=30)
 VIDEO_SEG_DIR = "segments"
 VIDEO_INIT_NAME = "dash-video.init"
 AUDIO_DIR = "a"
+LIVE_STATE_FILENAME = "live_state.json"
+LIVE_MIN_POLL_SECONDS = 1.0
+LIVE_MAX_POLL_SECONDS = 10.0
+LIVE_STALL_MIN_SECONDS = 90.0
+LIVE_STALL_TARGET_MULTIPLIER = 6.0
 
 
 def _is_webm_track(track: dict) -> bool:
@@ -147,6 +153,12 @@ class NativeDashEngine:
             if not tracks:
                 raise NativeDashUnsupported("MPD 中没有可下载轨道")
             (task_dir / "manifest.mpd").write_text(text, encoding="utf-8")
+
+            if parsed["type"] == "dynamic":
+                task.engine_state["live"] = True
+                return await self._record_live(client, parsed, manifest_url, task_dir)
+            # A retried task whose stream has since ended downloads as VOD.
+            task.engine_state.pop("live", None)
 
             total_segments = sum(
                 len(track["segments"]) + (1 if track["init_url"] else 0)
@@ -262,6 +274,22 @@ class NativeDashEngine:
                 self._set_stage("paused", "已暂停，已完成的分片会在继续时复用")
                 return True
 
+        return await self._finalize_tracks(
+            task_dir,
+            tracks,
+            {kind: len(track["segments"]) for kind, track in tracks.items()},
+            duration,
+        )
+
+    async def _finalize_tracks(
+        self,
+        task_dir: Path,
+        tracks: dict,
+        counts: dict[str, int],
+        duration: float,
+    ) -> bool:
+        """Concat each downloaded track and mux them into the output file."""
+        task = self.task
         task.status = TaskStatus.MERGING
         task.progress.post_percent = 5.0
         self._set_stage("merging", "正在拼接 DASH 轨道")
@@ -284,7 +312,7 @@ class NativeDashEngine:
                 self._concat_track,
                 seg_dir,
                 init_path,
-                len(track["segments"]),
+                counts[kind],
                 extension,
                 joined,
             )
@@ -352,6 +380,343 @@ class NativeDashEngine:
 
             await asyncio.to_thread(shutil.rmtree, task_dir, True)
         return True
+
+    @staticmethod
+    def _track_layout(task_dir: Path, kind: str) -> tuple[Path, str]:
+        if kind == "video":
+            return task_dir / VIDEO_SEG_DIR, ".seg"
+        return task_dir / AUDIO_DIR, ".m4s"
+
+    @staticmethod
+    def _track_init_path(task_dir: Path, kind: str) -> Path:
+        if kind == "video":
+            return task_dir / "maps" / VIDEO_INIT_NAME
+        return task_dir / AUDIO_DIR / "init.mp4"
+
+    def _load_live_state(self, task_dir: Path) -> dict | None:
+        path = task_dir / LIVE_STATE_FILENAME
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _save_live_state(self, task_dir: Path, state: dict[str, dict]) -> None:
+        payload = {
+            "version": 1,
+            "tracks": {
+                kind: {"segments": value["entries"]}
+                for kind, value in state.items()
+            },
+        }
+        destination = task_dir / LIVE_STATE_FILENAME
+        temporary = destination.with_name(destination.name + ".tmp")
+        try:
+            temporary.write_text(
+                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+            )
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _pause_exit(self) -> bool:
+        task = self.task
+        if task.pause_event is not None:
+            task.pause_event.clear()
+        task.status = TaskStatus.PAUSED
+        task.progress.connection_status = "idle"
+        self._set_stage("paused", "已停止，尚未录制到内容，可重新开始")
+        return True
+
+    async def _record_live(
+        self,
+        client: httpx.AsyncClient,
+        parsed: dict,
+        manifest_url: str,
+        task_dir: Path,
+    ) -> bool:
+        """Record a dynamic MPD until stopped, stalled or ended.
+
+        Mirrors the HLS live recorder: segments append per manifest refresh
+        (deduplicated by timeline identity), state persists for crash
+        recovery, the stop request finalizes and muxes what was captured.
+        """
+        task = self.task
+        tracks = {
+            kind: parsed[kind] for kind in ("video", "audio") if parsed.get(kind)
+        }
+        segment_basis = max(
+            [seg["duration"] for track in tracks.values() for seg in track["segments"][:1]]
+            or [2.0]
+        )
+        poll_seconds = min(
+            LIVE_MAX_POLL_SECONDS,
+            max(LIVE_MIN_POLL_SECONDS, float(parsed.get("update_period") or segment_basis)),
+        )
+        stall_window = max(
+            LIVE_STALL_MIN_SECONDS,
+            LIVE_STALL_TARGET_MULTIPLIER * max(segment_basis, poll_seconds),
+        )
+        max_minutes = max(0, int(getattr(settings, "live_record_max_minutes", 0) or 0))
+        max_seconds = max_minutes * 60.0
+
+        saved = self._load_live_state(task_dir) or {}
+        state: dict[str, dict] = {}
+        self.tracker.start(0)
+        for kind, track in tracks.items():
+            seg_dir, extension = self._track_layout(task_dir, kind)
+            seg_dir.mkdir(parents=True, exist_ok=True)
+            kept: list[dict] = []
+            for item in (saved.get("tracks", {}).get(kind) or {}).get("segments", []):
+                try:
+                    index = int(item["index"])
+                    identity = int(item["identity"])
+                except (KeyError, TypeError, ValueError):
+                    break
+                path = seg_dir / f"{index:06d}{extension}"
+                if index != len(kept) or not path.exists() or path.stat().st_size == 0:
+                    break
+                kept.append({
+                    "index": index,
+                    "identity": identity,
+                    "duration": float(item.get("duration") or 0),
+                })
+                self.tracker.add_completed(path.stat().st_size)
+            # Files past the persisted contiguous prefix belong to a crashed
+            # batch whose indexes will be reassigned; never splice them in.
+            for stray in seg_dir.glob(f"*{extension}"):
+                try:
+                    stray_index = int(stray.stem)
+                except ValueError:
+                    continue
+                if stray_index >= len(kept):
+                    stray.unlink(missing_ok=True)
+            state[kind] = {
+                "entries": kept,
+                "last_identity": max((entry["identity"] for entry in kept), default=-1),
+            }
+        if any(value["entries"] for value in state.values()):
+            self._log(
+                "[recording] 继续上次录制："
+                + "、".join(
+                    f"{kind} {len(value['entries'])} 片"
+                    for kind, value in state.items()
+                )
+            )
+
+        for kind, track in tracks.items():
+            if not track["init_url"]:
+                continue
+            init_path = self._track_init_path(task_dir, kind)
+            init_path.parent.mkdir(parents=True, exist_ok=True)
+            if not init_path.exists():
+                await self._download_one(client, track["init_url"], init_path)
+                if not init_path.exists():
+                    return self._pause_exit()
+
+        video_state = state.get("video")
+        video_track = tracks.get("video")
+        plan_init = (
+            str(self._track_init_path(task_dir, "video"))
+            if video_track and video_track["init_url"] and not _is_webm_track(video_track)
+            else ""
+        )
+
+        def write_live_plan() -> None:
+            if not video_state or not plan_init:
+                return
+            entries = video_state["entries"]
+            write_playback_plan(
+                task_dir,
+                [
+                    {
+                        "index": entry["index"],
+                        "duration": entry["duration"],
+                        "discontinuity": False,
+                        "init_path": plan_init,
+                    }
+                    for entry in entries
+                ],
+                sum(entry["duration"] for entry in entries),
+            )
+
+        def refresh_counters() -> None:
+            total = sum(len(value["entries"]) for value in state.values())
+            task.progress.total_segments = total
+            task.progress.completed_segments = total
+            snapshot = self.tracker.snapshot()
+            task.progress.downloaded_bytes = snapshot["downloaded_bytes"]
+            task.progress.speed_bytes_per_sec = snapshot["speed"]
+            if video_state:
+                task.progress.media_duration = sum(
+                    entry["duration"] for entry in video_state["entries"]
+                )
+            self._publish()
+
+        task.status = TaskStatus.DOWNLOADING_SEGMENTS
+        task.progress.max_workers = 1
+        task.progress.connection_status = "running"
+        write_live_plan()
+        refresh_counters()
+        self._refresh_playback_progress()
+        self._set_stage("recording", "DASH 直播录制中，停止录制后自动合并")
+
+        loop = asyncio.get_running_loop()
+        last_new_segment = loop.time()
+        current = tracks
+        finish_reason = ""
+
+        async def append_fresh(current_tracks: dict) -> bool:
+            nonlocal finish_reason
+            appended = False
+            for kind, track in current_tracks.items():
+                if kind not in state:
+                    continue
+                track_state = state[kind]
+                seg_dir, extension = self._track_layout(task_dir, kind)
+                for segment in track["segments"]:
+                    identity = int(segment.get("identity") or 0)
+                    if identity <= track_state["last_identity"]:
+                        continue
+                    if self._is_canceled():
+                        raise asyncio.CancelledError
+                    if self._is_pausing():
+                        finish_reason = "已停止录制"
+                        return appended
+                    index = len(track_state["entries"])
+                    destination = seg_dir / f"{index:06d}{extension}"
+                    try:
+                        await self._download_one(client, segment["url"], destination)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        # The live window slides on; skip a dead segment
+                        # rather than aborting the whole recording.
+                        task.progress.failed_segments += 1
+                        self._log(f"[recording] {kind} 分片下载失败已跳过: {exc}")
+                        track_state["last_identity"] = identity
+                        continue
+                    if not destination.exists():
+                        finish_reason = "已停止录制"
+                        return appended
+                    track_state["entries"].append({
+                        "index": index,
+                        "identity": identity,
+                        "duration": float(segment.get("duration") or 0),
+                    })
+                    track_state["last_identity"] = identity
+                    self.tracker.add_completed(destination.stat().st_size)
+                    appended = True
+                    if kind == "video":
+                        write_live_plan()
+                        self._refresh_playback_progress()
+                    self._save_live_state(task_dir, state)
+                    refresh_counters()
+            return appended
+
+        while True:
+            if self._is_canceled():
+                raise asyncio.CancelledError
+            if self._is_pausing():
+                finish_reason = "已停止录制"
+                break
+
+            appended = await append_fresh(current)
+            if finish_reason:
+                break
+            recorded_any = any(value["entries"] for value in state.values())
+            video_duration = (
+                sum(entry["duration"] for entry in video_state["entries"])
+                if video_state
+                else 0.0
+            )
+            if appended:
+                last_new_segment = loop.time()
+                self._set_stage(
+                    "recording",
+                    f"DASH 直播录制中：已录制 {video_duration:.0f} 秒"
+                    f"（{task.progress.total_segments} 分片）",
+                )
+            if max_seconds and video_duration >= max_seconds:
+                finish_reason = f"已达到录制时长上限 {max_minutes} 分钟"
+                break
+            if loop.time() - last_new_segment > stall_window:
+                if recorded_any:
+                    finish_reason = "直播源已停止更新，自动结束录制"
+                    break
+                raise RuntimeError("直播清单长时间没有新分片，直播源可能已停止")
+
+            deadline = loop.time() + poll_seconds
+            while loop.time() < deadline:
+                if self._is_canceled() or self._is_pausing():
+                    break
+                await asyncio.sleep(0.2)
+            if self._is_canceled():
+                raise asyncio.CancelledError
+            if self._is_pausing():
+                finish_reason = "已停止录制"
+                break
+
+            try:
+                response = await client.get(
+                    manifest_url, headers=self._headers(manifest_url)
+                )
+                response.raise_for_status()
+                refreshed = parse_mpd(
+                    str(response.url or manifest_url),
+                    response.text,
+                    preferred_video=task.selected_video,
+                    preferred_audio=task.selected_audio,
+                )
+                manifest_url = str(response.url or manifest_url)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if any(value["entries"] for value in state.values()):
+                    self._log(f"[recording] 直播清单刷新失败，结束录制: {exc}")
+                    finish_reason = "直播清单已不可用，录制结束"
+                    break
+                raise
+            current = {
+                kind: refreshed[kind]
+                for kind in ("video", "audio")
+                if refreshed.get(kind) and kind in state
+            }
+            if refreshed["type"] != "dynamic":
+                await append_fresh(current)
+                finish_reason = finish_reason or "直播已结束"
+                break
+
+        counts = {
+            kind: len(value["entries"])
+            for kind, value in state.items()
+            if value["entries"]
+        }
+        if not counts:
+            return self._pause_exit()
+        self._save_live_state(task_dir, state)
+        final_duration = (
+            sum(entry["duration"] for entry in video_state["entries"])
+            if video_state and video_state["entries"]
+            else max(
+                sum(entry["duration"] for entry in value["entries"])
+                for value in state.values()
+                if value["entries"]
+            )
+        )
+        task.progress.media_duration = final_duration
+        self._set_stage(
+            "recording",
+            f"{finish_reason}，共录制 {final_duration:.0f} 秒，正在合并",
+        )
+        return await self._finalize_tracks(
+            task_dir,
+            {kind: tracks[kind] for kind in counts},
+            counts,
+            final_duration,
+        )
 
     async def _download_one(
         self,

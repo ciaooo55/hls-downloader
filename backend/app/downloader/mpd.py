@@ -182,7 +182,13 @@ def _template_segments(
                 number=start_number + offset,
                 time=start,
             ))
-            segments.append({"url": url, "duration": duration / timescale})
+            segments.append({
+                "url": url,
+                "duration": duration / timescale,
+                # Stable identity across live manifest refreshes: the media
+                # timeline position in timescale units.
+                "identity": start,
+            })
         return init_url, segments
     duration_units = float(template.get("duration") or 0)
     if duration_units <= 0:
@@ -200,7 +206,11 @@ def _template_segments(
             number=start_number + index,
             time=int(index * duration_units),
         ))
-        segments.append({"url": url, "duration": min(segment_seconds, max(0.001, remaining))})
+        segments.append({
+            "url": url,
+            "duration": min(segment_seconds, max(0.001, remaining)),
+            "identity": start_number + index,
+        })
     return init_url, segments
 
 
@@ -282,8 +292,7 @@ def parse_mpd(
         raise NativeDashUnsupported(f"MPD 解析失败: {exc}") from exc
     if _local(root.tag) != "MPD":
         raise NativeDashUnsupported("不是 MPD 清单")
-    if (root.get("type") or "static").lower() != "static":
-        raise NativeDashUnsupported("动态（直播）MPD 暂不支持原生下载")
+    is_dynamic = (root.get("type") or "static").lower() == "dynamic"
     periods = _children(root, "Period")
     if not periods:
         raise NativeDashUnsupported("MPD 中没有 Period")
@@ -293,6 +302,12 @@ def parse_mpd(
     total_duration = parse_iso_duration(period.get("duration")) or parse_iso_duration(
         root.get("mediaPresentationDuration")
     )
+    if is_dynamic and total_duration <= 0:
+        # A live window has no fixed length; SegmentTimeline entries carry
+        # their own durations, while duration-computed templates (which need
+        # a known period length) fall through to NativeDashUnsupported below
+        # and reach the fallback engine.
+        total_duration = 0.0
 
     best_video: dict | None = None
     best_audio: dict | None = None
@@ -349,6 +364,10 @@ def parse_mpd(
                     single_file = False
             if not segments:
                 continue
+            if is_dynamic and (single_file or template is None):
+                raise NativeDashUnsupported(
+                    "直播 MPD 暂仅支持 SegmentTemplate 形式的原生录制"
+                )
             candidate = {
                 "id": representation_id,
                 "mime": representation.get("mimeType") or adaptation.get("mimeType") or "",
@@ -404,8 +423,9 @@ def parse_mpd(
                     sum(segment["duration"] for segment in track["segments"]),
                 )
     return {
-        "type": "static",
+        "type": "dynamic" if is_dynamic else "static",
         "duration": total_duration,
+        "update_period": parse_iso_duration(root.get("minimumUpdatePeriod")),
         "video": best_video,
         "audio": best_audio,
         "video_options": video_options,
