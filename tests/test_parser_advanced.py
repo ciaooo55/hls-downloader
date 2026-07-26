@@ -92,3 +92,16 @@ audio-only.m3u8
 
     assert parsed["type"] == "variant"
     assert parsed["url"] == "https://example.test/1080p.m3u8"
+
+
+def test_master_playlist_marks_a_separate_audio_rendition_for_compatible_download():
+    content = """#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-main",NAME="国语",DEFAULT=YES,AUTOSELECT=YES,URI="audio/index.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=4200000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2",AUDIO="audio-main"
+video/1080.m3u8
+"""
+
+    parsed = parse_m3u8("https://example.test/master.m3u8", content)
+
+    assert parsed["type"] == "variant"
+    assert parsed["external_audio"] is True

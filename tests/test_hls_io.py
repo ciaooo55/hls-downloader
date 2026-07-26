@@ -1,4 +1,5 @@
 import asyncio
+import types
 from pathlib import Path
 
 import httpx
@@ -62,6 +63,47 @@ one.ts
         assert parsed["segments"][0]["url"] == "https://example.test/one.ts"
 
     asyncio.run(run())
+
+
+def test_hls_with_external_audio_uses_adaptive_compatibility_engine(tmp_path, monkeypatch):
+    from backend.app.downloader import hls as hls_module
+
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path))
+    task = _task()
+    calls = []
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class FakeAdaptiveDownloader:
+        def __init__(self, received_task, on_progress=None, on_log=None, source_label=""):
+            assert received_task is task
+            assert source_label == "HLS 独立音轨"
+            self.task = received_task
+            self.on_progress = on_progress
+            self.on_log = on_log
+
+        async def run(self):
+            calls.append("run")
+            self.task.status = self.task.status.DONE
+
+    async def fake_playlist(self, _client, _url, _headers):
+        return {"external_audio": True}
+
+    monkeypatch.setattr(hls_module, "_create_hls_client", lambda _concurrency: FakeClient())
+    monkeypatch.setattr(hls_module, "DashDownloader", FakeAdaptiveDownloader)
+    downloader = HLSDownloader(task)
+    downloader._load_media_playlist = types.MethodType(fake_playlist, downloader)
+
+    asyncio.run(downloader.run())
+
+    assert calls == ["run"]
+    assert task.stage == "parsing"
+    assert "独立 HLS 音轨" in task.last_log
 
 
 def test_download_resource_validates_byte_range_and_renames_atomically(tmp_path):

@@ -19,10 +19,11 @@ class _StopDownload(Exception):
 
 
 class DashDownloader(SeeklessEngine):
-    def __init__(self, task: Task, on_progress=None, on_log=None) -> None:
+    def __init__(self, task: Task, on_progress=None, on_log=None, source_label: str = "DASH") -> None:
         self.task = task
         self.on_progress = on_progress or (lambda task: None)
         self.on_log = on_log or (lambda task_id, message: None)
+        self.source_label = source_label
 
     def _publish(self) -> None:
         self.on_progress(self.task)
@@ -47,7 +48,7 @@ class DashDownloader(SeeklessEngine):
             task.status = TaskStatus.DOWNLOADING
             task.started_at = task.started_at or datetime.now().isoformat()
             task.progress.connection_status = "connecting"
-            self._set_stage("parsing", "正在解析 DASH 清单")
+            self._set_stage("parsing", f"正在解析 {self.source_label} 清单")
             result = await asyncio.to_thread(self._run_ytdlp, task_dir)
             if self._stopping():
                 if task.cancel_event and task.cancel_event.is_set():
@@ -150,13 +151,13 @@ class DashDownloader(SeeklessEngine):
                         100.0,
                         task.progress.downloaded_bytes * 100 / task.progress.total_bytes,
                     )
-                task.last_log = f"DASH 下载 {task.progress.progress_percent:.1f}%"
+                task.last_log = f"{self.source_label} 下载 {task.progress.progress_percent:.1f}%"
                 self._publish()
             elif status == "finished":
                 task.status = TaskStatus.REMUXING
                 task.stage = "remuxing"
                 task.progress.post_percent = 95.0
-                task.last_log = "正在合并 DASH 音视频轨"
+                task.last_log = f"正在合并 {self.source_label} 音视频轨"
                 self._publish()
 
         headers = build_task_headers(task)

@@ -20,6 +20,7 @@ from ..utils import sanitize_filename
 from ..naming import is_generic_media_name, suggest_manifest_name
 from ..request_context import build_task_headers
 from .http_file import _content_disposition_filename
+from .dash import DashDownloader
 from .merge import merge_segments
 from .errors import (
     SharedRetryWindow,
@@ -294,6 +295,7 @@ class HLSDownloader:
         current_url = url
         manifest_title = ""
         response_filename = ""
+        external_audio = False
         for depth in range(MAX_PLAYLIST_DEPTH + 1):
             if current_url in visited:
                 raise ValueError(f"主清单存在循环引用: {current_url}")
@@ -314,9 +316,15 @@ class HLSDownloader:
                 parsed["title"] = manifest_title
                 parsed["response_filename"] = response_filename
                 parsed["final_url"] = final_url
+                parsed["external_audio"] = external_audio
                 return parsed
             if parsed.get("external_audio"):
-                raise UnsupportedPlaylistError("暂不支持独立 HLS 音轨")
+                # The native segment engine intentionally keeps one media
+                # timeline at a time.  A master with a separate audio
+                # rendition is still fully downloadable through the bundled
+                # adaptive compatibility engine, which selects and muxes the
+                # matching best video/audio pair without dropping auth context.
+                external_audio = True
             if parsed.get("external_subtitles"):
                 self._log("[parsing] 外部字幕轨道已忽略")
             if depth >= MAX_PLAYLIST_DEPTH:
@@ -345,6 +353,15 @@ class HLSDownloader:
                 task.status = TaskStatus.PARSING
                 self._set_stage("parsing", "正在解析 HLS 清单")
                 parsed = await self._load_media_playlist(client, task.url, headers)
+                if parsed.get("external_audio"):
+                    self._set_stage("parsing", "检测到独立 HLS 音轨，正在使用兼容合并引擎")
+                    await DashDownloader(
+                        task,
+                        on_progress=self.on_progress,
+                        on_log=self.on_log,
+                        source_label="HLS 独立音轨",
+                    ).run()
+                    return
                 if is_generic_media_name(task.filename):
                     task.filename = suggest_manifest_name(
                         parsed.get("final_url") or task.url,
