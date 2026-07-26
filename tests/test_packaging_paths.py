@@ -78,6 +78,20 @@ def test_installer_bundles_loadable_edge_extension_and_removes_it_on_uninstall()
     assert 'RMDir /r "$INSTDIR\\browser-extension"' in nsis_script
 
 
+def test_firefox_web_and_no_web_variants_have_stable_distinct_ids():
+    root = Path(__file__).resolve().parent.parent
+    build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
+    wxt_config = (root / "extension" / "wxt.config.ts").read_text(encoding="utf-8")
+    native_host = (root / "extension" / "native-host" / "firefox.json").read_text(encoding="utf-8")
+
+    assert '$FirefoxWebId = "browser@hls-downloader.ciaooo55.com"' in build_script
+    assert '$FirefoxNoWebId = "hls-downloader-store@ciaooo55.com"' in build_script
+    assert "const firefoxId = process.env.HLS_FIREFOX_EXTENSION_ID || 'browser@hls-downloader.ciaooo55.com'" in wxt_config
+    assert "Firefox source archive did not receive the expected extension ID" in build_script
+    assert '"browser@hls-downloader.ciaooo55.com"' in native_host
+    assert '"hls-downloader-store@ciaooo55.com"' in native_host
+
+
 def test_app_icon_is_used_by_executable_tray_ui_and_installer():
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
@@ -288,14 +302,14 @@ def test_extension_source_does_not_assign_untrusted_html():
         assert ".innerHTML" not in source.read_text(encoding="utf-8")
 
 
-def test_firefox_store_id_matches_native_host_and_keeps_legacy_compatibility():
+def test_firefox_web_store_id_matches_native_host_and_keeps_no_web_compatibility():
     root = Path(__file__).resolve().parent.parent
     config = (root / "extension" / "wxt.config.ts").read_text(encoding="utf-8")
     native_host = (root / "extension" / "native-host" / "firefox.json").read_text(encoding="utf-8")
 
-    store_id = "hls-downloader-store@ciaooo55.com"
-    legacy_id = "browser@hls-downloader.ciaooo55.com"
-    assert store_id in config
-    assert store_id in native_host
-    assert legacy_id not in config
-    assert legacy_id in native_host
+    web_store_id = "browser@hls-downloader.ciaooo55.com"
+    no_web_id = "hls-downloader-store@ciaooo55.com"
+    assert web_store_id in config
+    assert web_store_id in native_host
+    assert no_web_id not in config
+    assert no_web_id in native_host

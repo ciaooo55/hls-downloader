@@ -3,7 +3,7 @@ param(
     [switch]$SkipBackend,
     [switch]$SkipDesktop,
     [switch]$SkipSmoke,
-    [string]$Version = "1.6.16"
+    [string]$Version = "1.6.17"
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,8 +37,8 @@ $NsisUrl = "https://downloads.sourceforge.net/project/nsis/NSIS%203/$NsisVersion
 $InstallerScript = Join-Path $Root "installer\hls-downloader.nsi"
 $InstallerOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Setup.exe"
 $PortableOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Portable.zip"
-$FirefoxWebId = "hls-downloader-store@ciaooo55.com"
-$FirefoxNoWebId = "browser@hls-downloader.ciaooo55.com"
+$FirefoxWebId = "browser@hls-downloader.ciaooo55.com"
+$FirefoxNoWebId = "hls-downloader-store@ciaooo55.com"
 $ExtensionBuildDir = Join-Path $Root "build\installer\extensions"
 $FirefoxWebStage = Join-Path $ExtensionBuildDir "firefox-web-ui"
 $FirefoxNoWebStage = Join-Path $ExtensionBuildDir "firefox-no-web-ui"
@@ -589,12 +589,23 @@ Invoke-Step "Assemble release files" {
         Remove-Item -Recurse -Force $sourceVariant.Stage -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force -Path $sourceVariant.Stage | Out-Null
         Copy-Item -Recurse -Force -Path $sourceInputs -Destination $sourceVariant.Stage
+        # AMO reviewers and users must be able to build each source archive
+        # without an undocumented environment variable.  Keep the functional
+        # source identical, but make this archive's manifest default to the
+        # exact ID carried by its corresponding unsigned ZIP.
+        $sourceConfigPath = Join-Path $sourceVariant.Stage "wxt.config.ts"
+        $sourceConfig = [IO.File]::ReadAllText($sourceConfigPath)
+        $sourceConfig = $sourceConfig -replace "const firefoxId = process\.env\.HLS_FIREFOX_EXTENSION_ID \|\| '[^']+'", "const firefoxId = '$($sourceVariant.Id)'"
+        if ($sourceConfig -notmatch [regex]::Escape("const firefoxId = '$($sourceVariant.Id)'")) {
+            throw "Firefox source archive did not receive the expected extension ID: $($sourceVariant.Id)"
+        }
+        [IO.File]::WriteAllText($sourceConfigPath, $sourceConfig, [Text.UTF8Encoding]::new($false))
         @"
 Firefox 发布变体：$($sourceVariant.Label)
 扩展 ID：$($sourceVariant.Id)
-构建命令：`$env:HLS_FIREFOX_EXTENSION_ID='$($sourceVariant.Id)'; pnpm run build:firefox
+构建命令：pnpm run build:firefox
 
-两个发布变体的功能源码完全相同，仅 Mozilla 发布 ID 不同。
+该源码包已将上述 ID 设为默认值；两个发布变体的功能源码完全相同，仅 Mozilla 发布 ID 不同。
 "@ | Set-Content -LiteralPath (Join-Path $sourceVariant.Stage "BUILD-VARIANT.txt") -Encoding UTF8
         Compress-Archive -Path (Join-Path $sourceVariant.Stage "*") -DestinationPath $sourceVariant.Out -CompressionLevel Optimal
     }

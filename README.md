@@ -82,7 +82,7 @@ Release 同时生成两个 Firefox 插件包：网页显示版与网页不显示
 
 扩展支持响应嗅探、页面 fetch/XHR/media/Performance 观察、右键下载和 magnet 链接，主检测器与 MAIN-world 监听器均在 iframe 内运行。识别结果按“标签页 + 当前页面 URL + frame”隔离；只有媒体元素地址精确匹配，或播放前后短时间内同 frame 捕获到的资源才会显示，避免把广告、图片、PHP 页面或后台预览流误认为目标视频。检测到可见视频后，下载按钮会贴在视频右上角，多清晰度时点击选择。无可见视频时仍可使用右侧折叠资源面板。Cookie 必须按站点单独授权，桌面任务中的 Cookie 使用 Windows DPAPI 加密后再写入数据库。Chrome 正式安装需要 Chrome Web Store，Firefox 永久安装需要 Mozilla 签名。
 
-Firefox 网页显示版使用 ID `hls-downloader-store@ciaooo55.com`，网页不显示版使用 `browser@hls-downloader.ciaooo55.com`。首次提交时，在 AMO 的“提交新附加组件”页面选择“在此网站上”，上传对应的 `Unsigned.zip`。不要先对商店 ID 执行 `web-ext sign --channel unlisted`，否则它会被注册为自分发扩展，随后创建公开商店条目会提示“发现重复的附加组件 ID”。以后更新必须进入“我的附加组件 → HLS Downloader → 状态和版本 → 上传新版本”，保持该版本对应的 ID 不变并提高版本号。
+Firefox 网页显示版使用已发布的 AMO ID `browser@hls-downloader.ciaooo55.com`，网页不显示版使用独立 ID `hls-downloader-store@ciaooo55.com`。首次提交时，在 AMO 的“提交新附加组件”页面选择“在此网站上”，上传对应的 `Unsigned.zip`。不要先对商店 ID 执行 `web-ext sign --channel unlisted`，否则它会被注册为自分发扩展，随后创建公开商店条目会提示“发现重复的附加组件 ID”。以后更新必须进入“我的附加组件 → HLS Downloader → 状态和版本 → 上传新版本”，保持该版本对应的 ID 不变并提高版本号。每个 Source.zip 已内置与同名 Unsigned.zip 一致的默认 ID。
 
 校验通过后，源码问题选择“是”，再上传同一 Release、同一变体对应的 `Source.zip`。审核说明见源码包内的 `AMO-BUILD.md`，隐私政策见 [PRIVACY.md](PRIVACY.md)。未签名 ZIP 不能拖进正式版 Firefox；临时测试时先解压，在 `about:debugging#/runtime/this-firefox` 中选择“临时载入附加组件”，再选择解压目录里的 `manifest.json`。
 

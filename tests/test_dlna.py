@@ -93,6 +93,12 @@ def test_scan_cast_devices_includes_chromecast(monkeypatch):
     assert devices[0]["id"] == "cast-uuid"
 
 
+def test_ssdp_scan_uses_a_response_window_that_cannot_expire_before_mx():
+    assert dlna.SSDP_RESPONSE_DELAY_SECONDS == 1
+    assert dlna.MEDIA_RENDERER_TARGET_V2 in dlna.SSDP_TARGETS
+    assert "urn:schemas-upnp-org:service:AVTransport:2" in dlna.SSDP_TARGETS
+
+
 def test_cast_control_seeks_forward_from_the_reported_position(monkeypatch):
     calls = []
 

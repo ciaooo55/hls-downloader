@@ -14,10 +14,14 @@ from urllib.parse import urljoin, urlparse
 
 
 SSDP_ADDRESS = ("239.255.255.250", 1900)
+SSDP_RESPONSE_DELAY_SECONDS = 1
 MEDIA_RENDERER_TARGET = "urn:schemas-upnp-org:device:MediaRenderer:1"
+MEDIA_RENDERER_TARGET_V2 = "urn:schemas-upnp-org:device:MediaRenderer:2"
 SSDP_TARGETS = (
     MEDIA_RENDERER_TARGET,
+    MEDIA_RENDERER_TARGET_V2,
     "urn:schemas-upnp-org:service:AVTransport:1",
+    "urn:schemas-upnp-org:service:AVTransport:2",
     "ssdp:all",
 )
 AV_TRANSPORT_PREFIX = "urn:schemas-upnp-org:service:AVTransport:"
@@ -118,7 +122,12 @@ def _search_ssdp(timeout: float) -> list[str]:
                 "M-SEARCH * HTTP/1.1\r\n"
                 "HOST: 239.255.255.250:1900\r\n"
                 'MAN: "ssdp:discover"\r\n'
-                "MX: 3\r\n"
+                # ``MX: 3`` permits a renderer to delay its response for up
+                # to three seconds, while the old default scan only listened
+                # for 2.5 seconds.  That made an otherwise healthy renderer
+                # appear and disappear between scans.  One second is enough
+                # for a LAN response and keeps the picker responsive.
+                f"MX: {SSDP_RESPONSE_DELAY_SECONDS}\r\n"
                 "USER-AGENT: HLSDownloader/1.6 UPnP/1.1\r\n"
                 f"ST: {target}\r\n\r\n"
             ).encode("ascii")
@@ -219,7 +228,7 @@ async def _describe(location: str, timeout: float) -> CastDevice | None:
     return None
 
 
-async def scan_cast_devices(timeout: float = 2.5) -> list[dict[str, str]]:
+async def scan_cast_devices(timeout: float = 4.0) -> list[dict[str, str]]:
     locations, chromecasts = await asyncio.gather(
         asyncio.to_thread(_search_ssdp, timeout),
         asyncio.to_thread(_scan_chromecasts, max(3.0, timeout)),

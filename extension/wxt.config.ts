@@ -1,12 +1,14 @@
 import { defineConfig } from 'wxt'
-const firefoxId = process.env.HLS_FIREFOX_EXTENSION_ID || 'hls-downloader-store@ciaooo55.com'
+// This is the already-published AMO ID for the variant that appears on the
+// web store. Packaging overrides it only for the separate no-web-store build.
+const firefoxId = process.env.HLS_FIREFOX_EXTENSION_ID || 'browser@hls-downloader.ciaooo55.com'
 
 export default defineConfig({
   manifestVersion: 3,
   manifest: ({ browser }) => ({
     name: 'HLS Downloader 浏览器接管',
     description: '嗅探媒体、接管普通下载并发送到 HLS Downloader 桌面端。',
-    version: '1.6.16',
+    version: '1.6.17',
     icons: {
       16: 'icon-16.png',
       32: 'icon-32.png',
