@@ -30,6 +30,25 @@ import { pickLocalMediaFile } from './desktop'
 const VideoPlayerModal = lazy(() => import('./components/VideoPlayerModal'))
 const launchParams = new URLSearchParams(window.location.search)
 
+/** WebView2 has no Web Notification API, so the desktop shell must use the
+ *  Tauri notification plugin; the web UI keeps the browser API. */
+async function notifySystem(title: string, body: string): Promise<void> {
+  try {
+    if (isTauriDesktop()) {
+      const plugin = await import('@tauri-apps/plugin-notification')
+      let granted = await plugin.isPermissionGranted()
+      if (!granted) granted = (await plugin.requestPermission()) === 'granted'
+      if (granted) plugin.sendNotification({ title, body })
+      return
+    }
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification(title, { body })
+    }
+  } catch {
+    // Notifications are optional; task state remains visible in the app.
+  }
+}
+
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [settings, setSettings] = useState<Settings>({})
@@ -122,14 +141,8 @@ export default function App() {
         const previous = lastStatuses.current[event.task_id]
         if (previous !== event.status) {
           lastStatuses.current[event.task_id] = event.status
-          try {
-            if ('Notification' in window && Notification.permission === 'granted') {
-              if (event.status === 'done') new Notification('下载完成', { body: event.title || event.task_id })
-              if (event.status === 'failed') new Notification('下载失败', { body: event.error_message || event.task_id })
-            }
-          } catch {
-            // Desktop notifications are optional; task state remains visible in the app.
-          }
+          if (event.status === 'done') void notifySystem('下载完成', event.title || event.task_id)
+          if (event.status === 'failed') void notifySystem('下载失败', event.error_message || event.task_id)
         }
       }
     }, load)
