@@ -133,11 +133,29 @@ class NativeDashEngine:
         async with httpx.AsyncClient(
             follow_redirects=True, timeout=DASH_TIMEOUT
         ) as client:
-            response = await client.get(task.url, headers=self._headers(task.url))
-            response.raise_for_status()
-            text = response.text
-            if "<MPD" not in text[:4096]:
-                raise NativeDashUnsupported("清单不是 MPD 格式")
+            saved_state = self._load_live_state(task_dir)
+            has_recorded = any(
+                (track or {}).get("segments")
+                for track in ((saved_state or {}).get("tracks") or {}).values()
+            )
+            try:
+                response = await client.get(task.url, headers=self._headers(task.url))
+                response.raise_for_status()
+                text = response.text
+                if "<MPD" not in text[:4096]:
+                    raise NativeDashUnsupported("清单不是 MPD 格式")
+            except asyncio.CancelledError:
+                raise
+            except NativeDashUnsupported:
+                raise
+            except Exception:
+                # A finished live event usually takes its manifest offline.
+                # The captured segments are the only copy that will ever
+                # exist, so merge them instead of failing forever.
+                if not has_recorded:
+                    raise
+                self._log("[recording] 直播清单已不可用，直接合并已录制的内容")
+                return await self._finalize_offline(task_dir, saved_state or {})
             manifest_url = str(response.url or task.url)
             parsed = parse_mpd(
                 manifest_url,
@@ -154,7 +172,10 @@ class NativeDashEngine:
                 raise NativeDashUnsupported("MPD 中没有可下载轨道")
             (task_dir / "manifest.mpd").write_text(text, encoding="utf-8")
 
-            if parsed["type"] == "dynamic":
+            # A resumed recording stays in recording mode even after the
+            # stream flipped to static VOD: its captured segments start
+            # mid-timeline and must never be reused as VOD positions.
+            if parsed["type"] == "dynamic" or has_recorded:
                 task.engine_state["live"] = True
                 return await self._record_live(client, parsed, manifest_url, task_dir)
             # A retried task whose stream has since ended downloads as VOD.
@@ -279,6 +300,11 @@ class NativeDashEngine:
             tracks,
             {kind: len(track["segments"]) for kind, track in tracks.items()},
             duration,
+            starts={
+                kind: float((track["segments"][0] or {}).get("start") or 0)
+                for kind, track in tracks.items()
+                if track["segments"]
+            },
         )
 
     async def _finalize_tracks(
@@ -287,8 +313,14 @@ class NativeDashEngine:
         tracks: dict,
         counts: dict[str, int],
         duration: float,
+        starts: dict[str, float] | None = None,
     ) -> bool:
-        """Concat each downloaded track and mux them into the output file."""
+        """Concat each downloaded track and mux them into the output file.
+
+        starts carries each track's first-segment position on the media
+        timeline; live tracks routinely begin a segment apart, so the mux
+        offsets them instead of stacking both at zero (A/V desync).
+        """
         task = self.task
         task.status = TaskStatus.MERGING
         task.progress.post_percent = 5.0
@@ -316,7 +348,7 @@ class NativeDashEngine:
                 extension,
                 joined,
             )
-            track_files.append(joined)
+            track_files.append((kind, joined))
 
         # VP8 (and some VP9) streams are WebM-only; Matroska accepts any
         # codec losslessly, so it is the safe container for those.
@@ -333,7 +365,13 @@ class NativeDashEngine:
         temporary = output.with_name(f"{output.stem}.merging{output.suffix}")
         temporary.unlink(missing_ok=True)
         command = [settings.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error"]
-        for path in track_files:
+        offsets = starts or {}
+        base_start = min((offsets.get(kind, 0.0) for kind, _ in track_files), default=0.0)
+        for kind, path in track_files:
+            offset = offsets.get(kind, 0.0) - base_start
+            # -itsoffset is an input option: it must precede its own -i.
+            if offset > 0.001:
+                command += ["-itsoffset", f"{offset:.3f}"]
             command += ["-i", str(path)]
         command += ["-c", "copy"]
         if container == ".mp4":
@@ -430,6 +468,82 @@ class NativeDashEngine:
         self._set_stage("paused", "已停止，尚未录制到内容，可重新开始")
         return True
 
+    async def _finalize_offline(self, task_dir: Path, saved_state: dict) -> bool:
+        """Merge a recording whose live manifest is gone.
+
+        Track metadata comes from manifest.mpd (always written before the
+        first segment), and only the validated contiguous file prefix is
+        merged — exactly the rule the resume path uses.
+        """
+        task = self.task
+        task.engine_state["live"] = True
+        manifest_path = task_dir / "manifest.mpd"
+        tracks: dict = {}
+        if manifest_path.exists():
+            try:
+                parsed = parse_mpd(
+                    task.url,
+                    manifest_path.read_text(encoding="utf-8"),
+                    preferred_video=task.selected_video,
+                    preferred_audio=task.selected_audio,
+                )
+                tracks = {
+                    kind: parsed[kind]
+                    for kind in ("video", "audio")
+                    if parsed.get(kind)
+                }
+            except Exception:
+                tracks = {}
+        counts: dict[str, int] = {}
+        starts: dict[str, float] = {}
+        duration = 0.0
+        for kind in ("video", "audio"):
+            entries = ((saved_state.get("tracks") or {}).get(kind) or {}).get("segments") or []
+            if not entries:
+                continue
+            seg_dir, extension = self._track_layout(task_dir, kind)
+            kept = 0
+            total = 0.0
+            for item in entries:
+                try:
+                    index = int(item["index"])
+                except (KeyError, TypeError, ValueError):
+                    break
+                path = seg_dir / f"{index:06d}{extension}"
+                if index != kept or not path.exists() or path.stat().st_size == 0:
+                    break
+                if kept == 0:
+                    starts[kind] = float(item.get("start") or 0)
+                kept += 1
+                total += float(item.get("duration") or 0)
+            if not kept:
+                continue
+            counts[kind] = kept
+            if kind not in tracks:
+                # Without the manifest, assume the standard fMP4 layout the
+                # recorder itself wrote (init + media segments).
+                tracks[kind] = {
+                    "init_url": str(self._track_init_path(task_dir, kind))
+                    if self._track_init_path(task_dir, kind).exists() else "",
+                    "mime": "video/mp4" if kind == "video" else "audio/mp4",
+                    "codecs": "",
+                    "segments": [],
+                }
+            if kind == "video" or not duration:
+                duration = max(duration, total)
+        if not counts:
+            raise RuntimeError("直播源已不可用，且没有可合并的已录制分片")
+        task.progress.total_segments = sum(counts.values())
+        task.progress.completed_segments = task.progress.total_segments
+        task.progress.media_duration = duration
+        return await self._finalize_tracks(
+            task_dir,
+            {kind: tracks[kind] for kind in counts},
+            counts,
+            duration,
+            starts=starts,
+        )
+
     async def _record_live(
         self,
         client: httpx.AsyncClient,
@@ -482,6 +596,7 @@ class NativeDashEngine:
                     "index": index,
                     "identity": identity,
                     "duration": float(item.get("duration") or 0),
+                    "start": float(item.get("start") or 0),
                 })
                 self.tracker.add_completed(path.stat().st_size)
             # Files past the persisted contiguous prefix belong to a crashed
@@ -517,6 +632,9 @@ class NativeDashEngine:
                     return self._pause_exit()
 
         video_state = state.get("video")
+        # An audio-only recording still needs a duration for the cap, the UI
+        # and the finalize log.
+        duration_state = video_state or state.get("audio")
         video_track = tracks.get("video")
         plan_init = (
             str(self._track_init_path(task_dir, "video"))
@@ -549,9 +667,9 @@ class NativeDashEngine:
             snapshot = self.tracker.snapshot()
             task.progress.downloaded_bytes = snapshot["downloaded_bytes"]
             task.progress.speed_bytes_per_sec = snapshot["speed"]
-            if video_state:
+            if duration_state:
                 task.progress.media_duration = sum(
-                    entry["duration"] for entry in video_state["entries"]
+                    entry["duration"] for entry in duration_state["entries"]
                 )
             self._publish()
 
@@ -605,6 +723,7 @@ class NativeDashEngine:
                         "index": index,
                         "identity": identity,
                         "duration": float(segment.get("duration") or 0),
+                        "start": float(segment.get("start") or 0),
                     })
                     track_state["last_identity"] = identity
                     self.tracker.add_completed(destination.stat().st_size)
@@ -628,8 +747,8 @@ class NativeDashEngine:
                 break
             recorded_any = any(value["entries"] for value in state.values())
             video_duration = (
-                sum(entry["duration"] for entry in video_state["entries"])
-                if video_state
+                sum(entry["duration"] for entry in duration_state["entries"])
+                if duration_state
                 else 0.0
             )
             if appended:
@@ -716,6 +835,10 @@ class NativeDashEngine:
             {kind: tracks[kind] for kind in counts},
             counts,
             final_duration,
+            starts={
+                kind: float(state[kind]["entries"][0].get("start") or 0)
+                for kind in counts
+            },
         )
 
     async def _download_one(

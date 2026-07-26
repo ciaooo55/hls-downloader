@@ -53,3 +53,6 @@ docs/superpowers/
 Thumbs.db
 .DS_Store
 
+
+# Per-install runtime config (holds the local IPC token)
+config.json

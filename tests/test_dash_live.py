@@ -232,3 +232,124 @@ def test_duration_limit_stops_the_recording(tmp_path, monkeypatch):
         assert Path(task.output_path).exists()
 
     asyncio.run(run())
+
+
+def test_offline_manifest_finalizes_recorded_segments(tmp_path, monkeypatch):
+    """A finished live event whose MPD 404s must still produce the file."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, request=request)
+
+    _install(monkeypatch, handler)
+
+    async def run():
+        task = _task(tmp_path)
+        task.engine_state["live"] = True
+        engine = NativeDashEngine(task)
+        from backend.app.downloader.engine import task_work_dir
+
+        task_dir = task_work_dir(task)
+        seg_dir = task_dir / "segments"
+        seg_dir.mkdir(parents=True, exist_ok=True)
+        (seg_dir / "000000.seg").write_bytes(b"one")
+        (seg_dir / "000001.seg").write_bytes(b"two")
+        (task_dir / "maps").mkdir(parents=True, exist_ok=True)
+        (task_dir / "maps" / "dash-video.init").write_bytes(b"init")
+        (task_dir / "manifest.mpd").write_text(
+            _live_mpd('<S t="0" d="2"/><S d="2"/>'), encoding="utf-8"
+        )
+        (task_dir / "live_state.json").write_text(json.dumps({
+            "version": 1,
+            "tracks": {"video": {"segments": [
+                {"index": 0, "identity": 0, "duration": 2.0, "start": 0.0},
+                {"index": 1, "identity": 2, "duration": 2.0, "start": 2.0},
+            ]}},
+        }), encoding="utf-8")
+
+        handled = await engine.run()
+        assert handled is True
+        assert task.status is TaskStatus.DONE
+        assert Path(task.output_path).read_bytes() == b"initonetwo"
+        assert task.progress.media_duration == pytest.approx(4.0)
+
+    asyncio.run(run())
+
+
+def test_recorded_segments_are_never_reused_as_vod_positions(tmp_path, monkeypatch):
+    """After the stream turns static, resume keeps recording semantics."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        target = str(request.url)
+        if target.endswith("main.mpd"):
+            # The event is over: same URL now serves the whole VOD timeline.
+            return httpx.Response(200, text=_live_mpd(
+                '<S t="0" d="2"/><S d="2"/><S d="2"/><S d="2"/>', dynamic=False,
+            ))
+        return httpx.Response(200, content=b"fresh")
+
+    _install(monkeypatch, handler)
+
+    async def run():
+        task = _task(tmp_path)
+        task.engine_state["live"] = True
+        from backend.app.downloader.engine import task_work_dir
+
+        task_dir = task_work_dir(task)
+        seg_dir = task_dir / "segments"
+        seg_dir.mkdir(parents=True, exist_ok=True)
+        # Recording joined the live window at t=4s, so file 0 is NOT VOD 0.
+        (seg_dir / "000000.seg").write_bytes(b"rec-t4")
+        (task_dir / "maps").mkdir(parents=True, exist_ok=True)
+        (task_dir / "maps" / "dash-video.init").write_bytes(b"init")
+        (task_dir / "live_state.json").write_text(json.dumps({
+            "version": 1,
+            "tracks": {"video": {"segments": [
+                {"index": 0, "identity": 4, "duration": 2.0, "start": 4.0},
+            ]}},
+        }), encoding="utf-8")
+
+        handled = await NativeDashEngine(task).run()
+        assert handled is True
+        assert task.status is TaskStatus.DONE
+        payload = Path(task.output_path).read_bytes()
+        # The recorded segment stays first and only newer identities follow;
+        # the static manifest's earlier segments are never spliced under it.
+        assert payload == b"initrec-t4fresh"
+
+    asyncio.run(run())
+
+
+def test_track_start_offsets_reach_the_mux_command(tmp_path, monkeypatch):
+    """Live tracks starting at different times must be offset, not stacked."""
+    commands: list[list[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        target = str(request.url)
+        if target.endswith("main.mpd"):
+            # Video window starts at t=0, audio window starts at t=2.
+            return httpx.Response(200, text=_live_mpd(
+                '<S t="0" d="2"/><S d="2"/>', dynamic=False,
+                audio_rows='<S t="2" d="2"/>',
+            ))
+        return httpx.Response(200, content=b"x")
+
+    _install(monkeypatch, handler)
+
+    async def capture(command, task=None, duration_sec=0, on_progress=None):
+        commands.append(list(command))
+        Path(command[-1]).write_bytes(b"muxed")
+        return True
+
+    monkeypatch.setattr(native_module, "_run_ffmpeg", capture)
+
+    async def run():
+        task = _task(tmp_path)
+        handled = await NativeDashEngine(task).run()
+        assert handled is True
+        assert task.status is TaskStatus.DONE
+        command = commands[-1]
+        assert "-itsoffset" in command
+        offset = command[command.index("-itsoffset") + 1]
+        assert float(offset) == pytest.approx(2.0, abs=0.01)
+        # The offset must immediately precede its own input.
+        assert command[command.index("-itsoffset") + 2] == "-i"
+
+    asyncio.run(run())

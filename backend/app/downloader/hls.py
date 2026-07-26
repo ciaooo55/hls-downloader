@@ -85,6 +85,7 @@ class _BrowserHLSClient:
         destination: Path,
         headers: dict[str, str],
         cancel_check,
+        task=None,
     ) -> tuple[Any, int]:
         written = 0
         response = await self._session.get(
@@ -100,7 +101,7 @@ class _BrowserHLSClient:
                         if response.quit_now:
                             response.quit_now.set()
                         raise asyncio.CancelledError
-                    await throttle_bytes(len(chunk))
+                    await throttle_bytes(len(chunk), task)
                     output.write(chunk)
                     written += len(chunk)
         finally:
@@ -426,7 +427,9 @@ class HLSDownloader:
                 label="HLS 清单",
             )
             final_url = str(getattr(response, "url", "") or current_url)
-            parsed = parse_m3u8(final_url, response.text)
+            # The chosen rendition is resolved inside the master so
+            # EXT-X-MEDIA audio/subtitle detection is never bypassed.
+            parsed = parse_m3u8(final_url, response.text, self.task.selected_video)
             manifest_title = manifest_title or parsed.get("title", "")
             response_filename = response_filename or _content_disposition_filename(
                 response.headers.get("content-disposition", "")
@@ -483,11 +486,7 @@ class HLSDownloader:
                 self._set_stage("parsing", "正在解析 HLS 清单")
                 saved_live_state = self._load_live_state()
                 try:
-                    parsed = await self._load_media_playlist(
-                        # A user-selected rendition URL takes precedence over
-                        # the master's automatic best pick.
-                        client, task.selected_video or task.url, headers
-                    )
+                    parsed = await self._load_media_playlist(client, task.url, headers)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -1613,6 +1612,7 @@ class HLSDownloader:
                     temporary,
                     request_headers,
                     self._is_canceled,
+                    self.task,
                 )
                 validate_response(response)
             else:

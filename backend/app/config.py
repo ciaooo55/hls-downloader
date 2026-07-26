@@ -13,8 +13,17 @@ def _new_internal_token() -> str:
     """Create an installation-local credential that is never user managed."""
     return secrets.token_urlsafe(32)
 
+
+# Tokens that reached a public commit while config.json was tracked by git.
+# They are public knowledge and must never authenticate anything again.
+_LEAKED_TOKENS = frozenset({
+    "55555",
+    "ktHjYK8MXbRKgH0QtuGQl1n4duHVHAMECEbOpiTNCqM",
+})
+
+
 class Settings(BaseSettings):
-    config_version: int = 14
+    config_version: int = 15
     host: str = "127.0.0.1"
     port: int = 8765
     token: str = Field(default_factory=_new_internal_token, min_length=32)
@@ -154,7 +163,7 @@ def load_settings() -> Settings:
             # The legacy fixed value was exposed in Settings and shared by all
             # installations. Replace it with an implementation detail used only
             # by the desktop shell and Native Messaging host.
-            if not isinstance(data.get("token"), str) or len(data.get("token", "")) < 32 or data.get("token") == "55555":
+            if not isinstance(data.get("token"), str) or len(data.get("token", "")) < 32 or data.get("token") in _LEAKED_TOKENS:
                 data["token"] = _new_internal_token()
             # Browser integration is Native Messaging only. The privileged
             # control API is an internal desktop transport, never a LAN API.
@@ -162,6 +171,15 @@ def load_settings() -> Settings:
             data["config_version"] = 14
             migrated = True
             version = 14
+        if version < 15:
+            # config.json used to be tracked by git, so any token that ever
+            # reached a public commit must be rotated on sight — it is a
+            # shared credential from that moment on.
+            if data.get("token") in _LEAKED_TOKENS:
+                data["token"] = _new_internal_token()
+            data["config_version"] = 15
+            migrated = True
+            version = 15
         if not isinstance(data.get("tvbox_endpoint"), str):
             data["tvbox_endpoint"] = ""
             migrated = True

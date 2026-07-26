@@ -377,16 +377,50 @@ def test_old_blank_request_defaults_remain_blank_after_migration(tmp_path, monke
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 14
+    assert loaded.config_version == 15
     assert loaded.default_referer == ""
     assert loaded.default_origin == ""
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["config_version"] == 14
+    assert saved["config_version"] == 15
     assert saved["token"] != "55555"
     assert len(saved["token"]) >= 32
     assert saved["temp_dir"] == "."
     assert saved["default_concurrency"] == 12
     assert saved["max_concurrent_tasks"] == 3
+
+
+def test_publicly_leaked_token_is_rotated_on_load(tmp_path, monkeypatch):
+    # config.json used to be git-tracked, so this token reached a public
+    # commit; it must never authenticate an installation again.
+    leaked = "ktHjYK8MXbRKgH0QtuGQl1n4duHVHAMECEbOpiTNCqM"
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"config_version": 14, "token": leaked}), encoding="utf-8"
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+
+    loaded = config_module.load_settings()
+
+    assert loaded.token != leaked
+    assert len(loaded.token) >= 32
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["token"] == loaded.token
+    assert saved["config_version"] == 15
+
+
+def test_runtime_config_is_not_tracked_by_git():
+    """config.json holds the per-install IPC token and must stay untracked."""
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "config.json"],
+        cwd=str(config_module.PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert tracked == "", "config.json must never be tracked: it holds a secret"
+    ignore_rules = (config_module.PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "config.json" in ignore_rules
 
 
 def test_v13_template_generates_a_per_install_native_transport_token(tmp_path, monkeypatch):
@@ -406,8 +440,8 @@ def test_v13_template_generates_a_per_install_native_transport_token(tmp_path, m
     loaded = config_module.load_settings()
     saved = json.loads(config_path.read_text(encoding="utf-8"))
 
-    assert loaded.config_version == 14
-    assert saved["config_version"] == 14
+    assert loaded.config_version == 15
+    assert saved["config_version"] == 15
     assert len(saved["token"]) >= 32
 
 
@@ -429,7 +463,7 @@ def test_v2_legacy_concurrency_defaults_migrate_to_new_defaults(tmp_path, monkey
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 14
+    assert loaded.config_version == 15
     assert loaded.default_concurrency == 12
     assert loaded.max_concurrent_tasks == 3
 
@@ -452,7 +486,7 @@ def test_v2_custom_concurrency_values_are_preserved_during_migration(tmp_path, m
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 14
+    assert loaded.config_version == 15
     assert loaded.default_concurrency == 6
     assert loaded.max_concurrent_tasks == 5
 
@@ -474,7 +508,7 @@ def test_v11_legacy_takeover_default_migrates_to_capture_all_explicit_downloads(
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 14
+    assert loaded.config_version == 15
     assert loaded.browser_takeover_min_mb == 0
 
 
@@ -495,7 +529,7 @@ def test_v11_custom_takeover_threshold_is_preserved(tmp_path, monkeypatch):
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 14
+    assert loaded.config_version == 15
     assert loaded.browser_takeover_min_mb == 3
 
 

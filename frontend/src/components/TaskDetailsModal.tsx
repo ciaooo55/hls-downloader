@@ -53,15 +53,19 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
   // trend without any global bookkeeping.
   const speedSamples = useRef<number[]>([])
   const [, forceSampleRender] = useState(0)
+  // Read the live speed through a ref: keeping it out of the effect deps
+  // stops every SSE progress event from restarting the 1s sampler.
+  const latestSpeed = useRef(0)
+  latestSpeed.current = task.speed_bytes_per_sec || 0
   useEffect(() => {
     const active = ['downloading', 'downloading_segments', 'fetching_metadata', 'checking'].includes(task.status)
     if (!active) return
     const timer = window.setInterval(() => {
-      speedSamples.current = [...speedSamples.current.slice(-59), task.speed_bytes_per_sec || 0]
+      speedSamples.current = [...speedSamples.current.slice(-59), latestSpeed.current]
       forceSampleRender(value => value + 1)
     }, 1000)
     return () => window.clearInterval(timer)
-  }, [task.status, task.speed_bytes_per_sec])
+  }, [task.status])
   const samples = speedSamples.current
   const peakSpeed = Math.max(...samples, 1)
   const sparkPoints = samples.length >= 2

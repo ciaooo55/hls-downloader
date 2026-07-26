@@ -28,7 +28,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const [busy, setBusy] = useState(false)
   const [startingCandidate, setStartingCandidate] = useState('')
   const [error, setError] = useState('')
-  const [duplicatePrompt, setDuplicatePrompt] = useState<{ message: string; candidate: string } | null>(null)
+  const [duplicatePrompt, setDuplicatePrompt] = useState<{ message: string; candidate: string; video: string; audio: string } | null>(null)
   const [trackChoice, setTrackChoice] = useState<{ candidate: string; format: string; video: ManifestTrackOption[]; audio: ManifestTrackOption[] } | null>(null)
   const [selectedVideo, setSelectedVideo] = useState('')
   const [selectedAudio, setSelectedAudio] = useState('')
@@ -71,7 +71,9 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
       onClose()
     } catch (reason: unknown) {
       if (!allowDuplicate && isDuplicateUrlError(reason)) {
-        setDuplicatePrompt({ message: reason.message || '下载列表中已有相同链接', candidate })
+        // Keep the chosen tracks (and skip re-probing) so confirming does
+        // not loop back into the chooser or silently fall back to auto.
+        setDuplicatePrompt({ message: reason.message || '下载列表中已有相同链接', candidate, video, audio })
         return
       }
       throw reason
@@ -302,10 +304,11 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
           confirmLabel="仍要下载"
           onCancel={() => setDuplicatePrompt(null)}
           onConfirm={() => {
-            const candidate = duplicatePrompt.candidate
+            const { candidate, video, audio } = duplicatePrompt
             setDuplicatePrompt(null)
             setBusy(true)
-            void startCandidate(candidate, true)
+            // skipTrackProbe: the tracks were already chosen (or left auto).
+            void startCandidate(candidate, true, video, audio, true)
               .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : '添加失败'))
               .finally(() => setBusy(false))
           }}

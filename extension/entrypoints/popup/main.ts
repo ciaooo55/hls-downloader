@@ -122,6 +122,9 @@ async function main() {
   const sending: Record<string, string> = {}
   const pending: Record<string, string> = {}
   const pushing: Record<string, string> = {}
+  // Chosen rendition per resource id: the list re-renders on every send or
+  // status poll, and the pick must survive those rebuilds.
+  const chosenVariant: Record<string, string> = {}
   let resources: MediaResource[] = []
 
   const statusEl = brandText.querySelector('.status') as HTMLSpanElement
@@ -155,6 +158,11 @@ async function main() {
       const line = el('span', '', meta)
       const mime = el('small', '', [item.mimeType, itemHost].filter(Boolean).join(' \u00b7 '))
       let selected = item
+      const remembered = chosenVariant[item.id]
+      if (remembered) {
+        const variant = item.variants?.find(value => value.url === remembered)
+        if (variant) selected = { ...item, ...variant, url: variant.url, variants: undefined }
+      }
       body.append(name, line)
       if (item.variants?.length) {
         const variantLabel = (variant?: { quality?: string; height?: number; bandwidth?: number }) =>
@@ -164,7 +172,9 @@ async function main() {
         const trigger = el('button', 'quality-trigger') as HTMLButtonElement
         trigger.type = 'button'
         trigger.setAttribute('aria-label', '\u9009\u62e9\u89c6\u9891\u6e05\u6670\u5ea6')
-        const currentLabel = el('em', '', variantLabel())
+        const currentLabel = el('em', '', variantLabel(
+          item.variants?.find(value => value.url === chosenVariant[item.id]),
+        ))
         trigger.append(currentLabel, el('span', '', '\u25be'))
         trigger.addEventListener('click', event => {
           event.stopPropagation()
@@ -186,6 +196,8 @@ async function main() {
             option.append(el('i', '', selected.url === choice.url ? '\u2713' : ''), el('span', '', choice.label))
             option.addEventListener('click', () => {
               selected = choice.variant ? { ...item, ...choice.variant, url: choice.variant.url, variants: undefined } : item
+              if (choice.variant) chosenVariant[item.id] = choice.variant.url
+              else delete chosenVariant[item.id]
               currentLabel.textContent = choice.label
               backdrop.remove(); menu.remove()
             })

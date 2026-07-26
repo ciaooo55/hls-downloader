@@ -813,7 +813,7 @@ code,
   .task-table, .task-table tbody { display: block; min-width: 0; }
   .task-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; position: relative; padding: 13px 14px 13px 40px; border-bottom: 1px solid var(--border); }
   .task-table td { display: block; width: auto; height: auto; padding: 0; border: 0; white-space: normal; overflow: visible; }
-  .task-table td.check-col { position: absolute; left: 12px; top: 14px; width: auto !important; }
+  .task-table td.check-col { position: absolute; left: 12px; top: 14px; width: auto !important; display: block; }
   .name-cell b { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .task-table td.menu-col { position: absolute; top: 8px; right: 10px; }
   .row-actions button { width: 34px; height: 34px; }

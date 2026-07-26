@@ -196,7 +196,7 @@ export default function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       if (previewImage) { setPreviewImage(null); return }
-      if (showBatch) { setShowBatch(false) }
+      if (showBatch) { setShowBatch(false); setBatchInitialText('') }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -210,6 +210,12 @@ export default function App() {
   }, [tasks, playing])
   useEffect(() => () => { if (feedbackTimer.current) window.clearTimeout(feedbackTimer.current) }, [])
   useEffect(() => { tasksRef.current = tasks }, [tasks])
+  useEffect(() => {
+    if (!speedMenuOpen) return
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setSpeedMenuOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [speedMenuOpen])
   useEffect(() => {
     // IDM-style clipboard watching, desktop shell only: the Rust side emits
     // an event when copied text looks like a downloadable link.
@@ -538,7 +544,7 @@ export default function App() {
           <DialogHeader title="批量添加" description="每行一个链接：普通文件、HLS、DASH 或 magnet" onClose={() => { setShowBatch(false); setBatchInitialText('') }} />
           <BatchAddPanel key={batchInitialText || 'default'} settings={settings} initialText={batchInitialText} onAdded={() => { setShowBatch(false); setBatchInitialText(''); void load() }} />
           <DialogFooter>
-            <Button variant="secondary" className="secondary-button" onClick={() => setShowBatch(false)}>关闭</Button>
+            <Button variant="secondary" className="secondary-button" onClick={() => { setShowBatch(false); setBatchInitialText('') }}>关闭</Button>
           </DialogFooter>
         </Dialog>
       </DialogOverlay>

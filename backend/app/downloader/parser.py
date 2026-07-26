@@ -156,14 +156,23 @@ def list_hls_video_tracks(url: str, content: str) -> list[dict]:
     return tracks
 
 
-def parse_m3u8(url: str, content: str) -> dict:
+def parse_m3u8(url: str, content: str, preferred_variant: str = "") -> dict:
+    """Parse a playlist; preferred_variant picks a specific rendition URL.
+
+    Selecting through the master (instead of fetching the rendition
+    directly) keeps EXT-X-MEDIA audio/subtitle detection intact, so a
+    master with separate audio still routes to the muxing engine.
+    """
     playlist = m3u8.loads(content, uri=url)
     playlist_title = _playlist_title(content)
 
     if playlist.is_variant:
         best = None
         best_rank = (-1, -1, -1, -1)
+        chosen = None
         for candidate in playlist.playlists:
+            if preferred_variant and candidate.uri and _resolve_url(url, candidate.uri) == preferred_variant:
+                chosen = candidate
             info = candidate.stream_info
             bandwidth = getattr(info, "average_bandwidth", None) or info.bandwidth or 0
             width, height = _variant_dimensions(info)
@@ -181,6 +190,9 @@ def parse_m3u8(url: str, content: str) -> dict:
             if rank > best_rank:
                 best_rank = rank
                 best = candidate
+        # A stale selection (rendition gone after a manifest update) falls
+        # back to the automatic best pick instead of failing the task.
+        best = chosen or best
         if best is None or not best.uri:
             raise ValueError("主清单中没有可用视频变体")
         info = best.stream_info

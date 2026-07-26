@@ -541,12 +541,17 @@ class HTTPDownloader(SeeklessEngine):
         # failed chunk retracts cleanly and resumed bytes never inflate the
         # displayed transfer rate.
         committed_bytes = task.progress.downloaded_bytes
-        partials: dict[int, int] = {}
+        partials: dict[tuple[int, int], int] = {}
+        # Finished parts of a still-incomplete chunk are not resumable, so
+        # they stay out of committed_bytes until the whole chunk lands.
+        finished_parts: dict[int, int] = {}
         last_publish = 0.0
 
         def refresh_progress(publish: bool = False) -> None:
             nonlocal last_publish
-            task.progress.downloaded_bytes = committed_bytes + sum(partials.values())
+            task.progress.downloaded_bytes = (
+                committed_bytes + sum(finished_parts.values()) + sum(partials.values())
+            )
             self._apply_speed(window)
             now = time.monotonic()
             if publish or now - last_publish >= 0.5:
@@ -573,14 +578,19 @@ class HTTPDownloader(SeeklessEngine):
         SPLIT_MIN_BYTES = 4 * 1024 * 1024
         stop_at: dict[int, int] = {}
         parts_open: dict[int, int] = {}
+        # Only a primary part that is still streaming may be split: once it
+        # finishes, its bytes are committed and re-splitting that range would
+        # re-download and double-count them.
+        splittable: set[int] = set()
 
         async def finish_part(index: int, part_key: tuple[int, int], size: int) -> None:
             nonlocal committed_bytes
             async with state_lock:
-                committed_bytes += size
+                finished_parts[index] = finished_parts.get(index, 0) + size
                 partials.pop(part_key, None)
                 parts_open[index] -= 1
                 if parts_open[index] <= 0:
+                    committed_bytes += finished_parts.pop(index, 0)
                     completed.add(index)
                     self._completed_chunks.add(index)
                     self._claimed_chunks.discard(index)
@@ -661,7 +671,7 @@ class HTTPDownloader(SeeklessEngine):
         def pick_split() -> tuple[int, int, int] | None:
             best: tuple[int, int, int] | None = None
             best_remaining = SPLIT_MIN_BYTES - 1
-            for index in self._claimed_chunks:
+            for index in list(splittable):
                 if index not in stop_at or index in completed:
                     continue
                 chunk_start = chunks[index][0]
@@ -686,7 +696,12 @@ class HTTPDownloader(SeeklessEngine):
                 start, end = chunks[index]
                 stop_at[index] = end
                 parts_open[index] = 1
-                if not await fetch_range(index, start, end, dynamic_stop=True):
+                splittable.add(index)
+                try:
+                    ok = await fetch_range(index, start, end, dynamic_stop=True)
+                finally:
+                    splittable.discard(index)
+                if not ok:
                     self._claimed_chunks.discard(index)
                     queue.task_done()
                     return
@@ -707,6 +722,7 @@ class HTTPDownloader(SeeklessEngine):
         # In-flight chunk bytes are not resumable; drop them so the shown
         # progress matches exactly what a resume will restore.
         partials.clear()
+        finished_parts.clear()
         task.progress.downloaded_bytes = committed_bytes
         error = next((result for result in results if isinstance(result, Exception)), None)
         if error:

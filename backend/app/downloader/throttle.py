@@ -43,8 +43,8 @@ class GlobalDownloadThrottle:
         self._tokens = min(self._limit_bps, self._tokens + elapsed * self._limit_bps)
 
     async def consume(self, nbytes: int) -> None:
-        amount = max(0, int(nbytes or 0))
-        if amount <= 0:
+        remaining = max(0, int(nbytes or 0))
+        if remaining <= 0:
             return
         while True:
             async with self._lock:
@@ -52,11 +52,17 @@ class GlobalDownloadThrottle:
                     return
                 now = time.monotonic()
                 self._refill(now)
-                if self._tokens >= amount:
-                    self._tokens -= amount
+                # Partial grants: a read larger than one second of budget
+                # (e.g. a 256 KiB chunk under a 100 KiB/s limit) drains over
+                # several refills instead of waiting for a burst that the
+                # one-second cap can never produce.
+                take = min(remaining, self._tokens)
+                if take > 0:
+                    self._tokens -= take
+                    remaining -= take
+                if remaining <= 0:
                     return
-                deficit = amount - self._tokens
-                wait = deficit / self._limit_bps if self._limit_bps > 0 else 0.0
+                wait = min(remaining, self._limit_bps) / self._limit_bps
             await asyncio.sleep(min(1.0, max(0.001, wait)))
 
 
@@ -77,7 +83,11 @@ class TaskThrottleRegistry:
         return found
 
     def drop(self, task_id: str) -> None:
-        self._buckets.pop(task_id, None)
+        # Release anyone already waiting on the old bucket: without this a
+        # coroutine parked inside consume() would keep the removed limit.
+        bucket = self._buckets.pop(task_id, None)
+        if bucket is not None:
+            bucket.configure(0)
 
 
 task_throttles = TaskThrottleRegistry()

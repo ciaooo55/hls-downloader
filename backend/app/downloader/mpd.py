@@ -188,6 +188,9 @@ def _template_segments(
                 # Stable identity across live manifest refreshes: the media
                 # timeline position in timescale units.
                 "identity": start,
+                # Wall-clock position on the media timeline: live tracks can
+                # begin at different points, and the mux must offset them.
+                "start": start / timescale,
             })
         return init_url, segments
     duration_units = float(template.get("duration") or 0)
@@ -210,6 +213,7 @@ def _template_segments(
             "url": url,
             "duration": min(segment_seconds, max(0.001, remaining)),
             "identity": start_number + index,
+            "start": index * segment_seconds,
         })
     return init_url, segments
 
@@ -364,9 +368,13 @@ def parse_mpd(
                     single_file = False
             if not segments:
                 continue
-            if is_dynamic and (single_file or template is None):
+            if is_dynamic and (
+                single_file or template is None or template.get("_timeline") is None
+            ):
+                # A duration-based template enumerates a fixed future list the
+                # recorder cannot follow; the fallback engine handles it.
                 raise NativeDashUnsupported(
-                    "直播 MPD 暂仅支持 SegmentTemplate 形式的原生录制"
+                    "直播 MPD 暂仅支持 SegmentTimeline 形式的原生录制"
                 )
             candidate = {
                 "id": representation_id,
