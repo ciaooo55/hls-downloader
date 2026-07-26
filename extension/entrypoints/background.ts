@@ -591,7 +591,6 @@ export default defineBackground(() => {
       return
     }
     console.debug('HLS Downloader observed browser download', item.url)
-    concealBrowserDownload()
     let paused = false
     let handedOff = false
     try {
@@ -648,6 +647,9 @@ export default defineBackground(() => {
       const response = await offer(resource, chain)
       if (!desktopAcceptedHandoff(response)) throw new Error(response?.error || 'desktop rejected')
       handedOff = true
+      // Do not hide Chrome's downloads UI merely because a browser download was
+      // observed. Suppress it only after the desktop accepted the handoff.
+      concealBrowserDownload()
       await removeBrowserDownload(actual)
     } catch (error) {
       console.warn('HLS Downloader takeover failed; returning download to browser', error)

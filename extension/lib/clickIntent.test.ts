@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isLikelyDownloadControl, resolveDownloadTarget, shouldTrackDownloadIntent } from './clickIntent'
+import { isAuthenticationNavigation, isLikelyDownloadControl, isLikelyDownloadUrl, resolveDownloadTarget, shouldTrackDownloadIntent } from './clickIntent'
 import { matchesDownloadClick, type DownloadClickIntent } from './resources'
 
 function intent(overrides: Partial<DownloadClickIntent> = {}): DownloadClickIntent {
@@ -26,11 +26,28 @@ describe('download click intent', () => {
     expect(isLikelyDownloadControl(['登录', 'submit'])).toBe(false)
   })
 
-  it('tracks JavaScript links only when they carry a concrete or download-specific signal', () => {
+  it('tracks only download-specific normal links and generated controls', () => {
     expect(shouldTrackDownloadIntent({ hintedHref: 'https://cdn.test/file.zip' })).toBe(true)
+    expect(shouldTrackDownloadIntent({ directHref: 'https://site.test/download?id=7' })).toBe(true)
+    expect(shouldTrackDownloadIntent({ directHref: 'https://site.test/account/settings' })).toBe(false)
     expect(shouldTrackDownloadIntent({ hints: ['下载资源', 'javascript-link'] })).toBe(true)
     expect(shouldTrackDownloadIntent({ hints: ['展开详情', 'javascript-link'] })).toBe(false)
     expect(shouldTrackDownloadIntent({ ctrlForce: true })).toBe(true)
+  })
+
+  it('never records Google or third-party OAuth navigation as a download intent', () => {
+    const google = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=app&redirect_uri=https%3A%2F%2Fsite.test%2Fcallback&response_type=code&scope=profile'
+    const microsoft = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=app&redirect_uri=https%3A%2F%2Fsite.test%2Fcallback&response_type=code'
+    const github = 'https://github.com/login/oauth/authorize?client_id=app&redirect_uri=https%3A%2F%2Fsite.test%2Fcallback'
+    for (const url of [google, microsoft, github]) {
+      expect(isAuthenticationNavigation(url)).toBe(true)
+      expect(shouldTrackDownloadIntent({ directHref: url, ctrlForce: true, hints: ['下载'] })).toBe(false)
+    }
+  })
+
+  it('keeps real download gateways eligible without treating every route as a file', () => {
+    expect(isLikelyDownloadUrl('https://files.test/attachments/report?id=1')).toBe(true)
+    expect(isLikelyDownloadUrl('https://site.test/watch/episode-1')).toBe(false)
   })
 
   it('accepts only downloader-owned schemes from data download targets', () => {

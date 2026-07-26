@@ -15,13 +15,15 @@ export default defineContentScript({
       if (!anchor?.href && !control) return
       const rawHref = anchor?.getAttribute('href')?.trim() || ''
       const directHref = rawHref && !rawHref.startsWith('#') && !/^javascript:/i.test(rawHref) ? anchor?.href || '' : ''
-      const rawHintedHref = anchor?.getAttribute('data-download-url')
-        || anchor?.getAttribute('data-url')
-        || anchor?.getAttribute('data-href')
+      const rawDownloadHref = anchor?.getAttribute('data-download-url')
         || control?.getAttribute('data-download-url')
+        || ''
+      const rawHintedHref = anchor?.getAttribute('data-url')
+        || anchor?.getAttribute('data-href')
         || control?.getAttribute('data-url')
         || control?.getAttribute('data-href')
         || ''
+      const downloadHref = resolveDownloadTarget(rawDownloadHref, location.href)
       const hintedHref = resolveDownloadTarget(rawHintedHref, location.href)
       const downloadHint = isLikelyDownloadControl([
         anchor?.textContent,
@@ -41,8 +43,15 @@ export default defineContentScript({
         control?.className,
         control?.getAttribute('data-testid'),
       ])
-      if (!shouldTrackDownloadIntent({ directHref, hintedHref, ctrlForce: event.ctrlKey, hints: [downloadHint ? 'download' : ''] })) return
-      const href = directHref || hintedHref
+      const explicitDownloadTarget = Boolean(anchor?.hasAttribute('download') || downloadHref)
+      if (!shouldTrackDownloadIntent({
+        directHref,
+        hintedHref: downloadHref || hintedHref,
+        ctrlForce: event.ctrlKey,
+        explicitDownloadTarget,
+        hints: [downloadHint ? 'download' : ''],
+      })) return
+      const href = downloadHref || directHref || hintedHref
       void browser.runtime.sendMessage({
         type: 'click-intent',
         href,

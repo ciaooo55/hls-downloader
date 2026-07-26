@@ -1,3 +1,5 @@
+import { isAuthenticationNavigation } from './clickIntent'
+
 export type ResourceKind = 'hls' | 'dash' | 'media' | 'file' | 'magnet'
 
 export interface MediaVariant {
@@ -315,6 +317,10 @@ export function shouldTakeover(input: {
   ctrlForce?: boolean
 }): boolean {
   if (input.altBypass) return false
+  // OAuth and account-login navigations must never be pre-empted, even when a
+  // stale intent or Ctrl click is present. This is a second boundary behind
+  // the content-script filter because old session intents can survive briefly.
+  if (isAuthenticationNavigation(input.url)) return false
   if (input.ctrlForce) return true
   if (!input.explicitClick) return false
   if (!input.enabled) return false
@@ -394,6 +400,8 @@ export function matchesDownloadClick(
   download: { url: string; finalUrl?: string; referrer?: string; chainUrls?: string[]; tabId?: number },
   now = Date.now(),
 ): boolean {
+  if (isAuthenticationNavigation(intent.href)
+    || [download.url, download.finalUrl, ...(download.chainUrls || [])].some(isAuthenticationNavigation)) return false
   const age = now - intent.at
   if (age < 0 || age > 7000) return false
   const sameTab = intent.tabId !== undefined && download.tabId !== undefined && intent.tabId === download.tabId

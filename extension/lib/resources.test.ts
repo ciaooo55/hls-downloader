@@ -227,6 +227,18 @@ describe('resource rules', () => {
     expect(shouldTakeover({ ...base, size: 0 })).toBe(true)
     expect(shouldTakeover({ ...base, url: 'https://sub.blocked.test/file.zip', excludedHosts: ['blocked.test'] })).toBe(false)
   })
+  it('never takes over OAuth/account navigation, including forced or stale click paths', () => {
+    const base = { size: 20, enabled: true, minimumBytes: 10, excludedHosts: [], explicitClick: true, ctrlForce: true }
+    const google = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=app&redirect_uri=https%3A%2F%2Fsite.test%2Fcallback&response_type=code'
+    const microsoft = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=app&redirect_uri=https%3A%2F%2Fsite.test%2Fcallback&response_type=code'
+    const github = 'https://github.com/login/oauth/authorize?client_id=app&redirect_uri=https%3A%2F%2Fsite.test%2Fcallback'
+    expect(shouldTakeover({ ...base, url: google })).toBe(false)
+    expect(shouldTakeover({ ...base, url: microsoft })).toBe(false)
+    expect(shouldTakeover({ ...base, url: github })).toBe(false)
+    expect(matchesDownloadClick({
+      href: google, pageUrl: 'https://site.test/login', altBypass: false, ctrlForce: false, at: 1_000,
+    }, { url: 'https://cdn.test/file.zip', finalUrl: 'https://cdn.test/file.zip' }, 1_500)).toBe(false)
+  })
   it('takes over unknown-size downloads and classifies response filenames', () => {
     expect(classifyDownload('https://cdn.test/get?id=1', 'application/octet-stream', 'setup.exe')).toBe('file')
     expect(shouldTakeover({
