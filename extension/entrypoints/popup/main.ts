@@ -107,7 +107,11 @@ async function main() {
   title.append(count)
   const list = el('div', 'list')
   section.append(title, list)
-  const footer = el('footer', '', 'Alt \u7ed5\u8fc7 \u00b7 Ctrl \u5f3a\u5236 \u00b7 \u8f7b\u91cf\u9762\u677f')
+  const footer = el('footer')
+  footer.append(
+    el('span', '', 'Alt \u7ed5\u8fc7 \u00b7 Ctrl \u5f3a\u5236\u63a5\u7ba1'),
+    el('span', '', `v${browser.runtime.getManifest().version}`),
+  )
   mainEl.append(header, controls, errorBox, section, footer)
   root.append(mainEl)
 
@@ -153,22 +157,45 @@ async function main() {
       let selected = item
       body.append(name, line)
       if (item.variants?.length) {
-        const select = el('select', 'hlsd-select quality-select') as HTMLSelectElement
-        select.setAttribute('aria-label', '\u9009\u62e9\u89c6\u9891\u6e05\u6670\u5ea6')
-        const automatic = el('option', '', '\u81ea\u52a8\uff08\u6700\u9ad8\uff09') as HTMLOptionElement
-        automatic.value = item.url
-        select.append(automatic)
-        for (const variant of item.variants) {
-          const option = el('option') as HTMLOptionElement
-          option.value = variant.url
-          option.textContent = [variant.quality || (variant.height ? `${variant.height}p` : '\u7ebf\u8def'), variant.bandwidth ? `${(variant.bandwidth / 1_000_000).toFixed(1)} Mbps` : ''].filter(Boolean).join(' \u00b7 ')
-          select.append(option)
-        }
-        select.addEventListener('change', () => {
-          const variant = item.variants?.find(value => value.url === select.value)
-          selected = variant ? { ...item, ...variant, url: variant.url, variants: undefined } : item
+        const variantLabel = (variant?: { quality?: string; height?: number; bandwidth?: number }) =>
+          variant
+            ? [variant.quality || (variant.height ? `${variant.height}p` : '\u7ebf\u8def'), variant.bandwidth ? `${(variant.bandwidth / 1_000_000).toFixed(1)} Mbps` : ''].filter(Boolean).join(' \u00b7 ')
+            : '\u81ea\u52a8\uff08\u6700\u9ad8\uff09'
+        const trigger = el('button', 'quality-trigger') as HTMLButtonElement
+        trigger.type = 'button'
+        trigger.setAttribute('aria-label', '\u9009\u62e9\u89c6\u9891\u6e05\u6670\u5ea6')
+        const currentLabel = el('em', '', variantLabel())
+        trigger.append(currentLabel, el('span', '', '\u25be'))
+        trigger.addEventListener('click', event => {
+          event.stopPropagation()
+          const host = trigger.closest('article') as HTMLElement | null
+          if (!host) return
+          const open = host.querySelector('.quality-menu')
+          document.querySelectorAll('.quality-menu, .quality-menu-backdrop').forEach(node => node.remove())
+          if (open) return
+          const backdrop = el('div', 'quality-menu-backdrop')
+          const menu = el('div', 'quality-menu')
+          backdrop.addEventListener('mousedown', () => { backdrop.remove(); menu.remove() })
+          const choices: Array<{ url: string; label: string; variant?: NonNullable<MediaResource['variants']>[number] }> = [
+            { url: item.url, label: variantLabel() },
+            ...item.variants!.map(variant => ({ url: variant.url, label: variantLabel(variant), variant })),
+          ]
+          for (const choice of choices) {
+            const option = el('button') as HTMLButtonElement
+            option.type = 'button'
+            option.append(el('i', '', selected.url === choice.url ? '\u2713' : ''), el('span', '', choice.label))
+            option.addEventListener('click', () => {
+              selected = choice.variant ? { ...item, ...choice.variant, url: choice.variant.url, variants: undefined } : item
+              currentLabel.textContent = choice.label
+              backdrop.remove(); menu.remove()
+            })
+            menu.append(option)
+          }
+          host.append(backdrop, menu)
+          menu.style.top = `${trigger.offsetTop + trigger.offsetHeight + 4}px`
+          menu.style.left = `${trigger.offsetLeft}px`
         })
-        body.append(select)
+        body.append(trigger)
       }
       body.append(mime)
       const label = sending[item.id] || '\u4e0b\u8f7d'

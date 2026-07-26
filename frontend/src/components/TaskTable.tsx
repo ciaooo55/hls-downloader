@@ -32,7 +32,7 @@ const typeIcons = {
   torrent: <Magnet size={15} />,
 }
 
-export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTasksAction, onOpenLog, onOpenFile, onLaunchFile, onCopyUrl, onPreview, onPreviewImage }: {
+export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTasksAction, onOpenLog, onOpenFile, onLaunchFile, onCopyUrl, onPreview, onPreviewImage, onCast }: {
   tasks: Task[]
   selected: Set<string>
   pending: Set<string>
@@ -45,6 +45,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
   onCopyUrl: (task: Task) => void
   onPreview: (task: Task) => void
   onPreviewImage: (task: Task) => void
+  onCast: (task: Task) => void
 }) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
   const [selectionBox, setSelectionBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
@@ -265,7 +266,19 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
                   : <><ProgressLine value={progress} /><small className="progress-bytes">{fmtBytes(task.downloaded_bytes)} / {task.total_bytes ? fmtBytes(task.total_bytes) : '--'}</small></>}</td>
             <td><span className="speed-cell">{fmtSpeed(task.speed_bytes_per_sec)}</span><small className="eta-cell">{recordingLive ? 'LIVE' : task.task_type === 'torrent' && task.upload_speed_bytes_per_sec > 0 ? `↑ ${fmtSpeed(task.upload_speed_bytes_per_sec)}` : fmtEta(task.eta_seconds)}</small></td>
             <td className="segments-col" title={task.task_type === 'torrent' ? `Peer ${task.peer_count} · Seed ${task.seed_count}` : `${task.active_workers || task.active_slots || 0}/${task.max_workers || task.concurrency || 0} 个连接`}>{task.task_type === 'torrent' ? `${task.peer_count} Peer` : task.total_segments ? <><span>{task.completed_segments}/{task.total_segments}</span><small>{task.active_workers || task.active_slots || 0} 连接</small></> : '--'}</td><td className="updated-col">{fmtDate(task.updated_at)}</td>
-            <td className="menu-col"><button className="row-menu-button" title="任务操作" onClick={event => { event.stopPropagation(); openMenu(event, task) }}><MoreHorizontal size={17} /></button></td>
+            <td className="menu-col">
+              <button className="row-menu-button" title="任务操作" onClick={event => { event.stopPropagation(); openMenu(event, task) }}><MoreHorizontal size={17} /></button>
+              <div className="row-actions" onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()}>
+                {task.available_actions?.includes('pause') && <button title={task.is_live ? '停止录制' : '暂停'} onClick={() => onTasksAction([task], 'pause')}><Pause size={16} /></button>}
+                {task.available_actions?.includes('resume') && <button title={task.is_live ? '继续录制' : '恢复'} onClick={() => onTasksAction([task], 'resume')}><Play size={16} /></button>}
+                {(task.playback_ready || task.status === 'done') && <button title={task.status === 'done' ? '播放' : '边下边播'} onClick={() => onPreview(task)}><MonitorPlay size={16} /></button>}
+                {task.output_path && task.status === 'done' && <button title="投屏到电视" onClick={() => onCast(task)}><RadioTower size={16} /></button>}
+                <button title="复制链接" onClick={() => onCopyUrl(task)}><Copy size={16} /></button>
+                <i className="row-actions-divider" />
+                <button className="danger" title="删除" onClick={() => onTasksAction([task], 'delete')}><Trash2 size={16} /></button>
+                <button title="更多" onClick={event => { event.stopPropagation(); openMenu(event, task) }}><MoreHorizontal size={16} /></button>
+              </div>
+            </td>
           </tr>
         })}</tbody>
       </table>

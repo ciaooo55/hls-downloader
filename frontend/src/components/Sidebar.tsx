@@ -1,4 +1,5 @@
-import { AppWindow, Archive, AlertCircle, CheckCircle2, Download, File, Images, List, Radio } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { AppWindow, Archive, AlertCircle, CheckCircle2, Download, File, Images, List, X } from 'lucide-react'
 import type { BrowserStatus, Task } from '../types'
 import { downloadCategory } from '../downloadCategory'
 
@@ -23,7 +24,19 @@ function countFor(tasks: Task[], filter: TaskFilter): number {
   return tasks.filter(task => task.status === filter).length
 }
 
-export default function Sidebar({ tasks, active, onChange, browserStatus }: { tasks: Task[]; active: TaskFilter; onChange: (filter: TaskFilter) => void; browserStatus: BrowserStatus | null }) {
+export default function Sidebar({ tasks, active, onChange, browserStatus, appVersion = '', onOpenExtensionHelp }: {
+  tasks: Task[]
+  active: TaskFilter
+  onChange: (filter: TaskFilter) => void
+  browserStatus: BrowserStatus | null
+  appVersion?: string
+  onOpenExtensionHelp?: () => void
+}) {
+  const serviceOnline = Boolean(appVersion)
+  const extensionOnline = Boolean(browserStatus?.detected)
+  const extensionLost = !extensionOnline && Boolean(browserStatus?.seen_before)
+  const [bubbleDismissed, setBubbleDismissed] = useState(false)
+  useEffect(() => { setBubbleDismissed(false) }, [extensionOnline])
   return (
     <aside className="sidebar">
       <nav>
@@ -32,10 +45,19 @@ export default function Sidebar({ tasks, active, onChange, browserStatus }: { ta
           return <div key={item.id}>{index === 4 && <span className="sidebar-group-label">分类</span>}<button title={`${item.label} · ${countFor(tasks, item.id)}`} aria-label={item.label} className={`sidebar-item${active === item.id ? ' active' : ''}`} onClick={() => onChange(item.id)}><Icon size={18} /><span>{item.label}</span><b>{countFor(tasks, item.id)}</b></button></div>
         })}
       </nav>
-      <div className="sidebar-script">
-        <span className="sidebar-caption">浏览器接管</span>
-        <div className={`script-state ${browserStatus?.detected ? 'online' : browserStatus?.seen_before ? 'seen' : ''}`} title={browserStatus?.message || ''}><Radio size={15} /><span>{browserStatus?.detected ? '正式插件已连接' : browserStatus?.seen_before ? '插件连接已断开' : '插件未安装或未连接'}</span></div>
-        {browserStatus?.version && <small>版本 {browserStatus.version}</small>}
+      <div className="sidebar-connection">
+        <span className="sidebar-caption">连接</span>
+        <div className={`connection-row ${serviceOnline ? 'online' : 'offline'}`}><i className="connection-dot" /><span>本地服务</span><b>{serviceOnline ? '正常' : '离线'}</b></div>
+        <div className={`connection-row ${extensionOnline ? 'online' : 'offline'}`} title={browserStatus?.message || ''}><i className="connection-dot" /><span>浏览器插件</span><b>{extensionOnline ? '已连接' : extensionLost ? '已断开' : '未连接'}</b></div>
+        <small>{appVersion ? `v${appVersion}` : ''}{browserStatus?.version ? ` · 插件 v${browserStatus.version}` : ''}</small>
+        {extensionLost && !bubbleDismissed && (
+          <div className="connection-bubble" role="status">
+            <button className="connection-bubble-close" aria-label="关闭提示" onClick={() => setBubbleDismissed(true)}><X size={13} /></button>
+            <b>插件连接已断开</b>
+            <span>浏览器可能重启过，或插件被更新/停用；网页嗅探和接管暂不可用。</span>
+            <button className="secondary-button" onClick={onOpenExtensionHelp}>查看排查步骤</button>
+          </div>
+        )}
       </div>
     </aside>
   )

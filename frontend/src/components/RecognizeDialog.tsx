@@ -5,7 +5,7 @@ import { recognitionCandidateViews, recognitionView, type RecognitionResult } fr
 import type { Settings, Task } from '../types'
 import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 import ConfirmDialog from './ConfirmDialog'
-import { Button, Dialog, DialogFooter, DialogHeader, DialogOverlay, Field, Input } from './ui'
+import { Button, DialogFooter, DialogHeader, Field, Input } from './ui'
 
 export default function RecognizeDialog({ settings, initialUrl = '', onClose, onAdded, onNeedExtension }: { settings: Settings; initialUrl?: string; onClose: () => void; onAdded: (task?: Task) => void; onNeedExtension: () => void }) {
   useEffect(() => {
@@ -127,15 +127,16 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
     return ''
   }
 
-  const recognize = async () => {
-    if (!url.trim()) return
+  const recognize = async (target?: string) => {
+    const value = (target ?? url).trim()
+    if (!value) return
     setBusy(true); setError(''); setResult(null); setDuplicatePrompt(null)
     try {
-      if (directType(url.trim())) {
-        await startCandidate(url.trim())
+      if (directType(value)) {
+        await startCandidate(value)
         return
       }
-      const found = await recognizeUrl({ url: url.trim(), referer, origin, user_agent: userAgent, cookie })
+      const found = await recognizeUrl({ url: value, referer, origin, user_agent: userAgent, cookie })
       setResult(found)
       if (recognitionView(found).mode === 'ready') await startCandidate(found.candidates[0].url)
     } catch (reason: unknown) {
@@ -149,6 +150,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const view = result ? recognitionView(result) : null
   const candidateViews = result ? recognitionCandidateViews(result.candidates) : []
   const recommendedCandidate = candidateViews.find(candidate => candidate.recommended)
+  const submitWith = (value: string) => recognize(value)
   const submit = () => view?.mode === 'choose' && recommendedCandidate
     ? downloadCandidate(recommendedCandidate.url)
     : recognize()
@@ -163,14 +165,23 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
 
   return (
     <>
-      <DialogOverlay onClose={onClose}>
-        <Dialog className="recognize-modal" label="新建下载" onClose={onClose}>
+      <div className="recognize-popover-backdrop" onMouseDown={onClose} />
+      <section className="recognize-popover" role="dialog" aria-label="新建下载">
           <DialogHeader title="新建下载" description="支持普通文件、HLS、DASH、magnet 和 .torrent" onClose={onClose} />
           <section className="download-entry-surface">
             <Field label="下载链接" htmlFor="recognize-url">
               <div className="url-entry">
                 <Link size={18} />
-                <Input id="recognize-url" autoFocus value={url} onChange={event => { setUrl(event.target.value); setResult(null); setError('') }} onKeyDown={event => { if (event.key === 'Enter') void submit() }} placeholder="粘贴文件、m3u8、mpd、网页或 magnet 链接" />
+                <Input id="recognize-url" autoFocus value={url} onChange={event => { setUrl(event.target.value); setResult(null); setError('') }} onKeyDown={event => { if (event.key === 'Enter') void submit() }} onPaste={event => {
+                  // 粘贴即识别：粘贴的完整链接直接进入识别/下载流程。
+                  const pasted = event.clipboardData.getData('text').trim()
+                  if (!pasted || busy) return
+                  event.preventDefault()
+                  setUrl(pasted)
+                  setResult(null)
+                  setError('')
+                  window.setTimeout(() => { void submitWith(pasted) }, 0)
+                }} placeholder="粘贴文件、m3u8、mpd、网页或 magnet 链接" />
               </div>
             </Field>
             <div className="recognize-quick-actions">
@@ -283,8 +294,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
               {busy ? '正在处理...' : view?.mode === 'choose' && recommendedCandidate ? '下载推荐项' : directType(url.trim()) ? '开始下载' : '识别并下载'}
             </Button>
           </DialogFooter>
-        </Dialog>
-      </DialogOverlay>
+      </section>
       {duplicatePrompt && (
         <ConfirmDialog
           title="检测到重复下载"

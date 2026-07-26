@@ -88,6 +88,7 @@ export default function App() {
   const [devicePick, setDevicePick] = useState<{ kind: 'cast' | 'tvbox'; path?: string; url?: string; filename: string; requestId?: string } | null>(null)
   const [clipboardOffer, setClipboardOffer] = useState('')
   const [clipboardBatch, setClipboardBatch] = useState('')
+  const [speedMenuOpen, setSpeedMenuOpen] = useState(false)
   const [batchInitialText, setBatchInitialText] = useState('')
   const lastStatuses = useRef<Record<string, string>>({})
   const feedbackTimer = useRef<number | null>(null)
@@ -492,12 +493,12 @@ export default function App() {
     {desktopShell && <WindowChrome />}
     <DesktopToolbar commands={commands} theme={theme} version={appVersion} query={query} onQueryChange={setQuery} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onPauseAll={() => void pauseAllActive()} onStartAll={() => void startAllWaiting()} onOpen={() => selectedTasks[0]?.output_path && openExplorer(selectedTasks[0].output_path)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onBrowserExtension={() => setShowBrowserExtension(true)} onPushLocalMedia={() => void confirmLocalMediaPush()} pushLocalMediaBusy={localPushBusy} onCastLocalMedia={() => void confirmLocalCast()} castLocalMediaBusy={castBusy} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
     <div className="workspace">
-      <Sidebar tasks={tasks} active={filter} onChange={setFilter} browserStatus={browserStatus} />
+      <Sidebar tasks={tasks} active={filter} onChange={setFilter} browserStatus={browserStatus} appVersion={appVersion} onOpenExtensionHelp={() => setShowBrowserExtension(true)} />
       <main className="content">
         <UpdateNotice />
         <div className="content-head"><strong>{filter === 'all' ? '全部任务' : filter === 'running' ? '进行中' : filter === 'done' ? '已完成' : filter === 'failed' ? '失败任务' : filter === 'media' ? '媒体' : filter === 'program' ? '程序' : filter === 'archive' ? '压缩包' : filter === 'other' ? '其他' : '任务列表'} <span>{filtered.length} 项{selected.size > 0 ? ` · 已选 ${selected.size}` : ''}</span></strong><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={() => void clearCompleted()}><Trash2 size={14} />清理已完成</button></div>
         {error && <div className="action-error" role="alert"><span>{error}</span><div className="action-error-actions"><button type="button" className="secondary-button" onClick={() => void load()}>重试</button><button type="button" className="icon-button action-error-dismiss" title="关闭提示" onClick={() => setError('')}><X size={15} /></button></div></div>}
-        <TaskTable tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openExplorer(task.output_path)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onPreview={setPlaying} onPreviewImage={setPreviewImage} />
+        <TaskTable tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openExplorer(task.output_path)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onPreview={setPlaying} onPreviewImage={setPreviewImage} onCast={task => task.output_path && void confirmLocalCast(task.output_path)} />
       </main>
     </div>
     <footer className="statusbar">
@@ -505,23 +506,27 @@ export default function App() {
       <span>排队 <b>{queued}</b></span>
       <span>总速度 <b>{fmtSpeed(totalSpeed)}</b></span>
       <span className="speed-limit-control" title="全局下载限速">
-        限速
-        <select
-          aria-label="全局下载限速"
-          value={String(settings.download_speed_limit_kib ?? 0)}
-          onChange={event => void applySpeedLimit(Number(event.target.value))}
-        >
-          <option value="0">不限速</option>
-          <option value="256">256 KiB/s</option>
-          <option value="512">512 KiB/s</option>
-          <option value="1024">1 MiB/s</option>
-          <option value="2048">2 MiB/s</option>
-          <option value="5120">5 MiB/s</option>
-          <option value="10240">10 MiB/s</option>
-          {![0, 256, 512, 1024, 2048, 5120, 10240].includes(Number(settings.download_speed_limit_kib ?? 0)) && (
-            <option value={String(settings.download_speed_limit_kib)}>{settings.download_speed_limit_kib} KiB/s</option>
-          )}
-        </select>
+        <button type="button" className="speed-limit-trigger" aria-label="全局下载限速" onClick={() => setSpeedMenuOpen(open => !open)}>
+          限速 <b>{(settings.download_speed_limit_kib ?? 0) > 0 ? fmtSpeed((settings.download_speed_limit_kib ?? 0) * 1024) : '关'}</b>
+        </button>
+        {speedMenuOpen && <>
+          <div className="floating-menu-backdrop" onMouseDown={() => setSpeedMenuOpen(false)} />
+          <div className="floating-menu speed-limit-menu" role="menu">
+            {[[0, '不限速'], [256, '256 KiB/s'], [512, '512 KiB/s'], [1024, '1 MiB/s'], [2048, '2 MiB/s'], [5120, '5 MiB/s'], [10240, '10 MiB/s']].map(([value, label]) => (
+              <button key={value} role="menuitemradio" aria-checked={Number(settings.download_speed_limit_kib ?? 0) === value}
+                onClick={() => { setSpeedMenuOpen(false); void applySpeedLimit(Number(value)) }}>
+                <i>{Number(settings.download_speed_limit_kib ?? 0) === value ? '✓' : ''}</i>{label}
+              </button>
+            ))}
+            <button role="menuitem" onClick={() => {
+              setSpeedMenuOpen(false)
+              const answer = window.prompt('自定义限速（KiB/s，0 表示不限速）', String(settings.download_speed_limit_kib ?? 0))
+              if (answer === null) return
+              const value = Math.max(0, Math.min(1048576, Math.round(Number(answer) || 0)))
+              void applySpeedLimit(value)
+            }}><i /> 自定义…</button>
+          </div>
+        </>}
       </span>
       <span>已完成 <b>{fmtBytes(completedSize)}</b></span>
       {localShare ? <span className="local-share-status" title={localShare.kind === 'cast' ? 'DLNA 投屏支持暂停、继续和快进；停止共享会立即取消本机媒体链接。' : 'TVBox 推送不定义通用播放控制；停止共享会立即取消本机媒体链接。'}><b>{localShare.kind === 'cast' ? '投屏共享中' : 'TVBox 共享中'}</b><em>{localShare.filename}</em>{localShare.kind === 'cast' && <span className="cast-controls"><button type="button" disabled={castControlBusy || castBusy} title="暂停投屏播放" aria-label="暂停投屏播放" onClick={() => void runCastControl('pause')}><Pause size={13} /></button><button type="button" disabled={castControlBusy || castBusy} title="继续投屏播放" aria-label="继续投屏播放" onClick={() => void runCastControl('play')}><Play size={13} /></button><button type="button" disabled={castControlBusy || castBusy} title="快进 10 秒" aria-label="快进 10 秒" onClick={() => void runCastControl('seek')}><FastForward size={13} /></button></span>}<button type="button" disabled={localPushBusy || castBusy || castControlBusy} onClick={() => void stopLocalShare()}>停止共享</button></span> : <span>{browserStatus?.detected ? `插件已连接${browserStatus.version ? ` · v${browserStatus.version}` : ''}` : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span>}
