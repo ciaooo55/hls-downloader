@@ -229,6 +229,15 @@ fn watch_clipboard(handle: tauri::AppHandle) {
             last = text.clone();
             if let Some(url) = downloadable_clipboard_text(&text) {
                 let _ = handle.emit_to("main", "clipboard-url", url);
+            } else if text.lines().count() > 1 {
+                // A copied list of links goes to batch import in one step.
+                let urls: Vec<String> = text
+                    .lines()
+                    .filter_map(downloadable_clipboard_text)
+                    .collect();
+                if urls.len() >= 2 {
+                    let _ = handle.emit_to("main", "clipboard-url-batch", urls.join("\n"));
+                }
             }
         }
     });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, FileText, FolderOpen, LoaderCircle, MonitorPlay, Pause, PlayCircle, RotateCcw, ScreenShare, ShieldCheck, Trash2, Tv, X, XCircle } from 'lucide-react'
 import { getFailureDetails } from '../failureDetails'
 import { fmtBytes, fmtDate, fmtEta, fmtSpeed } from '../format'
@@ -26,6 +26,7 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
   const [selectedFiles, setSelectedFiles] = useState<number[]>([])
   const [selectionBusy, setSelectionBusy] = useState(false)
   const [selectionNotice, setSelectionNotice] = useState('')
+  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false)
   const [limitDraft, setLimitDraft] = useState(String(task.speed_limit_kib || 0))
   const [limitBusy, setLimitBusy] = useState(false)
   const [limitNotice, setLimitNotice] = useState('')
@@ -48,6 +49,24 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
     window.addEventListener('keydown', close)
     return () => window.removeEventListener('keydown', close)
   }, [onClose])
+  // Speed history sampled while the dialog is open: enough for an at-a-glance
+  // trend without any global bookkeeping.
+  const speedSamples = useRef<number[]>([])
+  const [, forceSampleRender] = useState(0)
+  useEffect(() => {
+    const active = ['downloading', 'downloading_segments', 'fetching_metadata', 'checking'].includes(task.status)
+    if (!active) return
+    const timer = window.setInterval(() => {
+      speedSamples.current = [...speedSamples.current.slice(-59), task.speed_bytes_per_sec || 0]
+      forceSampleRender(value => value + 1)
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [task.status, task.speed_bytes_per_sec])
+  const samples = speedSamples.current
+  const peakSpeed = Math.max(...samples, 1)
+  const sparkPoints = samples.length >= 2
+    ? samples.map((value, index) => `${(index / (samples.length - 1)) * 100},${30 - (value / peakSpeed) * 28}`).join(' ')
+    : ''
   useEffect(() => {
     if (task.task_type !== 'torrent') return
     fetchTorrentFiles(task.id).then(result => {
@@ -59,6 +78,12 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
     <header><div><h2>{task.title || task.filename || task.id}</h2><p title={task.url}>{task.url}</p></div><button className="modal-close-button" title="关闭" onClick={onClose}><X size={18} /></button></header>
     <div className="task-details-body">
       <div className="detail-grid"><Detail label="类型" value={task.task_type.toUpperCase()} /><Detail label="请求" value={task.request_method || 'GET'} /><Detail label="状态" value={statusLabel(task.status)} /><Detail label="阶段" value={stageLabel(task.stage)} /><Detail label="进度" value={`${getDisplayedProgress(task).toFixed(1)}%`} /><Detail label="总大小" value={fmtBytes(task.total_bytes)} /><Detail label="已下载" value={fmtBytes(task.downloaded_bytes)} /><Detail label="下载速度" value={fmtSpeed(task.speed_bytes_per_sec)} /><Detail label="剩余时间" value={fmtEta(task.eta_seconds)} /><Detail label={task.task_type === 'torrent' ? 'Piece' : '分片'} value={`${task.completed_segments}/${task.total_segments}`} /><Detail label={task.task_type === 'torrent' ? 'Peer / Seed' : '活动线程'} value={task.task_type === 'torrent' ? `${task.peer_count} / ${task.seed_count}` : `${task.active_workers}/${task.max_workers}`} /><Detail label="上传速度" value={task.task_type === 'torrent' ? fmtSpeed(task.upload_speed_bytes_per_sec) : '--'} /><Detail label="更新时间" value={fmtDate(task.updated_at)} /></div>
+      {sparkPoints && <div className="speed-spark" title={`峰值 ${fmtSpeed(peakSpeed)}`}>
+        <svg viewBox="0 0 100 30" preserveAspectRatio="none" aria-label="速度曲线">
+          <polyline points={sparkPoints} fill="none" />
+        </svg>
+        <small>{fmtSpeed(task.speed_bytes_per_sec)} · 峰值 {fmtSpeed(peakSpeed)}</small>
+      </div>}
       {task.status !== 'done' && task.task_type !== 'torrent' && <section className="task-speed-limit">
         <b>任务限速（KiB/s）</b>
         <div className="task-speed-limit-row">
@@ -72,7 +97,20 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
       {task.request_method === 'POST' && <section className="post-replay-details"><ShieldCheck size={16} /><div><b>安全 POST 下载</b><span>此资源需要重放网页请求；为避免重复提交，下载仅使用单连接。暂停、恢复或重试会重新请求服务器，不能使用断点续传。</span></div></section>}
       {task.expected_checksum && <section className={`checksum-details ${task.checksum_verified === false ? 'failed' : task.checksum_verified ? 'verified' : ''}`}><b>文件校验</b><dl><div><dt>期望</dt><dd>{task.expected_checksum}</dd></div><div><dt>结果</dt><dd>{task.checksum_verified === true ? '已通过' : task.checksum_verified === false ? '不匹配或未能校验' : '等待下载完成'}</dd></div>{task.checksum_actual && <div><dt>实际</dt><dd>{task.checksum_actual}</dd></div>}</dl></section>}
       {failure && <section className="failure-details">
-      <h3><AlertTriangle size={17} />{failure.title}</h3>
+      <h3><AlertTriangle size={17} />{failure.title}
+        <button className="text-button failure-copy" title="复制诊断信息，便于反馈问题" onClick={() => {
+          const lines = [
+            `任务: ${task.title || task.filename || task.id}`,
+            `链接: ${task.url}`,
+            `状态: ${task.status}`,
+            ...failure.items.map(item => `${item.label}: ${item.value}`),
+            failure.message ? `失败原因: ${failure.message}` : '',
+            `最近日志: ${task.last_log || '--'}`,
+          ].filter(Boolean)
+          void navigator.clipboard.writeText(lines.join('\n')).then(() => setDiagnosticsCopied(true))
+          window.setTimeout(() => setDiagnosticsCopied(false), 2000)
+        }}>{diagnosticsCopied ? '已复制' : '复制诊断'}</button>
+      </h3>
       {failure.items.length > 0 && <dl>{failure.items.map(item => <div key={item.label}><dt>{item.label}</dt><dd title={item.value}>{item.value}</dd></div>)}</dl>}
       {failure.message && <div className="failure-message"><b>失败原因</b><code>{failure.message}</code></div>}
       {failure.hint && <div className="failure-hint"><b>处理建议</b><span>{failure.hint}</span></div>}

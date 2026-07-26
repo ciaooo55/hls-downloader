@@ -3,8 +3,8 @@ import { createBatch } from '../api'
 import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 import { Button, Field, Input, Textarea } from './ui'
 
-export default function BatchAddPanel({ settings, onAdded }: { settings: any; onAdded: () => void }) {
-  const [text, setText] = useState('')
+export default function BatchAddPanel({ settings, onAdded, initialText = '' }: { settings: any; onAdded: () => void; initialText?: string }) {
+  const [text, setText] = useState(initialText)
   const [referer, setReferer] = useState(settings?.default_referer || '')
   const [concurrency, setConcurrency] = useState(settings?.default_concurrency || 12)
   const [loading, setLoading] = useState(false)

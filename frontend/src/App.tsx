@@ -87,6 +87,8 @@ export default function App() {
   const [confirmation, setConfirmation] = useState<{ title: string; message: string; confirmLabel: string; danger: boolean; run: () => void } | null>(null)
   const [devicePick, setDevicePick] = useState<{ kind: 'cast' | 'tvbox'; path?: string; url?: string; filename: string; requestId?: string } | null>(null)
   const [clipboardOffer, setClipboardOffer] = useState('')
+  const [clipboardBatch, setClipboardBatch] = useState('')
+  const [batchInitialText, setBatchInitialText] = useState('')
   const lastStatuses = useRef<Record<string, string>>({})
   const feedbackTimer = useRef<number | null>(null)
   const clipboardOfferTimer = useRef<number | null>(null)
@@ -212,22 +214,32 @@ export default function App() {
     // an event when copied text looks like a downloadable link.
     if (!isTauriDesktop() || settings.clipboard_watch === false) return
     let disposed = false
-    let unlisten: (() => void) | null = null
+    const unlisteners: Array<() => void> = []
     void import('@tauri-apps/api/event')
-      .then(({ listen }) => listen<string>('clipboard-url', event => {
-        const url = String(event.payload || '').trim()
-        if (!url || url === lastClipboardOffer.current) return
-        if (tasksRef.current.some(task => task.url === url)) return
-        lastClipboardOffer.current = url
-        setClipboardOffer(url)
-        if (clipboardOfferTimer.current) window.clearTimeout(clipboardOfferTimer.current)
-        clipboardOfferTimer.current = window.setTimeout(() => setClipboardOffer(''), 15_000)
-      }))
-      .then(fn => { if (disposed) fn?.(); else unlisten = fn ?? null })
+      .then(async ({ listen }) => {
+        const single = await listen<string>('clipboard-url', event => {
+          const url = String(event.payload || '').trim()
+          if (!url || url === lastClipboardOffer.current) return
+          if (tasksRef.current.some(task => task.url === url)) return
+          lastClipboardOffer.current = url
+          setClipboardOffer(url)
+          if (clipboardOfferTimer.current) window.clearTimeout(clipboardOfferTimer.current)
+          clipboardOfferTimer.current = window.setTimeout(() => setClipboardOffer(''), 15_000)
+        })
+        const batch = await listen<string>('clipboard-url-batch', event => {
+          const text = String(event.payload || '').trim()
+          if (!text || text === lastClipboardOffer.current) return
+          lastClipboardOffer.current = text
+          setClipboardBatch(text)
+          if (clipboardOfferTimer.current) window.clearTimeout(clipboardOfferTimer.current)
+          clipboardOfferTimer.current = window.setTimeout(() => setClipboardBatch(''), 15_000)
+        })
+        if (disposed) { single(); batch() } else unlisteners.push(single, batch)
+      })
       .catch(() => {})
     return () => {
       disposed = true
-      unlisten?.()
+      for (const fn of unlisteners) fn()
       if (clipboardOfferTimer.current) window.clearTimeout(clipboardOfferTimer.current)
     }
   }, [settings.clipboard_watch])
@@ -516,10 +528,10 @@ export default function App() {
     </footer>
     {showRecognize && <RecognizeDialog settings={settings} initialUrl={recognizeInitialUrl} onClose={() => setShowRecognize(false)} onAdded={task => { void load(); if (task?.task_type === 'torrent') setDetails(task) }} onNeedExtension={() => { setShowRecognize(false); setShowBrowserExtension(true) }} />}
     {showBatch && (
-      <DialogOverlay onClose={() => setShowBatch(false)}>
-        <Dialog className="batch-modal" label="批量添加" onClose={() => setShowBatch(false)}>
-          <DialogHeader title="批量添加" description="每行一个链接：普通文件、HLS、DASH 或 magnet" onClose={() => setShowBatch(false)} />
-          <BatchAddPanel settings={settings} onAdded={() => { setShowBatch(false); void load() }} />
+      <DialogOverlay onClose={() => { setShowBatch(false); setBatchInitialText('') }}>
+        <Dialog className="batch-modal" label="批量添加" onClose={() => { setShowBatch(false); setBatchInitialText('') }}>
+          <DialogHeader title="批量添加" description="每行一个链接：普通文件、HLS、DASH 或 magnet" onClose={() => { setShowBatch(false); setBatchInitialText('') }} />
+          <BatchAddPanel key={batchInitialText || 'default'} settings={settings} initialText={batchInitialText} onAdded={() => { setShowBatch(false); setBatchInitialText(''); void load() }} />
           <DialogFooter>
             <Button variant="secondary" className="secondary-button" onClick={() => setShowBatch(false)}>关闭</Button>
           </DialogFooter>
@@ -538,6 +550,11 @@ export default function App() {
       <span className="clipboard-toast-url" title={clipboardOffer}>检测到可下载链接：{clipboardOffer}</span>
       <button className="primary-button" onClick={() => { setRecognizeInitialUrl(clipboardOffer); setShowRecognize(true); setClipboardOffer('') }}>下载</button>
       <button className="secondary-button" onClick={() => setClipboardOffer('')}>忽略</button>
+    </div>}
+    {clipboardBatch && <div className="toast clipboard-toast" role="status">
+      <span className="clipboard-toast-url">检测到 {clipboardBatch.split('\n').length} 条可下载链接</span>
+      <button className="primary-button" onClick={() => { setBatchInitialText(clipboardBatch); setShowBatch(true); setClipboardBatch('') }}>批量导入</button>
+      <button className="secondary-button" onClick={() => setClipboardBatch('')}>忽略</button>
     </div>}
     {handoffs[0] && <BrowserHandoffDialog key={handoffs[0].id} item={handoffs[0]} busy={handoffBusy} settings={settings} onResolve={resolveHandoff} queueRemaining={Math.max(0, handoffs.length - 1)} />}
     {confirmation && <ConfirmDialog title={confirmation.title} message={confirmation.message} confirmLabel={confirmation.confirmLabel} danger={confirmation.danger} onCancel={() => setConfirmation(null)} onConfirm={confirmation.run} />}
