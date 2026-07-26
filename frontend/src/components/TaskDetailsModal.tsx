@@ -5,7 +5,7 @@ import { fmtBytes, fmtDate, fmtEta, fmtSpeed } from '../format'
 import { getDisplayedProgress } from '../taskState'
 import { stageLabel, statusLabel } from '../taskPresentation'
 import type { Task } from '../types'
-import { fetchTorrentFiles, selectTorrentFiles } from '../api'
+import { fetchTorrentFiles, selectTorrentFiles, setTaskSpeedLimit } from '../api'
 import { Button, Dialog, DialogOverlay } from './ui'
 
 export default function TaskDetailsModal({ task, pending, onClose, onLog, onAction, onOpenFile, onLaunchFile, onPushToTv, onCast, onPreview }: {
@@ -26,6 +26,23 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
   const [selectedFiles, setSelectedFiles] = useState<number[]>([])
   const [selectionBusy, setSelectionBusy] = useState(false)
   const [selectionNotice, setSelectionNotice] = useState('')
+  const [limitDraft, setLimitDraft] = useState(String(task.speed_limit_kib || 0))
+  const [limitBusy, setLimitBusy] = useState(false)
+  const [limitNotice, setLimitNotice] = useState('')
+  const applySpeedLimit = async () => {
+    const value = Math.max(0, Math.min(1048576, Math.round(Number(limitDraft) || 0)))
+    setLimitBusy(true)
+    setLimitNotice('')
+    try {
+      await setTaskSpeedLimit(task.id, value)
+      setLimitDraft(String(value))
+      setLimitNotice(value > 0 ? `已限速 ${value} KiB/s，立即生效` : '已取消该任务的限速')
+    } catch {
+      setLimitNotice('保存限速失败，请检查连接后重试')
+    } finally {
+      setLimitBusy(false)
+    }
+  }
   useEffect(() => {
     const close = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
     window.addEventListener('keydown', close)
@@ -42,6 +59,15 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
     <header><div><h2>{task.title || task.filename || task.id}</h2><p title={task.url}>{task.url}</p></div><button className="modal-close-button" title="关闭" onClick={onClose}><X size={18} /></button></header>
     <div className="task-details-body">
       <div className="detail-grid"><Detail label="类型" value={task.task_type.toUpperCase()} /><Detail label="请求" value={task.request_method || 'GET'} /><Detail label="状态" value={statusLabel(task.status)} /><Detail label="阶段" value={stageLabel(task.stage)} /><Detail label="进度" value={`${getDisplayedProgress(task).toFixed(1)}%`} /><Detail label="总大小" value={fmtBytes(task.total_bytes)} /><Detail label="已下载" value={fmtBytes(task.downloaded_bytes)} /><Detail label="下载速度" value={fmtSpeed(task.speed_bytes_per_sec)} /><Detail label="剩余时间" value={fmtEta(task.eta_seconds)} /><Detail label={task.task_type === 'torrent' ? 'Piece' : '分片'} value={`${task.completed_segments}/${task.total_segments}`} /><Detail label={task.task_type === 'torrent' ? 'Peer / Seed' : '活动线程'} value={task.task_type === 'torrent' ? `${task.peer_count} / ${task.seed_count}` : `${task.active_workers}/${task.max_workers}`} /><Detail label="上传速度" value={task.task_type === 'torrent' ? fmtSpeed(task.upload_speed_bytes_per_sec) : '--'} /><Detail label="更新时间" value={fmtDate(task.updated_at)} /></div>
+      {task.status !== 'done' && task.task_type !== 'torrent' && <section className="task-speed-limit">
+        <b>任务限速（KiB/s）</b>
+        <div className="task-speed-limit-row">
+          <input type="number" min={0} max={1048576} value={limitDraft} onChange={event => setLimitDraft(event.target.value)} aria-label="任务限速" />
+          <button className="secondary-button" disabled={limitBusy} onClick={() => void applySpeedLimit()}>{limitBusy ? '保存中…' : '应用'}</button>
+        </div>
+        <p className="field-note">0 表示不限制；与全局限速同时生效，取两者更严格值。</p>
+        {limitNotice && <p className="torrent-selection-notice" role="status">{limitNotice}</p>}
+      </section>}
       {task.last_log && <div className="detail-message"><b>最近日志</b><code>{task.last_log}</code></div>}
       {task.request_method === 'POST' && <section className="post-replay-details"><ShieldCheck size={16} /><div><b>安全 POST 下载</b><span>此资源需要重放网页请求；为避免重复提交，下载仅使用单连接。暂停、恢复或重试会重新请求服务器，不能使用断点续传。</span></div></section>}
       {task.expected_checksum && <section className={`checksum-details ${task.checksum_verified === false ? 'failed' : task.checksum_verified ? 'verified' : ''}`}><b>文件校验</b><dl><div><dt>期望</dt><dd>{task.expected_checksum}</dd></div><div><dt>结果</dt><dd>{task.checksum_verified === true ? '已通过' : task.checksum_verified === false ? '不匹配或未能校验' : '等待下载完成'}</dd></div>{task.checksum_actual && <div><dt>实际</dt><dd>{task.checksum_actual}</dd></div>}</dl></section>}

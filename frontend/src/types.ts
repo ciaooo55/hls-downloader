@@ -49,6 +49,7 @@ export interface Task {
   media_duration: number
   playback_ready: boolean
   is_live?: boolean
+  speed_limit_kib?: number
   progress_percent: number
   uploaded_bytes: number
   upload_speed_bytes_per_sec: number

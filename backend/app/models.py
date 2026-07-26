@@ -75,6 +75,7 @@ class Task:
     title: str = ""
     filename: str = ""
     concurrency: int = 0  # 0 = use server default from config
+    speed_limit_kib: int = 0  # 0 = no per-task limit (global limit still applies)
     status: TaskStatus = TaskStatus.QUEUED
     progress: TaskProgress = field(default_factory=TaskProgress)
     error_message: str = ""

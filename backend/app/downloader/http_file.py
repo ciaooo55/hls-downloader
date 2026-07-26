@@ -321,7 +321,7 @@ class HTTPDownloader(SeeklessEngine):
                         raise asyncio.CancelledError
                     if self._is_pausing():
                         return output
-                    await throttle_bytes(len(chunk))
+                    await throttle_bytes(len(chunk), task)
                     stream.write(chunk)
                     task.progress.downloaded_bytes += len(chunk)
                     window.add(len(chunk))
@@ -463,7 +463,7 @@ class HTTPDownloader(SeeklessEngine):
                         raise asyncio.CancelledError
                     if self._is_pausing():
                         return
-                    await throttle_bytes(len(chunk))
+                    await throttle_bytes(len(chunk), task)
                     output.write(chunk)
                     task.progress.downloaded_bytes += len(chunk)
                     window.add(len(chunk))
@@ -601,7 +601,7 @@ class HTTPDownloader(SeeklessEngine):
                                     received += len(content)
                                     if received > expected:
                                         raise RuntimeError("Range 响应长度超过请求范围")
-                                    await throttle_bytes(len(content))
+                                    await throttle_bytes(len(content), task)
                                     output_file.write(content)
                                     partials[index] = received
                                     window.add(len(content))

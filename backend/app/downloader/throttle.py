@@ -63,9 +63,39 @@ class GlobalDownloadThrottle:
 download_throttle = GlobalDownloadThrottle()
 
 
-async def throttle_bytes(nbytes: int) -> None:
-    """Convenience wrapper used by download engines."""
+class TaskThrottleRegistry:
+    """Per-task token buckets layered on top of the global budget."""
+
+    def __init__(self) -> None:
+        self._buckets: dict[str, GlobalDownloadThrottle] = {}
+
+    def bucket(self, task_id: str) -> GlobalDownloadThrottle:
+        found = self._buckets.get(task_id)
+        if found is None:
+            found = GlobalDownloadThrottle()
+            self._buckets[task_id] = found
+        return found
+
+    def drop(self, task_id: str) -> None:
+        self._buckets.pop(task_id, None)
+
+
+task_throttles = TaskThrottleRegistry()
+
+
+async def throttle_bytes(nbytes: int, task=None) -> None:
+    """Consume from the task's own budget (when set), then the global one.
+
+    Both limits must admit the bytes, so a per-task cap can never exceed
+    the global cap and vice versa.
+    """
     from ..config import settings
 
+    if task is not None:
+        limit = int(getattr(task, "speed_limit_kib", 0) or 0)
+        if limit > 0:
+            bucket = task_throttles.bucket(task.id)
+            bucket.configure(limit)
+            await bucket.consume(nbytes)
     download_throttle.configure(getattr(settings, "download_speed_limit_kib", 0) or 0)
     await download_throttle.consume(nbytes)

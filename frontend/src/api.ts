@@ -74,6 +74,11 @@ export const selectTorrentFiles = (id: string, indexes: number[]) =>
   })
 export const taskAction = (id: string, action: string) =>
   request<{ ok: boolean }>(`/tasks/${id}/${action}`, { method: 'POST' })
+export const setTaskSpeedLimit = (id: string, limitKib: number) =>
+  request<{ ok: boolean }>(`/tasks/${id}/speed-limit`, {
+    method: 'POST',
+    body: JSON.stringify({ limit_kib: limitKib }),
+  })
 export const deleteTask = (id: string, deleteFiles = false) =>
   request<{ ok: boolean }>(`/tasks/${id}${deleteFiles ? '?delete_files=true' : ''}`, { method: 'DELETE' })
 export const taskFileUrl = (id: string) =>

@@ -1618,7 +1618,7 @@ class HLSDownloader:
                         async for chunk in response.aiter_bytes(256 * 1024):
                             if self._is_canceled():
                                 raise asyncio.CancelledError
-                            await throttle_bytes(len(chunk))
+                            await throttle_bytes(len(chunk), self.task)
                             output.write(chunk)
                             written += len(chunk)
 

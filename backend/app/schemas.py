@@ -93,6 +93,7 @@ class TaskResponse(BaseModel):
     seed_count: int = 0
     playback_ready: bool = False
     is_live: bool = False
+    speed_limit_kib: int = 0
     error_message: str
     error_code: str = ""
     error_stage: str = ""
@@ -112,6 +113,10 @@ class TaskResponse(BaseModel):
     finished_at: str = ""
     available_actions: list[str] = Field(default_factory=list)
     queue_position: int = 0
+
+class TaskSpeedLimit(BaseModel):
+    limit_kib: int = Field(ge=0, le=1048576)
+
 
 class SettingsUpdate(BaseModel):
     download_dir: Optional[str] = None

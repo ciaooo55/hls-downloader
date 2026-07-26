@@ -15,6 +15,7 @@ from .schemas import (
     TaskBatchCreate,
     TaskCreate,
     TaskResponse,
+    TaskSpeedLimit,
     UrlRecognitionRequest,
     PlaybackSeekRequest,
     TorrentFileSelection,
@@ -876,6 +877,14 @@ async def retry_task(task_id: str, x_token: str = Header(default="")):
     await _manager_action(manager.retry_task(task_id))
     return {"ok": True}
 
+@router.post("/tasks/{task_id}/speed-limit")
+async def set_task_speed_limit(
+    task_id: str, body: TaskSpeedLimit, x_token: str = Header(default="")
+):
+    _check_token(x_token)
+    await _manager_action(manager.set_task_speed_limit(task_id, body.limit_kib))
+    return {"ok": True}
+
 
 @router.post("/tasks/{task_id}/queue/{direction}", response_model=TaskResponse)
 async def reorder_task_queue(task_id: str, direction: str, x_token: str = Header(default="")):
@@ -1357,6 +1366,7 @@ def _to_resp(task) -> TaskResponse:
         peer_count=task.progress.peer_count,
         seed_count=task.progress.seed_count,
         playback_ready=manager._playback_ready(task),
+        speed_limit_kib=task.speed_limit_kib,
         is_live=bool(task.engine_state.get("live")),
         error_message=task.error_message,
         error_code=task.error_code,

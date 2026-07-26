@@ -90,6 +90,7 @@ MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN request_contexts TEXT DEFAULT ''",
     "ALTER TABLE tasks ADD COLUMN request_method TEXT DEFAULT 'GET'",
     "ALTER TABLE tasks ADD COLUMN request_body TEXT DEFAULT ''",
+    "ALTER TABLE tasks ADD COLUMN speed_limit_kib INTEGER DEFAULT 0",
 ]
 
 _lock = asyncio.Lock()

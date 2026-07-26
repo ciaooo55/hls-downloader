@@ -646,6 +646,19 @@ class TaskManager:
             return path, size
         return self.get_stream_info(task_id)
 
+    async def set_task_speed_limit(self, task_id: str, limit_kib: int) -> None:
+        """Apply a per-task download cap immediately; 0 removes it."""
+        from .throttle import task_throttles
+
+        task = self._get_task(task_id)
+        task.speed_limit_kib = max(0, min(1048576, int(limit_kib or 0)))
+        if task.speed_limit_kib > 0:
+            task_throttles.bucket(task.id).configure(task.speed_limit_kib)
+        else:
+            task_throttles.drop(task.id)
+        await self._save_db(task)
+        self._on_progress(task)
+
     async def pause_task(self, task_id: str) -> None:
         task = self._get_task(task_id)
         if task.status not in {
@@ -742,6 +755,9 @@ class TaskManager:
         if task.task_handle and not task.task_handle.done():
             await self.cancel_task(task_id)
         playback_service.close_task(task_id)
+        from .throttle import task_throttles
+
+        task_throttles.drop(task_id)
         if delete_files or not was_complete:
             await self._delete_task_outputs(task)
         self.tasks.pop(task_id, None)
@@ -912,6 +928,7 @@ class TaskManager:
                 title=_row_value(row, "title", "") or "",
                 filename=_row_value(row, "filename", "") or "",
                 concurrency=int(_row_value(row, "concurrency", 0) or 0),
+                speed_limit_kib=int(_row_value(row, "speed_limit_kib", 0) or 0),
                 status=status,
                 progress=progress,
                 stage=stage,
@@ -960,7 +977,7 @@ class TaskManager:
                 "error_code=?,error_stage=?,error_url=?,error_hint=?,http_status=?,"
                 "error_attempt=?,expected_checksum=?,checksum_algorithm=?,checksum_actual=?,checksum_verified=?,output_path=?,updated_at=?,started_at=?,finished_at=?,"
                 "task_type=?,source_page_url=?,mime_type=?,progress_percent=?,uploaded_bytes=?,"
-                "upload_speed_bytes_per_sec=?,peer_count=?,seed_count=?,engine_state=? WHERE id=?",
+                "upload_speed_bytes_per_sec=?,peer_count=?,seed_count=?,speed_limit_kib=?,engine_state=? WHERE id=?",
                 (
                     task.status.value,
                     task.stage,
@@ -999,6 +1016,7 @@ class TaskManager:
                     task.progress.upload_speed_bytes_per_sec,
                     task.progress.peer_count,
                     task.progress.seed_count,
+                    task.speed_limit_kib,
                     json.dumps(task.engine_state, ensure_ascii=False),
                     task.id,
                 ),
@@ -1090,6 +1108,7 @@ class TaskManager:
             "filename": task.filename,
             "download_dir": str(task.engine_state.get("output_dir") or settings.download_dir),
             "concurrency": task.concurrency,
+            "speed_limit_kib": task.speed_limit_kib,
             "status": task.status.value,
             "stage": task.stage,
             "last_log": task.last_log,

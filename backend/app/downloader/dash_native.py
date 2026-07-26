@@ -376,7 +376,7 @@ class NativeDashEngine:
                         async for chunk in response.aiter_bytes(256 * 1024):
                             if self._is_canceled() or self._is_pausing():
                                 raise asyncio.CancelledError
-                            await throttle_bytes(len(chunk))
+                            await throttle_bytes(len(chunk), task)
                             stream.write(chunk)
                             received += len(chunk)
                 if received <= 0:
