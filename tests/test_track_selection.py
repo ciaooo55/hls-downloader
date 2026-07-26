@@ -131,3 +131,39 @@ def test_native_engine_downloads_selected_tracks(tmp_path, monkeypatch):
         assert not any("/en/" in url for url in requested)
 
     asyncio.run(run())
+
+
+MASTER_WITH_SEPARATE_AUDIO = """#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="chinese",DEFAULT=YES,URI="audio.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360,AUDIO="aud"
+low.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,AUDIO="aud"
+high.m3u8
+"""
+
+
+def test_selected_rendition_keeps_external_audio_detection():
+    """Selecting a rendition must not bypass the master (silent video)."""
+    from backend.app.downloader.parser import parse_m3u8
+
+    parsed = parse_m3u8(
+        "https://cdn.test/master.m3u8",
+        MASTER_WITH_SEPARATE_AUDIO,
+        preferred_variant="https://cdn.test/low.m3u8",
+    )
+    assert parsed["type"] == "variant"
+    assert parsed["url"] == "https://cdn.test/low.m3u8"
+    # The separate audio rendition is still reported, so the engine routes
+    # to the muxing path instead of downloading video without sound.
+    assert parsed["external_audio"] is True
+
+
+def test_stale_rendition_selection_falls_back_to_best():
+    from backend.app.downloader.parser import parse_m3u8
+
+    parsed = parse_m3u8(
+        "https://cdn.test/master.m3u8",
+        MASTER_WITH_SEPARATE_AUDIO,
+        preferred_variant="https://cdn.test/gone.m3u8",
+    )
+    assert parsed["url"] == "https://cdn.test/high.m3u8"
