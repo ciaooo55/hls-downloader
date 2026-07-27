@@ -8,6 +8,9 @@ import { Button, Dialog, DialogFooter, DialogHeader, DialogOverlay } from './ui'
 export default function BrowserExtensionDialog({ onClose }: { onClose: () => void }) {
   const [browserStatus, setBrowserStatus] = useState<BrowserStatus | null>(null)
   const [message, setMessage] = useState('')
+  const versionLine = browserStatus?.detected
+    ? `插件 v${browserStatus.version || '未知'} · 桌面 v${browserStatus.desktop_version || '未知'}`
+    : '未连接时浏览器会继续使用自己的下载器，不会静默丢失文件。'
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
@@ -27,13 +30,18 @@ export default function BrowserExtensionDialog({ onClose }: { onClose: () => voi
     <DialogOverlay onClose={onClose}>
       <Dialog className="browser-integration-modal" label="浏览器插件" onClose={onClose}>
         <DialogHeader title="浏览器插件" description="Chrome/Edge 与 Firefox 插件负责资源识别、下载点击接管和请求身份传递" onClose={onClose} />
-        <div className={`browser-status ${browserStatus?.detected ? 'online' : ''}`}>
+        <div className={`browser-status ${browserStatus?.detected ? 'online' : ''}${browserStatus?.needs_upgrade ? ' warning' : ''}`}>
           <Puzzle size={18} />
           <div>
-            <strong>{browserStatus?.detected ? '浏览器插件已连接' : browserStatus?.seen_before ? '插件连接已断开' : '插件未安装或未连接'}</strong>
-            <span>{browserStatus?.detected ? `版本 ${browserStatus.version || '未知'}` : '未连接时浏览器会继续使用自己的下载器，不会静默丢失文件。'}</span>
+            <strong>{browserStatus?.needs_upgrade ? '浏览器插件需要升级' : browserStatus?.detected ? '浏览器插件已连接' : browserStatus?.seen_before ? '插件连接已断开' : '插件未安装或未连接'}</strong>
+            <span>{versionLine}</span>
           </div>
         </div>
+        {browserStatus?.needs_upgrade && (
+          <div className="inline-message update-warning" role="status">
+            当前插件低于最低兼容版本 v{browserStatus.minimum_version || browserStatus.recommended_version || '最新'}。请使用同一个 GitHub Release 里的 Chromium / Firefox 插件包；旧插件不会被强制禁用，但可能缺少最新的请求头、Cookie 和弹窗修复。
+          </div>
+        )}
         <div className="extension-actions">
           <Button className="primary-button" onClick={() => void installExtension()}><FolderOpen size={16} />加载 Chromium 插件</Button>
         </div>

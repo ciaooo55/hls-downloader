@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.request
 import webbrowser
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import uvicorn
@@ -27,6 +28,64 @@ except ImportError:
     from app.version import APP_VERSION
     from app.desktop_runtime import register_activation, register_browser_handoff, register_shutdown, set_desktop_handoff_session
     from app.main import app
+
+
+def configure_runtime_logging() -> None:
+    """Persist desktop diagnostics without relying on a visible console.
+
+    Frozen Windows builds intentionally have no console.  Without a local log,
+    a WebView/native-host failure looks indistinguishable from a random exit and
+    cannot be diagnosed after the process disappears.  Keep a small rotating
+    log in the installation's data directory and include unhandled exceptions
+    from both the main and worker threads.
+    """
+    root = logging.getLogger()
+    if any(getattr(handler, "_hls_downloader_runtime_log", False) for handler in root.handlers):
+        return
+    try:
+        log_dir = RUNTIME_PATHS.data_root / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            log_dir / "desktop.log",
+            maxBytes=1_500_000,
+            backupCount=3,
+            encoding="utf-8",
+        )
+        handler._hls_downloader_runtime_log = True
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(threadName)s %(name)s: %(message)s"
+        ))
+        root.addHandler(handler)
+        if root.level == logging.NOTSET or root.level > logging.INFO:
+            root.setLevel(logging.INFO)
+    except OSError:
+        # A read-only portable folder must not prevent the downloader itself
+        # from launching.  Windows Error Reporting remains available there.
+        return
+
+    previous_excepthook = sys.excepthook
+
+    def log_uncaught(exc_type, exc_value, traceback) -> None:
+        logger.critical("unhandled desktop exception", exc_info=(exc_type, exc_value, traceback))
+        try:
+            previous_excepthook(exc_type, exc_value, traceback)
+        except Exception:
+            pass
+
+    sys.excepthook = log_uncaught
+    previous_thread_hook = getattr(threading, "excepthook", None)
+    if previous_thread_hook is not None:
+        def log_thread_exception(args) -> None:
+            logger.critical(
+                "unhandled exception in thread %s",
+                getattr(args.thread, "name", "unknown"),
+                exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+            )
+            try:
+                previous_thread_hook(args)
+            except Exception:
+                pass
+        threading.excepthook = log_thread_exception
 
 
 def public_base_url() -> str:
@@ -873,6 +932,8 @@ def _run_desktop(*, start_hidden: bool = False) -> int:
 
 
 def main() -> int:
+    configure_runtime_logging()
+    logger.info("desktop launch: version=%s runtime_mode=%s", APP_VERSION, RUNTIME_PATHS.mode)
     args = set(sys.argv[1:])
     if "--shutdown" in args:
         shutdown_existing_instance()

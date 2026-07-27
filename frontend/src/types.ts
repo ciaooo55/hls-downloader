@@ -118,6 +118,10 @@ export interface BrowserStatus {
   version?: string
   state?: 'connected' | 'inactive' | 'not_detected'
   message?: string
+  desktop_version?: string
+  recommended_version?: string
+  minimum_version?: string
+  needs_upgrade?: boolean
 }
 
 export interface UpdateInfo {

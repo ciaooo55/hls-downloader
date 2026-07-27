@@ -1,8 +1,9 @@
 import time
 import base64
 
-from backend.app.browser_handoff import BrowserHandoffService
+from backend.app.browser_handoff import BrowserHandoffService, RECOMMENDED_BROWSER_EXTENSION_VERSION
 from backend.app.credentials import PREFIX, protect_secret, unprotect_secret
+from backend.app.version import APP_VERSION
 from backend import native_host
 
 
@@ -91,7 +92,35 @@ def test_browser_status_explains_when_extension_has_never_connected():
         "version": "",
         "state": "not_detected",
         "message": "未检测到浏览器扩展；浏览器下载不会被接管",
+        "desktop_version": APP_VERSION,
+        "recommended_version": RECOMMENDED_BROWSER_EXTENSION_VERSION,
+        "minimum_version": RECOMMENDED_BROWSER_EXTENSION_VERSION,
+        "needs_upgrade": False,
     }
+
+
+def test_browser_status_marks_outdated_extension_without_blocking_connection():
+    service = BrowserHandoffService()
+    service.record_ping("2.0.9")
+
+    status = service.status()
+
+    assert status["detected"] is True
+    assert status["version"] == "2.0.9"
+    assert status["recommended_version"] == RECOMMENDED_BROWSER_EXTENSION_VERSION
+    assert status["needs_upgrade"] is True
+    assert "建议升级" in status["message"]
+
+
+def test_browser_status_accepts_current_extension_version():
+    service = BrowserHandoffService()
+    service.record_ping(RECOMMENDED_BROWSER_EXTENSION_VERSION)
+
+    status = service.status()
+
+    assert status["detected"] is True
+    assert status["needs_upgrade"] is False
+    assert status["message"] == "浏览器扩展已连接"
 
 
 def test_task_cookie_uses_dpapi_on_windows():

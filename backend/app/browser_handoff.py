@@ -6,8 +6,31 @@ import time
 from dataclasses import asdict, dataclass
 from urllib.parse import urlsplit
 
+from .version import APP_VERSION
 from .naming import is_generic_media_name, suggest_manifest_name
 from .request_context import request_origin, sanitize_request_headers, sanitize_request_replay
+
+
+RECOMMENDED_BROWSER_EXTENSION_VERSION = "2.0.11"
+MIN_BROWSER_EXTENSION_VERSION = "2.0.11"
+
+
+def _version_parts(value: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for part in str(value or "").split("."):
+        if not part.isdigit():
+            break
+        parts.append(int(part))
+    return tuple(parts)
+
+
+def _is_older_version(value: str, baseline: str) -> bool:
+    current = _version_parts(value)
+    target = _version_parts(baseline)
+    if not current or not target:
+        return False
+    size = max(len(current), len(target))
+    return current + (0,) * (size - len(current)) < target + (0,) * (size - len(target))
 
 
 @dataclass
@@ -99,8 +122,12 @@ class BrowserHandoffService:
             version = self.version
         detected = bool(last_seen and time.time() - last_seen < 90)
         seen_before = bool(last_seen)
+        needs_upgrade = bool(version) and _is_older_version(version, MIN_BROWSER_EXTENSION_VERSION)
         state = "connected" if detected else "inactive" if seen_before else "not_detected"
         message = (
+            f"浏览器插件版本偏旧，建议升级到 v{RECOMMENDED_BROWSER_EXTENSION_VERSION}"
+            if detected and needs_upgrade
+            else
             "浏览器扩展已连接"
             if detected
             else "扩展此前连接过，目前没有心跳"
@@ -113,6 +140,10 @@ class BrowserHandoffService:
             "version": version,
             "state": state,
             "message": message,
+            "desktop_version": APP_VERSION,
+            "recommended_version": RECOMMENDED_BROWSER_EXTENSION_VERSION,
+            "minimum_version": MIN_BROWSER_EXTENSION_VERSION,
+            "needs_upgrade": needs_upgrade,
         }
 
     def create(self, payload: dict) -> BrowserHandoff:

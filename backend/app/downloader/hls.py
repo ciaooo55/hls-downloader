@@ -37,7 +37,7 @@ from .errors import (
 from .throttle import throttle_bytes
 from .engine import task_output_dir, task_work_dir
 from .parser import UnsupportedPlaylistError, parse_m3u8
-from .playback import playback_service, write_playback_plan
+from .playback import MIN_START_DURATION, playback_service, write_playback_plan
 from .progress import ProgressTracker
 from .subtitles import has_cues, merge_webvtt_segments, webvtt_to_srt
 
@@ -95,7 +95,17 @@ class _BrowserHLSClient:
         )
         try:
             with destination.open("wb") as output:
-                async for chunk in response.aiter_content():
+                # curl-cffi defaults to small chunks.  Larger buffered writes
+                # reduce Python/async scheduling overhead substantially when a
+                # playlist contains thousands of short media segments, while
+                # still keeping pause/cancel responsiveness below one chunk.
+                # Keep a no-argument fallback for compatible response objects
+                # whose iterator does not expose curl-cffi's chunk_size option.
+                try:
+                    content = response.aiter_content(chunk_size=256 * 1024)
+                except TypeError:
+                    content = response.aiter_content()
+                async for chunk in content:
                     if cancel_check():
                         if response.quit_now:
                             response.quit_now.set()
@@ -207,6 +217,7 @@ class HLSDownloader:
         self._retry_window = SharedRetryWindow()
         self._last_rate_limit_notice = 0.0
         self._subtitle_tracks: list[dict] = []
+        self._playback_refresh_error = ""
 
     def request_seek(self, segment_index: int) -> None:
         if segment_index >= 0:
@@ -1392,6 +1403,73 @@ class HLSDownloader:
                 self._completed_count += 1
             else:
                 pending[segment["index"]] = segment
+
+        # Start with the shortest contiguous prefix that a local HLS player can
+        # use.  The ordinary worker pool is intentionally concurrent, so a
+        # slow first request could otherwise leave later segments downloading
+        # for minutes while the only playable prefix is still empty.  This is a
+        # brief one-time warm-up; all remaining work immediately returns to the
+        # requested concurrency.
+        warmup_indexes: list[int] = []
+        warmup_duration = 0.0
+        for segment in segments:
+            index = int(segment["index"])
+            warmup_duration += max(0.001, float(segment.get("duration") or 0))
+            if index in pending:
+                warmup_indexes.append(index)
+            if warmup_duration >= MIN_START_DURATION:
+                break
+
+        if warmup_indexes:
+            self._set_stage(
+                "downloading_segments",
+                f"正在准备 {len(warmup_indexes)} 个播放缓冲分片",
+            )
+        warmup_completed = 0
+        for index in warmup_indexes:
+            if self._is_canceled() or self._is_pausing():
+                return False
+            priority = self._playback_priority_index
+            if priority is not None and priority != index:
+                break
+            segment = pending.pop(index)
+            self.task.progress.active_workers += 1
+            self.task.progress.active_slots += 1
+            self.task.progress.active_segment_indexes.append(index)
+            self._publish()
+            try:
+                completed = await self._download_one_segment(client, segment, headers)
+                if not completed:
+                    return False
+                warmup_completed += 1
+                self._refresh_playback_progress()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                failure = as_download_error(
+                    exc,
+                    stage="downloading_segments",
+                    url=segment["url"],
+                    attempt=MAX_RETRIES,
+                    task_context=self.task,
+                )
+                self._failed_indexes.append(index)
+                self.task.progress.failed_segments = len(self._failed_indexes)
+                self.task.progress.last_worker_error = f"[{index}] {str(exc)[:120]}"
+                self._log(f"[segment {index}] 播放缓冲分片下载失败: {exc}")
+                raise failure from exc
+            finally:
+                self.task.progress.active_workers -= 1
+                self.task.progress.active_slots -= 1
+                if index in self.task.progress.active_segment_indexes:
+                    self.task.progress.active_segment_indexes.remove(index)
+                self._emit_progress()
+
+        if warmup_completed:
+            self._set_stage(
+                "downloading_segments",
+                f"播放缓冲已准备 {warmup_completed} 个分片，开始下载剩余 {len(pending)} 个分片",
+            )
         claim_lock = asyncio.Lock()
 
         async def claim_segment() -> dict | None:
@@ -1581,8 +1659,16 @@ class HLSDownloader:
                 self.task.status.value,
                 self.task.output_path,
             )
-        except Exception:
+        except Exception as exc:
+            # Do not hide an on-disk plan error behind a missing preview action.
+            # Keep the normal download stage intact and log it only once so a
+            # transient filesystem race cannot flood the task log.
+            diagnostic = f"{type(exc).__name__}: {str(exc)[:180]}"
+            if diagnostic != self._playback_refresh_error:
+                self._playback_refresh_error = diagnostic
+                self._log(f"[playback] 边下边播缓冲暂不可用: {diagnostic}")
             return
+        self._playback_refresh_error = ""
         progress = self.task.progress
         progress.playable_segments = snapshot.available_segments
         progress.playable_duration = snapshot.available_duration

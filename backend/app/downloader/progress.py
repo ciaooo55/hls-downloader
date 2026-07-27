@@ -50,12 +50,17 @@ class ProgressTracker:
         avg_per_seg = self.downloaded_bytes / max(self.completed, 1)
         remaining_bytes = avg_per_seg * remaining
         eta = remaining_bytes / speed if speed > 0 else 0
+        # HLS playlists normally do not publish a byte total.  Returning only
+        # downloaded_bytes as total_bytes made the UI report the same value for
+        # both "总大小" and "已下载".  Use the observed mean segment size as a
+        # clearly labelled estimate until the final segment is known.
+        estimated_total_bytes = int(round(avg_per_seg * self.total)) if self.completed else 0
 
         return {
             "total": self.total,
             "completed": self.completed,
             "downloaded_bytes": self.downloaded_bytes,
-            "total_bytes": self.downloaded_bytes,
+            "total_bytes": max(self.downloaded_bytes, estimated_total_bytes),
             "speed": speed,
             "eta": eta,
         }

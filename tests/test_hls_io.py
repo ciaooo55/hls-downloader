@@ -16,6 +16,8 @@ from backend.app.downloader.hls import (
     _reserve_output_path,
 )
 from backend.app.downloader.errors import diagnose_download_error
+from backend.app.downloader.playback import playback_service, write_playback_plan
+from backend.app.downloader.progress import ProgressTracker
 from backend.app.models import Task
 
 
@@ -27,6 +29,53 @@ def test_browser_transport_matches_the_captured_user_agent_family():
     assert _browser_impersonation({"User-Agent": "Mozilla/5.0 Chrome/140.0 Safari/537.36"}) == "chrome"
     assert _browser_impersonation({"user-agent": "Mozilla/5.0 Firefox/152.0"}) == "firefox"
     assert _browser_impersonation({"User-Agent": "Mozilla/5.0 Version/18.0 Safari/605.1.15"}) == "safari"
+
+
+def test_hls_progress_estimates_total_from_completed_segments():
+    tracker = ProgressTracker()
+    tracker.start(10)
+    tracker.add_completed(100)
+    tracker.add_completed(100)
+
+    snapshot = tracker.snapshot()
+
+    assert snapshot["downloaded_bytes"] == 200
+    assert snapshot["total_bytes"] == 1000
+
+
+def test_hls_warms_a_contiguous_prefix_before_parallel_downloads(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path))
+    task = _task()
+    task.status = task.status.DOWNLOADING_SEGMENTS
+    task.progress.total_segments = 3
+    downloader = HLSDownloader(task)
+    task_dir = tmp_path / ".tasks" / task.id
+    segments = [
+        {"index": 0, "url": "https://example.test/0.ts", "duration": 0.5},
+        {"index": 1, "url": "https://example.test/1.ts", "duration": 0.5},
+        {"index": 2, "url": "https://example.test/2.ts", "duration": 4.0},
+    ]
+    write_playback_plan(task_dir, segments, total_duration=5.0)
+    calls: list[str] = []
+
+    class Client:
+        async def download_to_file(self, url, destination, *_args):
+            calls.append(url)
+            destination.write_bytes(url.encode())
+            return types.SimpleNamespace(status_code=200, headers={}), len(url)
+
+    async def run():
+        assert await downloader._download_segments(Client(), segments, {}, concurrency=3)
+
+    asyncio.run(run())
+
+    # The two 0.5-second segments are required to cross the one-second
+    # playback threshold and must land before the normal worker pool starts.
+    assert calls[:2] == ["https://example.test/0.ts", "https://example.test/1.ts"]
+    snapshot = playback_service.snapshot(task.id, task.status.value)
+    assert snapshot.ready is True
+    assert snapshot.available_segments == 3
+    assert task.progress.active_workers == 0
 
 
 def test_load_media_playlist_follows_variants_and_rejects_cycles():

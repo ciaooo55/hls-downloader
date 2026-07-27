@@ -482,16 +482,20 @@ code,
 .connection-row b{margin-left:auto;font-size:12px;font-weight:600}
 .connection-row.online b{color:var(--green)}
 .connection-row.offline b{color:var(--red)}
+.connection-row.warning b{color:var(--amber)}
 .connection-dot{width:8px;height:8px;border-radius:50%;background:var(--red);flex:0 0 auto}
 .connection-row.online .connection-dot{background:var(--green)}
+.connection-row.warning .connection-dot{background:var(--amber)}
 .sidebar-connection small{display:block;margin:6px 0 0 15px;color:var(--faint);font-size:11px}
 .connection-bubble{position:absolute;left:calc(100% + 10px);bottom:4px;z-index:900;width:236px;padding:12px 13px;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:0 12px 36px var(--shadow)}
+.connection-bubble.warning{border-color:color-mix(in srgb,var(--amber) 45%,var(--border));background:color-mix(in srgb,var(--amber) 8%,var(--surface))}
 .connection-bubble::before{content:"";position:absolute;left:-6px;bottom:22px;width:10px;height:10px;transform:rotate(45deg);background:var(--surface);border-left:1px solid var(--border);border-bottom:1px solid var(--border)}
 .connection-bubble b{display:block;font-size:13px}
 .connection-bubble span{display:block;margin:5px 0 9px;color:var(--muted);font-size:12px;line-height:1.5}
 .connection-bubble .secondary-button{height:30px;padding:0 11px;font-size:12px}
 .connection-bubble-close{position:absolute;top:8px;right:8px;display:grid;place-items:center;width:22px;height:22px;border:0;border-radius:6px;background:transparent;color:var(--faint);cursor:pointer}
 .connection-bubble-close:hover{background:var(--surface-3);color:var(--text)}
+.browser-status.warning{border-color:color-mix(in srgb,var(--amber) 50%,var(--border));background:color-mix(in srgb,var(--amber) 8%,var(--surface))}
 .speed-limit-control{position:relative}
 .speed-limit-trigger{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;font-size:12px;white-space:nowrap}
 .speed-limit-trigger:hover{background:var(--surface-3);color:var(--text)}

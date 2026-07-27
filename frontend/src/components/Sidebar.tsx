@@ -35,8 +35,9 @@ export default function Sidebar({ tasks, active, onChange, browserStatus, appVer
   const serviceOnline = Boolean(appVersion)
   const extensionOnline = Boolean(browserStatus?.detected)
   const extensionLost = !extensionOnline && Boolean(browserStatus?.seen_before)
+  const extensionNeedsUpgrade = Boolean(extensionOnline && browserStatus?.needs_upgrade)
   const [bubbleDismissed, setBubbleDismissed] = useState(false)
-  useEffect(() => { setBubbleDismissed(false) }, [extensionOnline])
+  useEffect(() => { setBubbleDismissed(false) }, [extensionOnline, extensionNeedsUpgrade])
   return (
     <aside className="sidebar">
       <nav>
@@ -48,8 +49,16 @@ export default function Sidebar({ tasks, active, onChange, browserStatus, appVer
       <div className="sidebar-connection">
         <span className="sidebar-caption">连接</span>
         <div className={`connection-row ${serviceOnline ? 'online' : 'offline'}`}><i className="connection-dot" /><span>本地服务</span><b>{serviceOnline ? '正常' : '离线'}</b></div>
-        <div className={`connection-row ${extensionOnline ? 'online' : 'offline'}`} title={browserStatus?.message || ''}><i className="connection-dot" /><span>浏览器插件</span><b>{extensionOnline ? '已连接' : extensionLost ? '已断开' : '未连接'}</b></div>
+        <div className={`connection-row ${extensionOnline ? 'online' : 'offline'}${extensionNeedsUpgrade ? ' warning' : ''}`} title={browserStatus?.message || ''}><i className="connection-dot" /><span>浏览器插件</span><b>{extensionNeedsUpgrade ? '需升级' : extensionOnline ? '已连接' : extensionLost ? '已断开' : '未连接'}</b></div>
         <small>{appVersion ? `v${appVersion}` : ''}{browserStatus?.version ? ` · 插件 v${browserStatus.version}` : ''}</small>
+        {extensionNeedsUpgrade && !bubbleDismissed && (
+          <div className="connection-bubble warning" role="status">
+            <button className="connection-bubble-close" aria-label="关闭提示" onClick={() => setBubbleDismissed(true)}><X size={13} /></button>
+            <b>插件版本需要同步</b>
+            <span>当前插件 v{browserStatus?.version || '未知'}，建议使用本版本发布包中的 v{browserStatus?.recommended_version || '最新'} 插件；旧插件仍可继续下载。</span>
+            <button className="secondary-button" onClick={onOpenExtensionHelp}>查看插件版本</button>
+          </div>
+        )}
         {extensionLost && !bubbleDismissed && (
           <div className="connection-bubble" role="status">
             <button className="connection-bubble-close" aria-label="关闭提示" onClick={() => setBubbleDismissed(true)}><X size={13} /></button>
