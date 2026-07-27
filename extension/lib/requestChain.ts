@@ -249,7 +249,7 @@ export class RequestChainStore {
     if (chain) chain.updatedAt = now
   }
 
-  cleanup(now = Date.now(), maxAgeMs = 30_000): void {
+  cleanup(now = Date.now(), maxAgeMs = 5 * 60_000): void {
     for (const [requestId, chain] of this.chains) {
       if (now - chain.updatedAt > maxAgeMs) this.chains.delete(requestId)
     }

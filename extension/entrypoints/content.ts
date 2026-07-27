@@ -68,7 +68,7 @@ export default defineContentScript({
           header{display:flex;align-items:center;justify-content:space-between;padding:7px 8px 7px 9px;border-bottom:1px solid var(--border);background:var(--surface-2);color:var(--text);font:600 12px system-ui;cursor:grab;touch-action:none}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:4px}
           .pin,.close{height:27px;border:0;border-radius:5px;background:var(--surface-3);color:var(--text);cursor:pointer}.pin{padding:0 8px;font:11px system-ui}.pin.active{background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green)}.close{display:grid;place-items:center;width:27px;font:700 18px/1 system-ui}.pin:hover,.close:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{overflow:auto;max-height:50vh}.empty{padding:18px 14px;color:var(--faint);font:12px/1.45 system-ui;text-align:center}
           .item{padding:9px 10px;border-bottom:1px solid var(--border)}.item:last-child{border-bottom:0}.item:hover{background:var(--surface-2)}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12px/1.35 system-ui;overflow-wrap:anywhere;color:var(--text)}.kind{overflow:hidden;color:var(--muted);font:10.5px/1.35 system-ui;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.quality-select{width:min(184px,100%);margin-top:6px}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:29px;border:0;border-radius:6px;background:var(--primary);color:var(--on-primary);padding:4px 6px;cursor:pointer;font-weight:600;font-size:11px}.download:hover{background:var(--primary-hover)}.download[disabled]{cursor:default;opacity:.6}.download.push-tv{background:color-mix(in srgb,var(--purple) 75%,var(--surface))}.download.push-tv:hover{background:var(--purple)}.download.cast{background:color-mix(in srgb,var(--green) 78%,var(--surface))}.download.cast:hover{background:var(--green)}.result{padding:7px 10px;background:color-mix(in srgb,var(--green) 14%,var(--surface));color:var(--green);font:11px/1.4 system-ui}.result.error{background:color-mix(in srgb,var(--red) 12%,var(--surface));color:var(--red)}
-          .video-buttons{position:fixed;inset:0;z-index:2147483646;pointer-events:none}.video-download{position:fixed;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 10px var(--shadow);pointer-events:auto;cursor:pointer;font:600 12px system-ui}.video-download:hover{background:var(--primary-hover)}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}
+          .video-buttons{position:fixed;inset:0;z-index:2147483646;pointer-events:none}.video-download{position:fixed;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 10px var(--shadow);pointer-events:auto;cursor:grab;touch-action:none;font:600 12px system-ui}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}
           button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
         `
         const image = () => {
@@ -135,6 +135,7 @@ export default defineContentScript({
     const dragHandles = ui.shadow.querySelectorAll<HTMLElement>('.toggle, header')
     let dragged = false
     let pinned = false
+    let videoButtonPosition: { x: number, y: number } | null = null
     let collapseTimer: ReturnType<typeof setTimeout> | null = null
     const fitPanel = () => {
       if (!wrap) return
@@ -170,7 +171,7 @@ export default defineContentScript({
       if (pinned) setPinned(false)
       setOpen(false)
     })
-    void browser.storage.local.get(['panelPosition', 'panelPinned']).then(value => {
+    void browser.storage.local.get(['panelPosition', 'panelPinned', 'videoButtonPosition']).then(value => {
       const position = value.panelPosition as { x?: unknown; y?: unknown } | undefined
       pinned = value.panelPinned === true
       pinButton?.classList.toggle('active', pinned)
@@ -179,6 +180,12 @@ export default defineContentScript({
       if (wrap && position && typeof position.x === 'number' && typeof position.y === 'number'
         && Number.isFinite(position.x) && Number.isFinite(position.y)) {
         wrap.style.left = `${Math.max(0, position.x)}px`; wrap.style.top = `${Math.max(0, position.y)}px`; wrap.style.right = 'auto'
+      }
+      const videoPosition = value.videoButtonPosition as { x?: unknown, y?: unknown } | undefined
+      if (videoPosition && typeof videoPosition.x === 'number' && typeof videoPosition.y === 'number'
+        && Number.isFinite(videoPosition.x) && Number.isFinite(videoPosition.y)) {
+        videoButtonPosition = { x: videoPosition.x, y: videoPosition.y }
+        updateVideoButtons()
       }
     })
     dragHandles.forEach(handle => handle.addEventListener('pointerdown', event => {
@@ -318,12 +325,53 @@ export default defineContentScript({
         visible += 1
         const button = document.createElement('button')
         button.type = 'button'; button.className = 'video-download'; button.title = hasExactPlayerMatch && choices.length === 1 ? '使用 HLS Downloader 下载此视频' : '选择当前页面检测到的视频资源'
-        button.style.left = `${Math.max(8, rect.right - 132)}px`; button.style.top = `${Math.max(8, rect.top + 8)}px`
+        const buttonWidth = 156
+        const buttonHeight = 34
+        const defaultLeft = Math.max(8, Math.min(rect.right - 132, innerWidth - buttonWidth - 8))
+        const defaultTop = Math.max(8, Math.min(rect.top + 8, innerHeight - buttonHeight - 8))
+        const saved = videoButtonPosition
+        button.style.left = `${saved ? Math.max(8, Math.min(saved.x, innerWidth - buttonWidth - 8)) : defaultLeft}px`
+        button.style.top = `${saved ? Math.max(8, Math.min(saved.y, innerHeight - buttonHeight - 8)) : defaultTop}px`
         const icon = document.createElement('img'); icon.src = browser.runtime.getURL('/icon-32.png'); icon.alt = ''
         const label = document.createElement('span'); label.textContent = hasExactPlayerMatch && choices.length === 1 ? '下载视频' : '选择资源'
         button.append(icon, label)
         if (choices.length > 1) { const count = document.createElement('b'); count.textContent = String(choices.length); button.append(count) }
-        button.addEventListener('click', () => {
+        let videoDragged = false
+        button.addEventListener('pointerdown', event => {
+          if (event.button !== 0) return
+          event.preventDefault()
+          button.setPointerCapture(event.pointerId)
+          videoDragged = false
+          const startX = event.clientX; const startY = event.clientY
+          const startLeft = button.offsetLeft; const startTop = button.offsetTop
+          const move = (next: PointerEvent) => {
+            if (next.pointerId !== event.pointerId) return
+            videoDragged ||= Math.abs(next.clientX - startX) + Math.abs(next.clientY - startY) > 4
+            const width = button.offsetWidth || buttonWidth
+            const height = button.offsetHeight || buttonHeight
+            button.style.left = `${Math.max(8, Math.min(innerWidth - width - 8, startLeft + next.clientX - startX))}px`
+            button.style.top = `${Math.max(8, Math.min(innerHeight - height - 8, startTop + next.clientY - startY))}px`
+          }
+          const finish = (next: PointerEvent) => {
+            if (next.pointerId !== event.pointerId) return
+            button.releasePointerCapture(event.pointerId)
+            button.removeEventListener('pointermove', move)
+            button.removeEventListener('pointerup', finish)
+            if (videoDragged) {
+              videoButtonPosition = { x: button.offsetLeft, y: button.offsetTop }
+              void browser.storage.local.set({ videoButtonPosition })
+            }
+          }
+          button.addEventListener('pointermove', move)
+          button.addEventListener('pointerup', finish, { once: true })
+        })
+        button.addEventListener('click', event => {
+          if (videoDragged) {
+            event.preventDefault()
+            event.stopImmediatePropagation()
+            videoDragged = false
+            return
+          }
           // MSE/blob players do not expose the actual manifest as currentSrc.
           // Never turn an unrelated single network entry into a one-click
           // download: opening the chooser lets the user see the evidence first.

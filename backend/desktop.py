@@ -116,6 +116,19 @@ class DesktopBridge:
         timer.start()
         return {"ok": True}
 
+    def resize_window(self, width: int, height: int) -> dict:
+        """Resize a short-lived handoff window to its rendered content."""
+        window = self._window
+        if window is None:
+            return {"ok": False, "error": "桌面窗口尚未就绪"}
+        try:
+            safe_width = max(340, min(560, int(width)))
+            safe_height = max(260, min(780, int(height)))
+            window.resize(safe_width, safe_height)
+        except (AttributeError, TypeError, ValueError, OSError) as exc:
+            return {"ok": False, "error": f"无法调整窗口大小：{exc}"}
+        return {"ok": True, "width": safe_width, "height": safe_height}
+
     def choose_folder(self, directory: str = "") -> dict:
         """Open the native folder dialog for handoff/settings path selection."""
         if self._window is None:

@@ -63,6 +63,9 @@ class FakeWindow:
     def destroy(self) -> None:
         self.calls.append("destroy")
 
+    def resize(self, width: int, height: int) -> None:
+        self.calls.append(f"resize:{width}x{height}")
+
     def create_file_dialog(self, dialog_type):
         self.calls.append(f"file-dialog:{dialog_type}")
         return self.selected_folders
@@ -479,6 +482,15 @@ def test_desktop_bridge_choose_folder(tmp_path):
     window.selected_folders = None
     canceled = bridge.choose_folder()
     assert canceled == {"ok": False, "canceled": True}
+
+
+def test_desktop_bridge_resizes_handoff_window_with_safe_bounds():
+    window = FakeWindow()
+    bridge = DesktopBridge(window)
+
+    assert bridge.resize_window(390, 320) == {"ok": True, "width": 390, "height": 320}
+    assert bridge.resize_window(5, 10_000) == {"ok": True, "width": 340, "height": 780}
+    assert window.calls == ["resize:390x320", "resize:340x780"]
 
 
 def test_desktop_bridge_opens_chrome_and_bundled_extension_folder(tmp_path):

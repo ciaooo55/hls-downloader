@@ -105,10 +105,11 @@ describe('browser request chains', () => {
     expect(contexts.map(item => item.requestId)).toEqual(['segment-new', 'manifest'])
   })
 
-  it('expires completed request metadata', () => {
+  it('keeps a recent playback context long enough for a user to choose a resource', () => {
     const store = new RequestChainStore()
     store.observeRequest({ requestId: 'old', url: 'https://a.test/file', tabId: 1, timeStamp: 1000 })
-    expect(store.find({ url: 'https://a.test/file' }, 32_000)).toBeUndefined()
+    expect(store.find({ url: 'https://a.test/file' }, 240_000)?.requestId).toBe('old')
+    expect(store.find({ url: 'https://a.test/file' }, 301_001)).toBeUndefined()
   })
 
   it('keeps the source-page navigation as the default browser context', () => {

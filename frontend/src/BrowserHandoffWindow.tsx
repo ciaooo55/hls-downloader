@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { LoaderCircle, RefreshCw, X } from 'lucide-react'
 import { fetchBrowserHandoff, fetchSettings, resolveBrowserHandoff } from './api'
-import { closeDesktopWindow } from './desktop'
+import { closeDesktopWindow, resizeDesktopWindow } from './desktop'
 import { resolveTheme } from './theme'
 import type { Settings } from './types'
 import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
@@ -15,6 +15,7 @@ export default function BrowserHandoffWindow({ handoffId }: { handoffId: string 
   const [error, setError] = useState('')
   const [closing, setClosing] = useState(false)
   const resolvedRef = useRef(false)
+  const surfaceRef = useRef<HTMLElement | null>(null)
 
   const close = useCallback(() => {
     if (closing) return
@@ -74,6 +75,29 @@ export default function BrowserHandoffWindow({ handoffId }: { handoffId: string 
     return () => window.clearInterval(timer)
   }, [close, handoffId, load])
 
+  useEffect(() => {
+    const surface = surfaceRef.current
+    if (!surface || isTauriDesktop() || typeof ResizeObserver === 'undefined') return
+    let last = ''
+    let frame = 0
+    const resize = () => {
+      frame = 0
+      const rect = surface.getBoundingClientRect()
+      const width = Math.ceil(Math.max(360, Math.min(460, rect.width || 390)))
+      const height = Math.ceil(Math.max(280, Math.min(760, surface.scrollHeight + 2)))
+      const key = `${width}x${height}`
+      if (key === last) return
+      last = key
+      void resizeDesktopWindow(width, height)
+    }
+    const observer = new ResizeObserver(() => {
+      if (!frame) frame = requestAnimationFrame(resize)
+    })
+    observer.observe(surface)
+    resize()
+    return () => { observer.disconnect(); if (frame) cancelAnimationFrame(frame) }
+  }, [item, error])
+
   const resolve = async (action: 'accept' | 'cancel', decision?: BrowserHandoffDecision) => {
     if (busy || resolvedRef.current) return
     setBusy(true)
@@ -89,14 +113,14 @@ export default function BrowserHandoffWindow({ handoffId }: { handoffId: string 
   }
 
   if (item) {
-    return <main className="handoff-window-root has-window-chrome">
+    return <main ref={surfaceRef} className="handoff-window-root has-window-chrome">
       <WindowChrome />
       {error && <div className="handoff-window-error">{error}</div>}
       <BrowserHandoffDialog item={item} busy={busy} settings={settings} onResolve={resolve} standalone />
     </main>
   }
 
-  return <main className="handoff-window-root has-window-chrome handoff-window-loading">
+  return <main ref={surfaceRef} className="handoff-window-root has-window-chrome handoff-window-loading">
     <WindowChrome />
     <section>
       {error ? <>

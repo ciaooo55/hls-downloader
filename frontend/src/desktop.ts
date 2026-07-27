@@ -17,6 +17,7 @@ interface NativeApi {
   get_desktop_info(): Promise<NativeResult>
   begin_uninstall(): Promise<NativeResult>
   close_window(): Promise<NativeResult>
+  resize_window?(width: number, height: number): Promise<NativeResult>
   choose_folder?(directory?: string): Promise<NativeResult>
 }
 
@@ -131,5 +132,16 @@ export async function closeDesktopWindow(): Promise<NativeResult> {
     return { ok: true }
   } catch (reason) {
     return { ok: false, error: reason instanceof Error ? reason.message : '无法关闭窗口' }
+  }
+}
+
+export async function resizeDesktopWindow(width: number, height: number): Promise<NativeResult> {
+  try {
+    if (isTauriDesktop()) return { ok: false, error: 'native-resize-unavailable' }
+    const api = await waitForNativeApi(1000)
+    if (!api?.resize_window) return { ok: false, error: 'native-resize-unavailable' }
+    return await api.resize_window(width, height)
+  } catch (reason) {
+    return { ok: false, error: reason instanceof Error ? reason.message : '无法调整窗口大小' }
   }
 }
