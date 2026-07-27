@@ -16,6 +16,7 @@ from .version import APP_VERSION
 
 
 LATEST_RELEASE_API = "https://api.github.com/repos/ciaooo55/hls-downloader/releases/latest"
+LATEST_RELEASE_PAGE = "https://github.com/ciaooo55/hls-downloader/releases/latest"
 RELEASE_DOWNLOAD_PREFIX = "/ciaooo55/hls-downloader/releases/download/"
 SETUP_ASSET_NAME = "HLSDownloader-Windows-x64-Setup.exe"
 MAX_INSTALLER_BYTES = 400 * 1024 * 1024
@@ -158,14 +159,65 @@ def _request_json(url: str, *, opener=urllib.request.urlopen) -> dict:
         raise _network_error(exc) from exc
 
 
+def _release_redirect_update(*, opener=urllib.request.urlopen) -> UpdateInfo:
+    """Find the latest tag without consuming GitHub's REST API allowance.
+
+    GitHub redirects the stable ``/releases/latest`` page to the concrete tag.
+    This path deliberately only enables opening the Release page: unlike the
+    API response it has no trusted asset digest, so it must never be used for
+    unattended installer downloads.
+    """
+    request = urllib.request.Request(
+        LATEST_RELEASE_PAGE,
+        headers={
+            "Accept": "text/html,application/xhtml+xml",
+            "User-Agent": f"HLS-Downloader/{APP_VERSION}",
+        },
+    )
+    try:
+        with opener(request, timeout=12) as response:
+            destination = str(response.geturl())
+    except (OSError, ValueError, urllib.error.URLError) as exc:
+        raise _network_error(exc) from exc
+
+    parsed = urlparse(destination)
+    prefix = "/ciaooo55/hls-downloader/releases/tag/"
+    if parsed.scheme != "https" or parsed.hostname != "github.com" or not parsed.path.startswith(prefix):
+        raise UpdateCheckError("GitHub 更新页面返回了无法识别的版本信息。", code="UPDATE_CHECK_FAILED")
+    latest = parsed.path.removeprefix(prefix).strip().lstrip("v")
+    if not latest:
+        raise UpdateCheckError("GitHub 更新页面没有提供版本号。", code="UPDATE_CHECK_FAILED")
+    return UpdateInfo(
+        current_version=APP_VERSION,
+        latest_version=latest,
+        available=is_newer_version(latest, APP_VERSION),
+        # There is no signed/digested asset descriptor on the page redirect.
+        # Keep the safe managed-install path reserved for API-verified assets.
+        can_auto_install=False,
+        release_url=destination,
+        download_url="",
+        size=0,
+        digest="",
+        notes="",
+        download_directory=str(get_update_directory()),
+    )
+
+
 def check_for_update(*, opener=urllib.request.urlopen) -> UpdateInfo:
     try:
         payload = _request_json(LATEST_RELEASE_API, opener=opener)
     except UpdateError as api_error:
-        # GitHub's release API supplies the asset digest used before install.
-        # The old HTML fallback depended on a seventh SHA256SUMS asset, which
-        # conflicts with the six-file release contract and cannot provide an
-        # equally trustworthy digest when absent.
+        if isinstance(api_error, UpdateCheckError) and api_error.code == "GITHUB_RATE_LIMITED":
+            # Match the resilient pattern used by mature desktop updaters:
+            # retry through a non-API stable endpoint.  It prevents a shared
+            # NAT's 60-request REST allowance from masquerading as a failed
+            # update check, while preserving checksum requirements for install.
+            try:
+                return _release_redirect_update(opener=opener)
+            except UpdateCheckError:
+                # Preserve the actionable rate-limit state if the independent
+                # fallback is also unavailable (for example, an offline PC).
+                raise api_error
         raise api_error
 
     latest = str(payload.get("tag_name", "")).strip().lstrip("v")

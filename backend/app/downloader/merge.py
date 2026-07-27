@@ -2,6 +2,8 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
+import subprocess
 from pathlib import Path
 
 from ..models import TaskStatus
@@ -11,6 +13,13 @@ PREPARE_PROGRESS_END = 30.0
 FFMPEG_PROGRESS_END = 98.0
 STDERR_TAIL_LIMIT = 64 * 1024
 logger = logging.getLogger(__name__)
+
+
+def _hidden_subprocess_kwargs() -> dict:
+    """Prevent ffmpeg/ffprobe from flashing a console on Windows."""
+    if os.name != "nt":
+        return {}
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
 def _emit_progress(task, on_progress) -> None:
@@ -215,6 +224,7 @@ async def _run_ffmpeg(
             *command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **_hidden_subprocess_kwargs(),
         )
         stderr_task = asyncio.create_task(read_stderr())
         while True:
@@ -296,6 +306,7 @@ async def _probe_duration(ffmpeg_path: str, input_file: Path) -> float:
             str(input_file),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **_hidden_subprocess_kwargs(),
         )
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=30)
         if process.returncode != 0:

@@ -224,6 +224,26 @@ export class RequestChainStore {
     return [...selected.values()]
   }
 
+  /**
+   * Return the browser request that established the source page itself.
+   * Resource probes often have no headers of their own (Performance/fetch
+   * observation), but the page navigation always carries the identity a site
+   * expects: UA, Referer/Origin policy and first-party cookies.
+   */
+  pageContext(tabId: number, pageUrl: string, now = Date.now()): RequestChain | undefined {
+    this.cleanup(now)
+    const page = normalized(pageUrl)
+    return [...this.chains.values()]
+      .filter(chain => chain.tabId === tabId)
+      .filter(chain => ['main_frame', 'sub_frame', 'xmlhttprequest'].includes(chain.type))
+      .filter(chain => !page || normalized(chain.finalUrl) === page || normalized(chain.pageUrl) === page)
+      .sort((left, right) => {
+        const leftExact = normalized(left.finalUrl) === page ? 1 : 0
+        const rightExact = normalized(right.finalUrl) === page ? 1 : 0
+        return rightExact - leftExact || right.updatedAt - left.updatedAt
+      })[0]
+  }
+
   finish(requestId: string, now = Date.now()): void {
     const chain = this.chains.get(requestId)
     if (chain) chain.updatedAt = now

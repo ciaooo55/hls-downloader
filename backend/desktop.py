@@ -275,11 +275,14 @@ class BrowserHandoffWindowManager:
                     title,
                     self.url_builder(handoff_id),
                     js_api=bridge,
-                    width=360,
-                    height=405,
+                    # Folded handoffs are short.  At Windows high DPI a
+                    # 405px webview looked like a mostly blank oversized
+                    # confirmation dialog.
+                    width=390,
+                    height=320,
                     x=x,
                     y=y,
-                    min_size=(340, 360),
+                    min_size=(340, 280),
                     resizable=True,
                     on_top=True,
                     focus=True,

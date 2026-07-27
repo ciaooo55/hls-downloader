@@ -579,3 +579,50 @@ def test_create_browser_handoff_queues_while_desktop_session_starts(monkeypatch)
     assert body["presentation"] == "queued"
     assert body["presentation_queued"] is True
     runtime.set_desktop_handoff_session(False)
+
+
+def test_browser_handoff_manual_context_overrides_are_scoped_to_download_origin(tmp_path, monkeypatch):
+    """A user-entered 403 workaround must reach a cross-origin media URL."""
+    from backend.app import api as api_module
+    from backend.app import desktop_runtime as runtime
+    from backend.app.browser_handoff import browser_handoffs
+    from backend.app.models import Task
+
+    runtime.register_browser_handoff(None)
+    runtime.set_desktop_handoff_session(False)
+    monkeypatch.setattr(api_module, "_check_token", lambda _token: None)
+    monkeypatch.setattr(api_module, "_check_host", lambda _url: None)
+
+    captured = {}
+    async def create_task(item, output_dir=""):
+        captured["item"] = item
+        return Task(id="manual-context", url=item.url)
+
+    monkeypatch.setattr(api_module, "_create_browser_task", create_task)
+    client = TestClient(app)
+    created = client.post(
+        "/api/browser/handoffs",
+        json={
+            "url": "https://cdn.example.test/video.m3u8",
+            "source_page_url": "https://site.example.test/watch/42",
+            "cookie": "page=default",
+            "request_headers": {"referer": "https://site.example.test/watch/42"},
+        },
+        headers={"X-Token": "test"},
+    ).json()
+    accepted = client.post(
+        f"/api/browser/handoffs/{created['id']}/accept",
+        json={
+            "download_dir": str(tmp_path),
+            "cookie": "manual=secret",
+            "request_headers": {"Authorization": "Bearer manual", "X-Token": "x"},
+        },
+        headers={"X-Token": "test"},
+    )
+    assert accepted.status_code == 200
+    item = captured["item"]
+    context = item.request_contexts["https://cdn.example.test"]
+    assert context["cookie"] == "manual=secret"
+    assert context["request_headers"]["authorization"] == "Bearer manual"
+    assert context["request_headers"]["x-token"] == "x"
+    runtime.set_desktop_handoff_session(False)

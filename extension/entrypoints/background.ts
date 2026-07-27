@@ -166,6 +166,15 @@ function revealBrowserDownload(): void {
 
 async function resourcePayload(resource: MediaResource, explicitChain?: RequestChain) {
   const pageUrl = resource.pageUrl || ''
+  const pageChain = resource.tabId !== undefined && resource.tabId >= 0
+    ? requestChains.pageContext(resource.tabId, pageUrl)
+    : undefined
+  // The source-page request is the stable default.  Individual media/CDN
+  // chains remain in request_contexts and take precedence for their origin.
+  const sourceIdentity = resourceRequestIdentity({
+    pageUrl,
+    requestHeaders: pageChain?.requestHeaders || resource.requestHeaders,
+  }, navigator.userAgent)
   const identity = resourceRequestIdentity(resource, navigator.userAgent)
   const chain = explicitChain || (resource.tabId !== undefined && resource.tabId >= 0
     ? requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), resource.tabId)
@@ -197,11 +206,13 @@ async function resourcePayload(resource: MediaResource, explicitChain?: RequestC
     mime_type: resource.mimeType || '',
     size: resource.size || 0,
     source_page_url: pageUrl,
-    referer: identity.referer,
-    origin: identity.origin,
-    cookie: await cookiesFor(resource.url, pageUrl),
-    user_agent: identity.userAgent,
-    request_headers: replayableRequestHeaders(resource.requestHeaders),
+    referer: sourceIdentity.referer || identity.referer,
+    origin: sourceIdentity.origin || identity.origin,
+    // This top-level context belongs to the browser URL, not the media URL.
+    // Exact resource/CDN cookies are still supplied through request_contexts.
+    cookie: await cookiesFor(pageUrl || resource.url, pageUrl),
+    user_agent: sourceIdentity.userAgent || identity.userAgent,
+    request_headers: replayableRequestHeaders(pageChain?.requestHeaders || resource.requestHeaders),
     request_contexts: requestContexts,
     ...replay,
     extension_version: browser.runtime.getManifest().version,

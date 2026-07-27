@@ -139,6 +139,38 @@ def test_rate_limited_check_returns_a_safe_actionable_error(monkeypatch):
     assert "urlopen" not in str(error)
 
 
+def test_rate_limited_check_falls_back_to_latest_release_redirect(monkeypatch):
+    headers = Message()
+    headers["X-RateLimit-Remaining"] = "0"
+    headers["X-RateLimit-Reset"] = str(int(time.time()) + 120)
+
+    def opener(request, timeout):
+        if request.full_url == updater.LATEST_RELEASE_API:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                403,
+                "Forbidden",
+                headers,
+                io.BytesIO(b'{"message":"API rate limit exceeded"}'),
+            )
+        assert request.full_url == updater.LATEST_RELEASE_PAGE
+        return FakeResponse(
+            b"<html></html>",
+            "https://github.com/ciaooo55/hls-downloader/releases/tag/v9.0.0",
+        )
+
+    monkeypatch.setattr(updater, "APP_VERSION", "1.0.0")
+    monkeypatch.setattr(updater, "RUNTIME_PATHS", SimpleNamespace(mode="installed", data_root=None))
+
+    info = updater.check_for_update(opener=opener)
+
+    assert info.available is True
+    assert info.latest_version == "9.0.0"
+    assert info.can_auto_install is False
+    assert info.release_url.endswith("/tag/v9.0.0")
+    assert not info.digest
+
+
 def test_release_checksum_tls_error_is_not_exposed_to_clients():
     def opener(request, timeout):
         raise urllib.error.URLError("<urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING]>")

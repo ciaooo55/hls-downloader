@@ -382,14 +382,17 @@ code,
   to { opacity: 1; transform: none; }
 }
 .browser-handoff-standalone {
+  align-self: start;
+  min-height: 0;
+  height: auto;
   padding: 0;
   background: var(--surface);
   backdrop-filter: none;
 }
 .browser-handoff-standalone .browser-handoff-dialog {
   width: 100%;
-  height: 100%;
-  max-height: 100%;
+  height: auto;
+  max-height: min(680px, 100%);
   margin: 0;
   padding: 0;
   border: 0;
@@ -404,7 +407,7 @@ code,
   border-bottom: 1px solid var(--border);
   background: var(--surface-2);
 }
-.browser-handoff-standalone .browser-handoff-body { padding: 10px 16px 12px; }
+.browser-handoff-standalone .browser-handoff-body { flex: 0 1 auto; padding: 10px 16px 12px; }
 .browser-handoff-standalone .browser-handoff-dialog > footer {
   min-height: 54px;
   margin: 0;
@@ -746,6 +749,18 @@ code,
 .browser-handoff-option-fields { padding: 2px 0 2px; }
 .browser-handoff-option-fields > label { margin-top: 11px; }
 .handoff-categories button { background: var(--surface); }
+.browser-handoff-context { margin-top: 8px; border-top: 1px solid var(--border); }
+.browser-handoff-context > summary { display: grid; grid-template-columns: 16px auto minmax(0, 1fr); align-items: center; gap: 7px; min-height: 34px; cursor: pointer; list-style: none; color: var(--text); }
+.browser-handoff-context > summary::-webkit-details-marker { display: none; }
+.browser-handoff-context > summary svg { color: var(--green); }
+.browser-handoff-context > summary span { font-size: 11px; font-weight: 650; }
+.browser-handoff-context > summary small { min-width: 0; color: var(--muted); font-size: 10px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.browser-handoff-context-fields { display: grid; gap: 7px; padding: 5px 0 3px; }
+.browser-handoff-context-fields p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.browser-handoff-context-fields code { color: var(--text); font-family: Consolas, monospace; }
+.browser-handoff-context-fields label { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.browser-handoff-context-fields textarea { min-height: 88px; width: 100%; resize: vertical; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text); padding: 8px; font: 11px/1.45 Consolas, monospace; }
+.browser-handoff-context-fields textarea:focus { outline: 2px solid color-mix(in srgb, var(--primary) 62%, transparent); outline-offset: 1px; }
 
 .confirm-modal { overflow: hidden; padding: 0; border-radius: 8px; }
 .confirm-modal > header { margin: 0; padding: 16px 17px 13px; border-bottom: 1px solid var(--border); background: var(--surface-2); }

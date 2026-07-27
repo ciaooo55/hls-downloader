@@ -65,7 +65,7 @@ export default defineContentScript({
           .wrap{display:none;position:fixed;right:14px;top:35%;z-index:2147483647;color:var(--text);filter:drop-shadow(0 6px 12px var(--shadow))}.wrap.open{display:block}
           .toggle{display:none}
           .panel{display:none;width:min(344px,calc(100vw - 20px));max-height:min(480px,62vh);background:var(--surface);border:1px solid var(--overlay-border);border-radius:9px;overflow:hidden}.open .panel{display:block}.open .toggle{display:none}
-          header{display:flex;align-items:center;justify-content:space-between;padding:7px 8px 7px 9px;border-bottom:1px solid var(--border);background:var(--surface-2);color:var(--text);font:600 12px system-ui}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:4px}
+          header{display:flex;align-items:center;justify-content:space-between;padding:7px 8px 7px 9px;border-bottom:1px solid var(--border);background:var(--surface-2);color:var(--text);font:600 12px system-ui;cursor:grab;touch-action:none}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:4px}
           .pin,.close{height:27px;border:0;border-radius:5px;background:var(--surface-3);color:var(--text);cursor:pointer}.pin{padding:0 8px;font:11px system-ui}.pin.active{background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green)}.close{display:grid;place-items:center;width:27px;font:700 18px/1 system-ui}.pin:hover,.close:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{overflow:auto;max-height:50vh}.empty{padding:18px 14px;color:var(--faint);font:12px/1.45 system-ui;text-align:center}
           .item{padding:9px 10px;border-bottom:1px solid var(--border)}.item:last-child{border-bottom:0}.item:hover{background:var(--surface-2)}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12px/1.35 system-ui;overflow-wrap:anywhere;color:var(--text)}.kind{overflow:hidden;color:var(--muted);font:10.5px/1.35 system-ui;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.quality-select{width:min(184px,100%);margin-top:6px}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:29px;border:0;border-radius:6px;background:var(--primary);color:var(--on-primary);padding:4px 6px;cursor:pointer;font-weight:600;font-size:11px}.download:hover{background:var(--primary-hover)}.download[disabled]{cursor:default;opacity:.6}.download.push-tv{background:color-mix(in srgb,var(--purple) 75%,var(--surface))}.download.push-tv:hover{background:var(--purple)}.download.cast{background:color-mix(in srgb,var(--green) 78%,var(--surface))}.download.cast:hover{background:var(--green)}.result{padding:7px 10px;background:color-mix(in srgb,var(--green) 14%,var(--surface));color:var(--green);font:11px/1.4 system-ui}.result.error{background:color-mix(in srgb,var(--red) 12%,var(--surface));color:var(--red)}
           .video-buttons{position:fixed;inset:0;z-index:2147483646;pointer-events:none}.video-download{position:fixed;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 10px var(--shadow);pointer-events:auto;cursor:pointer;font:600 12px system-ui}.video-download:hover{background:var(--primary-hover)}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}
@@ -183,16 +183,22 @@ export default defineContentScript({
     })
     dragHandles.forEach(handle => handle.addEventListener('pointerdown', event => {
       if (!wrap || (event.target as HTMLElement).closest('.close, .pin')) return
+      if (event.button !== 0) return
+      event.preventDefault()
+      handle.setPointerCapture?.(event.pointerId)
       dragged = false
       const startX = event.clientX; const startY = event.clientY
       const rect = wrap.getBoundingClientRect(); const startLeft = rect.left; const startTop = rect.top
       const move = (next: PointerEvent) => {
+        if (next.pointerId !== event.pointerId) return
         if (Math.abs(next.clientX - startX) + Math.abs(next.clientY - startY) > 4) dragged = true
-        wrap.style.left = `${Math.max(0, Math.min(innerWidth - 34, startLeft + next.clientX - startX))}px`
-        wrap.style.top = `${Math.max(0, Math.min(innerHeight - 34, startTop + next.clientY - startY))}px`
+        wrap.style.left = `${Math.max(10, Math.min(innerWidth - rect.width - 10, startLeft + next.clientX - startX))}px`
+        wrap.style.top = `${Math.max(10, Math.min(innerHeight - rect.height - 10, startTop + next.clientY - startY))}px`
         wrap.style.right = 'auto'
       }
-      const finish = () => {
+      const finish = (next: PointerEvent) => {
+        if (next.pointerId !== event.pointerId) return
+        handle.releasePointerCapture?.(event.pointerId)
         window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish)
         void browser.storage.local.set({ panelPosition: { x: wrap.offsetLeft, y: wrap.offsetTop } })
         setTimeout(() => { dragged = false }, 0)
@@ -323,9 +329,12 @@ export default defineContentScript({
           // download: opening the chooser lets the user see the evidence first.
           if (hasExactPlayerMatch && choices.length === 1) { sendResource(choices[0], button); return }
           if (wrap) {
+            // Populate synchronously: waiting for the next observer render
+            // made “选择资源” look unresponsive on busy players.
+            render()
             wrap.style.left = `${Math.max(10, Math.min(rect.right - 344, innerWidth - 354))}px`
             wrap.style.top = `${Math.max(10, Math.min(rect.top + 44, innerHeight - 480))}px`
-            wrap.style.right = 'auto'; setOpen(true)
+            wrap.style.right = 'auto'; setPinned(true); setOpen(true)
           }
         })
         layer.append(button)

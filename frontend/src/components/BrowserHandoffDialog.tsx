@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Download, FolderOpen, Globe2 } from 'lucide-react'
+import { AlertTriangle, Download, FolderOpen, Globe2, ShieldCheck } from 'lucide-react'
 import { fmtBytes } from '../format'
 import type { Settings } from '../types'
 import { downloadCategory, DOWNLOAD_CATEGORY_LABELS, type DownloadCategory } from '../downloadCategory'
@@ -34,6 +34,8 @@ export interface BrowserHandoffDecision {
   download_dir: string
   category: DownloadCategory
   remember: boolean
+  cookie?: string
+  request_headers?: Record<string, string>
 }
 
 export default function BrowserHandoffDialog({ item, busy, settings, onResolve, standalone = false, queueRemaining = 0 }: {
@@ -53,6 +55,9 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
   const [directory, setDirectory] = useState(settings.browser_category_dirs?.[initialCategory] || settings.download_dir || '')
   const [remember, setRemember] = useState(true)
   const [showPicker, setShowPicker] = useState(false)
+  const [contextOpen, setContextOpen] = useState(false)
+  const [cookie, setCookie] = useState('')
+  const [headersText, setHeadersText] = useState('')
   const canAccept = Boolean(filename.trim() && directory.trim() && !busy)
   const directoryLabel = directory.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || directory || '未设置保存位置'
 
@@ -63,13 +68,17 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
 
   const accept = () => {
     if (!canAccept) return
-    onResolve('accept', {
-      filename: filename.trim(),
-      download_dir: directory.trim(),
-      category,
-      remember,
-    })
+    onResolve('accept', decision())
   }
+
+  const decision = (): BrowserHandoffDecision => ({
+    filename: filename.trim(),
+    download_dir: directory.trim(),
+    category,
+    remember,
+    cookie: cookie.trim(),
+    request_headers: parseRequestHeaders(headersText),
+  })
 
   const cancel = () => {
     if (busy) return
@@ -99,17 +108,12 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
       if (event.key === 'Enter' && !typing && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault()
         if (!filename.trim() || !directory.trim() || busy) return
-        onResolve('accept', {
-          filename: filename.trim(),
-          download_dir: directory.trim(),
-          category,
-          remember,
-        })
+        onResolve('accept', decision())
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [busy, filename, directory, category, remember, onResolve])
+  }, [busy, filename, directory, category, remember, cookie, headersText, onResolve])
 
   const topDuplicate = item.duplicates?.[0]
   const duplicateHint = item.duplicate_message || (
@@ -124,7 +128,7 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
         <DialogHeader
           title="浏览器下载"
           description={`确认后加入下载队列${queueRemaining > 0 ? ` · 还有 ${queueRemaining} 个待确认` : ''}`}
-          onClose={busy ? undefined : cancel}
+          onClose={standalone || busy ? undefined : cancel}
         />
         <div className="browser-handoff-body">
           {item.duplicate && <div className="browser-handoff-duplicate" role="status">
@@ -160,6 +164,20 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
               </label>
             </div>
           </details>
+          <details className="browser-handoff-context" open={contextOpen} onToggle={event => setContextOpen((event.currentTarget as HTMLDetailsElement).open)}>
+            <summary>
+              <ShieldCheck size={14} />
+              <span>网站请求上下文</span>
+              <small>默认使用来源网页</small>
+            </summary>
+            <div className="browser-handoff-context-fields">
+              <p>默认沿用 <code title={item.source_page_url}>{sourceHost(item.source_page_url) || host}</code> 的浏览器 Cookie、Referer、User-Agent 和已捕获请求头。下面留空即使用默认值。</p>
+              <label htmlFor="handoff-cookie">Cookie（仅需覆盖时填写）</label>
+              <Input id="handoff-cookie" value={cookie} onChange={event => setCookie(event.target.value)} disabled={busy} placeholder="默认：来源网页的浏览器 Cookie" />
+              <label htmlFor="handoff-headers">请求头（每行：Header: value）</label>
+              <textarea id="handoff-headers" value={headersText} onChange={event => setHeadersText(event.target.value)} disabled={busy} placeholder={'默认：来源网页捕获的请求头\nReferer: https://example.com/page\nAuthorization: Bearer …'} />
+            </div>
+          </details>
         </div>
         <DialogFooter>
           <Button type="button" variant="secondary" className="secondary-button" disabled={busy} onClick={cancel}>取消</Button>
@@ -169,4 +187,20 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
     </DialogOverlay>
     {showPicker && <FolderPicker initialPath={directory} onSelect={path => { setDirectory(path); setShowPicker(false) }} onClose={() => setShowPicker(false)} />}
   </>
+}
+
+function sourceHost(value: string): string {
+  try { return new URL(value).host } catch { return '' }
+}
+
+function parseRequestHeaders(value: string): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const line of value.split(/\r?\n/).slice(0, 64)) {
+    const separator = line.indexOf(':')
+    if (separator <= 0) continue
+    const name = line.slice(0, separator).trim()
+    const headerValue = line.slice(separator + 1).trim()
+    if (name && headerValue && !/[\r\n]/.test(name + headerValue)) result[name] = headerValue
+  }
+  return result
 }

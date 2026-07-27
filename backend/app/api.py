@@ -52,6 +52,7 @@ from .updater import UpdateCheckError, UpdateError, queue_update_download, updat
 from .models import TaskStatus, TaskType
 from .browser_handoff import browser_handoffs
 from .downloader.throttle import download_throttle
+from .request_context import request_origin, sanitize_request_headers
 from .tvbox import local_media_server, push_tvbox, scan_tvboxes
 from .dlna import cast_control, cast_media, normalize_cast_device, scan_cast_devices
 
@@ -257,6 +258,29 @@ async def accept_browser_handoff(handoff_id: str, body: BrowserHandoffAccept | N
         raise HTTPException(status_code=400, detail="保存位置不是文件夹")
     if body.filename.strip():
         item.filename = body.filename.strip()
+    # Keep the browser-captured source-page context by default.  Only an
+    # explicit value from the expanded handoff form overrides it; this avoids
+    # falling back to global defaults and is essential for authenticated sites.
+    if body.cookie.strip():
+        item.cookie = body.cookie.strip()
+    if body.request_headers:
+        item.request_headers = sanitize_request_headers(body.request_headers)
+    if body.cookie.strip() or body.request_headers:
+        # Manual values are intentionally scoped to the actual download
+        # origin. build_task_headers otherwise strips top-level cookies and
+        # Authorization across origins to prevent credential leakage, which
+        # would make an explicit 403 workaround appear to do nothing.
+        origin = request_origin(item.url)
+        if origin:
+            context = dict(item.request_contexts.get(origin) or {})
+            if body.cookie.strip():
+                context["cookie"] = body.cookie.strip()
+            if body.request_headers:
+                context["request_headers"] = item.request_headers
+            context.setdefault("referer", item.referer)
+            context.setdefault("origin", item.origin)
+            context.setdefault("user_agent", item.user_agent)
+            item.request_contexts[origin] = context
     try:
         task = await _create_browser_task(item, output_dir=str(output_dir))
     except Exception:

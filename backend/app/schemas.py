@@ -173,6 +173,10 @@ class BrowserHandoffAccept(BaseModel):
     download_dir: str = Field(default="", max_length=2048)
     category: str = Field(default="other", pattern="^(media|program|archive|other)$")
     remember: bool = True
+    # Empty means "use the browser-captured source-page context".  Values are
+    # optional overrides entered explicitly in the confirmation window.
+    cookie: str = Field(default="", max_length=16 * 1024)
+    request_headers: dict[str, str] = Field(default_factory=dict)
 
 
 class TvboxPush(BaseModel):

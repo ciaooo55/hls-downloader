@@ -111,6 +111,23 @@ describe('browser request chains', () => {
     expect(store.find({ url: 'https://a.test/file' }, 32_000)).toBeUndefined()
   })
 
+  it('keeps the source-page navigation as the default browser context', () => {
+    const store = new RequestChainStore()
+    store.observeRequest({
+      requestId: 'page', url: 'https://site.test/watch/42', tabId: 7,
+      type: 'main_frame', timeStamp: 1000,
+      requestHeaders: [{ name: 'User-Agent', value: 'Browser UA' }],
+    })
+    store.observeRequest({
+      requestId: 'other', url: 'https://site.test/watch/other', tabId: 7,
+      type: 'main_frame', timeStamp: 1100,
+    })
+
+    const context = store.pageContext(7, 'https://site.test/watch/42', 1200)
+    expect(context?.requestId).toBe('page')
+    expect(requestHeader(context, 'user-agent')).toBe('Browser UA')
+  })
+
   it('keeps a small JSON POST body only for a matching replayable download request', () => {
     const store = new RequestChainStore()
     const bytes = new TextEncoder().encode('{"asset":"episode-12","token":"short-lived"}')
