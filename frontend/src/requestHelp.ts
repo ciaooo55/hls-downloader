@@ -17,3 +17,34 @@ export const REQUEST_FIELD_HELP = {
   maxTasks: '同时处于下载状态的任务数量，其余任务排队等待（默认 3）。排队任务可在列表右键调整优先级。',
   speedLimit: '全局下载限速（KiB/s）。0 表示不限速；HTTP/HLS 分片共享该预算，适合网络受限时控制带宽。',
 } as const
+
+export interface RequestContextValues {
+  referer: string
+  origin: string
+  userAgent: string
+  cookie: string
+}
+
+/**
+ * A narrowly-scoped preset for a known player CDN. It is not a global default:
+ * only a direct surrit.com media URL gets the MissAV page context, and users
+ * can always replace either field before starting the task.
+ */
+export function suggestedRequestContext(url: string): Pick<RequestContextValues, 'referer' | 'origin'> | null {
+  try {
+    const host = new URL(url).hostname.toLowerCase()
+    if (host === 'surrit.com' || host.endsWith('.surrit.com')) {
+      return { referer: 'https://missav.ai/', origin: 'https://missav.ai' }
+    }
+  } catch {}
+  return null
+}
+
+export function resolveRequestContext(url: string, values: RequestContextValues): RequestContextValues {
+  const suggested = suggestedRequestContext(url)
+  return {
+    ...values,
+    referer: values.referer || suggested?.referer || '',
+    origin: values.origin || suggested?.origin || '',
+  }
+}

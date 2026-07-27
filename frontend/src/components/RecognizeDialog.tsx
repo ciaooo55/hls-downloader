@@ -3,7 +3,7 @@ import { Download, FileUp, Globe2, Link } from 'lucide-react'
 import { ApiError, createTask, fetchManifestTracks, isDuplicateUrlError, recognizeUrl, uploadTorrent, type ManifestTrackOption } from '../api'
 import { recognitionCandidateViews, recognitionView, type RecognitionResult } from '../recognition'
 import type { Settings, Task } from '../types'
-import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
+import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP, resolveRequestContext, suggestedRequestContext } from '../requestHelp'
 import ConfirmDialog from './ConfirmDialog'
 import { Button, DialogFooter, DialogHeader, Field, Input } from './ui'
 
@@ -34,27 +34,45 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const [selectedAudio, setSelectedAudio] = useState('')
   const torrentInput = useRef<HTMLInputElement>(null)
 
-  const taskPayload = (candidate: string, allowDuplicate = false, video = '', audio = '') => ({
-    url: candidate,
-    task_type: 'auto' as const,
-    filename,
-    concurrency,
-    checksum,
+  const contextFor = (candidate: string) => resolveRequestContext(candidate, {
     referer,
     origin,
-    user_agent: userAgent,
+    userAgent,
     cookie,
-    allow_duplicate: allowDuplicate,
-    selected_video: video,
-    selected_audio: audio,
   })
 
+  useEffect(() => {
+    const suggested = suggestedRequestContext(url)
+    if (!suggested) return
+    if (!referer) setReferer(suggested.referer)
+    if (!origin) setOrigin(suggested.origin)
+  }, [url])
+
+  const taskPayload = (candidate: string, allowDuplicate = false, video = '', audio = '') => {
+    const context = contextFor(candidate)
+    return {
+      url: candidate,
+      task_type: 'auto' as const,
+      filename,
+      concurrency,
+      checksum,
+      referer: context.referer,
+      origin: context.origin,
+      user_agent: context.userAgent,
+      cookie: context.cookie,
+      allow_duplicate: allowDuplicate,
+      selected_video: video,
+      selected_audio: audio,
+    }
+  }
+
   const startCandidate = async (candidate: string, allowDuplicate = false, video = '', audio = '', skipTrackProbe = false) => {
+    const context = contextFor(candidate)
     // A manifest with multiple renditions gets a one-step chooser first;
     // failures or single-rendition manifests download immediately as before.
     if (!skipTrackProbe && !video && !audio && ['hls', 'dash'].includes(directType(candidate))) {
       try {
-        const tracks = await fetchManifestTracks({ url: candidate, referer, origin, user_agent: userAgent, cookie })
+        const tracks = await fetchManifestTracks({ url: candidate, referer: context.referer, origin: context.origin, user_agent: context.userAgent, cookie: context.cookie })
         if ((tracks.video?.length || 0) > 1 || (tracks.audio?.length || 0) > 1) {
           setTrackChoice({ candidate, format: tracks.format, video: tracks.video || [], audio: tracks.audio || [] })
           setSelectedVideo('')
@@ -138,7 +156,8 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
         await startCandidate(value)
         return
       }
-      const found = await recognizeUrl({ url: value, referer, origin, user_agent: userAgent, cookie })
+      const context = contextFor(value)
+      const found = await recognizeUrl({ url: value, referer: context.referer, origin: context.origin, user_agent: context.userAgent, cookie: context.cookie })
       setResult(found)
       if (recognitionView(found).mode === 'ready') await startCandidate(found.candidates[0].url)
     } catch (reason: unknown) {
@@ -152,6 +171,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const view = result ? recognitionView(result) : null
   const candidateViews = result ? recognitionCandidateViews(result.candidates) : []
   const recommendedCandidate = candidateViews.find(candidate => candidate.recommended)
+  const suggestedContext = suggestedRequestContext(url)
   const submitWith = (value: string) => recognize(value)
   const submit = () => view?.mode === 'choose' && recommendedCandidate
     ? downloadCandidate(recommendedCandidate.url)
@@ -208,6 +228,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
             <Button variant="ghost" className="text-button" onClick={() => setAdvanced(value => !value)}>{advanced ? '收起请求上下文' : '请求上下文（Cookie / Referer）'}</Button>
           </div>}
           {showDownloadOptions && advanced && <div className="advanced-grid request-options">
+            {suggestedContext && <p className="request-context-preset">已为 surrit.com 自动填入 MissAV 的 Referer 与 Origin；可直接修改。</p>}
             <div className="request-field"><label htmlFor="recognize-referer">Referer</label><Input id="recognize-referer" value={referer} onChange={event => setReferer(event.target.value)} placeholder={REQUEST_EXAMPLES.referer} /><small>{REQUEST_FIELD_HELP.referer}</small></div>
             <div className="request-field"><label htmlFor="recognize-origin">Origin</label><Input id="recognize-origin" value={origin} onChange={event => setOrigin(event.target.value)} placeholder={REQUEST_EXAMPLES.origin} /><small>{REQUEST_FIELD_HELP.origin}</small></div>
             <div className="request-field"><label htmlFor="recognize-ua">User-Agent</label><Input id="recognize-ua" value={userAgent} onChange={event => setUserAgent(event.target.value)} placeholder={REQUEST_EXAMPLES.userAgent} /><small>{REQUEST_FIELD_HELP.userAgent}</small></div>

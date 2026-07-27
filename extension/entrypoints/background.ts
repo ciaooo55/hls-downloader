@@ -45,8 +45,13 @@ async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabI
   const kind = resource.kind || classifyResource(resource.url, resource.mimeType)
   if (!kind) return
   let pageUrl = resource.pageUrl || ''
-  if (tabId >= 0 && !pageUrl) {
-    pageUrl = (await browser.tabs.get(tabId).catch(() => null))?.url || ''
+  if (tabId >= 0) {
+    // A media player may live in a CDN iframe. The user-facing source page is
+    // still the browser tab URL (for example MissAV), not the iframe/media
+    // host. This gives the handoff a stable Referer fallback and prevents an
+    // iframe URL from becoming the incorrectly advertised source page.
+    const tabUrl = (await browser.tabs.get(tabId).catch(() => null))?.url || ''
+    if (/^https?:\/\//i.test(tabUrl)) pageUrl = tabUrl
   }
   const key = storageKey(tabId, pageUrl)
   const stored = await browser.storage.session.get(key)

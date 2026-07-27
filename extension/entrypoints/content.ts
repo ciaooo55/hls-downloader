@@ -136,6 +136,7 @@ export default defineContentScript({
     let dragged = false
     let pinned = false
     let videoButtonPosition: { x: number, y: number } | null = null
+    let videoControlDragging = false
     let collapseTimer: ReturnType<typeof setTimeout> | null = null
     const fitPanel = () => {
       if (!wrap) return
@@ -302,6 +303,9 @@ export default defineContentScript({
       const layer = ui.shadow.querySelector<HTMLElement>('.video-buttons')
       const toggle = ui.shadow.querySelector<HTMLButtonElement>('.toggle')
       if (!layer) return
+      // Players emit timeupdate while the pointer is down. Replacing the
+      // control in that interval cancels pointer capture before it can move.
+      if (videoControlDragging) return
       layer.replaceChildren()
       if (!activePlayback || !activeVideo) {
         if (toggle) toggle.hidden = true
@@ -342,6 +346,7 @@ export default defineContentScript({
           event.preventDefault()
           button.setPointerCapture(event.pointerId)
           videoDragged = false
+          videoControlDragging = true
           const startX = event.clientX; const startY = event.clientY
           const startLeft = button.offsetLeft; const startTop = button.offsetTop
           const move = (next: PointerEvent) => {
@@ -357,13 +362,19 @@ export default defineContentScript({
             button.releasePointerCapture(event.pointerId)
             button.removeEventListener('pointermove', move)
             button.removeEventListener('pointerup', finish)
-            if (videoDragged) {
-              videoButtonPosition = { x: button.offsetLeft, y: button.offsetTop }
-              void browser.storage.local.set({ videoButtonPosition })
-            }
+          if (videoDragged) {
+            videoButtonPosition = { x: button.offsetLeft, y: button.offsetTop }
+            void browser.storage.local.set({ videoButtonPosition })
+          }
+          videoControlDragging = false
+          scheduleVideoButtons()
           }
           button.addEventListener('pointermove', move)
           button.addEventListener('pointerup', finish, { once: true })
+          button.addEventListener('pointercancel', () => {
+            videoControlDragging = false
+            scheduleVideoButtons()
+          }, { once: true })
         })
         button.addEventListener('click', event => {
           if (videoDragged) {
