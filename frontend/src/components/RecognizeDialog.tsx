@@ -3,7 +3,7 @@ import { Download, FileUp, Globe2, Link } from 'lucide-react'
 import { ApiError, createTask, fetchManifestTracks, isDuplicateUrlError, recognizeUrl, uploadTorrent, type ManifestTrackOption } from '../api'
 import { recognitionCandidateViews, recognitionView, type RecognitionResult } from '../recognition'
 import type { Settings, Task } from '../types'
-import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP, suggestedRequestContext } from '../requestHelp'
+import { parseRequestHeaders, REQUEST_EXAMPLES, REQUEST_FIELD_HELP, sourcePageRequestContext } from '../requestHelp'
 import ConfirmDialog from './ConfirmDialog'
 import { Button, DialogFooter, DialogHeader, Field, Input } from './ui'
 
@@ -24,6 +24,8 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const [origin, setOrigin] = useState(settings.default_origin || '')
   const [userAgent, setUserAgent] = useState(settings.default_user_agent || '')
   const [cookie, setCookie] = useState(settings.default_cookie || '')
+  const [headersText, setHeadersText] = useState('')
+  const [sourcePageUrl, setSourcePageUrl] = useState('')
   const [result, setResult] = useState<RecognitionResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [startingCandidate, setStartingCandidate] = useState('')
@@ -32,7 +34,6 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const [trackChoice, setTrackChoice] = useState<{ candidate: string; format: string; video: ManifestTrackOption[]; audio: ManifestTrackOption[] } | null>(null)
   const [selectedVideo, setSelectedVideo] = useState('')
   const [selectedAudio, setSelectedAudio] = useState('')
-  const [suggestedForUrl, setSuggestedForUrl] = useState('')
   const torrentInput = useRef<HTMLInputElement>(null)
 
   const contextFor = () => ({
@@ -40,21 +41,26 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
     origin,
     userAgent,
     cookie,
+    requestHeaders: parseRequestHeaders(headersText),
   })
 
-  useEffect(() => {
-    const suggested = suggestedRequestContext(url)
-    if (!suggested || suggestedForUrl === url) return
-    if (!referer) setReferer(suggested.referer)
-    if (!origin) setOrigin(suggested.origin)
-    setSuggestedForUrl(url)
-  }, [url, suggestedForUrl, referer, origin])
+  const applySourcePageContext = () => {
+    const context = sourcePageRequestContext(sourcePageUrl)
+    if (!context) {
+      setError('来源网页 URL 必须是有效的 HTTP(S) 地址')
+      return
+    }
+    setReferer(context.referer)
+    setOrigin(context.origin)
+    setError('')
+  }
 
   const taskPayload = (candidate: string, allowDuplicate = false, video = '', audio = '') => {
     const context = contextFor()
     return {
       url: candidate,
       task_type: 'auto' as const,
+      source_page_url: sourcePageUrl.trim(),
       filename,
       concurrency,
       checksum,
@@ -62,6 +68,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
       origin: context.origin,
       user_agent: context.userAgent,
       cookie: context.cookie,
+      request_headers: context.requestHeaders,
       allow_duplicate: allowDuplicate,
       selected_video: video,
       selected_audio: audio,
@@ -74,7 +81,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
     // failures or single-rendition manifests download immediately as before.
     if (!skipTrackProbe && !video && !audio && ['hls', 'dash'].includes(directType(candidate))) {
       try {
-        const tracks = await fetchManifestTracks({ url: candidate, referer: context.referer, origin: context.origin, user_agent: context.userAgent, cookie: context.cookie })
+        const tracks = await fetchManifestTracks({ url: candidate, referer: context.referer, origin: context.origin, user_agent: context.userAgent, cookie: context.cookie, request_headers: context.requestHeaders })
         if ((tracks.video?.length || 0) > 1 || (tracks.audio?.length || 0) > 1) {
           setTrackChoice({ candidate, format: tracks.format, video: tracks.video || [], audio: tracks.audio || [] })
           setSelectedVideo('')
@@ -159,7 +166,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
         return
       }
       const context = contextFor()
-      const found = await recognizeUrl({ url: value, referer: context.referer, origin: context.origin, user_agent: context.userAgent, cookie: context.cookie })
+      const found = await recognizeUrl({ url: value, referer: context.referer, origin: context.origin, user_agent: context.userAgent, cookie: context.cookie, request_headers: context.requestHeaders })
       setResult(found)
       if (recognitionView(found).mode === 'ready') await startCandidate(found.candidates[0].url)
     } catch (reason: unknown) {
@@ -173,7 +180,6 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const view = result ? recognitionView(result) : null
   const candidateViews = result ? recognitionCandidateViews(result.candidates) : []
   const recommendedCandidate = candidateViews.find(candidate => candidate.recommended)
-  const suggestedContext = suggestedRequestContext(url)
   const submitWith = (value: string) => recognize(value)
   const submit = () => view?.mode === 'choose' && recommendedCandidate
     ? downloadCandidate(recommendedCandidate.url)
@@ -230,11 +236,12 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
             <Button variant="ghost" className="text-button" onClick={() => setAdvanced(value => !value)}>{advanced ? '收起请求上下文' : '请求上下文（Cookie / Referer）'}</Button>
           </div>}
           {showDownloadOptions && advanced && <div className="advanced-grid request-options">
-            {suggestedContext && <p className="request-context-preset">已为 surrit.com 填入建议值。Referer 与 Origin 可任意修改；清空后将按空值提交。</p>}
+            <div className="request-field request-context-source"><label htmlFor="recognize-source-page">来源网页 URL</label><div><Input id="recognize-source-page" value={sourcePageUrl} onChange={event => setSourcePageUrl(event.target.value)} placeholder="浏览器地址栏中的播放网页，不是 m3u8/CDN 链接" /><Button type="button" variant="secondary" size="sm" onClick={applySourcePageContext}>填入 Referer / Origin</Button></div><small>按当前来源网页 URL 填入 Referer 与 Origin。Cookie、User-Agent 和其他请求头仍由下方字段或浏览器扩展提供。</small></div>
             <div className="request-field"><label htmlFor="recognize-referer">Referer</label><Input id="recognize-referer" value={referer} onChange={event => setReferer(event.target.value)} placeholder={REQUEST_EXAMPLES.referer} /><small>{REQUEST_FIELD_HELP.referer}</small></div>
             <div className="request-field"><label htmlFor="recognize-origin">Origin</label><Input id="recognize-origin" value={origin} onChange={event => setOrigin(event.target.value)} placeholder={REQUEST_EXAMPLES.origin} /><small>{REQUEST_FIELD_HELP.origin}</small></div>
             <div className="request-field"><label htmlFor="recognize-ua">User-Agent</label><Input id="recognize-ua" value={userAgent} onChange={event => setUserAgent(event.target.value)} placeholder={REQUEST_EXAMPLES.userAgent} /><small>{REQUEST_FIELD_HELP.userAgent}</small></div>
             <div className="request-field"><label htmlFor="recognize-cookie">Cookie</label><Input id="recognize-cookie" value={cookie} onChange={event => setCookie(event.target.value)} placeholder="sessionid=abc; token=xyz" /><small>{REQUEST_FIELD_HELP.cookie}</small></div>
+            <div className="request-field request-context-headers"><label htmlFor="recognize-headers">其他请求头</label><textarea id="recognize-headers" value={headersText} onChange={event => setHeadersText(event.target.value)} placeholder={'每行一个，例如：\nAuthorization: Bearer ...\nX-Playback-Token: ...'} /><small>可按实际网站请求填写；留空不添加。Cookie 请单独填写，不能写在这里。</small></div>
           </div>}
           {error && <div className="inline-error" role="alert">{error}</div>}
           {trackChoice && (

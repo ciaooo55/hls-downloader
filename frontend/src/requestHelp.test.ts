@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP, suggestedRequestContext } from './requestHelp'
+import { parseRequestHeaders, REQUEST_EXAMPLES, REQUEST_FIELD_HELP, sourcePageRequestContext } from './requestHelp'
 
 describe('request field guidance', () => {
   it('uses neutral request examples instead of a site-specific identity', () => {
@@ -12,11 +12,18 @@ describe('request field guidance', () => {
     })
   })
 
-  it('uses the MissAV page only for matching surrit media URLs', () => {
-    expect(suggestedRequestContext('https://surrit.com/id/1080p/video.m3u8')).toEqual({
-      referer: 'https://missav.ai/', origin: 'https://missav.ai',
+  it('derives Referer and Origin from any explicit source page', () => {
+    expect(sourcePageRequestContext('https://example.com/watch/42#player')).toEqual({
+      referer: 'https://example.com/watch/42', origin: 'https://example.com',
     })
-    expect(suggestedRequestContext('https://cdn.example.com/video.m3u8')).toBeNull()
+    expect(sourcePageRequestContext('not-a-url')).toBeNull()
+  })
+
+  it('parses manual request headers without accepting malformed lines', () => {
+    expect(parseRequestHeaders('Authorization: Bearer token\nX-Playback-Token: abc\ninvalid\nCookie:')).toEqual({
+      Authorization: 'Bearer token',
+      'X-Playback-Token': 'abc',
+    })
   })
 
   it('explains the required format and when fields may be empty', () => {

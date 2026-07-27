@@ -18,24 +18,26 @@ export const REQUEST_FIELD_HELP = {
   speedLimit: '全局下载限速（KiB/s）。0 表示不限速；HTTP/HLS 分片共享该预算，适合网络受限时控制带宽。',
 } as const
 
-export interface RequestContextValues {
-  referer: string
-  origin: string
-  userAgent: string
-  cookie: string
-}
-
-/**
- * A narrowly-scoped preset for a known player CDN. It is not a global default:
- * only a direct surrit.com media URL gets the MissAV page context, and users
- * can always replace either field before starting the task.
- */
-export function suggestedRequestContext(url: string): Pick<RequestContextValues, 'referer' | 'origin'> | null {
+/** Return the values a browser would derive from an explicitly supplied page. */
+export function sourcePageRequestContext(url: string): { referer: string, origin: string } | null {
   try {
-    const host = new URL(url).hostname.toLowerCase()
-    if (host === 'surrit.com' || host.endsWith('.surrit.com')) {
-      return { referer: 'https://missav.ai/', origin: 'https://missav.ai' }
-    }
+    const parsed = new URL(url)
+    if (!['http:', 'https:'].includes(parsed.protocol)) return null
+    parsed.hash = ''
+    return { referer: parsed.href, origin: parsed.origin }
   } catch {}
   return null
+}
+
+/** Parse the compact manual header editor without accepting header injection. */
+export function parseRequestHeaders(value: string): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const line of value.split(/\r?\n/).slice(0, 64)) {
+    const separator = line.indexOf(':')
+    if (separator <= 0) continue
+    const name = line.slice(0, separator).trim()
+    const headerValue = line.slice(separator + 1).trim()
+    if (name && headerValue && !/[\r\n]/.test(name + headerValue)) result[name] = headerValue
+  }
+  return result
 }

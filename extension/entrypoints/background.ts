@@ -47,9 +47,9 @@ async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabI
   let pageUrl = resource.pageUrl || ''
   if (tabId >= 0) {
     // A media player may live in a CDN iframe. The user-facing source page is
-    // still the browser tab URL (for example MissAV), not the iframe/media
-    // host. This gives the handoff a stable Referer fallback and prevents an
-    // iframe URL from becoming the incorrectly advertised source page.
+    // still the browser tab URL, not the iframe/media host. This gives the
+    // handoff a stable Referer fallback and prevents an iframe URL from
+    // becoming the incorrectly advertised source page.
     const tabUrl = (await browser.tabs.get(tabId).catch(() => null))?.url || ''
     if (/^https?:\/\//i.test(tabUrl)) pageUrl = tabUrl
   }
@@ -174,29 +174,46 @@ async function resourcePayload(resource: MediaResource, explicitChain?: RequestC
   const pageChain = resource.tabId !== undefined && resource.tabId >= 0
     ? requestChains.pageContext(resource.tabId, pageUrl)
     : undefined
+  const chain = explicitChain || (resource.tabId !== undefined && resource.tabId >= 0
+    ? requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), resource.tabId)
+    : requestChains.find({ url: resource.url, referrer: pageUrl }))
   // The source-page request is the stable default.  Individual media/CDN
   // chains remain in request_contexts and take precedence for their origin.
-  const sourceIdentity = resourceRequestIdentity({
+  const pageIdentity = resourceRequestIdentity({
     pageUrl,
     requestHeaders: pageChain?.requestHeaders || resource.requestHeaders,
   }, navigator.userAgent)
   const identity = resourceRequestIdentity(resource, navigator.userAgent)
-  const chain = explicitChain || (resource.tabId !== undefined && resource.tabId >= 0
-    ? requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), resource.tabId)
-    : requestChains.find({ url: resource.url, referrer: pageUrl }))
+  const chainIdentity = resourceRequestIdentity({
+    pageUrl,
+    requestHeaders: chain?.requestHeaders || resource.requestHeaders,
+  }, navigator.userAgent)
+  // The browser address bar is the source page advertised to the desktop app.
+  // A main-frame navigation's Referer is the page *before* the current page,
+  // so never use it as the media request's default.
+  const sourceIdentity = {
+    referer: pageUrl || chainIdentity.referer || pageIdentity.referer || identity.referer,
+    origin: chainIdentity.origin || pageIdentity.origin || identity.origin,
+    userAgent: pageIdentity.userAgent || chainIdentity.userAgent || identity.userAgent,
+  }
   const requestContexts: Record<string, Record<string, unknown>> = {}
   if (resource.tabId !== undefined && resource.tabId >= 0) {
-    for (const chain of requestChains.contextsForPage(resource.tabId, pageUrl)) {
+    const contexts = requestChains.contextsForPage(resource.tabId, pageUrl)
+    // An iframe resource has its own document URL and is deliberately absent
+    // from contextsForPage(topPage). The selected resource's exact chain is
+    // still authoritative for its CDN credentials, so append it explicitly.
+    if (chain && !contexts.some(context => context.requestId === chain.requestId)) contexts.push(chain)
+    for (const context of contexts) {
       let origin = ''
-      try { origin = new URL(chain.finalUrl).origin } catch {}
+      try { origin = new URL(context.finalUrl).origin } catch {}
       if (!origin) continue
-      const scopedIdentity = resourceRequestIdentity({ pageUrl, requestHeaders: chain.requestHeaders })
+      const scopedIdentity = resourceRequestIdentity({ pageUrl, requestHeaders: context.requestHeaders })
       requestContexts[origin] = {
-        request_headers: replayableRequestHeaders(chain.requestHeaders),
+        request_headers: replayableRequestHeaders(context.requestHeaders),
         referer: scopedIdentity.referer,
         origin: scopedIdentity.origin,
         user_agent: scopedIdentity.userAgent,
-        cookie: await cookiesFor(chain.finalUrl, pageUrl),
+        cookie: await cookiesFor(context.finalUrl, pageUrl),
       }
     }
   }

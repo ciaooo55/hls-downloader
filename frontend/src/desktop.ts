@@ -137,7 +137,14 @@ export async function closeDesktopWindow(): Promise<NativeResult> {
 
 export async function resizeDesktopWindow(width: number, height: number): Promise<NativeResult> {
   try {
-    if (isTauriDesktop()) return { ok: false, error: 'native-resize-unavailable' }
+    if (isTauriDesktop()) {
+      const [{ getCurrentWindow }, { LogicalSize }] = await Promise.all([
+        import('@tauri-apps/api/window'),
+        import('@tauri-apps/api/dpi'),
+      ])
+      await getCurrentWindow().setSize(new LogicalSize(width, height))
+      return { ok: true }
+    }
     const api = await waitForNativeApi(1000)
     if (!api?.resize_window) return { ok: false, error: 'native-resize-unavailable' }
     return await api.resize_window(width, height)

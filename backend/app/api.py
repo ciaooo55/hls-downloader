@@ -488,15 +488,14 @@ async def _launch_managed_update(task_id: str) -> None:
 async def recognize_input_url(body: UrlRecognitionRequest, x_token: str = Header(default="")):
     _check_token(x_token)
     _check_host(body.url)
-    headers = {
-        "User-Agent": body.user_agent or settings.default_user_agent,
-    }
+    headers = sanitize_request_headers(body.request_headers)
+    headers["user-agent"] = body.user_agent or settings.default_user_agent
     if body.referer:
-        headers["Referer"] = body.referer
+        headers["referer"] = body.referer
     if body.origin:
-        headers["Origin"] = body.origin
+        headers["origin"] = body.origin
     if body.cookie:
-        headers["Cookie"] = body.cookie
+        headers["cookie"] = body.cookie
     try:
         return await recognize_url(body.url, headers=headers)
     except RecognitionError as exc:
@@ -512,13 +511,14 @@ async def manifest_tracks(body: UrlRecognitionRequest, x_token: str = Header(def
     """
     _check_token(x_token)
     _check_host(body.url)
-    headers = {"User-Agent": body.user_agent or settings.default_user_agent}
+    headers = sanitize_request_headers(body.request_headers)
+    headers["user-agent"] = body.user_agent or settings.default_user_agent
     if body.referer:
-        headers["Referer"] = body.referer
+        headers["referer"] = body.referer
     if body.origin:
-        headers["Origin"] = body.origin
+        headers["origin"] = body.origin
     if body.cookie:
-        headers["Cookie"] = body.cookie
+        headers["cookie"] = body.cookie
     empty = {"format": "", "video": [], "audio": []}
     try:
         async with httpx.AsyncClient(

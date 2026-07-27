@@ -77,14 +77,14 @@ export default function BrowserHandoffWindow({ handoffId }: { handoffId: string 
 
   useEffect(() => {
     const surface = surfaceRef.current
-    if (!surface || isTauriDesktop() || typeof ResizeObserver === 'undefined') return
+    if (!surface || typeof ResizeObserver === 'undefined') return
     let last = ''
     let frame = 0
     const resize = () => {
       frame = 0
       const rect = surface.getBoundingClientRect()
-      const width = Math.ceil(Math.max(360, Math.min(460, rect.width || 390)))
-      const height = Math.ceil(Math.max(280, Math.min(760, surface.scrollHeight + 2)))
+      const width = Math.ceil(Math.max(360, Math.min(420, rect.width || 400)))
+      const height = Math.ceil(Math.max(300, Math.min(680, surface.scrollHeight + 2)))
       const key = `${width}x${height}`
       if (key === last) return
       last = key

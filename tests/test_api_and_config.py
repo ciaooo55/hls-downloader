@@ -164,6 +164,46 @@ def test_task_api_preserves_cross_origin_request_contexts(monkeypatch):
     assert [item["request_contexts"] for item in captured] == [payload["request_contexts"], payload["request_contexts"]]
 
 
+def test_recognize_uses_explicit_manual_request_context(monkeypatch):
+    """Manual recognition must not drop an auth header before task creation."""
+    from backend.app import api as api_module
+
+    captured: dict[str, object] = {}
+
+    async def recognize(url, headers, client=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        return {"status": "ready", "candidates": []}
+
+    monkeypatch.setattr(api_module, "recognize_url", recognize)
+    response = TestClient(app).post(
+        "/api/recognize",
+        headers=AUTH,
+        json={
+            "url": "https://cdn.example.test/master.m3u8",
+            "referer": "https://site.example.test/watch/42",
+            "origin": "https://site.example.test",
+            "cookie": "session=private",
+            "request_headers": {
+                "Authorization": "Bearer media",
+                "X-Playback-Token": "token",
+                "Host": "must-not-pass.example.test",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["url"] == "https://cdn.example.test/master.m3u8"
+    assert captured["headers"] == {
+        "authorization": "Bearer media",
+        "x-playback-token": "token",
+        "user-agent": config_module.settings.default_user_agent,
+        "referer": "https://site.example.test/watch/42",
+        "origin": "https://site.example.test",
+        "cookie": "session=private",
+    }
+
+
 def test_task_response_exposes_safe_request_method_but_never_replay_body():
     from backend.app import api as api_module
 

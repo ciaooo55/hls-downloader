@@ -84,10 +84,10 @@ def load_settings() -> Settings:
         migrated = False
         version = int(data.get("config_version", 1) or 1)
         if version < 2:
-            if not data.get("default_referer"):
-                data["default_referer"] = "https://missav.ai/"
-            if not data.get("default_origin"):
-                data["default_origin"] = "https://missav.ai"
+            # Request defaults must be site-neutral. A global Referer/Origin
+            # breaks other providers and can leak an unrelated page identity.
+            data.setdefault("default_referer", "")
+            data.setdefault("default_origin", "")
             data["config_version"] = 2
             version = 2
             migrated = True

@@ -4,6 +4,7 @@ import { fmtBytes } from '../format'
 import type { Settings } from '../types'
 import { downloadCategory, DOWNLOAD_CATEGORY_LABELS, type DownloadCategory } from '../downloadCategory'
 import { pickFolder } from '../desktop'
+import { parseRequestHeaders } from '../requestHelp'
 import FolderPicker from './FolderPicker'
 import { Button, Dialog, DialogFooter, DialogHeader, DialogOverlay, Input } from './ui'
 
@@ -191,16 +192,4 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
 
 function sourceHost(value: string): string {
   try { return new URL(value).host } catch { return '' }
-}
-
-function parseRequestHeaders(value: string): Record<string, string> {
-  const result: Record<string, string> = {}
-  for (const line of value.split(/\r?\n/).slice(0, 64)) {
-    const separator = line.indexOf(':')
-    if (separator <= 0) continue
-    const name = line.slice(0, separator).trim()
-    const headerValue = line.slice(separator + 1).trim()
-    if (name && headerValue && !/[\r\n]/.test(name + headerValue)) result[name] = headerValue
-  }
-  return result
 }

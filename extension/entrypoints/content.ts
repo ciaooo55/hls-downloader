@@ -344,6 +344,7 @@ export default defineContentScript({
         button.addEventListener('pointerdown', event => {
           if (event.button !== 0) return
           event.preventDefault()
+          event.stopPropagation()
           button.setPointerCapture(event.pointerId)
           videoDragged = false
           videoControlDragging = true
@@ -359,22 +360,33 @@ export default defineContentScript({
           }
           const finish = (next: PointerEvent) => {
             if (next.pointerId !== event.pointerId) return
-            button.releasePointerCapture(event.pointerId)
-            button.removeEventListener('pointermove', move)
-            button.removeEventListener('pointerup', finish)
-          if (videoDragged) {
-            videoButtonPosition = { x: button.offsetLeft, y: button.offsetTop }
-            void browser.storage.local.set({ videoButtonPosition })
-          }
-          videoControlDragging = false
-          scheduleVideoButtons()
-          }
-          button.addEventListener('pointermove', move)
-          button.addEventListener('pointerup', finish, { once: true })
-          button.addEventListener('pointercancel', () => {
+            button.releasePointerCapture?.(event.pointerId)
+            window.removeEventListener('pointermove', move, true)
+            window.removeEventListener('pointerup', finish, true)
+            window.removeEventListener('pointercancel', cancel, true)
+            if (videoDragged) {
+              videoButtonPosition = { x: button.offsetLeft, y: button.offsetTop }
+              void browser.storage.local.set({ videoButtonPosition })
+            }
             videoControlDragging = false
             scheduleVideoButtons()
-          }, { once: true })
+          }
+          const cancel = (next: PointerEvent) => {
+            if (next.pointerId !== event.pointerId) return
+            button.releasePointerCapture?.(event.pointerId)
+            window.removeEventListener('pointermove', move, true)
+            window.removeEventListener('pointerup', finish, true)
+            window.removeEventListener('pointercancel', cancel, true)
+            videoControlDragging = false
+            scheduleVideoButtons()
+          }
+          // Use the window capture phase as a fallback for players that stop
+          // dispatching pointer events from their overlay while the pointer is
+          // moved outside the button. Pointer capture alone is not reliable in
+          // every iframe/player combination.
+          window.addEventListener('pointermove', move, true)
+          window.addEventListener('pointerup', finish, true)
+          window.addEventListener('pointercancel', cancel, true)
         })
         button.addEventListener('click', event => {
           if (videoDragged) {

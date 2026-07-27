@@ -262,6 +262,7 @@ class UrlRecognitionRequest(BaseModel):
     origin: str = ""
     user_agent: str = ""
     cookie: str = ""
+    request_headers: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("url")
     @classmethod
