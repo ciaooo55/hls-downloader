@@ -180,7 +180,7 @@ describe('resource rules', () => {
       'stream-9', 'stream-8', 'stream-7',
     ])
   })
-  it('waits for playback and then sorts current-video candidates by likely size', () => {
+  it('uses an exact current-video source without mixing in nearby streams', () => {
     const now = Date.now()
     const direct = resource({ id: 'direct', kind: 'media', url: 'https://cdn.test/current.mp4', size: 12 * 1024 * 1024, seenAt: now - 60_000 })
     const main = resource({ id: 'main', kind: 'hls', url: 'https://cdn.test/main.m3u8', duration: 3_600, bandwidth: 2_000_000, seenAt: now })
@@ -188,7 +188,7 @@ describe('resource rules', () => {
     const stale = resource({ id: 'stale', kind: 'hls', url: 'https://cdn.test/stale.m3u8', size: 2_000_000_000, seenAt: now - 60_000 })
 
     expect(visiblePlaybackResources([direct, main, bumper, stale], null)).toEqual([])
-    expect(visiblePlaybackResources([direct, main, bumper, stale], { sourceUrls: [direct.url], startedAt: now }).map(item => item.id)).toEqual(['direct', 'main', 'bumper'])
+    expect(visiblePlaybackResources([direct, main, bumper, stale], { sourceUrls: [direct.url], startedAt: now }).map(item => item.id)).toEqual(['direct'])
   })
   it('keeps a signed direct player URL at the exact-evidence tier after its token refreshes', () => {
     const now = Date.now()
@@ -203,7 +203,33 @@ describe('resource rules', () => {
 
     expect(visiblePlaybackResources([recentFallback, refreshed], {
       sourceUrls: ['https://cdn.test/movie.mp4?expires=100&quality=1080&token=old'], startedAt: now,
-    }).map(item => item.id)).toEqual(['refreshed-direct', 'fallback'])
+    }).map(item => item.id)).toEqual(['refreshed-direct'])
+  })
+  it('keeps preloaded and late adaptive manifests for MSE playback, not small media responses', () => {
+    const now = Date.now()
+    const preloaded = resource({
+      id: 'preloaded', kind: 'hls', url: 'https://cdn.test/master.m3u8', seenAt: now - 2 * 60_000,
+    })
+    const lateRendition = resource({
+      id: 'late-rendition', kind: 'dash', url: 'https://cdn.test/manifest.mpd', seenAt: now + 5 * 60_000,
+    })
+    const smallMedia = resource({
+      id: 'fragment', kind: 'media', url: 'https://cdn.test/opaque', size: 176 * 1024, seenAt: now,
+    })
+
+    expect(visiblePlaybackResources([smallMedia, lateRendition, preloaded], {
+      sourceUrls: ['blob:https://site.test/current-player'], startedAt: now,
+    }).map(item => item.id)).toEqual(['preloaded', 'late-rendition'])
+  })
+  it('does not revive adaptive manifests from an earlier page session', () => {
+    const now = Date.now()
+    const earlierPageVideo = resource({
+      id: 'earlier', kind: 'hls', url: 'https://cdn.test/earlier.m3u8', seenAt: now - 3 * 60_000 - 1,
+    })
+
+    expect(visiblePlaybackResources([earlierPageVideo], {
+      sourceUrls: ['blob:https://site.test/current-player'], startedAt: now,
+    })).toEqual([])
   })
   it('does not fall back to unrelated page media when playback has no evidence', () => {
     const now = Date.now()

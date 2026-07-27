@@ -63,7 +63,6 @@ class _BrowserHLSClient:
         self._session = CurlAsyncSession(
             max_clients=concurrency + 4,
             default_headers=False,
-            http_version="v1",
             timeout=(10, 60),
             allow_redirects=True,
         )

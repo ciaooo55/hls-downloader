@@ -21,6 +21,7 @@
 | --- | --- |
 | `HLSDownloader-Windows-x64-Setup.exe` | Windows 10/11 x64 安装版，带在线更新、卸载程序和快捷方式 |
 | `HLSDownloader-Windows-x64-Portable.zip` | Windows 10/11 x64 便携版，解压后直接运行 |
+| `HLSDownloader-Chrome-Edge-Extension.zip` | Chrome 与 Microsoft Edge 共用的 MV3 扩展包；解压后在扩展管理页开启开发者模式并加载已解压的扩展程序 |
 | `HLSDownloader-Firefox-Web-UI-Unsigned.zip` | 网页显示版 Firefox 插件，AMO 上传或临时测试用 |
 | `HLSDownloader-Firefox-Web-UI-Source.zip` | 网页显示版对应的 AMO 审核源码包 |
 | `HLSDownloader-Firefox-No-Web-UI-Unsigned.zip` | 网页不显示版 Firefox 插件，功能与显示版完全一致，仅发布 ID 不同 |

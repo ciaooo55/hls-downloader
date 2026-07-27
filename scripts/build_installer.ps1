@@ -46,6 +46,8 @@ $FirefoxWebExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-Web-UI-Un
 $FirefoxWebSourceOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-Web-UI-Source.zip"
 $FirefoxNoWebExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-No-Web-UI-Unsigned.zip"
 $FirefoxNoWebSourceOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-No-Web-UI-Source.zip"
+$ChromiumExtensionStage = Join-Path $ExtensionBuildDir "chrome-edge"
+$ChromiumExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Chrome-Edge-Extension.zip"
 
 function Invoke-Step($Name, [scriptblock]$Block) {
     Write-Host ""
@@ -239,6 +241,13 @@ if (-not $SkipFrontend) {
             if (-not (Test-Path "node_modules")) { pnpm install --frozen-lockfile }
             pnpm test
             pnpm run build:chrome
+            Remove-Item -Recurse -Force $ChromiumExtensionStage -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $ChromiumExtensionStage | Out-Null
+            $chromeManifest = Get-Content -LiteralPath .output/chrome-mv3/manifest.json -Raw | ConvertFrom-Json
+            if ($chromeManifest.manifest_version -ne 3) {
+                throw "Chrome/Edge extension build did not produce Manifest V3"
+            }
+            Copy-Item -Recurse -Force -Path .output/chrome-mv3/* -Destination $ChromiumExtensionStage
             Remove-Item -Recurse -Force $FirefoxWebStage, $FirefoxNoWebStage -ErrorAction SilentlyContinue
             foreach ($variant in @(
                 @{ Id = $FirefoxWebId; Stage = $FirefoxWebStage; Label = "web UI" },
@@ -567,6 +576,7 @@ then select browser-extension\chrome.
 }
 
 Invoke-Step "Assemble release files" {
+    Compress-Archive -Path (Join-Path $ChromiumExtensionStage "*") -DestinationPath $ChromiumExtensionOut -CompressionLevel Optimal
     Compress-Archive -Path (Join-Path $FirefoxWebStage "*") -DestinationPath $FirefoxWebExtensionOut -CompressionLevel Optimal
     Compress-Archive -Path (Join-Path $FirefoxNoWebStage "*") -DestinationPath $FirefoxNoWebExtensionOut -CompressionLevel Optimal
     $sourceInputs = @(
@@ -609,20 +619,21 @@ Firefox 发布变体：$($sourceVariant.Label)
 "@ | Set-Content -LiteralPath (Join-Path $sourceVariant.Stage "BUILD-VARIANT.txt") -Encoding UTF8
         Compress-Archive -Path (Join-Path $sourceVariant.Stage "*") -DestinationPath $sourceVariant.Out -CompressionLevel Optimal
     }
-    $expected = @($InstallerOut, $PortableOut, $FirefoxWebExtensionOut, $FirefoxWebSourceOut, $FirefoxNoWebExtensionOut, $FirefoxNoWebSourceOut)
+    $expected = @($InstallerOut, $PortableOut, $ChromiumExtensionOut, $FirefoxWebExtensionOut, $FirefoxWebSourceOut, $FirefoxNoWebExtensionOut, $FirefoxNoWebSourceOut)
     foreach ($path in $expected) {
         if (-not (Test-Path -LiteralPath $path)) {
             throw "Missing release file: $path"
         }
     }
     $actual = @(Get-ChildItem -LiteralPath $ReleaseDir -File)
-    if ($actual.Count -ne 6) { throw "Release directory must contain exactly six files; found $($actual.Count)" }
+    if ($actual.Count -ne 7) { throw "Release directory must contain exactly seven files; found $($actual.Count)" }
 }
 
 Write-Host ""
 Write-Host "Windows release assets created:" -ForegroundColor Green
 Write-Host $InstallerOut
 Write-Host $PortableOut
+Write-Host $ChromiumExtensionOut
 Write-Host $FirefoxWebExtensionOut
 Write-Host $FirefoxWebSourceOut
 Write-Host $FirefoxNoWebExtensionOut

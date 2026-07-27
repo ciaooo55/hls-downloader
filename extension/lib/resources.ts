@@ -206,34 +206,42 @@ export function likelyResourceBytes(resource: Pick<MediaResource, 'size' | 'esti
 
 /**
  * Keep detection quiet until playback starts. Exact media-element sources are
- * strongest evidence; MSE/blob players fall back to network manifests seen in
- * the short window around pressing play. Within either evidence tier, likely
- * stream size is the most useful proxy for the main programme over a bumper.
+ * strongest evidence. MSE/blob players expose no usable currentSrc, so retain
+ * adaptive manifests fetched shortly before playback and throughout the same
+ * playback session. Sites often preload a manifest well before the user
+ * presses play or request a rendition after the initial buffering period.
  */
 export function visiblePlaybackResources(resources: MediaResource[], playback: PlaybackContext | null, limit = 8): MediaResource[] {
   if (!playback) return []
   const sources = playback.sourceUrls.filter(Boolean)
-  const recentFloor = playback.startedAt - 20_000
-  const recentCeiling = playback.startedAt + 90_000
+  // Do not require the manifest to arrive in the first few seconds after play:
+  // that dropped legitimate preloaded VOD streams and late quality switches.
+  // We still require a user-started playback event and only accept adaptive
+  // manifests; generic video responses remain too ambiguous for MSE players.
+  const adaptiveSessionFloor = playback.startedAt - 3 * 60_000
   const candidates = compactResources(resources, 40)
     .filter(item => ['hls', 'dash', 'media'].includes(item.kind))
     .map(item => ({
       item,
       evidence: sources.some(source => resourceMatchesPlaybackSource(item, source)) ? 3
-        : item.seenAt >= recentFloor && item.seenAt <= recentCeiling && (item.kind === 'hls' || item.kind === 'dash') ? 2
-          : item.seenAt >= recentFloor && item.seenAt <= recentCeiling ? 1 : 0,
+        : item.seenAt >= adaptiveSessionFloor && (item.kind === 'hls' || item.kind === 'dash') ? 2
+          : 0,
       bytes: likelyResourceBytes(item),
     }))
     .filter(entry => entry.evidence > 0)
-  candidates.sort((left, right) => right.evidence - left.evidence
+  const exact = candidates.filter(entry => entry.evidence === 3)
+  const visible = exact.length ? exact : candidates
+  visible.sort((left, right) => right.evidence - left.evidence
     || resourceRank(right.item) - resourceRank(left.item)
     || (right.item.height || 0) - (left.item.height || 0)
     || (right.item.bandwidth || 0) - (left.item.bandwidth || 0)
     || right.bytes - left.bytes
     || right.item.seenAt - left.item.seenAt)
-  // Without playback evidence, previews, adverts and background players must
-  // never become the default one-click target.
-  return candidates.slice(0, limit).map(entry => entry.item)
+  // IDM-style panel behavior: a real media-element source wins outright. For
+  // MSE/blob playback, only adaptive manifests can represent the current
+  // video; arbitrary video/* responses are often ads, thumbnails, or short
+  // fMP4 pieces and must not become download candidates.
+  return visible.slice(0, limit).map(entry => entry.item)
 }
 
 export function compactResources(resources: MediaResource[], limit = 40): MediaResource[] {

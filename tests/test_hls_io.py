@@ -360,7 +360,6 @@ def test_browser_transport_matches_request_tls_and_streams_to_disk(tmp_path, mon
         {
             "max_clients": 8,
             "default_headers": False,
-            "http_version": "v1",
             "timeout": (10, 60),
             "allow_redirects": True,
         }

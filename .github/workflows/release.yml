@@ -90,6 +90,7 @@ jobs:
           $expected = @(
             "HLSDownloader-Windows-x64-Setup.exe",
             "HLSDownloader-Windows-x64-Portable.zip",
+            "HLSDownloader-Chrome-Edge-Extension.zip",
             "HLSDownloader-Firefox-Web-UI-Unsigned.zip",
             "HLSDownloader-Firefox-Web-UI-Source.zip",
             "HLSDownloader-Firefox-No-Web-UI-Unsigned.zip",
@@ -101,8 +102,8 @@ jobs:
             }
           }
           $actual = @(Get-ChildItem .\release -File)
-          if ($actual.Count -ne 6) {
-            throw "Release directory must contain exactly six files; found $($actual.Count)"
+          if ($actual.Count -ne 7) {
+            throw "Release directory must contain exactly seven files; found $($actual.Count)"
           }
 
       - name: Upload workflow artifact

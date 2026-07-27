@@ -8,10 +8,21 @@ async function controlWindow(action: 'minimize' | 'maximize' | 'close') {
   else await current.close()
 }
 
+async function startDragging() {
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window')
+    await getCurrentWindow().startDragging()
+  } catch {
+    // The shared chrome also renders in the browser development surface.
+  }
+}
+
 export default function WindowChrome() {
   return (
     <header className="hls-window-chrome">
-      <div className="hls-window-drag-region" data-tauri-drag-region>
+      <div className="hls-window-drag-region" onMouseDown={event => {
+        if (event.button === 0) void startDragging()
+      }}>
         <img className="hls-window-chrome-mark" src="./app-icon.png" alt="" />
         <span>HLS Downloader</span>
       </div>

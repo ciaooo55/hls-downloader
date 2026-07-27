@@ -8,7 +8,7 @@
 2. 选择 `Windows Release`。
 3. 点击 `Run workflow`，填写版本号后运行。
 4. 等待任务通过，从任务页面下载 `HLSDownloader-Windows-x64` artifact。
-5. 确认其中包含安装版、便携版，以及网页显示和网页不显示两种 Firefox 插件各自的 unsigned/source 文件。
+5. 确认其中包含安装版、便携版、Chrome/Edge MV3 扩展包，以及网页显示和网页不显示两种 Firefox 插件各自的 unsigned/source 文件。
 
 手动运行只生成临时 artifact，不会创建公开 Release。
 
@@ -28,6 +28,7 @@ git push origin v1.4.2
 ```text
 HLSDownloader-Windows-x64-Setup.exe
 HLSDownloader-Windows-x64-Portable.zip
+HLSDownloader-Chrome-Edge-Extension.zip
 HLSDownloader-Firefox-Web-UI-Unsigned.zip
 HLSDownloader-Firefox-Web-UI-Source.zip
 HLSDownloader-Firefox-No-Web-UI-Unsigned.zip

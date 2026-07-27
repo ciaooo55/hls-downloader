@@ -67,7 +67,7 @@ export default defineContentScript({
           .panel{display:none;width:min(344px,calc(100vw - 20px));max-height:min(480px,62vh);background:var(--surface);border:1px solid var(--overlay-border);border-radius:9px;overflow:hidden}.open .panel{display:block}.open .toggle{display:none}
           header{display:flex;align-items:center;justify-content:space-between;padding:7px 8px 7px 9px;border-bottom:1px solid var(--border);background:var(--surface-2);color:var(--text);font:600 12px system-ui;cursor:grab;touch-action:none}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:4px}
           .pin,.close{height:27px;border:0;border-radius:5px;background:var(--surface-3);color:var(--text);cursor:pointer}.pin{padding:0 8px;font:11px system-ui}.pin.active{background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green)}.close{display:grid;place-items:center;width:27px;font:700 18px/1 system-ui}.pin:hover,.close:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{overflow:auto;max-height:50vh}.empty{padding:18px 14px;color:var(--faint);font:12px/1.45 system-ui;text-align:center}
-          .item{padding:9px 10px;border-bottom:1px solid var(--border)}.item:last-child{border-bottom:0}.item:hover{background:var(--surface-2)}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12px/1.35 system-ui;overflow-wrap:anywhere;color:var(--text)}.kind{overflow:hidden;color:var(--muted);font:10.5px/1.35 system-ui;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.quality-select{width:min(184px,100%);margin-top:6px}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:29px;border:0;border-radius:6px;background:var(--primary);color:var(--on-primary);padding:4px 6px;cursor:pointer;font-weight:600;font-size:11px}.download:hover{background:var(--primary-hover)}.download[disabled]{cursor:default;opacity:.6}.download.push-tv{background:color-mix(in srgb,var(--purple) 75%,var(--surface))}.download.push-tv:hover{background:var(--purple)}.download.cast{background:color-mix(in srgb,var(--green) 78%,var(--surface))}.download.cast:hover{background:var(--green)}.result{padding:7px 10px;background:color-mix(in srgb,var(--green) 14%,var(--surface));color:var(--green);font:11px/1.4 system-ui}.result.error{background:color-mix(in srgb,var(--red) 12%,var(--surface));color:var(--red)}
+          .item{padding:9px 10px;border-bottom:1px solid var(--border)}.item:last-child{border-bottom:0}.item:hover{background:var(--surface-2)}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12px/1.35 system-ui;overflow-wrap:anywhere;color:var(--text)}.kind{overflow:hidden;color:var(--muted);font:10.5px/1.35 system-ui;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.resource-url{display:block;margin-top:4px;color:var(--faint);font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;user-select:text}.quality-select{width:min(184px,100%);margin-top:6px}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:29px;border:0;border-radius:6px;background:var(--primary);color:var(--on-primary);padding:4px 6px;cursor:pointer;font-weight:600;font-size:11px}.download:hover{background:var(--primary-hover)}.download[disabled]{cursor:default;opacity:.6}.download.push-tv{background:color-mix(in srgb,var(--purple) 75%,var(--surface))}.download.push-tv:hover{background:var(--purple)}.download.cast{background:color-mix(in srgb,var(--green) 78%,var(--surface))}.download.cast:hover{background:var(--green)}.result{padding:7px 10px;background:color-mix(in srgb,var(--green) 14%,var(--surface));color:var(--green);font:11px/1.4 system-ui}.result.error{background:color-mix(in srgb,var(--red) 12%,var(--surface));color:var(--red)}
           .video-buttons{position:fixed;inset:0;z-index:2147483646;pointer-events:none}.video-download{position:fixed;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 10px var(--shadow);pointer-events:auto;cursor:grab;touch-action:none;font:600 12px system-ui}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}
           button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
         `
@@ -172,7 +172,7 @@ export default defineContentScript({
       if (pinned) setPinned(false)
       setOpen(false)
     })
-    void browser.storage.local.get(['panelPosition', 'panelPinned', 'videoButtonPosition']).then(value => {
+    void browser.storage.local.get(['panelPosition', 'panelPinned']).then(value => {
       const position = value.panelPosition as { x?: unknown; y?: unknown } | undefined
       pinned = value.panelPinned === true
       pinButton?.classList.toggle('active', pinned)
@@ -182,13 +182,11 @@ export default defineContentScript({
         && Number.isFinite(position.x) && Number.isFinite(position.y)) {
         wrap.style.left = `${Math.max(0, position.x)}px`; wrap.style.top = `${Math.max(0, position.y)}px`; wrap.style.right = 'auto'
       }
-      const videoPosition = value.videoButtonPosition as { x?: unknown, y?: unknown } | undefined
-      if (videoPosition && typeof videoPosition.x === 'number' && typeof videoPosition.y === 'number'
-        && Number.isFinite(videoPosition.x) && Number.isFinite(videoPosition.y)) {
-        videoButtonPosition = { x: videoPosition.x, y: videoPosition.y }
-        updateVideoButtons()
-      }
     })
+    // Older builds persisted one screen coordinate for every site. It detached
+    // the control from the active player after navigation, so positions are
+    // now retained only for the current playback session.
+    void browser.storage.local.remove('videoButtonPosition')
     dragHandles.forEach(handle => handle.addEventListener('pointerdown', event => {
       if (!wrap || (event.target as HTMLElement).closest('.close, .pin')) return
       if (event.button !== 0) return
@@ -331,7 +329,10 @@ export default defineContentScript({
         button.type = 'button'; button.className = 'video-download'; button.title = hasExactPlayerMatch && choices.length === 1 ? '使用 HLS Downloader 下载此视频' : '选择当前页面检测到的视频资源'
         const buttonWidth = 156
         const buttonHeight = 34
-        const defaultLeft = Math.max(8, Math.min(rect.right - 132, innerWidth - buttonWidth - 8))
+        const besidePlayer = rect.right + 8
+        const defaultLeft = besidePlayer + buttonWidth <= innerWidth - 8
+          ? besidePlayer
+          : Math.max(8, Math.min(rect.right - buttonWidth - 8, innerWidth - buttonWidth - 8))
         const defaultTop = Math.max(8, Math.min(rect.top + 8, innerHeight - buttonHeight - 8))
         const saved = videoButtonPosition
         button.style.left = `${saved ? Math.max(8, Math.min(saved.x, innerWidth - buttonWidth - 8)) : defaultLeft}px`
@@ -366,7 +367,6 @@ export default defineContentScript({
             window.removeEventListener('pointercancel', cancel, true)
             if (videoDragged) {
               videoButtonPosition = { x: button.offsetLeft, y: button.offsetTop }
-              void browser.storage.local.set({ videoButtonPosition })
             }
             videoControlDragging = false
             scheduleVideoButtons()
@@ -435,6 +435,7 @@ export default defineContentScript({
         const likelySize = resource.size || resource.estimatedSize || 0
         const sizeLabel = resource.size ? formatSize(resource.size) : likelySize ? `约 ${formatSize(likelySize)}` : '大小未知'
         const kind = document.createElement('div'); kind.className = 'kind'; kind.textContent = [resource.kind.toUpperCase(), quality, resource.width && resource.height ? `${resource.width}×${resource.height}` : '', bandwidth, duration, sizeLabel, host].filter(Boolean).join(' · ')
+        const resourceUrl = document.createElement('code'); resourceUrl.className = 'resource-url'; resourceUrl.title = resource.url; resourceUrl.textContent = resource.url
         let selected = resource
         if (resource.variants?.length) {
           const select = document.createElement('select')
@@ -454,9 +455,9 @@ export default defineContentScript({
             const variant = resource.variants?.find(item => item.url === select.value)
             selected = variant ? { ...resource, ...variant, url: variant.url, variants: undefined } : resource
           })
-          meta.append(name, kind, select)
+          meta.append(name, kind, resourceUrl, select)
         } else {
-          meta.append(name, kind)
+          meta.append(name, kind, resourceUrl)
         }
         const actions = document.createElement('div'); actions.className = 'item-actions'
         const button = document.createElement('button'); button.className = 'download'; button.textContent = '下载'
@@ -493,6 +494,7 @@ export default defineContentScript({
       const sourceUrls = [video.currentSrc, video.src, ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')].map(source => source.src)].filter(Boolean)
       const changedSource = sourceUrls.join('\n') !== (activePlayback?.sourceUrls || []).join('\n')
       if (!activePlayback || changedSource || changedVideo) {
+        if (changedSource || changedVideo) videoButtonPosition = null
         activePlayback = { sourceUrls, startedAt: Date.now() }
       } else if (event.type === 'timeupdate') {
         scheduleVideoButtons()

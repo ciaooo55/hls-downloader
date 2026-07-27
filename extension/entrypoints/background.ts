@@ -198,23 +198,32 @@ async function resourcePayload(resource: MediaResource, explicitChain?: RequestC
   }
   const requestContexts: Record<string, Record<string, unknown>> = {}
   if (resource.tabId !== undefined && resource.tabId >= 0) {
+    const addRequestContext = async (requestUrl: string, requestHeaders: Record<string, string> | undefined) => {
+      let origin = ''
+      try { origin = new URL(requestUrl).origin } catch {}
+      if (!origin) return
+      const scopedIdentity = resourceRequestIdentity({ pageUrl, requestHeaders })
+      requestContexts[origin] = {
+        request_headers: replayableRequestHeaders(requestHeaders),
+        referer: scopedIdentity.referer,
+        origin: scopedIdentity.origin,
+        user_agent: scopedIdentity.userAgent,
+        cookie: await cookiesFor(requestUrl, pageUrl),
+      }
+    }
     const contexts = requestChains.contextsForPage(resource.tabId, pageUrl)
     // An iframe resource has its own document URL and is deliberately absent
     // from contextsForPage(topPage). The selected resource's exact chain is
     // still authoritative for its CDN credentials, so append it explicitly.
     if (chain && !contexts.some(context => context.requestId === chain.requestId)) contexts.push(chain)
     for (const context of contexts) {
-      let origin = ''
-      try { origin = new URL(context.finalUrl).origin } catch {}
-      if (!origin) continue
-      const scopedIdentity = resourceRequestIdentity({ pageUrl, requestHeaders: context.requestHeaders })
-      requestContexts[origin] = {
-        request_headers: replayableRequestHeaders(context.requestHeaders),
-        referer: scopedIdentity.referer,
-        origin: scopedIdentity.origin,
-        user_agent: scopedIdentity.userAgent,
-        cookie: await cookiesFor(context.finalUrl, pageUrl),
-      }
+      await addRequestContext(context.finalUrl, context.requestHeaders)
+    }
+    if (!chain && resource.requestHeaders && Object.keys(resource.requestHeaders).length) {
+      // Variant URLs parsed from a master HLS playlist are often chosen before
+      // the browser fetches them. Reuse that master request's captured headers
+      // only for the selected variant's origin, and fetch cookies for that URL.
+      await addRequestContext(resource.url, resource.requestHeaders)
     }
   }
   const replay = replayablePostRequest(chain)
