@@ -598,6 +598,39 @@ def test_create_browser_handoff_reports_ui_fallback(monkeypatch):
     assert browser_handoffs.get(body["id"]).presented is True
 
 
+def test_cancel_browser_handoff_can_suppress_one_site_resource_kind(monkeypatch):
+    from backend.app import api as api_module
+    from backend.app import desktop_runtime as runtime
+
+    runtime.register_browser_handoff(None)
+    runtime.set_desktop_handoff_session(False)
+    monkeypatch.setattr(api_module, "_check_token", lambda _token: None)
+    monkeypatch.setattr(api_module, "_check_host", lambda _url: None)
+
+    client = TestClient(app)
+    created = client.post(
+        "/api/browser/handoffs",
+        json={
+            "url": "https://cdn.example.test/video.m3u8",
+            "source_page_url": "https://watch.example.test/episode/42",
+            "resource_kind": "hls",
+        },
+        headers={"X-Token": "test"},
+    ).json()
+    canceled = client.post(
+        f"/api/browser/handoffs/{created['id']}/cancel",
+        json={"suppress_site_kind": True},
+        headers={"X-Token": "test"},
+    )
+
+    assert canceled.status_code == 200
+    assert canceled.json()["status"] == "canceled"
+    assert canceled.json()["suppression"] == {
+        "host": "watch.example.test",
+        "kind": "hls",
+    }
+
+
 def test_create_browser_handoff_queues_while_desktop_session_starts(monkeypatch):
     from backend.app import api as api_module
     from backend.app import desktop_runtime as runtime

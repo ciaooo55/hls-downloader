@@ -36,6 +36,9 @@ article small { margin-top: 2px; color: var(--faint); font-size: 11px; }
 .empty { margin: 0; padding: 26px 16px; color: var(--faint); text-align: center; }
 .send-error { margin: 8px 10px 0; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--red) 40%, var(--border)); border-radius: 6px; background: color-mix(in srgb, var(--red) 10%, var(--surface)); color: var(--red); font-size: 11px; }
 footer { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: auto; height: 34px; padding: 0 10px; border-top: 1px solid var(--border); background: var(--surface); color: var(--faint); font-size: 11px; white-space: nowrap; }
+.restore-site-prompts { overflow: hidden; max-width: 116px; padding: 0; border: 0; background: transparent; color: var(--primary); cursor: pointer; font: inherit; text-overflow: ellipsis; white-space: nowrap; }
+.restore-site-prompts:hover { color: var(--primary-hover); text-decoration: underline; }
+.restore-site-prompts:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { border-radius: 4px; background: var(--surface-3); }

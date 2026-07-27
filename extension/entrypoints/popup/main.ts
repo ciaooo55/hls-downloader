@@ -2,6 +2,7 @@ import { browser } from 'wxt/browser'
 import { visibleMediaResources, type MediaResource } from '../../lib/resources'
 import { resourceQuality } from '../../lib/hlsManifest'
 import { handoffStatusLabel, handoffTerminalStatus } from '../../lib/takeover'
+import { HANDOFF_SUPPRESSION_STORAGE_KEY, normalizeHandoffSuppressions, type HandoffSuppression } from '../../lib/handoffSuppression'
 import {
   THEME_BASE_CSS,
   THEME_STORAGE_KEY,
@@ -108,9 +109,13 @@ async function main() {
   const list = el('div', 'list')
   section.append(title, list)
   const footer = el('footer')
+  const restorePromptsBtn = el('button', 'restore-site-prompts', '\u6062\u590d\u672c\u7ad9\u81ea\u52a8\u63d0\u793a') as HTMLButtonElement
+  restorePromptsBtn.type = 'button'
+  restorePromptsBtn.hidden = true
   footer.append(
     el('span', '', 'Alt \u7ed5\u8fc7 \u00b7 Ctrl \u5f3a\u5236\u63a5\u7ba1'),
     el('span', '', `v${browser.runtime.getManifest().version}`),
+    restorePromptsBtn,
   )
   mainEl.append(header, controls, errorBox, section, footer)
   root.append(mainEl)
@@ -119,6 +124,7 @@ async function main() {
   let host = ''
   let useBrowserCookies = true
   let excluded: string[] = []
+  let suppressions: HandoffSuppression[] = []
   const sending: Record<string, string> = {}
   const pending: Record<string, string> = {}
   const pushing: Record<string, string> = {}
@@ -241,6 +247,11 @@ async function main() {
     excludeBtn.textContent = siteExcluded ? '\u672c\u7ad9\u5df2\u6392\u9664' : '\u6392\u9664\u672c\u7ad9'
     excludeBtn.classList.toggle('active', siteExcluded)
     excludeBtn.disabled = !host
+    const suppressedKinds = suppressions.filter(rule => rule.host === host).map(rule => rule.kind)
+    restorePromptsBtn.hidden = suppressedKinds.length === 0
+    restorePromptsBtn.title = suppressedKinds.length
+      ? `\u6062\u590d\u672c\u7ad9 ${suppressedKinds.join('\u3001')} \u8d44\u6e90\u7684\u81ea\u52a8\u63d0\u793a`
+      : ''
   }
 
   const pushToTv = async (item: MediaResource) => {
@@ -300,6 +311,12 @@ async function main() {
     await browser.storage.local.set({ excludedHosts: excluded })
     refreshButtons()
   })
+  restorePromptsBtn.addEventListener('click', async () => {
+    if (!host) return
+    suppressions = suppressions.filter(rule => rule.host !== host)
+    await browser.storage.local.set({ [HANDOFF_SUPPRESSION_STORAGE_KEY]: suppressions })
+    refreshButtons()
+  })
 
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true })
   const pageUrl = tab?.url || ''
@@ -308,10 +325,13 @@ async function main() {
   const online = Boolean((await browser.runtime.sendMessage({ type: 'ping' }))?.ok)
   statusEl.textContent = online ? '\u684c\u9762\u7aef\u5df2\u8fde\u63a5' : '\u684c\u9762\u7aef\u79bb\u7ebf'
   statusEl.classList.toggle('online', online)
-  const stored = await browser.storage.local.get(['enabled', 'excludedHosts', 'useBrowserCookies'])
+  const stored = await browser.storage.local.get([
+    'enabled', 'excludedHosts', 'useBrowserCookies', HANDOFF_SUPPRESSION_STORAGE_KEY,
+  ])
   enabled = stored.enabled !== false
   useBrowserCookies = stored.useBrowserCookies !== false
   excluded = Array.isArray(stored.excludedHosts) ? stored.excludedHosts : []
+  suppressions = normalizeHandoffSuppressions(stored[HANDOFF_SUPPRESSION_STORAGE_KEY])
   refreshButtons()
   renderList()
 

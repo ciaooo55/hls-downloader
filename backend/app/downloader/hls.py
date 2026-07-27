@@ -254,6 +254,26 @@ class HLSDownloader:
     def _is_pausing(self) -> bool:
         return bool(self.task.pause_event and self.task.pause_event.is_set())
 
+    def _should_propagate_cancellation(self) -> bool:
+        """Keep only intentional task cancellation on asyncio's cancel path.
+
+        curl_cffi can surface a transport reset as ``CancelledError`` even
+        though neither the task nor its worker was cancelled.  Treating that
+        as a task cancellation pauses a healthy download after a random
+        segment.  A real task cancellation increments ``cancelling()``, while
+        the two explicit user actions are represented by their task events.
+        """
+        return (
+            self._is_canceled()
+            or self._is_pausing()
+            or _externally_cancelled()
+        )
+
+    @staticmethod
+    def _unexpected_request_cancellation() -> httpx.RemoteProtocolError:
+        """Normalize a transport's spurious cancellation into a retryable error."""
+        return httpx.RemoteProtocolError("底层网络请求意外中断")
+
     def _announce_rate_limit(self, remaining: float) -> None:
         now = asyncio.get_running_loop().time()
         if now - self._last_rate_limit_notice < 0.5:
@@ -363,7 +383,19 @@ class HLSDownloader:
                     self._set_stage(stage, f"{label}限流结束，继续请求")
                 return value
             except asyncio.CancelledError:
-                raise
+                if self._should_propagate_cancellation():
+                    raise
+                # curl_cffi may report a dropped TLS/socket stream as a
+                # cancellation of its internal request task.  It is not a
+                # pause of the download, so retry it just like a protocol
+                # disconnect instead of bubbling it to run().
+                last_error = self._unexpected_request_cancellation()
+                self._log(
+                    f"[{label}] 第 {attempt + 1}/{MAX_RETRIES} 次请求被网络层中断，正在重试"
+                )
+                if attempt >= MAX_RETRIES - 1:
+                    break
+                await asyncio.sleep(retry_delay_seconds(last_error, min(2**attempt, 10)))
             except Exception as exc:
                 last_error = exc
                 if not should_retry_download_error(exc):
@@ -1496,7 +1528,23 @@ class HLSDownloader:
                     )
                 return True
             except asyncio.CancelledError:
-                raise
+                if self._should_propagate_cancellation():
+                    raise
+                # See _retry_control_request: this is a curl transport abort,
+                # not a user pause.  Preserve the partial-file cleanup and
+                # retry it through the normal transient-network policy.
+                last_error = self._unexpected_request_cancellation()
+                self.task.progress.reconnect_count += 1
+                self.task.progress.connection_status = "reconnecting"
+                destination.unlink(missing_ok=True)
+                destination.with_name(destination.name + ".tmp").unlink(missing_ok=True)
+                if attempt < MAX_RETRIES - 1:
+                    self._log(
+                        f"[segment {index}] 第 {attempt + 1}/{MAX_RETRIES} 次请求被网络层中断，正在重试"
+                    )
+                    await asyncio.sleep(
+                        retry_delay_seconds(last_error, min(2**attempt, 10))
+                    )
             except Exception as exc:
                 last_error = exc
                 self.task.progress.reconnect_count += 1

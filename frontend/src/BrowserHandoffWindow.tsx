@@ -4,7 +4,7 @@ import { fetchBrowserHandoff, fetchBrowserHandoffs, fetchSettings, resolveBrowse
 import { closeDesktopWindow } from './desktop'
 import { resolveTheme } from './theme'
 import type { Settings } from './types'
-import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
+import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffCancelDecision, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
 import WindowChrome from './components/WindowChrome'
 import { isTauriDesktop } from './tauri'
 
@@ -80,7 +80,7 @@ export default function BrowserHandoffWindow({ handoffId }: { handoffId: string 
     return () => window.clearInterval(timer)
   }, [close, handoffId, load])
 
-  const resolve = async (action: 'accept' | 'cancel', decision?: BrowserHandoffDecision) => {
+  const resolve = async (action: 'accept' | 'cancel', decision?: BrowserHandoffDecision | BrowserHandoffCancelDecision) => {
     if (busy || resolvedRef.current) return
     setBusy(true)
     setError('')

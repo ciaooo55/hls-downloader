@@ -194,6 +194,7 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     assert 'shutdown-running.ps1' in nsis_script
     shutdown_script = (root / "scripts" / "shutdown-running.ps1").read_text(encoding="utf-8")
     assert "api/app/shutdown" in shutdown_script
+    assert "resume_tasks=true" in shutdown_script
     assert "taskkill.exe\" /IM HLSDownloader.exe /T /F" in shutdown_script
     assert '[System.IO.FileShare]::None' in shutdown_script
     assert '-InstallDir "$INSTDIR" -TimeoutSeconds 20' in nsis_script

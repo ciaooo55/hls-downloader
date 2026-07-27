@@ -23,6 +23,7 @@ from .schemas import (
     TorrentFileSelection,
     TorrentPathImport,
     BrowserHandoffAccept,
+    BrowserHandoffCancel,
     CastLocalPush,
     CastUrlPush,
     CastControl,
@@ -380,9 +381,16 @@ async def reject_browser_handoff(handoff_id: str, x_token: str = Header(default=
 
 
 @router.post("/browser/handoffs/{handoff_id}/cancel")
-async def cancel_browser_handoff(handoff_id: str, x_token: str = Header(default="")):
+async def cancel_browser_handoff(
+    handoff_id: str,
+    body: BrowserHandoffCancel | None = None,
+    x_token: str = Header(default=""),
+):
     _check_token(x_token)
-    item = browser_handoffs.cancel(handoff_id)
+    item = browser_handoffs.cancel(
+        handoff_id,
+        suppress_site_kind=bool(body and body.suppress_site_kind),
+    )
     if not item:
         raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
     return item.public()
@@ -395,9 +403,13 @@ async def activate_desktop_app(x_token: str = Header(default="")):
 
 
 @router.post("/app/shutdown")
-async def shutdown_desktop_app(x_token: str = Header(default="")):
+async def shutdown_desktop_app(
+    resume_tasks: bool = False,
+    x_token: str = Header(default=""),
+):
     _check_token(x_token)
-    return {"ok": request_shutdown()}
+    marked = await manager.prepare_for_update_restart() if resume_tasks else 0
+    return {"ok": request_shutdown(), "resume_tasks": marked}
 
 
 @router.post("/desktop/session/start")
@@ -503,6 +515,7 @@ async def _launch_managed_update(task_id: str) -> None:
         task.last_log = f"更新安装包已下载，但无法自动启动：{exc}"
         await manager._save_db(task)
         return
+    await manager.prepare_for_update_restart()
     update_service._install_started = True
     timer = threading.Timer(0.75, request_shutdown)
     timer.daemon = True

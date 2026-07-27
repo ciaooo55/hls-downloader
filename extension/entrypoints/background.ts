@@ -3,6 +3,7 @@ import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
 import { classifyDownload, classifyResource, compactResources, matchesDownloadClick, mergeResources, pageResourceKey, replayableRequestHeaders, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus, shouldResumeBrowserDownload } from '../lib/takeover'
+import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
 import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
 import { parseHlsManifest, resourceQuality } from '../lib/hlsManifest'
 import { contentDispositionFilename } from '../lib/contentDisposition'
@@ -20,14 +21,19 @@ let nativeBridge: NativeBridge | null = null
 let concealedDownloadCount = 0
 let downloadUiFailsafe: ReturnType<typeof setTimeout> | null = null
 const inspectedHls = new InspectionCache()
+const pendingHandoffResolutions = new Map<string, Promise<any>>()
 
 async function settings() {
-  const data = await browser.storage.local.get(['enabled', 'minimumBytes', 'excludedHosts', 'authorizedCookieHosts', 'useBrowserCookies'])
+  const data = await browser.storage.local.get([
+    'enabled', 'minimumBytes', 'excludedHosts', 'authorizedCookieHosts',
+    'useBrowserCookies', HANDOFF_SUPPRESSION_STORAGE_KEY,
+  ])
   return {
     enabled: data.enabled !== false,
     minimumBytes: Number(data.minimumBytes ?? 0),
     excludedHosts: Array.isArray(data.excludedHosts) ? data.excludedHosts : [],
     authorizedCookieHosts: Array.isArray(data.authorizedCookieHosts) ? data.authorizedCookieHosts : [],
+    suppressions: normalizeHandoffSuppressions(data[HANDOFF_SUPPRESSION_STORAGE_KEY]),
     // Media URLs commonly require the logged-in browser session. This is on by
     // default; cookies are read only for the exact resource when the user
     // explicitly sends it to the desktop app, never while merely sniffing.
@@ -47,6 +53,41 @@ async function topLevelPageUrl(tabId: number, fallback = ''): Promise<string> {
     if (/^https?:\/\//i.test(tabUrl)) return tabUrl
   }
   return fallback
+}
+
+async function rememberHandoffSuppression(value: unknown): Promise<void> {
+  const rule = normalizeHandoffSuppressions([value], 1)[0]
+  if (!rule) return
+  const stored = await browser.storage.local.get(HANDOFF_SUPPRESSION_STORAGE_KEY)
+  const current = normalizeHandoffSuppressions(stored[HANDOFF_SUPPRESSION_STORAGE_KEY])
+  const next = [rule, ...current.filter(item => item.host !== rule.host || item.kind !== rule.kind)]
+  await browser.storage.local.set({
+    [HANDOFF_SUPPRESSION_STORAGE_KEY]: normalizeHandoffSuppressions(next),
+  })
+}
+
+function waitForHandoffResolution(handoffId: string): Promise<any> {
+  const existing = pendingHandoffResolutions.get(handoffId)
+  if (existing) return existing
+  const pending = (async () => {
+    const deadline = Date.now() + 125_000
+    while (Date.now() < deadline) {
+      try {
+        const response = await native({ op: 'handoff_status', handoff_id: handoffId }, 2_000)
+        const handoff = response?.handoff || response
+        if (handoffTerminalStatus(String(handoff?.status || ''))) {
+          await rememberHandoffSuppression(handoff?.suppression)
+          return handoff
+        }
+      } catch {
+        // The desktop app can restart briefly while a focused confirmation is open.
+      }
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+    return { status: 'expired' }
+  })().finally(() => pendingHandoffResolutions.delete(handoffId))
+  pendingHandoffResolutions.set(handoffId, pending)
+  return pending
 }
 
 async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1) {
@@ -244,6 +285,7 @@ async function resourcePayload(resource: MediaResource, explicitChain?: RequestC
     mime_type: resource.mimeType || '',
     size: resource.size || 0,
     source_page_url: pageUrl,
+    resource_kind: resource.kind,
     referer: sourceIdentity.referer || identity.referer,
     origin: sourceIdentity.origin || identity.origin,
     // This top-level context belongs to the browser URL, not the media URL.
@@ -279,6 +321,9 @@ async function offer(resource: MediaResource, chain?: RequestChain) {
   const response = await native({ op: 'offer', resource: payload })
   const handoff = response?.handoff
   if (!response?.ok || !handoff?.id) return response
+  // Keep observing even for user-initiated offers so a suppression selected
+  // in the desktop confirmation is stored before the next automatic download.
+  void waitForHandoffResolution(String(handoff.id))
 
   // Desktop presentation is asynchronous. Wait briefly for the confirm UI so the
   // browser can still roll back if the window never appears.
@@ -602,6 +647,7 @@ export default defineBackground(() => {
       if (!intent) return {}
       const config = await settings()
       const resource = observed.resource!
+      resource.pageUrl = await topLevelPageUrl(details.tabId, resource.pageUrl)
       if (String(chain.method || '').toUpperCase() === 'POST' && !replayablePostRequest(chain).request_body) {
         // Never cancel a browser POST that cannot be reproduced exactly.
         return {}
@@ -614,7 +660,7 @@ export default defineBackground(() => {
         ...config,
         ...intent,
         explicitClick: true,
-      })) {
+      }) || (!intent.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) {
         return {}
       }
       try {
@@ -694,21 +740,31 @@ export default defineBackground(() => {
         || (actual.totalBytes && actual.totalBytes > 0 ? actual.totalBytes : 0)
         || trackedSize(chain)
       const pageUrl = actual.referrer || chain?.pageUrl || requestHeader(chain, 'referer')
+      const sourcePageUrl = await topLevelPageUrl(chain?.tabId ?? -1, pageUrl)
       const resource: MediaResource = {
         id: resourceId(url), url, kind, mimeType, size, title: filename, filename,
-        pageUrl, tabId: chain?.tabId, method: chain?.method, requestHeaders: chain?.requestHeaders, seenAt: Date.now(),
+        pageUrl: sourcePageUrl, tabId: chain?.tabId, method: chain?.method, requestHeaders: chain?.requestHeaders, seenAt: Date.now(),
       }
       if (String(chain?.method || '').toUpperCase() === 'POST' && !replayablePostRequest(chain).request_body) {
         if (paused) await browser.downloads.resume(item.id).catch(() => undefined)
         return
       }
-      if (!intent || !shouldTakeover({ url: resource.url, size: resource.size, mimeType, filename, ...config, ...intent, explicitClick: true })) {
+      if (!intent || !shouldTakeover({ url: resource.url, size: resource.size, mimeType, filename, ...config, ...intent, explicitClick: true })
+        || (!intent.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) {
         await browser.downloads.resume(item.id).catch(() => undefined)
         return
       }
       console.debug('HLS Downloader taking over explicit browser download', url)
       const response = await offer(resource, chain)
       if (!desktopAcceptedHandoff(response)) throw new Error(response?.error || 'desktop rejected')
+      // Do not discard the browser download just because the confirmation
+      // window opened. The user owns the final decision; cancel/reject keeps
+      // this original download in the browser.
+      const handoff = await waitForHandoffResolution(String(response.handoff.id))
+      if (handoff?.status !== 'accepted') {
+        await browser.downloads.resume(item.id).catch(() => undefined)
+        return
+      }
       handedOff = true
       // Do not hide Chrome's downloads UI merely because a browser download was
       // observed. Suppress it only after the desktop accepted the handoff.

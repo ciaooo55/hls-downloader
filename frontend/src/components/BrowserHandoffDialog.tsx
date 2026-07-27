@@ -24,6 +24,7 @@ export interface BrowserHandoff {
   mime_type: string
   source_page_url: string
   size: number
+  resource_kind?: 'hls' | 'dash' | 'media' | 'file' | 'magnet'
   status?: string
   duplicate?: boolean
   duplicates?: BrowserHandoffDuplicate[]
@@ -47,11 +48,15 @@ export interface BrowserHandoffDecision {
   request_headers?: Record<string, string>
 }
 
+export interface BrowserHandoffCancelDecision {
+  suppress_site_kind: true
+}
+
 export default function BrowserHandoffDialog({ item, busy, settings, onResolve, standalone = false, queueRemaining = 0 }: {
   item: BrowserHandoff
   busy: boolean
   settings: Settings
-  onResolve: (action: 'accept' | 'cancel', decision?: BrowserHandoffDecision) => void
+  onResolve: (action: 'accept' | 'cancel', decision?: BrowserHandoffDecision | BrowserHandoffCancelDecision) => void
   standalone?: boolean
   queueRemaining?: number
 }) {
@@ -67,8 +72,12 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
   const [contextOpen, setContextOpen] = useState(false)
   const [cookie, setCookie] = useState(() => item.effective_context?.cookie || '')
   const [headersText, setHeadersText] = useState(() => formatRequestHeaders(item.effective_context?.request_headers))
+  const [suppressArmed, setSuppressArmed] = useState(false)
   const canAccept = Boolean(filename.trim() && directory.trim() && !busy)
   const directoryLabel = directory.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || directory || '未设置保存位置'
+  let sourceHost = ''
+  try { sourceHost = new URL(item.source_page_url).hostname } catch {}
+  const resourceKindLabel = ({ hls: 'HLS 视频', dash: 'DASH 视频', media: '媒体文件', magnet: '磁力链接', file: '文件' } as const)[item.resource_kind || 'file']
 
   const chooseCategory = (value: DownloadCategory) => {
     setCategory(value)
@@ -92,6 +101,15 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
   const cancel = () => {
     if (busy) return
     onResolve('cancel')
+  }
+
+  const suppressSiteKind = () => {
+    if (busy || !sourceHost) return
+    if (!suppressArmed) {
+      setSuppressArmed(true)
+      return
+    }
+    onResolve('cancel', { suppress_site_kind: true })
   }
 
   const openDirectoryPicker = async () => {
@@ -151,6 +169,11 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
             <div className="browser-handoff-file"><Download size={20} /><div><strong>{filename || host}</strong><span>{item.mime_type || '类型未知'}{item.size ? ` · ${fmtBytes(item.size)}` : ' · 大小未知'}</span></div></div>
             <div className="browser-handoff-source"><Globe2 size={14} /><span title={item.url}>{host}</span></div>
           </section>
+          {sourceHost && <button type="button" className={`browser-handoff-suppress${suppressArmed ? ' armed' : ''}`} disabled={busy} onClick={suppressSiteKind}>
+            {suppressArmed
+              ? `再次点击：不再自动提示 ${sourceHost} 的${resourceKindLabel}`
+              : `不再自动提示 ${sourceHost} 的${resourceKindLabel}`}
+          </button>}
           <details className="browser-handoff-options">
             <summary title={`保存为${DOWNLOAD_CATEGORY_LABELS[category]} · ${directory || directoryLabel}`}>
               <span>保存选项</span><small>{DOWNLOAD_CATEGORY_LABELS[category]} · {directoryLabel}</small>
@@ -191,7 +214,7 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
         </div>
         <DialogFooter>
           <Button type="button" variant="secondary" className="secondary-button" disabled={busy} onClick={cancel}>取消</Button>
-          <Button type="button" className="primary-button" disabled={!canAccept} onClick={accept}><Download size={15} />{busy ? '处理中…' : '下载'}</Button>
+          <Button type="button" className="primary-button" disabled={!canAccept} onClick={accept}><Download size={15} />{busy ? '处理中…' : '确认下载'}</Button>
         </DialogFooter>
       </Dialog>
     </DialogOverlay>

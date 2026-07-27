@@ -179,6 +179,10 @@ class BrowserHandoffAccept(BaseModel):
     request_headers: dict[str, str] = Field(default_factory=dict)
 
 
+class BrowserHandoffCancel(BaseModel):
+    suppress_site_kind: bool = False
+
+
 class TvboxPush(BaseModel):
     url: str = Field(min_length=1, max_length=8192)
     endpoint: str = Field(default="", max_length=512)

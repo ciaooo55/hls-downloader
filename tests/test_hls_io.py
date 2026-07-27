@@ -98,6 +98,133 @@ def test_load_media_playlist_retries_a_transient_origin_failure(monkeypatch):
     ]
 
 
+def test_hls_control_request_retries_unrequested_transport_cancellation(monkeypatch):
+    from backend.app.downloader import hls as hls_module
+
+    monkeypatch.setattr(hls_module, "retry_delay_seconds", lambda *_args: 0)
+    downloader = HLSDownloader(_task())
+    calls = 0
+
+    async def request():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # Models curl_cffi cancelling its internal stream task after a
+            # transient TLS/socket failure.  No user event is set.
+            raise asyncio.CancelledError
+        return "recovered"
+
+    async def run():
+        assert await downloader._retry_control_request(
+            request,
+            stage="parsing",
+            url="https://example.test/master.m3u8",
+            label="HLS 清单",
+        ) == "recovered"
+
+    asyncio.run(run())
+    assert calls == 2
+    assert downloader.task.pause_event is None
+
+
+def test_hls_segment_retries_unrequested_transport_cancellation(tmp_path, monkeypatch):
+    from backend.app.downloader import hls as hls_module
+
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path))
+    monkeypatch.setattr(hls_module, "retry_delay_seconds", lambda *_args: 0)
+    downloader = HLSDownloader(_task("https://example.test/master.m3u8"))
+    calls = 0
+
+    class Client:
+        async def download_to_file(
+            self,
+            _url,
+            destination,
+            _headers,
+            _cancel_check,
+            _task,
+        ):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise asyncio.CancelledError
+            destination.write_bytes(b"segment")
+            return types.SimpleNamespace(status_code=200, headers={}), 7
+
+    async def run():
+        assert await downloader._download_one_segment(
+            Client(),
+            {"index": 0, "url": "https://example.test/one.ts"},
+            {},
+        )
+
+    asyncio.run(run())
+    assert calls == 2
+    assert downloader.task.progress.reconnect_count == 1
+    assert (tmp_path / ".tasks" / "test" / "segments" / "000000.seg").read_bytes() == b"segment"
+
+
+def test_hls_run_completes_after_an_unrequested_segment_cancellation(tmp_path, monkeypatch):
+    from backend.app.downloader import hls as hls_module
+
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path))
+    monkeypatch.setattr(hls_module, "retry_delay_seconds", lambda *_args: 0)
+    attempts = 0
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def download_to_file(
+            self,
+            _url,
+            destination,
+            _headers,
+            _cancel_check,
+            _task,
+        ):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise asyncio.CancelledError
+            destination.write_bytes(b"segment")
+            return types.SimpleNamespace(status_code=200, headers={}), 7
+
+    async def merge(*, output_path, **_kwargs):
+        output_path.write_bytes(b"merged")
+
+    async def verified(*_args, **_kwargs):
+        return True
+
+    async def playlist(_client, _url, _headers):
+        return {
+            "is_live": False,
+            "segments": [{"index": 0, "url": "https://example.test/one.ts"}],
+            "total_duration": 1.0,
+            "content": "#EXTM3U\n#EXTINF:1,\none.ts\n#EXT-X-ENDLIST\n",
+            "title": "",
+            "response_filename": "",
+            "final_url": "https://example.test/master.m3u8",
+            "external_audio": False,
+            "subtitle_tracks": [],
+        }
+
+    monkeypatch.setattr(hls_module, "_create_hls_client", lambda _concurrency: Client())
+    monkeypatch.setattr(hls_module, "merge_segments", merge)
+    monkeypatch.setattr(hls_module, "verify_task_checksum", verified)
+    downloader = HLSDownloader(_task())
+    downloader._load_media_playlist = playlist
+
+    asyncio.run(downloader.run())
+
+    assert attempts == 2
+    assert downloader.task.status.value == "done"
+    assert downloader.task.stage == "done"
+
+
 def test_hls_control_resources_retry_transient_failures(tmp_path, monkeypatch):
     from backend.app.downloader import hls as hls_module
 

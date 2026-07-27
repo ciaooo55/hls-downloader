@@ -67,6 +67,31 @@ def test_pause_transitions_to_pausing_and_rejects_wrong_stage(monkeypatch):
     asyncio.run(run())
 
 
+def test_update_restart_marks_only_running_tasks(monkeypatch):
+    async def run():
+        manager = TaskManager()
+        active = _task("active", TaskStatus.DOWNLOADING_SEGMENTS)
+        waiting_for_slot = _task("waiting", TaskStatus.QUEUED)
+        waiting_for_slot.task_handle = type("LiveHandle", (), {"done": staticmethod(lambda: False)})()
+        user_paused = _task("paused", TaskStatus.PAUSED)
+        queued = _task("queued", TaskStatus.QUEUED)
+        manager.tasks = {
+            active.id: active,
+            waiting_for_slot.id: waiting_for_slot,
+            user_paused.id: user_paused,
+            queued.id: queued,
+        }
+        monkeypatch.setattr(manager, "_save_db", _async_noop)
+
+        assert await manager.prepare_for_update_restart() == 2
+        assert active.engine_state[manager_module.RESUME_AFTER_UPDATE_KEY] is True
+        assert waiting_for_slot.engine_state[manager_module.RESUME_AFTER_UPDATE_KEY] is True
+        assert manager_module.RESUME_AFTER_UPDATE_KEY not in user_paused.engine_state
+        assert manager_module.RESUME_AFTER_UPDATE_KEY not in queued.engine_state
+
+    asyncio.run(run())
+
+
 def test_torrent_file_selection_can_change_while_downloading(monkeypatch):
     class LiveTorrentDownloader:
         def __init__(self):
@@ -186,6 +211,34 @@ def test_load_from_db_keeps_history_and_pauses_interrupted_tasks(monkeypatch):
         assert failed.error_stage == "downloading_segments"
         assert failed.http_status == 403
         assert failed.error_hint == "检查请求头"
+
+    asyncio.run(run())
+
+
+def test_load_from_db_auto_resumes_only_update_marked_tasks(monkeypatch):
+    row = _db_row("paused", task_id="update-restart")
+    row["engine_state"] = '{"resume_after_update": true}'
+
+    async def fake_run_db(sql, params=()):
+        return [row]
+
+    async def run():
+        manager = TaskManager()
+        started = []
+
+        async def fake_start(task_id):
+            started.append(task_id)
+
+        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+        monkeypatch.setattr(manager, "_save_db", _async_noop)
+        monkeypatch.setattr(manager, "start_task", fake_start)
+
+        await manager.load_from_db()
+
+        task = manager.tasks["update-restart"]
+        assert started == [task.id]
+        assert manager_module.RESUME_AFTER_UPDATE_KEY not in task.engine_state
+        assert task.last_log == "更新完成，正在自动继续下载"
 
     asyncio.run(run())
 

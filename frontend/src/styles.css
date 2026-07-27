@@ -263,6 +263,10 @@ html[data-surface="handoff"] #root {
 .handoff-window-loading section > div { display: flex; gap: 8px; }
 .browser-handoff-file span,
 .browser-handoff-source { color: var(--muted); }
+.browser-handoff-suppress { display: block; width: 100%; margin: 2px 0 8px; padding: 5px 0; border: 0; border-radius: 4px; background: transparent; color: var(--faint); cursor: pointer; font: 11px/1.35 inherit; text-align: left; overflow-wrap: anywhere; }
+.browser-handoff-suppress:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.browser-handoff-suppress.armed { padding-inline: 7px; background: color-mix(in srgb, var(--amber) 13%, var(--surface)); color: var(--amber); }
+.browser-handoff-suppress:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 
 html[data-surface="host"],
 html[data-surface="host"] body,

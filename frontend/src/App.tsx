@@ -19,7 +19,7 @@ import BatchAddPanel from './components/BatchAddPanel'
 import LogModal from './components/LogModal'
 import UpdateNotice from './components/UpdateNotice'
 import UpdateDialog from './components/UpdateDialog'
-import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
+import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffCancelDecision, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
 import ConfirmDialog from './components/ConfirmDialog'
 import DevicePickerDialog from './components/DevicePickerDialog'
 import { Button, Dialog, DialogFooter, DialogHeader, DialogOverlay } from './components/ui'
@@ -357,7 +357,7 @@ export default function App() {
       await launchFile(task.output_path)
     } catch (reason: any) { setError(reason.message || '无法打开文件') }
   }
-  const resolveHandoff = async (action: 'accept' | 'cancel', decision?: BrowserHandoffDecision) => {
+  const resolveHandoff = async (action: 'accept' | 'cancel', decision?: BrowserHandoffDecision | BrowserHandoffCancelDecision) => {
     const item = handoffs[0]
     if (!item || handoffBusy) return
     setHandoffBusy(true)

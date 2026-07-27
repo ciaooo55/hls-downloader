@@ -424,7 +424,7 @@ def test_shutdown_api_requires_token_and_calls_registered_shutdown():
 
     assert unauthorized.status_code == 401
     assert stopped.status_code == 200
-    assert stopped.json() == {"ok": True}
+    assert stopped.json() == {"ok": True, "resume_tasks": 0}
     assert calls == ["shutdown"]
 
 

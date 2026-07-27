@@ -4,6 +4,7 @@ import secrets
 import threading
 import time
 from dataclasses import asdict, dataclass
+from urllib.parse import urlsplit
 
 from .naming import is_generic_media_name, suggest_manifest_name
 from .request_context import request_origin, sanitize_request_headers, sanitize_request_replay
@@ -32,6 +33,8 @@ class BrowserHandoff:
     presented: bool = False
     presentation: str = "pending"
     presentation_error: str = ""
+    resource_kind: str = "file"
+    suppression: dict[str, str] | None = None
 
     def public(self) -> dict:
         value = asdict(self)
@@ -40,6 +43,8 @@ class BrowserHandoff:
         value.pop("request_headers", None)
         value.pop("request_contexts", None)
         value.pop("request_body", None)
+        if value.get("suppression") is None:
+            value.pop("suppression", None)
         return value
 
     def effective_context(self) -> dict:
@@ -133,6 +138,9 @@ class BrowserHandoffService:
         request_method, request_body = sanitize_request_replay(
             payload.get("request_method", "GET"), payload.get("request_body", ""), request_headers
         )
+        resource_kind = str(payload.get("resource_kind", "file") or "file").lower()
+        if resource_kind not in {"hls", "dash", "media", "file", "magnet"}:
+            resource_kind = "file"
         item = BrowserHandoff(
             id=secrets.token_urlsafe(12),
             url=url,
@@ -153,6 +161,7 @@ class BrowserHandoffService:
             created_at=time.time(),
             presented=False,
             presentation="pending",
+            resource_kind=resource_kind,
         )
         with self._lock:
             self._items[item.id] = item
@@ -222,11 +231,23 @@ class BrowserHandoffService:
                 item.status = "rejected"
             return item
 
-    def cancel(self, handoff_id: str) -> BrowserHandoff | None:
+    def cancel(
+        self,
+        handoff_id: str,
+        *,
+        suppress_site_kind: bool = False,
+    ) -> BrowserHandoff | None:
         with self._lock:
             item = self._items.get(handoff_id)
             if item and item.status == "pending":
                 item.status = "canceled"
+                if suppress_site_kind:
+                    host = (urlsplit(item.source_page_url).hostname or "").lower()
+                    if host:
+                        item.suppression = {
+                            "host": host,
+                            "kind": item.resource_kind,
+                        }
             return item
 
     def cleanup(self) -> None:

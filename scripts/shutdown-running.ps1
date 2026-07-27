@@ -25,7 +25,7 @@ if ($token) {
     try {
         Invoke-RestMethod `
             -Method Post `
-            -Uri "http://127.0.0.1:$port/api/app/shutdown" `
+            -Uri "http://127.0.0.1:$port/api/app/shutdown?resume_tasks=true" `
             -Headers @{ "X-Token" = $token } `
             -ContentType "application/json" `
             -Body "{}" `

@@ -73,6 +73,7 @@ PLAYBACK_STATUSES = {
     TaskStatus.MERGING,
     TaskStatus.REMUXING,
 }
+RESUME_AFTER_UPDATE_KEY = "resume_after_update"
 
 
 def resolve_task_type(value: TaskType | str, url: str, mime_type: str = "") -> TaskType:
@@ -687,6 +688,21 @@ class TaskManager:
             task.last_log = "正在等待当前分片完成"
         await self._save_db(task)
 
+    async def prepare_for_update_restart(self) -> int:
+        """Persist only running work that a managed update may safely resume."""
+        marked = 0
+        for task in self.tasks.values():
+            running = task.status in ACTIVE_STATUSES or (
+                task.status is TaskStatus.QUEUED and self._has_live_handle(task)
+            )
+            if not running:
+                continue
+            task.engine_state[RESUME_AFTER_UPDATE_KEY] = True
+            task.last_log = "正在更新，启动新版本后将自动继续下载"
+            await self._save_db(task)
+            marked += 1
+        return marked
+
     async def select_torrent_files(self, task_id: str, indexes: list[int]) -> None:
         task = self._get_task(task_id)
         if task.task_type is not TaskType.TORRENT:
@@ -882,6 +898,7 @@ class TaskManager:
     async def load_from_db(self) -> None:
         rows = await run_db("SELECT * FROM tasks ORDER BY created_at ASC")
         interrupted: list[Task] = []
+        resume_after_update: list[Task] = []
         for row in rows:
             stored_status = TaskStatus(_row_value(row, "status", TaskStatus.QUEUED.value))
             status = stored_status
@@ -971,8 +988,24 @@ class TaskManager:
             self.tasks[task.id] = task
             if status is not stored_status:
                 interrupted.append(task)
+            if task.engine_state.pop(RESUME_AFTER_UPDATE_KEY, False):
+                task.status = TaskStatus.PAUSED
+                task.stage = "queued"
+                task.last_log = "更新完成，正在自动继续下载"
+                resume_after_update.append(task)
         for task in interrupted:
             await self._save_db(task)
+        for task in resume_after_update:
+            # Save the cleared marker before starting.  If startup itself is
+            # interrupted, the persisted task remains resumable rather than
+            # repeatedly carrying a stale update marker.
+            await self._save_db(task)
+            try:
+                await self.start_task(task.id)
+            except TaskConflictError as exc:
+                task.stage = "paused"
+                task.last_log = f"更新后自动继续失败：{exc}"
+                await self._save_db(task)
 
     async def _write_db(self, task: Task) -> None:
         task.updated_at = datetime.now().isoformat()
