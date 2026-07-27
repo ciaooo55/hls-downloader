@@ -8,6 +8,7 @@ import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClick
 import { parseHlsManifest, resourceQuality } from '../lib/hlsManifest'
 import { contentDispositionFilename } from '../lib/contentDisposition'
 import { InspectionCache } from '../lib/inspectionCache'
+import { cookieLookupUrl } from '../lib/browserCookies'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 const CLICK_INTENT_STORAGE_KEY = 'click-intents'
@@ -121,15 +122,20 @@ async function sendCapturedResource(tabId: number, resource: Omit<MediaResource,
 }
 
 async function cookiesFor(url: string, pageUrl = ''): Promise<string> {
+  const cookieUrl = cookieLookupUrl(url)
+  if (!cookieUrl) return ''
   const config = await settings()
-  const host = new URL(url).host
+  const host = new URL(cookieUrl).host
   let pageHost = ''
-  try { pageHost = pageUrl ? new URL(pageUrl).host : '' } catch {}
+  try {
+    const lookup = cookieLookupUrl(pageUrl)
+    pageHost = lookup ? new URL(lookup).host : ''
+  } catch {}
   // Authorizing a page means its detected resources may reuse only cookies
   // that the browser would send to the resource URL itself. Page cookies are
   // never copied across origins.
   if (!config.useBrowserCookies && !config.authorizedCookieHosts.includes(host) && !config.authorizedCookieHosts.includes(pageHost)) return ''
-  const values = await browser.cookies.getAll({ url })
+  const values = await browser.cookies.getAll({ url: cookieUrl }).catch(() => [])
   return values.map(cookie => `${cookie.name}=${cookie.value}`).join('; ')
 }
 

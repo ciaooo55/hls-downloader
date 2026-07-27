@@ -11,7 +11,7 @@ from .naming import is_generic_media_name, suggest_manifest_name
 from .request_context import request_origin, sanitize_request_headers, sanitize_request_replay
 
 
-RECOMMENDED_BROWSER_EXTENSION_VERSION = "2.0.11"
+RECOMMENDED_BROWSER_EXTENSION_VERSION = "3.0.0"
 MIN_BROWSER_EXTENSION_VERSION = "2.0.11"
 
 
@@ -122,10 +122,10 @@ class BrowserHandoffService:
             version = self.version
         detected = bool(last_seen and time.time() - last_seen < 90)
         seen_before = bool(last_seen)
-        needs_upgrade = bool(version) and _is_older_version(version, MIN_BROWSER_EXTENSION_VERSION)
+        needs_upgrade = bool(version) and _is_older_version(version, RECOMMENDED_BROWSER_EXTENSION_VERSION)
         state = "connected" if detected else "inactive" if seen_before else "not_detected"
         message = (
-            f"浏览器插件版本偏旧，建议升级到 v{RECOMMENDED_BROWSER_EXTENSION_VERSION}"
+            f"浏览器插件版本低于推荐版本，建议升级到 v{RECOMMENDED_BROWSER_EXTENSION_VERSION}"
             if detected and needs_upgrade
             else
             "浏览器扩展已连接"

@@ -39,7 +39,7 @@ export default function BrowserExtensionDialog({ onClose }: { onClose: () => voi
         </div>
         {browserStatus?.needs_upgrade && (
           <div className="inline-message update-warning" role="status">
-            当前插件低于最低兼容版本 v{browserStatus.minimum_version || browserStatus.recommended_version || '最新'}。请使用同一个 GitHub Release 里的 Chromium / Firefox 插件包；旧插件不会被强制禁用，但可能缺少最新的请求头、Cookie 和弹窗修复。
+            当前插件低于推荐版本 v{browserStatus.recommended_version || '最新'}。请使用同一个 GitHub Release 里的 Chromium / Firefox 插件包；旧插件不会被强制禁用，但可能缺少最新的请求头、Cookie 和弹窗修复。
           </div>
         )}
         <div className="extension-actions">
