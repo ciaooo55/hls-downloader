@@ -3,7 +3,7 @@ import { Download, FileUp, Globe2, Link } from 'lucide-react'
 import { ApiError, createTask, fetchManifestTracks, isDuplicateUrlError, recognizeUrl, uploadTorrent, type ManifestTrackOption } from '../api'
 import { recognitionCandidateViews, recognitionView, type RecognitionResult } from '../recognition'
 import type { Settings, Task } from '../types'
-import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP, resolveRequestContext, suggestedRequestContext } from '../requestHelp'
+import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP, suggestedRequestContext } from '../requestHelp'
 import ConfirmDialog from './ConfirmDialog'
 import { Button, DialogFooter, DialogHeader, Field, Input } from './ui'
 
@@ -32,9 +32,10 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const [trackChoice, setTrackChoice] = useState<{ candidate: string; format: string; video: ManifestTrackOption[]; audio: ManifestTrackOption[] } | null>(null)
   const [selectedVideo, setSelectedVideo] = useState('')
   const [selectedAudio, setSelectedAudio] = useState('')
+  const [suggestedForUrl, setSuggestedForUrl] = useState('')
   const torrentInput = useRef<HTMLInputElement>(null)
 
-  const contextFor = (candidate: string) => resolveRequestContext(candidate, {
+  const contextFor = () => ({
     referer,
     origin,
     userAgent,
@@ -43,13 +44,14 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
 
   useEffect(() => {
     const suggested = suggestedRequestContext(url)
-    if (!suggested) return
+    if (!suggested || suggestedForUrl === url) return
     if (!referer) setReferer(suggested.referer)
     if (!origin) setOrigin(suggested.origin)
-  }, [url])
+    setSuggestedForUrl(url)
+  }, [url, suggestedForUrl, referer, origin])
 
   const taskPayload = (candidate: string, allowDuplicate = false, video = '', audio = '') => {
-    const context = contextFor(candidate)
+    const context = contextFor()
     return {
       url: candidate,
       task_type: 'auto' as const,
@@ -67,7 +69,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   }
 
   const startCandidate = async (candidate: string, allowDuplicate = false, video = '', audio = '', skipTrackProbe = false) => {
-    const context = contextFor(candidate)
+    const context = contextFor()
     // A manifest with multiple renditions gets a one-step chooser first;
     // failures or single-rendition manifests download immediately as before.
     if (!skipTrackProbe && !video && !audio && ['hls', 'dash'].includes(directType(candidate))) {
@@ -156,7 +158,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
         await startCandidate(value)
         return
       }
-      const context = contextFor(value)
+      const context = contextFor()
       const found = await recognizeUrl({ url: value, referer: context.referer, origin: context.origin, user_agent: context.userAgent, cookie: context.cookie })
       setResult(found)
       if (recognitionView(found).mode === 'ready') await startCandidate(found.candidates[0].url)
@@ -228,7 +230,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
             <Button variant="ghost" className="text-button" onClick={() => setAdvanced(value => !value)}>{advanced ? '收起请求上下文' : '请求上下文（Cookie / Referer）'}</Button>
           </div>}
           {showDownloadOptions && advanced && <div className="advanced-grid request-options">
-            {suggestedContext && <p className="request-context-preset">已为 surrit.com 自动填入 MissAV 的 Referer 与 Origin；可直接修改。</p>}
+            {suggestedContext && <p className="request-context-preset">已为 surrit.com 填入建议值。Referer 与 Origin 可任意修改；清空后将按空值提交。</p>}
             <div className="request-field"><label htmlFor="recognize-referer">Referer</label><Input id="recognize-referer" value={referer} onChange={event => setReferer(event.target.value)} placeholder={REQUEST_EXAMPLES.referer} /><small>{REQUEST_FIELD_HELP.referer}</small></div>
             <div className="request-field"><label htmlFor="recognize-origin">Origin</label><Input id="recognize-origin" value={origin} onChange={event => setOrigin(event.target.value)} placeholder={REQUEST_EXAMPLES.origin} /><small>{REQUEST_FIELD_HELP.origin}</small></div>
             <div className="request-field"><label htmlFor="recognize-ua">User-Agent</label><Input id="recognize-ua" value={userAgent} onChange={event => setUserAgent(event.target.value)} placeholder={REQUEST_EXAMPLES.userAgent} /><small>{REQUEST_FIELD_HELP.userAgent}</small></div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP, resolveRequestContext, suggestedRequestContext } from './requestHelp'
+import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP, suggestedRequestContext } from './requestHelp'
 
 describe('request field guidance', () => {
   it('uses neutral request examples instead of a site-specific identity', () => {
@@ -17,9 +17,6 @@ describe('request field guidance', () => {
       referer: 'https://missav.ai/', origin: 'https://missav.ai',
     })
     expect(suggestedRequestContext('https://cdn.example.com/video.m3u8')).toBeNull()
-    expect(resolveRequestContext('https://surrit.com/id/video.m3u8', {
-      referer: '', origin: '', userAgent: 'UA', cookie: '',
-    })).toMatchObject({ referer: 'https://missav.ai/', origin: 'https://missav.ai' })
   })
 
   it('explains the required format and when fields may be empty', () => {

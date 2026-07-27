@@ -39,12 +39,3 @@ export function suggestedRequestContext(url: string): Pick<RequestContextValues,
   } catch {}
   return null
 }
-
-export function resolveRequestContext(url: string, values: RequestContextValues): RequestContextValues {
-  const suggested = suggestedRequestContext(url)
-  return {
-    ...values,
-    referer: values.referer || suggested?.referer || '',
-    origin: values.origin || suggested?.origin || '',
-  }
-}
