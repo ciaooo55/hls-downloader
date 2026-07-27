@@ -6,8 +6,33 @@ from backend.app.credentials import PREFIX, protect_secret, unprotect_secret
 from backend import native_host
 
 
+def test_versioned_native_host_resolves_the_install_root(tmp_path):
+    install_root = tmp_path / "HLS Downloader"
+    host = (
+        install_root
+        / "native-host"
+        / "versions"
+        / "HLSDownloaderNativeHost-1.10.0.exe"
+    )
+    host.parent.mkdir(parents=True)
+    host.write_bytes(b"host")
+    (install_root / "HLSDownloader.exe").write_bytes(b"desktop")
+
+    assert native_host._frozen_install_root(host) == install_root
+
+
+def test_legacy_native_host_keeps_its_existing_root(tmp_path):
+    install_root = tmp_path / "HLS Downloader"
+    host = install_root / "HLSDownloaderNativeHost.exe"
+    host.parent.mkdir(parents=True)
+    host.write_bytes(b"host")
+    (install_root / "portable").write_text("", encoding="ascii")
+
+    assert native_host._frozen_install_root(host) == install_root
+
+
 def test_browser_handoff_confirmation_and_expiry():
-    service = BrowserHandoffService(ttl=0.01)
+    service = BrowserHandoffService(ttl=1.0)
     item = service.create({
         "url": "https://cdn.test/file.zip",
         "cookie": "session=secret",
@@ -40,7 +65,7 @@ def test_browser_handoff_confirmation_and_expiry():
     assert service.reject(item.id).status == "rejected"
 
     expired = service.create({"url": "https://cdn.test/old.zip"})
-    expired.created_at = time.time() - 0.02
+    expired.created_at = time.time() - 2.0
     assert service.get(expired.id).status == "expired"
 
 

@@ -11,7 +11,21 @@ import urllib.request
 from pathlib import Path
 
 
-ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+def _frozen_install_root(executable: Path) -> Path:
+    """Resolve the app root for legacy and versioned Native Host layouts."""
+    host_dir = executable.resolve().parent
+    for candidate in (host_dir, host_dir.parent, host_dir.parent.parent):
+        if (candidate / "HLSDownloader.exe").is_file() or (candidate / "portable").is_file():
+            return candidate
+    # Keep the legacy behavior when a partial install is being repaired.
+    return host_dir
+
+
+ROOT = (
+    _frozen_install_root(Path(sys.executable))
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parent.parent
+)
 
 
 def _settings() -> tuple[str, str]:

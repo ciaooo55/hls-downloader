@@ -3,7 +3,7 @@ param(
     [switch]$SkipBackend,
     [switch]$SkipDesktop,
     [switch]$SkipSmoke,
-    [string]$Version = "1.6.22"
+    [string]$Version = "1.7.9"
 )
 
 $ErrorActionPreference = "Stop"
@@ -555,6 +555,18 @@ Invoke-Step "Build NSIS installer" {
 Invoke-Step "Build portable archive" {
     New-Item -ItemType Directory -Force -Path $PortableStage | Out-Null
     Copy-Item -Path (Join-Path $StageDir "*") -Destination $PortableStage -Recurse -Force
+    # Match the installer behaviour for a portable-over-portable upgrade.  An
+    # older browser may keep the legacy root host locked, so the archive ships
+    # a fresh versioned host instead of asking Explorer to overwrite it.
+    $portableNativeHost = Join-Path $PortableStage "HLSDownloaderNativeHost.exe"
+    $portableVersionsDir = Join-Path $PortableStage "native-host\versions"
+    $portableVersionedHost = Join-Path $portableVersionsDir "HLSDownloaderNativeHost-$Version.exe"
+    New-Item -ItemType Directory -Force -Path $portableVersionsDir | Out-Null
+    Move-Item -LiteralPath $portableNativeHost -Destination $portableVersionedHost -Force
+    $portableManifestsDir = Join-Path $PortableStage "native-host\manifests"
+    New-Item -ItemType Directory -Force -Path $portableManifestsDir | Out-Null
+    Move-Item -LiteralPath (Join-Path $PortableStage "native-host\chrome.json") -Destination (Join-Path $portableManifestsDir "chrome-$Version.json") -Force
+    Move-Item -LiteralPath (Join-Path $PortableStage "native-host\firefox.json") -Destination (Join-Path $portableManifestsDir "firefox-$Version.json") -Force
     Set-Content -LiteralPath (Join-Path $PortableStage "portable") -Value "" -Encoding ASCII
     @"
 HLS Downloader portable edition

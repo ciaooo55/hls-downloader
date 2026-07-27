@@ -266,7 +266,7 @@ def test_available_actions_follow_backend_state_and_live_handle():
     downloading.progress.playable_duration = 8
     assert "preview" in manager.get_available_actions(downloading)
 
-    downloading.progress.playable_duration = 2
+    downloading.progress.playable_duration = 0.5
     assert "preview" not in manager.get_available_actions(downloading)
     assert "delete" in manager.get_available_actions(downloading)
     assert "delete_files" in manager.get_available_actions(downloading)

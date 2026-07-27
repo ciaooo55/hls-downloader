@@ -102,7 +102,13 @@ Section "Install" SecInstall
 
   File "${STAGE_DIR}\HLSDownloader.exe"
   File "${STAGE_DIR}\HLSDownloaderCore.exe"
-  File "${STAGE_DIR}\HLSDownloaderNativeHost.exe"
+  ; Native Messaging processes are launched by Chrome, Edge and Firefox and
+  ; may legitimately remain alive after the desktop app has exited.  Never
+  ; overwrite their executable in place: a versioned target lets an existing
+  ; browser connection finish while newly created connections use this build.
+  SetOutPath "$INSTDIR\native-host\versions"
+  File /oname=HLSDownloaderNativeHost-${APP_VERSION}.exe "${STAGE_DIR}\HLSDownloaderNativeHost.exe"
+  SetOutPath "$INSTDIR"
   File /oname=config.default.json "${STAGE_DIR}\config.json"
 
   SetOutPath "$INSTDIR\_internal"
@@ -122,14 +128,16 @@ Section "Install" SecInstall
   File "${STAGE_DIR}\assets\app-icon.png"
   File "${STAGE_DIR}\assets\app-icon.ico"
 
-  SetOutPath "$INSTDIR\native-host"
-  File "${STAGE_DIR}\native-host\chrome.json"
-  File "${STAGE_DIR}\native-host\firefox.json"
+  ; Switch the registry to fresh manifest files too.  This avoids racing a
+  ; browser which happens to be reading the old manifest while upgrading.
+  SetOutPath "$INSTDIR\native-host\manifests"
+  File /oname=chrome-${APP_VERSION}.json "${STAGE_DIR}\native-host\chrome.json"
+  File /oname=firefox-${APP_VERSION}.json "${STAGE_DIR}\native-host\firefox.json"
   SetOutPath "$INSTDIR\scripts"
   File "${STAGE_DIR}\scripts\register-native-host.ps1"
   File "${STAGE_DIR}\scripts\shutdown-running.ps1"
 
-  DetailPrint "正在注册 Chrome/Edge/Firefox 浏览器连接..."
+  DetailPrint "正在切换 Chrome/Edge/Firefox 浏览器连接到新版本..."
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\scripts\register-native-host.ps1"'
   Pop $0
   Pop $1
@@ -179,7 +187,11 @@ SectionEnd
 Section "Uninstall"
   InitPluginsDir
   CopyFiles /SILENT "$INSTDIR\scripts\shutdown-running.ps1" "$PLUGINSDIR\shutdown-running.ps1"
+  ; Prevent a browser extension from reopening its host while the uninstall is
+  ; removing versioned host files.  Updates intentionally do not do this.
+  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\scripts\register-native-host.ps1" -Unregister'
   !insertmacro CloseRunningApp Uninstall
+  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\shutdown-running.ps1" -InstallDir "$INSTDIR" -TimeoutSeconds 5 -IncludeNativeHost'
 
   StrCpy $0 "preserve"
   IfSilent RemoveApplicationData

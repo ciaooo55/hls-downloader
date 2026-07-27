@@ -82,6 +82,28 @@ def test_incremental_playlist_only_exposes_contiguous_local_media(tmp_path, monk
     assert completed.rstrip().endswith("#EXT-X-ENDLIST")
 
 
+def test_first_complete_short_segment_enables_preview_only_after_its_init_map(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path))
+    task_dir = tmp_path / ".tasks" / "shortpreview"
+    segments = _segments(task_dir, durations=(1.0, 1.0))
+    write_playback_plan(task_dir, segments, total_duration=2.0)
+    seg_dir = task_dir / "segments"
+    seg_dir.mkdir()
+    (seg_dir / "000000.seg").write_bytes(b"first")
+    init_path = task_dir / "maps" / "0000.init"
+    init_path.unlink()
+
+    service = PlaybackService()
+    # The media segment alone is not enough for fMP4 playback.
+    assert service.snapshot("shortpreview", "downloading_segments").ready is False
+    init_path.write_bytes(b"init")
+
+    snapshot = service.snapshot("shortpreview", "downloading_segments")
+    assert snapshot.ready is True
+    _, opened = service.open_ready_session("shortpreview", "downloading_segments")
+    assert opened.available_duration == 1.0
+
+
 def test_full_playlist_reports_total_duration_and_seek_target(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "download_dir", str(tmp_path))
     monkeypatch.setattr(settings, "token", "play-token")

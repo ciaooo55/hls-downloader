@@ -271,7 +271,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
               <div className="row-actions" onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()}>
                 {task.available_actions?.includes('pause') && <button title={task.is_live ? '停止录制' : '暂停'} onClick={() => onTasksAction([task], 'pause')}><Pause size={16} /></button>}
                 {task.available_actions?.includes('resume') && <button title={task.is_live ? '继续录制' : '恢复'} onClick={() => onTasksAction([task], 'resume')}><Play size={16} /></button>}
-                {(task.playback_ready || task.status === 'done') && <button title={task.status === 'done' ? '播放' : '边下边播'} onClick={() => onPreview(task)}><MonitorPlay size={16} /></button>}
+                {(task.available_actions?.includes('preview') || task.status === 'done') && <button title={task.status === 'done' ? '播放' : '边下边播'} onClick={() => onPreview(task)}><MonitorPlay size={16} /></button>}
                 {task.output_path && task.status === 'done' && <button title="投屏到电视" onClick={() => onCast(task)}><RadioTower size={16} /></button>}
                 <button title="复制链接" onClick={() => onCopyUrl(task)}><Copy size={16} /></button>
                 <i className="row-actions-divider" />

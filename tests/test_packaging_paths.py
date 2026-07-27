@@ -133,6 +133,10 @@ def test_windows_build_emits_setup_and_portable_assets():
     assert "HLSDownloader-Windows-x64-Setup.exe" in build_script
     assert "HLSDownloader-Windows-x64-Portable.zip" in build_script
     assert 'Join-Path $PortableStage "portable"' in build_script
+    assert 'Join-Path $PortableStage "native-host\\versions"' in build_script
+    assert 'HLSDownloaderNativeHost-$Version.exe' in build_script
+    assert 'Join-Path $PortableStage "native-host\\manifests"' in build_script
+    assert '"chrome-$Version.json"' in build_script
     assert "Compress-Archive" in build_script
 
 
@@ -259,14 +263,24 @@ def test_source_only_gitignore_excludes_generated_binaries():
     assert "frontend/dist/" in ignore
 
 
-def test_native_host_registration_writes_absolute_executable_path():
+def test_native_host_registration_uses_a_versioned_executable_path():
     root = Path(__file__).resolve().parent.parent
     script = (root / "scripts" / "register-native-host.ps1").read_text(encoding="utf-8")
     nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
 
+    assert "Get-VersionedNativeHost" in script
+    assert "Get-VersionedManifest" in script
+    assert 'Join-Path $manifestDir "versions"' in script
     assert 'Join-Path $root "HLSDownloaderNativeHost.exe"' in script
     assert "$manifest.path = $hostExecutable" in script
+    assert "HLSDownloaderNativeHost-*.exe" in script
+    assert "HLSDownloaderNativeHost-${APP_VERSION}.exe" in nsis_script
+    assert 'SetOutPath "$INSTDIR\\native-host\\versions"' in nsis_script
+    assert 'SetOutPath "$INSTDIR\\native-host\\manifests"' in nsis_script
+    assert 'File /oname=chrome-${APP_VERSION}.json' in nsis_script
+    assert 'File "${STAGE_DIR}\\HLSDownloaderNativeHost.exe"' not in nsis_script
+    assert 'register-native-host.ps1" -Unregister' in nsis_script
     assert r'Microsoft\Edge\NativeMessagingHosts' in script
     assert "RegistryPrefix" in script
     assert "smoke_native_host.py" in build_script
@@ -275,8 +289,21 @@ def test_native_host_registration_writes_absolute_executable_path():
     smoke_cleanup = build_script.index('RegistryPrefix "HKCU:\\Software\\HLSDownloaderBuildSmoke" | Out-Null')
     installer_build = build_script.index('Invoke-Step "Build NSIS installer"')
     assert build_script.index('(Join-Path $ExtensionDir "native-host\\chrome.json")', smoke_cleanup) < installer_build
-    assert "正在注册 Chrome/Edge/Firefox 浏览器连接" in nsis_script
+    assert "正在切换 Chrome/Edge/Firefox 浏览器连接到新版本" in nsis_script
     assert r'Software\Microsoft\Edge\NativeMessagingHosts' in nsis_script
+
+
+def test_installer_does_not_require_a_browser_owned_native_host_to_be_writable():
+    root = Path(__file__).resolve().parent.parent
+    shutdown_script = (root / "scripts" / "shutdown-running.ps1").read_text(encoding="utf-8")
+    register_script = (root / "scripts" / "register-native-host.ps1").read_text(encoding="utf-8")
+
+    assert "Test-ApplicationFilesWritable" in shutdown_script
+    assert "Native Messaging host is deliberately excluded" in shutdown_script
+    assert "HLSDownloaderNativeHost.exe\"))" not in shutdown_script
+    assert 'Get-Process -Name "HLSDownloaderNativeHost*"' in shutdown_script
+    assert "neither the current registration target nor a" in register_script
+    assert 'Get-Process -Name "HLSDownloaderNativeHost*"' in register_script
 
 
 def test_firefox_release_includes_reviewable_source_archive():

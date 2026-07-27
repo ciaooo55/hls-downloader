@@ -14,7 +14,10 @@ from .engine import task_work_dir
 
 
 PLAN_FILENAME = "playback-plan.json"
-MIN_START_DURATION = 6.0
+# A complete first segment is a usable HLS boundary.  Waiting for a fixed
+# six-second buffer made short-segment streams look as if in-progress playback
+# had disappeared, despite a locally playable prefix already being present.
+MIN_START_DURATION = 1.0
 SESSION_TTL_SECONDS = 90.0
 _TASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -199,6 +202,13 @@ class PlaybackService:
 
         while count < len(plan.segments):
             segment = plan.segments[count]
+            if segment.init_name:
+                init_path = _safe_task_dir(task_id) / "maps" / segment.init_name
+                try:
+                    if init_path.stat().st_size <= 0:
+                        break
+                except FileNotFoundError:
+                    break
             path = seg_dir / f"{segment.index:06d}.seg"
             try:
                 if path.stat().st_size <= 0:
@@ -263,7 +273,7 @@ class PlaybackService:
         with self._lock:
             snapshot = self.snapshot(task_id, status, output_path)
             if not snapshot.ready:
-                raise PlaybackNotReadyError("至少需要 6 秒连续分片才能开始播放")
+                raise PlaybackNotReadyError("至少需要一个完整分片才能开始播放")
             session_id = uuid.uuid4().hex
             self._sessions[session_id] = _PlaybackSession(
                 task_id=task_id,

@@ -1,6 +1,7 @@
 param(
     [int]$TimeoutSeconds = 20,
-    [string]$InstallDir = ""
+    [string]$InstallDir = "",
+    [switch]$IncludeNativeHost
 )
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -45,8 +46,18 @@ if (Get-Process HLSDownloader -ErrorAction SilentlyContinue) {
 }
 Get-Process HLSDownloaderCore -ErrorAction SilentlyContinue | Stop-Process -Force
 
-function Test-ExecutableWritable {
+if ($IncludeNativeHost) {
+    # Versioned hosts are named HLSDownloaderNativeHost-<version>.exe.  This
+    # path is used only by uninstallation after browser registration is gone;
+    # updates deliberately leave browser-owned hosts alone.
+    Get-Process -Name "HLSDownloaderNativeHost*" -ErrorAction SilentlyContinue | Stop-Process -Force
+}
+
+function Test-ApplicationFilesWritable {
     if (-not $InstallDir) { return $true }
+    # The Native Messaging host is deliberately excluded.  A browser can keep
+    # it alive indefinitely, and the installer now deploys it under a new
+    # versioned name rather than replacing that locked executable.
     foreach ($name in @("HLSDownloader.exe", "HLSDownloaderCore.exe")) {
         $target = Join-Path $InstallDir $name
         if (-not (Test-Path -LiteralPath $target)) { continue }
@@ -66,9 +77,11 @@ function Test-ExecutableWritable {
 }
 
 $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(3, $TimeoutSeconds))
+$processNames = @("HLSDownloader", "HLSDownloaderCore")
+if ($IncludeNativeHost) { $processNames += "HLSDownloaderNativeHost*" }
 do {
-    $running = Get-Process HLSDownloader,HLSDownloaderCore -ErrorAction SilentlyContinue
-    if (-not $running -and (Test-ExecutableWritable)) { exit 0 }
+    $running = Get-Process -Name $processNames -ErrorAction SilentlyContinue
+    if (-not $running -and (Test-ApplicationFilesWritable)) { exit 0 }
     if ($running) {
         $running | Stop-Process -Force
     }
