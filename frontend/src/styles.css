@@ -881,3 +881,12 @@ html[data-surface="handoff"] #root {
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
+.hls-window-resize-grips { position: fixed; inset: 0; z-index: 40; pointer-events: none; }
+.hls-window-resize-grip { position: absolute; pointer-events: auto; touch-action: none; }
+.hls-window-resize-grip.north, .hls-window-resize-grip.south { left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
+.hls-window-resize-grip.north { top: 0; }.hls-window-resize-grip.south { bottom: 0; }
+.hls-window-resize-grip.east, .hls-window-resize-grip.west { top: 8px; bottom: 8px; width: 6px; cursor: ew-resize; }
+.hls-window-resize-grip.east { right: 0; }.hls-window-resize-grip.west { left: 0; }
+.hls-window-resize-grip.north-east, .hls-window-resize-grip.north-west, .hls-window-resize-grip.south-east, .hls-window-resize-grip.south-west { width: 12px; height: 12px; }
+.hls-window-resize-grip.north-east { top: 0; right: 0; cursor: nesw-resize; }.hls-window-resize-grip.south-west { bottom: 0; left: 0; cursor: nesw-resize; }
+.hls-window-resize-grip.north-west { top: 0; left: 0; cursor: nwse-resize; }.hls-window-resize-grip.south-east { right: 0; bottom: 0; cursor: nwse-resize; }

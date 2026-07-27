@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { LoaderCircle, RefreshCw, X } from 'lucide-react'
-import { fetchBrowserHandoff, fetchSettings, resolveBrowserHandoff } from './api'
+import { fetchBrowserHandoff, fetchBrowserHandoffs, fetchSettings, resolveBrowserHandoff } from './api'
 import { closeDesktopWindow } from './desktop'
 import { resolveTheme } from './theme'
 import type { Settings } from './types'
@@ -14,6 +14,7 @@ export default function BrowserHandoffWindow({ handoffId }: { handoffId: string 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [closing, setClosing] = useState(false)
+  const [queueRemaining, setQueueRemaining] = useState(0)
   const resolvedRef = useRef(false)
 
   const close = useCallback(() => {
@@ -25,9 +26,10 @@ export default function BrowserHandoffWindow({ handoffId }: { handoffId: string 
   const load = useCallback(async () => {
     setError('')
     try {
-      const [handoff, currentSettings] = await Promise.all([
+      const [handoff, currentSettings, pendingHandoffs] = await Promise.all([
         fetchBrowserHandoff(handoffId),
         fetchSettings(),
+        fetchBrowserHandoffs(),
       ])
       if (handoff.status && handoff.status !== 'pending') {
         close()
@@ -35,6 +37,7 @@ export default function BrowserHandoffWindow({ handoffId }: { handoffId: string 
       }
       setItem(handoff)
       setSettings(currentSettings)
+      setQueueRemaining(Math.max(0, pendingHandoffs.filter(item => item.id !== handoffId && item.status === 'pending').length))
     } catch (reason: any) {
       setError(reason?.message || '无法读取浏览器下载请求')
     }
@@ -64,10 +67,13 @@ export default function BrowserHandoffWindow({ handoffId }: { handoffId: string 
     void load()
     const timer = window.setInterval(() => {
       if (resolvedRef.current || document.hidden) return
-      void fetchBrowserHandoff(handoffId)
-        .then(handoff => {
+      void Promise.all([fetchBrowserHandoff(handoffId), fetchBrowserHandoffs()])
+        .then(([handoff, pendingHandoffs]) => {
           if (handoff.status && handoff.status !== 'pending') close()
-          else setItem(handoff)
+          else {
+            setItem(handoff)
+            setQueueRemaining(Math.max(0, pendingHandoffs.filter(item => item.id !== handoffId && item.status === 'pending').length))
+          }
         })
         .catch(() => {})
     }, 2000)
@@ -90,14 +96,14 @@ export default function BrowserHandoffWindow({ handoffId }: { handoffId: string 
 
   if (item) {
     return <main className="handoff-window-root has-window-chrome">
-      <WindowChrome />
+      <WindowChrome resizable />
       {error && <div className="handoff-window-error">{error}</div>}
-      <BrowserHandoffDialog item={item} busy={busy} settings={settings} onResolve={resolve} standalone />
+      <BrowserHandoffDialog item={item} busy={busy} settings={settings} onResolve={resolve} standalone queueRemaining={queueRemaining} />
     </main>
   }
 
   return <main className="handoff-window-root has-window-chrome handoff-window-loading">
-    <WindowChrome />
+    <WindowChrome resizable />
     <section>
       {error ? <>
         <X size={28} />

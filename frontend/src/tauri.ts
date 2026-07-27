@@ -1,3 +1,5 @@
+import { HandoffWindowQueue } from './handoffQueue'
+
 export interface CoreConfig {
   port: number
   credential: string
@@ -57,7 +59,9 @@ export async function startTauriDesktopSession(): Promise<() => void> {
   const current = getCurrentWindow()
   let stopped = false
   let sequence = 0
-  const handoffWindows = new Map<string, InstanceType<typeof WebviewWindow>>()
+  const handoffQueue = new HandoffWindowQueue()
+  let activeHandoffWindow: InstanceType<typeof WebviewWindow> | null = null
+  let openingHandoff = false
 
   const showMain = async () => {
     await current.show().catch(() => {})
@@ -65,36 +69,59 @@ export async function startTauriDesktopSession(): Promise<() => void> {
     await current.setFocus().catch(() => {})
   }
 
-  const openHandoff = async (id: string) => {
-    if (!id || handoffWindows.has(id)) return
+  const openNextHandoff = async (): Promise<void> => {
+    if (stopped || openingHandoff || activeHandoffWindow) return
+    const id = handoffQueue.begin()
+    if (!id) return
+    openingHandoff = true
     const label = `handoff-${id.replace(/[^a-zA-Z0-9-]/g, '-')}`
-    const existing = await WebviewWindow.getByLabel(label)
-    if (existing) {
-      handoffWindows.set(id, existing)
-      await existing.show().catch(() => {})
-      await existing.setFocus().catch(() => {})
+    try {
+      const existing = await WebviewWindow.getByLabel(label)
+      const child = existing || new WebviewWindow(label, {
+        url: `index.html?handoff=${encodeURIComponent(id)}`,
+        title: '下载文件信息 - HLS Downloader',
+        width: 420,
+        height: 460,
+        minWidth: 380,
+        minHeight: 360,
+        center: true,
+        resizable: true,
+        decorations: false,
+        alwaysOnTop: true,
+        focus: true,
+      })
+      if (!existing) {
+        await new Promise<void>((resolve, reject) => {
+          void child.once('tauri://created', () => resolve())
+          void child.once('tauri://error', event => reject(new Error(String(event.payload || '无法创建下载确认窗口'))))
+        })
+      }
+      activeHandoffWindow = child
+      await child.show().catch(() => {})
+      await child.setFocus().catch(() => {})
+      await localRequest(`/desktop/handoffs/${encodeURIComponent(id)}/presented`, { method: 'POST', body: '{}' })
+      void child.once('tauri://destroyed', () => {
+        if (handoffQueue.release(id)) activeHandoffWindow = null
+        void openNextHandoff()
+      })
+    } catch {
+      handoffQueue.release(id)
+      activeHandoffWindow = null
+      await localRequest(`/browser/handoffs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: '{}' }).catch(() => {})
+    } finally {
+      openingHandoff = false
+      void openNextHandoff()
+    }
+  }
+
+  const openHandoff = async (id: string) => {
+    if (!id) return
+    if (id === handoffQueue.activeId) {
+      await activeHandoffWindow?.show().catch(() => {})
+      await activeHandoffWindow?.setFocus().catch(() => {})
       return
     }
-    const child = new WebviewWindow(label, {
-      url: `index.html?handoff=${encodeURIComponent(id)}`,
-      title: '下载文件信息 - HLS Downloader',
-      width: 400,
-      height: 420,
-      minWidth: 360,
-      minHeight: 340,
-      center: true,
-      resizable: true,
-      decorations: false,
-      alwaysOnTop: true,
-      focus: true,
-    })
-    handoffWindows.set(id, child)
-    await new Promise<void>((resolve, reject) => {
-      void child.once('tauri://created', () => resolve())
-      void child.once('tauri://error', event => reject(new Error(String(event.payload || '无法创建下载确认窗口'))))
-    })
-    await localRequest(`/desktop/handoffs/${encodeURIComponent(id)}/presented`, { method: 'POST', body: '{}' })
-    void child.once('tauri://destroyed', () => handoffWindows.delete(id))
+    if (handoffQueue.enqueue(id)) await openNextHandoff()
   }
 
   const poll = async () => {

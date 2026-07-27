@@ -297,6 +297,20 @@ async function offer(resource: MediaResource, chain?: RequestChain) {
             },
           }
         }
+        if (current?.presentation === 'queued') {
+          // A focused confirm window is already handling an earlier offer.
+          // The request is safely queued in the desktop service, so do not
+          // report a false failure merely because it has not surfaced yet.
+          return {
+            ...response,
+            handoff: {
+              ...handoff,
+              ...current,
+              presentation_mode: 'desktop-queued',
+              presentation_ok: true,
+            },
+          }
+        }
         if (current?.presentation === 'failed' || handoffTerminalStatus(current?.status)) {
           return {
             ok: false,
