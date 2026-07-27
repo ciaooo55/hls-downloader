@@ -655,7 +655,12 @@ def test_browser_handoff_manual_context_overrides_are_scoped_to_download_origin(
         json={
             "download_dir": str(tmp_path),
             "cookie": "manual=secret",
-            "request_headers": {"Authorization": "Bearer manual", "X-Token": "x"},
+            "request_headers": {
+                "Authorization": "Bearer manual",
+                "Origin": "https://manual.example.test",
+                "Referer": "https://manual.example.test/watch",
+                "X-Token": "x",
+            },
         },
         headers={"X-Token": "test"},
     )
@@ -663,6 +668,16 @@ def test_browser_handoff_manual_context_overrides_are_scoped_to_download_origin(
     item = captured["item"]
     context = item.request_contexts["https://cdn.example.test"]
     assert context["cookie"] == "manual=secret"
+    assert context["origin"] == "https://manual.example.test"
+    assert context["referer"] == "https://manual.example.test/watch"
     assert context["request_headers"]["authorization"] == "Bearer manual"
     assert context["request_headers"]["x-token"] == "x"
+    detail = client.get(
+        f"/api/browser/handoffs/{created['id']}",
+        headers={"X-Token": "test"},
+    )
+    assert detail.status_code == 200
+    assert detail.json()["effective_context"]["target_origin"] == "https://cdn.example.test"
+    assert detail.json()["effective_context"]["cookie"] == "manual=secret"
+    assert detail.json()["effective_context"]["request_headers"]["referer"] == "https://manual.example.test/watch"
     runtime.set_desktop_handoff_session(False)

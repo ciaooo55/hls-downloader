@@ -41,6 +41,14 @@ function storageKey(tabId: number, pageUrl = '') {
 
 const responseFilename = contentDispositionFilename
 
+async function topLevelPageUrl(tabId: number, fallback = ''): Promise<string> {
+  if (tabId >= 0) {
+    const tabUrl = (await browser.tabs.get(tabId).catch(() => null))?.url || ''
+    if (/^https?:\/\//i.test(tabUrl)) return tabUrl
+  }
+  return fallback
+}
+
 async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1) {
   const kind = resource.kind || classifyResource(resource.url, resource.mimeType)
   if (!kind) return
@@ -50,8 +58,7 @@ async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabI
     // still the browser tab URL, not the iframe/media host. This gives the
     // handoff a stable Referer fallback and prevents an iframe URL from
     // becoming the incorrectly advertised source page.
-    const tabUrl = (await browser.tabs.get(tabId).catch(() => null))?.url || ''
-    if (/^https?:\/\//i.test(tabUrl)) pageUrl = tabUrl
+    pageUrl = await topLevelPageUrl(tabId, pageUrl)
   }
   const key = storageKey(tabId, pageUrl)
   const stored = await browser.storage.session.get(key)
@@ -170,7 +177,7 @@ function revealBrowserDownload(): void {
 }
 
 async function resourcePayload(resource: MediaResource, explicitChain?: RequestChain) {
-  const pageUrl = resource.pageUrl || ''
+  const pageUrl = await topLevelPageUrl(resource.tabId ?? -1, resource.pageUrl || '')
   const pageChain = resource.tabId !== undefined && resource.tabId >= 0
     ? requestChains.pageContext(resource.tabId, pageUrl)
     : undefined

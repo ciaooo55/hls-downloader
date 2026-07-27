@@ -6,7 +6,7 @@ import time
 from dataclasses import asdict, dataclass
 
 from .naming import is_generic_media_name, suggest_manifest_name
-from .request_context import sanitize_request_headers, sanitize_request_replay
+from .request_context import request_origin, sanitize_request_headers, sanitize_request_replay
 
 
 @dataclass
@@ -40,6 +40,38 @@ class BrowserHandoff:
         value.pop("request_headers", None)
         value.pop("request_contexts", None)
         value.pop("request_body", None)
+        return value
+
+    def effective_context(self) -> dict:
+        """Return the exact-origin context shown in the local confirmation window."""
+        target_origin = request_origin(self.url)
+        scoped = self.request_contexts.get(target_origin, {}) if target_origin else {}
+        headers = sanitize_request_headers(
+            scoped.get("request_headers") if isinstance(scoped, dict) else self.request_headers
+        )
+        referer = str((scoped or {}).get("referer") or self.referer or "")
+        origin = str((scoped or {}).get("origin") or self.origin or "")
+        user_agent = str((scoped or {}).get("user_agent") or self.user_agent or "")
+        cookie = str((scoped or {}).get("cookie") or self.cookie or "")
+        if referer and "referer" not in headers:
+            headers["referer"] = referer
+        if origin and "origin" not in headers:
+            headers["origin"] = origin
+        if user_agent and "user-agent" not in headers:
+            headers["user-agent"] = user_agent
+        return {
+            "target_origin": target_origin,
+            "referer": referer,
+            "origin": origin,
+            "user_agent": user_agent,
+            "cookie": cookie,
+            "request_headers": headers,
+        }
+
+    def detail(self) -> dict:
+        """Return public handoff metadata plus the local user's actual context."""
+        value = self.public()
+        value["effective_context"] = self.effective_context()
         return value
 
 

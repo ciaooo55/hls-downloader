@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseRequestHeaders, REQUEST_EXAMPLES, REQUEST_FIELD_HELP, sourcePageRequestContext } from './requestHelp'
+import { formatRequestHeaders, parseRequestHeaders, REQUEST_EXAMPLES, REQUEST_FIELD_HELP, sourcePageRequestContext } from './requestHelp'
 
 describe('request field guidance', () => {
   it('uses neutral request examples instead of a site-specific identity', () => {
@@ -37,5 +37,13 @@ describe('request field guidance', () => {
     expect(REQUEST_FIELD_HELP.concurrency).toContain('默认 12')
     expect(REQUEST_FIELD_HELP.concurrency).toContain('最高 256')
     expect(REQUEST_FIELD_HELP.maxTasks).toContain('默认 3')
+  })
+
+  it('shows captured headers while keeping Cookie in its dedicated field', () => {
+    expect(formatRequestHeaders({
+      authorization: 'Bearer token',
+      cookie: 'session=secret',
+      referer: 'https://site.test/watch',
+    })).toBe('authorization: Bearer token\nreferer: https://site.test/watch')
   })
 })

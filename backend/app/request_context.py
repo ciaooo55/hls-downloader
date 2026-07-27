@@ -188,6 +188,18 @@ def build_task_headers(
     if scoped:
         headers.update(captured_headers)
     lowered = {name.lower(): name for name in headers}
+    scoped_referer = (
+        captured_headers.get("referer", "") or str((scoped or {}).get("referer", ""))
+        if scoped else ""
+    )
+    scoped_origin = (
+        captured_headers.get("origin", "") or str((scoped or {}).get("origin", ""))
+        if scoped else ""
+    )
+    scoped_user_agent = (
+        captured_headers.get("user-agent", "") or str((scoped or {}).get("user_agent", ""))
+        if scoped else ""
+    )
 
     def set_header(name: str, value: str) -> None:
         existing = lowered.get(name.lower())
@@ -211,21 +223,21 @@ def build_task_headers(
     supplied_cookie = supplied_values.get("cookie", "")
     set_header(
         "User-Agent",
-        str((scoped or {}).get("user_agent", ""))
+        scoped_user_agent
         or supplied_user_agent
         or getattr(task, "user_agent", "")
         or settings.default_user_agent,
     )
     set_header(
         "Referer",
-        str((scoped or {}).get("referer", ""))
+        scoped_referer
         or supplied_referer
         or getattr(task, "referer", "")
         or ("" if browser_context else settings.default_referer),
     )
     set_header(
         "Origin",
-        str((scoped or {}).get("origin", ""))
+        scoped_origin
         or supplied_origin
         or getattr(task, "origin", "")
         or ("" if browser_context else settings.default_origin),

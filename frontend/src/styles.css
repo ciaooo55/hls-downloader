@@ -759,7 +759,7 @@ code,
 .browser-handoff-context > summary small { min-width: 0; color: var(--muted); font-size: 10px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .browser-handoff-context-fields { display: grid; gap: 7px; padding: 5px 0 3px; }
 .browser-handoff-context-fields p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
-.browser-handoff-context-fields code { color: var(--text); font-family: Consolas, monospace; }
+.browser-handoff-context-fields code { color: var(--text); font-family: Consolas, monospace; overflow-wrap: anywhere; word-break: break-word; }
 .browser-handoff-context-fields label { margin-top: 4px; color: var(--muted); font-size: 11px; }
 .browser-handoff-context-fields textarea { min-height: 88px; width: 100%; resize: vertical; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text); padding: 8px; font: 11px/1.45 Consolas, monospace; }
 .browser-handoff-context-fields textarea:focus { outline: 2px solid color-mix(in srgb, var(--primary) 62%, transparent); outline-offset: 1px; }

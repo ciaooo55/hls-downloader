@@ -32,6 +32,8 @@ def test_browser_handoff_confirmation_and_expiry():
     assert "request_body" not in item.public()
     assert item.request_headers == {"authorization": "Bearer private", "content-type": "application/json"}
     assert item.request_contexts["https://segments.test"]["cookie"] == "scoped=secret"
+    assert item.detail()["effective_context"]["target_origin"] == "https://cdn.test"
+    assert item.detail()["effective_context"]["cookie"] == "session=secret"
     assert item.request_method == "POST"
     assert item.request_body
     assert service.pending()[0]["id"] == item.id

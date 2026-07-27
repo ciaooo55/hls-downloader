@@ -161,6 +161,21 @@ def _handoff_public(item) -> dict:
         body['duplicate_message'] = ''
     return body
 
+
+def _handoff_detail(item) -> dict:
+    body = item.detail()
+    duplicates = _duplicate_task_payload(item.url)
+    body["duplicate"] = bool(duplicates)
+    body["duplicates"] = duplicates
+    if duplicates:
+        top = duplicates[0]
+        body["duplicate_message"] = (
+            f'下载列表中已有相同链接（{top.get("filename") or "已有任务"} · {top.get("status") or ""}）。仍可继续下载，也可取消。'
+        )
+    else:
+        body["duplicate_message"] = ""
+    return body
+
 @router.post("/browser/handoffs")
 async def create_browser_handoff(request: Request, x_token: str = Header(default="")):
     _check_token(x_token)
@@ -234,7 +249,7 @@ async def get_browser_handoff(handoff_id: str, x_token: str = Header(default="")
     item = browser_handoffs.get(handoff_id)
     if not item:
         raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
-    return _handoff_public(item)
+    return _handoff_detail(item)
 
 
 @router.post("/browser/handoffs/{handoff_id}/accept")
@@ -265,6 +280,9 @@ async def accept_browser_handoff(handoff_id: str, body: BrowserHandoffAccept | N
         item.cookie = body.cookie.strip()
     if body.request_headers:
         item.request_headers = sanitize_request_headers(body.request_headers)
+        manual_headers = item.request_headers
+    else:
+        manual_headers = {}
     if body.cookie.strip() or body.request_headers:
         # Manual values are intentionally scoped to the actual download
         # origin. build_task_headers otherwise strips top-level cookies and
@@ -277,6 +295,13 @@ async def accept_browser_handoff(handoff_id: str, body: BrowserHandoffAccept | N
                 context["cookie"] = body.cookie.strip()
             if body.request_headers:
                 context["request_headers"] = item.request_headers
+                for header_name, context_key in (
+                    ("referer", "referer"),
+                    ("origin", "origin"),
+                    ("user-agent", "user_agent"),
+                ):
+                    if manual_headers.get(header_name):
+                        context[context_key] = manual_headers[header_name]
             context.setdefault("referer", item.referer)
             context.setdefault("origin", item.origin)
             context.setdefault("user_agent", item.user_agent)

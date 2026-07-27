@@ -4,7 +4,7 @@ import { fmtBytes } from '../format'
 import type { Settings } from '../types'
 import { downloadCategory, DOWNLOAD_CATEGORY_LABELS, type DownloadCategory } from '../downloadCategory'
 import { pickFolder } from '../desktop'
-import { parseRequestHeaders } from '../requestHelp'
+import { formatRequestHeaders, parseRequestHeaders } from '../requestHelp'
 import FolderPicker from './FolderPicker'
 import { Button, Dialog, DialogFooter, DialogHeader, DialogOverlay, Input } from './ui'
 
@@ -28,6 +28,14 @@ export interface BrowserHandoff {
   duplicate?: boolean
   duplicates?: BrowserHandoffDuplicate[]
   duplicate_message?: string
+  effective_context?: {
+    target_origin?: string
+    referer?: string
+    origin?: string
+    user_agent?: string
+    cookie?: string
+    request_headers?: Record<string, string>
+  }
 }
 
 export interface BrowserHandoffDecision {
@@ -57,8 +65,8 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
   const [remember, setRemember] = useState(true)
   const [showPicker, setShowPicker] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
-  const [cookie, setCookie] = useState('')
-  const [headersText, setHeadersText] = useState('')
+  const [cookie, setCookie] = useState(() => item.effective_context?.cookie || '')
+  const [headersText, setHeadersText] = useState(() => formatRequestHeaders(item.effective_context?.request_headers))
   const canAccept = Boolean(filename.trim() && directory.trim() && !busy)
   const directoryLabel = directory.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || directory || '未设置保存位置'
 
@@ -172,11 +180,12 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
               <small>默认使用来源网页</small>
             </summary>
             <div className="browser-handoff-context-fields">
-              <p>默认沿用 <code title={item.source_page_url}>{sourceHost(item.source_page_url) || host}</code> 的浏览器 Cookie、Referer、User-Agent 和已捕获请求头。下面留空即使用默认值。</p>
-              <label htmlFor="handoff-cookie">Cookie（仅需覆盖时填写）</label>
-              <Input id="handoff-cookie" value={cookie} onChange={event => setCookie(event.target.value)} disabled={busy} placeholder="默认：来源网页的浏览器 Cookie" />
-              <label htmlFor="handoff-headers">请求头（每行：Header: value）</label>
-              <textarea id="handoff-headers" value={headersText} onChange={event => setHeadersText(event.target.value)} disabled={busy} placeholder={'默认：来源网页捕获的请求头\nReferer: https://example.com/page\nAuthorization: Bearer …'} />
+              <p>来源网页：<code title={item.source_page_url}>{item.source_page_url || '未捕获'}</code></p>
+              <p>实际下载域：<code title={item.effective_context?.target_origin || item.url}>{item.effective_context?.target_origin || host}</code>。下面已填入本次实际捕获值，可直接修改；留空则保留默认来源上下文。</p>
+              <label htmlFor="handoff-cookie">Cookie（本次实际值，可编辑）</label>
+              <Input id="handoff-cookie" value={cookie} onChange={event => setCookie(event.target.value)} disabled={busy} placeholder="未捕获 Cookie；留空使用默认上下文" />
+              <label htmlFor="handoff-headers">请求头（本次实际值，可编辑，每行：Header: value）</label>
+              <textarea id="handoff-headers" value={headersText} onChange={event => setHeadersText(event.target.value)} disabled={busy} placeholder={'未捕获请求头；留空使用默认上下文\nReferer: https://example.com/page\nAuthorization: Bearer …'} />
             </div>
           </details>
         </div>
@@ -188,8 +197,4 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
     </DialogOverlay>
     {showPicker && <FolderPicker initialPath={directory} onSelect={path => { setDirectory(path); setShowPicker(false) }} onClose={() => setShowPicker(false)} />}
   </>
-}
-
-function sourceHost(value: string): string {
-  try { return new URL(value).host } catch { return '' }
 }

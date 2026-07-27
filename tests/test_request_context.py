@@ -224,6 +224,35 @@ def test_exact_origin_context_overrides_supplied_credentials(monkeypatch):
     assert headers["Cookie"] == "cdn=secret"
 
 
+def test_exact_origin_header_overrides_are_used_for_manual_403_workarounds(monkeypatch):
+    monkeypatch.setattr(request_context.settings, "default_cookie", "")
+    task = Task(
+        id="scoped-header-override",
+        url="https://manifest.example.test/master.m3u8",
+        request_contexts={
+            "https://cdn.example.test": {
+                "referer": "https://stale.example.test/watch",
+                "origin": "https://stale.example.test",
+                "user_agent": "Stale UA",
+                "request_headers": {
+                    "Referer": "https://manual.example.test/watch",
+                    "Origin": "https://manual.example.test",
+                    "User-Agent": "Manual UA",
+                },
+                "cookie": "cdn=secret",
+            }
+        },
+    )
+
+    headers = request_context.build_task_headers(
+        task, request_url="https://cdn.example.test/segment.ts"
+    )
+
+    assert headers["Referer"] == "https://manual.example.test/watch"
+    assert headers["Origin"] == "https://manual.example.test"
+    assert headers["User-Agent"] == "Manual UA"
+
+
 def test_request_replay_allows_only_bounded_json_or_form_post_bodies():
     payload = base64.b64encode(b'{"export":"episode-12"}').decode("ascii")
     method, body = request_context.sanitize_request_replay(

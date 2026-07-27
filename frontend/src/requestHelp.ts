@@ -41,3 +41,11 @@ export function parseRequestHeaders(value: string): Record<string, string> {
   }
   return result
 }
+
+/** Keep captured browser headers editable without exposing transport-owned fields. */
+export function formatRequestHeaders(values: Record<string, string> | undefined): string {
+  return Object.entries(values || {})
+    .filter(([name, value]) => name.trim() && String(value || '').trim() && name.toLowerCase() !== 'cookie')
+    .map(([name, value]) => `${name}: ${value}`)
+    .join('\n')
+}
