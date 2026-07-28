@@ -201,11 +201,11 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     assert 'CloseRunningAppRetry${Suffix}' in nsis_script
     assert 'DisconnectLegacyNativeHost' in nsis_script
     assert 'register-native-host.ps1" -Unregister' in nsis_script
-    assert 'IfSilent CloseRunningAppAbort${Suffix}' in nsis_script
+    assert '关闭结果未确认，继续验证并覆盖程序文件' in nsis_script
+    assert 'CloseRunningAppAbort${Suffix}' not in nsis_script
     assert 'StrCpy $R0 0' in nsis_script
     assert 'IntOp $R0 $R0 + 1' in nsis_script
-    assert 'MB_RETRYCANCEL' in nsis_script
-    assert 'CloseRunningAppAbort${Suffix}' in nsis_script
+    assert 'MB_RETRYCANCEL' not in nsis_script
     assert 'RMDir /r "$LOCALAPPDATA\\HLS Downloader"' in nsis_script
     assert nsis_script.count('RMDir /r "$LOCALAPPDATA\\HLS Downloader"') >= 3
     assert 'Sleep 1000' in nsis_script

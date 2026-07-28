@@ -98,12 +98,14 @@ CloseRunningAppRetry${Suffix}:
         Sleep 1000
         Goto CloseRunningAppRetry${Suffix}
       ${EndIf}
-      IfSilent CloseRunningAppAbort${Suffix}
-      MessageBox MB_ICONSTOP|MB_RETRYCANCEL "无法关闭正在运行的 HLS Downloader，或程序文件仍被其他进程占用。$\r$\n$\r$\n请关闭下载器、文件管理器预览和安全软件扫描后重试。" IDRETRY CloseRunningAppRetry${Suffix} IDCANCEL CloseRunningAppAbort${Suffix}
+      ; The helper has already forced the desktop/Core/Host process tree down.
+      ; On some Windows builds nsExec can report a bridge error after that
+      ; cleanup has succeeded.  Do not turn that stale return value into a
+      ; blocking Retry/Cancel dialog: NSIS performs the actual write check
+      ; when it replaces the executable a few lines below.
+      DetailPrint "关闭结果未确认，继续验证并覆盖程序文件..."
     ${EndIf}
     Goto CloseRunningAppDone${Suffix}
-CloseRunningAppAbort${Suffix}:
-    Abort
 CloseRunningAppDone${Suffix}:
 !macroend
 
