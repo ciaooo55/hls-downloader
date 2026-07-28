@@ -11,7 +11,10 @@ from .naming import is_generic_media_name, suggest_manifest_name
 from .request_context import request_origin, sanitize_request_headers, sanitize_request_replay
 
 
-RECOMMENDED_BROWSER_EXTENSION_VERSION = "3.0.4"
+# Browser add-ons have an independent release cadence.  Keep this pinned to
+# the newest extension build whose Native Messaging contract is compatible;
+# desktop-only fixes must not manufacture a browser upgrade prompt.
+RECOMMENDED_BROWSER_EXTENSION_VERSION = "3.0.3"
 MIN_BROWSER_EXTENSION_VERSION = "2.0.11"
 DEFAULT_BROWSER_CLIENT_TTL = 180.0
 

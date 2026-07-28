@@ -32,7 +32,7 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     workflow = _workflow("release.yml")
 
     assert "workflow_dispatch:" in workflow
-    assert 'default: "3.0.4"' in workflow
+    assert 'default: "3.0.5"' in workflow
     assert "tags:" in workflow and "v*" in workflow
     assert "windows-latest" in workflow
     assert "dtolnay/rust-toolchain@stable" in workflow
