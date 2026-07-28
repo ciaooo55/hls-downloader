@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version used in the installer, for example 3.0.5
+        description: Version used in the installer, for example 3.0.6
         required: false
-        default: "3.0.5"
+        default: "3.0.6"
   push:
     tags:
       - "v*"
@@ -87,14 +87,19 @@ jobs:
       - name: Assemble and verify release files
         shell: pwsh
         run: |
+          $version = "${{ inputs.version }}"
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}".TrimStart("v")
+          }
+          $prefix = "HLSDownloader-v$version"
           $expected = @(
-            "HLSDownloader-Windows-x64-Setup.exe",
-            "HLSDownloader-Windows-x64-Portable.zip",
-            "HLSDownloader-Chrome-Edge-Extension.zip",
-            "HLSDownloader-Firefox-Web-UI-Unsigned.zip",
-            "HLSDownloader-Firefox-Web-UI-Source.zip",
-            "HLSDownloader-Firefox-No-Web-UI-Unsigned.zip",
-            "HLSDownloader-Firefox-No-Web-UI-Source.zip"
+            "$prefix-Windows-x64-Setup.exe",
+            "$prefix-Windows-x64-Portable.zip",
+            "$prefix-Chrome-Edge-Extension.zip",
+            "$prefix-Firefox-Web-UI-Unsigned.zip",
+            "$prefix-Firefox-Web-UI-Source.zip",
+            "$prefix-Firefox-No-Web-UI-Unsigned.zip",
+            "$prefix-Firefox-No-Web-UI-Source.zip"
           )
           foreach ($name in $expected) {
             if (-not (Test-Path -LiteralPath (Join-Path .\release $name))) {
@@ -109,7 +114,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: HLSDownloader-Windows-x64
+          name: HLSDownloader-Windows-x64-${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', inputs.version) }}
           path: release/*
           if-no-files-found: error
           retention-days: 14
@@ -126,7 +131,7 @@ jobs:
       - name: Download verified Windows assets
         uses: actions/download-artifact@v7
         with:
-          name: HLSDownloader-Windows-x64
+          name: HLSDownloader-Windows-x64-${{ github.ref_name }}
           path: release
 
       - name: Publish GitHub Release

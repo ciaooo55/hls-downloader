@@ -62,7 +62,11 @@ class _BrowserHLSClient:
     def __init__(self, concurrency: int) -> None:
         self._session = CurlAsyncSession(
             max_clients=concurrency + 4,
-            default_headers=False,
+            # Let curl-cffi emit the headers that match its TLS/browser
+            # profile.  Replaying an extension's UA/sec-* fields here makes
+            # that profile contradictory and is frequently rejected by
+            # Cloudflare.
+            default_headers=True,
             # HLS VOD downloads intentionally use independent HTTP/1.1
             # connections for the worker pool.  A number of video CDNs apply
             # their throughput limit to an individual HTTP/2 connection; if
@@ -70,8 +74,8 @@ class _BrowserHLSClient:
             # increasing task concurrency no longer increases total speed.
             # HTTP/1.1 keeps the configured worker count meaningful (the
             # same multi-connection strategy used by download managers),
-            # without changing the captured headers, cookies or TLS browser
-            # impersonation used for access-controlled streams.
+            # while preserving the semantic access context (Referer, Origin,
+            # Cookie and custom authorization headers).
             http_version="v1",
             timeout=(10, 60),
             allow_redirects=True,
@@ -85,8 +89,22 @@ class _BrowserHLSClient:
         return await self._session.__aexit__(*args)
 
     async def get(self, url: str, **kwargs):
-        kwargs.setdefault("impersonate", _browser_impersonation(kwargs.get("headers")))
-        return await self._session.get(url, **kwargs)
+        kwargs.setdefault("impersonate", _browser_impersonation())
+        return await self._get_with_cloudflare_fallback(url, **kwargs)
+
+    async def _get_with_cloudflare_fallback(self, url: str, **kwargs):
+        response = await self._session.get(url, **kwargs)
+        fallback_headers = _without_stale_cloudflare_cookies(kwargs.get("headers"))
+        if response.status_code != 403 or fallback_headers is None:
+            return response
+
+        # __cf_bm is short-lived telemetry, not a reusable login credential.
+        # A stale one can cause a valid Referer/Origin/Cookie context to be
+        # blocked.  Retry once with it removed; never loop on 403.
+        await _close_response(response)
+        retry_kwargs = dict(kwargs)
+        retry_kwargs["headers"] = fallback_headers
+        return await self._session.get(url, **retry_kwargs)
 
     async def download_to_file(
         self,
@@ -97,13 +115,17 @@ class _BrowserHLSClient:
         task=None,
     ) -> tuple[Any, int]:
         written = 0
-        response = await self._session.get(
+        response = await self._get_with_cloudflare_fallback(
             url,
             headers=headers,
             stream=True,
-            impersonate=_browser_impersonation(headers),
+            impersonate=_browser_impersonation(),
         )
         try:
+            # Do not write an HTML 403 page into the temporary media segment.
+            # The caller validates and raises the real HTTP error below.
+            if response.status_code >= 400:
+                return response, written
             with destination.open("wb") as output:
                 # curl-cffi defaults to small chunks.  Larger buffered writes
                 # reduce Python/async scheduling overhead substantially when a
@@ -131,14 +153,45 @@ class _BrowserHLSClient:
         return response, written
 
 
-def _browser_impersonation(headers: dict[str, str] | None) -> str:
-    values = {str(name).lower(): str(value) for name, value in dict(headers or {}).items()}
-    user_agent = values.get("user-agent", "").lower()
-    if "edg/" in user_agent or "chrome/" in user_agent or "chromium/" in user_agent:
-        return "chrome"
-    if "safari/" in user_agent and "chrome/" not in user_agent:
-        return "safari"
-    return "firefox"
+def _browser_impersonation() -> str:
+    """Use one supported curl-cffi profile, never a captured browser version."""
+    return "chrome"
+
+
+def _without_stale_cloudflare_cookies(
+    headers: dict[str, str] | None,
+) -> dict[str, str] | None:
+    """Return a one-shot 403 fallback header set without disposable CF cookies."""
+    result = dict(headers or {})
+    cookie_name = next((name for name in result if name.lower() == "cookie"), None)
+    if not cookie_name:
+        return None
+    transient = {"__cf_bm", "__cflb"}
+    values = []
+    changed = False
+    for item in str(result[cookie_name]).split(";"):
+        name = item.split("=", 1)[0].strip().lower()
+        if name in transient:
+            changed = True
+            continue
+        if item.strip():
+            values.append(item.strip())
+    if not changed:
+        return None
+    if values:
+        result[cookie_name] = "; ".join(values)
+    else:
+        result.pop(cookie_name, None)
+    return result
+
+
+async def _close_response(response: Any) -> None:
+    close = getattr(response, "aclose", None)
+    if close is None:
+        return
+    result = close()
+    if hasattr(result, "__await__"):
+        await result
 
 
 def _create_hls_client(concurrency: int):
@@ -241,6 +294,9 @@ class HLSDownloader:
     ) -> dict[str, str]:
         return build_task_headers(
             self.task,
+            # curl-cffi supplies the Accept header associated with its
+            # impersonation profile; do not override it with a captured one.
+            accept="",
             request_url=request_url,
             base_headers=base_headers,
         )
@@ -1414,72 +1470,12 @@ class HLSDownloader:
             else:
                 pending[segment["index"]] = segment
 
-        # Start with the shortest contiguous prefix that a local HLS player can
-        # use.  The ordinary worker pool is intentionally concurrent, so a
-        # slow first request could otherwise leave later segments downloading
-        # for minutes while the only playable prefix is still empty.  This is a
-        # brief one-time warm-up; all remaining work immediately returns to the
-        # requested concurrency.
-        warmup_indexes: list[int] = []
-        warmup_duration = 0.0
-        for segment in segments:
-            index = int(segment["index"])
-            warmup_duration += max(0.001, float(segment.get("duration") or 0))
-            if index in pending:
-                warmup_indexes.append(index)
-            if warmup_duration >= MIN_START_DURATION:
-                break
-
-        if warmup_indexes:
-            self._set_stage(
-                "downloading_segments",
-                f"正在准备 {len(warmup_indexes)} 个播放缓冲分片",
-            )
-        warmup_completed = 0
-        for index in warmup_indexes:
-            if self._is_canceled() or self._is_pausing():
-                return False
-            priority = self._playback_priority_index
-            if priority is not None and priority != index:
-                break
-            segment = pending.pop(index)
-            self.task.progress.active_workers += 1
-            self.task.progress.active_slots += 1
-            self.task.progress.active_segment_indexes.append(index)
-            self._publish()
-            try:
-                completed = await self._download_one_segment(client, segment, headers)
-                if not completed:
-                    return False
-                warmup_completed += 1
-                self._refresh_playback_progress()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                failure = as_download_error(
-                    exc,
-                    stage="downloading_segments",
-                    url=segment["url"],
-                    attempt=MAX_RETRIES,
-                    task_context=self.task,
-                )
-                self._failed_indexes.append(index)
-                self.task.progress.failed_segments = len(self._failed_indexes)
-                self.task.progress.last_worker_error = f"[{index}] {str(exc)[:120]}"
-                self._log(f"[segment {index}] 播放缓冲分片下载失败: {exc}")
-                raise failure from exc
-            finally:
-                self.task.progress.active_workers -= 1
-                self.task.progress.active_slots -= 1
-                if index in self.task.progress.active_segment_indexes:
-                    self.task.progress.active_segment_indexes.remove(index)
-                self._emit_progress()
-
-        if warmup_completed:
-            self._set_stage(
-                "downloading_segments",
-                f"播放缓冲已准备 {warmup_completed} 个分片，开始下载剩余 {len(pending)} 个分片",
-            )
+        # Do not serialize a playback warm-up here.  Every configured worker
+        # must immediately own an independent in-flight segment request; with
+        # HTTP/1.1 this creates multiple simultaneous CDN connections instead
+        # of repeatedly using one rate-limited connection.  claim_segment()
+        # still hands out the lowest indexes first, so the playable prefix is
+        # prepared by the same concurrent pool.
         claim_lock = asyncio.Lock()
 
         async def claim_segment() -> dict | None:
@@ -1535,7 +1531,7 @@ class HLSDownloader:
 
         workers = [
             asyncio.create_task(worker())
-            for _ in range(min(max(1, concurrency), len(segments)))
+            for _ in range(min(max(1, concurrency), len(pending)))
         ]
         try:
             await asyncio.gather(*workers)

@@ -1,7 +1,7 @@
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from contextlib import asynccontextmanager
 
 from .config import PROJECT_ROOT, settings
@@ -74,7 +74,7 @@ async def serve_help():
     <h1>HLS Downloader 使用教程</h1>
     <p>下载器已经启动。请安装 Chrome/Edge 或 Firefox 浏览器插件，再打开需要下载的网页。</p>
     <div class="actions">
-      <a class="button" href="/ui">打开下载管理器</a>
+      <a class="button" href="/ui/">打开下载管理器</a>
     </div>
     <div class="status">
       <strong>仅使用正式浏览器插件</strong>
@@ -97,7 +97,7 @@ async def serve_help():
 async def serve_ui_root():
     idx = UI_DIST / "index.html"
     if idx.exists():
-        return FileResponse(idx, headers=UI_RESPONSE_HEADERS)
+        return RedirectResponse(url="/ui/", status_code=307)
     return HTMLResponse("<h2>Frontend not built</h2><p>Run: cd frontend && npm run build</p>", status_code=404)
 
 @app.get("/ui/{full_path:path}")

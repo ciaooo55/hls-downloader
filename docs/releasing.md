@@ -7,7 +7,7 @@
 1. 打开仓库的 `Actions` 页面。
 2. 选择 `Windows Release`。
 3. 点击 `Run workflow`，填写版本号后运行。
-4. 等待任务通过，从任务页面下载 `HLSDownloader-Windows-x64` artifact。
+4. 等待任务通过，从任务页面下载对应版本的 `HLSDownloader-Windows-x64` artifact。
 5. 确认其中包含安装版、便携版、Chrome/Edge MV3 扩展包，以及网页显示和网页不显示两种 Firefox 插件各自的 unsigned/source 文件。
 
 手动运行只生成临时 artifact，不会创建公开 Release。
@@ -26,18 +26,18 @@ git push origin v1.4.2
 `v*` 标签会触发完整 Windows 构建。成功后工作流自动创建同名 GitHub Release，并上传：
 
 ```text
-HLSDownloader-Windows-x64-Setup.exe
-HLSDownloader-Windows-x64-Portable.zip
-HLSDownloader-Chrome-Edge-Extension.zip
-HLSDownloader-Firefox-Web-UI-Unsigned.zip
-HLSDownloader-Firefox-Web-UI-Source.zip
-HLSDownloader-Firefox-No-Web-UI-Unsigned.zip
-HLSDownloader-Firefox-No-Web-UI-Source.zip
+HLSDownloader-v3.0.6-Windows-x64-Setup.exe
+HLSDownloader-v3.0.6-Windows-x64-Portable.zip
+HLSDownloader-v3.0.6-Chrome-Edge-Extension.zip
+HLSDownloader-v3.0.6-Firefox-Web-UI-Unsigned.zip
+HLSDownloader-v3.0.6-Firefox-Web-UI-Source.zip
+HLSDownloader-v3.0.6-Firefox-No-Web-UI-Unsigned.zip
+HLSDownloader-v3.0.6-Firefox-No-Web-UI-Source.zip
 ```
 
 Firefox 网页显示商店版使用已发布的 `browser@hls-downloader.ciaooo55.com` ID；网页不显示版使用独立的 `hls-downloader-store@ciaooo55.com` ID。首次提交时在 AMO
 的“提交新附加组件”页面选择“在此网站上”，上传
-对应变体的 `HLSDownloader-Firefox-*-Unsigned.zip`，由 Mozilla 审核和签名。不要先使用同一 ID
+对应变体的 `HLSDownloader-v*-Firefox-*-Unsigned.zip`，由 Mozilla 审核和签名。不要先使用同一 ID
 执行 `web-ext sign --channel unlisted`；该通道用于自分发，会预先占用 ID，导致
 创建公开商店条目时出现“发现重复的附加组件 ID”。后续版本从原附加组件的
 “状态和版本”页面上传并保持 ID 不变。

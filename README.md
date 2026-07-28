@@ -19,13 +19,13 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `HLSDownloader-Windows-x64-Setup.exe` | Windows 10/11 x64 安装版，带在线更新、卸载程序和快捷方式 |
-| `HLSDownloader-Windows-x64-Portable.zip` | Windows 10/11 x64 便携版，解压后直接运行 |
-| `HLSDownloader-Chrome-Edge-Extension.zip` | Chrome 与 Microsoft Edge 共用的 MV3 扩展包；解压后在扩展管理页开启开发者模式并加载已解压的扩展程序 |
-| `HLSDownloader-Firefox-Web-UI-Unsigned.zip` | 网页显示版 Firefox 插件，AMO 上传或临时测试用 |
-| `HLSDownloader-Firefox-Web-UI-Source.zip` | 网页显示版对应的 AMO 审核源码包 |
-| `HLSDownloader-Firefox-No-Web-UI-Unsigned.zip` | 网页不显示版 Firefox 插件，功能与显示版完全一致，仅发布 ID 不同 |
-| `HLSDownloader-Firefox-No-Web-UI-Source.zip` | 网页不显示版对应的 AMO 审核源码包 |
+| `HLSDownloader-v3.0.6-Windows-x64-Setup.exe` | Windows 10/11 x64 安装版，带在线更新、卸载程序和快捷方式 |
+| `HLSDownloader-v3.0.6-Windows-x64-Portable.zip` | Windows 10/11 x64 便携版，解压后直接运行 |
+| `HLSDownloader-v3.0.6-Chrome-Edge-Extension.zip` | Chrome 与 Microsoft Edge 共用的 MV3 扩展包；解压后在扩展管理页开启开发者模式并加载已解压的扩展程序 |
+| `HLSDownloader-v3.0.6-Firefox-Web-UI-Unsigned.zip` | 网页显示版 Firefox 插件，AMO 上传或临时测试用 |
+| `HLSDownloader-v3.0.6-Firefox-Web-UI-Source.zip` | 网页显示版对应的 AMO 审核源码包 |
+| `HLSDownloader-v3.0.6-Firefox-No-Web-UI-Unsigned.zip` | 网页不显示版 Firefox 插件，功能与显示版完全一致，仅发布 ID 不同 |
+| `HLSDownloader-v3.0.6-Firefox-No-Web-UI-Source.zip` | 网页不显示版对应的 AMO 审核源码包 |
 
 安装包和便携包由 GitHub Actions 从源码自动构建，不保存在 Git 仓库中。桌面主程序使用 Cockpit Tools 同类的 Tauri + React 架构，包含下载核心、FFmpeg、ffprobe、播放器资源和 Chromium 浏览器插件；Windows 10/11 自带的 Microsoft Edge WebView2 运行时为其渲染界面。
 
@@ -153,8 +153,8 @@ choco install ffmpeg nsis -y
 输出位于忽略的 `release` 目录：
 
 ```text
-HLSDownloader-Windows-x64-Setup.exe
-HLSDownloader-Windows-x64-Portable.zip
+HLSDownloader-v3.0.6-Windows-x64-Setup.exe
+HLSDownloader-v3.0.6-Windows-x64-Portable.zip
 ```
 
 ## GitHub 自动发布

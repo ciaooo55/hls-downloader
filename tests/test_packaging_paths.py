@@ -130,8 +130,8 @@ def test_windows_build_emits_setup_and_portable_assets():
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
 
-    assert "HLSDownloader-Windows-x64-Setup.exe" in build_script
-    assert "HLSDownloader-Windows-x64-Portable.zip" in build_script
+    assert "$ReleaseNamePrefix-Windows-x64-Setup.exe" in build_script
+    assert "$ReleaseNamePrefix-Windows-x64-Portable.zip" in build_script
     assert 'Join-Path $PortableStage "portable"' in build_script
     assert 'Join-Path $PortableStage "native-host\\versions"' in build_script
     assert 'HLSDownloaderNativeHost-$Version.exe' in build_script
@@ -144,11 +144,11 @@ def test_windows_build_emits_chromium_and_two_firefox_variants_with_seven_releas
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
 
-    assert 'Join-Path $ReleaseDir "HLSDownloader-Firefox-Web-UI-Unsigned.zip"' in build_script
-    assert 'Join-Path $ReleaseDir "HLSDownloader-Firefox-Web-UI-Source.zip"' in build_script
-    assert 'Join-Path $ReleaseDir "HLSDownloader-Firefox-No-Web-UI-Unsigned.zip"' in build_script
-    assert 'Join-Path $ReleaseDir "HLSDownloader-Firefox-No-Web-UI-Source.zip"' in build_script
-    assert 'Join-Path $ReleaseDir "HLSDownloader-Chrome-Edge-Extension.zip"' in build_script
+    assert "$ReleaseNamePrefix-Firefox-Web-UI-Unsigned.zip" in build_script
+    assert "$ReleaseNamePrefix-Firefox-Web-UI-Source.zip" in build_script
+    assert "$ReleaseNamePrefix-Firefox-No-Web-UI-Unsigned.zip" in build_script
+    assert "$ReleaseNamePrefix-Firefox-No-Web-UI-Source.zip" in build_script
+    assert "$ReleaseNamePrefix-Chrome-Edge-Extension.zip" in build_script
     assert "$ChromiumExtensionStage" in build_script
     assert "$FirefoxWebId" in build_script and "$FirefoxNoWebId" in build_script
     assert "HLS_FIREFOX_EXTENSION_ID" in build_script
@@ -318,8 +318,8 @@ def test_firefox_release_includes_reviewable_source_archive():
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
     reviewer_notes = (root / "extension" / "AMO-BUILD.md").read_text(encoding="utf-8")
 
-    assert "HLSDownloader-Firefox-Web-UI-Source.zip" in build_script
-    assert "HLSDownloader-Firefox-No-Web-UI-Source.zip" in build_script
+    assert "$ReleaseNamePrefix-Firefox-Web-UI-Source.zip" in build_script
+    assert "$ReleaseNamePrefix-Firefox-No-Web-UI-Source.zip" in build_script
     assert "BUILD-VARIANT.txt" in build_script
     for source in ("entrypoints", "lib", "public", "package.json", "pnpm-lock.yaml", "wxt.config.ts", "AMO-BUILD.md"):
         assert source in build_script

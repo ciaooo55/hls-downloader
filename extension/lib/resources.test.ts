@@ -319,13 +319,13 @@ describe('resource rules', () => {
       'x-playback-token': 'abc',
     })
   })
-  it('never invents an Origin that the browser did not send', () => {
+  it('uses the browser page URL as media Referer and Origin', () => {
     expect(resourceRequestIdentity({
       pageUrl: 'https://page.test/watch/1',
       requestHeaders: { Referer: 'https://page.test/watch/1', 'User-Agent': 'Browser UA' },
     }, 'Fallback UA')).toEqual({
       referer: 'https://page.test/watch/1',
-      origin: '',
+      origin: 'https://page.test',
       userAgent: 'Browser UA',
     })
     expect(resourceRequestIdentity({
@@ -335,6 +335,16 @@ describe('resource rules', () => {
       referer: 'https://page.test/watch/1',
       origin: 'https://page.test',
       userAgent: 'Fallback UA',
+    })
+    expect(resourceRequestIdentity({
+      pageUrl: 'https://page.test/watch/1',
+      requestHeaders: {
+        Referer: 'https://cdn.test/video.m3u8',
+        Origin: 'https://cdn.test',
+      },
+    })).toMatchObject({
+      referer: 'https://page.test/watch/1',
+      origin: 'https://page.test',
     })
   })
   it('requires and matches a recent explicit click', () => {

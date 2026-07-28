@@ -3,7 +3,7 @@ param(
     [switch]$SkipBackend,
     [switch]$SkipDesktop,
     [switch]$SkipSmoke,
-    [string]$Version = "3.0.5"
+    [string]$Version = "3.0.6"
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,19 +35,20 @@ $NsisVersion = "3.12"
 $NsisZip = Join-Path $ToolsDir "nsis-$NsisVersion.zip"
 $NsisUrl = "https://downloads.sourceforge.net/project/nsis/NSIS%203/$NsisVersion/nsis-$NsisVersion.zip"
 $InstallerScript = Join-Path $Root "installer\hls-downloader.nsi"
-$InstallerOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Setup.exe"
-$PortableOut = Join-Path $ReleaseDir "HLSDownloader-Windows-x64-Portable.zip"
+$ReleaseNamePrefix = "HLSDownloader-v$Version"
+$InstallerOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Windows-x64-Setup.exe"
+$PortableOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Windows-x64-Portable.zip"
 $FirefoxWebId = "browser@hls-downloader.ciaooo55.com"
 $FirefoxNoWebId = "hls-downloader-store@ciaooo55.com"
 $ExtensionBuildDir = Join-Path $Root "build\installer\extensions"
 $FirefoxWebStage = Join-Path $ExtensionBuildDir "firefox-web-ui"
 $FirefoxNoWebStage = Join-Path $ExtensionBuildDir "firefox-no-web-ui"
-$FirefoxWebExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-Web-UI-Unsigned.zip"
-$FirefoxWebSourceOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-Web-UI-Source.zip"
-$FirefoxNoWebExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-No-Web-UI-Unsigned.zip"
-$FirefoxNoWebSourceOut = Join-Path $ReleaseDir "HLSDownloader-Firefox-No-Web-UI-Source.zip"
+$FirefoxWebExtensionOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Firefox-Web-UI-Unsigned.zip"
+$FirefoxWebSourceOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Firefox-Web-UI-Source.zip"
+$FirefoxNoWebExtensionOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Firefox-No-Web-UI-Unsigned.zip"
+$FirefoxNoWebSourceOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Firefox-No-Web-UI-Source.zip"
 $ChromiumExtensionStage = Join-Path $ExtensionBuildDir "chrome-edge"
-$ChromiumExtensionOut = Join-Path $ReleaseDir "HLSDownloader-Chrome-Edge-Extension.zip"
+$ChromiumExtensionOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Chrome-Edge-Extension.zip"
 
 function Invoke-Step($Name, [scriptblock]$Block) {
     Write-Host ""
@@ -237,7 +238,9 @@ if (-not $SkipFrontend) {
     Invoke-Step "Build browser extensions" {
         Push-Location $ExtensionDir
         $previousFirefoxId = $env:HLS_FIREFOX_EXTENSION_ID
+        $previousExtensionVersion = $env:HLS_EXTENSION_VERSION
         try {
+            $env:HLS_EXTENSION_VERSION = $Version
             if (-not (Test-Path "node_modules")) { pnpm install --frozen-lockfile }
             pnpm test
             pnpm run build:chrome
@@ -270,6 +273,7 @@ if (-not $SkipFrontend) {
             }
         } finally {
             $env:HLS_FIREFOX_EXTENSION_ID = $previousFirefoxId
+            $env:HLS_EXTENSION_VERSION = $previousExtensionVersion
             Pop-Location
         }
     }
@@ -278,13 +282,22 @@ if (-not $SkipFrontend) {
 if (-not $SkipDesktop) {
     Invoke-Step "Build Tauri desktop shell" {
         Push-Location $FrontendDir
+        $previousCargoLto = $env:CARGO_PROFILE_RELEASE_LTO
+        $previousCargoCodegenUnits = $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS
         try {
             if (-not (Get-Command cargo.exe -ErrorAction SilentlyContinue)) {
                 throw "Rust/Cargo is required to build the Tauri desktop shell. Install rustup before packaging."
             }
+            # The default release profile is too aggressive for this Windows
+            # toolchain.  LTO was causing the Tauri build to fail in this
+            # environment even though the source itself compiled cleanly.
+            $env:CARGO_PROFILE_RELEASE_LTO = "false"
+            $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "16"
             pnpm run tauri:build
             if ($LASTEXITCODE -ne 0) { throw "Tauri desktop build failed with exit code $LASTEXITCODE" }
         } finally {
+            $env:CARGO_PROFILE_RELEASE_LTO = $previousCargoLto
+            $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = $previousCargoCodegenUnits
             Pop-Location
         }
     }
@@ -517,6 +530,13 @@ if (-not $SkipSmoke) {
                 for ($i = 0; $i -lt 80; $i++) {
                     if (-not (Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue)) {
                         break
+                    }
+                    $listeners = @(Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue)
+                    foreach ($listener in $listeners) {
+                        $owner = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
+                        if ($owner -and $owner.ProcessName -in @("HLSDownloader", "HLSDownloaderCore")) {
+                            $owner | Stop-Process -Force -ErrorAction SilentlyContinue
+                        }
                     }
                     Start-Sleep -Milliseconds 250
                 }

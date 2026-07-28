@@ -40,7 +40,7 @@ def _info(data: bytes, **changes) -> UpdateInfo:
         available=True,
         can_auto_install=True,
         release_url="https://github.com/ciaooo55/hls-downloader/releases/tag/v9.0.0",
-        download_url="https://github.com/ciaooo55/hls-downloader/releases/download/v9.0.0/HLSDownloader-Windows-x64-Setup.exe",
+        download_url="https://github.com/ciaooo55/hls-downloader/releases/download/v9.0.0/HLSDownloader-v9.0.0-Windows-x64-Setup.exe",
         size=len(data),
         digest=hashlib.sha256(data).hexdigest(),
         notes="release notes",
@@ -65,10 +65,10 @@ def test_update_check_selects_exact_windows_asset_and_digest(monkeypatch):
         "assets": [
             {"name": "other.zip", "size": 1, "digest": "sha256:" + "0" * 64},
             {
-                "name": updater.SETUP_ASSET_NAME,
+                "name": updater.setup_asset_name("9.0.0"),
                 "size": len(data),
                 "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
-                "browser_download_url": "https://github.com/ciaooo55/hls-downloader/releases/download/v9.0.0/HLSDownloader-Windows-x64-Setup.exe",
+                "browser_download_url": "https://github.com/ciaooo55/hls-downloader/releases/download/v9.0.0/HLSDownloader-v9.0.0-Windows-x64-Setup.exe",
             },
         ],
     }
@@ -92,7 +92,7 @@ def test_update_check_rejects_untrusted_download_host():
     payload = {
         "tag_name": "v9.0.0",
         "assets": [{
-            "name": updater.SETUP_ASSET_NAME,
+            "name": updater.setup_asset_name("9.0.0"),
             "size": 10,
             "digest": "sha256:" + "0" * 64,
             "browser_download_url": "https://example.test/fake.exe",

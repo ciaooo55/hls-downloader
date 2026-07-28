@@ -27,7 +27,6 @@ def test_request_context_replays_authentication_but_filters_transport_headers(mo
     headers = request_context.build_task_headers(task)
 
     assert headers["authorization"] == "Bearer signed-token"
-    assert headers["sec-ch-ua"] == '"Chromium";v="140"'
     assert headers["x-playback-token"] == "opaque"
     assert headers["Cookie"] == "session=explicit"
     lowered = {name.lower() for name in headers}
@@ -35,6 +34,8 @@ def test_request_context_replays_authentication_but_filters_transport_headers(mo
     assert "content-length" not in lowered
     assert "range" not in lowered
     assert "accept-encoding" not in lowered
+    assert "sec-ch-ua" not in lowered
+    assert "user-agent" not in lowered
 
 
 def test_manual_download_has_no_unrelated_referer_or_origin(monkeypatch):
@@ -71,7 +72,6 @@ def test_explicit_task_fields_override_captured_equivalents(monkeypatch):
 
     assert headers["Referer"] == "https://page.example.test/watch"
     assert headers["Origin"] == "https://page.example.test"
-    assert headers["User-Agent"] == "Desktop UA"
     assert "referer" not in headers
     assert "origin" not in headers
     assert "user-agent" not in headers
@@ -136,7 +136,7 @@ def test_hls_subresources_use_exact_origin_context_without_leaking_credentials(m
     assert cdn["authorization"] == "Bearer cdn"
     assert cdn["x-playback-token"] == "segment-token"
     assert cdn["Cookie"] == "cdn_session=two"
-    assert cdn["User-Agent"] == "CDN Browser UA"
+    assert "user-agent" not in {name.lower() for name in cdn}
     assert "authorization" not in {name.lower() for name in unrelated}
     assert "cookie" not in {name.lower() for name in unrelated}
     assert unrelated["Referer"] == "https://page.example.test/watch"
@@ -187,10 +187,10 @@ def test_explicit_base_headers_survive_same_origin_but_not_cross_origin_credenti
         base_headers=supplied,
     )
 
-    assert same_origin["User-Agent"] == supplied["User-Agent"]
     assert same_origin["authorization"] == "Bearer supplied"
     assert same_origin["Cookie"] == "supplied=secret"
-    assert unrelated["User-Agent"] == supplied["User-Agent"]
+    assert "user-agent" not in {name.lower() for name in same_origin}
+    assert "user-agent" not in {name.lower() for name in unrelated}
     assert "authorization" not in {name.lower() for name in unrelated}
     assert "cookie" not in {name.lower() for name in unrelated}
 
@@ -219,9 +219,9 @@ def test_exact_origin_context_overrides_supplied_credentials(monkeypatch):
         },
     )
 
-    assert headers["User-Agent"] == "CDN Browser UA"
     assert headers["authorization"] == "Bearer cdn"
     assert headers["Cookie"] == "cdn=secret"
+    assert "user-agent" not in {name.lower() for name in headers}
 
 
 def test_exact_origin_header_overrides_are_used_for_manual_403_workarounds(monkeypatch):
@@ -250,7 +250,37 @@ def test_exact_origin_header_overrides_are_used_for_manual_403_workarounds(monke
 
     assert headers["Referer"] == "https://manual.example.test/watch"
     assert headers["Origin"] == "https://manual.example.test"
-    assert headers["User-Agent"] == "Manual UA"
+    assert "user-agent" not in {name.lower() for name in headers}
+
+
+def test_browser_page_url_overrides_media_domain_identity(monkeypatch):
+    monkeypatch.setattr(request_context.settings, "default_cookie", "")
+    task = Task(
+        id="browser-page-authority",
+        url="https://media-cdn.example/720p/video.m3u8",
+        source_page_url="https://video-page.example/watch/240#player",
+        referer="https://media-cdn.example/",
+        origin="https://media-cdn.example",
+        request_contexts={
+            "https://media-cdn.example": {
+                "request_headers": {
+                    "Referer": "https://media-cdn.example/video.m3u8",
+                    "Origin": "https://media-cdn.example",
+                },
+                "referer": "https://media-cdn.example/video.m3u8",
+                "origin": "https://media-cdn.example",
+                "cookie": "session=valid",
+            }
+        },
+    )
+
+    headers = request_context.build_task_headers(
+        task, request_url="https://media-cdn.example/720p/segment-1.ts"
+    )
+
+    assert headers["Referer"] == "https://video-page.example/watch/240"
+    assert headers["Origin"] == "https://video-page.example"
+    assert headers["Cookie"] == "session=valid"
 
 
 def test_request_replay_allows_only_bounded_json_or_form_post_bodies():

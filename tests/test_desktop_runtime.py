@@ -451,9 +451,12 @@ def test_ui_files_disable_persistent_webview_cache(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(main_module, "UI_DIST", dist)
 
     with TestClient(app) as client:
-        index = client.get("/ui?version=9.8.7")
+        root = client.get("/ui?version=9.8.7", follow_redirects=False)
+        index = client.get("/ui/?version=9.8.7")
         asset = client.get("/ui/app.js")
 
+    assert root.status_code == 307
+    assert root.headers["location"] == "/ui/"
     assert index.status_code == 200
     assert asset.status_code == 200
     assert "no-store" in index.headers["cache-control"]

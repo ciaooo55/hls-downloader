@@ -127,7 +127,7 @@ function appendUrl(values: string[], value: string | undefined): string[] {
   return values.some(item => normalized(item) === key) ? values : [...values, value]
 }
 
-function httpOrigin(value: string): string {
+export function httpOrigin(value: string): string {
   try {
     const url = new URL(value)
     return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : ''

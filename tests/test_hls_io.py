@@ -25,10 +25,8 @@ def _task(url: str = "https://example.test/master.m3u8") -> Task:
     return Task(id="test", url=url, filename="video")
 
 
-def test_browser_transport_matches_the_captured_user_agent_family():
-    assert _browser_impersonation({"User-Agent": "Mozilla/5.0 Chrome/140.0 Safari/537.36"}) == "chrome"
-    assert _browser_impersonation({"user-agent": "Mozilla/5.0 Firefox/152.0"}) == "firefox"
-    assert _browser_impersonation({"User-Agent": "Mozilla/5.0 Version/18.0 Safari/605.1.15"}) == "safari"
+def test_browser_transport_uses_one_supported_coherent_profile():
+    assert _browser_impersonation() == "chrome"
 
 
 def test_hls_progress_estimates_total_from_completed_segments():
@@ -535,10 +533,53 @@ def test_browser_transport_matches_request_tls_and_streams_to_disk(tmp_path, mon
     assert created == [
         {
             "max_clients": 8,
-            "default_headers": False,
+            "default_headers": True,
             "http_version": "v1",
             "timeout": (10, 60),
             "allow_redirects": True,
         }
     ]
     assert requested[0]["impersonate"] == "chrome"
+    assert "user-agent" not in {name.lower() for name in requested[0]["headers"]}
+
+
+def test_browser_transport_retries_cloudflare_403_without_stale_cf_cookie(monkeypatch):
+    from backend.app.downloader import hls as hls_module
+
+    requested = []
+
+    class FakeResponse:
+        def __init__(self, status_code):
+            self.status_code = status_code
+            self.closed = False
+
+        async def aclose(self):
+            self.closed = True
+
+    first = FakeResponse(403)
+    second = FakeResponse(200)
+
+    class FakeSession:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def get(self, _url, **kwargs):
+            requested.append(kwargs)
+            return first if len(requested) == 1 else second
+
+    monkeypatch.setattr(hls_module, "CurlAsyncSession", FakeSession)
+
+    async def run():
+        client = _create_hls_client(2)
+        response = await client.get(
+            "https://example.test/playlist.m3u8",
+            headers={"Cookie": "session=ok; __cf_bm=expired; __cflb=stale"},
+        )
+        assert response is second
+
+    asyncio.run(run())
+    assert first.closed is True
+    assert len(requested) == 2
+    assert requested[0]["headers"]["Cookie"] == "session=ok; __cf_bm=expired; __cflb=stale"
+    assert requested[1]["headers"]["Cookie"] == "session=ok"
+    assert requested[0]["impersonate"] == requested[1]["impersonate"] == "chrome"

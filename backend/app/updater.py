@@ -18,7 +18,7 @@ from .version import APP_VERSION
 LATEST_RELEASE_API = "https://api.github.com/repos/ciaooo55/hls-downloader/releases/latest"
 LATEST_RELEASE_PAGE = "https://github.com/ciaooo55/hls-downloader/releases/latest"
 RELEASE_DOWNLOAD_PREFIX = "/ciaooo55/hls-downloader/releases/download/"
-SETUP_ASSET_NAME = "HLSDownloader-Windows-x64-Setup.exe"
+LEGACY_SETUP_ASSET_NAME = "HLSDownloader-Windows-x64-Setup.exe"
 MAX_INSTALLER_BYTES = 400 * 1024 * 1024
 
 
@@ -134,6 +134,10 @@ def is_newer_version(candidate: str, current: str) -> bool:
     return left + (0,) * (width - len(left)) > right + (0,) * (width - len(right))
 
 
+def setup_asset_name(version: str) -> str:
+    return f"HLSDownloader-v{version.strip().lstrip('v')}-Windows-x64-Setup.exe"
+
+
 def get_update_directory() -> Path:
     # Import lazily so updater helpers remain usable while configuration starts up.
     from .config import settings
@@ -224,10 +228,11 @@ def check_for_update(*, opener=urllib.request.urlopen) -> UpdateInfo:
     if not latest:
         raise UpdateError("GitHub 最新版本信息中缺少版本号")
 
-    asset = next(
-        (item for item in payload.get("assets", []) if item.get("name") == SETUP_ASSET_NAME),
-        None,
-    )
+    expected_asset_name = setup_asset_name(latest)
+    assets = list(payload.get("assets", []))
+    asset = next((item for item in assets if item.get("name") == expected_asset_name), None)
+    if not asset:
+        asset = next((item for item in assets if item.get("name") == LEGACY_SETUP_ASSET_NAME), None)
     if not asset:
         raise UpdateError("最新版本没有 Windows 安装包")
 

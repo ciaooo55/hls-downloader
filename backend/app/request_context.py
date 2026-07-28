@@ -24,6 +24,17 @@ _HOP_BY_HOP = {
     "upgrade",
 }
 _CLIENT_MANAGED = {"accept-encoding", "cookie"}
+# These fields describe a particular browser build or its HTTP stack.  They
+# cannot be safely replayed alongside curl-cffi impersonation: a captured
+# Firefox/Chrome version, sec-ch-ua brand list and HTTP priority value often
+# disagree with the TLS/header fingerprint curl-cffi actually emits.
+_BROWSER_FINGERPRINT_HEADERS = {
+    "accept",
+    "accept-encoding",
+    "accept-language",
+    "priority",
+    "user-agent",
+}
 _REPLAYABLE_POST_CONTENT_TYPES = {
     "application/json",
     "application/x-www-form-urlencoded",
@@ -48,6 +59,24 @@ def request_origin(value: str) -> str:
         return f"{parsed.scheme}://{host}{port}"
     except (TypeError, ValueError):
         return ""
+
+
+def source_page_identity(value: str) -> tuple[str, str]:
+    """Return the browser page Referer and Origin for a captured task.
+
+    The address-bar page is the access context for media requests.  It must
+    not be inferred from the manifest/CDN URL: doing that turns a cross-site
+    player request into a same-site request and is a common cause of 403s.
+    URL fragments are omitted because browsers never send them in Referer.
+    """
+    try:
+        parsed = urlsplit(str(value or "").strip())
+        origin = request_origin(value)
+        if not origin:
+            return "", ""
+        return parsed._replace(fragment="").geturl(), origin
+    except (TypeError, ValueError):
+        return "", ""
 
 
 def sanitize_request_headers(values: Mapping[str, str] | None) -> dict[str, str]:
@@ -76,6 +105,22 @@ def sanitize_request_headers(values: Mapping[str, str] | None) -> dict[str, str]
         # under different casing.
         result[lowered] = value
     return result
+
+
+def _browser_safe_headers(values: Mapping[str, str] | None) -> dict[str, str]:
+    """Drop captured browser-fingerprint fields before a download request.
+
+    Authentication and application-specific headers stay intact.  Referer,
+    Origin and Cookie are restored separately by :func:`build_task_headers`,
+    so this only removes fields that curl-cffi must own to keep its browser
+    impersonation internally consistent.
+    """
+    headers = sanitize_request_headers(values)
+    return {
+        name: value
+        for name, value in headers.items()
+        if name not in _BROWSER_FINGERPRINT_HEADERS and not name.startswith("sec-")
+    }
 
 
 def sanitize_request_replay(
@@ -154,7 +199,10 @@ def build_task_headers(
     request_url: str = "",
     base_headers: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Reproduce a captured browser request without replaying unsafe headers."""
+    """Build access headers while leaving browser fingerprinting to the client."""
+    page_referer, page_origin = source_page_identity(
+        getattr(task, "source_page_url", "")
+    )
     target_origin = request_origin(request_url or getattr(task, "url", ""))
     source_origin = request_origin(getattr(task, "url", ""))
     contexts = sanitize_request_contexts(getattr(task, "request_contexts", {}))
@@ -162,16 +210,17 @@ def build_task_headers(
     captured_headers = sanitize_request_headers(
         scoped.get("request_headers") if scoped else getattr(task, "request_headers", {})
     )
-    supplied_headers = sanitize_request_headers(base_headers)
+    captured_access_headers = _browser_safe_headers(captured_headers)
+    supplied_headers = _browser_safe_headers(base_headers)
     supplied_values = {
         str(name).lower(): str(value).strip()
         for name, value in dict(base_headers or {}).items()
         if str(value or "").strip() and "\r" not in str(value) and "\n" not in str(value)
     }
-    headers = dict(captured_headers)
-    # Callers may add request-specific fields (for example Accept or a browser
-    # User-Agent). Keep them unless an exact per-origin browser context below
-    # has a more authoritative value.
+    headers = dict(captured_access_headers)
+    # Callers may add request-specific access fields (for example an API
+    # authorization token). Browser fingerprint fields are intentionally
+    # ignored so curl-cffi can inject a coherent profile of its own.
     headers.update(supplied_headers)
     cross_origin_without_context = bool(
         request_url and target_origin and source_origin
@@ -186,7 +235,7 @@ def build_task_headers(
         headers.pop("authorization", None)
         supplied_values.pop("cookie", None)
     if scoped:
-        headers.update(captured_headers)
+        headers.update(captured_access_headers)
     lowered = {name.lower(): name for name in headers}
     scoped_referer = (
         captured_headers.get("referer", "") or str((scoped or {}).get("referer", ""))
@@ -196,11 +245,6 @@ def build_task_headers(
         captured_headers.get("origin", "") or str((scoped or {}).get("origin", ""))
         if scoped else ""
     )
-    scoped_user_agent = (
-        captured_headers.get("user-agent", "") or str((scoped or {}).get("user_agent", ""))
-        if scoped else ""
-    )
-
     def set_header(name: str, value: str) -> None:
         existing = lowered.get(name.lower())
         if existing and existing != name:
@@ -217,27 +261,21 @@ def build_task_headers(
         or getattr(task, "request_headers", {})
         or contexts
     )
-    supplied_user_agent = supplied_values.get("user-agent", "")
     supplied_referer = supplied_values.get("referer", "")
     supplied_origin = supplied_values.get("origin", "")
     supplied_cookie = supplied_values.get("cookie", "")
     set_header(
-        "User-Agent",
-        scoped_user_agent
-        or supplied_user_agent
-        or getattr(task, "user_agent", "")
-        or settings.default_user_agent,
-    )
-    set_header(
         "Referer",
-        scoped_referer
+        page_referer
+        or scoped_referer
         or supplied_referer
         or getattr(task, "referer", "")
         or ("" if browser_context else settings.default_referer),
     )
     set_header(
         "Origin",
-        scoped_origin
+        page_origin
+        or scoped_origin
         or supplied_origin
         or getattr(task, "origin", "")
         or ("" if browser_context else settings.default_origin),

@@ -1,4 +1,5 @@
 import { isAuthenticationNavigation } from './clickIntent'
+import { httpOrigin } from './requestChain'
 
 export type ResourceKind = 'hls' | 'dash' | 'media' | 'file' | 'magnet'
 
@@ -393,12 +394,13 @@ export function resourceRequestIdentity(
   const captured = Object.fromEntries(
     Object.entries(resource.requestHeaders || {}).map(([name, value]) => [name.toLowerCase(), String(value || '')]),
   )
+  const pageOrigin = httpOrigin(resource.pageUrl || '')
   return {
-    // A page URL is a valid fallback for Referer when the resource came from
-    // DOM/performance capture. Origin is deliberately not synthesized: normal
-    // GET navigations/downloads often omit it and some CDNs reject an invented one.
-    referer: captured.referer || resource.pageUrl || '',
-    origin: captured.origin || '',
+    // Media access context belongs to the page in the browser address bar,
+    // never to the manifest/CDN host.  Captured headers are only a fallback
+    // for handoffs where no tab/page URL was available.
+    referer: resource.pageUrl || captured.referer || '',
+    origin: pageOrigin || captured.origin || '',
     userAgent: captured['user-agent'] || fallbackUserAgent,
   }
 }

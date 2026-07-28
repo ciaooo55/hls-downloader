@@ -23,11 +23,20 @@ class GlobalDownloadThrottle:
         except (TypeError, ValueError):
             kib = 0.0
         limit_bps = kib * 1024.0
+        previous_limit = self._limit_bps
         self._limit_bps = limit_bps
         if limit_bps <= 0:
             self._tokens = 0.0
+            self._updated = time.monotonic()
         else:
             self._tokens = min(self._tokens, limit_bps)
+            # A new cap starts with no accumulated burst.  Without resetting
+            # the timestamp, test/setup time before the first read becomes a
+            # hidden free allowance and the configured speed is exceeded.
+            # Repeated configure() calls at the same cap intentionally keep
+            # the bucket state, as throttle_bytes invokes it for every chunk.
+            if previous_limit != limit_bps:
+                self._updated = time.monotonic()
 
     @property
     def limit_bps(self) -> float:

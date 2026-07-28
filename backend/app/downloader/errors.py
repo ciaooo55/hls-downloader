@@ -157,7 +157,10 @@ def _http_hint(
     if status == 403:
         parts: list[str] = []
         if cloudflare:
-            parts.append("响应像是 Cloudflare / 人机验证拦截，直接重试旧任务通常无效。")
+            parts.append(
+                "响应像是 Cloudflare / 人机验证拦截。已避免回放冲突的浏览器指纹，"
+                "并会清理过期的 __cf_bm 后受控重试一次；仍被拒绝通常表示会话挑战未通过。"
+            )
         if signed:
             parts.append("链接含签名/过期参数，签名 URL 过期后必须回到原网页重新获取。")
         if not has_referer and not has_browser_context:
