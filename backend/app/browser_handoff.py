@@ -11,7 +11,7 @@ from .naming import is_generic_media_name, suggest_manifest_name
 from .request_context import request_origin, sanitize_request_headers, sanitize_request_replay
 
 
-RECOMMENDED_BROWSER_EXTENSION_VERSION = "3.0.3"
+RECOMMENDED_BROWSER_EXTENSION_VERSION = "3.0.4"
 MIN_BROWSER_EXTENSION_VERSION = "2.0.11"
 DEFAULT_BROWSER_CLIENT_TTL = 180.0
 

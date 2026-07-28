@@ -63,6 +63,16 @@ class _BrowserHLSClient:
         self._session = CurlAsyncSession(
             max_clients=concurrency + 4,
             default_headers=False,
+            # HLS VOD downloads intentionally use independent HTTP/1.1
+            # connections for the worker pool.  A number of video CDNs apply
+            # their throughput limit to an individual HTTP/2 connection; if
+            # all segment workers are multiplexed onto that one connection,
+            # increasing task concurrency no longer increases total speed.
+            # HTTP/1.1 keeps the configured worker count meaningful (the
+            # same multi-connection strategy used by download managers),
+            # without changing the captured headers, cookies or TLS browser
+            # impersonation used for access-controlled streams.
+            http_version="v1",
             timeout=(10, 60),
             allow_redirects=True,
         )
