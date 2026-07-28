@@ -71,14 +71,34 @@ Function ScheduleSelfDelete
   Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -Command "Wait-Process -Id $0 -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '$EXEPATH' -Force -ErrorAction SilentlyContinue"`
 FunctionEnd
 
-!macro CloseRunningApp Suffix
+!macro DisconnectLegacyNativeHost Suffix
+  ; An old browser extension can launch its Native Host while this update is
+  ; closing the desktop.  Disconnect it first so it cannot immediately create
+  ; another old Core and re-lock HLSDownloader.exe mid-upgrade.
+  IfFileExists "$INSTDIR\scripts\register-native-host.ps1" 0 DisconnectLegacyNativeHostDone${Suffix}
+    DetailPrint "正在暂时断开旧版浏览器连接..."
+    nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\scripts\register-native-host.ps1" -Unregister'
+DisconnectLegacyNativeHostDone${Suffix}:
+!macroend
+
+!macro CloseRunningApp Suffix IncludeNativeHost
   IfFileExists "$INSTDIR\HLSDownloader.exe" 0 CloseRunningAppDone${Suffix}
+  StrCpy $R0 0
 CloseRunningAppRetry${Suffix}:
+    IntOp $R0 $R0 + 1
     DetailPrint "正在关闭运行中的 HLS Downloader..."
-    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\shutdown-running.ps1" -InstallDir "$INSTDIR" -TimeoutSeconds 20'
-    Pop $0
-    Pop $1
-    ${If} $0 != 0
+    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\shutdown-running.ps1" -InstallDir "$INSTDIR" -TimeoutSeconds 20 ${IncludeNativeHost}'
+    Pop $R1
+    Pop $R2
+    ${If} $R1 != 0
+      ; Antivirus and Explorer can hold a just-closed executable briefly.
+      ; Retry automatically after the Host/desktop process tree is gone so a
+      ; normal overwrite never requires users to race a dialog manually.
+      ${If} $R0 < 4
+        Sleep 1000
+        Goto CloseRunningAppRetry${Suffix}
+      ${EndIf}
+      IfSilent CloseRunningAppAbort${Suffix}
       MessageBox MB_ICONSTOP|MB_RETRYCANCEL "无法关闭正在运行的 HLS Downloader，或程序文件仍被其他进程占用。$\r$\n$\r$\n请关闭下载器、文件管理器预览和安全软件扫描后重试。" IDRETRY CloseRunningAppRetry${Suffix} IDCANCEL CloseRunningAppAbort${Suffix}
     ${EndIf}
     Goto CloseRunningAppDone${Suffix}
@@ -90,7 +110,8 @@ CloseRunningAppDone${Suffix}:
 Section "Install" SecInstall
   SetOutPath "$PLUGINSDIR"
   File /oname=shutdown-running.ps1 "${STAGE_DIR}\scripts\shutdown-running.ps1"
-  !insertmacro CloseRunningApp Install
+  !insertmacro DisconnectLegacyNativeHost Install
+  !insertmacro CloseRunningApp Install "-IncludeNativeHost"
   ; Remove both generations of the old desktop shell before writing Tauri.
   ; v1.4.0 shipped a Kotlin/Compose image in app/ and runtime/.  Leaving it
   ; behind made a half-updated install easy to launch from a stale shortcut.
@@ -190,7 +211,7 @@ Section "Uninstall"
   ; Prevent a browser extension from reopening its host while the uninstall is
   ; removing versioned host files.  Updates intentionally do not do this.
   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\scripts\register-native-host.ps1" -Unregister'
-  !insertmacro CloseRunningApp Uninstall
+  !insertmacro CloseRunningApp Uninstall "-IncludeNativeHost"
   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\shutdown-running.ps1" -InstallDir "$INSTDIR" -TimeoutSeconds 5 -IncludeNativeHost'
 
   StrCpy $0 "preserve"

@@ -197,8 +197,13 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     assert "resume_tasks=true" in shutdown_script
     assert "taskkill.exe\" /IM HLSDownloader.exe /T /F" in shutdown_script
     assert '[System.IO.FileShare]::None' in shutdown_script
-    assert '-InstallDir "$INSTDIR" -TimeoutSeconds 20' in nsis_script
+    assert '-InstallDir "$INSTDIR" -TimeoutSeconds 20 ${IncludeNativeHost}' in nsis_script
     assert 'CloseRunningAppRetry${Suffix}' in nsis_script
+    assert 'DisconnectLegacyNativeHost' in nsis_script
+    assert 'register-native-host.ps1" -Unregister' in nsis_script
+    assert 'IfSilent CloseRunningAppAbort${Suffix}' in nsis_script
+    assert 'StrCpy $R0 0' in nsis_script
+    assert 'IntOp $R0 $R0 + 1' in nsis_script
     assert 'MB_RETRYCANCEL' in nsis_script
     assert 'CloseRunningAppAbort${Suffix}' in nsis_script
     assert 'RMDir /r "$LOCALAPPDATA\\HLS Downloader"' in nsis_script
@@ -219,8 +224,9 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     assert 'Set-Content -LiteralPath $smokePortableMarker' in build_script
     assert 'Remove-Item -LiteralPath $smokePortableMarker' in build_script
     assert 'compose\\binaries\\main\\app\\HLSDownloader' not in build_script
-    assert '!insertmacro CloseRunningApp Install' in nsis_script
-    assert '!insertmacro CloseRunningApp Uninstall' in nsis_script
+    assert '!insertmacro DisconnectLegacyNativeHost Install' in nsis_script
+    assert '!insertmacro CloseRunningApp Install "-IncludeNativeHost"' in nsis_script
+    assert '!insertmacro CloseRunningApp Uninstall "-IncludeNativeHost"' in nsis_script
     install_cleanup = nsis_script.index('RMDir /r "$INSTDIR\\_internal"')
     install_copy = nsis_script.index('SetOutPath "$INSTDIR\\_internal"')
     assert install_cleanup < install_copy
