@@ -96,6 +96,7 @@ export default function App() {
   const lastClipboardOffer = useRef('')
   const tasksRef = useRef<Task[]>([])
   const loadInFlight = useRef<Promise<void> | null>(null)
+  const deletedTaskIds = useRef<Set<string>>(new Set())
   const handoffRefreshInFlight = useRef(false)
   const autoPlayHandled = useRef(false)
 
@@ -123,7 +124,7 @@ export default function App() {
     if (loadInFlight.current) return loadInFlight.current
     const request = (async () => { try {
       const [taskData, settingData, browserData, healthData] = await Promise.all([fetchTasks(), fetchSettings(), fetchBrowserStatus(), fetchHealth()])
-      setTasks(taskData); setSettings(settingData); setBrowserStatus(browserData); setAppVersion(healthData.version || ''); setError('')
+      setTasks(taskData.filter(task => !deletedTaskIds.current.has(task.id))); setSettings(settingData); setBrowserStatus(browserData); setAppVersion(healthData.version || ''); setError('')
       try {
         if ('Notification' in window && Notification.permission === 'default') {
           void Notification.requestPermission()
@@ -139,7 +140,8 @@ export default function App() {
   useEffect(() => {
     load()
     const events = connectSSE(event => {
-      setTasks(previous => mergeTaskEvent(previous, event) as Task[])
+      if (event.type === 'task_deleted' && event.task_id) deletedTaskIds.current.add(event.task_id)
+      setTasks(previous => mergeTaskEvent(previous, event, deletedTaskIds.current) as Task[])
       if (event.type === 'task_progress' && event.task_id) {
         const previous = lastStatuses.current[event.task_id]
         if (previous !== event.status) {
@@ -300,12 +302,22 @@ export default function App() {
     }
     const fresh = targets.filter(task => !pending.has(task.id))
     if (!fresh.length) return
+    const deleting = action === 'delete' || action === 'deleteFiles'
+    if (deleting) {
+      fresh.forEach(task => deletedTaskIds.current.add(task.id))
+      setTasks(current => current.filter(task => !deletedTaskIds.current.has(task.id)))
+    }
     setError('')
     setPending(current => new Set([...current, ...fresh.map(task => task.id)]))
     try {
       const apiAction = action.startsWith('queue_') ? `queue/${action.slice('queue_'.length)}` : action
       const results = await Promise.allSettled(fresh.map(task => action === 'delete' || action === 'deleteFiles' ? deleteTask(task.id, action === 'deleteFiles') : taskAction(task.id, apiAction)))
       const failures = results.filter(result => result.status === 'rejected') as PromiseRejectedResult[]
+      if (deleting && failures.length) {
+        results.forEach((result, index) => {
+          if (result.status === 'rejected') deletedTaskIds.current.delete(fresh[index].id)
+        })
+      }
       const successCount = results.length - failures.length
       if (failures.length) {
         const reason = failures[0].reason

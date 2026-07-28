@@ -5,12 +5,17 @@ export type TaskRecord = Record<string, any> & {
   type?: string
 }
 
-export function mergeTaskEvent(tasks: TaskRecord[], event: TaskRecord): TaskRecord[] {
+export function mergeTaskEvent(
+  tasks: TaskRecord[],
+  event: TaskRecord,
+  deletedTaskIds: ReadonlySet<string> = new Set(),
+): TaskRecord[] {
   const taskId = event.task_id || event.id
   if (!taskId) return tasks
   if (event.type === 'task_deleted') {
     return tasks.filter(task => task.id !== taskId)
   }
+  if (deletedTaskIds.has(taskId)) return tasks
   if (event.type !== 'task_progress' && event.type !== 'task_created') {
     return tasks
   }

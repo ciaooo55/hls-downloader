@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser'
+import { clampOverlayPosition, shouldShowMediaOverlay } from '../lib/mediaOverlay'
 import { classifyResource, isGenericMediaName, mergeResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
@@ -62,13 +63,12 @@ export default defineContentScript({
           :host{all:initial}*{box-sizing:border-box}button{font:13px system-ui,sans-serif;letter-spacing:0}
           ${THEME_TOKENS_CSS}
           ${THEME_BASE_CSS}
-          .wrap{display:none;position:fixed;right:14px;top:35%;z-index:2147483647;color:var(--text);filter:drop-shadow(0 6px 12px var(--shadow))}.wrap.open{display:block}
-          .toggle{display:none}
-          .panel{display:none;width:min(344px,calc(100vw - 20px));max-height:min(480px,62vh);background:var(--surface);border:1px solid var(--overlay-border);border-radius:9px;overflow:hidden}.open .panel{display:block}.open .toggle{display:none}
+          .wrap{display:none;position:fixed;z-index:2147483647;color:var(--text);filter:drop-shadow(0 6px 12px var(--shadow))}.wrap.open{display:block}
+          .panel{display:none;width:min(344px,calc(100vw - 20px));max-height:min(520px,calc(100vh - 20px));background:var(--surface);border:1px solid var(--overlay-border);border-radius:9px;overflow:hidden}.open .panel{display:block}
           header{display:flex;align-items:center;justify-content:space-between;padding:7px 8px 7px 9px;border-bottom:1px solid var(--border);background:var(--surface-2);color:var(--text);font:600 12px system-ui;cursor:grab;touch-action:none}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:4px}
-          .pin,.close{height:27px;border:0;border-radius:5px;background:var(--surface-3);color:var(--text);cursor:pointer}.pin{padding:0 8px;font:11px system-ui}.pin.active{background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green)}.close{display:grid;place-items:center;width:27px;font:700 18px/1 system-ui}.pin:hover,.close:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{overflow:auto;max-height:50vh}.empty{padding:18px 14px;color:var(--faint);font:12px/1.45 system-ui;text-align:center}
+          .pin,.close{height:27px;border:0;border-radius:5px;background:var(--surface-3);color:var(--text);cursor:pointer}.pin{padding:0 8px;font:11px system-ui}.pin.active{background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green)}.close{display:grid;place-items:center;width:27px;font:700 18px/1 system-ui}.pin:hover,.close:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{max-height:calc(min(520px,calc(100vh - 20px)) - 78px);overflow-y:auto;overscroll-behavior:contain}
           .item{padding:9px 10px;border-bottom:1px solid var(--border)}.item:last-child{border-bottom:0}.item:hover{background:var(--surface-2)}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12px/1.35 system-ui;overflow-wrap:anywhere;color:var(--text)}.kind{overflow:hidden;color:var(--muted);font:10.5px/1.35 system-ui;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.resource-url{display:block;margin-top:4px;color:var(--faint);font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;user-select:text}.quality-select{width:min(184px,100%);margin-top:6px}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:29px;border:0;border-radius:6px;background:var(--primary);color:var(--on-primary);padding:4px 6px;cursor:pointer;font-weight:600;font-size:11px}.download:hover{background:var(--primary-hover)}.download[disabled]{cursor:default;opacity:.6}.download.push-tv{background:color-mix(in srgb,var(--purple) 75%,var(--surface))}.download.push-tv:hover{background:var(--purple)}.download.cast{background:color-mix(in srgb,var(--green) 78%,var(--surface))}.download.cast:hover{background:var(--green)}.result{padding:7px 10px;background:color-mix(in srgb,var(--green) 14%,var(--surface));color:var(--green);font:11px/1.4 system-ui}.result.error{background:color-mix(in srgb,var(--red) 12%,var(--surface));color:var(--red)}
-          .video-buttons{position:fixed;inset:0;z-index:2147483646;pointer-events:none}.video-download{position:fixed;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 10px var(--shadow);pointer-events:auto;cursor:grab;touch-action:none;font:600 12px system-ui}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}
+          .video-buttons{position:fixed;inset:0;z-index:2147483646;pointer-events:none}.video-download{position:fixed;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 10px var(--shadow);pointer-events:auto;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font:600 12px system-ui}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}
           button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
         `
         const image = () => {
@@ -78,11 +78,6 @@ export default defineContentScript({
           return icon
         }
         const panelWrap = element('div', 'wrap')
-        const toggle = element('button', 'toggle') as HTMLButtonElement
-        toggle.type = 'button'
-        toggle.title = '媒体嗅探：悬停展开'
-        toggle.setAttribute('aria-label', '展开媒体嗅探')
-        toggle.append(image())
         const panel = element('div', 'panel')
         const header = element('header')
         const title = element('span', 'title', '当前视频')
@@ -100,20 +95,12 @@ export default defineContentScript({
         const result = element('div', 'result')
         result.hidden = true
         const list = element('div', 'list')
-        list.append(element('div', 'empty', '播放视频后会显示资源'))
         panel.append(header, result, list)
-        panelWrap.append(toggle, panel)
+        panelWrap.append(panel)
         const videoButtons = element('div', 'video-buttons')
         root.append(style, panelWrap, videoButtons)
         container.append(root)
         const wrap = root.querySelector<HTMLElement>('.wrap')!
-        root.querySelector('.toggle')!.addEventListener('click', () => {
-          wrap.classList.add('open')
-          const rect = wrap.getBoundingClientRect()
-          wrap.style.left = `${Math.max(10, Math.min(rect.left, innerWidth - rect.width - 10))}px`
-          wrap.style.top = `${Math.max(10, Math.min(rect.top, innerHeight - rect.height - 10))}px`
-          wrap.style.right = 'auto'
-        })
         return root
       },
     })
@@ -132,18 +119,20 @@ export default defineContentScript({
         removeTheme = applyTheme(themeRoot, normalizeThemePreference(changes[THEME_STORAGE_KEY].newValue))
       })
     }
-    const dragHandles = ui.shadow.querySelectorAll<HTMLElement>('.toggle, header')
+    const dragHandles = ui.shadow.querySelectorAll<HTMLElement>('header')
     let dragged = false
     let pinned = false
+    let panelPosition: { x: number, y: number } | null = null
     let videoButtonPosition: { x: number, y: number } | null = null
     let videoControlDragging = false
     let collapseTimer: ReturnType<typeof setTimeout> | null = null
     const fitPanel = () => {
       if (!wrap) return
       const rect = wrap.getBoundingClientRect()
-      if (rect.right > innerWidth - 10 || rect.bottom > innerHeight - 10 || rect.left < 10 || rect.top < 10) {
-        wrap.style.left = `${Math.max(10, Math.min(rect.left, innerWidth - rect.width - 10))}px`
-        wrap.style.top = `${Math.max(10, Math.min(rect.top, innerHeight - rect.height - 10))}px`
+      const next = clampOverlayPosition({ x: rect.left, y: rect.top }, { width: rect.width, height: rect.height }, { width: innerWidth, height: innerHeight })
+      if (next.x !== rect.left || next.y !== rect.top) {
+        wrap.style.left = `${next.x}px`
+        wrap.style.top = `${next.y}px`
         wrap.style.right = 'auto'
       }
     }
@@ -157,7 +146,6 @@ export default defineContentScript({
       pinButton?.classList.toggle('active', value)
       if (pinButton) pinButton.textContent = value ? '已固定' : '固定'
       if (value) setOpen(true)
-      void browser.storage.local.set({ panelPinned: value })
     }
     wrap?.addEventListener('mouseenter', () => {
       if (collapseTimer) clearTimeout(collapseTimer)
@@ -172,21 +160,10 @@ export default defineContentScript({
       if (pinned) setPinned(false)
       setOpen(false)
     })
-    void browser.storage.local.get(['panelPosition', 'panelPinned']).then(value => {
-      const position = value.panelPosition as { x?: unknown; y?: unknown } | undefined
-      pinned = value.panelPinned === true
-      pinButton?.classList.toggle('active', pinned)
-      if (pinButton) pinButton.textContent = pinned ? '已固定' : '固定'
-      if (pinned) setOpen(true)
-      if (wrap && position && typeof position.x === 'number' && typeof position.y === 'number'
-        && Number.isFinite(position.x) && Number.isFinite(position.y)) {
-        wrap.style.left = `${Math.max(0, position.x)}px`; wrap.style.top = `${Math.max(0, position.y)}px`; wrap.style.right = 'auto'
-      }
-    })
-    // Older builds persisted one screen coordinate for every site. It detached
-    // the control from the active player after navigation, so positions are
-    // now retained only for the current playback session.
-    void browser.storage.local.remove('videoButtonPosition')
+    // Older builds persisted panelPinned/panelPosition across every site.
+    // Clear that migration residue once: visibility and positions now belong
+    // only to the active playback session in this page.
+    void browser.storage.local.remove(['panelPinned', 'panelPosition', 'videoButtonPosition'])
     dragHandles.forEach(handle => handle.addEventListener('pointerdown', event => {
       if (!wrap || (event.target as HTMLElement).closest('.close, .pin')) return
       if (event.button !== 0) return
@@ -198,22 +175,20 @@ export default defineContentScript({
       const move = (next: PointerEvent) => {
         if (next.pointerId !== event.pointerId) return
         if (Math.abs(next.clientX - startX) + Math.abs(next.clientY - startY) > 4) dragged = true
-        wrap.style.left = `${Math.max(10, Math.min(innerWidth - rect.width - 10, startLeft + next.clientX - startX))}px`
-        wrap.style.top = `${Math.max(10, Math.min(innerHeight - rect.height - 10, startTop + next.clientY - startY))}px`
+        const position = clampOverlayPosition({ x: startLeft + next.clientX - startX, y: startTop + next.clientY - startY }, { width: rect.width, height: rect.height }, { width: innerWidth, height: innerHeight })
+        wrap.style.left = `${position.x}px`
+        wrap.style.top = `${position.y}px`
         wrap.style.right = 'auto'
       }
       const finish = (next: PointerEvent) => {
         if (next.pointerId !== event.pointerId) return
         handle.releasePointerCapture?.(event.pointerId)
         window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish)
-        void browser.storage.local.set({ panelPosition: { x: wrap.offsetLeft, y: wrap.offsetTop } })
+        panelPosition = { x: wrap.offsetLeft, y: wrap.offsetTop }
         setTimeout(() => { dragged = false }, 0)
       }
       window.addEventListener('pointermove', move); window.addEventListener('pointerup', finish, { once: true })
     }))
-    ui.shadow.querySelector('.toggle')?.addEventListener('click', event => {
-      if (dragged) event.stopImmediatePropagation()
-    }, true)
     window.addEventListener('resize', fitPanel)
 
     const sendResource = (resource: MediaResource, button: HTMLButtonElement) => {
@@ -221,7 +196,7 @@ export default defineContentScript({
       button.setAttribute('disabled', ''); button.textContent = '发送中'
       void runtimeMessage({ type: 'offer', resource }).then(async response => {
         if (!response?.ok || !response?.handoff?.id) throw new Error(response?.error || '桌面端未接受请求')
-        button.textContent = '待确认'
+        button.textContent = '等待确认'
         if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `请在桌面下载器确认：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
         const handoffId = response.handoff.id
         const deadline = Date.now() + 130_000
@@ -231,6 +206,7 @@ export default defineContentScript({
           const handoff = statusResponse?.handoff || statusResponse
           const status = String(handoff?.status || '')
           if (!status || status === 'pending' || status === 'accepting') continue
+          if (status === 'connection_lost') throw new Error('桌面端连接中断，请重试')
           if (status === 'accepted') {
             button.textContent = '已加入'
             if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `已加入下载队列：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
@@ -299,17 +275,24 @@ export default defineContentScript({
 
     const updateVideoButtons = () => {
       const layer = ui.shadow.querySelector<HTMLElement>('.video-buttons')
-      const toggle = ui.shadow.querySelector<HTMLButtonElement>('.toggle')
       if (!layer) return
       // Players emit timeupdate while the pointer is down. Replacing the
       // control in that interval cancels pointer capture before it can move.
       if (videoControlDragging) return
-      layer.replaceChildren()
-      if (!activePlayback || !activeVideo) {
-        if (toggle) toggle.hidden = true
+      const entries = visiblePlaybackResources([...resources.values()], activePlayback, 8)
+      const canShowOverlay = shouldShowMediaOverlay({
+        hasPlayback: Boolean(activePlayback),
+        hasActiveVideo: Boolean(activeVideo),
+        resourceCount: entries.length,
+      })
+      if (!canShowOverlay) {
+        layer.replaceChildren()
+        if (pinned) setPinned(false)
+        setOpen(false)
+        panelPosition = null
         return
       }
-      const entries = visiblePlaybackResources([...resources.values()], activePlayback, 8)
+      layer.replaceChildren()
       let visible = 0
       const videos = (activeVideo && document.contains(activeVideo) ? [activeVideo] : [...document.querySelectorAll<HTMLVideoElement>('video')])
         .map(video => ({ video, rect: video.getBoundingClientRect() }))
@@ -326,7 +309,7 @@ export default defineContentScript({
         if (!choices.length) return
         visible += 1
         const button = document.createElement('button')
-        button.type = 'button'; button.className = 'video-download'; button.title = hasExactPlayerMatch && choices.length === 1 ? '使用 HLS Downloader 下载此视频' : '选择当前页面检测到的视频资源'
+        button.type = 'button'; button.className = 'video-download'; button.title = hasExactPlayerMatch && choices.length === 1 ? '查看此视频的下载选项' : '选择当前页面检测到的视频资源'
         const buttonWidth = 156
         const buttonHeight = 34
         const besidePlayer = rect.right + 8
@@ -395,22 +378,22 @@ export default defineContentScript({
             videoDragged = false
             return
           }
-          // MSE/blob players do not expose the actual manifest as currentSrc.
-          // Never turn an unrelated single network entry into a one-click
-          // download: opening the chooser lets the user see the evidence first.
-          if (hasExactPlayerMatch && choices.length === 1) { sendResource(choices[0], button); return }
+          // Always show the evidence and actions first. This keeps one-click
+          // controls beside the player compact without turning an unrelated
+          // MSE network request into an accidental download.
           if (wrap) {
-            // Populate synchronously: waiting for the next observer render
-            // made “选择资源” look unresponsive on busy players.
             render()
-            wrap.style.left = `${Math.max(10, Math.min(rect.right - 344, innerWidth - 354))}px`
-            wrap.style.top = `${Math.max(10, Math.min(rect.top + 44, innerHeight - 480))}px`
-            wrap.style.right = 'auto'; setPinned(true); setOpen(true)
+            const preferred = panelPosition || { x: rect.right - 344, y: rect.top + 44 }
+            const position = clampOverlayPosition(preferred, { width: 344, height: Math.min(520, innerHeight - 20) }, { width: innerWidth, height: innerHeight })
+            panelPosition = position
+            wrap.style.left = `${position.x}px`
+            wrap.style.top = `${position.y}px`
+            wrap.style.right = 'auto'
+            setOpen(true)
           }
         })
         layer.append(button)
       })
-      if (toggle) toggle.hidden = true
     }
 
     const render = () => {
@@ -418,12 +401,6 @@ export default defineContentScript({
       if (!list) return
       const entries = visiblePlaybackResources([...resources.values()], activePlayback, 8)
       list.replaceChildren()
-      if (!entries.length) {
-        const empty = document.createElement('div')
-        empty.className = 'empty'
-        empty.textContent = activePlayback ? '未找到与本次播放关联的可下载资源' : '请先播放主视频，再显示关联资源'
-        list.append(empty)
-      }
       entries.forEach(resource => {
         const row = document.createElement('div'); row.className = 'item'
         const meta = document.createElement('div'); meta.className = 'meta'
@@ -553,6 +530,11 @@ export default defineContentScript({
       if (next === currentPageUrl) return
       currentPageUrl = next
       activePlayback = null
+      activeVideo = null
+      videoButtonPosition = null
+      panelPosition = null
+      if (pinned) setPinned(false)
+      setOpen(false)
       resources.clear(); render(); loadPageResources(location.href)
       document.querySelectorAll<HTMLMediaElement>('video[src],audio[src],source[src]').forEach(media => add(media.currentSrc || media.src))
     }

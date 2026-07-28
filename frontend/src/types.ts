@@ -122,6 +122,16 @@ export interface BrowserStatus {
   recommended_version?: string
   minimum_version?: string
   needs_upgrade?: boolean
+  clients?: Array<{
+    id: string
+    browser: 'edge' | 'chrome' | 'chromium' | 'firefox' | 'unknown'
+    version?: string
+    last_seen: number
+    active: boolean
+    needs_upgrade: boolean
+  }>
+  active_versions?: string[]
+  client_count?: number
 }
 
 export interface UpdateInfo {

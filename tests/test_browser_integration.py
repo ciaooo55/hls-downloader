@@ -100,6 +100,9 @@ def test_browser_status_explains_when_extension_has_never_connected():
         "recommended_version": RECOMMENDED_BROWSER_EXTENSION_VERSION,
         "minimum_version": MIN_BROWSER_EXTENSION_VERSION,
         "needs_upgrade": False,
+        "clients": [],
+        "active_versions": [],
+        "client_count": 0,
     }
 
 
@@ -138,7 +141,24 @@ def test_browser_status_accepts_current_extension_version():
 
     assert status["detected"] is True
     assert status["needs_upgrade"] is False
-    assert status["message"] == "浏览器扩展已连接"
+    assert status["message"] == "已连接 1 个浏览器插件"
+
+
+def test_browser_status_keeps_multiple_client_versions_separate():
+    service = BrowserHandoffService()
+    service.record_ping("2.0.7", "edge-install", "edge")
+    service.record_ping(RECOMMENDED_BROWSER_EXTENSION_VERSION, "firefox-install", "firefox")
+
+    status = service.status()
+
+    assert status["detected"] is True
+    assert status["client_count"] == 2
+    assert status["active_versions"] == [RECOMMENDED_BROWSER_EXTENSION_VERSION, "2.0.7"]
+    assert {(item["browser"], item["version"]) for item in status["clients"]} == {
+        ("edge", "2.0.7"),
+        ("firefox", RECOMMENDED_BROWSER_EXTENSION_VERSION),
+    }
+    assert status["needs_upgrade"] is True
 
 
 def test_task_cookie_uses_dpapi_on_windows():
@@ -163,9 +183,9 @@ def test_native_host_manual_download_creates_task_immediately(monkeypatch):
     )
 
     assert result["task"]["id"] == "task-1"
-    assert result["activated"] is True
+    assert result["activated"] is False
+    assert not any(path == "/app/activate" for _, path, _ in calls)
     assert ("POST", "/browser/downloads", {"url": "https://cdn.test/setup.exe"}) in calls
-    assert ("POST", "/app/activate", {}) in calls
 
 
 def test_native_host_ping_and_takeover_settings_share_desktop_source_of_truth(monkeypatch):

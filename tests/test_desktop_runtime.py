@@ -654,7 +654,9 @@ def test_browser_handoff_window_manager_creates_one_window_per_request():
     assert len(created) == 2
     assert created[0][1].endswith("handoff=one")
     assert created[1][1].endswith("handoff=two")
-    assert created[0][2]["on_top"] is True
+    # A new confirmation is focused once, but it must not remain permanently
+    # above the browser or unrelated applications.
+    assert created[0][2]["on_top"] is False
     assert created[0][2]["x"] != created[1][2]["x"]
     assert created[0][3].calls[:2] == ["restore", "show"]
     assert presented == ["one", "two", "one"]

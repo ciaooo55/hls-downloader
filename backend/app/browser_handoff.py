@@ -11,8 +11,9 @@ from .naming import is_generic_media_name, suggest_manifest_name
 from .request_context import request_origin, sanitize_request_headers, sanitize_request_replay
 
 
-RECOMMENDED_BROWSER_EXTENSION_VERSION = "3.0.0"
+RECOMMENDED_BROWSER_EXTENSION_VERSION = "3.0.1"
 MIN_BROWSER_EXTENSION_VERSION = "2.0.11"
+DEFAULT_BROWSER_CLIENT_TTL = 180.0
 
 
 def _version_parts(value: str) -> tuple[int, ...]:
@@ -103,32 +104,75 @@ class BrowserHandoff:
         return value
 
 
-class BrowserHandoffService:
-    def __init__(self, ttl: float = 120.0) -> None:
-        self.ttl = ttl
-        self._items: dict[str, BrowserHandoff] = {}
-        self._lock = threading.RLock()
-        self.last_seen = 0.0
-        self.version = ""
+@dataclass
+class BrowserClient:
+    id: str
+    browser: str
+    version: str
+    last_seen: float
 
-    def record_ping(self, version: str = "") -> None:
+    def public(self, now: float, ttl: float) -> dict:
+        return {
+            "id": self.id,
+            "browser": self.browser,
+            "version": self.version,
+            "last_seen": self.last_seen,
+            "active": now - self.last_seen < ttl,
+            "needs_upgrade": bool(self.version)
+            and _is_older_version(self.version, RECOMMENDED_BROWSER_EXTENSION_VERSION),
+        }
+
+
+def _browser_name(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in {"edge", "chrome", "chromium", "firefox"} else "unknown"
+
+
+class BrowserHandoffService:
+    def __init__(self, ttl: float = 120.0, client_ttl: float = DEFAULT_BROWSER_CLIENT_TTL) -> None:
+        self.ttl = ttl
+        self.client_ttl = max(30.0, float(client_ttl))
+        self._items: dict[str, BrowserHandoff] = {}
+        self._clients: dict[str, BrowserClient] = {}
+        self._lock = threading.RLock()
+
+    def record_ping(self, version: str = "", client_id: str = "", browser: str = "") -> None:
+        browser_name = _browser_name(browser)
+        version = str(version or "").strip()
+        client_id = str(client_id or "").strip()[:128]
+        if not client_id:
+            # Legacy clients have no installation ID. Keep each browser/version
+            # in its own slot so an older heartbeat cannot overwrite a newer one.
+            client_id = f"legacy:{browser_name}:{version or 'unknown'}"
         with self._lock:
-            self.last_seen = time.time()
-            self.version = version
+            self._clients[client_id] = BrowserClient(
+                id=client_id,
+                browser=browser_name,
+                version=version,
+                last_seen=time.time(),
+            )
 
     def status(self) -> dict:
+        now = time.time()
         with self._lock:
-            last_seen = self.last_seen
-            version = self.version
-        detected = bool(last_seen and time.time() - last_seen < 90)
-        seen_before = bool(last_seen)
-        needs_upgrade = bool(version) and _is_older_version(version, RECOMMENDED_BROWSER_EXTENSION_VERSION)
+            clients = [client.public(now, self.client_ttl) for client in self._clients.values()]
+        clients.sort(key=lambda item: (not item["active"], -float(item["last_seen"]), item["browser"]))
+        active_clients = [client for client in clients if client["active"]]
+        active_versions = sorted(
+            {str(client["version"]) for client in active_clients if client["version"]},
+            key=_version_parts,
+            reverse=True,
+        )
+        version = active_versions[0] if active_versions else (str(clients[0]["version"]) if clients else "")
+        detected = bool(active_clients)
+        seen_before = bool(clients)
+        needs_upgrade = any(bool(client["needs_upgrade"]) for client in active_clients)
         state = "connected" if detected else "inactive" if seen_before else "not_detected"
         message = (
-            f"浏览器插件版本低于推荐版本，建议升级到 v{RECOMMENDED_BROWSER_EXTENSION_VERSION}"
+            f"检测到 {len(active_clients)} 个浏览器插件，其中有旧版本，建议升级到 v{RECOMMENDED_BROWSER_EXTENSION_VERSION}"
             if detected and needs_upgrade
             else
-            "浏览器扩展已连接"
+            f"已连接 {len(active_clients)} 个浏览器插件"
             if detected
             else "扩展此前连接过，目前没有心跳"
             if seen_before
@@ -144,10 +188,19 @@ class BrowserHandoffService:
             "recommended_version": RECOMMENDED_BROWSER_EXTENSION_VERSION,
             "minimum_version": MIN_BROWSER_EXTENSION_VERSION,
             "needs_upgrade": needs_upgrade,
+            "clients": clients,
+            "active_versions": active_versions,
+            "client_count": len(active_clients),
         }
 
     def create(self, payload: dict) -> BrowserHandoff:
-        self.record_ping(str(payload.get("extension_version", "")))
+        extension_version = str(payload.get("extension_version", ""))
+        if extension_version:
+            self.record_ping(
+                extension_version,
+                str(payload.get("extension_client_id", "")),
+                str(payload.get("extension_browser", "")),
+            )
         self.cleanup()
         url = str(payload.get("url", ""))
         filename = str(payload.get("filename", ""))

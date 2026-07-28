@@ -25,6 +25,12 @@ const THEME_LABELS: Record<ThemePreference, string> = {
 }
 const THEME_ORDER: ThemePreference[] = ['auto', 'dark', 'light']
 const THEME_GLYPHS: Record<ThemePreference, string> = { auto: '◐', dark: '●', light: '○' }
+const PENDING_HANDOFF_STORAGE_KEY = 'popup-pending-handoffs-v1'
+
+interface PendingHandoff {
+  handoffId: string
+  startedAt: number
+}
 
 function formatDuration(seconds?: number) {
   if (!seconds || seconds <= 0) return ''
@@ -126,7 +132,8 @@ async function main() {
   let excluded: string[] = []
   let suppressions: HandoffSuppression[] = []
   const sending: Record<string, string> = {}
-  const pending: Record<string, string> = {}
+  const pending: Record<string, PendingHandoff> = {}
+  const pendingFailures: Record<string, number> = {}
   const pushing: Record<string, string> = {}
   // Chosen rendition per resource id: the list re-renders on every send or
   // status poll, and the pick must survive those rebuilds.
@@ -137,6 +144,12 @@ async function main() {
   const setError = (message = '') => {
     errorBox.hidden = !message
     errorBox.textContent = message
+  }
+  const persistPending = () => browser.storage.session.set({ [PENDING_HANDOFF_STORAGE_KEY]: pending }).catch(() => undefined)
+  const clearPending = (resourceId: string) => {
+    delete pending[resourceId]
+    delete pendingFailures[resourceId]
+    void persistPending()
   }
 
   const renderList = () => {
@@ -218,7 +231,7 @@ async function main() {
       body.append(mime)
       const label = sending[item.id] || '\u4e0b\u8f7d'
       const button = el('button', 'hlsd-button primary', label)
-      const locked = ['\u53d1\u9001\u4e2d', '\u5f85\u786e\u8ba4', '\u786e\u8ba4\u4e2d', '\u5df2\u52a0\u5165'].includes(sending[item.id] || '')
+      const locked = ['\u53d1\u9001\u4e2d', '\u7b49\u5f85\u786e\u8ba4', '\u786e\u8ba4\u4e2d', '\u5df2\u52a0\u5165'].includes(sending[item.id] || '')
       button.disabled = locked
       if (sending[item.id]) button.classList.add('busy')
       button.title = '\u53d1\u9001\u5230\u4e0b\u8f7d\u5668'
@@ -278,12 +291,13 @@ async function main() {
     try {
       const response = await browser.runtime.sendMessage({ type: 'offer', resource: item })
       if (!response?.ok || !response?.handoff?.id) throw new Error(response?.error || '\u684c\u9762\u7aef\u6ca1\u6709\u521b\u5efa\u4e0b\u8f7d\u7a97\u53e3')
-      sending[item.id] = '\u5f85\u786e\u8ba4'
-      pending[item.id] = response.handoff.id
+      sending[item.id] = '\u7b49\u5f85\u786e\u8ba4'
+      pending[item.id] = { handoffId: response.handoff.id, startedAt: Date.now() }
+      void persistPending()
       renderList()
     } catch (reason) {
       sending[item.id] = '\u91cd\u8bd5'
-      delete pending[item.id]
+      clearPending(item.id)
       setError(reason instanceof Error ? reason.message : '\u53d1\u9001\u5230\u684c\u9762\u7aef\u5931\u8d25')
       renderList()
     }
@@ -332,24 +346,48 @@ async function main() {
   useBrowserCookies = stored.useBrowserCookies !== false
   excluded = Array.isArray(stored.excludedHosts) ? stored.excludedHosts : []
   suppressions = normalizeHandoffSuppressions(stored[HANDOFF_SUPPRESSION_STORAGE_KEY])
+  const session = await browser.storage.session.get(PENDING_HANDOFF_STORAGE_KEY)
+  const restored = session[PENDING_HANDOFF_STORAGE_KEY]
+  if (restored && typeof restored === 'object') {
+    for (const [resourceId, value] of Object.entries(restored as Record<string, Partial<PendingHandoff>>)) {
+      const handoffId = String(value?.handoffId || '')
+      const startedAt = Number(value?.startedAt || 0)
+      if (!handoffId || !Number.isFinite(startedAt) || startedAt <= 0) continue
+      pending[resourceId] = { handoffId, startedAt }
+      sending[resourceId] = '\u7b49\u5f85\u786e\u8ba4'
+    }
+  }
   refreshButtons()
   renderList()
 
   window.setInterval(() => {
     const entries = Object.entries(pending)
     if (!entries.length) return
-    void Promise.all(entries.map(async ([resourceId, handoffId]) => {
+    void Promise.all(entries.map(async ([resourceId, pendingItem]) => {
+      if (Date.now() - pendingItem.startedAt > 130_000) {
+        sending[resourceId] = '\u5df2\u8fc7\u671f'
+        clearPending(resourceId)
+        setError('桌面端确认超时，请重试或打开下载器查看状态')
+        renderList()
+        return
+      }
       try {
-        const response = await browser.runtime.sendMessage({ type: 'handoff-status', handoffId })
+        const response = await browser.runtime.sendMessage({ type: 'handoff-status', handoffId: pendingItem.handoffId })
         const handoff = response?.handoff || response
         const status = String(handoff?.status || '')
         if (!handoffTerminalStatus(status)) return
         sending[resourceId] = handoffStatusLabel(status)
-        delete pending[resourceId]
+        clearPending(resourceId)
         if (status === 'accepted') setError('')
+        if (status === 'connection_lost') setError('桌面端连接中断，请重试')
         renderList()
       } catch {
-        // Keep waiting while the native host briefly restarts.
+        pendingFailures[resourceId] = (pendingFailures[resourceId] || 0) + 1
+        if (pendingFailures[resourceId] < 3) return
+        sending[resourceId] = '\u91cd\u8bd5'
+        clearPending(resourceId)
+        setError('无法读取桌面端确认状态，请重试')
+        renderList()
       }
     }))
   }, 800)

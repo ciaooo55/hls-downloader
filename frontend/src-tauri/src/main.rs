@@ -1,11 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Deserialize;
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
@@ -15,7 +16,7 @@ use tauri::{Emitter, Manager, WindowEvent};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct LocalConfig {
     #[serde(default = "default_port")]
     port: u16,
@@ -23,15 +24,25 @@ struct LocalConfig {
     token: String,
 }
 
-fn default_port() -> u16 { 8765 }
+fn default_port() -> u16 {
+    8765
+}
 
 impl Default for LocalConfig {
-    fn default() -> Self { Self { port: default_port(), token: String::new() } }
+    fn default() -> Self {
+        Self {
+            port: default_port(),
+            token: String::new(),
+        }
+    }
 }
 
 struct CoreRuntime {
     child: Mutex<Option<Child>>,
-    config: LocalConfig,
+    config: Mutex<LocalConfig>,
+    root: PathBuf,
+    primary: AtomicBool,
+    stopping: AtomicBool,
 }
 
 struct DesktopPaths {
@@ -57,16 +68,93 @@ fn get_desktop_info(paths: tauri::State<'_, DesktopPaths>) -> serde_json::Value 
 
 #[tauri::command]
 fn get_core_config(runtime: tauri::State<'_, Arc<CoreRuntime>>) -> serde_json::Value {
-    serde_json::json!({ "port": runtime.config.port, "credential": runtime.config.token })
+    let config = runtime
+        .config
+        .lock()
+        .map(|value| value.clone())
+        .unwrap_or_default();
+    serde_json::json!({ "port": config.port, "credential": config.token })
 }
 
 #[tauri::command]
-fn begin_uninstall(paths: tauri::State<'_, DesktopPaths>, app: tauri::AppHandle) -> serde_json::Value {
+fn open_browser_extension_installer(paths: tauri::State<'_, DesktopPaths>) -> serde_json::Value {
+    let extension = paths.root.join("browser-extension").join("chrome");
+    if !extension.join("manifest.json").is_file() {
+        return serde_json::json!({ "ok": false, "error": "安装包中缺少浏览器扩展，请重新安装最新版" });
+    }
+    let program_files = std::env::var_os("PROGRAMFILES").map(PathBuf::from);
+    let program_files_x86 = std::env::var_os("PROGRAMFILES(X86)").map(PathBuf::from);
+    let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let candidates = [
+        program_files_x86.as_ref().map(|root| {
+            root.join("Microsoft")
+                .join("Edge")
+                .join("Application")
+                .join("msedge.exe")
+        }),
+        program_files.as_ref().map(|root| {
+            root.join("Microsoft")
+                .join("Edge")
+                .join("Application")
+                .join("msedge.exe")
+        }),
+        program_files.as_ref().map(|root| {
+            root.join("Google")
+                .join("Chrome")
+                .join("Application")
+                .join("chrome.exe")
+        }),
+        program_files_x86.as_ref().map(|root| {
+            root.join("Google")
+                .join("Chrome")
+                .join("Application")
+                .join("chrome.exe")
+        }),
+        local_app_data.as_ref().map(|root| {
+            root.join("Google")
+                .join("Chrome")
+                .join("Application")
+                .join("chrome.exe")
+        }),
+    ];
+    let mut browser_opened = false;
+    for browser in candidates.into_iter().flatten() {
+        if !browser.is_file() {
+            continue;
+        }
+        let internal_url =
+            if browser.file_name().and_then(|name| name.to_str()) == Some("msedge.exe") {
+                "edge://extensions"
+            } else {
+                "chrome://extensions"
+            };
+        browser_opened = Command::new(browser).arg(internal_url).spawn().is_ok();
+        if browser_opened {
+            break;
+        }
+    }
+    match Command::new("explorer.exe").arg(&extension).spawn() {
+        Ok(_) => {
+            serde_json::json!({ "ok": true, "path": extension, "browser_opened": browser_opened })
+        }
+        Err(error) => serde_json::json!({ "ok": false, "error": error.to_string() }),
+    }
+}
+
+#[tauri::command]
+fn begin_uninstall(
+    paths: tauri::State<'_, DesktopPaths>,
+    app: tauri::AppHandle,
+) -> serde_json::Value {
     let uninstaller = paths.root.join("Uninstall.exe");
     if !uninstaller.is_file() {
         return serde_json::json!({ "ok": false, "error": "当前版本无需卸载" });
     }
-    match Command::new(&uninstaller).arg("_?=").arg(&paths.root).spawn() {
+    match Command::new(&uninstaller)
+        .arg("_?=")
+        .arg(&paths.root)
+        .spawn()
+    {
         Ok(_) => {
             app.exit(0);
             serde_json::json!({ "ok": true })
@@ -77,16 +165,23 @@ fn begin_uninstall(paths: tauri::State<'_, DesktopPaths>, app: tauri::AppHandle)
 
 fn app_root() -> PathBuf {
     let working = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let executable = std::env::current_exe().ok().and_then(|path| path.parent().map(Path::to_path_buf));
+    let executable = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf));
     let mut candidates = vec![working.clone()];
-    if let Some(parent) = working.parent() { candidates.push(parent.to_path_buf()); }
+    if let Some(parent) = working.parent() {
+        candidates.push(parent.to_path_buf());
+    }
     if let Some(path) = executable {
         candidates.push(path.clone());
-        if let Some(parent) = path.parent() { candidates.push(parent.to_path_buf()); }
+        if let Some(parent) = path.parent() {
+            candidates.push(parent.to_path_buf());
+        }
     }
-    candidates.into_iter().find(|path| {
-        path.join("HLSDownloaderCore.exe").is_file() || path.join("backend").is_dir()
-    }).unwrap_or(working)
+    candidates
+        .into_iter()
+        .find(|path| path.join("HLSDownloaderCore.exe").is_file() || path.join("backend").is_dir())
+        .unwrap_or(working)
 }
 
 fn load_config(root: &Path) -> LocalConfig {
@@ -94,21 +189,32 @@ fn load_config(root: &Path) -> LocalConfig {
     if root.join("portable").is_file() {
         candidates.push(root.join("config.json"));
     } else if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        candidates.push(PathBuf::from(local).join("HLS Downloader").join("config.json"));
+        candidates.push(
+            PathBuf::from(local)
+                .join("HLS Downloader")
+                .join("config.json"),
+        );
         candidates.push(root.join("config.json"));
     } else {
         candidates.push(root.join("config.json"));
     }
-    candidates.into_iter().find_map(|path| {
-        std::fs::read_to_string(path).ok().and_then(|value| serde_json::from_str(&value).ok())
-    }).unwrap_or_default()
+    candidates
+        .into_iter()
+        .find_map(|path| {
+            std::fs::read_to_string(path)
+                .ok()
+                .and_then(|value| serde_json::from_str(&value).ok())
+        })
+        .unwrap_or_default()
 }
 
 fn wait_for_runtime_config(root: &Path, port: u16) -> LocalConfig {
     let deadline = Instant::now() + Duration::from_secs(4);
     while Instant::now() < deadline {
         let config = load_config(root);
-        if config.port == port && !config.token.is_empty() { return config; }
+        if config.port == port && !config.token.is_empty() {
+            return config;
+        }
         std::thread::sleep(Duration::from_millis(80));
     }
     load_config(root)
@@ -120,7 +226,9 @@ fn core_alive(port: u16) -> bool {
 }
 
 fn start_core(root: &Path, config: &LocalConfig) -> Result<Option<Child>, String> {
-    if core_alive(config.port) { return Ok(None); }
+    if core_alive(config.port) {
+        return Ok(None);
+    }
     let packaged = root.join("HLSDownloaderCore.exe");
     let mut command = if packaged.is_file() {
         Command::new(packaged)
@@ -131,17 +239,104 @@ fn start_core(root: &Path, config: &LocalConfig) -> Result<Option<Child>, String
         value
     };
     command.current_dir(root);
-    command.stdout(Stdio::from(File::create(root.join("core.log")).map_err(|e| e.to_string())?));
-    command.stderr(Stdio::from(File::create(root.join("core-error.log")).map_err(|e| e.to_string())?));
+    let stdout = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(root.join("core.log"))
+        .map_err(|e| e.to_string())?;
+    let stderr = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(root.join("core-error.log"))
+        .map_err(|e| e.to_string())?;
+    command.stdout(Stdio::from(stdout));
+    command.stderr(Stdio::from(stderr));
     #[cfg(windows)]
     command.creation_flags(0x08000000);
-    let child = command.spawn().map_err(|e| format!("Unable to start download core: {e}"))?;
+    let child = command
+        .spawn()
+        .map_err(|e| format!("Unable to start download core: {e}"))?;
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
-        if core_alive(config.port) { return Ok(Some(child)); }
+        if core_alive(config.port) {
+            return Ok(Some(child));
+        }
         std::thread::sleep(Duration::from_millis(250));
     }
     Err(format!("Download core did not open port {}", config.port))
+}
+
+fn runtime_config(runtime: &CoreRuntime) -> LocalConfig {
+    runtime
+        .config
+        .lock()
+        .map(|value| value.clone())
+        .unwrap_or_default()
+}
+
+fn ensure_core(runtime: &CoreRuntime) -> Result<(), String> {
+    let current = runtime_config(runtime);
+    if core_alive(current.port) {
+        return Ok(());
+    }
+
+    let mut slot = runtime
+        .child
+        .lock()
+        .map_err(|_| "Download core lock is poisoned".to_string())?;
+    if let Some(child) = slot.as_mut() {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                *slot = None;
+            }
+            Ok(None) => {
+                // A live child can briefly be between process creation and bind.
+                for _ in 0..12 {
+                    if core_alive(current.port) {
+                        return Ok(());
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                *slot = None;
+            }
+            Err(_) => {
+                *slot = None;
+            }
+        }
+    }
+
+    let child = start_core(&runtime.root, &current)?;
+    *slot = child;
+    drop(slot);
+    let refreshed = wait_for_runtime_config(&runtime.root, current.port);
+    if let Ok(mut config) = runtime.config.lock() {
+        *config = refreshed;
+    }
+    Ok(())
+}
+
+fn supervise_core(runtime: Arc<CoreRuntime>) {
+    std::thread::spawn(move || {
+        let mut failures = 0_u8;
+        while !runtime.stopping.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_secs(2));
+            if runtime.stopping.load(Ordering::Relaxed) {
+                break;
+            }
+            let port = runtime_config(&runtime).port;
+            if core_alive(port) {
+                failures = 0;
+                continue;
+            }
+            failures = failures.saturating_add(1);
+            if failures >= 3 {
+                let _ = ensure_core(&runtime);
+                failures = 0;
+            }
+        }
+    });
 }
 
 fn request_core_shutdown(config: &LocalConfig) {
@@ -158,7 +353,9 @@ fn request_core_shutdown(config: &LocalConfig) {
 }
 
 fn import_torrent_path(config: &LocalConfig, path: &str) {
-    if !path.to_ascii_lowercase().ends_with(".torrent") { return; }
+    if !path.to_ascii_lowercase().ends_with(".torrent") {
+        return;
+    }
     let body = serde_json::json!({ "path": path }).to_string();
     if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", config.port)) {
         let request = format!(
@@ -175,6 +372,11 @@ fn show_main(app: &tauri::AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+fn background_launch(args: &[String]) -> bool {
+    args.iter()
+        .any(|arg| arg == "--background" || arg == "--native-host")
 }
 
 /// Return the clipboard text when it is a link the downloader can handle.
@@ -196,9 +398,9 @@ fn downloadable_clipboard_text(raw: &str) -> Option<String> {
     }
     let path = lowered.split(['?', '#']).next().unwrap_or("");
     const EXTENSIONS: [&str; 24] = [
-        ".m3u8", ".mpd", ".mp4", ".mkv", ".mov", ".webm", ".flv", ".m4v", ".avi",
-        ".mp3", ".m4a", ".flac", ".wav", ".zip", ".7z", ".rar", ".gz", ".iso",
-        ".exe", ".msi", ".apk", ".torrent", ".pdf", ".dmg",
+        ".m3u8", ".mpd", ".mp4", ".mkv", ".mov", ".webm", ".flv", ".m4v", ".avi", ".mp3", ".m4a",
+        ".flac", ".wav", ".zip", ".7z", ".rar", ".gz", ".iso", ".exe", ".msi", ".apk", ".torrent",
+        ".pdf", ".dmg",
     ];
     if EXTENSIONS.iter().any(|extension| path.ends_with(extension)) {
         return Some(text.to_string());
@@ -208,7 +410,9 @@ fn downloadable_clipboard_text(raw: &str) -> Option<String> {
 
 fn watch_clipboard(handle: tauri::AppHandle) {
     std::thread::spawn(move || {
-        let Ok(mut clipboard) = arboard::Clipboard::new() else { return };
+        let Ok(mut clipboard) = arboard::Clipboard::new() else {
+            return;
+        };
         // Seed with the current content so a link copied before launch does
         // not immediately pop a suggestion.
         let mut last = clipboard.get_text().unwrap_or_default();
@@ -246,20 +450,30 @@ fn watch_clipboard(handle: tauri::AppHandle) {
 fn main() {
     let root = app_root();
     let startup_config = load_config(&root);
-    let child = start_core(&root, &startup_config).unwrap_or_else(|reason| {
-        eprintln!("{reason}");
-        None
+    // Core startup is deliberately deferred until Tauri's single-instance
+    // plugin has established that this process is the primary desktop shell.
+    let runtime = Arc::new(CoreRuntime {
+        child: Mutex::new(None),
+        config: Mutex::new(startup_config),
+        root: root.clone(),
+        primary: AtomicBool::new(false),
+        stopping: AtomicBool::new(false),
     });
-    let config = wait_for_runtime_config(&root, startup_config.port);
-    let runtime = Arc::new(CoreRuntime { child: Mutex::new(child), config });
     let exit_runtime = Arc::clone(&runtime);
-    let background = std::env::args().any(|arg| arg == "--background" || arg == "--native-host");
+    let launch_args: Vec<String> = std::env::args().collect();
+    let background = background_launch(&launch_args);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            show_main(app);
             let runtime = app.state::<Arc<CoreRuntime>>();
-            for arg in args.iter().skip(1) { import_torrent_path(&runtime.config, arg); }
+            let _ = ensure_core(runtime.inner());
+            let config = runtime_config(runtime.inner());
+            for arg in args.iter().skip(1) {
+                import_torrent_path(&config, arg);
+            }
+            if !background_launch(&args) {
+                show_main(app);
+            }
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -268,28 +482,51 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .manage(Arc::clone(&runtime))
         .manage(DesktopPaths { root: root.clone() })
-        .invoke_handler(tauri::generate_handler![get_app_root, get_desktop_info, get_core_config, begin_uninstall])
+        .invoke_handler(tauri::generate_handler![
+            get_app_root,
+            get_desktop_info,
+            get_core_config,
+            open_browser_extension_installer,
+            begin_uninstall
+        ])
         .setup(move |app| {
             let startup_runtime = app.state::<Arc<CoreRuntime>>();
-            for arg in std::env::args().skip(1) { import_torrent_path(&startup_runtime.config, &arg); }
+            startup_runtime.primary.store(true, Ordering::Relaxed);
+            ensure_core(startup_runtime.inner()).map_err(std::io::Error::other)?;
+            supervise_core(Arc::clone(startup_runtime.inner()));
+            let config = runtime_config(startup_runtime.inner());
+            for arg in std::env::args().skip(1) {
+                import_torrent_path(&config, &arg);
+            }
             let open = MenuItem::with_id(app, "open", "打开下载器", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;
-            let mut tray = TrayIconBuilder::with_id("main").menu(&menu).show_menu_on_left_click(false);
-            if let Some(icon) = app.default_window_icon() { tray = tray.icon(icon.clone()); }
+            let mut tray = TrayIconBuilder::with_id("main")
+                .menu(&menu)
+                .show_menu_on_left_click(false);
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
             tray.on_menu_event(|app, event| match event.id.as_ref() {
                 "open" => show_main(app),
                 "quit" => app.exit(0),
                 _ => {}
             })
             .on_tray_icon_event(|tray, event| {
-                if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } = event
+                {
                     show_main(tray.app_handle());
                 }
             })
             .build(app)?;
             watch_clipboard(app.handle().clone());
-            if !background { show_main(app.handle()); }
+            if !background {
+                show_main(app.handle());
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -305,11 +542,18 @@ fn main() {
 
     app.run(move |_handle, event| {
         if let tauri::RunEvent::Exit = event {
-            request_core_shutdown(&exit_runtime.config);
+            if !exit_runtime.primary.load(Ordering::Relaxed) {
+                return;
+            }
+            exit_runtime.stopping.store(true, Ordering::Relaxed);
+            let config = runtime_config(&exit_runtime);
+            request_core_shutdown(&config);
             std::thread::sleep(Duration::from_millis(400));
             if let Ok(mut slot) = exit_runtime.child.lock() {
                 if let Some(child) = slot.as_mut() {
-                    if child.try_wait().ok().flatten().is_none() { let _ = child.kill(); }
+                    if child.try_wait().ok().flatten().is_none() {
+                        let _ = child.kill();
+                    }
                 }
             }
         }
@@ -318,7 +562,7 @@ fn main() {
 
 #[cfg(test)]
 mod clipboard_tests {
-    use super::downloadable_clipboard_text;
+    use super::{background_launch, downloadable_clipboard_text};
 
     #[test]
     fn accepts_media_archive_and_magnet_links() {
@@ -331,6 +575,23 @@ mod clipboard_tests {
         ] {
             assert!(downloadable_clipboard_text(text).is_some(), "{text}");
         }
+    }
+
+    #[test]
+    fn background_native_launch_does_not_request_foreground() {
+        assert!(background_launch(&[
+            "app.exe".into(),
+            "--background".into()
+        ]));
+        assert!(background_launch(&[
+            "app.exe".into(),
+            "--native-host".into()
+        ]));
+        assert!(!background_launch(&["app.exe".into()]));
+        assert!(!background_launch(&[
+            "app.exe".into(),
+            "movie.torrent".into()
+        ]));
     }
 
     #[test]

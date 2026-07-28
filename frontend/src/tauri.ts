@@ -87,7 +87,7 @@ export async function startTauriDesktopSession(): Promise<() => void> {
         center: true,
         resizable: true,
         decorations: false,
-        alwaysOnTop: true,
+        alwaysOnTop: false,
         focus: true,
       })
       if (!existing) {
@@ -98,7 +98,7 @@ export async function startTauriDesktopSession(): Promise<() => void> {
       }
       activeHandoffWindow = child
       await child.show().catch(() => {})
-      await child.setFocus().catch(() => {})
+      if (!existing) await child.setFocus().catch(() => {})
       await localRequest(`/desktop/handoffs/${encodeURIComponent(id)}/presented`, { method: 'POST', body: '{}' })
       void child.once('tauri://destroyed', () => {
         if (handoffQueue.release(id)) activeHandoffWindow = null
@@ -118,7 +118,6 @@ export async function startTauriDesktopSession(): Promise<() => void> {
     if (!id) return
     if (id === handoffQueue.activeId) {
       await activeHandoffWindow?.show().catch(() => {})
-      await activeHandoffWindow?.setFocus().catch(() => {})
       return
     }
     if (handoffQueue.enqueue(id)) await openNextHandoff()

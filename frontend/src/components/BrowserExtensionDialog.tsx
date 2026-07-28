@@ -9,8 +9,9 @@ export default function BrowserExtensionDialog({ onClose }: { onClose: () => voi
   const [browserStatus, setBrowserStatus] = useState<BrowserStatus | null>(null)
   const [message, setMessage] = useState('')
   const versionLine = browserStatus?.detected
-    ? `插件 v${browserStatus.version || '未知'} · 桌面 v${browserStatus.desktop_version || '未知'}`
+    ? `${browserStatus.client_count || 1} 个浏览器插件 · 桌面 v${browserStatus.desktop_version || '未知'}`
     : '未连接时浏览器会继续使用自己的下载器，不会静默丢失文件。'
+  const browserNames = { edge: 'Edge', chrome: 'Chrome', chromium: 'Chromium', firefox: 'Firefox', unknown: '浏览器' }
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
@@ -37,6 +38,18 @@ export default function BrowserExtensionDialog({ onClose }: { onClose: () => voi
             <span>{versionLine}</span>
           </div>
         </div>
+        {!!browserStatus?.clients?.length && (
+          <div className="browser-client-list" aria-label="浏览器插件连接">
+            {browserStatus.clients.map(client => (
+              <div className={!client.active ? 'inactive' : client.needs_upgrade ? 'warning' : 'online'} key={client.id}>
+                <span className="browser-client-dot" />
+                <strong>{browserNames[client.browser] || '浏览器'}</strong>
+                <span>v{client.version || '未知'}</span>
+                <em>{!client.active ? '未连接' : client.needs_upgrade ? '需升级' : '已连接'}</em>
+              </div>
+            ))}
+          </div>
+        )}
         {browserStatus?.needs_upgrade && (
           <div className="inline-message update-warning" role="status">
             当前插件低于推荐版本 v{browserStatus.recommended_version || '最新'}。请使用同一个 GitHub Release 里的 Chromium / Firefox 插件包；旧插件不会被强制禁用，但可能缺少最新的请求头、Cookie 和弹窗修复。

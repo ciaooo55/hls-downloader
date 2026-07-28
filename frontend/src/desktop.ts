@@ -42,15 +42,8 @@ async function waitForNativeApi(timeoutMs = 2500): Promise<NativeApi | null> {
 export async function openBrowserExtensionInstaller(): Promise<NativeResult> {
   try {
     if (isTauriDesktop()) {
-      const [{ invoke }, { join }, { openPath }] = await Promise.all([
-        import('@tauri-apps/api/core'),
-        import('@tauri-apps/api/path'),
-        import('@tauri-apps/plugin-opener'),
-      ])
-      const root = await invoke<string>('get_app_root')
-      const path = await join(root, 'browser-extension', 'chrome')
-      await openPath(path)
-      return { ok: true, path }
+      const { invoke } = await import('@tauri-apps/api/core')
+      return await invoke<NativeResult>('open_browser_extension_installer')
     }
     const api = await waitForNativeApi()
     if (!api) return { ok: false, error: '扩展安装工具仅在桌面版中可用' }

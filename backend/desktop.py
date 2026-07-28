@@ -294,7 +294,7 @@ class BrowserHandoffWindowManager:
         return max(20, base_x + 70 + slot * 28), max(20, base_y + 55 + slot * 24)
 
     @staticmethod
-    def _raise(window, *, keep_on_top: bool = True) -> None:
+    def _raise(window, *, keep_on_top: bool = False) -> None:
         try:
             window.restore()
         except Exception:
@@ -304,7 +304,8 @@ class BrowserHandoffWindowManager:
         except Exception:
             pass
         try:
-            # Newest confirm dialog should win focus over the browser and siblings.
+            # Raise once without leaving the confirmation permanently above
+            # unrelated applications.
             window.on_top = False
             window.on_top = True
             if not keep_on_top:
@@ -356,7 +357,7 @@ class BrowserHandoffWindowManager:
                     y=y,
                     min_size=(340, 280),
                     resizable=True,
-                    on_top=True,
+                    on_top=False,
                     focus=True,
                     background_color="#17191d",
                     text_select=True,

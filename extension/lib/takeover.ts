@@ -53,7 +53,9 @@ export function handoffStatusLabel(status?: string): string {
     case 'accepting':
       return '确认中'
     case 'pending':
-      return '待确认'
+      return '等待确认'
+    case 'connection_lost':
+      return '连接中断'
     default:
       return status || '待确认'
   }

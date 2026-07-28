@@ -9,6 +9,7 @@ import { parseHlsManifest, resourceQuality } from '../lib/hlsManifest'
 import { contentDispositionFilename } from '../lib/contentDisposition'
 import { InspectionCache } from '../lib/inspectionCache'
 import { cookieLookupUrl } from '../lib/browserCookies'
+import { detectBrowserFamily, stableBrowserClientId } from '../lib/browserClient'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 const CLICK_INTENT_STORAGE_KEY = 'click-intents'
@@ -22,7 +23,38 @@ let nativeBridge: NativeBridge | null = null
 let concealedDownloadCount = 0
 let downloadUiFailsafe: ReturnType<typeof setTimeout> | null = null
 const inspectedHls = new InspectionCache()
-const pendingHandoffResolutions = new Map<string, Promise<any>>()
+let browserClientIdPromise: Promise<string> | null = null
+const HANDOFF_TRACKER_STORAGE_KEY = 'handoff-tracker-v1'
+
+interface TrackedHandoff {
+  id: string
+  resourceId: string
+  status: string
+  checkedAt: number
+  failures: number
+  presentation?: string
+  suppression?: unknown
+}
+
+const trackedHandoffs = new Map<string, TrackedHandoff>()
+let handoffTrackerHydrated = false
+let handoffTrackerPolling = false
+let handoffTrackerTimer: ReturnType<typeof setTimeout> | null = null
+
+function browserClientId(): Promise<string> {
+  browserClientIdPromise ||= stableBrowserClientId(
+    browser.storage.local,
+    () => globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
+  )
+  return browserClientIdPromise
+}
+
+function extensionIdentity() {
+  return {
+    version: browser.runtime.getManifest().version,
+    browser: detectBrowserFamily(browser.runtime.getURL('/'), globalThis.navigator?.userAgent || ''),
+  }
+}
 
 async function settings() {
   const data = await browser.storage.local.get([
@@ -67,28 +99,102 @@ async function rememberHandoffSuppression(value: unknown): Promise<void> {
   })
 }
 
-function waitForHandoffResolution(handoffId: string): Promise<any> {
-  const existing = pendingHandoffResolutions.get(handoffId)
-  if (existing) return existing
-  const pending = (async () => {
-    const deadline = Date.now() + 125_000
-    while (Date.now() < deadline) {
-      try {
-        const response = await native({ op: 'handoff_status', handoff_id: handoffId }, 2_000)
-        const handoff = response?.handoff || response
-        if (handoffTerminalStatus(String(handoff?.status || ''))) {
-          await rememberHandoffSuppression(handoff?.suppression)
-          return handoff
-        }
-      } catch {
-        // The desktop app can restart briefly while a focused confirmation is open.
-      }
-      await new Promise(resolve => setTimeout(resolve, 500))
-    }
-    return { status: 'expired' }
-  })().finally(() => pendingHandoffResolutions.delete(handoffId))
-  pendingHandoffResolutions.set(handoffId, pending)
-  return pending
+async function hydrateHandoffTracker(): Promise<void> {
+  if (handoffTrackerHydrated) return
+  handoffTrackerHydrated = true
+  const stored: Record<string, unknown> = await browser.storage.session
+    .get(HANDOFF_TRACKER_STORAGE_KEY)
+    .catch(() => ({})) as Record<string, unknown>
+  const values = Array.isArray(stored[HANDOFF_TRACKER_STORAGE_KEY]) ? stored[HANDOFF_TRACKER_STORAGE_KEY] : []
+  for (const value of values) {
+    if (!value || typeof value !== 'object') continue
+    const item = value as Partial<TrackedHandoff>
+    const id = String(item.id || '')
+    if (!id) continue
+    trackedHandoffs.set(id, {
+      id,
+      resourceId: String(item.resourceId || ''),
+      status: String(item.status || 'pending'),
+      checkedAt: Number(item.checkedAt || 0),
+      failures: Math.max(0, Number(item.failures || 0)),
+      presentation: typeof item.presentation === 'string' ? item.presentation : undefined,
+      suppression: item.suppression,
+    })
+  }
+}
+
+async function persistHandoffTracker(): Promise<void> {
+  const values = [...trackedHandoffs.values()].slice(-24)
+  await browser.storage.session.set({ [HANDOFF_TRACKER_STORAGE_KEY]: values }).catch(() => undefined)
+}
+
+function scheduleHandoffPoll(delay = 120): void {
+  if (handoffTrackerTimer) return
+  handoffTrackerTimer = setTimeout(() => {
+    handoffTrackerTimer = null
+    void pollTrackedHandoffs()
+  }, delay)
+}
+
+async function trackHandoff(handoffId: string, resourceId = ''): Promise<TrackedHandoff> {
+  await hydrateHandoffTracker()
+  const id = String(handoffId || '')
+  const current = trackedHandoffs.get(id)
+  if (current) {
+    if (resourceId && !current.resourceId) current.resourceId = resourceId
+    scheduleHandoffPoll()
+    return current
+  }
+  const tracked: TrackedHandoff = { id, resourceId, status: 'pending', checkedAt: 0, failures: 0 }
+  trackedHandoffs.set(id, tracked)
+  await persistHandoffTracker()
+  scheduleHandoffPoll()
+  return tracked
+}
+
+async function pollTrackedHandoffs(): Promise<void> {
+  if (handoffTrackerPolling) return
+  await hydrateHandoffTracker()
+  const next = [...trackedHandoffs.values()]
+    .filter(item => !handoffTerminalStatus(item.status))
+    .sort((left, right) => left.checkedAt - right.checkedAt)[0]
+  if (!next) return
+  handoffTrackerPolling = true
+  try {
+    const response = await native({ op: 'handoff_status', handoff_id: next.id }, 2_500)
+    const handoff = response?.handoff || response
+    const status = String(handoff?.status || 'pending')
+    next.status = status
+    next.checkedAt = Date.now()
+    next.failures = 0
+    next.presentation = typeof handoff?.presentation === 'string' ? handoff.presentation : next.presentation
+    next.suppression = handoff?.suppression
+    if (handoffTerminalStatus(status)) await rememberHandoffSuppression(handoff?.suppression)
+  } catch {
+    next.checkedAt = Date.now()
+    next.failures += 1
+    if (next.failures >= 3) next.status = 'connection_lost'
+  } finally {
+    handoffTrackerPolling = false
+    await persistHandoffTracker()
+    if ([...trackedHandoffs.values()].some(item => !handoffTerminalStatus(item.status))) scheduleHandoffPoll(900)
+  }
+}
+
+async function handoffStatus(handoffId: string): Promise<{ ok: true, handoff: TrackedHandoff }> {
+  const handoff = await trackHandoff(handoffId)
+  return { ok: true, handoff: { ...handoff } }
+}
+
+async function waitForHandoffResolution(handoffId: string): Promise<TrackedHandoff> {
+  const deadline = Date.now() + 125_000
+  await trackHandoff(handoffId)
+  while (Date.now() < deadline) {
+    const current = await handoffStatus(handoffId)
+    if (handoffTerminalStatus(current.handoff.status)) return current.handoff
+    await new Promise(resolve => setTimeout(resolve, 450))
+  }
+  return { id: handoffId, resourceId: '', status: 'expired', checkedAt: Date.now(), failures: 0 }
 }
 
 async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1) {
@@ -139,9 +245,15 @@ async function cookiesFor(url: string, pageUrl = ''): Promise<string> {
   return values.map(cookie => `${cookie.name}=${cookie.value}`).join('; ')
 }
 
-function native(message: Record<string, unknown>, timeoutMs?: number): Promise<any> {
+async function native(message: Record<string, unknown>, timeoutMs?: number): Promise<any> {
   if (!nativeBridge) return Promise.reject(new Error('Native Messaging 尚未初始化'))
-  return nativeBridge.request(message, timeoutMs)
+  const identity = extensionIdentity()
+  return nativeBridge.request({
+    ...message,
+    version: identity.version,
+    client_id: await browserClientId(),
+    browser: identity.browser,
+  }, timeoutMs)
 }
 
 async function applyDesktopTakeoverSettings(response: any): Promise<any> {
@@ -155,7 +267,7 @@ async function applyDesktopTakeoverSettings(response: any): Promise<any> {
 }
 
 async function pingDesktop(): Promise<any> {
-  return applyDesktopTakeoverSettings(await native({ op: 'ping', version: browser.runtime.getManifest().version }))
+  return applyDesktopTakeoverSettings(await native({ op: 'ping' }))
 }
 
 async function inspectHls(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1): Promise<void> {
@@ -281,6 +393,7 @@ async function resourcePayload(resource: MediaResource, explicitChain?: RequestC
     }
   }
   const replay = replayablePostRequest(chain)
+  const extension = extensionIdentity()
   if (String(resource.method || '').toUpperCase() === 'POST' && !replay.request_body) {
     throw new Error('此 POST 下载包含无法安全重放的请求体；请让浏览器完成本次下载后再导入文件')
   }
@@ -301,7 +414,9 @@ async function resourcePayload(resource: MediaResource, explicitChain?: RequestC
     request_headers: replayableRequestHeaders(pageChain?.requestHeaders || resource.requestHeaders),
     request_contexts: requestContexts,
     ...replay,
-    extension_version: browser.runtime.getManifest().version,
+    extension_version: extension.version,
+    extension_client_id: await browserClientId(),
+    extension_browser: extension.browser,
   }
 }
 
@@ -327,66 +442,13 @@ async function offer(resource: MediaResource, chain?: RequestChain) {
   const response = await native({ op: 'offer', resource: payload })
   const handoff = response?.handoff
   if (!response?.ok || !handoff?.id) return response
-  // Keep observing even for user-initiated offers so a suppression selected
-  // in the desktop confirmation is stored before the next automatic download.
-  void waitForHandoffResolution(String(handoff.id))
-
-  // Desktop presentation is asynchronous. Wait briefly for the confirm UI so the
-  // browser can still roll back if the window never appears.
-  if (
-    handoff.presentation_mode === 'desktop'
-    || handoff.presentation_mode === 'desktop-pending'
-    || handoff.presentation === 'queued'
-  ) {
-    const deadline = Date.now() + (handoff.presentation_mode === 'desktop-pending' ? 22_000 : 5_000)
-    while (Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 180))
-      try {
-        const status = await native({ op: 'handoff_status', handoff_id: handoff.id }, 2_000)
-        const current = status?.handoff || status
-        if (current?.presentation === 'presented' || current?.presented) {
-          return {
-            ...response,
-            handoff: {
-              ...handoff,
-              ...current,
-              presentation_mode: current.presentation_mode || handoff.presentation_mode || 'desktop',
-              presentation_ok: true,
-            },
-          }
-        }
-        if (current?.presentation === 'queued') {
-          // A focused confirm window is already handling an earlier offer.
-          // The request is safely queued in the desktop service, so do not
-          // report a false failure merely because it has not surfaced yet.
-          return {
-            ...response,
-            handoff: {
-              ...handoff,
-              ...current,
-              presentation_mode: 'desktop-queued',
-              presentation_ok: true,
-            },
-          }
-        }
-        if (current?.presentation === 'failed' || handoffTerminalStatus(current?.status)) {
-          return {
-            ok: false,
-            error: current?.presentation_error || `接管请求${handoffStatusLabel(current?.status)}`,
-            handoff: { ...handoff, ...current },
-          }
-        }
-      } catch {
-        // Keep waiting until the short presentation window expires.
-      }
-    }
-    return { ok: false, error: '桌面端未能打开下载确认窗口', handoff }
+  if (handoff.presentation === 'failed' || handoff.presentation_ok === false) {
+    return { ok: false, error: handoff.presentation_error || '桌面端未能打开下载确认窗口', handoff }
   }
+  // Handoff creation is the acknowledgement. Presentation happens in the
+  // desktop queue and must never hold the browser button at “发送中”.
+  void trackHandoff(String(handoff.id), resource.id)
   return response
-}
-
-async function handoffStatus(handoffId: string) {
-  return native({ op: 'handoff_status', handoff_id: handoffId }, 2_000)
 }
 
 async function refreshedDownload(downloadId: number, original: Browser.downloads.DownloadItem) {
@@ -611,14 +673,17 @@ export default defineBackground(() => {
       revealBrowserDownload()
     },
   )
+  void hydrateHandoffTracker().then(() => pollTrackedHandoffs()).catch(() => undefined)
   void setBrowserDownloadUi(true)
   void pingDesktop().catch(() => undefined)
   browser.alarms.create('desktop-heartbeat', { periodInMinutes: 0.5 })
+  browser.alarms.create('handoff-tracker', { periodInMinutes: 0.5 })
   browser.alarms.onAlarm.addListener(alarm => {
     if (alarm.name === 'desktop-heartbeat') {
       requestChains.cleanup()
       void pingDesktop().catch(() => undefined)
     }
+    if (alarm.name === 'handoff-tracker') void pollTrackedHandoffs()
   })
   browser.runtime.onInstalled.addListener(() => {
     browser.contextMenus.create({ id: 'hls-download-link', title: '使用 HLS Downloader 下载', contexts: ['link', 'video', 'audio'] })

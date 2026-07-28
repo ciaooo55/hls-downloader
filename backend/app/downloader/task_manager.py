@@ -140,6 +140,7 @@ class TaskManager:
         self._sniffed: list[dict] = []
         self._pending_saves: dict[str, asyncio.Task] = {}
         self._downloaders: dict[str, object] = {}
+        self._deleting_task_ids: set[str] = set()
         self._temp_cleanup_lock = asyncio.Lock()
         self._maintenance_task: asyncio.Task | None = None
 
@@ -222,6 +223,10 @@ class TaskManager:
         if task is None:
             raise TaskNotFoundError(f"任务不存在: {task_id}")
         return task
+
+    def _task_is_current(self, task: Task) -> bool:
+        """True only while this exact task remains owned by the manager."""
+        return task.id not in self._deleting_task_ids and self.tasks.get(task.id) is task
 
     @staticmethod
     def _has_live_handle(task: Task) -> bool:
@@ -590,12 +595,7 @@ class TaskManager:
             run_task(),
             name=f"{task.task_type.value}-{task.id}",
         )
-        task.task_handle.add_done_callback(
-            lambda _handle: (
-                self._broadcast_nowait(self._task_event(task)),
-                self._broadcast_queue_updates(),
-            )
-        )
+        task.task_handle.add_done_callback(lambda _handle: self._on_task_finished(task))
         self._broadcast_nowait(self._task_event(task))
         self._broadcast_queue_updates()
 
@@ -678,6 +678,7 @@ class TaskManager:
         if task.pause_event is None:
             raise TaskConflictError("任务尚未进入可暂停状态")
         task.pause_event.set()
+        task.engine_state["state_reason"] = "user_pause"
         task.status = TaskStatus.PAUSING
         task.stage = "pausing"
         if task.engine_state.get("live"):
@@ -698,6 +699,7 @@ class TaskManager:
             if not running:
                 continue
             task.engine_state[RESUME_AFTER_UPDATE_KEY] = True
+            task.engine_state["state_reason"] = "update_restart"
             task.last_log = "正在更新，启动新版本后将自动继续下载"
             await self._save_db(task)
             marked += 1
@@ -773,31 +775,39 @@ class TaskManager:
 
     async def delete_task(self, task_id: str, *, delete_files: bool = False) -> None:
         task = self._get_task(task_id)
+        self._deleting_task_ids.add(task_id)
         was_complete = task.status is TaskStatus.DONE
-        if task.task_handle and not task.task_handle.done():
-            await self.cancel_task(task_id)
-        playback_service.close_task(task_id)
-        from .throttle import task_throttles
+        try:
+            if task.task_handle and not task.task_handle.done():
+                await self.cancel_task(task_id)
+            playback_service.close_task(task_id)
+            from .throttle import task_throttles
 
-        task_throttles.drop(task_id)
-        if delete_files or not was_complete:
-            await self._delete_task_outputs(task)
-        self.tasks.pop(task_id, None)
-        pending = self._pending_saves.pop(task_id, None)
-        if pending and not pending.done():
-            pending.cancel()
-        await run_db("DELETE FROM tasks WHERE id=?", (task_id,))
-        task_dir = task_work_dir(task)
-        if task_dir.exists():
-            await asyncio.to_thread(shutil.rmtree, task_dir, True)
-        self._broadcast_nowait({"type": "task_deleted", "task_id": task_id})
-        await self._cleanup_temp_root_if_all_done()
+            task_throttles.drop(task_id)
+            if delete_files or not was_complete:
+                await self._delete_task_outputs(task)
+            self.tasks.pop(task_id, None)
+            pending = self._pending_saves.pop(task_id, None)
+            if pending and not pending.done():
+                pending.cancel()
+            await run_db("DELETE FROM tasks WHERE id=?", (task_id,))
+            task_dir = task_work_dir(task)
+            if task_dir.exists():
+                await asyncio.to_thread(shutil.rmtree, task_dir, True)
+            self._broadcast_nowait({"type": "task_deleted", "task_id": task_id})
+            await self._cleanup_temp_root_if_all_done()
+        except Exception:
+            # The task remains managed if deletion did not complete, so permit
+            # normal updates after surfacing the failure to the caller.
+            self._deleting_task_ids.discard(task_id)
+            raise
 
     async def _delete_task_outputs(self, task: Task) -> None:
         download_root = Path(task.engine_state.get("output_dir") or settings.download_dir).resolve()
         candidates = {
             str(task.output_path or ""),
             str(task.engine_state.get("reserved_output_path", "") or ""),
+            str(task.engine_state.get("stream_path", "") or ""),
         }
 
         def remove() -> None:
@@ -987,11 +997,13 @@ class TaskManager:
                     task.progress.playable_duration = 0
             self.tasks[task.id] = task
             if status is not stored_status:
+                task.engine_state["state_reason"] = "core_interrupted"
                 interrupted.append(task)
             if task.engine_state.pop(RESUME_AFTER_UPDATE_KEY, False):
                 task.status = TaskStatus.PAUSED
                 task.stage = "queued"
                 task.last_log = "更新完成，正在自动继续下载"
+                task.engine_state["state_reason"] = "update_restart"
                 resume_after_update.append(task)
         for task in interrupted:
             await self._save_db(task)
@@ -1008,6 +1020,8 @@ class TaskManager:
                 await self._save_db(task)
 
     async def _write_db(self, task: Task) -> None:
+        if not self._task_is_current(task):
+            return
         task.updated_at = datetime.now().isoformat()
         try:
             await run_db(
@@ -1070,10 +1084,14 @@ class TaskManager:
         current = asyncio.current_task()
         if pending and pending is not current and not pending.done():
             pending.cancel()
+        if not self._task_is_current(task):
+            return
         await self._write_db(task)
         self._broadcast_nowait(self._task_event(task))
 
     def _schedule_save(self, task: Task) -> None:
+        if not self._task_is_current(task):
+            return
         pending = self._pending_saves.get(task.id)
         if pending and not pending.done():
             return
@@ -1081,7 +1099,8 @@ class TaskManager:
         async def delayed_save() -> None:
             try:
                 await asyncio.sleep(1)
-                await self._write_db(task)
+                if self._task_is_current(task):
+                    await self._write_db(task)
             finally:
                 self._pending_saves.pop(task.id, None)
 
@@ -1178,6 +1197,7 @@ class TaskManager:
             "seed_count": progress.seed_count,
             "playback_ready": self._playback_ready(task),
             "is_live": bool(task.engine_state.get("live")),
+            "state_reason": str(task.engine_state.get("state_reason", "")),
             "error_message": task.error_message,
             "error_code": task.error_code,
             "error_stage": task.error_stage,
@@ -1200,6 +1220,8 @@ class TaskManager:
         }
 
     def _on_log_write(self, task_id: str, message: str) -> None:
+        if task_id in self._deleting_task_ids:
+            return
         self._broadcast_nowait(
             {"type": "task_log", "task_id": task_id, "message": message}
         )
@@ -1213,8 +1235,16 @@ class TaskManager:
             logger.warning("log write failed for task %s: %s", task_id, exc)
 
     def _on_progress(self, task: Task) -> None:
+        if not self._task_is_current(task):
+            return
         self._broadcast_nowait(self._task_event(task))
         self._schedule_save(task)
+
+    def _on_task_finished(self, task: Task) -> None:
+        if not self._task_is_current(task):
+            return
+        self._broadcast_nowait(self._task_event(task))
+        self._broadcast_queue_updates()
 
 
 manager = TaskManager()

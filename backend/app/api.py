@@ -210,7 +210,11 @@ async def create_browser_handoff(request: Request, x_token: str = Header(default
 async def browser_extension_ping(request: Request, x_token: str = Header(default="")):
     _check_token(x_token)
     payload = await request.json()
-    browser_handoffs.record_ping(str(payload.get("version", "")))
+    browser_handoffs.record_ping(
+        str(payload.get("version", "")),
+        str(payload.get("client_id", "")),
+        str(payload.get("browser", "")),
+    )
     return {"ok": True}
 
 

@@ -50,6 +50,14 @@ describe('task state updates', () => {
     })
     expect(deleted).toEqual([])
   })
+
+  it('does not revive a deleted task from a late progress event', () => {
+    const tombstones = new Set(['gone'])
+    const updated = mergeTaskEvent([], {
+      type: 'task_progress', task_id: 'gone', status: 'downloading', completed_segments: 4,
+    }, tombstones)
+    expect(updated).toEqual([])
+  })
 })
 
 

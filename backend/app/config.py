@@ -1,5 +1,6 @@
 import json
 import secrets
+import hashlib
 from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -14,16 +15,24 @@ def _new_internal_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-# Tokens that reached a public commit while config.json was tracked by git.
-# They are public knowledge and must never authenticate anything again.
-_LEAKED_TOKENS = frozenset({
-    "55555",
-    "ktHjYK8MXbRKgH0QtuGQl1n4duHVHAMECEbOpiTNCqM",
+# SHA-256 digests of tokens that reached public commits while config.json was
+# tracked by git. Keeping digests prevents re-publishing the credentials while
+# still allowing an installation to rotate a compromised legacy value on sight.
+_LEAKED_TOKEN_HASHES = frozenset({
+    "c507a68f3093e885765257ed3f176c757aaf62bb4cbc2ef94b2e7da3406d9676",
+    "b04cb8d73a825328d40038f6e8e9b02fc36303f6452298ffe548aa87f76d3a8d",
+    "9671d1a6c492898aa8fae3c034f8144cfe518a1aaed6b535252526e7b6399200",
 })
 
 
+def _is_leaked_token(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    return hashlib.sha256(value.encode("utf-8")).hexdigest() in _LEAKED_TOKEN_HASHES
+
+
 class Settings(BaseSettings):
-    config_version: int = 15
+    config_version: int = 16
     host: str = "127.0.0.1"
     port: int = 8765
     token: str = Field(default_factory=_new_internal_token, min_length=32)
@@ -163,7 +172,7 @@ def load_settings() -> Settings:
             # The legacy fixed value was exposed in Settings and shared by all
             # installations. Replace it with an implementation detail used only
             # by the desktop shell and Native Messaging host.
-            if not isinstance(data.get("token"), str) or len(data.get("token", "")) < 32 or data.get("token") in _LEAKED_TOKENS:
+            if not isinstance(data.get("token"), str) or len(data.get("token", "")) < 32 or _is_leaked_token(data.get("token")):
                 data["token"] = _new_internal_token()
             # Browser integration is Native Messaging only. The privileged
             # control API is an internal desktop transport, never a LAN API.
@@ -175,11 +184,19 @@ def load_settings() -> Settings:
             # config.json used to be tracked by git, so any token that ever
             # reached a public commit must be rotated on sight — it is a
             # shared credential from that moment on.
-            if data.get("token") in _LEAKED_TOKENS:
+            if _is_leaked_token(data.get("token")):
                 data["token"] = _new_internal_token()
             data["config_version"] = 15
             migrated = True
             version = 15
+        if version < 16:
+            # Rotate a second historic public token even for installations
+            # already migrated to v15.  The deny-list contains digests only.
+            if _is_leaked_token(data.get("token")):
+                data["token"] = _new_internal_token()
+            data["config_version"] = 16
+            migrated = True
+            version = 16
         if not isinstance(data.get("tvbox_endpoint"), str):
             data["tvbox_endpoint"] = ""
             migrated = True

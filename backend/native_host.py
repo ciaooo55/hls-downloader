@@ -128,7 +128,15 @@ def dispatch(message: dict) -> dict:
     }:
         raise ValueError("不支持的 Native Messaging 操作")
     _ensure_app()
-    _request("POST", "/browser/ping", {"version": str(message.get("version", ""))})
+    _request(
+        "POST",
+        "/browser/ping",
+        {
+            "version": str(message.get("version", "")),
+            "client_id": str(message.get("client_id", "")),
+            "browser": str(message.get("browser", "")),
+        },
+    )
     if operation == "ping":
         health = _request("GET", "/health")
         current = _request("GET", "/settings")
@@ -156,8 +164,7 @@ def dispatch(message: dict) -> dict:
         return {"ok": True, "handoff": _request("POST", "/browser/handoffs", message.get("resource", {}))}
     if operation == "download":
         task = _request("POST", "/browser/downloads", message.get("resource", {}))
-        activated = _request("POST", "/app/activate", {})
-        return {"ok": True, "task": task, "activated": bool(activated.get("ok"))}
+        return {"ok": True, "task": task, "activated": False}
     if operation == "push_to_tv":
         return _request("POST", "/tvbox/push", {"url": str(message.get("resource", {}).get("url", ""))})
     if operation == "media_push":

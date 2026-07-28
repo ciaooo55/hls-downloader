@@ -607,6 +607,35 @@ def test_delete_incomplete_task_always_removes_reserved_output(tmp_path, monkeyp
     asyncio.run(run())
 
 
+def test_deleted_task_ignores_late_progress_log_and_database_callbacks(tmp_path, monkeypatch):
+    database_calls = []
+
+    async def fake_run_db(sql, params=()):
+        database_calls.append((sql, params))
+        return None
+
+    async def run():
+        manager = TaskManager()
+        task = _task("late", TaskStatus.PAUSED)
+        manager.tasks[task.id] = task
+        events = []
+        monkeypatch.setattr(manager_module.settings, "download_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+        monkeypatch.setattr(manager, "_broadcast_nowait", lambda event: events.append(event))
+
+        await manager.delete_task(task.id)
+        manager._on_progress(task)
+        manager._on_log_write(task.id, "late worker log")
+        await manager._save_db(task)
+
+        assert [event["type"] for event in events] == ["task_deleted"]
+        assert len(database_calls) == 1
+        assert database_calls[0][0] == "DELETE FROM tasks WHERE id=?"
+        assert not (tmp_path / ".tasks" / task.id / "download.log").exists()
+
+    asyncio.run(run())
+
+
 def test_new_task_registration_waits_for_final_temp_cleanup(tmp_path, monkeypatch):
     cleanup_started = asyncio.Event()
     release_cleanup = asyncio.Event()
