@@ -140,10 +140,11 @@ def test_windows_build_emits_setup_and_portable_assets():
     assert "Compress-Archive" in build_script
 
 
-def test_windows_build_emits_chromium_and_two_firefox_variants_with_seven_release_files():
+def test_windows_build_emits_extension_assets_only_when_requested():
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
 
+    assert "[switch]$IncludeExtensionAssets" in build_script
     assert "$ReleaseNamePrefix-Firefox-Web-UI-Unsigned.zip" in build_script
     assert "$ReleaseNamePrefix-Firefox-Web-UI-Source.zip" in build_script
     assert "$ReleaseNamePrefix-Firefox-No-Web-UI-Unsigned.zip" in build_script
@@ -152,7 +153,8 @@ def test_windows_build_emits_chromium_and_two_firefox_variants_with_seven_releas
     assert "$ChromiumExtensionStage" in build_script
     assert "$FirefoxWebId" in build_script and "$FirefoxNoWebId" in build_script
     assert "HLS_FIREFOX_EXTENSION_ID" in build_script
-    assert "Release directory must contain exactly seven files" in build_script
+    assert "if ($IncludeExtensionAssets)" in build_script
+    assert "Release directory must contain exactly $($expected.Count) files" in build_script
     assert "SHA256SUMS.txt" not in build_script
 
 

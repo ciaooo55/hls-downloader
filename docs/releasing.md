@@ -1,14 +1,14 @@
 # Windows 发布流程
 
-本项目使用 GitHub Actions 从源码生成 Tauri + React Windows 安装版、便携版、Chrome/Firefox 浏览器插件和 SHA256 校验文件。工作流使用 Rust stable 构建桌面界面、PyInstaller 构建无窗口下载核心；`bin/` 与 `release/` 由 `.gitignore` 排除，不应手动提交二进制产物。
+本项目使用 GitHub Actions 从源码生成 Tauri + React Windows 安装版和便携版。工作流使用 Rust stable 构建桌面界面、PyInstaller 构建无窗口下载核心；`bin/` 与 `release/` 由 `.gitignore` 排除，不应手动提交二进制产物。
 
 ## 手动验证构建
 
 1. 打开仓库的 `Actions` 页面。
 2. 选择 `Windows Release`。
-3. 点击 `Run workflow`，填写版本号后运行。
+3. 点击 `Run workflow`，填写版本号后运行。只有浏览器插件本身有改动时才勾选 `include_extensions`。
 4. 等待任务通过，从任务页面下载对应版本的 `HLSDownloader-Windows-x64` artifact。
-5. 确认其中包含安装版、便携版、Chrome/Edge MV3 扩展包，以及网页显示和网页不显示两种 Firefox 插件各自的 unsigned/source 文件。
+5. 默认确认其中只包含安装版和便携版；勾选 `include_extensions` 时，再确认包含 Chrome/Edge MV3 扩展包，以及网页显示和网页不显示两种 Firefox 插件各自的 unsigned/source 文件。
 
 手动运行只生成临时 artifact，不会创建公开 Release。
 
@@ -23,11 +23,16 @@ git tag v1.4.2
 git push origin v1.4.2
 ```
 
-`v*` 标签会触发完整 Windows 构建。成功后工作流自动创建同名 GitHub Release，并上传：
+`v*` 标签会触发完整 Windows 构建。插件没有改动时不要上传独立插件包，成功后工作流自动创建同名 GitHub Release，并默认上传：
 
 ```text
 HLSDownloader-v3.0.6-Windows-x64-Setup.exe
 HLSDownloader-v3.0.6-Windows-x64-Portable.zip
+```
+
+只有发布浏览器插件新版本时，才通过手动工作流勾选 `include_extensions` 或本地传入 `-IncludeExtensionAssets`，额外上传：
+
+```text
 HLSDownloader-v3.0.6-Chrome-Edge-Extension.zip
 HLSDownloader-v3.0.6-Firefox-Web-UI-Unsigned.zip
 HLSDownloader-v3.0.6-Firefox-Web-UI-Source.zip

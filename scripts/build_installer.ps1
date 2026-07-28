@@ -3,6 +3,7 @@ param(
     [switch]$SkipBackend,
     [switch]$SkipDesktop,
     [switch]$SkipSmoke,
+    [switch]$IncludeExtensionAssets,
     [string]$Version = "3.0.6"
 )
 
@@ -240,7 +241,9 @@ if (-not $SkipFrontend) {
         $previousFirefoxId = $env:HLS_FIREFOX_EXTENSION_ID
         $previousExtensionVersion = $env:HLS_EXTENSION_VERSION
         try {
-            $env:HLS_EXTENSION_VERSION = $Version
+            if ($IncludeExtensionAssets) {
+                $env:HLS_EXTENSION_VERSION = $Version
+            }
             if (-not (Test-Path "node_modules")) { pnpm install --frozen-lockfile }
             pnpm test
             pnpm run build:chrome
@@ -608,65 +611,70 @@ then select browser-extension\chrome.
 }
 
 Invoke-Step "Assemble release files" {
-    Compress-Archive -Path (Join-Path $ChromiumExtensionStage "*") -DestinationPath $ChromiumExtensionOut -CompressionLevel Optimal
-    Compress-Archive -Path (Join-Path $FirefoxWebStage "*") -DestinationPath $FirefoxWebExtensionOut -CompressionLevel Optimal
-    Compress-Archive -Path (Join-Path $FirefoxNoWebStage "*") -DestinationPath $FirefoxNoWebExtensionOut -CompressionLevel Optimal
-    $sourceInputs = @(
-        (Join-Path $ExtensionDir "entrypoints"),
-        (Join-Path $ExtensionDir "lib"),
-        (Join-Path $ExtensionDir "native-host"),
-        (Join-Path $ExtensionDir "public"),
-        (Join-Path $ExtensionDir "AMO-BUILD.md"),
-        (Join-Path $ExtensionDir "package.json"),
-        (Join-Path $ExtensionDir "pnpm-lock.yaml"),
-        (Join-Path $ExtensionDir "pnpm-workspace.yaml"),
-        (Join-Path $ExtensionDir "tsconfig.json"),
-        (Join-Path $ExtensionDir "wxt.config.ts"),
-        (Join-Path $Root "PRIVACY.md")
-    )
-    foreach ($sourceVariant in @(
-        @{ Id = $FirefoxWebId; Out = $FirefoxWebSourceOut; Stage = (Join-Path $ExtensionBuildDir "source-web-ui"); Label = "网页显示" },
-        @{ Id = $FirefoxNoWebId; Out = $FirefoxNoWebSourceOut; Stage = (Join-Path $ExtensionBuildDir "source-no-web-ui"); Label = "网页不显示" }
-    )) {
-        Remove-Item -Recurse -Force $sourceVariant.Stage -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path $sourceVariant.Stage | Out-Null
-        Copy-Item -Recurse -Force -Path $sourceInputs -Destination $sourceVariant.Stage
-        # AMO reviewers and users must be able to build each source archive
-        # without an undocumented environment variable.  Keep the functional
-        # source identical, but make this archive's manifest default to the
-        # exact ID carried by its corresponding unsigned ZIP.
-        $sourceConfigPath = Join-Path $sourceVariant.Stage "wxt.config.ts"
-        $sourceConfig = [IO.File]::ReadAllText($sourceConfigPath)
-        $sourceConfig = $sourceConfig -replace "const firefoxId = process\.env\.HLS_FIREFOX_EXTENSION_ID \|\| '[^']+'", "const firefoxId = '$($sourceVariant.Id)'"
-        if ($sourceConfig -notmatch [regex]::Escape("const firefoxId = '$($sourceVariant.Id)'")) {
-            throw "Firefox source archive did not receive the expected extension ID: $($sourceVariant.Id)"
-        }
-        [IO.File]::WriteAllText($sourceConfigPath, $sourceConfig, [Text.UTF8Encoding]::new($false))
-        @"
+    $expected = @($InstallerOut, $PortableOut)
+    if ($IncludeExtensionAssets) {
+        Compress-Archive -Path (Join-Path $ChromiumExtensionStage "*") -DestinationPath $ChromiumExtensionOut -CompressionLevel Optimal
+        Compress-Archive -Path (Join-Path $FirefoxWebStage "*") -DestinationPath $FirefoxWebExtensionOut -CompressionLevel Optimal
+        Compress-Archive -Path (Join-Path $FirefoxNoWebStage "*") -DestinationPath $FirefoxNoWebExtensionOut -CompressionLevel Optimal
+        $sourceInputs = @(
+            (Join-Path $ExtensionDir "entrypoints"),
+            (Join-Path $ExtensionDir "lib"),
+            (Join-Path $ExtensionDir "native-host"),
+            (Join-Path $ExtensionDir "public"),
+            (Join-Path $ExtensionDir "AMO-BUILD.md"),
+            (Join-Path $ExtensionDir "package.json"),
+            (Join-Path $ExtensionDir "pnpm-lock.yaml"),
+            (Join-Path $ExtensionDir "pnpm-workspace.yaml"),
+            (Join-Path $ExtensionDir "tsconfig.json"),
+            (Join-Path $ExtensionDir "wxt.config.ts"),
+            (Join-Path $Root "PRIVACY.md")
+        )
+        foreach ($sourceVariant in @(
+            @{ Id = $FirefoxWebId; Out = $FirefoxWebSourceOut; Stage = (Join-Path $ExtensionBuildDir "source-web-ui"); Label = "网页显示" },
+            @{ Id = $FirefoxNoWebId; Out = $FirefoxNoWebSourceOut; Stage = (Join-Path $ExtensionBuildDir "source-no-web-ui"); Label = "网页不显示" }
+        )) {
+            Remove-Item -Recurse -Force $sourceVariant.Stage -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $sourceVariant.Stage | Out-Null
+            Copy-Item -Recurse -Force -Path $sourceInputs -Destination $sourceVariant.Stage
+            # AMO reviewers and users must be able to build each source archive
+            # without an undocumented environment variable.  Keep the functional
+            # source identical, but make this archive's manifest default to the
+            # exact ID carried by its corresponding unsigned ZIP.
+            $sourceConfigPath = Join-Path $sourceVariant.Stage "wxt.config.ts"
+            $sourceConfig = [IO.File]::ReadAllText($sourceConfigPath)
+            $sourceConfig = $sourceConfig -replace "const firefoxId = process\.env\.HLS_FIREFOX_EXTENSION_ID \|\| '[^']+'", "const firefoxId = '$($sourceVariant.Id)'"
+            if ($sourceConfig -notmatch [regex]::Escape("const firefoxId = '$($sourceVariant.Id)'")) {
+                throw "Firefox source archive did not receive the expected extension ID: $($sourceVariant.Id)"
+            }
+            [IO.File]::WriteAllText($sourceConfigPath, $sourceConfig, [Text.UTF8Encoding]::new($false))
+            @"
 Firefox 发布变体：$($sourceVariant.Label)
 扩展 ID：$($sourceVariant.Id)
 构建命令：pnpm run build:firefox
 
 该源码包已将上述 ID 设为默认值；两个发布变体的功能源码完全相同，仅 Mozilla 发布 ID 不同。
 "@ | Set-Content -LiteralPath (Join-Path $sourceVariant.Stage "BUILD-VARIANT.txt") -Encoding UTF8
-        Compress-Archive -Path (Join-Path $sourceVariant.Stage "*") -DestinationPath $sourceVariant.Out -CompressionLevel Optimal
+            Compress-Archive -Path (Join-Path $sourceVariant.Stage "*") -DestinationPath $sourceVariant.Out -CompressionLevel Optimal
+        }
+        $expected += @($ChromiumExtensionOut, $FirefoxWebExtensionOut, $FirefoxWebSourceOut, $FirefoxNoWebExtensionOut, $FirefoxNoWebSourceOut)
     }
-    $expected = @($InstallerOut, $PortableOut, $ChromiumExtensionOut, $FirefoxWebExtensionOut, $FirefoxWebSourceOut, $FirefoxNoWebExtensionOut, $FirefoxNoWebSourceOut)
     foreach ($path in $expected) {
         if (-not (Test-Path -LiteralPath $path)) {
             throw "Missing release file: $path"
         }
     }
     $actual = @(Get-ChildItem -LiteralPath $ReleaseDir -File)
-    if ($actual.Count -ne 7) { throw "Release directory must contain exactly seven files; found $($actual.Count)" }
+    if ($actual.Count -ne $expected.Count) { throw "Release directory must contain exactly $($expected.Count) files; found $($actual.Count)" }
 }
 
 Write-Host ""
 Write-Host "Windows release assets created:" -ForegroundColor Green
 Write-Host $InstallerOut
 Write-Host $PortableOut
-Write-Host $ChromiumExtensionOut
-Write-Host $FirefoxWebExtensionOut
-Write-Host $FirefoxWebSourceOut
-Write-Host $FirefoxNoWebExtensionOut
-Write-Host $FirefoxNoWebSourceOut
+if ($IncludeExtensionAssets) {
+    Write-Host $ChromiumExtensionOut
+    Write-Host $FirefoxWebExtensionOut
+    Write-Host $FirefoxWebSourceOut
+    Write-Host $FirefoxNoWebExtensionOut
+    Write-Host $FirefoxNoWebSourceOut
+}

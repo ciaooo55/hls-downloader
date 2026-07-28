@@ -7,6 +7,11 @@ on:
         description: Version used in the installer, for example 3.0.6
         required: false
         default: "3.0.6"
+      include_extensions:
+        description: Upload browser extension ZIPs for this release
+        required: false
+        type: boolean
+        default: false
   push:
     tags:
       - "v*"
@@ -82,7 +87,11 @@ jobs:
           if ("${{ github.ref_type }}" -eq "tag") {
             $version = "${{ github.ref_name }}".TrimStart("v")
           }
-          & .\scripts\build_installer.ps1 -Version $version
+          $buildArgs = @("-Version", $version)
+          if ("${{ github.event.inputs.include_extensions }}" -eq "true") {
+            $buildArgs += "-IncludeExtensionAssets"
+          }
+          & .\scripts\build_installer.ps1 @buildArgs
 
       - name: Assemble and verify release files
         shell: pwsh
@@ -94,21 +103,25 @@ jobs:
           $prefix = "HLSDownloader-v$version"
           $expected = @(
             "$prefix-Windows-x64-Setup.exe",
-            "$prefix-Windows-x64-Portable.zip",
-            "$prefix-Chrome-Edge-Extension.zip",
-            "$prefix-Firefox-Web-UI-Unsigned.zip",
-            "$prefix-Firefox-Web-UI-Source.zip",
-            "$prefix-Firefox-No-Web-UI-Unsigned.zip",
-            "$prefix-Firefox-No-Web-UI-Source.zip"
+            "$prefix-Windows-x64-Portable.zip"
           )
+          if ("${{ github.event.inputs.include_extensions }}" -eq "true") {
+            $expected += @(
+              "$prefix-Chrome-Edge-Extension.zip",
+              "$prefix-Firefox-Web-UI-Unsigned.zip",
+              "$prefix-Firefox-Web-UI-Source.zip",
+              "$prefix-Firefox-No-Web-UI-Unsigned.zip",
+              "$prefix-Firefox-No-Web-UI-Source.zip"
+            )
+          }
           foreach ($name in $expected) {
             if (-not (Test-Path -LiteralPath (Join-Path .\release $name))) {
               throw "Missing release file: $name"
             }
           }
           $actual = @(Get-ChildItem .\release -File)
-          if ($actual.Count -ne 7) {
-            throw "Release directory must contain exactly seven files; found $($actual.Count)"
+          if ($actual.Count -ne $expected.Count) {
+            throw "Release directory must contain exactly $($expected.Count) files; found $($actual.Count)"
           }
 
       - name: Upload workflow artifact

@@ -147,7 +147,7 @@ pnpm run tauri:build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 1.4.3
+.\scripts\build_installer.ps1 -Version 3.0.6
 ```
 
 输出位于忽略的 `release` 目录：
@@ -156,6 +156,8 @@ choco install ffmpeg nsis -y
 HLSDownloader-v3.0.6-Windows-x64-Setup.exe
 HLSDownloader-v3.0.6-Windows-x64-Portable.zip
 ```
+
+插件没有改动时不要上传独立插件包。只有需要发布浏览器插件新版本时，打包时追加 `-IncludeExtensionAssets`，GitHub Actions 手动运行时勾选 `include_extensions`。
 
 ## GitHub 自动发布
 

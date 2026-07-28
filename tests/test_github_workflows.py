@@ -33,6 +33,8 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
 
     assert "workflow_dispatch:" in workflow
     assert 'default: "3.0.6"' in workflow
+    assert "include_extensions:" in workflow
+    assert "Upload browser extension ZIPs for this release" in workflow
     assert "tags:" in workflow and "v*" in workflow
     assert "windows-latest" in workflow
     assert "dtolnay/rust-toolchain@stable" in workflow
@@ -43,6 +45,7 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "$prefix-Windows-x64-Setup.exe" in workflow
     assert "$prefix-Windows-x64-Portable.zip" in workflow
     assert "m3u8-sniffer.user.js" not in workflow
+    assert "github.event.inputs.include_extensions" in workflow
     assert "$prefix-Firefox-Web-UI-Unsigned.zip" in workflow
     assert "$prefix-Firefox-Web-UI-Source.zip" in workflow
     assert "$prefix-Firefox-No-Web-UI-Unsigned.zip" in workflow
@@ -96,3 +99,4 @@ def test_readme_documents_windows_release_assets():
     assert "SHA256SUMS.txt" not in readme
     assert "Windows 10/11" in readme
     assert "git tag v" in readme
+    assert "插件没有改动时不要上传独立插件包" in readme
