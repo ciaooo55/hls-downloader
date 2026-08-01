@@ -3,17 +3,32 @@
 [![CI](https://github.com/ciaooo55/hls-downloader/actions/workflows/ci.yml/badge.svg)](https://github.com/ciaooo55/hls-downloader/actions/workflows/ci.yml)
 [![Windows Release](https://github.com/ciaooo55/hls-downloader/actions/workflows/release.yml/badge.svg)](https://github.com/ciaooo55/hls-downloader/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](requirements.txt)
+[![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](frontend/src-tauri)
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=000)](frontend/package.json)
 
 一个面向 Windows 的本地下载管理器。支持点播 HLS、非 DRM DASH、普通 HTTP/HTTPS 文件和 BT/magnet，提供暂停续传、边下边播、浏览器接管及统一任务列表。
 
 程序只监听 `127.0.0.1`，任务、配置和视频均保存在本机。关闭主窗口后程序会留在系统托盘继续下载，可从托盘重新打开或彻底退出。
 
 
-## 技术架构
+## 🔎 项目速览
+
+| 项目 | 说明 |
+| --- | --- |
+| 适用平台 | Windows 10/11 x64 |
+| 当前版本 | `3.0.9` |
+| 桌面端 | Tauri 2 + React 19 + TypeScript |
+| 下载核心 | Python 3.12 + FastAPI |
+| 浏览器扩展 | WXT / Manifest V3 / Native Messaging |
+| 支持协议 | HLS、非 DRM DASH、HTTP(S)、BT / magnet |
+| 本地服务 | 默认仅监听 `127.0.0.1:8765` |
+
+## 🏗️ 技术架构
 
 桌面主程序锁定 **Tauri 2 + React 19 + Vite + Tailwind CSS v4 + Zustand**，下载核心为 **FastAPI**，浏览器扩展为 **WXT**。详见 [docs/architecture.md](docs/architecture.md) 与 [DESIGN.md](DESIGN.md)。
 
-## 下载
+## 📦 下载
 
 从 [Releases](https://github.com/ciaooo55/hls-downloader/releases/latest) 下载最新版：
 
@@ -31,7 +46,7 @@
 
 > 当前安装包没有商业代码签名证书。Windows SmartScreen 首次运行时可能显示未知发布者，请只从本仓库 Releases 下载；应用更新使用 GitHub Release 资产提供的 SHA-256 digest 校验安装包。
 
-## 使用
+## 🚀 使用
 
 1. 安装版运行安装程序；便携版完整解压后运行 `HLSDownloader.exe`。
 2. 点击顶部“新建”，粘贴普通文件、m3u8 或含视频的网页地址。
@@ -46,7 +61,7 @@
 
 安装版的设置和任务历史位于 `%LOCALAPPDATA%\HLS Downloader`，默认视频目录为 `%USERPROFILE%\Downloads\HLS Downloader`。缓存与过程文件目录可在设置中单独指定，默认使用安装目录；卸载会清除程序数据和缓存，并询问是否同时删除视频。便携版的运行数据保存在解压目录中。
 
-## 功能
+## ✨ 功能
 
 - m3u8 直链和网页链接识别
 - HLS 文件名会综合服务器响应、播放清单元数据、网页标题和 URL 推断，避免只保存成 `video.mp4`
@@ -82,11 +97,11 @@
 - 设置页、开始菜单和 Windows“已安装的应用”卸载入口
 - 深色/浅色界面切换
 
-## 支持范围
+## 🧭 支持范围
 
 支持点播 HLS（含外挂字幕自动保存为 .vtt/.srt）、直播 HLS 录制（可手动停止或设置时长上限）、非 DRM DASH、严格 Range 的 HTTP 续传和 libtorrent BT。SAMPLE-AES/DRM、受保护 EME、无法重放的 `blob:`/POST 下载不会尝试绕过。
 
-## 浏览器插件
+## 🧩 浏览器插件
 
 插件有改动的 Release 会同时生成两个 Firefox 插件包：网页显示版与网页不显示版。它们功能和源码完全一致，仅 Mozilla 发布 ID 不同。安装版内置 Chromium 插件目录，并为 Chrome、Edge、Brave、Chromium、Vivaldi、Opera 和 Firefox 自动注册 `com.ciaooo55.hls_downloader` Native Messaging Host；首次使用时在工具栏打开“浏览器插件”，按界面提示完成一次性加载。插件先通过 Native Messaging 完成本机可信配对和冷启动，随后使用并发友好的 loopback HTTP 通道，断线或核心重启时自动退回 Native 并重新配对；多个浏览器及不同插件版本可同时在线，用户不需要复制或配置 Token。用户点击真实链接或带有下载语义的按钮后，插件才会登记接管意图；随后浏览器创建真实 `DownloadItem` 时，插件立即暂停并暂时隐藏浏览器下载 UI，并按 `webRequest.requestId` 跟踪 PHP/脚本跳转的完整重定向链、`Content-Disposition`、最终文件名、类型和大小。普通的播放、展开、登录等页面按钮不会登记接管意图。媒体悬浮按钮按具体 `<video>` 保存播放证据：直链必须精确匹配，同一 frame 有多个 MSE 播放器时不做模糊归属；iframe 的真实请求头、Referer/Origin 缺失状态和 Cookie 按资源源站分别传递。桌面端成功打开下载确认对话框后，插件立即取消并清除浏览器副本；用户之后选择下载或取消都只由桌面软件处理。只有桌面端离线或无法接收接管请求时才恢复浏览器下载。页面嗅探只登记资源，不会自行启动下载，按住 Alt 点击可临时绕过接管。
 
@@ -100,7 +115,7 @@ Firefox 网页显示版使用已发布的 AMO ID `browser@hls-downloader.ciaooo5
 
 播放器使用已下载的连续分片生成临时本地 HLS 清单，默认至少积累 6 秒后开放播放；下载完成后使用带 `faststart` 的 MP4 和 HTTP Range，避免再次读取源站。关闭播放器会释放会话，空闲会话超时后自动清理临时文件。
 
-## 源码运行
+## 🛠️ 源码运行
 
 需要：
 
@@ -137,7 +152,7 @@ cd ..
 .\run_frontend.ps1
 ```
 
-## 测试
+## 🧪 测试
 
 ```powershell
 python -m pytest -q
@@ -148,7 +163,17 @@ pnpm run build
 pnpm run tauri:build
 ```
 
-## 本地打包
+后端还配置了 Ruff、mypy 与覆盖率规则；修改下载核心或数据模型时可额外运行：
+
+```powershell
+python -m ruff check backend tests
+python -m mypy backend
+python -m pytest --cov
+```
+
+真实下载、浏览器接管、安装/升级、系统托盘与休眠抑制涉及 Windows 和外部网络，自动测试之外还应按 `scripts/smoke_*.py`、`scripts/smoke-*.ps1` 的适用条件做针对性冒烟，运行前先查看脚本参数与副作用。
+
+## 📦 本地打包
 
 打包需要 PyInstaller、NSIS、FFmpeg 和 ffprobe：
 
@@ -167,7 +192,7 @@ HLSDownloader-v3.0.9-Windows-x64-Portable.zip
 
 插件没有改动时不要上传独立插件包。只有需要发布浏览器插件新版本时，打包时追加 `-IncludeExtensionAssets`，GitHub Actions 手动运行时勾选 `include_extensions`。
 
-## GitHub 自动发布
+## 🚢 GitHub 自动发布
 
 - 推送到 `main` 或提交 Pull Request：运行 Python 测试、前端测试和生产构建。
 - 在 Actions 页面手动运行 `Windows Release`：生成可下载的工作流产物，不创建正式 Release。
@@ -182,7 +207,7 @@ git push origin v1.4.3
 
 详细流程见 [docs/releasing.md](docs/releasing.md)。
 
-## 项目结构
+## 🗂️ 项目结构
 
 ```text
 backend/       FastAPI、统一任务调度、下载核心与 Native Host
@@ -194,14 +219,33 @@ tests/         Python 自动化测试
 .github/       CI 与自动 Release 工作流
 ```
 
-## 安全说明
+## ⚙️ 配置与数据目录
+
+默认配置模板是 [`config.default.json`](config.default.json)。推荐优先通过桌面设置页修改，不要直接共享个人运行配置。
+
+| 配置项 | 默认值 / 说明 |
+| --- | --- |
+| `host` / `port` | `127.0.0.1` / `8765` |
+| `default_concurrency` | 单任务 12 路并发 |
+| `max_concurrent_tasks` | 最多 3 个活动任务 |
+| `download_dir` | `downloads` |
+| `temp_dir` | 当前运行目录 |
+| `proxy_mode` | `system`，也支持直连与手动代理 |
+| `ffmpeg_path` | `bin\\ffmpeg.exe` |
+
+安装版数据位于 `%LOCALAPPDATA%\HLS Downloader`，视频默认保存到 `%USERPROFILE%\Downloads\HLS Downloader`；便携版将运行数据保存在解压目录。缓存目录中的 `.tasks` 保存分片、检查点、BT 数据与日志，暂停/失败任务可能依赖这些文件继续运行。
+
+## 🔐 隐私与安全
 
 - 服务默认只监听 `127.0.0.1`，不要改成公网地址。
 - `config.json` 中的 token 用于本机 UI、浏览器插件和 Native Messaging 通信，不是 GitHub token。
 - 不要把 Cookie、网站账号信息、下载记录或个人配置提交到仓库。
 - 仓库不跟踪 `bin`、`release`、数据库、下载目录和构建缓存。
+- 导入 cURL、站点请求头或代理认证信息时，应把任务数据库与配置目录视为敏感数据。
+- 浏览器扩展只应从本仓库 Release 或可信商店安装；Native Messaging 注册会修改本机浏览器相关配置。
+- 本项目不会绕过 DRM。下载、录制或投屏前请确认自己拥有访问和保存内容的权利。
 
-## License
+## 📄 License
 
 [MIT](LICENSE)
 
