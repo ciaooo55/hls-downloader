@@ -35,7 +35,20 @@ OVERLAY_EXPRESSION = """
   if (!video) return false;
   if (!window.__hlsOverlaySmokeStarted) {
     window.__hlsOverlaySmokeStarted = true;
-    video.dispatchEvent(new Event('playing'));
+    // A page-world synthetic Event does not reliably cross Firefox's
+    // extension-world boundary.  Exercise a real browser playback transition
+    // instead: a canvas MediaStream needs no codec, network, or fixture file,
+    // and emits the same trusted media lifecycle events as a site player.
+    const canvas = document.createElement('canvas');
+    canvas.width = 320;
+    canvas.height = 180;
+    const context = canvas.getContext('2d');
+    context?.fillRect(0, 0, canvas.width, canvas.height);
+    const stream = canvas.captureStream(5);
+    window.__hlsOverlaySmokeStream = stream;
+    video.muted = true;
+    video.srcObject = stream;
+    void video.play().catch(error => { window.__hlsOverlaySmokeError = String(error); });
   }
   return [...document.querySelectorAll('*')].some(element => {
     const button = element.shadowRoot?.querySelector('.video-download.identifying');
@@ -101,7 +114,25 @@ def _wait_for_identifying_overlay(driver: webdriver.Remote, browser_name: str) -
         except WebDriverException:
             pass
         time.sleep(0.1)
-    raise RuntimeError(f"{browser_name} did not show the immediate identifying overlay")
+    diagnostics = driver.execute_script(
+        """
+        const video = document.querySelector('video');
+        return {
+          marker: document.documentElement.getAttribute(arguments[0]),
+          paused: video?.paused,
+          readyState: video?.readyState,
+          playbackError: window.__hlsOverlaySmokeError || '',
+          shadowHosts: [...document.querySelectorAll('*')].filter(element => element.shadowRoot).length,
+          overlayLabels: [...document.querySelectorAll('*')].flatMap(element =>
+            [...(element.shadowRoot?.querySelectorAll('.video-download') || [])].map(button => button.textContent)
+          ),
+        };
+        """,
+        MARKER,
+    )
+    raise RuntimeError(
+        f"{browser_name} did not show the immediate identifying overlay: {diagnostics}"
+    )
 
 
 def _free_port() -> int:
