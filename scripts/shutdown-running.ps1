@@ -69,7 +69,7 @@ $port = 8765
 foreach ($configPath in $configPaths) {
     if (-not (Test-Path -LiteralPath $configPath)) { continue }
     try {
-        $configured = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+        $configured = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($configured.token) { $token = [string]$configured.token }
         if ($configured.port) { $port = [int]$configured.port }
         break

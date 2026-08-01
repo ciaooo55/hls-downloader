@@ -91,7 +91,7 @@ foreach ($entry in @(
     if (-not (Test-Path -LiteralPath $manifestPath)) {
         throw "Native Messaging manifest not found: $manifestPath"
     }
-    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $manifest.path = $hostExecutable
     [System.IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 8), $utf8NoBom)
     New-Item -Path $entry[0] -Force | Out-Null

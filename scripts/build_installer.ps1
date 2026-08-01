@@ -11,7 +11,10 @@ param(
 $ErrorActionPreference = "Stop"
 
 function Get-DeclaredVersion([string]$Path, [string]$Pattern) {
-    $content = Get-Content -LiteralPath $Path -Raw
+    # Windows PowerShell 5.1 treats BOM-less UTF-8 as the active ANSI code
+    # page. Every project manifest is UTF-8 and may contain Chinese text, so
+    # make the encoding explicit instead of relying on the shell version.
+    $content = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     $match = [regex]::Match($content, $Pattern)
     if (-not $match.Success) {
         throw "Unable to read the declared version from $Path"
@@ -30,8 +33,8 @@ $FileVersion = ($versionParts | ForEach-Object { [int]$_ }) -join "."
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $declaredAppVersions = [ordered]@{
     "backend/app/version.py" = Get-DeclaredVersion (Join-Path $Root "backend\app\version.py") 'APP_VERSION\s*=\s*"([^"]+)"'
-    "frontend/package.json" = (Get-Content -LiteralPath (Join-Path $Root "frontend\package.json") -Raw | ConvertFrom-Json).version
-    "frontend/src-tauri/tauri.conf.json" = (Get-Content -LiteralPath (Join-Path $Root "frontend\src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json).version
+    "frontend/package.json" = (Get-Content -LiteralPath (Join-Path $Root "frontend\package.json") -Raw -Encoding UTF8 | ConvertFrom-Json).version
+    "frontend/src-tauri/tauri.conf.json" = (Get-Content -LiteralPath (Join-Path $Root "frontend\src-tauri\tauri.conf.json") -Raw -Encoding UTF8 | ConvertFrom-Json).version
     "frontend/src-tauri/Cargo.toml" = Get-DeclaredVersion (Join-Path $Root "frontend\src-tauri\Cargo.toml") '(?m)^version\s*=\s*"([^"]+)"'
     "installer/hls-downloader.nsi" = Get-DeclaredVersion (Join-Path $Root "installer\hls-downloader.nsi") '!define APP_VERSION\s+"([^"]+)"'
 }
@@ -75,7 +78,7 @@ $ChromiumExtensionStage = Join-Path $ExtensionBuildDir "chrome-edge"
 $ChromiumExtensionOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Chrome-Edge-Extension.zip"
 
 if ($IncludeExtensionAssets) {
-    $declaredExtensionVersion = (Get-Content -LiteralPath (Join-Path $ExtensionDir "package.json") -Raw | ConvertFrom-Json).version
+    $declaredExtensionVersion = (Get-Content -LiteralPath (Join-Path $ExtensionDir "package.json") -Raw -Encoding UTF8 | ConvertFrom-Json).version
     $recommendedExtensionVersion = Get-DeclaredVersion (Join-Path $Root "backend\app\browser_handoff.py") 'RECOMMENDED_BROWSER_EXTENSION_VERSION\s*=\s*"([^"]+)"'
     if ($declaredExtensionVersion -ne $Version -or $recommendedExtensionVersion -ne $Version) {
         throw "Extension assets require package and recommended versions to match release $Version"
@@ -299,7 +302,7 @@ if (-not $SkipFrontend) {
             pnpm run build:chrome
             Remove-Item -Recurse -Force $ChromiumExtensionStage -ErrorAction SilentlyContinue
             New-Item -ItemType Directory -Force -Path $ChromiumExtensionStage | Out-Null
-            $chromeManifest = Get-Content -LiteralPath .output/chrome-mv3/manifest.json -Raw | ConvertFrom-Json
+            $chromeManifest = Get-Content -LiteralPath .output/chrome-mv3/manifest.json -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($chromeManifest.manifest_version -ne 3) {
                 throw "Chrome/Edge extension build did not produce Manifest V3"
             }
@@ -312,7 +315,7 @@ if (-not $SkipFrontend) {
                 $env:HLS_FIREFOX_EXTENSION_ID = $variant.Id
                 pnpm run build:firefox
                 pnpm exec web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors
-                $manifest = Get-Content -LiteralPath .output/firefox-mv3/manifest.json -Raw | ConvertFrom-Json
+                $manifest = Get-Content -LiteralPath .output/firefox-mv3/manifest.json -Raw -Encoding UTF8 | ConvertFrom-Json
                 if ($manifest.browser_specific_settings.gecko.id -ne $variant.Id) {
                     throw "Firefox $($variant.Label) build used the wrong extension ID"
                 }
@@ -452,7 +455,7 @@ if (-not $SkipSmoke) {
             # exercise authenticated startup even when config.default.json has
             # no token (the release package must not contain a reusable token).
             $smokeConfigPath = Join-Path $StageDir "config.json"
-            $smokeConfig = Get-Content -LiteralPath $smokeConfigPath -Raw | ConvertFrom-Json
+            $smokeConfig = Get-Content -LiteralPath $smokeConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
             $smokeTokenBytes = New-Object byte[] 32
             $smokeRng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
             try { $smokeRng.GetBytes($smokeTokenBytes) } finally { $smokeRng.Dispose() }
@@ -479,7 +482,7 @@ if (-not $SkipSmoke) {
                     throw "Packaged app did not respond on /api/health"
                 }
                 $packagedConfigPath = Join-Path $StageDir "config.json"
-                $packagedConfig = Get-Content -LiteralPath $packagedConfigPath -Raw | ConvertFrom-Json
+                $packagedConfig = Get-Content -LiteralPath $packagedConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
                 $packagedToken = [string]$packagedConfig.token
                 if ($packagedToken.Length -lt 32 -or $packagedToken -eq "55555") {
                     throw "Packaged app did not generate a secure internal credential"

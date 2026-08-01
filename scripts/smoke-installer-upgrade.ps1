@@ -94,7 +94,7 @@ function Start-SmokeApplication {
     $listener.Stop()
 
     $configPath = Join-Path $installDir "config.json"
-    $config = Get-Content -LiteralPath (Join-Path $installDir "config.default.json") -Raw | ConvertFrom-Json
+    $config = Get-Content -LiteralPath (Join-Path $installDir "config.default.json") -Raw -Encoding UTF8 | ConvertFrom-Json
     $config.port = $port
     $config.default_referer = "https://installer-smoke.invalid/preserved"
     Write-JsonNoBom $configPath $config
@@ -189,7 +189,7 @@ try {
     Assert-OfficialState $officialRegistryBefore $officialProcessIdsBefore
 
     Copy-Item -LiteralPath (Join-Path $installDir "config.default.json") -Destination (Join-Path $installDir "config.json")
-    $preservedConfig = Get-Content -LiteralPath (Join-Path $installDir "config.json") -Raw | ConvertFrom-Json
+    $preservedConfig = Get-Content -LiteralPath (Join-Path $installDir "config.json") -Raw -Encoding UTF8 | ConvertFrom-Json
     $preservedConfig.default_referer = "https://installer-smoke.invalid/preserved"
     Write-JsonNoBom (Join-Path $installDir "config.json") $preservedConfig
     Set-Content -LiteralPath (Join-Path $installDir "data.db") -Value "installer upgrade database sentinel" -Encoding UTF8
