@@ -15,6 +15,7 @@ import re
 from urllib.parse import urljoin
 from xml.etree import ElementTree
 
+from ..utils import inherit_hls_access_query
 from .parser import UnsupportedPlaylistError
 
 
@@ -30,6 +31,10 @@ _DURATION_RE = re.compile(
 )
 _TEMPLATE_RE = re.compile(r"\$(RepresentationID|Number|Bandwidth|Time)(%0\d+d)?\$|\$\$")
 _VIDEO_CODEC_RE = re.compile(r"^(avc|hev|hvc|vp0?8|vp0?9|av01)", re.IGNORECASE)
+
+
+def _resolve_url(base: str, reference: str) -> str:
+    return inherit_hls_access_query(base, urljoin(base, reference))
 
 
 def parse_iso_duration(value: str | None) -> float:
@@ -80,7 +85,7 @@ def _resolve_base(url: str, *nodes: ElementTree.Element) -> str:
     for node in nodes:
         element = _child(node, "BaseURL")
         if element is not None and (element.text or "").strip():
-            base = urljoin(base, element.text.strip())
+            base = _resolve_url(base, element.text.strip())
     return base
 
 
@@ -164,7 +169,7 @@ def _template_segments(
     init_url = None
     initialization = template.get("initialization")
     if initialization:
-        init_url = urljoin(base_url, expand_template(
+        init_url = _resolve_url(base_url, expand_template(
             initialization, representation_id=representation_id, bandwidth=bandwidth,
         ))
     segments: list[dict] = []
@@ -175,7 +180,7 @@ def _template_segments(
         for offset, (start, duration) in enumerate(
             _timeline_entries(timeline, timescale, period_duration, presentation_offset)
         ):
-            url = urljoin(base_url, expand_template(
+            url = _resolve_url(base_url, expand_template(
                 media,
                 representation_id=representation_id,
                 bandwidth=bandwidth,
@@ -202,7 +207,7 @@ def _template_segments(
     count = max(1, math.ceil(period_duration / segment_seconds))
     for index in range(count):
         remaining = period_duration - index * segment_seconds
-        url = urljoin(base_url, expand_template(
+        url = _resolve_url(base_url, expand_template(
             media,
             representation_id=representation_id,
             bandwidth=bandwidth,
@@ -231,7 +236,7 @@ def _list_segments(node: ElementTree.Element, base_url: str) -> tuple[str | None
             raise NativeDashUnsupported("SegmentList 使用字节区间初始化")
         source = initialization.get("sourceURL")
         if source:
-            init_url = urljoin(base_url, source)
+            init_url = _resolve_url(base_url, source)
     segments: list[dict] = []
     for segment_url in _children(segment_list, "SegmentURL"):
         if segment_url.get("mediaRange"):
@@ -240,7 +245,7 @@ def _list_segments(node: ElementTree.Element, base_url: str) -> tuple[str | None
         if not media:
             raise NativeDashUnsupported("SegmentURL 缺少 media 地址")
         segments.append({
-            "url": urljoin(base_url, media),
+            "url": _resolve_url(base_url, media),
             "duration": duration_units / timescale if duration_units else 0.0,
         })
     return init_url, segments
@@ -275,6 +280,21 @@ def _is_audio(adaptation: ElementTree.Element, representation: ElementTree.Eleme
         return False
     codecs = (representation.get("codecs") or adaptation.get("codecs") or "").lower()
     return codecs.startswith(("mp4a", "opus", "vorbis", "ac-3", "ec-3", "flac"))
+
+
+def _is_subtitle(adaptation: ElementTree.Element, representation: ElementTree.Element) -> bool:
+    content_type = (
+        representation.get("contentType") or adaptation.get("contentType") or ""
+    ).lower()
+    mime = (representation.get("mimeType") or adaptation.get("mimeType") or "").lower()
+    codecs = (representation.get("codecs") or adaptation.get("codecs") or "").lower()
+    return (
+        content_type in {"text", "subtitle", "subtitles"}
+        or mime.startswith("text/")
+        or mime == "application/ttml+xml"
+        or (mime == "application/mp4" and codecs.startswith(("stpp", "wvtt")))
+        or codecs.startswith(("stpp", "wvtt"))
+    )
 
 
 def parse_mpd(
@@ -319,13 +339,15 @@ def parse_mpd(
     forced_audio: dict | None = None
     video_options: list[dict] = []
     audio_options: list[dict] = []
+    subtitle_tracks: list[dict] = []
     for adaptation in _children(period, "AdaptationSet"):
         for representation in _children(adaptation, "Representation"):
             if _has_content_protection(adaptation, representation):
                 raise UnsupportedPlaylistError("该 DASH 使用 DRM/ContentProtection 保护")
             is_video = _is_video(adaptation, representation)
             is_audio = not is_video and _is_audio(adaptation, representation)
-            if not is_video and not is_audio:
+            is_subtitle = not is_video and not is_audio and _is_subtitle(adaptation, representation)
+            if not is_video and not is_audio and not is_subtitle:
                 continue
             base_url = _resolve_base(url, root, period, adaptation, representation)
             representation_id = representation.get("id") or ""
@@ -396,7 +418,10 @@ def parse_mpd(
                 "codecs": candidate["codecs"],
                 "lang": candidate["lang"],
             }
-            if is_video:
+            if is_subtitle:
+                candidate["name"] = adaptation.get("label") or representation_id
+                subtitle_tracks.append(candidate)
+            elif is_video:
                 video_options.append(option)
                 if preferred_video and candidate["id"] == preferred_video:
                     forced_video = candidate
@@ -438,4 +463,5 @@ def parse_mpd(
         "audio": best_audio,
         "video_options": video_options,
         "audio_options": audio_options,
+        "subtitle_tracks": subtitle_tracks,
     }

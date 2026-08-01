@@ -28,16 +28,39 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install -r requirements-dev.txt
 
-      - name: Run Python tests
-        run: python -m pytest -q
+      - name: Lint Python
+        run: python -m ruff check backend tests scripts/smoke_real_download.py scripts/smoke_extension_browsers.py
+
+      - name: Type-check security-critical Python modules
+        shell: pwsh
+        run: |
+          python -m mypy `
+            backend/app/credentials.py `
+            backend/app/network_proxy.py `
+            backend/app/database.py `
+            backend/app/config.py `
+            backend/app/schemas.py
+
+      - name: Run Python tests with coverage gate
+        run: python -m pytest -q --cov=backend.app --cov-report=term-missing --cov-fail-under=60
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: "24"
 
+      - name: Set up Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v2
+
+      - name: Set up Firefox
+        id: firefox
+        uses: browser-actions/setup-firefox@v1
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Enable pnpm
         shell: pwsh
@@ -61,6 +84,12 @@ jobs:
         working-directory: frontend
         run: pnpm run build
 
+      - name: Check and lint Tauri desktop shell
+        working-directory: frontend/src-tauri
+        run: |
+          cargo check --locked --all-targets
+          cargo clippy --locked --all-targets -- -D warnings
+
       - name: Build Tauri desktop shell
         working-directory: frontend
         run: pnpm run tauri:build
@@ -71,4 +100,13 @@ jobs:
           pnpm test
           pnpm run build
           pnpm exec web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors
+
+      - name: Load built extensions in Chrome and Firefox
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          python scripts/smoke_extension_browsers.py `
+            --extension-output extension/.output `
+            --chrome-binary "${{ steps.chrome.outputs.chrome-path }}" `
+            --firefox-binary "${{ steps.firefox.outputs.firefox-path }}"
 

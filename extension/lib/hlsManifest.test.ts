@@ -7,10 +7,34 @@ describe('HLS metadata', () => {
     expect(info.variants).toEqual([{
       url: 'https://cdn.test/1080p/video.m3u8', width: 1920, height: 1080, bandwidth: 5200000, quality: '1080p',
     }])
+    expect(info.isLive).toBeUndefined()
   })
 
   it('totals VOD segment durations and recognizes quality in URLs', () => {
-    expect(parseHlsManifest('#EXTM3U\n#EXTINF:5.5,\na.ts\n#EXTINF:4.5,\nb.ts', 'https://cdn.test/v.m3u8').duration).toBe(10)
+    const live = '#EXTM3U\n#EXTINF:5.5,\na.ts\n#EXTINF:4.5,\nb.ts'
+    expect(parseHlsManifest(live, 'https://cdn.test/live.m3u8')).toMatchObject({ duration: 10, isLive: true })
+    expect(parseHlsManifest(`${live}\n#EXT-X-ENDLIST`, 'https://cdn.test/vod.m3u8')).toMatchObject({ duration: 10, isLive: false })
     expect(resourceQuality('https://cdn.test/path/1080p/video.m3u8')).toBe('1080p')
+  })
+
+  it('distinguishes an LL-HLS live playlist from an ordinary event window', () => {
+    const ordinary = '#EXTM3U\n#EXTINF:4,\na.ts\n'
+    const lowLatency = `${ordinary}#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES\n#EXT-X-PART:DURATION=0.5,URI="a.part"\n`
+
+    expect(parseHlsManifest(ordinary, 'https://cdn.test/event.m3u8').lowLatencyLive).toBe(false)
+    expect(parseHlsManifest(lowLatency, 'https://cdn.test/llhls.m3u8')).toMatchObject({
+      isLive: true,
+      lowLatencyLive: true,
+    })
+  })
+
+  it('inherits a raw signed playlist token to a relative variant', () => {
+    const info = parseHlsManifest(
+      '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nvideo.m3u8\n',
+      'https://edge.test/live/master.m3u8?token=a%2Fb%2Bc&_HLS_msn=5',
+    )
+    expect(info.variants[0].url).toBe(
+      'https://edge.test/live/video.m3u8?token=a%2Fb%2Bc',
+    )
   })
 })

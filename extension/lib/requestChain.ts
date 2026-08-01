@@ -1,3 +1,5 @@
+import { removeRawQueryParameters } from './urlQuery'
+
 export interface HeaderLike {
   name?: string
   value?: string
@@ -49,6 +51,8 @@ const REPLAYABLE_POST_CONTENT_TYPES = new Set([
   'application/json',
   'application/x-www-form-urlencoded',
 ])
+const ADAPTIVE_MANIFEST_PATH = /\.(?:m3u8?|mpd)$/i
+const VOLATILE_MEDIA_QUERY = /^(?:token|auth|authorization|signature|sig|expires?|expiry|policy|key-pair-id|hdnea|hmac|jwt|session|sessionid|access[_-]?key|x-amz-.+)$/i
 
 export interface DownloadLike {
   url: string
@@ -113,11 +117,40 @@ export function replayablePostRequest(chain: RequestChain | undefined): {
 
 function normalized(value: string): string {
   try {
-    const url = new URL(value)
-    url.hash = ''
-    return url.href
+    // LL-HLS cursors identify one poll, not one stream. Preserve every raw
+    // byte of the surrounding signed query while removing only those fields.
+    const canonical = removeRawQueryParameters(
+      value,
+      new Set(['_hls_msn', '_hls_part', '_hls_skip']),
+    )
+    const hashAt = canonical.indexOf('#')
+    return hashAt >= 0 ? canonical.slice(0, hashAt) : canonical
   } catch {
     return value.split('#', 1)[0]
+  }
+}
+
+function mediaRequestKey(value: string): string {
+  const canonical = normalized(value)
+  try {
+    const url = new URL(canonical)
+    const names = new Set([...url.searchParams.keys()].map(key => key.toLowerCase()))
+    const terseSignature = names.has('s') && names.has('e')
+    const hasVolatileCredential = [...url.searchParams.keys()].some(key => VOLATILE_MEDIA_QUERY.test(key))
+    // Signed MP4/archive URLs rotate exactly like adaptive manifests. Keep
+    // meaningful selectors (quality, language, asset id) but ignore only known
+    // credential fields so a Performance-observed URL can be rebound to the
+    // browser's latest successful request and headers.
+    if (!ADAPTIVE_MANIFEST_PATH.test(url.pathname) && !terseSignature && !hasVolatileCredential) return canonical
+    for (const key of [...url.searchParams.keys()]) {
+      if (VOLATILE_MEDIA_QUERY.test(key) || (terseSignature && ['s', 'e', '_t'].includes(key.toLowerCase()))) {
+        url.searchParams.delete(key)
+      }
+    }
+    url.searchParams.sort()
+    return url.href
+  } catch {
+    return canonical
   }
 }
 
@@ -138,6 +171,8 @@ export function httpOrigin(value: string): string {
 
 export class RequestChainStore {
   private readonly chains = new Map<string, RequestChain>()
+
+  constructor(private readonly maxEntries = 1_500) {}
 
   observeRequest(details: RequestDetailsLike): RequestChain {
     const now = details.timeStamp || Date.now()
@@ -165,6 +200,7 @@ export class RequestChainStore {
       updatedAt: now,
     }
     this.chains.set(details.requestId, chain)
+    this.trim()
     return chain
   }
 
@@ -186,14 +222,15 @@ export class RequestChainStore {
     return chain
   }
 
-  find(download: DownloadLike, now = Date.now(), preferredTabId?: number): RequestChain | undefined {
+  find(download: DownloadLike, now = Date.now(), preferredTabId?: number, successfulOnly = false): RequestChain | undefined {
     this.cleanup(now)
     const candidates = [download.url, download.finalUrl]
       .filter((value): value is string => Boolean(value))
-      .map(normalized)
+      .map(mediaRequestKey)
     const referrer = download.referrer ? normalized(download.referrer) : ''
     return [...this.chains.values()]
-      .filter(chain => chain.urls.some(url => candidates.includes(normalized(url))))
+      .filter(chain => chain.urls.some(url => candidates.includes(mediaRequestKey(url))))
+      .filter(chain => !successfulOnly || (chain.statusCode >= 200 && chain.statusCode < 400))
       .filter(chain => preferredTabId === undefined || chain.tabId === preferredTabId)
       .sort((left, right) => {
         const leftPageMatch = referrer && normalized(left.pageUrl) === referrer ? 1 : 0
@@ -247,6 +284,28 @@ export class RequestChainStore {
   finish(requestId: string, now = Date.now()): void {
     const chain = this.chains.get(requestId)
     if (chain) chain.updatedAt = now
+  }
+
+  fail(requestId: string): void {
+    this.chains.delete(requestId)
+  }
+
+  clearTab(tabId: number): void {
+    for (const [requestId, chain] of this.chains) {
+      if (chain.tabId === tabId) this.chains.delete(requestId)
+    }
+  }
+
+  private trim(): void {
+    if (this.chains.size <= this.maxEntries) return
+    // Evict a batch rather than sorting the whole map for every subsequent
+    // HLS segment. The newest 80% remains available for delayed user clicks.
+    const target = Math.max(1, Math.floor(this.maxEntries * 0.8))
+    const remove = this.chains.size - target
+    const oldest = [...this.chains.values()]
+      .sort((left, right) => left.updatedAt - right.updatedAt)
+      .slice(0, remove)
+    for (const chain of oldest) this.chains.delete(chain.requestId)
   }
 
   cleanup(now = Date.now(), maxAgeMs = 5 * 60_000): void {

@@ -39,6 +39,110 @@ describe('browser request chains', () => {
     expect(store.find({ url: 'https://b.test/file' }, 1100)?.requestId).toBe('b')
   })
 
+  it('finds the exact headers for a canonicalized LL-HLS playlist', () => {
+    const store = new RequestChainStore()
+    store.observeRequest({
+      requestId: 'live-poll',
+      url: 'https://edge.test/live.m3u8?session=current&_HLS_msn=50&_HLS_part=2',
+      tabId: 4,
+      timeStamp: 1000,
+      requestHeaders: [{ name: 'X-Playback-Token', value: 'captured' }],
+    })
+
+    const chain = store.find({ url: 'https://edge.test/live.m3u8?session=current' }, 1100, 4)
+    expect(chain?.requestId).toBe('live-poll')
+    expect(requestHeader(chain, 'x-playback-token')).toBe('captured')
+  })
+
+  it('uses the newest successful signed LL-HLS poll for an older panel item', () => {
+    const store = new RequestChainStore()
+    store.observeRequest({
+      requestId: 'old-token', url: 'https://edge.test/live.m3u8?token=old&_HLS_msn=4',
+      tabId: 9, type: 'xmlhttprequest', timeStamp: 1000,
+    })
+    store.observeResponse({
+      requestId: 'old-token', url: 'https://edge.test/live.m3u8?token=old&_HLS_msn=4',
+      tabId: 9, type: 'xmlhttprequest', timeStamp: 1010, statusCode: 200,
+    })
+    store.observeRequest({
+      requestId: 'fresh-token', url: 'https://edge.test/live.m3u8?token=fresh&_HLS_msn=8&_HLS_part=2',
+      tabId: 9, type: 'xmlhttprequest', timeStamp: 1200,
+      requestHeaders: [{ name: 'Referer', value: 'https://page.test/watch' }],
+    })
+    store.observeResponse({
+      requestId: 'fresh-token', url: 'https://edge.test/live.m3u8?token=fresh&_HLS_msn=8&_HLS_part=2',
+      tabId: 9, type: 'xmlhttprequest', timeStamp: 1210, statusCode: 200,
+    })
+    store.observeResponse({
+      requestId: 'rejected-token', url: 'https://edge.test/live.m3u8?token=rejected&_HLS_msn=9',
+      tabId: 9, type: 'xmlhttprequest', timeStamp: 1250, statusCode: 403,
+    })
+
+    const chain = store.find({ url: 'https://edge.test/live.m3u8?token=old' }, 1300, 9, true)
+    expect(chain?.requestId).toBe('fresh-token')
+    expect(chain?.finalUrl).toContain('token=fresh')
+    expect(requestHeader(chain, 'referer')).toBe('https://page.test/watch')
+  })
+
+  it('matches a signed MP4 observation to the latest successful browser request', () => {
+    const store = new RequestChainStore()
+    store.observeRequest({
+      requestId: 'signed-mp4',
+      url: 'https://gfve4dog1.mxcontent.net/v2/asset.mp4?s=fresh&e=200&_t=150&quality=1080',
+      tabId: 3,
+      type: 'media',
+      timeStamp: 1000,
+      requestHeaders: [{ name: 'Referer', value: 'https://page.test/watch' }],
+    })
+    store.observeResponse({
+      requestId: 'signed-mp4',
+      url: 'https://gfve4dog1.mxcontent.net/v2/asset.mp4?s=fresh&e=200&_t=150&quality=1080',
+      tabId: 3,
+      type: 'media',
+      statusCode: 206,
+      timeStamp: 1100,
+    })
+
+    const matched = store.find({
+      url: 'https://gfve4dog1.mxcontent.net/v2/asset.mp4?s=stale&e=100&_t=90&quality=1080',
+    }, 1200, 3, true)
+
+    expect(matched?.finalUrl).toContain('s=fresh')
+    expect(matched?.statusCode).toBe(206)
+  })
+
+  it('does not merge signed files when a meaningful selector differs', () => {
+    const store = new RequestChainStore()
+    store.observeResponse({
+      requestId: 'quality-720',
+      url: 'https://cdn.test/movie.mp4?s=fresh&e=200&_t=150&quality=720',
+      tabId: 3,
+      statusCode: 200,
+      timeStamp: 1000,
+    })
+
+    expect(store.find({
+      url: 'https://cdn.test/movie.mp4?s=old&e=100&_t=90&quality=1080',
+    }, 1100, 3, true)).toBeUndefined()
+  })
+
+  it('bounds request history and immediately drops failed network requests', () => {
+    const store = new RequestChainStore(3)
+    for (let index = 1; index <= 4; index += 1) {
+      store.observeRequest({
+        requestId: `request-${index}`,
+        url: `https://cdn.test/${index}.bin`,
+        tabId: 1,
+        timeStamp: 1000 + index,
+      })
+    }
+
+    expect(store.find({ url: 'https://cdn.test/1.bin' }, 1100)).toBeUndefined()
+    expect(store.find({ url: 'https://cdn.test/4.bin' }, 1100)?.requestId).toBe('request-4')
+    store.fail('request-4')
+    expect(store.find({ url: 'https://cdn.test/4.bin' }, 1100)).toBeUndefined()
+  })
+
   it('prefers the request from the download referrer when URLs are shared across tabs', () => {
     const store = new RequestChainStore()
     store.observeRequest({
@@ -161,5 +265,16 @@ describe('browser request chains', () => {
       requestHeaders: [{ name: 'Content-Type', value: 'multipart/form-data; boundary=browser' }],
     })
     expect(replayablePostRequest(chain)).toEqual({})
+  })
+
+  it('drops only the navigated tab request chains', () => {
+    const store = new RequestChainStore()
+    store.observeRequest({ requestId: 'old-page', url: 'https://cdn.test/old.m3u8', tabId: 7, timeStamp: 1000 })
+    store.observeRequest({ requestId: 'other-tab', url: 'https://cdn.test/other.m3u8', tabId: 8, timeStamp: 1000 })
+
+    store.clearTab(7)
+
+    expect(store.find({ url: 'https://cdn.test/old.m3u8' }, 1200)).toBeUndefined()
+    expect(store.find({ url: 'https://cdn.test/other.m3u8' }, 1200)?.requestId).toBe('other-tab')
   })
 })

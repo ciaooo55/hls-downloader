@@ -14,8 +14,8 @@ the caller can fall back to the bundled yt-dlp engine with nothing lost.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
-import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -24,7 +24,9 @@ import httpx
 from ..config import settings
 from ..checksum import verify_task_checksum
 from ..models import Task, TaskStatus
+from ..network_proxy import policy_httpx_client
 from ..request_context import build_task_headers
+from ..utils import atomic_write_text, durable_replace, sanitize_filename, stable_request_key
 from .engine import task_output_dir, task_work_dir
 from .errors import (
     SharedRetryWindow,
@@ -37,6 +39,7 @@ from .mpd import NativeDashUnsupported, parse_mpd
 from .playback import playback_service, write_playback_plan
 from .progress import ProgressTracker
 from .throttle import throttle_bytes
+from .subtitles import has_cues, merge_webvtt_segments, webvtt_to_srt
 
 MAX_RETRIES = 5
 DASH_TIMEOUT = httpx.Timeout(connect=10, read=60, write=30, pool=30)
@@ -47,6 +50,8 @@ VIDEO_SEG_DIR = "segments"
 VIDEO_INIT_NAME = "dash-video.init"
 AUDIO_DIR = "a"
 LIVE_STATE_FILENAME = "live_state.json"
+DASH_VOD_STATE_FILENAME = "dash_vod_segments.json"
+DASH_VOD_STATE_VERSION = 1
 LIVE_MIN_POLL_SECONDS = 1.0
 LIVE_MAX_POLL_SECONDS = 10.0
 LIVE_STALL_MIN_SECONDS = 90.0
@@ -67,6 +72,8 @@ class NativeDashEngine:
         self._retry_window = SharedRetryWindow()
         self.tracker = ProgressTracker()
         self._header_cache: dict[str, dict[str, str]] = {}
+        self._vod_resume_records: dict[str, dict[str, int | str]] = {}
+        self._vod_resume_lock = asyncio.Lock()
 
     def _publish(self) -> None:
         self.on_progress(self.task)
@@ -100,6 +107,116 @@ class NativeDashEngine:
     def _is_pausing(self) -> bool:
         return bool(self.task.pause_event and self.task.pause_event.is_set())
 
+    @staticmethod
+    def _vod_job_identity(kind: str, slot: str, track: dict, url: str) -> str:
+        descriptor = {
+            "kind": kind,
+            "slot": slot,
+            "representation": str(track.get("id") or ""),
+            "resource": stable_request_key(url, ignore_host=True),
+            "mime": str(track.get("mime") or ""),
+            "codecs": str(track.get("codecs") or ""),
+        }
+        encoded = json.dumps(
+            descriptor,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _vod_state_path(task_dir: Path) -> Path:
+        return task_dir / DASH_VOD_STATE_FILENAME
+
+    def _write_vod_state(self, task_dir: Path) -> None:
+        atomic_write_text(
+            self._vod_state_path(task_dir),
+            json.dumps(
+                {
+                    "version": DASH_VOD_STATE_VERSION,
+                    "files": self._vod_resume_records,
+                },
+                sort_keys=True,
+            ),
+        )
+
+    def _prepare_vod_resume(self, task_dir: Path, jobs: list[dict]) -> None:
+        try:
+            payload = json.loads(
+                self._vod_state_path(task_dir).read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            payload = {}
+        saved = (
+            payload.get("files")
+            if payload.get("version") == DASH_VOD_STATE_VERSION
+            else {}
+        )
+        if not isinstance(saved, dict):
+            saved = {}
+        valid: dict[str, dict[str, int | str]] = {}
+        expected: set[str] = set()
+        for job in jobs:
+            destination = Path(job["destination"])
+            relative = destination.relative_to(task_dir).as_posix()
+            expected.add(relative)
+            record = saved.get(relative)
+            try:
+                size = destination.stat().st_size
+            except OSError:
+                size = 0
+            try:
+                expected_size = int((record or {}).get("size") or 0)
+            except (AttributeError, TypeError, ValueError):
+                expected_size = 0
+            if (
+                size > 0
+                and expected_size == size
+                and isinstance(record, dict)
+                and record.get("identity") == job["identity"]
+            ):
+                valid[relative] = {
+                    "identity": str(job["identity"]),
+                    "size": size,
+                }
+            else:
+                destination.unlink(missing_ok=True)
+            destination.with_name(destination.name + ".tmp").unlink(missing_ok=True)
+
+        candidates = [
+            task_dir / "maps" / VIDEO_INIT_NAME,
+            task_dir / AUDIO_DIR / "init.mp4",
+            *(task_dir / VIDEO_SEG_DIR).glob("*.seg"),
+            *(task_dir / AUDIO_DIR).glob("*.m4s"),
+        ]
+        for path in candidates:
+            try:
+                relative = path.relative_to(task_dir).as_posix()
+            except ValueError:
+                continue
+            if relative not in expected:
+                path.unlink(missing_ok=True)
+
+        self._vod_resume_records = valid
+        self._write_vod_state(task_dir)
+
+    async def _checkpoint_vod_job(
+        self,
+        task_dir: Path,
+        destination: Path,
+        identity: str,
+    ) -> None:
+        size = destination.stat().st_size
+        if size <= 0:
+            return
+        relative = destination.relative_to(task_dir).as_posix()
+        async with self._vod_resume_lock:
+            self._vod_resume_records[relative] = {
+                "identity": identity,
+                "size": size,
+            }
+            await asyncio.to_thread(self._write_vod_state, task_dir)
+
     def _headers(self, request_url: str = "") -> dict[str, str]:
         """Per-URL headers so manifest-origin cookies never leak to CDNs.
 
@@ -120,6 +237,57 @@ class NativeDashEngine:
             self._header_cache[origin] = cached
         return cached
 
+    async def _request_control(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        *,
+        stage: str,
+        label: str,
+    ) -> httpx.Response:
+        """Fetch a DASH manifest through the task-wide transient retry gate."""
+        last_error: Exception | None = None
+        for attempt in range(MAX_RETRIES):
+            if self._is_canceled() or self._is_pausing():
+                raise asyncio.CancelledError
+            if not await self._retry_window.wait(
+                lambda: self._is_canceled() or self._is_pausing()
+            ):
+                raise asyncio.CancelledError
+            try:
+                response = await client.get(url, headers=self._headers(url))
+                response.raise_for_status()
+                if self.task.progress.connection_status == "rate_limited":
+                    self.task.progress.connection_status = "running"
+                    self._set_stage(stage, f"{label}限流结束，继续请求")
+                return response
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                if not should_retry_download_error(exc) or attempt >= MAX_RETRIES - 1:
+                    break
+                delay = retry_delay_seconds(exc, min(2**attempt, 10))
+                self.task.progress.reconnect_count += 1
+                if should_share_retry_window(exc):
+                    remaining, extended = await self._retry_window.extend(delay)
+                    if extended:
+                        self.task.progress.connection_status = "rate_limited"
+                        self._set_stage(
+                            stage,
+                            f"源站暂时限流，{label}共同等待约 {max(1, int(remaining + 0.999))} 秒",
+                        )
+                else:
+                    self.task.progress.connection_status = "reconnecting"
+                    self._log(
+                        f"[{label}] 第 {attempt + 1}/{MAX_RETRIES} 次失败，"
+                        f"{delay:g} 秒后重试: {exc}"
+                    )
+                    await asyncio.sleep(delay)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"{label}请求失败")
+
     async def run(self) -> bool:
         """Download, concat and mux the manifest's best tracks.
 
@@ -130,7 +298,7 @@ class NativeDashEngine:
         task = self.task
         task_dir = task_work_dir(task)
         task_dir.mkdir(parents=True, exist_ok=True)
-        async with httpx.AsyncClient(
+        async with policy_httpx_client(
             follow_redirects=True, timeout=DASH_TIMEOUT
         ) as client:
             saved_state = self._load_live_state(task_dir)
@@ -139,8 +307,12 @@ class NativeDashEngine:
                 for track in ((saved_state or {}).get("tracks") or {}).values()
             )
             try:
-                response = await client.get(task.url, headers=self._headers(task.url))
-                response.raise_for_status()
+                response = await self._request_control(
+                    client,
+                    task.url,
+                    stage="parsing",
+                    label="DASH 清单",
+                )
                 text = response.text
                 if "<MPD" not in text[:4096]:
                     raise NativeDashUnsupported("清单不是 MPD 格式")
@@ -170,7 +342,7 @@ class NativeDashEngine:
             }
             if not tracks:
                 raise NativeDashUnsupported("MPD 中没有可下载轨道")
-            (task_dir / "manifest.mpd").write_text(text, encoding="utf-8")
+            atomic_write_text(task_dir / "manifest.mpd", text)
 
             # A resumed recording stays in recording mode even after the
             # stream flipped to static VOD: its captured segments start
@@ -201,7 +373,7 @@ class NativeDashEngine:
                 f"原生 DASH 引擎：{quality}{len(tracks)} 条轨道，共 {total_segments} 个分片",
             )
 
-            jobs: list[tuple[Path, str]] = []
+            jobs: list[dict] = []
             video = tracks.get("video")
             if video:
                 seg_dir = task_dir / VIDEO_SEG_DIR
@@ -210,9 +382,22 @@ class NativeDashEngine:
                 if video["init_url"]:
                     (task_dir / "maps").mkdir(parents=True, exist_ok=True)
                     init_path = task_dir / "maps" / VIDEO_INIT_NAME
-                    jobs.append((init_path, video["init_url"]))
+                    jobs.append({
+                        "destination": init_path,
+                        "url": video["init_url"],
+                        "identity": self._vod_job_identity(
+                            "video", "init", video, video["init_url"]
+                        ),
+                    })
                 for index, segment in enumerate(video["segments"]):
-                    jobs.append((seg_dir / f"{index:06d}.seg", segment["url"]))
+                    destination = seg_dir / f"{index:06d}.seg"
+                    jobs.append({
+                        "destination": destination,
+                        "url": segment["url"],
+                        "identity": self._vod_job_identity(
+                            "video", str(index), video, segment["url"]
+                        ),
+                    })
                 if (
                     init_path is not None
                     and not video.get("single_file")
@@ -221,7 +406,8 @@ class NativeDashEngine:
                     # Full plan up front: the playback service serves the
                     # contiguous prefix of files as they land, so preview
                     # works while the download runs — same as HLS.
-                    write_playback_plan(
+                    await asyncio.to_thread(
+                        write_playback_plan,
                         task_dir,
                         [
                             {
@@ -239,15 +425,29 @@ class NativeDashEngine:
                 track_dir = task_dir / AUDIO_DIR
                 track_dir.mkdir(parents=True, exist_ok=True)
                 if audio["init_url"]:
-                    jobs.append((track_dir / "init.mp4", audio["init_url"]))
+                    jobs.append({
+                        "destination": track_dir / "init.mp4",
+                        "url": audio["init_url"],
+                        "identity": self._vod_job_identity(
+                            "audio", "init", audio, audio["init_url"]
+                        ),
+                    })
                 for index, segment in enumerate(audio["segments"]):
-                    jobs.append((track_dir / f"{index:06d}.m4s", segment["url"]))
+                    jobs.append({
+                        "destination": track_dir / f"{index:06d}.m4s",
+                        "url": segment["url"],
+                        "identity": self._vod_job_identity(
+                            "audio", str(index), audio, segment["url"]
+                        ),
+                    })
+
+            await asyncio.to_thread(self._prepare_vod_resume, task_dir, jobs)
 
             semaphore = asyncio.Semaphore(task.progress.max_workers)
             self.tracker.start(total_segments)
             stopped = False
 
-            async def fetch(destination: Path, url: str) -> None:
+            async def fetch(destination: Path, url: str, identity: str) -> None:
                 nonlocal stopped
                 async with semaphore:
                     if stopped or self._is_canceled() or self._is_pausing():
@@ -260,6 +460,9 @@ class NativeDashEngine:
                         if not destination.exists():
                             stopped = True
                             return
+                        await self._checkpoint_vod_job(
+                            task_dir, destination, identity
+                        )
                         self.tracker.add_completed(destination.stat().st_size)
                         snapshot = self.tracker.snapshot()
                         task.progress.completed_segments = snapshot["completed"]
@@ -278,7 +481,11 @@ class NativeDashEngine:
                         self._publish()
 
             results = await asyncio.gather(
-                *(fetch(path, url) for path, url in jobs), return_exceptions=True
+                *(
+                    fetch(job["destination"], job["url"], job["identity"])
+                    for job in jobs
+                ),
+                return_exceptions=True,
             )
             if self._is_canceled():
                 raise asyncio.CancelledError
@@ -295,7 +502,7 @@ class NativeDashEngine:
                 self._set_stage("paused", "已暂停，已完成的分片会在继续时复用")
                 return True
 
-        return await self._finalize_tracks(
+        finalized = await self._finalize_tracks(
             task_dir,
             tracks,
             {kind: len(track["segments"]) for kind, track in tracks.items()},
@@ -305,7 +512,15 @@ class NativeDashEngine:
                 for kind, track in tracks.items()
                 if track["segments"]
             },
+            cleanup=False,
         )
+        if finalized and task.status is TaskStatus.DONE:
+            await self._download_dash_subtitles(parsed.get("subtitle_tracks") or [])
+        if not settings.keep_temp_files:
+            import shutil
+
+            await asyncio.to_thread(shutil.rmtree, task_dir, True)
+        return finalized
 
     async def _finalize_tracks(
         self,
@@ -314,6 +529,7 @@ class NativeDashEngine:
         counts: dict[str, int],
         duration: float,
         starts: dict[str, float] | None = None,
+        cleanup: bool = True,
     ) -> bool:
         """Concat each downloaded track and mux them into the output file.
 
@@ -385,7 +601,7 @@ class NativeDashEngine:
                 raise RuntimeError("ffmpeg 合并 DASH 轨道失败")
             if duration > 0:
                 await _verify_output(settings.ffmpeg_path, temporary, duration)
-            temporary.replace(output)
+            await asyncio.to_thread(durable_replace, temporary, output)
         except BaseException:
             # Never leave a zero-byte reservation or half-written file in
             # the user's download directory on failure/cancel/shutdown.
@@ -413,11 +629,119 @@ class NativeDashEngine:
         task.status = TaskStatus.DONE
         task.finished_at = datetime.now().isoformat()
         self._set_stage("done", f"完成: {output.name} ({size / 1048576:.1f} MB)")
-        if not settings.keep_temp_files:
+        if cleanup and not settings.keep_temp_files:
             import shutil
 
             await asyncio.to_thread(shutil.rmtree, task_dir, True)
         return True
+
+    async def _download_dash_subtitles(self, tracks: list[dict]) -> None:
+        if not tracks or not getattr(settings, "download_subtitles", True):
+            return
+        if not self.task.output_path:
+            return
+        output = Path(self.task.output_path)
+        base = output.with_suffix("")
+        used: set[str] = set()
+        saved = 0
+        async with policy_httpx_client(
+            follow_redirects=True, timeout=DASH_TIMEOUT
+        ) as client:
+            for position, track in enumerate(tracks, 1):
+                raw_label = str(
+                    track.get("lang") or track.get("name") or track.get("id") or f"sub{position}"
+                )
+                label = sanitize_filename(raw_label).strip(". ") or f"sub{position}"
+                candidate = label
+                suffix = 2
+                while candidate.lower() in used:
+                    candidate = f"{label}.{suffix}"
+                    suffix += 1
+                label = candidate
+                used.add(label.lower())
+                try:
+                    vtt_path = await self._download_dash_subtitle_track(
+                        client, track, base, label
+                    )
+                    if vtt_path is None:
+                        continue
+                    saved += 1
+                    self._log(f"[subtitles] 已保存 DASH 字幕: {vtt_path.name}")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self._log(f"[subtitles] DASH 字幕 {label} 下载失败: {exc}")
+        if saved:
+            self._log(f"[subtitles] 共保存 {saved} 条 DASH 字幕轨道")
+
+    async def _download_dash_subtitle_track(
+        self,
+        client: httpx.AsyncClient,
+        track: dict,
+        base: Path,
+        label: str,
+    ) -> Path | None:
+        task_dir = task_work_dir(self.task) / "dash-subtitles" / label
+        task_dir.mkdir(parents=True, exist_ok=True)
+        files: list[Path] = []
+        if track.get("init_url"):
+            init_path = task_dir / "init.bin"
+            await self._download_one(client, str(track["init_url"]), init_path)
+            files.append(init_path)
+        for index, segment in enumerate(track.get("segments") or []):
+            destination = task_dir / f"{index:06d}.bin"
+            await self._download_one(client, str(segment["url"]), destination)
+            files.append(destination)
+        if not files:
+            return None
+
+        mime = str(track.get("mime") or "").lower()
+        codecs = str(track.get("codecs") or "").lower()
+        vtt_path = base.with_name(f"{base.name}.{label}.vtt")
+        if mime.startswith("text/vtt") or (not track.get("init_url") and codecs.startswith("wvtt")):
+            texts = [path.read_text(encoding="utf-8-sig", errors="replace") for path in files]
+            merged = merge_webvtt_segments(texts)
+            if not has_cues(merged):
+                return None
+            vtt_path.write_text(merged, encoding="utf-8")
+        elif mime == "application/ttml+xml" and len(files) == 1:
+            ttml_path = base.with_name(f"{base.name}.{label}.ttml")
+            ttml_path.write_bytes(files[0].read_bytes())
+            return ttml_path
+        elif codecs.startswith(("wvtt", "stpp")) or mime == "application/mp4":
+            joined = task_dir / "subtitle.mp4"
+            with joined.open("wb") as stream:
+                for path in files:
+                    stream.write(path.read_bytes())
+            success = await _run_ffmpeg(
+                [
+                    settings.ffmpeg_path,
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    str(joined),
+                    str(vtt_path),
+                ],
+                task=self.task,
+                duration_sec=0,
+                on_progress=self.on_progress,
+            )
+            if not success or not vtt_path.is_file():
+                raise RuntimeError("FFmpeg 无法转换 fMP4 DASH 字幕")
+        else:
+            self._log(
+                f"[subtitles] 跳过暂不支持的 DASH 字幕格式: {mime or codecs or 'unknown'}"
+            )
+            return None
+
+        merged = vtt_path.read_text(encoding="utf-8-sig", errors="replace")
+        if has_cues(merged):
+            vtt_path.with_suffix(".srt").write_text(
+                webvtt_to_srt(merged), encoding="utf-8"
+            )
+        return vtt_path
 
     @staticmethod
     def _track_layout(task_dir: Path, kind: str) -> tuple[Path, str]:
@@ -431,6 +755,24 @@ class NativeDashEngine:
             return task_dir / "maps" / VIDEO_INIT_NAME
         return task_dir / AUDIO_DIR / "init.mp4"
 
+    @staticmethod
+    def _live_track_fingerprint(kind: str, track: dict) -> str:
+        descriptor = {
+            "kind": kind,
+            "representation": str(track.get("id") or ""),
+            "mime": str(track.get("mime") or ""),
+            "codecs": str(track.get("codecs") or ""),
+            "init": stable_request_key(
+                str(track.get("init_url") or ""), ignore_host=True
+            ),
+            "single_file": bool(track.get("single_file")),
+        }
+        return hashlib.sha256(
+            json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+
     def _load_live_state(self, task_dir: Path) -> dict | None:
         path = task_dir / LIVE_STATE_FILENAME
         if not path.exists():
@@ -443,21 +785,21 @@ class NativeDashEngine:
 
     def _save_live_state(self, task_dir: Path, state: dict[str, dict]) -> None:
         payload = {
-            "version": 1,
+            "version": 3,
             "tracks": {
-                kind: {"segments": value["entries"]}
+                kind: {
+                    "segments": value["entries"],
+                    "fingerprint": str(value.get("fingerprint") or ""),
+                    "mime": str(value.get("mime") or ""),
+                    "codecs": str(value.get("codecs") or ""),
+                    "has_init": bool(value.get("has_init")),
+                    "init_size": int(value.get("init_size") or 0),
+                }
                 for kind, value in state.items()
             },
         }
         destination = task_dir / LIVE_STATE_FILENAME
-        temporary = destination.with_name(destination.name + ".tmp")
-        try:
-            temporary.write_text(
-                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-            )
-            temporary.replace(destination)
-        finally:
-            temporary.unlink(missing_ok=True)
+        atomic_write_text(destination, json.dumps(payload, ensure_ascii=False))
 
     def _pause_exit(self) -> bool:
         task = self.task
@@ -498,7 +840,8 @@ class NativeDashEngine:
         starts: dict[str, float] = {}
         duration = 0.0
         for kind in ("video", "audio"):
-            entries = ((saved_state.get("tracks") or {}).get(kind) or {}).get("segments") or []
+            saved_track = ((saved_state.get("tracks") or {}).get(kind) or {})
+            entries = saved_track.get("segments") or []
             if not entries:
                 continue
             seg_dir, extension = self._track_layout(task_dir, kind)
@@ -511,6 +854,9 @@ class NativeDashEngine:
                     break
                 path = seg_dir / f"{index:06d}{extension}"
                 if index != kept or not path.exists() or path.stat().st_size == 0:
+                    break
+                expected_size = int(item.get("size") or 0)
+                if expected_size and path.stat().st_size != expected_size:
                     break
                 if kept == 0:
                     starts[kind] = float(item.get("start") or 0)
@@ -529,6 +875,21 @@ class NativeDashEngine:
                     "codecs": "",
                     "segments": [],
                 }
+            if saved_track:
+                # The live manifest may now describe a different
+                # representation.  Checkpoint metadata belongs to the bytes
+                # on disk and therefore wins for final container selection.
+                tracks[kind] = dict(tracks[kind])
+                tracks[kind]["mime"] = str(
+                    saved_track.get("mime") or tracks[kind].get("mime") or ""
+                )
+                tracks[kind]["codecs"] = str(
+                    saved_track.get("codecs") or tracks[kind].get("codecs") or ""
+                )
+                if "has_init" in saved_track:
+                    tracks[kind]["init_url"] = (
+                        "checkpoint-init" if saved_track.get("has_init") else ""
+                    )
             if kind == "video" or not duration:
                 duration = max(duration, total)
         if not counts:
@@ -577,6 +938,20 @@ class NativeDashEngine:
         max_seconds = max_minutes * 60.0
 
         saved = self._load_live_state(task_dir) or {}
+        saved_tracks = saved.get("tracks") or {}
+        incompatible = []
+        for kind, track in tracks.items():
+            saved_track = saved_tracks.get(kind) or {}
+            if not saved_track.get("segments") or not saved_track.get("fingerprint"):
+                continue
+            if saved_track["fingerprint"] != self._live_track_fingerprint(kind, track):
+                incompatible.append(kind)
+        if incompatible:
+            self._log(
+                "[recording] 检测到 DASH 轨道/编码器已变化，先安全合并上次录制"
+            )
+            return await self._finalize_offline(task_dir, saved)
+
         state: dict[str, dict] = {}
         self.tracker.start(0)
         for kind, track in tracks.items():
@@ -592,11 +967,15 @@ class NativeDashEngine:
                 path = seg_dir / f"{index:06d}{extension}"
                 if index != len(kept) or not path.exists() or path.stat().st_size == 0:
                     break
+                expected_size = int(item.get("size") or 0)
+                if expected_size and path.stat().st_size != expected_size:
+                    break
                 kept.append({
                     "index": index,
                     "identity": identity,
                     "duration": float(item.get("duration") or 0),
                     "start": float(item.get("start") or 0),
+                    "size": expected_size or path.stat().st_size,
                 })
                 self.tracker.add_completed(path.stat().st_size)
             # Files past the persisted contiguous prefix belong to a crashed
@@ -611,6 +990,11 @@ class NativeDashEngine:
             state[kind] = {
                 "entries": kept,
                 "last_identity": max((entry["identity"] for entry in kept), default=-1),
+                "fingerprint": self._live_track_fingerprint(kind, track),
+                "mime": str(track.get("mime") or ""),
+                "codecs": str(track.get("codecs") or ""),
+                "has_init": bool(track.get("init_url")),
+                "init_size": 0,
             }
         if any(value["entries"] for value in state.values()):
             self._log(
@@ -626,10 +1010,18 @@ class NativeDashEngine:
                 continue
             init_path = self._track_init_path(task_dir, kind)
             init_path.parent.mkdir(parents=True, exist_ok=True)
+            saved_track = saved_tracks.get(kind) or {}
+            expected_init_size = int(saved_track.get("init_size") or 0)
+            if init_path.exists() and (
+                not saved_track.get("segments")
+                or (expected_init_size and init_path.stat().st_size != expected_init_size)
+            ):
+                init_path.unlink(missing_ok=True)
             if not init_path.exists():
                 await self._download_one(client, track["init_url"], init_path)
                 if not init_path.exists():
                     return self._pause_exit()
+            state[kind]["init_size"] = init_path.stat().st_size
 
         video_state = state.get("video")
         # An audio-only recording still needs a duration for the cap, the UI
@@ -724,14 +1116,15 @@ class NativeDashEngine:
                         "identity": identity,
                         "duration": float(segment.get("duration") or 0),
                         "start": float(segment.get("start") or 0),
+                        "size": destination.stat().st_size,
                     })
                     track_state["last_identity"] = identity
                     self.tracker.add_completed(destination.stat().st_size)
                     appended = True
                     if kind == "video":
-                        write_live_plan()
+                        await asyncio.to_thread(write_live_plan)
                         self._refresh_playback_progress()
-                    self._save_live_state(task_dir, state)
+                    await asyncio.to_thread(self._save_live_state, task_dir, state)
                     refresh_counters()
             return appended
 
@@ -779,10 +1172,12 @@ class NativeDashEngine:
                 break
 
             try:
-                response = await client.get(
-                    manifest_url, headers=self._headers(manifest_url)
+                response = await self._request_control(
+                    client,
+                    manifest_url,
+                    stage="recording",
+                    label="DASH 直播清单",
                 )
-                response.raise_for_status()
                 refreshed = parse_mpd(
                     str(response.url or manifest_url),
                     response.text,
@@ -803,6 +1198,18 @@ class NativeDashEngine:
                 for kind in ("video", "audio")
                 if refreshed.get(kind) and kind in state
             }
+            changed = [kind for kind in state if kind not in current] + [
+                kind
+                for kind, track in current.items()
+                if self._live_track_fingerprint(kind, track)
+                != state[kind]["fingerprint"]
+            ]
+            if changed:
+                self._log(
+                    "[recording] DASH 直播轨道/编码器发生变化，结束当前文件以避免混流"
+                )
+                finish_reason = "直播轨道已切换，当前录制安全结束"
+                break
             if refreshed["type"] != "dynamic":
                 await append_fresh(current)
                 finish_reason = finish_reason or "直播已结束"
@@ -815,7 +1222,7 @@ class NativeDashEngine:
         }
         if not counts:
             return self._pause_exit()
-        self._save_live_state(task_dir, state)
+        await asyncio.to_thread(self._save_live_state, task_dir, state)
         final_duration = (
             sum(entry["duration"] for entry in video_state["entries"])
             if video_state and video_state["entries"]
@@ -874,7 +1281,7 @@ class NativeDashEngine:
                             received += len(chunk)
                 if received <= 0:
                     raise RuntimeError("分片响应为空")
-                temporary.replace(destination)
+                await asyncio.to_thread(durable_replace, temporary, destination)
                 return
             except asyncio.CancelledError:
                 temporary.unlink(missing_ok=True)

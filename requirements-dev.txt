@@ -1,2 +1,7 @@
 -r requirements.txt
 pytest>=8.0.0
+pytest-cov>=7.1.0,<8
+ruff>=0.16.0,<1
+mypy>=1.20.0,<2
+selenium>=4.36.0,<5
+websocket-client>=1.8.0,<2

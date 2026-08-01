@@ -1,10 +1,14 @@
 import json
+import binascii
 import secrets
 import hashlib
+import time
 from pathlib import Path
-from pydantic import Field
+from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings
 from .paths import RUNTIME_PATHS
+from .utils import atomic_write_text
+from .credentials import protect_secret, protect_site_profiles, unprotect_secret, unprotect_site_profiles
 
 PROJECT_ROOT = RUNTIME_PATHS.project_root
 CONFIG_PATH = RUNTIME_PATHS.config_path
@@ -32,13 +36,13 @@ def _is_leaked_token(value: object) -> bool:
 
 
 class Settings(BaseSettings):
-    config_version: int = 16
+    config_version: int = 18
     host: str = "127.0.0.1"
-    port: int = 8765
+    port: int = Field(default=8765, ge=1, le=65535)
     token: str = Field(default_factory=_new_internal_token, min_length=32)
     download_dir: str = "downloads"
     temp_dir: str = "."
-    default_concurrency: int = 12
+    default_concurrency: int = Field(default=12, ge=1, le=256)
     default_user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
     default_referer: str = ""
     default_origin: str = ""
@@ -46,26 +50,41 @@ class Settings(BaseSettings):
     ffmpeg_path: str = "bin\\ffmpeg.exe"
     allowed_hosts: list[str] = []
     keep_temp_files: bool = False
-    max_concurrent_tasks: int = 3
-    http_chunk_size_mb: int = 8
-    download_speed_limit_kib: int = 0
-    bt_upload_limit_kib: int = 1024
-    bt_max_connections: int = 200
+    max_concurrent_tasks: int = Field(default=3, ge=1, le=16)
+    http_chunk_size_mb: int = Field(default=8, ge=1, le=64)
+    download_speed_limit_kib: int = Field(default=0, ge=0, le=1048576)
+    bt_upload_limit_kib: int = Field(default=1024, ge=0, le=1048576)
+    bt_max_connections: int = Field(default=200, ge=10, le=1000)
     bt_enable_dht: bool = True
     browser_takeover_enabled: bool = True
     browser_takeover_min_mb: int = 0
     browser_category_dirs: dict[str, str] = Field(default_factory=dict)
     queue_auto_start_enabled: bool = False
     queue_auto_start_time: str = "00:00"
-    live_record_max_minutes: int = 0
+    queue_auto_stop_enabled: bool = False
+    queue_auto_stop_time: str = "07:30"
+    queue_active_days: list[int] = Field(default_factory=lambda: list(range(7)))
+    live_record_max_minutes: int = Field(default=0, ge=0, le=2880)
     download_subtitles: bool = True
     clipboard_watch: bool = True
     tvbox_endpoint: str = ""
     cast_device: dict[str, str] = Field(default_factory=dict)
+    site_profiles: list[dict] = Field(default_factory=list)
+    proxy_mode: str = "system"
+    proxy_url: str = ""
+    proxy_bypass: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1", "::1"])
 
     # Ignore fields written by a newer release so downgrade/upgrade helpers can
     # still start far enough to close the running application cleanly.
     model_config = {"env_prefix": "HLS_", "extra": "ignore"}
+
+    @field_validator("queue_active_days")
+    @classmethod
+    def validate_queue_active_days(cls, value: list[int]) -> list[int]:
+        normalized = sorted({int(day) for day in value})
+        if not normalized or any(day < 0 or day > 6 for day in normalized):
+            raise ValueError("queue_active_days 必须包含 0 到 6 的星期编号")
+        return normalized
 
 def _resolve_path(v: str, base: Path = PROJECT_ROOT) -> str:
     if not v:
@@ -87,9 +106,18 @@ def _serialize_path(v: str) -> str:
     except ValueError:
         return str(path)
 
-def load_settings() -> Settings:
+def _load_settings_file() -> Settings:
     if CONFIG_PATH.exists():
         data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        for secret_field in ("default_cookie", "proxy_url"):
+            try:
+                data[secret_field] = unprotect_secret(str(data.get(secret_field) or ""))
+            except (OSError, UnicodeError, ValueError, TypeError, binascii.Error):
+                # DPAPI values are intentionally tied to this Windows user.
+                # Moving a portable folder must not corrupt every non-secret
+                # setting merely because one credential cannot be decrypted.
+                data[secret_field] = ""
+        data["site_profiles"] = unprotect_site_profiles(data.get("site_profiles"))
         migrated = False
         version = int(data.get("config_version", 1) or 1)
         if version < 2:
@@ -197,8 +225,34 @@ def load_settings() -> Settings:
             data["config_version"] = 16
             migrated = True
             version = 16
+        if version < 17:
+            # Configuration credentials are encrypted by save_settings below.
+            # Existing plaintext values are already loaded into memory here and
+            # are migrated atomically without changing their runtime meaning.
+            data["config_version"] = 17
+            migrated = True
+            version = 17
+        if version < 18:
+            data.setdefault("queue_auto_stop_enabled", False)
+            data.setdefault("queue_auto_stop_time", "07:30")
+            data.setdefault("queue_active_days", list(range(7)))
+            data["config_version"] = 18
+            migrated = True
+            version = 18
         if not isinstance(data.get("tvbox_endpoint"), str):
             data["tvbox_endpoint"] = ""
+            migrated = True
+        # This API carries the desktop credential and is never a LAN service.
+        # Enforce loopback on every load, not only during an old migration.
+        if data.get("host") != "127.0.0.1":
+            data["host"] = "127.0.0.1"
+            migrated = True
+        if (
+            not isinstance(data.get("token"), str)
+            or len(data.get("token", "")) < 32
+            or _is_leaked_token(data.get("token"))
+        ):
+            data["token"] = _new_internal_token()
             migrated = True
         s = Settings(**data)
         # Keep a manually edited/legacy TVBox address from poisoning startup;
@@ -239,26 +293,65 @@ def load_settings() -> Settings:
     s.ffmpeg_path = _resolve_path(s.ffmpeg_path)
     return s
 
+
+def load_settings() -> Settings:
+    try:
+        return _load_settings_file()
+    except (OSError, TypeError, ValueError, json.JSONDecodeError, ValidationError):
+        # Preserve a malformed/truncated file for diagnosis, then restore a
+        # bootable default. Atomic saves below make this a last-resort path.
+        if CONFIG_PATH.exists():
+            backup = CONFIG_PATH.with_name(
+                f"{CONFIG_PATH.name}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
+            )
+            try:
+                CONFIG_PATH.replace(backup)
+            except OSError:
+                pass
+        s = Settings(
+            download_dir=str(RUNTIME_PATHS.default_download_dir),
+            temp_dir=str(RUNTIME_PATHS.default_temp_dir),
+        )
+        save_settings(s)
+        s.download_dir = _resolve_path(s.download_dir, PROJECT_ROOT)
+        s.temp_dir = _resolve_path(s.temp_dir, PROJECT_ROOT)
+        s.ffmpeg_path = _resolve_path(s.ffmpeg_path)
+        Path(s.download_dir).mkdir(parents=True, exist_ok=True)
+        Path(s.temp_dir).mkdir(parents=True, exist_ok=True)
+        return s
+
 def save_settings(s: Settings) -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = s.model_dump()
     data["download_dir"] = _serialize_path(data["download_dir"])
     data["temp_dir"] = _serialize_path(data["temp_dir"])
     data["ffmpeg_path"] = _serialize_path(data["ffmpeg_path"])
-    CONFIG_PATH.write_text(
+    data["default_cookie"] = protect_secret(str(data.get("default_cookie") or ""))
+    data["proxy_url"] = protect_secret(str(data.get("proxy_url") or ""))
+    data["site_profiles"] = protect_site_profiles(data.get("site_profiles"))
+    atomic_write_text(
+        CONFIG_PATH,
         json.dumps(data, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
 
 
 def apply_settings_update(s: Settings, data: dict) -> None:
-    for key, value in data.items():
-        if hasattr(s, key):
+    previous = s.model_copy(deep=True)
+    try:
+        for key, value in data.items():
+            if hasattr(s, key):
+                setattr(s, key, value)
+        s.host = "127.0.0.1"
+        s.download_dir = _resolve_path(s.download_dir)
+        s.temp_dir = _resolve_path(s.temp_dir)
+        s.ffmpeg_path = _resolve_path(s.ffmpeg_path, PROJECT_ROOT)
+        Path(s.download_dir).mkdir(parents=True, exist_ok=True)
+        Path(s.temp_dir).mkdir(parents=True, exist_ok=True)
+        save_settings(s)
+    except Exception:
+        for key, value in previous.__dict__.items():
             setattr(s, key, value)
-    s.download_dir = _resolve_path(s.download_dir)
-    s.temp_dir = _resolve_path(s.temp_dir)
-    s.ffmpeg_path = _resolve_path(s.ffmpeg_path, PROJECT_ROOT)
-    Path(s.download_dir).mkdir(parents=True, exist_ok=True)
-    Path(s.temp_dir).mkdir(parents=True, exist_ok=True)
+        raise
 
 settings = load_settings()

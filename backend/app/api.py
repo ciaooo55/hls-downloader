@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -11,12 +12,18 @@ from pathlib import Path
 import httpx
 from fastapi import APIRouter, HTTPException, Header, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse, Response
+from pydantic import BaseModel, ValidationError
 from .schemas import (
+    BrowserHandoffCreate,
+    BrowserMediaPushComplete,
+    BrowserMediaPushCreate,
+    BrowserPing,
     HealthResponse,
     SettingsUpdate,
     TaskBatchCreate,
     TaskCreate,
     TaskResponse,
+    TaskRequestUpdate,
     TaskSpeedLimit,
     UrlRecognitionRequest,
     PlaybackSeekRequest,
@@ -31,6 +38,7 @@ from .schemas import (
     TvboxPush,
 )
 from .config import apply_settings_update, settings, save_settings
+from .credentials import SECRET_MASK, mask_site_profiles, restore_masked_site_profiles
 from .downloader.task_manager import (
     TaskConflictError,
     TaskNotFoundError,
@@ -44,23 +52,34 @@ from .downloader.playback import (
     PlaybackSessionError,
     playback_service,
 )
-from .utils import get_domain
 from .desktop_runtime import activate_window, present_browser_handoff, has_browser_handoff_presenter, is_desktop_handoff_session, request_shutdown
 from .desktop_runtime import register_activation, register_browser_handoff, register_shutdown, set_desktop_handoff_session
 from .native_desktop import native_desktop_session, request_core_shutdown
 from .url_recognition import RecognitionError, recognize_url
-from .updater import UpdateCheckError, UpdateError, queue_update_download, update_service
+from .updater import (
+    UpdateCheckError,
+    UpdateError,
+    extract_portable_update,
+    queue_update_download,
+    update_service,
+    validate_portable_archive,
+)
+from .paths import RUNTIME_PATHS
+from .power_actions import power_action_service
 from .models import TaskStatus, TaskType
 from .browser_handoff import browser_handoffs
 from .downloader.throttle import download_throttle
-from .request_context import request_origin, sanitize_request_headers
+from .network_proxy import ensure_url_allowed, policy_httpx_client
+from .request_context import request_origin, sanitize_request_contexts, sanitize_request_headers
 from .tvbox import local_media_server, push_tvbox, scan_tvboxes
 from .dlna import cast_control, cast_media, normalize_cast_device, scan_cast_devices
 
 router = APIRouter(prefix="/api")
 _browser_media_pushes: dict[str, dict] = {}
 _browser_media_push_lock = threading.Lock()
+MAX_BROWSER_MEDIA_PUSHES = 64
 _update_launch_tasks: set[str] = set()
+MAX_BROWSER_JSON_BODY_BYTES = 256 * 1024
 
 def _check_token(x_token: str = Header(default="")):
     if x_token != settings.token:
@@ -72,17 +91,63 @@ def _check_playback_token(x_token: str = "", token: str = ""):
     _check_token(x_token or token)
 
 
+async def _read_browser_json(request: Request, model_type: type[BaseModel]) -> BaseModel:
+    """Parse a bounded browser message without buffering an unbounded body."""
+    content_encoding = request.headers.get("content-encoding", "").strip().lower()
+    if content_encoding and content_encoding != "identity":
+        raise HTTPException(status_code=415, detail="浏览器请求不支持压缩请求体")
+    content_length = request.headers.get("content-length", "").strip()
+    if content_length:
+        try:
+            if int(content_length) < 0:
+                raise ValueError
+            if int(content_length) > MAX_BROWSER_JSON_BODY_BYTES:
+                raise HTTPException(status_code=413, detail="浏览器请求体过大")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Content-Length 无效") from exc
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_BROWSER_JSON_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="浏览器请求体过大")
+    try:
+        return model_type.model_validate_json(bytes(body))
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=exc.errors(include_url=False, include_input=False),
+        ) from exc
+
+
+def _browser_payload(value: BrowserHandoffCreate) -> dict:
+    payload = value.model_dump()
+    # Apply the same canonical bounds before the handoff service keeps the
+    # request in memory. TaskManager repeats this at its persistence boundary.
+    payload["request_headers"] = sanitize_request_headers(payload.get("request_headers"))
+    payload["request_contexts"] = sanitize_request_contexts(payload.get("request_contexts"))
+    return payload
+
+
 def _public_settings() -> dict:
     """Return user-configurable settings without the internal IPC credential."""
-    return settings.model_dump(exclude={"token", "host", "port"})
+    body = settings.model_dump(exclude={"token", "host", "port"})
+    body["default_cookie_configured"] = bool(settings.default_cookie)
+    # A default Cookie is an authentication credential, not a display value.
+    # Manual task dialogs therefore receive an empty value and must not replay
+    # a mask as though it were a real Cookie.
+    body["default_cookie"] = ""
+    body["proxy_url_configured"] = bool(settings.proxy_url)
+    body["proxy_url"] = SECRET_MASK if settings.proxy_url else ""
+    body["site_profiles"] = mask_site_profiles(settings.site_profiles)
+    return body
 
 def _check_host(url: str):
     if url.lower().startswith("magnet:") or url.lower().startswith("torrent-file:"):
         return
-    if settings.allowed_hosts:
-        domain = get_domain(url)
-        if domain not in settings.allowed_hosts:
-            raise HTTPException(status_code=403, detail=f"Host {domain} not in allowed_hosts")
+    try:
+        ensure_url_allowed(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 async def _manager_action(awaitable):
@@ -180,10 +245,9 @@ def _handoff_detail(item) -> dict:
 @router.post("/browser/handoffs")
 async def create_browser_handoff(request: Request, x_token: str = Header(default="")):
     _check_token(x_token)
-    payload = await request.json()
-    url = str(payload.get("url", ""))
-    if not url.startswith(("http://", "https://", "magnet:")):
-        raise HTTPException(status_code=422, detail="浏览器资源地址无效")
+    model = await _read_browser_json(request, BrowserHandoffCreate)
+    payload = _browser_payload(model)
+    url = payload["url"]
     _check_host(url)
     item = browser_handoffs.create(payload)
     presentation = present_browser_handoff(item.id)
@@ -209,13 +273,16 @@ async def create_browser_handoff(request: Request, x_token: str = Header(default
 @router.post("/browser/ping")
 async def browser_extension_ping(request: Request, x_token: str = Header(default="")):
     _check_token(x_token)
-    payload = await request.json()
+    model = await _read_browser_json(request, BrowserPing)
     browser_handoffs.record_ping(
-        str(payload.get("version", "")),
-        str(payload.get("client_id", "")),
-        str(payload.get("browser", "")),
+        model.version,
+        model.client_id,
+        model.browser,
     )
-    return {"ok": True}
+    # Return update metadata on the same heartbeat. Store-installed extensions
+    # update through the browser; unpacked/self-hosted builds can at least show
+    # an accurate release link instead of silently staying on an old protocol.
+    return {"ok": True, **browser_handoffs.status()}
 
 
 @router.get("/browser/presenter")
@@ -337,6 +404,23 @@ async def wait_browser_handoff(handoff_id: str, x_token: str = Header(default=""
 
 
 async def _create_browser_task(item, output_dir: str = ""):
+    expired = manager.find_expired_request_task(item.url, item.source_page_url)
+    if expired is not None:
+        return await manager.refresh_task_request(
+            expired.id,
+            url=item.url,
+            source_page_url=item.source_page_url,
+            mime_type=item.mime_type,
+            referer=item.referer,
+            origin=item.origin,
+            user_agent=item.user_agent,
+            cookie=item.cookie,
+            request_headers=item.request_headers,
+            request_contexts=item.request_contexts,
+            request_method=item.request_method,
+            request_body=item.request_body,
+            auto_resume=True,
+        )
     task = await manager.create_task(
         url=item.url,
         task_type=TaskType.AUTO,
@@ -362,10 +446,9 @@ async def _create_browser_task(item, output_dir: str = ""):
 @router.post("/browser/downloads")
 async def create_browser_download(request: Request, x_token: str = Header(default="")):
     _check_token(x_token)
-    payload = await request.json()
-    url = str(payload.get("url", ""))
-    if not url.startswith(("http://", "https://", "magnet:")):
-        raise HTTPException(status_code=422, detail="浏览器资源地址无效")
+    model = await _read_browser_json(request, BrowserHandoffCreate)
+    payload = _browser_payload(model)
+    url = payload["url"]
     _check_host(url)
     item = browser_handoffs.create(payload)
     task = await _create_browser_task(item)
@@ -493,6 +576,36 @@ async def install_update(x_token: str = Header(default="")):
     return {"ok": True, "version": info.latest_version, "task_id": task.id}
 
 
+@router.post("/power-actions/{action_id}/cancel")
+async def cancel_power_action(action_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    if not power_action_service.cancel(action_id):
+        raise HTTPException(status_code=404, detail="电源动作不存在或已结束")
+    manager._broadcast_nowait({
+        "type": "power_action_canceled",
+        "power_action_id": action_id,
+    })
+    return {"ok": True}
+
+
+@router.get("/power-actions")
+async def list_power_actions(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return power_action_service.all_pending()
+
+
+@router.post("/power-actions/{action_id}/confirm")
+async def confirm_power_action(action_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    try:
+        confirmed = await asyncio.to_thread(power_action_service.confirm, action_id)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"无法执行电源动作：{exc}") from exc
+    if not confirmed:
+        raise HTTPException(status_code=404, detail="电源动作不存在或已结束")
+    return {"ok": True}
+
+
 async def _wait_and_launch_managed_update(task_id: str) -> None:
     try:
         task = manager.tasks.get(task_id)
@@ -509,19 +622,88 @@ async def _launch_managed_update(task_id: str) -> None:
     task = manager.tasks.get(task_id)
     if not task or task.status is not TaskStatus.DONE or not task.output_path:
         return
-    installer = Path(task.output_path)
+    package = Path(task.output_path)
+    asset_kind = str(task.engine_state.get("update_asset_kind") or "installer")
+
+    def validate_package() -> None:
+        expected_size = int(task.engine_state.get("update_expected_size") or 0)
+        if not package.is_file() or package.stat().st_size <= 0:
+            raise OSError("更新包文件不存在")
+        if expected_size and package.stat().st_size != expected_size:
+            raise OSError(
+                f"更新包大小不匹配：期望 {expected_size}，实际 {package.stat().st_size}"
+            )
+        expected = str(task.expected_checksum or "").strip().lower()
+        expected_digest = expected.removeprefix("sha256:") if expected.startswith("sha256:") else ""
+        if len(expected_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in expected_digest
+        ):
+            raise OSError("更新包缺少可信的 SHA-256 校验值")
+        import hashlib
+
+        digest = hashlib.sha256()
+        with package.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+        if digest.hexdigest() != expected_digest:
+            raise OSError("更新包 SHA-256 校验失败")
+        if asset_kind == "portable":
+            validate_portable_archive(package)
+        else:
+            with package.open("rb") as handle:
+                if handle.read(2) != b"MZ":
+                    raise OSError("不是有效的 Windows 安装程序")
+
+    portable_stage: Path | None = None
     try:
-        with installer.open("rb") as handle:
-            if handle.read(2) != b"MZ":
-                raise OSError("不是有效的 Windows 安装程序")
-        subprocess.Popen([str(installer), "/DELETESELF=1"])
-    except OSError as exc:
-        task.last_log = f"更新安装包已下载，但无法自动启动：{exc}"
+        await asyncio.to_thread(validate_package)
+        if asset_kind == "portable":
+            if RUNTIME_PATHS.mode != "portable":
+                raise OSError("当前不是便携版，拒绝应用便携更新包")
+            portable_stage = await asyncio.to_thread(
+                extract_portable_update,
+                package,
+                str(task.engine_state.get("update_version") or "update"),
+            )
+        # Finish and persist active download state before the installer begins
+        # trying to close/replace this process. Launching NSIS first created a
+        # real lock race: its shutdown helper waited on a Core that was still
+        # doing update preparation, making a healthy upgrade appear hung.
+        await manager.prepare_for_update_restart()
+        if asset_kind == "portable":
+            upgrade_script = portable_stage / "scripts" / "upgrade-portable.ps1"
+            subprocess.Popen([
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(upgrade_script),
+                "-TargetDir",
+                str(RUNTIME_PATHS.project_root),
+                "-StartAfterUpgrade",
+                "-DeleteSourceAfterUpgrade",
+            ])
+        else:
+            subprocess.Popen([str(package), "/DELETESELF=1"])
+    except (OSError, UpdateError) as exc:
+        package.unlink(missing_ok=True)
+        if portable_stage is not None:
+            await asyncio.to_thread(shutil.rmtree, portable_stage, True)
+        task.status = TaskStatus.FAILED
+        task.error_code = (
+            "UPDATE_PORTABLE_INVALID"
+            if asset_kind == "portable"
+            else "UPDATE_INSTALLER_INVALID"
+        )
+        task.error_stage = "verifying"
+        task.error_message = f"更新包验证失败：{exc}"
+        task.last_log = f"更新包已下载，但无法自动启动：{exc}"
         await manager._save_db(task)
         return
-    await manager.prepare_for_update_restart()
     update_service._install_started = True
-    timer = threading.Timer(0.75, request_shutdown)
+    timer = threading.Timer(0.1, request_shutdown)
     timer.daemon = True
     timer.start()
 
@@ -536,8 +718,9 @@ async def recognize_input_url(body: UrlRecognitionRequest, x_token: str = Header
         headers["referer"] = body.referer
     if body.origin:
         headers["origin"] = body.origin
-    if body.cookie:
-        headers["cookie"] = body.cookie
+    cookie = body.cookie or settings.default_cookie
+    if cookie:
+        headers["cookie"] = cookie
     try:
         return await recognize_url(body.url, headers=headers)
     except RecognitionError as exc:
@@ -563,26 +746,32 @@ async def manifest_tracks(body: UrlRecognitionRequest, x_token: str = Header(def
         headers["cookie"] = body.cookie
     empty = {"format": "", "video": [], "audio": []}
     try:
-        async with httpx.AsyncClient(
-            follow_redirects=True, timeout=httpx.Timeout(10)
+        async with policy_httpx_client(
+            follow_redirects=True,
+            timeout=httpx.Timeout(10),
         ) as client:
-            response = await client.get(body.url, headers=headers)
-            response.raise_for_status()
-            text = response.text
-            final_url = str(response.url or body.url)
+            async with client.stream("GET", body.url, headers=headers) as response:
+                response.raise_for_status()
+                payload = bytearray()
+                async for chunk in response.aiter_bytes():
+                    payload.extend(chunk)
+                    if len(payload) > 4 * 1024 * 1024:
+                        return empty
+                encoding = response.encoding or "utf-8"
+                text = bytes(payload).decode(encoding, errors="replace")
+                final_url = str(response.url or body.url)
+                ensure_url_allowed(final_url)
     except Exception:
         return empty
     stripped = text.lstrip("﻿ \t\r\n")
     try:
         if stripped.startswith("#EXTM3U"):
-            from .downloader.parser import list_hls_video_tracks
+            from .downloader.parser import list_hls_audio_tracks, list_hls_video_tracks
 
             return {
                 "format": "hls",
                 "video": list_hls_video_tracks(final_url, text),
-                # HLS audio renditions are downloaded automatically by the
-                # compatibility engine; no manual selection is offered yet.
-                "audio": [],
+                "audio": list_hls_audio_tracks(final_url, text),
             }
         if "<MPD" in text[:4096]:
             from .downloader.mpd import NativeDashUnsupported, parse_mpd
@@ -637,8 +826,15 @@ async def get_settings(x_token: str = Header(default="")):
 async def update_settings(body: SettingsUpdate, x_token: str = Header(default="")):
     _check_token(x_token)
     data = body.model_dump(exclude_none=True)
+    if data.get("default_cookie") == SECRET_MASK:
+        data.pop("default_cookie", None)
+    if data.get("proxy_url") == SECRET_MASK:
+        data.pop("proxy_url", None)
+    if "site_profiles" in data:
+        data["site_profiles"] = restore_masked_site_profiles(
+            data["site_profiles"], settings.site_profiles
+        )
     apply_settings_update(settings, data)
-    save_settings(settings)
     download_throttle.configure(getattr(settings, "download_speed_limit_kib", 0) or 0)
     return _public_settings()
 
@@ -723,9 +919,9 @@ async def cast_url(body: CastUrlPush, x_token: str = Header(default="")):
 @router.post("/browser/media-push")
 async def create_browser_media_push(request: Request, x_token: str = Header(default="")):
     _check_token(x_token)
-    payload = await request.json()
-    kind = str(payload.get("kind", ""))
-    resource = payload.get("resource") if isinstance(payload.get("resource"), dict) else {}
+    model = await _read_browser_json(request, BrowserMediaPushCreate)
+    kind = model.kind
+    resource = _browser_payload(model.resource)
     url = str(resource.get("url", ""))
     if kind not in {"cast", "tvbox"} or not url.startswith(("http://", "https://")):
         raise HTTPException(status_code=422, detail="浏览器投送请求无效")
@@ -735,6 +931,12 @@ async def create_browser_media_push(request: Request, x_token: str = Header(defa
         for stale_id, item in list(_browser_media_pushes.items()):
             if now - float(item.get("created_at", now)) > 180:
                 _browser_media_pushes.pop(stale_id, None)
+        while len(_browser_media_pushes) >= MAX_BROWSER_MEDIA_PUSHES:
+            oldest_id = min(
+                _browser_media_pushes,
+                key=lambda key: float(_browser_media_pushes[key].get("created_at", now)),
+            )
+            _browser_media_pushes.pop(oldest_id, None)
         _browser_media_pushes[request_id] = {"id": request_id, "kind": kind, "resource": resource, "created_at": now, "status": "pending", "message": "等待在桌面端选择设备"}
     if not native_desktop_session.push("media_push", request_id):
         with _browser_media_push_lock:
@@ -767,11 +969,9 @@ async def get_browser_media_push_status(request_id: str, x_token: str = Header(d
 @router.post("/browser/media-push/{request_id}/complete")
 async def complete_browser_media_push(request_id: str, request: Request, x_token: str = Header(default="")):
     _check_token(x_token)
-    payload = await request.json()
-    status = str(payload.get("status", "")).strip().lower()
-    if status not in {"done", "failed", "canceled"}:
-        raise HTTPException(status_code=422, detail="投送完成状态无效")
-    message = str(payload.get("message", "")).strip()[:300]
+    model = await _read_browser_json(request, BrowserMediaPushComplete)
+    status = model.status
+    message = model.message.strip()
     with _browser_media_push_lock:
         item = _browser_media_pushes.get(request_id)
         if not item:
@@ -828,6 +1028,9 @@ async def create_task(body: TaskCreate, x_token: str = Header(default="")):
         auto_start=True,
         selected_video=body.selected_video,
         selected_audio=body.selected_audio,
+        scheduled_start_at=body.scheduled_start_at.isoformat() if body.scheduled_start_at else "",
+        scheduled_stop_at=body.scheduled_stop_at.isoformat() if body.scheduled_stop_at else "",
+        completion_action=body.completion_action,
     )
     return _to_resp(task)
 
@@ -853,6 +1056,9 @@ async def create_batch(body: TaskBatchCreate, x_token: str = Header(default=""))
             checksum=t.checksum,
             output_dir=t.download_dir,
             auto_start=True,
+            scheduled_start_at=t.scheduled_start_at.isoformat() if t.scheduled_start_at else "",
+            scheduled_stop_at=t.scheduled_stop_at.isoformat() if t.scheduled_stop_at else "",
+            completion_action=t.completion_action,
         )
         results.append(_to_resp(task))
     return results
@@ -919,8 +1125,10 @@ async def create_torrent_path_task(body: TorrentPathImport, x_token: str = Heade
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="种子文件无法读取或已损坏") from exc
     task = await manager.create_task(url=f"torrent-file:{source.name}", task_type=TaskType.TORRENT, title=source.stem, filename=source.stem, auto_start=False)
-    task_dir = task_work_dir(task); task_dir.mkdir(parents=True, exist_ok=True)
-    saved = task_dir / "uploaded.torrent"; saved.write_bytes(content)
+    task_dir = task_work_dir(task)
+    task_dir.mkdir(parents=True, exist_ok=True)
+    saved = task_dir / "uploaded.torrent"
+    saved.write_bytes(content)
     files = metadata["files"]
     task.engine_state.update({
         "torrent_path": str(saved),
@@ -1013,6 +1221,24 @@ async def retry_task(task_id: str, x_token: str = Header(default="")):
     await _manager_action(manager.retry_task(task_id))
     return {"ok": True}
 
+
+@router.patch("/tasks/{task_id}/request", response_model=TaskResponse)
+async def refresh_task_request(
+    task_id: str,
+    body: TaskRequestUpdate,
+    x_token: str = Header(default=""),
+):
+    _check_token(x_token)
+    _check_host(body.url)
+    values = body.model_dump(exclude_unset=True)
+    values.pop("url", None)
+    try:
+        task = await manager.refresh_task_request(task_id, url=body.url, **values)
+    except (TaskNotFoundError, TaskConflictError) as exc:
+        status = 404 if isinstance(exc, TaskNotFoundError) else 409
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    return _to_resp(task)
+
 @router.post("/tasks/{task_id}/speed-limit")
 async def set_task_speed_limit(
     task_id: str, body: TaskSpeedLimit, x_token: str = Header(default="")
@@ -1095,11 +1321,21 @@ def _raise_playback_error(exc: PlaybackError):
     raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _uses_segment_playback(task) -> bool:
+    """DASH native downloads share the same local HLS preview layout."""
+    if task.task_type is TaskType.HLS:
+        return True
+    return (
+        task.task_type is TaskType.DASH
+        and (task_work_dir(task) / "playback-plan.json").is_file()
+    )
+
+
 @router.post("/tasks/{task_id}/playback")
 async def open_task_playback(task_id: str, x_token: str = Header(default="")):
     _check_token(x_token)
     task = _playback_task(task_id)
-    if task.task_type is not TaskType.HLS:
+    if not _uses_segment_playback(task):
         try:
             _, size = manager.get_stream_info(task.id)
         except TaskConflictError as exc:
@@ -1137,7 +1373,7 @@ async def task_playback_status(
     task = _playback_task(task_id)
     try:
         playback_service.touch(task.id, session)
-        if task.task_type is not TaskType.HLS:
+        if not _uses_segment_playback(task):
             _, size = manager.get_stream_info(task.id)
             return {
                 "ready": True,
@@ -1306,18 +1542,29 @@ async def task_playback_media(
             raise HTTPException(status_code=425, detail=str(exc)) from exc
         range_header = request.headers.get("range", "")
         match = re.match(r"^bytes=(\d*)-(\d*)$", range_header, re.IGNORECASE)
-        if not match:
+        if range_header and not match:
+            raise HTTPException(
+                status_code=416,
+                detail="无效的 Range",
+                headers={"Content-Range": f"bytes */{total}"},
+            )
+        if not range_header:
             start, end = 0, min(total - 1, 2 * 1024 * 1024 - 1)
         else:
             start_text, end_text = match.groups()
             if not start_text and not end_text:
                 raise HTTPException(status_code=416, detail="无效的 Range")
-            if start_text:
-                start = int(start_text)
-                end = int(end_text) if end_text else min(total - 1, start + 4 * 1024 * 1024 - 1)
-            else:
-                length = min(int(end_text), 4 * 1024 * 1024)
-                start, end = max(0, total - length), total - 1
+            if len(start_text) > 20 or len(end_text) > 20:
+                raise HTTPException(status_code=416, detail="无效的 Range")
+            try:
+                if start_text:
+                    start = int(start_text)
+                    end = int(end_text) if end_text else min(total - 1, start + 4 * 1024 * 1024 - 1)
+                else:
+                    length = min(int(end_text), 4 * 1024 * 1024)
+                    start, end = max(0, total - length), total - 1
+            except ValueError as exc:
+                raise HTTPException(status_code=416, detail="无效的 Range") from exc
             end = min(end, total - 1, start + 4 * 1024 * 1024 - 1)
         if start < 0 or start >= total or end < start:
             raise HTTPException(
@@ -1384,17 +1631,6 @@ async def events(request: Request):
             manager.unsubscribe(q)
 
     return StreamingResponse(stream(), media_type="text/event-stream")
-
-@router.get("/sniffed")
-async def get_sniffed(x_token: str = Header(default="")):
-    _check_token(x_token)
-    return manager._sniffed
-
-@router.post("/sniffed")
-async def add_sniffed(body: dict, x_token: str = Header(default="")):
-    _check_token(x_token)
-    manager._sniffed.append(body)
-    return {"ok": True}
 
 @router.post("/open-explorer")
 async def open_explorer(body: dict, x_token: str = Header(default="")):

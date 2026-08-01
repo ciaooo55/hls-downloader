@@ -4,6 +4,7 @@ import pytest
 
 from backend.app.downloader import task_manager as manager_module
 from backend.app.downloader.hls import HLSDownloader
+from backend.app.downloader.engine import task_work_dir
 from backend.app.downloader.task_manager import TaskConflictError, TaskManager
 from backend.app.models import Task, TaskStatus, TaskType
 
@@ -63,6 +64,252 @@ def test_pause_transitions_to_pausing_and_rejects_wrong_stage(monkeypatch):
         manager.tasks[queued.id] = queued
         with pytest.raises(TaskConflictError):
             await manager.pause_task(queued.id)
+
+    asyncio.run(run())
+
+
+def test_resume_waits_for_visible_paused_task_to_finish_old_run_tail(monkeypatch):
+    async def run():
+        manager = TaskManager()
+        task = _task(status=TaskStatus.PAUSED)
+        release = asyncio.Event()
+        started = False
+
+        async def finish_old_run():
+            await release.wait()
+
+        old_handle = asyncio.create_task(finish_old_run())
+        task.task_handle = old_handle
+        manager.tasks[task.id] = task
+
+        async def start_task(task_id: str):
+            nonlocal started
+            assert task_id == task.id
+            assert old_handle.done()
+            started = True
+
+        monkeypatch.setattr(manager, "start_task", start_task)
+        resume = asyncio.create_task(manager.resume_task(task.id))
+        await asyncio.sleep(0)
+        assert started is False
+        release.set()
+        await resume
+        assert started is True
+
+    asyncio.run(run())
+
+
+def test_refresh_task_request_preserves_progress_and_credentials(monkeypatch):
+    async def run():
+        manager = TaskManager()
+        task = Task(
+            id="expired",
+            url="https://cdn.test/video.mp4?token=old",
+            task_type=TaskType.HTTP,
+            status=TaskStatus.FAILED,
+            cookie="old=1",
+            request_headers={"referer": "https://site.test/old"},
+        )
+        task.progress.downloaded_bytes = 4096
+        task.error_message = "HTTP 403"
+        manager.tasks[task.id] = task
+        monkeypatch.setattr(manager, "_save_db", _async_noop)
+
+        updated = await manager.refresh_task_request(
+            task.id,
+            url="https://cdn.test/video.mp4?token=new",
+            cookie="new=2",
+            request_headers={"Referer": "https://site.test/new"},
+            auto_resume=False,
+        )
+
+        assert updated is task
+        assert task.status is TaskStatus.PAUSED
+        assert task.url.endswith("token=new")
+        assert task.cookie == "new=2"
+        assert task.request_headers == {"referer": "https://site.test/new"}
+        assert task.progress.downloaded_bytes == 4096
+        assert task.error_message == ""
+
+    asyncio.run(run())
+
+
+def test_refresh_waits_for_failed_runner_finalization(monkeypatch):
+    async def run():
+        manager = TaskManager()
+        task = Task(
+            id="failed-tail",
+            url="https://cdn.test/video.mp4?s=old&e=1&_t=1",
+            task_type=TaskType.HTTP,
+            status=TaskStatus.FAILED,
+        )
+        manager.tasks[task.id] = task
+        release = asyncio.Event()
+
+        async def finish_runner():
+            await release.wait()
+
+        task.task_handle = asyncio.create_task(finish_runner())
+        monkeypatch.setattr(manager, "_save_db", _async_noop)
+        refreshing = asyncio.create_task(manager.refresh_task_request(
+            task.id,
+            url="https://cdn.test/video.mp4?s=fresh&e=2&_t=2",
+            auto_resume=False,
+        ))
+        await asyncio.sleep(0)
+        assert refreshing.done() is False
+
+        release.set()
+        updated = await refreshing
+
+        assert updated.url.endswith("s=fresh&e=2&_t=2")
+        assert updated.status is TaskStatus.PAUSED
+
+    asyncio.run(run())
+
+
+def test_new_signed_browser_url_revives_only_safe_stale_tasks():
+    manager = TaskManager()
+    failed = Task(
+        id="failed",
+        url="https://cdn.test/video.mp4?token=old",
+        source_page_url="https://site.test/watch/1",
+        task_type=TaskType.HTTP,
+        status=TaskStatus.FAILED,
+        updated_at="2026-01-02",
+    )
+    paused = Task(
+        id="paused",
+        url="https://cdn.test/video.mp4?token=older",
+        task_type=TaskType.HTTP,
+        status=TaskStatus.PAUSED,
+        updated_at="2026-01-03",
+    )
+    interrupted = Task(
+        id="interrupted",
+        url="https://cdn.test/video.mp4?token=interrupted",
+        task_type=TaskType.HTTP,
+        status=TaskStatus.PAUSED,
+        updated_at="2026-01-04",
+        engine_state={"state_reason": "core_interrupted"},
+    )
+    probing = Task(
+        id="probing",
+        url="https://cdn.test/video.mp4?token=probe",
+        task_type=TaskType.HTTP,
+        status=TaskStatus.DOWNLOADING,
+        stage="probing",
+        updated_at="2026-01-05",
+    )
+    probing.task_handle = type("LiveHandle", (), {"done": staticmethod(lambda: False)})()
+    manager.tasks = {
+        failed.id: failed,
+        paused.id: paused,
+        interrupted.id: interrupted,
+        probing.id: probing,
+    }
+
+    assert manager.find_expired_request_task(
+        "https://cdn.test/video.mp4?token=fresh",
+        "https://site.test/watch/1",
+    ) is probing
+
+    manager.tasks.pop(probing.id)
+    assert manager.find_expired_request_task(
+        "https://cdn.test/video.mp4?token=fresh",
+        "https://site.test/other",
+    ) is interrupted
+
+    manager.tasks.pop(interrupted.id)
+    assert manager.find_expired_request_task(
+        "https://cdn.test/video.mp4?token=fresh",
+        "https://site.test/other",
+    ) is failed
+
+    failed_live = Task(
+        id="failed-live",
+        url="https://cdn.test/video.mp4?token=live-old",
+        source_page_url="https://site.test/watch/live",
+        task_type=TaskType.HLS,
+        status=TaskStatus.FAILED,
+        updated_at="2026-01-06",
+        engine_state={"live": True},
+    )
+    running_live = Task(
+        id="running-live",
+        url="https://cdn.test/video.mp4?token=live-running",
+        source_page_url="https://site.test/watch/live",
+        task_type=TaskType.HLS,
+        status=TaskStatus.DOWNLOADING_SEGMENTS,
+        updated_at="2026-01-07",
+        engine_state={"live": True},
+    )
+    running_live.task_handle = type("LiveHandle", (), {"done": staticmethod(lambda: False)})()
+    manager.tasks = {failed_live.id: failed_live, running_live.id: running_live}
+    assert manager.find_expired_request_task(
+        "https://cdn.test/video.mp4?token=live-fresh",
+        "https://site.test/watch/live",
+    ) is failed_live
+
+    signed_short = Task(
+        id="signed-short",
+        url="https://old-edge.test/asset.mp4?quality=1080&s=old&e=1&_t=2",
+        source_page_url="https://site.test/watch/signed",
+        task_type=TaskType.HTTP,
+        status=TaskStatus.FAILED,
+    )
+    manager.tasks = {signed_short.id: signed_short}
+    assert manager.find_expired_request_task(
+        "https://new-edge.test/asset.mp4?e=9&s=new&_t=8&quality=1080",
+        "https://site.test/watch/signed",
+    ) is signed_short
+    assert manager.find_expired_request_task(
+        "https://new-edge.test/asset.mp4?e=9&s=new&_t=8&quality=720",
+        "https://site.test/watch/signed",
+    ) is None
+
+
+def test_finished_runner_cannot_leave_task_in_active_state(monkeypatch):
+    async def crash():
+        raise RuntimeError("engine crash")
+
+    async def run():
+        manager = TaskManager()
+        task = _task("unexpected-exit", TaskStatus.DOWNLOADING)
+        manager.tasks[task.id] = task
+        monkeypatch.setattr(manager, "_save_db", _async_noop)
+        task.task_handle = asyncio.create_task(crash())
+        task.task_handle.add_done_callback(lambda handle: manager._on_task_finished(task, handle))
+        with pytest.raises(RuntimeError, match="engine crash"):
+            await task.task_handle
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert task.status is TaskStatus.FAILED
+        assert task.error_code == "DOWNLOADER_UNEXPECTED_EXIT"
+        assert task.stage == "failed"
+        assert "卡在准备下载" in task.last_log
+
+    asyncio.run(run())
+
+
+def test_site_profile_fills_manual_task_defaults(monkeypatch):
+    async def run():
+        manager = TaskManager()
+        monkeypatch.setattr(manager_module.settings, "site_profiles", [{
+            "host": "*.example.test",
+            "referer": "https://example.test/watch",
+            "concurrency": 3,
+            "speed_limit_kib": 512,
+            "request_headers": {"X-Site-Token": "profile"},
+        }])
+        monkeypatch.setattr(manager_module, "run_db", _async_noop)
+
+        task = await manager.create_task("https://cdn.example.test/file.bin")
+
+        assert task.referer == "https://example.test/watch"
+        assert task.concurrency == 3
+        assert task.speed_limit_kib == 512
+        assert task.request_headers == {"x-site-token": "profile"}
 
     asyncio.run(run())
 
@@ -415,9 +662,10 @@ def test_private_browser_request_headers_are_encrypted_and_survive_reload(tmp_pa
         )
 
         rows = await database_module.run_db(
-            "SELECT request_headers, request_contexts, request_body, cookie FROM tasks WHERE id=?", (task.id,)
+            "SELECT url,source_page_url,referer,origin,request_headers,request_contexts,request_body,cookie FROM tasks WHERE id=?", (task.id,)
         )
         stored = rows[0]
+        assert "protected.bin" not in stored["url"]
         assert "signed-token" not in stored["request_headers"]
         assert "Bearer segments" not in stored["request_contexts"]
         assert "segment_session=private" not in stored["request_contexts"]
@@ -434,6 +682,7 @@ def test_private_browser_request_headers_are_encrypted_and_survive_reload(tmp_pa
             "content-type": "application/json",
         }
         assert loaded.request_method == "POST"
+        assert loaded.url == "https://cdn.example.test/protected.bin"
         assert base64.b64decode(loaded.request_body) == b'{"token":"post-secret"}'
         assert loaded.cookie == "session=secret"
         assert loaded.request_contexts["https://segments.example.test"] == {
@@ -607,6 +856,28 @@ def test_delete_incomplete_task_always_removes_reserved_output(tmp_path, monkeyp
     asyncio.run(run())
 
 
+def test_failed_http_checkpoint_survives_manager_cleanup_for_retry(tmp_path, monkeypatch):
+    async def run():
+        manager = TaskManager()
+        task = _task("http-resume", TaskStatus.FAILED)
+        task.engine_state["temp_dir"] = str(tmp_path)
+        monkeypatch.setattr(manager_module.settings, "keep_temp_files", False)
+        task_dir = manager_module.task_work_dir(task)
+        task_dir.mkdir(parents=True)
+        payload = task_dir / "payload.downloading"
+        payload.write_bytes(b"durable-partial")
+        (task_dir / "http-resume.json").write_text(
+            '{"version":2,"ranges":[]}', encoding="utf-8"
+        )
+
+        await manager._cleanup_task_temp(task)
+
+        assert payload.read_bytes() == b"durable-partial"
+        assert (task_dir / "http-resume.json").is_file()
+
+    asyncio.run(run())
+
+
 def test_deleted_task_ignores_late_progress_log_and_database_callbacks(tmp_path, monkeypatch):
     database_calls = []
 
@@ -632,6 +903,47 @@ def test_deleted_task_ignores_late_progress_log_and_database_callbacks(tmp_path,
         assert len(database_calls) == 1
         assert database_calls[0][0] == "DELETE FROM tasks WHERE id=?"
         assert not (tmp_path / ".tasks" / task.id / "download.log").exists()
+
+    asyncio.run(run())
+
+
+def test_progress_events_are_throttled_but_database_save_remains_scheduled(monkeypatch):
+    async def run():
+        manager = TaskManager()
+        task = _task("throttled", TaskStatus.DOWNLOADING)
+        manager.tasks[task.id] = task
+        events = []
+        monkeypatch.setattr(manager, "_broadcast_nowait", lambda event: events.append(event))
+        monkeypatch.setattr(manager, "_schedule_save", lambda current: events.append({"type": "save", "id": current.id}))
+
+        for _ in range(20):
+            manager._on_progress(task)
+
+        assert [event["type"] for event in events].count("task_progress") == 1
+        assert [event["type"] for event in events].count("save") == 20
+
+    asyncio.run(run())
+
+
+def test_log_writer_uses_async_queue_and_rotates_bounded_files(tmp_path, monkeypatch):
+    async def run():
+        manager = TaskManager()
+        task = _task("logs", TaskStatus.DOWNLOADING)
+        manager.tasks[task.id] = task
+        monkeypatch.setattr(manager_module.settings, "temp_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module, "LOG_MAX_BYTES", 32)
+        monkeypatch.setattr(manager_module, "LOG_BACKUP_COUNT", 2)
+
+        manager._on_log_write(task.id, "first queued line")
+        assert manager._log_writer_task is not None
+        await manager._log_queue.put(None)
+        await manager._log_writer_task
+
+        log_path = task_work_dir(task) / "download.log"
+        assert "first queued line" in log_path.read_text(encoding="utf-8")
+        manager._write_log_batch([(task.id, "second line forces rotation")])
+        assert log_path.with_name("download.log.1").is_file()
+        assert len(list(log_path.parent.glob("download.log.*"))) <= 2
 
     asyncio.run(run())
 
@@ -701,6 +1013,154 @@ def test_failed_live_recording_survives_playback_cleanup(tmp_path):
         await manager._cleanup_task_temp(task)
         assert not seg_dir.exists()
         assert not (task_dir / "live_state.json").exists()
+
+    asyncio.run(run())
+
+
+def test_downloader_constructor_crash_cannot_leave_task_queued(monkeypatch):
+    class BrokenDownloader:
+        def __init__(self, *_args, **_kwargs):
+            raise RuntimeError("constructor crash")
+
+    async def run():
+        manager = TaskManager()
+        task = _task("constructor-crash")
+        manager.tasks[task.id] = task
+        monkeypatch.setattr(manager_module, "HLSDownloader", BrokenDownloader)
+        monkeypatch.setattr(manager, "_save_db", _async_noop)
+
+        await manager.start_task(task.id)
+        await task.task_handle
+
+        assert task.status is TaskStatus.FAILED
+        assert task.error_code == "DOWNLOADER_UNEXPECTED_EXIT"
+        assert task.stage == "failed"
+
+    asyncio.run(run())
+
+
+def test_create_task_rolls_back_memory_when_database_insert_fails(monkeypatch):
+    async def broken_db(*_args, **_kwargs):
+        raise RuntimeError("database unavailable")
+
+    async def run():
+        manager = TaskManager()
+        monkeypatch.setattr(manager_module, "run_db", broken_db)
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            await manager.create_task("https://example.test/video.m3u8")
+        assert manager.tasks == {}
+
+    asyncio.run(run())
+
+
+def test_load_from_db_preserves_future_scheduled_queue(monkeypatch):
+    row = _db_row("queued", task_id="scheduled")
+    row["engine_state"] = '{"queue_waiting_for_schedule": true}'
+
+    async def fake_run_db(sql, params=()):
+        return [row]
+
+    async def run():
+        manager = TaskManager()
+        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+        monkeypatch.setattr(manager, "_save_db", _async_noop)
+        monkeypatch.setattr(manager, "_queue_auto_start_due", lambda: False)
+
+        await manager.load_from_db()
+
+        task = manager.tasks["scheduled"]
+        assert task.status is TaskStatus.QUEUED
+        assert task.engine_state["queue_waiting_for_schedule"] is True
+
+    asyncio.run(run())
+
+
+def test_load_from_db_recovers_corrupt_engine_state_and_unknown_type(monkeypatch):
+    row = _db_row("paused", task_id="recovered")
+    row["engine_state"] = "not-json"
+    row["task_type"] = "future-protocol"
+    row["url"] = "https://example.test/file.mp4"
+    row["concurrency"] = "not-a-number"
+    row["total_bytes"] = "broken"
+    row["speed_bytes_per_sec"] = "nan"
+
+    async def fake_run_db(sql, params=()):
+        return [row]
+
+    async def run():
+        manager = TaskManager()
+        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+        await manager.load_from_db()
+        task = manager.tasks["recovered"]
+        assert task.task_type is TaskType.HTTP
+        assert task.engine_state["state_reason"] == "database_state_recovered"
+        assert task.concurrency >= 1
+        assert task.progress.total_bytes == 0
+        assert task.progress.speed_bytes_per_sec == 0
+
+    asyncio.run(run())
+
+
+def test_delete_database_failure_keeps_task_managed(tmp_path, monkeypatch):
+    async def broken_db(*_args, **_kwargs):
+        raise RuntimeError("delete failed")
+
+    async def run():
+        manager = TaskManager()
+        task = _task("delete-retry", TaskStatus.PAUSED)
+        manager.tasks[task.id] = task
+        monkeypatch.setattr(manager_module.settings, "download_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module, "run_db", broken_db)
+
+        with pytest.raises(RuntimeError, match="delete failed"):
+            await manager.delete_task(task.id)
+
+        assert manager.tasks[task.id] is task
+        assert task.id not in manager._deleting_task_ids
+
+    asyncio.run(run())
+
+
+def test_temp_root_is_removed_when_every_task_is_canceled(tmp_path, monkeypatch):
+    async def run():
+        manager = TaskManager()
+        task = _task("canceled", TaskStatus.CANCELED)
+        manager.tasks[task.id] = task
+        monkeypatch.setattr(manager_module.settings, "download_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module.settings, "temp_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module.settings, "keep_temp_files", False)
+        temp_root = tmp_path / ".tasks"
+        temp_root.mkdir()
+
+        await manager._cleanup_temp_root_if_all_done()
+
+        assert not temp_root.exists()
+
+    asyncio.run(run())
+
+
+def test_refresh_does_not_persist_the_previous_signed_url(monkeypatch):
+    async def run():
+        manager = TaskManager()
+        task = Task(
+            id="refresh-secret",
+            url="https://old-edge.test/video.mp4?token=old-secret",
+            task_type=TaskType.HTTP,
+            status=TaskStatus.FAILED,
+        )
+        manager.tasks[task.id] = task
+        monkeypatch.setattr(manager, "_save_db", _async_noop)
+
+        await manager.refresh_task_request(
+            task.id,
+            url="https://new-edge.test/video.mp4?token=new-secret",
+            auto_resume=False,
+        )
+
+        encoded = str(task.engine_state)
+        assert "old-secret" not in encoded
+        assert "previous_request_url" not in task.engine_state
+        assert "previous_request_key" in task.engine_state
 
     asyncio.run(run())
 

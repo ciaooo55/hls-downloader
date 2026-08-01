@@ -1,5 +1,7 @@
 import aiosqlite
 import asyncio
+import weakref
+from pathlib import Path
 from .paths import RUNTIME_PATHS
 
 DB_PATH = RUNTIME_PATHS.database_path
@@ -95,49 +97,131 @@ MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN selected_audio TEXT DEFAULT ''",
 ]
 
-_lock = asyncio.Lock()
+_connection: aiosqlite.Connection | None = None
+_connection_loop: asyncio.AbstractEventLoop | None = None
+_connection_path: Path | None = None
+_operation_lock: asyncio.Lock | None = None
+_ephemeral_locks: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 async def _migrate(db):
     """Add missing columns to existing tables."""
+    cursor = await db.execute("PRAGMA table_info(tasks)")
+    cols = {row[1] for row in await cursor.fetchall()}
+    for sql in MIGRATIONS:
+        col_name = sql.split("ADD COLUMN")[1].strip().split()[0]
+        if col_name not in cols:
+            await db.execute(sql)
+            cols.add(col_name)
+    await db.commit()
+
+
+async def _prepare(db: aiosqlite.Connection) -> None:
+    db.row_factory = aiosqlite.Row
+    await db.execute("PRAGMA busy_timeout=10000")
+    await db.execute("PRAGMA journal_mode=WAL")
+    await db.execute("PRAGMA synchronous=NORMAL")
+    await db.execute(SCHEMA)
+    await _migrate(db)
+
+
+async def initialize_database() -> None:
+    """Open and migrate the application database once for this Core lifetime."""
+    global _connection, _connection_loop, _connection_path, _operation_lock
+    loop = asyncio.get_running_loop()
+    path = Path(DB_PATH).resolve()
+    if _connection is not None and _connection_loop is loop and _connection_path == path:
+        return
+    if _connection is not None:
+        await _connection.close()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = await aiosqlite.connect(str(path), timeout=30)
     try:
-        cursor = await db.execute("PRAGMA table_info(tasks)")
-        cols = [row[1] for row in await cursor.fetchall()]
-        for sql in MIGRATIONS:
-            col_name = sql.split("ADD COLUMN")[1].strip().split()[0]
-            if col_name not in cols:
-                try:
-                    await db.execute(sql)
-                except Exception:
-                    pass
-        await db.commit()
+        await _prepare(connection)
     except Exception:
-        pass
+        await connection.close()
+        raise
+    _connection = connection
+    _connection_loop = loop
+    _connection_path = path
+    _operation_lock = asyncio.Lock()
+
+
+async def close_database() -> None:
+    global _connection, _connection_loop, _connection_path, _operation_lock
+    connection = _connection
+    _connection = None
+    _connection_loop = None
+    _connection_path = None
+    _operation_lock = None
+    if connection is not None:
+        await connection.close()
+
+
+def _active_connection() -> tuple[aiosqlite.Connection, asyncio.Lock] | None:
+    loop = asyncio.get_running_loop()
+    path = Path(DB_PATH).resolve()
+    if (
+        _connection is not None
+        and _operation_lock is not None
+        and _connection_loop is loop
+        and _connection_path == path
+    ):
+        return _connection, _operation_lock
+    return None
+
+
+def _ephemeral_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _ephemeral_locks.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _ephemeral_locks[loop] = lock
+    return lock
+
+
+async def _execute(db: aiosqlite.Connection, sql, params=()):
+    try:
+        cursor = await db.execute(sql, params)
+        await db.commit()
+        return await cursor.fetchall() if cursor.description else []
+    except Exception:
+        await db.rollback()
+        raise
 
 async def run_db(sql, params=()):
-    async with _lock:
+    active = _active_connection()
+    if active is not None:
+        db, lock = active
+        async with lock:
+            return await _execute(db, sql, params)
+    async with _ephemeral_lock():
         db = await aiosqlite.connect(str(DB_PATH), timeout=30)
-        db.row_factory = aiosqlite.Row
         try:
-            await db.execute("PRAGMA busy_timeout=10000")
-            await db.execute(SCHEMA)
-            await _migrate(db)
-            cursor = await db.execute(sql, params)
-            await db.commit()
-            rows = await cursor.fetchall() if cursor.description else []
-            return rows
+            await _prepare(db)
+            return await _execute(db, sql, params)
         finally:
             await db.close()
 
 async def run_db_many(sql, params_list):
-    async with _lock:
+    active = _active_connection()
+    if active is not None:
+        db, lock = active
+        async with lock:
+            try:
+                await db.executemany(sql, params_list)
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+        return
+    async with _ephemeral_lock():
         db = await aiosqlite.connect(str(DB_PATH), timeout=30)
-        db.row_factory = aiosqlite.Row
         try:
-            await db.execute("PRAGMA busy_timeout=10000")
-            await db.execute(SCHEMA)
-            await _migrate(db)
-            for params in params_list:
-                await db.execute(sql, params)
+            await _prepare(db)
+            await db.executemany(sql, params_list)
             await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
         finally:
             await db.close()

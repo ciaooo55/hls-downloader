@@ -19,13 +19,13 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `HLSDownloader-v3.0.6-Windows-x64-Setup.exe` | Windows 10/11 x64 安装版，带在线更新、卸载程序和快捷方式 |
-| `HLSDownloader-v3.0.6-Windows-x64-Portable.zip` | Windows 10/11 x64 便携版，解压后直接运行 |
-| `HLSDownloader-v3.0.6-Chrome-Edge-Extension.zip` | Chrome 与 Microsoft Edge 共用的 MV3 扩展包；解压后在扩展管理页开启开发者模式并加载已解压的扩展程序 |
-| `HLSDownloader-v3.0.6-Firefox-Web-UI-Unsigned.zip` | 网页显示版 Firefox 插件，AMO 上传或临时测试用 |
-| `HLSDownloader-v3.0.6-Firefox-Web-UI-Source.zip` | 网页显示版对应的 AMO 审核源码包 |
-| `HLSDownloader-v3.0.6-Firefox-No-Web-UI-Unsigned.zip` | 网页不显示版 Firefox 插件，功能与显示版完全一致，仅发布 ID 不同 |
-| `HLSDownloader-v3.0.6-Firefox-No-Web-UI-Source.zip` | 网页不显示版对应的 AMO 审核源码包 |
+| `HLSDownloader-v3.0.8-Windows-x64-Setup.exe` | Windows 10/11 x64 安装版，带在线更新、卸载程序和快捷方式 |
+| `HLSDownloader-v3.0.8-Windows-x64-Portable.zip` | Windows 10/11 x64 便携版，解压后直接运行 |
+| `HLSDownloader-v3.0.8-Chrome-Edge-Extension.zip` | Chromium MV3 扩展包，支持 Chrome、Edge、Brave、Chromium、Vivaldi 与 Opera；解压后在扩展管理页开启开发者模式并加载已解压的扩展程序 |
+| `HLSDownloader-v3.0.8-Firefox-Web-UI-Unsigned.zip` | 网页显示版 Firefox 插件，AMO 上传或临时测试用 |
+| `HLSDownloader-v3.0.8-Firefox-Web-UI-Source.zip` | 网页显示版对应的 AMO 审核源码包 |
+| `HLSDownloader-v3.0.8-Firefox-No-Web-UI-Unsigned.zip` | 网页不显示版 Firefox 插件，功能与显示版完全一致，仅发布 ID 不同 |
+| `HLSDownloader-v3.0.8-Firefox-No-Web-UI-Source.zip` | 网页不显示版对应的 AMO 审核源码包 |
 
 安装包和便携包由 GitHub Actions 从源码自动构建，不保存在 Git 仓库中。桌面主程序使用 Cockpit Tools 同类的 Tauri + React 架构，包含下载核心、FFmpeg、ffprobe、播放器资源和 Chromium 浏览器插件；Windows 10/11 自带的 Microsoft Edge WebView2 运行时为其渲染界面。
 
@@ -61,6 +61,14 @@
 - 内置播放器：边下边播、完成后本地 Range 播放、下载速度、缩略图预览和 0.5x-3x 倍速
 - 播放器按需加载，缩略图只在悬停时解码并限制缓存，不占用下载 worker
 - 断点续传和原子临时文件
+- HTTP 字节级断点检查点：每秒持久化已落盘位置，短效签名 URL 更新后按 ETag/Last-Modified 安全续传
+- 失败任务可在详情中更新 URL/Cookie 并继续；浏览器捕获同一资源的新签名时自动复活原任务
+- LL-HLS 阻塞轮询地址会自动移除过期的 `_HLS_msn/_HLS_part/_HLS_skip` 游标，保留真实会话凭据并合并为同一直播资源
+- HLS/DASH 直播分片先强制落盘再提交带文件大小的原子检查点；独立音视频轨可同步录制、停止后无损合并
+- 支持粘贴浏览器“复制为 cURL”，导入 URL、请求头、Cookie、Basic Auth 和安全可重放 POST
+- 按站点 Host 通配规则设置 UA、Referer、Origin、自定义头、并发和单任务限速
+- 系统、直连或手动 HTTP(S)/SOCKS5 代理，支持认证 URL 与 Host 通配绕过
+- 下载及直播录制期间自动阻止 Windows 休眠，全部任务停止后立即恢复系统电源策略
 - 并发同名输出保护
 - AES-128 显式 IV、默认 sequence IV 和 key rotation
 - BYTERANGE 显式/连续偏移与严格 Range 校验
@@ -80,9 +88,9 @@
 
 ## 浏览器插件
 
-Release 同时生成两个 Firefox 插件包：网页显示版与网页不显示版。它们功能和源码完全一致，仅 Mozilla 发布 ID 不同。安装版内置 Chromium 插件目录并自动注册 `com.ciaooo55.hls_downloader` Native Messaging Host；首次使用时在工具栏打开“浏览器插件”，按界面提示完成一次性加载。插件与桌面程序通过 Native Messaging 自动连接，用户不需要复制或配置 Token。用户点击真实链接或带有下载语义的按钮后，插件才会登记接管意图；随后浏览器创建真实 `DownloadItem` 时，插件立即暂停并暂时隐藏浏览器下载 UI，并按 `webRequest.requestId` 跟踪 PHP/脚本跳转的完整重定向链、`Content-Disposition`、最终文件名、类型和大小。普通的播放、展开、登录等页面按钮不会登记接管意图。桌面端成功打开下载确认对话框后，插件立即取消并清除浏览器副本；用户之后选择下载或取消都只由桌面软件处理。只有桌面端离线或无法接收接管请求时才恢复浏览器下载。页面嗅探只登记资源，不会自行启动下载，按住 Alt 点击可临时绕过接管。
+插件有改动的 Release 会同时生成两个 Firefox 插件包：网页显示版与网页不显示版。它们功能和源码完全一致，仅 Mozilla 发布 ID 不同。安装版内置 Chromium 插件目录，并为 Chrome、Edge、Brave、Chromium、Vivaldi、Opera 和 Firefox 自动注册 `com.ciaooo55.hls_downloader` Native Messaging Host；首次使用时在工具栏打开“浏览器插件”，按界面提示完成一次性加载。插件先通过 Native Messaging 完成本机可信配对和冷启动，随后使用并发友好的 loopback HTTP 通道，断线或核心重启时自动退回 Native 并重新配对；多个浏览器及不同插件版本可同时在线，用户不需要复制或配置 Token。用户点击真实链接或带有下载语义的按钮后，插件才会登记接管意图；随后浏览器创建真实 `DownloadItem` 时，插件立即暂停并暂时隐藏浏览器下载 UI，并按 `webRequest.requestId` 跟踪 PHP/脚本跳转的完整重定向链、`Content-Disposition`、最终文件名、类型和大小。普通的播放、展开、登录等页面按钮不会登记接管意图。媒体悬浮按钮按具体 `<video>` 保存播放证据：直链必须精确匹配，同一 frame 有多个 MSE 播放器时不做模糊归属；iframe 的真实请求头、Referer/Origin 缺失状态和 Cookie 按资源源站分别传递。桌面端成功打开下载确认对话框后，插件立即取消并清除浏览器副本；用户之后选择下载或取消都只由桌面软件处理。只有桌面端离线或无法接收接管请求时才恢复浏览器下载。页面嗅探只登记资源，不会自行启动下载，按住 Alt 点击可临时绕过接管。
 
-扩展支持响应嗅探、页面 fetch/XHR/media/Performance 观察、右键下载和 magnet 链接，主检测器与 MAIN-world 监听器均在 iframe 内运行。识别结果按“标签页 + 当前页面 URL + frame”隔离；只有媒体元素地址精确匹配，或播放前后短时间内同 frame 捕获到的资源才会显示，避免把广告、图片、PHP 页面或后台预览流误认为目标视频。检测到可见视频后，下载按钮会贴在视频右上角，多清晰度时点击选择。无可见视频时仍可使用右侧折叠资源面板。Cookie 必须按站点单独授权，桌面任务中的 Cookie 使用 Windows DPAPI 加密后再写入数据库。Chrome 正式安装需要 Chrome Web Store，Firefox 永久安装需要 Mozilla 签名。
+扩展支持响应嗅探、页面 fetch/XHR/media/Performance 观察、右键下载和 magnet 链接，主检测器与 MAIN-world 监听器均在 iframe 内运行。识别结果按“标签页 + 当前页面 URL + frame”隔离；只有媒体元素地址精确匹配，或播放前后短时间内同 frame 捕获到的资源才会显示，避免把广告、图片、PHP 页面或后台预览流误认为目标视频。检测到可见视频后，下载按钮会贴在视频右上角，多清晰度时点击选择。无可见视频时仍可使用右侧折叠资源面板。Cookie 必须按站点单独授权，桌面任务中的 Cookie 使用 Windows DPAPI 加密后再写入数据库。Chrome/Edge 商店安装和 AMO 安装由浏览器自动更新；安装包内置的 Chromium 解压插件会随桌面版覆盖升级，但升级后需在扩展管理页重新加载。Windows Chrome 的非商店自托管更新仅适用于企业策略环境；Firefox 自托管自动更新必须使用 Mozilla 签名包和 HTTPS 更新清单，未签名审核 ZIP 不能静默更新或永久安装。
 
 Firefox 网页显示版使用已发布的 AMO ID `browser@hls-downloader.ciaooo55.com`，网页不显示版使用独立 ID `hls-downloader-store@ciaooo55.com`。首次提交时，在 AMO 的“提交新附加组件”页面选择“在此网站上”，上传对应的 `Unsigned.zip`。不要先对商店 ID 执行 `web-ext sign --channel unlisted`，否则它会被注册为自分发扩展，随后创建公开商店条目会提示“发现重复的附加组件 ID”。以后更新必须进入“我的附加组件 → HLS Downloader → 状态和版本 → 上传新版本”，保持该版本对应的 ID 不变并提高版本号。每个 Source.zip 已内置与同名 Unsigned.zip 一致的默认 ID。
 
@@ -147,14 +155,14 @@ pnpm run tauri:build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 3.0.6
+.\scripts\build_installer.ps1 -Version 3.0.8
 ```
 
 输出位于忽略的 `release` 目录：
 
 ```text
-HLSDownloader-v3.0.6-Windows-x64-Setup.exe
-HLSDownloader-v3.0.6-Windows-x64-Portable.zip
+HLSDownloader-v3.0.8-Windows-x64-Setup.exe
+HLSDownloader-v3.0.8-Windows-x64-Portable.zip
 ```
 
 插件没有改动时不要上传独立插件包。只有需要发布浏览器插件新版本时，打包时追加 `-IncludeExtensionAssets`，GitHub Actions 手动运行时勾选 `include_extensions`。
@@ -163,7 +171,7 @@ HLSDownloader-v3.0.6-Windows-x64-Portable.zip
 
 - 推送到 `main` 或提交 Pull Request：运行 Python 测试、前端测试和生产构建。
 - 在 Actions 页面手动运行 `Windows Release`：生成可下载的工作流产物，不创建正式 Release。
-- 推送 `v*` 标签：自动测试、打包、计算 SHA256，并创建对应 GitHub Release。
+- 推送 `v*` 标签：自动测试、打包、计算 SHA256，并创建对应 GitHub Release；只有相对上一标签检测到 `extension/` 变化时才附带插件资产。
 
 发布示例：
 

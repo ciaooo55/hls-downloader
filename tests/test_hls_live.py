@@ -299,6 +299,82 @@ def test_restore_compacts_indexes_when_leading_segment_lost(tmp_path, monkeypatc
     asyncio.run(run())
 
 
+def test_restore_rejects_nonempty_segment_with_wrong_persisted_size(tmp_path):
+    task = _task(tmp_path, "https://example.test/live.m3u8")
+    downloader = _downloader(task)
+    (downloader._seg_dir() / "000000.seg").write_bytes(b"truncated")
+    recorded: list[dict] = []
+
+    duration = downloader._restore_live_segments({
+        "version": 2,
+        "segments": [{
+            "index": 0,
+            "url": "https://example.test/s0.ts",
+            "duration": 4.0,
+            "media_sequence": 0,
+            "size": 100,
+        }],
+    }, recorded)
+
+    assert duration == 0
+    assert recorded == []
+
+
+def test_live_checkpoint_does_not_persist_signed_urls_and_restores_local_map(tmp_path):
+    task = _task(tmp_path, "https://example.test/live.m3u8?token=manifest-secret")
+    downloader = _downloader(task)
+    segment_path = downloader._seg_dir() / "000000.seg"
+    segment_path.write_bytes(b"media")
+    map_dir = downloader._task_dir() / "maps"
+    map_dir.mkdir(parents=True, exist_ok=True)
+    init_path = map_dir / "safe.init"
+    init_path.write_bytes(b"init")
+    recorded = [{
+        "index": 0,
+        "url": "https://example.test/part.m4s?token=segment-secret",
+        "duration": 4.0,
+        "media_sequence": 1,
+        "discontinuity": False,
+        "init_path": str(init_path),
+    }]
+
+    downloader._save_live_state(recorded, 4.0)
+    raw = (downloader._task_dir() / "live_state.json").read_text(encoding="utf-8")
+    state = json.loads(raw)
+    restored: list[dict] = []
+    duration = downloader._restore_live_segments(state, restored)
+
+    assert "manifest-secret" not in raw
+    assert "segment-secret" not in raw
+    assert "https://" not in raw
+    assert state["version"] == 3
+    assert restored[0]["init_path"] == str(init_path.resolve())
+    assert duration == pytest.approx(4.0)
+
+
+def test_live_checkpoint_rejects_init_path_outside_task_directory(tmp_path):
+    task = _task(tmp_path)
+    downloader = _downloader(task)
+    (downloader._seg_dir() / "000000.seg").write_bytes(b"media")
+    outside = tmp_path / "outside.init"
+    outside.write_bytes(b"must-not-be-used")
+    restored: list[dict] = []
+
+    duration = downloader._restore_live_segments({
+        "version": 1,
+        "segments": [{
+            "index": 0,
+            "url": "https://example.test/part.m4s",
+            "duration": 4.0,
+            "media_sequence": 1,
+            "init_path": str(outside),
+        }],
+    }, restored)
+
+    assert duration == 0
+    assert restored == []
+
+
 def test_stale_window_replay_is_not_treated_as_sequence_reset(tmp_path, monkeypatch):
     monkeypatch.setattr(HLSDownloader, "_live_wait", _instant_wait)
     url = "https://example.test/live.m3u8"
@@ -388,7 +464,7 @@ def test_full_run_records_live_stream_to_final_file(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         hls_module, "_create_hls_client",
-        lambda concurrency: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        lambda *_args: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
 
     async def fake_merge(*, seg_dir, output_path, segments, **kwargs):
@@ -648,7 +724,7 @@ def test_full_run_merges_saved_recording_when_manifest_is_gone(tmp_path, monkeyp
 
     monkeypatch.setattr(
         hls_module, "_create_hls_client",
-        lambda concurrency: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        lambda *_args: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
     monkeypatch.setattr(
         hls_module, "retry_delay_seconds", lambda *_args: 0
@@ -693,30 +769,62 @@ def test_full_run_merges_saved_recording_when_manifest_is_gone(tmp_path, monkeyp
     asyncio.run(run())
 
 
-def test_full_run_rejects_live_master_with_external_audio(tmp_path, monkeypatch):
+def test_full_run_records_and_muxes_live_master_with_external_audio(tmp_path, monkeypatch):
+    monkeypatch.setattr(HLSDownloader, "_live_wait", _instant_wait)
     master_url = "https://example.test/master.m3u8"
-    responses = {
-        master_url: """#EXTM3U
+    video_url = "https://example.test/video.m3u8"
+    audio_url = "https://example.test/audio.m3u8"
+    master = """#EXTM3U
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="chinese",URI="audio.m3u8"
 #EXT-X-STREAM-INF:BANDWIDTH=2000,AUDIO="aud"
 video.m3u8
-""",
-        "https://example.test/video.m3u8": _live_playlist(0, ["s0.ts"]),
-    }
+"""
+    polls = {video_url: 0, audio_url: 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text=responses[str(request.url)])
+        target = str(request.url)
+        if target == master_url:
+            return httpx.Response(200, text=master)
+        if target in polls:
+            polls[target] += 1
+            name = "video.ts" if target == video_url else "audio.aac"
+            return httpx.Response(
+                200,
+                text=_live_playlist(0, [name], ended=polls[target] > 1),
+            )
+        if target == "https://example.test/video.ts":
+            return httpx.Response(200, content=b"video")
+        if target == "https://example.test/audio.aac":
+            return httpx.Response(200, content=b"audio")
+        return httpx.Response(404)
 
     monkeypatch.setattr(
         hls_module, "_create_hls_client",
-        lambda concurrency: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        lambda *_args: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
+
+    async def fake_merge(*, seg_dir, output_path, segments, **kwargs):
+        payload = b"".join(
+            (seg_dir / f"{segment['index']:06d}.seg").read_bytes()
+            for segment in segments
+        )
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(payload)
+
+    async def fake_mux(*, video_path, audio_path, output_path, **kwargs):
+        payload = Path(video_path).read_bytes() + b"+" + Path(audio_path).read_bytes()
+        Path(output_path).write_bytes(payload)
+
+    monkeypatch.setattr(hls_module, "merge_segments", fake_merge)
+    monkeypatch.setattr(hls_module, "mux_media_tracks", fake_mux)
 
     async def run():
         task = _task(tmp_path, master_url)
         downloader = HLSDownloader(task)
         await downloader.run()
-        assert task.status is TaskStatus.UNSUPPORTED
-        assert "分离" in task.error_message
+        assert task.status is TaskStatus.DONE
+        assert Path(task.output_path).read_bytes() == b"video+audio"
+        assert polls[video_url] >= 2
+        assert polls[audio_url] >= 1
 
     asyncio.run(run())

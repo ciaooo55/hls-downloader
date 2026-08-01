@@ -99,7 +99,7 @@ def _wait_presenter(timeout: float = 18.0) -> None:
         return
 
 
-def _ensure_app() -> None:
+def _ensure_app(require_presenter: bool = True) -> None:
     started = False
     try:
         _request("GET", "/health")
@@ -115,9 +115,10 @@ def _ensure_app() -> None:
                 pass
         else:
             raise RuntimeError("桌面下载器未启动或无法连接")
-    # Cold start: health is live before the desktop shell registers its session,
-    # so wait for the desktop presenter before accepting handoff offers.
-    _wait_presenter(18.0 if started else 2.5)
+    if require_presenter:
+        # Cold start: health is live before the desktop shell registers its
+        # session, so wait before accepting operations that need desktop UI.
+        _wait_presenter(18.0 if started else 2.5)
 
 
 def dispatch(message: dict) -> dict:
@@ -127,8 +128,8 @@ def dispatch(message: dict) -> dict:
         "set_takeover_settings", "push_to_tv", "media_push", "media_push_status",
     }:
         raise ValueError("不支持的 Native Messaging 操作")
-    _ensure_app()
-    _request(
+    _ensure_app(operation in {"offer", "media_push"})
+    browser_status = _request(
         "POST",
         "/browser/ping",
         {
@@ -140,11 +141,20 @@ def dispatch(message: dict) -> dict:
     if operation == "ping":
         health = _request("GET", "/health")
         current = _request("GET", "/settings")
+        bridge_base, bridge_token = _settings()
         return {
             "ok": True,
             "version": health.get("version", ""),
+            # Native Messaging is the trusted pairing/bootstrap channel. The
+            # extension then uses loopback HTTP for concurrent heartbeats and
+            # handoffs, falling back here if the core restarts.
+            "bridge_base": bridge_base,
+            "bridge_token": bridge_token,
             "takeover_enabled": bool(current.get("browser_takeover_enabled", True)),
             "takeover_minimum_bytes": max(0, int(current.get("browser_takeover_min_mb", 0) or 0)) * 1024 * 1024,
+            "recommended_extension_version": str(browser_status.get("recommended_version", "")),
+            "minimum_extension_version": str(browser_status.get("minimum_version", "")),
+            "extension_release_url": str(browser_status.get("release_url", "")),
         }
     if operation == "set_takeover_settings":
         payload = {}
@@ -181,14 +191,26 @@ def dispatch(message: dict) -> dict:
     return {"ok": True, "handoff": _request("GET", f"/browser/handoffs/{handoff_id}")}
 
 
+def _read_exact(stream, length: int) -> bytes:
+    chunks = bytearray()
+    while len(chunks) < length:
+        piece = stream.read(length - len(chunks))
+        if not piece:
+            raise EOFError("Native Messaging 消息被截断")
+        chunks.extend(piece)
+    return bytes(chunks)
+
+
 def _read_message() -> dict | None:
     raw = sys.stdin.buffer.read(4)
     if not raw:
         return None
+    if len(raw) != 4:
+        raw += _read_exact(sys.stdin.buffer, 4 - len(raw))
     length = struct.unpack("<I", raw)[0]
     if length > 4 * 1024 * 1024:
         raise ValueError("Native Messaging 消息过大")
-    return json.loads(sys.stdin.buffer.read(length).decode("utf-8"))
+    return json.loads(_read_exact(sys.stdin.buffer, length).decode("utf-8"))
 
 
 def _write_message(message: dict) -> None:
@@ -200,13 +222,22 @@ def _write_message(message: dict) -> None:
 
 def main() -> int:
     while True:
+        message = None
         try:
             message = _read_message()
             if message is None:
                 return 0
-            _write_message(dispatch(message))
+            response = dispatch(message)
+            request_id = str(message.get("__request_id", ""))
+            if request_id:
+                response = {**response, "__request_id": request_id}
+            _write_message(response)
         except Exception as exc:
-            _write_message({"ok": False, "error": str(exc)})
+            request_id = str(message.get("__request_id", "")) if isinstance(message, dict) else ""
+            response = {"ok": False, "error": str(exc)}
+            if request_id:
+                response["__request_id"] = request_id
+            _write_message(response)
 
 
 if __name__ == "__main__":

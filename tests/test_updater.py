@@ -1,8 +1,12 @@
 import hashlib
 import io
 import json
+import os
+from pathlib import Path
 import time
 import urllib.error
+import asyncio
+import zipfile
 from dataclasses import replace
 from email.message import Message
 from types import SimpleNamespace
@@ -14,7 +18,7 @@ from fastapi.testclient import TestClient
 from backend.app import updater
 from backend.app import api as api_module
 from backend.app.config import settings
-from backend.app.models import Task
+from backend.app.models import Task, TaskStatus
 from backend.app.updater import UpdateError, UpdateInfo
 
 
@@ -46,6 +50,17 @@ def _info(data: bytes, **changes) -> UpdateInfo:
         notes="release notes",
     )
     return replace(base, **changes)
+
+
+def _portable_bytes() -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as package:
+        package.writestr("HLSDownloader.exe", b"MZdesktop")
+        package.writestr("HLSDownloaderCore.exe", b"MZcore")
+        package.writestr("portable", b"")
+        package.writestr("scripts/upgrade-portable.ps1", b"Write-Host upgrade")
+        package.writestr("scripts/shutdown-running.ps1", b"exit 0")
+    return output.getvalue()
 
 
 def test_semantic_version_comparison_handles_prefixes_and_padding():
@@ -102,6 +117,62 @@ def test_update_check_rejects_untrusted_download_host():
         updater.check_for_update(
             opener=lambda request, timeout: FakeResponse(json.dumps(payload).encode())
         )
+
+
+def test_portable_update_check_selects_portable_asset(monkeypatch, tmp_path):
+    data = _portable_bytes()
+    root = tmp_path / "portable"
+    (root / "scripts").mkdir(parents=True)
+    (root / "portable").write_bytes(b"")
+    (root / "scripts" / "upgrade-portable.ps1").write_text("# upgrade", encoding="utf-8")
+    payload = {
+        "tag_name": "v9.0.0",
+        "assets": [{
+            "name": updater.portable_asset_name("9.0.0"),
+            "size": len(data),
+            "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
+            "browser_download_url": (
+                "https://github.com/ciaooo55/hls-downloader/releases/download/"
+                "v9.0.0/HLSDownloader-v9.0.0-Windows-x64-Portable.zip"
+            ),
+        }],
+    }
+    monkeypatch.setattr(
+        updater,
+        "RUNTIME_PATHS",
+        SimpleNamespace(mode="portable", project_root=root, data_root=root),
+    )
+
+    info = updater.check_for_update(
+        opener=lambda request, timeout: FakeResponse(json.dumps(payload).encode())
+    )
+
+    assert info.asset_kind == "portable"
+    assert info.can_auto_install is True
+    assert info.download_url.endswith("-Portable.zip")
+
+
+def test_portable_archive_validation_and_safe_extraction(tmp_path):
+    archive = tmp_path / "portable.zip"
+    archive.write_bytes(_portable_bytes())
+
+    updater.validate_portable_archive(archive)
+    extracted = updater.extract_portable_update(archive, "9.0.0")
+    try:
+        assert (extracted / "HLSDownloader.exe").is_file()
+        assert (extracted / "scripts" / "upgrade-portable.ps1").is_file()
+    finally:
+        import shutil
+
+        shutil.rmtree(extracted, ignore_errors=True)
+
+
+def test_portable_archive_rejects_path_traversal(tmp_path):
+    archive = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("../outside.txt", b"bad")
+    with pytest.raises(UpdateError, match="不安全"):
+        updater.validate_portable_archive(archive)
 
 
 def test_update_check_does_not_depend_on_an_unpublished_checksum_asset():
@@ -237,6 +308,9 @@ def test_update_cache_cleanup_removes_only_update_installers(monkeypatch, tmp_pa
     stale.write_bytes(b"old")
     partial.write_bytes(b"partial")
     unrelated.write_bytes(b"keep")
+    old = time.time() - updater.UPDATE_CACHE_MAX_AGE_SECONDS - 60
+    os.utime(stale, (old, old))
+    os.utime(partial, (old, old))
     monkeypatch.setattr(updater, "get_update_directory", lambda: downloads)
     monkeypatch.setattr(
         updater,
@@ -249,6 +323,24 @@ def test_update_cache_cleanup_removes_only_update_installers(monkeypatch, tmp_pa
     assert not stale.exists()
     assert not partial.exists()
     assert unrelated.exists()
+
+
+def test_update_cache_cleanup_preserves_fresh_resumable_downloads(monkeypatch, tmp_path):
+    downloads = tmp_path / "downloads"
+    updates = tmp_path / "data" / "updates"
+    downloads.mkdir()
+    updates.mkdir(parents=True)
+    installer = downloads / "HLSDownloader-Update-9.0.0.exe"
+    partial = updates / "HLSDownloader-Update-9.0.0.exe.part"
+    installer.write_bytes(b"MZfresh")
+    partial.write_bytes(b"resumable")
+    monkeypatch.setattr(updater, "get_update_directory", lambda: downloads)
+    monkeypatch.setattr(updater, "RUNTIME_PATHS", SimpleNamespace(data_root=tmp_path / "data"))
+
+    updater.cleanup_update_cache(now=time.time())
+
+    assert installer.read_bytes() == b"MZfresh"
+    assert partial.read_bytes() == b"resumable"
 
 
 def test_update_service_never_launches_installer_twice(monkeypatch, tmp_path):
@@ -347,5 +439,213 @@ def test_managed_update_is_a_resumable_download_task(monkeypatch, tmp_path):
     task = __import__("asyncio").run(updater.queue_update_download(info, manager))
 
     assert task.engine_state["is_update"] is True
-    assert task.engine_state["update_identity"] == f"{info.latest_version}:{info.digest}"
+    assert task.engine_state["update_identity"] == f"installer:{info.latest_version}:{info.digest}"
     assert manager.started == [task.id]
+
+
+def test_failed_managed_update_task_is_retried(monkeypatch, tmp_path):
+    info = _info(b"MZsetup")
+
+    class FakeManager:
+        def __init__(self):
+            task = Task(id="failed-update", url=info.download_url)
+            task.status = TaskStatus.FAILED
+            task.engine_state["update_identity"] = f"installer:{info.latest_version}:{info.digest}"
+            self.tasks = {task.id: task}
+            self.retried = []
+
+        async def retry_task(self, task_id):
+            self.retried.append(task_id)
+
+        async def _save_db(self, _task):
+            return None
+
+    manager = FakeManager()
+    task = __import__("asyncio").run(updater.queue_update_download(info, manager))
+
+    assert task.id == "failed-update"
+    assert manager.retried == [task.id]
+
+
+def test_missing_completed_update_file_is_downloaded_again(tmp_path):
+    info = _info(b"MZsetup")
+
+    class FakeManager:
+        def __init__(self):
+            task = Task(id="missing-update", url=info.download_url)
+            task.status = TaskStatus.DONE
+            task.output_path = str(tmp_path / "removed-setup.exe")
+            task.engine_state["update_identity"] = f"installer:{info.latest_version}:{info.digest}"
+            self.tasks = {task.id: task}
+            self.retried = []
+
+        async def _save_db(self, _task):
+            return None
+
+        async def retry_task(self, task_id):
+            self.retried.append(task_id)
+
+    manager = FakeManager()
+    task = asyncio.run(updater.queue_update_download(info, manager))
+
+    assert task.status is TaskStatus.FAILED
+    assert task.error_code == "UPDATE_INSTALLER_MISSING"
+    assert manager.retried == [task.id]
+
+
+def test_reused_managed_update_restores_trusted_launch_metadata(monkeypatch, tmp_path):
+    data = b"MZsetup"
+    info = _info(data)
+
+    class FakeManager:
+        def __init__(self):
+            task = Task(id="restored-update", url=info.download_url)
+            task.status = TaskStatus.DONE
+            task.output_path = str(tmp_path / "setup.exe")
+            task.engine_state["update_identity"] = f"installer:{info.latest_version}:{info.digest}"
+            self.tasks = {task.id: task}
+            self.saved = []
+
+        async def _save_db(self, task):
+            self.saved.append(task.id)
+
+    Path(tmp_path / "setup.exe").write_bytes(data)
+    manager = FakeManager()
+
+    task = asyncio.run(updater.queue_update_download(info, manager))
+
+    assert task.expected_checksum == f"sha256:{info.digest}"
+    assert task.engine_state["update_expected_size"] == len(data)
+    assert manager.saved == [task.id]
+
+
+def test_managed_update_launch_requires_hash_and_prepares_before_start(monkeypatch, tmp_path):
+    data = b"MZsetup"
+    info = _info(data)
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(data)
+    task = Task(id="launch-update", url=info.download_url)
+    task.status = TaskStatus.DONE
+    task.output_path = str(installer)
+    task.expected_checksum = f"sha256:{info.digest}"
+    task.engine_state["update_expected_size"] = len(data)
+    order = []
+
+    class FakeManager:
+        tasks = {task.id: task}
+
+        async def prepare_for_update_restart(self):
+            order.append("prepare")
+
+        async def _save_db(self, _task):
+            order.append("save")
+
+    class FakeTimer:
+        daemon = False
+
+        def __init__(self, _delay, _callback):
+            order.append("timer-created")
+
+        def start(self):
+            order.append("timer-started")
+
+    monkeypatch.setattr(api_module, "manager", FakeManager())
+    monkeypatch.setattr(api_module.subprocess, "Popen", lambda _args: order.append("launch"))
+    monkeypatch.setattr(api_module.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(api_module.update_service, "_install_started", False)
+
+    asyncio.run(api_module._launch_managed_update(task.id))
+
+    assert order[:2] == ["prepare", "launch"]
+    assert api_module.update_service._install_started is True
+
+
+def test_managed_update_launch_rejects_missing_checksum(monkeypatch, tmp_path):
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(b"MZsetup")
+    task = Task(id="unsafe-update", url="https://github.com/example")
+    task.status = TaskStatus.DONE
+    task.output_path = str(installer)
+    task.engine_state["update_expected_size"] = installer.stat().st_size
+    saved = []
+
+    class FakeManager:
+        tasks = {task.id: task}
+
+        async def prepare_for_update_restart(self):
+            pytest.fail("unsafe installer must not reach update preparation")
+
+        async def _save_db(self, saved_task):
+            saved.append(saved_task.id)
+
+    monkeypatch.setattr(api_module, "manager", FakeManager())
+    monkeypatch.setattr(api_module.subprocess, "Popen", lambda _args: pytest.fail("must not launch"))
+
+    asyncio.run(api_module._launch_managed_update(task.id))
+
+    assert task.status is TaskStatus.FAILED
+    assert task.error_code == "UPDATE_INSTALLER_INVALID"
+    assert saved == [task.id]
+    assert not installer.exists()
+
+
+def test_managed_portable_update_launches_transactional_upgrade(monkeypatch, tmp_path):
+    data = _portable_bytes()
+    archive = tmp_path / "portable.zip"
+    archive.write_bytes(data)
+    current = tmp_path / "current"
+    current.mkdir()
+    stage = tmp_path / "extracted"
+    (stage / "scripts").mkdir(parents=True)
+    upgrade_script = stage / "scripts" / "upgrade-portable.ps1"
+    upgrade_script.write_text("# upgrade", encoding="utf-8")
+    task = Task(id="portable-update", url="https://github.com/example")
+    task.status = TaskStatus.DONE
+    task.output_path = str(archive)
+    task.expected_checksum = f"sha256:{hashlib.sha256(data).hexdigest()}"
+    task.engine_state.update({
+        "update_expected_size": len(data),
+        "update_asset_kind": "portable",
+        "update_version": "9.0.0",
+    })
+    order: list[object] = []
+
+    class FakeManager:
+        tasks = {task.id: task}
+
+        async def prepare_for_update_restart(self):
+            order.append("prepare")
+
+        async def _save_db(self, _task):
+            order.append("save")
+
+    class FakeTimer:
+        daemon = False
+
+        def __init__(self, _delay, _callback):
+            order.append("timer-created")
+
+        def start(self):
+            order.append("timer-started")
+
+    monkeypatch.setattr(api_module, "manager", FakeManager())
+    monkeypatch.setattr(
+        api_module,
+        "RUNTIME_PATHS",
+        SimpleNamespace(mode="portable", project_root=current),
+    )
+    monkeypatch.setattr(api_module, "extract_portable_update", lambda *_args: stage)
+    monkeypatch.setattr(api_module.subprocess, "Popen", lambda args: order.append(args))
+    monkeypatch.setattr(api_module.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(api_module.update_service, "_install_started", False)
+
+    asyncio.run(api_module._launch_managed_update(task.id))
+
+    assert order[0] == "prepare"
+    launch = order[1]
+    assert isinstance(launch, list)
+    assert launch[0] == "powershell.exe"
+    assert str(upgrade_script) in launch
+    assert str(current) in launch
+    assert "-DeleteSourceAfterUpgrade" in launch
+    assert api_module.update_service._install_started is True

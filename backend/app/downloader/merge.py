@@ -2,11 +2,15 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import os
 import subprocess
+from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote
 
 from ..models import TaskStatus
+from ..utils import durable_replace
 
 
 PREPARE_PROGRESS_END = 30.0
@@ -27,23 +31,100 @@ def _emit_progress(task, on_progress) -> None:
         on_progress(task)
 
 
-def _combine_files(init_path: Path, segment_path: Path, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(destination.name + ".tmp")
+def _local_hls_uri(playlist_dir: Path, path: Path) -> str:
+    """Return an FFmpeg-safe URI for one downloaded local HLS resource."""
     try:
-        with temporary.open("wb") as output:
-            for source_path in (init_path, segment_path):
-                with source_path.open("rb") as source:
-                    while chunk := source.read(1024 * 1024):
-                        output.write(chunk)
-        temporary.replace(destination)
-    finally:
-        temporary.unlink(missing_ok=True)
+        relative = path.resolve().relative_to(playlist_dir.resolve())
+    except ValueError:
+        return path.resolve().as_uri()
+    return quote(relative.as_posix(), safe="/-._~")
 
 
-def _concat_line(path: Path) -> str:
-    escaped = str(path.resolve()).replace("\\", "/").replace("'", "'\\''")
-    return f"file '{escaped}'"
+def _write_local_hls_playlist(
+    destination: Path,
+    seg_dir: Path,
+    segments: list[dict],
+) -> None:
+    """Recreate HLS timeline semantics around already downloaded segments.
+
+    Concatenating ``init.mp4 + fragment.m4s`` as independent MP4 files is not
+    equivalent to HLS.  Each later fragment retains its absolute ``tfdt``
+    timestamp, so FFmpeg's concat demuxer interprets that timestamp as the
+    fragment's duration and produces an increasingly overlong movie.  A local
+    end-listed HLS manifest preserves EXT-X-MAP and discontinuity boundaries;
+    FFmpeg can then normalize the media timeline exactly as it does in a
+    player, without another network request or a lossy re-encode.
+    """
+    durations = [max(0.0, float(item.get("duration") or 0)) for item in segments]
+    target_duration = max(1, math.ceil(max(durations, default=1.0)))
+    uses_init_map = any(item.get("init_path") for item in segments)
+    lines = [
+        "#EXTM3U",
+        f"#EXT-X-VERSION:{7 if uses_init_map else 3}",
+        f"#EXT-X-TARGETDURATION:{target_duration}",
+        "#EXT-X-MEDIA-SEQUENCE:0",
+    ]
+    previous_init = ""
+    for position, segment in enumerate(segments):
+        index = int(segment["index"])
+        segment_path = seg_dir / f"{index:06d}.seg"
+        if not segment_path.exists() or segment_path.stat().st_size == 0:
+            raise FileNotFoundError(f"缺少分片: {segment_path.name}")
+
+        init_text = str(segment.get("init_path") or "")
+        init_path = Path(init_text) if init_text else None
+        if init_path is not None and (
+            not init_path.exists() or init_path.stat().st_size == 0
+        ):
+            raise FileNotFoundError(f"缺少 init map: {init_path}")
+
+        init_changed = position > 0 and init_text != previous_init
+        if position > 0 and (bool(segment.get("discontinuity")) or init_changed):
+            lines.append("#EXT-X-DISCONTINUITY")
+        if init_path is not None and init_text != previous_init:
+            uri = _local_hls_uri(destination.parent, init_path)
+            lines.append(f'#EXT-X-MAP:URI="{uri}"')
+        previous_init = init_text
+
+        duration = max(0.000001, float(segment.get("duration") or 0))
+        lines.append(f"#EXTINF:{duration:.6f},")
+        lines.append(_local_hls_uri(destination.parent, segment_path))
+    lines.append("#EXT-X-ENDLIST")
+    destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+@lru_cache(maxsize=8)
+def _local_hls_input_options(ffmpeg_path: str) -> tuple[str, ...]:
+    """Build HLS demuxer options supported by this FFmpeg executable.
+
+    Recent FFmpeg builds validate both general resource extensions and media
+    segment extensions. Older builds expose only ``allowed_extensions`` and
+    fail on an unknown option, so detect the additional guard once per binary.
+    """
+    options = ["-allowed_extensions", "ALL"]
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-hide_banner", "-h", "demuxer=hls"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            **_hidden_subprocess_kwargs(),
+        )
+        help_text = f"{result.stdout}\n{result.stderr}"
+        if "allowed_segment_extensions" in help_text:
+            options.extend(["-allowed_segment_extensions", "ALL"])
+        if "extension_picky" in help_text:
+            # Downloaded files intentionally use the neutral .seg suffix; the
+            # bytes themselves may be MPEG-TS, AAC or fMP4. FFmpeg 8 otherwise
+            # rejects a valid fMP4 fragment because its suffix differs from the
+            # init map even after both allow-lists are set to ALL.
+            options.extend(["-extension_picky", "0"])
+    except (OSError, subprocess.SubprocessError):
+        # The actual merge will report a precise startup/path error. Keeping
+        # the long-established option is the most compatible fallback here.
+        pass
+    return tuple(options)
 
 
 async def merge_segments(
@@ -58,8 +139,10 @@ async def merge_segments(
     if not segments:
         raise ValueError("没有可合并的分片")
 
-    prepared_dir = seg_dir / "prepared"
-    concat_inputs: list[Path] = []
+    local_playlist = seg_dir.parent / "local-merge.m3u8"
+    hls_input_options = await asyncio.to_thread(
+        _local_hls_input_options, ffmpeg_path
+    )
     for position, segment in enumerate(segments):
         index = int(segment["index"])
         segment_path = seg_dir / f"{index:06d}.seg"
@@ -71,16 +154,6 @@ async def merge_segments(
             init_path = Path(init_path_text)
             if not init_path.exists() or init_path.stat().st_size == 0:
                 raise FileNotFoundError(f"缺少 init map: {init_path}")
-            prepared = prepared_dir / f"{index:06d}.part"
-            await asyncio.to_thread(
-                _combine_files,
-                init_path,
-                segment_path,
-                prepared,
-            )
-            concat_inputs.append(prepared)
-        else:
-            concat_inputs.append(segment_path)
 
         if task is not None:
             percent = ((position + 1) / len(segments)) * PREPARE_PROGRESS_END
@@ -93,10 +166,11 @@ async def merge_segments(
             _emit_progress(task, on_progress)
         await asyncio.sleep(0)
 
-    concat_path = seg_dir.parent / "concat.txt"
-    concat_path.write_text(
-        "\n".join(_concat_line(path) for path in concat_inputs) + "\n",
-        encoding="utf-8",
+    await asyncio.to_thread(
+        _write_local_hls_playlist,
+        local_playlist,
+        seg_dir,
+        segments,
     )
 
     if task is not None:
@@ -113,14 +187,17 @@ async def merge_segments(
     copy_command = [
         ffmpeg_path,
         "-y",
-        "-f",
-        "concat",
-        "-safe",
-        "0",
+        "-fflags",
+        "+genpts+discardcorrupt",
+        *hls_input_options,
+        "-protocol_whitelist",
+        "file,crypto,data",
         "-i",
-        str(concat_path),
+        str(local_playlist),
         "-c",
         "copy",
+        "-avoid_negative_ts",
+        "make_zero",
         "-movflags",
         "+faststart",
         "-progress",
@@ -135,24 +212,42 @@ async def merge_segments(
             duration_sec=total_duration,
             on_progress=on_progress,
         )
+        copy_verified = False
+        if success:
+            if task is not None:
+                task.stage = "verifying"
+                task.progress.post_percent = 99.0
+                task.last_log = "正在验证无损转封装输出"
+                _emit_progress(task, on_progress)
+            try:
+                await _verify_output(ffmpeg_path, temporary_output, total_duration)
+                copy_verified = True
+            except RuntimeError as exc:
+                success = False
+                if task is not None:
+                    task.last_log = f"无损输出时间轴异常（{exc}），正在重新编码修复"
+                    _emit_progress(task, on_progress)
         if not success:
             temporary_output.unlink(missing_ok=True)
-            if task is not None:
+            if task is not None and not task.last_log.startswith("无损输出时间轴异常"):
                 task.last_log = "无损转封装失败，正在尝试重新编码"
                 _emit_progress(task, on_progress)
             encode_command = [
                 ffmpeg_path,
                 "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
+                "-fflags",
+                "+genpts+discardcorrupt",
+                *hls_input_options,
+                "-protocol_whitelist",
+                "file,crypto,data",
                 "-i",
-                str(concat_path),
+                str(local_playlist),
                 "-c:v",
                 "libx264",
                 "-c:a",
                 "aac",
+                "-avoid_negative_ts",
+                "make_zero",
                 "-movflags",
                 "+faststart",
                 "-progress",
@@ -171,13 +266,17 @@ async def merge_segments(
                 raise RuntimeError(task.last_log)
             raise RuntimeError("ffmpeg 合并失败，未返回可读取的错误信息")
 
-        if task is not None:
-            task.stage = "verifying"
-            task.progress.post_percent = 99.0
-            task.last_log = "正在验证输出文件"
-            _emit_progress(task, on_progress)
-        await _verify_output(ffmpeg_path, temporary_output, total_duration)
-        temporary_output.replace(output_path)
+        if not copy_verified:
+            if task is not None:
+                task.stage = "verifying"
+                task.progress.post_percent = 99.0
+                task.last_log = "正在验证重新编码输出"
+                _emit_progress(task, on_progress)
+            await _verify_output(ffmpeg_path, temporary_output, total_duration)
+        # FlushFileBuffers can take seconds on Windows when Defender or a
+        # network-backed download directory inspects the new media. Keep the
+        # API/event loop responsive while retaining durable atomic publish.
+        await asyncio.to_thread(durable_replace, temporary_output, output_path)
     finally:
         temporary_output.unlink(missing_ok=True)
 
@@ -187,17 +286,100 @@ async def merge_segments(
         _emit_progress(task, on_progress)
 
 
-async def _terminate_process(process: asyncio.subprocess.Process) -> None:
-    if process.returncode is not None:
+async def mux_media_tracks(
+    *,
+    video_path: Path,
+    audio_path: Path,
+    output_path: Path,
+    ffmpeg_path: str,
+    task=None,
+    total_duration: float = 0,
+    on_progress=None,
+) -> None:
+    """Mux independently recorded HLS video/audio tracks into one output."""
+    if not video_path.is_file() or video_path.stat().st_size <= 0:
+        raise FileNotFoundError("独立视频轨道不存在或为空")
+    if not audio_path.is_file() or audio_path.stat().st_size <= 0:
+        raise FileNotFoundError("独立音频轨道不存在或为空")
+    video_duration = await _probe_duration(ffmpeg_path, video_path)
+    duration_limit = video_duration if video_duration > 0 else float(total_duration or 0)
+
+    temporary = output_path.with_name(
+        f"{output_path.stem}.muxing{output_path.suffix or '.mp4'}"
+    )
+    temporary.unlink(missing_ok=True)
+    if task is not None:
+        task.status = TaskStatus.REMUXING
+        task.stage = "remuxing"
+        task.progress.post_percent = PREPARE_PROGRESS_END
+        task.last_log = "ffmpeg 正在合并独立视频与音频轨道"
+        _emit_progress(task, on_progress)
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(video_path),
+        "-i",
+        str(audio_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c",
+        "copy",
+        "-avoid_negative_ts",
+        "make_zero",
+        "-movflags",
+        "+faststart",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        *(["-t", f"{duration_limit:.6f}"] if duration_limit > 0 else []),
+        str(temporary),
+    ]
+    try:
+        if not await _run_ffmpeg(
+            command,
+            task=task,
+            duration_sec=total_duration,
+            on_progress=on_progress,
+        ):
+            detail = task.last_log if task is not None else ""
+            raise RuntimeError(detail or "ffmpeg 无法合并独立视频与音频轨道")
+        await _verify_output(ffmpeg_path, temporary, total_duration)
+        await asyncio.to_thread(durable_replace, temporary, output_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+async def _start_process(command: list[str]) -> subprocess.Popen[bytes]:
+    """Start media tools outside the asyncio thread.
+
+    Windows may synchronously scan a newly extracted executable during
+    CreateProcess.  Launching packaged FFmpeg/FFprobe directly from the event
+    loop can therefore freeze every API request for several seconds even
+    though the child process itself is asynchronous.
+    """
+    return await asyncio.to_thread(
+        subprocess.Popen,
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **_hidden_subprocess_kwargs(),
+    )
+
+
+async def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
         return
     with contextlib.suppress(ProcessLookupError):
-        process.terminate()
+        await asyncio.to_thread(process.terminate)
     try:
-        await asyncio.wait_for(process.wait(), timeout=5)
+        await asyncio.wait_for(asyncio.to_thread(process.wait), timeout=5)
     except asyncio.TimeoutError:
         with contextlib.suppress(ProcessLookupError):
-            process.kill()
-        await process.wait()
+            await asyncio.to_thread(process.kill)
+        await asyncio.to_thread(process.wait)
 
 
 async def _run_ffmpeg(
@@ -206,13 +388,15 @@ async def _run_ffmpeg(
     duration_sec: float = 0,
     on_progress=None,
 ) -> bool:
-    process: asyncio.subprocess.Process | None = None
+    process: subprocess.Popen[bytes] | None = None
     stderr_tail = bytearray()
     stderr_task: asyncio.Task | None = None
 
     async def read_stderr() -> None:
+        if process is None or process.stderr is None:
+            return
         while True:
-            chunk = await process.stderr.read(4096)
+            chunk = await asyncio.to_thread(process.stderr.read, 4096)
             if not chunk:
                 return
             stderr_tail.extend(chunk)
@@ -220,15 +404,14 @@ async def _run_ffmpeg(
                 del stderr_tail[:-STDERR_TAIL_LIMIT]
 
     try:
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            **_hidden_subprocess_kwargs(),
-        )
+        process = await _start_process(command)
+        if process.stdout is None or process.stderr is None:
+            raise RuntimeError("ffmpeg 标准输出管道创建失败")
         stderr_task = asyncio.create_task(read_stderr())
         while True:
-            line = await asyncio.wait_for(process.stdout.readline(), timeout=600)
+            line = await asyncio.wait_for(
+                asyncio.to_thread(process.stdout.readline), timeout=600
+            )
             if not line:
                 break
             key, separator, value = line.decode("utf-8", errors="replace").strip().partition("=")
@@ -249,7 +432,7 @@ async def _run_ffmpeg(
                     )
                     _emit_progress(task, on_progress)
 
-        return_code = await process.wait()
+        return_code = await asyncio.to_thread(process.wait)
         if stderr_task:
             await stderr_task
         if return_code != 0:
@@ -294,27 +477,33 @@ def _ffprobe_path(ffmpeg_path: str) -> str:
     return str(path.with_name(f"ffprobe{suffix}"))
 
 
-async def _probe_duration(ffmpeg_path: str, input_file: Path) -> float:
+def _probe_duration_sync(ffmpeg_path: str, input_file: Path) -> float:
     try:
-        process = await asyncio.create_subprocess_exec(
-            _ffprobe_path(ffmpeg_path),
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_format",
-            str(input_file),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        completed = subprocess.run(
+            [
+                _ffprobe_path(ffmpeg_path),
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                str(input_file),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
             **_hidden_subprocess_kwargs(),
         )
-        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=30)
-        if process.returncode != 0:
+        if completed.returncode != 0:
             return 0.0
-        data = json.loads(stdout.decode("utf-8", errors="replace"))
+        data = json.loads(completed.stdout.decode("utf-8", errors="replace"))
         return float(data.get("format", {}).get("duration", 0) or 0)
     except Exception:
         return 0.0
+
+
+async def _probe_duration(ffmpeg_path: str, input_file: Path) -> float:
+    return await asyncio.to_thread(_probe_duration_sync, ffmpeg_path, input_file)
 
 
 async def _verify_output(
@@ -330,6 +519,11 @@ async def _verify_output(
     if expected_duration >= 3 and actual_duration > 0:
         minimum = expected_duration * 0.9
         if actual_duration < minimum:
+            raise RuntimeError(
+                f"输出时长异常，期望约 {expected_duration:.1f}s，实际 {actual_duration:.1f}s"
+            )
+        maximum = expected_duration + max(5.0, expected_duration * 0.1)
+        if actual_duration > maximum:
             raise RuntimeError(
                 f"输出时长异常，期望约 {expected_duration:.1f}s，实际 {actual_duration:.1f}s"
             )

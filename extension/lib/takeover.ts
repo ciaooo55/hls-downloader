@@ -38,7 +38,7 @@ export function desktopAcceptedHandoff(response: unknown): boolean {
 }
 
 export function handoffTerminalStatus(status?: string): boolean {
-  return Boolean(status && status !== 'pending' && status !== 'accepting')
+  return ['accepted', 'canceled', 'rejected', 'expired', 'failed'].includes(status || '')
 }
 
 export function handoffStatusLabel(status?: string): string {

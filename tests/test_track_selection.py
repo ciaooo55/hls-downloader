@@ -2,12 +2,11 @@ import asyncio
 from pathlib import Path
 
 import httpx
-import pytest
 
 from backend.app.downloader import dash_native as native_module
 from backend.app.downloader.dash_native import NativeDashEngine
 from backend.app.downloader.mpd import parse_mpd
-from backend.app.downloader.parser import list_hls_video_tracks
+from backend.app.downloader.parser import list_hls_audio_tracks, list_hls_video_tracks, parse_m3u8
 from backend.app.models import Task, TaskStatus
 
 
@@ -156,6 +155,22 @@ def test_selected_rendition_keeps_external_audio_detection():
     # The separate audio rendition is still reported, so the engine routes
     # to the muxing path instead of downloading video without sound.
     assert parsed["external_audio"] is True
+    assert parsed["external_audio_url"] == "https://cdn.test/audio.m3u8"
+
+
+def test_list_hls_audio_tracks_and_select_language():
+    master = """#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="English",LANGUAGE="en",DEFAULT=YES,URI="en.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="中文",LANGUAGE="zh",URI="zh.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,AUDIO="aud"
+video.m3u8
+"""
+    tracks = list_hls_audio_tracks("https://cdn.test/master.m3u8", master)
+    assert [track["lang"] for track in tracks] == ["en", "zh"]
+    parsed = parse_m3u8(
+        "https://cdn.test/master.m3u8", master, preferred_audio="zh"
+    )
+    assert parsed["external_audio_url"] == "https://cdn.test/zh.m3u8"
 
 
 def test_stale_rendition_selection_falls_back_to_best():

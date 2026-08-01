@@ -9,6 +9,30 @@ from backend.app.downloader.mpd import (
 from backend.app.downloader.parser import UnsupportedPlaylistError
 
 
+def test_mpd_inherits_raw_playlist_token_to_relative_base_and_segments():
+    mpd = f"""<MPD {MPD_NS} type="static" mediaPresentationDuration="PT4S">
+  <Period>
+    <AdaptationSet mimeType="video/mp4">
+      <Representation id="v" bandwidth="1" width="2" height="2">
+        <BaseURL>video/</BaseURL>
+        <SegmentTemplate media="$Number$.m4s" initialization="init.mp4"
+          duration="4" timescale="1"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"""
+
+    parsed = parse_mpd(
+        "https://cdn.test/root/main.mpd?token=a%2Fb%2Bc&_HLS_msn=9",
+        mpd,
+    )
+
+    assert parsed["video"]["init_url"] == (
+        "https://cdn.test/root/video/init.mp4?token=a%2Fb%2Bc"
+    )
+    assert parsed["video"]["segments"][0]["url"] == (
+        "https://cdn.test/root/video/1.m4s?token=a%2Fb%2Bc"
+    )
 MPD_NS = 'xmlns="urn:mpeg:dash:schema:mpd:2011"'
 
 
@@ -309,3 +333,31 @@ def test_dynamic_and_multi_period_fall_back():
         parse_mpd("https://cdn.test/m.mpd", multi)
     with pytest.raises(NativeDashUnsupported):
         parse_mpd("https://cdn.test/m.mpd", "#EXTM3U not xml")
+
+
+def test_parse_exposes_dash_webvtt_subtitle_tracks():
+    manifest = f"""<MPD {MPD_NS} mediaPresentationDuration="PT4S">
+  <Period>
+    <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1000">
+      <BaseURL>video.mp4</BaseURL>
+    </Representation></AdaptationSet>
+    <AdaptationSet contentType="text" mimeType="text/vtt" lang="zh" label="中文">
+      <Representation id="sub-zh" bandwidth="100">
+        <SegmentList duration="2" timescale="1">
+          <SegmentURL media="sub-0.vtt"/><SegmentURL media="sub-1.vtt"/>
+        </SegmentList>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"""
+
+    parsed = parse_mpd("https://example.test/manifest.mpd", manifest)
+
+    assert len(parsed["subtitle_tracks"]) == 1
+    track = parsed["subtitle_tracks"][0]
+    assert track["lang"] == "zh"
+    assert track["name"] == "中文"
+    assert [item["url"] for item in track["segments"]] == [
+        "https://example.test/sub-0.vtt",
+        "https://example.test/sub-1.vtt",
+    ]

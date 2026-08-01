@@ -10,6 +10,7 @@ from ..checksum import verify_task_checksum
 from ..models import Task, TaskStatus
 from ..utils import sanitize_filename
 from ..request_context import build_task_headers
+from ..network_proxy import curl_proxy
 from .dash_native import NativeDashEngine
 from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
 from .errors import diagnose_download_error, format_download_error
@@ -192,6 +193,9 @@ class DashDownloader(SeeklessEngine):
             "progress_hooks": [progress_hook],
             "noplaylist": True,
         }
+        proxy = curl_proxy(task.url)
+        if proxy is not None:
+            options["proxy"] = proxy
         with yt_dlp.YoutubeDL(options) as downloader:
             info = downloader.extract_info(task.url, download=True)
             prepared = Path(downloader.prepare_filename(info))

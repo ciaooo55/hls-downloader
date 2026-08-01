@@ -1,4 +1,6 @@
 import importlib
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -96,7 +98,12 @@ def test_app_icon_is_used_by_executable_tray_ui_and_installer():
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
     nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
-    desktop = (root / "backend" / "desktop.py").read_text(encoding="utf-8")
+    tauri_config = (root / "frontend" / "src-tauri" / "tauri.conf.json").read_text(
+        encoding="utf-8"
+    )
+    tauri_main = (root / "frontend" / "src-tauri" / "src" / "main.rs").read_text(
+        encoding="utf-8"
+    )
 
     assert (root / "assets" / "app-icon.ico").stat().st_size > 10_000
     assert (root / "assets" / "app-icon.png").stat().st_size > 10_000
@@ -109,18 +116,22 @@ def test_app_icon_is_used_by_executable_tray_ui_and_installer():
     assert 'VIProductVersion "${APP_FILE_VERSION}"' in nsis_script
     assert '"FileVersion" "${APP_FILE_VERSION}"' in nsis_script
     assert '"/DAPP_FILE_VERSION=$FileVersion"' in build_script
-    assert 'assets" / "app-icon.png"' in desktop
+    assert '"../../assets/app-icon.png"' in tauri_config
+    assert '"../../assets/app-icon.ico"' in tauri_config
+    assert "app.default_window_icon()" in tauri_main
 
 
 def test_desktop_ui_bypasses_webview_cache_and_displays_version():
     root = Path(__file__).resolve().parent.parent
-    desktop = (root / "backend" / "desktop.py").read_text(encoding="utf-8")
     main = (root / "backend" / "app" / "main.py").read_text(encoding="utf-8")
     app = (root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
     toolbar = (root / "frontend" / "src" / "components" / "DesktopToolbar.tsx").read_text(encoding="utf-8")
+    tauri_config = (root / "frontend" / "src-tauri" / "tauri.conf.json").read_text(
+        encoding="utf-8"
+    )
 
-    assert "/ui?version={APP_VERSION}" in desktop
     assert '"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"' in main
+    assert '"frontendDist": "../dist"' in tauri_config
     assert "setAppVersion(healthData.version" in app
     assert "当前 v${props.version}" in toolbar
     assert 'className="tool-button update-button"' in toolbar
@@ -137,7 +148,152 @@ def test_windows_build_emits_setup_and_portable_assets():
     assert 'HLSDownloaderNativeHost-$Version.exe' in build_script
     assert 'Join-Path $PortableStage "native-host\\manifests"' in build_script
     assert '"chrome-$Version.json"' in build_script
+    assert 'Join-Path $Root "scripts\\upgrade-portable.ps1"' in build_script
+    assert "upgrade-portable.ps1 -TargetDir" in build_script
     assert "Compress-Archive" in build_script
+
+
+def test_installer_and_portable_upgrade_stop_partial_old_installs():
+    root = Path(__file__).resolve().parent.parent
+    nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
+    portable_upgrade = (root / "scripts" / "upgrade-portable.ps1").read_text(encoding="utf-8")
+
+    assert '!define APP_VERSION "3.0.8"' in nsis_script
+    close_macro = nsis_script[nsis_script.index("!macro CloseRunningApp") : nsis_script.index("!macroend", nsis_script.index("!macro CloseRunningApp"))]
+    assert 'IfFileExists "$INSTDIR\\HLSDownloader.exe"' not in close_macro
+    assert 'shutdown-running.ps1" -InstallDir "$INSTDIR"' in close_macro
+    assert "shutdown-running.ps1" in portable_upgrade
+    assert "register-native-host.ps1" in portable_upgrade
+    assert "RegistryPrefix" in portable_upgrade
+    assert '"config.json"' in portable_upgrade
+    assert '"data.db"' in portable_upgrade
+
+
+def test_installer_unregistration_survives_a_missing_legacy_helper():
+    root = Path(__file__).resolve().parents[1]
+    nsis = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
+    disconnect = nsis.split("!macro DisconnectLegacyNativeHost", 1)[1].split("!macroend", 1)[0]
+
+    assert 'DeleteRegKey HKCU "Software\\Google\\Chrome\\NativeMessagingHosts' in disconnect
+    assert 'DeleteRegKey HKCU "Software\\Mozilla\\NativeMessagingHosts' in disconnect
+    assert "Var RemoveDownloads" in nsis
+    assert 'StrCpy $RemoveDownloads "delete"' in nsis
+    assert '${If} $RemoveDownloads == "delete"' in nsis
+    assert "Function .onInstFailed" in nsis
+    assert "!define MUI_CUSTOMFUNCTION_ABORT RestoreBrowserRegistrationAfterAbort" in nsis
+    assert "Function .onUserAbort" not in nsis
+    assert "Call RestoreBrowserRegistrationAfterAbort" in nsis
+    install_section = nsis.split('Section "Install"', 1)[1].split("SectionEnd", 1)[0]
+    assert install_section.index("InitPluginsDir") < install_section.index('File /oname=shutdown-running.ps1')
+    close_macro = nsis.split("!macro CloseRunningApp", 1)[1].split("!macroend", 1)[0]
+    assert "SetErrorLevel 2" in close_macro
+    assert "Abort" in close_macro
+
+
+def test_portable_upgrade_smoke_is_isolated_from_the_real_browser_registry():
+    root = Path(__file__).resolve().parent.parent
+    smoke = (root / "scripts" / "smoke-portable-upgrade.ps1").read_text(encoding="utf-8")
+
+    assert "HLSDownloaderPortableUpgradeSmoke" in smoke
+    assert "Refusing to use an upgrade smoke path outside the project" in smoke
+    assert "PreservedConfig" in smoke
+    assert "OfficialAppProcessCountAfter" in smoke
+    assert "packageVersion" in smoke
+
+
+def test_installer_upgrade_smoke_isolated_and_runs_from_release_build():
+    root = Path(__file__).resolve().parent.parent
+    smoke = (root / "scripts" / "smoke-installer-upgrade.ps1").read_text(encoding="utf-8")
+    nsis = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
+    build = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
+
+    assert "/BUILD-SMOKE=1" in smoke
+    assert "HLSDownloaderInstallerSmoke" in smoke
+    assert "Assert-OfficialState" in smoke
+    assert "CoverInstallClosedRunningApp" in smoke
+    assert "UninstallClosedRunningApp" in smoke
+    assert 'StrCpy $NativeRegistryArgs \'-RegistryPrefix "HKCU:\\Software\\HLSDownloaderInstallerSmoke"\'' in nsis
+    assert '${If} $BuildSmoke != "1"' in nsis
+    assert 'Invoke-Step "Smoke test installer cover upgrade and uninstall"' in build
+
+
+def _portable_upgrade_fixture(tmp_path: Path, *, registration_fails: bool = False):
+    root = Path(__file__).resolve().parent.parent
+    source = tmp_path / "new-portable"
+    target = tmp_path / "old-portable"
+    for folder in (source / "scripts", target / "scripts"):
+        folder.mkdir(parents=True)
+    shutil.copy2(root / "scripts" / "upgrade-portable.ps1", source / "scripts" / "upgrade-portable.ps1")
+
+    for folder, version in ((source, "new"), (target, "old")):
+        (folder / "portable").write_text("", encoding="utf-8")
+        (folder / "HLSDownloader.exe").write_text(version, encoding="utf-8")
+        (folder / "HLSDownloaderCore.exe").write_text(version, encoding="utf-8")
+    (source / "new-program-file.txt").write_text("new", encoding="utf-8")
+    (target / "old-program-file.txt").write_text("old", encoding="utf-8")
+    (source / "config.json").write_text('{"version":"new"}', encoding="utf-8")
+    (target / "config.json").write_text('{"version":"old"}', encoding="utf-8")
+    (target / "data.db").write_text("old task database", encoding="utf-8")
+    helper = (
+        "param([int]$TimeoutSeconds=1,[string]$InstallDir='',[switch]$IncludeNativeHost)\n"
+        "$global:LASTEXITCODE=0\n"
+    )
+    (source / "scripts" / "shutdown-running.ps1").write_text(helper, encoding="utf-8")
+    old_register = (
+        "param([switch]$Unregister,[string]$RegistryPrefix='')\n"
+        "$global:LASTEXITCODE=0\n"
+    )
+    new_register = old_register + ("throw 'simulated registration failure'\n" if registration_fails else "")
+    (source / "scripts" / "register-native-host.ps1").write_text(new_register, encoding="utf-8")
+    (target / "scripts" / "register-native-host.ps1").write_text(old_register, encoding="utf-8")
+    return source, target
+
+
+def test_portable_upgrade_swaps_complete_tree_and_preserves_runtime_state(tmp_path):
+    source, target = _portable_upgrade_fixture(tmp_path)
+
+    subprocess.run(
+        [
+            "pwsh", "-NoProfile", "-NonInteractive", "-File",
+            str(source / "scripts" / "upgrade-portable.ps1"),
+            "-TargetDir", str(target),
+            "-RegistryPrefix", r"HKCU:\Software\HLSDownloaderUpgradeUnitTest",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert (target / "HLSDownloader.exe").read_text(encoding="utf-8") == "new"
+    assert (target / "new-program-file.txt").read_text(encoding="utf-8") == "new"
+    assert not (target / "old-program-file.txt").exists()
+    assert (target / "config.json").read_text(encoding="utf-8") == '{"version":"old"}'
+    assert (target / "data.db").read_text(encoding="utf-8") == "old task database"
+    assert not (tmp_path / ".old-portable.hls-upgrade-new").exists()
+    assert not (tmp_path / ".old-portable.hls-upgrade-backup").exists()
+
+
+def test_portable_upgrade_restores_old_tree_when_registration_fails(tmp_path):
+    source, target = _portable_upgrade_fixture(tmp_path, registration_fails=True)
+
+    result = subprocess.run(
+        [
+            "pwsh", "-NoProfile", "-NonInteractive", "-File",
+            str(source / "scripts" / "upgrade-portable.ps1"),
+            "-TargetDir", str(target),
+            "-RegistryPrefix", r"HKCU:\Software\HLSDownloaderUpgradeUnitTest",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert (target / "HLSDownloader.exe").read_text(encoding="utf-8") == "old"
+    assert (target / "old-program-file.txt").read_text(encoding="utf-8") == "old"
+    assert not (target / "new-program-file.txt").exists()
+    assert not (tmp_path / ".old-portable.hls-upgrade-new").exists()
+    assert not (tmp_path / ".old-portable.hls-upgrade-backup").exists()
 
 
 def test_windows_build_emits_extension_assets_only_when_requested():
@@ -156,6 +312,16 @@ def test_windows_build_emits_extension_assets_only_when_requested():
     assert "if ($IncludeExtensionAssets)" in build_script
     assert "Release directory must contain exactly $($expected.Count) files" in build_script
     assert "SHA256SUMS.txt" not in build_script
+
+
+def test_tag_release_only_emits_extension_assets_when_extension_changed():
+    root = Path(__file__).resolve().parent.parent
+    workflow = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    assert "fetch-depth: 0" in workflow
+    assert "git describe --tags --abbrev=0" in workflow
+    assert "git diff --name-only $previousTag $env:GITHUB_REF_NAME -- extension" in workflow
+    assert "steps.extension-assets.outputs.include_extensions" in workflow
 
 
 def test_windows_build_uses_tools_from_path_on_clean_runner():
@@ -179,13 +345,15 @@ def test_windows_build_uses_tools_from_path_on_clean_runner():
     assert "Bundled media tool validation failed" in build_script
 
 
-def test_windows_package_includes_tray_runtime_and_clean_uninstall():
+def test_windows_package_uses_tauri_tray_and_clean_uninstall():
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
     requirements = (root / "backend" / "requirements.txt").read_text(encoding="utf-8")
     nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
+    installer_smoke = (root / "scripts" / "smoke-installer-upgrade.ps1").read_text(encoding="utf-8")
 
-    assert "pystray==" in requirements
+    assert "pystray" not in requirements
+    assert "pywebview" not in requirements
     assert "curl_cffi==0.14.0" in requirements
     assert "pnpm run tauri:build" in build_script
     assert "src-tauri\\target\\release\\HLSDownloader.exe" in build_script
@@ -197,16 +365,21 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     shutdown_script = (root / "scripts" / "shutdown-running.ps1").read_text(encoding="utf-8")
     assert "api/app/shutdown" in shutdown_script
     assert "resume_tasks=true" in shutdown_script
-    assert "taskkill.exe\" /IM HLSDownloader.exe /T /F" in shutdown_script
+    assert "function Get-TargetProcesses" in shutdown_script
+    assert "$targetRunningAtStart" in shutdown_script
+    assert "$overallDeadline" in shutdown_script
+    assert "AddSeconds([Math]::Max(3, $TimeoutSeconds))" in shutdown_script
+    assert "taskkill.exe\" /PID $desktop.Id /T /F" in shutdown_script
     assert '[System.IO.FileShare]::None' in shutdown_script
-    assert '-InstallDir "$INSTDIR" -TimeoutSeconds 20 ${IncludeNativeHost}' in nsis_script
-    assert 'CloseRunningAppRetry${Suffix}' in nsis_script
+    assert '-InstallDir "$INSTDIR" -TimeoutSeconds 12 ${IncludeNativeHost}' in nsis_script
+    assert 'CloseRunningAppRetry${Suffix}' not in nsis_script
     assert 'DisconnectLegacyNativeHost' in nsis_script
     assert 'register-native-host.ps1" -Unregister' in nsis_script
-    assert '关闭结果未确认，继续验证并覆盖程序文件' in nsis_script
+    assert '无法安全关闭运行中的程序，安装已停止' in nsis_script
+    assert "SetErrorLevel 2" in nsis_script
     assert 'CloseRunningAppAbort${Suffix}' not in nsis_script
-    assert 'StrCpy $R0 0' in nsis_script
-    assert 'IntOp $R0 $R0 + 1' in nsis_script
+    assert 'StrCpy $R0 0' not in nsis_script
+    assert 'IntOp $R0 $R0 + 1' not in nsis_script
     assert 'MB_RETRYCANCEL' not in nsis_script
     assert 'RMDir /r "$LOCALAPPDATA\\HLS Downloader"' in nsis_script
     assert nsis_script.count('RMDir /r "$LOCALAPPDATA\\HLS Downloader"') >= 3
@@ -225,10 +398,17 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     assert "$smokePortableMarker" in build_script
     assert 'Set-Content -LiteralPath $smokePortableMarker' in build_script
     assert 'Remove-Item -LiteralPath $smokePortableMarker' in build_script
+    assert 'HLS_DOWNLOADER_BUILD_SMOKE' in build_script
+    assert '[System.Net.Sockets.TcpListener]::new' in build_script
+    assert '$smokeApiBase/api/health' in build_script
     assert 'compose\\binaries\\main\\app\\HLSDownloader' not in build_script
     assert '!insertmacro DisconnectLegacyNativeHost Install' in nsis_script
     assert '!insertmacro CloseRunningApp Install "-IncludeNativeHost"' in nsis_script
     assert '!insertmacro CloseRunningApp Uninstall "-IncludeNativeHost"' in nsis_script
+    assert '!include "x64.nsh"' in nsis_script
+    assert '"$WINDIR\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe"' in nsis_script
+    assert 'Var PowerShellExe' in nsis_script
+    assert 'Get-CimInstance Win32_Process' in shutdown_script
     install_cleanup = nsis_script.index('RMDir /r "$INSTDIR\\_internal"')
     install_copy = nsis_script.index('SetOutPath "$INSTDIR\\_internal"')
     assert install_cleanup < install_copy
@@ -236,6 +416,8 @@ def test_windows_package_includes_tray_runtime_and_clean_uninstall():
     assert "Wait-Process -Id $0" in nsis_script
     assert "Remove-Item -LiteralPath '$EXEPATH'" in nsis_script
     assert "Call ScheduleSelfDelete" in nsis_script
+    assert "NSIS first launches a temporary uninstaller" in installer_smoke
+    assert "-not (Test-Path -LiteralPath $uninstaller)" in installer_smoke
 
 
 def test_windows_package_uses_onedir_and_smoke_tests_graceful_shutdown():
@@ -247,10 +429,12 @@ def test_windows_package_uses_onedir_and_smoke_tests_graceful_shutdown():
     assert "--name HLSDownloaderNativeHost" in build_script
     assert "--onefile" in build_script
     assert 'dist\\HLSDownloaderCore\\*' in build_script
-    assert 'api/app/shutdown' in build_script
+    assert r'scripts\shutdown-running.ps1' in build_script
+    assert '-InstallDir $StageDir -TimeoutSeconds 12' in build_script
     assert 'Packaged Settings schema is missing field' in build_script
     assert '$env:PYTHONPATH = ""' in build_script
-    assert 'Graceful shutdown failed' in build_script
+    assert 'Installer shutdown helper failed' in build_script
+    assert r'Remove-Item -LiteralPath "HKCU:\Software\HLSDownloaderBuildSmoke"' in build_script
     assert "Single-instance check failed" in build_script
     assert "$secondProc.WaitForExit(12000)" in build_script
     assert '${STAGE_DIR}\\_internal' in nsis_script
@@ -291,6 +475,10 @@ def test_native_host_registration_uses_a_versioned_executable_path():
     assert 'File "${STAGE_DIR}\\HLSDownloaderNativeHost.exe"' not in nsis_script
     assert 'register-native-host.ps1" -Unregister' in nsis_script
     assert r'Microsoft\Edge\NativeMessagingHosts' in script
+    assert r'BraveSoftware\Brave-Browser\NativeMessagingHosts' in script
+    assert r'Chromium\NativeMessagingHosts' in script
+    assert r'Vivaldi\NativeMessagingHosts' in script
+    assert r'Opera Software\NativeMessagingHosts' in script
     assert "RegistryPrefix" in script
     assert "smoke_native_host.py" in build_script
     assert "Native Messaging protocol smoke test failed" in build_script
@@ -298,7 +486,7 @@ def test_native_host_registration_uses_a_versioned_executable_path():
     smoke_cleanup = build_script.index('RegistryPrefix "HKCU:\\Software\\HLSDownloaderBuildSmoke" | Out-Null')
     installer_build = build_script.index('Invoke-Step "Build NSIS installer"')
     assert build_script.index('(Join-Path $ExtensionDir "native-host\\chrome.json")', smoke_cleanup) < installer_build
-    assert "正在切换 Chrome/Edge/Firefox 浏览器连接到新版本" in nsis_script
+    assert "正在切换 Chromium/Firefox 系浏览器连接到新版本" in nsis_script
     assert r'Software\Microsoft\Edge\NativeMessagingHosts' in nsis_script
 
 
@@ -310,7 +498,7 @@ def test_installer_does_not_require_a_browser_owned_native_host_to_be_writable()
     assert "Test-ApplicationFilesWritable" in shutdown_script
     assert "Native Messaging host is deliberately excluded" in shutdown_script
     assert "HLSDownloaderNativeHost.exe\"))" not in shutdown_script
-    assert 'Get-Process -Name "HLSDownloaderNativeHost*"' in shutdown_script
+    assert 'Get-TargetProcesses @("HLSDownloaderNativeHost*")' in shutdown_script
     assert "neither the current registration target nor a" in register_script
     assert 'Get-Process -Name "HLSDownloaderNativeHost*"' in register_script
 

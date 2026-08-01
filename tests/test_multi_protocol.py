@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import errno
+import json
 import os
 import time
 from pathlib import Path
@@ -10,12 +11,18 @@ import pytest
 
 from backend.app.config import settings
 from backend.app.downloader import http_file as http_file_module
-from backend.app.downloader.http_file import HTTPDownloader, _content_disposition_filename, _SpeedWindow
+from backend.app.downloader.http_file import (
+    HTTPDownloader,
+    _content_disposition_filename,
+    _ensure_filename_extension,
+    _parse_content_range,
+    _SpeedWindow,
+)
 from backend.app.downloader.engine import publish_path, task_work_dir
 from backend.app.downloader.torrent import TorrentDownloader
 from backend.app.downloader import task_manager as task_manager_module
 from backend.app.downloader.task_manager import TaskManager, resolve_task_type
-from backend.app.models import Task, TaskType
+from backend.app.models import Task, TaskStatus, TaskType
 
 
 def test_auto_task_type_recognizes_supported_sources():
@@ -49,14 +56,19 @@ def test_create_task_uses_captured_manifest_mime_when_url_has_no_extension(monke
     asyncio.run(run())
 
 
-def test_http_probe_verifies_range_when_head_omits_accept_ranges():
+def test_http_probe_verifies_range_without_using_head():
     task = Task(id="probe-range", url="http://files.test/100MB.zip", task_type=TaskType.HTTP)
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "HEAD":
             return httpx.Response(200, headers={"Content-Length": "104857600", "Content-Type": "application/zip"}, request=request)
-        assert request.headers["range"] == "bytes=0-0"
-        return httpx.Response(206, content=b"x", headers={"Content-Range": "bytes 0-0/104857600"}, request=request)
+        assert request.headers["range"] == "bytes=0-255"
+        return httpx.Response(
+            206,
+            content=b"x" * 256,
+            headers={"Content-Range": "bytes 0-255/104857600"},
+            request=request,
+        )
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
@@ -65,6 +77,30 @@ def test_http_probe_verifies_range_when_head_omits_accept_ranges():
     metadata = asyncio.run(run())
     assert metadata["ranges"] is True
     assert metadata["total"] == 104857600
+
+
+def test_http_probe_falls_back_to_plain_streamed_get_when_range_is_rejected():
+    task = Task(id="probe-no-range", url="https://files.test/video.mp4", task_type=TaskType.HTTP)
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.headers.get("range", "")))
+        if request.headers.get("range"):
+            return httpx.Response(416, request=request)
+        return httpx.Response(
+            200,
+            headers={"Content-Length": "1234", "Content-Type": "video/mp4"},
+            request=request,
+        )
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await HTTPDownloader(task)._probe(client, {})
+
+    metadata = asyncio.run(run())
+    assert requests == [("GET", "bytes=0-255"), ("GET", "")]
+    assert metadata["ranges"] is False
+    assert metadata["total"] == 1234
 
 
 def test_http_probe_follows_https_to_http_redirect_and_uses_server_filename():
@@ -90,6 +126,68 @@ def test_http_probe_follows_https_to_http_redirect_and_uses_server_filename():
     assert metadata["total"] == 5500000000
     assert metadata["filename"] == "ubuntu-desktop.iso"
     assert metadata["final_url"] == "http://cdn.test/releases/system.iso"
+
+
+def test_http_probe_reports_get_rejection_without_waiting_for_head():
+    task = Task(id="probe-forbidden", url="https://files.test/signed.mp4", task_type=TaskType.HTTP)
+    methods = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        return httpx.Response(403, request=request)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await HTTPDownloader(task)._probe(client, {})
+
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(run())
+    assert methods == ["GET"]
+
+
+def test_http_probe_retries_transient_server_failure_before_succeeding(monkeypatch):
+    task = Task(id="probe-retry", url="https://files.test/video.mp4", task_type=TaskType.HTTP)
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            return httpx.Response(503, request=request)
+        return httpx.Response(
+            206,
+            headers={"Content-Range": "bytes 0-255/4096", "Content-Type": "video/mp4"},
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        monkeypatch.setattr(http_file_module, "retry_delay_seconds", lambda *args, **kwargs: 0)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await downloader._probe_with_retry(client, downloader._headers())
+
+    metadata = asyncio.run(run())
+    assert attempts == 3
+    assert metadata["total"] == 4096
+    assert task.progress.reconnect_count == 2
+
+
+def test_http_run_stops_with_actionable_error_when_metadata_probe_never_returns(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path / "downloads"))
+    monkeypatch.setattr(settings, "temp_dir", str(tmp_path / "temp"))
+    monkeypatch.setattr(http_file_module, "PROBE_TOTAL_TIMEOUT", 0.01)
+    task = Task(id="probe-timeout", url="https://files.test/slow.mp4", task_type=TaskType.HTTP)
+
+    async def never_finishes(self, client, headers):
+        await asyncio.sleep(1)
+
+    monkeypatch.setattr(HTTPDownloader, "_probe", never_finishes)
+    asyncio.run(HTTPDownloader(task).run())
+
+    assert task.status.value == "failed"
+    assert task.error_code == "HTTP_PROBE_TIMEOUT"
+    assert task.stage == "failed"
+    assert "准备下载" in task.error_hint
 
 
 def test_http_post_replay_uses_one_post_without_probe_or_ranges(tmp_path, monkeypatch):
@@ -145,6 +243,47 @@ def test_content_disposition_handles_rfc5987_and_quoted_semicolons():
     assert _content_disposition_filename("attachment; filename*=UTF-8''%E4%B8%8B%E8%BD%BD%3B%E6%B5%8B%E8%AF%95.iso") == "下载;测试.iso"
     assert _content_disposition_filename("attachment; filename*=ISO-8859-1''caf%E9.pdf") == "café.pdf"
     assert _content_disposition_filename('attachment; filename="archive; final.zip"') == "archive; final.zip"
+
+
+def test_http_content_range_and_mime_filename_cover_non_media_files():
+    assert _parse_content_range("bytes 4-9/10") == (4, 9, 10)
+    assert _parse_content_range("4-9/10") == (4, 9, 10)
+    assert _parse_content_range("bytes 4-9/*") == (4, 9, None)
+    assert _parse_content_range("bytes 9-4/10") is None
+    assert _ensure_filename_extension("download", "application/pdf") == "download.pdf"
+    assert _ensure_filename_extension("release", "application/x-7z-compressed") == "release.7z"
+    assert _ensure_filename_extension("unknown", "application/octet-stream") == "unknown"
+    assert _ensure_filename_extension("already.tar.gz", "application/gzip") == "already.tar.gz"
+
+
+def test_http_probe_requests_identity_and_rejects_compressed_range_metadata():
+    task = Task(id="probe-encoding", url="https://files.test/download", task_type=TaskType.HTTP)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["accept-encoding"] == "identity"
+        return httpx.Response(
+            206,
+            # The probe never reads the body.  A raw empty stream keeps httpx
+            # from trying to decompress the deliberately header-only example.
+            stream=httpx.ByteStream(b""),
+            headers={
+                "Content-Range": "0-19/200",
+                "Content-Length": "20",
+                "Content-Encoding": "gzip",
+                "Content-Type": "application/pdf",
+            },
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await downloader._probe(client, downloader._headers())
+
+    metadata = asyncio.run(run())
+    assert metadata["ranges"] is False
+    assert metadata["total"] == 0
+    assert metadata["content_type"] == "application/pdf"
 
 
 def test_task_process_files_use_configured_temp_directory(tmp_path):
@@ -353,6 +492,97 @@ def test_http_range_downloader_uses_twelve_workers_by_default(tmp_path, monkeypa
     assert peak == 12
 
 
+def test_http_range_downloader_never_creates_zero_worker_pool(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
+    task = Task(
+        id="legacy-zero-workers",
+        url="https://files.test/archive.bin",
+        task_type=TaskType.HTTP,
+        concurrency=0,
+    )
+    body = b"legacy-data"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            206,
+            content=body,
+            headers={"Content-Range": f"bytes 0-{len(body) - 1}/{len(body)}"},
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_ranges(
+                client,
+                {},
+                tmp_path / "payload.downloading",
+                tmp_path / "resume.json",
+                {"total": len(body), "etag": '"v1"', "last_modified": ""},
+            )
+
+    asyncio.run(run())
+    assert task.progress.max_workers == 1
+    assert task.progress.completed_segments == 1
+
+
+def test_http_playback_fetches_requested_tail_while_normal_worker_is_blocked(tmp_path, monkeypatch):
+    chunk_size = 1024 * 1024
+    body = (b"a" * chunk_size) + (b"b" * chunk_size)
+    tail_start = len(body) - 64
+    normal_started = asyncio.Event()
+    release_normal = asyncio.Event()
+    requested: list[str] = []
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
+    task = Task(
+        id="http-playback-priority",
+        url="https://files.test/video.mp4",
+        task_type=TaskType.HTTP,
+        concurrency=1,
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        value = request.headers["range"]
+        requested.append(value)
+        start_text, end_text = value.removeprefix("bytes=").split("-", 1)
+        start, end = int(start_text), int(end_text)
+        if start != tail_start:
+            normal_started.set()
+            await release_normal.wait()
+        return httpx.Response(
+            206,
+            content=body[start : end + 1],
+            headers={"Content-Range": f"bytes {start}-{end}/{len(body)}"},
+            request=request,
+        )
+
+    async def run():
+        part = tmp_path / "payload.downloading"
+        downloader = HTTPDownloader(task)
+        downloader._part_path = part
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            download = asyncio.create_task(downloader._download_ranges(
+                client,
+                {},
+                part,
+                tmp_path / "resume.json",
+                {"total": len(body), "etag": '"v1"', "last_modified": "now"},
+            ))
+            await normal_started.wait()
+            ready = await downloader.wait_for_range(tail_start, len(body) - 1, timeout=1)
+            assert ready == part
+            with part.open("rb") as stream:
+                stream.seek(tail_start)
+                assert stream.read(64) == b"b" * 64
+            assert f"bytes={tail_start}-{len(body) - 1}" in requested
+            release_normal.set()
+            await download
+
+    asyncio.run(run())
+    assert task.progress.max_workers == 1
+    assert task.progress.completed_segments == 2
+
+
 def test_http_resume_is_discarded_when_etag_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
     part = tmp_path / "payload.downloading"
@@ -496,6 +726,112 @@ def test_http_resume_without_a_server_validator_is_discarded(tmp_path, monkeypat
     assert task.progress.downloaded_bytes == 7
 
 
+def test_http_headers_force_identity_even_when_browser_captured_compression():
+    task = Task(
+        id="http-identity",
+        url="https://files.test/archive.bin",
+        task_type=TaskType.HTTP,
+        request_headers={"Accept-Encoding": "gzip, br"},
+    )
+
+    assert HTTPDownloader(task)._headers()["Accept-Encoding"] == "identity"
+
+
+def test_http_resume_rejects_weak_etag_without_last_modified(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
+    body = b"current"
+    part = tmp_path / "payload.downloading"
+    part.write_bytes(b"old-old")
+    state = tmp_path / "resume.json"
+    state.write_text(
+        '{"version":2,"url":"https://files.test/a.bin","total":7,'
+        '"etag":"W/\\"same\\"","last_modified":"","ranges":['
+        '{"index":0,"from":0,"to":6,"current":7}]}',
+        encoding="utf-8",
+    )
+    task = Task(id="http-weak", url="https://files.test/a.bin", task_type=TaskType.HTTP, concurrency=1)
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.headers["range"])
+        return httpx.Response(
+            206,
+            content=body,
+            headers={"Content-Range": "bytes 0-6/7", "ETag": 'W/"same"'},
+            request=request,
+        )
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await HTTPDownloader(task)._download_ranges(
+                client,
+                {},
+                part,
+                state,
+                {"total": 7, "etag": 'W/"same"', "last_modified": ""},
+            )
+
+    asyncio.run(run())
+    assert requests == ["bytes=0-6"]
+    assert part.read_bytes() == body
+
+
+def test_http_resume_url_identity_keeps_new_signature_but_rejects_other_resource():
+    from backend.app.downloader.http_file import _resume_resource_identity
+
+    old = "https://cdn.test/file.mp4?quality=1080&s=old&e=100&_t=90"
+    refreshed = "https://cdn.test/file.mp4?_t=190&e=200&s=new&quality=1080"
+    other = "https://cdn.test/file.mp4?quality=720&s=new&e=200&_t=190"
+
+    assert _resume_resource_identity(old) == _resume_resource_identity(refreshed)
+    assert _resume_resource_identity(old) != _resume_resource_identity(other)
+
+
+def test_http_v2_resume_keeps_partial_chunk_across_signed_url_change(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
+    body = b"0123456789"
+    part = tmp_path / "payload.downloading"
+    part.write_bytes(body[:4] + b"\0" * 6)
+    state = tmp_path / "resume.json"
+    state.write_text(json.dumps({
+        "version": 2,
+        "url": "https://cdn.test/file.mp4?token=old",
+        "total": len(body),
+        "etag": '\"same-file\"',
+        "last_modified": "",
+        "ranges": [{"index": 0, "from": 0, "to": 9, "current": 4}],
+    }), encoding="utf-8")
+    task = Task(id="signed", url="https://cdn.test/file.mp4?token=new", task_type=TaskType.HTTP, concurrency=1)
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.headers["range"])
+        return httpx.Response(
+            206,
+            content=body[4:],
+            headers={"Content-Range": "bytes 4-9/10"},
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_ranges(
+                client, {}, part, state,
+                {"total": len(body), "etag": '\"same-file\"', "last_modified": ""},
+            )
+
+    asyncio.run(run())
+    assert requested == ["bytes=4-9"]
+    assert part.read_bytes() == body
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert saved["version"] == 3
+    assert saved["resource_key"] == "https://cdn.test/file.mp4"
+    assert "url" not in saved
+    assert "token" not in state.read_text(encoding="utf-8")
+    assert saved["ranges"][0]["current"] == 10
+
+
 def test_torrent_downloads_from_local_peer_and_stops_at_completion(tmp_path, monkeypatch):
     import libtorrent as lt
 
@@ -550,6 +886,132 @@ def test_torrent_downloads_from_local_peer_and_stops_at_completion(tmp_path, mon
     assert task.progress.progress_percent == 100
 
 
+def test_http_range_downloader_accepts_server_capped_ranges(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
+    body = b"0123456789"
+    task = Task(id="http-capped", url="https://files.test/capped.bin", task_type=TaskType.HTTP, concurrency=1)
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        value = request.headers["range"]
+        requests.append(value)
+        start_text, end_text = value.removeprefix("bytes=").split("-", 1)
+        start, end = int(start_text), int(end_text)
+        capped_end = min(end, start + 3)
+        return httpx.Response(
+            206,
+            content=body[start : capped_end + 1],
+            headers={"Content-Range": f"bytes {start}-{capped_end}/{len(body)}"},
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_ranges(
+                client,
+                {"Accept-Encoding": "identity"},
+                tmp_path / "payload.downloading",
+                tmp_path / "resume.json",
+                {"total": len(body), "etag": '"v1"', "last_modified": ""},
+            )
+
+    asyncio.run(run())
+    assert (tmp_path / "payload.downloading").read_bytes() == body
+    assert requests == ["bytes=0-9", "bytes=4-9", "bytes=8-9"]
+
+
+def test_http_range_retry_resumes_after_mid_stream_disconnect(tmp_path, monkeypatch):
+    from backend.app.downloader import http_file as http_file_module
+
+    monkeypatch.setattr(http_file_module, "retry_delay_seconds", lambda *_args: 0)
+    body = b"0123456789"
+    task = Task(id="http-disconnect", url="https://files.test/disconnect.bin", task_type=TaskType.HTTP, concurrency=1)
+    requests: list[str] = []
+
+    class BrokenStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield body[:4]
+            raise httpx.ReadError("connection dropped")
+
+        async def aclose(self):
+            return None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        value = request.headers["range"]
+        requests.append(value)
+        start_text, end_text = value.removeprefix("bytes=").split("-", 1)
+        start, end = int(start_text), int(end_text)
+        if len(requests) == 1:
+            return httpx.Response(
+                206,
+                stream=BrokenStream(),
+                headers={"Content-Range": f"bytes {start}-{end}/{len(body)}"},
+                request=request,
+            )
+        return httpx.Response(
+            206,
+            content=body[start : end + 1],
+            headers={"Content-Range": f"bytes {start}-{end}/{len(body)}"},
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_ranges(
+                client,
+                {"Accept-Encoding": "identity"},
+                tmp_path / "payload.downloading",
+                tmp_path / "resume.json",
+                {"total": len(body), "etag": '"v1"', "last_modified": ""},
+            )
+
+    asyncio.run(run())
+    assert (tmp_path / "payload.downloading").read_bytes() == body
+    assert requests == ["bytes=0-9", "bytes=4-9"]
+
+
+def test_http_run_falls_back_from_206_to_200_without_corrupting_sparse_offsets(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path / "downloads"))
+    monkeypatch.setattr(settings, "temp_dir", str(tmp_path / "temp"))
+    body = b"fallback-body"
+    task = Task(id="http-fallback", url="https://files.test/download", task_type=TaskType.HTTP, concurrency=1)
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        value = request.headers.get("range", "")
+        requests.append(value)
+        if value == "bytes=0-255":
+            return httpx.Response(
+                206,
+                content=body[:1],
+                headers={"Content-Range": f"bytes 0-0/{len(body)}"},
+                request=request,
+            )
+        if value:
+            return httpx.Response(200, content=body, headers={"Content-Length": str(len(body))}, request=request)
+        return httpx.Response(
+            200,
+            content=body,
+            headers={"Content-Length": str(len(body)), "Content-Type": "application/pdf"},
+            request=request,
+        )
+
+    class MockClient(httpx.AsyncClient):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(http_file_module.httpx, "AsyncClient", MockClient)
+    asyncio.run(HTTPDownloader(task).run())
+
+    assert task.status.value == "done"
+    assert Path(task.output_path).read_bytes() == body
+    assert requests == ["bytes=0-255", "bytes=0-12", ""]
+    assert Path(task.output_path).suffix == ".pdf"
+
+
 def test_torrent_waits_for_disk_cache_before_finalizing():
     class Handle:
         def __init__(self):
@@ -583,3 +1045,117 @@ def test_torrent_waits_for_disk_cache_before_finalizing():
 
     assert handle.flush_calls == 1
     assert session.polls == 2
+
+
+def test_torrent_shutdown_preserves_payload_and_saves_resume(tmp_path, monkeypatch):
+    from backend.app.downloader import torrent as torrent_module
+
+    removed = []
+    resume_saved = []
+
+    class Status:
+        has_metadata = False
+
+    class Handle:
+        def status(self):
+            return Status()
+
+        def pause(self):
+            return None
+
+    handle = Handle()
+
+    class Session:
+        def add_torrent(self, _params):
+            return handle
+
+        def remove_torrent(self, *args):
+            removed.append(args)
+
+    session = Session()
+
+    class Params:
+        save_path = ""
+
+    class Libtorrent:
+        @staticmethod
+        def parse_magnet_uri(_url):
+            return Params()
+
+    monkeypatch.setattr(
+        TorrentDownloader,
+        "_load_libtorrent",
+        staticmethod(lambda: Libtorrent),
+    )
+    monkeypatch.setattr(torrent_module, "_torrent_session", lambda _lt: session)
+    task = Task(
+        id="torrent-shutdown",
+        url="magnet:?xt=urn:btih:0123456789abcdef",
+        task_type=TaskType.TORRENT,
+        engine_state={
+            "temp_dir": str(tmp_path / "temp"),
+            "output_dir": str(tmp_path / "out"),
+        },
+    )
+    task.cancel_event = asyncio.Event()
+    task.pause_event = asyncio.Event()
+    downloader = TorrentDownloader(task)
+
+    async def save_resume(_lt, _session, _handle, destination):
+        resume_saved.append(destination)
+
+    downloader._save_resume = save_resume
+
+    async def run():
+        runner = asyncio.create_task(downloader.run())
+        await asyncio.sleep(0)
+        runner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await runner
+
+    asyncio.run(run())
+
+    assert resume_saved
+    assert removed
+    assert all(len(call) == 1 for call in removed)
+    assert task.status is TaskStatus.PAUSED
+
+
+def test_torrent_partial_selection_publishes_only_selected_files(tmp_path):
+    class Storage:
+        paths = ["bundle/keep.mp4", "bundle/skip.txt"]
+
+        def num_files(self):
+            return len(self.paths)
+
+        def file_path(self, index):
+            return self.paths[index]
+
+    class Info:
+        def name(self):
+            return "bundle"
+
+        def files(self):
+            return Storage()
+
+    payload = tmp_path / "temp" / ".tasks" / "torrent-select" / "payload"
+    (payload / "bundle").mkdir(parents=True)
+    (payload / "bundle" / "keep.mp4").write_bytes(b"selected")
+    (payload / "bundle" / "skip.txt").write_bytes(b"unselected")
+    task = Task(
+        id="torrent-select",
+        url="magnet:?xt=urn:btih:0123456789abcdef",
+        task_type=TaskType.TORRENT,
+        engine_state={
+            "selected_files": [0],
+            "temp_dir": str(tmp_path / "temp"),
+            "output_dir": str(tmp_path / "out"),
+        },
+    )
+
+    destination = TorrentDownloader(task)._move_payload(Info(), payload)
+
+    assert destination.is_file()
+    assert destination.name == "keep.mp4"
+    assert destination.read_bytes() == b"selected"
+    assert not (tmp_path / "out" / "skip.txt").exists()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+import re
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -8,15 +9,20 @@ from urllib.parse import urlsplit
 
 from .version import APP_VERSION
 from .naming import is_generic_media_name, suggest_manifest_name
-from .request_context import request_origin, sanitize_request_headers, sanitize_request_replay
+from .request_context import request_origin, sanitize_request_contexts, sanitize_request_headers, sanitize_request_replay
 
 
 # Browser add-ons have an independent release cadence.  Keep this pinned to
 # the newest extension build whose Native Messaging contract is compatible;
 # desktop-only fixes must not manufacture a browser upgrade prompt.
-RECOMMENDED_BROWSER_EXTENSION_VERSION = "3.0.3"
+RECOMMENDED_BROWSER_EXTENSION_VERSION = "3.0.8"
 MIN_BROWSER_EXTENSION_VERSION = "2.0.11"
+BROWSER_EXTENSION_RELEASE_URL = "https://github.com/ciaooo55/hls-downloader/releases/latest"
 DEFAULT_BROWSER_CLIENT_TTL = 180.0
+MAX_BROWSER_CLIENTS = 64
+MAX_BROWSER_HANDOFFS = 256
+BROWSER_CLIENT_HISTORY_TTL = 7 * 24 * 60 * 60.0
+_CLIENT_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
 
 
 def _version_parts(value: str) -> tuple[int, ...]:
@@ -128,7 +134,9 @@ class BrowserClient:
 
 def _browser_name(value: str) -> str:
     normalized = str(value or "").strip().lower()
-    return normalized if normalized in {"edge", "chrome", "chromium", "firefox"} else "unknown"
+    return normalized if normalized in {
+        "edge", "chrome", "chromium", "brave", "vivaldi", "opera", "firefox",
+    } else "unknown"
 
 
 class BrowserHandoffService:
@@ -137,6 +145,7 @@ class BrowserHandoffService:
         self.client_ttl = max(30.0, float(client_ttl))
         self._items: dict[str, BrowserHandoff] = {}
         self._clients: dict[str, BrowserClient] = {}
+        self._request_ids: dict[str, str] = {}
         self._lock = threading.RLock()
 
     def record_ping(self, version: str = "", client_id: str = "", browser: str = "") -> None:
@@ -148,16 +157,19 @@ class BrowserHandoffService:
             # in its own slot so an older heartbeat cannot overwrite a newer one.
             client_id = f"legacy:{browser_name}:{version or 'unknown'}"
         with self._lock:
+            self._cleanup_clients_locked(time.time())
             self._clients[client_id] = BrowserClient(
                 id=client_id,
                 browser=browser_name,
                 version=version,
                 last_seen=time.time(),
             )
+            self._trim_clients_locked()
 
     def status(self) -> dict:
         now = time.time()
         with self._lock:
+            self._cleanup_clients_locked(now)
             clients = [client.public(now, self.client_ttl) for client in self._clients.values()]
         clients.sort(key=lambda item: (not item["active"], -float(item["last_seen"]), item["browser"]))
         active_clients = [client for client in clients if client["active"]]
@@ -169,7 +181,10 @@ class BrowserHandoffService:
         version = active_versions[0] if active_versions else (str(clients[0]["version"]) if clients else "")
         detected = bool(active_clients)
         seen_before = bool(clients)
-        needs_upgrade = any(bool(client["needs_upgrade"]) for client in active_clients)
+        # Keep the upgrade warning when a known browser has merely gone idle.
+        # Otherwise closing the browser would hide the exact warning needed to
+        # update its unpacked extension before it reconnects.
+        needs_upgrade = any(bool(client["needs_upgrade"]) for client in clients)
         state = "connected" if detected else "inactive" if seen_before else "not_detected"
         message = (
             f"检测到 {len(active_clients)} 个浏览器插件，其中有旧版本，建议升级到 v{RECOMMENDED_BROWSER_EXTENSION_VERSION}"
@@ -177,6 +192,8 @@ class BrowserHandoffService:
             else
             f"已连接 {len(active_clients)} 个浏览器插件"
             if detected
+            else f"此前连接的浏览器插件版本较旧，建议升级到 v{RECOMMENDED_BROWSER_EXTENSION_VERSION}"
+            if seen_before and needs_upgrade
             else "扩展此前连接过，目前没有心跳"
             if seen_before
             else "未检测到浏览器扩展；浏览器下载不会被接管"
@@ -190,6 +207,7 @@ class BrowserHandoffService:
             "desktop_version": APP_VERSION,
             "recommended_version": RECOMMENDED_BROWSER_EXTENSION_VERSION,
             "minimum_version": MIN_BROWSER_EXTENSION_VERSION,
+            "release_url": BROWSER_EXTENSION_RELEASE_URL,
             "needs_upgrade": needs_upgrade,
             "clients": clients,
             "active_versions": active_versions,
@@ -205,6 +223,19 @@ class BrowserHandoffService:
                 str(payload.get("extension_browser", "")),
             )
         self.cleanup()
+        client_request_id = str(payload.get("client_request_id", "") or "").strip()
+        client_id = str(payload.get("extension_client_id", "") or "").strip()[:128]
+        request_key = (
+            f"{client_id or 'legacy'}:{client_request_id}"
+            if _CLIENT_REQUEST_ID_RE.fullmatch(client_request_id)
+            else ""
+        )
+        if request_key:
+            with self._lock:
+                existing_id = self._request_ids.get(request_key, "")
+                existing = self._items.get(existing_id) if existing_id else None
+                if existing is not None:
+                    return existing
         url = str(payload.get("url", ""))
         filename = str(payload.get("filename", ""))
         title = str(payload.get("title", ""))
@@ -240,7 +271,7 @@ class BrowserHandoffService:
             cookie=str(payload.get("cookie", "")),
             user_agent=str(payload.get("user_agent", "")),
             request_headers=request_headers,
-            request_contexts={str(key): dict(value) for key, value in dict(payload.get("request_contexts") or {}).items() if isinstance(value, dict)},
+            request_contexts=sanitize_request_contexts(payload.get("request_contexts")),
             request_method=request_method,
             request_body=request_body,
             size=max(0, int(payload.get("size", 0) or 0)),
@@ -251,8 +282,37 @@ class BrowserHandoffService:
             resource_kind=resource_kind,
         )
         with self._lock:
+            # Direct HTTP may have created the handoff even if its response was
+            # lost and the extension fell back to Native Messaging. Recheck
+            # under the lock so that transport retry stays exactly-once.
+            if request_key:
+                existing_id = self._request_ids.get(request_key, "")
+                existing = self._items.get(existing_id) if existing_id else None
+                if existing is not None:
+                    return existing
             self._items[item.id] = item
+            if request_key:
+                self._request_ids[request_key] = item.id
+            while len(self._items) > MAX_BROWSER_HANDOFFS:
+                oldest_id = min(self._items, key=lambda key: self._items[key].created_at)
+                self._items.pop(oldest_id, None)
+                for key, handoff_id in list(self._request_ids.items()):
+                    if handoff_id == oldest_id:
+                        self._request_ids.pop(key, None)
         return item
+
+    def _cleanup_clients_locked(self, now: float) -> None:
+        retention = max(BROWSER_CLIENT_HISTORY_TTL, self.client_ttl * 4)
+        for client_id, client in list(self._clients.items()):
+            if now - client.last_seen > retention:
+                self._clients.pop(client_id, None)
+
+    def _trim_clients_locked(self) -> None:
+        if len(self._clients) <= MAX_BROWSER_CLIENTS:
+            return
+        oldest = sorted(self._clients.values(), key=lambda client: client.last_seen)
+        for client in oldest[: len(self._clients) - MAX_BROWSER_CLIENTS]:
+            self._clients.pop(client.id, None)
 
     def get(self, handoff_id: str) -> BrowserHandoff | None:
         self.cleanup()
@@ -340,12 +400,17 @@ class BrowserHandoffService:
     def cleanup(self) -> None:
         now = time.time()
         with self._lock:
+            self._cleanup_clients_locked(now)
+            self._trim_clients_locked()
             for item in self._items.values():
                 if item.status in {"pending", "accepting"} and now - item.created_at > self.ttl:
                     item.status = "expired"
             stale = [key for key, item in self._items.items() if now - item.created_at > self.ttl * 4]
             for key in stale:
                 self._items.pop(key, None)
+            for key, handoff_id in list(self._request_ids.items()):
+                if handoff_id not in self._items:
+                    self._request_ids.pop(key, None)
 
 
 browser_handoffs = BrowserHandoffService()

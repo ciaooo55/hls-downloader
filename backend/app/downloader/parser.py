@@ -3,6 +3,8 @@ from urllib.parse import urljoin
 
 import m3u8
 
+from ..utils import inherit_hls_access_query
+
 
 DRM_METHODS = {"sample-aes", "sample-aes-ctr"}
 
@@ -28,7 +30,7 @@ class UnsupportedPlaylistError(Exception):
 def _resolve_url(base: str, ref: str) -> str:
     if not ref:
         return ref
-    return urljoin(base, ref)
+    return inherit_hls_access_query(base, urljoin(base, ref))
 
 
 def _parse_byte_range(value: str | None, uri: str, previous_ends: dict[str, int]) -> dict | None:
@@ -156,7 +158,50 @@ def list_hls_video_tracks(url: str, content: str) -> list[dict]:
     return tracks
 
 
-def parse_m3u8(url: str, content: str, preferred_variant: str = "") -> dict:
+def list_hls_audio_tracks(url: str, content: str) -> list[dict]:
+    """Enumerate external audio renditions in an HLS master playlist."""
+    playlist = m3u8.loads(content, uri=url)
+    if not playlist.is_variant:
+        return []
+    tracks: list[dict] = []
+    seen: set[str] = set()
+    for media in playlist.media or []:
+        if str(getattr(media, "type", "") or "").upper() != "AUDIO":
+            continue
+        uri = str(getattr(media, "uri", "") or "")
+        if not uri:
+            continue
+        resolved = _resolve_url(url, uri)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        language = str(getattr(media, "language", "") or "")
+        name = str(getattr(media, "name", "") or "")
+        group_id = str(getattr(media, "group_id", "") or "")
+        tracks.append({
+            # selected_audio is intentionally short (language/name/id), while
+            # the signed rendition URL can be several kilobytes long.
+            "id": language or name or group_id or resolved,
+            "url": resolved,
+            "width": 0,
+            "height": 0,
+            "bandwidth": 0,
+            "codecs": "",
+            "lang": language,
+            "name": name,
+            "group_id": group_id,
+            "default": str(getattr(media, "default", "") or "").upper() == "YES",
+        })
+    tracks.sort(key=lambda item: (not item["default"], item["lang"], item["name"]))
+    return tracks
+
+
+def parse_m3u8(
+    url: str,
+    content: str,
+    preferred_variant: str = "",
+    preferred_audio: str = "",
+) -> dict:
     """Parse a playlist; preferred_variant picks a specific rendition URL.
 
     Selecting through the master (instead of fetching the rendition
@@ -196,6 +241,28 @@ def parse_m3u8(url: str, content: str, preferred_variant: str = "") -> dict:
         if best is None or not best.uri:
             raise ValueError("主清单中没有可用视频变体")
         info = best.stream_info
+        audio_group = str(getattr(info, "audio", "") or "")
+        audio_tracks = [
+            track for track in list_hls_audio_tracks(url, content)
+            if not audio_group or track.get("group_id") == audio_group
+        ]
+        chosen_audio = None
+        if preferred_audio:
+            preferred = preferred_audio.strip().lower()
+            chosen_audio = next((
+                track for track in audio_tracks
+                if preferred in {
+                    str(track.get("id", "")).lower(),
+                    str(track.get("url", "")).lower(),
+                    str(track.get("lang", "")).lower(),
+                    str(track.get("name", "")).lower(),
+                    str(track.get("group_id", "")).lower(),
+                }
+            ), None)
+        if chosen_audio is None:
+            chosen_audio = next((track for track in audio_tracks if track.get("default")), None)
+        if chosen_audio is None and audio_tracks:
+            chosen_audio = audio_tracks[0]
         subtitle_tracks = []
         for media in playlist.media or []:
             if str(getattr(media, "type", "") or "").upper() != "SUBTITLES":
@@ -215,7 +282,11 @@ def parse_m3u8(url: str, content: str, preferred_variant: str = "") -> dict:
             "type": "variant",
             "url": _resolve_url(url, best.uri),
             "base_url": _resolve_url(url, best.uri),
-            "external_audio": bool(getattr(info, "audio", None)),
+            # A group without URI describes in-band audio.  Only a concrete
+            # rendition needs the dual-track recorder/muxing path.
+            "external_audio": chosen_audio is not None,
+            "external_audio_url": str((chosen_audio or {}).get("url", "")),
+            "audio_tracks": audio_tracks,
             "external_subtitles": bool(getattr(info, "subtitles", None))
             or bool(subtitle_tracks),
             "subtitle_tracks": subtitle_tracks,
@@ -232,6 +303,17 @@ def parse_m3u8(url: str, content: str, preferred_variant: str = "") -> dict:
 
     for index, segment in enumerate(playlist.segments):
         if not segment.uri:
+            # LL-HLS puts the parts of the *currently-being-produced* media
+            # segment at the tail of a playlist.  python-m3u8 represents that
+            # tail as a Segment with uri=None and a non-empty parts list.
+            # It is not a malformed media segment: on the next playlist poll
+            # the origin normally publishes its complete URI.  Treating it as
+            # fatal made a separate audio rendition fail at arbitrary poll
+            # boundaries (for example "分片 4 缺少 URI").  Defer that incomplete
+            # tail instead; completed segments remain lossless and recording
+            # continues on the next live refresh.
+            if getattr(segment, "parts", None):
+                continue
             raise ValueError(f"分片 {index} 缺少 URI")
         segment_url = _resolve_url(url, segment.uri)
         media_sequence = int(playlist.media_sequence or 0) + index

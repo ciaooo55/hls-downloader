@@ -1,12 +1,15 @@
 import asyncio
+import contextlib
 import hashlib
 import json
 import re
 import shutil
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 try:
@@ -18,13 +21,20 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from ..config import settings
 from ..checksum import verify_task_checksum
-from ..models import Task, TaskStatus
-from ..utils import sanitize_filename
+from ..models import Task, TaskProgress, TaskStatus
+from ..utils import (
+    atomic_write_text,
+    canonical_hls_url,
+    durable_replace,
+    sanitize_filename,
+    stable_request_key,
+)
 from ..naming import is_generic_media_name, suggest_manifest_name
 from ..request_context import build_task_headers
+from ..network_proxy import curl_proxy, ensure_url_allowed, network_budget, policy_httpx_client
 from .http_file import _content_disposition_filename
 from .dash import DashDownloader
-from .merge import merge_segments
+from .merge import merge_segments, mux_media_tracks
 from .errors import (
     SharedRetryWindow,
     as_download_error,
@@ -37,7 +47,7 @@ from .errors import (
 from .throttle import throttle_bytes
 from .engine import task_output_dir, task_work_dir
 from .parser import UnsupportedPlaylistError, parse_m3u8
-from .playback import MIN_START_DURATION, playback_service, write_playback_plan
+from .playback import playback_service, write_playback_plan
 from .progress import ProgressTracker
 from .subtitles import has_cues, merge_webvtt_segments, webvtt_to_srt
 
@@ -52,6 +62,10 @@ _CONTENT_RANGE_RE = re.compile(r"^bytes (\d+)-(\d+)/(\d+|\*)$", re.IGNORECASE)
 # guidance of several target durations: past it the origin has stopped
 # publishing and the recording is finalized rather than left running forever.
 LIVE_STATE_FILENAME = "live_state.json"
+LIVE_SUBTITLE_STATE_FILENAME = "live_subtitles.json"
+LIVE_SUBTITLE_STATE_VERSION = 1
+VOD_STATE_FILENAME = "vod_segments.json"
+VOD_STATE_VERSION = 1
 LIVE_STALL_MIN_SECONDS = 90.0
 LIVE_STALL_TARGET_MULTIPLIER = 6.0
 LIVE_BATCH_CONCURRENCY = 3
@@ -59,7 +73,7 @@ LIVE_MAX_POLL_SECONDS = 10.0
 
 
 class _BrowserHLSClient:
-    def __init__(self, concurrency: int) -> None:
+    def __init__(self, concurrency: int, url: str) -> None:
         self._session = CurlAsyncSession(
             max_clients=concurrency + 4,
             # Let curl-cffi emit the headers that match its TLS/browser
@@ -78,7 +92,7 @@ class _BrowserHLSClient:
             # Cookie and custom authorization headers).
             http_version="v1",
             timeout=(10, 60),
-            allow_redirects=True,
+            allow_redirects=False,
         )
 
     async def __aenter__(self):
@@ -93,7 +107,7 @@ class _BrowserHLSClient:
         return await self._get_with_cloudflare_fallback(url, **kwargs)
 
     async def _get_with_cloudflare_fallback(self, url: str, **kwargs):
-        response = await self._session.get(url, **kwargs)
+        response = await self._get_with_redirect_policy(url, **kwargs)
         fallback_headers = _without_stale_cloudflare_cookies(kwargs.get("headers"))
         if response.status_code != 403 or fallback_headers is None:
             return response
@@ -104,7 +118,54 @@ class _BrowserHLSClient:
         await _close_response(response)
         retry_kwargs = dict(kwargs)
         retry_kwargs["headers"] = fallback_headers
-        return await self._session.get(url, **retry_kwargs)
+        return await self._get_with_redirect_policy(url, **retry_kwargs)
+
+    async def _get_with_redirect_policy(self, url: str, **kwargs):
+        current = str(url)
+        request_headers = dict(kwargs.get("headers") or {})
+        for _hop in range(11):
+            ensure_url_allowed(current)
+            request_kwargs = dict(kwargs)
+            request_kwargs["headers"] = request_headers
+            request_kwargs["allow_redirects"] = False
+            proxy = curl_proxy(current)
+            if proxy is None:
+                request_kwargs.pop("proxy", None)
+            else:
+                request_kwargs["proxy"] = proxy
+            slot_context = network_budget.slot(current)
+            await slot_context.__aenter__()
+            try:
+                response = await self._session.get(current, **request_kwargs)
+            except BaseException:
+                await slot_context.__aexit__(None, None, None)
+                raise
+            network_budget.record_response(
+                current,
+                int(getattr(response, "status_code", 0) or 0),
+                getattr(response, "headers", {}) or {},
+            )
+            if request_kwargs.get("stream"):
+                setattr(response, "_hls_budget_context", slot_context)
+            else:
+                await slot_context.__aexit__(None, None, None)
+            final_url = str(getattr(response, "url", "") or current)
+            ensure_url_allowed(final_url)
+            response_headers = getattr(response, "headers", {}) or {}
+            location = str(response_headers.get("location", "") or "")
+            if response.status_code not in {301, 302, 303, 307, 308} or not location:
+                return response
+            next_url = urljoin(final_url, location)
+            ensure_url_allowed(next_url)
+            if _url_authority(current) != _url_authority(next_url):
+                request_headers = {
+                    name: value
+                    for name, value in request_headers.items()
+                    if name.lower() not in {"authorization", "cookie", "proxy-authorization"}
+                }
+            await _close_response(response)
+            current = next_url
+        raise RuntimeError("HLS 请求重定向次数超过 10 次")
 
     async def download_to_file(
         self,
@@ -149,13 +210,21 @@ class _BrowserHLSClient:
             if response.astream_task and not response.astream_task.done():
                 if response.quit_now:
                     response.quit_now.set()
-                await response.aclose()
+            await _close_response(response)
         return response, written
 
 
 def _browser_impersonation() -> str:
     """Use one supported curl-cffi profile, never a captured browser version."""
     return "chrome"
+
+
+def _url_authority(url: str) -> tuple[str, str, int | None]:
+    try:
+        parsed = urlsplit(str(url or ""))
+        return parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port
+    except (TypeError, ValueError):
+        return "", "", None
 
 
 def _without_stale_cloudflare_cookies(
@@ -187,21 +256,26 @@ def _without_stale_cloudflare_cookies(
 
 async def _close_response(response: Any) -> None:
     close = getattr(response, "aclose", None)
-    if close is None:
-        return
-    result = close()
-    if hasattr(result, "__await__"):
-        await result
+    try:
+        if close is not None:
+            result = close()
+            if hasattr(result, "__await__"):
+                await result
+    finally:
+        slot_context = getattr(response, "_hls_budget_context", None)
+        if slot_context is not None:
+            setattr(response, "_hls_budget_context", None)
+            await slot_context.__aexit__(None, None, None)
 
 
-def _create_hls_client(concurrency: int):
+def _create_hls_client(concurrency: int, url: str = ""):
     if CurlAsyncSession is not None:
-        return _BrowserHLSClient(concurrency)
+        return _BrowserHLSClient(concurrency, url)
     limits = httpx.Limits(
         max_connections=concurrency + 4,
         max_keepalive_connections=concurrency + 2,
     )
-    return httpx.AsyncClient(
+    return policy_httpx_client(
         timeout=SEG_TIMEOUT,
         follow_redirects=True,
         limits=limits,
@@ -261,7 +335,7 @@ def _decrypt_aes128_file(source: Path, destination: Path, key: bytes, iv: bytes)
             output.write(unpadder.finalize())
         if temporary.stat().st_size == 0:
             raise ValueError("AES-128 解密结果为空")
-        temporary.replace(destination)
+        durable_replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -280,7 +354,81 @@ class HLSDownloader:
         self._retry_window = SharedRetryWindow()
         self._last_rate_limit_notice = 0.0
         self._subtitle_tracks: list[dict] = []
+        self._live_subtitle_stop: asyncio.Event | None = None
+        self._live_subtitle_runner: asyncio.Task | None = None
         self._playback_refresh_error = ""
+        self._vod_resume_enabled = False
+        self._vod_resume_records: dict[str, dict[str, int | str]] = {}
+        self._vod_resume_identities: dict[int, str] = {}
+        self._vod_resume_lock = asyncio.Lock()
+
+    def _external_audio_task(self, url: str) -> Task:
+        """Create a resumable sidecar recorder sharing only task controls."""
+        output_dir = self._task_dir() / "external-audio"
+        state = dict(self.task.engine_state)
+        state["output_dir"] = str(output_dir)
+        state.pop("live", None)
+        state.pop("reserved_output_path", None)
+        state.pop("output_is_file", None)
+        return replace(
+            self.task,
+            id=f"{self.task.id}-audio",
+            url=url,
+            title="独立音轨",
+            filename=f"{self.task.id}.audio.mp4",
+            selected_video="",
+            selected_audio="",
+            status=TaskStatus.QUEUED,
+            progress=TaskProgress(),
+            error_message="",
+            error_code="",
+            error_stage="",
+            error_url="",
+            error_hint="",
+            http_status=0,
+            error_attempt=0,
+            expected_checksum="",
+            checksum_algorithm="",
+            checksum_actual="",
+            checksum_verified=None,
+            output_path="",
+            stage="queued",
+            last_log="等待独立音轨录制",
+            started_at="",
+            finished_at="",
+            updated_at="",
+            cancel_event=self.task.cancel_event,
+            pause_event=asyncio.Event(),
+            task_handle=None,
+            playback_seek_index=None,
+            engine_state=state,
+        )
+
+    def _start_external_audio_recorder(self, url: str) -> tuple[Task, asyncio.Task]:
+        audio_task = self._external_audio_task(url)
+        downloader = HLSDownloader(
+            audio_task,
+            on_progress=lambda _task: None,
+            on_log=lambda _task_id, message: self.on_log(
+                self.task.id, f"[external_audio] {message}"
+            ),
+        )
+        runner = asyncio.create_task(
+            downloader.run(), name=f"hls-audio-{self.task.id}"
+        )
+        return audio_task, runner
+
+    async def _finish_external_audio_recorder(
+        self, audio_task: Task, runner: asyncio.Task
+    ) -> Path:
+        if audio_task.pause_event is not None:
+            audio_task.pause_event.set()
+        await runner
+        output = Path(audio_task.output_path) if audio_task.output_path else None
+        if audio_task.status is not TaskStatus.DONE or output is None or not output.is_file():
+            detail = audio_task.error_message or audio_task.last_log or "独立音轨没有生成输出"
+            raise RuntimeError(f"独立音轨录制失败: {detail}")
+        return output
 
     def request_seek(self, segment_index: int) -> None:
         if segment_index >= 0:
@@ -397,6 +545,17 @@ class HLSDownloader:
             # A live stream cannot be downloaded again: keep the captured
             # segments and live_state.json so retry can finalize them even
             # after a merge failure or a dead manifest.
+            return
+        if (
+            (task_dir / VOD_STATE_FILENAME).is_file()
+            and any(
+                path.is_file() and path.stat().st_size > 0
+                for path in (task_dir / "segments").glob("*.seg")
+            )
+        ):
+            # Verified VOD slots are resumable and may represent gigabytes.
+            # A retry should fetch only the failed pieces, not discard all
+            # durable work merely because one segment exhausted its retries.
             return
 
         def cleanup() -> None:
@@ -515,6 +674,8 @@ class HLSDownloader:
         manifest_title = ""
         response_filename = ""
         external_audio = False
+        external_audio_url = ""
+        audio_tracks: list[dict] = []
         subtitle_tracks: list[dict] = []
         for depth in range(MAX_PLAYLIST_DEPTH + 1):
             if current_url in visited:
@@ -537,7 +698,12 @@ class HLSDownloader:
             final_url = str(getattr(response, "url", "") or current_url)
             # The chosen rendition is resolved inside the master so
             # EXT-X-MEDIA audio/subtitle detection is never bypassed.
-            parsed = parse_m3u8(final_url, response.text, self.task.selected_video)
+            parsed = parse_m3u8(
+                final_url,
+                response.text,
+                self.task.selected_video,
+                self.task.selected_audio,
+            )
             manifest_title = manifest_title or parsed.get("title", "")
             response_filename = response_filename or _content_disposition_filename(
                 response.headers.get("content-disposition", "")
@@ -548,6 +714,8 @@ class HLSDownloader:
                 parsed["response_filename"] = response_filename
                 parsed["final_url"] = final_url
                 parsed["external_audio"] = external_audio
+                parsed["external_audio_url"] = external_audio_url
+                parsed["audio_tracks"] = audio_tracks
                 parsed["subtitle_tracks"] = subtitle_tracks
                 return parsed
             if parsed.get("subtitle_tracks") and not subtitle_tracks:
@@ -559,6 +727,8 @@ class HLSDownloader:
                 # adaptive compatibility engine, which selects and muxes the
                 # matching best video/audio pair without dropping auth context.
                 external_audio = True
+                external_audio_url = str(parsed.get("external_audio_url") or "")
+                audio_tracks = list(parsed.get("audio_tracks") or [])
             if parsed.get("external_subtitles"):
                 if subtitle_tracks and getattr(settings, "download_subtitles", True):
                     self._log(
@@ -574,10 +744,16 @@ class HLSDownloader:
 
     async def run(self) -> None:
         task = self.task
+        # webRequest observes LL-HLS blocking reloads with a moving cursor.
+        # That poll position expires almost immediately and is not the stable
+        # playlist address a recorder should persist or retry.
+        task.url = canonical_hls_url(task.url)
         task_dir = self._task_dir()
         seg_dir = self._seg_dir()
         seg_dir.mkdir(parents=True, exist_ok=True)
         output: Path | None = None
+        external_audio_task: Task | None = None
+        external_audio_runner: asyncio.Task | None = None
 
         try:
             self._clear_failure()
@@ -589,7 +765,7 @@ class HLSDownloader:
             concurrency = min(256, max(1, int(task.concurrency or settings.default_concurrency or 12)))
             task.concurrency = concurrency
             headers = self._headers(task.url)
-            async with _create_hls_client(concurrency) as client:
+            async with _create_hls_client(concurrency, task.url) as client:
                 task.status = TaskStatus.PARSING
                 self._set_stage("parsing", "正在解析 HLS 清单")
                 saved_live_state = self._load_live_state()
@@ -610,19 +786,6 @@ class HLSDownloader:
                 is_live = parsed is None or bool(parsed.get("is_live")) or saved_live_state is not None
                 if parsed is not None:
                     self._subtitle_tracks = list(parsed.get("subtitle_tracks") or [])
-                    if parsed.get("external_audio"):
-                        if is_live:
-                            raise UnsupportedPlaylistError(
-                                "直播流暂不支持视频与音频分离的清单"
-                            )
-                        self._set_stage("parsing", "检测到独立 HLS 音轨，正在使用兼容合并引擎")
-                        await DashDownloader(
-                            task,
-                            on_progress=self.on_progress,
-                            on_log=self.on_log,
-                            source_label="HLS 独立音轨",
-                        ).run()
-                        return
                     if is_generic_media_name(task.filename):
                         task.filename = suggest_manifest_name(
                             parsed.get("final_url") or task.url,
@@ -633,12 +796,35 @@ class HLSDownloader:
                             response_filename=parsed.get("response_filename", ""),
                             fallback=task.id,
                         )
+                    if parsed.get("external_audio"):
+                        if is_live:
+                            audio_url = str(parsed.get("external_audio_url") or "")
+                            if not audio_url:
+                                raise UnsupportedPlaylistError("独立 HLS 音轨缺少可下载的 URI")
+                            self._set_stage(
+                                "parsing", "检测到直播独立音轨，正在同步录制视频与音频"
+                            )
+                            external_audio_task, external_audio_runner = (
+                                self._start_external_audio_recorder(audio_url)
+                            )
+                        else:
+                            self._set_stage("parsing", "检测到独立 HLS 音轨，正在使用兼容合并引擎")
+                            await DashDownloader(
+                                task,
+                                on_progress=self.on_progress,
+                                on_log=self.on_log,
+                                source_label="HLS 独立音轨",
+                            ).run()
+                            return
                     (task_dir / "playlist.m3u8").write_text(parsed["content"], encoding="utf-8")
 
                 if is_live:
                     task.engine_state["live"] = True
-                    if self._subtitle_tracks:
-                        self._log("[subtitles] 直播录制暂不保存外部字幕")
+                    if self._subtitle_tracks and getattr(settings, "download_subtitles", True):
+                        self._log(
+                            f"[subtitles] 同步录制 {len(self._subtitle_tracks)} 条直播字幕轨道"
+                        )
+                        self._start_live_subtitle_recorder(headers)
                     if parsed is None:
                         recovered: list[dict] = []
                         total_duration = self._restore_live_segments(
@@ -646,19 +832,24 @@ class HLSDownloader:
                         )
                         if not recovered:
                             raise RuntimeError("直播源已不可用，且没有可合并的已录制分片")
-                        self._compact_recorded(recovered)
-                        self._save_live_state(recovered, total_duration)
+                        await asyncio.to_thread(self._compact_recorded, recovered)
+                        await asyncio.to_thread(self._save_live_state, recovered, total_duration)
                         segments = recovered
                         task.progress.total_segments = len(segments)
                         task.progress.media_duration = total_duration
-                        write_playback_plan(task_dir, segments, total_duration)
+                        await asyncio.to_thread(write_playback_plan, task_dir, segments, total_duration)
                     else:
                         recorded = await self._record_live(
                             client, parsed, headers, saved_live_state
                         )
                         if recorded is None:
+                            if external_audio_task and external_audio_task.pause_event:
+                                external_audio_task.pause_event.set()
                             return
                         segments, total_duration = recorded
+                        if external_audio_task and external_audio_task.pause_event:
+                            external_audio_task.pause_event.set()
+                    await self._stop_live_subtitle_recorder()
                 else:
                     # A retried task whose stream has since ended downloads as
                     # plain VOD; drop the stale live marker so the UI stops
@@ -672,7 +863,8 @@ class HLSDownloader:
                     task.progress.total_segments = len(segments)
                     self._set_stage("parsing", f"解析完成，共 {len(segments)} 个分片")
                     await self._download_init_maps(client, segments, headers)
-                    write_playback_plan(task_dir, segments, total_duration)
+                    await asyncio.to_thread(self._prepare_vod_resume, segments)
+                    await asyncio.to_thread(write_playback_plan, task_dir, segments, total_duration)
                     task.progress.media_duration = total_duration
                     self._refresh_playback_progress()
 
@@ -721,13 +913,30 @@ class HLSDownloader:
                 total_duration=total_duration,
                 on_progress=self.on_progress,
             )
+            if external_audio_task is not None and external_audio_runner is not None:
+                audio_output = await self._finish_external_audio_recorder(
+                    external_audio_task, external_audio_runner
+                )
+                external_audio_runner = None
+                self._set_stage("remuxing", "正在合并直播视频与独立音轨")
+                await mux_media_tracks(
+                    video_path=output,
+                    audio_path=audio_output,
+                    output_path=output,
+                    ffmpeg_path=settings.ffmpeg_path,
+                    task=task,
+                    total_duration=total_duration,
+                    on_progress=self.on_progress,
+                )
 
             task.output_path = str(output)
             task.engine_state["output_is_file"] = True
             task.engine_state.pop("reserved_output_path", None)
             if not await verify_task_checksum(task, output, on_progress=self.on_progress, on_log=self.on_log):
                 return
-            if not task.engine_state.get("live"):
+            if task.engine_state.get("live"):
+                await self._save_recorded_live_subtitles()
+            else:
                 # Sidecar subtitles are best-effort: a subtitle CDN failure
                 # must never fail a fully merged, verified video.
                 await self._download_subtitles(headers)
@@ -778,10 +987,208 @@ class HLSDownloader:
             if task.status is TaskStatus.FAILED:
                 await self._cleanup_failed_temp(task_dir)
         finally:
+            await self._stop_live_subtitle_recorder()
+            if external_audio_runner is not None and not external_audio_runner.done():
+                external_audio_runner.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await external_audio_runner
             task.progress.active_workers = 0
             task.progress.active_slots = 0
             task.progress.active_segment_indexes = []
             self._publish()
+
+    def _live_subtitle_state_path(self) -> Path:
+        return self._task_dir() / LIVE_SUBTITLE_STATE_FILENAME
+
+    def _load_live_subtitle_state(self) -> dict:
+        try:
+            state = json.loads(self._live_subtitle_state_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"version": LIVE_SUBTITLE_STATE_VERSION, "tracks": {}}
+        if state.get("version") != LIVE_SUBTITLE_STATE_VERSION or not isinstance(
+            state.get("tracks"), dict
+        ):
+            return {"version": LIVE_SUBTITLE_STATE_VERSION, "tracks": {}}
+        return state
+
+    def _save_live_subtitle_state(self, state: dict) -> None:
+        atomic_write_text(
+            self._live_subtitle_state_path(),
+            json.dumps(state, ensure_ascii=False, sort_keys=True),
+        )
+
+    @staticmethod
+    def _live_subtitle_track_key(track: dict) -> str:
+        identity = stable_request_key(str(track.get("uri") or ""), ignore_host=True)
+        if not identity:
+            identity = f"{track.get('language') or ''}:{track.get('name') or ''}"
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+
+    def _start_live_subtitle_recorder(self, headers: dict[str, str]) -> None:
+        if self._live_subtitle_runner and not self._live_subtitle_runner.done():
+            return
+        self._live_subtitle_stop = asyncio.Event()
+        self._live_subtitle_runner = asyncio.create_task(
+            self._record_live_subtitles(headers, self._live_subtitle_stop)
+        )
+
+    async def _stop_live_subtitle_recorder(self) -> None:
+        runner = self._live_subtitle_runner
+        stop = self._live_subtitle_stop
+        if runner is None:
+            return
+        if stop is not None:
+            stop.set()
+        try:
+            await asyncio.wait_for(asyncio.shield(runner), timeout=3)
+        except TimeoutError:
+            runner.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await runner
+        except asyncio.CancelledError:
+            runner.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await runner
+            raise
+        finally:
+            self._live_subtitle_runner = None
+            self._live_subtitle_stop = None
+
+    async def _record_live_subtitles(
+        self,
+        headers: dict[str, str],
+        stop: asyncio.Event,
+    ) -> None:
+        state = self._load_live_subtitle_state()
+        failure_notice: set[str] = set()
+        async with _create_hls_client(2, self.task.url) as client:
+            while not stop.is_set() and not self._is_canceled():
+                for track in self._subtitle_tracks:
+                    if stop.is_set() or self._is_canceled():
+                        break
+                    key = self._live_subtitle_track_key(track)
+                    try:
+                        changed = await self._capture_live_subtitle_track(
+                            client, track, key, state, headers
+                        )
+                        if changed:
+                            await asyncio.to_thread(self._save_live_subtitle_state, state)
+                        failure_notice.discard(key)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        if key not in failure_notice:
+                            failure_notice.add(key)
+                            self._log(
+                                f"[subtitles] 直播字幕 {track.get('language') or track.get('name') or key} "
+                                f"暂时不可用，将继续重试: {exc}"
+                            )
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=2.0)
+                except TimeoutError:
+                    pass
+
+    async def _capture_live_subtitle_track(
+        self,
+        client: Any,
+        track: dict,
+        key: str,
+        state: dict,
+        headers: dict[str, str],
+    ) -> bool:
+        url = str(track.get("uri") or "")
+        if not url:
+            return False
+        response = await client.get(url, headers=self._headers(url, headers))
+        response.raise_for_status()
+        final_url = str(getattr(response, "url", "") or url)
+        track_state = state["tracks"].setdefault(
+            key,
+            {
+                "name": str(track.get("name") or ""),
+                "language": str(track.get("language") or ""),
+                "forced": bool(track.get("forced")),
+                "segments": [],
+            },
+        )
+        segments = track_state.setdefault("segments", [])
+        seen = {str(item.get("identity") or "") for item in segments if isinstance(item, dict)}
+        cache_dir = self._task_dir() / "live-subtitles" / key
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        changed = False
+
+        if response.text.lstrip("﻿ \t\r\n").startswith("WEBVTT"):
+            payload = bytes(response.content)
+            identity = hashlib.sha256(payload).hexdigest()
+            candidates = [(identity, None, payload)]
+        else:
+            parsed = parse_m3u8(final_url, response.text)
+            if parsed["type"] != "media":
+                raise RuntimeError("直播字幕清单不是媒体清单")
+            candidates = [
+                (self._vod_segment_identity(segment), segment, None)
+                for segment in parsed["segments"]
+                if segment.get("url")
+            ]
+
+        for identity, segment, direct_payload in candidates:
+            if not identity or identity in seen:
+                continue
+            filename = f"{len(segments):08d}.vtt"
+            destination = cache_dir / filename
+            if direct_payload is not None:
+                temporary = destination.with_name(destination.name + ".tmp")
+                temporary.write_bytes(direct_payload)
+                await asyncio.to_thread(durable_replace, temporary, destination)
+            else:
+                await self._download_subtitle_segment(
+                    client, segment or {}, headers, destination
+                )
+            if destination.stat().st_size <= 0:
+                destination.unlink(missing_ok=True)
+                continue
+            segments.append({"identity": identity, "file": filename})
+            seen.add(identity)
+            changed = True
+        return changed
+
+    async def _save_recorded_live_subtitles(self) -> None:
+        if not self.task.output_path or not getattr(settings, "download_subtitles", True):
+            return
+        state = self._load_live_subtitle_state()
+        cache_root = (self._task_dir() / "live-subtitles").resolve()
+        output = Path(self.task.output_path)
+        base = output.with_suffix("")
+        used_labels: set[str] = set()
+        saved = 0
+        for position, (key, track_state) in enumerate(state.get("tracks", {}).items(), 1):
+            if not isinstance(track_state, dict):
+                continue
+            texts: list[str] = []
+            track_dir = (cache_root / key).resolve()
+            for item in track_state.get("segments", []):
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    path = (track_dir / str(item.get("file") or "")).resolve()
+                    if not path.is_relative_to(track_dir) or not path.is_file():
+                        continue
+                    texts.append(path.read_text(encoding="utf-8-sig", errors="replace"))
+                except (OSError, ValueError):
+                    continue
+            merged = merge_webvtt_segments(texts)
+            if not has_cues(merged):
+                continue
+            label = self._subtitle_label(track_state, position, used_labels)
+            vtt_path = base.with_name(f"{base.name}.{label}.vtt")
+            vtt_path.write_text(merged, encoding="utf-8")
+            vtt_path.with_suffix(".srt").write_text(
+                webvtt_to_srt(merged), encoding="utf-8"
+            )
+            saved += 1
+            self._log(f"[subtitles] 已保存直播字幕: {vtt_path.name}")
+        if saved:
+            self._log(f"[subtitles] 共保存 {saved} 条直播字幕轨道")
 
     def _subtitle_label(self, track: dict, position: int, used: set[str]) -> str:
         raw = str(track.get("language") or track.get("name") or f"sub{position}")
@@ -812,7 +1219,7 @@ class HLSDownloader:
         used_labels: set[str] = set()
         saved = 0
         try:
-            async with _create_hls_client(2) as client:
+            async with _create_hls_client(2, self.task.url) as client:
                 for position, track in enumerate(tracks, 1):
                     label = self._subtitle_label(track, position, used_labels)
                     try:
@@ -867,27 +1274,65 @@ class HLSDownloader:
         parsed = parse_m3u8(final_url, text)
         if parsed["type"] != "media":
             raise RuntimeError("字幕清单不是媒体清单")
-        if any(segment.get("key") for segment in parsed["segments"]):
-            raise RuntimeError("暂不支持加密字幕")
         texts: list[str] = []
-        for segment in parsed["segments"]:
-            segment_url = segment["url"]
-
-            async def load_segment(segment_url=segment_url):
-                response = await client.get(
-                    segment_url, headers=self._headers(segment_url, headers)
+        fetch_dir = self._task_dir() / "subtitle-fetch"
+        fetch_dir.mkdir(parents=True, exist_ok=True)
+        for position, segment in enumerate(parsed["segments"]):
+            destination = fetch_dir / f"{position:06d}.vtt"
+            try:
+                await self._retry_control_request(
+                    lambda segment=segment, destination=destination: self._download_subtitle_segment(
+                        client, segment, headers, destination
+                    ),
+                    stage="verifying",
+                    url=segment["url"],
+                    label="字幕分片",
                 )
-                response.raise_for_status()
-                return response
-
-            segment_response = await self._retry_control_request(
-                load_segment,
-                stage="verifying",
-                url=segment_url,
-                label="字幕分片",
-            )
-            texts.append(segment_response.text)
+                texts.append(
+                    destination.read_text(encoding="utf-8-sig", errors="replace")
+                )
+            finally:
+                destination.unlink(missing_ok=True)
         return texts
+
+    async def _download_subtitle_segment(
+        self,
+        client: Any,
+        segment: dict,
+        headers: dict[str, str],
+        destination: Path,
+    ) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.unlink(missing_ok=True)
+        key_info = segment.get("key")
+        if not key_info:
+            await self._download_resource(
+                client,
+                str(segment["url"]),
+                destination,
+                headers,
+                segment.get("byte_range"),
+            )
+            return
+        encrypted = destination.with_name(destination.name + ".enc")
+        try:
+            await self._download_resource(
+                client,
+                str(segment["url"]),
+                encrypted,
+                headers,
+                segment.get("byte_range"),
+            )
+            key = await self._fetch_key(client, str(key_info["uri"]), headers)
+            await asyncio.to_thread(
+                _decrypt_aes128_file,
+                encrypted,
+                destination,
+                key,
+                key_info["iv"],
+            )
+        finally:
+            encrypted.unlink(missing_ok=True)
 
     async def _download_init_maps(
         self,
@@ -962,6 +1407,135 @@ class HLSDownloader:
                 cache[cache_key] = destination
             segment["init_path"] = str(cache[cache_key])
 
+    @staticmethod
+    def _vod_segment_identity(segment: dict) -> str:
+        """Return a non-secret identity for bytes assigned to one VOD slot.
+
+        A numbered ``.seg`` file is safe to reuse only when the media URI,
+        byte range, encryption context and initialization section still refer
+        to the same resource.  Signed query values deliberately disappear via
+        ``stable_request_key`` so an expired CDN signature can be refreshed
+        without throwing away valid bytes.  Hashing the descriptor keeps
+        access tokens and source URLs out of the checkpoint file.
+        """
+
+        def resource(value: str) -> str:
+            return stable_request_key(str(value or ""), ignore_host=True)
+
+        byte_range = segment.get("byte_range") or {}
+        key_info = segment.get("key") or {}
+        init_map = segment.get("init_map") or {}
+        init_range = init_map.get("byte_range") or {}
+        iv = key_info.get("iv")
+        if isinstance(iv, bytes):
+            iv_value = iv.hex()
+        else:
+            iv_value = str(iv or "")
+        descriptor = {
+            "url": resource(segment.get("url", "")),
+            "range": [byte_range.get("offset"), byte_range.get("length")],
+            "key": [resource(key_info.get("uri", "")), iv_value],
+            "init": [
+                resource(init_map.get("uri", "")),
+                init_range.get("offset"),
+                init_range.get("length"),
+            ],
+            "sequence": int(segment.get("media_sequence") or 0),
+            "duration": round(float(segment.get("duration") or 0), 6),
+            "discontinuity": bool(segment.get("discontinuity")),
+        }
+        encoded = json.dumps(
+            descriptor,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _vod_state_path(self) -> Path:
+        return self._task_dir() / VOD_STATE_FILENAME
+
+    def _write_vod_state(self) -> None:
+        payload = {
+            "version": VOD_STATE_VERSION,
+            "segments": self._vod_resume_records,
+        }
+        atomic_write_text(
+            self._vod_state_path(),
+            json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        )
+
+    def _prepare_vod_resume(self, segments: list[dict]) -> None:
+        """Validate every reusable VOD segment before workers see it."""
+        state_path = self._vod_state_path()
+        try:
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = {}
+        saved = payload.get("segments") if payload.get("version") == VOD_STATE_VERSION else {}
+        if not isinstance(saved, dict):
+            saved = {}
+
+        identities = {
+            int(segment["index"]): self._vod_segment_identity(segment)
+            for segment in segments
+        }
+        valid: dict[str, dict[str, int | str]] = {}
+        seg_dir = self._seg_dir()
+        seg_dir.mkdir(parents=True, exist_ok=True)
+
+        for index, identity in identities.items():
+            path = seg_dir / f"{index:06d}.seg"
+            record = saved.get(str(index))
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            expected_size = 0
+            if isinstance(record, dict):
+                try:
+                    expected_size = int(record.get("size") or 0)
+                except (TypeError, ValueError):
+                    expected_size = 0
+            if (
+                size > 0
+                and expected_size == size
+                and isinstance(record, dict)
+                and record.get("identity") == identity
+            ):
+                valid[str(index)] = {"identity": identity, "size": size}
+            else:
+                path.unlink(missing_ok=True)
+
+        # Remove orphaned slots and all incomplete transport/decryption files.
+        # Their names are local implementation details and never constitute a
+        # completed checkpoint, even if a crash left them non-empty.
+        for path in seg_dir.iterdir():
+            match = re.fullmatch(r"(\d{6})\.seg(?:\..+)?", path.name)
+            if not match:
+                continue
+            index = int(match.group(1))
+            if path.suffix != ".seg" or index not in identities:
+                path.unlink(missing_ok=True)
+
+        self._vod_resume_identities = identities
+        self._vod_resume_records = valid
+        self._vod_resume_enabled = True
+        self._write_vod_state()
+
+    async def _checkpoint_vod_segment(self, index: int, size: int) -> None:
+        if not self._vod_resume_enabled:
+            return
+        identity = self._vod_resume_identities.get(index)
+        if not identity or size <= 0:
+            return
+        async with self._vod_resume_lock:
+            self._vod_resume_records[str(index)] = {
+                "identity": identity,
+                "size": int(size),
+            }
+            await asyncio.to_thread(self._write_vod_state)
+
     def _load_live_state(self) -> dict | None:
         path = self._task_dir() / LIVE_STATE_FILENAME
         if not path.exists():
@@ -974,31 +1548,59 @@ class HLSDownloader:
             return None
         return payload
 
+    @staticmethod
+    def _live_resource_identity(entry: dict) -> str:
+        saved = str(entry.get("resource_identity") or "")
+        if saved:
+            return saved
+        stable = stable_request_key(
+            str(entry.get("url") or ""),
+            ignore_host=True,
+        )
+        return hashlib.sha256(stable.encode("utf-8")).hexdigest() if stable else ""
+
+    def _safe_saved_init_path(self, item: dict) -> str:
+        """Resolve a checkpoint map only inside this task's map directory."""
+        map_dir = (self._task_dir() / "maps").resolve()
+        init_name = str(item.get("init_name") or "")
+        candidate = map_dir / init_name if init_name else Path(str(item.get("init_path") or ""))
+        if not str(candidate):
+            return ""
+        try:
+            resolved = candidate.resolve()
+            if not resolved.is_relative_to(map_dir) or not resolved.is_file():
+                return ""
+        except (OSError, ValueError):
+            return ""
+        return str(resolved)
+
     def _save_live_state(self, recorded: list[dict], total_duration: float) -> None:
-        payload = {
-            "version": 1,
-            "total_duration": float(total_duration or 0),
-            "segments": [
+        persisted = []
+        seg_dir = self._seg_dir()
+        for entry in recorded:
+            segment_path = seg_dir / f"{int(entry['index']):06d}.seg"
+            try:
+                size = segment_path.stat().st_size
+            except OSError:
+                size = 0
+            persisted.append(
                 {
                     "index": int(entry["index"]),
-                    "url": str(entry.get("url") or ""),
+                    "resource_identity": self._live_resource_identity(entry),
                     "duration": float(entry.get("duration") or 0),
                     "media_sequence": int(entry.get("media_sequence") or 0),
                     "discontinuity": bool(entry.get("discontinuity")),
-                    "init_path": str(entry.get("init_path") or ""),
+                    "init_name": Path(str(entry.get("init_path") or "")).name,
+                    "size": int(size),
                 }
-                for entry in recorded
-            ],
+            )
+        payload = {
+            "version": 3,
+            "total_duration": float(total_duration or 0),
+            "segments": persisted,
         }
         destination = self._task_dir() / LIVE_STATE_FILENAME
-        temporary = destination.with_name(destination.name + ".tmp")
-        try:
-            temporary.write_text(
-                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-            )
-            temporary.replace(destination)
-        finally:
-            temporary.unlink(missing_ok=True)
+        atomic_write_text(destination, json.dumps(payload, ensure_ascii=False))
 
     def _restore_live_segments(
         self,
@@ -1024,13 +1626,21 @@ class HLSDownloader:
             if not segment_path.exists() or segment_path.stat().st_size == 0:
                 gap = True
                 continue
-            init_path = str(item.get("init_path") or "")
-            if init_path and not Path(init_path).exists():
+            expected_size = int(item.get("size") or 0)
+            if expected_size and segment_path.stat().st_size != expected_size:
+                gap = True
+                continue
+            had_init = bool(item.get("init_name") or item.get("init_path"))
+            init_path = self._safe_saved_init_path(item) if had_init else ""
+            if had_init and not init_path:
                 gap = True
                 continue
             entry = {
                 "index": index,
+                # Old checkpoints can still resume once; the next atomic save
+                # migrates them to a token-free resource identity.
                 "url": str(item.get("url") or ""),
+                "resource_identity": str(item.get("resource_identity") or ""),
                 "duration": float(item.get("duration") or 0),
                 "media_sequence": int(item.get("media_sequence") or 0),
                 "discontinuity": bool(item.get("discontinuity")) or gap,
@@ -1065,9 +1675,15 @@ class HLSDownloader:
                     source.replace(destination)
                 except OSError:
                     # An open playback handle can block the rename on
-                    # Windows; copy so the plan stays consistent either way.
-                    shutil.copyfile(source, destination)
-                    source.unlink(missing_ok=True)
+                    # Windows; publish a flushed copy atomically so the next
+                    # checkpoint cannot point at a half-copied segment.
+                    temporary = destination.with_name(destination.name + ".compact.tmp")
+                    try:
+                        shutil.copyfile(source, temporary)
+                        durable_replace(temporary, destination)
+                        source.unlink(missing_ok=True)
+                    finally:
+                        temporary.unlink(missing_ok=True)
             entry["index"] = position
         return len(recorded)
 
@@ -1206,15 +1822,17 @@ class HLSDownloader:
                     f"[recording] 继续上次录制：已有 {len(recorded)} 个分片"
                     f"（{_format_clock(total_duration)}）"
                 )
-        next_index = self._compact_recorded(recorded)
+        next_index = await asyncio.to_thread(self._compact_recorded, recorded)
         self._purge_orphan_live_segments(next_index)
         if recorded:
             # Compaction may have renamed segment files; persist the new
             # index mapping immediately so a crash before the next batch
             # cannot resurrect the stale layout.
-            self._save_live_state(recorded, total_duration)
-        recorded_urls = {
-            str(entry.get("url") or "") for entry in recorded if entry.get("url")
+            await asyncio.to_thread(self._save_live_state, recorded, total_duration)
+        recorded_identities = {
+            self._live_resource_identity(entry)
+            for entry in recorded
+            if self._live_resource_identity(entry)
         }
         last_sequence = max(
             (int(entry.get("media_sequence") or 0) for entry in recorded),
@@ -1234,7 +1852,7 @@ class HLSDownloader:
         task.progress.connection_status = "running"
         task.progress.media_duration = total_duration
         if recorded:
-            write_playback_plan(task_dir, recorded, total_duration)
+            await asyncio.to_thread(write_playback_plan, task_dir, recorded, total_duration)
             self._refresh_playback_progress()
         self._set_stage("recording", "直播流录制中，停止录制后自动合并")
 
@@ -1269,7 +1887,8 @@ class HLSDownloader:
                 and last_sequence >= 0
                 and max(window_sequences) < last_sequence - len(window_sequences)
                 and any(
-                    segment.get("url") not in recorded_urls for segment in window
+                    self._live_resource_identity(segment) not in recorded_identities
+                    for segment in window
                 )
             )
             if epoch_reset:
@@ -1284,7 +1903,10 @@ class HLSDownloader:
                 sequence = int(segment.get("media_sequence") or 0)
                 if not epoch_reset and sequence <= last_sequence:
                     continue
-                if epoch_reset and segment.get("url") in recorded_urls:
+                if (
+                    epoch_reset
+                    and self._live_resource_identity(segment) in recorded_identities
+                ):
                     continue
                 if max_seconds and projected >= max_seconds:
                     # An event playlist can list hours of backlog in a single
@@ -1342,10 +1964,10 @@ class HLSDownloader:
                 )
                 if kept:
                     recorded.extend(kept)
-                    recorded_urls.update(
-                        str(entry.get("url") or "")
+                    recorded_identities.update(
+                        self._live_resource_identity(entry)
                         for entry in kept
-                        if entry.get("url")
+                        if self._live_resource_identity(entry)
                     )
                     total_duration += sum(
                         float(entry.get("duration") or 0) for entry in kept
@@ -1353,12 +1975,12 @@ class HLSDownloader:
                     last_new_segment = loop.time()
                     # Dropped segments burn indexes; renumber so the playback
                     # plan keeps its index == position invariant.
-                    next_index = self._compact_recorded(recorded)
+                    next_index = await asyncio.to_thread(self._compact_recorded, recorded)
                     self._purge_orphan_live_segments(next_index)
                     self.tracker.total = len(recorded)
                     task.progress.media_duration = total_duration
-                    write_playback_plan(task_dir, recorded, total_duration)
-                    self._save_live_state(recorded, total_duration)
+                    await asyncio.to_thread(write_playback_plan, task_dir, recorded, total_duration)
+                    await asyncio.to_thread(self._save_live_state, recorded, total_duration)
                     self._refresh_playback_progress()
                     self._emit_progress()
                     task.progress.connection_status = "running"
@@ -1433,15 +2055,15 @@ class HLSDownloader:
             self._log(f"[recording] 丢弃 {dropped} 个未完成分片")
         if not final_segments:
             raise RuntimeError("直播录制没有可用分片")
-        self._compact_recorded(final_segments)
+        await asyncio.to_thread(self._compact_recorded, final_segments)
 
         final_duration = sum(
             float(entry.get("duration") or 0) for entry in final_segments
         )
         task.progress.total_segments = len(final_segments)
         task.progress.media_duration = final_duration
-        write_playback_plan(task_dir, final_segments, final_duration)
-        self._save_live_state(final_segments, final_duration)
+        await asyncio.to_thread(write_playback_plan, task_dir, final_segments, final_duration)
+        await asyncio.to_thread(self._save_live_state, final_segments, final_duration)
         self._set_stage(
             "recording",
             f"{finish_reason}，共录制 {_format_clock(final_duration)}，正在合并",
@@ -1597,6 +2219,7 @@ class HLSDownloader:
                         segment.get("byte_range"),
                     )
                 size = destination.stat().st_size
+                await self._checkpoint_vod_segment(index, size)
                 self.tracker.add_completed(size)
                 self._completed_count += 1
                 if (
@@ -1771,7 +2394,7 @@ class HLSDownloader:
                 raise RuntimeError(
                     f"BYTERANGE 长度不匹配，期望 {expected_length}，实际 {written}"
                 )
-            temporary.replace(destination)
+            await asyncio.to_thread(durable_replace, temporary, destination)
             return written
         finally:
             temporary.unlink(missing_ok=True)

@@ -6,6 +6,8 @@ import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 import type { ThemePreference } from '../theme'
 import type { UpdateInfo } from '../types'
 import { friendlyUpdateError } from '../updateError'
+
+const QUEUE_DAY_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 import { pickFolder } from '../desktop'
 import FolderPicker from './FolderPicker'
 import ConfirmDialog from './ConfirmDialog'
@@ -13,6 +15,7 @@ import { Button } from './ui'
 
 type SettingsSection = 'general' | 'network' | 'maintenance'
 const SETTINGS_SECTIONS: SettingsSection[] = ['general', 'network', 'maintenance']
+const SECRET_MASK = '••••••••'
 
 export default function SettingsPanel({ themePreference, onThemePreferenceChange, onClose }: {
   themePreference: ThemePreference
@@ -42,11 +45,13 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   const [castDevices, setCastDevices] = useState<Array<{ id: string; protocol: 'dlna' | 'chromecast'; location: string; control_url: string; service_type: string; label: string; host: string }>>([])
   const [scanningCast, setScanningCast] = useState(false)
   const [castScanMessage, setCastScanMessage] = useState('')
+  const [siteProfilesText, setSiteProfilesText] = useState('[]')
+  const [originalSiteProfilesText, setOriginalSiteProfilesText] = useState('[]')
   const [activeSection, setActiveSection] = useState<SettingsSection>('general')
   const dialogRef = useRef<HTMLElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
-  const dirty = JSON.stringify(settings) !== JSON.stringify(original)
+  const dirty = JSON.stringify(settings) !== JSON.stringify(original) || siteProfilesText !== originalSiteProfilesText
   const selectedTvboxDevice = tvboxDevices.some(device => device.endpoint === settings.tvbox_endpoint)
   const tvboxSelectValue = settings.tvbox_endpoint
     ? (selectedTvboxDevice ? settings.tvbox_endpoint : '__manual__')
@@ -57,7 +62,14 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     : ''
 
   useEffect(() => {
-    fetchSettings().then(data => { setSettings(data); setOriginal(data) }).catch(reason => setError(reason.message || '加载设置失败'))
+    fetchSettings().then(data => {
+      const editable = {
+        ...data,
+        default_cookie: data.default_cookie_configured ? SECRET_MASK : '',
+      }
+      const profiles = JSON.stringify(editable.site_profiles || [], null, 2)
+      setSettings(editable); setOriginal(editable); setSiteProfilesText(profiles); setOriginalSiteProfilesText(profiles)
+    }).catch(reason => setError(reason.message || '加载设置失败'))
     getDesktopInfo().then(info => { setUninstallAvailable(info.installed === true); setDesktopInfo(info) })
     fetchUpdateInfo().then(setUpdateInfo).catch(() => {})
   }, [])
@@ -120,6 +132,15 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   }
   const doSave = async () => {
     setError('')
+    let siteProfiles: unknown
+    try {
+      siteProfiles = JSON.parse(siteProfilesText || '[]')
+      if (!Array.isArray(siteProfiles)) throw new Error()
+    } catch {
+      setError('按站点规则必须是 JSON 数组')
+      setActiveSection('network')
+      return
+    }
     if (!String(settings.download_dir || '').trim()) { setError('下载保存目录不能为空'); return }
     if (!String(settings.temp_dir || '').trim()) { setError('缓存与过程文件目录不能为空'); return }
     if (settings.default_concurrency < 1 || settings.default_concurrency > 256) { setError('默认并发数必须在 1 到 256 之间'); return }
@@ -127,6 +148,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     if (settings.http_chunk_size_mb < 1 || settings.http_chunk_size_mb > 64) { setError('HTTP 分段大小必须在 1 到 64 MiB 之间'); return }
     if (settings.download_speed_limit_kib != null && settings.download_speed_limit_kib < 0) { setError('下载限速不能小于 0'); return }
     if (settings.live_record_max_minutes != null && (settings.live_record_max_minutes < 0 || settings.live_record_max_minutes > 2880)) { setError('直播录制时长上限必须在 0 到 2880 分钟之间'); return }
+    if (settings.proxy_mode === 'manual' && !String(settings.proxy_url || '').trim()) { setError('手动代理模式必须填写代理地址'); setActiveSection('network'); return }
     if (settings.bt_upload_limit_kib < 0) { setError('BT 上传限制不能小于 0'); return }
     if (settings.queue_auto_start_enabled && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(settings.queue_auto_start_time || ''))) { setError('定时开始时间必须为 HH:MM'); return }
     if (!String(settings.ffmpeg_path || '').trim()) { setError('ffmpeg 路径不能为空'); return }
@@ -143,8 +165,14 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     }
     setSaving(true)
     try {
-      const normalized = await saveSettings(settings)
-      setSettings(normalized); setOriginal(normalized)
+      const normalized = await saveSettings({ ...settings, site_profiles: siteProfiles })
+      const editable = {
+        ...normalized,
+        default_cookie: normalized.default_cookie_configured ? SECRET_MASK : '',
+      }
+      const normalizedProfiles = JSON.stringify(editable.site_profiles || [], null, 2)
+      setSettings(editable); setOriginal(editable)
+      setSiteProfilesText(normalizedProfiles); setOriginalSiteProfilesText(normalizedProfiles)
       setSaved(true)
       window.setTimeout(() => setSaved(false), 2000)
     } catch (reason: any) {
@@ -270,11 +298,30 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
           <section className="settings-group settings-grid-group">
             <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={settings.queue_auto_start_enabled ?? false} onChange={event => update('queue_auto_start_enabled', event.target.checked)} />在指定时间自动开始新队列</label>
             <div className="settings-field"><label htmlFor="setting-queue-auto-start">自动开始时间</label><input id="setting-queue-auto-start" type="time" disabled={!settings.queue_auto_start_enabled} value={settings.queue_auto_start_time ?? '00:00'} onChange={event => update('queue_auto_start_time', event.target.value)} /><p>开启后，新任务保持排队，直到当天该时间开始。排队中可右键调整优先级（上移/下移/队首/队尾）。</p></div>
+            <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={settings.queue_auto_stop_enabled ?? false} onChange={event => update('queue_auto_stop_enabled', event.target.checked)} />在指定时间自动停止队列</label>
+            <div className="settings-field"><label htmlFor="setting-queue-auto-stop">自动停止时间</label><input id="setting-queue-auto-stop" type="time" disabled={!settings.queue_auto_stop_enabled} value={settings.queue_auto_stop_time ?? '07:30'} onChange={event => update('queue_auto_stop_time', event.target.value)} /><p>普通下载会安全暂停，直播会停止录制并合并；跨午夜时间段也能正确处理。</p></div>
+            <div className="settings-field settings-field-wide"><label>队列生效星期</label><div className="settings-day-picker">{QUEUE_DAY_LABELS.map((label, day) => { const selected: number[] = settings.queue_active_days ?? [0, 1, 2, 3, 4, 5, 6]; return <label className="checkbox-label" key={label}><input type="checkbox" checked={selected.includes(day)} onChange={event => { const next = event.target.checked ? [...selected, day].sort() : selected.filter((value: number) => value !== day); if (next.length) update('queue_active_days', next) }} />{label}</label> })}</div><p>至少保留一天；开始时间晚于停止时间时按跨午夜队列处理。</p></div>
           </section>
         </div>}
 
         {activeSection === 'network' && <div id="settings-network" role="tabpanel" aria-labelledby="settings-tab-network" className="settings-page">
-          <h3 className="settings-group-label settings-group-label-first">BT 下载</h3>
+          <h3 className="settings-group-label settings-group-label-first">代理</h3>
+          <section className="settings-group settings-grid-group">
+            <div className="settings-field"><label htmlFor="setting-proxy-mode">连接方式</label><select id="setting-proxy-mode" value={settings.proxy_mode || 'system'} onChange={event => update('proxy_mode', event.target.value)}><option value="system">跟随系统 / 环境</option><option value="direct">始终直连</option><option value="manual">手动代理</option></select><p>应用于 HTTP、HLS 和 DASH 下载连接。</p></div>
+            <div className="settings-field"><label htmlFor="setting-proxy-url">代理地址</label><input id="setting-proxy-url" disabled={settings.proxy_mode !== 'manual'} value={settings.proxy_url || ''} onChange={event => update('proxy_url', event.target.value)} placeholder="http://user:pass@127.0.0.1:7890" /><p>支持 HTTP(S)、SOCKS5 与带认证的代理 URL。</p></div>
+            <div className="settings-field"><label htmlFor="setting-proxy-bypass">不走代理的 Host</label><input id="setting-proxy-bypass" value={(settings.proxy_bypass || []).join(', ')} onChange={event => update('proxy_bypass', event.target.value.split(',').map(value => value.trim()).filter(Boolean))} placeholder="localhost, 127.0.0.1, *.lan" /><p>逗号分隔，支持通配符。</p></div>
+          </section>
+
+          <h3 className="settings-group-label">按站点下载规则</h3>
+          <section className="settings-group settings-grid-group">
+            <div className="settings-field settings-field-wide">
+              <label htmlFor="setting-site-profiles">Host 通配规则（JSON）</label>
+              <textarea id="setting-site-profiles" className="settings-json-editor" value={siteProfilesText} onChange={event => setSiteProfilesText(event.target.value)} spellCheck={false} placeholder={'[{"host":"*.example.com","concurrency":4,"speed_limit_kib":0,"referer":"https://example.com/"}]'} />
+              <p>第一条匹配规则生效。支持 host、user_agent、referer、origin、request_headers、concurrency 和 speed_limit_kib；浏览器实际捕获的请求值优先。</p>
+            </div>
+          </section>
+
+          <h3 className="settings-group-label">BT 下载</h3>
           <section className="settings-group settings-grid-group">
             <div className="settings-field"><label htmlFor="setting-bt-upload">上传上限（KiB/s）</label><input id="setting-bt-upload" type="number" min={0} max={1048576} value={settings.bt_upload_limit_kib ?? 1024} onChange={event => update('bt_upload_limit_kib', Number(event.target.value))} /><p>0 表示不限速；完成后会立即停止做种。</p></div>
             <div className="settings-field"><label htmlFor="setting-bt-peers">最大 Peer 连接</label><input id="setting-bt-peers" type="number" min={10} max={1000} value={settings.bt_max_connections ?? 200} onChange={event => update('bt_max_connections', Number(event.target.value))} /><p>默认 200；种子稀少时可提高连接发现速度，网络受限时再降低。</p></div>
@@ -361,6 +408,6 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     {showPicker && <FolderPicker initialPath={settings.download_dir || ''} onSelect={path => { update('download_dir', path); setShowPicker(false) }} onClose={() => setShowPicker(false)} />}
     {showTempPicker && <FolderPicker initialPath={settings.temp_dir || ''} onSelect={path => { update('temp_dir', path); setShowTempPicker(false) }} onClose={() => setShowTempPicker(false)} />}
     {confirmAction === 'close' && <ConfirmDialog title="放弃未保存的设置？" message="关闭后，本次修改不会生效。" confirmLabel="放弃修改" danger onCancel={() => setConfirmAction(null)} onConfirm={onClose} />}
-    {confirmAction === 'update' && updateInfo && <ConfirmDialog title={`安装 v${updateInfo.latest_version}？`} message="安装包下载完成后，下载器会自动关闭并启动安装程序。" confirmLabel="下载安装" onCancel={() => setConfirmAction(null)} onConfirm={() => { setConfirmAction(null); void updateApp(true) }} />}
+    {confirmAction === 'update' && updateInfo && <ConfirmDialog title={`安装 v${updateInfo.latest_version}？`} message={updateInfo.asset_kind === 'portable' ? '便携更新包下载并校验后，下载器会自动关闭、事务式替换程序文件并重新启动；配置、任务和下载文件会保留。' : '安装包下载完成并校验后，下载器会自动关闭并启动安装程序。'} confirmLabel="下载安装" onCancel={() => setConfirmAction(null)} onConfirm={() => { setConfirmAction(null); void updateApp(true) }} />}
   </div>
 }

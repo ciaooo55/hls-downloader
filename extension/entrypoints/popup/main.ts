@@ -3,6 +3,7 @@ import { visibleMediaResources, type MediaResource } from '../../lib/resources'
 import { resourceQuality } from '../../lib/hlsManifest'
 import { handoffStatusLabel, handoffTerminalStatus } from '../../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, normalizeHandoffSuppressions, type HandoffSuppression } from '../../lib/handoffSuppression'
+import { extensionNeedsUpgrade } from '../../lib/version'
 import {
   THEME_BASE_CSS,
   THEME_STORAGE_KEY,
@@ -106,6 +107,13 @@ async function main() {
   const excludeBtn = el('button', 'hlsd-button', '\u6392\u9664\u672c\u7ad9')
   controls.append(enableBtn, cookieBtn, excludeBtn)
 
+  const updateNotice = el('div', 'update-notice')
+  updateNotice.hidden = true
+  const updateText = el('span')
+  const updateButton = el('button', '', '查看新版') as HTMLButtonElement
+  updateButton.type = 'button'
+  updateNotice.append(updateText, updateButton)
+
   const errorBox = el('div', 'send-error')
   errorBox.hidden = true
   const section = el('section')
@@ -123,7 +131,7 @@ async function main() {
     el('span', '', `v${browser.runtime.getManifest().version}`),
     restorePromptsBtn,
   )
-  mainEl.append(header, controls, errorBox, section, footer)
+  mainEl.append(header, controls, updateNotice, errorBox, section, footer)
   root.append(mainEl)
 
   let enabled = true
@@ -169,7 +177,8 @@ async function main() {
       const resolution = item.width && item.height ? (item.width + '\u00d7' + item.height) : ''
       const bandwidth = item.bandwidth ? ((item.bandwidth / 1_000_000).toFixed(1) + ' Mbps') : ''
       const duration = item.duration ? formatDuration(item.duration) : ''
-      const meta = [item.kind.toUpperCase(), quality, resolution, bandwidth, duration, size].filter(Boolean).join(' \u00b7 ')
+      const streamMode = item.isLive === true ? '直播' : ''
+      const meta = [item.kind.toUpperCase(), streamMode, quality, resolution, bandwidth, duration, size].filter(Boolean).join(' \u00b7 ')
       const article = el('article')
       const body = el('div')
       const name = el('strong', '', item.title || item.filename || item.url.split('/').pop() || item.url)
@@ -336,9 +345,21 @@ async function main() {
   const pageUrl = tab?.url || ''
   try { host = new URL(pageUrl).host } catch { host = '' }
   resources = await browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab?.id }) || []
-  const online = Boolean((await browser.runtime.sendMessage({ type: 'ping' }))?.ok)
-  statusEl.textContent = online ? '\u684c\u9762\u7aef\u5df2\u8fde\u63a5' : '\u684c\u9762\u7aef\u79bb\u7ebf'
+  const connection = await browser.runtime.sendMessage({ type: 'ping' }) || {}
+  const online = Boolean(connection.ok)
+  statusEl.textContent = online ? '\u684c\u9762\u7aef\u5df2\u8fde\u63a5' : connection.reconnecting ? '\u684c\u9762\u7aef\u6b63\u5728\u91cd\u8fde' : '\u684c\u9762\u7aef\u79bb\u7ebf'
   statusEl.classList.toggle('online', online)
+  const currentExtensionVersion = browser.runtime.getManifest().version
+  const recommendedExtensionVersion = String(connection.recommended_extension_version || '')
+  const extensionReleaseUrl = String(connection.extension_release_url || '')
+  if (extensionNeedsUpgrade(currentExtensionVersion, recommendedExtensionVersion)) {
+    updateNotice.hidden = false
+    updateText.textContent = `插件可升级到 v${recommendedExtensionVersion}。商店安装版由浏览器自动更新；开发者模式安装请下载新版后重新加载。`
+    updateButton.hidden = !extensionReleaseUrl
+    updateButton.onclick = () => {
+      if (extensionReleaseUrl) void browser.tabs.create({ url: extensionReleaseUrl })
+    }
+  }
   const stored = await browser.storage.local.get([
     'enabled', 'excludedHosts', 'useBrowserCookies', HANDOFF_SUPPRESSION_STORAGE_KEY,
   ])

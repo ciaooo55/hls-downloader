@@ -373,13 +373,86 @@ def test_save_settings_serializes_project_paths_as_relative(tmp_path, monkeypatc
     assert saved["ffmpeg_path"] == "bin\\ffmpeg.exe"
 
 
+def test_config_credentials_are_dpapi_protected_and_restore_at_runtime(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+    settings = config_module.Settings(
+        default_cookie="session=config-secret",
+        proxy_mode="manual",
+        proxy_url="http://proxy-user:proxy-pass@127.0.0.1:8080",
+        site_profiles=[{
+            "host": "example.test",
+            "request_headers": {
+                "Authorization": "Bearer site-secret",
+                "X-Public-Mode": "video",
+            },
+        }],
+    )
+
+    config_module.save_settings(settings)
+    stored_text = config_path.read_text(encoding="utf-8")
+    stored = json.loads(stored_text)
+    assert "config-secret" not in stored_text
+    assert "proxy-pass" not in stored_text
+    assert "site-secret" not in stored_text
+    assert stored["default_cookie"].startswith("dpapi:")
+    assert stored["proxy_url"].startswith("dpapi:")
+    assert stored["site_profiles"][0]["request_headers"]["Authorization"].startswith("dpapi:")
+    assert stored["site_profiles"][0]["request_headers"]["X-Public-Mode"] == "video"
+
+    restored = config_module.load_settings()
+    assert restored.default_cookie == "session=config-secret"
+    assert restored.proxy_url == "http://proxy-user:proxy-pass@127.0.0.1:8080"
+    assert restored.site_profiles[0]["request_headers"]["Authorization"] == "Bearer site-secret"
+
+
+def test_settings_api_masks_credentials_and_preserves_masked_updates(tmp_path, monkeypatch):
+    from backend.app import api as api_module
+
+    monkeypatch.setattr(config_module, "CONFIG_PATH", tmp_path / "config.json")
+    monkeypatch.setattr(api_module, "_check_token", lambda _token: None)
+    monkeypatch.setattr(api_module.settings, "default_cookie", "session=api-secret")
+    monkeypatch.setattr(api_module.settings, "proxy_mode", "manual")
+    monkeypatch.setattr(api_module.settings, "proxy_url", "http://user:pass@127.0.0.1:8080")
+    monkeypatch.setattr(api_module.settings, "site_profiles", [{
+        "host": "example.test",
+        "request_headers": {"Authorization": "Bearer secret", "X-Mode": "video"},
+    }])
+
+    public = api_module._public_settings()
+    serialized = json.dumps(public, ensure_ascii=False)
+    assert "api-secret" not in serialized
+    assert "user:pass" not in serialized
+    assert "Bearer secret" not in serialized
+    assert public["default_cookie"] == ""
+    assert public["default_cookie_configured"] is True
+    assert public["proxy_url"] == "••••••••"
+    assert public["proxy_url_configured"] is True
+    assert public["site_profiles"][0]["request_headers"]["Authorization"] == "••••••••"
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/settings",
+        json={
+            "default_cookie": "••••••••",
+            "proxy_url": "••••••••",
+            "site_profiles": public["site_profiles"],
+        },
+        headers={"X-Token": "test"},
+    )
+    assert response.status_code == 200
+    assert api_module.settings.default_cookie == "session=api-secret"
+    assert api_module.settings.proxy_url == "http://user:pass@127.0.0.1:8080"
+    assert api_module.settings.site_profiles[0]["request_headers"]["Authorization"] == "Bearer secret"
+
+
 def test_distributable_default_config_does_not_force_site_specific_request_headers():
     config_path = config_module.PROJECT_ROOT / "config.default.json"
     data = json.loads(config_path.read_text(encoding="utf-8"))
 
     # The checked-in template must not ship a reusable privileged credential.
-    # First launch migrates this v13 template and persists a per-install token.
-    assert data["config_version"] == 13
+    # The release template already uses the current credential-protection schema.
+    assert data["config_version"] == 18
     assert "token" not in data
     assert data["temp_dir"] == "."
     assert data["default_referer"] == ""
@@ -417,16 +490,48 @@ def test_old_blank_request_defaults_remain_blank_after_migration(tmp_path, monke
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 16
+    assert loaded.config_version == 18
     assert loaded.default_referer == ""
     assert loaded.default_origin == ""
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["config_version"] == 16
+    assert saved["config_version"] == 18
     assert saved["token"] != "55555"
     assert len(saved["token"]) >= 32
     assert saved["temp_dir"] == "."
     assert saved["default_concurrency"] == 12
     assert saved["max_concurrent_tasks"] == 3
+
+
+def test_current_config_can_never_rebind_internal_api_to_lan(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "config_version": 18,
+        "host": "0.0.0.0",
+        "token": "x" * 40,
+        "download_dir": str(tmp_path / "downloads"),
+        "temp_dir": str(tmp_path / "temp"),
+    }), encoding="utf-8")
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+
+    loaded = config_module.load_settings()
+
+    assert loaded.host == "127.0.0.1"
+    assert json.loads(config_path.read_text(encoding="utf-8"))["host"] == "127.0.0.1"
+
+
+def test_corrupt_config_is_preserved_and_replaced_atomically(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"config_version":', encoding="utf-8")
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+
+    loaded = config_module.load_settings()
+
+    assert loaded.host == "127.0.0.1"
+    assert json.loads(config_path.read_text(encoding="utf-8"))["token"]
+    backups = list(tmp_path.glob("config.json.corrupt-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == '{"config_version":'
+    assert not (tmp_path / "config.json.tmp").exists()
 
 
 def test_publicly_leaked_token_is_rotated_on_load(tmp_path, monkeypatch):
@@ -445,7 +550,7 @@ def test_publicly_leaked_token_is_rotated_on_load(tmp_path, monkeypatch):
     assert len(loaded.token) >= 32
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["token"] == loaded.token
-    assert saved["config_version"] == 16
+    assert saved["config_version"] == 18
 
 
 def test_runtime_config_is_not_tracked_by_git():
@@ -480,8 +585,8 @@ def test_v13_template_generates_a_per_install_native_transport_token(tmp_path, m
     loaded = config_module.load_settings()
     saved = json.loads(config_path.read_text(encoding="utf-8"))
 
-    assert loaded.config_version == 16
-    assert saved["config_version"] == 16
+    assert loaded.config_version == 18
+    assert saved["config_version"] == 18
     assert len(saved["token"]) >= 32
 
 
@@ -503,7 +608,7 @@ def test_v2_legacy_concurrency_defaults_migrate_to_new_defaults(tmp_path, monkey
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 16
+    assert loaded.config_version == 18
     assert loaded.default_concurrency == 12
     assert loaded.max_concurrent_tasks == 3
 
@@ -526,7 +631,7 @@ def test_v2_custom_concurrency_values_are_preserved_during_migration(tmp_path, m
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 16
+    assert loaded.config_version == 18
     assert loaded.default_concurrency == 6
     assert loaded.max_concurrent_tasks == 5
 
@@ -548,7 +653,7 @@ def test_v11_legacy_takeover_default_migrates_to_capture_all_explicit_downloads(
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 16
+    assert loaded.config_version == 18
     assert loaded.browser_takeover_min_mb == 0
 
 
@@ -569,7 +674,7 @@ def test_v11_custom_takeover_threshold_is_preserved(tmp_path, monkeypatch):
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 16
+    assert loaded.config_version == 18
     assert loaded.browser_takeover_min_mb == 3
 
 
@@ -596,6 +701,70 @@ def test_create_browser_handoff_reports_ui_fallback(monkeypatch):
     assert body["presentation"] == "presented"
     assert body["presented"] is True
     assert browser_handoffs.get(body["id"]).presented is True
+
+
+def test_browser_handoff_rejects_oversized_body_and_fields(monkeypatch):
+    from backend.app import api as api_module
+
+    monkeypatch.setattr(api_module, "_check_token", lambda _token: None)
+    client = TestClient(app)
+
+    oversized_body = client.post(
+        "/api/browser/handoffs",
+        content=b"{" + b" " * (api_module.MAX_BROWSER_JSON_BODY_BYTES + 1),
+        headers={"X-Token": "test", "Content-Type": "application/json"},
+    )
+    oversized_title = client.post(
+        "/api/browser/handoffs",
+        json={"url": "https://cdn.example.test/video.mp4", "title": "x" * 513},
+        headers={"X-Token": "test"},
+    )
+    too_many_contexts = client.post(
+        "/api/browser/handoffs",
+        json={
+            "url": "https://cdn.example.test/video.mp4",
+            "request_contexts": {
+                f"https://cdn-{index}.example.test": {} for index in range(13)
+            },
+        },
+        headers={"X-Token": "test"},
+    )
+
+    assert oversized_body.status_code == 413
+    assert oversized_title.status_code == 422
+    assert too_many_contexts.status_code == 422
+
+
+def test_browser_handoff_sanitizes_contexts_before_memory_storage(monkeypatch):
+    from backend.app import api as api_module
+    from backend.app import desktop_runtime as runtime
+    from backend.app.browser_handoff import browser_handoffs
+
+    runtime.register_browser_handoff(None)
+    runtime.set_desktop_handoff_session(False)
+    monkeypatch.setattr(api_module, "_check_token", lambda _token: None)
+    monkeypatch.setattr(api_module, "_check_host", lambda _url: None)
+    client = TestClient(app)
+    response = client.post(
+        "/api/browser/handoffs",
+        json={
+            "url": "https://cdn.example.test/video.mp4",
+            "request_contexts": {
+                "not-an-origin": {"cookie": "discard=1"},
+                "https://segments.example.test/path": {
+                    "cookie": "x" * (20 * 1024),
+                    "request_headers": {"Host": "evil.test", "X-Safe": "yes"},
+                },
+            },
+        },
+        headers={"X-Token": "test"},
+    )
+
+    assert response.status_code == 200
+    item = browser_handoffs.get(response.json()["id"])
+    assert set(item.request_contexts) == {"https://segments.example.test"}
+    assert len(item.request_contexts["https://segments.example.test"]["cookie"]) == 16 * 1024
+    assert item.request_contexts["https://segments.example.test"]["request_headers"] == {"x-safe": "yes"}
 
 
 def test_cancel_browser_handoff_can_suppress_one_site_resource_kind(monkeypatch):
@@ -658,7 +827,6 @@ def test_browser_handoff_manual_context_overrides_are_scoped_to_download_origin(
     """A user-entered 403 workaround must reach a cross-origin media URL."""
     from backend.app import api as api_module
     from backend.app import desktop_runtime as runtime
-    from backend.app.browser_handoff import browser_handoffs
     from backend.app.models import Task
 
     runtime.register_browser_handoff(None)

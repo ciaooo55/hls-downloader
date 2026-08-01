@@ -1,4 +1,5 @@
 import uvicorn
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
@@ -7,6 +8,7 @@ from contextlib import asynccontextmanager
 from .config import PROJECT_ROOT, settings
 from .api import router
 from .downloader.task_manager import manager
+from .database import close_database, initialize_database
 from .downloader.throttle import download_throttle
 from .updater import cleanup_update_cache
 
@@ -14,6 +16,7 @@ from .updater import cleanup_update_cache
 async def lifespan(app: FastAPI):
     cleanup_update_cache()
     download_throttle.configure(getattr(settings, "download_speed_limit_kib", 0) or 0)
+    await initialize_database()
     await manager.load_from_db()
     manager.start_maintenance()
     try:
@@ -24,14 +27,30 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await manager.shutdown()
+        await close_database()
 
 app = FastAPI(title="HLS Downloader", lifespan=lifespan)
+CHROMIUM_EXTENSION_ORIGIN = "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla"
+ALLOWED_CORS_ORIGINS = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    f"http://127.0.0.1:{settings.port}",
+    f"http://localhost:{settings.port}",
+    "http://127.0.0.1:1420",
+    "http://localhost:1420",
+    CHROMIUM_EXTENSION_ORIGIN,
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^(tauri://localhost|https?://tauri\.localhost|https?://(localhost|127\.0\.0\.1)(:\d+)?)$",
+    # WebExtensions with loopback host_permissions do not require CORS. Firefox
+    # moz-extension origins contain a per-profile UUID rather than the signed
+    # Gecko add-on ID, so accepting arbitrary UUIDs would accept every local
+    # Firefox extension. Keep browser CORS limited to the stable release ID.
+    allow_origins=ALLOWED_CORS_ORIGINS,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Token"],
 )
 app.include_router(router)
 
@@ -43,30 +62,56 @@ UI_RESPONSE_HEADERS = {
 }
 
 
+def _resolve_ui_file(full_path: str) -> Path | None:
+    """Resolve a URL path without permitting Windows or POSIX path escape."""
+    if "\x00" in full_path:
+        return None
+    if not full_path:
+        return UI_DIST.resolve()
+    windows_path = PureWindowsPath(full_path)
+    posix_path = PurePosixPath(full_path)
+    if (
+        windows_path.is_absolute()
+        or windows_path.drive
+        or windows_path.root
+        or posix_path.is_absolute()
+        or ".." in windows_path.parts
+        or ".." in posix_path.parts
+    ):
+        return None
+    root = UI_DIST.resolve()
+    candidate = (root / Path(*posix_path.parts)).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
 @app.get("/help")
 async def serve_help():
     return HTMLResponse(
-        f"""<!doctype html>
+        """<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HLS Downloader 使用教程</title>
   <style>
-    * {{ box-sizing: border-box; }}
-    body {{ margin: 0; color: #17202a; background: #f3f5f7; font: 16px/1.65 system-ui, sans-serif; }}
-    main {{ width: min(760px, calc(100% - 32px)); margin: 48px auto; }}
-    h1 {{ margin: 0 0 8px; font-size: 30px; letter-spacing: 0; }}
-    h2 {{ margin: 28px 0 10px; font-size: 19px; letter-spacing: 0; }}
-    p {{ margin: 8px 0; }}
-    .status {{ border-left: 4px solid #16845b; background: #fff; padding: 16px 18px; }}
-    .status strong {{ display: block; font-size: 18px; }}
-    .actions {{ display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }}
-    a {{ color: #075ca8; }}
-    .button {{ display: inline-block; padding: 9px 14px; border-radius: 6px; color: #fff; background: #1267a8; text-decoration: none; }}
-    ol {{ padding-left: 24px; }}
-    code {{ padding: 2px 5px; background: #e7ebef; border-radius: 4px; }}
-    .note {{ color: #59636e; font-size: 14px; }}
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #17202a; background: #f3f5f7; font: 16px/1.65 system-ui, sans-serif; }
+    main { width: min(760px, calc(100% - 32px)); margin: 48px auto; }
+    h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: 0; }
+    h2 { margin: 28px 0 10px; font-size: 19px; letter-spacing: 0; }
+    p { margin: 8px 0; }
+    .status { border-left: 4px solid #16845b; background: #fff; padding: 16px 18px; }
+    .status strong { display: block; font-size: 18px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
+    a { color: #075ca8; }
+    .button { display: inline-block; padding: 9px 14px; border-radius: 6px; color: #fff; background: #1267a8; text-decoration: none; }
+    ol { padding-left: 24px; }
+    code { padding: 2px 5px; background: #e7ebef; border-radius: 4px; }
+    .note { color: #59636e; font-size: 14px; }
   </style>
 </head>
 <body>
@@ -102,7 +147,9 @@ async def serve_ui_root():
 
 @app.get("/ui/{full_path:path}")
 async def serve_ui_files(full_path: str):
-    file = UI_DIST / full_path
+    file = _resolve_ui_file(full_path)
+    if file is None:
+        return HTMLResponse("Not found", status_code=404)
     if file.exists() and file.is_file():
         return FileResponse(file, headers=UI_RESPONSE_HEADERS)
     # SPA fallback: return index.html for unknown routes

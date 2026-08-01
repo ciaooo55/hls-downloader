@@ -117,6 +117,78 @@ def test_records_dynamic_timeline_until_it_turns_static(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
+def test_live_representation_change_finalizes_before_mixing_new_track(
+    tmp_path, monkeypatch
+):
+    polls = {"count": 0}
+    media: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        target = str(request.url)
+        if target.endswith("main.mpd"):
+            polls["count"] += 1
+            manifest = _live_mpd('<S t="0" d="2"/><S d="2"/>')
+            if polls["count"] > 1:
+                manifest = manifest.replace('id="v1"', 'id="v2"')
+            return httpx.Response(200, text=manifest)
+        media.append(target)
+        return httpx.Response(200, content=target.rsplit("/", 1)[-1].encode())
+
+    _install(monkeypatch, handler)
+
+    async def run():
+        task = _task(tmp_path)
+        handled = await NativeDashEngine(task).run()
+        assert handled is True
+        assert task.status is TaskStatus.DONE
+        assert polls["count"] >= 2
+        assert Path(task.output_path).read_bytes() == (
+            b"v-init.mp4v-0.m4sv-2.m4s"
+        )
+        assert len(media) == 3
+
+    asyncio.run(run())
+
+
+def test_live_manifest_503_uses_shared_cooldown_and_recovers(tmp_path, monkeypatch):
+    polls = {"count": 0}
+    cooldowns: list[float] = []
+
+    class RecordingWindow(native_module.SharedRetryWindow):
+        async def extend(self, delay):
+            cooldowns.append(delay)
+            return await super().extend(delay)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        target = str(request.url)
+        if target.endswith("main.mpd"):
+            polls["count"] += 1
+            if polls["count"] == 1:
+                return httpx.Response(200, text=_live_mpd('<S t="0" d="2"/>'))
+            if polls["count"] == 2:
+                return httpx.Response(503, request=request)
+            return httpx.Response(
+                200,
+                text=_live_mpd('<S t="0" d="2"/><S d="2"/>', dynamic=False),
+            )
+        return httpx.Response(200, content=b"segment")
+
+    _install(monkeypatch, handler)
+    monkeypatch.setattr(native_module, "SharedRetryWindow", RecordingWindow)
+    monkeypatch.setattr(native_module, "retry_delay_seconds", lambda *_args: 0.01)
+
+    async def run():
+        task = _task(tmp_path)
+        handled = await NativeDashEngine(task).run()
+        assert handled is True
+        assert task.status is TaskStatus.DONE
+        assert polls["count"] == 3
+        assert cooldowns == [0.01]
+        assert task.progress.reconnect_count >= 1
+
+    asyncio.run(run())
+
+
 def test_stop_request_finalizes_partial_recording(tmp_path, monkeypatch):
     holder: dict[str, Task] = {}
 

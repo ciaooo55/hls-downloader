@@ -1,5 +1,6 @@
 import { isAuthenticationNavigation } from './clickIntent'
 import { httpOrigin } from './requestChain'
+import { removeRawQueryParameters } from './urlQuery'
 
 export type ResourceKind = 'hls' | 'dash' | 'media' | 'file' | 'magnet'
 
@@ -32,6 +33,13 @@ export interface MediaResource {
   bandwidth?: number
   quality?: string
   duration?: number
+  /** True/false only after an adaptive media playlist was actually parsed. */
+  isLive?: boolean
+  /** Strong signal for LL-HLS (PART/SERVER-CONTROL) rather than a short event. */
+  lowLatencyLive?: boolean
+  /** Distinguishes verified manifest metadata from URL/MIME-only detection. */
+  inspected?: boolean
+  manifestType?: 'master' | 'media'
   variants?: MediaVariant[]
   seenAt: number
 }
@@ -57,6 +65,7 @@ const MANIFEST_EXT = /\.(?:m3u8?|mpd)$/i
 const SEGMENT_PATH = /(?:^|[\/_-])(?:init|segment|seg|fragment|frag|chunk|part)[-_]?(?:\d{1,8}|video|audio)?(?:\.|[\/_-]|$)/i
 const SEGMENT_MIME = /^(?:video\/mp2t|audio\/(?:aac|mp4a-latm))\b/i
 const VOLATILE_QUERY = /^(?:token|auth|authorization|signature|sig|expires?|expiry|policy|key-pair-id|hdnea|hmac|jwt|session|sessionid|access[_-]?key|x-amz-.+)$/i
+const LL_HLS_RELOAD_QUERY = new Set(['_hls_msn', '_hls_part', '_hls_skip'])
 const AD_SIGNAL = /(?:^|[\/_-])(?:ad|ads|advert|advertisement|preroll|midroll|postroll|promo)(?:[\/_-]|$)/i
 const NON_VIDEO_MANIFEST_SIGNAL = /(?:^|[\/_.-])(?:audio(?:only|track)?|subtitle(?:s)?|caption(?:s)?|thumbnail(?:s)?|thumb(?:s)?|sprite(?:s)?|storyboard(?:s)?|preview(?:s)?|iframe|trickplay|ad(?:s)?|advert(?:s|ising)?|preroll|midroll|postroll)(?:[\/_.-]|$)/i
 const NON_VIDEO_MANIFEST_QUERY = new Set(['audio', 'subtitle', 'subtitles', 'caption', 'captions', 'ad', 'ads', 'advertisement', 'iframe'])
@@ -115,6 +124,13 @@ export function classifyResource(url: string, mimeType = ''): ResourceKind | nul
   return MEDIA_EXT.test(url) || mime.includes('octet-stream') ? 'file' : null
 }
 
+/** Remove LL-HLS blocking-reload cursors that expire after each playlist poll. */
+export function canonicalMediaUrl(url: string, kind?: ResourceKind | null): string {
+  const resourceKind = kind || classifyResource(url)
+  if (resourceKind !== 'hls') return url
+  return removeRawQueryParameters(url, LL_HLS_RELOAD_QUERY)
+}
+
 export interface PlaybackContext {
   sourceUrls: string[]
   startedAt: number
@@ -134,10 +150,18 @@ function isNonVideoManifest(resource: Pick<MediaResource, 'url'>): boolean {
 
 export function resourceFingerprint(resource: Pick<MediaResource, 'url' | 'kind'>): string {
   try {
-    const url = new URL(resource.url)
+    const url = new URL(canonicalMediaUrl(resource.url, resource.kind))
     url.hash = ''
+    // A few CDN families use terse signature keys (s/e/_t) rather than the
+    // conventional token/expires names.  Treat the trio as volatile only when
+    // s and e occur together, so an ordinary semantic `e` query parameter on
+    // another site is not silently discarded.
+    const names = new Set([...url.searchParams.keys()].map(key => key.toLowerCase()))
+    const hasShortLivedSignature = names.has('s') && names.has('e')
     for (const key of [...url.searchParams.keys()]) {
-      if (VOLATILE_QUERY.test(key)) url.searchParams.delete(key)
+      if (VOLATILE_QUERY.test(key) || (hasShortLivedSignature && ['s', 'e', '_t'].includes(key.toLowerCase()))) {
+        url.searchParams.delete(key)
+      }
     }
     url.searchParams.sort()
     return `${resource.kind}:${url.href}`
@@ -183,6 +207,10 @@ export function isUsefulResource(resource: MediaResource): boolean {
 export function resourceRank(resource: MediaResource): number {
   let score = resource.kind === 'hls' ? 500 : resource.kind === 'dash' ? 480 : resource.kind === 'media' ? 300 : resource.kind === 'magnet' ? 250 : 100
   if (resource.variants?.length) score += 80
+  if (resource.inspected) score += 15
+  if (resource.isLive === true) score += 90
+  else if (resource.isLive === false && resource.duration && resource.duration < 30) score -= 80
+  if (resource.lowLatencyLive) score += 40
   if (resource.duration && resource.duration >= 60) score += 60
   else if (resource.duration && resource.duration >= 10) score += 20
   if (resource.height) score += Math.min(50, Math.round(resource.height / 40))
@@ -212,7 +240,12 @@ export function likelyResourceBytes(resource: Pick<MediaResource, 'size' | 'esti
  * playback session. Sites often preload a manifest well before the user
  * presses play or request a rendition after the initial buffering period.
  */
-export function visiblePlaybackResources(resources: MediaResource[], playback: PlaybackContext | null, limit = 8): MediaResource[] {
+export function visiblePlaybackResources(
+  resources: MediaResource[],
+  playback: PlaybackContext | null,
+  limit = 8,
+  allowAdaptiveFallback = true,
+): MediaResource[] {
   if (!playback) return []
   const sources = playback.sourceUrls.filter(Boolean)
   // Do not require the manifest to arrive in the first few seconds after play:
@@ -225,13 +258,47 @@ export function visiblePlaybackResources(resources: MediaResource[], playback: P
     .map(item => ({
       item,
       evidence: sources.some(source => resourceMatchesPlaybackSource(item, source)) ? 3
-        : item.seenAt >= adaptiveSessionFloor && (item.kind === 'hls' || item.kind === 'dash') ? 2
+        : allowAdaptiveFallback && item.seenAt >= adaptiveSessionFloor && (item.kind === 'hls' || item.kind === 'dash') ? 2
           : 0,
       bytes: likelyResourceBytes(item),
     }))
     .filter(entry => entry.evidence > 0)
   const exact = candidates.filter(entry => entry.evidence === 3)
-  const visible = exact.length ? exact : candidates
+  let visible = exact.length ? exact : candidates
+  if (!exact.length && visible.length > 1) {
+    // Multiple raw manifests around one MSE player are ambiguous until at
+    // least one has actually been parsed. A pre-roll often arrives first and
+    // otherwise wins by recency/bitrate for a few seconds. Inspection is local
+    // and bounded, so waiting here makes the per-video button accurate without
+    // delaying the common single-manifest case.
+    const inspected = visible.filter(entry => entry.item.inspected === true)
+    if (!inspected.length) return []
+    visible = inspected
+    // A pre-roll is normally a short, end-listed VOD requested immediately
+    // before the real live manifest. Once inspection has confirmed a live
+    // playlist from this playback session, do not put those two unrelated
+    // streams in the same player menu or let bitrate make the advert win.
+    const recentLive = visible.filter(entry => entry.item.isLive === true
+      && entry.item.inspected === true
+      && entry.item.seenAt >= playback.startedAt - 10_000)
+    if (recentLive.length) {
+      // Live rendition polling refreshes the active stream continuously. Keep
+      // streams in the newest poll cluster; an old preloaded/background live
+      // manifest must not remain beside the currently advancing player.
+      const lowLatency = recentLive.filter(entry => entry.item.lowLatencyLive === true)
+      const livePool = lowLatency.length ? lowLatency : recentLive
+      const newestLiveObservation = Math.max(...livePool.map(entry => entry.item.seenAt))
+      visible = livePool.filter(entry => newestLiveObservation - entry.item.seenAt <= 15_000)
+    } else {
+      const knownShortVod = (entry: typeof visible[number]) => entry.item.inspected === true
+        && entry.item.isLive === false
+        && Number(entry.item.duration) > 0
+        && Number(entry.item.duration) < 45
+      if (visible.some(entry => !knownShortVod(entry))) {
+        visible = visible.filter(entry => !knownShortVod(entry))
+      }
+    }
+  }
   visible.sort((left, right) => right.evidence - left.evidence
     || resourceRank(right.item) - resourceRank(left.item)
     || (right.item.height || 0) - (left.item.height || 0)
@@ -245,9 +312,40 @@ export function visiblePlaybackResources(resources: MediaResource[], playback: P
   return visible.slice(0, limit).map(entry => entry.item)
 }
 
+/**
+ * Resolve candidates for one concrete HTMLMediaElement playback session.
+ *
+ * Direct URLs can be fingerprint-matched exactly. A blob/MSE URL intentionally
+ * hides the manifest, so an adaptive fallback is only safe while it is the
+ * sole active MSE session in that frame. This is deliberately conservative:
+ * a missing button is preferable to putting another player's video beside the
+ * wrong element.
+ */
+export function playerPlaybackResources(
+  resources: MediaResource[],
+  playback: PlaybackContext | null,
+  activeMseSessions: number,
+  limit = 8,
+): MediaResource[] {
+  const msePlayback = Boolean(playback?.sourceUrls.some(source => source.startsWith('blob:')))
+  return visiblePlaybackResources(
+    resources,
+    playback,
+    limit,
+    // A concrete http(s) currentSrc must match that exact resource. Adaptive
+    // time-window fallback exists only for blob/MSE, where the browser hides
+    // the manifest URL from the media element.
+    msePlayback && activeMseSessions <= 1,
+  )
+}
+
 export function compactResources(resources: MediaResource[], limit = 40): MediaResource[] {
   const byKey = new Map<string, MediaResource>()
-  for (const resource of resources) {
+  for (const rawResource of resources) {
+    const canonicalUrl = canonicalMediaUrl(rawResource.url, rawResource.kind)
+    const resource = canonicalUrl === rawResource.url
+      ? rawResource
+      : { ...rawResource, url: canonicalUrl, id: resourceId(canonicalUrl) }
     if (!isUsefulResource(resource)) continue
     const key = resourceFingerprint(resource)
     const previous = byKey.get(key)
@@ -265,8 +363,29 @@ export function compactResources(resources: MediaResource[], limit = 40): MediaR
     })
   }
   const result = [...byKey.values()]
-  const childVariants = new Set(result.flatMap(item => item.variants || []).map(item => resourceFingerprint({ url: item.url, kind: 'hls' })))
-  return result
+  const childToParents = new Map<string, number[]>()
+  result.forEach((item, parentIndex) => {
+    for (const variant of item.variants || []) {
+      const fingerprint = resourceFingerprint({ url: variant.url, kind: 'hls' })
+      childToParents.set(fingerprint, [...(childToParents.get(fingerprint) || []), parentIndex])
+    }
+  })
+  const refreshedParents = new Map<number, number>()
+  for (const child of result) {
+    const parents = childToParents.get(resourceFingerprint(child)) || []
+    for (const parentIndex of parents) {
+      refreshedParents.set(parentIndex, Math.max(
+        refreshedParents.get(parentIndex) || 0,
+        child.seenAt || 0,
+      ))
+    }
+  }
+  const refreshed = result.map((item, index) => {
+    const seenAt = Math.max(item.seenAt || 0, refreshedParents.get(index) || 0)
+    return seenAt === item.seenAt ? item : { ...item, seenAt }
+  })
+  const childVariants = new Set(refreshed.flatMap(item => item.variants || []).map(item => resourceFingerprint({ url: item.url, kind: 'hls' })))
+  return refreshed
     .filter(item => Boolean(item.variants?.length) || !childVariants.has(resourceFingerprint(item)))
     .sort((left, right) => resourceRank(right) - resourceRank(left) || right.seenAt - left.seenAt)
     .slice(0, limit)
@@ -401,6 +520,21 @@ export function resourceRequestIdentity(
     // for handoffs where no tab/page URL was available.
     referer: resource.pageUrl || captured.referer || '',
     origin: pageOrigin || captured.origin || '',
+    userAgent: captured['user-agent'] || fallbackUserAgent,
+  }
+}
+
+/** Preserve the request identity the browser actually sent to one origin. */
+export function capturedRequestIdentity(
+  requestHeaders: Record<string, string> | undefined,
+  fallbackUserAgent = '',
+): { referer: string; origin: string; userAgent: string } {
+  const captured = Object.fromEntries(
+    Object.entries(requestHeaders || {}).map(([name, value]) => [name.toLowerCase(), String(value || '')]),
+  )
+  return {
+    referer: captured.referer || '',
+    origin: captured.origin || '',
     userAgent: captured['user-agent'] || fallbackUserAgent,
   }
 }

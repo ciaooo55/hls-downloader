@@ -211,6 +211,122 @@ def test_hls_segment_retries_unrequested_transport_cancellation(tmp_path, monkey
     assert (tmp_path / ".tasks" / "test" / "segments" / "000000.seg").read_bytes() == b"segment"
 
 
+def test_vod_resume_reuses_complete_segment_across_signature_refresh_without_leaking_url(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path))
+    old = {
+        "index": 0,
+        "url": "https://edge-a.test/media/part.m4s?quality=1080&token=old-secret",
+        "duration": 4.0,
+        "media_sequence": 10,
+        "byte_range": None,
+        "key": None,
+        "init_map": {
+            "uri": "https://edge-a.test/media/init.mp4?token=old-secret",
+            "byte_range": None,
+        },
+    }
+    first = HLSDownloader(_task())
+    first._prepare_vod_resume([old])
+    path = first._seg_dir() / "000000.seg"
+    path.write_bytes(b"complete-segment")
+    asyncio.run(first._checkpoint_vod_segment(0, path.stat().st_size))
+
+    refreshed = dict(old)
+    refreshed["url"] = (
+        "https://edge-b.test/media/part.m4s?token=new-secret&quality=1080"
+    )
+    refreshed["init_map"] = {
+        "uri": "https://edge-b.test/media/init.mp4?token=new-secret",
+        "byte_range": None,
+    }
+    second = HLSDownloader(_task())
+    second._prepare_vod_resume([refreshed])
+
+    assert path.read_bytes() == b"complete-segment"
+    checkpoint = second._vod_state_path().read_text(encoding="utf-8")
+    assert "old-secret" not in checkpoint
+    assert "new-secret" not in checkpoint
+    assert "https://" not in checkpoint
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"url": "https://edge.test/media/part.m4s?quality=720&token=new"},
+        {"byte_range": {"offset": 100, "length": 50}},
+        {
+            "key": {
+                "uri": "https://edge.test/keys/other.bin?token=new",
+                "iv": b"\x01" * 16,
+            }
+        },
+        {
+            "init_map": {
+                "uri": "https://edge.test/media/other-init.mp4?token=new",
+                "byte_range": None,
+            }
+        },
+    ],
+)
+def test_vod_resume_discards_segment_when_byte_identity_changes(
+    tmp_path, monkeypatch, changed
+):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path))
+    original = {
+        "index": 0,
+        "url": "https://edge.test/media/part.m4s?quality=1080&token=old",
+        "duration": 4.0,
+        "media_sequence": 10,
+        "byte_range": {"offset": 0, "length": 50},
+        "key": {
+            "uri": "https://edge.test/keys/main.bin?token=old",
+            "iv": b"\x01" * 16,
+        },
+        "init_map": {
+            "uri": "https://edge.test/media/init.mp4?token=old",
+            "byte_range": None,
+        },
+    }
+    first = HLSDownloader(_task())
+    first._prepare_vod_resume([original])
+    path = first._seg_dir() / "000000.seg"
+    path.write_bytes(b"x" * 50)
+    asyncio.run(first._checkpoint_vod_segment(0, 50))
+
+    updated = dict(original)
+    updated.update(changed)
+    second = HLSDownloader(_task())
+    second._prepare_vod_resume([updated])
+
+    assert not path.exists()
+
+
+def test_vod_resume_discards_truncated_and_uncheckpointed_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path))
+    segments = [
+        {"index": 0, "url": "https://edge.test/0.ts", "duration": 4.0},
+        {"index": 1, "url": "https://edge.test/1.ts", "duration": 4.0},
+    ]
+    first = HLSDownloader(_task())
+    first._prepare_vod_resume(segments)
+    complete = first._seg_dir() / "000000.seg"
+    complete.write_bytes(b"complete")
+    asyncio.run(first._checkpoint_vod_segment(0, complete.stat().st_size))
+    complete.write_bytes(b"cut")
+    orphan = first._seg_dir() / "000001.seg"
+    orphan.write_bytes(b"not-checkpointed")
+    (first._seg_dir() / "000002.seg.tmp").write_bytes(b"partial")
+
+    second = HLSDownloader(_task())
+    second._prepare_vod_resume(segments)
+
+    assert not complete.exists()
+    assert not orphan.exists()
+    assert not (first._seg_dir() / "000002.seg.tmp").exists()
+
+
 def test_hls_run_completes_after_an_unrequested_segment_cancellation(tmp_path, monkeypatch):
     from backend.app.downloader import hls as hls_module
 
@@ -259,7 +375,7 @@ def test_hls_run_completes_after_an_unrequested_segment_cancellation(tmp_path, m
             "subtitle_tracks": [],
         }
 
-    monkeypatch.setattr(hls_module, "_create_hls_client", lambda _concurrency: Client())
+    monkeypatch.setattr(hls_module, "_create_hls_client", lambda *_args: Client())
     monkeypatch.setattr(hls_module, "merge_segments", merge)
     monkeypatch.setattr(hls_module, "verify_task_checksum", verified)
     downloader = HLSDownloader(_task())
@@ -331,7 +447,7 @@ def test_hls_with_external_audio_uses_adaptive_compatibility_engine(tmp_path, mo
     async def fake_playlist(self, _client, _url, _headers):
         return {"external_audio": True}
 
-    monkeypatch.setattr(hls_module, "_create_hls_client", lambda _concurrency: FakeClient())
+    monkeypatch.setattr(hls_module, "_create_hls_client", lambda *_args: FakeClient())
     monkeypatch.setattr(hls_module, "DashDownloader", FakeAdaptiveDownloader)
     downloader = HLSDownloader(task)
     downloader._load_media_playlist = types.MethodType(fake_playlist, downloader)
@@ -536,7 +652,7 @@ def test_browser_transport_matches_request_tls_and_streams_to_disk(tmp_path, mon
             "default_headers": True,
             "http_version": "v1",
             "timeout": (10, 60),
-            "allow_redirects": True,
+            "allow_redirects": False,
         }
     ]
     assert requested[0]["impersonate"] == "chrome"

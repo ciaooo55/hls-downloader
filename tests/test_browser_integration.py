@@ -2,6 +2,9 @@ import time
 import base64
 
 from backend.app.browser_handoff import (
+    MAX_BROWSER_CLIENTS,
+    MAX_BROWSER_HANDOFFS,
+    BROWSER_EXTENSION_RELEASE_URL,
     BrowserHandoffService,
     MIN_BROWSER_EXTENSION_VERSION,
     RECOMMENDED_BROWSER_EXTENSION_VERSION,
@@ -74,6 +77,22 @@ def test_browser_handoff_confirmation_and_expiry():
     assert service.get(expired.id).status == "expired"
 
 
+def test_browser_handoff_transport_retry_is_idempotent():
+    service = BrowserHandoffService()
+    payload = {
+        "url": "https://cdn.test/live.m3u8?token=fresh",
+        "extension_client_id": "edge-install",
+        "client_request_id": "offer-7f6ccf5d",
+    }
+
+    first = service.create(payload)
+    retried = service.create(payload)
+
+    assert retried is first
+    assert retried.id == first.id
+    assert len(service.pending()) == 1
+
+
 def test_browser_handoff_replaces_generic_manifest_name_with_page_title():
     service = BrowserHandoffService()
     item = service.create({
@@ -99,6 +118,7 @@ def test_browser_status_explains_when_extension_has_never_connected():
         "desktop_version": APP_VERSION,
         "recommended_version": RECOMMENDED_BROWSER_EXTENSION_VERSION,
         "minimum_version": MIN_BROWSER_EXTENSION_VERSION,
+        "release_url": BROWSER_EXTENSION_RELEASE_URL,
         "needs_upgrade": False,
         "clients": [],
         "active_versions": [],
@@ -144,6 +164,21 @@ def test_browser_status_accepts_current_extension_version():
     assert status["message"] == "已连接 1 个浏览器插件"
 
 
+def test_browser_status_keeps_upgrade_warning_for_idle_known_client():
+    service = BrowserHandoffService(client_ttl=30)
+    service.record_ping("2.0.9", "old-edge", "edge")
+    service._clients["old-edge"].last_seen -= 31
+
+    status = service.status()
+
+    assert status["detected"] is False
+    assert status["seen_before"] is True
+    assert status["needs_upgrade"] is True
+    assert status["release_url"] == BROWSER_EXTENSION_RELEASE_URL
+    assert "此前连接" in status["message"]
+    assert "建议升级" in status["message"]
+
+
 def test_browser_status_keeps_multiple_client_versions_separate():
     service = BrowserHandoffService()
     service.record_ping("2.0.7", "edge-install", "edge")
@@ -161,6 +196,24 @@ def test_browser_status_keeps_multiple_client_versions_separate():
     assert status["needs_upgrade"] is True
 
 
+def test_browser_status_keeps_chromium_fork_identities_separate():
+    service = BrowserHandoffService()
+    for browser_name in ("chrome", "brave", "vivaldi", "opera"):
+        service.record_ping(
+            RECOMMENDED_BROWSER_EXTENSION_VERSION,
+            f"{browser_name}-install",
+            browser_name,
+        )
+
+    status = service.status()
+
+    assert status["client_count"] == 4
+    assert {item["browser"] for item in status["clients"]} == {
+        "chrome", "brave", "vivaldi", "opera",
+    }
+    assert status["needs_upgrade"] is False
+
+
 def test_task_cookie_uses_dpapi_on_windows():
     protected = protect_secret("session=secret")
     assert unprotect_secret(protected) == "session=secret"
@@ -170,7 +223,7 @@ def test_task_cookie_uses_dpapi_on_windows():
 
 def test_native_host_manual_download_creates_task_immediately(monkeypatch):
     calls = []
-    monkeypatch.setattr(native_host, "_ensure_app", lambda: None)
+    monkeypatch.setattr(native_host, "_ensure_app", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         native_host,
         "_request",
@@ -190,10 +243,17 @@ def test_native_host_manual_download_creates_task_immediately(monkeypatch):
 
 def test_native_host_ping_and_takeover_settings_share_desktop_source_of_truth(monkeypatch):
     calls = []
-    monkeypatch.setattr(native_host, "_ensure_app", lambda: None)
+    monkeypatch.setattr(native_host, "_ensure_app", lambda *_args, **_kwargs: None)
 
     def request(method, path, payload=None, timeout=4):
         calls.append((method, path, payload))
+        if path == "/browser/ping":
+            return {
+                "ok": True,
+                "recommended_version": RECOMMENDED_BROWSER_EXTENSION_VERSION,
+                "minimum_version": MIN_BROWSER_EXTENSION_VERSION,
+                "release_url": BROWSER_EXTENSION_RELEASE_URL,
+            }
         if path == "/health":
             return {"version": "1.4.1"}
         if path == "/settings" and method == "GET":
@@ -209,13 +269,16 @@ def test_native_host_ping_and_takeover_settings_share_desktop_source_of_truth(mo
 
     assert ping["takeover_enabled"] is False
     assert ping["takeover_minimum_bytes"] == 3 * 1024 * 1024
+    assert ping["recommended_extension_version"] == RECOMMENDED_BROWSER_EXTENSION_VERSION
+    assert ping["minimum_extension_version"] == MIN_BROWSER_EXTENSION_VERSION
+    assert ping["extension_release_url"] == BROWSER_EXTENSION_RELEASE_URL
     assert updated["takeover_enabled"] is True
     assert ("POST", "/settings", {"browser_takeover_enabled": True}) in calls
 
 
 def test_native_host_waits_for_handoff_with_one_long_request(monkeypatch):
     calls = []
-    monkeypatch.setattr(native_host, "_ensure_app", lambda: None)
+    monkeypatch.setattr(native_host, "_ensure_app", lambda *_args, **_kwargs: None)
 
     def request(method, path, payload=None, timeout=4):
         calls.append((method, path, payload, timeout))
@@ -232,14 +295,62 @@ def test_native_host_waits_for_handoff_with_one_long_request(monkeypatch):
 
 
 def test_native_host_process_handles_multiple_messages(monkeypatch):
-    messages = iter([{"op": "ping"}, {"op": "ping"}, None])
+    messages = iter([{"op": "ping", "__request_id": "one"}, {"op": "ping"}, None])
     responses = []
     monkeypatch.setattr(native_host, "_read_message", lambda: next(messages))
     monkeypatch.setattr(native_host, "_write_message", responses.append)
     monkeypatch.setattr(native_host, "dispatch", lambda message: {"ok": True, "op": message["op"]})
 
     assert native_host.main() == 0
-    assert responses == [{"ok": True, "op": "ping"}, {"ok": True, "op": "ping"}]
+    assert responses == [
+        {"ok": True, "op": "ping", "__request_id": "one"},
+        {"ok": True, "op": "ping"},
+    ]
+
+
+def test_native_host_reads_a_message_split_across_pipe_reads():
+    class SplitStream:
+        def __init__(self, chunks):
+            self.chunks = list(chunks)
+
+        def read(self, length):
+            if not self.chunks:
+                return b""
+            chunk = self.chunks.pop(0)
+            if len(chunk) <= length:
+                return chunk
+            self.chunks.insert(0, chunk[length:])
+            return chunk[:length]
+
+    assert native_host._read_exact(SplitStream([b"a", b"bc", b"def"]), 6) == b"abcdef"
+
+
+def test_native_host_waits_for_presenter_only_for_ui_operations(monkeypatch):
+    requirements = []
+    monkeypatch.setattr(
+        native_host,
+        "_ensure_app",
+        lambda require_presenter=True: requirements.append(require_presenter),
+    )
+    monkeypatch.setattr(
+        native_host,
+        "_request",
+        lambda method, path, payload=None, timeout=4: (
+            {"recommended_version": "", "minimum_version": "", "release_url": ""}
+            if path == "/browser/ping"
+            else {"version": "3.0.8"}
+            if path == "/health"
+            else {"browser_takeover_enabled": True, "browser_takeover_min_mb": 0}
+            if path == "/settings"
+            else {"id": "handoff"}
+        ),
+    )
+
+    native_host.dispatch({"op": "ping"})
+    native_host.dispatch({"op": "handoff_status", "handoff_id": "handoff"})
+    native_host.dispatch({"op": "offer", "resource": {"url": "https://cdn.test/a.mp4"}})
+
+    assert requirements == [False, False, True]
 
 
 def test_task_manager_finds_duplicate_urls():
@@ -292,3 +403,30 @@ def test_native_host_waits_for_presenter_after_cold_start(monkeypatch):
     native_host._ensure_app()
     assert ('start', 'app') in calls
     assert any(path == '/browser/presenter' for _method, path in calls)
+
+
+def test_browser_handoff_service_bounds_client_history_and_pending_items():
+    service = BrowserHandoffService()
+    for index in range(MAX_BROWSER_CLIENTS + 20):
+        service.record_ping("3.0.8", f"client-{index}", "chrome")
+    assert len(service._clients) == MAX_BROWSER_CLIENTS
+    assert "client-0" not in service._clients
+
+    for index in range(MAX_BROWSER_HANDOFFS + 20):
+        service.create({"url": f"https://cdn.example.test/video-{index}.mp4"})
+    assert len(service._items) == MAX_BROWSER_HANDOFFS
+
+
+def test_removed_legacy_sniffed_endpoint_cannot_accumulate_payloads():
+    from fastapi.testclient import TestClient
+    from backend.app import api as api_module
+    from backend.app.main import app
+
+    original = api_module._check_token
+    api_module._check_token = lambda _token: None
+    try:
+        with TestClient(app) as client:
+            assert client.get("/api/sniffed", headers={"X-Token": "test"}).status_code == 404
+            assert client.post("/api/sniffed", json={"value": "x"}, headers={"X-Token": "test"}).status_code == 404
+    finally:
+        api_module._check_token = original

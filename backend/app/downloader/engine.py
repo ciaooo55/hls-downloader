@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Protocol
 
 from ..config import settings
+from ..utils import durable_replace
 
 
 class DownloadEngine(Protocol):
@@ -70,7 +71,10 @@ def publish_path(source: Path, destination: Path) -> None:
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
-        os.replace(source, destination)
+        if source.is_file():
+            durable_replace(source, destination)
+        else:
+            os.replace(source, destination)
         return
     except OSError as exc:
         if exc.errno != errno.EXDEV and getattr(exc, "winerror", None) != 17:
@@ -82,7 +86,10 @@ def publish_path(source: Path, destination: Path) -> None:
             shutil.copytree(source, staging)
         else:
             shutil.copy2(source, staging)
-        os.replace(staging, destination)
+        if staging.is_file():
+            durable_replace(staging, destination)
+        else:
+            os.replace(staging, destination)
         if source.is_dir():
             shutil.rmtree(source)
         else:

@@ -18,12 +18,20 @@ def test_ci_runs_windows_python_and_frontend_checks():
     assert "windows-latest" in workflow
     assert "ubuntu-latest" not in workflow
     assert "python -m pytest -q" in workflow
+    assert "python -m ruff check" in workflow
+    assert "python -m mypy" in workflow
+    assert "--cov-fail-under=60" in workflow
     assert "pnpm test" in workflow
     assert "pnpm run build" in workflow
     assert "working-directory: extension" in workflow
     assert "web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors" in workflow
     assert "dtolnay/rust-toolchain@stable" in workflow
     assert "pnpm run tauri:build" in workflow
+    assert "cargo check --locked --all-targets" in workflow
+    assert "cargo clippy --locked --all-targets -- -D warnings" in workflow
+    assert "browser-actions/setup-chrome@v2" in workflow
+    assert "browser-actions/setup-firefox@v1" in workflow
+    assert "scripts/smoke_extension_browsers.py" in workflow
     assert "actions/setup-java@v5" not in workflow
     assert "permissions:\n  contents: read" in workflow
 
@@ -32,7 +40,7 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     workflow = _workflow("release.yml")
 
     assert "workflow_dispatch:" in workflow
-    assert 'default: "3.0.6"' in workflow
+    assert 'default: "3.0.8"' in workflow
     assert "include_extensions:" in workflow
     assert "Upload browser extension ZIPs for this release" in workflow
     assert "tags:" in workflow and "v*" in workflow
@@ -45,7 +53,8 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "$prefix-Windows-x64-Setup.exe" in workflow
     assert "$prefix-Windows-x64-Portable.zip" in workflow
     assert "m3u8-sniffer.user.js" not in workflow
-    assert "github.event.inputs.include_extensions" in workflow
+    assert "steps.extension-assets.outputs.include_extensions" in workflow
+    assert "git diff --name-only $previousTag $env:GITHUB_REF_NAME -- extension" in workflow
     assert "$prefix-Firefox-Web-UI-Unsigned.zip" in workflow
     assert "$prefix-Firefox-Web-UI-Source.zip" in workflow
     assert "$prefix-Firefox-No-Web-UI-Unsigned.zip" in workflow
@@ -53,6 +62,16 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "web-ext sign" not in workflow
     assert "--channel unlisted" not in workflow
     assert "web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors" in workflow
+    assert "python -m ruff check" in workflow
+    assert "python -m mypy" in workflow
+    assert "--cov-fail-under=60" in workflow
+    assert "cargo check --locked --all-targets" in workflow
+    assert "cargo clippy --locked --all-targets -- -D warnings" in workflow
+    assert "browser-actions/setup-chrome@v2" in workflow
+    assert "browser-actions/setup-firefox@v1" in workflow
+    assert "scripts/smoke_extension_browsers.py" in workflow
+    assert "scripts/smoke_real_download.py --archive $archive" in workflow
+    assert "scripts/smoke-portable-upgrade.ps1" in workflow
     assert "SHA256SUMS.txt" not in workflow
     assert "actions/upload-artifact@v7" in workflow
     assert "actions/download-artifact@v7" in workflow
@@ -89,13 +108,13 @@ def test_readme_documents_windows_release_assets():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "ciaooo55/hls-downloader/actions/workflows/ci.yml" in readme
-    assert "HLSDownloader-v3.0.6-Windows-x64-Setup.exe" in readme
-    assert "HLSDownloader-v3.0.6-Windows-x64-Portable.zip" in readme
+    assert "HLSDownloader-v3.0.8-Windows-x64-Setup.exe" in readme
+    assert "HLSDownloader-v3.0.8-Windows-x64-Portable.zip" in readme
     assert "m3u8-sniffer.user.js" not in readme
-    assert "HLSDownloader-v3.0.6-Firefox-Web-UI-Unsigned.zip" in readme
-    assert "HLSDownloader-v3.0.6-Firefox-Web-UI-Source.zip" in readme
-    assert "HLSDownloader-v3.0.6-Firefox-No-Web-UI-Unsigned.zip" in readme
-    assert "HLSDownloader-v3.0.6-Firefox-No-Web-UI-Source.zip" in readme
+    assert "HLSDownloader-v3.0.8-Firefox-Web-UI-Unsigned.zip" in readme
+    assert "HLSDownloader-v3.0.8-Firefox-Web-UI-Source.zip" in readme
+    assert "HLSDownloader-v3.0.8-Firefox-No-Web-UI-Unsigned.zip" in readme
+    assert "HLSDownloader-v3.0.8-Firefox-No-Web-UI-Source.zip" in readme
     assert "SHA256SUMS.txt" not in readme
     assert "Windows 10/11" in readme
     assert "git tag v" in readme

@@ -1,13 +1,69 @@
 param(
-    [int]$TimeoutSeconds = 20,
+    [int]$TimeoutSeconds = 12,
     [string]$InstallDir = "",
     [switch]$IncludeNativeHost
 )
 
 $ErrorActionPreference = "SilentlyContinue"
+
+function Get-ProcessExecutablePath {
+    param([System.Diagnostics.Process]$Process)
+
+    try {
+        $path = [string]$Process.Path
+        if ($path) { return $path }
+    } catch {
+    }
+    # A 32-bit caller cannot always read MainModule/Path for a 64-bit target.
+    # CIM remains architecture-neutral and keeps shutdown scoped to InstallDir.
+    try {
+        return [string](Get-CimInstance Win32_Process -Filter "ProcessId = $($Process.Id)" -ErrorAction Stop).ExecutablePath
+    } catch {
+        return ""
+    }
+}
+
+function Get-TargetProcesses {
+    param([string[]]$Names)
+
+    $processes = @(Get-Process -Name $Names -ErrorAction SilentlyContinue)
+    if (-not $InstallDir) { return $processes }
+    try {
+        $installRoot = [IO.Path]::GetFullPath($InstallDir)
+        $directorySeparator = [string][IO.Path]::DirectorySeparatorChar
+        if (-not $installRoot.EndsWith($directorySeparator, [System.StringComparison]::Ordinal)) {
+            $installRoot += $directorySeparator
+        }
+    } catch {
+        return @()
+    }
+    return @(
+        $processes | Where-Object {
+            try {
+                $processPath = Get-ProcessExecutablePath $_
+                $processPath -and [IO.Path]::GetFullPath($processPath).StartsWith(
+                    $installRoot,
+                    [System.StringComparison]::OrdinalIgnoreCase
+                )
+            } catch {
+                $false
+            }
+        }
+    )
+}
+
+$targetProcessNames = @("HLSDownloader", "HLSDownloaderCore")
+if ($IncludeNativeHost) { $targetProcessNames += "HLSDownloaderNativeHost*" }
+$targetRunningAtStart = @(Get-TargetProcesses $targetProcessNames)
+$overallDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(3, $TimeoutSeconds))
 $configPaths = @()
-if ($env:LOCALAPPDATA) { $configPaths += Join-Path $env:LOCALAPPDATA "HLS Downloader\config.json" }
 if ($InstallDir) { $configPaths += Join-Path $InstallDir "config.json" }
+# An installed build stores its IPC credential under LocalAppData. Only read it
+# when the requested install is actually the one that is running; otherwise a
+# portable/temporary upgrade could accidentally shut down another installation.
+if ((-not $InstallDir -or $targetRunningAtStart.Count) -and $env:LOCALAPPDATA) {
+    $configPaths += Join-Path $env:LOCALAPPDATA "HLS Downloader\config.json"
+}
 $token = ""
 $port = 8765
 foreach ($configPath in $configPaths) {
@@ -29,31 +85,34 @@ if ($token) {
             -Headers @{ "X-Token" = $token } `
             -ContentType "application/json" `
             -Body "{}" `
-            -TimeoutSec 2 | Out-Null
+            -TimeoutSec 3 | Out-Null
     } catch {
     }
 }
 
-$gracefulDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Min(8, [Math]::Max(1, $TimeoutSeconds)))
+$gracefulDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Min(4, [Math]::Max(1, $TimeoutSeconds)))
+if ($gracefulDeadline -gt $overallDeadline) { $gracefulDeadline = $overallDeadline }
 while ([DateTime]::UtcNow -lt $gracefulDeadline) {
-    if (-not (Get-Process HLSDownloader -ErrorAction SilentlyContinue)) { break }
+    if (-not (Get-TargetProcesses @("HLSDownloader"))) { break }
     Start-Sleep -Milliseconds 200
 }
 
-if (Get-Process HLSDownloader -ErrorAction SilentlyContinue) {
-    & "$env:SystemRoot\System32\taskkill.exe" /IM HLSDownloader.exe /T /F | Out-Null
-    Get-Process HLSDownloader -ErrorAction SilentlyContinue | Stop-Process -Force
+foreach ($desktop in @(Get-TargetProcesses @("HLSDownloader"))) {
+    & "$env:SystemRoot\System32\taskkill.exe" /PID $desktop.Id /T /F | Out-Null
+    $desktop | Stop-Process -Force
 }
-Get-Process HLSDownloaderCore -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-TargetProcesses @("HLSDownloaderCore") | Stop-Process -Force
 
 if ($IncludeNativeHost) {
     # Versioned hosts are named HLSDownloaderNativeHost-<version>.exe.  This
     # path is used only by uninstallation after browser registration is gone;
     # updates deliberately leave browser-owned hosts alone.
-    Get-Process -Name "HLSDownloaderNativeHost*" -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-TargetProcesses @("HLSDownloaderNativeHost*") | Stop-Process -Force
 }
 
 function Test-ApplicationFilesWritable {
+    $script:lastLockedFile = ""
+    $script:lastLockError = ""
     if (-not $InstallDir) { return $true }
     # The Native Messaging host is deliberately excluded.  A browser can keep
     # it alive indefinitely, and the installer now deploys it under a new
@@ -70,22 +129,34 @@ function Test-ApplicationFilesWritable {
             )
             $stream.Dispose()
         } catch {
+            $script:lastLockedFile = $file
+            $script:lastLockError = $_.Exception.Message
             return $false
         }
     }
     return $true
 }
 
-$deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(3, $TimeoutSeconds))
-$processNames = @("HLSDownloader", "HLSDownloaderCore")
-if ($IncludeNativeHost) { $processNames += "HLSDownloaderNativeHost*" }
 do {
-    $running = Get-Process -Name $processNames -ErrorAction SilentlyContinue
+    $running = Get-TargetProcesses $targetProcessNames
     if (-not $running -and (Test-ApplicationFilesWritable)) { exit 0 }
     if ($running) {
         $running | Stop-Process -Force
     }
     Start-Sleep -Milliseconds 250
-} while ([DateTime]::UtcNow -lt $deadline)
-
+} while ([DateTime]::UtcNow -lt $overallDeadline)
+$remaining = @(Get-TargetProcesses $targetProcessNames)
+$remainingSummary = ($remaining | ForEach-Object {
+    $path = Get-ProcessExecutablePath $_
+    "$($_.ProcessName):$($_.Id):$path"
+}) -join "; "
+$writable = Test-ApplicationFilesWritable
+$installDirBase64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes([string]$InstallDir))
+$namedDiagnostics = @(Get-Process -Name $targetProcessNames -ErrorAction SilentlyContinue | ForEach-Object {
+    $path = Get-ProcessExecutablePath $_
+    $pathBase64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($path))
+    "$($_.ProcessName):$($_.Id):$pathBase64"
+}) -join "; "
+$lockedFileBase64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes([string]$lastLockedFile))
+Write-Output "Shutdown timeout; install_dir=$InstallDir; install_dir_utf16=$installDirBase64; remaining=$remainingSummary; named=$namedDiagnostics; files_writable=$writable; locked_file_utf16=$lockedFileBase64; lock_error=$lastLockError"
 exit 1

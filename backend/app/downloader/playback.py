@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import quote
 
-from ..config import settings
+from ..utils import atomic_write_text
 from .engine import task_work_dir
 
 
@@ -113,15 +113,10 @@ def write_playback_plan(
     }
     task_dir.mkdir(parents=True, exist_ok=True)
     destination = task_dir / PLAN_FILENAME
-    temporary = destination.with_name(destination.name + ".tmp")
-    try:
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        temporary.replace(destination)
-    finally:
-        temporary.unlink(missing_ok=True)
+    atomic_write_text(
+        destination,
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+    )
     playback_service.invalidate(task_dir.name)
     return destination
 
@@ -136,6 +131,7 @@ class PlaybackService:
     def invalidate(self, task_id: str) -> None:
         with self._lock:
             self._prefix_cache.pop(task_id, None)
+            self._plan_cache.pop(_safe_task_dir(task_id) / PLAN_FILENAME, None)
 
     def _load_plan(self, task_id: str) -> tuple[PlaybackPlan, int]:
         path = _safe_task_dir(task_id) / PLAN_FILENAME
@@ -341,6 +337,7 @@ class PlaybackService:
             ]:
                 self._sessions.pop(session_id, None)
             self._prefix_cache.pop(task_id, None)
+            self._plan_cache.pop(_safe_task_dir(task_id) / PLAN_FILENAME, None)
 
     def _expire_locked(self, now: float) -> set[str]:
         expired_tasks: set[str] = set()

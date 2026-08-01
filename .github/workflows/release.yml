@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version used in the installer, for example 3.0.6
+        description: Version used in the installer, for example 3.0.8
         required: false
-        default: "3.0.6"
+        default: "3.0.8"
       include_extensions:
         description: Upload browser extension ZIPs for this release
         required: false
@@ -25,6 +25,30 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether extension assets changed
+        id: extension-assets
+        shell: pwsh
+        env:
+          REQUESTED_INCLUDE_EXTENSIONS: ${{ inputs.include_extensions }}
+        run: |
+          $include = $env:REQUESTED_INCLUDE_EXTENSIONS -eq "true"
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $previousTag = & git describe --tags --abbrev=0 "$env:GITHUB_REF_NAME^" 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not $previousTag) {
+              $include = $true
+            } else {
+              $changedExtensionFiles = @(& git diff --name-only $previousTag $env:GITHUB_REF_NAME -- extension)
+              if ($LASTEXITCODE -ne 0) {
+                throw "Unable to compare extension changes with $previousTag"
+              }
+              $include = $changedExtensionFiles.Count -gt 0
+            }
+          }
+          "include_extensions=$($include.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          Write-Host "Include extension release assets: $include"
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -42,8 +66,18 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Set up Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v2
+
+      - name: Set up Firefox
+        id: firefox
+        uses: browser-actions/setup-firefox@v1
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Enable pnpm
         shell: pwsh
@@ -65,16 +99,36 @@ jobs:
       - name: Run verification
         shell: pwsh
         run: |
-          python -m pytest -q
+          python -m ruff check backend tests scripts/smoke_real_download.py scripts/smoke_extension_browsers.py
+          python -m mypy `
+            backend/app/credentials.py `
+            backend/app/network_proxy.py `
+            backend/app/database.py `
+            backend/app/config.py `
+            backend/app/schemas.py
+          python -m pytest -q --cov=backend.app --cov-report=term-missing --cov-fail-under=60
           Push-Location frontend
           pnpm test
           pnpm run build
+          Pop-Location
+          Push-Location frontend/src-tauri
+          cargo check --locked --all-targets
+          cargo clippy --locked --all-targets -- -D warnings
           Pop-Location
           Push-Location extension
           pnpm test
           pnpm run build
           pnpm exec web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors
           Pop-Location
+
+      - name: Load built extensions in Chrome and Firefox
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          python scripts/smoke_extension_browsers.py `
+            --extension-output extension/.output `
+            --chrome-binary "${{ steps.chrome.outputs.chrome-path }}" `
+            --firefox-binary "${{ steps.firefox.outputs.firefox-path }}"
 
       - name: Install packaging tools
         shell: pwsh
@@ -88,7 +142,7 @@ jobs:
             $version = "${{ github.ref_name }}".TrimStart("v")
           }
           $buildArgs = @("-Version", $version)
-          if ("${{ github.event.inputs.include_extensions }}" -eq "true") {
+          if ("${{ steps.extension-assets.outputs.include_extensions }}" -eq "true") {
             $buildArgs += "-IncludeExtensionAssets"
           }
           & .\scripts\build_installer.ps1 @buildArgs
@@ -105,7 +159,7 @@ jobs:
             "$prefix-Windows-x64-Setup.exe",
             "$prefix-Windows-x64-Portable.zip"
           )
-          if ("${{ github.event.inputs.include_extensions }}" -eq "true") {
+          if ("${{ steps.extension-assets.outputs.include_extensions }}" -eq "true") {
             $expected += @(
               "$prefix-Chrome-Edge-Extension.zip",
               "$prefix-Firefox-Web-UI-Unsigned.zip",
@@ -123,6 +177,19 @@ jobs:
           if ($actual.Count -ne $expected.Count) {
             throw "Release directory must contain exactly $($expected.Count) files; found $($actual.Count)"
           }
+
+      - name: Smoke-test packaged downloads and portable upgrade
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}".TrimStart("v")
+          }
+          $archive = Join-Path .\release "HLSDownloader-v$version-Windows-x64-Portable.zip"
+          python scripts/smoke_real_download.py --archive $archive
+          powershell -NoProfile -ExecutionPolicy Bypass `
+            -File scripts/smoke-portable-upgrade.ps1 `
+            -ArchivePath $archive
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7

@@ -2,11 +2,13 @@ import asyncio
 from pathlib import Path
 
 import httpx
-import pytest
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from backend.app.config import settings
 from backend.app.downloader import hls as hls_module
 from backend.app.downloader.hls import HLSDownloader
+from backend.app.downloader.dash_native import NativeDashEngine
 from backend.app.downloader.subtitles import (
     has_cues,
     merge_webvtt_segments,
@@ -137,7 +139,7 @@ def test_full_run_saves_sidecar_subtitles(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         hls_module, "_create_hls_client",
-        lambda concurrency: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        lambda *_args: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
     _install_fake_merge(monkeypatch)
 
@@ -177,7 +179,7 @@ def test_subtitle_failure_never_fails_a_verified_download(tmp_path, monkeypatch)
 
     monkeypatch.setattr(
         hls_module, "_create_hls_client",
-        lambda concurrency: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        lambda *_args: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
     _install_fake_merge(monkeypatch)
 
@@ -212,7 +214,7 @@ def test_subtitles_can_be_disabled_in_settings(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         hls_module, "_create_hls_client",
-        lambda concurrency: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        lambda *_args: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
     _install_fake_merge(monkeypatch)
 
@@ -222,5 +224,138 @@ def test_subtitles_can_be_disabled_in_settings(tmp_path, monkeypatch):
         assert task.status is TaskStatus.DONE
         assert subtitle_requests["count"] == 0
         assert not list(Path(task.output_path).parent.glob("*.vtt"))
+
+    asyncio.run(run())
+
+
+def _encrypt_aes128(payload: bytes, key: bytes, iv: bytes) -> bytes:
+    padder = padding.PKCS7(128).padder()
+    padded = padder.update(payload) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    return encryptor.update(padded) + encryptor.finalize()
+
+
+def test_aes128_encrypted_hls_subtitles_are_saved(tmp_path, monkeypatch):
+    key = b"subtitle-key-123"
+    iv = bytes.fromhex("00000000000000000000000000000009")
+    subtitle = b"WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nencrypted subtitle\n"
+    encrypted = _encrypt_aes128(subtitle, key, iv)
+    master_url = "https://example.test/master.m3u8"
+    encrypted_playlist = (
+        "#EXTM3U\n#EXT-X-TARGETDURATION:4\n"
+        '#EXT-X-KEY:METHOD=AES-128,URI="subtitle.key",IV=0x00000000000000000000000000000009\n'
+        "#EXTINF:4,\nencrypted.vtt\n#EXT-X-ENDLIST\n"
+    )
+    responses: dict[str, str | bytes] = {
+        master_url: MASTER_PLAYLIST,
+        "https://example.test/video.m3u8": VIDEO_PLAYLIST,
+        "https://example.test/subs_zh.m3u8": encrypted_playlist,
+        "https://example.test/subtitle.key": key,
+        "https://example.test/encrypted.vtt": encrypted,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        value = responses.get(str(request.url), b"video-bytes")
+        return httpx.Response(200, text=value) if isinstance(value, str) else httpx.Response(200, content=value)
+
+    monkeypatch.setattr(
+        hls_module,
+        "_create_hls_client",
+        lambda *_args: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    _install_fake_merge(monkeypatch)
+
+    async def run():
+        task = _task(tmp_path, master_url)
+        await HLSDownloader(task).run()
+        assert task.status is TaskStatus.DONE
+        subtitles = list(Path(task.output_path).parent.glob("*.zh.vtt"))
+        assert len(subtitles) == 1
+        assert "encrypted subtitle" in subtitles[0].read_text(encoding="utf-8")
+
+    asyncio.run(run())
+
+
+def test_live_subtitle_capture_persists_sliding_windows_and_finalizes(tmp_path):
+    playlist_url = "https://example.test/live-subs.m3u8"
+    playlists = [
+        "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:10\n#EXTINF:2,\ns10.vtt\n",
+        "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:11\n#EXTINF:2,\ns11.vtt\n",
+    ]
+    calls = {"playlist": 0}
+    payloads = {
+        "https://example.test/s10.vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:01.500\nfirst\n",
+        "https://example.test/s11.vtt": "WEBVTT\n\n00:00:02.000 --> 00:00:03.500\nsecond\n",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        target = str(request.url)
+        if target == playlist_url:
+            index = min(calls["playlist"], len(playlists) - 1)
+            calls["playlist"] += 1
+            return httpx.Response(200, text=playlists[index])
+        return httpx.Response(200, text=payloads[target])
+
+    async def run():
+        task = _task(tmp_path, "https://example.test/live.m3u8")
+        task.output_path = str(tmp_path / "out" / "recording.mp4")
+        Path(task.output_path).parent.mkdir(parents=True)
+        Path(task.output_path).write_bytes(b"video")
+        downloader = HLSDownloader(task)
+        track = {"uri": playlist_url, "language": "en", "name": "English"}
+        state = downloader._load_live_subtitle_state()
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            key = downloader._live_subtitle_track_key(track)
+            assert await downloader._capture_live_subtitle_track(client, track, key, state, {})
+            assert await downloader._capture_live_subtitle_track(client, track, key, state, {})
+        downloader._save_live_subtitle_state(state)
+        await downloader._save_recorded_live_subtitles()
+        vtt = tmp_path / "out" / "recording.en.vtt"
+        assert vtt.is_file()
+        text = vtt.read_text(encoding="utf-8")
+        assert "first" in text and "second" in text
+        assert (tmp_path / "out" / "recording.en.srt").is_file()
+
+    asyncio.run(run())
+
+
+def test_dash_webvtt_segments_are_saved_as_vtt_and_srt(tmp_path, monkeypatch):
+    task = Task(id="dash-subs", url="https://example.test/manifest.mpd")
+    task.engine_state["temp_dir"] = str(tmp_path / "temp")
+    task.engine_state["output_dir"] = str(tmp_path / "out")
+    task.output_path = str(tmp_path / "out" / "movie.mp4")
+    Path(task.output_path).parent.mkdir(parents=True)
+    Path(task.output_path).write_bytes(b"video")
+    engine = NativeDashEngine(task)
+    payloads = {
+        "https://example.test/sub-0.vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:01.500\nfirst\n",
+        "https://example.test/sub-1.vtt": "WEBVTT\n\n00:00:02.000 --> 00:00:03.500\nsecond\n",
+    }
+
+    async def download(_client, url, destination):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(payloads[url], encoding="utf-8")
+
+    monkeypatch.setattr(engine, "_download_one", download)
+    track = {
+        "id": "sub-en",
+        "lang": "en",
+        "mime": "text/vtt",
+        "codecs": "",
+        "init_url": None,
+        "segments": [
+            {"url": "https://example.test/sub-0.vtt", "duration": 2},
+            {"url": "https://example.test/sub-1.vtt", "duration": 2},
+        ],
+    }
+
+    async def run():
+        saved = await engine._download_dash_subtitle_track(
+            None, track, Path(task.output_path).with_suffix(""), "en"
+        )
+        assert saved == tmp_path / "out" / "movie.en.vtt"
+        assert "first" in saved.read_text(encoding="utf-8")
+        assert "second" in saved.read_text(encoding="utf-8")
+        assert saved.with_suffix(".srt").is_file()
 
     asyncio.run(run())

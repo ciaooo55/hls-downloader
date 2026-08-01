@@ -1,0 +1,66 @@
+export interface DirectBackendIdentity {
+  version: string
+  client_id: string
+  browser: string
+}
+
+export class BrowserDirectBackend {
+  constructor(private readonly base: string, private readonly token: string) {}
+
+  private async call(path: string, init: RequestInit, timeoutMs: number): Promise<any> {
+    const response = await fetch(`${this.base}${path}`, {
+      ...init,
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Token': this.token,
+        ...(init.headers || {}),
+      },
+    })
+    const body = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      const detail = body?.detail
+      throw new Error(typeof detail === 'string' ? detail : `Desktop HTTP ${response.status}`)
+    }
+    return body
+  }
+
+  async request(message: Record<string, any>, identity: DirectBackendIdentity, timeoutMs = 4_000): Promise<any> {
+    const op = String(message.op || '')
+    const post = (path: string, body: unknown) => this.call(path, { method: 'POST', body: JSON.stringify(body) }, timeoutMs)
+    const get = (path: string) => this.call(path, { method: 'GET' }, timeoutMs)
+    if (op === 'ping') {
+      const browserStatus = await post('/browser/ping', identity)
+      const [health, current] = await Promise.all([get('/health'), get('/settings')])
+      return {
+        ok: true,
+        version: health.version || '',
+        takeover_enabled: current.browser_takeover_enabled !== false,
+        takeover_minimum_bytes: Math.max(0, Number(current.browser_takeover_min_mb || 0)) * 1024 * 1024,
+        recommended_extension_version: browserStatus.recommended_version || '',
+        minimum_extension_version: browserStatus.minimum_version || '',
+        extension_release_url: browserStatus.release_url || '',
+      }
+    }
+    if (op === 'offer') return { ok: true, handoff: await post('/browser/handoffs', message.resource || {}) }
+    if (op === 'download') return { ok: true, task: await post('/browser/downloads', message.resource || {}), activated: false }
+    if (op === 'handoff_status') return { ok: true, handoff: await get(`/browser/handoffs/${encodeURIComponent(message.handoff_id || '')}`) }
+    if (op === 'wait_handoff') return { ok: true, handoff: await get(`/browser/handoffs/${encodeURIComponent(message.handoff_id || '')}/wait`) }
+    if (op === 'activate') return { ok: true, result: await post('/app/activate', {}) }
+    if (op === 'set_takeover_settings') {
+      const payload: Record<string, unknown> = {}
+      if ('enabled' in message) payload.browser_takeover_enabled = Boolean(message.enabled)
+      if ('minimum_bytes' in message) payload.browser_takeover_min_mb = Math.max(0, Math.floor(Number(message.minimum_bytes || 0) / (1024 * 1024)))
+      const current = await post('/settings', payload)
+      return {
+        ok: true,
+        takeover_enabled: current.browser_takeover_enabled !== false,
+        takeover_minimum_bytes: Math.max(0, Number(current.browser_takeover_min_mb || 0)) * 1024 * 1024,
+      }
+    }
+    if (op === 'push_to_tv') return post('/tvbox/push', { url: String(message.resource?.url || '') })
+    if (op === 'media_push') return post('/browser/media-push', { kind: String(message.kind || ''), resource: message.resource || {} })
+    if (op === 'media_push_status') return get(`/browser/media-push/${encodeURIComponent(message.request_id || '')}/status`)
+    throw new Error(`Direct backend does not support ${op}`)
+  }
+}

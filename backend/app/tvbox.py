@@ -16,6 +16,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlencode, urlparse, urlsplit
 
+from .lan import private_ipv4_addresses, request_lan, validate_lan_url
+
 
 TVBOX_PORTS = (9978, 9979, 9977, 9976)
 _TVBOX_MARKER = re.compile(r"tvbox|影视|vod|player|/action|push", re.IGNORECASE)
@@ -48,6 +50,7 @@ class LocalMediaShare:
     path: Path
     expires_at: float
     last_access_at: float
+    allowed_clients: frozenset[str]
     active_streams: int = 0
 
 
@@ -78,10 +81,12 @@ class LocalMediaServer:
         for token in expired:
             self._shares.pop(token, None)
 
-    def _begin_stream(self, token: str) -> LocalMediaShare | None:
+    def _begin_stream(self, token: str, client_ip: str = "") -> LocalMediaShare | None:
         with self._lock:
             self._purge_locked()
             share = self._shares.get(token)
+            if share is not None and client_ip and client_ip not in share.allowed_clients:
+                return None
             if share is not None:
                 share.active_streams += 1
                 share.last_access_at = time.monotonic()
@@ -100,17 +105,22 @@ class LocalMediaServer:
         if not match or size <= 0:
             return None
         start_raw, end_raw = match.groups()
+        if len(start_raw) > 20 or len(end_raw) > 20:
+            return None
         if not start_raw and not end_raw:
             return None
-        if start_raw:
-            start = int(start_raw)
-            end = int(end_raw) if end_raw else size - 1
-        else:
-            suffix = int(end_raw)
-            if suffix <= 0:
-                return None
-            start = max(0, size - suffix)
-            end = size - 1
+        try:
+            if start_raw:
+                start = int(start_raw)
+                end = int(end_raw) if end_raw else size - 1
+            else:
+                suffix = int(end_raw)
+                if suffix <= 0:
+                    return None
+                start = max(0, size - suffix)
+                end = size - 1
+        except ValueError:
+            return None
         if start >= size or end < start:
             return None
         return start, min(end, size - 1)
@@ -130,11 +140,12 @@ class LocalMediaServer:
                     self.send_error(404)
                     return
                 token = parts[1]
-                share = owner._begin_stream(token)
+                share = owner._begin_stream(token, str(self.client_address[0]))
                 if share is None:
                     self.send_error(404)
                     return
                 try:
+                    self.connection.settimeout(30)
                     try:
                         size = share.path.stat().st_size
                     except OSError:
@@ -210,17 +221,27 @@ class LocalMediaServer:
         address = local_address_for_tvbox(endpoint)
         if not address:
             raise RuntimeError("无法确定电视所在局域网的电脑地址，请确认电脑和电视在同一局域网")
+        parsed_endpoint = urlparse(normalize_tvbox_endpoint(endpoint))
+        allowed_clients = private_ipv4_addresses(parsed_endpoint.hostname or "")
+        if not allowed_clients:
+            raise ValueError("电视地址不是可访问的 IPv4 局域网地址")
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            raise ValueError("无法读取要推送的本机文件") from exc
         with self._lock:
             self._purge_locked()
             port = self._ensure_server_locked()
             token = secrets.token_urlsafe(32)
             now = time.monotonic()
-            self._shares[token] = LocalMediaShare(token, path, now + LOCAL_MEDIA_MAX_SECONDS, now)
+            self._shares[token] = LocalMediaShare(
+                token, path, now + LOCAL_MEDIA_MAX_SECONDS, now, allowed_clients,
+            )
         return {
             "id": token,
             "url": f"http://{address}:{port}/media/{token}/{quote(path.name)}",
             "filename": path.name,
-            "size": path.stat().st_size,
+            "size": size,
             "expires_in_seconds": LOCAL_MEDIA_MAX_SECONDS,
             "idle_cleanup_seconds": LOCAL_MEDIA_IDLE_SECONDS,
         }
@@ -245,12 +266,21 @@ class LocalMediaServer:
     def shutdown(self) -> None:
         with self._lock:
             server = self._server
+            server_thread = self._thread
+            reaper = self._reaper
             self._server = None
+            self._thread = None
+            self._reaper = None
             self._shares.clear()
             self._reaper_stop.set()
         if server is not None:
             server.shutdown()
             server.server_close()
+        current = threading.current_thread()
+        if server_thread is not None and server_thread is not current:
+            server_thread.join(timeout=2)
+        if reaper is not None and reaper is not current:
+            reaper.join(timeout=2)
 
 
 def local_address_for_tvbox(endpoint: str) -> str:
@@ -259,13 +289,20 @@ def local_address_for_tvbox(endpoint: str) -> str:
     if not host:
         return ""
     try:
-        remote = socket.gethostbyname(host)
-        if not ipaddress.ip_address(remote).is_private:
+        remote_addresses = private_ipv4_addresses(host)
+        if not remote_addresses:
             return ""
+        remote = sorted(remote_addresses)[0]
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
             probe.connect((remote, parsed.port or 80))
             address = probe.getsockname()[0]
-        return address if ipaddress.ip_address(address).is_private else ""
+        parsed_address = ipaddress.ip_address(address)
+        return address if (
+            parsed_address.is_private
+            and not parsed_address.is_loopback
+            and not parsed_address.is_link_local
+            and not parsed_address.is_unspecified
+        ) else ""
     except (OSError, ValueError):
         return ""
 
@@ -425,11 +462,24 @@ async def push_tvbox(endpoint: str, url: str, timeout: float = 8.0) -> dict:
     if parsed_url.scheme.lower() not in {"http", "https"} or not parsed_url.hostname:
         raise ValueError("待推送的视频地址必须是有效的 HTTP(S) 地址")
     target = tvbox_action_url(endpoint)
+    _, device_addresses = validate_lan_url(target)
     form = tvbox_push_form(target_url)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        response = await client.post(target, content=form, headers={"Content-Type": "application/x-www-form-urlencoded"})
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False) as client:
+        response = await request_lan(
+            client,
+            "POST",
+            target,
+            expected_addresses=device_addresses,
+            content=form,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
         if response.status_code in {404, 405}:
-            response = await client.get(f"{target}?{form}")
+            response = await request_lan(
+                client,
+                "GET",
+                f"{target}?{form}",
+                expected_addresses=device_addresses,
+            )
         response.raise_for_status()
         text = response.text.strip()
         if text:

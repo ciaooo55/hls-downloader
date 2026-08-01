@@ -6,6 +6,9 @@ describe('browser client identity', () => {
   it('detects the active browser family', () => {
     expect(detectBrowserFamily('moz-extension://id/background.html', 'Firefox/142')).toBe('firefox')
     expect(detectBrowserFamily('chrome-extension://id/background.html', 'Edg/150.0')).toBe('edge')
+    expect(detectBrowserFamily('chrome-extension://id/background.html', 'Chrome/150.0 OPR/120.0')).toBe('opera')
+    expect(detectBrowserFamily('chrome-extension://id/background.html', 'Chrome/150.0 Vivaldi/7.0')).toBe('vivaldi')
+    expect(detectBrowserFamily('chrome-extension://id/background.html', 'Chrome/150.0', true)).toBe('brave')
     expect(detectBrowserFamily('chrome-extension://id/background.html', 'Chrome/150.0')).toBe('chrome')
   })
 

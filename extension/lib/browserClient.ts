@@ -1,4 +1,4 @@
-export type BrowserFamily = 'edge' | 'chrome' | 'chromium' | 'firefox'
+export type BrowserFamily = 'edge' | 'chrome' | 'chromium' | 'brave' | 'vivaldi' | 'opera' | 'firefox'
 
 export const BROWSER_CLIENT_ID_STORAGE_KEY = 'desktopClientId'
 
@@ -7,9 +7,12 @@ interface LocalStorageLike {
   set(value: Record<string, unknown>): Promise<void>
 }
 
-export function detectBrowserFamily(runtimeUrl: string, userAgent = ''): BrowserFamily {
+export function detectBrowserFamily(runtimeUrl: string, userAgent = '', braveApiPresent = false): BrowserFamily {
   if (runtimeUrl.startsWith('moz-extension://')) return 'firefox'
   if (/\bEdg\//i.test(userAgent)) return 'edge'
+  if (/\bOPR\//i.test(userAgent)) return 'opera'
+  if (/\bVivaldi\//i.test(userAgent)) return 'vivaldi'
+  if (braveApiPresent || /\bBrave\//i.test(userAgent)) return 'brave'
   if (/\b(?:Chrome|Chromium)\//i.test(userAgent)) return 'chrome'
   return 'chromium'
 }

@@ -4,8 +4,16 @@ import { ApiError, createTask, fetchManifestTracks, isDuplicateUrlError, recogni
 import { recognitionCandidateViews, recognitionView, type RecognitionResult } from '../recognition'
 import type { Settings, Task } from '../types'
 import { parseRequestHeaders, REQUEST_EXAMPLES, REQUEST_FIELD_HELP, sourcePageRequestContext } from '../requestHelp'
+import { parseCurlCommand } from '../curlImport'
 import ConfirmDialog from './ConfirmDialog'
 import { Button, DialogFooter, DialogHeader, Field, Input } from './ui'
+
+function encodeRequestBody(value: string): string {
+  const bytes = new TextEncoder().encode(value)
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
+}
 
 export default function RecognizeDialog({ settings, initialUrl = '', onClose, onAdded, onNeedExtension }: { settings: Settings; initialUrl?: string; onClose: () => void; onAdded: (task?: Task) => void; onNeedExtension: () => void }) {
   useEffect(() => {
@@ -18,6 +26,9 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const [filename, setFilename] = useState('')
   const [concurrency, setConcurrency] = useState(settings.default_concurrency || 12)
   const [checksum, setChecksum] = useState('')
+  const [scheduledStartAt, setScheduledStartAt] = useState('')
+  const [scheduledStopAt, setScheduledStopAt] = useState('')
+  const [completionAction, setCompletionAction] = useState<'none' | 'shutdown' | 'sleep' | 'hibernate'>('none')
   const [showDownloadOptions, setShowDownloadOptions] = useState(false)
   const [advanced, setAdvanced] = useState(false)
   const [referer, setReferer] = useState(settings.default_referer || '')
@@ -26,6 +37,9 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const [cookie, setCookie] = useState(settings.default_cookie || '')
   const [headersText, setHeadersText] = useState('')
   const [sourcePageUrl, setSourcePageUrl] = useState('')
+  const [requestMethod, setRequestMethod] = useState('GET')
+  const [requestBody, setRequestBody] = useState('')
+  const [curlNotice, setCurlNotice] = useState('')
   const [result, setResult] = useState<RecognitionResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [startingCandidate, setStartingCandidate] = useState('')
@@ -69,9 +83,14 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
       user_agent: context.userAgent,
       cookie: context.cookie,
       request_headers: context.requestHeaders,
+      request_method: requestMethod,
+      request_body: requestMethod === 'POST' && requestBody ? encodeRequestBody(requestBody) : '',
       allow_duplicate: allowDuplicate,
       selected_video: video,
       selected_audio: audio,
+      scheduled_start_at: scheduledStartAt || null,
+      scheduled_stop_at: scheduledStopAt || null,
+      completion_action: completionAction,
     }
   }
 
@@ -206,18 +225,42 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
                   // 粘贴即识别：粘贴的完整链接直接进入识别/下载流程。
                   const pasted = event.clipboardData.getData('text').trim()
                   if (!pasted || busy) return
+                  try {
+                    const imported = parseCurlCommand(pasted)
+                    if (imported) {
+                      event.preventDefault()
+                      setUrl(imported.url)
+                      setReferer(imported.referer)
+                      setOrigin(imported.origin)
+                      if (imported.userAgent) setUserAgent(imported.userAgent)
+                      setCookie(imported.cookie)
+                      setHeadersText(Object.entries(imported.headers).map(([name, value]) => `${name}: ${value}`).join('\n'))
+                      setRequestMethod(imported.method)
+                      setRequestBody(imported.body)
+                      setAdvanced(true)
+                      setShowDownloadOptions(true)
+                      setResult(null)
+                      setCurlNotice(`已导入 cURL ${imported.method} 请求，请确认后开始下载`)
+                      setError('')
+                      return
+                    }
+                  } catch (reason) {
+                    event.preventDefault()
+                    setError(reason instanceof Error ? reason.message : 'cURL 命令无法解析')
+                    return
+                  }
                   event.preventDefault()
                   setUrl(pasted)
                   setResult(null)
                   setError('')
                   window.setTimeout(() => { void submitWith(pasted) }, 0)
-                }} placeholder="粘贴文件、m3u8、mpd、网页或 magnet 链接" />
+                }} placeholder="粘贴链接、magnet 或浏览器“复制为 cURL”" />
               </div>
             </Field>
             <div className="recognize-quick-actions">
               <input ref={torrentInput} type="file" accept=".torrent,application/x-bittorrent" hidden onChange={event => void importTorrent(event.target.files?.[0])} />
               <Button variant="ghost" className="text-button" disabled={busy} onClick={() => torrentInput.current?.click()}><FileUp size={14} />导入 .torrent</Button>
-              <span>磁力链接直接粘贴即可</span>
+              <span>{curlNotice || '磁力链接和“复制为 cURL”可直接粘贴'}</span>
             </div>
           </section>
           <Button variant="ghost" className="text-button recognize-options-toggle" onClick={() => setShowDownloadOptions(value => !value)}>{showDownloadOptions ? '收起下载选项' : '下载选项'}</Button>
@@ -232,6 +275,17 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
             </div>
             <Field label="校验和" htmlFor="recognize-checksum" help="可选；下载完成后核对。多文件 BT 不支持单一校验和。">
               <Input id="recognize-checksum" value={checksum} onChange={event => setChecksum(event.target.value)} placeholder="SHA-256、SHA-1 或 MD5" />
+            </Field>
+            <div className="form-row">
+              <Field label="计划开始" htmlFor="recognize-scheduled-start" help="可选；到本机时间后自动开始，关闭程序后计划仍会保留。">
+                <Input id="recognize-scheduled-start" type="datetime-local" value={scheduledStartAt} onChange={event => setScheduledStartAt(event.target.value)} />
+              </Field>
+              <Field label="计划停止" htmlFor="recognize-scheduled-stop" help="可选；直播会停止并合并，普通下载会安全暂停。">
+                <Input id="recognize-scheduled-stop" type="datetime-local" value={scheduledStopAt} onChange={event => setScheduledStopAt(event.target.value)} />
+              </Field>
+            </div>
+            <Field label="完成后动作" htmlFor="recognize-completion-action" help="执行前会显示 30 秒倒计时，可随时取消；仅影响这一项任务。">
+              <select id="recognize-completion-action" value={completionAction} onChange={event => setCompletionAction(event.target.value as typeof completionAction)}><option value="none">无</option><option value="shutdown">关机</option><option value="sleep">睡眠</option><option value="hibernate">休眠</option></select>
             </Field>
             <Button variant="ghost" className="text-button" onClick={() => setAdvanced(value => !value)}>{advanced ? '收起请求上下文' : '请求上下文（Cookie / Referer）'}</Button>
           </div>}

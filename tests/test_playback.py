@@ -11,8 +11,8 @@ from backend.app.downloader.playback import (
     playback_service,
     write_playback_plan,
 )
-from backend.app.downloader.task_manager import TaskManager, manager
-from backend.app.models import Task, TaskStatus
+from backend.app.downloader.task_manager import TaskConflictError, TaskManager, manager
+from backend.app.models import Task, TaskStatus, TaskType
 
 
 def _segments(task_dir, durations=(4.0, 4.0, 4.0)):
@@ -247,6 +247,48 @@ def test_native_hls_auth_token_is_carried_to_child_urls(tmp_path, monkeypatch):
         manager.tasks = previous
 
 
+def test_native_dash_uses_local_segment_preview_before_final_mux(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "temp_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "token", "play-token")
+    task = Task(
+        id="dashpreview",
+        url="https://example.test/video.mpd",
+        task_type=TaskType.DASH,
+        status=TaskStatus.DOWNLOADING_SEGMENTS,
+    )
+    task.engine_state["temp_dir"] = str(tmp_path)
+    task_dir = tmp_path / ".tasks" / task.id
+    segments = _segments(task_dir, durations=(2.0, 2.0))
+    write_playback_plan(task_dir, segments, total_duration=4.0)
+    seg_dir = task_dir / "segments"
+    seg_dir.mkdir(parents=True, exist_ok=True)
+    (seg_dir / "000000.seg").write_bytes(b"dash-segment")
+
+    previous = manager.tasks
+    manager.tasks = {task.id: task}
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        with TestClient(app) as client:
+            opened = client.post(
+                f"/api/tasks/{task.id}/playback",
+                headers={"X-Token": "play-token"},
+            )
+            assert opened.status_code == 200
+            assert opened.json()["mode"] == "hls"
+            session = opened.json()["session_id"]
+            playlist = client.get(
+                f"/api/tasks/{task.id}/playback/index.m3u8",
+                params={"session": session, "token": "play-token"},
+            )
+            assert playlist.status_code == 200
+            assert "segments/000000.seg" in playlist.text
+    finally:
+        playback_service.close_task(task.id)
+        manager.tasks = previous
+
+
 def test_active_playback_defers_temp_cleanup_until_player_closes(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "download_dir", str(tmp_path))
     monkeypatch.setattr(settings, "keep_temp_files", False)
@@ -272,4 +314,42 @@ def test_active_playback_defers_temp_cleanup_until_player_closes(tmp_path, monke
         await local_manager.release_playback(task.id, session)
         assert not task_dir.exists()
 
+    asyncio.run(run())
+
+
+def test_paused_sparse_http_never_serves_unwritten_zero_filled_ranges(tmp_path, monkeypatch):
+    async def run():
+        local_manager = TaskManager()
+        task = Task(
+            id="paused-http",
+            url="https://cdn.test/video.mp4?token=fresh",
+            task_type=TaskType.HTTP,
+            status=TaskStatus.PAUSED,
+        )
+        task.engine_state.update({
+            "temp_dir": str(tmp_path),
+            "stream_path": str(tmp_path / ".tasks" / task.id / "payload.downloading"),
+            "total_size": 100,
+        })
+        task.progress.total_bytes = 100
+        task.progress.downloaded_bytes = 10
+        task_dir = tmp_path / ".tasks" / task.id
+        task_dir.mkdir(parents=True)
+        payload = task_dir / "payload.downloading"
+        payload.write_bytes(b"abcdefghij" + b"\0" * 90)
+        (task_dir / "http-resume.json").write_text(json.dumps({
+            "version": 3,
+            "resource_key": "https://cdn.test/video.mp4",
+            "total": 100,
+            "ranges": [{"index": 0, "from": 0, "to": 99, "current": 10}],
+        }), encoding="utf-8")
+        local_manager.tasks[task.id] = task
+
+        path, total = await local_manager.wait_for_stream_range(task.id, 0, 9)
+        assert path == payload
+        assert total == 100
+        with pytest.raises(TaskConflictError, match="尚未下载完成"):
+            await local_manager.wait_for_stream_range(task.id, 10, 19)
+
+    import pytest
     asyncio.run(run())

@@ -1,15 +1,16 @@
 import { browser } from 'wxt/browser'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
-import { classifyDownload, classifyResource, compactResources, matchesDownloadClick, mergeResources, pageResourceKey, replayableRequestHeaders, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
+import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyResource, compactResources, matchesDownloadClick, mergeResources, pageResourceKey, replayableRequestHeaders, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus, shouldResumeBrowserDownload } from '../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
 import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
-import { parseHlsManifest, resourceQuality } from '../lib/hlsManifest'
+import { inspectHlsResource } from '../lib/hlsInspection'
 import { contentDispositionFilename } from '../lib/contentDisposition'
 import { InspectionCache } from '../lib/inspectionCache'
 import { cookieLookupUrl } from '../lib/browserCookies'
 import { detectBrowserFamily, stableBrowserClientId } from '../lib/browserClient'
+import { BrowserDirectBackend } from '../lib/directBackend'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 const CLICK_INTENT_STORAGE_KEY = 'click-intents'
@@ -20,6 +21,7 @@ const determinedDownloads = new Map<number, Browser.downloads.DownloadItem>()
 const determinationWaiters = new Map<number, (item: Browser.downloads.DownloadItem) => void>()
 const requestChains = new RequestChainStore()
 let nativeBridge: NativeBridge | null = null
+let directBackend: BrowserDirectBackend | null = null
 let concealedDownloadCount = 0
 let downloadUiFailsafe: ReturnType<typeof setTimeout> | null = null
 const inspectedHls = new InspectionCache()
@@ -40,6 +42,7 @@ const trackedHandoffs = new Map<string, TrackedHandoff>()
 let handoffTrackerHydrated = false
 let handoffTrackerPolling = false
 let handoffTrackerTimer: ReturnType<typeof setTimeout> | null = null
+let lastDesktopPingAt = 0
 
 function browserClientId(): Promise<string> {
   browserClientIdPromise ||= stableBrowserClientId(
@@ -50,9 +53,14 @@ function browserClientId(): Promise<string> {
 }
 
 function extensionIdentity() {
+  const navigatorWithBrave = globalThis.navigator as Navigator & { brave?: unknown }
   return {
     version: browser.runtime.getManifest().version,
-    browser: detectBrowserFamily(browser.runtime.getURL('/'), globalThis.navigator?.userAgent || ''),
+    browser: detectBrowserFamily(
+      browser.runtime.getURL('/'),
+      navigatorWithBrave?.userAgent || '',
+      Boolean(navigatorWithBrave?.brave),
+    ),
   }
 }
 
@@ -248,12 +256,34 @@ async function cookiesFor(url: string, pageUrl = ''): Promise<string> {
 async function native(message: Record<string, unknown>, timeoutMs?: number): Promise<any> {
   if (!nativeBridge) return Promise.reject(new Error('Native Messaging 尚未初始化'))
   const identity = extensionIdentity()
-  return nativeBridge.request({
+  const operation = String(message.op || '')
+  const retryCount = new Set([
+    'ping', 'offer', 'handoff_status', 'media_push_status',
+  ]).has(operation) ? 1 : 0
+  const payload = {
     ...message,
     version: identity.version,
     client_id: await browserClientId(),
     browser: identity.browser,
-  }, timeoutMs)
+  }
+  if (directBackend) {
+    try {
+      return await directBackend.request(payload, {
+        version: identity.version,
+        client_id: String(payload.client_id),
+        browser: identity.browser,
+      }, timeoutMs)
+    } catch {
+      // Core restart, token rotation or an older backend: renew pairing over
+      // Native Messaging without surfacing a false "未连接" state.
+      directBackend = null
+    }
+  }
+  const response = await nativeBridge.request(payload, timeoutMs, retryCount)
+  if (response?.bridge_base && response?.bridge_token) {
+    directBackend = new BrowserDirectBackend(String(response.bridge_base), String(response.bridge_token))
+  }
+  return response
 }
 
 async function applyDesktopTakeoverSettings(response: any): Promise<any> {
@@ -267,30 +297,24 @@ async function applyDesktopTakeoverSettings(response: any): Promise<any> {
 }
 
 async function pingDesktop(): Promise<any> {
-  return applyDesktopTakeoverSettings(await native({ op: 'ping' }))
+  const response = await applyDesktopTakeoverSettings(await native({ op: 'ping' }))
+  if (response?.ok) lastDesktopPingAt = Date.now()
+  return response
 }
 
 async function inspectHls(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1): Promise<void> {
-  const inspectionKey = `${tabId}:${resource.pageUrl || ''}:${resource.url}`
-  if (resource.kind !== 'hls' || !inspectedHls.claim(inspectionKey)) return
+  const normalized = {
+    ...resource,
+    url: canonicalMediaUrl(resource.url, resource.kind),
+  }
+  const inspectionKey = `${tabId}:${normalized.pageUrl || ''}:${normalized.url}`
+  if (normalized.kind !== 'hls' || !inspectedHls.claim(inspectionKey)) return
   try {
-    const response = await fetch(resource.url, { credentials: 'include', signal: AbortSignal.timeout(5_000) })
-    if (!response.ok) return
-    const info = parseHlsManifest(await response.text(), response.url || resource.url)
-    if (info.duration || info.variants.length) {
-      const variants = [...info.variants]
-        .sort((left, right) => (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0))
-        .slice(0, 12)
-      const best = variants[0]
+    const metadata = await inspectHlsResource(normalized)
+    if (metadata) {
       const enriched = {
-        ...resource,
-        duration: info.duration,
-        variants,
-        width: best?.width || resource.width,
-        height: best?.height || resource.height,
-        bandwidth: best?.bandwidth || resource.bandwidth,
-        estimatedSize: info.duration && best?.bandwidth ? Math.round(info.duration * best.bandwidth / 8) : resource.estimatedSize,
-        quality: best?.quality ? `最高 ${best.quality}` : resourceQuality(resource.url, resource.height),
+        ...normalized,
+        ...metadata,
       }
       await saveResource(enriched, tabId)
       await sendCapturedResource(tabId, enriched)
@@ -336,13 +360,24 @@ function revealBrowserDownload(): void {
 }
 
 async function resourcePayload(resource: MediaResource, explicitChain?: RequestChain) {
+  resource = { ...resource, url: canonicalMediaUrl(resource.url, resource.kind) }
   const pageUrl = await topLevelPageUrl(resource.tabId ?? -1, resource.pageUrl || '')
   const pageChain = resource.tabId !== undefined && resource.tabId >= 0
     ? requestChains.pageContext(resource.tabId, pageUrl)
     : undefined
+  const requireSuccessfulRequest = resource.kind !== 'magnet'
   const chain = explicitChain || (resource.tabId !== undefined && resource.tabId >= 0
-    ? requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), resource.tabId)
-    : requestChains.find({ url: resource.url, referrer: pageUrl }))
+    ? requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), resource.tabId, requireSuccessfulRequest)
+    : requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), undefined, requireSuccessfulRequest))
+  if (chain) {
+    const freshUrl = canonicalMediaUrl(chain.finalUrl, resource.kind)
+    if (resourceFingerprint({ url: freshUrl, kind: resource.kind }) === resourceFingerprint(resource)) {
+      // LL-HLS and signed files keep refreshing while the selection panel is
+      // open. Always hand off the most recently successful browser request,
+      // not a stale Performance/fetch observation rendered by the page.
+      resource = { ...resource, url: freshUrl, seenAt: Math.max(resource.seenAt || 0, chain.updatedAt) }
+    }
+  }
   // The source-page request is the stable default.  Individual media/CDN
   // chains remain in request_contexts and take precedence for their origin.
   const pageIdentity = resourceRequestIdentity({
@@ -368,7 +403,7 @@ async function resourcePayload(resource: MediaResource, explicitChain?: RequestC
       let origin = ''
       try { origin = new URL(requestUrl).origin } catch {}
       if (!origin) return
-      const scopedIdentity = resourceRequestIdentity({ pageUrl, requestHeaders })
+      const scopedIdentity = capturedRequestIdentity(requestHeaders, navigator.userAgent)
       requestContexts[origin] = {
         request_headers: replayableRequestHeaders(requestHeaders),
         referer: scopedIdentity.referer,
@@ -438,7 +473,11 @@ async function castToDevice(resource: MediaResource): Promise<{ ok: true }> {
 }
 
 async function offer(resource: MediaResource, chain?: RequestChain) {
-  const payload = await resourcePayload(resource, chain)
+  const payload = {
+    ...await resourcePayload(resource, chain),
+    client_request_id: globalThis.crypto?.randomUUID?.()
+      || `offer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
+  }
   const response = await native({ op: 'offer', resource: payload })
   const handoff = response?.handoff
   if (!response?.ok || !handoff?.id) return response
@@ -655,10 +694,21 @@ function isDownloadResponse(disposition: string, resource: { mimeType?: string, 
 export default defineBackground(() => {
   browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.status === 'loading' || changeInfo.url) {
+      requestChains.clearTab(tabId)
+      inspectedHls.releasePrefix(`${tabId}:`)
       void browser.action.setBadgeText({ tabId, text: '' }).catch(() => undefined)
+      if (changeInfo.url) {
+        const keep = storageKey(tabId, changeInfo.url)
+        void browser.storage.session.get(null).then(values => {
+          const prefix = `resources:tab:${tabId}`
+          const keys = Object.keys(values).filter(key => key.startsWith(prefix) && key !== keep)
+          if (keys.length) return browser.storage.session.remove(keys)
+        }).catch(() => undefined)
+      }
     }
   })
   browser.tabs.onRemoved.addListener(tabId => {
+    requestChains.clearTab(tabId)
     inspectedHls.releasePrefix(`${tabId}:`)
     void browser.storage.session.get(null).then(values => {
       const keys = Object.keys(values).filter(key => key.startsWith(`resources:tab:${tabId}`))
@@ -686,8 +736,12 @@ export default defineBackground(() => {
     if (alarm.name === 'handoff-tracker') void pollTrackedHandoffs()
   })
   browser.runtime.onInstalled.addListener(() => {
-    browser.contextMenus.create({ id: 'hls-download-link', title: '使用 HLS Downloader 下载', contexts: ['link', 'video', 'audio'] })
-    browser.contextMenus.create({ id: 'hls-download-selection', title: '批量发送选中的链接', contexts: ['selection'] })
+    // Updates keep old menu registrations. Rebuild them atomically so a
+    // duplicate-id error cannot prevent the second item from being installed.
+    void browser.contextMenus.removeAll().catch(() => undefined).then(() => {
+      browser.contextMenus.create({ id: 'hls-download-link', title: '使用 HLS Downloader 下载', contexts: ['link', 'video', 'audio'] })
+      browser.contextMenus.create({ id: 'hls-download-selection', title: '批量发送选中的链接', contexts: ['selection'] })
+    })
   })
 
   ;(browser.webRequest.onSendHeaders.addListener as any)((details: any) => {
@@ -756,6 +810,12 @@ export default defineBackground(() => {
       return undefined
     }, { urls: ['<all_urls>'] }, ['responseHeaders'])
   }
+  browser.webRequest.onCompleted.addListener(details => {
+    requestChains.finish(details.requestId, details.timeStamp || Date.now())
+  }, { urls: ['<all_urls>'] })
+  browser.webRequest.onErrorOccurred.addListener(details => {
+    requestChains.fail(details.requestId)
+  }, { urls: ['<all_urls>'] })
 
   filenameDeterminationEvent(import.meta.env.CHROME, browser.downloads as any)?.addListener((item: any, suggest: any) => {
     determinedDownloads.set(item.id, item)
@@ -766,6 +826,8 @@ export default defineBackground(() => {
 
   browser.downloads.onCreated.addListener(async item => {
     if (!item.url || item.url.startsWith('blob:')) return
+    const creatingExtension = String((item as any).byExtensionId || '')
+    if (creatingExtension && creatingExtension !== browser.runtime.id) return
     if (consumeBrowserFallback(item.url)) {
       revealBrowserDownload()
       return
@@ -932,7 +994,11 @@ export default defineBackground(() => {
     if (message?.type === 'ping') {
       void pingDesktop()
         .then(response => sendResponse(response))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendResponse({
+          ok: false,
+          reconnecting: lastDesktopPingAt > 0 && Date.now() - lastDesktopPingAt < 90_000,
+          error: String(error),
+        }))
       return true
     }
     if (message?.type === 'set-takeover-settings') {

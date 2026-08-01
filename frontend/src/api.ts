@@ -74,6 +74,8 @@ export const selectTorrentFiles = (id: string, indexes: number[]) =>
   })
 export const taskAction = (id: string, action: string) =>
   request<{ ok: boolean }>(`/tasks/${id}/${action}`, { method: 'POST' })
+export const refreshTaskRequest = (id: string, data: Record<string, unknown>) =>
+  request<any>(`/tasks/${id}/request`, { method: 'PATCH', body: JSON.stringify(data) })
 export const setTaskSpeedLimit = (id: string, limitKib: number) =>
   request<{ ok: boolean }>(`/tasks/${id}/speed-limit`, {
     method: 'POST',
@@ -125,6 +127,12 @@ export const fetchUpdateInfo = (force = false) =>
   request<any>(`/update/check${force ? '?force=true' : ''}`)
 export const installUpdate = () =>
   request<{ ok: boolean; version: string; task_id: string }>('/update/install', { method: 'POST' })
+export const cancelPowerAction = (id: string) =>
+  request<{ ok: boolean }>(`/power-actions/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
+export const confirmPowerAction = (id: string) =>
+  request<{ ok: boolean }>(`/power-actions/${encodeURIComponent(id)}/confirm`, { method: 'POST' })
+export const fetchPendingPowerActions = () =>
+  request<Array<{ power_action_id: string; action: 'shutdown' | 'sleep' | 'hibernate'; task_title: string; delay_seconds: number }>>('/power-actions')
 export const createPlaybackSession = (id: string) =>
   request<PlaybackSession>(`/tasks/${id}/playback`, { method: 'POST' })
 export const fetchPlaybackStatus = (id: string, session: string) =>

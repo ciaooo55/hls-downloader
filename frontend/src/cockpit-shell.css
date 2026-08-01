@@ -368,8 +368,11 @@ body,
 .settings-field p { margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .settings-inline-status { margin: 8px 0 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-3); color: var(--muted); font-size: 11px; line-height: 1.45; }
 .settings-field-wide { grid-column: 1 / -1; }
+.settings-modal .settings-json-editor { width: 100%; min-height: 132px; resize: vertical; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--surface-3); color: var(--text); font: 11px/1.5 var(--font-mono); }
 .settings-checkbox { align-self: center; min-height: 40px; margin: 21px 0 0 !important; font-size: 12px; }
 .settings-checkbox input { width: 16px !important; height: 16px !important; accent-color: var(--primary); }
+.settings-day-picker { display: flex; flex-wrap: wrap; gap: 8px 14px; min-height: 40px; align-items: center; }
+.settings-day-picker .checkbox-label { margin: 0; font-size: 12px; }
 
 .settings-group > .advanced-toggle { width: 100%; min-height: 52px; margin: 0; padding: 0 20px; border-top: 1px solid var(--border); text-align: left; }
 .settings-advanced-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding: 18px 20px 22px; border-top: 1px solid var(--border); }

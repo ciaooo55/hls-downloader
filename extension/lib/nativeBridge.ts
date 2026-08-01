@@ -7,7 +7,9 @@ export interface NativePortLike {
 
 interface PendingRequest {
   message: Record<string, unknown>
+  requestId: string
   timeoutMs: number
+  retriesRemaining: number
   resolve(value: unknown): void
   reject(reason: Error): void
   timer?: ReturnType<typeof setTimeout>
@@ -18,6 +20,7 @@ export class NativeBridge {
   private active: PendingRequest | null = null
   private readonly queue: PendingRequest[] = []
   private closed = false
+  private requestSequence = 0
 
   constructor(
     private readonly connect: () => NativePortLike,
@@ -25,10 +28,22 @@ export class NativeBridge {
     private readonly disconnected: () => void = () => undefined,
   ) {}
 
-  request(message: Record<string, unknown>, timeoutMs = this.timeoutMs): Promise<any> {
+  request(
+    message: Record<string, unknown>,
+    timeoutMs = this.timeoutMs,
+    retryCount = 0,
+  ): Promise<any> {
     if (this.closed) return Promise.reject(new Error('Native Messaging connection is closed'))
     return new Promise((resolve, reject) => {
-      this.queue.push({ message, timeoutMs, resolve, reject })
+      const requestId = `${Date.now().toString(36)}-${++this.requestSequence}`
+      this.queue.push({
+        message: { ...message, __request_id: requestId },
+        requestId,
+        timeoutMs,
+        retriesRemaining: Math.max(0, Math.floor(retryCount)),
+        resolve,
+        reject,
+      })
       this.pump()
     })
   }
@@ -47,7 +62,7 @@ export class NativeBridge {
   private ensurePort(): NativePortLike {
     if (this.port) return this.port
     const port = this.connect()
-    port.onMessage.addListener(message => this.handleMessage(message))
+    port.onMessage.addListener(message => this.handleMessage(port, message))
     port.onDisconnect.addListener(() => this.handleDisconnect(port))
     this.port = port
     return port
@@ -61,23 +76,34 @@ export class NativeBridge {
       const port = this.ensurePort()
       request.timer = setTimeout(() => {
         if (this.active !== request) return
-        if (this.port === port) this.port = null
-        this.rejectActive(new Error('Native Messaging response timed out'))
-        this.disconnected()
-        try { port.disconnect() } catch {}
-        this.pump()
+        this.retryOrRejectActive(port, new Error('Native Messaging response timed out'))
       }, request.timeoutMs)
       port.postMessage(request.message)
     } catch (error) {
       this.port = null
-      this.rejectActive(error instanceof Error ? error : new Error(String(error)))
-      this.pump()
+      const reason = error instanceof Error ? error : new Error(String(error))
+      if (request.retriesRemaining > 0 && !this.closed) {
+        request.retriesRemaining -= 1
+        this.active = null
+        this.disconnected()
+        setTimeout(() => this.pump(), 80)
+      } else {
+        this.rejectActive(reason)
+        this.pump()
+      }
     }
   }
 
-  private handleMessage(message: unknown): void {
+  private handleMessage(port: NativePortLike, message: unknown): void {
+    // A timed-out/disconnected port may still deliver a buffered response.
+    // Never let it complete the next request running on a replacement port.
+    if (this.port !== port) return
     const request = this.active
     if (!request) return
+    if (message && typeof message === 'object') {
+      const responseId = String((message as Record<string, unknown>).__request_id || '')
+      if (responseId && responseId !== request.requestId) return
+    }
     if (request.timer) clearTimeout(request.timer)
     this.active = null
     this.queue.shift()
@@ -88,8 +114,21 @@ export class NativeBridge {
   private handleDisconnect(port: NativePortLike): void {
     if (this.port !== port) return
     this.port = null
-    this.rejectActive(new Error('Native Messaging host disconnected'))
+    this.retryOrRejectActive(port, new Error('Native Messaging host disconnected'))
+  }
+
+  private retryOrRejectActive(port: NativePortLike, error: Error): void {
+    const request = this.active
+    if (request?.timer) clearTimeout(request.timer)
+    this.port = null
     this.disconnected()
+    if (request && request.retriesRemaining > 0 && !this.closed) {
+      request.retriesRemaining -= 1
+      this.active = null
+    } else {
+      this.rejectActive(error)
+    }
+    try { port.disconnect() } catch {}
     this.pump()
   }
 

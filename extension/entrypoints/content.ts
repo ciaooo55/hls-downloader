@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser'
 import { clampOverlayPosition, shouldShowMediaOverlay } from '../lib/mediaOverlay'
-import { classifyResource, isGenericMediaName, mergeResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
+import { classifyResource, isGenericMediaName, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
 
@@ -28,8 +28,15 @@ export default defineContentScript({
   async main(ctx) {
     document.documentElement.setAttribute('data-hls-downloader-extension', '1')
     const resources = new Map<string, MediaResource>()
+    // Rendering is intentionally frequent on live pages. Keep handoff state
+    // outside the DOM so a network event cannot replace an in-flight button.
+    const resourceSendStates = new Map<string, { label: string, disabled: boolean }>()
     let activePlayback: PlaybackContext | null = null
     let activeVideo: HTMLVideoElement | null = null
+    // A page can contain several players.  Keep playback evidence per element
+    // instead of treating the latest network manifest as belonging to every
+    // video in the document.
+    let playbackByVideo = new WeakMap<HTMLVideoElement, PlaybackContext>()
     const replaceResources = (values: MediaResource[]) => {
       resources.clear()
       for (const value of values) resources.set(resourceFingerprint(value), value)
@@ -123,7 +130,7 @@ export default defineContentScript({
     let dragged = false
     let pinned = false
     let panelPosition: { x: number, y: number } | null = null
-    let videoButtonPosition: { x: number, y: number } | null = null
+    let videoButtonPositions = new WeakMap<HTMLVideoElement, { x: number, y: number }>()
     let videoControlDragging = false
     let collapseTimer: ReturnType<typeof setTimeout> | null = null
     const fitPanel = () => {
@@ -191,12 +198,28 @@ export default defineContentScript({
     }))
     window.addEventListener('resize', fitPanel)
 
+    const applySendState = (resource: MediaResource, button: HTMLButtonElement, fallbackLabel: string) => {
+      const state = resourceSendStates.get(resourceFingerprint(resource))
+      const label = button.querySelector<HTMLElement>('.download-label')
+      if (label) label.textContent = state?.label || fallbackLabel
+      else button.textContent = state?.label || fallbackLabel
+      if (state?.disabled) button.setAttribute('disabled', '')
+      else button.removeAttribute('disabled')
+    }
+
+    const setSendState = (resource: MediaResource, button: HTMLButtonElement, label: string, disabled: boolean, fallbackLabel = '下载') => {
+      resourceSendStates.set(resourceFingerprint(resource), { label, disabled })
+      applySendState(resource, button, fallbackLabel)
+    }
+
     const sendResource = (resource: MediaResource, button: HTMLButtonElement) => {
+      const key = resourceFingerprint(resource)
+      if (resourceSendStates.get(key)?.disabled) return
       const result = ui.shadow.querySelector<HTMLElement>('.result')
-      button.setAttribute('disabled', ''); button.textContent = '发送中'
+      setSendState(resource, button, '发送中', true)
       void runtimeMessage({ type: 'offer', resource }).then(async response => {
         if (!response?.ok || !response?.handoff?.id) throw new Error(response?.error || '桌面端未接受请求')
-        button.textContent = '等待确认'
+        setSendState(resource, button, '等待确认', true)
         if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `请在桌面下载器确认：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
         const handoffId = response.handoff.id
         const deadline = Date.now() + 130_000
@@ -206,20 +229,23 @@ export default defineContentScript({
           const handoff = statusResponse?.handoff || statusResponse
           const status = String(handoff?.status || '')
           if (!status || status === 'pending' || status === 'accepting') continue
-          if (status === 'connection_lost') throw new Error('桌面端连接中断，请重试')
+          if (status === 'connection_lost') {
+            if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = '桌面端短暂断开，正在自动恢复确认状态' }
+            continue
+          }
           if (status === 'accepted') {
-            button.textContent = '已加入'
+            setSendState(resource, button, '已加入', true)
             if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `已加入下载队列：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
+            setTimeout(() => resourceSendStates.delete(key), 2_500)
           } else {
-            button.removeAttribute('disabled')
-            button.textContent = status === 'expired' ? '已过期' : '重试'
+            setSendState(resource, button, status === 'expired' ? '已过期' : '重试', false)
             if (result) { result.hidden = false; result.classList.add('error'); result.textContent = status === 'canceled' || status === 'rejected' ? '已取消下载确认' : `确认已${status}` }
           }
           return
         }
-        button.removeAttribute('disabled'); button.textContent = '重试'
+        setSendState(resource, button, '重试', false)
       }).catch(reason => {
-        button.removeAttribute('disabled'); button.textContent = '重试'
+        setSendState(resource, button, '重试', false)
         if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '发送失败' }
       })
     }
@@ -279,34 +305,36 @@ export default defineContentScript({
       // Players emit timeupdate while the pointer is down. Replacing the
       // control in that interval cancels pointer capture before it can move.
       if (videoControlDragging) return
-      const entries = visiblePlaybackResources([...resources.values()], activePlayback, 8)
-      const canShowOverlay = shouldShowMediaOverlay({
-        hasPlayback: Boolean(activePlayback),
-        hasActiveVideo: Boolean(activeVideo),
-        resourceCount: entries.length,
-      })
-      if (!canShowOverlay) {
-        layer.replaceChildren()
-        if (pinned) setPinned(false)
-        setOpen(false)
-        panelPosition = null
-        return
-      }
       layer.replaceChildren()
       let visible = 0
-      const videos = (activeVideo && document.contains(activeVideo) ? [activeVideo] : [...document.querySelectorAll<HTMLVideoElement>('video')])
-        .map(video => ({ video, rect: video.getBoundingClientRect() }))
-        .filter(({ rect }) => rect.width >= 180 && rect.height >= 100 && rect.bottom >= 0 && rect.top <= innerHeight && rect.right >= 0 && rect.left <= innerWidth)
-        .sort((left, right) => right.rect.width * right.rect.height - left.rect.width * left.rect.height)
-      // IDM and AB place one action beside the dominant player. Showing a
-      // duplicate button on every preview/advert video is noisy and ambiguous.
-      videos.slice(0, 1).forEach(({ video, rect }) => {
-        const sourceUrls = [video.currentSrc, video.src, ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')].map(source => source.src)].filter(Boolean)
-        const exact = entries.filter(item => sourceUrls.some(source => resourceMatchesPlaybackSource(item, source)))
+      const videos = [...document.querySelectorAll<HTMLVideoElement>('video')]
+        .map(video => ({ video, rect: video.getBoundingClientRect(), playback: playbackByVideo.get(video) || null }))
+        .filter(({ video, rect, playback }) => Boolean(playback)
+          && (video === activeVideo || (!video.paused && !video.ended))
+          && rect.width >= 180 && rect.height >= 100
+          && rect.bottom >= 0 && rect.top <= innerHeight && rect.right >= 0 && rect.left <= innerWidth)
+        .sort((left, right) => Number(right.video === activeVideo) - Number(left.video === activeVideo)
+          || right.rect.width * right.rect.height - left.rect.width * left.rect.height)
+      const activeMseVideos = videos.filter(({ video, playback }) => Boolean(playback?.sourceUrls.some(source => source.startsWith('blob:')))
+        && (video === activeVideo || !video.paused))
+      // Render beside every real, played video that has its own evidence.  A
+      // blob/MSE source cannot name its manifest; when two MSE players are
+      // active in this frame, page-level manifests are ambiguous and are not
+      // shown beside either player.
+      videos.forEach(({ video, rect, playback }) => {
+        if (!playback) return
+        const sourceUrls = playback.sourceUrls
+        const candidates = playerPlaybackResources(
+          [...resources.values()],
+          playback,
+          activeMseVideos.length,
+          8,
+        )
+        const exact = candidates.filter(item => sourceUrls.some(source => resourceMatchesPlaybackSource(item, source)))
         const hasExactPlayerMatch = exact.length > 0
-        const choices = (hasExactPlayerMatch ? exact : entries)
+        const choices = (hasExactPlayerMatch ? exact : candidates)
           .sort((left, right) => resourceRank(right) - resourceRank(left) || (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0) || (right.size || right.estimatedSize || 0) - (left.size || left.estimatedSize || 0))
-        if (!choices.length) return
+        if (!shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: choices.length })) return
         visible += 1
         const button = document.createElement('button')
         button.type = 'button'; button.className = 'video-download'; button.title = hasExactPlayerMatch && choices.length === 1 ? '查看此视频的下载选项' : '选择当前页面检测到的视频资源'
@@ -317,11 +345,12 @@ export default defineContentScript({
           ? besidePlayer
           : Math.max(8, Math.min(rect.right - buttonWidth - 8, innerWidth - buttonWidth - 8))
         const defaultTop = Math.max(8, Math.min(rect.top + 8, innerHeight - buttonHeight - 8))
-        const saved = videoButtonPosition
+        const saved = videoButtonPositions.get(video)
         button.style.left = `${saved ? Math.max(8, Math.min(saved.x, innerWidth - buttonWidth - 8)) : defaultLeft}px`
         button.style.top = `${saved ? Math.max(8, Math.min(saved.y, innerHeight - buttonHeight - 8)) : defaultTop}px`
         const icon = document.createElement('img'); icon.src = browser.runtime.getURL('/icon-32.png'); icon.alt = ''
-        const label = document.createElement('span'); label.textContent = hasExactPlayerMatch && choices.length === 1 ? '下载视频' : '选择资源'
+         const fallbackLabel = hasExactPlayerMatch && choices.length === 1 ? '下载视频' : '选择资源'
+         const label = document.createElement('span'); label.className = 'download-label'; label.textContent = fallbackLabel
         button.append(icon, label)
         if (choices.length > 1) { const count = document.createElement('b'); count.textContent = String(choices.length); button.append(count) }
         let videoDragged = false
@@ -349,7 +378,7 @@ export default defineContentScript({
             window.removeEventListener('pointerup', finish, true)
             window.removeEventListener('pointercancel', cancel, true)
             if (videoDragged) {
-              videoButtonPosition = { x: button.offsetLeft, y: button.offsetTop }
+              videoButtonPositions.set(video, { x: button.offsetLeft, y: button.offsetTop })
             }
             videoControlDragging = false
             scheduleVideoButtons()
@@ -378,9 +407,13 @@ export default defineContentScript({
             videoDragged = false
             return
           }
-          // Always show the evidence and actions first. This keeps one-click
-          // controls beside the player compact without turning an unrelated
-          // MSE network request into an accidental download.
+           if (hasExactPlayerMatch && choices.length === 1) {
+             event.preventDefault()
+             event.stopImmediatePropagation()
+             sendResource(choices[0], button)
+             return
+           }
+           // Ambiguous MSE resources still require an evidence selection panel.
           if (wrap) {
             render()
             const preferred = panelPosition || { x: rect.right - 344, y: rect.top + 44 }
@@ -392,8 +425,14 @@ export default defineContentScript({
             setOpen(true)
           }
         })
-        layer.append(button)
+         applySendState(choices[0], button, fallbackLabel)
+         layer.append(button)
       })
+      if (!visible) {
+        if (pinned) setPinned(false)
+        setOpen(false)
+        panelPosition = null
+      }
     }
 
     const render = () => {
@@ -407,11 +446,12 @@ export default defineContentScript({
         const name = document.createElement('div'); name.className = 'name'; name.title = resource.title || resource.filename || resource.url; name.textContent = resource.title || resource.filename || resource.url.split('/').pop() || resource.url
         let host = ''; try { host = new URL(resource.url).host } catch {}
         const quality = resource.quality || resourceQuality(resource.url, resource.height)
+        const streamMode = resource.isLive === true ? '直播' : ''
         const duration = resource.duration ? formatDuration(resource.duration) : ''
         const bandwidth = resource.bandwidth ? `${(resource.bandwidth / 1_000_000).toFixed(1)} Mbps` : ''
         const likelySize = resource.size || resource.estimatedSize || 0
         const sizeLabel = resource.size ? formatSize(resource.size) : likelySize ? `约 ${formatSize(likelySize)}` : '大小未知'
-        const kind = document.createElement('div'); kind.className = 'kind'; kind.textContent = [resource.kind.toUpperCase(), quality, resource.width && resource.height ? `${resource.width}×${resource.height}` : '', bandwidth, duration, sizeLabel, host].filter(Boolean).join(' · ')
+        const kind = document.createElement('div'); kind.className = 'kind'; kind.textContent = [resource.kind.toUpperCase(), streamMode, quality, resource.width && resource.height ? `${resource.width}×${resource.height}` : '', bandwidth, duration, sizeLabel, host].filter(Boolean).join(' · ')
         const resourceUrl = document.createElement('code'); resourceUrl.className = 'resource-url'; resourceUrl.title = resource.url; resourceUrl.textContent = resource.url
         let selected = resource
         if (resource.variants?.length) {
@@ -428,17 +468,19 @@ export default defineContentScript({
             option.textContent = [variant.quality || (variant.height ? `${variant.height}p` : '线路'), variant.bandwidth ? `${(variant.bandwidth / 1_000_000).toFixed(1)} Mbps` : ''].filter(Boolean).join(' · ')
             select.append(option)
           })
-          select.addEventListener('change', () => {
+           select.addEventListener('change', () => {
             const variant = resource.variants?.find(item => item.url === select.value)
             selected = variant ? { ...resource, ...variant, url: variant.url, variants: undefined } : resource
+            applySendState(selected, button, '下载')
           })
           meta.append(name, kind, resourceUrl, select)
         } else {
           meta.append(name, kind, resourceUrl)
         }
         const actions = document.createElement('div'); actions.className = 'item-actions'
-        const button = document.createElement('button'); button.className = 'download'; button.textContent = '下载'
-        button.addEventListener('click', () => sendResource(selected, button))
+         const button = document.createElement('button'); button.className = 'download'; button.textContent = '下载'
+         button.addEventListener('click', () => sendResource(selected, button))
+         applySendState(selected, button, '下载')
         const pushButton = document.createElement('button'); pushButton.className = 'download push-tv'; pushButton.textContent = '推电视'
         pushButton.title = '推送到电视播放'
         pushButton.addEventListener('click', () => pushToTv(selected, pushButton))
@@ -466,16 +508,20 @@ export default defineContentScript({
       if (rect.width < 180 || rect.height < 100 || rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) return
       // MSE and nested players can fire on a non-dominant video node. Anchor
       // to the element that is actually advancing, not the largest rectangle.
-      const changedVideo = activeVideo !== video
       activeVideo = video
       const sourceUrls = [video.currentSrc, video.src, ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')].map(source => source.src)].filter(Boolean)
-      const changedSource = sourceUrls.join('\n') !== (activePlayback?.sourceUrls || []).join('\n')
-      if (!activePlayback || changedSource || changedVideo) {
-        if (changedSource || changedVideo) videoButtonPosition = null
+      const previousPlayback = playbackByVideo.get(video) || null
+      const changedSource = sourceUrls.join('\n') !== (previousPlayback?.sourceUrls || []).join('\n')
+      if (!previousPlayback || changedSource) {
+        if (changedSource) videoButtonPositions.delete(video)
         activePlayback = { sourceUrls, startedAt: Date.now() }
+        playbackByVideo.set(video, activePlayback)
       } else if (event.type === 'timeupdate') {
+        activePlayback = previousPlayback
         scheduleVideoButtons()
         return
+      } else {
+        activePlayback = previousPlayback
       }
       render()
     }
@@ -531,7 +577,8 @@ export default defineContentScript({
       currentPageUrl = next
       activePlayback = null
       activeVideo = null
-      videoButtonPosition = null
+      playbackByVideo = new WeakMap<HTMLVideoElement, PlaybackContext>()
+      videoButtonPositions = new WeakMap<HTMLVideoElement, { x: number, y: number }>()
       panelPosition = null
       if (pinned) setPinned(false)
       setOpen(false)

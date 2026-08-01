@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import time
 
 import httpx
@@ -12,6 +13,7 @@ from backend.app.downloader.errors import (
     should_share_retry_window,
 )
 from backend.app.downloader.hls import HLSDownloader
+from backend.app.downloader.parser import UnsupportedPlaylistError
 from backend.app.models import Task, TaskStatus
 
 
@@ -39,6 +41,21 @@ def test_http_403_reports_code_stage_redacted_url_and_header_hint():
     assert "浏览器扩展" in details.hint
     assert "Cookie" in details.hint
     assert "403" in details.message
+
+
+def test_streaming_http_error_diagnostic_does_not_raise_response_not_read():
+    request = httpx.Request("GET", "https://example.test/live.m3u8?token=secret")
+    response = httpx.Response(403, request=request, stream=httpx.ByteStream(b"expired"))
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        details = diagnose_download_error(exc, stage="parsing", url=str(request.url))
+    else:
+        raise AssertionError("expected HTTPStatusError")
+
+    assert details.code in {"HTTP_403", "HTTP_403_EXPIRED_SIGNATURE"}
+    assert details.http_status == 403
+    assert details.url == "https://example.test/live.m3u8"
 
 
 def test_browser_transport_http_error_keeps_status_and_url():
@@ -82,6 +99,54 @@ def test_http_429_and_timeout_have_actionable_hints():
         url="https://cdn.example.test/3.ts",
     )
     assert browser_timeout.code == "NETWORK_TIMEOUT"
+
+
+def test_http_range_and_storage_failures_do_not_masquerade_as_hls_errors():
+    range_error = diagnose_download_error(
+        RuntimeError("Range 响应缺少有效 Content-Range"),
+        stage="downloading",
+        url="https://files.test/archive.zip",
+    )
+    assert range_error.code == "HTTP_RANGE_INVALID"
+    assert "拼接错误数据" in range_error.hint
+
+    no_space = OSError(errno.ENOSPC, "No space left on device")
+    no_space_details = diagnose_download_error(
+        no_space,
+        stage="downloading",
+        url="https://files.test/archive.zip",
+    )
+    assert no_space_details.code == "STORAGE_NO_SPACE"
+
+    denied = PermissionError(errno.EACCES, "permission denied")
+    denied_details = diagnose_download_error(
+        denied,
+        stage="downloading",
+        url="https://files.test/archive.zip",
+    )
+    assert denied_details.code == "OUTPUT_PERMISSION_DENIED"
+
+
+def test_hls_unsupported_messages_do_not_claim_separate_audio_is_unsupported():
+    drm = diagnose_download_error(
+        UnsupportedPlaylistError("不支持 SAMPLE-AES / DRM 加密"),
+        stage="parsing",
+    )
+    missing_audio = diagnose_download_error(
+        UnsupportedPlaylistError("独立 HLS 音轨缺少可下载的 URI"),
+        stage="parsing",
+    )
+    unknown = diagnose_download_error(
+        UnsupportedPlaylistError("不支持的 HLS 加密方式: FOO"),
+        stage="parsing",
+    )
+
+    assert drm.code == "HLS_DRM_UNSUPPORTED"
+    assert "官方离线功能" in drm.hint
+    assert missing_audio.code == "HLS_AUDIO_TRACK_UNAVAILABLE"
+    assert "重新识别" in missing_audio.hint
+    assert unknown.code == "HLS_UNSUPPORTED"
+    assert "独立音视频 HLS 已支持" in unknown.hint
 
 
 def test_auth_failure_distinguishes_missing_and_expired_browser_context():
@@ -169,7 +234,7 @@ def test_rate_limit_retry_window_is_shared_and_interruptible():
     asyncio.run(run())
 
 
-def test_rate_limit_window_only_applies_to_429_or_retry_after():
+def test_rate_limit_window_applies_to_429_503_or_retry_after():
     request = httpx.Request("GET", "https://example.test/file")
     limited = httpx.HTTPStatusError(
         "limited", request=request, response=httpx.Response(429, request=request)
@@ -179,12 +244,16 @@ def test_rate_limit_window_only_applies_to_429_or_retry_after():
         request=request,
         response=httpx.Response(503, headers={"Retry-After": "1"}, request=request),
     )
-    transient = httpx.HTTPStatusError(
+    service_unavailable = httpx.HTTPStatusError(
         "busy", request=request, response=httpx.Response(503, request=request)
+    )
+    transient = httpx.HTTPStatusError(
+        "bad gateway", request=request, response=httpx.Response(502, request=request)
     )
 
     assert should_share_retry_window(limited) is True
     assert should_share_retry_window(delayed) is True
+    assert should_share_retry_window(service_unavailable) is True
     assert should_share_retry_window(transient) is False
 
 
@@ -227,7 +296,7 @@ def test_playlist_http_failure_is_persisted_on_task(tmp_path, monkeypatch):
             kwargs["transport"] = httpx.MockTransport(handler)
             super().__init__(*args, **kwargs)
 
-    monkeypatch.setattr(hls_module, "_create_hls_client", lambda _concurrency: MockClient())
+    monkeypatch.setattr(hls_module, "_create_hls_client", lambda *_args: MockClient())
     task = Task(id="failure", url="https://example.test/video.m3u8?token=secret")
 
     asyncio.run(HLSDownloader(task).run())
@@ -255,7 +324,7 @@ def test_failed_download_keeps_log_but_removes_large_temp_data(tmp_path, monkeyp
             kwargs["transport"] = httpx.MockTransport(handler)
             super().__init__(*args, **kwargs)
 
-    monkeypatch.setattr(hls_module, "_create_hls_client", lambda _concurrency: MockClient())
+    monkeypatch.setattr(hls_module, "_create_hls_client", lambda *_args: MockClient())
     task = Task(id="keep-log", url="https://example.test/video.m3u8")
     task_dir = tmp_path / ".tasks" / task.id
     segments = task_dir / "segments"
@@ -272,6 +341,25 @@ def test_failed_download_keeps_log_but_removes_large_temp_data(tmp_path, monkeyp
     assert task.status is TaskStatus.FAILED
     assert (task_dir / "download.log").is_file()
     assert not segments.exists()
+
+
+def test_failed_hls_keeps_checkpointed_segments_for_retry(tmp_path, monkeypatch):
+    from backend.app.downloader import hls as hls_module
+
+    monkeypatch.setattr(hls_module.settings, "download_dir", str(tmp_path))
+    monkeypatch.setattr(hls_module.settings, "keep_temp_files", False)
+    task = Task(id="resume-failure", url="https://example.test/video.m3u8")
+    downloader = HLSDownloader(task)
+    segment = {"index": 0, "url": "https://example.test/0.ts", "duration": 4.0}
+    downloader._prepare_vod_resume([segment])
+    path = downloader._seg_dir() / "000000.seg"
+    path.write_bytes(b"verified-segment")
+    asyncio.run(downloader._checkpoint_vod_segment(0, path.stat().st_size))
+
+    asyncio.run(downloader._cleanup_failed_temp(downloader._task_dir()))
+
+    assert path.read_bytes() == b"verified-segment"
+    assert downloader._vod_state_path().is_file()
 
 
 def test_http_403_detects_cloudflare_and_signed_url_cases():

@@ -1,6 +1,6 @@
-import { coreOrigin, isTauriDesktop } from './tauri'
+import { isTauriDesktop } from './tauri'
 
-interface NativeResult {
+export interface NativeResult {
   ok: boolean
   canceled?: boolean
   path?: string
@@ -12,136 +12,90 @@ interface NativeResult {
   browser_opened?: boolean
 }
 
-interface NativeApi {
-  open_browser_extension_installer(): Promise<NativeResult>
-  get_desktop_info(): Promise<NativeResult>
-  begin_uninstall(): Promise<NativeResult>
-  close_window(): Promise<NativeResult>
-  resize_window?(width: number, height: number): Promise<NativeResult>
-  choose_folder?(directory?: string): Promise<NativeResult>
-}
-
-declare global {
-  interface Window {
-    pywebview?: { api: NativeApi }
-  }
-}
-
-async function waitForNativeApi(timeoutMs = 2500): Promise<NativeApi | null> {
-  if (window.pywebview?.api) return window.pywebview.api
-  return new Promise(resolve => {
-    const timer = window.setTimeout(() => resolve(null), timeoutMs)
-    const onReady = () => {
-      window.clearTimeout(timer)
-      resolve(window.pywebview?.api || null)
-    }
-    window.addEventListener('pywebviewready', onReady, { once: true })
-  })
+function unavailable(error: string): NativeResult {
+  return { ok: false, error }
 }
 
 export async function openBrowserExtensionInstaller(): Promise<NativeResult> {
   try {
-    if (isTauriDesktop()) {
-      const { invoke } = await import('@tauri-apps/api/core')
-      return await invoke<NativeResult>('open_browser_extension_installer')
-    }
-    const api = await waitForNativeApi()
-    if (!api) return { ok: false, error: '扩展安装工具仅在桌面版中可用' }
-    return await api.open_browser_extension_installer()
+    if (!isTauriDesktop()) return unavailable('扩展安装工具仅在桌面版中可用')
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<NativeResult>('open_browser_extension_installer')
   } catch (reason) {
-    return { ok: false, error: reason instanceof Error ? reason.message : '无法打开扩展安装工具' }
+    return unavailable(reason instanceof Error ? reason.message : '无法打开扩展安装工具')
   }
 }
 
 export async function getDesktopInfo(): Promise<NativeResult> {
   try {
-    if (isTauriDesktop()) {
-      const { invoke } = await import('@tauri-apps/api/core')
-      return await invoke<NativeResult>('get_desktop_info')
-    }
-    const api = await waitForNativeApi()
-    if (!api) return { ok: true, installed: false, mode: 'web' }
-    return await api.get_desktop_info()
+    if (!isTauriDesktop()) return { ok: true, installed: false, mode: 'web' }
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<NativeResult>('get_desktop_info')
   } catch (reason) {
-    return { ok: false, installed: false, error: reason instanceof Error ? reason.message : '无法读取桌面版信息' }
+    return {
+      ok: false,
+      installed: false,
+      error: reason instanceof Error ? reason.message : '无法读取桌面版信息',
+    }
   }
 }
 
 export async function beginUninstall(): Promise<NativeResult> {
   try {
-    if (isTauriDesktop()) {
-      const { invoke } = await import('@tauri-apps/api/core')
-      return await invoke<NativeResult>('begin_uninstall')
-    }
-    const api = await waitForNativeApi()
-    if (!api) return { ok: false, error: '卸载仅在安装版中可用' }
-    return await api.begin_uninstall()
+    if (!isTauriDesktop()) return unavailable('卸载仅在安装版中可用')
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<NativeResult>('begin_uninstall')
   } catch (reason) {
-    return { ok: false, error: reason instanceof Error ? reason.message : '无法启动卸载程序' }
+    return unavailable(reason instanceof Error ? reason.message : '无法启动卸载程序')
   }
 }
 
-
-
-
 export async function pickFolder(directory = ''): Promise<NativeResult> {
   try {
-    if (isTauriDesktop()) {
-      const { open } = await import('@tauri-apps/plugin-dialog')
-      const path = await open({ directory: true, multiple: false, defaultPath: directory || undefined })
-      return path ? { ok: true, path } : { ok: false, canceled: true }
-    }
-    const api = await waitForNativeApi(1000)
-    if (!api?.choose_folder) return { ok: false, error: 'native-folder-unavailable' }
-    return await api.choose_folder(directory)
+    if (!isTauriDesktop()) return unavailable('native-folder-unavailable')
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const path = await open({ directory: true, multiple: false, defaultPath: directory || undefined })
+    return path ? { ok: true, path } : { ok: false, canceled: true }
   } catch (reason) {
-    return { ok: false, error: reason instanceof Error ? reason.message : '无法打开文件夹选择对话框' }
+    return unavailable(reason instanceof Error ? reason.message : '无法打开文件夹选择对话框')
   }
 }
 
 export async function pickLocalMediaFile(): Promise<NativeResult> {
   try {
-    if (isTauriDesktop()) {
-      const { open } = await import('@tauri-apps/plugin-dialog')
-      const path = await open({ multiple: false, title: '选择要投屏或 TVBox 推送的本机文件' })
-      return path ? { ok: true, path } : { ok: false, canceled: true }
-    }
-    return { ok: false, error: '本机文件投屏仅在桌面版中可用' }
+    if (!isTauriDesktop()) return unavailable('本机文件投屏仅在桌面版中可用')
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const path = await open({ multiple: false, title: '选择要投屏或 TVBox 推送的本机文件' })
+    return path ? { ok: true, path } : { ok: false, canceled: true }
   } catch (reason) {
-    return { ok: false, error: reason instanceof Error ? reason.message : '无法打开文件选择对话框' }
+    return unavailable(reason instanceof Error ? reason.message : '无法打开文件选择对话框')
   }
 }
 
 export async function closeDesktopWindow(): Promise<NativeResult> {
   try {
-    if (isTauriDesktop()) {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window')
-      await getCurrentWindow().destroy()
+    if (!isTauriDesktop()) {
+      window.close()
       return { ok: true }
     }
-    const api = await waitForNativeApi(1000)
-    if (api?.close_window) return await api.close_window()
-    window.close()
+    const { getCurrentWindow } = await import('@tauri-apps/api/window')
+    await getCurrentWindow().destroy()
     return { ok: true }
   } catch (reason) {
-    return { ok: false, error: reason instanceof Error ? reason.message : '无法关闭窗口' }
+    return unavailable(reason instanceof Error ? reason.message : '无法关闭窗口')
   }
 }
 
 export async function resizeDesktopWindow(width: number, height: number): Promise<NativeResult> {
   try {
-    if (isTauriDesktop()) {
-      const [{ getCurrentWindow }, { LogicalSize }] = await Promise.all([
-        import('@tauri-apps/api/window'),
-        import('@tauri-apps/api/dpi'),
-      ])
-      await getCurrentWindow().setSize(new LogicalSize(width, height))
-      return { ok: true }
-    }
-    const api = await waitForNativeApi(1000)
-    if (!api?.resize_window) return { ok: false, error: 'native-resize-unavailable' }
-    return await api.resize_window(width, height)
+    if (!isTauriDesktop()) return unavailable('native-resize-unavailable')
+    const [{ getCurrentWindow }, { LogicalSize }] = await Promise.all([
+      import('@tauri-apps/api/window'),
+      import('@tauri-apps/api/dpi'),
+    ])
+    await getCurrentWindow().setSize(new LogicalSize(width, height))
+    return { ok: true }
   } catch (reason) {
-    return { ok: false, error: reason instanceof Error ? reason.message : '无法调整窗口大小' }
+    return unavailable(reason instanceof Error ? reason.message : '无法调整窗口大小')
   }
 }

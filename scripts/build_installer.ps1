@@ -2,12 +2,22 @@ param(
     [switch]$SkipFrontend,
     [switch]$SkipBackend,
     [switch]$SkipDesktop,
+    [switch]$SkipInstaller,
     [switch]$SkipSmoke,
     [switch]$IncludeExtensionAssets,
-    [string]$Version = "3.0.6"
+    [string]$Version = "3.0.8"
 )
 
 $ErrorActionPreference = "Stop"
+
+function Get-DeclaredVersion([string]$Path, [string]$Pattern) {
+    $content = Get-Content -LiteralPath $Path -Raw
+    $match = [regex]::Match($content, $Pattern)
+    if (-not $match.Success) {
+        throw "Unable to read the declared version from $Path"
+    }
+    return $match.Groups[1].Value
+}
 
 $versionParts = @($Version -split '\.')
 $invalidVersionPart = @($versionParts | Where-Object { $_ -notmatch '^\d+$' }).Count -gt 0
@@ -18,6 +28,18 @@ while ($versionParts.Count -lt 4) { $versionParts += "0" }
 $FileVersion = ($versionParts | ForEach-Object { [int]$_ }) -join "."
 
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
+$declaredAppVersions = [ordered]@{
+    "backend/app/version.py" = Get-DeclaredVersion (Join-Path $Root "backend\app\version.py") 'APP_VERSION\s*=\s*"([^"]+)"'
+    "frontend/package.json" = (Get-Content -LiteralPath (Join-Path $Root "frontend\package.json") -Raw | ConvertFrom-Json).version
+    "frontend/src-tauri/tauri.conf.json" = (Get-Content -LiteralPath (Join-Path $Root "frontend\src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json).version
+    "frontend/src-tauri/Cargo.toml" = Get-DeclaredVersion (Join-Path $Root "frontend\src-tauri\Cargo.toml") '(?m)^version\s*=\s*"([^"]+)"'
+    "installer/hls-downloader.nsi" = Get-DeclaredVersion (Join-Path $Root "installer\hls-downloader.nsi") '!define APP_VERSION\s+"([^"]+)"'
+}
+foreach ($entry in $declaredAppVersions.GetEnumerator()) {
+    if ($entry.Value -ne $Version) {
+        throw "Release version $Version does not match $($entry.Key): $($entry.Value)"
+    }
+}
 $FrontendDir = Join-Path $Root "frontend"
 $BackendDir = Join-Path $Root "backend"
 $ExtensionDir = Join-Path $Root "extension"
@@ -38,6 +60,7 @@ $NsisUrl = "https://downloads.sourceforge.net/project/nsis/NSIS%203/$NsisVersion
 $InstallerScript = Join-Path $Root "installer\hls-downloader.nsi"
 $ReleaseNamePrefix = "HLSDownloader-v$Version"
 $InstallerOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Windows-x64-Setup.exe"
+$PreservedInstaller = Join-Path $Root "build\installer\$ReleaseNamePrefix-Windows-x64-Setup.exe"
 $PortableOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Windows-x64-Portable.zip"
 $FirefoxWebId = "browser@hls-downloader.ciaooo55.com"
 $FirefoxNoWebId = "hls-downloader-store@ciaooo55.com"
@@ -51,10 +74,38 @@ $FirefoxNoWebSourceOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Firefox-No-We
 $ChromiumExtensionStage = Join-Path $ExtensionBuildDir "chrome-edge"
 $ChromiumExtensionOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Chrome-Edge-Extension.zip"
 
+if ($IncludeExtensionAssets) {
+    $declaredExtensionVersion = (Get-Content -LiteralPath (Join-Path $ExtensionDir "package.json") -Raw | ConvertFrom-Json).version
+    $recommendedExtensionVersion = Get-DeclaredVersion (Join-Path $Root "backend\app\browser_handoff.py") 'RECOMMENDED_BROWSER_EXTENSION_VERSION\s*=\s*"([^"]+)"'
+    if ($declaredExtensionVersion -ne $Version -or $recommendedExtensionVersion -ne $Version) {
+        throw "Extension assets require package and recommended versions to match release $Version"
+    }
+}
+
 function Invoke-Step($Name, [scriptblock]$Block) {
     Write-Host ""
     Write-Host "==> $Name" -ForegroundColor Cyan
     & $Block
+}
+
+function Invoke-PyInstallerWithRetry(
+    [string]$Name,
+    [scriptblock]$Build
+) {
+    # On some Windows Python environments pywin32-ctypes can fail during
+    # PyInstaller's *process startup* immediately after another PyInstaller
+    # build, even though importing it in a fresh process succeeds. Retrying a
+    # clean child process is safe: --noconfirm/--clean make every attempt a
+    # complete replacement and we never stage output until it succeeds.
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        & $Build
+        if ($LASTEXITCODE -eq 0) { return }
+        if ($attempt -lt 3) {
+            Write-Warning "$Name PyInstaller startup/build failed (attempt $attempt/3); retrying in a fresh process..."
+            Start-Sleep -Seconds (2 * $attempt)
+        }
+    }
+    throw "$Name PyInstaller build failed with exit code $LASTEXITCODE"
 }
 
 function Get-MakeNsis {
@@ -182,30 +233,26 @@ function Copy-MediaTool($Name) {
     }
 }
 
-Invoke-Step "Stop running packaged app" {
-    $running = @(Get-Process HLSDownloader,HLSDownloaderCore -ErrorAction SilentlyContinue)
-    if ($running.Count) {
-        $running | Stop-Process -Force -ErrorAction SilentlyContinue
-    }
-    # Tauri's single-instance guard can forward a smoke launch to an old install
-    # while its companion backend is still releasing 8765. Wait for both before
-    # starting the staged executable, otherwise the smoke test could validate the
-    # old install instead of this build.
-    for ($attempt = 0; $attempt -lt 40; $attempt++) {
-        $left = @(Get-Process HLSDownloader,HLSDownloaderCore -ErrorAction SilentlyContinue)
-        $listener = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
-        if (-not $left.Count -and -not $listener) { break }
-        Start-Sleep -Milliseconds 250
-    }
-    $left = @(Get-Process HLSDownloader,HLSDownloaderCore -ErrorAction SilentlyContinue)
-    $listener = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
-    if ($left.Count -or $listener) {
-        throw "Existing HLS Downloader process or port 8765 did not exit; refusing to smoke-test against an old install."
-    }
+Invoke-Step "Prepare isolated packaged-app smoke test" {
+    # A browser's persistent Native Messaging connection may immediately relaunch
+    # a user's installed app. The smoke process uses its own port and explicitly
+    # bypasses only its single-instance guard, so building never closes a real
+    # download or tampers with live browser integration.
 }
 
 Invoke-Step "Prepare directories" {
     Remove-Item -Recurse -Force $StageDir, $PortableStage -ErrorAction SilentlyContinue
+    # Allows a resumed release build to refresh the portable/extension assets
+    # after NSIS already produced a verified installer. The installer is kept
+    # outside the cleaned release directory and copied back below; this avoids
+    # an expensive second compression pass and never reuses an arbitrary file.
+    if ($SkipInstaller) {
+        if (-not (Test-Path -LiteralPath $InstallerOut)) {
+            throw "-SkipInstaller requires an existing installer: $InstallerOut"
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PreservedInstaller) | Out-Null
+        Copy-Item -LiteralPath $InstallerOut -Destination $PreservedInstaller -Force
+    }
     if (Test-Path -LiteralPath $ReleaseDir) {
         $resolvedRelease = (Resolve-Path -LiteralPath $ReleaseDir).Path
         if ((Split-Path $resolvedRelease -Parent) -ne $Root.Path -or (Split-Path $resolvedRelease -Leaf) -ne "release") {
@@ -214,6 +261,9 @@ Invoke-Step "Prepare directories" {
         Remove-Item -LiteralPath $resolvedRelease -Recurse -Force
     }
     New-Item -ItemType Directory -Force -Path $StageDir, $ReleaseDir, $BinDir, $ToolsDir | Out-Null
+    if ($SkipInstaller) {
+        Copy-Item -LiteralPath $PreservedInstaller -Destination $InstallerOut -Force
+    }
     if (-not (Test-Path -LiteralPath $IconFile)) {
         throw "Application icon is missing: $IconFile"
     }
@@ -313,35 +363,37 @@ Invoke-Step "Build backend executable" {
     try {
         # Keep unrelated local projects out of PyInstaller's module graph.
         $env:PYTHONPATH = ""
-        python -m PyInstaller `
-            --noconfirm `
-            --clean `
-            --onedir `
-            --noconsole `
-            --name HLSDownloaderCore `
-            --icon $IconFile `
-            --paths . `
-            --collect-all curl_cffi `
-            --collect-all libtorrent `
-            --collect-all yt_dlp `
-            --collect-all multipart `
-            --collect-all pychromecast `
-            --collect-all zeroconf `
-            --collect-all casttube `
-            --hidden-import uvicorn.lifespan.on `
-            --hidden-import uvicorn.loops.auto `
-            --hidden-import uvicorn.protocols.http.auto `
-            --hidden-import uvicorn.protocols.websockets.auto `
-            run_core.py
-        if ($LASTEXITCODE -ne 0) { throw "Core executable build failed with exit code $LASTEXITCODE" }
-        python -m PyInstaller `
-            --noconfirm `
-            --clean `
-            --onefile `
-            --console `
-            --name HLSDownloaderNativeHost `
-            native_host.py
-        if ($LASTEXITCODE -ne 0) { throw "Native host executable build failed with exit code $LASTEXITCODE" }
+        Invoke-PyInstallerWithRetry "Core executable" {
+            python -m PyInstaller `
+                --noconfirm `
+                --clean `
+                --onedir `
+                --noconsole `
+                --name HLSDownloaderCore `
+                --icon $IconFile `
+                --paths . `
+                --collect-all curl_cffi `
+                --collect-all libtorrent `
+                --collect-all yt_dlp `
+                --collect-all multipart `
+                --collect-all pychromecast `
+                --collect-all zeroconf `
+                --collect-all casttube `
+                --hidden-import uvicorn.lifespan.on `
+                --hidden-import uvicorn.loops.auto `
+                --hidden-import uvicorn.protocols.http.auto `
+                --hidden-import uvicorn.protocols.websockets.auto `
+                run_core.py
+        }
+        Invoke-PyInstallerWithRetry "Native host executable" {
+            python -m PyInstaller `
+                --noconfirm `
+                --clean `
+                --onefile `
+                --console `
+                --name HLSDownloaderNativeHost `
+                native_host.py
+        }
     } finally {
         $env:PYTHONPATH = $previousPythonPath
         Pop-Location
@@ -379,7 +431,8 @@ Invoke-Step "Stage application files" {
     New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "scripts") | Out-Null
     Copy-Item -Force -Path `
         (Join-Path $Root "scripts\register-native-host.ps1"), `
-        (Join-Path $Root "scripts\shutdown-running.ps1") `
+        (Join-Path $Root "scripts\shutdown-running.ps1"), `
+        (Join-Path $Root "scripts\upgrade-portable.ps1") `
         -Destination (Join-Path $StageDir "scripts")
 }
 
@@ -387,15 +440,34 @@ if (-not $SkipSmoke) {
     Invoke-Step "Smoke test packaged app" {
         $smokeExe = Join-Path $StageDir "HLSDownloader.exe"
         $smokePortableMarker = Join-Path $StageDir "portable"
+        $smokeListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+        $smokeListener.Start()
+        $smokePort = ([System.Net.IPEndPoint]$smokeListener.LocalEndpoint).Port
+        $smokeListener.Stop()
+        $smokeApiBase = "http://127.0.0.1:$smokePort"
         Set-Content -LiteralPath $smokePortableMarker -Value "" -Encoding ASCII
         try {
+            # The staged smoke copy is intentionally isolated from the user's
+            # install. Seed it with a fresh credential so the health/API checks
+            # exercise authenticated startup even when config.default.json has
+            # no token (the release package must not contain a reusable token).
+            $smokeConfigPath = Join-Path $StageDir "config.json"
+            $smokeConfig = Get-Content -LiteralPath $smokeConfigPath -Raw | ConvertFrom-Json
+            $smokeTokenBytes = New-Object byte[] 32
+            $smokeRng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+            try { $smokeRng.GetBytes($smokeTokenBytes) } finally { $smokeRng.Dispose() }
+            $smokeConfig | Add-Member -NotePropertyName token -NotePropertyValue ([Convert]::ToBase64String($smokeTokenBytes)) -Force
+            $smokeConfig | Add-Member -NotePropertyName port -NotePropertyValue $smokePort -Force
+            $smokeConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $smokeConfigPath -Encoding UTF8
+            $previousBuildSmoke = $env:HLS_DOWNLOADER_BUILD_SMOKE
+            $env:HLS_DOWNLOADER_BUILD_SMOKE = "1"
             $proc = Start-Process -FilePath $smokeExe -WorkingDirectory $StageDir -PassThru -WindowStyle Hidden
             try {
                 $ok = $false
                 for ($i = 0; $i -lt 40; $i++) {
                     Start-Sleep -Milliseconds 500
                     try {
-                        $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/health" -TimeoutSec 2
+                        $health = Invoke-RestMethod -Uri "$smokeApiBase/api/health" -TimeoutSec 2
                         if ($health) {
                             $ok = $true
                             break
@@ -419,7 +491,7 @@ if (-not $SkipSmoke) {
                     throw "Smoke test reached a different HLS Downloader core instead of the staged build."
                 }
                 $packagedSettings = Invoke-RestMethod `
-                    -Uri "http://127.0.0.1:8765/api/settings" `
+                    -Uri "$smokeApiBase/api/settings" `
                     -Headers @{ "X-Token" = $packagedToken } `
                     -TimeoutSec 2
                 if ($null -ne $packagedSettings.PSObject.Properties["token"]) {
@@ -458,50 +530,44 @@ if (-not $SkipSmoke) {
                     throw "Native Messaging protocol smoke test failed"
                 }
 
-                $baselineProcesses = @(Get-Process HLSDownloader -ErrorAction SilentlyContinue |
-                    Where-Object { $_.Path -eq $smokeExe })
-                if ($baselineProcesses.Count -lt 1 -or $baselineProcesses.Count -gt 2) {
-                    throw "Single-instance check failed: unexpected primary process count $($baselineProcesses.Count)"
-                }
-                $secondProc = Start-Process -FilePath $smokeExe -WorkingDirectory $StageDir -PassThru -WindowStyle Hidden
-                if (-not $secondProc.WaitForExit(12000)) {
-                    Stop-Process -Id $secondProc.Id -Force -ErrorAction SilentlyContinue
-                    throw "Single-instance check failed: second packaged process did not exit"
-                }
-                $proc.Refresh()
-                $samePathProcesses = @(Get-Process HLSDownloader -ErrorAction SilentlyContinue |
-                    Where-Object { $_.Path -eq $smokeExe })
-                if ($proc.HasExited -or $samePathProcesses.Count -ne $baselineProcesses.Count) {
-                    throw "Single-instance check failed: second launch changed the packaged process count"
+                # HLS_DOWNLOADER_BUILD_SMOKE deliberately isolates this staged
+                # process from an already-running user install, which means it
+                # cannot also exercise the production single-instance mutex.
+                # The normal production path retains tauri-plugin-single-instance
+                # and is type-checked with the desktop build above.
+                if (-not $env:HLS_DOWNLOADER_BUILD_SMOKE) {
+                    $baselineProcesses = @(Get-Process HLSDownloader -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Path -eq $smokeExe })
+                    if ($baselineProcesses.Count -lt 1 -or $baselineProcesses.Count -gt 2) {
+                        throw "Single-instance check failed: unexpected primary process count $($baselineProcesses.Count)"
+                    }
+                    $secondProc = Start-Process -FilePath $smokeExe -WorkingDirectory $StageDir -PassThru -WindowStyle Hidden
+                    if (-not $secondProc.WaitForExit(12000)) {
+                        Stop-Process -Id $secondProc.Id -Force -ErrorAction SilentlyContinue
+                        throw "Single-instance check failed: second packaged process did not exit"
+                    }
+                    $proc.Refresh()
+                    $samePathProcesses = @(Get-Process HLSDownloader -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Path -eq $smokeExe })
+                    if ($proc.HasExited -or $samePathProcesses.Count -ne $baselineProcesses.Count) {
+                        throw "Single-instance check failed: second launch changed the packaged process count"
+                    }
                 }
 
-                $shutdownAccepted = $false
-                for ($i = 0; $i -lt 240; $i++) {
-                    try {
-                        $shutdown = Invoke-RestMethod `
-                            -Method Post `
-                            -Uri "http://127.0.0.1:8765/api/app/shutdown" `
-                            -Headers @{ "X-Token" = $packagedToken } `
-                            -ContentType "application/json" `
-                            -Body "{}" `
-                            -TimeoutSec 2
-                        if ($shutdown.ok -eq $true) {
-                            $shutdownAccepted = $true
-                            break
-                        }
-                    } catch {
-                    }
-                    Start-Sleep -Milliseconds 250
-                }
-                if (-not $shutdownAccepted) {
-                    throw "Graceful shutdown failed: desktop callback was not ready after 60 seconds"
+                # Exercise the exact bounded helper embedded in the NSIS
+                # installer, not a separate test-only shutdown path.
+                $shutdownHelper = Join-Path $StageDir "scripts\shutdown-running.ps1"
+                & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+                    -File $shutdownHelper -InstallDir $StageDir -TimeoutSeconds 12
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Installer shutdown helper failed with exit code $LASTEXITCODE"
                 }
 
                 # A signed/unsigned executable may be scanned by Windows
-                # Defender immediately after PyInstaller writes it. Allow the
-                # desktop and core enough time to finish graceful shutdown,
-                # while still requiring every same-path process to disappear.
-                for ($i = 0; $i -lt 120; $i++) {
+                # Defender immediately after PyInstaller writes it. The helper
+                # already bounded the wait, but independently verify that every
+                # same-path process disappeared and its executable is writable.
+                for ($i = 0; $i -lt 20; $i++) {
                     $proc.Refresh()
                     $remaining = Get-Process HLSDownloader -ErrorAction SilentlyContinue |
                         Where-Object { $_.Path -eq $smokeExe }
@@ -512,7 +578,7 @@ if (-not $SkipSmoke) {
                 }
                 $proc.Refresh()
                 if (-not $proc.HasExited -or (Get-Process HLSDownloader -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $smokeExe })) {
-                    throw "Graceful shutdown failed: packaged app process remained after 30 seconds"
+                    throw "Installer shutdown helper left a packaged app process running"
                 }
             } finally {
                 if ($proc -and -not $proc.HasExited) {
@@ -531,10 +597,10 @@ if (-not $SkipSmoke) {
                     throw "Packaged app processes remained after smoke test"
                 }
                 for ($i = 0; $i -lt 80; $i++) {
-                    if (-not (Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue)) {
+                    if (-not (Get-NetTCPConnection -LocalPort $smokePort -State Listen -ErrorAction SilentlyContinue)) {
                         break
                     }
-                    $listeners = @(Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue)
+                    $listeners = @(Get-NetTCPConnection -LocalPort $smokePort -State Listen -ErrorAction SilentlyContinue)
                     foreach ($listener in $listeners) {
                         $owner = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
                         if ($owner -and $owner.ProcessName -in @("HLSDownloader", "HLSDownloaderCore")) {
@@ -543,15 +609,20 @@ if (-not $SkipSmoke) {
                     }
                     Start-Sleep -Milliseconds 250
                 }
-                if (Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue) {
-                    throw "Port 8765 remained occupied after smoke test"
+                if (Get-NetTCPConnection -LocalPort $smokePort -State Listen -ErrorAction SilentlyContinue) {
+                    throw "Smoke port $smokePort remained occupied after smoke test"
                 }
             }
-        } finally {
-            $nativeRegistrationScript = Join-Path $StageDir "scripts\register-native-host.ps1"
+            } finally {
+                $env:HLS_DOWNLOADER_BUILD_SMOKE = $previousBuildSmoke
+                $nativeRegistrationScript = Join-Path $StageDir "scripts\register-native-host.ps1"
             if (Test-Path -LiteralPath $nativeRegistrationScript) {
                 & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $nativeRegistrationScript -Unregister -RegistryPrefix "HKCU:\Software\HLSDownloaderBuildSmoke" | Out-Null
             }
+            # The unregister helper removes every host leaf. Remove the empty
+            # isolated parent tree as well so repeated release builds leave no
+            # smoke-only registry keys on the developer machine.
+            Remove-Item -LiteralPath "HKCU:\Software\HLSDownloaderBuildSmoke" -Recurse -Force -ErrorAction SilentlyContinue
             Copy-Item -Force -Path `
                 (Join-Path $ExtensionDir "native-host\chrome.json"), `
                 (Join-Path $ExtensionDir "native-host\firefox.json") `
@@ -564,14 +635,26 @@ if (-not $SkipSmoke) {
     }
 }
 
-Invoke-Step "Build NSIS installer" {
-    $makensis = Get-MakeNsis
-    & $makensis "/INPUTCHARSET" "UTF8" "/DAPP_VERSION=$Version" "/DAPP_FILE_VERSION=$FileVersion" "/DSTAGE_DIR=$StageDir" "/DICON_FILE=$IconFile" "/DOUT_FILE=$InstallerOut" $InstallerScript
-    if ($LASTEXITCODE -ne 0) {
-        throw "makensis failed with exit code $LASTEXITCODE"
+if (-not $SkipInstaller) {
+    Invoke-Step "Build NSIS installer" {
+        $makensis = Get-MakeNsis
+        & $makensis "/INPUTCHARSET" "UTF8" "/DAPP_VERSION=$Version" "/DAPP_FILE_VERSION=$FileVersion" "/DSTAGE_DIR=$StageDir" "/DICON_FILE=$IconFile" "/DOUT_FILE=$InstallerOut" $InstallerScript
+        if ($LASTEXITCODE -ne 0) {
+            throw "makensis failed with exit code $LASTEXITCODE"
+        }
+        if (-not (Test-Path $InstallerOut)) {
+            throw "makensis reported success but did not create $InstallerOut"
+        }
     }
-    if (-not (Test-Path $InstallerOut)) {
-        throw "makensis reported success but did not create $InstallerOut"
+    if (-not $SkipSmoke) {
+        Invoke-Step "Smoke test installer cover upgrade and uninstall" {
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+                -File (Join-Path $Root "scripts\smoke-installer-upgrade.ps1") `
+                -InstallerPath $InstallerOut
+            if ($LASTEXITCODE -ne 0) {
+                throw "Installer upgrade/uninstall smoke test failed with exit code $LASTEXITCODE"
+            }
+        }
     }
 }
 
@@ -591,19 +674,24 @@ Invoke-Step "Build portable archive" {
     Move-Item -LiteralPath (Join-Path $PortableStage "native-host\chrome.json") -Destination (Join-Path $portableManifestsDir "chrome-$Version.json") -Force
     Move-Item -LiteralPath (Join-Path $PortableStage "native-host\firefox.json") -Destination (Join-Path $portableManifestsDir "firefox-$Version.json") -Force
     Set-Content -LiteralPath (Join-Path $PortableStage "portable") -Value "" -Encoding ASCII
-    @"
-HLS Downloader portable edition
-
-Run HLSDownloader.exe. The application uses the Microsoft Edge WebView2
-runtime that is included with supported Windows 10/11 installations.
-
-To enable Chrome/Firefox integration, run:
-powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1
-To remove the registration, add -Unregister.
-
-For Chrome, open chrome://extensions, enable Developer mode, choose Load unpacked,
-then select browser-extension\chrome.
-"@ | Set-Content -LiteralPath (Join-Path $PortableStage "README-PORTABLE.txt") -Encoding UTF8
+    $portableReadme = @(
+        'HLS Downloader portable edition',
+        '',
+        'Run HLSDownloader.exe. The application uses the Microsoft Edge WebView2',
+        'runtime that is included with supported Windows 10/11 installations.',
+        '',
+        'To enable Chrome/Firefox integration, run:',
+        'powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1',
+        'To remove the registration, add -Unregister.',
+        '',
+        'To upgrade an existing portable copy safely, extract this archive into a new',
+        'folder, then run:',
+        'powershell -ExecutionPolicy Bypass -File scripts\upgrade-portable.ps1 -TargetDir "C:\path\to\old\HLS Downloader" -StartAfterUpgrade',
+        '',
+        'For Chrome, open chrome://extensions, enable Developer mode, choose Load unpacked,',
+        'then select browser-extension\chrome.'
+    )
+    $portableReadme | Set-Content -LiteralPath (Join-Path $PortableStage "README-PORTABLE.txt") -Encoding UTF8
     Compress-Archive -Path (Join-Path $PortableStage "*") -DestinationPath $PortableOut -CompressionLevel Optimal
     if (-not (Test-Path -LiteralPath $PortableOut)) {
         throw "Portable archive was not created: $PortableOut"
@@ -630,8 +718,8 @@ Invoke-Step "Assemble release files" {
             (Join-Path $Root "PRIVACY.md")
         )
         foreach ($sourceVariant in @(
-            @{ Id = $FirefoxWebId; Out = $FirefoxWebSourceOut; Stage = (Join-Path $ExtensionBuildDir "source-web-ui"); Label = "网页显示" },
-            @{ Id = $FirefoxNoWebId; Out = $FirefoxNoWebSourceOut; Stage = (Join-Path $ExtensionBuildDir "source-no-web-ui"); Label = "网页不显示" }
+            @{ Id = $FirefoxWebId; Out = $FirefoxWebSourceOut; Stage = (Join-Path $ExtensionBuildDir "source-web-ui"); Label = "web UI enabled" },
+            @{ Id = $FirefoxNoWebId; Out = $FirefoxNoWebSourceOut; Stage = (Join-Path $ExtensionBuildDir "source-no-web-ui"); Label = "web UI disabled" }
         )) {
             Remove-Item -Recurse -Force $sourceVariant.Stage -ErrorAction SilentlyContinue
             New-Item -ItemType Directory -Force -Path $sourceVariant.Stage | Out-Null
@@ -648,11 +736,11 @@ Invoke-Step "Assemble release files" {
             }
             [IO.File]::WriteAllText($sourceConfigPath, $sourceConfig, [Text.UTF8Encoding]::new($false))
             @"
-Firefox 发布变体：$($sourceVariant.Label)
-扩展 ID：$($sourceVariant.Id)
-构建命令：pnpm run build:firefox
+Firefox release variant: $($sourceVariant.Label)
+Extension ID: $($sourceVariant.Id)
+Build command: pnpm run build:firefox
 
-该源码包已将上述 ID 设为默认值；两个发布变体的功能源码完全相同，仅 Mozilla 发布 ID 不同。
+This source archive defaults to the ID above. Both variants use identical functional source code; only the Mozilla release ID differs.
 "@ | Set-Content -LiteralPath (Join-Path $sourceVariant.Stage "BUILD-VARIANT.txt") -Encoding UTF8
             Compress-Archive -Path (Join-Path $sourceVariant.Stage "*") -DestinationPath $sourceVariant.Out -CompressionLevel Optimal
         }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FolderOpen, Puzzle } from 'lucide-react'
+import { ExternalLink, FolderOpen, Puzzle } from 'lucide-react'
 import { fetchBrowserStatus } from '../api'
 import { openBrowserExtensionInstaller } from '../desktop'
 import type { BrowserStatus } from '../types'
@@ -11,7 +11,7 @@ export default function BrowserExtensionDialog({ onClose }: { onClose: () => voi
   const versionLine = browserStatus?.detected
     ? `${browserStatus.client_count || 1} 个浏览器插件 · 桌面 v${browserStatus.desktop_version || '未知'}`
     : '未连接时浏览器会继续使用自己的下载器，不会静默丢失文件。'
-  const browserNames = { edge: 'Edge', chrome: 'Chrome', chromium: 'Chromium', firefox: 'Firefox', unknown: '浏览器' }
+  const browserNames = { edge: 'Edge', chrome: 'Chrome', chromium: 'Chromium', brave: 'Brave', vivaldi: 'Vivaldi', opera: 'Opera', firefox: 'Firefox', unknown: '浏览器' }
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
@@ -23,7 +23,7 @@ export default function BrowserExtensionDialog({ onClose }: { onClose: () => voi
   const installExtension = async () => {
     const result = await openBrowserExtensionInstaller()
     setMessage(result.ok
-      ? `${result.browser_opened ? '已打开 Chrome 扩展页和插件目录。' : '已打开插件目录，请手动打开 chrome://extensions。'} 开启“开发者模式”，点击“加载已解压的扩展程序”，选择：${result.path}`
+      ? `${result.browser_opened ? '已打开浏览器扩展页和插件目录。' : '已打开插件目录，请手动打开浏览器扩展管理页。'} 首次安装请选择“加载已解压的扩展程序”；更新已有插件请点击该插件的“重新加载”，然后刷新正在播放的网页。目录：${result.path}`
       : result.error || '无法打开插件安装工具')
   }
 
@@ -52,11 +52,12 @@ export default function BrowserExtensionDialog({ onClose }: { onClose: () => voi
         )}
         {browserStatus?.needs_upgrade && (
           <div className="inline-message update-warning" role="status">
-            当前插件低于推荐版本 v{browserStatus.recommended_version || '最新'}。请使用同一个 GitHub Release 里的 Chromium / Firefox 插件包；旧插件不会被强制禁用，但可能缺少最新的请求头、Cookie 和弹窗修复。
+            已知插件中有版本低于 v{browserStatus.recommended_version || '最新'}。桌面升级已同步更新内置 Chromium 插件目录，请在扩展管理页点“重新加载”；商店安装版由浏览器自动更新，Firefox 独立安装版必须使用 Mozilla 签名包。
           </div>
         )}
         <div className="extension-actions">
-          <Button className="primary-button" onClick={() => void installExtension()}><FolderOpen size={16} />加载 Chromium 插件</Button>
+          <Button className="primary-button" onClick={() => void installExtension()}><FolderOpen size={16} />安装或重载 Chromium 插件</Button>
+          {browserStatus?.needs_upgrade && browserStatus.release_url && <Button variant="secondary" onClick={() => window.open(browserStatus.release_url, '_blank', 'noopener')}><ExternalLink size={16} />打开插件发布页</Button>}
         </div>
         <section className="firefox-release-variants" aria-labelledby="firefox-release-variants-title">
           <div className="firefox-release-variants-heading">
@@ -73,7 +74,7 @@ export default function BrowserExtensionDialog({ onClose }: { onClose: () => voi
           </div>
         </section>
         {message && <div className="inline-message">{message}</div>}
-        <p className="fine-print">安装包内置 Chromium 插件目录。Firefox 请从同版本 GitHub Release 选择对应变体，并使用 Mozilla 签名版长期安装；不要把一个 ID 的更新上传到另一个 ID 的商店条目。Cookie 只在你对站点明确授权后读取。</p>
+        <p className="fine-print">Chrome/Edge 商店版和 AMO 版由商店自动更新。Windows 上以开发者模式加载的解压插件不能安全静默自更新；应用覆盖升级会替换内置目录，但浏览器仍需重新加载插件。Firefox 自托管更新只适用于带 HTTPS 更新清单的 Mozilla 签名包。Cookie 只在你对站点明确授权后读取。</p>
         <DialogFooter>
           <Button variant="secondary" className="secondary-button" onClick={onClose}>关闭</Button>
         </DialogFooter>

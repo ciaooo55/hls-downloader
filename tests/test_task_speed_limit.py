@@ -1,7 +1,6 @@
 import asyncio
 import time
 
-import pytest
 
 from backend.app.downloader.task_manager import TaskManager
 from backend.app.downloader.throttle import (

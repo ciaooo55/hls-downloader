@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  canonicalMediaUrl,
   classifyDownload,
   classifyResource,
   compactResources,
@@ -10,7 +11,9 @@ import {
   pageResourceKey,
   replayableRequestHeaders,
   resourceFingerprint,
+  playerPlaybackResources,
   resourceMatchesPlaybackSource,
+  capturedRequestIdentity,
   resourceRequestIdentity,
   visiblePlaybackResources,
   shouldTakeover,
@@ -106,6 +109,27 @@ describe('resource rules', () => {
     const merged = mergeResources([previous], refreshed)
     expect(merged).toHaveLength(1)
     expect(merged[0]).toMatchObject({ id: 'new-signature', url: refreshed.url, seenAt: now })
+
+    const shortLivedPrevious = resource({
+      kind: 'media',
+      url: 'https://cdn.test/clip.mp4?quality=1080&s=old-signature&e=100&_t=90',
+    })
+    const shortLivedRefreshed = resource({
+      kind: 'media',
+      url: 'https://cdn.test/clip.mp4?_t=190&e=200&s=new-signature&quality=1080',
+    })
+    expect(resourceFingerprint(shortLivedPrevious)).toBe(resourceFingerprint(shortLivedRefreshed))
+    expect(resourceFingerprint(shortLivedPrevious)).not.toBe(resourceFingerprint({
+      ...shortLivedRefreshed,
+      url: 'https://cdn.test/clip.mp4?s=new-signature&e=200&quality=720',
+    }))
+  })
+
+  it('canonicalizes LL-HLS cursors without re-encoding signed query bytes', () => {
+    expect(canonicalMediaUrl(
+      'https://edge.test/live.m3u8?token=a%2Fb%2Bc&_HLS_msn=4&_HLS_part=2&empty=',
+      'hls',
+    )).toBe('https://edge.test/live.m3u8?token=a%2Fb%2Bc&empty=')
   })
   it('matches the current player across refreshed signatures without merging distinct renditions', () => {
     const captured = resource({
@@ -118,10 +142,12 @@ describe('resource rules', () => {
     expect(resourceMatchesPlaybackSource(captured, 'blob:https://site.test/current-player')).toBe(false)
   })
   it('folds captured HLS variants into their master manifest', () => {
+    const now = Date.now()
     const master = resource({
       id: 'master',
       kind: 'hls',
       url: 'https://cdn.test/master.m3u8?token=master',
+      seenAt: now - 20_000,
       variants: [
         { url: 'https://cdn.test/1080p/index.m3u8?token=from-manifest', height: 1080 },
         { url: 'https://cdn.test/720p/index.m3u8?token=from-manifest', height: 720 },
@@ -131,14 +157,20 @@ describe('resource rules', () => {
       id: '1080p-child',
       kind: 'hls',
       url: 'https://cdn.test/1080p/index.m3u8?token=observed',
+      seenAt: now - 1_000,
     })
     const medium = resource({
       id: '720p-child',
       kind: 'hls',
       url: 'https://cdn.test/720p/index.m3u8?token=refreshed',
+      seenAt: now,
     })
 
-    expect(compactResources([high, master, medium])).toEqual([master])
+    expect(compactResources([high, master, medium])).toMatchObject([{
+      id: 'master',
+      url: master.url,
+      seenAt: now,
+    }])
   })
   it('sorts useful resources by relevance and recency', () => {
     const now = Date.now()
@@ -190,6 +222,23 @@ describe('resource rules', () => {
     expect(visiblePlaybackResources([direct, main, bumper, stale], null)).toEqual([])
     expect(visiblePlaybackResources([direct, main, bumper, stale], { sourceUrls: [direct.url], startedAt: now }).map(item => item.id)).toEqual(['direct'])
   })
+  it('canonicalizes LL-HLS poll cursors into one reusable stream URL', () => {
+    const first = resource({
+      id: 'poll-1', kind: 'hls', seenAt: 100,
+      url: 'https://edge.test/live.m3u8?_HLS_msn=100&_HLS_part=2&session=current',
+    })
+    const second = resource({
+      id: 'poll-2', kind: 'hls', seenAt: 200,
+      url: 'https://edge.test/live.m3u8?session=current&_HLS_msn=101&_HLS_part=0',
+    })
+
+    expect(canonicalMediaUrl(first.url, 'hls')).toBe('https://edge.test/live.m3u8?session=current')
+    expect(resourceFingerprint(first)).toBe(resourceFingerprint(second))
+    expect(compactResources([first, second])).toMatchObject([{
+      url: 'https://edge.test/live.m3u8?session=current',
+      seenAt: 200,
+    }])
+  })
   it('keeps a signed direct player URL at the exact-evidence tier after its token refreshes', () => {
     const now = Date.now()
     const refreshed = resource({
@@ -208,10 +257,10 @@ describe('resource rules', () => {
   it('keeps preloaded and late adaptive manifests for MSE playback, not small media responses', () => {
     const now = Date.now()
     const preloaded = resource({
-      id: 'preloaded', kind: 'hls', url: 'https://cdn.test/master.m3u8', seenAt: now - 2 * 60_000,
+      id: 'preloaded', kind: 'hls', url: 'https://cdn.test/master.m3u8', inspected: true, seenAt: now - 2 * 60_000,
     })
     const lateRendition = resource({
-      id: 'late-rendition', kind: 'dash', url: 'https://cdn.test/manifest.mpd', seenAt: now + 5 * 60_000,
+      id: 'late-rendition', kind: 'dash', url: 'https://cdn.test/manifest.mpd', inspected: true, seenAt: now + 5 * 60_000,
     })
     const smallMedia = resource({
       id: 'fragment', kind: 'media', url: 'https://cdn.test/opaque', size: 176 * 1024, seenAt: now,
@@ -220,6 +269,78 @@ describe('resource rules', () => {
     expect(visiblePlaybackResources([smallMedia, lateRendition, preloaded], {
       sourceUrls: ['blob:https://site.test/current-player'], startedAt: now,
     }).map(item => item.id)).toEqual(['preloaded', 'late-rendition'])
+  })
+  it('waits for inspection when multiple raw MSE manifests could include an advert', () => {
+    const now = Date.now()
+    const advert = resource({
+      id: 'advert', kind: 'hls', url: 'https://media.test/opening.m3u8', seenAt: now,
+    })
+    const main = resource({
+      id: 'main', kind: 'hls', url: 'https://media.test/feature.m3u8', seenAt: now + 100,
+    })
+
+    expect(visiblePlaybackResources([advert, main], {
+      sourceUrls: ['blob:https://site.test/player'], startedAt: now,
+    })).toEqual([])
+  })
+  it('keeps a verified live stream and removes a pre-roll from the same MSE session', () => {
+    const now = Date.now()
+    const preroll = resource({
+      id: 'preroll', kind: 'hls', url: 'https://media.test/opening.m3u8',
+      inspected: true, isLive: false, duration: 20, bandwidth: 8_000_000,
+      seenAt: now - 2_000,
+    })
+    const live = resource({
+      id: 'live', kind: 'hls', url: 'https://edge.test/streams/channel/llhls.m3u8',
+      inspected: true, isLive: true, lowLatencyLive: true, bandwidth: 3_000_000,
+      seenAt: now + 500,
+    })
+
+    expect(visiblePlaybackResources([preroll, live], {
+      sourceUrls: ['blob:https://site.test/player'], startedAt: now,
+    }).map(item => item.id)).toEqual(['live'])
+  })
+  it('removes a verified short bumper when a long VOD is available', () => {
+    const now = Date.now()
+    const bumper = resource({
+      id: 'bumper', kind: 'hls', url: 'https://media.test/opening.m3u8',
+      inspected: true, isLive: false, duration: 12, seenAt: now,
+    })
+    const movie = resource({
+      id: 'movie', kind: 'hls', url: 'https://media.test/feature.m3u8',
+      inspected: true, isLive: false, duration: 3_600, seenAt: now + 100,
+    })
+
+    expect(visiblePlaybackResources([bumper, movie], {
+      sourceUrls: ['blob:https://site.test/player'], startedAt: now,
+    }).map(item => item.id)).toEqual(['movie'])
+  })
+  it('prefers the active LL-HLS stream over an ordinary live-like event playlist', () => {
+    const now = Date.now()
+    const event = resource({
+      id: 'event', kind: 'hls', url: 'https://media.test/event.m3u8',
+      inspected: true, isLive: true, bandwidth: 9_000_000, seenAt: now + 100,
+    })
+    const lowLatency = resource({
+      id: 'llhls', kind: 'hls', url: 'https://edge.test/streams/channel/llhls.m3u8',
+      inspected: true, isLive: true, lowLatencyLive: true,
+      bandwidth: 3_000_000, seenAt: now,
+    })
+
+    expect(visiblePlaybackResources([event, lowLatency], {
+      sourceUrls: ['blob:https://site.test/player'], startedAt: now,
+    }).map(item => item.id)).toEqual(['llhls'])
+  })
+  it('does not hide the only verified short-form stream', () => {
+    const now = Date.now()
+    const clip = resource({
+      id: 'clip', kind: 'hls', url: 'https://media.test/clip.m3u8',
+      inspected: true, isLive: false, duration: 20, seenAt: now,
+    })
+
+    expect(visiblePlaybackResources([clip], {
+      sourceUrls: ['blob:https://site.test/player'], startedAt: now,
+    }).map(item => item.id)).toEqual(['clip'])
   })
   it('does not revive adaptive manifests from an earlier page session', () => {
     const now = Date.now()
@@ -239,6 +360,25 @@ describe('resource rules', () => {
     })
 
     expect(visiblePlaybackResources([unrelated], { sourceUrls: ['blob:https://site.test/player'], startedAt: now })).toEqual([])
+  })
+  it('hides ambiguous adaptive manifests when simultaneous MSE players are active', () => {
+    const now = Date.now()
+    const manifest = resource({
+      id: 'manifest', kind: 'hls', url: 'https://cdn.test/current/master.m3u8', seenAt: now,
+    })
+    const blobPlayback = { sourceUrls: ['blob:https://site.test/player-a'], startedAt: now }
+
+    expect(playerPlaybackResources([manifest], blobPlayback, 1).map(item => item.id)).toEqual(['manifest'])
+    expect(playerPlaybackResources([manifest], blobPlayback, 2)).toEqual([])
+  })
+  it('never places a recent adaptive stream beside a different direct video', () => {
+    const now = Date.now()
+    const manifest = resource({
+      id: 'other-player', kind: 'hls', url: 'https://cdn.test/other/master.m3u8', seenAt: now,
+    })
+    const directPlayback = { sourceUrls: ['https://cdn.test/current/movie.mp4'], startedAt: now }
+
+    expect(playerPlaybackResources([manifest], directPlayback, 0)).toEqual([])
   })
   it('keeps images and ambiguous dynamic documents in the browser', () => {
     expect(classifyDownload('https://cdn.test/photo.jpg', 'application/octet-stream', 'photo.jpg')).toBeNull()
@@ -345,6 +485,16 @@ describe('resource rules', () => {
     })).toMatchObject({
       referer: 'https://page.test/watch/1',
       origin: 'https://page.test',
+    })
+  })
+  it('keeps the exact per-origin identity and does not invent an Origin header', () => {
+    expect(capturedRequestIdentity({
+      Referer: 'https://embed.test/player',
+      'User-Agent': 'Browser UA',
+    }, 'Fallback UA')).toEqual({
+      referer: 'https://embed.test/player',
+      origin: '',
+      userAgent: 'Browser UA',
     })
   })
   it('requires and matches a recent explicit click', () => {

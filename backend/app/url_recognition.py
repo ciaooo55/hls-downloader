@@ -8,6 +8,8 @@ from urllib.parse import parse_qsl, unquote, urljoin, urlparse, urlunparse
 import httpx
 from pydantic import BaseModel
 
+from .network_proxy import ensure_url_allowed, policy_httpx_client
+
 
 class RecognitionError(RuntimeError):
     pass
@@ -470,12 +472,16 @@ async def recognize_url(url: str, headers: dict[str, str], client=None) -> Recog
         raise RecognitionError("链接必须是有效的 HTTP(S) 地址")
 
     owned_client = client is None
-    http = client or httpx.AsyncClient(follow_redirects=True, timeout=15)
+    http = client or policy_httpx_client(
+        follow_redirects=True,
+        timeout=httpx.Timeout(15, connect=10),
+    )
     try:
         try:
             async with http.stream("GET", url, headers=headers) as response:
                 response.raise_for_status()
                 final_url = str(response.url)
+                ensure_url_allowed(final_url)
                 content_type = response.headers.get("content-type", "")
                 disposition = response.headers.get("content-disposition", "")
                 # Do not read multi-gigabyte archives or installers into the page recognizer.
@@ -499,8 +505,10 @@ async def recognize_url(url: str, headers: dict[str, str], client=None) -> Recog
                     if len(body) > MAX_RESPONSE_BYTES:
                         raise RecognitionError("页面超过 4 MiB 识别上限")
                 encoding = response.encoding or "utf-8"
+        except httpx.HTTPStatusError as exc:
+            raise RecognitionError(f"链接请求失败：HTTP {exc.response.status_code}") from exc
         except httpx.HTTPError as exc:
-            raise RecognitionError(f"链接请求失败：{exc}") from exc
+            raise RecognitionError(f"链接请求失败：{type(exc).__name__}") from exc
 
         text = bytes(body).decode(encoding, errors="replace")
         signature = text.lstrip("\ufeff \t\r\n")

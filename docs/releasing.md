@@ -23,21 +23,21 @@ git tag v1.4.2
 git push origin v1.4.2
 ```
 
-`v*` 标签会触发完整 Windows 构建。插件没有改动时不要上传独立插件包，成功后工作流自动创建同名 GitHub Release，并默认上传：
+`v*` 标签会触发完整 Windows 构建。工作流会比较上一个标签到当前标签的 `extension/` 变更：插件有改动时自动附带插件资产，没有改动时只发布桌面端。成功后工作流自动创建同名 GitHub Release，并始终上传：
 
 ```text
-HLSDownloader-v3.0.6-Windows-x64-Setup.exe
-HLSDownloader-v3.0.6-Windows-x64-Portable.zip
+HLSDownloader-v3.0.8-Windows-x64-Setup.exe
+HLSDownloader-v3.0.8-Windows-x64-Portable.zip
 ```
 
-只有发布浏览器插件新版本时，才通过手动工作流勾选 `include_extensions` 或本地传入 `-IncludeExtensionAssets`，额外上传：
+标签间检测到插件变化时会自动额外上传以下文件；手动工作流仍需勾选 `include_extensions`，本地构建则传入 `-IncludeExtensionAssets`：
 
 ```text
-HLSDownloader-v3.0.6-Chrome-Edge-Extension.zip
-HLSDownloader-v3.0.6-Firefox-Web-UI-Unsigned.zip
-HLSDownloader-v3.0.6-Firefox-Web-UI-Source.zip
-HLSDownloader-v3.0.6-Firefox-No-Web-UI-Unsigned.zip
-HLSDownloader-v3.0.6-Firefox-No-Web-UI-Source.zip
+HLSDownloader-v3.0.8-Chrome-Edge-Extension.zip
+HLSDownloader-v3.0.8-Firefox-Web-UI-Unsigned.zip
+HLSDownloader-v3.0.8-Firefox-Web-UI-Source.zip
+HLSDownloader-v3.0.8-Firefox-No-Web-UI-Unsigned.zip
+HLSDownloader-v3.0.8-Firefox-No-Web-UI-Source.zip
 ```
 
 Firefox 网页显示商店版使用已发布的 `browser@hls-downloader.ciaooo55.com` ID；网页不显示版使用独立的 `hls-downloader-store@ciaooo55.com` ID。首次提交时在 AMO

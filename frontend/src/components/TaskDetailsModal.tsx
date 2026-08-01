@@ -5,7 +5,7 @@ import { fmtBytes, fmtDate, fmtEta, fmtSpeed } from '../format'
 import { getDisplayedProgress } from '../taskState'
 import { stageLabel, statusLabel } from '../taskPresentation'
 import type { Task } from '../types'
-import { fetchTorrentFiles, selectTorrentFiles, setTaskSpeedLimit } from '../api'
+import { fetchTorrentFiles, refreshTaskRequest, selectTorrentFiles, setTaskSpeedLimit } from '../api'
 import { Button, Dialog, DialogOverlay } from './ui'
 
 export default function TaskDetailsModal({ task, pending, onClose, onLog, onAction, onOpenFile, onLaunchFile, onPushToTv, onCast, onPreview }: {
@@ -30,6 +30,11 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
   const [limitDraft, setLimitDraft] = useState(String(task.speed_limit_kib || 0))
   const [limitBusy, setLimitBusy] = useState(false)
   const [limitNotice, setLimitNotice] = useState('')
+  const [showRequestRefresh, setShowRequestRefresh] = useState(false)
+  const [requestUrl, setRequestUrl] = useState(task.url)
+  const [requestCookie, setRequestCookie] = useState('')
+  const [requestBusy, setRequestBusy] = useState(false)
+  const [requestNotice, setRequestNotice] = useState('')
   const applySpeedLimit = async () => {
     const value = Math.max(0, Math.min(1048576, Math.round(Number(limitDraft) || 0)))
     setLimitBusy(true)
@@ -124,6 +129,24 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
           <ol>{failure.steps.map((step: string) => <li key={step}>{step}</li>)}</ol>
         </div>
       )}
+      </section>}
+      {task.status !== 'done' && task.task_type !== 'torrent' && <section className="task-request-refresh">
+        <button className="secondary-button" onClick={() => setShowRequestRefresh(value => !value)}>{showRequestRefresh ? '收起链接更新' : '更新下载链接 / 凭据'}</button>
+        {showRequestRefresh && <div className="task-request-refresh-form">
+          <label><span>新的资源地址</span><textarea rows={3} value={requestUrl} onChange={event => setRequestUrl(event.target.value)} /></label>
+          <label><span>新的 Cookie（留空则保留原值）</span><textarea rows={2} value={requestCookie} onChange={event => setRequestCookie(event.target.value)} placeholder="可选；从浏览器复制最新 Cookie" /></label>
+          <p className="field-note">适合 403/410、短效 token 或签名过期。更新后会校验服务端文件身份，匹配时从已有字节继续，不匹配时安全重下。</p>
+          <button className="primary-button" disabled={requestBusy || !requestUrl.trim()} onClick={async () => {
+            setRequestBusy(true); setRequestNotice('')
+            try {
+              await refreshTaskRequest(task.id, { url: requestUrl.trim(), ...(requestCookie ? { cookie: requestCookie } : {}), auto_resume: true })
+              setRequestCookie(''); setRequestNotice('已更新，正在从已有进度继续下载')
+            } catch (error) {
+              setRequestNotice(error instanceof Error ? error.message : '更新失败，请检查链接后重试')
+            } finally { setRequestBusy(false) }
+          }}>{requestBusy ? '正在更新…' : '更新并继续'}</button>
+          {requestNotice && <p className="torrent-selection-notice" role="status">{requestNotice}</p>}
+        </div>}
       </section>}
       {task.task_type === 'torrent' && torrentFiles.length > 0 && <section className="torrent-files">
       <div className="torrent-files-head"><h3>BT 文件选择</h3><span>{selectedFiles.length}/{torrentFiles.length}</span></div>

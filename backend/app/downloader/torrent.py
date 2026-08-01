@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
 
-import httpx
 
 from ..config import settings
 from ..checksum import verify_task_checksum
 from ..request_context import build_task_headers
 from ..models import Task, TaskStatus
-from ..utils import sanitize_filename
+from ..network_proxy import policy_httpx_client
+from ..utils import durable_replace, sanitize_filename
 from .errors import diagnose_download_error, format_download_error
 from .engine import publish_path, task_output_dir, task_work_dir
 
@@ -175,6 +174,7 @@ class TorrentDownloader:
         resume_path = task_dir / "torrent.fastresume"
         torrent_path = task_dir / "source.torrent"
         payload_dir.mkdir(parents=True, exist_ok=True)
+        lt = None
         try:
             lt = self._load_libtorrent()
             task.started_at = task.started_at or datetime.now().isoformat()
@@ -348,7 +348,16 @@ class TorrentDownloader:
         except asyncio.CancelledError:
             if self._handle is not None and self._session is not None:
                 try:
-                    self._session.remove_torrent(self._handle, 1)
+                    if not self._is_canceled() and lt is not None:
+                        self._handle.pause()
+                        await self._save_resume(
+                            lt, self._session, self._handle, resume_path
+                        )
+                    # Never pass delete_files here. User cancellation/deletion
+                    # is cleaned by TaskManager; an app shutdown must preserve
+                    # every downloaded piece exactly as the UI promises.
+                    self._session.remove_torrent(self._handle)
+                    self._handle = None
                 except Exception:
                     pass
             task.progress.connection_status = "idle"
@@ -393,7 +402,7 @@ class TorrentDownloader:
 
     async def _download_torrent_file(self, destination: Path) -> None:
         headers = build_task_headers(self.task)
-        async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+        async with policy_httpx_client(follow_redirects=True, timeout=30) as client:
             response = await client.get(self.task.url, headers=headers)
             response.raise_for_status()
             if len(response.content) > 16 * 1024 * 1024:
@@ -423,7 +432,19 @@ class TorrentDownloader:
                         if alert_handle is not None and alert_handle != handle:
                             continue
                         if isinstance(alert, lt.save_resume_data_alert):
-                            destination.write_bytes(bytes(lt.write_resume_data_buf(alert.params)))
+                            payload = bytes(lt.write_resume_data_buf(alert.params))
+
+                            def persist() -> None:
+                                temporary = destination.with_name(
+                                    destination.name + ".tmp"
+                                )
+                                try:
+                                    temporary.write_bytes(payload)
+                                    durable_replace(temporary, destination)
+                                finally:
+                                    temporary.unlink(missing_ok=True)
+
+                            await asyncio.to_thread(persist)
                             return
                         if isinstance(alert, lt.save_resume_data_failed_alert):
                             return
@@ -454,16 +475,43 @@ class TorrentDownloader:
             if not candidate.exists():
                 destination = candidate
                 break
-        if root.exists():
+        storage = info.files()
+        selected = set(self.task.engine_state.get("selected_files", []))
+        all_selected = not selected or selected == set(range(storage.num_files()))
+        if root.exists() and all_selected:
             publish_path(root, destination)
             return destination
-        files = [path for path in payload_dir.rglob("*") if path.is_file()]
+        if selected:
+            files = []
+            for index in sorted(selected):
+                if index < 0 or index >= storage.num_files():
+                    continue
+                relative = Path(storage.file_path(index))
+                candidate = payload_dir / relative
+                if candidate.is_file():
+                    files.append(candidate)
+        else:
+            files = [path for path in payload_dir.rglob("*") if path.is_file()]
+        if not files:
+            raise RuntimeError("选中的 BT 文件没有生成可发布的数据")
         if len(files) == 1:
-            publish_path(files[0], destination)
-            return destination
+            single_destination = destination
+            if destination.suffix.lower() != files[0].suffix.lower():
+                single_destination = destination.with_name(files[0].name)
+                for index in range(10000):
+                    candidate = single_destination if index == 0 else single_destination.with_name(
+                        f"{single_destination.stem}_{index}{single_destination.suffix}"
+                    )
+                    if not candidate.exists():
+                        single_destination = candidate
+                        break
+            publish_path(files[0], single_destination)
+            return single_destination
         destination.mkdir(parents=True, exist_ok=False)
         for path in files:
             relative = path.relative_to(payload_dir)
+            if relative.parts and relative.parts[0] == info.name():
+                relative = Path(*relative.parts[1:])
             target = destination / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             publish_path(path, target)

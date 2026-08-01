@@ -48,6 +48,7 @@ def test_local_media_share_only_exposes_selected_file_with_range_support(tmp_pat
     source = tmp_path / "演示视频.mkv"
     source.write_bytes(b"0123456789")
     monkeypatch.setattr(tvbox, "local_address_for_tvbox", lambda _endpoint: "127.0.0.1")
+    monkeypatch.setattr(tvbox, "private_ipv4_addresses", lambda _host: frozenset({"127.0.0.1"}))
     server = tvbox.LocalMediaServer()
     try:
         share = server.share(str(source), "http://192.168.1.20:9979")
@@ -72,6 +73,7 @@ def test_local_media_share_is_removed_after_idle_timeout(tmp_path, monkeypatch):
     source = tmp_path / "movie.mp4"
     source.write_bytes(b"media")
     monkeypatch.setattr(tvbox, "local_address_for_tvbox", lambda _endpoint: "127.0.0.1")
+    monkeypatch.setattr(tvbox, "private_ipv4_addresses", lambda _host: frozenset({"127.0.0.1"}))
     server = tvbox.LocalMediaServer()
     try:
         share = server.share(str(source), "http://192.168.1.20:9979")
@@ -87,6 +89,7 @@ def test_local_media_share_can_be_revoked_immediately(tmp_path, monkeypatch):
     source = tmp_path / "movie.mp4"
     source.write_bytes(b"media")
     monkeypatch.setattr(tvbox, "local_address_for_tvbox", lambda _endpoint: "127.0.0.1")
+    monkeypatch.setattr(tvbox, "private_ipv4_addresses", lambda _host: frozenset({"127.0.0.1"}))
     server = tvbox.LocalMediaServer()
     try:
         share = server.share(str(source), "http://192.168.1.20:9979")
@@ -96,3 +99,23 @@ def test_local_media_share_can_be_revoked_immediately(tmp_path, monkeypatch):
         assert server.status(share["id"]) == {"active": False}
     finally:
         server.shutdown()
+
+
+def test_local_media_share_rejects_a_client_other_than_the_selected_tv(tmp_path, monkeypatch):
+    source = tmp_path / "movie.mp4"
+    source.write_bytes(b"media")
+    monkeypatch.setattr(tvbox, "local_address_for_tvbox", lambda _endpoint: "192.168.1.2")
+    monkeypatch.setattr(tvbox, "private_ipv4_addresses", lambda _host: frozenset({"192.168.1.20"}))
+    server = tvbox.LocalMediaServer()
+    try:
+        share = server.share(str(source), "http://192.168.1.20:9979")
+        assert server._begin_stream(share["id"], "192.168.1.20") is not None
+        server._finish_stream(share["id"])
+        assert server._begin_stream(share["id"], "192.168.1.21") is None
+    finally:
+        server.shutdown()
+
+
+def test_local_address_rejects_loopback_device(monkeypatch):
+    monkeypatch.setattr(tvbox, "private_ipv4_addresses", lambda _host: frozenset())
+    assert tvbox.local_address_for_tvbox("http://127.0.0.1:9979") == ""

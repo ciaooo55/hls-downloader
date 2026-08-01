@@ -1,5 +1,6 @@
-from pydantic import BaseModel, Field, field_validator
-from typing import Optional
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from datetime import datetime
+from typing import Literal, Optional
 from urllib.parse import urlparse
 
 from .version import APP_VERSION
@@ -7,28 +8,91 @@ from .models import TaskType
 from .checksum import normalize_checksum
 from .tvbox import normalize_tvbox_endpoint
 from .dlna import normalize_cast_device
+from .credentials import SECRET_MASK
+
+
+class BrowserHandoffCreate(BaseModel):
+    """Bounded browser-to-desktop request accepted over HTTP/Native Messaging."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    url: str = Field(max_length=8192)
+    filename: str = Field(default="", max_length=255)
+    title: str = Field(default="", max_length=512)
+    mime_type: str = Field(default="", max_length=255)
+    source_page_url: str = Field(default="", max_length=8192)
+    resource_kind: str = Field(default="file", max_length=32)
+    referer: str = Field(default="", max_length=4096)
+    origin: str = Field(default="", max_length=1024)
+    cookie: str = Field(default="", max_length=16 * 1024)
+    user_agent: str = Field(default="", max_length=2048)
+    request_headers: dict[str, str] = Field(default_factory=dict, max_length=64)
+    request_contexts: dict[str, dict] = Field(default_factory=dict, max_length=12)
+    request_method: str = Field(default="GET", max_length=16)
+    request_body: str = Field(default="", max_length=175000)
+    size: int = Field(default=0, ge=0, le=2**63 - 1)
+    extension_version: str = Field(default="", max_length=64)
+    extension_client_id: str = Field(default="", max_length=128)
+    extension_browser: str = Field(default="", max_length=32)
+    client_request_id: str = Field(default="", max_length=160)
+
+    @field_validator("url")
+    @classmethod
+    def validate_browser_url(cls, value: str) -> str:
+        value = str(value or "").strip()
+        parsed = urlparse(value)
+        if parsed.scheme == "magnet" and parsed.query:
+            return value
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("url 必须是有效的 HTTP(S) 或 magnet 地址")
+        return value
+
+
+class BrowserPing(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    version: str = Field(default="", max_length=64)
+    client_id: str = Field(default="", max_length=128)
+    browser: str = Field(default="", max_length=32)
+
+
+class BrowserMediaPushCreate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    kind: Literal["cast", "tvbox"]
+    resource: BrowserHandoffCreate
+
+
+class BrowserMediaPushComplete(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    status: Literal["done", "failed", "canceled"]
+    message: str = Field(default="", max_length=300)
 
 class TaskCreate(BaseModel):
-    url: str
+    url: str = Field(max_length=8192)
     task_type: TaskType = TaskType.AUTO
-    source_page_url: str = ""
-    mime_type: str = ""
-    referer: str = ""
-    origin: str = ""
-    user_agent: str = ""
-    cookie: str = ""
+    source_page_url: str = Field(default="", max_length=8192)
+    mime_type: str = Field(default="", max_length=255)
+    referer: str = Field(default="", max_length=4096)
+    origin: str = Field(default="", max_length=1024)
+    user_agent: str = Field(default="", max_length=2048)
+    cookie: str = Field(default="", max_length=16 * 1024)
     request_headers: dict[str, str] = Field(default_factory=dict)
     request_contexts: dict[str, dict] = Field(default_factory=dict)
     request_method: str = Field(default="GET", max_length=16)
     request_body: str = Field(default="", max_length=175000)
-    title: str = ""
-    filename: str = ""
-    download_dir: str = ""
+    title: str = Field(default="", max_length=512)
+    filename: str = Field(default="", max_length=255)
+    download_dir: str = Field(default="", max_length=32767)
     concurrency: int = Field(default=0, ge=0, le=256)
     checksum: str = Field(default="", max_length=80)
     allow_duplicate: bool = False
     selected_video: str = Field(default="", max_length=2048)
     selected_audio: str = Field(default="", max_length=256)
+    scheduled_start_at: Optional[datetime] = None
+    scheduled_stop_at: Optional[datetime] = None
+    completion_action: Literal["none", "shutdown", "sleep", "hibernate"] = "none"
 
     @field_validator("url")
     @classmethod
@@ -49,8 +113,44 @@ class TaskCreate(BaseModel):
         algorithm, digest = normalize_checksum(raw)
         return f"{algorithm}:{digest}"
 
+    @model_validator(mode="after")
+    def validate_schedule_window(self):
+        if (
+            self.scheduled_start_at is not None
+            and self.scheduled_stop_at is not None
+            and self.scheduled_stop_at.timestamp() <= self.scheduled_start_at.timestamp()
+        ):
+            raise ValueError("计划停止时间必须晚于计划开始时间")
+        return self
+
 class TaskBatchCreate(BaseModel):
     tasks: list[TaskCreate] = Field(min_length=1, max_length=100)
+
+
+class TaskRequestUpdate(BaseModel):
+    """Replace an expiring download request without discarding task data."""
+
+    url: str = Field(max_length=8192)
+    source_page_url: Optional[str] = Field(default=None, max_length=8192)
+    mime_type: Optional[str] = Field(default=None, max_length=255)
+    referer: Optional[str] = Field(default=None, max_length=4096)
+    origin: Optional[str] = Field(default=None, max_length=1024)
+    user_agent: Optional[str] = Field(default=None, max_length=2048)
+    cookie: Optional[str] = Field(default=None, max_length=16 * 1024)
+    request_headers: Optional[dict[str, str]] = None
+    request_contexts: Optional[dict[str, dict]] = None
+    request_method: Optional[str] = Field(default=None, max_length=16)
+    request_body: Optional[str] = Field(default=None, max_length=175000)
+    auto_resume: bool = True
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        value = str(value or "").strip()
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("url 必须是有效的 HTTP(S) 地址")
+        return value
 
 class TaskResponse(BaseModel):
     id: str
@@ -115,21 +215,35 @@ class TaskResponse(BaseModel):
     finished_at: str = ""
     available_actions: list[str] = Field(default_factory=list)
     queue_position: int = 0
+    scheduled_start_at: str = ""
+    scheduled_stop_at: str = ""
+    completion_action: str = "none"
 
 class TaskSpeedLimit(BaseModel):
     limit_kib: int = Field(ge=0, le=1048576)
 
 
+class SiteProfile(BaseModel):
+    host: str = Field(min_length=1, max_length=255)
+    enabled: bool = True
+    user_agent: str = Field(default="", max_length=2048)
+    referer: str = Field(default="", max_length=4096)
+    origin: str = Field(default="", max_length=1024)
+    request_headers: dict[str, str] = Field(default_factory=dict)
+    concurrency: int = Field(default=0, ge=0, le=256)
+    speed_limit_kib: int = Field(default=0, ge=0, le=1048576)
+
+
 class SettingsUpdate(BaseModel):
-    download_dir: Optional[str] = None
-    temp_dir: Optional[str] = None
+    download_dir: Optional[str] = Field(default=None, min_length=1, max_length=32767)
+    temp_dir: Optional[str] = Field(default=None, min_length=1, max_length=32767)
     default_concurrency: Optional[int] = Field(default=None, ge=1, le=256)
-    default_user_agent: Optional[str] = None
-    default_referer: Optional[str] = None
-    default_origin: Optional[str] = None
-    default_cookie: Optional[str] = None
-    ffmpeg_path: Optional[str] = None
-    allowed_hosts: Optional[list[str]] = None
+    default_user_agent: Optional[str] = Field(default=None, max_length=2048)
+    default_referer: Optional[str] = Field(default=None, max_length=4096)
+    default_origin: Optional[str] = Field(default=None, max_length=1024)
+    default_cookie: Optional[str] = Field(default=None, max_length=16 * 1024)
+    ffmpeg_path: Optional[str] = Field(default=None, min_length=1, max_length=32767)
+    allowed_hosts: Optional[list[str]] = Field(default=None, max_length=100)
     keep_temp_files: Optional[bool] = None
     max_concurrent_tasks: Optional[int] = Field(default=None, ge=1, le=16)
     http_chunk_size_mb: Optional[int] = Field(default=None, ge=1, le=64)
@@ -142,11 +256,97 @@ class SettingsUpdate(BaseModel):
     browser_category_dirs: Optional[dict[str, str]] = None
     queue_auto_start_enabled: Optional[bool] = None
     queue_auto_start_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    queue_auto_stop_enabled: Optional[bool] = None
+    queue_auto_stop_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    queue_active_days: Optional[list[int]] = Field(default=None, min_length=1, max_length=7)
     live_record_max_minutes: Optional[int] = Field(default=None, ge=0, le=2880)
     download_subtitles: Optional[bool] = None
     clipboard_watch: Optional[bool] = None
     tvbox_endpoint: Optional[str] = Field(default=None, max_length=512)
     cast_device: Optional[dict[str, str]] = None
+    site_profiles: Optional[list[SiteProfile]] = Field(default=None, max_length=100)
+    proxy_mode: Optional[str] = Field(default=None, pattern="^(system|direct|manual)$")
+    proxy_url: Optional[str] = Field(default=None, max_length=2048)
+    proxy_bypass: Optional[list[str]] = Field(default=None, max_length=100)
+
+    @field_validator("proxy_url")
+    @classmethod
+    def validate_proxy_url(cls, value: Optional[str]) -> str:
+        value = str(value or "").strip()
+        if not value:
+            return ""
+        if value == SECRET_MASK:
+            return value
+        parsed = urlparse(value)
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("proxy_url 端口无效") from exc
+        if (
+            parsed.scheme.lower() not in {"http", "https", "socks5", "socks5h"}
+            or not parsed.hostname
+            or parsed.query
+            or parsed.fragment
+            or port == 0
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        ):
+            raise ValueError("proxy_url 必须是 HTTP(S) 或 SOCKS5 代理地址")
+        return value
+
+    @field_validator("queue_active_days")
+    @classmethod
+    def validate_queue_active_days(cls, value: Optional[list[int]]) -> Optional[list[int]]:
+        if value is None:
+            return None
+        normalized = sorted(set(value))
+        if any(day < 0 or day > 6 for day in normalized):
+            raise ValueError("星期编号必须在 0 到 6 之间")
+        return normalized
+
+    @field_validator("allowed_hosts")
+    @classmethod
+    def validate_allowed_hosts(cls, value: Optional[list[str]]) -> list[str] | None:
+        if value is None:
+            return None
+        result = []
+        for item in value:
+            pattern = str(item or "").strip().lower()
+            if (
+                not pattern
+                or len(pattern) > 255
+                or any(character in pattern for character in "\r\n/\\@")
+            ):
+                raise ValueError("Host 规则无效")
+            if pattern not in result:
+                result.append(pattern)
+        return result
+
+    @field_validator("proxy_bypass")
+    @classmethod
+    def validate_proxy_bypass(cls, value: Optional[list[str]]) -> list[str] | None:
+        if value is None:
+            return None
+        result = []
+        for item in value:
+            pattern = str(item or "").strip().lower()
+            if (
+                not pattern
+                or len(pattern) > 255
+                or any(ord(character) < 32 or ord(character) == 127 for character in pattern)
+                or any(character in pattern for character in "\\@")
+                or "://" in pattern
+            ):
+                raise ValueError("代理绕过规则无效")
+            if "/" in pattern:
+                from ipaddress import ip_network
+
+                try:
+                    ip_network(pattern, strict=False)
+                except ValueError as exc:
+                    raise ValueError("代理绕过 CIDR 规则无效") from exc
+            if pattern not in result:
+                result.append(pattern)
+        return result
 
     @field_validator("tvbox_endpoint")
     @classmethod
@@ -261,11 +461,11 @@ class TorrentPathImport(BaseModel):
 
 
 class UrlRecognitionRequest(BaseModel):
-    url: str
-    referer: str = ""
-    origin: str = ""
-    user_agent: str = ""
-    cookie: str = ""
+    url: str = Field(max_length=8192)
+    referer: str = Field(default="", max_length=4096)
+    origin: str = Field(default="", max_length=1024)
+    user_agent: str = Field(default="", max_length=2048)
+    cookie: str = Field(default="", max_length=16 * 1024)
     request_headers: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("url")

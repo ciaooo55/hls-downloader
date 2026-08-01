@@ -360,7 +360,7 @@ fn import_torrent_path(config: &LocalConfig, path: &str) {
     if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", config.port)) {
         let request = format!(
             "POST /api/tasks/torrent-path HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Token: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            config.port, config.token, body.as_bytes().len(), body
+            config.port, config.token, body.len(), body
         );
         let _ = stream.write_all(request.as_bytes());
     }
@@ -462,9 +462,14 @@ fn main() {
     let exit_runtime = Arc::clone(&runtime);
     let launch_args: Vec<String> = std::env::args().collect();
     let background = background_launch(&launch_args);
+    // Packaging smoke tests run a staged copy alongside a user's installed
+    // application. Keep the production single-instance guard intact, but let
+    // the staged process use its isolated core/port when explicitly requested.
+    let build_smoke = std::env::var_os("HLS_DOWNLOADER_BUILD_SMOKE").is_some();
 
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+    let mut builder = tauri::Builder::default();
+    if !build_smoke {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             let runtime = app.state::<Arc<CoreRuntime>>();
             let _ = ensure_core(runtime.inner());
             let config = runtime_config(runtime.inner());
@@ -474,7 +479,10 @@ fn main() {
             if !background_launch(&args) {
                 show_main(app);
             }
-        }))
+        }));
+    }
+
+    let app = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_fs::init())

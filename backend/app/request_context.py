@@ -4,6 +4,7 @@ import base64
 import binascii
 import re
 from collections.abc import Mapping
+from itertools import islice
 from urllib.parse import urlsplit
 
 from .config import settings
@@ -83,7 +84,7 @@ def sanitize_request_headers(values: Mapping[str, str] | None) -> dict[str, str]
     """Keep replay-safe browser headers and reject transport-owned fields."""
     result: dict[str, str] = {}
     total = 0
-    for raw_name, raw_value in list((values or {}).items())[:64]:
+    for raw_name, raw_value in islice((values or {}).items(), 64):
         name = str(raw_name or "").strip()
         value = str(raw_value or "").strip()
         lowered = name.lower()
@@ -95,6 +96,7 @@ def sanitize_request_headers(values: Mapping[str, str] | None) -> dict[str, str]
             or lowered in _CLIENT_MANAGED
             or "\r" in value
             or "\n" in value
+            or len(value) > 32 * 1024
         ):
             continue
         total += len(name) + len(value)
@@ -120,6 +122,23 @@ def _browser_safe_headers(values: Mapping[str, str] | None) -> dict[str, str]:
         name: value
         for name, value in headers.items()
         if name not in _BROWSER_FINGERPRINT_HEADERS and not name.startswith("sec-")
+    }
+
+
+def _generic_http_safe_headers(values: Mapping[str, str] | None) -> dict[str, str]:
+    """Keep ordinary browser semantics for clients without impersonation.
+
+    ``httpx`` does not synthesize a browser User-Agent/Accept profile.  Feeding
+    it the heavily stripped curl-cffi header set advertises ``python-httpx`` to
+    the origin and is rejected by a number of signed media CDNs.  We still drop
+    Client-Hint and priority fields because those describe a browser/TLS stack
+    that httpx cannot reproduce coherently.
+    """
+    headers = sanitize_request_headers(values)
+    return {
+        name: value
+        for name, value in headers.items()
+        if name != "priority" and not name.startswith("sec-")
     }
 
 
@@ -167,7 +186,7 @@ def sanitize_request_contexts(values: Mapping | None) -> dict[str, dict]:
     """Validate and bound per-origin browser identities before encrypted storage."""
     result: dict[str, dict] = {}
     total = 0
-    for raw_origin, raw_context in list((values or {}).items())[:12]:
+    for raw_origin, raw_context in islice((values or {}).items(), 12):
         origin = request_origin(str(raw_origin or ""))
         if not origin or not isinstance(raw_context, Mapping):
             continue
@@ -198,6 +217,7 @@ def build_task_headers(
     accept: str = "*/*",
     request_url: str = "",
     base_headers: Mapping[str, str] | None = None,
+    browser_profile_managed: bool = True,
 ) -> dict[str, str]:
     """Build access headers while leaving browser fingerprinting to the client."""
     page_referer, page_origin = source_page_identity(
@@ -210,8 +230,9 @@ def build_task_headers(
     captured_headers = sanitize_request_headers(
         scoped.get("request_headers") if scoped else getattr(task, "request_headers", {})
     )
-    captured_access_headers = _browser_safe_headers(captured_headers)
-    supplied_headers = _browser_safe_headers(base_headers)
+    header_filter = _browser_safe_headers if browser_profile_managed else _generic_http_safe_headers
+    captured_access_headers = header_filter(captured_headers)
+    supplied_headers = header_filter(base_headers)
     supplied_values = {
         str(name).lower(): str(value).strip()
         for name, value in dict(base_headers or {}).items()
@@ -222,10 +243,6 @@ def build_task_headers(
     # authorization token). Browser fingerprint fields are intentionally
     # ignored so curl-cffi can inject a coherent profile of its own.
     headers.update(supplied_headers)
-    cross_origin_without_context = bool(
-        request_url and target_origin and source_origin
-        and target_origin != source_origin and scoped is None
-    )
     cross_origin = bool(
         request_url and target_origin and source_origin and target_origin != source_origin
     )
@@ -247,8 +264,9 @@ def build_task_headers(
     )
     def set_header(name: str, value: str) -> None:
         existing = lowered.get(name.lower())
-        if existing and existing != name:
+        if existing:
             headers.pop(existing, None)
+            lowered.pop(name.lower(), None)
         if value:
             headers[name] = value
             lowered[name.lower()] = name
@@ -264,29 +282,45 @@ def build_task_headers(
     supplied_referer = supplied_values.get("referer", "")
     supplied_origin = supplied_values.get("origin", "")
     supplied_cookie = supplied_values.get("cookie", "")
-    set_header(
-        "Referer",
-        page_referer
-        or scoped_referer
+    # An exact per-origin request context is stronger evidence than the tab's
+    # address-bar URL.  In particular, sandboxed/cross-origin iframe players
+    # may use their own Referer, and many signed GET requests deliberately omit
+    # Origin. Replaying an invented top-page identity is a common 403 cause.
+    referer_value = (
+        scoped_referer
+        if scoped is not None
+        else page_referer
         or supplied_referer
         or getattr(task, "referer", "")
-        or ("" if browser_context else settings.default_referer),
+        or ("" if browser_context else settings.default_referer)
     )
-    set_header(
-        "Origin",
-        page_origin
-        or scoped_origin
+    origin_value = (
+        scoped_origin
+        if scoped is not None
+        else page_origin
         or supplied_origin
         or getattr(task, "origin", "")
-        or ("" if browser_context else settings.default_origin),
+        or ("" if browser_context else settings.default_origin)
     )
-    set_header(
-        "Cookie",
-        str((scoped or {}).get("cookie", ""))
-        or ("" if cross_origin else supplied_cookie)
+    cookie_value = (
+        str(scoped.get("cookie", ""))
+        if scoped is not None
+        else ("" if cross_origin else supplied_cookie)
         or ("" if cross_origin else getattr(task, "cookie", ""))
-        or ("" if browser_context else settings.default_cookie),
+        or ("" if browser_context else settings.default_cookie)
     )
+    set_header("Referer", referer_value)
+    set_header("Origin", origin_value)
+    set_header("Cookie", cookie_value)
+    if not browser_profile_managed:
+        set_header(
+            "User-Agent",
+            str((scoped or {}).get("user_agent", ""))
+            or captured_headers.get("user-agent", "")
+            or supplied_values.get("user-agent", "")
+            or getattr(task, "user_agent", "")
+            or settings.default_user_agent,
+        )
     if accept and "accept" not in lowered:
         headers["Accept"] = accept
     return headers

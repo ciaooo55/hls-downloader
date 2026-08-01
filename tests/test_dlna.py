@@ -2,6 +2,8 @@ import asyncio
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from backend.app import dlna
 
 
@@ -58,6 +60,16 @@ def test_normalize_cast_device_rejects_an_unrelated_control_host():
         assert "无效" in str(exc)
     else:
         raise AssertionError("Expected invalid cast device to be rejected")
+
+
+def test_ssdp_location_rejects_public_and_loopback_targets(monkeypatch):
+    def resolve(host):
+        return frozenset({"192.168.1.20"}) if host == "tv.lan" else frozenset()
+
+    monkeypatch.setattr("backend.app.lan.private_ipv4_addresses", resolve)
+    assert dlna._parse_ssdp_location(b"HTTP/1.1 200 OK\r\nLOCATION: http://tv.lan/desc.xml\r\n\r\n")
+    assert dlna._parse_ssdp_location(b"HTTP/1.1 200 OK\r\nLOCATION: http://127.0.0.1/private\r\n\r\n") == ""
+    assert dlna._parse_ssdp_location(b"HTTP/1.1 200 OK\r\nLOCATION: https://example.com/desc.xml\r\n\r\n") == ""
 
 
 def test_scan_cast_devices_describes_unique_ssdp_locations(monkeypatch):
@@ -129,3 +141,10 @@ def test_didl_metadata_is_escaped_once_by_the_soap_envelope():
 
     assert "&lt;DIDL-Lite" in body
     assert "&amp;lt;DIDL-Lite" not in body
+
+
+def test_invalid_dlna_duration_is_rejected():
+    with pytest.raises(ValueError):
+        dlna._parse_duration("00:99:00")
+    with pytest.raises(ValueError):
+        dlna._parse_duration("00:00:61")

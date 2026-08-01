@@ -1,4 +1,5 @@
 import asyncio
+import errno
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
@@ -40,6 +41,14 @@ class DownloadError(RuntimeError):
         super().__init__(format_download_error(details))
 
 
+class MetadataProbeTimeout(TimeoutError):
+    """The bounded HTTP metadata probe did not finish in time.
+
+    Keeping this distinct from a general transport timeout lets the UI explain
+    why a task would otherwise appear to be stuck at "preparing download".
+    """
+
+
 def redact_url(value: str) -> str:
     if not value:
         return ""
@@ -75,10 +84,13 @@ def _response_headers(response) -> dict[str, str]:
 
 def _response_snippet(response, limit: int = 800) -> str:
     for attr in ("text", "content"):
-        value = getattr(response, attr, None)
-        if value is None:
-            continue
         try:
+            # httpx streaming responses raise ResponseNotRead from the
+            # property getter itself. Keep diagnostics best-effort: the HTTP
+            # status and headers are still valid even when no body was read.
+            value = getattr(response, attr, None)
+            if value is None:
+                continue
             if isinstance(value, bytes):
                 return value[:limit].decode("utf-8", errors="ignore")
             return str(value)[:limit]
@@ -196,6 +208,16 @@ def diagnose_download_error(
     if existing is not None:
         return existing.details
 
+    if any(isinstance(item, MetadataProbeTimeout) for item in chain):
+        return DownloadErrorDetails(
+            code="HTTP_PROBE_TIMEOUT",
+            message="读取文件信息超时",
+            hint="服务器在下载探测阶段没有完成响应。请检查网络或代理；若是短效链接，请回到原页面用扩展重新识别后再试。任务已停止，不会一直卡在“准备下载”。",
+            stage=stage,
+            url=redact_url(url),
+            attempt=attempt,
+        )
+
     http_error = next(
         (
             item
@@ -272,15 +294,49 @@ def diagnose_download_error(
             attempt=attempt,
         )
 
+    os_error = next((item for item in chain if isinstance(item, OSError)), None)
+    if os_error is not None:
+        winerror = int(getattr(os_error, "winerror", 0) or 0)
+        if getattr(os_error, "errno", None) == errno.ENOSPC or winerror == 112:
+            return DownloadErrorDetails(
+                code="STORAGE_NO_SPACE",
+                message="磁盘空间不足，无法继续写入下载文件",
+                hint="清理下载盘和缓存/过程文件所在磁盘，或在设置中更换目录后继续任务。",
+                stage=stage,
+                url=redact_url(url),
+                attempt=attempt,
+            )
+        if isinstance(os_error, PermissionError) or getattr(os_error, "errno", None) in {errno.EACCES, errno.EPERM} or winerror in {5, 32}:
+            return DownloadErrorDetails(
+                code="OUTPUT_PERMISSION_DENIED",
+                message="输出文件或目录不可写，或正被其他程序占用",
+                hint="关闭占用该文件的播放器/杀毒软件，确认目录权限，或改用其他下载目录。",
+                stage=stage,
+                url=redact_url(url),
+                attempt=attempt,
+            )
+
     root = chain[-1] if chain else exc
     raw = str(root).strip() or root.__class__.__name__
     lowered = raw.lower()
     if root.__class__.__name__ == "UnsupportedPlaylistError":
-        code = "HLS_UNSUPPORTED"
-        hint = "该播放列表使用了当前不支持的 DRM、SAMPLE-AES 或音视频分离的直播格式。"
+        if "drm" in lowered or "sample-aes" in lowered or "contentprotection" in lowered:
+            code = "HLS_DRM_UNSUPPORTED"
+            hint = "该媒体使用 DRM 或 SAMPLE-AES 保护，不能由下载器绕过；请使用网站官方离线功能。"
+        elif "音轨" in raw or "audio" in lowered:
+            code = "HLS_AUDIO_TRACK_UNAVAILABLE"
+            hint = "所选独立音轨没有可访问的播放地址。请刷新网页重新识别，或改选其他音轨。"
+        else:
+            code = "HLS_UNSUPPORTED"
+            hint = "该播放列表包含当前无法安全解析的加密或清单结构。非 DRM 的独立音视频 HLS 已支持。"
     elif "content-range" in lowered or "byterange" in lowered or "range" in lowered:
-        code = "HLS_RANGE_INVALID"
-        hint = "服务器没有正确支持 Range 请求。重新获取链接，或确认 CDN 没有拦截分段请求。"
+        is_http_file = stage in {"probing", "downloading"}
+        code = "HTTP_RANGE_INVALID" if is_http_file else "HLS_RANGE_INVALID"
+        hint = (
+            "服务器返回的字节范围与请求不一致。程序已避免拼接错误数据；重新获取链接或改用单连接。"
+            if is_http_file
+            else "服务器没有正确支持 Range 请求。重新获取链接，或确认 CDN 没有拦截分段请求。"
+        )
     elif "密钥" in raw or "key" in lowered:
         code = "HLS_KEY_INVALID"
         hint = "AES 密钥无效或无法访问。检查 Referer、Origin、Cookie，并重新获取播放地址。"
@@ -381,7 +437,10 @@ def retry_after_seconds(exc: BaseException, maximum: float = 60.0) -> float | No
 
 def should_share_retry_window(exc: BaseException) -> bool:
     """Whether a retry represents server-wide throttling rather than a local blip."""
-    return http_status_from_exception(exc) == 429 or retry_after_seconds(exc) is not None
+    # 503 means the service, not an individual byte range, is unavailable.
+    # Letting every HLS/DASH/HTTP worker retry independently creates a request
+    # storm and often prolongs the CDN penalty even without Retry-After.
+    return http_status_from_exception(exc) in {429, 503} or retry_after_seconds(exc) is not None
 
 
 def retry_delay_seconds(exc: BaseException, fallback: float, maximum: float = 60.0) -> float:

@@ -39,6 +39,31 @@ media.mp4
     assert second["discontinuity"] is True
 
 
+def test_parse_inherits_playlist_token_to_relative_variant_key_map_and_segment():
+    master_url = "https://edge.test/live/master.m3u8?token=a%2Fb%2Bc&_HLS_msn=5"
+    master = """#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=1000
+video/index.m3u8
+"""
+    variant = parse_m3u8(master_url, master)
+    assert variant["url"] == (
+        "https://edge.test/live/video/index.m3u8?token=a%2Fb%2Bc"
+    )
+
+    media = """#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="key.bin"
+#EXT-X-MAP:URI="init.mp4"
+#EXTINF:4,
+part.m4s
+#EXT-X-ENDLIST
+"""
+    parsed = parse_m3u8(variant["url"], media)
+    segment = parsed["segments"][0]
+    assert segment["url"].endswith("part.m4s?token=a%2Fb%2Bc")
+    assert segment["key"]["uri"].endswith("key.bin?token=a%2Fb%2Bc")
+    assert segment["init_map"]["uri"].endswith("init.mp4?token=a%2Fb%2Bc")
+
+
 def test_parse_marks_live_playlists_and_rejects_sample_aes():
     live = """#EXTM3U
 #EXT-X-TARGETDURATION:5
@@ -74,6 +99,30 @@ one.ts
 """
     with pytest.raises(UnsupportedPlaylistError, match="SAMPLE-AES"):
         parse_m3u8("https://example.test/vod.m3u8", sample_aes)
+
+
+def test_parse_ll_hls_defers_incomplete_part_only_tail_without_failing():
+    # At a live poll boundary, python-m3u8 exposes the current partial media
+    # segment as uri=None plus EXT-X-PART entries.  It becomes a normal media
+    # URI on a later refresh and must not abort an independent audio recorder.
+    playlist = """#EXTM3U
+#EXT-X-VERSION:9
+#EXT-X-TARGETDURATION:2
+#EXT-X-MEDIA-SEQUENCE:40
+#EXTINF:2.0,
+complete-40.m4s
+#EXT-X-PART:DURATION=0.333,URI="part-41-0.m4s"
+#EXT-X-PART:DURATION=0.333,URI="part-41-1.m4s"
+#EXT-X-PRELOAD-HINT:TYPE=PART,URI="part-41-2.m4s"
+"""
+
+    parsed = parse_m3u8("https://example.test/live.m3u8", playlist)
+
+    assert parsed["is_live"] is True
+    assert [segment["url"] for segment in parsed["segments"]] == [
+        "https://example.test/complete-40.m4s"
+    ]
+    assert parsed["segments"][0]["media_sequence"] == 40
 
 
 def test_parse_rejects_invalid_implicit_byte_range():

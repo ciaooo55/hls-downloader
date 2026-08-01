@@ -32,7 +32,6 @@ import {
   PLAYBACK_RATES,
   effectivePlaybackDuration,
   formatPlayerTime,
-  isTimeSeekable,
   thumbnailBucket,
   thumbnailLeft,
   timelineTime,
@@ -90,6 +89,11 @@ export default function VideoPlayerModal({ task, onClose }: {
   const [session, setSession] = useState<PlaybackSession | null>(null)
   const [playbackStatus, setPlaybackStatus] = useState<PlaybackStatus | null>(null)
   const [mode, setMode] = useState<'hls' | 'file'>('hls')
+  // The normal playlist exposes only the contiguous local prefix, which makes
+  // startup instant. Switch to the sparse/full view only after an explicit
+  // seek outside that prefix.
+  const [sparsePlayback, setSparsePlayback] = useState(false)
+  const [playbackReload, setPlaybackReload] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [paused, setPaused] = useState(true)
@@ -134,6 +138,9 @@ export default function VideoPlayerModal({ task, onClose }: {
   useEffect(() => {
     let canceled = false
     let openedSession = ''
+    resumePositionRef.current = 0
+    setSparsePlayback(false)
+    setPlaybackReload(0)
     setLoading(true)
     setError('')
     createPlaybackSession(task.id)
@@ -230,7 +237,7 @@ export default function VideoPlayerModal({ task, onClose }: {
       mainHlsRef.current = hls
       hls.attachMedia(video)
       hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-        hls.loadSource(playbackPlaylistUrl(task.id, session.session_id, true))
+        hls.loadSource(playbackPlaylistUrl(task.id, session.session_id, sparsePlayback))
       })
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         setLoading(false)
@@ -251,7 +258,7 @@ export default function VideoPlayerModal({ task, onClose }: {
         setError('当前视频编码无法由内置播放器解码，可使用系统播放器打开')
       })
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = playbackPlaylistUrl(task.id, session.session_id, true)
+      video.src = playbackPlaylistUrl(task.id, session.session_id, sparsePlayback)
       video.load()
     } else {
       setLoading(false)
@@ -268,7 +275,7 @@ export default function VideoPlayerModal({ task, onClose }: {
       video.removeAttribute('src')
       video.load()
     }
-  }, [mode, session, task.id])
+  }, [mode, playbackReload, session, sparsePlayback, task.id])
 
   useEffect(() => {
     const video = videoRef.current
@@ -348,6 +355,17 @@ export default function VideoPlayerModal({ task, onClose }: {
       return
     }
 
+    const available = playbackStatus?.available_duration || 0
+    // Seeking inside the contiguous local prefix must never round-trip through
+    // the backend. This is what keeps the first seconds and ordinary rewinds
+    // responsive even while the task is still downloading.
+    if (!sparsePlayback && available > 0 && bounded <= Math.max(0, available - 0.25)) {
+      resumePositionRef.current = bounded
+      video.currentTime = bounded
+      setCurrentTime(bounded)
+      return
+    }
+
     if (seekTimerRef.current) window.clearTimeout(seekTimerRef.current)
     const requestNumber = ++seekRequestRef.current
     setError('')
@@ -356,27 +374,13 @@ export default function VideoPlayerModal({ task, onClose }: {
       void requestPlaybackSeek(task.id, session.session_id, bounded)
         .then(async result => {
           if (requestNumber !== seekRequestRef.current) return
-          const hls = mainHlsRef.current
-          hls?.stopLoad()
-          hls?.startLoad(result.time)
-
-          const deadline = Date.now() + 45_000
-          while (requestNumber === seekRequestRef.current && Date.now() < deadline) {
-            const currentVideo = videoRef.current
-            if (currentVideo && isTimeSeekable(currentVideo.seekable, result.time)) {
-              resumePositionRef.current = result.time
-              currentVideo.currentTime = result.time
-              setCurrentTime(result.time)
-              setLoading(false)
-              void currentVideo.play().catch(() => setPaused(true))
-              return
-            }
-            await new Promise(resolve => window.setTimeout(resolve, 150))
-          }
-          if (requestNumber === seekRequestRef.current) {
-            setLoading(false)
-            setError('目标位置下载超时，请稍后重试')
-          }
+          resumePositionRef.current = result.time
+          setCurrentTime(result.time)
+          // Rebuild the main decoder against the sparse playlist. The effect
+          // owns teardown/reload, avoiding a race between stopLoad/startLoad
+          // and a manifest that does not yet contain the requested segment.
+          setSparsePlayback(true)
+          setPlaybackReload(value => value + 1)
         })
         .catch(reason => {
           if (requestNumber === seekRequestRef.current) {
@@ -385,7 +389,7 @@ export default function VideoPlayerModal({ task, onClose }: {
           }
         })
     }, 120)
-  }, [effectiveDuration, mode, session, task.id])
+  }, [effectiveDuration, mode, playbackStatus?.available_duration, session, sparsePlayback, task.id])
 
   const seekBy = useCallback((seconds: number) => {
     const video = videoRef.current

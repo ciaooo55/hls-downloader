@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from email.parser import BytesHeaderParser
 from urllib.parse import urljoin, urlparse
 
+from .lan import private_ipv4_addresses, request_lan, validate_lan_url
+
 
 SSDP_ADDRESS = ("239.255.255.250", 1900)
 SSDP_RESPONSE_DELAY_SECONDS = 1
@@ -90,7 +92,13 @@ def _parse_ssdp_location(payload: bytes) -> str:
     headers = BytesHeaderParser().parsebytes(lines[1] if len(lines) > 1 else payload)
     location = str(headers.get("location") or "").strip()
     parsed = urlparse(location)
-    return location if parsed.scheme.lower() in {"http", "https"} and parsed.hostname else ""
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        return ""
+    try:
+        validate_lan_url(location)
+    except ValueError:
+        return ""
+    return location
 
 
 def _search_ssdp(timeout: float) -> list[str]:
@@ -132,7 +140,12 @@ def _search_ssdp(timeout: float) -> list[str]:
                 f"ST: {target}\r\n\r\n"
             ).encode("ascii")
             for client in clients:
-                client.sendto(request, SSDP_ADDRESS)
+                try:
+                    client.sendto(request, SSDP_ADDRESS)
+                except OSError:
+                    # One adapter can disappear during a scan without making
+                    # results from every other adapter unusable.
+                    continue
         deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
@@ -209,12 +222,15 @@ async def _describe(location: str, timeout: float) -> CastDevice | None:
     import httpx
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=False) as client:
-            response = await client.get(location)
+        _, device_addresses = validate_lan_url(location)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False) as client:
+            response = await request_lan(
+                client, "GET", location, expected_addresses=device_addresses,
+            )
         response.raise_for_status()
         root = ET.fromstring(response.content)
         device_ns = "{urn:schemas-upnp-org:device-1-0}"
-        friendly_name = (root.findtext(f".//{device_ns}friendlyName") or "").strip()
+        friendly_name = (root.findtext(f".//{device_ns}friendlyName") or "").strip()[:160]
         url_base = (root.findtext(f".//{device_ns}URLBase") or location).strip()
         for service in root.findall(f".//{device_ns}service"):
             service_type = (service.findtext(f"{device_ns}serviceType") or "").strip()
@@ -222,8 +238,17 @@ async def _describe(location: str, timeout: float) -> CastDevice | None:
             if service_type.startswith(AV_TRANSPORT_PREFIX) and control_path:
                 control_url = urljoin(url_base, control_path)
                 parsed = urlparse(location)
-                return CastDevice(location, control_url, service_type, friendly_name or parsed.hostname or "DLNA 设备", parsed.hostname or "")
-    except (httpx.HTTPError, ET.ParseError, ValueError):
+                validate_lan_url(control_url, expected_addresses=device_addresses)
+                candidate = CastDevice(
+                    location,
+                    control_url,
+                    service_type,
+                    friendly_name or parsed.hostname or "DLNA 设备",
+                    parsed.hostname or "",
+                )
+                normalize_cast_device(candidate.public())
+                return candidate
+    except (httpx.HTTPError, ET.ParseError, RuntimeError, ValueError):
         return None
     return None
 
@@ -268,11 +293,16 @@ async def _av_transport_action(device: dict, action: str, arguments: dict[str, s
     import httpx
 
     selected = normalize_cast_device(device)
+    _, device_addresses = validate_lan_url(selected["location"])
+    validate_lan_url(selected["control_url"], expected_addresses=device_addresses)
     response = None
     try:
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-            response = await client.post(
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False) as client:
+            response = await request_lan(
+                client,
+                "POST",
                 selected["control_url"],
+                expected_addresses=device_addresses,
                 content=_soap_body(action, selected["service_type"], arguments),
                 headers={
                     "Content-Type": 'text/xml; charset="utf-8"',
@@ -290,6 +320,8 @@ def _with_chromecast(device: dict, operation):
     import pychromecast
 
     selected = normalize_cast_device(device)
+    if not private_ipv4_addresses(selected["host"]):
+        raise ValueError("Chromecast 设备不是可访问的 IPv4 局域网设备")
     chromecasts, browser = pychromecast.get_chromecasts(
         known_hosts=[selected["host"]], timeout=8, tries=1,
     )
@@ -361,7 +393,7 @@ def _parse_duration(value: str) -> int:
     if len(parts) != 3:
         raise ValueError("投屏设备没有返回当前播放进度")
     hours, minutes, seconds = (int(part) for part in parts)
-    if hours < 0 or minutes < 0 or seconds < 0:
+    if hours < 0 or not 0 <= minutes < 60 or not 0 <= seconds < 60:
         raise ValueError("投屏设备返回了无效的播放进度")
     return hours * 3600 + minutes * 60 + seconds
 

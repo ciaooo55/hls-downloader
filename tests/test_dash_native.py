@@ -5,7 +5,6 @@ from pathlib import Path
 import httpx
 import pytest
 
-from backend.app.downloader import dash as dash_module
 from backend.app.downloader import dash_native as native_module
 from backend.app.downloader.dash import DashDownloader
 from backend.app.downloader.dash_native import NativeDashEngine
@@ -135,6 +134,48 @@ def test_native_dash_pause_keeps_segments_and_resume_reuses_them(tmp_path, monke
                 continue
             if url.endswith((".m4s", "init.mp4")):
                 assert media_hits[url] == count, url
+
+    asyncio.run(run())
+
+
+def test_native_dash_resume_ignores_rotated_signature_but_rejects_new_representation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(native_module.settings, "keep_temp_files", True)
+    active_manifest = {"text": TEMPLATE_MPD}
+    media_hits: dict[str, int] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("manifest.mpd"):
+            return httpx.Response(200, text=active_manifest["text"], request=request)
+        stable = request.url.path
+        media_hits[stable] = media_hits.get(stable, 0) + 1
+        return httpx.Response(200, content=stable.encode(), request=request)
+
+    _install_transport(monkeypatch, handler)
+    _install_fake_mux(monkeypatch)
+
+    async def run():
+        task = _task(tmp_path, "https://cdn.test/stream/manifest.mpd?token=old-secret")
+        assert await NativeDashEngine(task).run() is True
+        first_hits = dict(media_hits)
+        state_path = (
+            tmp_path / "temp" / ".tasks" / task.id / "dash_vod_segments.json"
+        )
+        checkpoint = state_path.read_text(encoding="utf-8")
+        assert "old-secret" not in checkpoint
+        assert "https://" not in checkpoint
+
+        task.url = "https://cdn.test/stream/manifest.mpd?token=new-secret"
+        assert await NativeDashEngine(task).run() is True
+        assert media_hits == first_hits
+
+        active_manifest["text"] = TEMPLATE_MPD.replace('id="v720"', 'id="v1080"')
+        assert await NativeDashEngine(task).run() is True
+        assert media_hits["/stream/v/init.mp4"] == first_hits["/stream/v/init.mp4"] + 1
+        assert media_hits["/stream/v/1.m4s"] == first_hits["/stream/v/1.m4s"] + 1
+        assert media_hits["/stream/v/2.m4s"] == first_hits["/stream/v/2.m4s"] + 1
+        assert media_hits["/stream/a/init.mp4"] == first_hits["/stream/a/init.mp4"]
 
     asyncio.run(run())
 

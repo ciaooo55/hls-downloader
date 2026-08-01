@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FastForward, LoaderCircle, Pause, Play, Trash2, X } from 'lucide-react'
-import { castLocalFile, castMediaUrl, clearCompletedTasks, completeBrowserMediaPush, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLocalTvboxShare, fetchSettings, fetchTasks, importTorrentPath, launchFile, openExplorer, pushLocalTvboxFile, pushTvboxUrl, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
+import { cancelPowerAction, castLocalFile, castMediaUrl, clearCompletedTasks, completeBrowserMediaPush, confirmPowerAction, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLocalTvboxShare, fetchPendingPowerActions, fetchSettings, fetchTasks, importTorrentPath, launchFile, openExplorer, pushLocalTvboxFile, pushTvboxUrl, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
 import { fmtBytes, fmtSpeed } from './format'
 import { isRunningStatus, mergeTaskEvent } from './taskState'
 import { commandState } from './taskCommands'
@@ -85,6 +85,7 @@ export default function App() {
   const [handoffBusy, setHandoffBusy] = useState(false)
   const [error, setError] = useState('')
   const [confirmation, setConfirmation] = useState<{ title: string; message: string; confirmLabel: string; danger: boolean; run: () => void } | null>(null)
+  const [powerAction, setPowerAction] = useState<{ power_action_id: string; action: 'shutdown' | 'sleep' | 'hibernate'; task_title: string; delay_seconds: number } | null>(null)
   const [devicePick, setDevicePick] = useState<{ kind: 'cast' | 'tvbox'; path?: string; url?: string; filename: string; requestId?: string } | null>(null)
   const [clipboardOffer, setClipboardOffer] = useState('')
   const [clipboardBatch, setClipboardBatch] = useState('')
@@ -123,8 +124,8 @@ export default function App() {
   const load = useCallback(async () => {
     if (loadInFlight.current) return loadInFlight.current
     const request = (async () => { try {
-      const [taskData, settingData, browserData, healthData] = await Promise.all([fetchTasks(), fetchSettings(), fetchBrowserStatus(), fetchHealth()])
-      setTasks(taskData.filter(task => !deletedTaskIds.current.has(task.id))); setSettings(settingData); setBrowserStatus(browserData); setAppVersion(healthData.version || ''); setError('')
+      const [taskData, settingData, browserData, healthData, powerActions] = await Promise.all([fetchTasks(), fetchSettings(), fetchBrowserStatus(), fetchHealth(), fetchPendingPowerActions()])
+      setTasks(taskData.filter(task => !deletedTaskIds.current.has(task.id))); setSettings(settingData); setBrowserStatus(browserData); setAppVersion(healthData.version || ''); setPowerAction(powerActions[0] || null); setError('')
       try {
         if ('Notification' in window && Notification.permission === 'default') {
           void Notification.requestPermission()
@@ -141,6 +142,13 @@ export default function App() {
     load()
     const events = connectSSE(event => {
       if (event.type === 'task_deleted' && event.task_id) deletedTaskIds.current.add(event.task_id)
+      if (event.type === 'power_action_pending' && event.power_action_id) {
+        setPowerAction(event)
+        void notifySystem('下载完成后的电源动作', `${event.delay_seconds || 30} 秒后将执行，可在下载器中取消。`)
+      }
+      if (['power_action_canceled', 'power_action_executed', 'power_action_failed'].includes(event.type)) {
+        setPowerAction(current => current?.power_action_id === event.power_action_id ? null : current)
+      }
       setTasks(previous => mergeTaskEvent(previous, event, deletedTaskIds.current) as Task[])
       if (event.type === 'task_progress' && event.task_id) {
         const previous = lastStatuses.current[event.task_id]
@@ -162,8 +170,9 @@ export default function App() {
   }, [load])
 
   useEffect(() => {
-    // Desktop owns dedicated handoff windows. Only pure /ui (no pywebview) needs the manager modal fallback.
-    const desktopShell = Boolean((window as any).pywebview || (window as any).chrome?.webview || isTauriDesktop())
+    // Tauri owns dedicated handoff windows. The standalone /ui surface uses
+    // the manager modal fallback instead.
+    const desktopShell = isTauriDesktop()
     if (desktopShell) return
     const refresh = () => {
       if (handoffRefreshInFlight.current) return
@@ -581,6 +590,7 @@ export default function App() {
     </div>}
     {handoffs[0] && <BrowserHandoffDialog key={handoffs[0].id} item={handoffs[0]} busy={handoffBusy} settings={settings} onResolve={resolveHandoff} queueRemaining={Math.max(0, handoffs.length - 1)} />}
     {confirmation && <ConfirmDialog title={confirmation.title} message={confirmation.message} confirmLabel={confirmation.confirmLabel} danger={confirmation.danger} onCancel={() => setConfirmation(null)} onConfirm={confirmation.run} />}
+    {powerAction && <ConfirmDialog title={`${powerAction.task_title || '任务'} 已完成`} message={`${powerAction.delay_seconds || 30} 秒后将${powerAction.action === 'shutdown' ? '关机' : powerAction.action === 'sleep' ? '进入睡眠' : '进入休眠'}。可以立即执行或取消。`} confirmLabel="立即执行" danger={powerAction.action === 'shutdown'} onCancel={() => { const id = powerAction.power_action_id; setPowerAction(null); void cancelPowerAction(id).catch(() => {}) }} onConfirm={() => { const id = powerAction.power_action_id; setPowerAction(null); void confirmPowerAction(id).catch(reason => setError(reason?.message || '无法执行电源动作')) }} />}
     {devicePick && <DevicePickerDialog mode={devicePick.kind} onClose={() => { if (devicePick.requestId) void completeBrowserMediaPush(devicePick.requestId, 'canceled', '已取消设备选择'); setDevicePick(null) }} onChoose={completeDevicePick} />}
   </div>
 }

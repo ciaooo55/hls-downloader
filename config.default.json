@@ -1,5 +1,5 @@
 {
-  "config_version": 13,
+  "config_version": 18,
   "host": "127.0.0.1",
   "port": 8765,
   "download_dir": "downloads",
@@ -23,6 +23,13 @@
   "browser_category_dirs": {},
   "queue_auto_start_enabled": false,
   "queue_auto_start_time": "00:00",
+  "queue_auto_stop_enabled": false,
+  "queue_auto_stop_time": "07:30",
+  "queue_active_days": [0, 1, 2, 3, 4, 5, 6],
   "tvbox_endpoint": "",
-  "cast_device": {}
+  "cast_device": {},
+  "site_profiles": [],
+  "proxy_mode": "system",
+  "proxy_url": "",
+  "proxy_bypass": ["localhost", "127.0.0.1", "::1"]
 }

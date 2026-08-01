@@ -8,9 +8,13 @@ $root = Split-Path -Parent $PSScriptRoot
 $name = "com.ciaooo55.hls_downloader"
 $chrome = Join-Path $RegistryPrefix "Google\Chrome\NativeMessagingHosts\$name"
 $edge = Join-Path $RegistryPrefix "Microsoft\Edge\NativeMessagingHosts\$name"
+$brave = Join-Path $RegistryPrefix "BraveSoftware\Brave-Browser\NativeMessagingHosts\$name"
+$chromium = Join-Path $RegistryPrefix "Chromium\NativeMessagingHosts\$name"
+$vivaldi = Join-Path $RegistryPrefix "Vivaldi\NativeMessagingHosts\$name"
+$opera = Join-Path $RegistryPrefix "Opera Software\NativeMessagingHosts\$name"
 $firefox = Join-Path $RegistryPrefix "Mozilla\NativeMessagingHosts\$name"
 if ($Unregister) {
-    Remove-Item -LiteralPath $chrome, $edge, $firefox -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $chrome, $edge, $brave, $chromium, $vivaldi, $opera, $firefox -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "Browser integration removed."
     exit 0
 }
@@ -74,7 +78,15 @@ $chromeManifest = Get-VersionedManifest -Directory $manifestsDir -Name "chrome"
 if (-not $chromeManifest) { $chromeManifest = Join-Path $manifestDir "chrome.json" }
 $firefoxManifest = Get-VersionedManifest -Directory $manifestsDir -Name "firefox"
 if (-not $firefoxManifest) { $firefoxManifest = Join-Path $manifestDir "firefox.json" }
-foreach ($entry in @(@($chrome, $chromeManifest), @($edge, $chromeManifest), @($firefox, $firefoxManifest))) {
+foreach ($entry in @(
+    @($chrome, $chromeManifest),
+    @($edge, $chromeManifest),
+    @($brave, $chromeManifest),
+    @($chromium, $chromeManifest),
+    @($vivaldi, $chromeManifest),
+    @($opera, $chromeManifest),
+    @($firefox, $firefoxManifest)
+)) {
     $manifestPath = $entry[1]
     if (-not (Test-Path -LiteralPath $manifestPath)) {
         throw "Native Messaging manifest not found: $manifestPath"
@@ -116,4 +128,4 @@ if (Test-Path -LiteralPath $manifestsDir) {
             Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
         }
 }
-Write-Host "Chrome, Edge and Firefox Native Messaging hosts registered."
+Write-Host "Chrome, Edge, Brave, Chromium, Vivaldi, Opera and Firefox Native Messaging hosts registered."

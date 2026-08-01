@@ -253,7 +253,7 @@ def test_exact_origin_header_overrides_are_used_for_manual_403_workarounds(monke
     assert "user-agent" not in {name.lower() for name in headers}
 
 
-def test_browser_page_url_overrides_media_domain_identity(monkeypatch):
+def test_exact_browser_request_identity_overrides_top_page_fallback(monkeypatch):
     monkeypatch.setattr(request_context.settings, "default_cookie", "")
     task = Task(
         id="browser-page-authority",
@@ -278,9 +278,54 @@ def test_browser_page_url_overrides_media_domain_identity(monkeypatch):
         task, request_url="https://media-cdn.example/720p/segment-1.ts"
     )
 
-    assert headers["Referer"] == "https://video-page.example/watch/240"
-    assert headers["Origin"] == "https://video-page.example"
+    assert headers["Referer"] == "https://media-cdn.example/video.m3u8"
+    assert headers["Origin"] == "https://media-cdn.example"
     assert headers["Cookie"] == "session=valid"
+
+
+def test_exact_browser_context_preserves_omitted_origin(monkeypatch):
+    monkeypatch.setattr(request_context.settings, "default_origin", "")
+    task = Task(
+        id="browser-omitted-origin",
+        url="https://cdn.example.test/video.mp4",
+        source_page_url="https://page.example.test/watch",
+        request_contexts={
+            "https://cdn.example.test": {
+                "request_headers": {"Referer": "https://embed.example.test/player"},
+                "referer": "https://embed.example.test/player",
+                "origin": "",
+                "cookie": "",
+            }
+        },
+    )
+
+    headers = request_context.build_task_headers(task, request_url=task.url)
+
+    assert headers["Referer"] == "https://embed.example.test/player"
+    assert "origin" not in {name.lower() for name in headers}
+
+
+def test_generic_http_client_keeps_browser_user_agent_without_client_hints(monkeypatch):
+    monkeypatch.setattr(request_context.settings, "default_user_agent", "Fallback UA")
+    task = Task(
+        id="plain-http-identity",
+        url="https://cdn.example.test/file.mp4",
+        user_agent="Captured Browser UA",
+        request_headers={
+            "Accept": "video/mp4,*/*",
+            "Sec-CH-UA": '"Chromium";v="140"',
+            "Priority": "u=1",
+        },
+    )
+
+    headers = request_context.build_task_headers(
+        task, browser_profile_managed=False
+    )
+
+    assert headers["User-Agent"] == "Captured Browser UA"
+    assert headers["accept"] == "video/mp4,*/*"
+    assert "sec-ch-ua" not in {name.lower() for name in headers}
+    assert "priority" not in {name.lower() for name in headers}
 
 
 def test_request_replay_allows_only_bounded_json_or_form_post_bodies():

@@ -16,7 +16,7 @@
 
 ## Non-goals
 
-- Do **not** reintroduce Kotlin/Compose as the primary shell (`desktop-compose/` is legacy).
+- Do **not** reintroduce the removed Kotlin/Compose or pywebview desktop shells.
 - Do **not** switch to Electron for the main window.
 - Do **not** load remote Google Fonts in the packaged app (offline + privacy); use system UI fonts.
 

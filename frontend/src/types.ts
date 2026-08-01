@@ -42,6 +42,9 @@ export interface Task {
   updated_at: string
   started_at: string
   finished_at: string
+  scheduled_start_at?: string
+  scheduled_stop_at?: string
+  completion_action?: 'none' | 'shutdown' | 'sleep' | 'hibernate'
   available_actions: string[]
   queue_position: number
   playable_segments: number
@@ -88,6 +91,7 @@ export interface Settings {
   default_referer?: string
   default_origin?: string
   default_cookie?: string
+  default_cookie_configured?: boolean
   http_chunk_size_mb?: number
   download_speed_limit_kib?: number
   bt_upload_limit_kib?: number
@@ -98,11 +102,19 @@ export interface Settings {
   browser_category_dirs?: Record<string, string>
   queue_auto_start_enabled?: boolean
   queue_auto_start_time?: string
+  queue_auto_stop_enabled?: boolean
+  queue_auto_stop_time?: string
+  queue_active_days?: number[]
   live_record_max_minutes?: number
   download_subtitles?: boolean
   clipboard_watch?: boolean
   tvbox_endpoint?: string
   cast_device?: { id: string; protocol: 'dlna' | 'chromecast'; location: string; control_url: string; service_type: string; label: string; host: string }
+  site_profiles?: Array<{ host: string; enabled?: boolean; user_agent?: string; referer?: string; origin?: string; request_headers?: Record<string, string>; concurrency?: number; speed_limit_kib?: number }>
+  proxy_mode?: 'system' | 'direct' | 'manual'
+  proxy_url?: string
+  proxy_url_configured?: boolean
+  proxy_bypass?: string[]
 }
 
 export interface TorrentFileEntry {
@@ -121,10 +133,11 @@ export interface BrowserStatus {
   desktop_version?: string
   recommended_version?: string
   minimum_version?: string
+  release_url?: string
   needs_upgrade?: boolean
   clients?: Array<{
     id: string
-    browser: 'edge' | 'chrome' | 'chromium' | 'firefox' | 'unknown'
+    browser: 'edge' | 'chrome' | 'chromium' | 'brave' | 'vivaldi' | 'opera' | 'firefox' | 'unknown'
     version?: string
     last_seen: number
     active: boolean
@@ -145,4 +158,5 @@ export interface UpdateInfo {
   digest: string
   notes: string
   download_directory: string
+  asset_kind: 'installer' | 'portable'
 }

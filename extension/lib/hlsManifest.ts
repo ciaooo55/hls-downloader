@@ -1,3 +1,5 @@
+import { inheritManifestAccessQuery } from './urlQuery'
+
 export interface HlsVariant {
   url: string
   width?: number
@@ -9,6 +11,10 @@ export interface HlsVariant {
 export interface HlsManifestInfo {
   variants: HlsVariant[]
   duration?: number
+  /** Present only for media playlists; a master cannot determine liveness. */
+  isLive?: boolean
+  /** LL-HLS media playlists advertise partial segments/control directives. */
+  lowLatencyLive?: boolean
 }
 
 function attribute(line: string, name: string): string {
@@ -32,14 +38,22 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
     const height = Number(resolution?.[2] || 0) || undefined
     const bandwidth = Number(attribute(attributes, 'BANDWIDTH')) || undefined
     variants.push({
-      url: new URL(uri, baseUrl).href,
+      url: inheritManifestAccessQuery(baseUrl, new URL(uri, baseUrl).href),
       width,
       height,
       bandwidth,
       quality: height ? `${height}p` : undefined,
     })
   }
-  return { variants, duration: duration > 0 ? duration : undefined }
+  const mediaPlaylist = lines.some(line => line.startsWith('#EXTINF:'))
+  const isLive = mediaPlaylist ? !lines.some(line => line === '#EXT-X-ENDLIST') : undefined
+  const lowLatencyLive = isLive === true && lines.some(line =>
+    line.startsWith('#EXT-X-PART:')
+      || line.startsWith('#EXT-X-PART-INF:')
+      || line.startsWith('#EXT-X-PRELOAD-HINT:')
+      || line.startsWith('#EXT-X-SERVER-CONTROL:'),
+  )
+  return { variants, duration: duration > 0 ? duration : undefined, isLive, lowLatencyLive }
 }
 
 export function resourceQuality(url: string, height?: number): string {
