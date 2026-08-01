@@ -117,6 +117,24 @@ def _wait_for_content_script(driver: webdriver.Remote, browser_name: str) -> Non
     raise RuntimeError(f"{browser_name} loaded the page but the production content script did not run")
 
 
+def _wait_for_playback_started(driver: webdriver.Remote, browser_name: str) -> None:
+    """Exclude headless media startup latency from the overlay response timer."""
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        try:
+            if driver.execute_script("return document.querySelector('video')?.paused === false"):
+                return
+        except WebDriverException:
+            pass
+        time.sleep(0.1)
+    diagnostics = driver.execute_script(
+        "return {paused: document.querySelector('video')?.paused, "
+        "readyState: document.querySelector('video')?.readyState, "
+        "error: window.__hlsOverlaySmokeError || ''}"
+    )
+    raise RuntimeError(f"{browser_name} smoke media did not start playback: {diagnostics}")
+
+
 def _wait_for_identifying_overlay(driver: webdriver.Remote, browser_name: str) -> None:
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
@@ -277,6 +295,7 @@ def _exercise_firefox(extension_dir: Path, page_url: str, binary: str | None, te
         # policy while OVERLAY_EXPRESSION still creates the in-memory media.
         driver.execute_script(f"return {OVERLAY_EXPRESSION}")
         driver.find_element("id", "play-smoke").click()
+        _wait_for_playback_started(driver, "Firefox")
         _wait_for_identifying_overlay(driver, "Firefox")
 
 
