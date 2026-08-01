@@ -50,6 +50,9 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "ubuntu-latest" not in workflow
     assert "choco install ffmpeg nsis" in workflow
     assert "scripts\\build_installer.ps1" in workflow
+    assert '$buildArgs = @{ Version = $version }' in workflow
+    assert "$buildArgs.IncludeExtensionAssets = $true" in workflow
+    assert '$buildArgs = @("-Version", $version)' not in workflow
     assert "$prefix-Windows-x64-Setup.exe" in workflow
     assert "$prefix-Windows-x64-Portable.zip" in workflow
     assert "m3u8-sniffer.user.js" not in workflow
