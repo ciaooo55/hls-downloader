@@ -10,6 +10,17 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Write-Utf8NoBom([string]$Path, [string]$Value) {
+    # `Set-Content -Encoding UTF8` writes a BOM in Windows PowerShell 5.1 but
+    # not in PowerShell 7. Keep generated JSON/source artifacts identical in
+    # both shells and accepted by strict UTF-8 readers.
+    [System.IO.File]::WriteAllText(
+        $Path,
+        $Value,
+        (New-Object System.Text.UTF8Encoding($false))
+    )
+}
+
 function Get-DeclaredVersion([string]$Path, [string]$Pattern) {
     # Windows PowerShell 5.1 treats BOM-less UTF-8 as the active ANSI code
     # page. Every project manifest is UTF-8 and may contain Chinese text, so
@@ -461,25 +472,45 @@ if (-not $SkipSmoke) {
             try { $smokeRng.GetBytes($smokeTokenBytes) } finally { $smokeRng.Dispose() }
             $smokeConfig | Add-Member -NotePropertyName token -NotePropertyValue ([Convert]::ToBase64String($smokeTokenBytes)) -Force
             $smokeConfig | Add-Member -NotePropertyName port -NotePropertyValue $smokePort -Force
-            $smokeConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $smokeConfigPath -Encoding UTF8
+            Write-Utf8NoBom $smokeConfigPath ($smokeConfig | ConvertTo-Json -Depth 20)
             $previousBuildSmoke = $env:HLS_DOWNLOADER_BUILD_SMOKE
             $env:HLS_DOWNLOADER_BUILD_SMOKE = "1"
             $proc = Start-Process -FilePath $smokeExe -WorkingDirectory $StageDir -PassThru -WindowStyle Hidden
             try {
                 $ok = $false
-                for ($i = 0; $i -lt 40; $i++) {
+                # Fresh PyInstaller executables can spend tens of seconds in
+                # Defender/SmartScreen scanning on slower Windows machines.
+                # Keep the wait bounded but do not classify that cold-start
+                # delay as a broken package. A real desktop crash still exits
+                # the loop immediately and reports process diagnostics below.
+                for ($i = 0; $i -lt 120; $i++) {
                     Start-Sleep -Milliseconds 500
                     try {
-                        $health = Invoke-RestMethod -Uri "$smokeApiBase/api/health" -TimeoutSec 2
+                        $health = Invoke-RestMethod -Uri "$smokeApiBase/api/health" -TimeoutSec 1
                         if ($health) {
                             $ok = $true
                             break
                         }
                     } catch {
                     }
+                    $proc.Refresh()
+                    if ($proc.HasExited) { break }
                 }
                 if (-not $ok) {
-                    throw "Packaged app did not respond on /api/health"
+                    $proc.Refresh()
+                    $stageCoreExe = Join-Path $StageDir "HLSDownloaderCore.exe"
+                    $stageCoreCount = @(Get-Process HLSDownloaderCore -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Path -eq $stageCoreExe }).Count
+                    $coreLogPath = Join-Path $StageDir "core.log"
+                    $coreErrorLogPath = Join-Path $StageDir "core-error.log"
+                    $diagnostics = @(
+                        "desktop_exited=$($proc.HasExited)",
+                        "desktop_exit_code=$(if ($proc.HasExited) { $proc.ExitCode } else { 'running' })",
+                        "core_processes=$stageCoreCount",
+                        "core_log_bytes=$(if (Test-Path -LiteralPath $coreLogPath) { (Get-Item -LiteralPath $coreLogPath).Length } else { 0 })",
+                        "core_error_log_bytes=$(if (Test-Path -LiteralPath $coreErrorLogPath) { (Get-Item -LiteralPath $coreErrorLogPath).Length } else { 0 })"
+                    ) -join ", "
+                    throw "Packaged app did not respond on /api/health ($diagnostics)"
                 }
                 $packagedConfigPath = Join-Path $StageDir "config.json"
                 $packagedConfig = Get-Content -LiteralPath $packagedConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
