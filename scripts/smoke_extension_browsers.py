@@ -29,6 +29,9 @@ from selenium.webdriver.firefox.options import Options as FirefoxOptions
 
 
 MARKER = "data-hls-downloader-extension"
+# Keep the expression stripped. Selenium prepends `return `; a leading line
+# break would trigger JavaScript automatic semicolon insertion and make every
+# Firefox poll return undefined even while the overlay is visibly present.
 OVERLAY_EXPRESSION = """
 (() => {
   const video = document.querySelector('video');
@@ -65,7 +68,7 @@ OVERLAY_EXPRESSION = """
     return Boolean(button?.textContent?.trim());
   });
 })()
-"""
+""".strip()
 
 
 class _PageHandler(BaseHTTPRequestHandler):
