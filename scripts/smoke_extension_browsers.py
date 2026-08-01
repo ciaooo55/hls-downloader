@@ -36,25 +36,28 @@ OVERLAY_EXPRESSION = """
   if (!window.__hlsOverlaySmokeStarted) {
     window.__hlsOverlaySmokeStarted = true;
     // A page-world synthetic Event does not reliably cross Firefox's
-    // extension-world boundary.  Exercise a real browser playback transition
-    // instead: a canvas MediaStream needs no codec, network, or fixture file,
-    // and emits the same trusted media lifecycle events as a site player.
-    const canvas = document.createElement('canvas');
-    canvas.width = 320;
-    canvas.height = 180;
-    const context = canvas.getContext('2d');
-    const stream = canvas.captureStream(5);
-    window.__hlsOverlaySmokeStream = stream;
-    let frame = 0;
-    window.__hlsOverlaySmokeFrames = setInterval(() => {
-      if (!context) return;
-      context.fillStyle = frame++ % 2 ? '#1677ff' : '#12b76a';
-      context.fillRect(0, 0, canvas.width, canvas.height);
-    }, 100);
+    // extension-world boundary. Exercise a real browser playback transition
+    // with an in-memory PCM WAV. Unlike canvas.captureStream(), this advances
+    // in headless Firefox and needs no network or external codec fixture.
+    const sampleRate = 8000;
+    const sampleCount = sampleRate * 2;
+    const wav = new ArrayBuffer(44 + sampleCount);
+    const view = new DataView(wav);
+    const write = (offset, value) => [...value].forEach((character, index) =>
+      view.setUint8(offset + index, character.charCodeAt(0)));
+    write(0, 'RIFF'); view.setUint32(4, 36 + sampleCount, true); write(8, 'WAVE');
+    write(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate, true); view.setUint16(32, 1, true);
+    view.setUint16(34, 8, true); write(36, 'data'); view.setUint32(40, sampleCount, true);
+    new Uint8Array(wav, 44).fill(128);
+    const mediaUrl = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+    window.__hlsOverlaySmokeMediaUrl = mediaUrl;
     video.muted = true;
     video.autoplay = true;
     video.playsInline = true;
-    video.srcObject = stream;
+    video.loop = true;
+    video.src = mediaUrl;
     void video.play().catch(error => { window.__hlsOverlaySmokeError = String(error); });
   }
   return [...document.querySelectorAll('*')].some(element => {
@@ -75,7 +78,9 @@ class _PageHandler(BaseHTTPRequestHandler):
             return
         payload = (
             b"<!doctype html><html><head><meta charset=utf-8><title>Extension smoke</title></head>"
-            b"<body><video controls width=320 height=180></video><a href=/sample.mp4>sample</a></body></html>"
+            b"<body><video controls width=320 height=180></video>"
+            b"<button id=play-smoke type=button onclick=\"document.querySelector('video').play()\">Play</button>"
+            b"<a href=/sample.mp4>sample</a></body></html>"
         )
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -267,6 +272,11 @@ def _exercise_firefox(extension_dir: Path, page_url: str, binary: str | None, te
         driver.set_page_load_timeout(20)
         driver.get(page_url)
         _wait_for_content_script(driver, "Firefox")
+        # WebDriver's element click supplies a genuine user activation. This
+        # keeps the smoke independent of Firefox's changing headless autoplay
+        # policy while OVERLAY_EXPRESSION still creates the in-memory media.
+        driver.execute_script(f"return {OVERLAY_EXPRESSION}")
+        driver.find_element("id", "play-smoke").click()
         _wait_for_identifying_overlay(driver, "Firefox")
 
 
