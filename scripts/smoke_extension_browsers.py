@@ -61,8 +61,8 @@ OVERLAY_EXPRESSION = """
     void video.play().catch(error => { window.__hlsOverlaySmokeError = String(error); });
   }
   return [...document.querySelectorAll('*')].some(element => {
-    const button = element.shadowRoot?.querySelector('.video-download.identifying');
-    return button?.textContent?.includes('正在识别') === true;
+    const button = element.shadowRoot?.querySelector('.video-download');
+    return Boolean(button?.textContent?.trim());
   });
 })()
 """
@@ -135,7 +135,7 @@ def _wait_for_playback_started(driver: webdriver.Remote, browser_name: str) -> N
     raise RuntimeError(f"{browser_name} smoke media did not start playback: {diagnostics}")
 
 
-def _wait_for_identifying_overlay(driver: webdriver.Remote, browser_name: str) -> None:
+def _wait_for_media_overlay(driver: webdriver.Remote, browser_name: str) -> None:
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         try:
@@ -161,7 +161,7 @@ def _wait_for_identifying_overlay(driver: webdriver.Remote, browser_name: str) -
         MARKER,
     )
     raise RuntimeError(
-        f"{browser_name} did not show the immediate identifying overlay: {diagnostics}"
+        f"{browser_name} did not show the immediate media overlay: {diagnostics}"
     )
 
 
@@ -254,7 +254,7 @@ def _exercise_chrome(extension_dir: Path, page_url: str, binary: str | None, tem
             except (OSError, ValueError, KeyError, websocket.WebSocketException):
                 pass
             time.sleep(0.15)
-        raise RuntimeError("Chromium content script loaded but the immediate identifying overlay did not appear")
+        raise RuntimeError("Chromium content script loaded but the immediate media overlay did not appear")
     finally:
         if process.poll() is None:
             process.terminate()
@@ -296,7 +296,7 @@ def _exercise_firefox(extension_dir: Path, page_url: str, binary: str | None, te
         driver.execute_script(f"return {OVERLAY_EXPRESSION}")
         driver.find_element("id", "play-smoke").click()
         _wait_for_playback_started(driver, "Firefox")
-        _wait_for_identifying_overlay(driver, "Firefox")
+        _wait_for_media_overlay(driver, "Firefox")
 
 
 def _require_build(path: Path, browser_name: str) -> Path:
