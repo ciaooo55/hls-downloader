@@ -36,6 +36,14 @@ export default function Sidebar({ tasks, active, onChange, browserStatus, appVer
   const extensionOnline = Boolean(browserStatus?.detected)
   const extensionLost = !extensionOnline && Boolean(browserStatus?.seen_before)
   const extensionNeedsUpgrade = Boolean(extensionOnline && browserStatus?.needs_upgrade)
+  const activeOutdatedClients = (browserStatus?.clients || []).filter(client => client.active && client.needs_upgrade)
+  const browserLabels: Record<string, string> = {
+    edge: 'Edge', chrome: 'Chrome', chromium: 'Chromium', brave: 'Brave',
+    vivaldi: 'Vivaldi', opera: 'Opera', firefox: 'Firefox', unknown: '未知浏览器',
+  }
+  const outdatedClientSummary = activeOutdatedClients
+    .map(client => `${browserLabels[client.browser] || client.browser} v${client.version || '未知'}`)
+    .join('、')
   const [bubbleDismissed, setBubbleDismissed] = useState(false)
   useEffect(() => { setBubbleDismissed(false) }, [extensionOnline, extensionNeedsUpgrade])
   return (
@@ -55,7 +63,9 @@ export default function Sidebar({ tasks, active, onChange, browserStatus, appVer
           <div className="connection-bubble warning" role="status">
             <button className="connection-bubble-close" aria-label="关闭提示" onClick={() => setBubbleDismissed(true)}><X size={13} /></button>
             <b>插件版本需要同步</b>
-            <span>当前插件 v{browserStatus?.version || '未知'}，建议使用本版本发布包中的 v{browserStatus?.recommended_version || '最新'} 插件；旧插件仍可继续下载。</span>
+            <span>{outdatedClientSummary
+              ? `检测到仍在连接的旧插件：${outdatedClientSummary}；建议升级到 v${browserStatus?.recommended_version || '最新'}。`
+              : `检测到旧版插件，建议升级到 v${browserStatus?.recommended_version || '最新'}。`}</span>
             <button className="secondary-button" onClick={onOpenExtensionHelp}>查看插件版本</button>
           </div>
         )}

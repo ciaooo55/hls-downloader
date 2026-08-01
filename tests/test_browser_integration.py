@@ -179,6 +179,23 @@ def test_browser_status_keeps_upgrade_warning_for_idle_known_client():
     assert "建议升级" in status["message"]
 
 
+def test_browser_status_does_not_downgrade_current_client_for_idle_old_history():
+    service = BrowserHandoffService(client_ttl=30)
+    service.record_ping("2.0.9", "old-edge", "edge")
+    service._clients["old-edge"].last_seen -= 31
+    service.record_ping(RECOMMENDED_BROWSER_EXTENSION_VERSION, "current-chrome", "chrome")
+
+    status = service.status()
+
+    assert status["detected"] is True
+    assert status["version"] == RECOMMENDED_BROWSER_EXTENSION_VERSION
+    assert status["needs_upgrade"] is False
+    assert status["message"] == "已连接 1 个浏览器插件"
+    old_client = next(item for item in status["clients"] if item["id"] == "old-edge")
+    assert old_client["active"] is False
+    assert old_client["needs_upgrade"] is True
+
+
 def test_browser_status_keeps_multiple_client_versions_separate():
     service = BrowserHandoffService()
     service.record_ping("2.0.7", "edge-install", "edge")

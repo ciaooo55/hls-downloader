@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version used in the installer, for example 3.0.9
+        description: Version used in the installer, for example 3.0.10
         required: false
-        default: "3.0.9"
+        default: "3.0.10"
       include_extensions:
         description: Upload browser extension ZIPs for this release
         required: false

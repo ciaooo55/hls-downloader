@@ -181,10 +181,13 @@ class BrowserHandoffService:
         version = active_versions[0] if active_versions else (str(clients[0]["version"]) if clients else "")
         detected = bool(active_clients)
         seen_before = bool(clients)
-        # Keep the upgrade warning when a known browser has merely gone idle.
-        # Otherwise closing the browser would hide the exact warning needed to
-        # update its unpacked extension before it reconnects.
-        needs_upgrade = any(bool(client["needs_upgrade"]) for client in clients)
+        # When at least one extension is connected, the aggregate badge must
+        # describe those active clients only. An idle old browser stays in the
+        # detailed history, but must not turn a currently connected current
+        # client into the contradictory "current version needs itself" warning. With no
+        # active client, keep the historical warning for troubleshooting.
+        upgrade_scope = active_clients if active_clients else clients
+        needs_upgrade = any(bool(client["needs_upgrade"]) for client in upgrade_scope)
         state = "connected" if detected else "inactive" if seen_before else "not_detected"
         message = (
             f"检测到 {len(active_clients)} 个浏览器插件，其中有旧版本，建议升级到 v{RECOMMENDED_BROWSER_EXTENSION_VERSION}"
