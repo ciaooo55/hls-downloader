@@ -127,12 +127,17 @@ function Start-SmokeApplication {
     throw "The isolated installed application did not start its desktop and Core processes; desktop $desktopState; observed [$processState]; core-error [$coreErrors]"
 }
 
-function Assert-OfficialState([string]$ExpectedRegistry, [int[]]$ExpectedProcessIds) {
+function Assert-OfficialState(
+    [string]$ExpectedRegistry,
+    [int[]]$ExpectedProcessIds = @()
+) {
     $actualRegistry = Get-RegistrySnapshot
     if ($actualRegistry -ne $ExpectedRegistry) {
         throw "Installer smoke changed production browser, application, uninstall, or torrent registry state"
     }
-    $actualIds = @((Get-ApplicationProcesses).Id)
+    $actualIds = @(
+        Get-ApplicationProcesses | ForEach-Object { [int]$_.Id }
+    )
     foreach ($id in $ExpectedProcessIds) {
         if ($id -notin $actualIds) {
             throw "Installer smoke stopped an existing application process: $id"
@@ -141,7 +146,9 @@ function Assert-OfficialState([string]$ExpectedRegistry, [int[]]$ExpectedProcess
 }
 
 $officialRegistryBefore = Get-RegistrySnapshot
-$officialProcessIdsBefore = @((Get-ApplicationProcesses).Id)
+$officialProcessIdsBefore = @(
+    Get-ApplicationProcesses | ForEach-Object { [int]$_.Id }
+)
 $result = $null
 try {
     if (Test-Path -LiteralPath $smokeRoot) {

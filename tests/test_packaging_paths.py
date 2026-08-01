@@ -377,6 +377,9 @@ def test_windows_package_uses_tauri_tray_and_clean_uninstall():
     assert 'register-native-host.ps1" -Unregister' in nsis_script
     assert '无法安全关闭运行中的程序，安装已停止' in nsis_script
     assert "SetErrorLevel 2" in nsis_script
+    assert "[int[]]$ExpectedProcessIds = @()" in installer_smoke
+    assert "Get-ApplicationProcesses | ForEach-Object { [int]$_.Id }" in installer_smoke
+    assert "@((Get-ApplicationProcesses).Id)" not in installer_smoke
     assert 'CloseRunningAppAbort${Suffix}' not in nsis_script
     assert 'StrCpy $R0 0' not in nsis_script
     assert 'IntOp $R0 $R0 + 1' not in nsis_script
