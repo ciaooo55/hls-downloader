@@ -8,6 +8,7 @@ export interface HlsInspectionResult {
   manifestType: 'master' | 'media'
   isLive?: boolean
   lowLatencyLive?: boolean
+  partOnlyLive?: boolean
   duration?: number
   variants: HlsVariant[]
   width?: number
@@ -39,7 +40,7 @@ export async function inspectHlsResource(
   const response = await fetchManifest(resource.url)
   if (!response.ok) return null
   const info = parseHlsManifest(await response.text(), response.url || resource.url)
-  if (!info.duration && !info.variants.length) return null
+  if (!info.duration && !info.variants.length && info.isLive === undefined) return null
 
   const variants = [...info.variants]
     .sort((left, right) => (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0))
@@ -47,6 +48,7 @@ export async function inspectHlsResource(
   const best = variants[0]
   let live = info.isLive
   let lowLatencyLive = info.lowLatencyLive
+  let partOnlyLive = info.partOnlyLive
   let duration = live ? undefined : info.duration
   if (!duration && best) {
     const mediaResponse = await fetchManifest(best.url)
@@ -54,6 +56,7 @@ export async function inspectHlsResource(
       const mediaInfo = parseHlsManifest(await mediaResponse.text(), mediaResponse.url || best.url)
       live = mediaInfo.isLive
       lowLatencyLive = mediaInfo.lowLatencyLive
+      partOnlyLive = mediaInfo.partOnlyLive
       if (live === false) duration = mediaInfo.duration
     }
   }
@@ -63,6 +66,7 @@ export async function inspectHlsResource(
     manifestType: info.variants.length ? 'master' : 'media',
     isLive: live,
     lowLatencyLive,
+    partOnlyLive,
     duration,
     variants,
     width: best?.width || resource.width,

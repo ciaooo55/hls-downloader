@@ -5,6 +5,7 @@ import { inspectHlsResource, type ManifestFetcher } from './hlsInspection'
 const master = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=1920x1080\n1080/index.m3u8\n'
 const vod = '#EXTM3U\n#EXTINF:6,\na.ts\n#EXTINF:4,\nb.ts\n#EXT-X-ENDLIST\n'
 const live = '#EXTM3U\n#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES\n#EXTINF:6,\na.ts\n#EXTINF:4,\nb.ts\n#EXT-X-PART:DURATION=0.5,URI="tail.part"\n'
+const partOnlyLive = '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-PART:DURATION=0.333,URI="tail.part"\n'
 
 describe('HLS browser inspection', () => {
   it('follows the best VOD rendition and estimates its full size', async () => {
@@ -56,6 +57,20 @@ describe('HLS browser inspection', () => {
       manifestType: 'master',
       isLive: true,
       lowLatencyLive: true,
+    })
+  })
+
+  it('keeps a PART-only live manifest instead of waiting forever for EXTINF', async () => {
+    const result = await inspectHlsResource({
+      url: 'https://cdn.test/part-only.m3u8',
+    }, async () => new Response(partOnlyLive, { status: 200 }))
+
+    expect(result).toMatchObject({
+      inspected: true,
+      manifestType: 'media',
+      isLive: true,
+      lowLatencyLive: true,
+      partOnlyLive: true,
     })
   })
 })

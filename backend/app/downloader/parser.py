@@ -297,11 +297,56 @@ def parse_m3u8(
         raise UnsupportedPlaylistError("不支持 SAMPLE-AES / DRM 加密")
 
     media_ranges: dict[str, int] = {}
+    part_ranges: dict[str, int] = {}
     map_ranges: dict[str, int] = {}
     map_cache: dict[int, dict] = {}
     segments = []
 
+    skipped_segments = 0
+    skip = getattr(playlist, "skip", None)
+    if skip is not None:
+        try:
+            skipped_segments = max(0, int(getattr(skip, "skipped_segments", 0) or 0))
+        except (TypeError, ValueError):
+            skipped_segments = 0
+    first_sequence = int(playlist.media_sequence or 0) + skipped_segments
+
+    playlist_map = next(
+        (
+            item for item in reversed(list(getattr(playlist, "segment_map", None) or []))
+            if getattr(item, "uri", None)
+        ),
+        None,
+    )
+    playlist_key = next(
+        (
+            item for item in reversed(list(getattr(playlist, "keys", None) or []))
+            if item is not None
+        ),
+        None,
+    )
+
+    def init_map_info(init_section) -> dict | None:
+        if init_section is None or not getattr(init_section, "uri", None):
+            return None
+        cache_key = id(init_section)
+        cached = map_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        init_url = _resolve_url(url, init_section.uri)
+        cached = {
+            "uri": init_url,
+            "byte_range": _parse_byte_range(
+                getattr(init_section, "byterange", None),
+                init_url,
+                map_ranges,
+            ),
+        }
+        map_cache[cache_key] = cached
+        return cached
+
     for index, segment in enumerate(playlist.segments):
+        media_sequence = first_sequence + index
         if not segment.uri:
             # LL-HLS puts the parts of the *currently-being-produced* media
             # segment at the tail of a playlist.  python-m3u8 represents that
@@ -312,35 +357,64 @@ def parse_m3u8(
             # boundaries (for example "分片 4 缺少 URI").  Defer that incomplete
             # tail instead; completed segments remain lossless and recording
             # continues on the next live refresh.
-            if getattr(segment, "parts", None):
+            parts = list(getattr(segment, "parts", None) or [])
+            if parts:
+                # Some LL-HLS origins publish only EXT-X-PART objects while
+                # the stream is live. Waiting for an eventual EXTINF URI made
+                # those streams sit at 0/0 until the stall timeout. A part is
+                # an independently addressable media fragment, so expose every
+                # completed PART (but never PRELOAD-HINT) to the live recorder.
+                # The recorder de-duplicates them by URL and atomically
+                # replaces them if the later full parent segment appears.
+                init_map = init_map_info(
+                    getattr(segment, "init_section", None) or playlist_map
+                )
+                gap = False
+                for part_index, part in enumerate(parts):
+                    if not getattr(part, "uri", None):
+                        continue
+                    if str(getattr(part, "gap", "") or "").upper() == "YES":
+                        gap = True
+                        continue
+                    part_url = _resolve_url(url, part.uri)
+                    segments.append(
+                        {
+                            "url": part_url,
+                            "duration": float(getattr(part, "duration", 0) or 0),
+                            "index": len(segments),
+                            "media_sequence": media_sequence,
+                            "part_index": part_index,
+                            "is_partial": True,
+                            "byte_range": _parse_byte_range(
+                                getattr(part, "byterange", None),
+                                part_url,
+                                part_ranges,
+                            ),
+                            "key": _key_info(
+                                url,
+                                getattr(segment, "key", None) or playlist_key,
+                                media_sequence,
+                            ),
+                            "init_map": init_map,
+                            "discontinuity": bool(segment.discontinuity)
+                            if part_index == 0
+                            else gap,
+                        }
+                    )
+                    gap = False
                 continue
             raise ValueError(f"分片 {index} 缺少 URI")
         segment_url = _resolve_url(url, segment.uri)
-        media_sequence = int(playlist.media_sequence or 0) + index
-
-        init_map = None
-        init_section = getattr(segment, "init_section", None)
-        if init_section and init_section.uri:
-            cache_key = id(init_section)
-            init_map = map_cache.get(cache_key)
-            if init_map is None:
-                init_url = _resolve_url(url, init_section.uri)
-                init_map = {
-                    "uri": init_url,
-                    "byte_range": _parse_byte_range(
-                        getattr(init_section, "byterange", None),
-                        init_url,
-                        map_ranges,
-                    ),
-                }
-                map_cache[cache_key] = init_map
+        init_map = init_map_info(getattr(segment, "init_section", None))
 
         segments.append(
             {
                 "url": segment_url,
                 "duration": float(segment.duration or 0),
-                "index": index,
+                "index": len(segments),
                 "media_sequence": media_sequence,
+                "part_index": None,
+                "is_partial": False,
                 "byte_range": _parse_byte_range(segment.byterange, segment_url, media_ranges),
                 "key": _key_info(url, segment.key, media_sequence),
                 "init_map": init_map,
@@ -368,5 +442,5 @@ def parse_m3u8(
         # fixed segment list.
         "is_live": not playlist.is_endlist,
         "target_duration": target_duration,
-        "media_sequence": int(playlist.media_sequence or 0),
+        "media_sequence": first_sequence,
     }

@@ -37,6 +37,8 @@ export interface MediaResource {
   isLive?: boolean
   /** Strong signal for LL-HLS (PART/SERVER-CONTROL) rather than a short event. */
   lowLatencyLive?: boolean
+  /** The inspected live window currently exposes only LL-HLS partial segments. */
+  partOnlyLive?: boolean
   /** Distinguishes verified manifest metadata from URL/MIME-only detection. */
   inspected?: boolean
   manifestType?: 'master' | 'media'
@@ -210,7 +212,8 @@ export function resourceRank(resource: MediaResource): number {
   if (resource.inspected) score += 15
   if (resource.isLive === true) score += 90
   else if (resource.isLive === false && resource.duration && resource.duration < 30) score -= 80
-  if (resource.lowLatencyLive) score += 40
+  if (resource.lowLatencyLive) score += 10
+  if (resource.partOnlyLive) score -= 25
   if (resource.duration && resource.duration >= 60) score += 60
   else if (resource.duration && resource.duration >= 10) score += 20
   if (resource.height) score += Math.min(50, Math.round(resource.height / 40))
@@ -285,8 +288,11 @@ export function visiblePlaybackResources(
       // Live rendition polling refreshes the active stream continuously. Keep
       // streams in the newest poll cluster; an old preloaded/background live
       // manifest must not remain beside the currently advancing player.
-      const lowLatency = recentLive.filter(entry => entry.item.lowLatencyLive === true)
-      const livePool = lowLatency.length ? lowLatency : recentLive
+      // Keep every verified live route in the newest observation cluster.
+      // Some sites request both a PART-only low-latency route and a regular
+      // completed-segment route for the same player. Silently discarding the
+      // latter made the less stable route the only one-click choice.
+      const livePool = recentLive
       const newestLiveObservation = Math.max(...livePool.map(entry => entry.item.seenAt))
       visible = livePool.filter(entry => newestLiveObservation - entry.item.seenAt <= 15_000)
     } else {

@@ -19,13 +19,13 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `HLSDownloader-v3.0.8-Windows-x64-Setup.exe` | Windows 10/11 x64 安装版，带在线更新、卸载程序和快捷方式 |
-| `HLSDownloader-v3.0.8-Windows-x64-Portable.zip` | Windows 10/11 x64 便携版，解压后直接运行 |
-| `HLSDownloader-v3.0.8-Chrome-Edge-Extension.zip` | Chromium MV3 扩展包，支持 Chrome、Edge、Brave、Chromium、Vivaldi 与 Opera；解压后在扩展管理页开启开发者模式并加载已解压的扩展程序 |
-| `HLSDownloader-v3.0.8-Firefox-Web-UI-Unsigned.zip` | 网页显示版 Firefox 插件，AMO 上传或临时测试用 |
-| `HLSDownloader-v3.0.8-Firefox-Web-UI-Source.zip` | 网页显示版对应的 AMO 审核源码包 |
-| `HLSDownloader-v3.0.8-Firefox-No-Web-UI-Unsigned.zip` | 网页不显示版 Firefox 插件，功能与显示版完全一致，仅发布 ID 不同 |
-| `HLSDownloader-v3.0.8-Firefox-No-Web-UI-Source.zip` | 网页不显示版对应的 AMO 审核源码包 |
+| `HLSDownloader-v3.0.9-Windows-x64-Setup.exe` | Windows 10/11 x64 安装版，带在线更新、卸载程序和快捷方式 |
+| `HLSDownloader-v3.0.9-Windows-x64-Portable.zip` | Windows 10/11 x64 便携版，解压后直接运行 |
+| `HLSDownloader-v3.0.9-Chrome-Edge-Extension.zip` | Chromium MV3 扩展包，支持 Chrome、Edge、Brave、Chromium、Vivaldi 与 Opera；解压后在扩展管理页开启开发者模式并加载已解压的扩展程序 |
+| `HLSDownloader-v3.0.9-Firefox-Web-UI-Unsigned.zip` | 网页显示版 Firefox 插件，AMO 上传或临时测试用 |
+| `HLSDownloader-v3.0.9-Firefox-Web-UI-Source.zip` | 网页显示版对应的 AMO 审核源码包 |
+| `HLSDownloader-v3.0.9-Firefox-No-Web-UI-Unsigned.zip` | 网页不显示版 Firefox 插件，功能与显示版完全一致，仅发布 ID 不同 |
+| `HLSDownloader-v3.0.9-Firefox-No-Web-UI-Source.zip` | 网页不显示版对应的 AMO 审核源码包 |
 
 安装包和便携包由 GitHub Actions 从源码自动构建，不保存在 Git 仓库中。桌面主程序使用 Cockpit Tools 同类的 Tauri + React 架构，包含下载核心、FFmpeg、ffprobe、播放器资源和 Chromium 浏览器插件；Windows 10/11 自带的 Microsoft Edge WebView2 运行时为其渲染界面。
 
@@ -155,14 +155,14 @@ pnpm run tauri:build
 ```powershell
 python -m pip install -r requirements-build.txt
 choco install ffmpeg nsis -y
-.\scripts\build_installer.ps1 -Version 3.0.8
+.\scripts\build_installer.ps1 -Version 3.0.9
 ```
 
 输出位于忽略的 `release` 目录：
 
 ```text
-HLSDownloader-v3.0.8-Windows-x64-Setup.exe
-HLSDownloader-v3.0.8-Windows-x64-Portable.zip
+HLSDownloader-v3.0.9-Windows-x64-Setup.exe
+HLSDownloader-v3.0.9-Windows-x64-Portable.zip
 ```
 
 插件没有改动时不要上传独立插件包。只有需要发布浏览器插件新版本时，打包时追加 `-IncludeExtensionAssets`，GitHub Actions 手动运行时勾选 `include_extensions`。

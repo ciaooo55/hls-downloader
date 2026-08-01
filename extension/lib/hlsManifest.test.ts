@@ -28,6 +28,16 @@ describe('HLS metadata', () => {
     })
   })
 
+  it('recognizes a PART-only LL-HLS window as live media', () => {
+    const partOnly = '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-PART:DURATION=0.333,URI="p0.m4s"\n#EXT-X-PRELOAD-HINT:TYPE=PART,URI="p1.m4s"\n'
+
+    expect(parseHlsManifest(partOnly, 'https://cdn.test/live.m3u8')).toMatchObject({
+      isLive: true,
+      lowLatencyLive: true,
+      partOnlyLive: true,
+    })
+  })
+
   it('inherits a raw signed playlist token to a relative variant', () => {
     const info = parseHlsManifest(
       '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nvideo.m3u8\n',

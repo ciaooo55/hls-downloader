@@ -29,6 +29,20 @@ from selenium.webdriver.firefox.options import Options as FirefoxOptions
 
 
 MARKER = "data-hls-downloader-extension"
+OVERLAY_EXPRESSION = """
+(() => {
+  const video = document.querySelector('video');
+  if (!video) return false;
+  if (!window.__hlsOverlaySmokeStarted) {
+    window.__hlsOverlaySmokeStarted = true;
+    video.dispatchEvent(new Event('playing'));
+  }
+  return [...document.querySelectorAll('*')].some(element => {
+    const button = element.shadowRoot?.querySelector('.video-download.identifying');
+    return button?.textContent?.includes('正在识别') === true;
+  });
+})()
+"""
 
 
 class _PageHandler(BaseHTTPRequestHandler):
@@ -78,6 +92,18 @@ def _wait_for_content_script(driver: webdriver.Remote, browser_name: str) -> Non
     raise RuntimeError(f"{browser_name} loaded the page but the production content script did not run")
 
 
+def _wait_for_identifying_overlay(driver: webdriver.Remote, browser_name: str) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            if driver.execute_script(f"return {OVERLAY_EXPRESSION}"):
+                return
+        except WebDriverException:
+            pass
+        time.sleep(0.1)
+    raise RuntimeError(f"{browser_name} did not show the immediate identifying overlay")
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -106,21 +132,21 @@ def _read_debug_targets(port: int) -> list[dict]:
     return payload if isinstance(payload, list) else []
 
 
-def _evaluate_marker(websocket_url: str) -> bool:
+def _evaluate(websocket_url: str, expression: str) -> object:
     connection = websocket.create_connection(websocket_url, timeout=2, suppress_origin=True)
     try:
         connection.send(json.dumps({
             "id": 1,
             "method": "Runtime.evaluate",
             "params": {
-                "expression": f"document.documentElement.getAttribute('{MARKER}')",
+                "expression": expression,
                 "returnByValue": True,
             },
         }))
         while True:
             message = json.loads(connection.recv())
             if message.get("id") == 1:
-                return message.get("result", {}).get("result", {}).get("value") == "1"
+                return message.get("result", {}).get("result", {}).get("value")
     finally:
         connection.close()
 
@@ -156,12 +182,18 @@ def _exercise_chrome(extension_dir: Path, page_url: str, binary: str | None, tem
             try:
                 targets = _read_debug_targets(port)
                 page = next((item for item in targets if item.get("type") == "page" and item.get("url") == page_url), None)
-                if page and _evaluate_marker(str(page["webSocketDebuggerUrl"])):
-                    return
+                if page:
+                    websocket_url = str(page["webSocketDebuggerUrl"])
+                    marker = _evaluate(
+                        websocket_url,
+                        f"document.documentElement.getAttribute('{MARKER}')",
+                    )
+                    if marker == "1" and _evaluate(websocket_url, OVERLAY_EXPRESSION) is True:
+                        return
             except (OSError, ValueError, KeyError, websocket.WebSocketException):
                 pass
             time.sleep(0.15)
-        raise RuntimeError("Chromium loaded the page but the production content script did not run")
+        raise RuntimeError("Chromium content script loaded but the immediate identifying overlay did not appear")
     finally:
         if process.poll() is None:
             process.terminate()
@@ -194,6 +226,7 @@ def _exercise_firefox(extension_dir: Path, page_url: str, binary: str | None, te
         driver.set_page_load_timeout(20)
         driver.get(page_url)
         _wait_for_content_script(driver, "Firefox")
+        _wait_for_identifying_overlay(driver, "Firefox")
 
 
 def _require_build(path: Path, browser_name: str) -> Path:

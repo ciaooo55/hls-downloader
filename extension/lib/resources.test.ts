@@ -315,7 +315,7 @@ describe('resource rules', () => {
       sourceUrls: ['blob:https://site.test/player'], startedAt: now,
     }).map(item => item.id)).toEqual(['movie'])
   })
-  it('prefers the active LL-HLS stream over an ordinary live-like event playlist', () => {
+  it('keeps both verified live routes and prefers completed segments', () => {
     const now = Date.now()
     const event = resource({
       id: 'event', kind: 'hls', url: 'https://media.test/event.m3u8',
@@ -323,13 +323,13 @@ describe('resource rules', () => {
     })
     const lowLatency = resource({
       id: 'llhls', kind: 'hls', url: 'https://edge.test/streams/channel/llhls.m3u8',
-      inspected: true, isLive: true, lowLatencyLive: true,
+      inspected: true, isLive: true, lowLatencyLive: true, partOnlyLive: true,
       bandwidth: 3_000_000, seenAt: now,
     })
 
     expect(visiblePlaybackResources([event, lowLatency], {
       sourceUrls: ['blob:https://site.test/player'], startedAt: now,
-    }).map(item => item.id)).toEqual(['llhls'])
+    }).map(item => item.id)).toEqual(['event', 'llhls'])
   })
   it('does not hide the only verified short-form stream', () => {
     const now = Date.now()

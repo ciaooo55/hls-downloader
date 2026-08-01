@@ -14,15 +14,16 @@ export interface OverlayViewport {
 }
 
 /**
- * Keep the page overlay quiet until the user has started a real playback and
- * the detector has evidence for at least one resource from that session.
+ * A visible playing video is enough to show a non-actionable identifying
+ * state. The download action is enabled separately only after resource
+ * association succeeds.
  */
 export function shouldShowMediaOverlay(input: {
   hasPlayback: boolean
   hasActiveVideo: boolean
   resourceCount: number
 }): boolean {
-  return input.hasPlayback && input.hasActiveVideo && input.resourceCount > 0
+  return input.hasPlayback && input.hasActiveVideo
 }
 
 /** Clamp an overlay to the visible viewport without persisting a cross-site coordinate. */

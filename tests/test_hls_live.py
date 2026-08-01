@@ -106,6 +106,103 @@ def test_live_recording_appends_segments_and_finishes_on_endlist(tmp_path, monke
     asyncio.run(run())
 
 
+def test_live_recording_advances_through_part_only_windows_without_duplicates(tmp_path, monkeypatch):
+    monkeypatch.setattr(HLSDownloader, "_live_wait", _instant_wait)
+    url = "https://example.test/live.m3u8"
+    polls = {"count": 0}
+
+    def part_playlist(names: list[str]) -> str:
+        return (
+            "#EXTM3U\n#EXT-X-VERSION:9\n#EXT-X-TARGETDURATION:2\n"
+            "#EXT-X-MEDIA-SEQUENCE:40\n#EXT-X-MAP:URI=\"init.mp4\"\n"
+            + "".join(f'#EXT-X-PART:DURATION=0.333,URI="{name}"\n' for name in names)
+            + '#EXT-X-PRELOAD-HINT:TYPE=PART,URI="future.m4s"\n'
+        )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        target = str(request.url)
+        if target == url:
+            polls["count"] += 1
+            if polls["count"] == 1:
+                return httpx.Response(200, text=part_playlist(["p40-0.m4s", "p40-1.m4s"]))
+            return httpx.Response(200, text=(
+                "#EXTM3U\n#EXT-X-VERSION:9\n#EXT-X-TARGETDURATION:2\n"
+                "#EXT-X-MEDIA-SEQUENCE:40\n#EXT-X-MAP:URI=\"init.mp4\"\n"
+                "#EXT-X-PART:DURATION=0.333,URI=\"p40-0.m4s\"\n"
+                "#EXT-X-PART:DURATION=0.333,URI=\"p40-1.m4s\"\n"
+                "#EXTINF:0.666,\nfull40.m4s\n"
+                "#EXTINF:2.0,\nfull41.m4s\n#EXT-X-ENDLIST\n"
+            ))
+        if target.endswith("init.mp4"):
+            return httpx.Response(200, content=b"init")
+        return httpx.Response(200, content=target.rsplit("/", 1)[-1].encode())
+
+    async def run():
+        task = _task(tmp_path, url)
+        downloader = _downloader(task)
+        initial = part_playlist(["p40-0.m4s"])
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await downloader._record_live(client, _parsed(url, initial), {}, None)
+        assert result is not None
+        segments, total_duration = result
+        names = [segment["url"].rsplit("/", 1)[-1] for segment in segments]
+        assert names == ["full40.m4s", "full41.m4s"]
+        assert "future.m4s" not in names
+        assert total_duration == pytest.approx(2.666)
+        assert all(segment.get("init_path") for segment in segments)
+
+    asyncio.run(run())
+
+
+def test_part_only_encoder_reset_is_a_single_timeline_boundary(tmp_path, monkeypatch):
+    monkeypatch.setattr(HLSDownloader, "_live_wait", _instant_wait)
+    url = "https://example.test/live.m3u8"
+    polls = {"count": 0}
+
+    def part_window(names: list[str]) -> str:
+        return (
+            "#EXTM3U\n#EXT-X-VERSION:9\n#EXT-X-TARGETDURATION:2\n"
+            "#EXT-X-MEDIA-SEQUENCE:0\n"
+            + "".join(f'#EXT-X-PART:DURATION=0.5,URI="{name}"\n' for name in names)
+        )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == url:
+            polls["count"] += 1
+            if polls["count"] == 1:
+                return httpx.Response(200, text=part_window(["new0.part", "new1.part"]))
+            return httpx.Response(200, text=(
+                "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n"
+                "#EXTINF:1.0,\nnew-parent.ts\n#EXT-X-ENDLIST\n"
+            ))
+        return httpx.Response(200, content=b"new")
+
+    async def run():
+        task = _task(tmp_path, url)
+        downloader = _downloader(task)
+        old = downloader._seg_dir() / "000000.seg"
+        old.write_bytes(b"old")
+        state = {
+            "version": 3,
+            "segments": [{
+                "index": 0,
+                "resource_identity": "old-id",
+                "duration": 4.0,
+                "media_sequence": 100,
+                "discontinuity": False,
+                "size": 3,
+            }],
+        }
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await downloader._record_live(client, _parsed(url, part_window(["new0.part"])), {}, state)
+        assert result is not None
+        segments, _ = result
+        assert [segment["url"].rsplit("/", 1)[-1] for segment in segments] == ["", "new-parent.ts"]
+        assert segments[1]["discontinuity"] is True
+
+    asyncio.run(run())
+
+
 def test_live_recording_stop_request_finalizes_partial_capture(tmp_path, monkeypatch):
     monkeypatch.setattr(HLSDownloader, "_live_wait", _instant_wait)
     url = "https://example.test/live.m3u8"

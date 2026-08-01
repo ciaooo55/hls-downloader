@@ -81,6 +81,34 @@ def sha256(path: Path) -> str:
 
 class SmokeOrigin(BaseHTTPRequestHandler):
     root: Path
+    _stats_lock = threading.Lock()
+    _active_ranges = 0
+    _max_active_ranges = 0
+    _range_requests = 0
+    _range_spans: set[tuple[int, int]] = set()
+    _llhls_polls = 0
+
+    @classmethod
+    def reset_range_stats(cls) -> None:
+        with cls._stats_lock:
+            cls._active_ranges = 0
+            cls._max_active_ranges = 0
+            cls._range_requests = 0
+            cls._range_spans = set()
+
+    @classmethod
+    def reset_llhls(cls) -> None:
+        with cls._stats_lock:
+            cls._llhls_polls = 0
+
+    @classmethod
+    def range_stats(cls) -> dict[str, int]:
+        with cls._stats_lock:
+            return {
+                "max_active": cls._max_active_ranges,
+                "requests": cls._range_requests,
+                "distinct_spans": len(cls._range_spans),
+            }
 
     def log_message(self, _format: str, *_args) -> None:
         return
@@ -94,6 +122,31 @@ class SmokeOrigin(BaseHTTPRequestHandler):
         path = (self.root / relative).resolve()
         if not path.is_file() or self.root.resolve() not in path.parents:
             self.send_error(404)
+            return
+        if relative == "llhls/index.m3u8":
+            with type(self)._stats_lock:
+                type(self)._llhls_polls += 1
+                poll = type(self)._llhls_polls
+            head = (
+                "#EXTM3U\n#EXT-X-VERSION:9\n#EXT-X-TARGETDURATION:2\n"
+                "#EXT-X-PART-INF:PART-TARGET=2.0\n#EXT-X-MEDIA-SEQUENCE:0\n"
+                '#EXT-X-MAP:URI="init.mp4"\n'
+                '#EXT-X-PART:DURATION=2.0,URI="segment-000.m4s",INDEPENDENT=YES\n'
+            )
+            body = head + (
+                '#EXT-X-PRELOAD-HINT:TYPE=PART,URI="future.m4s"\n'
+                if poll == 1
+                else (
+                    "#EXTINF:2.0,\nsegment-000.m4s\n"
+                    "#EXTINF:2.0,\nsegment-001.m4s\n#EXT-X-ENDLIST\n"
+                )
+            )
+            payload = body.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.apple.mpegurl")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
             return
         if path.name == "signed.bin" and parse_qs(parsed_request.query).get("s") != ["fresh"]:
             self.send_error(403)
@@ -120,6 +173,21 @@ class SmokeOrigin(BaseHTTPRequestHandler):
         if path.suffix.lower() == ".ts":
             # Keep the HLS task alive long enough to open incremental playback.
             time.sleep(1.1)
+        # Exclude the 256-byte metadata probe. Only worker-owned byte ranges
+        # count toward the parallelism proof.
+        tracks_worker_range = (
+            path.name == "range.bin" and partial and end - start + 1 > 256
+        )
+        if tracks_worker_range:
+            with type(self)._stats_lock:
+                type(self)._active_ranges += 1
+                type(self)._range_requests += 1
+                type(self)._range_spans.add((start, end))
+                type(self)._max_active_ranges = max(
+                    type(self)._max_active_ranges,
+                    type(self)._active_ranges,
+                )
+
         self.send_response(206 if partial else 200)
         self.send_header("Content-Type", "application/octet-stream")
         if supports_range:
@@ -145,6 +213,10 @@ class SmokeOrigin(BaseHTTPRequestHandler):
                         time.sleep(0.012)
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             return
+        finally:
+            if tracks_worker_range:
+                with type(self)._stats_lock:
+                    type(self)._active_ranges = max(0, type(self)._active_ranges - 1)
 
 
 def generate_hls(ffmpeg: Path, origin: Path) -> None:
@@ -163,6 +235,29 @@ def generate_hls(ffmpeg: Path, origin: Path) -> None:
     completed = subprocess.run(command, capture_output=True, text=True, timeout=90)
     if completed.returncode:
         raise RuntimeError(f"ffmpeg HLS fixture generation failed: {completed.stderr[-500:]}")
+
+    llhls_dir = origin / "llhls"
+    llhls_dir.mkdir(parents=True)
+    llhls_command = [
+        str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24",
+        "-f", "lavfi", "-i", "sine=frequency=990:sample_rate=48000",
+        "-t", "4", "-c:v", "libx264", "-preset", "ultrafast",
+        "-g", "48", "-sc_threshold", "0", "-c:a", "aac",
+        "-f", "hls", "-hls_time", "2", "-hls_list_size", "0",
+        "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4",
+        "-hls_segment_filename", str(llhls_dir / "segment-%03d.m4s"),
+        str(llhls_dir / "index.m3u8"),
+    ]
+    completed = subprocess.run(
+        llhls_command,
+        cwd=llhls_dir,
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    if completed.returncode:
+        raise RuntimeError(f"ffmpeg LL-HLS fixture generation failed: {completed.stderr[-500:]}")
 
 
 def generate_dash(ffmpeg: Path, origin: Path) -> None:
@@ -291,6 +386,7 @@ def run(archive: Path | None = None) -> dict:
             raise RuntimeError("packaged Core did not become healthy")
 
         file_url = f"http://127.0.0.1:{origin_port}/range.bin?signature=smoke&expires=4102444800"
+        SmokeOrigin.reset_range_stats()
         status, created = api_request(base, "/api/tasks", token=token, method="POST", body={
             "url": file_url, "task_type": "http", "filename": "range-smoke.bin",
             "concurrency": 2,
@@ -313,6 +409,14 @@ def run(archive: Path | None = None) -> dict:
         if sha256(http_output) != expected_range_hash:
             raise RuntimeError("HTTP pause/resume output checksum mismatch")
         http_output_size = http_output.stat().st_size
+        range_stats = SmokeOrigin.range_stats()
+        if range_stats["max_active"] < 2:
+            raise RuntimeError(
+                "HTTP configured concurrency did not produce two simultaneous "
+                f"worker Range requests: {range_stats}"
+            )
+        if range_stats["requests"] < 2 or range_stats["distinct_spans"] < 2:
+            raise RuntimeError(f"HTTP worker pool did not request distinct ranges: {range_stats}")
 
         no_range_url = f"http://127.0.0.1:{origin_port}/norange.bin?signature=smoke"
         status, created = api_request(base, "/api/tasks", token=token, method="POST", body={
@@ -417,6 +521,28 @@ def run(archive: Path | None = None) -> dict:
             raise RuntimeError("HLS output failed ffprobe duration validation")
         hls_output_size = hls_output.stat().st_size
 
+        SmokeOrigin.reset_llhls()
+        llhls_url = f"http://127.0.0.1:{origin_port}/llhls/index.m3u8?token=current"
+        status, created = api_request(base, "/api/tasks", token=token, method="POST", body={
+            "url": llhls_url, "task_type": "hls", "filename": "llhls-smoke.mp4",
+            "concurrency": 2,
+        })
+        if status != 200 or not isinstance(created, dict):
+            raise RuntimeError(f"LL-HLS task creation failed: {status}")
+        llhls_id = str(created["id"])
+        llhls_task = wait_task(base, token, llhls_id, lambda item: item.get("status") in {"done", "failed"}, timeout=120)
+        if llhls_task.get("status") != "done":
+            raise RuntimeError(f"LL-HLS PART-only recording failed: {llhls_task.get('error_code') or llhls_task.get('last_log')}")
+        llhls_output = Path(str(llhls_task["output_path"]))
+        llhls_probe = subprocess.run(
+            [str(ffmpeg.parent / "ffprobe.exe"), "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(llhls_output)],
+            capture_output=True, text=True, timeout=20,
+        )
+        llhls_duration = float(llhls_probe.stdout.strip() or 0)
+        if llhls_probe.returncode or not 3.5 <= llhls_duration <= 4.5:
+            raise RuntimeError(f"LL-HLS output duration is invalid: {llhls_duration}")
+        llhls_output_size = llhls_output.stat().st_size
+
         dash_url = f"http://127.0.0.1:{origin_port}/dash/manifest.mpd?token=current"
         status, created = api_request(base, "/api/tasks", token=token, method="POST", body={
             "url": dash_url, "task_type": "dash", "filename": "dash-smoke.mp4",
@@ -437,7 +563,7 @@ def run(archive: Path | None = None) -> dict:
             raise RuntimeError("DASH output failed ffprobe duration validation")
         dash_output_size = dash_output.stat().st_size
 
-        smoke_task_ids = (http_id, no_range_id, signed_id, hls_id, dash_id)
+        smoke_task_ids = (http_id, no_range_id, signed_id, hls_id, llhls_id, dash_id)
         for task_id in smoke_task_ids:
             delete_status, _ = api_request(base, f"/api/tasks/{task_id}?delete_files=true", token=token, method="DELETE")
             if delete_status != 200:
@@ -452,11 +578,16 @@ def run(archive: Path | None = None) -> dict:
             "packaged_version": health.get("version", ""),
             "http_pause_resume_bytes": http_output_size,
             "http_sha256_verified": True,
+            "http_range_worker_requests": range_stats["requests"],
+            "http_distinct_range_spans": range_stats["distinct_spans"],
+            "http_max_simultaneous_ranges": range_stats["max_active"],
             "http_no_range_bytes": no_range_output_size,
             "http_no_range_sha256_verified": True,
             "http_signed_refresh_bytes": signed_output_size,
             "http_signed_refresh_sha256_verified": True,
             "hls_output_bytes": hls_output_size,
+            "llhls_part_only_output_bytes": llhls_output_size,
+            "llhls_part_only_duration_seconds": round(llhls_duration, 3),
             "dash_output_bytes": dash_output_size,
             "first_local_segment_ready_seconds": round(first_local_ready_seconds, 2),
             "local_playback_open_ms": round(playback_open_latency * 1000),

@@ -101,10 +101,10 @@ one.ts
         parse_m3u8("https://example.test/vod.m3u8", sample_aes)
 
 
-def test_parse_ll_hls_defers_incomplete_part_only_tail_without_failing():
+def test_parse_ll_hls_exposes_completed_parts_but_not_preload_hint():
     # At a live poll boundary, python-m3u8 exposes the current partial media
-    # segment as uri=None plus EXT-X-PART entries.  It becomes a normal media
-    # URI on a later refresh and must not abort an independent audio recorder.
+    # segment as uri=None plus EXT-X-PART entries. Some origins remain in this
+    # state for the whole broadcast, so completed parts must be recordable.
     playlist = """#EXTM3U
 #EXT-X-VERSION:9
 #EXT-X-TARGETDURATION:2
@@ -120,9 +120,30 @@ complete-40.m4s
 
     assert parsed["is_live"] is True
     assert [segment["url"] for segment in parsed["segments"]] == [
-        "https://example.test/complete-40.m4s"
+        "https://example.test/complete-40.m4s",
+        "https://example.test/part-41-0.m4s",
+        "https://example.test/part-41-1.m4s",
     ]
-    assert parsed["segments"][0]["media_sequence"] == 40
+    assert [segment["media_sequence"] for segment in parsed["segments"]] == [40, 41, 41]
+    assert [segment["is_partial"] for segment in parsed["segments"]] == [False, True, True]
+    assert [segment["part_index"] for segment in parsed["segments"]] == [None, 0, 1]
+
+
+def test_parse_ll_hls_part_inherits_map_and_delta_skip_sequence():
+    playlist = """#EXTM3U
+#EXT-X-VERSION:9
+#EXT-X-TARGETDURATION:2
+#EXT-X-MEDIA-SEQUENCE:40
+#EXT-X-SKIP:SKIPPED-SEGMENTS=3
+#EXT-X-MAP:URI="init.mp4"
+#EXT-X-PART:DURATION=0.5,URI="part-43-0.m4s",INDEPENDENT=YES
+"""
+
+    parsed = parse_m3u8("https://example.test/live.m3u8", playlist)
+
+    assert parsed["media_sequence"] == 43
+    assert parsed["segments"][0]["media_sequence"] == 43
+    assert parsed["segments"][0]["init_map"]["uri"] == "https://example.test/init.mp4"
 
 
 def test_parse_rejects_invalid_implicit_byte_range():

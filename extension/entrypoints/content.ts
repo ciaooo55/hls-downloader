@@ -75,7 +75,7 @@ export default defineContentScript({
           header{display:flex;align-items:center;justify-content:space-between;padding:7px 8px 7px 9px;border-bottom:1px solid var(--border);background:var(--surface-2);color:var(--text);font:600 12px system-ui;cursor:grab;touch-action:none}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:4px}
           .pin,.close{height:27px;border:0;border-radius:5px;background:var(--surface-3);color:var(--text);cursor:pointer}.pin{padding:0 8px;font:11px system-ui}.pin.active{background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green)}.close{display:grid;place-items:center;width:27px;font:700 18px/1 system-ui}.pin:hover,.close:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{max-height:calc(min(520px,calc(100vh - 20px)) - 78px);overflow-y:auto;overscroll-behavior:contain}
           .item{padding:9px 10px;border-bottom:1px solid var(--border)}.item:last-child{border-bottom:0}.item:hover{background:var(--surface-2)}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12px/1.35 system-ui;overflow-wrap:anywhere;color:var(--text)}.kind{overflow:hidden;color:var(--muted);font:10.5px/1.35 system-ui;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.resource-url{display:block;margin-top:4px;color:var(--faint);font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;user-select:text}.quality-select{width:min(184px,100%);margin-top:6px}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:29px;border:0;border-radius:6px;background:var(--primary);color:var(--on-primary);padding:4px 6px;cursor:pointer;font-weight:600;font-size:11px}.download:hover{background:var(--primary-hover)}.download[disabled]{cursor:default;opacity:.6}.download.push-tv{background:color-mix(in srgb,var(--purple) 75%,var(--surface))}.download.push-tv:hover{background:var(--purple)}.download.cast{background:color-mix(in srgb,var(--green) 78%,var(--surface))}.download.cast:hover{background:var(--green)}.result{padding:7px 10px;background:color-mix(in srgb,var(--green) 14%,var(--surface));color:var(--green);font:11px/1.4 system-ui}.result.error{background:color-mix(in srgb,var(--red) 12%,var(--surface));color:var(--red)}
-          .video-buttons{position:fixed;inset:0;z-index:2147483646;pointer-events:none}.video-download{position:fixed;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 10px var(--shadow);pointer-events:auto;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font:600 12px system-ui}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}
+          .video-buttons{position:fixed;inset:0;z-index:2147483646;pointer-events:none}.video-download{position:fixed;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 10px var(--shadow);pointer-events:auto;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font:600 12px system-ui}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download.identifying{border-color:var(--overlay-border);background:color-mix(in srgb,var(--surface) 88%,var(--primary));color:var(--muted)}.video-download.identifying:hover{background:color-mix(in srgb,var(--surface) 88%,var(--primary))}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}
           button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
         `
         const image = () => {
@@ -335,9 +335,12 @@ export default defineContentScript({
         const choices = (hasExactPlayerMatch ? exact : candidates)
           .sort((left, right) => resourceRank(right) - resourceRank(left) || (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0) || (right.size || right.estimatedSize || 0) - (left.size || left.estimatedSize || 0))
         if (!shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: choices.length })) return
+        const identifying = choices.length === 0
         visible += 1
         const button = document.createElement('button')
-        button.type = 'button'; button.className = 'video-download'; button.title = hasExactPlayerMatch && choices.length === 1 ? '查看此视频的下载选项' : '选择当前页面检测到的视频资源'
+        button.type = 'button'; button.className = `video-download${identifying ? ' identifying' : ''}`
+        button.title = identifying ? '正在识别当前播放的视频资源' : hasExactPlayerMatch && choices.length === 1 ? '下载当前视频' : '选择当前页面检测到的视频资源'
+        if (identifying) button.setAttribute('aria-disabled', 'true')
         const buttonWidth = 156
         const buttonHeight = 34
         const besidePlayer = rect.right + 8
@@ -349,7 +352,7 @@ export default defineContentScript({
         button.style.left = `${saved ? Math.max(8, Math.min(saved.x, innerWidth - buttonWidth - 8)) : defaultLeft}px`
         button.style.top = `${saved ? Math.max(8, Math.min(saved.y, innerHeight - buttonHeight - 8)) : defaultTop}px`
         const icon = document.createElement('img'); icon.src = browser.runtime.getURL('/icon-32.png'); icon.alt = ''
-         const fallbackLabel = hasExactPlayerMatch && choices.length === 1 ? '下载视频' : '选择资源'
+         const fallbackLabel = identifying ? '正在识别' : hasExactPlayerMatch && choices.length === 1 ? '下载视频' : '选择资源'
          const label = document.createElement('span'); label.className = 'download-label'; label.textContent = fallbackLabel
         button.append(icon, label)
         if (choices.length > 1) { const count = document.createElement('b'); count.textContent = String(choices.length); button.append(count) }
@@ -407,6 +410,11 @@ export default defineContentScript({
             videoDragged = false
             return
           }
+           if (identifying) {
+             event.preventDefault()
+             event.stopImmediatePropagation()
+             return
+           }
            if (hasExactPlayerMatch && choices.length === 1) {
              event.preventDefault()
              event.stopImmediatePropagation()
@@ -425,7 +433,7 @@ export default defineContentScript({
             setOpen(true)
           }
         })
-         applySendState(choices[0], button, fallbackLabel)
+         if (choices[0]) applySendState(choices[0], button, fallbackLabel)
          layer.append(button)
       })
       if (!visible) {
@@ -499,11 +507,8 @@ export default defineContentScript({
     }
     window.addEventListener('scroll', scheduleVideoButtons, { capture: true, passive: true })
     window.addEventListener('resize', scheduleVideoButtons)
-    new MutationObserver(scheduleVideoButtons).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'style', 'class'] })
 
-    const markPlayback = (event: Event) => {
-      const video = event.target instanceof HTMLVideoElement ? event.target : null
-      if (!video) return
+    const markVideoPlayback = (video: HTMLVideoElement, eventType: string) => {
       const rect = video.getBoundingClientRect()
       if (rect.width < 180 || rect.height < 100 || rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) return
       // MSE and nested players can fire on a non-dominant video node. Anchor
@@ -516,18 +521,39 @@ export default defineContentScript({
         if (changedSource) videoButtonPositions.delete(video)
         activePlayback = { sourceUrls, startedAt: Date.now() }
         playbackByVideo.set(video, activePlayback)
-      } else if (event.type === 'timeupdate') {
+      } else {
         activePlayback = previousPlayback
         scheduleVideoButtons()
         return
-      } else {
-        activePlayback = previousPlayback
       }
       render()
     }
+    const markPlayback = (event: Event) => {
+      if (!(event.target instanceof HTMLVideoElement)) return
+      if (
+        event.target.paused
+        && !playbackByVideo.has(event.target)
+        && ['loadedmetadata', 'loadeddata', 'timeupdate'].includes(event.type)
+      ) return
+      markVideoPlayback(event.target, event.type)
+    }
+    const syncPlayingVideos = () => {
+      document.querySelectorAll<HTMLVideoElement>('video').forEach(video => {
+        if (!video.paused && !video.ended) markVideoPlayback(video, 'sync')
+      })
+    }
+    new MutationObserver(mutations => {
+      scheduleVideoButtons()
+      if (mutations.some(mutation => mutation.type === 'childList' || mutation.attributeName === 'src')) {
+        queueMicrotask(syncPlayingVideos)
+      }
+    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'style', 'class'] })
     document.addEventListener('play', markPlayback, true)
     document.addEventListener('playing', markPlayback, true)
+    document.addEventListener('loadedmetadata', markPlayback, true)
+    document.addEventListener('loadeddata', markPlayback, true)
     document.addEventListener('timeupdate', markPlayback, true)
+    syncPlayingVideos()
 
     const add = (url: string, mimeType = '') => {
       const kind = classifyResource(url, mimeType); if (!kind) return
@@ -584,11 +610,12 @@ export default defineContentScript({
       setOpen(false)
       resources.clear(); render(); loadPageResources(location.href)
       document.querySelectorAll<HTMLMediaElement>('video[src],audio[src],source[src]').forEach(media => add(media.currentSrc || media.src))
+      syncPlayingVideos()
     }
     loadPageResources(location.href)
     window.addEventListener('popstate', syncPage)
     window.addEventListener('hashchange', syncPage)
-    window.setInterval(syncPage, 800)
+    window.setInterval(() => { syncPage(); syncPlayingVideos() }, 800)
   },
 })
 

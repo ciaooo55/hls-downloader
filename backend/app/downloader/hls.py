@@ -1589,6 +1589,8 @@ class HLSDownloader:
                     "resource_identity": self._live_resource_identity(entry),
                     "duration": float(entry.get("duration") or 0),
                     "media_sequence": int(entry.get("media_sequence") or 0),
+                    "part_index": entry.get("part_index"),
+                    "is_partial": bool(entry.get("is_partial")),
                     "discontinuity": bool(entry.get("discontinuity")),
                     "init_name": Path(str(entry.get("init_path") or "")).name,
                     "size": int(size),
@@ -1643,6 +1645,8 @@ class HLSDownloader:
                 "resource_identity": str(item.get("resource_identity") or ""),
                 "duration": float(item.get("duration") or 0),
                 "media_sequence": int(item.get("media_sequence") or 0),
+                "part_index": item.get("part_index"),
+                "is_partial": bool(item.get("is_partial")),
                 "discontinuity": bool(item.get("discontinuity")) or gap,
                 "init_path": init_path or None,
                 "init_map": None,
@@ -1835,9 +1839,18 @@ class HLSDownloader:
             if self._live_resource_identity(entry)
         }
         last_sequence = max(
-            (int(entry.get("media_sequence") or 0) for entry in recorded),
+            (
+                int(entry.get("media_sequence") or 0)
+                for entry in recorded
+                if not entry.get("is_partial")
+            ),
             default=-1,
         )
+        partial_sequences = {
+            int(entry.get("media_sequence") or 0)
+            for entry in recorded
+            if entry.get("is_partial")
+        }
 
         self.tracker.start(len(recorded))
         self._completed_count = 0
@@ -1877,6 +1890,11 @@ class HLSDownloader:
             window_sequences = [
                 int(segment.get("media_sequence") or 0) for segment in window
             ]
+            complete_window_sequences = [
+                int(segment.get("media_sequence") or 0)
+                for segment in window
+                if not segment.get("is_partial")
+            ]
             # An encoder restart resets EXT-X-MEDIA-SEQUENCE; treat the whole
             # window as fresh content instead of skipping it until the stall
             # timeout ends a stream that is actually still live.  A stale CDN
@@ -1896,16 +1914,28 @@ class HLSDownloader:
                     "[recording] 直播序号已重置"
                     f"（{last_sequence} → {max(window_sequences)}），继续录制新片段"
                 )
+                if not complete_window_sequences:
+                    # A restarted encoder can initially expose only PARTs.
+                    # Reset the completed cursor to just before their parent
+                    # sequence; otherwise every new PART in that parent would
+                    # be mistaken for another epoch reset and gain a false
+                    # discontinuity.
+                    last_sequence = min(window_sequences) - 1
             new_batch: list[dict] = []
             capped = False
             projected = total_duration
             for segment in window:
                 sequence = int(segment.get("media_sequence") or 0)
-                if not epoch_reset and sequence <= last_sequence:
-                    continue
+                identity = self._live_resource_identity(segment)
+                if not epoch_reset:
+                    if segment.get("is_partial"):
+                        if sequence <= last_sequence or identity in recorded_identities:
+                            continue
+                    elif sequence <= last_sequence:
+                        continue
                 if (
                     epoch_reset
-                    and self._live_resource_identity(segment) in recorded_identities
+                    and identity in recorded_identities
                 ):
                     continue
                 if max_seconds and projected >= max_seconds:
@@ -1915,6 +1945,14 @@ class HLSDownloader:
                     capped = True
                     break
                 entry = dict(segment)
+                if not entry.get("is_partial") and sequence in partial_sequences:
+                    # A completed parent contains the same samples as its
+                    # previously published PART objects. Download it into a
+                    # new slot first; only after success do we remove the
+                    # partial files and replace them in the timeline. This
+                    # avoids duplicate time without losing late parts that
+                    # appeared between playlist polls.
+                    entry["replaces_partial_sequence"] = sequence
                 entry["index"] = next_index
                 next_index += 1
                 if session_boundary or (epoch_reset and not new_batch):
@@ -1926,14 +1964,18 @@ class HLSDownloader:
                 # Only sequences actually queued count as consumed, so a
                 # capped batch whose downloads fail can still re-fetch them.
                 last_sequence = max(
-                    (int(entry.get("media_sequence") or 0) for entry in new_batch),
+                    (
+                        int(entry.get("media_sequence") or 0)
+                        for entry in new_batch
+                        if not entry.get("is_partial")
+                    ),
                     default=last_sequence,
                 )
-            elif window_sequences:
+            elif complete_window_sequences:
                 if epoch_reset:
-                    last_sequence = max(window_sequences)
+                    last_sequence = max(complete_window_sequences)
                 else:
-                    last_sequence = max(last_sequence, max(window_sequences))
+                    last_sequence = max(last_sequence, max(complete_window_sequences))
 
             if new_batch:
                 task.progress.total_segments = len(recorded) + len(new_batch)
@@ -1963,11 +2005,46 @@ class HLSDownloader:
                     client, new_batch, headers, pending_gap
                 )
                 if kept:
+                    replacement_sequences = {
+                        int(entry["replaces_partial_sequence"])
+                        for entry in kept
+                        if entry.get("replaces_partial_sequence") is not None
+                    }
+                    if replacement_sequences:
+                        survivors = []
+                        removed_duration = 0.0
+                        replacement_boundaries: set[int] = set()
+                        for existing in recorded:
+                            sequence = int(existing.get("media_sequence") or 0)
+                            if existing.get("is_partial") and sequence in replacement_sequences:
+                                removed_duration += float(existing.get("duration") or 0)
+                                if existing.get("discontinuity"):
+                                    replacement_boundaries.add(sequence)
+                                recorded_identities.discard(
+                                    self._live_resource_identity(existing)
+                                )
+                                (self._seg_dir() / f"{int(existing['index']):06d}.seg").unlink(
+                                    missing_ok=True
+                                )
+                            else:
+                                survivors.append(existing)
+                        recorded = survivors
+                        total_duration = max(0.0, total_duration - removed_duration)
+                        partial_sequences.difference_update(replacement_sequences)
+                        for replacement in kept:
+                            sequence = replacement.get("replaces_partial_sequence")
+                            if sequence is not None and int(sequence) in replacement_boundaries:
+                                replacement["discontinuity"] = True
                     recorded.extend(kept)
                     recorded_identities.update(
                         self._live_resource_identity(entry)
                         for entry in kept
                         if self._live_resource_identity(entry)
+                    )
+                    partial_sequences.update(
+                        int(entry.get("media_sequence") or 0)
+                        for entry in kept
+                        if entry.get("is_partial")
                     )
                     total_duration += sum(
                         float(entry.get("duration") or 0) for entry in kept
