@@ -26,7 +26,18 @@ export default defineContentScript({
   allFrames: true,
   cssInjectionMode: 'ui',
   async main(ctx) {
-    document.documentElement.setAttribute('data-hls-downloader-extension', '1')
+    // The shadow UI is mounted asynchronously.  A fast player can emit its
+    // first play/playing event while that work is still in progress (Firefox
+    // exposes this race more readily than Chromium).  Buffer those events so
+    // the per-video entry is never lost, and expose the ready marker only
+    // after the real listeners are installed.
+    document.documentElement.setAttribute('data-hls-downloader-extension', 'loading')
+    const pendingPlaybackVideos = new Set<HTMLVideoElement>()
+    const rememberPendingPlayback = (event: Event) => {
+      if (event.target instanceof HTMLVideoElement) pendingPlaybackVideos.add(event.target)
+    }
+    document.addEventListener('play', rememberPendingPlayback, true)
+    document.addEventListener('playing', rememberPendingPlayback, true)
     const resources = new Map<string, MediaResource>()
     // Rendering is intentionally frequent on live pages. Keep handoff state
     // outside the DOM so a network event cannot replace an in-flight button.
@@ -553,7 +564,12 @@ export default defineContentScript({
     document.addEventListener('loadedmetadata', markPlayback, true)
     document.addEventListener('loadeddata', markPlayback, true)
     document.addEventListener('timeupdate', markPlayback, true)
+    document.removeEventListener('play', rememberPendingPlayback, true)
+    document.removeEventListener('playing', rememberPendingPlayback, true)
+    pendingPlaybackVideos.forEach(video => markVideoPlayback(video, 'initializing'))
+    pendingPlaybackVideos.clear()
     syncPlayingVideos()
+    document.documentElement.setAttribute('data-hls-downloader-extension', '1')
 
     const add = (url: string, mimeType = '') => {
       const kind = classifyResource(url, mimeType); if (!kind) return
