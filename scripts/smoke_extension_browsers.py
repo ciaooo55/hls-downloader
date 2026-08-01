@@ -43,10 +43,17 @@ OVERLAY_EXPRESSION = """
     canvas.width = 320;
     canvas.height = 180;
     const context = canvas.getContext('2d');
-    context?.fillRect(0, 0, canvas.width, canvas.height);
     const stream = canvas.captureStream(5);
     window.__hlsOverlaySmokeStream = stream;
+    let frame = 0;
+    window.__hlsOverlaySmokeFrames = setInterval(() => {
+      if (!context) return;
+      context.fillStyle = frame++ % 2 ? '#1677ff' : '#12b76a';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+    }, 100);
     video.muted = true;
+    video.autoplay = true;
+    video.playsInline = true;
     video.srcObject = stream;
     void video.play().catch(error => { window.__hlsOverlaySmokeError = String(error); });
   }
@@ -250,6 +257,9 @@ def _exercise_firefox(extension_dir: Path, page_url: str, binary: str | None, te
     options.set_preference("datareporting.policy.dataSubmissionEnabled", False)
     options.set_preference("browser.shell.checkDefaultBrowser", False)
     options.set_preference("browser.startup.homepage_override.mstone", "ignore")
+    options.set_preference("media.autoplay.default", 0)
+    options.set_preference("media.autoplay.blocking_policy", 0)
+    options.set_preference("media.autoplay.allow-muted", True)
     if binary:
         options.binary_location = binary
     with webdriver.Firefox(options=options) as driver:
