@@ -7,7 +7,7 @@ import pytest
 
 from backend.app.downloader import dash_native as native_module
 from backend.app.downloader.dash import DashDownloader
-from backend.app.downloader.dash_native import NativeDashEngine
+from backend.app.downloader.dash_native import NativeDashEngine, _merge_segmented_ttml
 from backend.app.models import Task, TaskStatus
 
 
@@ -584,3 +584,30 @@ def test_hard_segment_failure_fails_the_task_with_diagnosis(tmp_path, monkeypatc
         assert task.error_code
 
     asyncio.run(run())
+
+
+def test_segmented_ttml_is_merged_and_relative_times_are_shifted(tmp_path):
+    first = tmp_path / "first.ttml"
+    second = tmp_path / "second.ttml"
+    output = tmp_path / "merged.ttml"
+    template = (
+        '<tt xmlns="http://www.w3.org/ns/ttml"><body><div>'
+        '<p begin="00:00:00.000" end="00:00:01.000">{}</p>'
+        '</div></body></tt>'
+    )
+    first.write_text(template.format("one"), encoding="utf-8")
+    second.write_text(template.format("two"), encoding="utf-8")
+
+    _merge_segmented_ttml(
+        [first, second],
+        [
+            {"start": 0.0, "duration": 2.0},
+            {"start": 2.0, "duration": 2.0},
+        ],
+        output,
+    )
+
+    text = output.read_text(encoding="utf-8")
+    assert "one" in text and "two" in text
+    assert 'begin="00:00:02.000"' in text
+    assert 'end="00:00:03.000"' in text

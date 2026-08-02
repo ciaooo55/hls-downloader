@@ -486,6 +486,103 @@ def test_live_checkpoint_does_not_persist_signed_urls_and_restores_local_map(tmp
     assert duration == pytest.approx(4.0)
 
 
+def test_live_checkpoint_journal_replays_deltas_and_ignores_torn_tail(tmp_path):
+    task = _task(tmp_path)
+    downloader = _downloader(task)
+    first = {
+        "index": 0, "url": "https://example.test/0.ts?token=one",
+        "duration": 4.0, "media_sequence": 0,
+    }
+    second = {
+        "index": 1, "url": "https://example.test/1.ts?token=two",
+        "duration": 4.0, "media_sequence": 1,
+    }
+    (downloader._seg_dir() / "000000.seg").write_bytes(b"one")
+    (downloader._seg_dir() / "000001.seg").write_bytes(b"two")
+    downloader._save_live_state([first], 4.0)
+    downloader._save_live_state(
+        [first, second],
+        8.0,
+        changed_entries=[second],
+    )
+    journal = downloader._task_dir() / "live_state.journal"
+    assert journal.exists()
+    event = json.loads(journal.read_text(encoding="utf-8").splitlines()[0])
+    assert [item["index"] for item in event["upsert"]] == [1]
+
+    restored = _downloader(task)._load_live_state()
+    assert restored is not None
+    assert [item["index"] for item in restored["segments"]] == [0, 1]
+    assert restored["total_duration"] == pytest.approx(8.0)
+    with journal.open("a", encoding="utf-8") as stream:
+        stream.write('{"version":1,"upsert":')
+    torn_restored = _downloader(task)._load_live_state()
+    assert torn_restored is not None
+    assert [item["index"] for item in torn_restored["segments"]] == [0, 1]
+
+    downloader._save_live_state([first, second], 8.0, force_compact=True)
+    assert not journal.exists()
+    compacted = json.loads(
+        (downloader._task_dir() / "live_state.json").read_text(encoding="utf-8")
+    )
+    assert [item["index"] for item in compacted["segments"]] == [0, 1]
+
+
+def test_ll_hls_parent_replacement_survives_journal_restart(tmp_path):
+    task = _task(tmp_path)
+    downloader = _downloader(task)
+    partials = [
+        {
+            "index": index,
+            "url": f"https://example.test/p40-{index}.m4s",
+            "duration": 0.333,
+            "media_sequence": 40,
+            "part_index": index,
+            "is_partial": True,
+        }
+        for index in range(3)
+    ]
+    for index in range(3):
+        (downloader._seg_dir() / f"{index:06d}.seg").write_bytes(b"part")
+    downloader._save_live_state(partials, 0.999)
+
+    completed = [
+        {
+            "index": 0,
+            "url": "https://example.test/full40.m4s",
+            "duration": 0.999,
+            "media_sequence": 40,
+            "is_partial": False,
+        },
+        {
+            "index": 1,
+            "url": "https://example.test/full41.m4s",
+            "duration": 2.0,
+            "media_sequence": 41,
+            "is_partial": False,
+        },
+    ]
+    (downloader._seg_dir() / "000000.seg").write_bytes(b"parent")
+    (downloader._seg_dir() / "000001.seg").write_bytes(b"next")
+    (downloader._seg_dir() / "000002.seg").unlink()
+    downloader._save_live_state(completed, 2.999)
+    journal = downloader._task_dir() / "live_state.journal"
+    event = json.loads(journal.read_text(encoding="utf-8").splitlines()[0])
+    assert event["remove"] == [2]
+    assert [item["index"] for item in event["upsert"]] == [0, 1]
+    with journal.open("a", encoding="utf-8") as stream:
+        stream.write('{"version":1,"remove":')
+
+    restarted = _downloader(task)
+    state = restarted._load_live_state()
+    assert state is not None
+    restored: list[dict] = []
+    duration = restarted._restore_live_segments(state, restored)
+    assert [item["index"] for item in restored] == [0, 1]
+    assert all(not item["is_partial"] for item in restored)
+    assert duration == pytest.approx(2.999)
+
+
 def test_live_checkpoint_rejects_init_path_outside_task_directory(tmp_path):
     task = _task(tmp_path)
     downloader = _downloader(task)

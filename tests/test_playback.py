@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -11,6 +12,7 @@ from backend.app.downloader.playback import (
     playback_service,
     write_playback_plan,
 )
+from backend.app.downloader import playback as playback_module
 from backend.app.downloader.task_manager import TaskConflictError, TaskManager, manager
 from backend.app.models import Task, TaskStatus, TaskType
 
@@ -80,6 +82,126 @@ def test_incremental_playlist_only_exposes_contiguous_local_media(tmp_path, monk
     assert '#EXT-X-MAP:URI="maps/0001.init' in completed
     assert "segments/000002.seg" in completed
     assert completed.rstrip().endswith("#EXT-X-ENDLIST")
+
+
+def test_playback_plan_journal_appends_and_ignores_a_torn_tail(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path))
+    task_dir = tmp_path / ".tasks" / "journal-preview"
+    segments = _segments(task_dir, durations=(2.0, 2.0))
+    seg_dir = task_dir / "segments"
+    seg_dir.mkdir(parents=True)
+    (seg_dir / "000000.seg").write_bytes(b"first")
+    (seg_dir / "000001.seg").write_bytes(b"second")
+
+    plan_path = write_playback_plan(task_dir, segments[:1], total_duration=2.0)
+    write_playback_plan(
+        task_dir,
+        segments,
+        total_duration=4.0,
+        changed_segments=[segments[1]],
+    )
+    journal = task_dir / "playback-plan.journal"
+    assert len(json.loads(plan_path.read_text(encoding="utf-8"))["segments"]) == 1
+    assert journal.exists()
+
+    service = PlaybackService()
+    assert service.snapshot("journal-preview", "downloading_segments").available_segments == 2
+    with journal.open("a", encoding="utf-8") as stream:
+        stream.write('{"version":1,"append":')
+    # A torn final journal line cannot hide earlier durable entries.
+    assert service.snapshot("journal-preview", "downloading_segments").available_segments == 2
+
+    write_playback_plan(task_dir, segments, total_duration=4.0, force_compact=True)
+    assert not journal.exists()
+    assert len(json.loads(plan_path.read_text(encoding="utf-8"))["segments"]) == 2
+
+
+def test_playback_plan_ignores_stale_journal_left_after_compaction_crash(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path))
+    task_dir = tmp_path / ".tasks" / "stale-journal"
+    segments = _segments(task_dir, durations=(2.0, 2.0))
+    seg_dir = task_dir / "segments"
+    seg_dir.mkdir(parents=True)
+    for index in range(2):
+        (seg_dir / f"{index:06d}.seg").write_bytes(b"media")
+
+    plan_path = write_playback_plan(task_dir, segments[:1], total_duration=2.0)
+    write_playback_plan(
+        task_dir,
+        segments,
+        total_duration=4.0,
+        changed_segments=[segments[1]],
+    )
+    journal_path = task_dir / "playback-plan.journal"
+    stale_journal = journal_path.read_bytes()
+    write_playback_plan(task_dir, segments, total_duration=4.0, force_compact=True)
+    # Simulate power loss after the new base was atomically published but
+    # before the old journal directory entry could be removed.
+    journal_path.write_bytes(stale_journal)
+
+    base = json.loads(plan_path.read_text(encoding="utf-8"))
+    event = json.loads(stale_journal.decode("utf-8").splitlines()[0])
+    assert base["journal_id"] != event["journal_id"]
+    service = PlaybackService()
+    snapshot = service.snapshot("stale-journal", "downloading_segments")
+    assert snapshot.available_segments == 2
+    assert snapshot.available_duration == 4.0
+
+
+def test_active_playback_waits_for_plan_compaction(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path))
+    task_dir = tmp_path / ".tasks" / "active-compaction"
+    segments = _segments(task_dir, durations=(2.0, 2.0))
+    seg_dir = task_dir / "segments"
+    seg_dir.mkdir(parents=True)
+    for index in range(2):
+        (seg_dir / f"{index:06d}.seg").write_bytes(b"media")
+    write_playback_plan(task_dir, segments[:1], total_duration=2.0)
+    write_playback_plan(
+        task_dir,
+        segments,
+        total_duration=4.0,
+        changed_segments=[segments[1]],
+    )
+    service = PlaybackService()
+    session = service.open_session("active-compaction")
+
+    compact_started = threading.Event()
+    allow_compact = threading.Event()
+    reader_finished = threading.Event()
+    real_atomic_write = playback_module.atomic_write_text
+
+    def paused_atomic_write(path, content):
+        real_atomic_write(path, content)
+        compact_started.set()
+        assert allow_compact.wait(timeout=5)
+
+    monkeypatch.setattr(playback_module, "atomic_write_text", paused_atomic_write)
+    writer = threading.Thread(
+        target=write_playback_plan,
+        args=(task_dir, segments, 4.0),
+        kwargs={"force_compact": True},
+    )
+    writer.start()
+    assert compact_started.wait(timeout=5)
+
+    result: list[str] = []
+
+    def read_playlist():
+        result.append(service.playlist("active-compaction", "recording", session))
+        reader_finished.set()
+
+    reader = threading.Thread(target=read_playlist)
+    reader.start()
+    assert not reader_finished.wait(timeout=0.1)
+    allow_compact.set()
+    writer.join(timeout=5)
+    reader.join(timeout=5)
+    assert not writer.is_alive()
+    assert not reader.is_alive()
+    assert result[0].count("#EXTINF:") == 2
 
 
 def test_first_complete_short_segment_enables_preview_only_after_its_init_map(tmp_path, monkeypatch):

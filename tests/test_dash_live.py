@@ -425,3 +425,85 @@ def test_track_start_offsets_reach_the_mux_command(tmp_path, monkeypatch):
         assert command[command.index("-itsoffset") + 2] == "-i"
 
     asyncio.run(run())
+
+
+def test_dash_live_checkpoint_journal_replays_incremental_tracks(tmp_path):
+    task = _task(tmp_path)
+    engine = NativeDashEngine(task)
+    from backend.app.downloader.engine import task_work_dir
+
+    task_dir = task_work_dir(task)
+    metadata = {
+        "fingerprint": "track-one", "mime": "video/mp4", "codecs": "avc1",
+        "has_init": True, "init_size": 4,
+    }
+    first = {"index": 0, "identity": 0, "duration": 2.0, "start": 0.0, "size": 3}
+    second = {"index": 1, "identity": 2, "duration": 2.0, "start": 2.0, "size": 3}
+    state = {"video": {"entries": [first], **metadata}}
+    engine._save_live_state(task_dir, state)
+    state["video"]["entries"].append(second)
+    engine._save_live_state(
+        task_dir,
+        state,
+        changed_tracks={"video": [second]},
+    )
+    journal = task_dir / "live_state.journal"
+    assert journal.exists()
+    event = json.loads(journal.read_text(encoding="utf-8").splitlines()[0])
+    assert [item["identity"] for item in event["tracks"]["video"]["upsert"]] == [2]
+
+    restarted_engine = NativeDashEngine(task)
+    restored = restarted_engine._load_live_state(task_dir)
+    assert restored is not None
+    assert [item["identity"] for item in restored["tracks"]["video"]["segments"]] == [0, 2]
+    engine._save_live_state(
+        task_dir,
+        state,
+        force_compact=True,
+    )
+    assert not journal.exists()
+
+
+def test_dash_live_interleaved_tracks_restore_before_torn_tail(tmp_path):
+    task = _task(tmp_path)
+    engine = NativeDashEngine(task)
+    from backend.app.downloader.engine import task_work_dir
+
+    task_dir = task_work_dir(task)
+    video_meta = {
+        "fingerprint": "video-one", "mime": "video/mp4", "codecs": "avc1",
+        "has_init": True, "init_size": 4,
+    }
+    audio_meta = {
+        "fingerprint": "audio-one", "mime": "audio/mp4", "codecs": "mp4a",
+        "has_init": True, "init_size": 4,
+    }
+    video0 = {"index": 0, "identity": 0, "duration": 2.0, "start": 0.0, "size": 3}
+    video1 = {"index": 1, "identity": 2, "duration": 2.0, "start": 2.0, "size": 3}
+    audio0 = {"index": 0, "identity": 0, "duration": 2.0, "start": 0.0, "size": 2}
+    audio1 = {"index": 1, "identity": 2, "duration": 2.0, "start": 2.0, "size": 2}
+    state = {
+        "video": {"entries": [video0], **video_meta},
+        "audio": {"entries": [audio0], **audio_meta},
+    }
+    engine._save_live_state(task_dir, state)
+    state["video"]["entries"].append(video1)
+    engine._save_live_state(task_dir, state, changed_tracks={"video": [video1]})
+    state["audio"]["entries"].append(audio1)
+    engine._save_live_state(task_dir, state, changed_tracks={"audio": [audio1]})
+    journal = task_dir / "live_state.journal"
+    with journal.open("a", encoding="utf-8") as stream:
+        stream.write('{"version":1,"tracks":')
+
+    restarted_engine = NativeDashEngine(task)
+    restored = restarted_engine._load_live_state(task_dir)
+    assert restored is not None
+    assert [item["identity"] for item in restored["tracks"]["video"]["segments"]] == [0, 2]
+    assert [item["identity"] for item in restored["tracks"]["audio"]["segments"]] == [0, 2]
+
+    # A full checkpoint may remove a disappeared track; the deletion must also
+    # survive journal replay rather than resurrecting stale audio on restart.
+    restarted_engine._save_live_state(task_dir, {"video": state["video"]})
+    without_audio = NativeDashEngine(task)._load_live_state(task_dir)
+    assert without_audio is not None
+    assert set(without_audio["tracks"]) == {"video"}

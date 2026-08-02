@@ -1,6 +1,7 @@
 import asyncio
 import json
 import math
+import os
 import re
 import secrets
 import threading
@@ -10,17 +11,21 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import quote
 
-from ..utils import atomic_write_text
+from ..utils import atomic_write_text, read_jsonl_prefix, truncate_durable
 from .engine import task_work_dir
 
 
 PLAN_FILENAME = "playback-plan.json"
+PLAN_JOURNAL_FILENAME = "playback-plan.journal"
+PLAN_JOURNAL_MIN_COMPACT_BYTES = 4 * 1024 * 1024
 # A complete first segment is a usable HLS boundary.  Waiting for a fixed
 # six-second buffer made short-segment streams look as if in-progress playback
 # had disappeared, despite a locally playable prefix already being present.
 MIN_START_DURATION = 1.0
 SESSION_TTL_SECONDS = 90.0
 _TASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_PLAN_WRITE_LOCK = threading.RLock()
+_PLAN_WRITE_CACHE: dict[Path, dict] = {}
 
 
 class PlaybackError(Exception):
@@ -87,42 +92,178 @@ def _safe_task_dir(task_id: str) -> Path:
         raise PlaybackError("无效的任务目录") from exc
 
 
+def _plan_journal_path(plan_path: Path) -> Path:
+    return plan_path.with_name(PLAN_JOURNAL_FILENAME)
+
+
+def _append_plan_event(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+    with path.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(line)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _read_plan_payload(path: Path) -> dict:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("version") != 1 or not isinstance(data.get("segments"), list):
+        raise ValueError("invalid playback plan")
+    result = {
+        "version": 1,
+        "total_duration": data.get("total_duration", 0),
+        "target_duration": data.get("target_duration", 1),
+        "is_fmp4": bool(data.get("is_fmp4")),
+        "journal_id": str(data.get("journal_id") or ""),
+        "segments": list(data["segments"]),
+    }
+    journal = _plan_journal_path(path)
+    if not journal.exists():
+        return result
+    # Each line is independently flushed. A power loss can leave only the
+    # final line incomplete; keep every previously committed append.
+    records, journal_size = read_jsonl_prefix(journal)
+    accepted_offset = 0
+    for event, end_offset in records:
+        if event.get("version") != 1 or not isinstance(event.get("append"), list):
+            break
+        # Compaction publishes a new snapshot with a new journal id before
+        # removing the old journal.  A crash in that tiny window can leave
+        # both files behind; never replay the old appends onto the already
+        # compacted snapshot.
+        if str(event.get("journal_id") or "") != result["journal_id"]:
+            break
+        result["segments"].extend(event["append"])
+        result["total_duration"] = event.get("total_duration", result["total_duration"])
+        result["target_duration"] = event.get("target_duration", result["target_duration"])
+        result["is_fmp4"] = bool(event.get("is_fmp4", result["is_fmp4"]))
+        accepted_offset = end_offset
+    if accepted_offset < journal_size:
+        truncate_durable(journal, accepted_offset)
+    return result
+
+
+def _plan_signature(path: Path) -> tuple[int, int]:
+    journal = _plan_journal_path(path)
+    base = path.stat()
+    try:
+        delta = journal.stat()
+        delta_mtime, delta_size = delta.st_mtime_ns, delta.st_size
+    except FileNotFoundError:
+        delta_mtime, delta_size = 0, 0
+    return hash((base.st_mtime_ns, delta_mtime)), base.st_size + delta_size
+
+
+def _compact_plan(path: Path, payload: dict) -> None:
+    # A new id makes the atomic snapshot self-identifying.  If power loss
+    # happens after replace() but before the old journal is deleted, readers
+    # can distinguish that stale journal instead of duplicating its segments.
+    payload["journal_id"] = secrets.token_hex(16)
+    atomic_write_text(
+        path,
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+    )
+    _plan_journal_path(path).unlink(missing_ok=True)
+
+
 def write_playback_plan(
     task_dir: Path,
     segments: list[dict],
     total_duration: float,
+    *,
+    force_compact: bool = False,
+    changed_segments: list[dict] | None = None,
 ) -> Path:
-    safe_segments = []
-    for segment in segments:
+    def safe(segment: dict) -> dict:
         init_name = ""
         if segment.get("init_path"):
             init_name = Path(segment["init_path"]).name
-        safe_segments.append(
-            {
-                "index": int(segment["index"]),
-                "duration": max(0.001, float(segment.get("duration") or 0)),
-                "discontinuity": bool(segment.get("discontinuity")),
-                "init_name": init_name,
-            }
-        )
+        return {
+            "index": int(segment["index"]),
+            "duration": max(0.001, float(segment.get("duration") or 0)),
+            "discontinuity": bool(segment.get("discontinuity")),
+            "init_name": init_name,
+        }
 
-    target_duration = max(
-        1,
-        math.ceil(max((segment["duration"] for segment in safe_segments), default=1)),
-    )
-    payload = {
-        "version": 1,
-        "total_duration": max(0.0, float(total_duration or 0)),
-        "target_duration": target_duration,
-        "is_fmp4": any(segment["init_name"] for segment in safe_segments),
-        "segments": safe_segments,
-    }
     task_dir.mkdir(parents=True, exist_ok=True)
     destination = task_dir / PLAN_FILENAME
-    atomic_write_text(
-        destination,
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-    )
+    with _PLAN_WRITE_LOCK:
+        previous = _PLAN_WRITE_CACHE.get(destination)
+        if previous is None and destination.exists():
+            try:
+                previous = _read_plan_payload(destination)
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                previous = None
+        old_segments = previous.get("segments", []) if previous else []
+        old_count = len(old_segments)
+        incremental = False
+        if changed_segments is not None and previous is not None:
+            safe_changes = [safe(segment) for segment in changed_segments]
+            expected_count = old_count
+            incremental = True
+            for item in safe_changes:
+                index = int(item["index"])
+                if index == expected_count:
+                    expected_count += 1
+                else:
+                    incremental = False
+                    break
+            if incremental:
+                safe_segments = old_segments
+                for item in safe_changes:
+                    safe_segments.append(item)
+            else:
+                safe_segments = [safe(segment) for segment in segments]
+                safe_changes = safe_segments
+        else:
+            safe_segments = [safe(segment) for segment in segments]
+            safe_changes = safe_segments
+        target_duration = max(
+            int(previous.get("target_duration") or 1) if previous else 1,
+            math.ceil(max((segment["duration"] for segment in safe_changes), default=1)),
+        )
+        payload = {
+            "version": 1,
+            "total_duration": max(0.0, float(total_duration or 0)),
+            "target_duration": target_duration,
+            "is_fmp4": bool(previous and previous.get("is_fmp4"))
+            or any(segment["init_name"] for segment in safe_changes),
+            "journal_id": str(previous.get("journal_id") or secrets.token_hex(16))
+            if previous
+            else secrets.token_hex(16),
+            "segments": safe_segments,
+        }
+        prefix_unchanged = incremental or (
+            len(safe_segments) >= old_count
+            and safe_segments[:old_count] == old_segments
+        )
+        appended = safe_segments[old_count:] if prefix_unchanged else []
+        metadata_changed = not previous or any(
+            payload[key] != previous.get(key)
+            for key in ("total_duration", "target_duration", "is_fmp4")
+        )
+        journal = _plan_journal_path(destination)
+        if force_compact or previous is None or not prefix_unchanged:
+            _compact_plan(destination, payload)
+        elif appended or metadata_changed:
+            _append_plan_event(journal, {
+                "version": 1,
+                "journal_id": payload["journal_id"],
+                "append": appended,
+                "total_duration": payload["total_duration"],
+                "target_duration": payload["target_duration"],
+                "is_fmp4": payload["is_fmp4"],
+            })
+            base_size = destination.stat().st_size
+            if journal.stat().st_size >= max(
+                PLAN_JOURNAL_MIN_COMPACT_BYTES,
+                base_size * 2,
+            ):
+                _compact_plan(destination, payload)
+        if force_compact:
+            _PLAN_WRITE_CACHE.pop(destination, None)
+        else:
+            _PLAN_WRITE_CACHE[destination] = payload
     playback_service.invalidate(task_dir.name)
     return destination
 
@@ -140,18 +281,26 @@ class PlaybackService:
             self._plan_cache.pop(_safe_task_dir(task_id) / PLAN_FILENAME, None)
 
     def _load_plan(self, task_id: str) -> tuple[PlaybackPlan, int]:
+        # Keep signature, base snapshot and append journal in one writer lock.
+        # Without it, an active player could observe the new compacted base
+        # together with the old journal (duplicates), or the old base after the
+        # journal was removed (missing tail segments).
+        with _PLAN_WRITE_LOCK:
+            return self._load_plan_consistent(task_id)
+
+    def _load_plan_consistent(self, task_id: str) -> tuple[PlaybackPlan, int]:
         path = _safe_task_dir(task_id) / PLAN_FILENAME
         try:
-            stat = path.stat()
+            stamp, total_size = _plan_signature(path)
         except FileNotFoundError as exc:
             raise PlaybackNotReadyError("播放清单尚未准备好") from exc
         with self._lock:
             cached = self._plan_cache.get(path)
-            if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
-                return cached[2], stat.st_mtime_ns
+            if cached and cached[0] == stamp and cached[1] == total_size:
+                return cached[2], stamp
 
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = _read_plan_payload(path)
             if data.get("version") != 1 or not isinstance(data.get("segments"), list):
                 raise ValueError
             segments = []
@@ -180,8 +329,8 @@ class PlaybackService:
             raise PlaybackError("本地播放清单损坏") from exc
 
         with self._lock:
-            self._plan_cache[path] = (stat.st_mtime_ns, stat.st_size, plan)
-        return plan, stat.st_mtime_ns
+            self._plan_cache[path] = (stamp, total_size, plan)
+        return plan, stamp
 
     def _available_prefix(
         self,
@@ -367,7 +516,10 @@ class PlaybackService:
             ]:
                 self._sessions.pop(session_id, None)
             self._prefix_cache.pop(task_id, None)
-            self._plan_cache.pop(_safe_task_dir(task_id) / PLAN_FILENAME, None)
+            plan_path = _safe_task_dir(task_id) / PLAN_FILENAME
+            self._plan_cache.pop(plan_path, None)
+        with _PLAN_WRITE_LOCK:
+            _PLAN_WRITE_CACHE.pop(plan_path, None)
 
     def _expire_locked(self, now: float) -> set[str]:
         expired_tasks: set[str] = set()

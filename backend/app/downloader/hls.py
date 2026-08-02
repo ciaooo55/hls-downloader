@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import os
 import re
 import shutil
 from collections.abc import Awaitable, Callable
@@ -26,8 +27,10 @@ from ..utils import (
     atomic_write_text,
     canonical_hls_url,
     durable_replace,
+    read_jsonl_prefix,
     sanitize_filename,
     stable_request_key,
+    truncate_durable,
 )
 from ..naming import is_generic_media_name, suggest_manifest_name
 from ..request_context import build_task_headers
@@ -68,6 +71,8 @@ _CONTENT_RANGE_RE = re.compile(r"^bytes (\d+)-(\d+)/(\d+|\*)$", re.IGNORECASE)
 # guidance of several target durations: past it the origin has stopped
 # publishing and the recording is finalized rather than left running forever.
 LIVE_STATE_FILENAME = "live_state.json"
+LIVE_STATE_JOURNAL_FILENAME = "live_state.journal"
+LIVE_STATE_JOURNAL_MIN_COMPACT_BYTES = 4 * 1024 * 1024
 LIVE_SUBTITLE_STATE_FILENAME = "live_subtitles.json"
 LIVE_SUBTITLE_STATE_VERSION = 1
 VOD_STATE_FILENAME = "vod_segments.json"
@@ -375,6 +380,8 @@ class HLSDownloader:
         self._vod_resume_records: dict[str, dict[str, int | str]] = {}
         self._vod_resume_identities: dict[int, str] = {}
         self._vod_resume_lock = asyncio.Lock()
+        self._live_checkpoint_records: dict[int, dict] | None = None
+        self._live_checkpoint_duration = 0.0
 
     def _external_audio_task(self, url: str) -> Task:
         """Create a resumable sidecar recorder sharing only task controls."""
@@ -844,6 +851,7 @@ class HLSDownloader:
                         )
                         self._start_live_subtitle_recorder(headers)
                     if parsed is None:
+                        assert saved_live_state is not None
                         recovered: list[dict] = []
                         total_duration = self._restore_live_segments(
                             saved_live_state, recovered
@@ -873,6 +881,7 @@ class HLSDownloader:
                     # plain VOD; drop the stale live marker so the UI stops
                     # presenting it as a recording.
                     task.engine_state.pop("live", None)
+                    assert parsed is not None
                     segments = parsed["segments"]
                     if not segments:
                         raise ValueError("m3u8 中没有分片")
@@ -1139,6 +1148,7 @@ class HLSDownloader:
         cache_dir.mkdir(parents=True, exist_ok=True)
         changed = False
 
+        candidates: list[tuple[str, dict | None, bytes | None]]
         if response.text.lstrip("﻿ \t\r\n").startswith("WEBVTT"):
             payload = bytes(response.content)
             identity = hashlib.sha256(payload).hexdigest()
@@ -1306,10 +1316,13 @@ class HLSDownloader:
         for position, segment in enumerate(parsed["segments"]):
             destination = fetch_dir / f"{position:06d}.vtt"
             try:
-                await self._retry_control_request(
-                    lambda segment=segment, destination=destination: self._download_subtitle_segment(
+                async def download_current_subtitle_segment() -> None:
+                    await self._download_subtitle_segment(
                         client, segment, headers, destination
-                    ),
+                    )
+
+                await self._retry_control_request(
+                    download_current_subtitle_segment,
                     stage="verifying",
                     url=segment["url"],
                     label="字幕分片",
@@ -1562,16 +1575,78 @@ class HLSDownloader:
             }
             await asyncio.to_thread(self._write_vod_state)
 
-    def _load_live_state(self) -> dict | None:
+    def _live_state_journal_path(self) -> Path:
+        return self._task_dir() / LIVE_STATE_JOURNAL_FILENAME
+
+    def _read_live_state(self) -> dict | None:
         path = self._task_dir() / LIVE_STATE_FILENAME
-        if not path.exists():
+        journal = self._live_state_journal_path()
+        if not path.exists() and not journal.exists():
             return None
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
-        if not isinstance(payload, dict) or not isinstance(payload.get("segments"), list):
-            return None
+        payload: dict = {"version": 3, "total_duration": 0.0, "segments": []}
+        if path.exists():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            if not isinstance(loaded, dict) or not isinstance(loaded.get("segments"), list):
+                return None
+            payload = loaded
+        by_index = {
+            int(item["index"]): item
+            for item in payload.get("segments", [])
+            if isinstance(item, dict) and str(item.get("index", "")).lstrip("-").isdigit()
+        }
+        if journal.exists():
+            try:
+                records, journal_size = read_jsonl_prefix(journal)
+                accepted_offset = 0
+                for event, end_offset in records:
+                    if event.get("version") != 1:
+                        break
+                    remove = event.get("remove", [])
+                    upserts = event.get("upsert", [])
+                    if not isinstance(remove, list) or not isinstance(upserts, list):
+                        break
+                    for raw_index in remove:
+                        try:
+                            by_index.pop(int(raw_index), None)
+                        except (TypeError, ValueError):
+                            continue
+                    for item in upserts:
+                        if not isinstance(item, dict):
+                            continue
+                        try:
+                            by_index[int(item["index"])] = item
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                    payload["total_duration"] = float(
+                        event.get("total_duration", payload.get("total_duration", 0)) or 0
+                    )
+                    accepted_offset = end_offset
+                if accepted_offset < journal_size:
+                    truncate_durable(journal, accepted_offset)
+            except OSError:
+                return None
+        payload["version"] = 3
+        payload["segments"] = [by_index[index] for index in sorted(by_index)]
+        return payload
+
+    def _load_live_state(self) -> dict | None:
+        payload = self._read_live_state()
+        self._live_checkpoint_records = (
+            {
+                int(item["index"]): item
+                for item in payload.get("segments", [])
+                if isinstance(item, dict)
+                and str(item.get("index", "")).lstrip("-").isdigit()
+            }
+            if payload is not None
+            else None
+        )
+        self._live_checkpoint_duration = (
+            float(payload.get("total_duration") or 0) if payload else 0.0
+        )
         return payload
 
     @staticmethod
@@ -1600,35 +1675,95 @@ class HLSDownloader:
             return ""
         return str(resolved)
 
-    def _save_live_state(self, recorded: list[dict], total_duration: float) -> None:
-        persisted = []
+    def _save_live_state(
+        self,
+        recorded: list[dict],
+        total_duration: float,
+        *,
+        force_compact: bool = False,
+        changed_entries: list[dict] | None = None,
+    ) -> None:
         seg_dir = self._seg_dir()
-        for entry in recorded:
+
+        def persist(entry: dict) -> dict:
             segment_path = seg_dir / f"{int(entry['index']):06d}.seg"
             try:
                 size = segment_path.stat().st_size
             except OSError:
                 size = 0
-            persisted.append(
-                {
-                    "index": int(entry["index"]),
-                    "resource_identity": self._live_resource_identity(entry),
-                    "duration": float(entry.get("duration") or 0),
-                    "media_sequence": int(entry.get("media_sequence") or 0),
-                    "part_index": entry.get("part_index"),
-                    "is_partial": bool(entry.get("is_partial")),
-                    "discontinuity": bool(entry.get("discontinuity")),
-                    "init_name": Path(str(entry.get("init_path") or "")).name,
-                    "size": int(size),
-                }
-            )
-        payload = {
-            "version": 3,
-            "total_duration": float(total_duration or 0),
-            "segments": persisted,
-        }
+            return {
+                "index": int(entry["index"]),
+                "resource_identity": self._live_resource_identity(entry),
+                "duration": float(entry.get("duration") or 0),
+                "media_sequence": int(entry.get("media_sequence") or 0),
+                "part_index": entry.get("part_index"),
+                "is_partial": bool(entry.get("is_partial")),
+                "discontinuity": bool(entry.get("discontinuity")),
+                "init_name": Path(str(entry.get("init_path") or "")).name,
+                "size": int(size),
+            }
+
         destination = self._task_dir() / LIVE_STATE_FILENAME
-        atomic_write_text(destination, json.dumps(payload, ensure_ascii=False))
+        journal = self._live_state_journal_path()
+        old = self._live_checkpoint_records
+        if old is None:
+            previous = self._read_live_state()
+            old = {
+                int(item["index"]): item
+                for item in (previous or {}).get("segments", [])
+                if isinstance(item, dict)
+                and str(item.get("index", "")).lstrip("-").isdigit()
+            }
+            self._live_checkpoint_duration = (
+                float(previous.get("total_duration") or 0) if previous else 0.0
+            )
+        if changed_entries is None:
+            new = {int(entry["index"]): persist(entry) for entry in recorded}
+            removed = sorted(set(old) - set(new))
+            upserts = [new[index] for index in sorted(new) if old.get(index) != new[index]]
+        else:
+            new = dict(old)
+            upserts = []
+            for entry in changed_entries:
+                item = persist(entry)
+                index = int(item["index"])
+                if new.get(index) != item:
+                    new[index] = item
+                    upserts.append(item)
+            removed = []
+        duration = float(total_duration or 0)
+
+        def payload() -> dict:
+            return {
+                "version": 3,
+                "total_duration": duration,
+                "segments": [new[index] for index in sorted(new)],
+            }
+
+        if force_compact or not destination.exists():
+            snapshot = payload()
+            atomic_write_text(destination, json.dumps(snapshot, ensure_ascii=False))
+            journal.unlink(missing_ok=True)
+        elif upserts or removed or self._live_checkpoint_duration != duration:
+            line = json.dumps({
+                "version": 1,
+                "total_duration": duration,
+                "remove": removed,
+                "upsert": upserts,
+            }, ensure_ascii=False, separators=(",", ":")) + "\n"
+            journal.parent.mkdir(parents=True, exist_ok=True)
+            with journal.open("a", encoding="utf-8", newline="\n") as stream:
+                stream.write(line)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if journal.stat().st_size >= max(
+                LIVE_STATE_JOURNAL_MIN_COMPACT_BYTES,
+                destination.stat().st_size * 2,
+            ):
+                atomic_write_text(destination, json.dumps(payload(), ensure_ascii=False))
+                journal.unlink(missing_ok=True)
+        self._live_checkpoint_records = new
+        self._live_checkpoint_duration = duration
 
     def _restore_live_segments(
         self,
@@ -2057,8 +2192,13 @@ class HLSDownloader:
                         total_duration = max(0.0, total_duration - removed_duration)
                         partial_sequences.difference_update(replacement_sequences)
                         for replacement in kept:
-                            sequence = replacement.get("replaces_partial_sequence")
-                            if sequence is not None and int(sequence) in replacement_boundaries:
+                            replacement_sequence = replacement.get(
+                                "replaces_partial_sequence"
+                            )
+                            if (
+                                replacement_sequence is not None
+                                and int(replacement_sequence) in replacement_boundaries
+                            ):
                                 replacement["discontinuity"] = True
                     recorded.extend(kept)
                     recorded_identities.update(
@@ -2081,8 +2221,19 @@ class HLSDownloader:
                     self._purge_orphan_live_segments(next_index)
                     self.tracker.total = len(recorded)
                     task.progress.media_duration = total_duration
-                    await asyncio.to_thread(write_playback_plan, task_dir, recorded, total_duration)
-                    await asyncio.to_thread(self._save_live_state, recorded, total_duration)
+                    await asyncio.to_thread(
+                        write_playback_plan,
+                        task_dir,
+                        recorded,
+                        total_duration,
+                        changed_segments=(None if replacement_sequences else kept),
+                    )
+                    await asyncio.to_thread(
+                        self._save_live_state,
+                        recorded,
+                        total_duration,
+                        changed_entries=(None if replacement_sequences else kept),
+                    )
                     self._refresh_playback_progress()
                     self._emit_progress()
                     task.progress.connection_status = "running"
@@ -2164,8 +2315,19 @@ class HLSDownloader:
         )
         task.progress.total_segments = len(final_segments)
         task.progress.media_duration = final_duration
-        await asyncio.to_thread(write_playback_plan, task_dir, final_segments, final_duration)
-        await asyncio.to_thread(self._save_live_state, final_segments, final_duration)
+        await asyncio.to_thread(
+            write_playback_plan,
+            task_dir,
+            final_segments,
+            final_duration,
+            force_compact=True,
+        )
+        await asyncio.to_thread(
+            self._save_live_state,
+            final_segments,
+            final_duration,
+            force_compact=True,
+        )
         self._set_stage(
             "recording",
             f"{finish_reason}，共录制 {_format_clock(final_duration)}，正在合并",

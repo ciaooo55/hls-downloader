@@ -16,8 +16,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
+import re
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
+from xml.etree import ElementTree
 
 import httpx
 
@@ -26,7 +30,14 @@ from ..checksum import verify_task_checksum
 from ..models import Task, TaskStatus
 from ..network_proxy import policy_httpx_client
 from ..request_context import build_task_headers
-from ..utils import atomic_write_text, durable_replace, sanitize_filename, stable_request_key
+from ..utils import (
+    atomic_write_text,
+    durable_replace,
+    read_jsonl_prefix,
+    sanitize_filename,
+    stable_request_key,
+    truncate_durable,
+)
 from .engine import task_output_dir, task_work_dir
 from .errors import (
     SharedRetryWindow,
@@ -51,12 +62,81 @@ VIDEO_SEG_DIR = "segments"
 VIDEO_INIT_NAME = "dash-video.init"
 AUDIO_DIR = "a"
 LIVE_STATE_FILENAME = "live_state.json"
+LIVE_STATE_JOURNAL_FILENAME = "live_state.journal"
+LIVE_STATE_JOURNAL_MIN_COMPACT_BYTES = 4 * 1024 * 1024
 DASH_VOD_STATE_FILENAME = "dash_vod_segments.json"
 DASH_VOD_STATE_VERSION = 1
 LIVE_MIN_POLL_SECONDS = 1.0
 LIVE_MAX_POLL_SECONDS = 10.0
 LIVE_STALL_MIN_SECONDS = 90.0
 LIVE_STALL_TARGET_MULTIPLIER = 6.0
+_TTML_CLOCK_RE = re.compile(r"^(?:(\d+):)?(\d{2}):(\d{2}(?:\.\d+)?)$")
+_TTML_SECONDS_RE = re.compile(r"^(\d+(?:\.\d+)?)s$")
+
+
+def _ttml_seconds(value: str) -> float | None:
+    raw = str(value or "").strip()
+    clock = _TTML_CLOCK_RE.fullmatch(raw)
+    if clock:
+        return (
+            int(clock.group(1) or 0) * 3600
+            + int(clock.group(2)) * 60
+            + float(clock.group(3))
+        )
+    seconds = _TTML_SECONDS_RE.fullmatch(raw)
+    return float(seconds.group(1)) if seconds else None
+
+
+def _ttml_clock(value: float) -> str:
+    bounded = max(0.0, float(value))
+    hours, remainder = divmod(bounded, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{int(hours):02d}:{int(minutes):02d}:{seconds:06.3f}"
+
+
+def _merge_segmented_ttml(files: list[Path], segments: list[dict], destination: Path) -> None:
+    documents = [ElementTree.parse(path) for path in files]
+    cue_groups = [
+        [node for node in document.getroot().iter() if node.tag.rsplit("}", 1)[-1] == "p"]
+        for document in documents
+    ]
+    root = documents[0].getroot()
+    target_div = next(
+        (node for node in root.iter() if node.tag.rsplit("}", 1)[-1] == "div"),
+        None,
+    )
+    if target_div is None:
+        raise RuntimeError("TTML 字幕缺少 div 容器")
+    # Rebuild the cue list in segment order. Styling/layout from the first
+    # document remains authoritative; individual cue attributes are retained.
+    for node in list(target_div):
+        if node.tag.rsplit("}", 1)[-1] == "p":
+            target_div.remove(node)
+    for index, cues in enumerate(cue_groups):
+        segment = segments[index] if index < len(segments) else {}
+        start = float(segment.get("start") or 0)
+        duration = float(segment.get("duration") or 0)
+        times = [
+            parsed
+            for cue in cues
+            for name in ("begin", "end")
+            if (parsed := _ttml_seconds(cue.get(name, ""))) is not None
+        ]
+        relative = bool(start > 0 and times and max(times) <= duration + 0.5)
+        for cue in cues:
+            copied = deepcopy(cue)
+            if relative:
+                for name in ("begin", "end"):
+                    parsed = _ttml_seconds(copied.get(name, ""))
+                    if parsed is not None:
+                        copied.set(name, _ttml_clock(parsed + start))
+            target_div.append(copied)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    ElementTree.ElementTree(root).write(
+        destination,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
 
 
 def _is_webm_track(track: dict) -> bool:
@@ -73,6 +153,7 @@ class NativeDashEngine:
         self._retry_window = SharedRetryWindow()
         self.tracker = ProgressTracker()
         self._header_cache: dict[str, dict[str, str]] = {}
+        self._live_checkpoint_tracks: dict[str, dict] | None = None
         self._vod_resume_records: dict[str, dict[str, int | str]] = {}
         self._vod_resume_lock = asyncio.Lock()
 
@@ -715,9 +796,17 @@ class NativeDashEngine:
             if not has_cues(merged):
                 return None
             vtt_path.write_text(merged, encoding="utf-8")
-        elif mime == "application/ttml+xml" and len(files) == 1:
+        elif mime == "application/ttml+xml":
             ttml_path = base.with_name(f"{base.name}.{label}.ttml")
-            ttml_path.write_bytes(files[0].read_bytes())
+            if len(files) == 1:
+                ttml_path.write_bytes(files[0].read_bytes())
+            else:
+                await asyncio.to_thread(
+                    _merge_segmented_ttml,
+                    files,
+                    list(track.get("segments") or []),
+                    ttml_path,
+                )
             return ttml_path
         elif codecs.startswith(("wvtt", "stpp")) or mime == "application/mp4":
             joined = task_dir / "subtitle.mp4"
@@ -784,33 +873,211 @@ class NativeDashEngine:
             )
         ).hexdigest()
 
-    def _load_live_state(self, task_dir: Path) -> dict | None:
-        path = task_dir / LIVE_STATE_FILENAME
-        if not path.exists():
-            return None
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
-        return payload if isinstance(payload, dict) else None
+    @staticmethod
+    def _live_state_journal_path(task_dir: Path) -> Path:
+        return task_dir / LIVE_STATE_JOURNAL_FILENAME
 
-    def _save_live_state(self, task_dir: Path, state: dict[str, dict]) -> None:
-        payload = {
-            "version": 3,
-            "tracks": {
-                kind: {
-                    "segments": value["entries"],
-                    "fingerprint": str(value.get("fingerprint") or ""),
-                    "mime": str(value.get("mime") or ""),
-                    "codecs": str(value.get("codecs") or ""),
-                    "has_init": bool(value.get("has_init")),
-                    "init_size": int(value.get("init_size") or 0),
+    def _read_live_state(self, task_dir: Path) -> dict | None:
+        path = task_dir / LIVE_STATE_FILENAME
+        journal = self._live_state_journal_path(task_dir)
+        if not path.exists() and not journal.exists():
+            return None
+        payload: dict = {"version": 3, "tracks": {}}
+        if path.exists():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            if not isinstance(loaded, dict) or not isinstance(loaded.get("tracks"), dict):
+                return None
+            payload = loaded
+
+        def apply_track_delta(kind: str, delta: dict) -> None:
+            if delta.get("deleted"):
+                payload.setdefault("tracks", {}).pop(kind, None)
+                return
+            track = payload.setdefault("tracks", {}).setdefault(kind, {"segments": []})
+            by_index = {
+                int(item["index"]): item
+                for item in track.get("segments", [])
+                if isinstance(item, dict) and str(item.get("index", "")).lstrip("-").isdigit()
+            }
+            for raw_index in delta.get("remove", []):
+                try:
+                    by_index.pop(int(raw_index), None)
+                except (TypeError, ValueError):
+                    continue
+            for item in delta.get("upsert", []):
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    by_index[int(item["index"])] = item
+                except (KeyError, TypeError, ValueError):
+                    continue
+            metadata = delta.get("metadata")
+            if isinstance(metadata, dict):
+                track.update(metadata)
+            track["segments"] = [by_index[index] for index in sorted(by_index)]
+
+        if journal.exists():
+            try:
+                records, journal_size = read_jsonl_prefix(journal)
+                accepted_offset = 0
+                for event, end_offset in records:
+                    deltas = event.get("tracks") if event.get("version") == 1 else None
+                    if not isinstance(deltas, dict):
+                        break
+                    for kind, delta in deltas.items():
+                        if isinstance(delta, dict):
+                            apply_track_delta(str(kind), delta)
+                    accepted_offset = end_offset
+                if accepted_offset < journal_size:
+                    truncate_durable(journal, accepted_offset)
+            except OSError:
+                return None
+        payload["version"] = 3
+        return payload
+
+    def _load_live_state(self, task_dir: Path) -> dict | None:
+        payload = self._read_live_state(task_dir)
+        self._live_checkpoint_tracks = (
+            {
+                str(kind): {
+                    "segments": {
+                        int(item["index"]): item
+                        for item in track.get("segments", [])
+                        if isinstance(item, dict)
+                        and str(item.get("index", "")).lstrip("-").isdigit()
+                    },
+                    "metadata": {
+                        key: value for key, value in track.items() if key != "segments"
+                    },
                 }
-                for kind, value in state.items()
-            },
-        }
+                for kind, track in payload.get("tracks", {}).items()
+                if isinstance(track, dict)
+            }
+            if payload is not None
+            else None
+        )
+        return payload
+
+    def _save_live_state(
+        self,
+        task_dir: Path,
+        state: dict[str, dict],
+        *,
+        force_compact: bool = False,
+        changed_tracks: dict[str, list[dict]] | None = None,
+    ) -> None:
+        def metadata(value: dict) -> dict:
+            return {
+                "fingerprint": str(value.get("fingerprint") or ""),
+                "mime": str(value.get("mime") or ""),
+                "codecs": str(value.get("codecs") or ""),
+                "has_init": bool(value.get("has_init")),
+                "init_size": int(value.get("init_size") or 0),
+            }
+
         destination = task_dir / LIVE_STATE_FILENAME
-        atomic_write_text(destination, json.dumps(payload, ensure_ascii=False))
+        journal = self._live_state_journal_path(task_dir)
+        previous_tracks = self._live_checkpoint_tracks
+        if previous_tracks is None:
+            previous = self._read_live_state(task_dir)
+            previous_tracks = {
+                str(kind): {
+                    "segments": {
+                        int(item["index"]): item
+                        for item in track.get("segments", [])
+                        if isinstance(item, dict)
+                        and str(item.get("index", "")).lstrip("-").isdigit()
+                    },
+                    "metadata": {
+                        key: value for key, value in track.items() if key != "segments"
+                    },
+                }
+                for kind, track in (previous or {}).get("tracks", {}).items()
+                if isinstance(track, dict)
+            }
+        next_tracks = {
+            kind: {
+                "segments": dict(track.get("segments", {})),
+                "metadata": dict(track.get("metadata", {})),
+            }
+            for kind, track in previous_tracks.items()
+        }
+        deltas: dict[str, dict] = {}
+        for kind, value in state.items():
+            old_track = previous_tracks.get(kind, {"segments": {}, "metadata": {}})
+            old = old_track.get("segments", {})
+            new_metadata = metadata(value)
+            if changed_tracks is None:
+                new = {int(item["index"]): dict(item) for item in value["entries"]}
+                removed = sorted(set(old) - set(new))
+                upserts = [new[index] for index in sorted(new) if old.get(index) != new[index]]
+            else:
+                new = dict(old)
+                upserts = []
+                for item in changed_tracks.get(kind, []):
+                    copied = dict(item)
+                    index = int(copied["index"])
+                    if new.get(index) != copied:
+                        new[index] = copied
+                        upserts.append(copied)
+                removed = []
+            next_tracks[kind] = {"segments": new, "metadata": new_metadata}
+            if upserts or removed or new_metadata != old_track.get("metadata", {}):
+                deltas[kind] = {
+                    "remove": removed,
+                    "upsert": upserts,
+                    "metadata": new_metadata,
+                }
+        if changed_tracks is None:
+            for kind in set(previous_tracks) - set(state):
+                old_track = previous_tracks.get(kind, {"segments": {}})
+                next_tracks.pop(kind, None)
+                deltas[kind] = {
+                    "remove": sorted(old_track.get("segments", {})),
+                    "upsert": [],
+                    "metadata": {},
+                    "deleted": True,
+                }
+
+        def payload() -> dict:
+            return {
+                "version": 3,
+                "tracks": {
+                    kind: {
+                        "segments": [
+                            track["segments"][index]
+                            for index in sorted(track["segments"])
+                        ],
+                        **track["metadata"],
+                    }
+                    for kind, track in next_tracks.items()
+                },
+            }
+
+        if force_compact or not destination.exists():
+            atomic_write_text(destination, json.dumps(payload(), ensure_ascii=False))
+            journal.unlink(missing_ok=True)
+        elif deltas:
+            line = json.dumps(
+                {"version": 1, "tracks": deltas},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ) + "\n"
+            journal.parent.mkdir(parents=True, exist_ok=True)
+            with journal.open("a", encoding="utf-8", newline="\n") as stream:
+                stream.write(line)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if journal.stat().st_size >= max(
+                LIVE_STATE_JOURNAL_MIN_COMPACT_BYTES,
+                destination.stat().st_size * 2,
+            ):
+                atomic_write_text(destination, json.dumps(payload(), ensure_ascii=False))
+                journal.unlink(missing_ok=True)
+        self._live_checkpoint_tracks = next_tracks
 
     def _pause_exit(self) -> bool:
         task = self.task
@@ -1000,6 +1267,7 @@ class NativeDashEngine:
                     stray.unlink(missing_ok=True)
             state[kind] = {
                 "entries": kept,
+                "total_duration": sum(entry["duration"] for entry in kept),
                 "last_identity": max((entry["identity"] for entry in kept), default=-1),
                 "fingerprint": self._live_track_fingerprint(kind, track),
                 "mime": str(track.get("mime") or ""),
@@ -1045,22 +1313,29 @@ class NativeDashEngine:
             else ""
         )
 
-        def write_live_plan() -> None:
+        def write_live_plan(
+            changed_entries: list[dict] | None = None,
+            *,
+            force_compact: bool = False,
+        ) -> None:
             if not video_state or not plan_init:
                 return
-            entries = video_state["entries"]
+            entries = video_state["entries"] if changed_entries is None else changed_entries
+            plan_segments = [
+                {
+                    "index": entry["index"],
+                    "duration": entry["duration"],
+                    "discontinuity": False,
+                    "init_path": plan_init,
+                }
+                for entry in entries
+            ]
             write_playback_plan(
                 task_dir,
-                [
-                    {
-                        "index": entry["index"],
-                        "duration": entry["duration"],
-                        "discontinuity": False,
-                        "init_path": plan_init,
-                    }
-                    for entry in entries
-                ],
-                sum(entry["duration"] for entry in entries),
+                plan_segments,
+                float(video_state["total_duration"]),
+                force_compact=force_compact,
+                changed_segments=(plan_segments if changed_entries is not None else None),
             )
 
         def refresh_counters() -> None:
@@ -1071,9 +1346,7 @@ class NativeDashEngine:
             task.progress.downloaded_bytes = snapshot["downloaded_bytes"]
             task.progress.speed_bytes_per_sec = snapshot["speed"]
             if duration_state:
-                task.progress.media_duration = sum(
-                    entry["duration"] for entry in duration_state["entries"]
-                )
+                task.progress.media_duration = float(duration_state["total_duration"])
             self._publish()
 
         task.status = TaskStatus.DOWNLOADING_SEGMENTS
@@ -1129,13 +1402,22 @@ class NativeDashEngine:
                         "start": float(segment.get("start") or 0),
                         "size": destination.stat().st_size,
                     })
+                    track_state["total_duration"] += float(segment.get("duration") or 0)
                     track_state["last_identity"] = identity
                     self.tracker.add_completed(destination.stat().st_size)
                     appended = True
                     if kind == "video":
-                        await asyncio.to_thread(write_live_plan)
+                        await asyncio.to_thread(
+                            write_live_plan,
+                            [track_state["entries"][-1]],
+                        )
                         self._refresh_playback_progress()
-                    await asyncio.to_thread(self._save_live_state, task_dir, state)
+                    await asyncio.to_thread(
+                        self._save_live_state,
+                        task_dir,
+                        state,
+                        changed_tracks={kind: [track_state["entries"][-1]]},
+                    )
                     refresh_counters()
             return appended
 
@@ -1150,11 +1432,7 @@ class NativeDashEngine:
             if finish_reason:
                 break
             recorded_any = any(value["entries"] for value in state.values())
-            video_duration = (
-                sum(entry["duration"] for entry in duration_state["entries"])
-                if duration_state
-                else 0.0
-            )
+            video_duration = float(duration_state["total_duration"]) if duration_state else 0.0
             if appended:
                 last_new_segment = loop.time()
                 self._set_stage(
@@ -1233,12 +1511,18 @@ class NativeDashEngine:
         }
         if not counts:
             return self._pause_exit()
-        await asyncio.to_thread(self._save_live_state, task_dir, state)
+        await asyncio.to_thread(write_live_plan, force_compact=True)
+        await asyncio.to_thread(
+            self._save_live_state,
+            task_dir,
+            state,
+            force_compact=True,
+        )
         final_duration = (
-            sum(entry["duration"] for entry in video_state["entries"])
+            float(video_state["total_duration"])
             if video_state and video_state["entries"]
             else max(
-                sum(entry["duration"] for entry in value["entries"])
+                float(value["total_duration"])
                 for value in state.values()
                 if value["entries"]
             )

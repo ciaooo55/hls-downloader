@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from urllib.parse import (
@@ -18,6 +19,42 @@ _VOLATILE_REQUEST_QUERY = re.compile(
     r"_hls_(?:msn|part|skip))$",
     re.IGNORECASE,
 )
+
+
+def read_jsonl_prefix(path: str | Path) -> tuple[list[tuple[dict, int]], int]:
+    """Read complete JSON-object lines and report their durable byte offsets.
+
+    Journal appends always end in ``\n``. A final line without that terminator,
+    invalid UTF-8/JSON, or a non-object value is a torn tail and must not hide
+    later recovery work. Callers may apply their own schema checks and truncate
+    to the last accepted offset with :func:`truncate_durable`.
+    """
+    source = Path(path)
+    total_size = source.stat().st_size
+    records: list[tuple[dict, int]] = []
+    with source.open("rb") as stream:
+        while True:
+            line = stream.readline()
+            if not line:
+                break
+            end_offset = stream.tell()
+            if not line.endswith(b"\n"):
+                break
+            try:
+                value = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                break
+            if not isinstance(value, dict):
+                break
+            records.append((value, end_offset))
+    return records, total_size
+
+
+def truncate_durable(path: str | Path, size: int) -> None:
+    """Durably discard an invalid append-journal tail."""
+    with Path(path).open("r+b", buffering=0) as stream:
+        stream.truncate(max(0, int(size)))
+        os.fsync(stream.fileno())
 
 
 def durable_replace(temporary: str | Path, destination: str | Path) -> None:
