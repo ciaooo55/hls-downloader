@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { FastForward, LoaderCircle, Pause, Play, Trash2, X } from 'lucide-react'
 import { cancelPowerAction, castLocalFile, castMediaUrl, clearCompletedTasks, completeBrowserMediaPush, confirmPowerAction, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLocalTvboxShare, fetchPendingPowerActions, fetchSettings, fetchTasks, importTorrentPath, launchFile, openExplorer, openTaskInExplorer, pushLocalTvboxFile, pushTvboxUrl, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
 import { fmtBytes, fmtSpeed } from './format'
-import { isRunningStatus, mergeTaskEvent } from './taskState'
+import { isRunningStatus, mergeTaskEvent, mergeTaskEvents } from './taskState'
 import { commandState } from './taskCommands'
 import { filterAndSortTasks } from './taskPresentation'
 import type { ThemePreference } from './theme'
@@ -97,6 +97,8 @@ export default function App() {
   const lastClipboardOffer = useRef('')
   const tasksRef = useRef<Task[]>([])
   const loadInFlight = useRef<Promise<void> | null>(null)
+  const progressEventBatch = useRef<Map<string, Record<string, any>>>(new Map())
+  const progressFlushTimer = useRef<number | null>(null)
   const deletedTaskIds = useRef<Set<string>>(new Set())
   const handoffRefreshInFlight = useRef(false)
   const autoPlayHandled = useRef(false)
@@ -134,7 +136,12 @@ export default function App() {
     if (loadInFlight.current) return loadInFlight.current
     const request = (async () => { try {
       const [taskData, settingData, browserData, healthData, powerActions] = await Promise.all([fetchTasks(), fetchSettings(), fetchBrowserStatus(), fetchHealth(), fetchPendingPowerActions()])
-      setTasks(taskData.filter(task => !deletedTaskIds.current.has(task.id))); setSettings(settingData); setBrowserStatus(browserData); setAppVersion(healthData.version || ''); setPowerAction(powerActions[0] || null); setError('')
+      const pendingProgress = [...progressEventBatch.current.values()]
+      progressEventBatch.current.clear()
+      if (progressFlushTimer.current !== null) window.clearTimeout(progressFlushTimer.current)
+      progressFlushTimer.current = null
+      const visibleTasks = taskData.filter(task => !deletedTaskIds.current.has(task.id))
+      setTasks(mergeTaskEvents(visibleTasks, pendingProgress, deletedTaskIds.current) as Task[]); setSettings(settingData); setBrowserStatus(browserData); setAppVersion(healthData.version || ''); setPowerAction(powerActions[0] || null); setError('')
       try {
         if ('Notification' in window && Notification.permission === 'default') {
           void Notification.requestPermission()
@@ -158,7 +165,6 @@ export default function App() {
       if (['power_action_canceled', 'power_action_executed', 'power_action_failed'].includes(event.type)) {
         setPowerAction(current => current?.power_action_id === event.power_action_id ? null : current)
       }
-      setTasks(previous => mergeTaskEvent(previous, event, deletedTaskIds.current) as Task[])
       if (event.type === 'task_progress' && event.task_id) {
         const previous = lastStatuses.current[event.task_id]
         if (previous !== event.status) {
@@ -166,6 +172,21 @@ export default function App() {
           if (event.status === 'done') void notifySystem('下载完成', event.title || event.task_id)
           if (event.status === 'failed') void notifySystem('下载失败', event.error_message || event.task_id)
         }
+        progressEventBatch.current.set(event.task_id, event)
+        if (progressFlushTimer.current === null) {
+          progressFlushTimer.current = window.setTimeout(() => {
+            progressFlushTimer.current = null
+            const batch = [...progressEventBatch.current.values()]
+            progressEventBatch.current.clear()
+            setTasks(previousTasks => mergeTaskEvents(
+              previousTasks,
+              batch,
+              deletedTaskIds.current,
+            ) as Task[])
+          }, 100)
+        }
+      } else {
+        setTasks(previous => mergeTaskEvent(previous, event, deletedTaskIds.current) as Task[])
       }
     }, load)
     const timer = window.setInterval(load, 30000)
@@ -174,6 +195,9 @@ export default function App() {
     return () => {
       events.close()
       window.clearInterval(timer)
+      if (progressFlushTimer.current !== null) window.clearTimeout(progressFlushTimer.current)
+      progressFlushTimer.current = null
+      progressEventBatch.current.clear()
       window.removeEventListener('desktop-activated', onActivated)
     }
   }, [load])
@@ -544,7 +568,7 @@ export default function App() {
         <UpdateNotice />
         <div className="content-head"><strong>{filter === 'all' ? '全部任务' : filter === 'running' ? '进行中' : filter === 'done' ? '已完成' : filter === 'failed' ? '失败任务' : filter === 'media' ? '媒体' : filter === 'program' ? '程序' : filter === 'archive' ? '压缩包' : filter === 'other' ? '其他' : '任务列表'} <span>{filtered.length} 项{selected.size > 0 ? ` · 已选 ${selected.size}` : ''}</span></strong><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={() => void clearCompleted()}><Trash2 size={14} />清理已完成</button></div>
         {error && <div className="action-error" role="alert"><span>{error}</span><div className="action-error-actions"><button type="button" className="secondary-button" onClick={() => void load()}>重试</button><button type="button" className="icon-button action-error-dismiss" title="关闭提示" onClick={() => setError('')}><X size={15} /></button></div></div>}
-        <TaskTable tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openTaskInExplorer(task.id)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onPreview={setPlaying} onPreviewImage={setPreviewImage} onCast={task => task.output_path && void confirmLocalCast(task.output_path)} />
+        <TaskTable key={`${filter}:${query}`} tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openTaskInExplorer(task.id)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onPreview={setPlaying} onPreviewImage={setPreviewImage} onCast={task => task.output_path && void confirmLocalCast(task.output_path)} />
       </main>
     </div>
     <footer className="statusbar">

@@ -657,7 +657,7 @@ async def cancel_power_action(action_id: str, x_token: str = Header(default=""))
     _check_token(x_token)
     if not power_action_service.cancel(action_id):
         raise HTTPException(status_code=404, detail="电源动作不存在或已结束")
-    manager._broadcast_nowait({
+    manager.publish_event({
         "type": "power_action_canceled",
         "power_action_id": action_id,
     })
@@ -778,7 +778,7 @@ async def _launch_managed_update(task_id: str) -> None:
         task.error_stage = "verifying"
         task.error_message = f"更新包验证失败：{exc}"
         task.last_log = f"更新包已下载，但无法自动启动：{exc}"
-        await manager._save_db(task)
+        await manager.save_task(task)
         return
     update_service._install_started = True
     timer = threading.Timer(0.1, request_shutdown)
@@ -1186,7 +1186,7 @@ async def create_torrent_file_task(
     task.status = TaskStatus.AWAITING_SELECTION
     task.stage = "awaiting_selection"
     task.last_log = "请选择要下载的 BT 文件，然后点击开始下载"
-    await manager._save_db(task)
+    await manager.save_task(task)
     return _to_resp(task)
 
 
@@ -1220,7 +1220,7 @@ async def create_torrent_path_task(body: TorrentPathImport, x_token: str = Heade
     task.status = TaskStatus.AWAITING_SELECTION
     task.stage = "awaiting_selection"
     task.last_log = "请选择要下载的 BT 文件，然后点击开始下载"
-    await manager._save_db(task)
+    await manager.save_task(task)
     return _to_resp(task)
 
 
@@ -1896,7 +1896,7 @@ def _to_resp(task) -> TaskResponse:
         upload_speed_bytes_per_sec=task.progress.upload_speed_bytes_per_sec,
         peer_count=task.progress.peer_count,
         seed_count=task.progress.seed_count,
-        playback_ready=manager._playback_ready(task),
+        playback_ready=manager.playback_ready(task),
         speed_limit_kib=task.speed_limit_kib,
         is_live=bool(task.engine_state.get("live")),
         error_message=task.error_message,

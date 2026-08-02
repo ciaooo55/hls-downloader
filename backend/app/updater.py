@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 
 from .config import settings
 from .network_proxy import ensure_url_allowed, host_matches_patterns
+from .models import Task
 from .paths import RUNTIME_PATHS
 from .version import APP_VERSION
 
@@ -492,7 +493,7 @@ def download_installer(
         temporary.unlink(missing_ok=True)
 
 
-async def queue_update_download(info: UpdateInfo, manager) -> object:
+async def queue_update_download(info: UpdateInfo, manager) -> Task:
     """Create a real, persisted HTTP task for the installer download.
 
     Updates must have the same pause/resume, queue and progress semantics as
@@ -524,7 +525,7 @@ async def queue_update_download(info: UpdateInfo, manager) -> object:
             "update_expected_size": info.size,
             "update_asset_kind": info.asset_kind,
         })
-        await manager._save_db(task)
+        await manager.save_task(task)
         if task.status is TaskStatus.DONE:
             if task.output_path and Path(task.output_path).is_file():
                 return task
@@ -536,7 +537,7 @@ async def queue_update_download(info: UpdateInfo, manager) -> object:
             task.error_code = "UPDATE_INSTALLER_MISSING"
             task.error_message = "更新安装包文件不存在，将重新下载"
             task.last_log = task.error_message
-            await manager._save_db(task)
+            await manager.save_task(task)
             await manager.retry_task(task.id)
             return task
         if task.status is TaskStatus.PAUSED:
@@ -574,7 +575,7 @@ async def queue_update_download(info: UpdateInfo, manager) -> object:
         "temp_dir": str(RUNTIME_PATHS.data_root / "updates"),
     })
     task.last_log = f"正在下载 v{info.latest_version} 更新安装包"
-    await manager._save_db(task)
+    await manager.save_task(task)
     await manager.start_task(task.id)
     return task
 

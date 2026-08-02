@@ -524,6 +524,7 @@ code,
 .content-head strong { display: inline-flex; align-items: baseline; gap: 7px; font-size: 12px; }
 .content-head strong span { font-weight: 400; }
 .table-scroll { padding: 0 7px 7px; background: var(--bg); }
+.task-list-load-more { display:flex; justify-content:center; padding:12px 0 6px; }
 .task-table { border-collapse: separate; border-spacing: 0 2px; }
 .task-table th { height: 32px; border-bottom: 0; background: var(--bg); color: var(--muted); font-weight: 500; }
 .task-table td { height: 50px; border-bottom: 0; background: var(--surface); }

@@ -435,13 +435,14 @@ def test_load_from_db_keeps_history_and_pauses_interrupted_tasks(monkeypatch):
         _db_row("failed", task_id="failed1"),
     ]
 
-    async def fake_run_db(sql, params=()):
+    async def fake_iter_db_rows(sql, params=(), **_kwargs):
         assert "status NOT IN" not in sql
-        return rows
+        for item in rows:
+            yield item
 
     async def run():
         manager = TaskManager()
-        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+        monkeypatch.setattr(manager_module, "iter_db_rows", fake_iter_db_rows)
         monkeypatch.setattr(manager, "_save_db", _async_noop)
 
         await manager.load_from_db()
@@ -466,8 +467,8 @@ def test_load_from_db_auto_resumes_only_update_marked_tasks(monkeypatch):
     row = _db_row("paused", task_id="update-restart")
     row["engine_state"] = '{"resume_after_update": true}'
 
-    async def fake_run_db(sql, params=()):
-        return [row]
+    async def fake_iter_db_rows(sql, params=(), **_kwargs):
+        yield row
 
     async def run():
         manager = TaskManager()
@@ -476,7 +477,7 @@ def test_load_from_db_auto_resumes_only_update_marked_tasks(monkeypatch):
         async def fake_start(task_id):
             started.append(task_id)
 
-        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+        monkeypatch.setattr(manager_module, "iter_db_rows", fake_iter_db_rows)
         monkeypatch.setattr(manager, "_save_db", _async_noop)
         monkeypatch.setattr(manager, "start_task", fake_start)
 
@@ -1057,12 +1058,12 @@ def test_load_from_db_preserves_future_scheduled_queue(monkeypatch):
     row = _db_row("queued", task_id="scheduled")
     row["engine_state"] = '{"queue_waiting_for_schedule": true}'
 
-    async def fake_run_db(sql, params=()):
-        return [row]
+    async def fake_iter_db_rows(sql, params=(), **_kwargs):
+        yield row
 
     async def run():
         manager = TaskManager()
-        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+        monkeypatch.setattr(manager_module, "iter_db_rows", fake_iter_db_rows)
         monkeypatch.setattr(manager, "_save_db", _async_noop)
         monkeypatch.setattr(manager, "_queue_auto_start_due", lambda: False)
 
@@ -1084,12 +1085,12 @@ def test_load_from_db_recovers_corrupt_engine_state_and_unknown_type(monkeypatch
     row["total_bytes"] = "broken"
     row["speed_bytes_per_sec"] = "nan"
 
-    async def fake_run_db(sql, params=()):
-        return [row]
+    async def fake_iter_db_rows(sql, params=(), **_kwargs):
+        yield row
 
     async def run():
         manager = TaskManager()
-        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+        monkeypatch.setattr(manager_module, "iter_db_rows", fake_iter_db_rows)
         await manager.load_from_db()
         task = manager.tasks["recovered"]
         assert task.task_type is TaskType.HTTP

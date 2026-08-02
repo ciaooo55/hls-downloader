@@ -4,6 +4,7 @@ import {
   getDisplayedProgress,
   isPausable,
   mergeTaskEvent,
+  mergeTaskEvents,
 } from './taskState'
 
 
@@ -57,6 +58,22 @@ describe('task state updates', () => {
       type: 'task_progress', task_id: 'gone', status: 'downloading', completed_segments: 4,
     }, tombstones)
     expect(updated).toEqual([])
+  })
+
+  it('merges a progress batch with one pass and keeps the newest fields', () => {
+    const tasks = [
+      { id: 'one', status: 'downloading', downloaded_bytes: 1, title: 'One' },
+      { id: 'two', status: 'queued', downloaded_bytes: 0, title: 'Two' },
+    ]
+    const merged = mergeTaskEvents(tasks, [
+      { type: 'task_progress', task_id: 'one', downloaded_bytes: 2 },
+      { type: 'task_progress', task_id: 'two', status: 'downloading' },
+      { type: 'task_progress', task_id: 'one', downloaded_bytes: 3 },
+    ])
+    expect(merged).toEqual([
+      { id: 'one', status: 'downloading', downloaded_bytes: 3, title: 'One' },
+      { id: 'two', status: 'downloading', downloaded_bytes: 0, title: 'Two' },
+    ])
   })
 })
 

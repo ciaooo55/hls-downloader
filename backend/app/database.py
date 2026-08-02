@@ -244,3 +244,33 @@ async def run_db_many(sql, params_list):
             raise
         finally:
             await db.close()
+
+
+async def iter_db_rows(sql, params=(), *, batch_size: int = 512):
+    """Stream a large SELECT without materializing every SQLite row at once."""
+    size = max(1, min(int(batch_size), 10_000))
+    active = _active_connection()
+    if active is not None:
+        db, lock = active
+        async with lock:
+            cursor = await db.execute(sql, params)
+            try:
+                while rows := await cursor.fetchmany(size):
+                    for row in rows:
+                        yield row
+            finally:
+                await cursor.close()
+        return
+    async with _ephemeral_lock():
+        db = await aiosqlite.connect(str(DB_PATH), timeout=30)
+        try:
+            await _prepare(db)
+            cursor = await db.execute(sql, params)
+            try:
+                while rows := await cursor.fetchmany(size):
+                    for row in rows:
+                        yield row
+            finally:
+                await cursor.close()
+        finally:
+            await db.close()

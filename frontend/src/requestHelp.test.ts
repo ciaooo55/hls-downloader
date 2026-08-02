@@ -35,7 +35,8 @@ describe('request field guidance', () => {
     expect(REQUEST_FIELD_HELP.referer).toContain('浏览器插件任务使用实际捕获值')
     expect(REQUEST_FIELD_HELP.origin).toContain('不会凭空生成 Origin')
     expect(REQUEST_FIELD_HELP.concurrency).toContain('默认 12')
-    expect(REQUEST_FIELD_HELP.concurrency).toContain('最高 256')
+    expect(REQUEST_FIELD_HELP.concurrency).toContain('最高 64')
+    expect(REQUEST_FIELD_HELP.concurrency).toContain('单站连接预算')
     expect(REQUEST_FIELD_HELP.maxTasks).toContain('默认 3')
   })
 

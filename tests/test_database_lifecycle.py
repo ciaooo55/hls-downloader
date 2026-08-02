@@ -44,3 +44,31 @@ def test_core_lifecycle_reuses_one_wal_connection_and_migrates_once(tmp_path, mo
         assert database._connection is None
 
     asyncio.run(run())
+
+
+def test_large_select_can_be_streamed_in_bounded_batches(tmp_path, monkeypatch):
+    from backend.app import database
+
+    async def run():
+        await database.close_database()
+        monkeypatch.setattr(database, "DB_PATH", tmp_path / "streamed.db")
+        try:
+            await database.initialize_database()
+            await database.run_db_many(
+                "INSERT INTO tasks (id,url,title) VALUES (?,?,?)",
+                [(f"task-{index}", "https://example.test/file", str(index)) for index in range(1200)],
+            )
+            ids = [
+                row["id"]
+                async for row in database.iter_db_rows(
+                    "SELECT id FROM tasks ORDER BY id",
+                    batch_size=127,
+                )
+            ]
+            assert len(ids) == 1200
+            assert ids[0] == "task-0"
+            assert ids[-1] == "task-999"
+        finally:
+            await database.close_database()
+
+    asyncio.run(run())

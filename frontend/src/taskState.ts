@@ -31,6 +31,47 @@ export function mergeTaskEvent(
   return next
 }
 
+export function mergeTaskEvents(
+  tasks: TaskRecord[],
+  events: TaskRecord[],
+  deletedTaskIds: ReadonlySet<string> = new Set(),
+): TaskRecord[] {
+  if (!events.length) return tasks
+  const updates = new Map<string, TaskRecord>()
+  const removed = new Set<string>()
+  for (const event of events) {
+    const taskId = event.task_id || event.id
+    if (!taskId) continue
+    if (event.type === 'task_deleted') {
+      removed.add(taskId)
+      updates.delete(taskId)
+      continue
+    }
+    if (
+      deletedTaskIds.has(taskId)
+      || (event.type !== 'task_progress' && event.type !== 'task_created')
+    ) continue
+    const update = { ...(updates.get(taskId) || {}), ...event, id: taskId }
+    delete update.type
+    delete update.task_id
+    updates.set(taskId, update)
+  }
+  if (!updates.size && !removed.size) return tasks
+  const seen = new Set<string>()
+  const next: TaskRecord[] = []
+  for (const task of tasks) {
+    const taskId = String(task.id || '')
+    if (removed.has(taskId)) continue
+    const update = updates.get(taskId)
+    next.push(update ? { ...task, ...update } : task)
+    if (update) seen.add(taskId)
+  }
+  for (const [taskId, update] of updates) {
+    if (!seen.has(taskId) && !removed.has(taskId)) next.unshift(update)
+  }
+  return next
+}
+
 export function getDisplayedProgress(task: TaskRecord): number {
   if (task.status === 'done') return 100
   if (task.status === 'merging' || task.status === 'remuxing') {

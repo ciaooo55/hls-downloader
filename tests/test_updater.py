@@ -425,7 +425,7 @@ def test_managed_update_is_a_resumable_download_task(monkeypatch, tmp_path):
             self.tasks[task.id] = task
             return task
 
-        async def _save_db(self, _task):
+        async def save_task(self, _task):
             return None
 
         async def start_task(self, task_id):
@@ -457,7 +457,7 @@ def test_failed_managed_update_task_is_retried(monkeypatch, tmp_path):
         async def retry_task(self, task_id):
             self.retried.append(task_id)
 
-        async def _save_db(self, _task):
+        async def save_task(self, _task):
             return None
 
     manager = FakeManager()
@@ -479,7 +479,7 @@ def test_missing_completed_update_file_is_downloaded_again(tmp_path):
             self.tasks = {task.id: task}
             self.retried = []
 
-        async def _save_db(self, _task):
+        async def save_task(self, _task):
             return None
 
         async def retry_task(self, task_id):
@@ -506,7 +506,7 @@ def test_reused_managed_update_restores_trusted_launch_metadata(monkeypatch, tmp
             self.tasks = {task.id: task}
             self.saved = []
 
-        async def _save_db(self, task):
+        async def save_task(self, task):
             self.saved.append(task.id)
 
     Path(tmp_path / "setup.exe").write_bytes(data)
@@ -537,7 +537,7 @@ def test_managed_update_launch_requires_hash_and_prepares_before_start(monkeypat
         async def prepare_for_update_restart(self):
             order.append("prepare")
 
-        async def _save_db(self, _task):
+        async def save_task(self, _task):
             order.append("save")
 
     class FakeTimer:
@@ -575,7 +575,7 @@ def test_managed_update_launch_rejects_missing_checksum(monkeypatch, tmp_path):
         async def prepare_for_update_restart(self):
             pytest.fail("unsafe installer must not reach update preparation")
 
-        async def _save_db(self, saved_task):
+        async def save_task(self, saved_task):
             saved.append(saved_task.id)
 
     monkeypatch.setattr(api_module, "manager", FakeManager())
@@ -616,7 +616,7 @@ def test_managed_portable_update_launches_transactional_upgrade(monkeypatch, tmp
         async def prepare_for_update_restart(self):
             order.append("prepare")
 
-        async def _save_db(self, _task):
+        async def save_task(self, _task):
             order.append("save")
 
     class FakeTimer:

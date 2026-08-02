@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from ..config import settings
-from ..database import run_db
+from ..database import iter_db_rows, run_db
 from ..models import Task, TaskProgress, TaskStatus, TaskType
 from ..naming import suggest_manifest_name
 from ..request_context import sanitize_request_contexts, sanitize_request_headers, sanitize_request_replay
@@ -26,7 +26,7 @@ from .http_file import HTTPDownloader, _resume_resource_identity
 from .dash import DashDownloader
 from .torrent import TorrentDownloader
 from .playback import MIN_START_DURATION, PlaybackError, playback_service
-from .engine import task_work_dir, temp_roots
+from .engine import DownloadEngine, task_work_dir, temp_roots
 
 
 logger = logging.getLogger(__name__)
@@ -238,13 +238,13 @@ def _http_checkpoint_covers_range(task: Task, path: Path, start: int, end: int) 
 
 
 class TaskManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self.tasks: dict[str, Task] = {}
         self._sem: asyncio.Semaphore | None = None
         self._sem_limit = 0
         self._event_subscribers: list[asyncio.Queue] = []
         self._pending_saves: dict[str, asyncio.Task] = {}
-        self._downloaders: dict[str, object] = {}
+        self._downloaders: dict[str, DownloadEngine] = {}
         self._deleting_task_ids: set[str] = set()
         self._temp_cleanup_lock = asyncio.Lock()
         self._maintenance_task: asyncio.Task | None = None
@@ -336,12 +336,12 @@ class TaskManager:
             self._sem_limit = limit
         return self._sem
 
-    def subscribe(self) -> asyncio.Queue:
-        queue = asyncio.Queue(maxsize=200)
+    def subscribe(self) -> asyncio.Queue[dict]:
+        queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=200)
         self._event_subscribers.append(queue)
         return queue
 
-    def unsubscribe(self, queue: asyncio.Queue) -> None:
+    def unsubscribe(self, queue: asyncio.Queue[dict]) -> None:
         if queue in self._event_subscribers:
             self._event_subscribers.remove(queue)
 
@@ -531,6 +531,18 @@ class TaskManager:
                 or progress.playable_segments == progress.total_segments
             )
         )
+
+    def playback_ready(self, task: Task) -> bool:
+        """Public playback capability query for API presenters."""
+        return self._playback_ready(task)
+
+    def publish_event(self, event: dict) -> None:
+        """Publish a service event without exposing subscriber internals."""
+        self._broadcast_nowait(event)
+
+    async def save_task(self, task: Task) -> None:
+        """Persist a task through the manager's database boundary."""
+        await self._save_db(task)
 
     @staticmethod
     def _queue_sort_key(item: Task):
@@ -1311,6 +1323,7 @@ class TaskManager:
                 )
             )
         )
+
         if resumable:
             return
         keep = {"download.log", "playlist.m3u8"}
@@ -1364,12 +1377,14 @@ class TaskManager:
         await self._cleanup_temp_root_if_all_done()
 
     async def load_from_db(self) -> None:
-        rows = await run_db("SELECT * FROM tasks ORDER BY created_at ASC")
         interrupted: list[Task] = []
         resume_after_update: list[Task] = []
         scheduled_queue: list[Task] = []
         secret_migrations: list[Task] = []
-        for row in rows:
+        async for row in iter_db_rows(
+            "SELECT * FROM tasks ORDER BY created_at ASC",
+            batch_size=512,
+        ):
             engine_state = _decode_engine_state(_row_value(row, "engine_state", "{}") or "{}")
             try:
                 stored_status = TaskStatus(_row_value(row, "status", TaskStatus.QUEUED.value))

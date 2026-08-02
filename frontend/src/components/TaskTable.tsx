@@ -32,6 +32,8 @@ const typeIcons = {
   torrent: <Magnet size={15} />,
 }
 
+const TASK_PAGE_SIZE = 250
+
 export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTasksAction, onOpenLog, onOpenFile, onLaunchFile, onCopyUrl, onPreview, onPreviewImage, onCast }: {
   tasks: Task[]
   selected: Set<string>
@@ -48,10 +50,12 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
   onCast: (task: Task) => void
 }) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
+  const [visibleLimit, setVisibleLimit] = useState(TASK_PAGE_SIZE)
   const [selectionBox, setSelectionBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const selectionAnchor = useRef<string | null>(null)
   const suppressClick = useRef(false)
   const allSelected = tasks.length > 0 && tasks.every(task => selected.has(task.id))
+  const visibleTasks = tasks.slice(0, visibleLimit)
   const toggleAll = () => {
     if (allSelected) {
       onSelect(new Set())
@@ -224,7 +228,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
     <div className="table-scroll" onPointerDown={beginMarqueeSelection}>
       <table className="task-table">
         <thead><tr><th className="check-col"><input type="checkbox" checked={allSelected} ref={element => { if (element) element.indeterminate = selected.size > 0 && !allSelected }} onChange={toggleAll} aria-label="选择全部任务" /></th><th>文件名</th><th>状态</th><th>进度</th><th>速度 / 剩余</th><th className="segments-col">分片</th><th className="updated-col">更新时间</th><th className="menu-col" /></tr></thead>
-        <tbody>{tasks.map(task => {
+        <tbody>{visibleTasks.map(task => {
           const progress = getDisplayedProgress(task)
           const visual = filePresentation(task.output_path || task.filename || task.url, task.mime_type)
           const displayName = task.title || task.filename || task.id
@@ -282,6 +286,13 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
           </tr>
         })}</tbody>
       </table>
+      {visibleTasks.length < tasks.length && (
+        <div className="task-list-load-more">
+          <button className="compact-button" onClick={() => setVisibleLimit(value => value + TASK_PAGE_SIZE)}>
+            加载更多（已显示 {visibleTasks.length} / {tasks.length}）
+          </button>
+        </div>
+      )}
       {menu && createPortal(
         <div className="task-context-menu" role="menu" style={{ left: menu.x, top: menu.y }} onPointerDown={event => event.stopPropagation()}>
           {menu.actions.map(action => <button key={action} role="menuitem" className={action === 'deleteFiles' ? 'danger' : ''} onClick={() => runMenuAction(action)}>
