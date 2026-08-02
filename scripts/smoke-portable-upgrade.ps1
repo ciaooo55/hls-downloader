@@ -5,6 +5,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Write-Utf8NoBom([string]$Path, [string]$Value) {
+    [System.IO.File]::WriteAllText(
+        $Path,
+        $Value,
+        (New-Object System.Text.UTF8Encoding($false))
+    )
+}
+
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $archive = (Resolve-Path $ArchivePath).Path
 $smokeRoot = Join-Path $root "build\upgrade-smoke"
@@ -56,7 +64,7 @@ try {
         temp_dir = "."
         ffmpeg_path = "bin\\ffmpeg.exe"
     } | ConvertTo-Json
-    Set-Content -LiteralPath (Join-Path $target "config.json") -Value $targetConfig -Encoding UTF8
+    Write-Utf8NoBom (Join-Path $target "config.json") $targetConfig
     Set-Content -LiteralPath (Join-Path $target "data.db") -Value "persistent task database" -Encoding UTF8
     New-Item -ItemType Directory -Path (Join-Path $target "downloads") -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $target "downloads\keep.txt") -Value "do not replace" -Encoding UTF8
@@ -71,13 +79,13 @@ try {
         throw "Portable upgrade did not remove its extracted update staging directory"
     }
 
-    if ((Get-Content -LiteralPath (Join-Path $target "config.json") -Raw) -notmatch "preserved-token-for-upgrade-smoke") {
+    if ((Get-Content -LiteralPath (Join-Path $target "config.json") -Raw -Encoding UTF8) -notmatch "preserved-token-for-upgrade-smoke") {
         throw "Portable upgrade did not preserve config.json"
     }
-    if ((Get-Content -LiteralPath (Join-Path $target "data.db") -Raw) -notmatch "persistent task database") {
+    if ((Get-Content -LiteralPath (Join-Path $target "data.db") -Raw -Encoding UTF8) -notmatch "persistent task database") {
         throw "Portable upgrade did not preserve data.db"
     }
-    if ((Get-Content -LiteralPath (Join-Path $target "downloads\keep.txt") -Raw) -notmatch "do not replace") {
+    if ((Get-Content -LiteralPath (Join-Path $target "downloads\keep.txt") -Raw -Encoding UTF8) -notmatch "do not replace") {
         throw "Portable upgrade did not preserve downloads"
     }
     $versionedHosts = @(Get-ChildItem -LiteralPath (Join-Path $target "native-host\versions") -Filter "HLSDownloaderNativeHost-*.exe" -File)

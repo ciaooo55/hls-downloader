@@ -2,6 +2,7 @@ import asyncio
 import json
 import math
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -31,6 +32,10 @@ class PlaybackNotReadyError(PlaybackError):
 
 
 class PlaybackSessionError(PlaybackError):
+    pass
+
+
+class PlaybackAuthorizationError(PlaybackError):
     pass
 
 
@@ -68,6 +73,7 @@ class PlaybackSnapshot:
 class _PlaybackSession:
     task_id: str
     last_seen: float
+    access_token: str
     requested_index: int | None = None
     requested_time: float = 0.0
 
@@ -257,7 +263,11 @@ class PlaybackService:
         session_id = uuid.uuid4().hex
         now = time.monotonic()
         with self._lock:
-            self._sessions[session_id] = _PlaybackSession(task_id=task_id, last_seen=now)
+            self._sessions[session_id] = _PlaybackSession(
+                task_id=task_id,
+                last_seen=now,
+                access_token=secrets.token_urlsafe(24),
+            )
         return session_id
 
     def open_ready_session(
@@ -274,8 +284,28 @@ class PlaybackService:
             self._sessions[session_id] = _PlaybackSession(
                 task_id=task_id,
                 last_seen=time.monotonic(),
+                access_token=secrets.token_urlsafe(24),
             )
             return session_id, snapshot
+
+    def access_token(self, task_id: str, session_id: str) -> str:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None or session.task_id != task_id:
+                raise PlaybackSessionError("播放会话已失效，请重新打开播放器")
+            return session.access_token
+
+    def authorize(self, task_id: str, session_id: str, access_token: str) -> None:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if (
+                session is None
+                or session.task_id != task_id
+                or not access_token
+                or not secrets.compare_digest(session.access_token, access_token)
+            ):
+                raise PlaybackAuthorizationError("播放凭据无效，请重新打开播放器")
+        self.touch(task_id, session_id)
 
     def request_seek(self, task_id: str, session_id: str, target_time: float) -> dict:
         """Record a seek target and return its exact HLS segment location."""

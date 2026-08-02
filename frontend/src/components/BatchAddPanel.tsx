@@ -36,7 +36,7 @@ export default function BatchAddPanel({ settings, onAdded, initialText = '' }: {
         <small>{REQUEST_FIELD_HELP.referer}</small>
       </div>
       <label htmlFor="batch-concurrency">并发</label>
-      <Input id="batch-concurrency" className="number-input" type="number" min={1} max={256} value={concurrency} onChange={event => setConcurrency(Math.max(1, Math.min(256, Number(event.target.value))))} />
+      <Input id="batch-concurrency" className="number-input" type="number" min={1} max={64} value={concurrency} onChange={event => setConcurrency(Math.max(1, Math.min(64, Number(event.target.value))))} />
       <Button className="primary-button" onClick={() => void submit()} disabled={loading || !urls.length}>{loading ? '添加中...' : `添加 ${urls.length} 项`}</Button>
     </div>
     {error && <div className="inline-error" role="alert">{error}</div>}

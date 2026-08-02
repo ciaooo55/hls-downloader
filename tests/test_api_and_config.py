@@ -17,9 +17,19 @@ def test_task_schema_rejects_invalid_url_concurrency_and_oversized_batch():
     with pytest.raises(ValidationError):
         TaskCreate(url="ftp://example.test/video.m3u8")
     with pytest.raises(ValidationError):
-        TaskCreate(url="https://example.test/video.m3u8", concurrency=257)
+        TaskCreate(url="https://example.test/video.m3u8", concurrency=65)
     with pytest.raises(ValidationError):
         TaskCreate(url="https://example.test/file.bin", checksum="sha256:bad")
+    with pytest.raises(ValidationError):
+        TaskCreate(
+            url="https://example.test/file.bin",
+            request_headers={f"x-{index}": "value" for index in range(65)},
+        )
+    with pytest.raises(ValidationError):
+        TaskCreate(
+            url="https://example.test/file.bin",
+            request_contexts={f"https://cdn-{index}.test": {} for index in range(13)},
+        )
     with pytest.raises(ValidationError):
         TaskBatchCreate(
             tasks=[
@@ -27,12 +37,22 @@ def test_task_schema_rejects_invalid_url_concurrency_and_oversized_batch():
                 for index in range(101)
             ]
         )
+
+
+def test_global_json_body_limit_rejects_oversized_payload():
+    response = TestClient(app).post(
+        "/api/tasks",
+        headers={**AUTH, "Content-Type": "application/json"},
+        content=b"{" + b" " * (4 * 1024 * 1024) + b"}",
+    )
+
+    assert response.status_code == 413
     with pytest.raises(ValidationError):
         SettingsUpdate(max_concurrent_tasks=0)
 
-    assert TaskCreate(url="https://example.test/file.bin", concurrency=256).concurrency == 256
+    assert TaskCreate(url="https://example.test/file.bin", concurrency=64).concurrency == 64
     assert TaskCreate(url="https://example.test/file.bin", checksum="A" * 64).checksum == "sha256:" + "a" * 64
-    assert SettingsUpdate(default_concurrency=256).default_concurrency == 256
+    assert SettingsUpdate(default_concurrency=64).default_concurrency == 64
 
 
 def test_settings_api_keeps_native_transport_credentials_internal():
@@ -216,6 +236,23 @@ def test_task_response_exposes_safe_request_method_but_never_replay_body():
     assert "request_body" not in response
 
 
+def test_task_response_preserves_schedule_and_completion_action():
+    from backend.app import api as api_module
+
+    task = Task(id="scheduled", url="https://cdn.example.test/file.zip", task_type=TaskType.HTTP)
+    task.engine_state.update({
+        "scheduled_start_at": "2026-08-03T08:00:00+08:00",
+        "scheduled_stop_at": "2026-08-03T09:00:00+08:00",
+        "completion_action": "sleep",
+    })
+
+    response = api_module._to_resp(task).model_dump()
+
+    assert response["scheduled_start_at"] == "2026-08-03T08:00:00+08:00"
+    assert response["scheduled_stop_at"] == "2026-08-03T09:00:00+08:00"
+    assert response["completion_action"] == "sleep"
+
+
 def test_task_action_maps_manager_errors_to_http_status(monkeypatch):
     from backend.app import api as api_module
 
@@ -288,10 +325,15 @@ def test_completed_task_file_endpoint_serves_drag_download(tmp_path, monkeypatch
     previous = api_module.manager.tasks
     monkeypatch.setattr(api_module.manager, "tasks", {task.id: task})
     try:
+        safe = api_module._to_resp(task)
         response = TestClient(app).get(
-            f"/api/tasks/{task.id}/file?token={config_module.settings.token}",
+            f"/api/tasks/{task.id}/file?token={safe.file_access_token}",
         )
         assert response.status_code == 200
+        control_token_in_url = TestClient(app).get(
+            f"/api/tasks/{task.id}/file?token={config_module.settings.token}",
+        )
+        assert control_token_in_url.status_code == 401
         assert response.content == b"binary"
         assert "setup.exe" in response.headers["content-disposition"]
     finally:
@@ -339,21 +381,76 @@ def test_browser_direct_download_creates_and_starts_desktop_task(monkeypatch):
     assert activated == [True]
 
 
-def test_launch_file_requires_an_existing_file(tmp_path, monkeypatch):
+def test_launch_file_requires_a_completed_task_output(tmp_path, monkeypatch):
+    from backend.app import api as api_module
     import os
 
     opened = []
     media = tmp_path / "video.mp4"
     media.write_bytes(b"media")
+    task = Task(
+        id="launch-media",
+        url="https://cdn.test/video.mp4",
+        task_type=TaskType.HTTP,
+        status=TaskStatus.DONE,
+        output_path=str(media),
+    )
+    api_module.manager.tasks[task.id] = task
     monkeypatch.setattr(os, "startfile", lambda path: opened.append(path), raising=False)
     client = TestClient(app)
 
-    missing = client.post("/api/launch-file", json={"path": str(tmp_path / "missing.mp4")}, headers=AUTH)
-    response = client.post("/api/launch-file", json={"path": str(media)}, headers=AUTH)
+    try:
+        arbitrary = client.post(
+            "/api/launch-file", json={"path": str(media)}, headers=AUTH
+        )
+        missing = client.post(
+            "/api/launch-file", json={"task_id": "missing"}, headers=AUTH
+        )
+        response = client.post(
+            "/api/launch-file", json={"task_id": task.id}, headers=AUTH
+        )
+    finally:
+        api_module.manager.tasks.pop(task.id, None)
 
+    assert arbitrary.status_code == 400
     assert missing.status_code == 404
     assert response.status_code == 200
     assert opened == [str(media)]
+
+
+def test_launch_executable_requires_explicit_confirmation(tmp_path, monkeypatch):
+    from backend.app import api as api_module
+    import os
+
+    opened = []
+    executable = tmp_path / "setup.exe"
+    executable.write_bytes(b"MZ")
+    task = Task(
+        id="launch-executable",
+        url="https://cdn.test/setup.exe",
+        task_type=TaskType.HTTP,
+        status=TaskStatus.DONE,
+        output_path=str(executable),
+    )
+    api_module.manager.tasks[task.id] = task
+    monkeypatch.setattr(os, "startfile", lambda path: opened.append(path), raising=False)
+    client = TestClient(app)
+
+    try:
+        blocked = client.post(
+            "/api/launch-file", json={"task_id": task.id}, headers=AUTH
+        )
+        confirmed = client.post(
+            "/api/launch-file",
+            json={"task_id": task.id, "confirm_executable": True},
+            headers=AUTH,
+        )
+    finally:
+        api_module.manager.tasks.pop(task.id, None)
+
+    assert blocked.status_code == 409
+    assert confirmed.status_code == 200
+    assert opened == [str(executable)]
 
 
 def test_save_settings_serializes_project_paths_as_relative(tmp_path, monkeypatch):
@@ -452,7 +549,7 @@ def test_distributable_default_config_does_not_force_site_specific_request_heade
 
     # The checked-in template must not ship a reusable privileged credential.
     # The release template already uses the current credential-protection schema.
-    assert data["config_version"] == 18
+    assert data["config_version"] == 20
     assert "token" not in data
     assert data["temp_dir"] == "."
     assert data["default_referer"] == ""
@@ -490,11 +587,11 @@ def test_old_blank_request_defaults_remain_blank_after_migration(tmp_path, monke
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 18
+    assert loaded.config_version == 20
     assert loaded.default_referer == ""
     assert loaded.default_origin == ""
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["config_version"] == 18
+    assert saved["config_version"] == 20
     assert saved["token"] != "55555"
     assert len(saved["token"]) >= 32
     assert saved["temp_dir"] == "."
@@ -550,7 +647,7 @@ def test_publicly_leaked_token_is_rotated_on_load(tmp_path, monkeypatch):
     assert len(loaded.token) >= 32
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["token"] == loaded.token
-    assert saved["config_version"] == 18
+    assert saved["config_version"] == 20
 
 
 def test_runtime_config_is_not_tracked_by_git():
@@ -585,8 +682,8 @@ def test_v13_template_generates_a_per_install_native_transport_token(tmp_path, m
     loaded = config_module.load_settings()
     saved = json.loads(config_path.read_text(encoding="utf-8"))
 
-    assert loaded.config_version == 18
-    assert saved["config_version"] == 18
+    assert loaded.config_version == 20
+    assert saved["config_version"] == 20
     assert len(saved["token"]) >= 32
 
 
@@ -608,7 +705,7 @@ def test_v2_legacy_concurrency_defaults_migrate_to_new_defaults(tmp_path, monkey
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 18
+    assert loaded.config_version == 20
     assert loaded.default_concurrency == 12
     assert loaded.max_concurrent_tasks == 3
 
@@ -631,9 +728,35 @@ def test_v2_custom_concurrency_values_are_preserved_during_migration(tmp_path, m
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 18
+    assert loaded.config_version == 20
     assert loaded.default_concurrency == 6
     assert loaded.max_concurrent_tasks == 5
+
+
+def test_v19_excessive_worker_counts_are_clamped_to_global_budget(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "config_version": 19,
+                "download_dir": str(tmp_path / "downloads"),
+                "temp_dir": str(tmp_path / "cache"),
+                "ffmpeg_path": str(tmp_path / "ffmpeg.exe"),
+                "default_concurrency": 256,
+                "site_profiles": [
+                    {"host": "example.test", "concurrency": 256},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
+
+    loaded = config_module.load_settings()
+
+    assert loaded.config_version == 20
+    assert loaded.default_concurrency == 64
+    assert loaded.site_profiles[0]["concurrency"] == 64
 
 
 def test_v11_legacy_takeover_default_migrates_to_capture_all_explicit_downloads(tmp_path, monkeypatch):
@@ -653,7 +776,7 @@ def test_v11_legacy_takeover_default_migrates_to_capture_all_explicit_downloads(
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 18
+    assert loaded.config_version == 20
     assert loaded.browser_takeover_min_mb == 0
 
 
@@ -674,7 +797,7 @@ def test_v11_custom_takeover_threshold_is_preserved(tmp_path, monkeypatch):
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 18
+    assert loaded.config_version == 20
     assert loaded.browser_takeover_min_mb == 3
 
 
@@ -882,3 +1005,37 @@ def test_browser_handoff_manual_context_overrides_are_scoped_to_download_origin(
     assert detail.json()["effective_context"]["cookie"] == "manual=secret"
     assert detail.json()["effective_context"]["request_headers"]["referer"] == "https://manual.example.test/watch"
     runtime.set_desktop_handoff_session(False)
+
+
+def test_directory_browser_is_bounded_to_configured_roots(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from backend.app import api as api_module
+
+    download = tmp_path / "downloads"
+    temporary = tmp_path / "cache"
+    data = tmp_path / "data"
+    outside = tmp_path / "private"
+    for path in (download, temporary, data, outside):
+        path.mkdir()
+    (download / "child").mkdir()
+    monkeypatch.setattr(config_module.settings, "download_dir", str(download))
+    monkeypatch.setattr(config_module.settings, "temp_dir", str(temporary))
+    monkeypatch.setattr(api_module, "RUNTIME_PATHS", SimpleNamespace(data_root=data))
+    monkeypatch.setattr(api_module.manager, "tasks", {})
+
+    with TestClient(app) as client:
+        allowed = client.get(
+            "/api/browse-dir",
+            params={"path": str(download), "limit": 1},
+            headers=AUTH,
+        )
+        blocked = client.get(
+            "/api/browse-dir",
+            params={"path": str(outside)},
+            headers=AUTH,
+        )
+
+    assert allowed.status_code == 200
+    assert allowed.json()["limit"] == 1
+    assert allowed.json()["items"][0]["name"] == "child"
+    assert blocked.status_code == 403

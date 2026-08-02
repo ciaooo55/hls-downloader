@@ -6,7 +6,7 @@ import logging
 import os
 import shutil
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -30,7 +30,7 @@ from .engine import task_work_dir, temp_roots
 
 
 logger = logging.getLogger(__name__)
-PROGRESS_EVENT_INTERVAL_SECONDS = 0.1
+PROGRESS_EVENT_INTERVAL_SECONDS = 0.25
 LOG_QUEUE_CAPACITY = 2000
 LOG_MAX_BYTES = 4 * 1024 * 1024
 LOG_BACKUP_COUNT = 3
@@ -306,12 +306,12 @@ class TaskManager:
             return True
         try:
             target = datetime.fromisoformat(raw)
-            current = now or (
-                datetime.now(target.tzinfo) if target.tzinfo is not None else datetime.now()
-            )
-            if target.tzinfo is None and current.tzinfo is not None:
-                current = current.replace(tzinfo=None)
-            return current >= target
+            if target.tzinfo is None:
+                target = target.astimezone()
+            current = now or datetime.now().astimezone()
+            if current.tzinfo is None:
+                current = current.astimezone()
+            return current.astimezone(timezone.utc) >= target.astimezone(timezone.utc)
         except (TypeError, ValueError):
             return False
 
@@ -654,6 +654,7 @@ class TaskManager:
         scheduled_start_at="",
         scheduled_stop_at="",
         completion_action="none",
+        browser_originated=False,
     ) -> Task:
         task_id = uuid.uuid4().hex
         profile = resolve_site_profile(url)
@@ -708,7 +709,7 @@ class TaskManager:
             checksum_algorithm=checksum_algorithm,
             selected_video=str(selected_video or "")[:2048],
             selected_audio=str(selected_audio or "")[:256],
-            concurrency=min(256, max(1, int(concurrency or profile.get("concurrency") or settings.default_concurrency or 12))),
+            concurrency=min(64, max(1, int(concurrency or profile.get("concurrency") or settings.default_concurrency or 12))),
             speed_limit_kib=int(profile.get("speed_limit_kib") or 0),
             status=TaskStatus.QUEUED,
             stage="queued",
@@ -731,6 +732,7 @@ class TaskManager:
                 ),
                 "completion_action": str(completion_action or "none"),
                 "queue_managed": bool(auto_start),
+                "browser_originated": bool(browser_originated),
             },
         )
         async with self._temp_cleanup_lock:
@@ -874,6 +876,15 @@ class TaskManager:
                 task.progress.connection_status = "error"
                 task.finished_at = datetime.now().isoformat()
             finally:
+                if task.status is TaskStatus.DONE and task.output_path:
+                    from ..windows_attachment import mark_download_from_internet
+
+                    await asyncio.to_thread(
+                        mark_download_from_internet,
+                        task.output_path,
+                        task.url,
+                        task.source_page_url,
+                    )
                 await self._save_db(task)
                 await self._cleanup_temp_root_if_all_done()
 
@@ -1051,6 +1062,7 @@ class TaskManager:
         request_method: str | None = None,
         request_body: str | None = None,
         auto_resume: bool = True,
+        browser_originated: bool | None = None,
     ) -> Task:
         """Refresh a signed URL/captured request while preserving resumable data."""
         task = self._get_task(task_id)
@@ -1128,6 +1140,8 @@ class TaskManager:
         task.request_method = safe_method
         task.request_body = safe_body
         task.engine_state.pop("previous_request_url", None)
+        if browser_originated is not None:
+            task.engine_state["browser_originated"] = bool(browser_originated)
         task.engine_state["previous_request_key"] = stable_request_key(old_url, ignore_host=True)
         task.engine_state["state_reason"] = "request_refreshed"
         task.status = TaskStatus.PAUSED

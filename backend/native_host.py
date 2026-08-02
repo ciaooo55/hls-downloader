@@ -46,7 +46,7 @@ def _settings() -> tuple[str, str]:
     return "http://127.0.0.1:8765/api", ""
 
 
-def _request(method: str, path: str, payload: dict | None = None, timeout: float = 4) -> dict | list:
+def _request(method: str, path: str, payload: dict | None = None, timeout: float = 4) -> dict:
     base, token = _settings()
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     request = urllib.request.Request(base + path, data=body, method=method)
@@ -54,7 +54,10 @@ def _request(method: str, path: str, payload: dict | None = None, timeout: float
     request.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+            decoded = json.loads(response.read().decode("utf-8"))
+            if not isinstance(decoded, dict):
+                raise RuntimeError("桌面端返回了无效的对象响应")
+            return decoded
     except urllib.error.HTTPError as exc:
         # Surface FastAPI's localized detail to the extension instead of the
         # unhelpful generic ``HTTP Error 502`` string.
@@ -141,7 +144,8 @@ def dispatch(message: dict) -> dict:
     if operation == "ping":
         health = _request("GET", "/health")
         current = _request("GET", "/settings")
-        bridge_base, bridge_token = _settings()
+        bridge_base, _control_token = _settings()
+        browser_credential = _request("POST", "/browser/credential", {})
         return {
             "ok": True,
             "version": health.get("version", ""),
@@ -149,7 +153,7 @@ def dispatch(message: dict) -> dict:
             # extension then uses loopback HTTP for concurrent heartbeats and
             # handoffs, falling back here if the core restarts.
             "bridge_base": bridge_base,
-            "bridge_token": bridge_token,
+            "bridge_token": str(browser_credential.get("credential", "")),
             "takeover_enabled": bool(current.get("browser_takeover_enabled", True)),
             "takeover_minimum_bytes": max(0, int(current.get("browser_takeover_min_mb", 0) or 0)) * 1024 * 1024,
             "recommended_extension_version": str(browser_status.get("recommended_version", "")),
@@ -157,7 +161,7 @@ def dispatch(message: dict) -> dict:
             "extension_release_url": str(browser_status.get("release_url", "")),
         }
     if operation == "set_takeover_settings":
-        payload = {}
+        payload: dict[str, object] = {}
         if "enabled" in message:
             payload["browser_takeover_enabled"] = bool(message["enabled"])
         if "minimum_bytes" in message:

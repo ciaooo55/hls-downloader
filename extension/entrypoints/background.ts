@@ -2,7 +2,7 @@ import { browser } from 'wxt/browser'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
 import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyResource, compactResources, matchesDownloadClick, mergeResources, pageResourceKey, replayableRequestHeaders, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
-import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus, shouldResumeBrowserDownload } from '../lib/takeover'
+import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus } from '../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
 import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
 import { inspectHlsResource } from '../lib/hlsInspection'
@@ -473,10 +473,18 @@ async function castToDevice(resource: MediaResource): Promise<{ ok: true }> {
 }
 
 async function offer(resource: MediaResource, chain?: RequestChain) {
+  const fingerprint = `${resource.tabId ?? -1}:${resourceFingerprint(resource)}`
+  let requestId = ''
+  try {
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(fingerprint))
+    requestId = `resource:${resource.tabId ?? -1}:${[...new Uint8Array(digest)].slice(0, 16).map(value => value.toString(16).padStart(2, '0')).join('')}`
+  } catch {
+    requestId = globalThis.crypto?.randomUUID?.()
+      || `offer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  }
   const payload = {
     ...await resourcePayload(resource, chain),
-    client_request_id: globalThis.crypto?.randomUUID?.()
-      || `offer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
+    client_request_id: requestId,
   }
   const response = await native({ op: 'offer', resource: payload })
   const handoff = response?.handoff
@@ -507,18 +515,6 @@ async function refreshedDownload(downloadId: number, original: Browser.downloads
   }
   const [current] = await browser.downloads.search({ id: downloadId })
   return { ...original, ...(current || {}), ...(determined || {}) }
-}
-
-async function pauseDownload(downloadId: number): Promise<boolean> {
-  for (let attempt = 0; attempt < 12; attempt += 1) {
-    try {
-      await browser.downloads.pause(downloadId)
-      return true
-    } catch {
-      await new Promise(resolve => setTimeout(resolve, 100))
-    }
-  }
-  return false
 }
 
 async function removeBrowserDownload(item: Browser.downloads.DownloadItem): Promise<void> {
@@ -833,17 +829,11 @@ export default defineBackground(() => {
       return
     }
     console.debug('HLS Downloader observed browser download', item.url)
-    let paused = false
-    let handedOff = false
     try {
-      const [pauseResult, config] = await Promise.all([pauseDownload(item.id), settings()])
-      paused = pauseResult
-      if (!config.enabled) {
-        if (paused) await browser.downloads.resume(item.id).catch(() => undefined)
-        return
-      }
+      const config = await settings()
+      if (!config.enabled) return
       const actual = await refreshedDownload(item.id, item)
-      if (!canContinueTakeover(paused, actual.state)) return
+      if (!canContinueTakeover(actual.state)) return
       // Prefer the request chain first so click matching can use tabId even when
       // Chrome leaves DownloadItem.referrer empty. After a click is known, re-bind
       // the chain to that tab so we never replay another page's auth headers.
@@ -861,14 +851,12 @@ export default defineBackground(() => {
         intent = await waitForClickIntent(actual.url, actual.finalUrl, actual.referrer || '')
       }
       const url = chain?.finalUrl || actual.finalUrl || actual.url
-      const responseName = responseFilename(responseHeader(chain, 'content-disposition'))
+      const contentDisposition = responseHeader(chain, 'content-disposition')
+      const responseName = responseFilename(contentDisposition)
       const filename = responseName || actual.filename.split(/[\\/]/).pop() || ''
       const mimeType = actual.mime || responseHeader(chain, 'content-type')
-      const kind = classifyDownload(url, mimeType, filename)
-      if (!kind) {
-        if (paused) await browser.downloads.resume(item.id).catch(() => undefined)
-        return
-      }
+      const kind = classifyDownload(url, mimeType, filename, contentDisposition)
+      if (!kind) return
       const size = (actual.fileSize && actual.fileSize > 0 ? actual.fileSize : 0)
         || (actual.totalBytes && actual.totalBytes > 0 ? actual.totalBytes : 0)
         || trackedSize(chain)
@@ -879,33 +867,34 @@ export default defineBackground(() => {
         pageUrl: sourcePageUrl, tabId: chain?.tabId, method: chain?.method, requestHeaders: chain?.requestHeaders, seenAt: Date.now(),
       }
       if (String(chain?.method || '').toUpperCase() === 'POST' && !replayablePostRequest(chain).request_body) {
-        if (paused) await browser.downloads.resume(item.id).catch(() => undefined)
         return
       }
-      if (!intent || !shouldTakeover({ url: resource.url, size: resource.size, mimeType, filename, ...config, ...intent, explicitClick: true })
-        || (!intent.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) {
-        await browser.downloads.resume(item.id).catch(() => undefined)
+      if (!shouldTakeover({
+        url: resource.url,
+        size: resource.size,
+        mimeType,
+        filename,
+        ...config,
+        ...(intent || {}),
+        explicitClick: Boolean(intent),
+        strongEvidence: true,
+      }) || (!intent?.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) {
         return
       }
-      console.debug('HLS Downloader taking over explicit browser download', url)
+      console.debug('HLS Downloader offering verified browser download', url)
       const response = await offer(resource, chain)
       if (!desktopAcceptedHandoff(response)) throw new Error(response?.error || 'desktop rejected')
       // Do not discard the browser download just because the confirmation
       // window opened. The user owns the final decision; cancel/reject keeps
       // this original download in the browser.
       const handoff = await waitForHandoffResolution(String(response.handoff.id))
-      if (handoff?.status !== 'accepted') {
-        await browser.downloads.resume(item.id).catch(() => undefined)
-        return
-      }
-      handedOff = true
+      if (handoff?.status !== 'accepted') return
       // Do not hide Chrome's downloads UI merely because a browser download was
       // observed. Suppress it only after the desktop accepted the handoff.
       concealBrowserDownload()
       await removeBrowserDownload(actual)
     } catch (error) {
-      console.warn('HLS Downloader takeover failed; returning download to browser', error)
-      if (shouldResumeBrowserDownload(paused, handedOff)) await browser.downloads.resume(item.id).catch(() => undefined)
+      console.warn('HLS Downloader takeover failed; browser download remains untouched', error)
     } finally {
       determinedDownloads.delete(item.id)
       determinationWaiters.delete(item.id)

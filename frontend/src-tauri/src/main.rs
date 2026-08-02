@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Deserialize;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -49,6 +49,39 @@ struct DesktopPaths {
     root: PathBuf,
 }
 
+const CORE_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+const CORE_LOG_BACKUPS: usize = 3;
+
+fn log_backup_path(path: &Path, index: usize) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "core.log".to_string());
+    path.with_file_name(format!("{name}.{index}"))
+}
+
+fn rotate_core_log(path: &Path) -> std::io::Result<()> {
+    let size = match fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if size <= CORE_LOG_MAX_BYTES {
+        return Ok(());
+    }
+    let oldest = log_backup_path(path, CORE_LOG_BACKUPS);
+    if oldest.exists() {
+        fs::remove_file(oldest)?;
+    }
+    for index in (1..CORE_LOG_BACKUPS).rev() {
+        let source = log_backup_path(path, index);
+        if source.exists() {
+            fs::rename(source, log_backup_path(path, index + 1))?;
+        }
+    }
+    fs::rename(path, log_backup_path(path, 1))
+}
+
 #[tauri::command]
 fn get_app_root(paths: tauri::State<'_, DesktopPaths>) -> String {
     paths.root.to_string_lossy().into_owned()
@@ -67,13 +100,16 @@ fn get_desktop_info(paths: tauri::State<'_, DesktopPaths>) -> serde_json::Value 
 }
 
 #[tauri::command]
-fn get_core_config(runtime: tauri::State<'_, Arc<CoreRuntime>>) -> serde_json::Value {
+fn get_core_config(
+    runtime: tauri::State<'_, Arc<CoreRuntime>>,
+) -> Result<serde_json::Value, String> {
     let config = runtime
         .config
         .lock()
         .map(|value| value.clone())
         .unwrap_or_default();
-    serde_json::json!({ "port": config.port, "credential": config.token })
+    let credential = request_scoped_credential(&config, "/api/desktop/credential")?;
+    Ok(serde_json::json!({ "port": config.port, "credential": credential }))
 }
 
 #[tauri::command]
@@ -151,8 +187,7 @@ fn begin_uninstall(
         return serde_json::json!({ "ok": false, "error": "当前版本无需卸载" });
     }
     match Command::new(&uninstaller)
-        .arg("_?=")
-        .arg(&paths.root)
+        .arg(uninstall_in_place_argument(&paths.root))
         .spawn()
     {
         Ok(_) => {
@@ -161,6 +196,10 @@ fn begin_uninstall(
         }
         Err(error) => serde_json::json!({ "ok": false, "error": error.to_string() }),
     }
+}
+
+fn uninstall_in_place_argument(root: &Path) -> String {
+    format!("_?={}", root.display())
 }
 
 fn app_root() -> PathBuf {
@@ -220,14 +259,83 @@ fn wait_for_runtime_config(root: &Path, port: u16) -> LocalConfig {
     load_config(root)
 }
 
-fn core_alive(port: u16) -> bool {
+fn port_open(port: u16) -> bool {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     TcpStream::connect_timeout(&address, Duration::from_millis(180)).is_ok()
 }
 
+fn core_alive(config: &LocalConfig) -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], config.port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(350)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(700)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(350)));
+    if config.token.contains(['\r', '\n']) {
+        return false;
+    }
+    let request = format!(
+        "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Token: {}\r\nConnection: close\r\n\r\n",
+        config.port, config.token
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+    response.starts_with("HTTP/1.1 200")
+        && response.contains("\"app_id\":\"com.ciaooo55.hls-downloader\"")
+        && response.contains("\"protocol_version\":3")
+        && response.contains("\"authenticated\":true")
+}
+
+fn request_scoped_credential(config: &LocalConfig, path: &str) -> Result<String, String> {
+    if config.token.is_empty() || config.token.contains(['\r', '\n']) {
+        return Err("Core control credential is unavailable".to_string());
+    }
+    let mut stream = TcpStream::connect(("127.0.0.1", config.port))
+        .map_err(|_| "Unable to connect to download core".to_string())?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Token: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        config.port, config.token
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|_| "Unable to request a desktop session".to_string())?;
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|_| "Unable to read the desktop session response".to_string())?;
+    if !response.starts_with("HTTP/1.1 200") {
+        return Err("Download core rejected the desktop session".to_string());
+    }
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, value)| value)
+        .ok_or_else(|| "Desktop session response is malformed".to_string())?;
+    let payload: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| "Desktop session response is invalid".to_string())?;
+    payload
+        .get("credential")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "Desktop session credential is missing".to_string())
+}
+
 fn start_core(root: &Path, config: &LocalConfig) -> Result<Option<Child>, String> {
-    if core_alive(config.port) {
+    if core_alive(config) {
         return Ok(None);
+    }
+    if port_open(config.port) {
+        return Err(format!(
+            "Port {} is occupied by another process or an incompatible HLS Downloader Core",
+            config.port
+        ));
     }
     let packaged = root.join("HLSDownloaderCore.exe");
     let mut command = if packaged.is_file() {
@@ -239,15 +347,22 @@ fn start_core(root: &Path, config: &LocalConfig) -> Result<Option<Child>, String
         value
     };
     command.current_dir(root);
+    let stdout_path = root.join("core.log");
+    let stderr_path = root.join("core-error.log");
+    // Rotation is best-effort: inability to rename a diagnostic log must not
+    // prevent downloads from starting, while normal launches keep a bounded
+    // 20 MiB maximum across the active file and three backups.
+    let _ = rotate_core_log(&stdout_path);
+    let _ = rotate_core_log(&stderr_path);
     let stdout = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(root.join("core.log"))
+        .open(stdout_path)
         .map_err(|e| e.to_string())?;
     let stderr = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(root.join("core-error.log"))
+        .open(stderr_path)
         .map_err(|e| e.to_string())?;
     command.stdout(Stdio::from(stdout));
     command.stderr(Stdio::from(stderr));
@@ -258,7 +373,8 @@ fn start_core(root: &Path, config: &LocalConfig) -> Result<Option<Child>, String
         .map_err(|e| format!("Unable to start download core: {e}"))?;
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
-        if core_alive(config.port) {
+        let refreshed = load_config(root);
+        if core_alive(&refreshed) {
             return Ok(Some(child));
         }
         std::thread::sleep(Duration::from_millis(250));
@@ -276,7 +392,7 @@ fn runtime_config(runtime: &CoreRuntime) -> LocalConfig {
 
 fn ensure_core(runtime: &CoreRuntime) -> Result<(), String> {
     let current = runtime_config(runtime);
-    if core_alive(current.port) {
+    if core_alive(&current) {
         return Ok(());
     }
 
@@ -292,7 +408,7 @@ fn ensure_core(runtime: &CoreRuntime) -> Result<(), String> {
             Ok(None) => {
                 // A live child can briefly be between process creation and bind.
                 for _ in 0..12 {
-                    if core_alive(current.port) {
+                    if core_alive(&current) {
                         return Ok(());
                     }
                     std::thread::sleep(Duration::from_millis(100));
@@ -325,8 +441,8 @@ fn supervise_core(runtime: Arc<CoreRuntime>) {
             if runtime.stopping.load(Ordering::Relaxed) {
                 break;
             }
-            let port = runtime_config(&runtime).port;
-            if core_alive(port) {
+            let config = runtime_config(&runtime);
+            if core_alive(&config) {
                 failures = 0;
                 continue;
             }
@@ -485,8 +601,6 @@ fn main() {
     let app = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .manage(Arc::clone(&runtime))
         .manage(DesktopPaths { root: root.clone() })
@@ -570,7 +684,20 @@ fn main() {
 
 #[cfg(test)]
 mod clipboard_tests {
-    use super::{background_launch, downloadable_clipboard_text};
+    use super::{
+        background_launch, downloadable_clipboard_text, log_backup_path, rotate_core_log,
+        uninstall_in_place_argument, CORE_LOG_MAX_BYTES,
+    };
+    use std::fs;
+    use std::path::Path;
+
+    #[test]
+    fn nsis_uninstall_directory_is_one_argument() {
+        assert_eq!(
+            uninstall_in_place_argument(Path::new(r"E:\HLS Downloader")),
+            r"_?=E:\HLS Downloader"
+        );
+    }
 
     #[test]
     fn accepts_media_archive_and_magnet_links() {
@@ -614,5 +741,26 @@ mod clipboard_tests {
         ] {
             assert!(downloadable_clipboard_text(text).is_none(), "{text:?}");
         }
+    }
+
+    #[test]
+    fn rotates_oversized_core_logs() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-downloader-log-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create temp log directory");
+        let log = root.join("core.log");
+        let file = fs::File::create(&log).expect("create core log");
+        file.set_len(CORE_LOG_MAX_BYTES + 1)
+            .expect("size core log");
+        drop(file);
+
+        rotate_core_log(&log).expect("rotate core log");
+
+        assert!(!log.exists());
+        assert!(log_backup_path(&log, 1).exists());
+        fs::remove_dir_all(root).expect("clean temp log directory");
     }
 }

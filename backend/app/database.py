@@ -96,6 +96,7 @@ MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN selected_video TEXT DEFAULT ''",
     "ALTER TABLE tasks ADD COLUMN selected_audio TEXT DEFAULT ''",
 ]
+SCHEMA_VERSION = 1
 
 _connection: aiosqlite.Connection | None = None
 _connection_loop: asyncio.AbstractEventLoop | None = None
@@ -104,7 +105,15 @@ _operation_lock: asyncio.Lock | None = None
 _ephemeral_locks: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 async def _migrate(db):
-    """Add missing columns to existing tables."""
+    """Apply the legacy-column baseline once, then record explicit versions."""
+    await db.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))"
+    )
+    cursor = await db.execute("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
+    current = int((await cursor.fetchone())[0] or 0)
+    if current >= SCHEMA_VERSION:
+        return
     cursor = await db.execute("PRAGMA table_info(tasks)")
     cols = {row[1] for row in await cursor.fetchall()}
     for sql in MIGRATIONS:
@@ -112,6 +121,16 @@ async def _migrate(db):
         if col_name not in cols:
             await db.execute(sql)
             cols.add(col_name)
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at DESC)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at DESC)"
+    )
+    await db.execute(
+        "INSERT INTO schema_migrations(version) VALUES (?)",
+        (SCHEMA_VERSION,),
+    )
     await db.commit()
 
 

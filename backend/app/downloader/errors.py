@@ -8,6 +8,7 @@ import time
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import httpx
+from ..network_proxy import HostNotAllowedError, PrivateDestinationError
 try:
     from curl_cffi.requests.exceptions import (
         ChunkedEncodingError as CurlProtocolError,
@@ -213,6 +214,24 @@ def diagnose_download_error(
             code="HTTP_PROBE_TIMEOUT",
             message="读取文件信息超时",
             hint="服务器在下载探测阶段没有完成响应。请检查网络或代理；若是短效链接，请回到原页面用扩展重新识别后再试。任务已停止，不会一直卡在“准备下载”。",
+            stage=stage,
+            url=redact_url(url),
+            attempt=attempt,
+        )
+
+    destination_error = next(
+        (item for item in chain if isinstance(item, HostNotAllowedError)),
+        None,
+    )
+    if destination_error is not None:
+        return DownloadErrorDetails(
+            code=(
+                "PRIVATE_DESTINATION_BLOCKED"
+                if isinstance(destination_error, PrivateDestinationError)
+                else "HOST_NOT_ALLOWED"
+            ),
+            message=str(destination_error),
+            hint="浏览器来源任务默认不能访问本机、内网、链路本地或未获允许的主机；如需下载 NAS/LAN 文件，请在桌面端手动创建任务。",
             stage=stage,
             url=redact_url(url),
             attempt=attempt,

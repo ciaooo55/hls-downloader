@@ -1,5 +1,5 @@
 import type { PlaybackSeek, PlaybackSession, PlaybackStatus } from './types'
-import { coreOrigin, internalCredential } from './tauri'
+import { coreOrigin, internalCredential, isTauriDesktop, prepareTauriRuntime } from './tauri'
 
 const BASE = `${coreOrigin()}/api`
 
@@ -33,10 +33,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const requestHeaders = init.body instanceof FormData
     ? { 'X-Token': getToken(), ...(init.headers || {}) }
     : { ...headers(), ...(init.headers || {}) }
-  const response = await fetch(`${BASE}${path}`, {
+  let response = await fetch(`${BASE}${path}`, {
     ...init,
     headers: requestHeaders,
   })
+  if (response.status === 401 && isTauriDesktop()) {
+    await prepareTauriRuntime()
+    const refreshedHeaders = init.body instanceof FormData
+      ? { 'X-Token': getToken(), ...(init.headers || {}) }
+      : { ...headers(), ...(init.headers || {}) }
+    response = await fetch(`${BASE}${path}`, { ...init, headers: refreshedHeaders })
+  }
   const body = await response.json().catch(() => ({} as any))
   if (!response.ok) {
     const detail = body?.detail
@@ -83,8 +90,8 @@ export const setTaskSpeedLimit = (id: string, limitKib: number) =>
   })
 export const deleteTask = (id: string, deleteFiles = false) =>
   request<{ ok: boolean }>(`/tasks/${id}${deleteFiles ? '?delete_files=true' : ''}`, { method: 'DELETE' })
-export const taskFileUrl = (id: string) =>
-  `${BASE}/tasks/${encodeURIComponent(id)}/file?token=${encodeURIComponent(getToken())}`
+export const taskFileUrl = (id: string, fileAccessToken: string) =>
+  `${BASE}/tasks/${encodeURIComponent(id)}/file?token=${encodeURIComponent(fileAccessToken)}`
 export const clearCompletedTasks = () =>
   request<{ ok: boolean; count: number }>('/tasks/completed', { method: 'DELETE' })
 export const fetchLog = (id: string) => request<{ log: string }>(`/tasks/${id}/log`)
@@ -93,10 +100,15 @@ export const openExplorer = (path: string) =>
     method: 'POST',
     body: JSON.stringify({ path }),
   })
-export const launchFile = (path: string) =>
+export const openTaskInExplorer = (taskId: string) =>
+  request<{ ok: boolean }>('/open-explorer', {
+    method: 'POST',
+    body: JSON.stringify({ task_id: taskId }),
+  })
+export const launchFile = (taskId: string, confirmExecutable = false) =>
   request<{ ok: boolean }>('/launch-file', {
     method: 'POST',
-    body: JSON.stringify({ path }),
+    body: JSON.stringify({ task_id: taskId, confirm_executable: confirmExecutable }),
   })
 export const browseDir = (path: string = '') =>
   request<any>(`/browse-dir?path=${encodeURIComponent(path)}`)
@@ -146,40 +158,67 @@ export const requestPlaybackSeek = (id: string, session: string, time: number) =
   })
 export const closePlaybackSession = (id: string, session: string) =>
   request<{ ok: boolean }>(`/tasks/${id}/playback?session=${encodeURIComponent(session)}`, { method: 'DELETE', keepalive: true })
-export const playbackPlaylistUrl = (id: string, session: string, full = true) =>
-  `${BASE}/tasks/${encodeURIComponent(id)}/playback/index.m3u8?session=${encodeURIComponent(session)}&token=${encodeURIComponent(getToken())}${full ? '&full=1' : ''}`
-export const playbackMediaUrl = (id: string, session: string) =>
-  `${BASE}/tasks/${encodeURIComponent(id)}/playback/media?session=${encodeURIComponent(session)}&token=${encodeURIComponent(getToken())}`
+export const playbackPlaylistUrl = (id: string, session: string, playbackToken: string, full = true) =>
+  `${BASE}/tasks/${encodeURIComponent(id)}/playback/index.m3u8?session=${encodeURIComponent(session)}&token=${encodeURIComponent(playbackToken)}${full ? '&full=1' : ''}`
+export const playbackMediaUrl = (id: string, session: string, playbackToken: string) =>
+  `${BASE}/tasks/${encodeURIComponent(id)}/playback/media?session=${encodeURIComponent(session)}&token=${encodeURIComponent(playbackToken)}`
 
 export function connectSSE(
   onEvent: (event: any) => void,
   onOpen?: () => void,
 ): { close: () => void } {
-  const token = getToken()
   let closed = false
-  let eventSource: EventSource | null = null
+  let controller: AbortController | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
-  function connect() {
+  async function connect() {
     if (closed) return
-    eventSource = new EventSource(`${BASE}/events?token=${encodeURIComponent(token)}`)
-    eventSource.onopen = () => onOpen?.()
-    eventSource.onmessage = message => {
-      try { onEvent(JSON.parse(message.data)) } catch {}
-    }
-    eventSource.onerror = () => {
-      if (closed) return
-      eventSource?.close()
-      reconnectTimer = setTimeout(connect, 3000)
+    controller = new AbortController()
+    try {
+      const response = await fetch(`${BASE}/events`, {
+        headers: { 'X-Token': getToken(), Accept: 'text/event-stream' },
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+      if (response.status === 401 && isTauriDesktop()) {
+        await prepareTauriRuntime()
+        if (!closed) reconnectTimer = setTimeout(() => { void connect() }, 0)
+        return
+      }
+      if (!response.ok || !response.body) throw new Error(`SSE HTTP ${response.status}`)
+      onOpen?.()
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (!closed) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+        let boundary = buffer.indexOf('\n\n')
+        while (boundary >= 0) {
+          const block = buffer.slice(0, boundary)
+          buffer = buffer.slice(boundary + 2)
+          const data = block.split('\n')
+            .filter(line => line.startsWith('data:'))
+            .map(line => line.slice(5).trimStart())
+            .join('\n')
+          if (data) {
+            try { onEvent(JSON.parse(data)) } catch {}
+          }
+          boundary = buffer.indexOf('\n\n')
+        }
+      }
+    } catch {
+      if (!closed) reconnectTimer = setTimeout(() => { void connect() }, 3000)
     }
   }
 
-  connect()
+  void connect()
   return {
     close() {
       closed = true
       if (reconnectTimer) clearTimeout(reconnectTimer)
-      eventSource?.close()
+      controller?.abort()
     },
   }
 }

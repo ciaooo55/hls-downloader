@@ -5,7 +5,6 @@ import {
   desktopAcceptedHandoff,
   handoffStatusLabel,
   handoffTerminalStatus,
-  shouldResumeBrowserDownload,
 } from './takeover'
 
 describe('browser download takeover helpers', () => {
@@ -15,16 +14,10 @@ describe('browser download takeover helpers', () => {
     expect(browserCleanupAction('interrupted')).toBe('cancel')
   })
 
-  it('resumes only paused downloads that were not handed off', () => {
-    expect(shouldResumeBrowserDownload(true, false)).toBe(true)
-    expect(shouldResumeBrowserDownload(true, true)).toBe(false)
-    expect(shouldResumeBrowserDownload(false, false)).toBe(false)
-  })
-
-  it('continues takeover for paused or already completed downloads', () => {
-    expect(canContinueTakeover(true, 'in_progress')).toBe(true)
-    expect(canContinueTakeover(false, 'complete')).toBe(true)
-    expect(canContinueTakeover(false, 'in_progress')).toBe(false)
+  it('observes live browser downloads without pausing them first', () => {
+    expect(canContinueTakeover('in_progress')).toBe(true)
+    expect(canContinueTakeover('complete')).toBe(true)
+    expect(canContinueTakeover('interrupted')).toBe(false)
   })
 
   it('accepts only successful desktop handoff responses that can be presented', () => {

@@ -18,6 +18,7 @@ from backend.app.downloader.http_file import (
     _parse_content_range,
     _SpeedWindow,
 )
+from backend.app.downloader.errors import DownloadError
 from backend.app.downloader.engine import publish_path, task_work_dir
 from backend.app.downloader.torrent import TorrentDownloader
 from backend.app.downloader import task_manager as task_manager_module
@@ -77,6 +78,30 @@ def test_http_probe_verifies_range_without_using_head():
     metadata = asyncio.run(run())
     assert metadata["ranges"] is True
     assert metadata["total"] == 104857600
+
+
+def test_http_probe_rejects_successful_html_error_page():
+    task = Task(id="probe-html", url="https://files.test/archive.zip", task_type=TaskType.HTTP)
+    body = b"<!doctype html><html><title>Sign in</title></html>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            206,
+            content=body,
+            headers={
+                "Content-Range": f"bytes 0-{len(body) - 1}/{len(body)}",
+                "Content-Type": "text/html",
+            },
+            request=request,
+        )
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await HTTPDownloader(task)._probe(client, {})
+
+    with pytest.raises(DownloadError) as raised:
+        asyncio.run(run())
+    assert raised.value.details.code == "HTTP_UNEXPECTED_CONTENT"
 
 
 def test_http_probe_falls_back_to_plain_streamed_get_when_range_is_rejected():

@@ -1,5 +1,5 @@
 {
-  "config_version": 18,
+  "config_version": 20,
   "host": "127.0.0.1",
   "port": 8765,
   "download_dir": "downloads",

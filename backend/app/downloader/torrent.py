@@ -402,7 +402,11 @@ class TorrentDownloader:
 
     async def _download_torrent_file(self, destination: Path) -> None:
         headers = build_task_headers(self.task)
-        async with policy_httpx_client(follow_redirects=True, timeout=30) as client:
+        async with policy_httpx_client(
+            follow_redirects=True,
+            timeout=30,
+            deny_private_networks=bool(self.task.engine_state.get("browser_originated")),
+        ) as client:
             response = await client.get(self.task.url, headers=headers)
             response.raise_for_status()
             if len(response.content) > 16 * 1024 * 1024:

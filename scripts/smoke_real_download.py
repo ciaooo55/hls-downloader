@@ -489,7 +489,8 @@ def run(archive: Path | None = None) -> dict:
         if not session:
             raise RuntimeError("incremental HLS playback never became ready")
         session_id = str(session["session_id"])
-        query = urlencode({"session": session_id, "token": token})
+        playback_token = str(session["playback_token"])
+        query = urlencode({"session": session_id, "token": playback_token})
         request = Request(f"{base}/api/tasks/{hls_id}/playback/index.m3u8?{query}")
         playlist_started = time.monotonic()
         with urlopen(request, timeout=5) as response:

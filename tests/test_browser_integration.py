@@ -93,6 +93,22 @@ def test_browser_handoff_transport_retry_is_idempotent():
     assert len(service.pending()) == 1
 
 
+def test_browser_handoff_allows_a_new_offer_after_terminal_resolution():
+    service = BrowserHandoffService()
+    payload = {
+        "url": "https://cdn.test/live.m3u8?token=fresh",
+        "extension_client_id": "edge-install",
+        "client_request_id": "resource:7:0123456789abcdef0123456789abcdef",
+    }
+
+    first = service.create(payload)
+    service.reject(first.id)
+    second = service.create(payload)
+
+    assert second.id != first.id
+    assert second.status == "pending"
+
+
 def test_browser_handoff_replaces_generic_manifest_name_with_page_title():
     service = BrowserHandoffService()
     item = service.create({

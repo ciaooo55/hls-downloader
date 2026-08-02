@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FastForward, LoaderCircle, Pause, Play, Trash2, X } from 'lucide-react'
-import { cancelPowerAction, castLocalFile, castMediaUrl, clearCompletedTasks, completeBrowserMediaPush, confirmPowerAction, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLocalTvboxShare, fetchPendingPowerActions, fetchSettings, fetchTasks, importTorrentPath, launchFile, openExplorer, pushLocalTvboxFile, pushTvboxUrl, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
+import { cancelPowerAction, castLocalFile, castMediaUrl, clearCompletedTasks, completeBrowserMediaPush, confirmPowerAction, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLocalTvboxShare, fetchPendingPowerActions, fetchSettings, fetchTasks, importTorrentPath, launchFile, openExplorer, openTaskInExplorer, pushLocalTvboxFile, pushTvboxUrl, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
 import { fmtBytes, fmtSpeed } from './format'
 import { isRunningStatus, mergeTaskEvent } from './taskState'
 import { commandState } from './taskCommands'
@@ -102,11 +102,20 @@ export default function App() {
   const autoPlayHandled = useRef(false)
 
   useEffect(() => {
+    let disposed = false
     let stop: (() => void) | undefined
     void startTauriDesktopSession()
-      .then(cleanup => { stop = cleanup })
-      .catch(reason => setError(reason?.message || '无法启动桌面会话'))
-    return () => stop?.()
+      .then(cleanup => {
+        if (disposed) cleanup()
+        else stop = cleanup
+      })
+      .catch(reason => {
+        if (!disposed) setError(reason?.message || '无法启动桌面会话')
+      })
+    return () => {
+      disposed = true
+      stop?.()
+    }
   }, [])
 
   useEffect(() => {
@@ -371,11 +380,21 @@ export default function App() {
       await load()
     } catch (reason: any) { setError(reason.message || '清理失败') }
   }
-  const launchOutput = async (task: Task) => {
+  const launchOutput = async (task: Task, confirmed = false) => {
     if (!task.output_path) return
+    if (!confirmed && /\.(?:bat|cmd|com|exe|js|msi|ps1|scr|vbs)$/i.test(task.output_path)) {
+      setConfirmation({
+        title: '运行从互联网下载的文件？',
+        message: `即将运行 ${task.filename || task.title || '可执行文件'}。仅在信任来源并已完成安全检查时继续。`,
+        confirmLabel: '仍然运行',
+        danger: true,
+        run: () => { setConfirmation(null); void launchOutput(task, true) },
+      })
+      return
+    }
     try {
       if (/\.torrent$/i.test(task.output_path)) { await importTorrentPath(task.output_path); showFeedback('已解析种子并创建 BT 下载任务'); await load(); return }
-      await launchFile(task.output_path)
+      await launchFile(task.id, confirmed)
     } catch (reason: any) { setError(reason.message || '无法打开文件') }
   }
   const resolveHandoff = async (action: 'accept' | 'cancel', decision?: BrowserHandoffDecision | BrowserHandoffCancelDecision) => {
@@ -518,14 +537,14 @@ export default function App() {
   const desktopShell = isTauriDesktop()
   return <div className={`desktop-app${desktopShell ? ' has-window-chrome' : ''}`}>
     {desktopShell && <WindowChrome />}
-    <DesktopToolbar commands={commands} theme={theme} version={appVersion} query={query} onQueryChange={setQuery} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onPauseAll={() => void pauseAllActive()} onStartAll={() => void startAllWaiting()} onOpen={() => selectedTasks[0]?.output_path && openExplorer(selectedTasks[0].output_path)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onBrowserExtension={() => setShowBrowserExtension(true)} onPushLocalMedia={() => void confirmLocalMediaPush()} pushLocalMediaBusy={localPushBusy} onCastLocalMedia={() => void confirmLocalCast()} castLocalMediaBusy={castBusy} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
+    <DesktopToolbar commands={commands} theme={theme} version={appVersion} query={query} onQueryChange={setQuery} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onPauseAll={() => void pauseAllActive()} onStartAll={() => void startAllWaiting()} onOpen={() => selectedTasks[0]?.output_path && openTaskInExplorer(selectedTasks[0].id)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onBrowserExtension={() => setShowBrowserExtension(true)} onPushLocalMedia={() => void confirmLocalMediaPush()} pushLocalMediaBusy={localPushBusy} onCastLocalMedia={() => void confirmLocalCast()} castLocalMediaBusy={castBusy} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
     <div className="workspace">
       <Sidebar tasks={tasks} active={filter} onChange={setFilter} browserStatus={browserStatus} appVersion={appVersion} onOpenExtensionHelp={() => setShowBrowserExtension(true)} />
       <main className="content">
         <UpdateNotice />
         <div className="content-head"><strong>{filter === 'all' ? '全部任务' : filter === 'running' ? '进行中' : filter === 'done' ? '已完成' : filter === 'failed' ? '失败任务' : filter === 'media' ? '媒体' : filter === 'program' ? '程序' : filter === 'archive' ? '压缩包' : filter === 'other' ? '其他' : '任务列表'} <span>{filtered.length} 项{selected.size > 0 ? ` · 已选 ${selected.size}` : ''}</span></strong><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={() => void clearCompleted()}><Trash2 size={14} />清理已完成</button></div>
         {error && <div className="action-error" role="alert"><span>{error}</span><div className="action-error-actions"><button type="button" className="secondary-button" onClick={() => void load()}>重试</button><button type="button" className="icon-button action-error-dismiss" title="关闭提示" onClick={() => setError('')}><X size={15} /></button></div></div>}
-        <TaskTable tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openExplorer(task.output_path)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onPreview={setPlaying} onPreviewImage={setPreviewImage} onCast={task => task.output_path && void confirmLocalCast(task.output_path)} />
+        <TaskTable tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openTaskInExplorer(task.id)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onPreview={setPlaying} onPreviewImage={setPreviewImage} onCast={task => task.output_path && void confirmLocalCast(task.output_path)} />
       </main>
     </div>
     <footer className="statusbar">
@@ -573,9 +592,9 @@ export default function App() {
     {showBrowserExtension && <BrowserExtensionDialog onClose={() => { setShowBrowserExtension(false); load() }} />}
     {showSettings && <SettingsPanel themePreference={themePreference} onThemePreferenceChange={changeThemePreference} onClose={() => { setShowSettings(false); load() }} />}
     {showUpdate && <UpdateDialog onClose={() => setShowUpdate(false)} />}
-    {detailTask && <TaskDetailsModal task={detailTask} pending={pending.has(detailTask.id)} onClose={() => setDetails(null)} onLog={() => setLogTaskId(detailTask.id)} onAction={action => perform(action, [detailTask])} onOpenFile={() => detailTask.output_path && openExplorer(detailTask.output_path)} onLaunchFile={() => launchOutput(detailTask)} onPushToTv={() => void confirmLocalMediaPush(detailTask.output_path)} onCast={() => void confirmLocalCast(detailTask.output_path)} onPreview={() => { setDetails(null); setPlaying(detailTask) }} />}
+    {detailTask && <TaskDetailsModal task={detailTask} pending={pending.has(detailTask.id)} onClose={() => setDetails(null)} onLog={() => setLogTaskId(detailTask.id)} onAction={action => perform(action, [detailTask])} onOpenFile={() => detailTask.output_path && openTaskInExplorer(detailTask.id)} onLaunchFile={() => launchOutput(detailTask)} onPushToTv={() => void confirmLocalMediaPush(detailTask.output_path)} onCast={() => void confirmLocalCast(detailTask.output_path)} onPreview={() => { setDetails(null); setPlaying(detailTask) }} />}
     {playingTask && <Suspense fallback={<div className="modal-overlay player-overlay"><div className="player-chunk-loading"><LoaderCircle className="spin" size={24} /><span>正在打开播放器</span></div></div>}><VideoPlayerModal task={playingTask} onClose={() => setPlaying(null)} /></Suspense>}
-    {previewImage && <div className="modal-overlay image-preview-overlay" onMouseDown={() => setPreviewImage(null)}><section className="image-preview" onMouseDown={event => event.stopPropagation()}><header><strong>{previewImage.title || previewImage.filename}</strong><button className="modal-close-button" title="关闭预览" onClick={() => setPreviewImage(null)}><X size={18} /></button></header><img src={taskFileUrl(previewImage.id)} alt={previewImage.title || previewImage.filename} /></section></div>}
+    {previewImage && <div className="modal-overlay image-preview-overlay" onMouseDown={() => setPreviewImage(null)}><section className="image-preview" onMouseDown={event => event.stopPropagation()}><header><strong>{previewImage.title || previewImage.filename}</strong><button className="modal-close-button" title="关闭预览" onClick={() => setPreviewImage(null)}><X size={18} /></button></header><img src={taskFileUrl(previewImage.id, previewImage.file_access_token || '')} alt={previewImage.title || previewImage.filename} /></section></div>}
     {logTaskId && <LogModal taskId={logTaskId} onClose={() => setLogTaskId(null)} />}
     {feedback && <div className="toast" role="status">{feedback}</div>}
     {clipboardOffer && <div className="toast clipboard-toast" role="status">

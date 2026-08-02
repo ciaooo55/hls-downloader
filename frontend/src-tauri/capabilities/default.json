@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Desktop manager and browser handoff windows",
-  "windows": ["main", "handoff-*"],
+  "description": "Main desktop manager window",
+  "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-create",
@@ -17,12 +17,12 @@
     "core:window:allow-set-focus",
     "core:window:allow-center",
     "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
+    "core:window:allow-set-size",
     "core:webview:allow-create-webview",
     "core:webview:allow-create-webview-window",
     "dialog:default",
-    "fs:default",
     "notification:default",
-    "opener:default",
     "process:default"
   ]
 }

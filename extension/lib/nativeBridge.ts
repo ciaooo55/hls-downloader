@@ -10,6 +10,7 @@ interface PendingRequest {
   requestId: string
   timeoutMs: number
   retriesRemaining: number
+  priority: number
   resolve(value: unknown): void
   reject(reason: Error): void
   timer?: ReturnType<typeof setTimeout>
@@ -36,16 +37,36 @@ export class NativeBridge {
     if (this.closed) return Promise.reject(new Error('Native Messaging connection is closed'))
     return new Promise((resolve, reject) => {
       const requestId = `${Date.now().toString(36)}-${++this.requestSequence}`
-      this.queue.push({
+      const request: PendingRequest = {
         message: { ...message, __request_id: requestId },
         requestId,
         timeoutMs,
         retriesRemaining: Math.max(0, Math.floor(retryCount)),
+        priority: this.requestPriority(message),
         resolve,
         reject,
-      })
+      }
+      // A running native-host call cannot be pre-empted, but interactive
+      // offers/downloads must jump ahead of queued heartbeat and status work.
+      // Native Messaging hosts process stdin serially, so this small priority
+      // queue removes avoidable head-of-line delay without opening competing
+      // host processes or reordering an already active request.
+      const start = this.active ? 1 : 0
+      const nextLowerPriority = this.queue.findIndex(
+        (queued, index) => index >= start && queued.priority < request.priority,
+      )
+      if (nextLowerPriority >= 0) this.queue.splice(nextLowerPriority, 0, request)
+      else this.queue.push(request)
       this.pump()
     })
+  }
+
+  private requestPriority(message: Record<string, unknown>): number {
+    const operation = String(message.op || '')
+    if (new Set(['offer', 'download', 'activate', 'media_push', 'set_takeover_settings']).has(operation)) return 30
+    if (new Set(['handoff_status', 'media_push_status']).has(operation)) return 20
+    if (operation === 'wait_handoff') return 10
+    return 0
   }
 
   close(): void {

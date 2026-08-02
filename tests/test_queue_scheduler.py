@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -80,6 +80,14 @@ def test_per_task_schedule_due_and_window_validation():
             scheduled_start_at=now,
             scheduled_stop_at=now - timedelta(minutes=1),
         )
+
+
+def test_task_schedule_is_normalized_to_utc():
+    value = TaskCreate(
+        url="https://example.test/file",
+        scheduled_start_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone(timedelta(hours=8))),
+    )
+    assert value.scheduled_start_at == datetime(2026, 8, 1, 4, 0, tzinfo=timezone.utc)
 
 
 def test_schedule_maintenance_starts_and_stops_due_tasks(monkeypatch):

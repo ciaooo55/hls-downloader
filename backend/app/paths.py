@@ -75,7 +75,7 @@ def resolve_runtime_paths(
         database_path=data_root / "data.db",
         webview_path=data_root / "WebView",
         default_download_dir=downloads,
-        default_temp_dir=app_root,
+        default_temp_dir=data_root / "Cache",
     )
 
 

@@ -4,12 +4,8 @@ export function browserCleanupAction(state: BrowserDownloadState): 'remove-file'
   return state === 'complete' ? 'remove-file' : 'cancel'
 }
 
-export function shouldResumeBrowserDownload(paused: boolean, handedOff: boolean): boolean {
-  return paused && !handedOff
-}
-
-export function canContinueTakeover(paused: boolean, state: BrowserDownloadState): boolean {
-  return paused || state === 'complete'
+export function canContinueTakeover(state: BrowserDownloadState): boolean {
+  return state === 'in_progress' || state === 'complete'
 }
 
 export type HandoffPresentationMode = 'desktop' | 'desktop-pending' | 'ui-fallback' | 'none' | string

@@ -27,7 +27,7 @@ def resolve_site_profile(url: str) -> dict:
             "referer": str(raw.get("referer") or "")[:4096],
             "origin": str(raw.get("origin") or "")[:1024],
             "request_headers": sanitize_request_headers(raw.get("request_headers")),
-            "concurrency": max(0, min(256, int(raw.get("concurrency") or 0))),
+            "concurrency": max(0, min(64, int(raw.get("concurrency") or 0))),
             "speed_limit_kib": max(0, min(1048576, int(raw.get("speed_limit_kib") or 0))),
         }
     return {}

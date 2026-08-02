@@ -1,9 +1,11 @@
-import uvicorn
+import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, RedirectResponse
 from contextlib import asynccontextmanager
+
+import uvicorn
 
 from .config import PROJECT_ROOT, settings
 from .api import router
@@ -30,6 +32,24 @@ async def lifespan(app: FastAPI):
         await close_database()
 
 app = FastAPI(title="HLS Downloader", lifespan=lifespan)
+MAX_JSON_BODY_BYTES = 4 * 1024 * 1024
+
+
+@app.middleware("http")
+async def limit_json_request_body(request: Request, call_next):
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type == "application/json":
+        content_length = request.headers.get("content-length", "").strip()
+        if content_length:
+            try:
+                if int(content_length) > MAX_JSON_BODY_BYTES:
+                    return JSONResponse(status_code=413, content={"detail": "JSON 请求体过大"})
+            except ValueError:
+                return JSONResponse(status_code=400, content={"detail": "Content-Length 无效"})
+        body = await request.body()
+        if len(body) > MAX_JSON_BODY_BYTES:
+            return JSONResponse(status_code=413, content={"detail": "JSON 请求体过大"})
+    return await call_next(request)
 CHROMIUM_EXTENSION_ORIGIN = "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla"
 ALLOWED_CORS_ORIGINS = [
     "tauri://localhost",
@@ -37,10 +57,13 @@ ALLOWED_CORS_ORIGINS = [
     "https://tauri.localhost",
     f"http://127.0.0.1:{settings.port}",
     f"http://localhost:{settings.port}",
-    "http://127.0.0.1:1420",
-    "http://localhost:1420",
     CHROMIUM_EXTENSION_ORIGIN,
 ]
+if not getattr(sys, "frozen", False):
+    ALLOWED_CORS_ORIGINS.extend([
+        "http://127.0.0.1:1420",
+        "http://localhost:1420",
+    ])
 app.add_middleware(
     CORSMiddleware,
     # WebExtensions with loopback host_permissions do not require CORS. Firefox
@@ -59,6 +82,11 @@ UI_RESPONSE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
     "Pragma": "no-cache",
     "Expires": "0",
+    "Content-Security-Policy": "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
 }
 
 

@@ -25,12 +25,12 @@ def test_ci_runs_windows_python_and_frontend_checks():
     assert "pnpm run build" in workflow
     assert "working-directory: extension" in workflow
     assert "web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors" in workflow
-    assert "dtolnay/rust-toolchain@stable" in workflow
+    assert "dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4" in workflow
     assert "pnpm run tauri:build" in workflow
     assert "cargo check --locked --all-targets" in workflow
     assert "cargo clippy --locked --all-targets -- -D warnings" in workflow
-    assert "browser-actions/setup-chrome@v2" in workflow
-    assert "browser-actions/setup-firefox@v1" in workflow
+    assert "browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd" in workflow
+    assert "browser-actions/setup-firefox@0bc507ddf224827e3b1af68e014d5e42ab93e795" in workflow
     assert "scripts/smoke_extension_browsers.py" in workflow
     assert "actions/setup-java@v5" not in workflow
     assert "permissions:\n  contents: read" in workflow
@@ -40,15 +40,16 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     workflow = _workflow("release.yml")
 
     assert "workflow_dispatch:" in workflow
-    assert 'default: "3.0.10"' in workflow
+    assert 'default: "3.0.11"' in workflow
     assert "include_extensions:" in workflow
     assert "Upload browser extension ZIPs for this release" in workflow
     assert "tags:" in workflow and "v*" in workflow
     assert "windows-latest" in workflow
-    assert "dtolnay/rust-toolchain@stable" in workflow
+    assert "dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4" in workflow
     assert "actions/setup-java@v5" not in workflow
     assert "ubuntu-latest" not in workflow
-    assert "choco install ffmpeg nsis" in workflow
+    assert "choco install ffmpeg nsis" not in workflow
+    assert "Build Windows packages" in workflow
     assert "scripts\\build_installer.ps1" in workflow
     assert '$buildArgs = @{ Version = $version }' in workflow
     assert "$buildArgs.IncludeExtensionAssets = $true" in workflow
@@ -70,14 +71,14 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "--cov-fail-under=60" in workflow
     assert "cargo check --locked --all-targets" in workflow
     assert "cargo clippy --locked --all-targets -- -D warnings" in workflow
-    assert "browser-actions/setup-chrome@v2" in workflow
-    assert "browser-actions/setup-firefox@v1" in workflow
+    assert "browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd" in workflow
+    assert "browser-actions/setup-firefox@0bc507ddf224827e3b1af68e014d5e42ab93e795" in workflow
     assert "scripts/smoke_extension_browsers.py" in workflow
     assert "scripts/smoke_real_download.py --archive $archive" in workflow
     assert "scripts/smoke-portable-upgrade.ps1" in workflow
     assert "SHA256SUMS.txt" not in workflow
-    assert "actions/upload-artifact@v7" in workflow
-    assert "actions/download-artifact@v7" in workflow
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
+    assert "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131" in workflow
     assert "softprops/action-gh-release" not in workflow
     assert "gh release create" in workflow
     assert "gh release upload" in workflow
@@ -106,13 +107,19 @@ def test_build_requirements_pin_pyinstaller():
     assert "-r requirements-dev.txt" in requirements
     assert "pyinstaller==6.19.0" in requirements.lower()
 
+    release_lock = (ROOT / "requirements-release.lock").read_text(encoding="utf-8")
+    release_workflow = _workflow("release.yml")
+    assert "--hash=sha256:" in release_lock
+    assert "pyinstaller==6.19.0" in release_lock.lower()
+    assert "python -m pip install --require-hashes -r requirements-release.lock" in release_workflow
+
 
 def test_readme_documents_windows_release_assets():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "ciaooo55/hls-downloader/actions/workflows/ci.yml" in readme
-    assert "HLSDownloader-v3.0.10-Windows-x64-Setup.exe" in readme
-    assert "HLSDownloader-v3.0.10-Windows-x64-Portable.zip" in readme
+    assert "HLSDownloader-v3.0.11-Windows-x64-Setup.exe" in readme
+    assert "HLSDownloader-v3.0.11-Windows-x64-Portable.zip" in readme
     assert "m3u8-sniffer.user.js" not in readme
     assert "HLSDownloader-v3.0.9-Firefox-Web-UI-Unsigned.zip" in readme
     assert "HLSDownloader-v3.0.9-Firefox-Web-UI-Source.zip" in readme

@@ -62,11 +62,14 @@ export interface DownloadClickIntent {
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|torrent|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
 const SEGMENT_EXT = /\.(?:ts|m4s|cmfv|cmfa|aac)(?:$|[?#])/i
 const IMAGE_EXT = /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)(?:$|[?#])/i
+const PASSIVE_WEB_EXT = /\.(?:cjs|css|eot|js|json|map|mjs|otf|ttf|wasm|woff2?|xml)(?:$|[?#])/i
+const PASSIVE_WEB_MIME = /^(?:application\/(?:ecmascript|javascript|json|ld\+json|manifest\+json|wasm|xml)|font\/|text\/(?:css|javascript|xml))\b/i
 const DYNAMIC_DOCUMENT_EXT = /\.(?:asp|aspx|cfm|cgi|do|action|jsp|php\d?)(?:$|[?#])/i
 const MANIFEST_EXT = /\.(?:m3u8?|mpd)$/i
 const SEGMENT_PATH = /(?:^|[\/_-])(?:init|segment|seg|fragment|frag|chunk|part)[-_]?(?:\d{1,8}|video|audio)?(?:\.|[\/_-]|$)/i
 const SEGMENT_MIME = /^(?:video\/mp2t|audio\/(?:aac|mp4a-latm))\b/i
-const VOLATILE_QUERY = /^(?:token|auth|authorization|signature|sig|expires?|expiry|policy|key-pair-id|hdnea|hmac|jwt|session|sessionid|access[_-]?key|x-amz-.+)$/i
+const VOLATILE_QUERY = /^(?:signature|sig|expires?|expiry|policy|key-pair-id|hdnea|hmac|access[_-]?key|x-amz-.+)$/i
+const MEDIA_AUTH_QUERY = /^(?:token|auth|authorization|jwt|session|sessionid)$/i
 const LL_HLS_RELOAD_QUERY = new Set(['_hls_msn', '_hls_part', '_hls_skip'])
 const AD_SIGNAL = /(?:^|[\/_-])(?:ad|ads|advert|advertisement|preroll|midroll|postroll|promo)(?:[\/_-]|$)/i
 const NON_VIDEO_MANIFEST_SIGNAL = /(?:^|[\/_.-])(?:audio(?:only|track)?|subtitle(?:s)?|caption(?:s)?|thumbnail(?:s)?|thumb(?:s)?|sprite(?:s)?|storyboard(?:s)?|preview(?:s)?|iframe|trickplay|ad(?:s)?|advert(?:s|ising)?|preroll|midroll|postroll)(?:[\/_.-]|$)/i
@@ -160,8 +163,13 @@ export function resourceFingerprint(resource: Pick<MediaResource, 'url' | 'kind'
     // another site is not silently discarded.
     const names = new Set([...url.searchParams.keys()].map(key => key.toLowerCase()))
     const hasShortLivedSignature = names.has('s') && names.has('e')
+    const adaptiveOrMedia = ['hls', 'dash', 'media'].includes(resource.kind)
     for (const key of [...url.searchParams.keys()]) {
-      if (VOLATILE_QUERY.test(key) || (hasShortLivedSignature && ['s', 'e', '_t'].includes(key.toLowerCase()))) {
+      if (
+        VOLATILE_QUERY.test(key)
+        || (adaptiveOrMedia && MEDIA_AUTH_QUERY.test(key))
+        || (hasShortLivedSignature && ['s', 'e', '_t'].includes(key.toLowerCase()))
+      ) {
         url.searchParams.delete(key)
       }
     }
@@ -403,13 +411,24 @@ export function visibleMediaResources(resources: MediaResource[], limit = 8, fal
   return (video.length || !fallbackToFiles ? video : compact).slice(0, limit)
 }
 
-export function classifyDownload(url: string, mimeType = '', filename = ''): ResourceKind | null {
+export function classifyDownload(
+  url: string,
+  mimeType = '',
+  filename = '',
+  contentDisposition = '',
+): ResourceKind | null {
   const mime = mimeType.toLowerCase()
   const suppliedName = filename.split(/[\\/]/).pop() || ''
+  const attachment = /^\s*attachment\b/i.test(contentDisposition)
   const suppliedIsImage = IMAGE_EXT.test(suppliedName)
   const suppliedIsDocument = DYNAMIC_DOCUMENT_EXT.test(suppliedName)
   const suppliedHasExtension = /\.[A-Za-z0-9]{1,10}(?:$|[?#])/.test(suppliedName)
   if (mime.startsWith('image/') || suppliedIsImage) return null
+  // A browser DownloadItem alone is strong evidence for an actual download,
+  // but pages also create DownloadItems for saved scripts and other passive
+  // subresources. Keep those in the browser unless the server explicitly
+  // marks the response as an attachment.
+  if (!attachment && (PASSIVE_WEB_MIME.test(mime) || PASSIVE_WEB_EXT.test(url) || PASSIVE_WEB_EXT.test(suppliedName))) return null
   // Dynamic endpoints are common navigation and ad targets. Only take one over
   // when the server explicitly gives it a real, non-web download filename.
   if (DYNAMIC_DOCUMENT_EXT.test(url) && (!suppliedHasExtension || suppliedIsDocument)) return null
@@ -424,12 +443,20 @@ export function classifyDownload(url: string, mimeType = '', filename = ''): Res
 }
 
 export function resourceId(url: string): string {
-  let hash = 2166136261
-  for (let index = 0; index < url.length; index += 1) {
-    hash ^= url.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
+  // Two independent 64-bit FNV-1a passes keep this synchronous for DOM/storage
+  // keys while raising the identifier space from 32 to 128 bits. The complete
+  // resourceFingerprint remains the authoritative Map key.
+  const fnv64 = (value: string, offset: bigint): bigint => {
+    let hash = offset
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= BigInt(value.charCodeAt(index))
+      hash = BigInt.asUintN(64, hash * 1099511628211n)
+    }
+    return hash
   }
-  return (hash >>> 0).toString(36)
+  const forward = fnv64(url, 14695981039346656037n)
+  const reverse = fnv64([...url].reverse().join(''), 7809847782465536322n)
+  return `${forward.toString(16).padStart(16, '0')}${reverse.toString(16).padStart(16, '0')}`
 }
 
 export function mergeResources(current: MediaResource[], incoming: MediaResource, limit = 100): MediaResource[] {
@@ -447,6 +474,7 @@ export function shouldTakeover(input: {
   minimumBytes: number
   excludedHosts: string[]
   explicitClick?: boolean
+  strongEvidence?: boolean
   altBypass?: boolean
   ctrlForce?: boolean
 }): boolean {
@@ -456,7 +484,7 @@ export function shouldTakeover(input: {
   // the content-script filter because old session intents can survive briefly.
   if (isAuthenticationNavigation(input.url)) return false
   if (input.ctrlForce) return true
-  if (!input.explicitClick) return false
+  if (!input.explicitClick && !input.strongEvidence) return false
   if (!input.enabled) return false
   try {
     const url = new URL(input.url)

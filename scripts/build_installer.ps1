@@ -5,7 +5,7 @@ param(
     [switch]$SkipInstaller,
     [switch]$SkipSmoke,
     [switch]$IncludeExtensionAssets,
-    [string]$Version = "3.0.10"
+    [string]$Version = "3.0.11"
 )
 
 $ErrorActionPreference = "Stop"
@@ -66,11 +66,14 @@ $ToolsDir = Join-Path $Root "tools"
 $BinDir = Join-Path $Root "bin"
 $FFmpegArchive = Join-Path $ToolsDir "ffmpeg-windows.zip"
 $FFmpegToolsDir = Join-Path $ToolsDir "ffmpeg-windows"
-$FFmpegArchiveUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-$NsisCondaPrefix = Join-Path $ToolsDir "nsis-conda"
+$FFmpegArchiveUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-01-13-21/ffmpeg-N-125881-g946272b79a-win64-gpl.zip"
+$FFmpegArchiveBuild = "BtbN autobuild 2026-08-01 13:21 (FFmpeg g946272b79a)"
+$FFmpegArchiveSha256 = "a082da6d5ce0cbb9a8ad0112ab7f654d480c707b8caf9d332f4532d78b65257f"
 $NsisVersion = "3.12"
 $NsisZip = Join-Path $ToolsDir "nsis-$NsisVersion.zip"
-$NsisUrl = "https://downloads.sourceforge.net/project/nsis/NSIS%203/$NsisVersion/nsis-$NsisVersion.zip"
+$NsisToolsDir = Join-Path $ToolsDir "nsis-$NsisVersion"
+$NsisUrl = "https://master.dl.sourceforge.net/project/nsis/NSIS%203/$NsisVersion/nsis-$NsisVersion.zip?viasf=1"
+$NsisSha256 = "56581f90db321581c5381193d796fffcf2d24b2f8fed2160a6c6a3baa67f2c4f"
 $InstallerScript = Join-Path $Root "installer\hls-downloader.nsi"
 $ReleaseNamePrefix = "HLSDownloader-v$Version"
 $InstallerOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Windows-x64-Setup.exe"
@@ -102,6 +105,42 @@ function Invoke-Step($Name, [scriptblock]$Block) {
     & $Block
 }
 
+function Assert-FileSha256([string]$Path, [string]$Expected, [string]$Label) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "$Label is missing: $Path"
+    }
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $Expected.ToLowerInvariant()) {
+        throw "$Label SHA-256 mismatch. Expected $Expected, got $actual"
+    }
+}
+
+function Get-VerifiedArchive([string]$Url, [string]$Path, [string]$Expected, [string]$Label) {
+    New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($Path)) | Out-Null
+    if (Test-Path -LiteralPath $Path) {
+        try {
+            Assert-FileSha256 $Path $Expected $Label
+            return
+        } catch {
+            [System.IO.File]::Delete($Path)
+        }
+    }
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Write-Host "Downloading pinned $Label (attempt $attempt/3)..."
+            Invoke-WebRequest -Uri $Url -OutFile $Path -MaximumRedirection 10
+            Assert-FileSha256 $Path $Expected $Label
+            return
+        } catch {
+            $lastError = $_
+            [System.IO.File]::Delete($Path)
+            if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
+        }
+    }
+    throw "$Label download or verification failed: $($lastError.Exception.Message)"
+}
+
 function Invoke-PyInstallerWithRetry(
     [string]$Name,
     [scriptblock]$Build
@@ -123,102 +162,20 @@ function Invoke-PyInstallerWithRetry(
 }
 
 function Get-MakeNsis {
-    $pathCommand = Get-Command "makensis.exe" -ErrorAction SilentlyContinue
-    if ($pathCommand) {
-        return $pathCommand.Source
+    Get-VerifiedArchive $NsisUrl $NsisZip $NsisSha256 "NSIS $NsisVersion archive"
+    if (-not (Test-Path -LiteralPath $NsisToolsDir)) {
+        Expand-Archive -LiteralPath $NsisZip -DestinationPath $NsisToolsDir -Force
     }
-
-    $installedCandidate = @(
-        (Join-Path ${env:ProgramFiles(x86)} "NSIS\makensis.exe"),
-        (Join-Path $env:ProgramFiles "NSIS\makensis.exe")
-    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
-    if ($installedCandidate) {
-        return $installedCandidate
+    $makensis = Get-ChildItem -LiteralPath $NsisToolsDir -Recurse -File -Filter "makensis.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $makensis) {
+        throw "Pinned NSIS archive did not contain makensis.exe"
     }
-
-    $existing = Get-ChildItem -Path $ToolsDir -Recurse -Filter "makensis.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($existing) {
-        return $existing.FullName
-    }
-
-    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
-    $downloadedZip = $false
-    for ($attempt = 1; $attempt -le 3 -and -not $downloadedZip; $attempt++) {
-        try {
-            if (-not (Test-Path $NsisZip)) {
-                Write-Host "Downloading NSIS $NsisVersion (attempt $attempt/3)..."
-                Invoke-WebRequest -Uri $NsisUrl -OutFile $NsisZip -MaximumRedirection 10
-            }
-            $signature = [System.IO.File]::ReadAllBytes($NsisZip)[0..3]
-            $downloadedZip = ($signature[0] -eq 0x50 -and $signature[1] -eq 0x4B)
-        } catch {
-            $downloadedZip = $false
-        }
-        if (-not $downloadedZip) {
-            Remove-Item -Force $NsisZip -ErrorAction SilentlyContinue
-            if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
-        }
-    }
-
-    if ($downloadedZip) {
-        Expand-Archive -Path $NsisZip -DestinationPath $ToolsDir -Force
-        $makensis = Get-ChildItem -Path $ToolsDir -Recurse -Filter "makensis.exe" | Select-Object -First 1
-        if ($makensis) {
-            return $makensis.FullName
-        }
-    }
-
-    $choco = Get-Command "choco.exe" -ErrorAction SilentlyContinue
-    if ($choco) {
-        Write-Host "SourceForge did not return a usable zip; installing NSIS with Chocolatey..."
-        & $choco.Source install nsis --yes --no-progress --limit-output | Out-Host
-        if ($LASTEXITCODE -eq 0) {
-            $chocoCandidate = @(
-                (Join-Path ${env:ProgramFiles(x86)} "NSIS\makensis.exe"),
-                (Join-Path $env:ProgramFiles "NSIS\makensis.exe")
-            ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
-            if ($chocoCandidate) { return $chocoCandidate }
-        }
-    }
-
-    $conda = Get-Command "conda.exe" -ErrorAction SilentlyContinue
-    if ($conda) {
-        Write-Host "Installing NSIS into a project-local conda environment..."
-        & $conda.Source create -y -p $NsisCondaPrefix "nsis=$NsisVersion" | Out-Host
-        if ($LASTEXITCODE -eq 0) {
-            $makensis = Get-ChildItem -Path $NsisCondaPrefix -Recurse -Filter "makensis.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($makensis) { return $makensis.FullName }
-        }
-    }
-    throw "Unable to install NSIS: SourceForge, Chocolatey and conda methods all failed."
+    return $makensis.FullName
 }
 
 function Find-MediaTool($Name) {
-    if ($env:ChocolateyInstall) {
-        $chocolateyTools = Join-Path $env:ChocolateyInstall "lib\ffmpeg\tools"
-        if (Test-Path -LiteralPath $chocolateyTools) {
-            $packagedTool = Get-ChildItem -LiteralPath $chocolateyTools -Recurse -File -Filter $Name -ErrorAction SilentlyContinue |
-                Sort-Object Length -Descending |
-                Select-Object -First 1
-            if ($packagedTool) {
-                return $packagedTool.FullName
-            }
-        }
-    }
-
-    $command = Get-Command $Name -ErrorAction SilentlyContinue
-    if ($command) {
-        return $command.Source
-    }
-
-    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+    Get-VerifiedArchive $FFmpegArchiveUrl $FFmpegArchive $FFmpegArchiveSha256 "FFmpeg archive ($FFmpegArchiveBuild)"
     if (-not (Test-Path -LiteralPath $FFmpegToolsDir)) {
-        Write-Host "Downloading verified Windows FFmpeg build..."
-        Invoke-WebRequest -Uri $FFmpegArchiveUrl -OutFile $FFmpegArchive -MaximumRedirection 10
-        $signature = [System.IO.File]::ReadAllBytes($FFmpegArchive)[0..3]
-        if ($signature[0] -ne 0x50 -or $signature[1] -ne 0x4B) {
-            throw "FFmpeg download did not return a zip archive."
-        }
         Expand-Archive -LiteralPath $FFmpegArchive -DestinationPath $FFmpegToolsDir -Force
     }
     $downloaded = Get-ChildItem -LiteralPath $FFmpegToolsDir -Recurse -File -Filter $Name -ErrorAction SilentlyContinue |
@@ -232,11 +189,9 @@ function Find-MediaTool($Name) {
 
 function Copy-MediaTool($Name) {
     $destination = Join-Path $BinDir $Name
-    if (-not (Test-Path -LiteralPath $destination)) {
-        $source = Find-MediaTool $Name
-        New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-        Copy-Item -LiteralPath $source -Destination $destination
-    }
+    $source = Find-MediaTool $Name
+    New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+    Copy-Item -LiteralPath $source -Destination $destination -Force
 
     $versionOutput = @(& $destination -version 2>&1)
     $exitCode = $LASTEXITCODE
@@ -424,6 +379,10 @@ Invoke-Step "Stage application files" {
     Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloaderCore\*") -Destination $StageDir -Recurse -Force
     Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloaderNativeHost.exe") -Destination $StageDir
     Copy-Item -LiteralPath (Join-Path $Root "config.default.json") -Destination (Join-Path $StageDir "config.json")
+    Copy-Item -LiteralPath (Join-Path $Root "LICENSE") -Destination (Join-Path $StageDir "LICENSE.txt")
+    Copy-Item -LiteralPath (Join-Path $Root "THIRD_PARTY_NOTICES.md") -Destination (Join-Path $StageDir "THIRD_PARTY_NOTICES.md")
+    python (Join-Path $Root "scripts\generate_sbom.py") --version $Version --output (Join-Path $StageDir "sbom.cdx.json")
+    if ($LASTEXITCODE -ne 0) { throw "SBOM generation failed with exit code $LASTEXITCODE" }
 
     New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "assets") | Out-Null
     Copy-Item -Path (Join-Path $AssetsDir "app-icon.png") -Destination (Join-Path $StageDir "assets")

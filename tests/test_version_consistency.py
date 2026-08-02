@@ -29,8 +29,10 @@ def test_desktop_release_versions_are_consistent():
 
 
 def test_changed_extension_release_version_matches_desktop_recommendation():
+    desktop_version = _match("backend/app/version.py", r'APP_VERSION\s*=\s*"([^"]+)"')
     extension_version = json.loads((ROOT / "extension/package.json").read_text(encoding="utf-8"))["version"]
 
+    assert extension_version == desktop_version
     assert _match("extension/wxt.config.ts", r"extensionVersion\s*=.*?\|\|\s*'([^']+)'") == extension_version
     assert _match(
         "backend/app/browser_handoff.py",

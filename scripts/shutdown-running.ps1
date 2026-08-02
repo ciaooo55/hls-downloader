@@ -129,7 +129,7 @@ function Test-ApplicationFilesWritable {
             )
             $stream.Dispose()
         } catch {
-            $script:lastLockedFile = $file
+            $script:lastLockedFile = $target
             $script:lastLockError = $_.Exception.Message
             return $false
         }

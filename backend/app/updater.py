@@ -12,8 +12,11 @@ import uuid
 import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
+from typing import Any
 from urllib.parse import urlparse
 
+from .config import settings
+from .network_proxy import ensure_url_allowed, host_matches_patterns
 from .paths import RUNTIME_PATHS
 from .version import APP_VERSION
 
@@ -26,6 +29,32 @@ MAX_UPDATE_PACKAGE_BYTES = 800 * 1024 * 1024
 MAX_PORTABLE_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_PORTABLE_ARCHIVE_ENTRIES = 50_000
 UPDATE_CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+
+
+class _PolicyRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        ensure_url_allowed(newurl)
+        if urlparse(newurl).scheme != "https":
+            raise urllib.error.URLError("更新请求禁止重定向到非 HTTPS 地址")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _policy_urlopen(request, timeout: float):
+    """Open update metadata with the same proxy/host policy as downloads."""
+    url = str(getattr(request, "full_url", request))
+    ensure_url_allowed(url)
+    mode = str(getattr(settings, "proxy_mode", "system") or "system").lower()
+    bypassed = host_matches_patterns(url, getattr(settings, "proxy_bypass", []))
+    if mode == "manual" and settings.proxy_url and not bypassed:
+        proxy = urllib.request.ProxyHandler(
+            {"http": settings.proxy_url, "https": settings.proxy_url}
+        )
+    elif mode == "system":
+        proxy = urllib.request.ProxyHandler()
+    else:
+        proxy = urllib.request.ProxyHandler({})
+    opener = urllib.request.build_opener(proxy, _PolicyRedirectHandler())
+    return opener.open(request, timeout=timeout)
 
 
 class UpdateError(RuntimeError):
@@ -67,7 +96,7 @@ def _rate_limit_error(error: urllib.error.HTTPError) -> UpdateCheckError | None:
         body = error.read(4096).lower()
     except OSError:
         pass
-    headers = error.headers or {}
+    headers: Any = error.headers or {}
     remaining = str(headers.get("X-RateLimit-Remaining", ""))
     if remaining != "0" and b"rate limit" not in body:
         return None
@@ -249,7 +278,8 @@ def _request_json(url: str, *, opener=urllib.request.urlopen) -> dict:
         },
     )
     try:
-        with opener(request, timeout=12) as response:
+        selected_opener = _policy_urlopen if opener is urllib.request.urlopen else opener
+        with selected_opener(request, timeout=12) as response:
             return json.load(response)
     except urllib.error.HTTPError as exc:
         raise _network_error(exc) from exc
@@ -273,7 +303,8 @@ def _release_redirect_update(*, opener=urllib.request.urlopen) -> UpdateInfo:
         },
     )
     try:
-        with opener(request, timeout=12) as response:
+        selected_opener = _policy_urlopen if opener is urllib.request.urlopen else opener
+        with selected_opener(request, timeout=12) as response:
             destination = str(response.geturl())
     except (OSError, ValueError, urllib.error.URLError) as exc:
         raise _network_error(exc) from exc

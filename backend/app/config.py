@@ -36,13 +36,13 @@ def _is_leaked_token(value: object) -> bool:
 
 
 class Settings(BaseSettings):
-    config_version: int = 18
+    config_version: int = 20
     host: str = "127.0.0.1"
     port: int = Field(default=8765, ge=1, le=65535)
     token: str = Field(default_factory=_new_internal_token, min_length=32)
     download_dir: str = "downloads"
     temp_dir: str = "."
-    default_concurrency: int = Field(default=12, ge=1, le=256)
+    default_concurrency: int = Field(default=12, ge=1, le=64)
     default_user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
     default_referer: str = ""
     default_origin: str = ""
@@ -239,6 +239,39 @@ def _load_settings_file() -> Settings:
             data["config_version"] = 18
             migrated = True
             version = 18
+        if version < 19:
+            if RUNTIME_PATHS.mode == "installed":
+                raw_temp = str(data.get("temp_dir") or "")
+                candidate = Path(raw_temp) if raw_temp else RUNTIME_PATHS.project_root
+                if not candidate.is_absolute():
+                    candidate = RUNTIME_PATHS.project_root / candidate
+                try:
+                    used_program_directory = (
+                        candidate.resolve() == RUNTIME_PATHS.project_root.resolve()
+                    )
+                except OSError:
+                    used_program_directory = False
+                if used_program_directory:
+                    data["temp_dir"] = str(RUNTIME_PATHS.default_temp_dir)
+            data["config_version"] = 19
+            migrated = True
+            version = 19
+        if version < 20:
+            data["default_concurrency"] = min(
+                64,
+                max(1, int(data.get("default_concurrency") or 12)),
+            )
+            profiles = data.get("site_profiles")
+            if isinstance(profiles, list):
+                for profile in profiles:
+                    if isinstance(profile, dict):
+                        profile["concurrency"] = min(
+                            64,
+                            max(0, int(profile.get("concurrency") or 0)),
+                        )
+            data["config_version"] = 20
+            migrated = True
+            version = 20
         if not isinstance(data.get("tvbox_endpoint"), str):
             data["tvbox_endpoint"] = ""
             migrated = True

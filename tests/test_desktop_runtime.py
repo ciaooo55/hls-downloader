@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from backend.app import main as main_module
+from backend.app import config as config_module
 from backend.app.config import settings
 from backend.app.desktop_runtime import (
     activate_window,
@@ -174,6 +175,35 @@ def test_cors_rejects_unrelated_extensions_and_random_local_origins():
     assert allowed.headers["access-control-allow-origin"] == (
         main_module.CHROMIUM_EXTENSION_ORIGIN
     )
+
+
+def test_local_ui_uses_security_headers(monkeypatch, tmp_path):
+    (tmp_path / "index.html").write_text("<!doctype html><title>UI</title>", encoding="utf-8")
+    monkeypatch.setattr(main_module, "UI_DIST", tmp_path)
+    with TestClient(app) as client:
+        response = client.get("/ui/")
+
+    assert response.status_code == 200
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+
+
+def test_health_identifies_core_and_authenticates_desktop_probe():
+    with TestClient(app) as client:
+        public = client.get("/api/health")
+        authenticated = client.get(
+            "/api/health", headers={"X-Token": config_module.settings.token}
+        )
+        rejected = client.get("/api/health", headers={"X-Token": "wrong-token"})
+
+    assert public.status_code == 200
+    assert public.json()["app_id"] == "com.ciaooo55.hls-downloader"
+    assert public.json()["protocol_version"] == 3
+    assert public.json()["authenticated"] is False
+    assert authenticated.json()["authenticated"] is True
+    assert rejected.status_code == 401
 
 
 def test_browser_handoffs_queue_during_cold_start_and_flush_independently():

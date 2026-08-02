@@ -35,6 +35,7 @@ from .errors import (
     should_share_retry_window,
 )
 from .merge import _run_ffmpeg, _verify_output
+from .disk_space import MIN_FREE_RESERVE, ensure_free_space, estimate_paths_size
 from .mpd import NativeDashUnsupported, parse_mpd
 from .playback import playback_service, write_playback_plan
 from .progress import ProgressTracker
@@ -299,7 +300,9 @@ class NativeDashEngine:
         task_dir = task_work_dir(task)
         task_dir.mkdir(parents=True, exist_ok=True)
         async with policy_httpx_client(
-            follow_redirects=True, timeout=DASH_TIMEOUT
+            follow_redirects=True,
+            timeout=DASH_TIMEOUT,
+            deny_private_networks=bool(task.engine_state.get("browser_originated")),
         ) as client:
             saved_state = self._load_live_state(task_dir)
             has_recorded = any(
@@ -541,7 +544,7 @@ class NativeDashEngine:
         task.status = TaskStatus.MERGING
         task.progress.post_percent = 5.0
         self._set_stage("merging", "正在拼接 DASH 轨道")
-        track_files: list[Path] = []
+        track_files: list[tuple[str, Path]] = []
         for kind, track in tracks.items():
             joined = task_dir / f"{kind}.track.mp4"
             if kind == "video":
@@ -576,6 +579,12 @@ class NativeDashEngine:
         ) else ".mp4"
         output = self._reserve_output(task, container)
         task.engine_state["reserved_output_path"] = str(output)
+        await asyncio.to_thread(
+            ensure_free_space,
+            output,
+            estimate_paths_size(path for _kind, path in track_files) + MIN_FREE_RESERVE,
+            operation="DASH 合并输出盘",
+        )
         task.status = TaskStatus.REMUXING
         self._set_stage("remuxing", "正在无损合并音视频轨")
         temporary = output.with_name(f"{output.stem}.merging{output.suffix}")
@@ -645,7 +654,9 @@ class NativeDashEngine:
         used: set[str] = set()
         saved = 0
         async with policy_httpx_client(
-            follow_redirects=True, timeout=DASH_TIMEOUT
+            follow_redirects=True,
+            timeout=DASH_TIMEOUT,
+            deny_private_networks=bool(self.task.engine_state.get("browser_originated")),
         ) as client:
             for position, track in enumerate(tracks, 1):
                 raw_label = str(

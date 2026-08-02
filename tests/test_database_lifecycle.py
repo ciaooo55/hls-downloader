@@ -29,11 +29,15 @@ def test_core_lifecycle_reuses_one_wal_connection_and_migrates_once(tmp_path, mo
             )
             rows = await database.run_db("SELECT title FROM tasks WHERE id=?", ("persistent",))
             journal = await database.run_db("PRAGMA journal_mode")
+            migrations = await database.run_db(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            )
 
             assert id(database._connection) == connection_id
             assert calls == 1
             assert rows[0]["title"] == "two"
             assert str(journal[0][0]).lower() == "wal"
+            assert [row["version"] for row in migrations] == [database.SCHEMA_VERSION]
         finally:
             await database.close_database()
 

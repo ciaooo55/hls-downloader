@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import time
 import weakref
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from email.utils import parsedate_to_datetime
 from fnmatch import fnmatch
-from ipaddress import ip_address, ip_network
+from ipaddress import IPv6Address, ip_address, ip_network
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -20,6 +21,10 @@ class HostNotAllowedError(ValueError):
     pass
 
 
+class PrivateDestinationError(HostNotAllowedError):
+    pass
+
+
 GLOBAL_CONNECTION_LIMIT = 128
 PER_HOST_CONNECTION_LIMIT = 24
 MAX_BUDGET_HOSTS = 512
@@ -29,6 +34,7 @@ class _LoopBudget:
     def __init__(self) -> None:
         self.global_slots = asyncio.Semaphore(GLOBAL_CONNECTION_LIMIT)
         self.host_slots: OrderedDict[str, asyncio.Semaphore] = OrderedDict()
+        self.host_active: dict[str, int] = {}
         self.retry_until: dict[str, float] = {}
         self.failures: dict[str, int] = {}
 
@@ -60,9 +66,10 @@ class NetworkBudget:
         else:
             state.host_slots.move_to_end(host)
         if len(state.host_slots) > MAX_BUDGET_HOSTS:
-            for stale_host, stale in list(state.host_slots.items()):
-                if stale_host != host and getattr(stale, "_value", 0) == PER_HOST_CONNECTION_LIMIT:
+            for stale_host, _stale in list(state.host_slots.items()):
+                if stale_host != host and state.host_active.get(stale_host, 0) == 0:
                     state.host_slots.pop(stale_host, None)
+                    state.host_active.pop(stale_host, None)
                     state.retry_until.pop(stale_host, None)
                     state.failures.pop(stale_host, None)
                     if len(state.host_slots) <= MAX_BUDGET_HOSTS:
@@ -84,6 +91,7 @@ class NetworkBudget:
         await self.wait_for_host(url)
         host_slots = self._host_semaphore(state, host)
         await host_slots.acquire()
+        state.host_active[host] = state.host_active.get(host, 0) + 1
         try:
             await state.global_slots.acquire()
             try:
@@ -91,6 +99,7 @@ class NetworkBudget:
             finally:
                 state.global_slots.release()
         finally:
+            state.host_active[host] = max(0, state.host_active.get(host, 1) - 1)
             host_slots.release()
 
     def record_response(self, url: str, status_code: int, headers: Any = None) -> None:
@@ -214,6 +223,50 @@ def ensure_url_allowed(url: str) -> None:
     raise HostNotAllowedError(f"Host {host or '<invalid>'} not in allowed_hosts")
 
 
+def _is_public_address(value: str) -> bool:
+    try:
+        address = ip_address(value.split("%", 1)[0])
+    except ValueError:
+        return False
+    if isinstance(address, IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return bool(address.is_global)
+
+
+async def ensure_public_destination(url: str) -> None:
+    """Reject browser-originated requests that resolve outside public IP space.
+
+    Validation is repeated immediately before every request and redirect hop.
+    Manual desktop tasks deliberately do not use this restriction so users can
+    still download from a NAS or another explicitly entered LAN address.
+    """
+    ensure_url_allowed(url)
+    host, port = _url_host_port(url)
+    if not host:
+        raise PrivateDestinationError("下载地址缺少有效主机名")
+    try:
+        literal = ip_address(host.split("%", 1)[0])
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if not _is_public_address(host):
+            raise PrivateDestinationError(f"浏览器来源任务禁止访问非公网地址 {host}")
+        return
+    try:
+        records = await asyncio.to_thread(
+            socket.getaddrinfo,
+            host,
+            port or 443,
+            socket.AF_UNSPEC,
+            socket.SOCK_STREAM,
+        )
+    except socket.gaierror as exc:
+        raise PrivateDestinationError(f"无法解析浏览器来源任务的主机 {host}") from exc
+    addresses = {str(record[4][0]).split("%", 1)[0] for record in records if record[4]}
+    if not addresses or any(not _is_public_address(address) for address in addresses):
+        raise PrivateDestinationError(f"浏览器来源任务禁止访问解析到非公网地址的主机 {host}")
+
+
 async def _validate_httpx_request(request) -> None:
     ensure_url_allowed(str(request.url))
 
@@ -252,9 +305,17 @@ class PolicyAsyncClient:
     request and redirect destination.
     """
 
-    def __init__(self, *, follow_redirects: bool = True, max_redirects: int = 10, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        follow_redirects: bool = True,
+        max_redirects: int = 10,
+        deny_private_networks: bool = False,
+        **kwargs: Any,
+    ) -> None:
         self.follow_redirects = bool(follow_redirects)
         self.max_redirects = max(0, int(max_redirects))
+        self.deny_private_networks = bool(deny_private_networks)
         self._kwargs = dict(kwargs)
         self._kwargs.pop("proxy", None)
         self._kwargs.pop("trust_env", None)
@@ -293,6 +354,8 @@ class PolicyAsyncClient:
         current = request
         for _hop in range(self.max_redirects + 1):
             url = str(current.url)
+            if self.deny_private_networks:
+                await ensure_public_destination(url)
             client = self._client_for(url)
             slot_context = network_budget.slot(url)
             await slot_context.__aenter__()

@@ -1,4 +1,5 @@
 import importlib
+import json
 import shutil
 import subprocess
 import sys
@@ -158,7 +159,7 @@ def test_installer_and_portable_upgrade_stop_partial_old_installs():
     nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
     portable_upgrade = (root / "scripts" / "upgrade-portable.ps1").read_text(encoding="utf-8")
 
-    assert '!define APP_VERSION "3.0.10"' in nsis_script
+    assert '!define APP_VERSION "3.0.11"' in nsis_script
     close_macro = nsis_script[nsis_script.index("!macro CloseRunningApp") : nsis_script.index("!macroend", nsis_script.index("!macro CloseRunningApp"))]
     assert 'IfFileExists "$INSTDIR\\HLSDownloader.exe"' not in close_macro
     assert 'shutdown-running.ps1" -InstallDir "$INSTDIR"' in close_macro
@@ -324,22 +325,26 @@ def test_tag_release_only_emits_extension_assets_when_extension_changed():
     assert "steps.extension-assets.outputs.include_extensions" in workflow
 
 
-def test_windows_build_uses_tools_from_path_on_clean_runner():
+def test_windows_build_uses_pinned_verified_packaging_tools():
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
+    installer = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
 
-    assert 'Get-Command "makensis.exe"' in build_script
-    assert 'Get-Command "choco.exe"' in build_script
-    assert 'Get-Command "conda.exe"' in build_script
+    assert "$NsisVersion = \"3.12\"" in build_script
+    assert "$NsisSha256 = \"56581f90db321581c5381193d796fffcf2d24b2f8fed2160a6c6a3baa67f2c4f\"" in build_script
+    assert "$FFmpegArchiveBuild = \"BtbN autobuild 2026-08-01 13:21 (FFmpeg g946272b79a)\"" in build_script
+    assert "releases/download/autobuild-2026-08-01-13-21/ffmpeg-N-125881-g946272b79a-win64-gpl.zip" in build_script
+    assert "$FFmpegArchiveSha256 = \"a082da6d5ce0cbb9a8ad0112ab7f654d480c707b8caf9d332f4532d78b65257f\"" in build_script
+    assert "generate_sbom.py" in build_script
+    assert 'File "${STAGE_DIR}\\sbom.cdx.json"' in installer
+    assert "Assert-FileSha256" in build_script
+    assert "Get-VerifiedArchive" in build_script
     assert 'attempt $attempt/3' in build_script
     assert 'Copy-MediaTool "ffmpeg.exe"' in build_script
     assert 'Copy-MediaTool "ffprobe.exe"' in build_script
-    assert "Get-Command $Name" in build_script
     assert "Copy-Item" in build_script
     assert '$StageDir, $ReleaseDir, $BinDir, $ToolsDir' in build_script
     assert "return $installedCandidates[0]" not in build_script
-    assert "$env:ChocolateyInstall" in build_script
-    assert 'Join-Path $env:ChocolateyInstall "lib\\ffmpeg\\tools"' in build_script
     assert "Sort-Object Length -Descending" in build_script
     assert "& $destination -version" in build_script
     assert "Bundled media tool validation failed" in build_script
@@ -542,3 +547,38 @@ def test_firefox_web_store_id_matches_native_host_and_keeps_no_web_compatibility
     assert web_store_id in native_host
     assert no_web_id not in config
     assert no_web_id in native_host
+
+
+def test_tauri_enables_csp_and_splits_handoff_permissions():
+    root = Path(__file__).resolve().parent.parent / "frontend" / "src-tauri"
+    config = json.loads((root / "tauri.conf.json").read_text(encoding="utf-8"))
+    main_capability = json.loads(
+        (root / "capabilities" / "default.json").read_text(encoding="utf-8")
+    )
+    handoff_capability = json.loads(
+        (root / "capabilities" / "handoff.json").read_text(encoding="utf-8")
+    )
+
+    csp = config["app"]["security"]["csp"]
+    assert "default-src 'self'" in csp
+    assert "object-src 'none'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert main_capability["windows"] == ["main"]
+    assert handoff_capability["windows"] == ["handoff-*"]
+    assert "fs:default" not in main_capability["permissions"]
+    assert "opener:default" not in main_capability["permissions"]
+    assert "dialog:default" not in handoff_capability["permissions"]
+    assert "process:default" not in handoff_capability["permissions"]
+
+
+def test_frontend_sse_does_not_put_control_token_in_url():
+    root = Path(__file__).resolve().parent.parent
+    api_source = (root / "frontend" / "src" / "api.ts").read_text(encoding="utf-8")
+
+    assert "new EventSource" not in api_source
+    assert "`${BASE}/events?token=" not in api_source
+    assert "fetch(`${BASE}/events`" in api_source
+    assert "'X-Token': getToken()" in api_source
+    assert "file?token=${encodeURIComponent(getToken())}" not in api_source
+    assert "playback/index.m3u8?session=${encodeURIComponent(session)}&token=${encodeURIComponent(getToken())}" not in api_source
+    assert "playback/media?session=${encodeURIComponent(session)}&token=${encodeURIComponent(getToken())}" not in api_source

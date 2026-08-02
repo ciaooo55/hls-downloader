@@ -131,6 +131,7 @@ def test_full_playlist_reports_total_duration_and_seek_target(tmp_path, monkeypa
             )
             assert opened.status_code == 200
             session = opened.json()["session_id"]
+            playback_token = opened.json()["playback_token"]
             seek = client.post(
                 f"/api/tasks/{task.id}/playback/seek",
                 params={"session": session},
@@ -143,7 +144,7 @@ def test_full_playlist_reports_total_duration_and_seek_target(tmp_path, monkeypa
 
             playlist = client.get(
                 f"/api/tasks/{task.id}/playback/index.m3u8",
-                params={"session": session, "token": "play-token", "full": "true"},
+                params={"session": session, "token": playback_token, "full": "true"},
             )
             assert playlist.status_code == 200
             assert "#EXT-X-PLAYLIST-TYPE:VOD" in playlist.text
@@ -180,6 +181,7 @@ def test_completed_media_endpoint_supports_byte_ranges(tmp_path, monkeypatch):
             )
             assert opened.status_code == 200
             session = opened.json()["session_id"]
+            playback_token = opened.json()["playback_token"]
             unauthorized = client.get(
                 f"/api/tasks/{task.id}/playback/media",
                 params={"session": session, "token": "wrong"},
@@ -187,7 +189,7 @@ def test_completed_media_endpoint_supports_byte_ranges(tmp_path, monkeypatch):
             assert unauthorized.status_code == 401
             response = client.get(
                 f"/api/tasks/{task.id}/playback/media",
-                params={"session": session, "token": "play-token"},
+                params={"session": session, "token": playback_token},
                 headers={"Range": "bytes=10-19"},
             )
             assert response.status_code == 206
@@ -225,15 +227,16 @@ def test_native_hls_auth_token_is_carried_to_child_urls(tmp_path, monkeypatch):
             )
             assert opened.status_code == 200
             session = opened.json()["session_id"]
+            playback_token = opened.json()["playback_token"]
             playlist = client.get(
                 f"/api/tasks/{task.id}/playback/index.m3u8",
-                params={"session": session, "token": "play-token"},
+                params={"session": session, "token": playback_token},
             )
             assert playlist.status_code == 200
-            assert "token=play-token" in playlist.text
+            assert f"token={playback_token}" in playlist.text
             segment = client.get(
                 f"/api/tasks/{task.id}/playback/segments/0.seg",
-                params={"session": session, "token": "play-token"},
+                params={"session": session, "token": playback_token},
             )
             assert segment.status_code == 200
             assert segment.content == b"segment"
@@ -278,9 +281,10 @@ def test_native_dash_uses_local_segment_preview_before_final_mux(tmp_path, monke
             assert opened.status_code == 200
             assert opened.json()["mode"] == "hls"
             session = opened.json()["session_id"]
+            playback_token = opened.json()["playback_token"]
             playlist = client.get(
                 f"/api/tasks/{task.id}/playback/index.m3u8",
-                params={"session": session, "token": "play-token"},
+                params={"session": session, "token": playback_token},
             )
             assert playlist.status_code == 200
             assert "segments/000000.seg" in playlist.text

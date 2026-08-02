@@ -31,7 +31,13 @@ from ..utils import (
 )
 from ..naming import is_generic_media_name, suggest_manifest_name
 from ..request_context import build_task_headers
-from ..network_proxy import curl_proxy, ensure_url_allowed, network_budget, policy_httpx_client
+from ..network_proxy import (
+    curl_proxy,
+    ensure_public_destination,
+    ensure_url_allowed,
+    network_budget,
+    policy_httpx_client,
+)
 from .http_file import _content_disposition_filename
 from .dash import DashDownloader
 from .merge import merge_segments, mux_media_tracks
@@ -73,7 +79,8 @@ LIVE_MAX_POLL_SECONDS = 10.0
 
 
 class _BrowserHLSClient:
-    def __init__(self, concurrency: int, url: str) -> None:
+    def __init__(self, concurrency: int, url: str, deny_private_networks: bool = False) -> None:
+        self._deny_private_networks = bool(deny_private_networks)
         self._session = CurlAsyncSession(
             max_clients=concurrency + 4,
             # Let curl-cffi emit the headers that match its TLS/browser
@@ -125,6 +132,8 @@ class _BrowserHLSClient:
         request_headers = dict(kwargs.get("headers") or {})
         for _hop in range(11):
             ensure_url_allowed(current)
+            if self._deny_private_networks:
+                await ensure_public_destination(current)
             request_kwargs = dict(kwargs)
             request_kwargs["headers"] = request_headers
             request_kwargs["allow_redirects"] = False
@@ -268,9 +277,13 @@ async def _close_response(response: Any) -> None:
             await slot_context.__aexit__(None, None, None)
 
 
-def _create_hls_client(concurrency: int, url: str = ""):
+def _create_hls_client(
+    concurrency: int,
+    url: str = "",
+    deny_private_networks: bool = False,
+):
     if CurlAsyncSession is not None:
-        return _BrowserHLSClient(concurrency, url)
+        return _BrowserHLSClient(concurrency, url, deny_private_networks)
     limits = httpx.Limits(
         max_connections=concurrency + 4,
         max_keepalive_connections=concurrency + 2,
@@ -279,6 +292,7 @@ def _create_hls_client(concurrency: int, url: str = ""):
         timeout=SEG_TIMEOUT,
         follow_redirects=True,
         limits=limits,
+        deny_private_networks=deny_private_networks,
     )
 
 
@@ -762,10 +776,14 @@ class HLSDownloader:
             task.progress.connection_status = "connecting"
             self._set_stage("downloading_m3u8", "正在获取 m3u8 清单")
 
-            concurrency = min(256, max(1, int(task.concurrency or settings.default_concurrency or 12)))
+            concurrency = min(64, max(1, int(task.concurrency or settings.default_concurrency or 12)))
             task.concurrency = concurrency
             headers = self._headers(task.url)
-            async with _create_hls_client(concurrency, task.url) as client:
+            async with _create_hls_client(
+                concurrency,
+                task.url,
+                bool(task.engine_state.get("browser_originated")),
+            ) as client:
                 task.status = TaskStatus.PARSING
                 self._set_stage("parsing", "正在解析 HLS 清单")
                 saved_live_state = self._load_live_state()
@@ -1061,7 +1079,11 @@ class HLSDownloader:
     ) -> None:
         state = self._load_live_subtitle_state()
         failure_notice: set[str] = set()
-        async with _create_hls_client(2, self.task.url) as client:
+        async with _create_hls_client(
+            2,
+            self.task.url,
+            bool(self.task.engine_state.get("browser_originated")),
+        ) as client:
             while not stop.is_set() and not self._is_canceled():
                 for track in self._subtitle_tracks:
                     if stop.is_set() or self._is_canceled():
@@ -1219,7 +1241,11 @@ class HLSDownloader:
         used_labels: set[str] = set()
         saved = 0
         try:
-            async with _create_hls_client(2, self.task.url) as client:
+            async with _create_hls_client(
+                2,
+                self.task.url,
+                bool(self.task.engine_state.get("browser_originated")),
+            ) as client:
                 for position, track in enumerate(tracks, 1):
                     label = self._subtitle_label(track, position, used_labels)
                     try:
@@ -1922,7 +1948,6 @@ class HLSDownloader:
                     # discontinuity.
                     last_sequence = min(window_sequences) - 1
             new_batch: list[dict] = []
-            capped = False
             projected = total_duration
             for segment in window:
                 sequence = int(segment.get("media_sequence") or 0)
@@ -1942,7 +1967,6 @@ class HLSDownloader:
                     # An event playlist can list hours of backlog in a single
                     # window; stop queueing at the cap so the output actually
                     # honors the configured limit.
-                    capped = True
                     break
                 entry = dict(segment)
                 if not entry.get("is_partial") and sequence in partial_sequences:
@@ -1960,23 +1984,6 @@ class HLSDownloader:
                     session_boundary = False
                 projected += float(entry.get("duration") or 0)
                 new_batch.append(entry)
-            if capped:
-                # Only sequences actually queued count as consumed, so a
-                # capped batch whose downloads fail can still re-fetch them.
-                last_sequence = max(
-                    (
-                        int(entry.get("media_sequence") or 0)
-                        for entry in new_batch
-                        if not entry.get("is_partial")
-                    ),
-                    default=last_sequence,
-                )
-            elif complete_window_sequences:
-                if epoch_reset:
-                    last_sequence = max(complete_window_sequences)
-                else:
-                    last_sequence = max(last_sequence, max(complete_window_sequences))
-
             if new_batch:
                 task.progress.total_segments = len(recorded) + len(new_batch)
                 try:
@@ -2005,6 +2012,24 @@ class HLSDownloader:
                     client, new_batch, headers, pending_gap
                 )
                 if kept:
+                    # Commit the media-sequence cursor only after bytes are
+                    # safely on disk.  Signed live segment URLs can expire
+                    # between the manifest poll and the first GET.  Advancing
+                    # on observation made an all-failed first batch disappear
+                    # forever, even when the next manifest refreshed the URL,
+                    # leaving the task at 0 seconds until the stall timeout.
+                    # Once a later segment succeeds it is correct to advance
+                    # past an unrecoverable gap and keep recording live media.
+                    kept_complete_sequences = [
+                        int(entry.get("media_sequence") or 0)
+                        for entry in kept
+                        if not entry.get("is_partial")
+                    ]
+                    if kept_complete_sequences:
+                        if epoch_reset:
+                            last_sequence = max(kept_complete_sequences)
+                        else:
+                            last_sequence = max(last_sequence, max(kept_complete_sequences))
                     replacement_sequences = {
                         int(entry["replaces_partial_sequence"])
                         for entry in kept

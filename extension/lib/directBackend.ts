@@ -31,12 +31,11 @@ export class BrowserDirectBackend {
     const get = (path: string) => this.call(path, { method: 'GET' }, timeoutMs)
     if (op === 'ping') {
       const browserStatus = await post('/browser/ping', identity)
-      const [health, current] = await Promise.all([get('/health'), get('/settings')])
       return {
         ok: true,
-        version: health.version || '',
-        takeover_enabled: current.browser_takeover_enabled !== false,
-        takeover_minimum_bytes: Math.max(0, Number(current.browser_takeover_min_mb || 0)) * 1024 * 1024,
+        version: browserStatus.core_version || '',
+        takeover_enabled: browserStatus.takeover_enabled !== false,
+        takeover_minimum_bytes: Math.max(0, Number(browserStatus.takeover_minimum_bytes || 0)),
         recommended_extension_version: browserStatus.recommended_version || '',
         minimum_extension_version: browserStatus.minimum_version || '',
         extension_release_url: browserStatus.release_url || '',
@@ -46,16 +45,19 @@ export class BrowserDirectBackend {
     if (op === 'download') return { ok: true, task: await post('/browser/downloads', message.resource || {}), activated: false }
     if (op === 'handoff_status') return { ok: true, handoff: await get(`/browser/handoffs/${encodeURIComponent(message.handoff_id || '')}`) }
     if (op === 'wait_handoff') return { ok: true, handoff: await get(`/browser/handoffs/${encodeURIComponent(message.handoff_id || '')}/wait`) }
-    if (op === 'activate') return { ok: true, result: await post('/app/activate', {}) }
+    if (op === 'activate') return { ok: true, result: await post('/browser/activate', {}) }
     if (op === 'set_takeover_settings') {
       const payload: Record<string, unknown> = {}
       if ('enabled' in message) payload.browser_takeover_enabled = Boolean(message.enabled)
       if ('minimum_bytes' in message) payload.browser_takeover_min_mb = Math.max(0, Math.floor(Number(message.minimum_bytes || 0) / (1024 * 1024)))
-      const current = await post('/settings', payload)
+      const current = await post('/browser/takeover-settings', {
+        enabled: payload.browser_takeover_enabled,
+        minimum_bytes: message.minimum_bytes,
+      })
       return {
         ok: true,
-        takeover_enabled: current.browser_takeover_enabled !== false,
-        takeover_minimum_bytes: Math.max(0, Number(current.browser_takeover_min_mb || 0)) * 1024 * 1024,
+        takeover_enabled: current.takeover_enabled !== false,
+        takeover_minimum_bytes: Math.max(0, Number(current.takeover_minimum_bytes || 0)),
       }
     }
     if (op === 'push_to_tv') return post('/tvbox/push', { url: String(message.resource?.url || '') })

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal, Optional
 from urllib.parse import urlparse
 
@@ -56,6 +56,13 @@ class BrowserPing(BaseModel):
     browser: str = Field(default="", max_length=32)
 
 
+class BrowserTakeoverSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: Optional[bool] = None
+    minimum_bytes: Optional[int] = Field(default=None, ge=0, le=2**63 - 1)
+
+
 class BrowserMediaPushCreate(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -78,14 +85,14 @@ class TaskCreate(BaseModel):
     origin: str = Field(default="", max_length=1024)
     user_agent: str = Field(default="", max_length=2048)
     cookie: str = Field(default="", max_length=16 * 1024)
-    request_headers: dict[str, str] = Field(default_factory=dict)
-    request_contexts: dict[str, dict] = Field(default_factory=dict)
+    request_headers: dict[str, str] = Field(default_factory=dict, max_length=64)
+    request_contexts: dict[str, dict] = Field(default_factory=dict, max_length=12)
     request_method: str = Field(default="GET", max_length=16)
     request_body: str = Field(default="", max_length=175000)
     title: str = Field(default="", max_length=512)
     filename: str = Field(default="", max_length=255)
     download_dir: str = Field(default="", max_length=32767)
-    concurrency: int = Field(default=0, ge=0, le=256)
+    concurrency: int = Field(default=0, ge=0, le=64)
     checksum: str = Field(default="", max_length=80)
     allow_duplicate: bool = False
     selected_video: str = Field(default="", max_length=2048)
@@ -93,6 +100,17 @@ class TaskCreate(BaseModel):
     scheduled_start_at: Optional[datetime] = None
     scheduled_stop_at: Optional[datetime] = None
     completion_action: Literal["none", "shutdown", "sleep", "hibernate"] = "none"
+
+    @field_validator("scheduled_start_at", "scheduled_stop_at")
+    @classmethod
+    def normalize_schedule_to_utc(cls, value: Optional[datetime]) -> Optional[datetime]:
+        if value is None:
+            return None
+        # HTML datetime-local has no offset. Interpret it in the user's current
+        # Windows time zone at creation, then persist an unambiguous UTC value.
+        if value.tzinfo is None:
+            value = value.astimezone()
+        return value.astimezone(timezone.utc)
 
     @field_validator("url")
     @classmethod
@@ -137,8 +155,8 @@ class TaskRequestUpdate(BaseModel):
     origin: Optional[str] = Field(default=None, max_length=1024)
     user_agent: Optional[str] = Field(default=None, max_length=2048)
     cookie: Optional[str] = Field(default=None, max_length=16 * 1024)
-    request_headers: Optional[dict[str, str]] = None
-    request_contexts: Optional[dict[str, dict]] = None
+    request_headers: Optional[dict[str, str]] = Field(default=None, max_length=64)
+    request_contexts: Optional[dict[str, dict]] = Field(default=None, max_length=12)
     request_method: Optional[str] = Field(default=None, max_length=16)
     request_body: Optional[str] = Field(default=None, max_length=175000)
     auto_resume: bool = True
@@ -209,6 +227,7 @@ class TaskResponse(BaseModel):
     checksum_actual: str = ""
     checksum_verified: Optional[bool] = None
     output_is_file: bool = False
+    file_access_token: str = ""
     created_at: str
     updated_at: str
     started_at: str = ""
@@ -229,15 +248,15 @@ class SiteProfile(BaseModel):
     user_agent: str = Field(default="", max_length=2048)
     referer: str = Field(default="", max_length=4096)
     origin: str = Field(default="", max_length=1024)
-    request_headers: dict[str, str] = Field(default_factory=dict)
-    concurrency: int = Field(default=0, ge=0, le=256)
+    request_headers: dict[str, str] = Field(default_factory=dict, max_length=64)
+    concurrency: int = Field(default=0, ge=0, le=64)
     speed_limit_kib: int = Field(default=0, ge=0, le=1048576)
 
 
 class SettingsUpdate(BaseModel):
     download_dir: Optional[str] = Field(default=None, min_length=1, max_length=32767)
     temp_dir: Optional[str] = Field(default=None, min_length=1, max_length=32767)
-    default_concurrency: Optional[int] = Field(default=None, ge=1, le=256)
+    default_concurrency: Optional[int] = Field(default=None, ge=1, le=64)
     default_user_agent: Optional[str] = Field(default=None, max_length=2048)
     default_referer: Optional[str] = Field(default=None, max_length=4096)
     default_origin: Optional[str] = Field(default=None, max_length=1024)
@@ -446,6 +465,9 @@ class CastControl(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = APP_VERSION
+    app_id: str = "com.ciaooo55.hls-downloader"
+    protocol_version: int = 3
+    authenticated: bool = False
 
 
 class PlaybackSeekRequest(BaseModel):
@@ -458,6 +480,18 @@ class TorrentFileSelection(BaseModel):
 
 class TorrentPathImport(BaseModel):
     path: str = Field(min_length=1, max_length=32767)
+
+
+class FileSystemAction(BaseModel):
+    task_id: str = Field(default="", max_length=64, pattern=r"^[A-Za-z0-9_-]*$")
+    path: str = Field(default="", max_length=32767)
+    confirm_executable: bool = False
+
+    @model_validator(mode="after")
+    def require_target(self):
+        if not self.task_id and not self.path:
+            raise ValueError("task_id or path required")
+        return self
 
 
 class UrlRecognitionRequest(BaseModel):

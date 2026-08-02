@@ -11,6 +11,7 @@ import {
   pageResourceKey,
   replayableRequestHeaders,
   resourceFingerprint,
+  resourceId,
   playerPlaybackResources,
   resourceMatchesPlaybackSource,
   capturedRequestIdentity,
@@ -123,6 +124,11 @@ describe('resource rules', () => {
       ...shortLivedRefreshed,
       url: 'https://cdn.test/clip.mp4?s=new-signature&e=200&quality=720',
     }))
+    expect(resourceFingerprint(resource({
+      kind: 'file', url: 'https://api.test/export?token=customer-a',
+    }))).not.toBe(resourceFingerprint(resource({
+      kind: 'file', url: 'https://api.test/export?token=customer-b',
+    })))
   })
 
   it('canonicalizes LL-HLS cursors without re-encoding signed query bytes', () => {
@@ -385,6 +391,18 @@ describe('resource rules', () => {
     expect(classifyDownload('https://site.test/advert.php', 'application/octet-stream')).toBeNull()
     expect(classifyDownload('https://site.test/export.php', 'application/pdf', 'report.pdf')).toBe('file')
   })
+  it('excludes passive web resources unless the server marks an attachment', () => {
+    expect(classifyDownload('https://site.test/app.js', 'application/javascript', 'app.js')).toBeNull()
+    expect(classifyDownload('https://site.test/style.css', 'text/css', 'style.css')).toBeNull()
+    expect(classifyDownload('https://site.test/data', 'application/json', 'data.json')).toBeNull()
+    expect(classifyDownload('https://site.test/font.woff2', 'font/woff2', 'font.woff2')).toBeNull()
+    expect(classifyDownload(
+      'https://site.test/export',
+      'application/json',
+      'report.json',
+      'attachment; filename="report.json"',
+    )).toBe('file')
+  })
   it('honors Alt bypass and Ctrl force', () => {
     const base = { url: 'https://a.test/file.zip', size: 20, enabled: true, minimumBytes: 10, excludedHosts: [], explicitClick: true }
     expect(shouldTakeover({ ...base, altBypass: true })).toBe(false)
@@ -487,6 +505,13 @@ describe('resource rules', () => {
       origin: 'https://page.test',
     })
   })
+  it('uses stable 128-bit resource identifiers', () => {
+    const first = resourceId('https://cdn.test/video.mp4?quality=1080')
+    const second = resourceId('https://cdn.test/video.mp4?quality=720')
+    expect(first).toMatch(/^[0-9a-f]{32}$/)
+    expect(first).toBe(resourceId('https://cdn.test/video.mp4?quality=1080'))
+    expect(first).not.toBe(second)
+  })
   it('keeps the exact per-origin identity and does not invent an Origin header', () => {
     expect(capturedRequestIdentity({
       Referer: 'https://embed.test/player',
@@ -497,9 +522,10 @@ describe('resource rules', () => {
       userAgent: 'Browser UA',
     })
   })
-  it('requires and matches a recent explicit click', () => {
+  it('uses a recent click as confidence but accepts a classified DownloadItem as strong evidence', () => {
     const base = { url: 'https://cdn.test/file.zip', size: 2048, enabled: true, minimumBytes: 1024, excludedHosts: [] }
     expect(shouldTakeover(base)).toBe(false)
+    expect(shouldTakeover({ ...base, strongEvidence: true })).toBe(true)
     expect(shouldTakeover({ ...base, explicitClick: true })).toBe(true)
     expect(shouldTakeover({
       ...base,

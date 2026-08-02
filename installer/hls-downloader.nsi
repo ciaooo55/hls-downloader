@@ -8,10 +8,10 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-!define APP_VERSION "3.0.10"
+!define APP_VERSION "3.0.11"
 !endif
 !ifndef APP_FILE_VERSION
-!define APP_FILE_VERSION "3.0.10.0"
+!define APP_FILE_VERSION "3.0.11.0"
 !endif
 
 !ifndef STAGE_DIR
@@ -208,6 +208,9 @@ Section "Install" SecInstall
   File /oname=HLSDownloaderNativeHost-${APP_VERSION}.exe "${STAGE_DIR}\HLSDownloaderNativeHost.exe"
   SetOutPath "$INSTDIR"
   File /oname=config.default.json "${STAGE_DIR}\config.json"
+  File "${STAGE_DIR}\LICENSE.txt"
+  File "${STAGE_DIR}\THIRD_PARTY_NOTICES.md"
+  File "${STAGE_DIR}\sbom.cdx.json"
 
   SetOutPath "$INSTDIR\_internal"
   File /r "${STAGE_DIR}\_internal\*"

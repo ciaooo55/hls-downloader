@@ -40,28 +40,118 @@ function apiHeaders(): Record<string, string> {
 }
 
 async function localRequest(path: string, init: RequestInit = {}): Promise<any> {
-  const response = await fetch(`${coreOrigin()}/api${path}`, {
+  let response = await fetch(`${coreOrigin()}/api${path}`, {
     ...init,
     headers: { ...apiHeaders(), ...(init.headers || {}) },
   })
+  if (response.status === 401) {
+    await prepareTauriRuntime()
+    response = await fetch(`${coreOrigin()}/api${path}`, {
+      ...init,
+      headers: { ...apiHeaders(), ...(init.headers || {}) },
+    })
+  }
   if (!response.ok) throw new Error(`Desktop bridge HTTP ${response.status}`)
   return response.json()
 }
 
+let desktopSessionStart: Promise<() => void> | null = null
+let desktopSessionStop: (() => void) | null = null
+let desktopSessionReferences = 0
+
 export async function startTauriDesktopSession(): Promise<() => void> {
   if (!isTauriDesktop()) return () => {}
-  const [{ WebviewWindow }, { getCurrentWindow }, process] = await Promise.all([
+  if (!desktopSessionStart) {
+    desktopSessionStart = createTauriDesktopSession()
+      .then(stop => {
+        desktopSessionStop = stop
+        return stop
+      })
+      .catch(reason => {
+        desktopSessionStart = null
+        desktopSessionStop = null
+        throw reason
+      })
+  }
+  desktopSessionReferences += 1
+  try {
+    await desktopSessionStart
+  } catch (reason) {
+    desktopSessionReferences = Math.max(0, desktopSessionReferences - 1)
+    throw reason
+  }
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    desktopSessionReferences = Math.max(0, desktopSessionReferences - 1)
+    if (desktopSessionReferences === 0) {
+      desktopSessionStop?.()
+      desktopSessionStop = null
+      desktopSessionStart = null
+    }
+  }
+}
+
+async function createTauriDesktopSession(): Promise<() => void> {
+  if (!isTauriDesktop()) return () => {}
+  const [{ WebviewWindow }, { getCurrentWindow }, process, { emitTo }] = await Promise.all([
     import('@tauri-apps/api/webviewWindow'),
     import('@tauri-apps/api/window'),
     import('@tauri-apps/plugin-process'),
+    import('@tauri-apps/api/event'),
   ])
   await localRequest('/desktop/session/start', { method: 'POST', body: '{}' })
   const current = getCurrentWindow()
   let stopped = false
   let sequence = 0
   const handoffQueue = new HandoffWindowQueue()
-  let activeHandoffWindow: InstanceType<typeof WebviewWindow> | null = null
   let openingHandoff = false
+  let handoffHostReady = false
+  let resolveHandoffHostReady: (() => void) | null = null
+  const handoffHostReadyPromise = new Promise<void>(resolve => { resolveHandoffHostReady = resolve })
+  const unlistenHostReady = await current.listen('handoff-host-ready', () => {
+    handoffHostReady = true
+    resolveHandoffHostReady?.()
+  })
+  const unlistenResolved = await current.listen<{ id?: string }>('handoff-resolved', event => {
+    const id = String(event.payload?.id || '')
+    if (handoffQueue.release(id)) void openNextHandoff()
+  })
+
+  const ensureHandoffWindow = async (): Promise<InstanceType<typeof WebviewWindow>> => {
+    const existing = await WebviewWindow.getByLabel('handoff-host')
+    if (existing) return existing
+    const child = new WebviewWindow('handoff-host', {
+      url: 'index.html?handoffHost=1',
+      title: '下载文件信息 - HLS Downloader',
+      width: 420,
+      height: 460,
+      minWidth: 380,
+      minHeight: 360,
+      center: true,
+      resizable: true,
+      decorations: false,
+      alwaysOnTop: false,
+      focus: false,
+      visible: false,
+    })
+    await new Promise<void>((resolve, reject) => {
+      void child.once('tauri://created', () => resolve())
+      void child.once('tauri://error', event => reject(new Error(String(event.payload || '无法创建下载确认窗口'))))
+    })
+    return child
+  }
+
+  // Warm one hidden WebView during desktop startup. A later click only swaps
+  // its handoff ID and shows/focuses it, eliminating per-click WebView startup.
+  await ensureHandoffWindow()
+  if (!handoffHostReady) {
+    await Promise.race([
+      handoffHostReadyPromise,
+      new Promise(resolve => window.setTimeout(resolve, 3000)),
+    ])
+  }
 
   const showMain = async () => {
     await current.show().catch(() => {})
@@ -70,43 +160,19 @@ export async function startTauriDesktopSession(): Promise<() => void> {
   }
 
   const openNextHandoff = async (): Promise<void> => {
-    if (stopped || openingHandoff || activeHandoffWindow) return
+    if (stopped || openingHandoff || handoffQueue.activeId) return
     const id = handoffQueue.begin()
     if (!id) return
     openingHandoff = true
-    const label = `handoff-${id.replace(/[^a-zA-Z0-9-]/g, '-')}`
     try {
-      const existing = await WebviewWindow.getByLabel(label)
-      const child = existing || new WebviewWindow(label, {
-        url: `index.html?handoff=${encodeURIComponent(id)}`,
-        title: '下载文件信息 - HLS Downloader',
-        width: 420,
-        height: 460,
-        minWidth: 380,
-        minHeight: 360,
-        center: true,
-        resizable: true,
-        decorations: false,
-        alwaysOnTop: false,
-        focus: true,
-      })
-      if (!existing) {
-        await new Promise<void>((resolve, reject) => {
-          void child.once('tauri://created', () => resolve())
-          void child.once('tauri://error', event => reject(new Error(String(event.payload || '无法创建下载确认窗口'))))
-        })
-      }
-      activeHandoffWindow = child
+      const child = await ensureHandoffWindow()
+      await emitTo('handoff-host', 'handoff-request', { id })
       await child.show().catch(() => {})
-      if (!existing) await child.setFocus().catch(() => {})
+      await child.unminimize().catch(() => {})
+      await child.setFocus().catch(() => {})
       await localRequest(`/desktop/handoffs/${encodeURIComponent(id)}/presented`, { method: 'POST', body: '{}' })
-      void child.once('tauri://destroyed', () => {
-        if (handoffQueue.release(id)) activeHandoffWindow = null
-        void openNextHandoff()
-      })
     } catch {
       handoffQueue.release(id)
-      activeHandoffWindow = null
       await localRequest(`/browser/handoffs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: '{}' }).catch(() => {})
     } finally {
       openingHandoff = false
@@ -117,7 +183,9 @@ export async function startTauriDesktopSession(): Promise<() => void> {
   const openHandoff = async (id: string) => {
     if (!id) return
     if (id === handoffQueue.activeId) {
-      await activeHandoffWindow?.show().catch(() => {})
+      const child = await ensureHandoffWindow().catch(() => null)
+      await child?.show().catch(() => {})
+      await child?.setFocus().catch(() => {})
       return
     }
     if (handoffQueue.enqueue(id)) await openNextHandoff()
@@ -151,6 +219,9 @@ export async function startTauriDesktopSession(): Promise<() => void> {
   void poll()
   return () => {
     stopped = true
+    unlistenHostReady()
+    unlistenResolved()
+    void WebviewWindow.getByLabel('handoff-host').then(window => window?.destroy()).catch(() => {})
     void localRequest('/desktop/session/stop', { method: 'POST', body: '{}' }).catch(() => {})
   }
 }

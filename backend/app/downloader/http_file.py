@@ -23,6 +23,7 @@ from ..request_context import build_task_headers, replay_request_body
 from ..network_proxy import policy_httpx_client
 from ..utils import atomic_write_text, sanitize_filename
 from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
+from .disk_space import MIN_FREE_RESERVE, ensure_download_capacity, ensure_free_space
 from .errors import (
     MetadataProbeTimeout,
     SharedRetryWindow,
@@ -33,6 +34,7 @@ from .errors import (
     should_share_retry_window,
 )
 from .throttle import throttle_bytes
+from .response_validation import validate_download_response
 
 
 MAX_RETRIES = 5
@@ -463,12 +465,25 @@ class HTTPDownloader(SeeklessEngine):
             filename = _content_disposition_filename(response.headers.get("content-disposition", ""))
             if not filename and fallback is not None:
                 filename = _content_disposition_filename(fallback.headers.get("content-disposition", ""))
+            preview = b""
+            async for chunk in response.aiter_bytes():
+                preview = bytes(chunk[:65536])
+                break
+            content_type = (response.headers.get("content-type", "") or (fallback.headers.get("content-type", "") if fallback else "")).split(";", 1)[0]
+            validate_download_response(
+                self.task,
+                content_type=content_type,
+                content_length=total,
+                preview=preview,
+                final_url=str(response.url),
+                server_filename=filename,
+            )
             return {
                 "total": total,
                 "ranges": range_supported,
                 "etag": response.headers.get("etag", "") or (fallback.headers.get("etag", "") if fallback else ""),
                 "last_modified": response.headers.get("last-modified", "") or (fallback.headers.get("last-modified", "") if fallback else ""),
-                "content_type": (response.headers.get("content-type", "") or (fallback.headers.get("content-type", "") if fallback else "")).split(";", 1)[0],
+                "content_type": content_type,
                 "filename": filename,
                 "final_url": str(response.url),
             }
@@ -569,7 +584,18 @@ class HTTPDownloader(SeeklessEngine):
             output = _reserve_output_path(task_output_dir(task) / task.filename)
             task.engine_state["reserved_output_path"] = str(output)
             with part_path.open("wb") as stream:
+                first_chunk = True
                 async for chunk in response.aiter_bytes():
+                    if first_chunk:
+                        validate_download_response(
+                            task,
+                            content_type=response.headers.get("content-type", ""),
+                            content_length=task.progress.total_bytes,
+                            preview=bytes(chunk[:65536]),
+                            final_url=str(response.url),
+                            server_filename=filename,
+                        )
+                        first_chunk = False
                     if self._is_canceled():
                         raise asyncio.CancelledError
                     if self._is_pausing():
@@ -589,7 +615,7 @@ class HTTPDownloader(SeeklessEngine):
         # historical sentinel 0.  A zero-sized worker pool leaves a valid
         # ranged download permanently in "准备下载" with no exception.
         task.concurrency = min(
-            256,
+            64,
             max(1, int(task.concurrency or settings.default_concurrency or 12)),
         )
         task_dir = task_work_dir(task)
@@ -606,7 +632,12 @@ class HTTPDownloader(SeeklessEngine):
             limits = httpx.Limits(max_connections=max(2, task.concurrency + 2))
             timeout = httpx.Timeout(connect=15, read=60, write=30, pool=30)
             headers = self._headers()
-            async with policy_httpx_client(follow_redirects=True, timeout=timeout, limits=limits) as client:
+            async with policy_httpx_client(
+                follow_redirects=True,
+                timeout=timeout,
+                limits=limits,
+                deny_private_networks=bool(task.engine_state.get("browser_originated")),
+            ) as client:
                 if self._is_replay_post():
                     output = await self._download_replay_post(client, headers, part_path)
                 else:
@@ -626,6 +657,23 @@ class HTTPDownloader(SeeklessEngine):
                     task.filename = sanitize_filename(name if not requested_name or is_generic_media_name(requested_name) else requested_name)
                     output = _reserve_output_path(task_output_dir(task) / task.filename)
                     task.engine_state["reserved_output_path"] = str(output)
+
+                    current_size = part_path.stat().st_size if part_path.exists() else 0
+                    if total > 0:
+                        await asyncio.to_thread(
+                            ensure_download_capacity,
+                            part_path,
+                            output,
+                            total,
+                            current_size=current_size,
+                        )
+                    else:
+                        await asyncio.to_thread(
+                            ensure_free_space,
+                            part_path,
+                            MIN_FREE_RESERVE,
+                            operation="下载临时盘",
+                        )
 
                     if total <= 0 or not metadata["ranges"]:
                         self._sequential = True
@@ -758,7 +806,17 @@ class HTTPDownloader(SeeklessEngine):
                     self._total_size = reported_total
                     task.engine_state["total_size"] = reported_total
                     with part_path.open("wb") as output:
+                        first_chunk = True
                         async for chunk in response.aiter_bytes():
+                            if first_chunk:
+                                validate_download_response(
+                                    task,
+                                    content_type=content_type,
+                                    content_length=reported_total,
+                                    preview=bytes(chunk[:65536]),
+                                    final_url=str(response.url),
+                                )
+                                first_chunk = False
                             if self._is_canceled():
                                 raise asyncio.CancelledError
                             if self._is_pausing():
@@ -1107,6 +1165,15 @@ class HTTPDownloader(SeeklessEngine):
                             with part_path.open("r+b", buffering=0) as output_file:
                                 output_file.seek(request_start)
                                 async for content in response.aiter_bytes():
+                                    if request_start == 0 and response_received == 0:
+                                        validate_download_response(
+                                            task,
+                                            content_type=response.headers.get("content-type", ""),
+                                            content_length=total,
+                                            preview=bytes(content[:65536]),
+                                            final_url=str(response.url),
+                                            server_filename=str(metadata.get("filename", "") or ""),
+                                        )
                                     live_end = stop_at[index] if dynamic_stop else end
                                     live_allowed_end = min(response_end, live_end)
                                     needed = live_allowed_end - request_start + 1 - response_received

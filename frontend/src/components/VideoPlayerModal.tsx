@@ -215,7 +215,7 @@ export default function VideoPlayerModal({ task, onClose }: {
     video.load()
 
     if (mode === 'file') {
-      video.src = playbackMediaUrl(task.id, session.session_id)
+      video.src = playbackMediaUrl(task.id, session.session_id, session.playback_token)
       video.load()
     } else if (Hls.isSupported()) {
       const hls = new Hls({
@@ -237,7 +237,7 @@ export default function VideoPlayerModal({ task, onClose }: {
       mainHlsRef.current = hls
       hls.attachMedia(video)
       hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-        hls.loadSource(playbackPlaylistUrl(task.id, session.session_id, sparsePlayback))
+        hls.loadSource(playbackPlaylistUrl(task.id, session.session_id, session.playback_token, sparsePlayback))
       })
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         setLoading(false)
@@ -258,7 +258,7 @@ export default function VideoPlayerModal({ task, onClose }: {
         setError('当前视频编码无法由内置播放器解码，可使用系统播放器打开')
       })
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = playbackPlaylistUrl(task.id, session.session_id, sparsePlayback)
+      video.src = playbackPlaylistUrl(task.id, session.session_id, session.playback_token, sparsePlayback)
       video.load()
     } else {
       setLoading(false)
@@ -444,7 +444,7 @@ export default function VideoPlayerModal({ task, onClose }: {
     if (mode === 'file') {
       thumbnailReadyRef.current = (async () => {
         video.preload = 'auto'
-        video.src = playbackMediaUrl(task.id, session.session_id)
+        video.src = playbackMediaUrl(task.id, session.session_id, session.playback_token)
         video.load()
         if (video.readyState < 1) await waitForMediaEvent(video, 'loadedmetadata')
       })()
@@ -473,7 +473,7 @@ export default function VideoPlayerModal({ task, onClose }: {
         })
         hls.attachMedia(video)
         hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-          hls.loadSource(playbackPlaylistUrl(task.id, session.session_id, true))
+          hls.loadSource(playbackPlaylistUrl(task.id, session.session_id, session.playback_token, true))
         })
       })
     }

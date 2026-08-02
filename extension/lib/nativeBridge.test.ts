@@ -34,6 +34,24 @@ describe('persistent native bridge', () => {
     bridge.close()
   })
 
+  it('runs an interactive offer before queued heartbeat work', async () => {
+    const port = new FakePort()
+    const bridge = new NativeBridge(() => port)
+    const active = bridge.request({ op: 'handoff_status' })
+    const heartbeat = bridge.request({ op: 'ping' })
+    const offer = bridge.request({ op: 'offer' })
+
+    port.onMessage.emit({ ok: true, __request_id: port.posted[0].__request_id })
+    await expect(active).resolves.toMatchObject({ ok: true })
+    expect(port.posted[1]).toMatchObject({ op: 'offer' })
+    port.onMessage.emit({ ok: true, __request_id: port.posted[1].__request_id })
+    await expect(offer).resolves.toMatchObject({ ok: true })
+    expect(port.posted[2]).toMatchObject({ op: 'ping' })
+    port.onMessage.emit({ ok: true, __request_id: port.posted[2].__request_id })
+    await expect(heartbeat).resolves.toMatchObject({ ok: true })
+    bridge.close()
+  })
+
   it('rejects the active request and reconnects after host disconnect', async () => {
     const firstPort = new FakePort()
     const secondPort = new FakePort()

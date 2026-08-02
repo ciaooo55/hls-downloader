@@ -13,10 +13,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: pip
@@ -31,6 +31,12 @@ jobs:
       - name: Lint Python
         run: python -m ruff check backend tests scripts/smoke_real_download.py scripts/smoke_extension_browsers.py
 
+      - name: Validate user-facing PowerShell in 5.1 and 7
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validate-powershell.ps1
+          pwsh.exe -NoProfile -File scripts/validate-powershell.ps1
+
       - name: Type-check security-critical Python modules
         shell: pwsh
         run: |
@@ -39,26 +45,31 @@ jobs:
             backend/app/network_proxy.py `
             backend/app/database.py `
             backend/app/config.py `
-            backend/app/schemas.py
+            backend/app/schemas.py `
+            backend/app/access_tokens.py `
+            backend/app/downloader/disk_space.py `
+            backend/app/downloader/response_validation.py `
+            backend/app/windows_attachment.py `
+            backend/app/updater.py
 
       - name: Run Python tests with coverage gate
         run: python -m pytest -q --cov=backend.app --cov-report=term-missing --cov-fail-under=60
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
 
       - name: Set up Chrome
         id: chrome
-        uses: browser-actions/setup-chrome@v2
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2
 
       - name: Set up Firefox
         id: firefox
-        uses: browser-actions/setup-firefox@v1
+        uses: browser-actions/setup-firefox@0bc507ddf224827e3b1af68e014d5e42ab93e795 # v1
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: clippy
 
@@ -89,6 +100,7 @@ jobs:
         run: |
           cargo check --locked --all-targets
           cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
 
       - name: Build Tauri desktop shell
         working-directory: frontend

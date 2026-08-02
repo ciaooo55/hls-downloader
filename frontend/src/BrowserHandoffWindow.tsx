@@ -8,7 +8,15 @@ import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffCancelDec
 import WindowChrome from './components/WindowChrome'
 import { isTauriDesktop } from './tauri'
 
-export default function BrowserHandoffWindow({ handoffId }: { handoffId: string }) {
+export default function BrowserHandoffWindow({
+  handoffId,
+  persistent = false,
+  onClosed,
+}: {
+  handoffId: string
+  persistent?: boolean
+  onClosed?: (handoffId: string) => void
+}) {
   const [item, setItem] = useState<BrowserHandoff | null>(null)
   const [settings, setSettings] = useState<Settings>({})
   const [busy, setBusy] = useState(false)
@@ -20,8 +28,15 @@ export default function BrowserHandoffWindow({ handoffId }: { handoffId: string 
   const close = useCallback(() => {
     if (closing) return
     setClosing(true)
-    void closeDesktopWindow()
-  }, [closing])
+    if (persistent && isTauriDesktop()) {
+      void import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
+        await getCurrentWindow().hide()
+        onClosed?.(handoffId)
+      })
+    } else {
+      void closeDesktopWindow()
+    }
+  }, [closing, handoffId, onClosed, persistent])
 
   const load = useCallback(async () => {
     setError('')
@@ -52,11 +67,16 @@ export default function BrowserHandoffWindow({ handoffId }: { handoffId: string 
         event.preventDefault()
         resolvedRef.current = true
         await resolveBrowserHandoff(handoffId, 'cancel').catch(() => {})
-        await getCurrentWindow().destroy().catch(() => {})
+        if (persistent) {
+          await getCurrentWindow().hide().catch(() => {})
+          onClosed?.(handoffId)
+        } else {
+          await getCurrentWindow().destroy().catch(() => {})
+        }
       }),
     ).then(cleanup => { unlisten = cleanup })
     return () => unlisten?.()
-  }, [handoffId])
+  }, [handoffId, onClosed, persistent])
 
   useEffect(() => {
     document.documentElement.dataset.surface = 'handoff'

@@ -15,7 +15,7 @@ from .request_context import request_origin, sanitize_request_contexts, sanitize
 # Browser add-ons have an independent release cadence.  Keep this pinned to
 # the newest extension build whose Native Messaging contract is compatible;
 # desktop-only fixes must not manufacture a browser upgrade prompt.
-RECOMMENDED_BROWSER_EXTENSION_VERSION = "3.0.9"
+RECOMMENDED_BROWSER_EXTENSION_VERSION = "3.0.11"
 MIN_BROWSER_EXTENSION_VERSION = "2.0.11"
 BROWSER_EXTENSION_RELEASE_URL = "https://github.com/ciaooo55/hls-downloader/releases/latest"
 DEFAULT_BROWSER_CLIENT_TTL = 180.0
@@ -237,8 +237,9 @@ class BrowserHandoffService:
             with self._lock:
                 existing_id = self._request_ids.get(request_key, "")
                 existing = self._items.get(existing_id) if existing_id else None
-                if existing is not None:
+                if existing is not None and existing.status in {"pending", "accepting"}:
                     return existing
+                self._request_ids.pop(request_key, None)
         url = str(payload.get("url", ""))
         filename = str(payload.get("filename", ""))
         title = str(payload.get("title", ""))
@@ -291,8 +292,9 @@ class BrowserHandoffService:
             if request_key:
                 existing_id = self._request_ids.get(request_key, "")
                 existing = self._items.get(existing_id) if existing_id else None
-                if existing is not None:
+                if existing is not None and existing.status in {"pending", "accepting"}:
                     return existing
+                self._request_ids.pop(request_key, None)
             self._items[item.id] = item
             if request_key:
                 self._request_ids[request_key] = item.id

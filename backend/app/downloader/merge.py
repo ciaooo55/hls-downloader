@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 from ..models import TaskStatus
 from ..utils import durable_replace
+from .disk_space import MIN_FREE_RESERVE, ensure_free_space, estimate_paths_size
 
 
 PREPARE_PROGRESS_END = 30.0
@@ -138,6 +139,19 @@ async def merge_segments(
 ) -> None:
     if not segments:
         raise ValueError("没有可合并的分片")
+
+    merge_inputs: list[Path] = []
+    for segment in segments:
+        merge_inputs.append(seg_dir / f"{int(segment['index']):06d}.seg")
+        if segment.get("init_path"):
+            merge_inputs.append(Path(segment["init_path"]))
+    estimated_output = estimate_paths_size(merge_inputs)
+    await asyncio.to_thread(
+        ensure_free_space,
+        output_path,
+        int(estimated_output * 1.20) + MIN_FREE_RESERVE,
+        operation="HLS 合并输出盘",
+    )
 
     local_playlist = seg_dir.parent / "local-merge.m3u8"
     hls_input_options = await asyncio.to_thread(
@@ -301,6 +315,12 @@ async def mux_media_tracks(
         raise FileNotFoundError("独立视频轨道不存在或为空")
     if not audio_path.is_file() or audio_path.stat().st_size <= 0:
         raise FileNotFoundError("独立音频轨道不存在或为空")
+    await asyncio.to_thread(
+        ensure_free_space,
+        output_path,
+        video_path.stat().st_size + audio_path.stat().st_size + MIN_FREE_RESERVE,
+        operation="音视频合并输出盘",
+    )
     video_duration = await _probe_duration(ffmpeg_path, video_path)
     duration_limit = video_duration if video_duration > 0 else float(total_duration or 0)
 

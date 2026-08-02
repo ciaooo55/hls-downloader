@@ -251,7 +251,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
             <td className={`name-cell${task.output_is_file ? ' draggable-file' : ''}`} draggable={task.status === 'done' && task.output_is_file} title={task.output_is_file ? '从文件名拖到桌面或资源管理器可复制文件' : undefined} onDragStart={event => {
               if (!task.output_is_file) { event.preventDefault(); return }
               const filename = task.output_path.split(/[\\/]/).pop() || task.filename || task.id
-              const url = new URL(taskFileUrl(task.id), window.location.href).href
+              const url = new URL(taskFileUrl(task.id, task.file_access_token || ''), window.location.href).href
               event.dataTransfer.effectAllowed = 'copy'
               event.dataTransfer.setData('DownloadURL', `${task.mime_type || 'application/octet-stream'}:${filename}:${url}`)
               event.dataTransfer.setData('text/uri-list', url)

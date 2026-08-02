@@ -38,6 +38,7 @@ export interface Task {
   checksum_actual: string
   checksum_verified: boolean | null
   output_is_file: boolean
+  file_access_token?: string
   created_at: string
   updated_at: string
   started_at: string
@@ -80,6 +81,7 @@ export interface PlaybackSeek {
 
 export interface PlaybackSession extends PlaybackStatus {
   session_id: string
+  playback_token: string
 }
 
 export interface Settings {

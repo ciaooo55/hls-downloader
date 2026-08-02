@@ -71,6 +71,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
 
   const taskPayload = (candidate: string, allowDuplicate = false, video = '', audio = '') => {
     const context = contextFor()
+    const scheduleIso = (value: string) => value ? new Date(value).toISOString() : null
     return {
       url: candidate,
       task_type: 'auto' as const,
@@ -88,8 +89,8 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
       allow_duplicate: allowDuplicate,
       selected_video: video,
       selected_audio: audio,
-      scheduled_start_at: scheduledStartAt || null,
-      scheduled_stop_at: scheduledStopAt || null,
+      scheduled_start_at: scheduleIso(scheduledStartAt),
+      scheduled_stop_at: scheduleIso(scheduledStopAt),
       completion_action: completionAction,
     }
   }
@@ -270,7 +271,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
                 <Input id="recognize-filename" value={filename} onChange={event => setFilename(event.target.value)} placeholder="自动生成" />
               </Field>
               <Field label="并发" htmlFor="recognize-concurrency" className="short-field">
-                <Input id="recognize-concurrency" type="number" min={1} max={256} value={concurrency} onChange={event => setConcurrency(Math.max(1, Math.min(256, Number(event.target.value))))} />
+                <Input id="recognize-concurrency" type="number" min={1} max={64} value={concurrency} onChange={event => setConcurrency(Math.max(1, Math.min(64, Number(event.target.value))))} />
               </Field>
             </div>
             <Field label="校验和" htmlFor="recognize-checksum" help="可选；下载完成后核对。多文件 BT 不支持单一校验和。">

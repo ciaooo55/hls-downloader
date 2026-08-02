@@ -143,7 +143,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     }
     if (!String(settings.download_dir || '').trim()) { setError('下载保存目录不能为空'); return }
     if (!String(settings.temp_dir || '').trim()) { setError('缓存与过程文件目录不能为空'); return }
-    if (settings.default_concurrency < 1 || settings.default_concurrency > 256) { setError('默认并发数必须在 1 到 256 之间'); return }
+    if (settings.default_concurrency < 1 || settings.default_concurrency > 64) { setError('默认并发数必须在 1 到 64 之间'); return }
     if (settings.max_concurrent_tasks < 1 || settings.max_concurrent_tasks > 16) { setError('最大同时任务数必须在 1 到 16 之间'); return }
     if (settings.http_chunk_size_mb < 1 || settings.http_chunk_size_mb > 64) { setError('HTTP 分段大小必须在 1 到 64 MiB 之间'); return }
     if (settings.download_speed_limit_kib != null && settings.download_speed_limit_kib < 0) { setError('下载限速不能小于 0'); return }
@@ -286,7 +286,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
 
           <h3 className="settings-group-label">任务调度</h3>
           <section className="settings-group settings-grid-group">
-            <div className="settings-field"><label htmlFor="setting-default-concurrency">默认并发数</label><input id="setting-default-concurrency" type="number" min={1} max={256} value={settings.default_concurrency ?? 12} onChange={event => update('default_concurrency', Number(event.target.value))} /><p>{REQUEST_FIELD_HELP.concurrency}</p></div>
+            <div className="settings-field"><label htmlFor="setting-default-concurrency">默认并发数</label><input id="setting-default-concurrency" type="number" min={1} max={64} value={settings.default_concurrency ?? 12} onChange={event => update('default_concurrency', Number(event.target.value))} /><p>{REQUEST_FIELD_HELP.concurrency}</p></div>
             <div className="settings-field"><label htmlFor="setting-max-tasks">最大同时任务数</label><input id="setting-max-tasks" type="number" min={1} max={16} value={settings.max_concurrent_tasks ?? 3} onChange={event => update('max_concurrent_tasks', Number(event.target.value))} /><p>{REQUEST_FIELD_HELP.maxTasks}</p></div>
             <div className="settings-field"><label htmlFor="setting-speed-limit">全局下载限速（KiB/s）</label><input id="setting-speed-limit" type="number" min={0} max={1048576} value={settings.download_speed_limit_kib ?? 0} onChange={event => update('download_speed_limit_kib', Number(event.target.value))} /><p>{REQUEST_FIELD_HELP.speedLimit}</p></div>
             <div className="settings-field"><label htmlFor="setting-http-chunk">HTTP 分段大小（MiB）</label><input id="setting-http-chunk" type="number" min={1} max={64} value={settings.http_chunk_size_mb ?? 8} onChange={event => update('http_chunk_size_mb', Number(event.target.value))} /><p>每段完成后可安全暂停；较小更灵活，较大请求更少。</p></div>

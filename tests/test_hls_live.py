@@ -106,6 +106,43 @@ def test_live_recording_appends_segments_and_finishes_on_endlist(tmp_path, monke
     asyncio.run(run())
 
 
+def test_live_recording_retries_uncommitted_sequence_after_signed_url_refresh(
+    tmp_path, monkeypatch
+):
+    """A failed first window must not be committed as already recorded."""
+    monkeypatch.setattr(HLSDownloader, "_live_wait", _instant_wait)
+    url = "https://example.test/live.m3u8"
+    stale = _live_playlist(20, ["segment.ts?token=expired"])
+    fresh = _live_playlist(20, ["segment.ts?token=fresh"], ended=True)
+    polls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        target = str(request.url)
+        if target == url:
+            polls["count"] += 1
+            return httpx.Response(200, text=fresh)
+        if "token=expired" in target:
+            return httpx.Response(403, request=request)
+        if "token=fresh" in target:
+            return httpx.Response(200, content=b"fresh-segment")
+        return httpx.Response(404, request=request)
+
+    async def run():
+        task = _task(tmp_path, url)
+        downloader = _downloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await downloader._record_live(client, _parsed(url, stale), {}, None)
+        assert result is not None
+        segments, total_duration = result
+        assert polls["count"] >= 1
+        assert len(segments) == 1
+        assert segments[0]["url"].endswith("segment.ts?token=fresh")
+        assert total_duration == pytest.approx(4.0)
+        assert (downloader._seg_dir() / "000000.seg").read_bytes() == b"fresh-segment"
+
+    asyncio.run(run())
+
+
 def test_live_recording_advances_through_part_only_windows_without_duplicates(tmp_path, monkeypatch):
     monkeypatch.setattr(HLSDownloader, "_live_wait", _instant_wait)
     url = "https://example.test/live.m3u8"

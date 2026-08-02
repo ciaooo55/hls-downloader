@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import re
+import secrets
 import shutil
 import subprocess
 import threading
@@ -18,6 +19,7 @@ from .schemas import (
     BrowserMediaPushComplete,
     BrowserMediaPushCreate,
     BrowserPing,
+    BrowserTakeoverSettings,
     HealthResponse,
     SettingsUpdate,
     TaskBatchCreate,
@@ -29,6 +31,7 @@ from .schemas import (
     PlaybackSeekRequest,
     TorrentFileSelection,
     TorrentPathImport,
+    FileSystemAction,
     BrowserHandoffAccept,
     BrowserHandoffCancel,
     CastLocalPush,
@@ -47,6 +50,7 @@ from .downloader.task_manager import (
 )
 from .downloader.engine import task_work_dir
 from .downloader.playback import (
+    PlaybackAuthorizationError,
     PlaybackError,
     PlaybackNotReadyError,
     PlaybackSessionError,
@@ -65,9 +69,18 @@ from .updater import (
     validate_portable_archive,
 )
 from .paths import RUNTIME_PATHS
+from .version import APP_VERSION
 from .power_actions import power_action_service
 from .models import TaskStatus, TaskType
 from .browser_handoff import browser_handoffs
+from .access_tokens import (
+    issue_browser_access_token,
+    issue_desktop_access_token,
+    issue_file_access_token,
+    verify_browser_access_token,
+    verify_desktop_access_token,
+    verify_file_access_token,
+)
 from .downloader.throttle import download_throttle
 from .network_proxy import ensure_url_allowed, policy_httpx_client
 from .request_context import request_origin, sanitize_request_contexts, sanitize_request_headers
@@ -82,8 +95,22 @@ _update_launch_tasks: set[str] = set()
 MAX_BROWSER_JSON_BODY_BYTES = 256 * 1024
 
 def _check_token(x_token: str = Header(default="")):
-    if x_token != settings.token:
+    if not (
+        secrets.compare_digest(x_token, settings.token)
+        or verify_desktop_access_token(x_token)
+    ):
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+def _check_control_token(x_token: str) -> None:
+    if not secrets.compare_digest(x_token, settings.token):
+        raise HTTPException(status_code=401, detail="Invalid control token")
+
+
+def _check_browser_token(x_token: str) -> None:
+    if verify_browser_access_token(x_token):
+        return
+    _check_token(x_token)
 
 
 def _check_playback_token(x_token: str = "", token: str = ""):
@@ -159,8 +186,25 @@ async def _manager_action(awaitable):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 @router.get("/health", response_model=HealthResponse)
-async def health():
-    return HealthResponse()
+async def health(x_token: str = Header(default="")):
+    if x_token:
+        if verify_browser_access_token(x_token):
+            pass
+        else:
+            _check_token(x_token)
+    return HealthResponse(authenticated=bool(x_token))
+
+
+@router.post("/desktop/credential")
+async def create_desktop_credential(x_token: str = Header(default="")):
+    _check_control_token(x_token)
+    return {"credential": issue_desktop_access_token()}
+
+
+@router.post("/browser/credential")
+async def create_browser_credential(x_token: str = Header(default="")):
+    _check_control_token(x_token)
+    return {"credential": issue_browser_access_token()}
 
 
 
@@ -244,7 +288,7 @@ def _handoff_detail(item) -> dict:
 
 @router.post("/browser/handoffs")
 async def create_browser_handoff(request: Request, x_token: str = Header(default="")):
-    _check_token(x_token)
+    _check_browser_token(x_token)
     model = await _read_browser_json(request, BrowserHandoffCreate)
     payload = _browser_payload(model)
     url = payload["url"]
@@ -272,7 +316,7 @@ async def create_browser_handoff(request: Request, x_token: str = Header(default
 
 @router.post("/browser/ping")
 async def browser_extension_ping(request: Request, x_token: str = Header(default="")):
-    _check_token(x_token)
+    _check_browser_token(x_token)
     model = await _read_browser_json(request, BrowserPing)
     browser_handoffs.record_ping(
         model.version,
@@ -282,13 +326,43 @@ async def browser_extension_ping(request: Request, x_token: str = Header(default
     # Return update metadata on the same heartbeat. Store-installed extensions
     # update through the browser; unpacked/self-hosted builds can at least show
     # an accurate release link instead of silently staying on an old protocol.
-    return {"ok": True, **browser_handoffs.status()}
+    return {
+        "ok": True,
+        "core_version": APP_VERSION,
+        "takeover_enabled": bool(settings.browser_takeover_enabled),
+        "takeover_minimum_bytes": max(0, int(settings.browser_takeover_min_mb or 0)) * 1024 * 1024,
+        **browser_handoffs.status(),
+    }
+
+
+@router.post("/browser/takeover-settings")
+async def update_browser_takeover_settings(
+    body: BrowserTakeoverSettings,
+    x_token: str = Header(default=""),
+):
+    _check_browser_token(x_token)
+    if body.enabled is not None:
+        settings.browser_takeover_enabled = body.enabled
+    if body.minimum_bytes is not None:
+        settings.browser_takeover_min_mb = int(body.minimum_bytes) // (1024 * 1024)
+    save_settings(settings)
+    return {
+        "ok": True,
+        "takeover_enabled": bool(settings.browser_takeover_enabled),
+        "takeover_minimum_bytes": max(0, int(settings.browser_takeover_min_mb or 0)) * 1024 * 1024,
+    }
+
+
+@router.post("/browser/activate")
+async def activate_browser_desktop(x_token: str = Header(default="")):
+    _check_browser_token(x_token)
+    return {"ok": activate_window()}
 
 
 @router.get("/browser/presenter")
 async def browser_presenter_status(x_token: str = Header(default="")):
     """Desktop shell readiness for cold-start handoffs."""
-    _check_token(x_token)
+    _check_browser_token(x_token)
     ready = has_browser_handoff_presenter()
     session = is_desktop_handoff_session()
     return {
@@ -301,13 +375,13 @@ async def browser_presenter_status(x_token: str = Header(default="")):
 
 @router.get("/browser/status")
 async def browser_extension_status(x_token: str = Header(default="")):
-    _check_token(x_token)
+    _check_browser_token(x_token)
     return browser_handoffs.status()
 
 
 @router.get("/browser/handoffs")
 async def list_browser_handoffs(x_token: str = Header(default="")):
-    _check_token(x_token)
+    _check_browser_token(x_token)
     return [
         _handoff_public(browser_handoffs.get(item["id"]))
         for item in browser_handoffs.pending()
@@ -317,7 +391,7 @@ async def list_browser_handoffs(x_token: str = Header(default="")):
 
 @router.get("/browser/handoffs/{handoff_id}")
 async def get_browser_handoff(handoff_id: str, x_token: str = Header(default="")):
-    _check_token(x_token)
+    _check_browser_token(x_token)
     item = browser_handoffs.get(handoff_id)
     if not item:
         raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
@@ -326,7 +400,7 @@ async def get_browser_handoff(handoff_id: str, x_token: str = Header(default="")
 
 @router.post("/browser/handoffs/{handoff_id}/accept")
 async def accept_browser_handoff(handoff_id: str, body: BrowserHandoffAccept | None = None, x_token: str = Header(default="")):
-    _check_token(x_token)
+    _check_browser_token(x_token)
     body = body or BrowserHandoffAccept()
     item = browser_handoffs.claim(handoff_id)
     if not item:
@@ -392,7 +466,7 @@ async def accept_browser_handoff(handoff_id: str, body: BrowserHandoffAccept | N
 
 @router.get("/browser/handoffs/{handoff_id}/wait")
 async def wait_browser_handoff(handoff_id: str, x_token: str = Header(default="")):
-    _check_token(x_token)
+    _check_browser_token(x_token)
     deadline = asyncio.get_running_loop().time() + browser_handoffs.ttl + 2
     while True:
         item = browser_handoffs.get(handoff_id)
@@ -420,6 +494,7 @@ async def _create_browser_task(item, output_dir: str = ""):
             request_method=item.request_method,
             request_body=item.request_body,
             auto_resume=True,
+            browser_originated=True,
         )
     task = await manager.create_task(
         url=item.url,
@@ -439,13 +514,14 @@ async def _create_browser_task(item, output_dir: str = ""):
         output_dir=output_dir,
         auto_start=True,
         inherit_default_headers=False,
+        browser_originated=True,
     )
     return task
 
 
 @router.post("/browser/downloads")
 async def create_browser_download(request: Request, x_token: str = Header(default="")):
-    _check_token(x_token)
+    _check_browser_token(x_token)
     model = await _read_browser_json(request, BrowserHandoffCreate)
     payload = _browser_payload(model)
     url = payload["url"]
@@ -460,7 +536,7 @@ async def create_browser_download(request: Request, x_token: str = Header(defaul
 
 @router.post("/browser/handoffs/{handoff_id}/reject")
 async def reject_browser_handoff(handoff_id: str, x_token: str = Header(default="")):
-    _check_token(x_token)
+    _check_browser_token(x_token)
     item = browser_handoffs.reject(handoff_id)
     if not item:
         raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
@@ -473,7 +549,7 @@ async def cancel_browser_handoff(
     body: BrowserHandoffCancel | None = None,
     x_token: str = Header(default=""),
 ):
-    _check_token(x_token)
+    _check_browser_token(x_token)
     item = browser_handoffs.cancel(
         handoff_id,
         suppress_site_kind=bool(body and body.suppress_site_kind),
@@ -541,7 +617,7 @@ async def mark_native_handoff_presented(handoff_id: str, x_token: str = Header(d
 
 @router.post("/desktop/core/shutdown")
 async def shutdown_native_core(x_token: str = Header(default="")):
-    _check_token(x_token)
+    _check_control_token(x_token)
     return {"ok": request_core_shutdown()}
 
 
@@ -671,6 +747,8 @@ async def _launch_managed_update(task_id: str) -> None:
         # doing update preparation, making a healthy upgrade appear hung.
         await manager.prepare_for_update_restart()
         if asset_kind == "portable":
+            if portable_stage is None:
+                raise OSError("便携更新包尚未完成解压")
             upgrade_script = portable_stage / "scripts" / "upgrade-portable.ps1"
             subprocess.Popen([
                 "powershell.exe",
@@ -804,7 +882,7 @@ async def manifest_tracks(body: UrlRecognitionRequest, x_token: str = Header(def
 async def test_connection(x_token: str = Header(default="")):
     import shutil
     _check_token(x_token)
-    results = {"health": True}
+    results: dict[str, object] = {"health": True}
     results["browser_bridge"] = "native-messaging"
     ffmpeg_found = shutil.which(settings.ffmpeg_path) is not None
     if not ffmpeg_found:
@@ -918,7 +996,7 @@ async def cast_url(body: CastUrlPush, x_token: str = Header(default="")):
 
 @router.post("/browser/media-push")
 async def create_browser_media_push(request: Request, x_token: str = Header(default="")):
-    _check_token(x_token)
+    _check_browser_token(x_token)
     model = await _read_browser_json(request, BrowserMediaPushCreate)
     kind = model.kind
     resource = _browser_payload(model.resource)
@@ -948,7 +1026,7 @@ async def create_browser_media_push(request: Request, x_token: str = Header(defa
 
 @router.get("/browser/media-push/{request_id}")
 async def get_browser_media_push(request_id: str, x_token: str = Header(default="")):
-    _check_token(x_token)
+    _check_browser_token(x_token)
     with _browser_media_push_lock:
         item = _browser_media_pushes.get(request_id)
     if not item:
@@ -958,7 +1036,7 @@ async def get_browser_media_push(request_id: str, x_token: str = Header(default=
 
 @router.get("/browser/media-push/{request_id}/status")
 async def get_browser_media_push_status(request_id: str, x_token: str = Header(default="")):
-    _check_token(x_token)
+    _check_browser_token(x_token)
     with _browser_media_push_lock:
         item = _browser_media_pushes.get(request_id)
     if not item:
@@ -968,7 +1046,7 @@ async def get_browser_media_push_status(request_id: str, x_token: str = Header(d
 
 @router.post("/browser/media-push/{request_id}/complete")
 async def complete_browser_media_push(request_id: str, request: Request, x_token: str = Header(default="")):
-    _check_token(x_token)
+    _check_browser_token(x_token)
     model = await _read_browser_json(request, BrowserMediaPushComplete)
     status = model.status
     message = model.message.strip()
@@ -1275,7 +1353,10 @@ async def download_task_file(
     token: str = "",
     x_token: str = Header(default=""),
 ):
-    _check_playback_token(x_token, token)
+    if x_token:
+        _check_token(x_token)
+    elif not verify_file_access_token(task_id, token):
+        raise HTTPException(status_code=401, detail="Invalid file access token")
     task = manager.tasks.get(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -1314,6 +1395,8 @@ def _playback_task(task_id: str):
 
 
 def _raise_playback_error(exc: PlaybackError):
+    if isinstance(exc, PlaybackAuthorizationError):
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     if isinstance(exc, PlaybackSessionError):
         raise HTTPException(status_code=410, detail=str(exc)) from exc
     if isinstance(exc, PlaybackNotReadyError):
@@ -1343,6 +1426,7 @@ async def open_task_playback(task_id: str, x_token: str = Header(default="")):
         session_id = playback_service.open_session(task.id)
         return {
             "session_id": session_id,
+            "playback_token": playback_service.access_token(task.id, session_id),
             "ready": True,
             "mode": "file",
             "available_segments": task.progress.completed_segments,
@@ -1360,7 +1444,11 @@ async def open_task_playback(task_id: str, x_token: str = Header(default="")):
         )
     except PlaybackError as exc:
         _raise_playback_error(exc)
-    return {"session_id": session_id, **snapshot.to_dict()}
+    return {
+        "session_id": session_id,
+        "playback_token": playback_service.access_token(task.id, session_id),
+        **snapshot.to_dict(),
+    }
 
 
 @router.get("/tasks/{task_id}/playback/status")
@@ -1450,9 +1538,9 @@ async def task_playback_playlist(
     full: bool = False,
     x_token: str = Header(default=""),
 ):
-    _check_playback_token(x_token, token)
     task = _playback_task(task_id)
     try:
+        playback_service.authorize(task.id, session, token)
         content = playback_service.playlist(
             task.id,
             task.status.value,
@@ -1478,9 +1566,9 @@ async def task_playback_segment(
     full: bool = False,
     x_token: str = Header(default=""),
 ):
-    _check_playback_token(x_token, token)
     _playback_task(task_id)
     try:
+        playback_service.authorize(task_id, session, token)
         if full:
             await manager.request_playback_seek(task_id, index, force=False)
             path, is_fmp4 = await playback_service.wait_for_segment(
@@ -1508,9 +1596,9 @@ async def task_playback_map(
     token: str = "",
     x_token: str = Header(default=""),
 ):
-    _check_playback_token(x_token, token)
     _playback_task(task_id)
     try:
+        playback_service.authorize(task_id, session, token)
         path = playback_service.map_path(task_id, map_name, session)
     except PlaybackError as exc:
         _raise_playback_error(exc)
@@ -1529,10 +1617,9 @@ async def task_playback_media(
     token: str = "",
     x_token: str = Header(default=""),
 ):
-    _check_token(x_token or token)
     task = _playback_task(task_id)
     try:
-        playback_service.touch(task_id, session)
+        playback_service.authorize(task_id, session, token)
     except PlaybackError as exc:
         _raise_playback_error(exc)
     if task.task_type is not TaskType.HLS:
@@ -1551,6 +1638,7 @@ async def task_playback_media(
         if not range_header:
             start, end = 0, min(total - 1, 2 * 1024 * 1024 - 1)
         else:
+            assert match is not None
             start_text, end_text = match.groups()
             if not start_text and not end_text:
                 raise HTTPException(status_code=416, detail="无效的 Range")
@@ -1610,10 +1698,8 @@ async def task_playback_media(
     )
 
 @router.get("/events")
-async def events(request: Request):
-    tok = request.query_params.get("x_token") or request.query_params.get("token") or request.headers.get("x-token", "")
-    if tok != settings.token:
-        raise HTTPException(status_code=401, detail="Invalid token")
+async def events(x_token: str = Header(default="")):
+    _check_token(x_token)
     q = manager.subscribe()
 
     async def stream():
@@ -1632,14 +1718,47 @@ async def events(request: Request):
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
+def _task_output_path(task_id: str) -> Path:
+    task = manager.tasks.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not task.output_path:
+        raise HTTPException(status_code=409, detail="任务尚无输出文件")
+    return Path(task.output_path).resolve()
+
+
+def _path_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _allowed_explorer_path(value: str) -> Path:
+    path = Path(value).resolve()
+    roots = {
+        Path(settings.download_dir).resolve(),
+        Path(settings.temp_dir).resolve(),
+        RUNTIME_PATHS.data_root.resolve(),
+    }
+    for task in manager.tasks.values():
+        if task.output_path:
+            output = Path(task.output_path).resolve()
+            roots.add(output if output.is_dir() else output.parent)
+    if any(_path_within(path, root) for root in roots):
+        return path
+    ffmpeg = str(settings.ffmpeg_path or "").strip()
+    if ffmpeg and path == Path(ffmpeg).resolve():
+        return path
+    raise HTTPException(status_code=403, detail="只允许打开任务输出或已配置的数据目录")
+
+
 @router.post("/open-explorer")
-async def open_explorer(body: dict, x_token: str = Header(default="")):
+async def open_explorer(body: FileSystemAction, x_token: str = Header(default="")):
     _check_token(x_token)
-    path = body.get("path", "")
-    if not path:
-        raise HTTPException(status_code=400, detail="path required")
     import subprocess
-    p = Path(path)
+    p = _task_output_path(body.task_id) if body.task_id else _allowed_explorer_path(body.path)
     if not p.exists():
         raise HTTPException(status_code=404, detail="path not found")
     if p.is_file():
@@ -1649,14 +1768,20 @@ async def open_explorer(body: dict, x_token: str = Header(default="")):
     return {"ok": True}
 
 @router.post("/launch-file")
-async def launch_file(body: dict, x_token: str = Header(default="")):
+async def launch_file(body: FileSystemAction, x_token: str = Header(default="")):
     _check_token(x_token)
-    path = body.get("path", "")
-    if not path:
-        raise HTTPException(status_code=400, detail="path required")
-    target = Path(path)
+    if not body.task_id or body.path:
+        raise HTTPException(status_code=400, detail="launch-file requires task_id")
+    task = manager.tasks.get(body.task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status is not TaskStatus.DONE:
+        raise HTTPException(status_code=409, detail="任务尚未完成")
+    target = _task_output_path(body.task_id)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="file not found")
+    if target.suffix.lower() in {".bat", ".cmd", ".com", ".exe", ".js", ".msi", ".ps1", ".scr", ".vbs"} and not body.confirm_executable:
+        raise HTTPException(status_code=409, detail="启动可执行文件前需要明确确认")
     import os
     if not hasattr(os, "startfile"):
         raise HTTPException(status_code=501, detail="当前系统不支持直接打开文件")
@@ -1664,38 +1789,72 @@ async def launch_file(body: dict, x_token: str = Header(default="")):
     return {"ok": True}
 
 @router.get("/browse-dir")
-async def browse_dir(path: str = "", x_token: str = Header(default="")):
+async def browse_dir(
+    path: str = "",
+    offset: int = 0,
+    limit: int = 200,
+    x_token: str = Header(default=""),
+):
     _check_token(x_token)
     if not path:
-        # Default to drives on Windows
-        import string
-        drives = []
-        for letter in string.ascii_uppercase:
-            drive = f"{letter}:\\"
-            if Path(drive).exists():
-                drives.append({"name": drive, "path": drive, "is_dir": True})
-        return {"current": "", "items": drives, "parent": ""}
+        # Tauri uses the native folder dialog. The web fallback starts from
+        # explicitly configured application roots instead of exposing every
+        # same-user drive through the local HTTP API.
+        roots = {
+            Path(settings.download_dir).resolve(),
+            Path(settings.temp_dir).resolve(),
+            RUNTIME_PATHS.data_root.resolve(),
+        }
+        items = [
+            {"name": str(root), "path": str(root), "is_dir": True}
+            for root in sorted(roots, key=lambda value: str(value).casefold())
+            if root.exists() and root.is_dir()
+        ]
+        return {"current": "", "items": items, "parent": "", "total": len(items)}
 
-    p = Path(path)
+    p = _allowed_explorer_path(path)
     if not p.exists() or not p.is_dir():
         raise HTTPException(status_code=404, detail="directory not found")
 
-    items = []
-    try:
-        for child in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+    safe_offset = max(0, int(offset))
+    safe_limit = min(250, max(1, int(limit)))
+
+    def list_directory():
+        entries = []
+        for child in p.iterdir():
             try:
-                items.append({
+                is_dir = child.is_dir()
+                entries.append({
                     "name": child.name,
                     "path": str(child),
-                    "is_dir": child.is_dir(),
+                    "is_dir": is_dir,
                 })
             except (PermissionError, OSError):
-                pass
-    except PermissionError:
-        pass
+                continue
+        entries.sort(key=lambda item: (not item["is_dir"], item["name"].casefold()))
+        return entries
 
-    parent = str(p.parent) if str(p.parent) != str(p) else ""
-    return {"current": str(p), "items": items, "parent": parent}
+    try:
+        entries = await asyncio.wait_for(asyncio.to_thread(list_directory), timeout=5)
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="读取目录超时") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="没有权限读取该目录") from exc
+
+    parent = ""
+    if p.parent != p:
+        try:
+            parent = str(_allowed_explorer_path(str(p.parent)))
+        except HTTPException:
+            parent = ""
+    return {
+        "current": str(p),
+        "items": entries[safe_offset:safe_offset + safe_limit],
+        "parent": parent,
+        "total": len(entries),
+        "offset": safe_offset,
+        "limit": safe_limit,
+    }
 
 def _to_resp(task) -> TaskResponse:
     return TaskResponse(
@@ -1753,10 +1912,18 @@ def _to_resp(task) -> TaskResponse:
         checksum_actual=task.checksum_actual,
         checksum_verified=task.checksum_verified,
         output_is_file=task_output_is_file(task),
+        file_access_token=(
+            issue_file_access_token(task.id)
+            if task.status is TaskStatus.DONE and task_output_is_file(task)
+            else ""
+        ),
         created_at=task.created_at or "",
         updated_at=task.updated_at or "",
         started_at=task.started_at or "",
         finished_at=task.finished_at or "",
+        scheduled_start_at=str(task.engine_state.get("scheduled_start_at") or ""),
+        scheduled_stop_at=str(task.engine_state.get("scheduled_stop_at") or ""),
+        completion_action=str(task.engine_state.get("completion_action") or "none"),
         available_actions=manager.get_available_actions(task),
         queue_position=manager.get_queue_position(task),
     )

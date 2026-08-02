@@ -5,10 +5,12 @@ import pytest
 
 from backend.app.network_proxy import (
     HostNotAllowedError,
+    PrivateDestinationError,
     PolicyAsyncClient,
     _proxy_route,
     curl_proxy,
     ensure_url_allowed,
+    ensure_public_destination,
     host_matches_patterns,
     httpx_proxy_options,
 )
@@ -70,6 +72,30 @@ def test_host_pattern_does_not_confuse_ipv6_colons_with_ports():
     assert host_matches_patterns("http://[::1]:8765/", ["[::1]:8765"])
     assert not host_matches_patterns("http://[::1]:9000/", ["[::1]:8765"])
     assert curl_proxy("https://cdn.test/file") is None
+
+
+def test_browser_destination_policy_blocks_loopback_and_private_dns(monkeypatch):
+    monkeypatch.setattr(settings, "allowed_hosts", [])
+
+    async def run():
+        with pytest.raises(PrivateDestinationError):
+            await ensure_public_destination("http://127.0.0.1:8765/api/settings")
+
+        monkeypatch.setattr(
+            "backend.app.network_proxy.socket.getaddrinfo",
+            lambda *_args, **_kwargs: [
+                (2, 1, 6, "", ("192.168.1.20", 443)),
+            ],
+        )
+        with pytest.raises(PrivateDestinationError):
+            await ensure_public_destination("https://rebinding.example/file")
+
+    asyncio.run(run())
+
+
+def test_manual_destination_policy_still_allows_lan_addresses(monkeypatch):
+    monkeypatch.setattr(settings, "allowed_hosts", [])
+    ensure_url_allowed("http://192.168.1.20/file")
 
 
 def test_policy_client_recalculates_proxy_route_after_redirect(monkeypatch):
