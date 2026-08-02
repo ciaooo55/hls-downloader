@@ -51,6 +51,7 @@ jobs:
             backend/app/utils.py `
             backend/app/downloader/disk_space.py `
             backend/app/downloader/dash_native.py `
+            backend/app/downloader/errors.py `
             backend/app/downloader/hls.py `
             backend/app/downloader/playback.py `
             backend/app/downloader/response_validation.py `

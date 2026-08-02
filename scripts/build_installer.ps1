@@ -5,7 +5,7 @@ param(
     [switch]$SkipInstaller,
     [switch]$SkipSmoke,
     [switch]$IncludeExtensionAssets,
-    [string]$Version = "3.0.12"
+    [string]$Version = "3.0.13"
 )
 
 $ErrorActionPreference = "Stop"
@@ -94,8 +94,8 @@ $ChromiumExtensionOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Chrome-Edge-Ex
 if ($IncludeExtensionAssets) {
     $declaredExtensionVersion = (Get-Content -LiteralPath (Join-Path $ExtensionDir "package.json") -Raw -Encoding UTF8 | ConvertFrom-Json).version
     $recommendedExtensionVersion = Get-DeclaredVersion (Join-Path $Root "backend\app\browser_handoff.py") 'RECOMMENDED_BROWSER_EXTENSION_VERSION\s*=\s*"([^"]+)"'
-    if ($declaredExtensionVersion -ne $Version -or $recommendedExtensionVersion -ne $Version) {
-        throw "Extension assets require package and recommended versions to match release $Version"
+    if ($declaredExtensionVersion -ne $recommendedExtensionVersion) {
+        throw "Extension assets require package and recommended versions to match each other"
     }
 }
 

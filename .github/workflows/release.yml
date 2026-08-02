@@ -6,7 +6,7 @@ on:
       version:
         description: Version used in the installer, for example 3.0.10
         required: false
-        default: "3.0.12"
+        default: "3.0.13"
       include_extensions:
         description: Upload browser extension ZIPs for this release
         required: false
@@ -112,6 +112,7 @@ jobs:
             backend/app/utils.py `
             backend/app/downloader/disk_space.py `
             backend/app/downloader/dash_native.py `
+            backend/app/downloader/errors.py `
             backend/app/downloader/hls.py `
             backend/app/downloader/playback.py `
             backend/app/downloader/response_validation.py `

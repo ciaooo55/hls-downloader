@@ -9,6 +9,11 @@ from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import httpx
 from ..network_proxy import HostNotAllowedError, PrivateDestinationError
+
+_CURL_PROTOCOL_ERRORS: tuple[type[BaseException], ...]
+_CURL_CONNECTION_ERRORS: tuple[type[BaseException], ...]
+_CURL_TIMEOUT_ERRORS: tuple[type[BaseException], ...]
+
 try:
     from curl_cffi.requests.exceptions import (
         ChunkedEncodingError as CurlProtocolError,
@@ -426,6 +431,11 @@ def http_status_from_exception(exc: BaseException) -> int:
 
 def should_retry_download_error(exc: BaseException) -> bool:
     """Retry transient failures, but never hammer stale/authenticated URLs."""
+    # Destination policy failures are deterministic. Retrying them wastes time
+    # and made browser tasks display five identical PRIVATE_DESTINATION_BLOCKED
+    # attempts before surfacing the actionable failure.
+    if any(isinstance(item, HostNotAllowedError) for item in _exception_chain(exc)):
+        return False
     status = http_status_from_exception(exc)
     if not status:
         return True

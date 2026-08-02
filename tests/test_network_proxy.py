@@ -93,6 +93,43 @@ def test_browser_destination_policy_blocks_loopback_and_private_dns(monkeypatch)
     asyncio.run(run())
 
 
+def test_browser_destination_policy_allows_dns_proxy_fake_ip_but_not_literal(monkeypatch):
+    monkeypatch.setattr(settings, "allowed_hosts", [])
+    monkeypatch.setattr(
+        "backend.app.network_proxy.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (2, 1, 6, "", ("198.18.2.67", 443)),
+        ],
+    )
+
+    async def run():
+        # A domain resolved by a local proxy/TUN's Fake-IP DNS is safe to pass
+        # through that routing layer. The same reserved address typed directly
+        # remains blocked as a browser-originated destination.
+        await ensure_public_destination("https://media.example.test/master.m3u8")
+        with pytest.raises(PrivateDestinationError):
+            await ensure_public_destination("https://198.18.2.67/master.m3u8")
+
+    asyncio.run(run())
+
+
+def test_browser_destination_policy_rejects_fake_ip_mixed_with_private_dns(monkeypatch):
+    monkeypatch.setattr(settings, "allowed_hosts", [])
+    monkeypatch.setattr(
+        "backend.app.network_proxy.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (2, 1, 6, "", ("198.18.2.67", 443)),
+            (2, 1, 6, "", ("192.168.1.20", 443)),
+        ],
+    )
+
+    async def run():
+        with pytest.raises(PrivateDestinationError):
+            await ensure_public_destination("https://rebinding.example/master.m3u8")
+
+    asyncio.run(run())
+
+
 def test_manual_destination_policy_still_allows_lan_addresses(monkeypatch):
     monkeypatch.setattr(settings, "allowed_hosts", [])
     ensure_url_allowed("http://192.168.1.20/file")

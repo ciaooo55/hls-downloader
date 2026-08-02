@@ -28,6 +28,12 @@ class PrivateDestinationError(HostNotAllowedError):
 GLOBAL_CONNECTION_LIMIT = 128
 PER_HOST_CONNECTION_LIMIT = 24
 MAX_BUDGET_HOSTS = 512
+# Clash and similar transparent proxy/TUN implementations intentionally hand
+# out addresses from the RFC 2544 benchmarking block and recover the original
+# hostname in their local routing layer. It is not public, so a literal URL
+# must still be blocked; it is only tolerated for DNS names after the normal
+# hostname and redirect policy have already run.
+SYNTHETIC_PROXY_NETWORKS = (ip_network("198.18.0.0/15"),)
 
 
 class _LoopBudget:
@@ -233,6 +239,17 @@ def _is_public_address(value: str) -> bool:
     return bool(address.is_global)
 
 
+def _is_synthetic_proxy_address(value: str) -> bool:
+    """Return whether a DNS answer is a recognized local proxy fake IP."""
+    try:
+        address = ip_address(value.split("%", 1)[0])
+    except ValueError:
+        return False
+    if isinstance(address, IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return any(address in network for network in SYNTHETIC_PROXY_NETWORKS)
+
+
 async def ensure_public_destination(url: str) -> None:
     """Reject browser-originated requests that resolve outside public IP space.
 
@@ -263,7 +280,14 @@ async def ensure_public_destination(url: str) -> None:
     except socket.gaierror as exc:
         raise PrivateDestinationError(f"无法解析浏览器来源任务的主机 {host}") from exc
     addresses = {str(record[4][0]).split("%", 1)[0] for record in records if record[4]}
-    if not addresses or any(not _is_public_address(address) for address in addresses):
+    # Never allow private, loopback or link-local results. The one exception
+    # is a proxy/TUN fake IP supplied for a *hostname*; literal fake-IP URLs
+    # were rejected above so this cannot turn the reserved block into a manual
+    # browser-originated destination.
+    if not addresses or any(
+        not (_is_public_address(address) or _is_synthetic_proxy_address(address))
+        for address in addresses
+    ):
         raise PrivateDestinationError(f"浏览器来源任务禁止访问解析到非公网地址的主机 {host}")
 
 

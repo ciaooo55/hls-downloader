@@ -15,6 +15,7 @@ from backend.app.downloader.errors import (
 from backend.app.downloader.hls import HLSDownloader
 from backend.app.downloader.parser import UnsupportedPlaylistError
 from backend.app.models import Task, TaskStatus
+from backend.app.network_proxy import PrivateDestinationError
 
 
 def _http_error(status: int, url: str = "https://example.test/video.m3u8?token=secret"):
@@ -172,6 +173,7 @@ def test_auth_failure_distinguishes_missing_and_expired_browser_context():
     assert should_retry_download_error(_http_error(404)) is False
     assert should_retry_download_error(_http_error(429)) is True
     assert should_retry_download_error(_http_error(503)) is True
+    assert should_retry_download_error(PrivateDestinationError("private route")) is False
 
 
 def test_proxy_authentication_has_a_specific_recovery_hint():
