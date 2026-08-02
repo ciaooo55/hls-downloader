@@ -6,7 +6,7 @@ on:
       version:
         description: Version used in the installer, for example 3.0.10
         required: false
-        default: "3.0.11"
+        default: "3.0.12"
       include_extensions:
         description: Upload browser extension ZIPs for this release
         required: false
@@ -102,14 +102,20 @@ jobs:
         run: |
           python -m ruff check backend tests scripts/smoke_real_download.py scripts/smoke_extension_browsers.py
           python -m mypy `
+            backend/app/api.py `
             backend/app/credentials.py `
             backend/app/network_proxy.py `
             backend/app/database.py `
             backend/app/config.py `
             backend/app/schemas.py `
             backend/app/access_tokens.py `
+            backend/app/utils.py `
             backend/app/downloader/disk_space.py `
+            backend/app/downloader/dash_native.py `
+            backend/app/downloader/hls.py `
+            backend/app/downloader/playback.py `
             backend/app/downloader/response_validation.py `
+            backend/app/downloader/task_manager.py `
             backend/app/windows_attachment.py `
             backend/app/updater.py
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validate-powershell.ps1
