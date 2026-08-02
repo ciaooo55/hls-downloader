@@ -276,6 +276,44 @@ describe('resource rules', () => {
       sourceUrls: ['blob:https://site.test/current-player'], startedAt: now,
     }).map(item => item.id)).toEqual(['preloaded', 'late-rendition'])
   })
+  it('uses SourceBuffer path evidence to separate simultaneous MSE players', () => {
+    const now = Date.now()
+    const first = resource({
+      id: 'first', kind: 'hls', inspected: true,
+      url: 'https://cdn.test/live/channel-one/master.m3u8', seenAt: now,
+    })
+    const second = resource({
+      id: 'second', kind: 'hls', inspected: true,
+      url: 'https://cdn.test/live/channel-two/master.m3u8', seenAt: now,
+    })
+
+    expect(playerPlaybackResources([first, second], {
+      sourceUrls: ['blob:https://site.test/player-one'],
+      mseResourceUrls: ['https://cdn.test/live/channel-one/segment-10.m4s'],
+      startedAt: now,
+    }, 2).map(item => item.id)).toEqual(['first'])
+    expect(playerPlaybackResources([first, second], {
+      sourceUrls: ['blob:https://site.test/player-two'],
+      mseResourceUrls: ['https://cdn.test/live/channel-two/segment-20.m4s'],
+      startedAt: now,
+    }, 2).map(item => item.id)).toEqual(['second'])
+  })
+  it('does not assign origin-only MSE evidence to either player', () => {
+    const now = Date.now()
+    const first = resource({
+      id: 'first', kind: 'hls', inspected: true,
+      url: 'https://cdn.test/manifests/one.m3u8', seenAt: now,
+    })
+    const second = resource({
+      id: 'second', kind: 'hls', inspected: true,
+      url: 'https://cdn.test/manifests/two.m3u8', seenAt: now,
+    })
+    expect(playerPlaybackResources([first, second], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: ['https://cdn.test/segments/chunk.m4s'],
+      startedAt: now,
+    }, 2)).toEqual([])
+  })
   it('waits for inspection when multiple raw MSE manifests could include an advert', () => {
     const now = Date.now()
     const advert = resource({

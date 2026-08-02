@@ -48,6 +48,7 @@ export default defineContentScript({
     // instead of treating the latest network manifest as belonging to every
     // video in the document.
     let playbackByVideo = new WeakMap<HTMLVideoElement, PlaybackContext>()
+    const mseEvidenceByBlob = new Map<string, { urls: Set<string>; seenAt: number }>()
     const replaceResources = (values: MediaResource[]) => {
       resources.clear()
       for (const value of values) resources.set(resourceFingerprint(value), value)
@@ -526,11 +527,14 @@ export default defineContentScript({
       // to the element that is actually advancing, not the largest rectangle.
       activeVideo = video
       const sourceUrls = [video.currentSrc, video.src, ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')].map(source => source.src)].filter(Boolean)
+      const mseResourceUrls = sourceUrls
+        .filter(source => source.startsWith('blob:'))
+        .flatMap(source => [...(mseEvidenceByBlob.get(source)?.urls || [])])
       const previousPlayback = playbackByVideo.get(video) || null
       const changedSource = sourceUrls.join('\n') !== (previousPlayback?.sourceUrls || []).join('\n')
       if (!previousPlayback || changedSource) {
         if (changedSource) videoButtonPositions.delete(video)
-        activePlayback = { sourceUrls, startedAt: Date.now() }
+        activePlayback = { sourceUrls, startedAt: Date.now(), mseResourceUrls }
         playbackByVideo.set(video, activePlayback)
       } else {
         activePlayback = previousPlayback
@@ -579,6 +583,37 @@ export default defineContentScript({
       addResource(resource); render(); void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
     }
     window.addEventListener('__hls_downloader_resource__', ((event: CustomEvent) => add(event.detail?.url, event.detail?.mimeType)) as EventListener)
+    window.addEventListener('__hls_downloader_mse__', ((event: CustomEvent) => {
+      const blobUrl = String(event.detail?.blobUrl || '')
+      const mediaUrl = String(event.detail?.mediaUrl || '')
+      if (!blobUrl.startsWith('blob:') || !/^https?:/i.test(mediaUrl)) return
+      const now = Date.now()
+      const evidence = mseEvidenceByBlob.get(blobUrl) || { urls: new Set<string>(), seenAt: now }
+      evidence.urls.add(mediaUrl)
+      evidence.seenAt = now
+      // Refresh insertion order so the bounded map behaves like a small LRU.
+      mseEvidenceByBlob.delete(blobUrl)
+      mseEvidenceByBlob.set(blobUrl, evidence)
+      for (const video of document.querySelectorAll<HTMLVideoElement>('video')) {
+        const playback = playbackByVideo.get(video)
+        if (!playback?.sourceUrls.includes(blobUrl)) continue
+        const updated = {
+          ...playback,
+          mseResourceUrls: [...new Set([...(playback.mseResourceUrls || []), mediaUrl])],
+        }
+        playbackByVideo.set(video, updated)
+        if (video === activeVideo) activePlayback = updated
+      }
+      for (const [key, value] of mseEvidenceByBlob) {
+        if (now - value.seenAt > 30 * 60_000) mseEvidenceByBlob.delete(key)
+      }
+      while (mseEvidenceByBlob.size > 200) {
+        const oldest = mseEvidenceByBlob.keys().next().value
+        if (!oldest) break
+        mseEvidenceByBlob.delete(oldest)
+      }
+      render()
+    }) as EventListener)
     document.querySelectorAll<HTMLMediaElement>('video[src],audio[src],source[src]').forEach(media => add(media.currentSrc || media.src))
     new PerformanceObserver(list => list.getEntries().forEach(entry => add(entry.name))).observe({ type: 'resource', buffered: true })
     browser.runtime.onMessage.addListener(message => {

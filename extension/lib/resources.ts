@@ -139,6 +139,53 @@ export function canonicalMediaUrl(url: string, kind?: ResourceKind | null): stri
 export interface PlaybackContext {
   sourceUrls: string[]
   startedAt: number
+  mseResourceUrls?: string[]
+}
+
+function msePathAffinity(resourceUrl: string, mediaUrl: string): number {
+  try {
+    const resource = new URL(resourceUrl)
+    const media = new URL(mediaUrl)
+    if (resource.origin !== media.origin) return -1
+    const resourceParts = resource.pathname.split('/').filter(Boolean).slice(0, -1)
+    const mediaParts = media.pathname.split('/').filter(Boolean).slice(0, -1)
+    let common = 0
+    while (
+      common < resourceParts.length
+      && common < mediaParts.length
+      && resourceParts[common] === mediaParts[common]
+    ) common += 1
+    return common
+  } catch {
+    return -1
+  }
+}
+
+function mseCorrelatedResources(
+  resources: MediaResource[],
+  playback: PlaybackContext,
+  limit: number,
+): MediaResource[] {
+  const evidence = playback.mseResourceUrls || []
+  if (!evidence.length) return []
+  const floor = playback.startedAt - 3 * 60_000
+  const ranked = compactResources(resources, 40)
+    .filter(item => (item.kind === 'hls' || item.kind === 'dash') && item.seenAt >= floor)
+    .map(item => ({
+      item,
+      affinity: Math.max(...evidence.map(url => msePathAffinity(item.url, url))),
+    }))
+    // A same-origin match alone is not evidence: unrelated players and ads
+    // frequently share one CDN host.
+    .filter(entry => entry.affinity > 0)
+  if (!ranked.length) return []
+  const best = Math.max(...ranked.map(entry => entry.affinity))
+  return ranked
+    .filter(entry => entry.affinity === best)
+    .sort((left, right) => resourceRank(right.item) - resourceRank(left.item)
+      || right.item.seenAt - left.item.seenAt)
+    .slice(0, limit)
+    .map(entry => entry.item)
 }
 
 function isNonVideoManifest(resource: Pick<MediaResource, 'url'>): boolean {
@@ -342,6 +389,12 @@ export function playerPlaybackResources(
   limit = 8,
 ): MediaResource[] {
   const msePlayback = Boolean(playback?.sourceUrls.some(source => source.startsWith('blob:')))
+  if (msePlayback && playback) {
+    const correlated = mseCorrelatedResources(resources, playback, limit)
+    if (correlated.length && (activeMseSessions <= 1 || correlated.length === 1)) {
+      return correlated
+    }
+  }
   return visiblePlaybackResources(
     resources,
     playback,

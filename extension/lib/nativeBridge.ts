@@ -46,11 +46,27 @@ export class NativeBridge {
         resolve,
         reject,
       }
-      // A running native-host call cannot be pre-empted, but interactive
-      // offers/downloads must jump ahead of queued heartbeat and status work.
-      // Native Messaging hosts process stdin serially, so this small priority
-      // queue removes avoidable head-of-line delay without opening competing
-      // host processes or reordering an already active request.
+      // A user click must not wait behind a hung heartbeat/status request. A
+      // Native Messaging port cannot cancel one message in isolation, so move
+      // the interrupted low-priority request back into the queue, replace the
+      // port, and send the interactive request immediately. The old port is
+      // detached before disconnect() so its final event cannot reject or
+      // complete work on the replacement connection.
+      if (this.active && request.priority > this.active.priority) {
+        const interrupted = this.active
+        if (interrupted.timer) clearTimeout(interrupted.timer)
+        interrupted.timer = undefined
+        this.active = null
+        this.queue.unshift(request)
+        const port = this.port
+        this.port = null
+        try { port?.disconnect() } catch {}
+        this.pump()
+        return
+      }
+      // Native Messaging hosts process stdin serially. Interactive offers and
+      // downloads still jump ahead of queued heartbeat/status work even when
+      // the current request has equal or higher priority.
       const start = this.active ? 1 : 0
       const nextLowerPriority = this.queue.findIndex(
         (queued, index) => index >= start && queued.priority < request.priority,
