@@ -26,10 +26,55 @@ export function internalCredential(): string {
   return runtimeConfig?.credential || ''
 }
 
-export async function prepareTauriRuntime(): Promise<void> {
-  if (!isTauriDesktop()) return
-  const { invoke } = await import('@tauri-apps/api/core')
-  runtimeConfig = await invoke<CoreConfig>('get_core_config')
+let webCredentialRequest: Promise<void> | null = null
+
+export async function prepareTauriRuntime(force = false): Promise<void> {
+  if (isTauriDesktop()) {
+    const { invoke } = await import('@tauri-apps/api/core')
+    runtimeConfig = await invoke<CoreConfig>('get_core_config')
+    return
+  }
+  if (!force && runtimeConfig?.credential) return
+  // A burst of 401s (the task list and SSE reconnecting together) must share
+  // one refresh. Otherwise each caller overwrites the in-flight promise and
+  // one completion can clear the pointer while another refresh is still
+  // running, producing a short-lived "not connected" flap.
+  if (webCredentialRequest) return webCredentialRequest
+  webCredentialRequest = (async () => {
+    let credential = ''
+    let resolvedPort = Number(globalThis.location?.port || 8765)
+    try {
+      credential = globalThis.sessionStorage?.getItem('hls-downloader-ui-credential') || ''
+    } catch {
+      // Session storage can be disabled; the in-memory credential still works.
+    }
+    if (!credential || force) {
+      const response = await fetch('/api/ui/credential', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        cache: 'no-store',
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok || typeof payload?.credential !== 'string' || !payload.credential) {
+        throw new Error(typeof payload?.detail === 'string' ? payload.detail : `UI 凭据获取失败（HTTP ${response.status}）`)
+      }
+      credential = payload.credential
+      resolvedPort = Number(payload?.port || resolvedPort)
+      try { globalThis.sessionStorage?.setItem('hls-downloader-ui-credential', credential) } catch {}
+    }
+    runtimeConfig = {
+      port: Number.isInteger(resolvedPort) && resolvedPort > 0 && resolvedPort <= 65535
+        ? resolvedPort
+        : 8765,
+      credential,
+    }
+  })()
+  try {
+    await webCredentialRequest
+  } finally {
+    webCredentialRequest = null
+  }
 }
 
 function apiHeaders(): Record<string, string> {

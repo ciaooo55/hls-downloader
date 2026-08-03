@@ -18,6 +18,7 @@ const CLICK_INTENT_STORAGE_KEY = 'click-intents'
 let clickIntents: DownloadClickIntent[] = []
 let clickIntentsHydrated = false
 let browserFallbacks: Array<{ url: string, at: number }> = []
+const MAX_BROWSER_FALLBACKS = 128
 const determinedDownloads = new Map<number, Browser.downloads.DownloadItem>()
 const determinationWaiters = new Map<number, (item: Browser.downloads.DownloadItem) => void>()
 /**
@@ -53,6 +54,8 @@ interface TrackedHandoff {
 }
 
 const trackedHandoffs = new Map<string, TrackedHandoff>()
+const MAX_TRACKED_HANDOFFS = 128
+const TRACKED_HANDOFF_RETENTION_MS = 10 * 60_000
 let handoffTrackerHydrated = false
 let handoffTrackerPolling = false
 let handoffTrackerTimer: ReturnType<typeof setTimeout> | null = null
@@ -145,9 +148,30 @@ async function hydrateHandoffTracker(): Promise<void> {
       suppression: item.suppression,
     })
   }
+  pruneTrackedHandoffs()
+}
+
+function pruneTrackedHandoffs(now = Date.now()): void {
+  for (const [id, item] of trackedHandoffs) {
+    if (handoffTerminalStatus(item.status) && item.checkedAt > 0
+      && now - item.checkedAt > TRACKED_HANDOFF_RETENTION_MS) {
+      trackedHandoffs.delete(id)
+    }
+  }
+  if (trackedHandoffs.size <= MAX_TRACKED_HANDOFFS) return
+  const candidates = [...trackedHandoffs.entries()].sort((left, right) => {
+    const leftTerminal = handoffTerminalStatus(left[1].status) ? 0 : 1
+    const rightTerminal = handoffTerminalStatus(right[1].status) ? 0 : 1
+    return leftTerminal - rightTerminal
+      || (left[1].checkedAt || 0) - (right[1].checkedAt || 0)
+  })
+  for (const [id] of candidates.slice(0, trackedHandoffs.size - MAX_TRACKED_HANDOFFS)) {
+    trackedHandoffs.delete(id)
+  }
 }
 
 async function persistHandoffTracker(): Promise<void> {
+  pruneTrackedHandoffs()
   const values = [...trackedHandoffs.values()].slice(-24)
   await browser.storage.session.set({ [HANDOFF_TRACKER_STORAGE_KEY]: values }).catch(() => undefined)
 }
@@ -171,6 +195,7 @@ async function trackHandoff(handoffId: string, resourceId = ''): Promise<Tracked
   }
   const tracked: TrackedHandoff = { id, resourceId, status: 'pending', checkedAt: 0, failures: 0 }
   trackedHandoffs.set(id, tracked)
+  pruneTrackedHandoffs()
   await persistHandoffTracker()
   scheduleHandoffPoll()
   return tracked
@@ -200,6 +225,7 @@ async function pollTrackedHandoffs(): Promise<void> {
     if (next.failures >= 3) next.status = 'connection_lost'
   } finally {
     handoffTrackerPolling = false
+    pruneTrackedHandoffs()
     await persistHandoffTracker()
     if ([...trackedHandoffs.values()].some(item => !handoffTerminalStatus(item.status))) scheduleHandoffPoll(900)
   }
@@ -654,7 +680,9 @@ async function waitForClickIntent(url: string, finalUrl = '', referrer = '', cha
 
 function consumeBrowserFallback(url: string): boolean {
   const now = Date.now()
-  browserFallbacks = browserFallbacks.filter(item => now - item.at <= 7000)
+  browserFallbacks = browserFallbacks
+    .filter(item => now - item.at <= 7000)
+    .slice(0, MAX_BROWSER_FALLBACKS)
   const index = browserFallbacks.findIndex(item => item.url === url)
   if (index < 0) return false
   browserFallbacks.splice(index, 1)
@@ -678,7 +706,11 @@ async function installContextMenus(attempt = 0): Promise<void> {
 
 async function startBrowserFallback(url: string, filename = ''): Promise<number> {
   revealBrowserDownload()
-  browserFallbacks.unshift({ url, at: Date.now() })
+  const now = Date.now()
+  browserFallbacks = browserFallbacks
+    .filter(item => now - item.at <= 7000)
+    .slice(0, MAX_BROWSER_FALLBACKS - 1)
+  browserFallbacks.unshift({ url, at: now })
   try {
     return await browser.downloads.download({ url, ...(filename ? { filename } : {}) })
   } catch (error) {
@@ -754,6 +786,19 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
         seenAt: Date.now(),
       } as MediaResource
       if (String(chain.method || '').toUpperCase() === 'POST') return null
+      // Response headers are strong evidence that a navigation is a file, but
+      // they are not evidence that the user asked for a download: autoplay,
+      // hidden iframe preloads and direct MP4 navigations produce the same
+      // headers. Bind the early offer to the same trusted click intent used by
+      // the DownloadItem path so the browser is never pre-empted on a normal
+      // page visit.
+      const intent = await waitForClickIntent(
+        resource.url,
+        resource.url,
+        resource.pageUrl || chain.pageUrl || '',
+        chain,
+      )
+      if (!intent) return null
       if (!shouldTakeover({
         url: resource.url,
         sourcePageUrl: resource.pageUrl,
@@ -761,8 +806,10 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
         mimeType: resource.mimeType,
         filename: resource.filename,
         ...config,
+        ...intent,
+        explicitClick: true,
         strongEvidence: true,
-      }) || isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind)) return null
+      }) || (!intent.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) return null
       const response = await offer(resource, chain)
       // Keep a response with a handoff id even when its presentation was
       // rejected; onCreated must not issue a duplicate desktop task in that

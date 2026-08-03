@@ -22,6 +22,8 @@ import UpdateDialog from './components/UpdateDialog'
 import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffCancelDecision, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
 import ConfirmDialog from './components/ConfirmDialog'
 import DevicePickerDialog from './components/DevicePickerDialog'
+
+const UI_EVENT_ID_CAP = 4096
 import { Button, Dialog, DialogFooter, DialogHeader, DialogOverlay } from './components/ui'
 import { isTauriDesktop, startTauriDesktopSession } from './tauri'
 import { selectTheme, useUiStore } from './store/uiStore'
@@ -157,7 +159,14 @@ export default function App() {
   useEffect(() => {
     load()
     const events = connectSSE(event => {
-      if (event.type === 'task_deleted' && event.task_id) deletedTaskIds.current.add(event.task_id)
+      if (event.type === 'task_deleted' && event.task_id) {
+        deletedTaskIds.current.add(event.task_id)
+        while (deletedTaskIds.current.size > UI_EVENT_ID_CAP) {
+          const oldest = deletedTaskIds.current.values().next().value
+          if (typeof oldest !== 'string') break
+          deletedTaskIds.current.delete(oldest)
+        }
+      }
       if (event.type === 'power_action_pending' && event.power_action_id) {
         setPowerAction(event)
         void notifySystem('下载完成后的电源动作', `${event.delay_seconds || 30} 秒后将执行，可在下载器中取消。`)
@@ -169,6 +178,10 @@ export default function App() {
         const previous = lastStatuses.current[event.task_id]
         if (previous !== event.status) {
           lastStatuses.current[event.task_id] = event.status
+          if (Object.keys(lastStatuses.current).length > UI_EVENT_ID_CAP) {
+            const oldest = Object.keys(lastStatuses.current)[0]
+            if (oldest) delete lastStatuses.current[oldest]
+          }
           if (event.status === 'done') void notifySystem('下载完成', event.title || event.task_id)
           if (event.status === 'failed') void notifySystem('下载失败', event.error_message || event.task_id)
         }

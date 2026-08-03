@@ -76,4 +76,17 @@ def test_hls_access_query_inheritance_is_same_origin_and_auth_only():
     ) == "https://other.test/live/video.m3u8"
     assert utils.inherit_hls_access_query(
         base, "https://cdn.test/live/video.m3u8?sig=child"
-    ) == "https://cdn.test/live/video.m3u8?sig=child"
+    ) == "https://cdn.test/live/video.m3u8?sig=child&token=a%2Fb%2Bc"
+
+
+def test_hls_access_query_merges_provider_specific_fields_without_overwriting_child_values():
+    base = (
+        "https://media.test/live/master.m3u8?"
+        "pkey=master-key&psch=v2&playlistType=lowLatency&token=master-token"
+    )
+    assert utils.inherit_hls_access_query(
+        base, "https://media.test/live/video.m3u8?playlistType=child"
+    ) == (
+        "https://media.test/live/video.m3u8?playlistType=child&"
+        "pkey=master-key&psch=v2&token=master-token"
+    )

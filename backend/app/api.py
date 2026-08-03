@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, HTTPException, Header, Request, UploadFile, File, Form
@@ -93,6 +94,7 @@ _browser_media_push_lock = threading.Lock()
 MAX_BROWSER_MEDIA_PUSHES = 64
 _update_launch_tasks: set[str] = set()
 MAX_BROWSER_JSON_BODY_BYTES = 256 * 1024
+MAX_TORRENT_MULTIPART_BODY_BYTES = 17 * 1024 * 1024
 
 def _check_token(x_token: str = Header(default="")):
     if not (
@@ -199,6 +201,39 @@ async def health(x_token: str = Header(default="")):
 async def create_desktop_credential(x_token: str = Header(default="")):
     _check_control_token(x_token)
     return {"credential": issue_desktop_access_token()}
+
+
+def _is_local_ui_origin(value: str) -> bool:
+    """Allow credential bootstrap only to the UI served by this Core.
+
+    The standalone web UI has no Tauri command channel from which it could
+    obtain the installation credential.  Requiring an exact loopback Origin
+    keeps the bootstrap useful for ``/ui`` and the local Vite dev server while
+    preventing an arbitrary website from reading a newly issued API token.
+    """
+    try:
+        parsed = urlsplit(str(value or "").strip())
+        if parsed.scheme not in {"http", "https"}:
+            return False
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if host not in {"127.0.0.1", "localhost"}:
+            return False
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        return port in {int(settings.port), 1420}
+    except (TypeError, ValueError):
+        return False
+
+
+@router.post("/ui/credential")
+async def create_ui_credential(request: Request):
+    """Bootstrap the standalone local UI without exposing the master token."""
+    origin = request.headers.get("origin", "")
+    if not _is_local_ui_origin(origin):
+        raise HTTPException(status_code=403, detail="仅允许从本机下载器界面获取凭据")
+    return {
+        "credential": issue_desktop_access_token(),
+        "port": int(settings.port),
+    }
 
 
 @router.post("/browser/credential")
@@ -1144,12 +1179,22 @@ async def create_batch(body: TaskBatchCreate, x_token: str = Header(default=""))
 
 @router.post("/tasks/torrent-file", response_model=TaskResponse)
 async def create_torrent_file_task(
+    request: Request,
     file: UploadFile = File(...),
     title: str = Form(default=""),
     x_token: str = Header(default=""),
 ):
     _check_token(x_token)
-    name = file.filename or "download.torrent"
+    content_length = request.headers.get("content-length", "").strip()
+    if content_length:
+        try:
+            if int(content_length) > MAX_TORRENT_MULTIPART_BODY_BYTES:
+                raise HTTPException(status_code=413, detail="种子上传请求过大")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Content-Length 无效") from exc
+    if len(title) > 512:
+        raise HTTPException(status_code=422, detail="种子任务标题过长")
+    name = (file.filename or "download.torrent").strip()[:255]
     if not name.lower().endswith(".torrent"):
         raise HTTPException(status_code=400, detail="只接受 .torrent 文件")
     content = await file.read(16 * 1024 * 1024 + 1)
@@ -1197,7 +1242,12 @@ async def create_torrent_path_task(body: TorrentPathImport, x_token: str = Heade
     if source.suffix.lower() != ".torrent" or not source.is_file():
         raise HTTPException(status_code=400, detail="请选择有效的 .torrent 文件")
     try:
-        content = source.read_bytes()
+        if source.stat().st_size > 16 * 1024 * 1024:
+            raise ValueError("种子文件超过 16 MiB 限制")
+        with source.open("rb") as handle:
+            content = handle.read(16 * 1024 * 1024 + 1)
+        if len(content) > 16 * 1024 * 1024:
+            raise ValueError("种子文件超过 16 MiB 限制")
         from .downloader.torrent import TorrentDownloader
         metadata = TorrentDownloader.inspect_torrent_bytes(content)
     except (OSError, ValueError) as exc:

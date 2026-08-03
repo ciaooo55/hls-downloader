@@ -40,7 +40,7 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     workflow = _workflow("release.yml")
 
     assert "workflow_dispatch:" in workflow
-    assert 'default: "3.0.15"' in workflow
+    assert 'default: "3.0.16"' in workflow
     assert "include_extensions:" in workflow
     assert "Upload browser extension ZIPs for this release" in workflow
     assert "tags:" in workflow and "v*" in workflow
@@ -76,6 +76,7 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "scripts/smoke_extension_browsers.py" in workflow
     assert "scripts/smoke_real_download.py --archive $archive" in workflow
     assert "scripts/smoke-portable-upgrade.ps1" in workflow
+    assert "scripts/smoke-installer-upgrade.ps1" in workflow
     assert "SHA256SUMS.txt" not in workflow
     assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
     assert "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131" in workflow
@@ -118,13 +119,13 @@ def test_readme_documents_windows_release_assets():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "ciaooo55/hls-downloader/actions/workflows/ci.yml" in readme
-    assert "HLSDownloader-v3.0.15-Windows-x64-Setup.exe" in readme
-    assert "HLSDownloader-v3.0.15-Windows-x64-Portable.zip" in readme
+    assert "HLSDownloader-v3.0.16-Windows-x64-Setup.exe" in readme
+    assert "HLSDownloader-v3.0.16-Windows-x64-Portable.zip" in readme
     assert "m3u8-sniffer.user.js" not in readme
-    assert "HLSDownloader-v3.0.15-Firefox-Web-UI-Unsigned.zip" in readme
-    assert "HLSDownloader-v3.0.15-Firefox-Web-UI-Source.zip" in readme
-    assert "HLSDownloader-v3.0.15-Firefox-No-Web-UI-Unsigned.zip" in readme
-    assert "HLSDownloader-v3.0.15-Firefox-No-Web-UI-Source.zip" in readme
+    assert "HLSDownloader-v3.0.16-Firefox-Web-UI-Unsigned.zip" in readme
+    assert "HLSDownloader-v3.0.16-Firefox-Web-UI-Source.zip" in readme
+    assert "HLSDownloader-v3.0.16-Firefox-No-Web-UI-Unsigned.zip" in readme
+    assert "HLSDownloader-v3.0.16-Firefox-No-Web-UI-Source.zip" in readme
     assert "SHA256SUMS.txt" not in readme
     assert "Windows 10/11" in readme
     assert "git tag v" in readme

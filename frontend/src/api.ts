@@ -1,7 +1,12 @@
 import type { PlaybackSeek, PlaybackSession, PlaybackStatus } from './types'
-import { coreOrigin, internalCredential, isTauriDesktop, prepareTauriRuntime } from './tauri'
+import { coreOrigin, internalCredential, prepareTauriRuntime } from './tauri'
 
-const BASE = `${coreOrigin()}/api`
+// The Tauri core port is loaded asynchronously from the runtime config.  Do
+// not capture coreOrigin() during module evaluation: that happens before
+// prepareTauriRuntime() and silently pins a custom-port installation to 8765.
+function apiBase(): string {
+  return `${coreOrigin()}/api`
+}
 
 export class ApiError extends Error {
   status: number
@@ -33,16 +38,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const requestHeaders = init.body instanceof FormData
     ? { 'X-Token': getToken(), ...(init.headers || {}) }
     : { ...headers(), ...(init.headers || {}) }
-  let response = await fetch(`${BASE}${path}`, {
+  let response = await fetch(`${apiBase()}${path}`, {
     ...init,
     headers: requestHeaders,
   })
-  if (response.status === 401 && isTauriDesktop()) {
-    await prepareTauriRuntime()
+  if (response.status === 401) {
+    await prepareTauriRuntime(true)
     const refreshedHeaders = init.body instanceof FormData
       ? { 'X-Token': getToken(), ...(init.headers || {}) }
       : { ...headers(), ...(init.headers || {}) }
-    response = await fetch(`${BASE}${path}`, { ...init, headers: refreshedHeaders })
+    response = await fetch(`${apiBase()}${path}`, { ...init, headers: refreshedHeaders })
   }
   const body = await response.json().catch(() => ({} as any))
   if (!response.ok) {
@@ -91,7 +96,7 @@ export const setTaskSpeedLimit = (id: string, limitKib: number) =>
 export const deleteTask = (id: string, deleteFiles = false) =>
   request<{ ok: boolean }>(`/tasks/${id}${deleteFiles ? '?delete_files=true' : ''}`, { method: 'DELETE' })
 export const taskFileUrl = (id: string, fileAccessToken: string) =>
-  `${BASE}/tasks/${encodeURIComponent(id)}/file?token=${encodeURIComponent(fileAccessToken)}`
+  `${apiBase()}/tasks/${encodeURIComponent(id)}/file?token=${encodeURIComponent(fileAccessToken)}`
 export const clearCompletedTasks = () =>
   request<{ ok: boolean; count: number }>('/tasks/completed', { method: 'DELETE' })
 export const fetchLog = (id: string) => request<{ log: string }>(`/tasks/${id}/log`)
@@ -159,9 +164,9 @@ export const requestPlaybackSeek = (id: string, session: string, time: number) =
 export const closePlaybackSession = (id: string, session: string) =>
   request<{ ok: boolean }>(`/tasks/${id}/playback?session=${encodeURIComponent(session)}`, { method: 'DELETE', keepalive: true })
 export const playbackPlaylistUrl = (id: string, session: string, playbackToken: string, full = true) =>
-  `${BASE}/tasks/${encodeURIComponent(id)}/playback/index.m3u8?session=${encodeURIComponent(session)}&token=${encodeURIComponent(playbackToken)}${full ? '&full=1' : ''}`
+  `${apiBase()}/tasks/${encodeURIComponent(id)}/playback/index.m3u8?session=${encodeURIComponent(session)}&token=${encodeURIComponent(playbackToken)}${full ? '&full=1' : ''}`
 export const playbackMediaUrl = (id: string, session: string, playbackToken: string) =>
-  `${BASE}/tasks/${encodeURIComponent(id)}/playback/media?session=${encodeURIComponent(session)}&token=${encodeURIComponent(playbackToken)}`
+  `${apiBase()}/tasks/${encodeURIComponent(id)}/playback/media?session=${encodeURIComponent(session)}&token=${encodeURIComponent(playbackToken)}`
 
 export function connectSSE(
   onEvent: (event: any) => void,
@@ -175,13 +180,13 @@ export function connectSSE(
     if (closed) return
     controller = new AbortController()
     try {
-      const response = await fetch(`${BASE}/events`, {
+      const response = await fetch(`${apiBase()}/events`, {
         headers: { 'X-Token': getToken(), Accept: 'text/event-stream' },
         cache: 'no-store',
         signal: controller.signal,
       })
-      if (response.status === 401 && isTauriDesktop()) {
-        await prepareTauriRuntime()
+      if (response.status === 401) {
+        await prepareTauriRuntime(true)
         if (!closed) reconnectTimer = setTimeout(() => { void connect() }, 0)
         return
       }

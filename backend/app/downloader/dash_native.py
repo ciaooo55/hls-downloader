@@ -1386,11 +1386,16 @@ class NativeDashEngine:
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
-                        # The live window slides on; skip a dead segment
-                        # rather than aborting the whole recording.
+                        # Do not advance the committed cursor on a failed
+                        # request. Signed DASH URLs can expire between the
+                        # manifest poll and the segment GET; the next poll may
+                        # expose the same timeline identity with a refreshed
+                        # URL. Advancing here permanently loses that segment
+                        # and can leave a recording at 0 seconds until stall.
+                        # Once the live window slides past it, the identity is
+                        # naturally no longer present and recording proceeds.
                         task.progress.failed_segments += 1
-                        self._log(f"[recording] {kind} 分片下载失败已跳过: {exc}")
-                        track_state["last_identity"] = identity
+                        self._log(f"[recording] {kind} 分片下载失败，将在后续清单重试: {exc}")
                         continue
                     if not destination.exists():
                         finish_reason = "已停止录制"

@@ -19,6 +19,12 @@ _VOLATILE_REQUEST_QUERY = re.compile(
     r"_hls_(?:msn|part|skip))$",
     re.IGNORECASE,
 )
+_HLS_ACCESS_QUERY = re.compile(
+    r"^(?:token|auth|authorization|signature|sig|expires?|expiry|policy|"
+    r"key-pair-id|hdnea|hmac|jwt|session|sessionid|access[_-]?key|x-amz-.+|"
+    r"pkey|psch|playlisttype|validfrom|validto|ipa|hdl|hash|s|e|_t)$",
+    re.IGNORECASE,
+)
 
 
 def read_jsonl_prefix(path: str | Path) -> tuple[list[tuple[dict, int]], int]:
@@ -139,18 +145,28 @@ def canonical_hls_url(value: str) -> str:
 
 
 def inherit_hls_access_query(base_url: str, resolved_url: str) -> str:
-    """Carry known auth parameters to a same-origin relative HLS resource."""
+    """Carry known HLS access parameters to a same-origin child resource.
+
+    HLS origins commonly put a bearer token on the master while adding a
+    rendition/control query of their own. Preserve the child's raw query and
+    append only absent access names so required fields such as ``pkey`` and
+    ``psch`` are not lost during rendition resolution.
+    """
     try:
         base = urlsplit(str(base_url or ""))
         child = urlsplit(str(resolved_url or ""))
         if (
             not base.query
-            or child.query
             or base.scheme.lower() != child.scheme.lower()
             or base.netloc.lower() != child.netloc.lower()
         ):
             return str(resolved_url or "")
         raw_pairs = [pair for pair in base.query.split("&") if pair]
+        child_pairs = [pair for pair in child.query.split("&") if pair]
+        child_names = {
+            unquote_plus(pair.partition("=")[0]).lower()
+            for pair in child_pairs
+        }
         names = {
             unquote_plus(pair.partition("=")[0]).lower()
             for pair in raw_pairs
@@ -162,15 +178,21 @@ def inherit_hls_access_query(base_url: str, resolved_url: str) -> str:
             lowered = name.lower()
             if lowered in {"_hls_msn", "_hls_part", "_hls_skip"}:
                 continue
-            if _VOLATILE_REQUEST_QUERY.fullmatch(name) or (
+            if lowered in child_names:
+                continue
+            if _HLS_ACCESS_QUERY.fullmatch(name) or (
                 short_signature and lowered in {"s", "e", "_t"}
             ):
                 inherited.append(pair)
         if not inherited:
             return str(resolved_url or "")
-        return urlunsplit(
-            (child.scheme, child.netloc, child.path, "&".join(inherited), child.fragment)
-        )
+        return urlunsplit((
+            child.scheme,
+            child.netloc,
+            child.path,
+            "&".join([*child_pairs, *inherited]),
+            child.fragment,
+        ))
     except (TypeError, ValueError):
         return str(resolved_url or "")
 

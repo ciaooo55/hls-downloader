@@ -1,4 +1,4 @@
-const ACCESS_QUERY = /^(?:token|auth|authorization|signature|sig|expires?|expiry|policy|key-pair-id|hdnea|hmac|jwt|session|sessionid|access[_-]?key|x-amz-.+)$/i
+const ACCESS_QUERY = /^(?:token|auth|authorization|signature|sig|expires?|expiry|policy|key-pair-id|hdnea|hmac|jwt|session|sessionid|access[_-]?key|x-amz-.+|pkey|psch|playlisttype|validfrom|validto|ipa|hdl|hash|s|e|_t)$/i
 
 function decodedName(pair: string): string {
   const raw = pair.split('=', 1)[0]
@@ -28,19 +28,22 @@ export function inheritManifestAccessQuery(baseUrl: string, resolvedUrl: string)
   try {
     const base = new URL(baseUrl)
     const child = new URL(resolvedUrl)
-    if (!base.search || child.search || base.origin !== child.origin) return resolvedUrl
+    if (!base.search || base.origin !== child.origin) return resolvedUrl
     const rawPairs = splitRaw(baseUrl).query.split('&').filter(Boolean)
+    const childParts = splitRaw(resolvedUrl)
+    const childPairs = childParts.query.split('&').filter(Boolean)
+    const childNames = new Set(childPairs.map(pair => decodedName(pair).toLowerCase()))
     const names = new Set(rawPairs.map(pair => decodedName(pair).toLowerCase()))
     const terseSignature = names.has('s') && names.has('e')
     const inherited = rawPairs.filter(pair => {
       const name = decodedName(pair)
       const lowered = name.toLowerCase()
       if (['_hls_msn', '_hls_part', '_hls_skip'].includes(lowered)) return false
+      if (childNames.has(lowered)) return false
       return ACCESS_QUERY.test(name) || (terseSignature && ['s', 'e', '_t'].includes(lowered))
     })
     if (!inherited.length) return resolvedUrl
-    const parts = splitRaw(resolvedUrl)
-    return `${parts.base}?${inherited.join('&')}${parts.fragment}`
+    return `${childParts.base}?${[...childPairs, ...inherited].join('&')}${childParts.fragment}`
   } catch {
     return resolvedUrl
   }

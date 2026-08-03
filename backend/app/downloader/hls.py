@@ -441,14 +441,18 @@ class HLSDownloader:
 
     async def _finish_external_audio_recorder(
         self, audio_task: Task, runner: asyncio.Task
-    ) -> Path:
+    ) -> Path | None:
         if audio_task.pause_event is not None:
             audio_task.pause_event.set()
         await runner
         output = Path(audio_task.output_path) if audio_task.output_path else None
         if audio_task.status is not TaskStatus.DONE or output is None or not output.is_file():
             detail = audio_task.error_message or audio_task.last_log or "独立音轨没有生成输出"
-            raise RuntimeError(f"独立音轨录制失败: {detail}")
+            # A separate audio rendition is optional from the user's point of
+            # view. Keep the already merged video usable when that rendition
+            # expires, is blocked, or disappears at a live poll boundary.
+            self._log(f"[external_audio] 独立音轨不可用，保留无外挂音频的视频成品: {detail}")
+            return None
         return output
 
     def request_seek(self, segment_index: int) -> None:
@@ -945,16 +949,17 @@ class HLSDownloader:
                     external_audio_task, external_audio_runner
                 )
                 external_audio_runner = None
-                self._set_stage("remuxing", "正在合并直播视频与独立音轨")
-                await mux_media_tracks(
-                    video_path=output,
-                    audio_path=audio_output,
-                    output_path=output,
-                    ffmpeg_path=settings.ffmpeg_path,
-                    task=task,
-                    total_duration=total_duration,
-                    on_progress=self.on_progress,
-                )
+                if audio_output is not None:
+                    self._set_stage("remuxing", "正在合并直播视频与独立音轨")
+                    await mux_media_tracks(
+                        video_path=output,
+                        audio_path=audio_output,
+                        output_path=output,
+                        ffmpeg_path=settings.ffmpeg_path,
+                        task=task,
+                        total_duration=total_duration,
+                        on_progress=self.on_progress,
+                    )
 
             task.output_path = str(output)
             task.engine_state["output_is_file"] = True
@@ -1292,7 +1297,14 @@ class HLSDownloader:
         url = str(track["uri"])
 
         async def load_playlist():
-            response = await client.get(url, headers=self._headers(url, headers))
+            # Live manifests are sliding windows. Explicitly bypass caches on
+            # every poll; otherwise a proxy/CDN can repeatedly return the same
+            # old response and the recorder eventually reports "no new
+            # segments" even though the stream is still publishing.
+            request_headers = dict(headers)
+            request_headers["Cache-Control"] = "no-cache, no-store, max-age=0"
+            request_headers["Pragma"] = "no-cache"
+            response = await client.get(url, headers=self._headers(url, request_headers))
             response.raise_for_status()
             return response
 
@@ -1876,7 +1888,14 @@ class HLSDownloader:
         headers: dict[str, str],
     ) -> dict:
         async def load_playlist():
-            response = await client.get(url, headers=self._headers(url, headers))
+            # Live manifests are sliding windows. Explicitly bypass caches on
+            # every poll; otherwise a proxy/CDN can repeatedly return the same
+            # old response and the recorder eventually reports "no new
+            # segments" even though the stream is still publishing.
+            request_headers = dict(headers)
+            request_headers["Cache-Control"] = "no-cache, no-store, max-age=0"
+            request_headers["Pragma"] = "no-cache"
+            response = await client.get(url, headers=self._headers(url, request_headers))
             response.raise_for_status()
             return response
 

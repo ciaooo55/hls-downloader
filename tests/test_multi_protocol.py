@@ -128,6 +128,26 @@ def test_http_probe_falls_back_to_plain_streamed_get_when_range_is_rejected():
     assert metadata["total"] == 1234
 
 
+def test_http_probe_does_not_use_short_content_length_when_range_total_is_unknown():
+    task = Task(id="probe-unknown-range", url="https://files.test/video.mp4", task_type=TaskType.HTTP)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            206,
+            content=b"x" * 256,
+            headers={"Content-Range": "bytes 0-255/*", "Content-Length": "256", "Content-Type": "video/mp4"},
+            request=request,
+        )
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await HTTPDownloader(task)._probe(client, {})
+
+    metadata = asyncio.run(run())
+    assert metadata["ranges"] is False
+    assert metadata["total"] == 0
+
+
 def test_http_probe_follows_https_to_http_redirect_and_uses_server_filename():
     task = Task(id="probe-redirect", url="https://mirror.test/download?id=1", task_type=TaskType.HTTP)
 

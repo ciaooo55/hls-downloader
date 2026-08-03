@@ -90,6 +90,31 @@ def test_torrent_upload_rejects_invalid_seed_before_creating_a_task():
     assert response.json()["detail"] == "种子文件无效、已损坏，或下载到的不是 BT 种子"
 
 
+def test_torrent_upload_bounds_multipart_title_and_request(monkeypatch):
+    from backend.app import api as api_module
+
+    monkeypatch.setattr(api_module, "_check_token", lambda _token: None)
+    client = TestClient(app)
+    oversized_title = client.post(
+        "/api/tasks/torrent-file",
+        files={"file": ("sample.torrent", b"x", "application/x-bittorrent")},
+        data={"title": "x" * 513},
+        headers=AUTH,
+    )
+    oversized_request = client.build_request(
+        "POST",
+        "/api/tasks/torrent-file",
+        files={"file": ("sample.torrent", b"x", "application/x-bittorrent")},
+        data={"title": "ok"},
+        headers=AUTH,
+    )
+    oversized_request.headers["content-length"] = str(api_module.MAX_TORRENT_MULTIPART_BODY_BYTES + 1)
+    oversized_response = client.send(oversized_request)
+
+    assert oversized_title.status_code == 422
+    assert oversized_response.status_code == 413
+
+
 def test_torrent_upload_inspects_files_and_waits_for_explicit_start(monkeypatch, tmp_path):
     """Uploading a seed must never join the swarm before the file picker confirms."""
     from backend.app import api as api_module
@@ -856,6 +881,30 @@ def test_browser_handoff_rejects_oversized_body_and_fields(monkeypatch):
     assert oversized_body.status_code == 413
     assert oversized_title.status_code == 422
     assert too_many_contexts.status_code == 422
+
+
+def test_standalone_ui_credential_bootstrap_requires_exact_loopback_origin(monkeypatch):
+    from backend.app import api as api_module
+
+    monkeypatch.setattr(api_module.settings, "port", 8765)
+    client = TestClient(app)
+
+    allowed = client.post(
+        "/api/ui/credential",
+        json={},
+        headers={"Origin": "http://127.0.0.1:8765"},
+    )
+    rejected = client.post(
+        "/api/ui/credential",
+        json={},
+        headers={"Origin": "https://evil.example"},
+    )
+    missing = client.post("/api/ui/credential", json={})
+
+    assert allowed.status_code == 200
+    assert allowed.json()["credential"].startswith("desktop.")
+    assert rejected.status_code == 403
+    assert missing.status_code == 403
 
 
 def test_browser_handoff_sanitizes_contexts_before_memory_storage(monkeypatch):

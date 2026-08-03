@@ -6,7 +6,7 @@ on:
       version:
         description: Version used in the installer, for example 3.0.10
         required: false
-        default: "3.0.15"
+        default: "3.0.16"
       include_extensions:
         description: Upload browser extension ZIPs for this release
         required: false
@@ -191,6 +191,7 @@ jobs:
           }
 
       - name: Smoke-test packaged downloads and portable upgrade
+        timeout-minutes: 15
         shell: pwsh
         run: |
           $version = "${{ inputs.version }}"
@@ -202,6 +203,10 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass `
             -File scripts/smoke-portable-upgrade.ps1 `
             -ArchivePath $archive
+          $installer = Join-Path .\release "HLSDownloader-v$version-Windows-x64-Setup.exe"
+          powershell -NoProfile -ExecutionPolicy Bypass `
+            -File scripts/smoke-installer-upgrade.ps1 `
+            -InstallerPath $installer
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

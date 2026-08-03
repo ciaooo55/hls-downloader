@@ -33,6 +33,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="HLS Downloader", lifespan=lifespan)
 MAX_JSON_BODY_BYTES = 4 * 1024 * 1024
+MAX_TORRENT_MULTIPART_BODY_BYTES = 17 * 1024 * 1024
 
 
 @app.middleware("http")
@@ -49,6 +50,19 @@ async def limit_json_request_body(request: Request, call_next):
         body = await request.body()
         if len(body) > MAX_JSON_BODY_BYTES:
             return JSONResponse(status_code=413, content={"detail": "JSON 请求体过大"})
+    # UploadFile parsing happens inside FastAPI after this middleware. A
+    # chunked multipart request has no trustworthy Content-Length, so checking
+    # only in the endpoint would allow the parser to consume an unbounded body
+    # first. Buffer only this bounded endpoint's request before handing it to
+    # FastAPI; this is at most 17 MiB and keeps the error a clear 413 even when
+    # the client uses chunked transfer encoding.
+    if request.url.path.rstrip("/") == "/api/tasks/torrent-file" and content_type == "multipart/form-data":
+        received = bytearray()
+        async for chunk in request.stream():
+            received.extend(chunk)
+            if len(received) > MAX_TORRENT_MULTIPART_BODY_BYTES:
+                return JSONResponse(status_code=413, content={"detail": "种子上传请求过大"})
+        request._body = bytes(received)
     return await call_next(request)
 CHROMIUM_EXTENSION_ORIGIN = "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla"
 ALLOWED_CORS_ORIGINS = [
@@ -116,6 +130,11 @@ def _resolve_ui_file(full_path: str) -> Path | None:
     return candidate
 
 
+def _ui_index_file() -> Path | None:
+    """Resolve the SPA entrypoint through the same containment check as assets."""
+    return _resolve_ui_file("index.html")
+
+
 @app.get("/help")
 async def serve_help():
     return HTMLResponse(
@@ -168,8 +187,8 @@ async def serve_help():
 
 @app.get("/ui")
 async def serve_ui_root():
-    idx = UI_DIST / "index.html"
-    if idx.exists():
+    idx = _ui_index_file()
+    if idx is not None and idx.is_file():
         return RedirectResponse(url="/ui/", status_code=307)
     return HTMLResponse("<h2>Frontend not built</h2><p>Run: cd frontend && npm run build</p>", status_code=404)
 
@@ -181,8 +200,8 @@ async def serve_ui_files(full_path: str):
     if file.exists() and file.is_file():
         return FileResponse(file, headers=UI_RESPONSE_HEADERS)
     # SPA fallback: return index.html for unknown routes
-    idx = UI_DIST / "index.html"
-    if idx.exists():
+    idx = _ui_index_file()
+    if idx is not None and idx.is_file():
         return FileResponse(idx, headers=UI_RESPONSE_HEADERS)
     return HTMLResponse("Not found", status_code=404)
 

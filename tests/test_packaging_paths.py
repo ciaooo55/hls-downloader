@@ -159,7 +159,7 @@ def test_installer_and_portable_upgrade_stop_partial_old_installs():
     nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
     portable_upgrade = (root / "scripts" / "upgrade-portable.ps1").read_text(encoding="utf-8")
 
-    assert '!define APP_VERSION "3.0.15"' in nsis_script
+    assert '!define APP_VERSION "3.0.16"' in nsis_script
     close_macro = nsis_script[nsis_script.index("!macro CloseRunningApp") : nsis_script.index("!macroend", nsis_script.index("!macro CloseRunningApp"))]
     assert 'IfFileExists "$INSTDIR\\HLSDownloader.exe"' not in close_macro
     assert 'shutdown-running.ps1" -InstallDir "$INSTDIR"' in close_macro
@@ -577,7 +577,7 @@ def test_frontend_sse_does_not_put_control_token_in_url():
 
     assert "new EventSource" not in api_source
     assert "`${BASE}/events?token=" not in api_source
-    assert "fetch(`${BASE}/events`" in api_source
+    assert "fetch(`${apiBase()}/events`" in api_source
     assert "'X-Token': getToken()" in api_source
     assert "file?token=${encodeURIComponent(getToken())}" not in api_source
     assert "playback/index.m3u8?session=${encodeURIComponent(session)}&token=${encodeURIComponent(getToken())}" not in api_source

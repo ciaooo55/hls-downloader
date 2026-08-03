@@ -402,16 +402,31 @@ class TorrentDownloader:
 
     async def _download_torrent_file(self, destination: Path) -> None:
         headers = build_task_headers(self.task)
+        temporary = destination.with_name(destination.name + ".part")
+        temporary.unlink(missing_ok=True)
         async with policy_httpx_client(
             follow_redirects=True,
             timeout=30,
             deny_private_networks=bool(self.task.engine_state.get("browser_originated")),
         ) as client:
-            response = await client.get(self.task.url, headers=headers)
-            response.raise_for_status()
-            if len(response.content) > 16 * 1024 * 1024:
-                raise RuntimeError(".torrent 文件超过 16 MiB 限制")
-            destination.write_bytes(response.content)
+            try:
+                async with client.stream("GET", self.task.url, headers=headers) as response:
+                    response.raise_for_status()
+                    content_length = int(response.headers.get("content-length", 0) or 0)
+                    if content_length > 16 * 1024 * 1024:
+                        raise RuntimeError(".torrent 文件超过 16 MiB 限制")
+                    written = 0
+                    with temporary.open("wb") as output:
+                        async for chunk in response.aiter_bytes(256 * 1024):
+                            written += len(chunk)
+                            if written > 16 * 1024 * 1024:
+                                raise RuntimeError(".torrent 文件超过 16 MiB 限制")
+                            output.write(chunk)
+                if written <= 0:
+                    raise RuntimeError(".torrent 文件为空")
+                temporary.replace(destination)
+            finally:
+                temporary.unlink(missing_ok=True)
 
     def _apply_file_priorities(self) -> None:
         if (

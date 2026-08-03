@@ -7,6 +7,11 @@ from ..utils import inherit_hls_access_query
 
 
 DRM_METHODS = {"sample-aes", "sample-aes-ctr"}
+_AUXILIARY_AUDIO = re.compile(
+    r"(?:commentary|description|descriptive|visual[-_ ]?description|"
+    r"audio[-_ ]?description|sign[-_ ]?language|emergency|alternate[-_ ]?audio)",
+    re.IGNORECASE,
+)
 
 
 def _playlist_title(content: str) -> str:
@@ -74,6 +79,11 @@ def _key_info(base_url: str, key, media_sequence: int) -> dict | None:
     if key is None or not key.method or key.method.lower() == "none":
         return None
     method = key.method.lower()
+    keyformat = str(getattr(key, "keyformat", "") or "").strip().lower()
+    if keyformat and keyformat != "identity":
+        raise UnsupportedPlaylistError(
+            f"不支持 KEYFORMAT={getattr(key, 'keyformat', keyformat)} / DRM 加密"
+        )
     if method in DRM_METHODS:
         raise UnsupportedPlaylistError(f"不支持 {key.method} / DRM 加密")
     if method != "aes-128":
@@ -89,7 +99,26 @@ def _key_info(base_url: str, key, media_sequence: int) -> dict | None:
 
 def is_drm_protected(playlist: m3u8.M3U8) -> bool:
     keys = list(playlist.session_keys or []) + list(playlist.keys or [])
-    return any(key and key.method and key.method.lower() in DRM_METHODS for key in keys)
+    for key in keys:
+        if not key or not getattr(key, "method", None) or key.method.lower() == "none":
+            continue
+        keyformat = str(getattr(key, "keyformat", "") or "").strip().lower()
+        if keyformat and keyformat != "identity":
+            return True
+        if key.method.lower() in DRM_METHODS:
+            return True
+    return False
+
+
+def _unsupported_keyformat(playlist: m3u8.M3U8) -> str:
+    keys = list(playlist.session_keys or []) + list(playlist.keys or [])
+    for key in keys:
+        if not key or not getattr(key, "method", None) or key.method.lower() == "none":
+            continue
+        keyformat = str(getattr(key, "keyformat", "") or "").strip()
+        if keyformat and keyformat.lower() != "identity":
+            return keyformat
+    return ""
 
 
 def _variant_dimensions(info) -> tuple[int, int]:
@@ -178,6 +207,9 @@ def list_hls_audio_tracks(url: str, content: str) -> list[dict]:
         language = str(getattr(media, "language", "") or "")
         name = str(getattr(media, "name", "") or "")
         group_id = str(getattr(media, "group_id", "") or "")
+        characteristics = str(getattr(media, "characteristics", "") or "")
+        forced = str(getattr(media, "forced", "") or "").upper() == "YES"
+        autoselect = str(getattr(media, "autoselect", "") or "").upper() == "YES"
         tracks.append({
             # selected_audio is intentionally short (language/name/id), while
             # the signed rendition URL can be several kilobytes long.
@@ -191,6 +223,10 @@ def list_hls_audio_tracks(url: str, content: str) -> list[dict]:
             "name": name,
             "group_id": group_id,
             "default": str(getattr(media, "default", "") or "").upper() == "YES",
+            "forced": forced,
+            "autoselect": autoselect,
+            "characteristics": characteristics,
+            "auxiliary": bool(_AUXILIARY_AUDIO.search(f"{name} {characteristics}")),
         })
     tracks.sort(key=lambda item: (not item["default"], item["lang"], item["name"]))
     return tracks
@@ -210,6 +246,14 @@ def parse_m3u8(
     """
     playlist = m3u8.loads(content, uri=url)
     playlist_title = _playlist_title(content)
+
+    # Session keys belong to a master playlist too; reject unsupported
+    # KEYFORMAT/DRM before returning a seemingly usable variant selection.
+    if is_drm_protected(playlist):
+        keyformat = _unsupported_keyformat(playlist)
+        if keyformat:
+            raise UnsupportedPlaylistError(f"不支持 KEYFORMAT={keyformat} / DRM 加密")
+        raise UnsupportedPlaylistError("不支持 SAMPLE-AES / DRM 加密")
 
     if playlist.is_variant:
         best = None
@@ -244,7 +288,7 @@ def parse_m3u8(
         audio_group = str(getattr(info, "audio", "") or "")
         audio_tracks = [
             track for track in list_hls_audio_tracks(url, content)
-            if not audio_group or track.get("group_id") == audio_group
+            if audio_group and track.get("group_id") == audio_group
         ]
         chosen_audio = None
         if preferred_audio:
@@ -260,9 +304,16 @@ def parse_m3u8(
                 }
             ), None)
         if chosen_audio is None:
-            chosen_audio = next((track for track in audio_tracks if track.get("default")), None)
-        if chosen_audio is None and audio_tracks:
-            chosen_audio = audio_tracks[0]
+            # Prefer the main/default rendition.  Commentary, descriptive and
+            # emergency tracks are still exposed for an explicit user choice,
+            # but must not silently replace the program audio.
+            automatic_tracks = [track for track in audio_tracks if not track.get("auxiliary")]
+            candidates = automatic_tracks or audio_tracks
+            chosen_audio = next((track for track in candidates if track.get("default")), None)
+            if chosen_audio is None:
+                chosen_audio = next((track for track in candidates if track.get("autoselect")), None)
+            if chosen_audio is None and candidates:
+                chosen_audio = candidates[0]
         subtitle_tracks = []
         for media in playlist.media or []:
             if str(getattr(media, "type", "") or "").upper() != "SUBTITLES":
@@ -293,14 +344,11 @@ def parse_m3u8(
             "title": playlist_title,
         }
 
-    if is_drm_protected(playlist):
-        raise UnsupportedPlaylistError("不支持 SAMPLE-AES / DRM 加密")
-
     media_ranges: dict[str, int] = {}
     part_ranges: dict[str, int] = {}
     map_ranges: dict[str, int] = {}
     map_cache: dict[int, dict] = {}
-    segments = []
+    segments: list[dict] = []
 
     skipped_segments = 0
     skip = getattr(playlist, "skip", None)
@@ -403,6 +451,17 @@ def parse_m3u8(
                     )
                     gap = False
                 continue
+            if not playlist.is_endlist and not list(
+                getattr(segment, "parts", None) or []
+            ):
+                # A few LL-HLS origins briefly emit an EXTINF line without a
+                # URI while the segment is being assembled. This can happen
+                # in the middle of a sliding window (not only at its tail),
+                # so do not let one incomplete entry abort the entire poll.
+                # The next reload will expose the completed URI; if the CDN
+                # evicts it first, the resulting gap is handled by the live
+                # recorder's discontinuity logic.
+                continue
             raise ValueError(f"分片 {index} 缺少 URI")
         segment_url = _resolve_url(url, segment.uri)
         init_map = init_map_info(getattr(segment, "init_section", None))
@@ -425,7 +484,7 @@ def parse_m3u8(
     target_duration = float(playlist.target_duration or 0)
     if target_duration <= 0:
         target_duration = max(
-            (segment["duration"] for segment in segments),
+            (float(segment.get("duration") or 0) for segment in segments),
             default=6.0,
         ) or 6.0
 

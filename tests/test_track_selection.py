@@ -173,6 +173,28 @@ video.m3u8
     assert parsed["external_audio_url"] == "https://cdn.test/zh.m3u8"
 
 
+def test_automatic_hls_audio_avoids_commentary_track():
+    master = """#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Commentary",DEFAULT=YES,AUTOSELECT=YES,URI="commentary.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Program",DEFAULT=NO,AUTOSELECT=YES,URI="program.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,AUDIO="aud"
+video.m3u8
+"""
+    parsed = parse_m3u8("https://cdn.test/master.m3u8", master)
+    assert parsed["external_audio_url"] == "https://cdn.test/program.m3u8"
+
+
+def test_unreferenced_audio_group_is_not_attached_to_inband_variant():
+    master = """#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="alternate",NAME="Commentary",DEFAULT=YES,URI="commentary.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2"
+video.m3u8
+"""
+    parsed = parse_m3u8("https://cdn.test/master.m3u8", master)
+    assert parsed["external_audio"] is False
+    assert parsed["external_audio_url"] == ""
+
+
 def test_stale_rendition_selection_falls_back_to_best():
     from backend.app.downloader.parser import parse_m3u8
 

@@ -2,6 +2,7 @@ import asyncio
 import json
 import threading
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -82,6 +83,21 @@ def test_incremental_playlist_only_exposes_contiguous_local_media(tmp_path, monk
     assert '#EXT-X-MAP:URI="maps/0001.init' in completed
     assert "segments/000002.seg" in completed
     assert completed.rstrip().endswith("#EXT-X-ENDLIST")
+
+
+def test_playback_sessions_are_bounded_when_clients_never_close(monkeypatch):
+    service = PlaybackService()
+    monkeypatch.setattr(playback_module, "MAX_PLAYBACK_SESSIONS", 2)
+
+    first = service.open_session("session-one")
+    second = service.open_session("session-two")
+    third = service.open_session("session-three")
+
+    assert len(service._sessions) == 2
+    with pytest.raises(playback_module.PlaybackSessionError):
+        service.touch("session-one", first)
+    service.touch("session-two", second)
+    service.touch("session-three", third)
 
 
 def test_playback_plan_journal_appends_and_ignores_a_torn_tail(tmp_path, monkeypatch):

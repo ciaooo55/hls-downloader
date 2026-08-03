@@ -1,4 +1,5 @@
 import threading
+import urllib.request
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -18,6 +19,36 @@ from backend.app.desktop_runtime import (
     set_desktop_handoff_session,
 )
 from backend.app.main import app
+
+
+def test_native_host_loopback_requests_disable_inherited_proxy(monkeypatch):
+    from backend import native_host
+
+    calls: list[object] = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class _Opener:
+        def open(self, request, timeout):
+            calls.append((request, timeout))
+            return _Response()
+
+    def build_opener(*handlers):
+        assert len(handlers) == 1
+        assert isinstance(handlers[0], urllib.request.ProxyHandler)
+        assert handlers[0].proxies == {}
+        return _Opener()
+
+    monkeypatch.setattr(native_host.urllib.request, "build_opener", build_opener)
+    request = urllib.request.Request("http://127.0.0.1:8765/api/health")
+    with native_host._open_local(request, timeout=2.5):
+        pass
+    assert calls == [(request, 2.5)]
 
 
 def test_activation_returns_without_waiting_for_blocked_window():
@@ -144,6 +175,26 @@ def test_ui_files_reject_windows_and_posix_path_escape(monkeypatch, tmp_path: Pa
 
     assert all(response.status_code == 404 for response in responses)
     assert all("must-not-leak" not in response.text for response in responses)
+
+
+def test_ui_spa_fallback_rejects_index_symlink_escape(monkeypatch, tmp_path: Path):
+    dist = tmp_path / "frontend" / "dist"
+    dist.mkdir(parents=True)
+    secret = tmp_path / "secret.html"
+    secret.write_text("must-not-leak", encoding="utf-8")
+    try:
+        (dist / "index.html").symlink_to(secret)
+    except (OSError, NotImplementedError):
+        # Windows CI without symlink privileges still exercises the normal
+        # containment tests above; keep this regression portable.
+        return
+    monkeypatch.setattr(main_module, "UI_DIST", dist)
+
+    assert main_module._ui_index_file() is None
+    with TestClient(app) as client:
+        response = client.get("/ui/")
+    assert response.status_code == 404
+    assert "must-not-leak" not in response.text
 
 
 def test_cors_rejects_unrelated_extensions_and_random_local_origins():

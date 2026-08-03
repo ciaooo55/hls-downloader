@@ -145,6 +145,39 @@ def test_load_media_playlist_retries_a_transient_origin_failure(monkeypatch):
     ]
 
 
+def test_reload_live_playlist_bypasses_intermediate_caches(monkeypatch):
+    captured: dict[str, str] = {}
+
+    class Response:
+        url = "https://example.test/live.m3u8"
+        text = "#EXTM3U\n#EXTINF:2,\nsegment.ts\n"
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+    class Client:
+        async def get(self, _url, *, headers):
+            captured.update({str(key).lower(): str(value) for key, value in headers.items()})
+            return Response()
+
+    async def run():
+        downloader = HLSDownloader(_task())
+        monkeypatch.setattr(
+            downloader,
+            "_retry_control_request",
+            lambda operation, **_kwargs: operation(),
+        )
+        result = await downloader._reload_live_playlist(
+            Client(), "https://example.test/live.m3u8", {"Referer": "https://example.test/"}
+        )
+        assert result["type"] == "media"
+
+    asyncio.run(run())
+    assert captured["cache-control"] == "no-cache, no-store, max-age=0"
+    assert captured["pragma"] == "no-cache"
+
+
 def test_hls_control_request_retries_unrequested_transport_cancellation(monkeypatch):
     from backend.app.downloader import hls as hls_module
 
@@ -457,6 +490,24 @@ def test_hls_with_external_audio_uses_adaptive_compatibility_engine(tmp_path, mo
     assert calls == ["run"]
     assert task.stage == "parsing"
     assert "独立 HLS 音轨" in task.last_log
+
+
+def test_live_external_audio_failure_keeps_video_merge_usable(tmp_path):
+    task = _task()
+    task.engine_state["temp_dir"] = str(tmp_path)
+    messages: list[str] = []
+    downloader = HLSDownloader(task, on_log=lambda _task_id, message: messages.append(message))
+    audio = Task(id="audio", url="https://example.test/audio.m3u8")
+    audio.status = audio.status.FAILED
+    audio.error_message = "HTTP 403"
+    audio.pause_event = asyncio.Event()
+
+    async def run():
+        runner = asyncio.create_task(asyncio.sleep(0))
+        assert await downloader._finish_external_audio_recorder(audio, runner) is None
+
+    asyncio.run(run())
+    assert any("保留无外挂音频的视频成品" in message for message in messages)
 
 
 def test_download_resource_validates_byte_range_and_renames_atomically(tmp_path):

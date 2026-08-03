@@ -101,6 +101,17 @@ one.ts
         parse_m3u8("https://example.test/vod.m3u8", sample_aes)
 
 
+def test_parse_rejects_non_identity_keyformat_even_when_method_is_aes128():
+    playlist = """#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,KEYFORMAT="com.apple.streamingkeydelivery",URI="key.bin"
+#EXTINF:4,
+one.ts
+#EXT-X-ENDLIST
+"""
+    with pytest.raises(UnsupportedPlaylistError, match="KEYFORMAT"):
+        parse_m3u8("https://example.test/vod.m3u8", playlist)
+
+
 def test_parse_ll_hls_exposes_completed_parts_but_not_preload_hint():
     # At a live poll boundary, python-m3u8 exposes the current partial media
     # segment as uri=None plus EXT-X-PART entries. Some origins remain in this
@@ -127,6 +138,38 @@ complete-40.m4s
     assert [segment["media_sequence"] for segment in parsed["segments"]] == [40, 41, 41]
     assert [segment["is_partial"] for segment in parsed["segments"]] == [False, True, True]
     assert [segment["part_index"] for segment in parsed["segments"]] == [None, 0, 1]
+
+
+def test_parse_live_defers_an_incomplete_trailing_extinf_without_uri():
+    playlist = """#EXTM3U
+#EXT-X-TARGETDURATION:2
+#EXTINF:2.0,
+complete.ts
+#EXTINF:2.0,
+"""
+    parsed = parse_m3u8("https://example.test/live.m3u8", playlist)
+    assert [segment["url"] for segment in parsed["segments"]] == [
+        "https://example.test/complete.ts",
+    ]
+
+
+def test_parse_live_skips_an_incomplete_middle_extinf_without_uri():
+    # Some LL-HLS origins briefly publish an empty EXTINF entry between two
+    # already-completed entries while the sliding window is rewritten.
+    playlist = """#EXTM3U
+#EXT-X-TARGETDURATION:2
+#EXT-X-MEDIA-SEQUENCE:10
+#EXTINF:2.0,
+before.ts
+#EXTINF:2.0,
+#EXTINF:2.0,
+after.ts
+"""
+    parsed = parse_m3u8("https://example.test/live.m3u8", playlist)
+    assert [segment["url"] for segment in parsed["segments"]] == [
+        "https://example.test/before.ts",
+        "https://example.test/after.ts",
+    ]
 
 
 def test_parse_ll_hls_part_inherits_map_and_delta_skip_sequence():

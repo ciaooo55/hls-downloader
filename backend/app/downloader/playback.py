@@ -23,6 +23,10 @@ PLAN_JOURNAL_MIN_COMPACT_BYTES = 4 * 1024 * 1024
 # had disappeared, despite a locally playable prefix already being present.
 MIN_START_DURATION = 1.0
 SESSION_TTL_SECONDS = 90.0
+MAX_PLAYBACK_SESSIONS = 256
+MAX_PLAYBACK_PLAN_CACHE = 256
+MAX_PLAYBACK_PREFIX_CACHE = 512
+MAX_PLAN_WRITE_CACHE = 256
 _TASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _PLAN_WRITE_LOCK = threading.RLock()
 _PLAN_WRITE_CACHE: dict[Path, dict] = {}
@@ -264,6 +268,8 @@ def write_playback_plan(
             _PLAN_WRITE_CACHE.pop(destination, None)
         else:
             _PLAN_WRITE_CACHE[destination] = payload
+            while len(_PLAN_WRITE_CACHE) > MAX_PLAN_WRITE_CACHE:
+                _PLAN_WRITE_CACHE.pop(next(iter(_PLAN_WRITE_CACHE)))
     playback_service.invalidate(task_dir.name)
     return destination
 
@@ -330,6 +336,8 @@ class PlaybackService:
 
         with self._lock:
             self._plan_cache[path] = (stamp, total_size, plan)
+            while len(self._plan_cache) > MAX_PLAYBACK_PLAN_CACHE:
+                self._plan_cache.pop(next(iter(self._plan_cache)))
         return plan, stamp
 
     def _available_prefix(
@@ -371,6 +379,8 @@ class PlaybackService:
 
         with self._lock:
             self._prefix_cache[task_id] = (plan_stamp, count, duration)
+            while len(self._prefix_cache) > MAX_PLAYBACK_PREFIX_CACHE:
+                self._prefix_cache.pop(next(iter(self._prefix_cache)))
         return count, duration
 
     def snapshot(self, task_id: str, status: str, output_path: str = "") -> PlaybackSnapshot:
@@ -412,6 +422,8 @@ class PlaybackService:
         session_id = uuid.uuid4().hex
         now = time.monotonic()
         with self._lock:
+            self._expire_locked(now)
+            self._evict_oldest_sessions_locked()
             self._sessions[session_id] = _PlaybackSession(
                 task_id=task_id,
                 last_seen=now,
@@ -429,6 +441,8 @@ class PlaybackService:
             snapshot = self.snapshot(task_id, status, output_path)
             if not snapshot.ready:
                 raise PlaybackNotReadyError("至少需要一个完整分片才能开始播放")
+            self._expire_locked(time.monotonic())
+            self._evict_oldest_sessions_locked()
             session_id = uuid.uuid4().hex
             self._sessions[session_id] = _PlaybackSession(
                 task_id=task_id,
@@ -436,6 +450,15 @@ class PlaybackService:
                 access_token=secrets.token_urlsafe(24),
             )
             return session_id, snapshot
+
+    def _evict_oldest_sessions_locked(self) -> None:
+        """Bound session state even if a client never sends DELETE/heartbeat."""
+        overflow = len(self._sessions) - MAX_PLAYBACK_SESSIONS + 1
+        if overflow <= 0:
+            return
+        oldest = sorted(self._sessions.items(), key=lambda item: item[1].last_seen)
+        for session_id, _session in oldest[:overflow]:
+            self._sessions.pop(session_id, None)
 
     def access_token(self, task_id: str, session_id: str) -> str:
         with self._lock:

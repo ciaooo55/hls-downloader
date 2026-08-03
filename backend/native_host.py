@@ -46,6 +46,12 @@ def _settings() -> tuple[str, str]:
     return "http://127.0.0.1:8765/api", ""
 
 
+def _open_local(request: urllib.request.Request, timeout: float):
+    """Connect to the loopback Core without inheriting a system web proxy."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return opener.open(request, timeout=timeout)
+
+
 def _request(method: str, path: str, payload: dict | None = None, timeout: float = 4) -> dict:
     base, token = _settings()
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
@@ -53,7 +59,7 @@ def _request(method: str, path: str, payload: dict | None = None, timeout: float
     request.add_header("X-Token", token)
     request.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _open_local(request, timeout=timeout) as response:
             decoded = json.loads(response.read().decode("utf-8"))
             if not isinstance(decoded, dict):
                 raise RuntimeError("桌面端返回了无效的对象响应")

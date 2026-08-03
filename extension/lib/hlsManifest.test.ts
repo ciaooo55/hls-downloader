@@ -47,4 +47,14 @@ describe('HLS metadata', () => {
       'https://edge.test/live/video.m3u8?token=a%2Fb%2Bc',
     )
   })
+
+  it('merges provider access fields when a child already has its own query', () => {
+    const info = parseHlsManifest(
+      '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nvideo.m3u8?playlistType=child\n',
+      'https://edge.test/live/master.m3u8?pkey=key&psch=v2&playlistType=lowLatency&token=secret',
+    )
+    expect(info.variants[0].url).toBe(
+      'https://edge.test/live/video.m3u8?playlistType=child&pkey=key&psch=v2&token=secret',
+    )
+  })
 })

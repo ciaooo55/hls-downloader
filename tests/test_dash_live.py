@@ -189,6 +189,46 @@ def test_live_manifest_503_uses_shared_cooldown_and_recovers(tmp_path, monkeypat
     asyncio.run(run())
 
 
+def test_live_segment_failure_retries_same_timeline_identity_on_next_manifest(
+    tmp_path, monkeypatch
+):
+    """A transient signed-segment failure must not advance the live cursor."""
+    polls = {"manifest": 0, "segment": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        target = str(request.url)
+        if target.endswith("main.mpd"):
+            polls["manifest"] += 1
+            # Keep the same timeline identity visible until the second poll;
+            # then end the event so the successful retry is finalized.
+            return httpx.Response(
+                200,
+                text=_live_mpd(
+                    '<S t="0" d="2"/>',
+                    dynamic=polls["manifest"] < 3,
+                ),
+            )
+        if target.endswith("v-0.m4s"):
+            polls["segment"] += 1
+            if polls["segment"] == 1:
+                return httpx.Response(503, request=request)
+        return httpx.Response(200, content=target.rsplit("/", 1)[-1].encode())
+
+    _install(monkeypatch, handler)
+    monkeypatch.setattr(native_module, "MAX_RETRIES", 1)
+
+    async def run():
+        task = _task(tmp_path)
+        handled = await NativeDashEngine(task).run()
+        assert handled is True
+        assert task.status is TaskStatus.DONE
+        assert polls["manifest"] >= 3
+        assert polls["segment"] == 2
+        assert Path(task.output_path).read_bytes() == b"v-init.mp4v-0.m4s"
+
+    asyncio.run(run())
+
+
 def test_stop_request_finalizes_partial_recording(tmp_path, monkeypatch):
     holder: dict[str, Task] = {}
 

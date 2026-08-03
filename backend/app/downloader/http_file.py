@@ -8,9 +8,11 @@ import os
 import re
 import shutil
 import time
+from collections.abc import Callable, Coroutine
 from collections import deque
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, unquote, unquote_to_bytes, urlparse, urlsplit, urlunsplit
 
 import httpx
@@ -237,7 +239,7 @@ class HTTPDownloader(SeeklessEngine):
         self._completed_chunks: set[int] = set()
         self._claimed_chunks: set[int] = set()
         self._written_intervals: dict[int, int] = {}
-        self._playback_fetcher = None
+        self._playback_fetcher: Callable[[int, int], Coroutine[Any, Any, None]] | None = None
         self._playback_fetch_tasks: dict[tuple[int, int], asyncio.Task] = {}
         self._chunk_size = max(1, int(settings.http_chunk_size_mb)) * 1024 * 1024
         self._part_path: Path | None = None
@@ -408,6 +410,7 @@ class HTTPDownloader(SeeklessEngine):
                     client.send(request, stream=True),
                     timeout=PROBE_RESPONSE_TIMEOUT,
                 )
+                assert ranged is not None
                 # Most HTTP rejections are authoritative; only errors commonly
                 # caused by the Range form are eligible for a plain-GET retry.
                 ranged.raise_for_status()
@@ -431,6 +434,7 @@ class HTTPDownloader(SeeklessEngine):
                         client.send(request, stream=True),
                         timeout=PROBE_RESPONSE_TIMEOUT,
                     )
+                    assert fallback is not None
                     fallback.raise_for_status()
                 except Exception:
                     if fallback is not None:
@@ -452,10 +456,26 @@ class HTTPDownloader(SeeklessEngine):
                 and content_range[2] is not None
                 and not encoded
             )
-            total = int(content_range[2]) if range_supported and content_range else int(
-                response.headers.get("content-length", 0)
-                or (fallback.headers.get("content-length", 0) if fallback else 0)
-                or 0
+            # A 206 response with ``Content-Range: */*`` (or a malformed
+            # range header) only describes the short probe body. Treating its
+            # Content-Length as the object size makes a large MP4 appear to
+            # be 256 bytes and leaves the task stuck at the final verify step.
+            partial_probe_without_total = bool(
+                ranged is not None
+                and ranged.status_code == 206
+                and not range_supported
+            )
+            range_total = content_range[2] if range_supported and content_range else None
+            total = (
+                int(range_total)
+                if range_total is not None
+                else 0
+                if partial_probe_without_total
+                else int(
+                    response.headers.get("content-length", 0)
+                    or (fallback.headers.get("content-length", 0) if fallback else 0)
+                    or 0
+                )
             )
             if encoded:
                 # aiter_bytes yields the decoded entity, so the encoded wire
