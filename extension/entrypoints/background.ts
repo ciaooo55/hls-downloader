@@ -11,6 +11,7 @@ import { InspectionCache } from '../lib/inspectionCache'
 import { cookieLookupUrl } from '../lib/browserCookies'
 import { detectBrowserFamily, stableBrowserClientId } from '../lib/browserClient'
 import { BrowserDirectBackend } from '../lib/directBackend'
+import { isEarlyDirectDownloadResponse, type ObservedDownloadResource } from '../lib/directResponse'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 const CLICK_INTENT_STORAGE_KEY = 'click-intents'
@@ -19,6 +20,19 @@ let clickIntentsHydrated = false
 let browserFallbacks: Array<{ url: string, at: number }> = []
 const determinedDownloads = new Map<number, Browser.downloads.DownloadItem>()
 const determinationWaiters = new Map<number, (item: Browser.downloads.DownloadItem) => void>()
+/**
+ * Chrome MV3 delivers a browser DownloadItem after the response has already
+ * been accepted.  Keep a short-lived promise for the direct responses that
+ * were offered from onHeadersReceived so onCreated can reuse that handoff
+ * instead of waiting for a second offer round.  Firefox does not use this
+ * path because its blocking listener can cancel the response directly.
+ */
+interface EarlyBrowserTakeover {
+  requestId: string
+  startedAt: number
+  promise: Promise<{ resource: MediaResource, response: any } | null>
+}
+const earlyBrowserTakeovers = new Map<string, EarlyBrowserTakeover>()
 const requestChains = new RequestChainStore()
 let nativeBridge: NativeBridge | null = null
 let directBackend: BrowserDirectBackend | null = null
@@ -721,6 +735,60 @@ function isDownloadResponse(disposition: string, resource: { mimeType?: string, 
     || resource.mimeType?.toLowerCase().includes('application/octet-stream') === true
 }
 
+function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefined, observed: { disposition: string, resource: ObservedDownloadResource | null }): void {
+  if (!chain || !observed.resource || !isEarlyDirectDownloadResponse(details, observed)) return
+  const observedResource = observed.resource
+  const requestId = String(chain.requestId || details.requestId || '')
+  if (!requestId || earlyBrowserTakeovers.has(requestId)) return
+  const promise = (async () => {
+    try {
+      const config = await settings()
+      const resource = {
+        ...observedResource,
+        id: resourceId(observedResource.url),
+        pageUrl: await topLevelPageUrl(Number(details.tabId), observedResource.pageUrl || chain.pageUrl),
+        tabId: Number(details.tabId),
+        frameId: Number(details.frameId),
+        method: chain.method,
+        requestHeaders: chain.requestHeaders,
+        seenAt: Date.now(),
+      } as MediaResource
+      if (String(chain.method || '').toUpperCase() === 'POST') return null
+      if (!shouldTakeover({
+        url: resource.url,
+        sourcePageUrl: resource.pageUrl,
+        size: resource.size,
+        mimeType: resource.mimeType,
+        filename: resource.filename,
+        ...config,
+        strongEvidence: true,
+      }) || isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind)) return null
+      const response = await offer(resource, chain)
+      // Keep a response with a handoff id even when its presentation was
+      // rejected; onCreated must not issue a duplicate desktop task in that
+      // case.  A missing id means the early attempt never reached the app and
+      // the normal DownloadItem path may retry safely.
+      return response?.handoff?.id ? { resource, response } : null
+    } catch (error) {
+      console.debug('HLS Downloader early browser takeover unavailable', error)
+      return null
+    }
+  })()
+  earlyBrowserTakeovers.set(requestId, { requestId, startedAt: Date.now(), promise })
+  void promise.finally(() => {
+    setTimeout(() => {
+      const current = earlyBrowserTakeovers.get(requestId)
+      if (current?.promise === promise) earlyBrowserTakeovers.delete(requestId)
+    }, 30_000)
+  })
+  // Keep the map bounded on pages that repeatedly navigate through downloads.
+  if (earlyBrowserTakeovers.size > 128) {
+    const oldest = [...earlyBrowserTakeovers.values()]
+      .sort((left, right) => left.startedAt - right.startedAt)[0]
+    if (oldest) earlyBrowserTakeovers.delete(oldest.requestId)
+  }
+}
+
 export default defineBackground(() => {
   browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.status === 'loading' || changeInfo.url) {
@@ -835,7 +903,13 @@ export default defineBackground(() => {
   } else {
     browser.webRequest.onHeadersReceived.addListener(details => {
       const chain = requestChains.observeResponse(details as any)
-      observedResponse(details, chain)
+      const observed = observedResponse(details, chain)
+      // AB's Chromium path sends an early direct-download offer here and
+      // leaves only the browser-item cleanup for onCreated.  This makes the
+      // desktop confirmation window appear as soon as response headers prove
+      // that the navigation is a real download, while preserving the browser
+      // fallback if the app is unavailable.
+      rememberEarlyBrowserTakeover(details, chain, observed)
       return undefined
     }, { urls: ['<all_urls>'] }, ['responseHeaders'])
   }
@@ -876,6 +950,26 @@ export default defineBackground(() => {
       // Chrome leaves DownloadItem.referrer empty. After a click is known, re-bind
       // the chain to that tab so we never replay another page's auth headers.
       const provisionalChain = requestChains.find(actual)
+      const earlyTakeover = provisionalChain
+        ? earlyBrowserTakeovers.get(provisionalChain.requestId)
+        : undefined
+      if (earlyTakeover) {
+        const earlyResult = await earlyTakeover.promise
+        earlyBrowserTakeovers.delete(provisionalChain!.requestId)
+        if (earlyResult?.response?.handoff?.id) {
+          // The early response already created the desktop handoff.  If the
+          // desktop rejected presentation, leave the original browser item
+          // untouched; otherwise wait for the user's final decision and clean
+          // up the browser item only after acceptance.
+          if (!desktopAcceptedHandoff(earlyResult.response)) return
+          const handoff = await waitForHandoffResolution(String(earlyResult.response.handoff.id))
+          if (handoff?.status !== 'accepted') return
+          concealBrowserDownload()
+          await removeBrowserDownload(actual)
+          accepted = true
+          return
+        }
+      }
       let intent = await waitForClickIntent(
         actual.url,
         actual.finalUrl,

@@ -5,7 +5,7 @@ param(
     [switch]$SkipInstaller,
     [switch]$SkipSmoke,
     [switch]$IncludeExtensionAssets,
-    [string]$Version = "3.0.14"
+    [string]$Version = "3.0.15"
 )
 
 $ErrorActionPreference = "Stop"
