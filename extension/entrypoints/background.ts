@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
-import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyResource, compactResources, matchesDownloadClick, mergeResources, pageResourceKey, replayableRequestHeaders, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
+import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyResource, compactResources, matchesDownloadClick, mergeResources, normalizeHost, pageResourceKey, replayableRequestHeaders, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus } from '../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
@@ -72,7 +72,9 @@ async function settings() {
   return {
     enabled: data.enabled !== false,
     minimumBytes: Number(data.minimumBytes ?? 0),
-    excludedHosts: Array.isArray(data.excludedHosts) ? data.excludedHosts : [],
+    excludedHosts: Array.isArray(data.excludedHosts)
+      ? data.excludedHosts.map(value => normalizeHost(String(value || ''))).filter(Boolean)
+      : [],
     authorizedCookieHosts: Array.isArray(data.authorizedCookieHosts) ? data.authorizedCookieHosts : [],
     suppressions: normalizeHandoffSuppressions(data[HANDOFF_SUPPRESSION_STORAGE_KEY]),
     // Media URLs commonly require the logged-in browser session. This is on by
@@ -505,7 +507,7 @@ async function refreshedDownload(downloadId: number, original: Browser.downloads
       const timeout = setTimeout(() => {
         determinationWaiters.delete(downloadId)
         resolve(undefined)
-      }, 2_000)
+      }, 450)
       determinationWaiters.set(downloadId, item => {
         clearTimeout(timeout)
         determinationWaiters.delete(downloadId)
@@ -526,6 +528,23 @@ async function removeBrowserDownload(item: Browser.downloads.DownloadItem): Prom
     await browser.downloads.cancel(item.id).catch(() => undefined)
   }
   await browser.downloads.erase({ id: item.id }).catch(() => undefined)
+}
+
+async function pauseBrowserDownload(item: Browser.downloads.DownloadItem): Promise<boolean> {
+  if (item.state !== 'in_progress') return false
+  try {
+    await browser.downloads.pause(item.id)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function resumeBrowserDownload(item: Browser.downloads.DownloadItem, paused: boolean): Promise<void> {
+  if (!paused) return
+  const [current] = await browser.downloads.search({ id: item.id }).catch(() => [])
+  if (current?.state !== 'in_progress') return
+  try { await browser.downloads.resume(item.id) } catch {}
 }
 
 async function hydrateClickIntents(): Promise<void> {
@@ -626,6 +645,21 @@ function consumeBrowserFallback(url: string): boolean {
   if (index < 0) return false
   browserFallbacks.splice(index, 1)
   return true
+}
+
+async function installContextMenus(attempt = 0): Promise<void> {
+  try {
+    await browser.contextMenus.removeAll()
+    await Promise.all([
+      browser.contextMenus.create({ id: 'hls-download-link', title: '使用 HLS Downloader 下载', contexts: ['link', 'video', 'audio'] }),
+      browser.contextMenus.create({ id: 'hls-download-selection', title: '批量发送选中的链接', contexts: ['selection'] }),
+    ])
+  } catch (error) {
+    // Browser updates can briefly keep the old menu registry locked. Retry
+    // once after the registry is released instead of silently losing all items.
+    console.warn('HLS Downloader context menu install delayed', error)
+    if (attempt < 3) setTimeout(() => { void installContextMenus(attempt + 1) }, 250 * (attempt + 1))
+  }
 }
 
 async function startBrowserFallback(url: string, filename = ''): Promise<number> {
@@ -732,13 +766,11 @@ export default defineBackground(() => {
     if (alarm.name === 'handoff-tracker') void pollTrackedHandoffs()
   })
   browser.runtime.onInstalled.addListener(() => {
-    // Updates keep old menu registrations. Rebuild them atomically so a
-    // duplicate-id error cannot prevent the second item from being installed.
-    void browser.contextMenus.removeAll().catch(() => undefined).then(() => {
-      browser.contextMenus.create({ id: 'hls-download-link', title: '使用 HLS Downloader 下载', contexts: ['link', 'video', 'audio'] })
-      browser.contextMenus.create({ id: 'hls-download-selection', title: '批量发送选中的链接', contexts: ['selection'] })
-    })
+    void installContextMenus()
   })
+  // Firefox/Chromium can restore an existing service worker without emitting a
+  // fresh install event. Ensure an upgrade/restart always reconstructs menus.
+  void installContextMenus()
 
   ;(browser.webRequest.onSendHeaders.addListener as any)((details: any) => {
     requestChains.observeRequest(details)
@@ -775,6 +807,7 @@ export default defineBackground(() => {
       }
       if (!shouldTakeover({
         url: resource.url,
+        sourcePageUrl: resource.pageUrl,
         size: resource.size,
         mimeType: resource.mimeType,
         filename: resource.filename,
@@ -829,9 +862,14 @@ export default defineBackground(() => {
       return
     }
     console.debug('HLS Downloader observed browser download', item.url)
+    let paused = false
+    let accepted = false
     try {
       const config = await settings()
       if (!config.enabled) return
+      // Chrome emits onCreated after accepting the browser request. Pause it
+      // while click/resource evidence and the desktop handoff are resolved.
+      paused = await pauseBrowserDownload(item)
       const actual = await refreshedDownload(item.id, item)
       if (!canContinueTakeover(actual.state)) return
       // Prefer the request chain first so click matching can use tabId even when
@@ -871,6 +909,7 @@ export default defineBackground(() => {
       }
       if (!shouldTakeover({
         url: resource.url,
+        sourcePageUrl: resource.pageUrl,
         size: resource.size,
         mimeType,
         filename,
@@ -893,19 +932,24 @@ export default defineBackground(() => {
       // observed. Suppress it only after the desktop accepted the handoff.
       concealBrowserDownload()
       await removeBrowserDownload(actual)
+      accepted = true
     } catch (error) {
       console.warn('HLS Downloader takeover failed; browser download remains untouched', error)
     } finally {
       determinedDownloads.delete(item.id)
       determinationWaiters.delete(item.id)
+      await resumeBrowserDownload(item, paused && !accepted)
       revealBrowserDownload()
     }
   })
 
   browser.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId === 'hls-download-selection') {
+      if (tab?.id !== undefined) void browser.tabs.sendMessage(tab.id, { type: 'collect-selection' }).catch(() => undefined)
+      return
+    }
     const url = info.linkUrl || info.srcUrl
     if (url) void offer({ id: resourceId(url), url, kind: classifyResource(url) || 'file', pageUrl: tab?.url, title: tab?.title, tabId: tab?.id, seenAt: Date.now() })
-    if (info.menuItemId === 'hls-download-selection' && tab?.id) void browser.tabs.sendMessage(tab.id, { type: 'collect-selection' })
   })
 
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -968,15 +1012,15 @@ export default defineBackground(() => {
     }
     if (message?.type === 'list') {
       const tabId = Number(message.tabId ?? sender.tab?.id ?? -1)
-      const key = storageKey(tabId, message.pageUrl)
-      void browser.storage.session.get(key)
-        .then(async value => {
+      void topLevelPageUrl(tabId, String(message.pageUrl || ''))
+        .then(pageUrl => storageKey(tabId, pageUrl))
+        .then(key => browser.storage.session.get(key).then(async value => {
           const raw = Array.isArray(value[key]) ? value[key] : []
           const cleaned = compactResources(raw, 40)
           if (cleaned.length !== raw.length) await browser.storage.session.set({ [key]: cleaned })
           if (tabId >= 0) await browser.action.setBadgeText({ tabId, text: cleaned.length ? String(Math.min(99, cleaned.length)) : '' })
           sendResponse(cleaned)
-        })
+        }))
         .catch(error => sendResponse({ ok: false, error: String(error) }))
       return true
     }

@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { visibleMediaResources, type MediaResource } from '../../lib/resources'
+import { normalizeHost, visibleMediaResources, type MediaResource } from '../../lib/resources'
 import { resourceQuality } from '../../lib/hlsManifest'
 import { handoffStatusLabel, handoffTerminalStatus } from '../../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, normalizeHandoffSuppressions, type HandoffSuppression } from '../../lib/handoffSuppression'
@@ -314,39 +314,77 @@ async function main() {
 
   enableBtn.addEventListener('click', async () => {
     const requested = !enabled
-    const response = await browser.runtime.sendMessage({ type: 'set-takeover-settings', enabled: requested })
-    if (!response?.ok) {
-      setError(response?.error || '\u4fdd\u5b58\u63a5\u7ba1\u8bbe\u7f6e\u5931\u8d25')
-      return
+    enableBtn.disabled = true
+    try {
+      const response = await browser.runtime.sendMessage({ type: 'set-takeover-settings', enabled: requested })
+      if (!response?.ok) {
+        setError(response?.error || '\u4fdd\u5b58\u63a5\u7ba1\u8bbe\u7f6e\u5931\u8d25')
+        return
+      }
+      enabled = response.takeover_enabled === requested
+      refreshButtons()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '\u4fdd\u5b58\u63a5\u7ba1\u8bbe\u7f6e\u5931\u8d25')
+    } finally {
+      enableBtn.disabled = false
     }
-    enabled = response.takeover_enabled === requested
-    refreshButtons()
   })
   cookieBtn.addEventListener('click', async () => {
     if (!host) return
-    useBrowserCookies = !useBrowserCookies
-    await browser.storage.local.set({ useBrowserCookies })
-    refreshButtons()
+    const next = !useBrowserCookies
+    try {
+      await browser.storage.local.set({ useBrowserCookies: next })
+      useBrowserCookies = next
+      refreshButtons()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Cookie 设置保存失败')
+    }
   })
   excludeBtn.addEventListener('click', async () => {
     if (!host) return
-    excluded = excluded.includes(host) ? excluded.filter(value => value !== host) : [...excluded, host]
-    await browser.storage.local.set({ excludedHosts: excluded })
-    refreshButtons()
+    const next = excluded.includes(host) ? excluded.filter(value => value !== host) : [...excluded, host]
+    try {
+      await browser.storage.local.set({ excludedHosts: next })
+      excluded = next
+      refreshButtons()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '保存排除站点失败')
+    }
   })
   restorePromptsBtn.addEventListener('click', async () => {
     if (!host) return
-    suppressions = suppressions.filter(rule => rule.host !== host)
-    await browser.storage.local.set({ [HANDOFF_SUPPRESSION_STORAGE_KEY]: suppressions })
-    refreshButtons()
+    const next = suppressions.filter(rule => rule.host !== host)
+    try {
+      await browser.storage.local.set({ [HANDOFF_SUPPRESSION_STORAGE_KEY]: next })
+      suppressions = next
+      refreshButtons()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '恢复本站提示失败')
+    }
   })
 
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true })
   const pageUrl = tab?.url || ''
-  try { host = new URL(pageUrl).host } catch { host = '' }
-  resources = await browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab?.id }) || []
-  const connection = await browser.runtime.sendMessage({ type: 'ping' }) || {}
-  const online = Boolean(connection.ok)
+  host = normalizeHost(pageUrl)
+  // Load local settings before any network/native request. The popup is often
+  // opened exactly while a page starts a download; controls must be usable even
+  // if the desktop ping or resource query is temporarily slow.
+  const stored = await browser.storage.local.get([
+    'enabled', 'excludedHosts', 'useBrowserCookies', HANDOFF_SUPPRESSION_STORAGE_KEY,
+  ]).catch(() => ({} as Record<string, unknown>))
+  enabled = stored.enabled !== false
+  useBrowserCookies = stored.useBrowserCookies !== false
+  excluded = Array.isArray(stored.excludedHosts)
+    ? stored.excludedHosts.map(value => normalizeHost(String(value || ''))).filter(Boolean)
+    : []
+  suppressions = normalizeHandoffSuppressions(stored[HANDOFF_SUPPRESSION_STORAGE_KEY])
+  refreshButtons()
+  const [listed, connection] = await Promise.all([
+    browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab?.id }).catch(() => []),
+    browser.runtime.sendMessage({ type: 'ping' }).catch(() => ({})),
+  ])
+  resources = Array.isArray(listed) ? listed : []
+  const online = Boolean(connection?.ok)
   statusEl.textContent = online ? '\u684c\u9762\u7aef\u5df2\u8fde\u63a5' : connection.reconnecting ? '\u684c\u9762\u7aef\u6b63\u5728\u91cd\u8fde' : '\u684c\u9762\u7aef\u79bb\u7ebf'
   statusEl.classList.toggle('online', online)
   const currentExtensionVersion = browser.runtime.getManifest().version
@@ -360,13 +398,6 @@ async function main() {
       if (extensionReleaseUrl) void browser.tabs.create({ url: extensionReleaseUrl })
     }
   }
-  const stored = await browser.storage.local.get([
-    'enabled', 'excludedHosts', 'useBrowserCookies', HANDOFF_SUPPRESSION_STORAGE_KEY,
-  ])
-  enabled = stored.enabled !== false
-  useBrowserCookies = stored.useBrowserCookies !== false
-  excluded = Array.isArray(stored.excludedHosts) ? stored.excludedHosts : []
-  suppressions = normalizeHandoffSuppressions(stored[HANDOFF_SUPPRESSION_STORAGE_KEY])
   const session = await browser.storage.session.get(PENDING_HANDOFF_STORAGE_KEY)
   const restored = session[PENDING_HANDOFF_STORAGE_KEY]
   if (restored && typeof restored === 'object') {

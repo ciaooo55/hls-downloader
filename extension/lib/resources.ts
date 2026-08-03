@@ -330,8 +330,13 @@ export function visiblePlaybackResources(
     // and bounded, so waiting here makes the per-video button accurate without
     // delaying the common single-manifest case.
     const inspected = visible.filter(entry => entry.item.inspected === true)
-    if (!inspected.length) return []
-    visible = inspected
+    // Give the first manifest probe a short grace period so an opening ad can
+    // still be separated from the real stream. If the CDN rejects inspection,
+    // expose the bounded candidates shortly afterwards instead of leaving the
+    // overlay in an endless “正在识别” state.
+    if (inspected.length) visible = inspected
+    else if (Date.now() - playback.startedAt >= 1_500) visible = visible.slice(0, limit)
+    else return []
     // A pre-roll is normally a short, end-listed VOD requested immediately
     // before the real live manifest. Once inspection has confirmed a live
     // playlist from this playback session, do not put those two unrelated
@@ -520,6 +525,7 @@ export function mergeResources(current: MediaResource[], incoming: MediaResource
 
 export function shouldTakeover(input: {
   url: string
+  sourcePageUrl?: string
   size?: number
   mimeType?: string
   filename?: string
@@ -541,11 +547,8 @@ export function shouldTakeover(input: {
   if (!input.enabled) return false
   try {
     const url = new URL(input.url)
-    const host = url.host.toLowerCase()
-    const excluded = input.excludedHosts.some(value => {
-      const rule = String(value || '').trim().toLowerCase().replace(/^\*\./, '')
-      return Boolean(rule && (host === rule || host.endsWith(`.${rule}`)))
-    })
+    const hosts = [url.hostname, hostnameOf(input.sourcePageUrl || '')].filter(Boolean)
+    const excluded = hosts.some(host => isExcludedHost(host, input.excludedHosts))
     if (!['http:', 'https:'].includes(url.protocol) || excluded) return false
   } catch {
     return false
@@ -609,6 +612,31 @@ export function resourceRequestIdentity(
     origin: pageOrigin || captured.origin || '',
     userAgent: captured['user-agent'] || fallbackUserAgent,
   }
+}
+
+/** Canonical host form used by popup settings and the takeover boundary. */
+export function normalizeHost(value = ''): string {
+  const raw = String(value || '').trim().toLowerCase()
+  if (!raw) return ''
+  try {
+    const parsed = raw.includes('://') ? new URL(raw) : new URL(`https://${raw}`)
+    return parsed.hostname.replace(/^www\./, '')
+  } catch {
+    return raw.replace(/^\*\./, '').replace(/:\d+$/, '').replace(/^www\./, '').replace(/\.$/, '')
+  }
+}
+
+function hostnameOf(value: string): string {
+  return normalizeHost(value)
+}
+
+export function isExcludedHost(value: string, excludedHosts: string[]): boolean {
+  const host = normalizeHost(value)
+  if (!host) return false
+  return excludedHosts.some(value => {
+    const rule = normalizeHost(value)
+    return Boolean(rule && (host === rule || host.endsWith(`.${rule}`)))
+  })
 }
 
 /** Preserve the request identity the browser actually sent to one origin. */

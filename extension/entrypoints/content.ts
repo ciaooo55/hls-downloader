@@ -39,6 +39,35 @@ export default defineContentScript({
     document.addEventListener('play', rememberPendingPlayback, true)
     document.addEventListener('playing', rememberPendingPlayback, true)
     const resources = new Map<string, MediaResource>()
+    // The UI mount below is asynchronous. Capture bridge/webRequest messages
+    // during that window instead of losing the first manifest from a fast MSE
+    // player (which otherwise leaves the overlay in “正在识别” forever).
+    const earlyResourceEvents: Array<{ url: string; mimeType?: string }> = []
+    const earlyMseEvents: Array<{ blobUrl: string; mediaUrl: string }> = []
+    const earlyCapturedMessages: any[] = []
+    let contentReady = false
+    const earlyResourceListener = (event: Event) => {
+      if (contentReady) return
+      const detail = (event as CustomEvent).detail || {}
+      if (typeof detail.url === 'string') earlyResourceEvents.push({ url: detail.url, mimeType: detail.mimeType })
+      if (earlyResourceEvents.length > 200) earlyResourceEvents.splice(0, earlyResourceEvents.length - 200)
+    }
+    const earlyMseListener = (event: Event) => {
+      if (contentReady) return
+      const detail = (event as CustomEvent).detail || {}
+      if (typeof detail.blobUrl === 'string' && typeof detail.mediaUrl === 'string') {
+        earlyMseEvents.push({ blobUrl: detail.blobUrl, mediaUrl: detail.mediaUrl })
+        if (earlyMseEvents.length > 200) earlyMseEvents.splice(0, earlyMseEvents.length - 200)
+      }
+    }
+    const earlyRuntimeListener = (message: any) => {
+      if (contentReady || message?.type !== 'captured-resource' || !message.resource?.url) return
+      earlyCapturedMessages.push(message)
+      if (earlyCapturedMessages.length > 100) earlyCapturedMessages.splice(0, earlyCapturedMessages.length - 100)
+    }
+    window.addEventListener('__hls_downloader_resource__', earlyResourceListener)
+    window.addEventListener('__hls_downloader_mse__', earlyMseListener)
+    browser.runtime.onMessage.addListener(earlyRuntimeListener)
     // Rendering is intentionally frequent on live pages. Keep handoff state
     // outside the DOM so a network event cannot replace an in-flight button.
     const resourceSendStates = new Map<string, { label: string, disabled: boolean }>()
@@ -582,10 +611,14 @@ export default defineContentScript({
       const resource = { id: resourceId(url), url, kind, mimeType, pageUrl: location.href, title: pageMediaTitle() || filename, filename, seenAt: Date.now() }
       addResource(resource); render(); void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
     }
-    window.addEventListener('__hls_downloader_resource__', ((event: CustomEvent) => add(event.detail?.url, event.detail?.mimeType)) as EventListener)
-    window.addEventListener('__hls_downloader_mse__', ((event: CustomEvent) => {
-      const blobUrl = String(event.detail?.blobUrl || '')
-      const mediaUrl = String(event.detail?.mediaUrl || '')
+    const handleResourceEvent = (event: Event) => {
+      const detail = (event as CustomEvent).detail || {}
+      add(detail.url, detail.mimeType)
+    }
+    const handleMseEvent = (event: Event) => {
+      const detail = (event as CustomEvent).detail || {}
+      const blobUrl = String(detail.blobUrl || '')
+      const mediaUrl = String(detail.mediaUrl || '')
       if (!blobUrl.startsWith('blob:') || !/^https?:/i.test(mediaUrl)) return
       const now = Date.now()
       const evidence = mseEvidenceByBlob.get(blobUrl) || { urls: new Set<string>(), seenAt: now }
@@ -613,7 +646,16 @@ export default defineContentScript({
         mseEvidenceByBlob.delete(oldest)
       }
       render()
-    }) as EventListener)
+    }
+    window.removeEventListener('__hls_downloader_resource__', earlyResourceListener)
+    window.removeEventListener('__hls_downloader_mse__', earlyMseListener)
+    window.addEventListener('__hls_downloader_resource__', handleResourceEvent)
+    window.addEventListener('__hls_downloader_mse__', handleMseEvent)
+    // Ask the MAIN-world hook to replay events emitted before this content
+    // script/UI finished mounting (especially fast MSE and preloaded HLS).
+    window.dispatchEvent(new Event('__hls_downloader_replay__'))
+    earlyResourceEvents.splice(0).forEach(event => add(event.url, event.mimeType))
+    earlyMseEvents.splice(0).forEach(event => handleMseEvent(new CustomEvent('__hls_downloader_mse__', { detail: event })))
     document.querySelectorAll<HTMLMediaElement>('video[src],audio[src],source[src]').forEach(media => add(media.currentSrc || media.src))
     new PerformanceObserver(list => list.getEntries().forEach(entry => add(entry.name))).observe({ type: 'resource', buffered: true })
     browser.runtime.onMessage.addListener(message => {
@@ -635,6 +677,19 @@ export default defineContentScript({
         root.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => add(anchor.href))
       }
     })
+    contentReady = true
+    const bufferedCapturedMessages = earlyCapturedMessages.splice(0)
+    bufferedCapturedMessages.forEach(message => {
+      const pageTitle = pageMediaTitle()
+      const resource = {
+        ...message.resource,
+        title: !message.resource.title || isGenericMediaName(message.resource.title) ? pageTitle || message.resource.title : message.resource.title,
+        id: resourceId(message.resource.url),
+        seenAt: Date.now(),
+      } as MediaResource
+      addResource(resource)
+    })
+    if (bufferedCapturedMessages.length) render()
     let currentPageUrl = pageKey(location.href)
     const loadPageResources = (pageUrl: string) => {
       void runtimeMessage({ type: 'list', pageUrl }).then((stored: MediaResource[]) => {

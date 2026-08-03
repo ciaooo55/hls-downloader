@@ -718,6 +718,7 @@ class HTTPDownloader(SeeklessEngine):
                 raise RuntimeError(
                     f"文件长度不匹配，期望 {task.progress.total_bytes}，实际 {part_path.stat().st_size}"
                 )
+            self._set_stage("verifying", "下载完成，正在写入并校验最终文件")
             await asyncio.to_thread(publish_path, part_path, output)
             state_path.unlink(missing_ok=True)
             task.output_path = str(output)
@@ -1378,4 +1379,13 @@ class HTTPDownloader(SeeklessEngine):
         ) or next((result for result in results if isinstance(result, Exception)), None)
         if error:
             raise error
+        # Every worker has drained and the checkpoint is durable. Publish an
+        # explicit terminal transfer sample before the potentially slow
+        # cross-volume/antivirus-safe rename so the UI cannot remain at 99.x%
+        # while the download is already complete on disk.
+        if len(completed) == len(chunks) and part_path.exists() and part_path.stat().st_size == total:
+            task.progress.downloaded_bytes = total
+            task.progress.completed_segments = len(chunks)
+            self._apply_speed(window)
+            self._publish()
         self._priority_queue = None

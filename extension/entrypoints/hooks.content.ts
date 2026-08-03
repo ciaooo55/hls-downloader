@@ -7,16 +7,26 @@ export default defineContentScript({
     const bufferSources = new WeakMap<object, string>()
     const mediaSourceBlobs = new WeakMap<object, string>()
     const sourceBufferOwners = new WeakMap<object, object>()
+    const pendingResources: Array<{ url: string; mimeType: string }> = []
+    const pendingMse: Array<{ blobUrl: string; mediaUrl: string }> = []
     const report = (url: unknown, mimeType = '') => {
       if (typeof url !== 'string') return
+      pendingResources.push({ url, mimeType })
+      if (pendingResources.length > 200) pendingResources.shift()
       window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: { url, mimeType } }))
     }
     const reportMse = (blobUrl: string, mediaUrl: string) => {
       if (!blobUrl.startsWith('blob:') || !/^https?:/i.test(mediaUrl)) return
+      pendingMse.push({ blobUrl, mediaUrl })
+      if (pendingMse.length > 200) pendingMse.shift()
       window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', {
         detail: { blobUrl, mediaUrl },
       }))
     }
+    window.addEventListener('__hls_downloader_replay__', () => {
+      pendingResources.forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: event })))
+      pendingMse.forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', { detail: event })))
+    })
     const originalFetch = window.fetch
     window.fetch = async function (...args) {
       const response = await originalFetch.apply(this, args)

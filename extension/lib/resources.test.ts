@@ -20,6 +20,7 @@ import {
   shouldTakeover,
   suggestedResourceFilename,
   visibleMediaResources,
+  normalizeHost,
   type MediaResource,
 } from './resources'
 
@@ -448,6 +449,13 @@ describe('resource rules', () => {
     expect(shouldTakeover({ ...base, size: 9 })).toBe(false)
     expect(shouldTakeover({ ...base, size: 0 })).toBe(true)
     expect(shouldTakeover({ ...base, url: 'https://sub.blocked.test/file.zip', excludedHosts: ['blocked.test'] })).toBe(false)
+  })
+  it('applies an excluded source page to CDN downloads and normalizes ports', () => {
+    expect(normalizeHost('https://WWW.Example.test:443/watch')).toBe('example.test')
+    expect(shouldTakeover({
+      url: 'https://media.cdn.test/file.mp4', sourcePageUrl: 'https://www.Example.test:443/watch',
+      size: 20, enabled: true, minimumBytes: 0, excludedHosts: ['example.test'], explicitClick: true,
+    })).toBe(false)
   })
   it('never takes over OAuth/account navigation, including forced or stale click paths', () => {
     const base = { size: 20, enabled: true, minimumBytes: 10, excludedHosts: [], explicitClick: true, ctrlForce: true }
