@@ -510,7 +510,10 @@ code,
 .task-table td.menu-col{overflow:visible;position:relative}
 .row-actions{display:none;position:absolute;top:50%;right:8px;transform:translateY(-50%);align-items:center;gap:2px;padding:3px;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:0 8px 24px var(--shadow);z-index:6;white-space:nowrap}
 .task-table tbody tr:hover .row-actions{display:flex}
-.task-table tbody tr:hover .row-menu-button{visibility:hidden}
+/* Keep the keyboard-accessible overflow button in the focus order. The quick
+   actions may overlay it on hover, but hiding it with visibility:hidden made
+   the task menu unreachable to keyboard users. */
+.task-table tbody tr:focus-within .row-actions{display:flex}
 .row-actions button{display:grid;place-items:center;width:34px;height:34px;border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer}
 .row-actions button:hover{background:var(--surface-3);color:var(--text)}
 .row-actions button.danger:hover{background:color-mix(in srgb,var(--red) 14%,var(--surface-3));color:var(--red)}
@@ -716,10 +719,10 @@ code,
    deliberately use the same neutral layers as the task workspace. */
 .desktop-app.has-window-chrome { grid-template-rows: 32px 48px minmax(0, 1fr) 25px; }
 .hls-window-chrome { display: flex; align-items: stretch; min-width: 0; height: 32px; background: var(--surface); border-bottom: 1px solid var(--border); color: var(--muted); }
-.hls-window-drag-region { display: flex; align-items: center; min-width: 0; flex: 1; gap: 7px; padding-left: 10px; font-size: 11px; font-weight: 600; color: var(--text); }
+.hls-window-drag-region { display: flex; align-items: center; min-width: 0; flex: 1; gap: 7px; padding-left: 10px; font-size: 11px; font-weight: 600; color: var(--text); -webkit-app-region: drag; cursor: default; }
 .hls-window-chrome-mark { width: 18px; height: 18px; object-fit: contain; }
-.hls-window-controls { display: flex; align-items: stretch; flex: 0 0 auto; }
-.hls-window-controls button { display: grid; place-items: center; width: 46px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.hls-window-controls { display: flex; align-items: stretch; flex: 0 0 auto; -webkit-app-region: no-drag; }
+.hls-window-controls button { display: grid; place-items: center; width: 46px; border: 0; background: transparent; color: var(--muted); cursor: pointer; -webkit-app-region: no-drag; }
 .hls-window-controls button:hover { background: var(--surface-3); color: var(--text); }
 .hls-window-controls .hls-window-close:hover { background: var(--red); color: #fff; }
 .hls-window-controls button:focus-visible { position: relative; outline: 2px solid var(--primary); outline-offset: -2px; }

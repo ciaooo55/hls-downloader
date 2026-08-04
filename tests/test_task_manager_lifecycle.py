@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 import pytest
 
@@ -654,6 +655,8 @@ def test_private_browser_request_headers_are_encrypted_and_survive_reload(tmp_pa
             request_method="POST",
             request_body=base64.b64encode(b'{"token":"post-secret"}').decode("ascii"),
             cookie="session=secret",
+            selected_video="https://cdn.example.test/video.m3u8?token=selected-secret",
+            selected_audio="https://cdn.example.test/audio.m3u8?token=audio-secret",
             request_contexts={
                 "https://segments.example.test": {
                     "request_headers": {"Authorization": "Bearer segments"},
@@ -663,7 +666,7 @@ def test_private_browser_request_headers_are_encrypted_and_survive_reload(tmp_pa
         )
 
         rows = await database_module.run_db(
-            "SELECT url,source_page_url,referer,origin,request_headers,request_contexts,request_body,cookie FROM tasks WHERE id=?", (task.id,)
+            "SELECT url,source_page_url,referer,origin,request_headers,request_contexts,request_body,cookie,selected_video,selected_audio FROM tasks WHERE id=?", (task.id,)
         )
         stored = rows[0]
         assert "protected.bin" not in stored["url"]
@@ -672,6 +675,8 @@ def test_private_browser_request_headers_are_encrypted_and_survive_reload(tmp_pa
         assert "segment_session=private" not in stored["request_contexts"]
         assert "post-secret" not in stored["request_body"]
         assert "session=secret" not in stored["cookie"]
+        assert "selected-secret" not in stored["selected_video"]
+        assert "audio-secret" not in stored["selected_audio"]
 
         restored = TaskManager()
         await restored.load_from_db()
@@ -686,6 +691,8 @@ def test_private_browser_request_headers_are_encrypted_and_survive_reload(tmp_pa
         assert loaded.url == "https://cdn.example.test/protected.bin"
         assert base64.b64decode(loaded.request_body) == b'{"token":"post-secret"}'
         assert loaded.cookie == "session=secret"
+        assert loaded.selected_video == "https://cdn.example.test/video.m3u8?token=selected-secret"
+        assert loaded.selected_audio == "https://cdn.example.test/audio.m3u8?token=audio-secret"
         assert loaded.request_contexts["https://segments.example.test"] == {
             "request_headers": {"authorization": "Bearer segments"},
             "referer": "",
@@ -853,6 +860,47 @@ def test_delete_incomplete_task_always_removes_reserved_output(tmp_path, monkeyp
         await manager.delete_task(task.id)
 
         assert not reserved.exists()
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(os.name != "nt", reason="DPAPI migration is Windows-specific")
+def test_load_from_db_migrates_all_legacy_plaintext_secret_fields(tmp_path, monkeypatch):
+    from backend.app import database as database_module
+
+    async def run():
+        monkeypatch.setattr(database_module, "DB_PATH", tmp_path / "tasks.db")
+        manager = TaskManager()
+        task = await manager.create_task("https://cdn.example.test/legacy.m3u8")
+        await database_module.run_db(
+            "UPDATE tasks SET cookie=?,request_headers=?,request_contexts=?,request_method=?,request_body=?,selected_video=?,selected_audio=? WHERE id=?",
+            (
+                "legacy=session",
+                '{"authorization":"Bearer legacy","content-type":"application/json"}',
+                '{"https://segments.example.test":{"cookie":"segment=legacy"}}',
+                "POST",
+                "bGVnYWN5LXBvc3QtYm9keQ==",
+                "https://cdn.example.test/video.m3u8?token=legacy-video",
+                "https://cdn.example.test/audio.m3u8?token=legacy-audio",
+                task.id,
+            ),
+        )
+
+        restored = TaskManager()
+        await restored.load_from_db()
+        loaded = restored.tasks[task.id]
+        assert loaded.cookie == "legacy=session"
+        assert loaded.request_headers["authorization"] == "Bearer legacy"
+        assert loaded.request_contexts["https://segments.example.test"]["cookie"] == "segment=legacy"
+        assert loaded.request_body == "bGVnYWN5LXBvc3QtYm9keQ=="
+        assert loaded.selected_video.endswith("legacy-video")
+        assert loaded.selected_audio.endswith("legacy-audio")
+
+        rows = await database_module.run_db(
+            "SELECT cookie,request_headers,request_contexts,request_body,selected_video,selected_audio FROM tasks WHERE id=?",
+            (task.id,),
+        )
+        assert all(str(value or "").startswith("dpapi:") for value in rows[0])
 
     asyncio.run(run())
 

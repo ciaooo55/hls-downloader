@@ -782,8 +782,8 @@ class TaskManager:
                     task.checksum_algorithm,
                     "",
                     None,
-                    task.selected_video,
-                    task.selected_audio,
+                    protect_secret(task.selected_video),
+                    protect_secret(task.selected_audio),
                     json.dumps(task.engine_state, ensure_ascii=False),
                 ),
             )
@@ -1426,17 +1426,23 @@ class TaskManager:
                 seed_count=_safe_int(_row_value(row, "seed_count", 0), minimum=0),
                 connection_status="idle",
             )
-            request_headers = _decode_request_headers(_row_value(row, "request_headers", "") or "")
-            request_method, request_body = sanitize_request_replay(
-                _row_value(row, "request_method", "GET") or "GET",
-                _decode_request_body(_row_value(row, "request_body", "") or ""),
-                request_headers,
-            )
             raw_url = _row_value(row, "url", "") or ""
             raw_source_page_url = _row_value(row, "source_page_url", "") or ""
             raw_referer = _row_value(row, "referer", "") or ""
             raw_origin = _row_value(row, "origin", "") or ""
             raw_error_url = _row_value(row, "error_url", "") or ""
+            raw_cookie = _row_value(row, "cookie", "") or ""
+            raw_request_headers = _row_value(row, "request_headers", "") or ""
+            raw_request_contexts = _row_value(row, "request_contexts", "") or ""
+            raw_request_body = _row_value(row, "request_body", "") or ""
+            raw_selected_video = _row_value(row, "selected_video", "") or ""
+            raw_selected_audio = _row_value(row, "selected_audio", "") or ""
+            request_headers = _decode_request_headers(raw_request_headers)
+            request_method, request_body = sanitize_request_replay(
+                _row_value(row, "request_method", "GET") or "GET",
+                _decode_request_body(raw_request_body),
+                request_headers,
+            )
             task_url = _decode_secret_text(raw_url)
             try:
                 task_type = TaskType(
@@ -1458,9 +1464,9 @@ class TaskManager:
                 referer=_decode_secret_text(raw_referer),
                 origin=_decode_secret_text(raw_origin),
                 user_agent=_row_value(row, "user_agent", "") or "",
-                cookie=_decode_cookie(_row_value(row, "cookie", "") or ""),
+                cookie=_decode_cookie(raw_cookie),
                 request_headers=request_headers,
-                request_contexts=_decode_request_contexts(_row_value(row, "request_contexts", "") or ""),
+                request_contexts=_decode_request_contexts(raw_request_contexts),
                 request_method=request_method,
                 request_body=request_body,
                 title=_row_value(row, "title", "") or "",
@@ -1474,8 +1480,8 @@ class TaskManager:
                 speed_limit_kib=_safe_int(
                     _row_value(row, "speed_limit_kib", 0), minimum=0, maximum=1048576
                 ),
-                selected_video=str(_row_value(row, "selected_video", "") or ""),
-                selected_audio=str(_row_value(row, "selected_audio", "") or ""),
+                selected_video=_decode_secret_text(raw_selected_video),
+                selected_audio=_decode_secret_text(raw_selected_audio),
                 status=status,
                 progress=progress,
                 stage=stage,
@@ -1510,7 +1516,19 @@ class TaskManager:
             self.tasks[task.id] = task
             if os.name == "nt" and any(
                 value and not str(value).startswith("dpapi:")
-                for value in (raw_url, raw_source_page_url, raw_referer, raw_origin, raw_error_url)
+                for value in (
+                    raw_url,
+                    raw_source_page_url,
+                    raw_referer,
+                    raw_origin,
+                    raw_error_url,
+                    raw_cookie,
+                    raw_request_headers,
+                    raw_request_contexts,
+                    raw_request_body,
+                    raw_selected_video,
+                    raw_selected_audio,
+                )
             ):
                 secret_migrations.append(task)
             if status is not stored_status:
@@ -1566,7 +1584,7 @@ class TaskManager:
                 "playable_segments=?,playable_duration=?,media_duration=?,"
                 "error_code=?,error_stage=?,error_url=?,error_hint=?,http_status=?,"
                 "error_attempt=?,expected_checksum=?,checksum_algorithm=?,checksum_actual=?,checksum_verified=?,output_path=?,updated_at=?,started_at=?,finished_at=?,"
-                "task_type=?,source_page_url=?,mime_type=?,url=?,referer=?,origin=?,user_agent=?,cookie=?,request_headers=?,request_contexts=?,request_method=?,request_body=?,progress_percent=?,uploaded_bytes=?,"
+                "task_type=?,source_page_url=?,mime_type=?,url=?,referer=?,origin=?,user_agent=?,cookie=?,request_headers=?,request_contexts=?,request_method=?,request_body=?,selected_video=?,selected_audio=?,progress_percent=?,uploaded_bytes=?,"
                 "upload_speed_bytes_per_sec=?,peer_count=?,seed_count=?,speed_limit_kib=?,engine_state=? WHERE id=?",
                 (
                     task.status.value,
@@ -1610,6 +1628,8 @@ class TaskManager:
                     protect_secret(json.dumps(task.request_contexts, ensure_ascii=False)),
                     task.request_method,
                     protect_secret(task.request_body),
+                    protect_secret(task.selected_video),
+                    protect_secret(task.selected_audio),
                     task.progress.progress_percent,
                     task.progress.uploaded_bytes,
                     task.progress.upload_speed_bytes_per_sec,

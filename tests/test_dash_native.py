@@ -1,5 +1,6 @@
 import asyncio
 import json
+from urllib.parse import unquote
 from pathlib import Path
 
 import httpx
@@ -49,13 +50,26 @@ def _install_transport(monkeypatch, handler):
 
 
 def _install_fake_mux(monkeypatch):
+    def read_input(path: Path) -> bytes:
+        if path.suffix.lower() != ".m3u8":
+            return path.read_bytes()
+        payload = bytearray()
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith('#EXT-X-MAP:'):
+                line = line.split('URI="', 1)[-1].split('"', 1)[0]
+            elif line.startswith('#') or not line:
+                continue
+            payload.extend((path.parent / unquote(line)).read_bytes())
+        return bytes(payload)
+
     async def fake_ffmpeg(command, task=None, duration_sec=0, on_progress=None):
         inputs = [
             command[index + 1]
             for index, value in enumerate(command[:-1])
             if value == "-i"
         ]
-        payload = b"".join(Path(value).read_bytes() for value in inputs)
+        payload = b"".join(read_input(Path(value)) for value in inputs)
         Path(command[-1]).write_bytes(payload)
         return True
 
@@ -93,6 +107,38 @@ def test_native_dash_downloads_and_muxes_both_tracks(tmp_path, monkeypatch):
         assert task.progress.total_segments == 6
         assert task.progress.completed_segments == 6
         assert task.progress.progress_percent == pytest.approx(100.0)
+
+    asyncio.run(run())
+
+
+def test_native_dash_downloads_compatible_multi_period_without_fallback(tmp_path, monkeypatch):
+    manifest = f'''<MPD {MPD_NS} type="static">
+  <BaseURL>https://cdn.test/stream/</BaseURL>
+  <Period duration="PT2S"><AdaptationSet mimeType="video/mp4">
+    <SegmentTemplate media="p1-$Number$.m4s" initialization="init.mp4" duration="2"/>
+    <Representation id="v" bandwidth="1000" width="640" height="360"/>
+  </AdaptationSet></Period>
+  <Period duration="PT2S"><AdaptationSet mimeType="video/mp4">
+    <SegmentTemplate media="p2-$Number$.m4s" initialization="init.mp4" duration="2"/>
+    <Representation id="v" bandwidth="1000" width="640" height="360"/>
+  </AdaptationSet></Period>
+</MPD>'''
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        target = str(request.url)
+        if target.endswith("manifest.mpd"):
+            return httpx.Response(200, text=manifest, request=request)
+        return httpx.Response(200, content=target.rsplit("/", 1)[-1].encode(), request=request)
+
+    _install_transport(monkeypatch, handler)
+    _install_fake_mux(monkeypatch)
+
+    async def run():
+        task = _task(tmp_path)
+        assert await NativeDashEngine(task).run() is True
+        assert task.status is TaskStatus.DONE
+        assert Path(task.output_path).read_bytes() == b"init.mp4" + b"p1-1.m4s" + b"p2-1.m4s"
+        assert task.progress.total_segments == 3
 
     asyncio.run(run())
 

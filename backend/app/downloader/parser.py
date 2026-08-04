@@ -12,6 +12,16 @@ _AUXILIARY_AUDIO = re.compile(
     r"audio[-_ ]?description|sign[-_ ]?language|emergency|alternate[-_ ]?audio)",
     re.IGNORECASE,
 )
+_AD_SEGMENT_URL = re.compile(
+    r"(?:^|[/_.-])(?:ad|ads|advert|advertisement|preroll|midroll|postroll|promo)"
+    r"(?:[/_.?&=-]|$)",
+    re.IGNORECASE,
+)
+_AD_DATERANGE = re.compile(
+    r"(?:^|[._:-])(?:ad|ads|advert|advertisement|scte35|splice|preroll|midroll|postroll)"
+    r"(?:$|[._:-])",
+    re.IGNORECASE,
+)
 
 
 def _playlist_title(content: str) -> str:
@@ -373,6 +383,22 @@ def parse_m3u8(
         ),
         None,
     )
+    ad_cue_active = False
+
+    def segment_is_ad(segment, resolved_url: str) -> bool:
+        nonlocal ad_cue_active
+        cue_in = bool(getattr(segment, "cue_in", False))
+        cue_out = bool(getattr(segment, "cue_out", False) or getattr(segment, "cue_out_start", False))
+        dateranges = list(getattr(segment, "dateranges", None) or [])
+        explicit_range = any(_daterange_is_ad(item) for item in dateranges)
+        url_signal = bool(_AD_SEGMENT_URL.search(resolved_url))
+        # EXT-X-CUE-IN terminates the range before the following media URI.
+        if cue_in:
+            ad_cue_active = False
+        marked = cue_out or ad_cue_active or explicit_range or url_signal
+        if cue_out:
+            ad_cue_active = True
+        return marked
 
     def init_map_info(init_section) -> dict | None:
         if init_section is None or not getattr(init_section, "uri", None):
@@ -425,6 +451,7 @@ def parse_m3u8(
                         gap = True
                         continue
                     part_url = _resolve_url(url, part.uri)
+                    part_is_ad = segment_is_ad(segment, part_url)
                     segments.append(
                         {
                             "url": part_url,
@@ -447,24 +474,21 @@ def parse_m3u8(
                             "discontinuity": bool(segment.discontinuity)
                             if part_index == 0
                             else gap,
+                            "is_ad": part_is_ad,
                         }
                     )
                     gap = False
                 continue
-            if not playlist.is_endlist and not list(
-                getattr(segment, "parts", None) or []
-            ):
-                # A few LL-HLS origins briefly emit an EXTINF line without a
-                # URI while the segment is being assembled. This can happen
-                # in the middle of a sliding window (not only at its tail),
-                # so do not let one incomplete entry abort the entire poll.
-                # The next reload will expose the completed URI; if the CDN
-                # evicts it first, the resulting gap is handled by the live
-                # recorder's discontinuity logic.
-                continue
-            raise ValueError(f"分片 {index} 缺少 URI")
+            # A few origins emit an empty EXTINF entry while rewriting a
+            # sliding window. Although this is more commonly seen in live
+            # LL-HLS, VOD mirrors can expose the same torn line during a
+            # cache refresh. Preserve every valid segment and let the next
+            # reload/resume fill the gap instead of discarding the whole
+            # recording because one URI is temporarily absent.
+            continue
         segment_url = _resolve_url(url, segment.uri)
         init_map = init_map_info(getattr(segment, "init_section", None))
+        segment_is_ad_flag = segment_is_ad(segment, segment_url)
 
         segments.append(
             {
@@ -478,8 +502,12 @@ def parse_m3u8(
                 "key": _key_info(url, segment.key, media_sequence),
                 "init_map": init_map,
                 "discontinuity": bool(segment.discontinuity),
+                "is_ad": segment_is_ad_flag,
             }
         )
+
+    if not segments:
+        raise ValueError("m3u8 中没有可用分片")
 
     target_duration = float(playlist.target_duration or 0)
     if target_duration <= 0:
@@ -487,6 +515,18 @@ def parse_m3u8(
             (float(segment.get("duration") or 0) for segment in segments),
             default=6.0,
         ) or 6.0
+    part_information = getattr(playlist, "part_inf", None)
+    try:
+        part_target_duration = max(
+            0.0,
+            float(getattr(part_information, "part_target", 0) or 0),
+        )
+    except (TypeError, ValueError):
+        part_target_duration = 0.0
+    server_control = getattr(playlist, "server_control", None)
+    can_block_reload = (
+        str(getattr(server_control, "can_block_reload", "") or "").upper() == "YES"
+    )
 
     return {
         "type": "media",
@@ -501,5 +541,52 @@ def parse_m3u8(
         # fixed segment list.
         "is_live": not playlist.is_endlist,
         "target_duration": target_duration,
+        "part_target_duration": part_target_duration,
+        "can_block_reload": can_block_reload,
         "media_sequence": first_sequence,
     }
+
+
+def _daterange_is_ad(value) -> bool:
+    """Recognize explicit server-side ad markers without guessing from titles."""
+    for attr in ("id", "class", "scte35", "oatcls_scte35"):
+        text = str(getattr(value, attr, "") or "")
+        if text and _AD_DATERANGE.search(text):
+            return True
+    return False
+
+
+def filter_ad_segments(parsed: dict, enabled: bool = True) -> dict:
+    """Drop only explicit HLS ad-marked segments and preserve a timeline gap.
+
+    URL substring filtering alone is too aggressive for ordinary assets named
+    ``promotion`` or ``adventure``.  The parser marks SCTE-35/CUE-OUT ranges
+    and obvious segment paths; this function is the single policy boundary
+    used by both VOD and live recording.  The next retained segment receives a
+    discontinuity marker so a local HLS mux cannot bridge two encodings.
+    """
+    if not enabled or parsed.get("type") != "media":
+        return parsed
+    segments = list(parsed.get("segments") or [])
+    if not segments:
+        return parsed
+    kept: list[dict] = []
+    pending_gap = False
+    skipped = 0
+    for raw in segments:
+        segment = dict(raw)
+        if bool(segment.get("is_ad")):
+            skipped += 1
+            pending_gap = True
+            continue
+        if pending_gap:
+            segment["discontinuity"] = True
+            pending_gap = False
+        kept.append(segment)
+    if not skipped:
+        return parsed
+    filtered = dict(parsed)
+    filtered["segments"] = kept
+    filtered["total_duration"] = sum(float(item.get("duration") or 0) for item in kept)
+    filtered["ad_segments_skipped"] = skipped
+    return filtered

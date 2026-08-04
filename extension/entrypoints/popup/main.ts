@@ -105,6 +105,12 @@ async function main() {
   const enableBtn = el('button', 'hlsd-button', '\u81ea\u52a8\u63a5\u7ba1')
   const cookieBtn = el('button', 'hlsd-button', 'Cookie')
   const excludeBtn = el('button', 'hlsd-button', '\u6392\u9664\u672c\u7ad9')
+  // The popup DOM becomes visible before its asynchronous storage/bootstrap
+  // work finishes. Do not present controls as clickable until their handlers
+  // and local source of truth are ready; a very fast click was otherwise lost.
+  enableBtn.disabled = true
+  cookieBtn.disabled = true
+  excludeBtn.disabled = true
   controls.append(enableBtn, cookieBtn, excludeBtn)
 
   const updateNotice = el('div', 'update-notice')
@@ -321,7 +327,12 @@ async function main() {
         setError(response?.error || '\u4fdd\u5b58\u63a5\u7ba1\u8bbe\u7f6e\u5931\u8d25')
         return
       }
-      enabled = response.takeover_enabled === requested
+      if (typeof response.takeover_enabled !== 'boolean') {
+        setError('\u684c\u9762\u7aef\u672a\u8fd4\u56de\u6709\u6548\u7684\u63a5\u7ba1\u8bbe\u7f6e')
+        return
+      }
+      enabled = response.takeover_enabled
+      if (enabled !== requested) setError('\u63a5\u7ba1\u8bbe\u7f6e\u5df2\u88ab\u684c\u9762\u7aef\u7684\u66f4\u65b0\u503c\u8986\u76d6')
       refreshButtons()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '\u4fdd\u5b58\u63a5\u7ba1\u8bbe\u7f6e\u5931\u8d25')
@@ -378,6 +389,7 @@ async function main() {
     ? stored.excludedHosts.map(value => normalizeHost(String(value || ''))).filter(Boolean)
     : []
   suppressions = normalizeHandoffSuppressions(stored[HANDOFF_SUPPRESSION_STORAGE_KEY])
+  enableBtn.disabled = false
   refreshButtons()
   const [listed, connection] = await Promise.all([
     browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab?.id }).catch(() => []),

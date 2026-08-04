@@ -100,7 +100,7 @@ jobs:
       - name: Run verification
         shell: pwsh
         run: |
-          python -m ruff check backend tests scripts/smoke_real_download.py scripts/smoke_extension_browsers.py
+          python -m ruff check backend tests scripts/smoke_real_download.py scripts/smoke_extension_browsers.py scripts/smoke_extension_media.py scripts/smoke_extension_takeover.py
           python -m mypy `
             backend/app/api.py `
             backend/app/credentials.py `
@@ -145,6 +145,14 @@ jobs:
             --extension-output extension/.output `
             --chrome-binary "${{ steps.chrome.outputs.chrome-path }}" `
             --firefox-binary "${{ steps.firefox.outputs.firefox-path }}"
+          python scripts/smoke_extension_media.py `
+            --browser firefox `
+            --extension extension/.output/firefox-mv3 `
+            --browser-binary "${{ steps.firefox.outputs.firefox-path }}"
+          python scripts/smoke_extension_takeover.py `
+            --browser chrome `
+            --extension extension/.output/chrome-mv3 `
+            --browser-binary "${{ steps.chrome.outputs.chrome-path }}"
 
       - name: Build Windows packages
         shell: pwsh

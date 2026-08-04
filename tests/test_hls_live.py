@@ -7,12 +7,74 @@ import pytest
 
 from backend.app.config import settings
 from backend.app.downloader import hls as hls_module
-from backend.app.downloader.hls import HLSDownloader
+from backend.app.downloader.hls import HLSDownloader, _blocking_reload_url, _live_reload_delay
 from backend.app.downloader.parser import parse_m3u8
 from backend.app.models import Task, TaskStatus
 
 
 LIVE_HEAD = "#EXTM3U\n#EXT-X-TARGETDURATION:4\n"
+
+
+def test_live_reload_delay_uses_part_target_without_one_second_floor():
+    assert _live_reload_delay(
+        {"target_duration": 6, "part_target_duration": 0.333},
+        True,
+    ) == pytest.approx(0.333)
+    assert _live_reload_delay({"target_duration": 6}, True) == 6
+    assert _live_reload_delay({"target_duration": 6}, False) == 3
+
+
+def test_ll_hls_blocking_reload_uses_latest_media_cursor_and_preserves_token():
+    url = "https://edge.example/live.m3u8?token=secret&_HLS_msn=1&_HLS_part=0"
+    playlist = {
+        "can_block_reload": True,
+        "segments": [{
+            "media_sequence": 42,
+            "part_index": 3,
+        }],
+    }
+    reloaded = _blocking_reload_url(url, playlist)
+    query = dict(httpx.URL(reloaded).params.multi_items())
+    assert query["token"] == "secret"
+    assert query["_HLS_msn"] == "42"
+    assert query["_HLS_part"] == "3"
+    assert "_HLS_skip" not in query
+
+
+def test_ll_hls_blocking_reload_falls_back_for_rejecting_edge(tmp_path):
+    url = "https://example.test/live.m3u8"
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        if request.url.params.get("_HLS_msn"):
+            return httpx.Response(400, request=request)
+        return httpx.Response(
+            200,
+            text=(
+                "#EXTM3U\n#EXT-X-TARGETDURATION:2\n"
+                "#EXT-X-MEDIA-SEQUENCE:42\n#EXTINF:2,\nnext.ts\n"
+            ),
+            request=request,
+        )
+
+    async def run():
+        task = _task(tmp_path, url)
+        downloader = _downloader(task)
+        previous = _parsed(
+            url,
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n"
+            "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES\n"
+            "#EXT-X-MEDIA-SEQUENCE:41\n"
+            "#EXTINF:2,\nold.ts\n",
+        )
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            refreshed = await downloader._reload_live_playlist(client, url, {}, previous)
+        assert refreshed["segments"][0]["url"].endswith("next.ts")
+        assert any("_HLS_msn=" in item for item in requests)
+        assert requests[-1] == url
+
+    asyncio.run(run())
 
 
 def _live_playlist(first_sequence: int, names: list[str], ended: bool = False) -> str:
@@ -327,6 +389,35 @@ def test_live_recording_finalizes_when_origin_stalls(tmp_path, monkeypatch):
         assert "停止更新" in task.last_log
 
     asyncio.run(run())
+
+
+def test_live_recording_reports_first_segment_auth_failure_instead_of_stall(tmp_path, monkeypatch):
+    monkeypatch.setattr(hls_module, "LIVE_STALL_MIN_SECONDS", 0.01)
+    monkeypatch.setattr(hls_module, "LIVE_STALL_TARGET_MULTIPLIER", 0.01)
+
+    async def quick_wait(self, seconds: float) -> None:
+        await asyncio.sleep(0.02)
+
+    monkeypatch.setattr(HLSDownloader, "_live_wait", quick_wait)
+
+    async def fail_segment(self, client, segment, headers):
+        raise RuntimeError("HTTP 403 Forbidden（签名已过期）")
+
+    monkeypatch.setattr(HLSDownloader, "_download_one_segment", fail_segment)
+    url = "https://example.test/signed-live.m3u8"
+    playlist = _live_playlist(0, ["expired.ts"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=playlist, request=request)
+
+    async def run():
+        task = _task(tmp_path, url)
+        downloader = _downloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._record_live(client, _parsed(url, playlist), {}, None)
+
+    with pytest.raises(RuntimeError, match="首批分片下载失败.*403"):
+        asyncio.run(run())
 
 
 def test_live_recording_resumes_from_saved_state(tmp_path, monkeypatch):

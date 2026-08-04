@@ -24,6 +24,13 @@ export class InspectionCache {
     this.entries.delete(key)
   }
 
+  /** Keep a failed key quiet briefly, then allow a renewed observation. */
+  defer(key: string, retryAfterMs = 3_000, now = Date.now()): void {
+    this.entries.delete(key)
+    const delay = Math.max(0, Math.min(this.ttlMs, retryAfterMs))
+    this.entries.set(key, now - this.ttlMs + delay)
+  }
+
   releasePrefix(prefix: string): void {
     for (const key of this.entries.keys()) {
       if (key.startsWith(prefix)) this.entries.delete(key)
@@ -32,8 +39,7 @@ export class InspectionCache {
 
   private expire(now: number): void {
     for (const [key, claimedAt] of this.entries) {
-      if (now - claimedAt < this.ttlMs) break
-      this.entries.delete(key)
+      if (now - claimedAt >= this.ttlMs) this.entries.delete(key)
     }
   }
 }

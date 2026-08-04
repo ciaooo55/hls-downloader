@@ -280,6 +280,7 @@ class SettingsUpdate(BaseModel):
     queue_active_days: Optional[list[int]] = Field(default=None, min_length=1, max_length=7)
     live_record_max_minutes: Optional[int] = Field(default=None, ge=0, le=2880)
     download_subtitles: Optional[bool] = None
+    skip_ad_segments: Optional[bool] = None
     clipboard_watch: Optional[bool] = None
     tvbox_endpoint: Optional[str] = Field(default=None, max_length=512)
     cast_device: Optional[dict[str, str]] = None

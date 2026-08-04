@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser'
 import { clampOverlayPosition, shouldShowMediaOverlay } from '../lib/mediaOverlay'
-import { classifyResource, isGenericMediaName, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
+import { classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
 
@@ -24,8 +24,16 @@ async function runtimeMessage(message: Record<string, unknown>, retries = 1): Pr
 export default defineContentScript({
   matches: ['<all_urls>'],
   allFrames: true,
-  cssInjectionMode: 'ui',
+  // All overlay/theme CSS is constructed below inside the isolated root. `ui`
+  // makes WXT fetch a generated content.css even when no CSS bundle exists,
+  // producing one denied chrome-extension request on every page.
+  cssInjectionMode: 'manual',
   async main(ctx) {
+    const eventVideo = (event: Event): HTMLVideoElement | null => {
+      const path = typeof event.composedPath === 'function' ? event.composedPath() : []
+      return (path.find(value => value instanceof HTMLVideoElement)
+        || (event.target instanceof HTMLVideoElement ? event.target : null)) as HTMLVideoElement | null
+    }
     // The shadow UI is mounted asynchronously.  A fast player can emit its
     // first play/playing event while that work is still in progress (Firefox
     // exposes this race more readily than Chromium).  Buffer those events so
@@ -34,7 +42,8 @@ export default defineContentScript({
     document.documentElement.setAttribute('data-hls-downloader-extension', 'loading')
     const pendingPlaybackVideos = new Set<HTMLVideoElement>()
     const rememberPendingPlayback = (event: Event) => {
-      if (event.target instanceof HTMLVideoElement) pendingPlaybackVideos.add(event.target)
+      const video = eventVideo(event)
+      if (video) pendingPlaybackVideos.add(video)
     }
     document.addEventListener('play', rememberPendingPlayback, true)
     document.addEventListener('playing', rememberPendingPlayback, true)
@@ -73,10 +82,18 @@ export default defineContentScript({
     const resourceSendStates = new Map<string, { label: string, disabled: boolean }>()
     let activePlayback: PlaybackContext | null = null
     let activeVideo: HTMLVideoElement | null = null
+    let selectionMode = false
     // A page can contain several players.  Keep playback evidence per element
     // instead of treating the latest network manifest as belonging to every
     // video in the document.
     let playbackByVideo = new WeakMap<HTMLVideoElement, PlaybackContext>()
+    const knownVideos = new Set<HTMLVideoElement>()
+    const currentVideos = () => {
+      for (const video of knownVideos) {
+        if (!video.isConnected) knownVideos.delete(video)
+      }
+      return [...knownVideos]
+    }
     const mseEvidenceByBlob = new Map<string, { urls: Set<string>; seenAt: number }>()
     const replaceResources = (values: MediaResource[]) => {
       resources.clear()
@@ -348,7 +365,7 @@ export default defineContentScript({
       if (videoControlDragging) return
       layer.replaceChildren()
       let visible = 0
-      const videos = [...document.querySelectorAll<HTMLVideoElement>('video')]
+      const videos = currentVideos()
         .map(video => ({ video, rect: video.getBoundingClientRect(), playback: playbackByVideo.get(video) || null }))
         .filter(({ video, rect, playback }) => Boolean(playback)
           && (video === activeVideo || (!video.paused && !video.ended))
@@ -377,10 +394,16 @@ export default defineContentScript({
           .sort((left, right) => resourceRank(right) - resourceRank(left) || (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0) || (right.size || right.estimatedSize || 0) - (left.size || left.estimatedSize || 0))
         if (!shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: choices.length })) return
         const identifying = choices.length === 0
+        // playerPlaybackResources already enforces the ambiguity boundary for
+        // blob/MSE (per-SourceBuffer evidence, or a sole active MSE session).
+        // Requiring a literal currentSrc match again made a uniquely resolved
+        // MSE video open a pointless one-item picker.
+        const oneClickChoice = choices.length === 1
         visible += 1
         const button = document.createElement('button')
         button.type = 'button'; button.className = `video-download${identifying ? ' identifying' : ''}`
-        button.title = identifying ? '正在识别当前播放的视频资源' : hasExactPlayerMatch && choices.length === 1 ? '下载当前视频' : '选择当前页面检测到的视频资源'
+        if (oneClickChoice) button.dataset.resourceId = choices[0].id
+        button.title = identifying ? '正在识别当前播放的视频资源' : oneClickChoice ? '下载当前视频' : '选择当前页面检测到的视频资源'
         if (identifying) button.setAttribute('aria-disabled', 'true')
         const buttonWidth = 156
         const buttonHeight = 34
@@ -393,7 +416,7 @@ export default defineContentScript({
         button.style.left = `${saved ? Math.max(8, Math.min(saved.x, innerWidth - buttonWidth - 8)) : defaultLeft}px`
         button.style.top = `${saved ? Math.max(8, Math.min(saved.y, innerHeight - buttonHeight - 8)) : defaultTop}px`
         const icon = document.createElement('img'); icon.src = browser.runtime.getURL('/icon-32.png'); icon.alt = ''
-         const fallbackLabel = identifying ? '正在识别' : hasExactPlayerMatch && choices.length === 1 ? '下载视频' : '选择资源'
+         const fallbackLabel = identifying ? '正在识别' : oneClickChoice ? '下载视频' : '选择资源'
          const label = document.createElement('span'); label.className = 'download-label'; label.textContent = fallbackLabel
         button.append(icon, label)
         if (choices.length > 1) { const count = document.createElement('b'); count.textContent = String(choices.length); button.append(count) }
@@ -456,7 +479,7 @@ export default defineContentScript({
              event.stopImmediatePropagation()
              return
            }
-           if (hasExactPlayerMatch && choices.length === 1) {
+           if (oneClickChoice) {
              event.preventDefault()
              event.stopImmediatePropagation()
              sendResource(choices[0], button)
@@ -487,7 +510,9 @@ export default defineContentScript({
     const render = () => {
       const list = ui.shadow.querySelector('.list')
       if (!list) return
-      const entries = visiblePlaybackResources([...resources.values()], activePlayback, 8)
+      const entries = selectionMode && !activePlayback
+        ? compactResources([...resources.values()], 40).slice(0, 20)
+        : visiblePlaybackResources([...resources.values()], activePlayback, 8)
       list.replaceChildren()
       entries.forEach(resource => {
         const row = document.createElement('div'); row.className = 'item'
@@ -549,12 +574,22 @@ export default defineContentScript({
     window.addEventListener('scroll', scheduleVideoButtons, { capture: true, passive: true })
     window.addEventListener('resize', scheduleVideoButtons)
 
+    const add = (url: string, mimeType = '', playbackSource = false) => {
+      const kind = playbackSource ? classifyPlaybackSource(url, mimeType) : classifyResource(url, mimeType)
+      if (!kind) return
+      let filename = ''
+      try { filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch {}
+      const resource = { id: resourceId(url), url, kind, mimeType, pageUrl: location.href, title: pageMediaTitle() || filename, filename, seenAt: Date.now() }
+      addResource(resource); render(); void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
+    }
+
     const markVideoPlayback = (video: HTMLVideoElement, eventType: string) => {
       const rect = video.getBoundingClientRect()
       if (rect.width < 180 || rect.height < 100 || rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) return
       // MSE and nested players can fire on a non-dominant video node. Anchor
       // to the element that is actually advancing, not the largest rectangle.
       activeVideo = video
+      selectionMode = false
       const sourceUrls = [video.currentSrc, video.src, ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')].map(source => source.src)].filter(Boolean)
       const mseResourceUrls = sourceUrls
         .filter(source => source.startsWith('blob:'))
@@ -565,6 +600,20 @@ export default defineContentScript({
         if (changedSource) videoButtonPositions.delete(video)
         activePlayback = { sourceUrls, startedAt: Date.now(), mseResourceUrls }
         playbackByVideo.set(video, activePlayback)
+        // currentSrc is immediate, player-specific evidence. Register it here
+        // instead of waiting for PerformanceObserver/webRequest: Firefox can
+        // omit those observations for dynamically created iframe media.
+        const directSources = [
+          { url: video.currentSrc || video.src, mimeType: '' },
+          ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')]
+            .map(source => ({ url: source.src, mimeType: source.type || '' })),
+        ]
+        const seenDirectSources = new Set<string>()
+        directSources.forEach(source => {
+          if (!source.url || seenDirectSources.has(source.url)) return
+          seenDirectSources.add(source.url)
+          add(source.url, source.mimeType, true)
+        })
       } else {
         activePlayback = previousPlayback
         scheduleVideoButtons()
@@ -573,30 +622,61 @@ export default defineContentScript({
       render()
     }
     const markPlayback = (event: Event) => {
-      if (!(event.target instanceof HTMLVideoElement)) return
+      const video = eventVideo(event)
+      if (!video) return
       if (
-        event.target.paused
-        && !playbackByVideo.has(event.target)
+        video.paused
+        && !playbackByVideo.has(video)
         && ['loadedmetadata', 'loadeddata', 'timeupdate'].includes(event.type)
       ) return
-      markVideoPlayback(event.target, event.type)
+      markVideoPlayback(video, event.type)
     }
     const syncPlayingVideos = () => {
-      document.querySelectorAll<HTMLVideoElement>('video').forEach(video => {
+      currentVideos().forEach(video => {
         if (!video.paused && !video.ended) markVideoPlayback(video, 'sync')
       })
     }
-    new MutationObserver(mutations => {
-      scheduleVideoButtons()
-      if (mutations.some(mutation => mutation.type === 'childList' || mutation.attributeName === 'src')) {
+    const observedMediaRoots = new WeakSet<Document | ShadowRoot>()
+    const mediaEvents = ['play', 'playing', 'loadedmetadata', 'loadeddata', 'timeupdate'] as const
+    const registerMediaRoot = (root: Document | ShadowRoot) => {
+      if (observedMediaRoots.has(root)) return
+      observedMediaRoots.add(root)
+      const discover = (node: ParentNode | Element) => {
+        if (node instanceof HTMLVideoElement) knownVideos.add(node)
+        node.querySelectorAll<HTMLVideoElement>('video').forEach(video => knownVideos.add(video))
+        const elements = node instanceof Element
+          ? [node, ...node.querySelectorAll<HTMLElement>('*')]
+          : [...node.querySelectorAll<HTMLElement>('*')]
+        elements.forEach(element => {
+          if (element.shadowRoot) registerMediaRoot(element.shadowRoot)
+        })
+      }
+      discover(root)
+      mediaEvents.forEach(type => root.addEventListener(type, markPlayback, true))
+      new MutationObserver(mutations => {
+        scheduleVideoButtons()
+        let playbackChanged = false
+        mutations.forEach(mutation => {
+          if (mutation.type === 'childList') {
+            mutation.addedNodes.forEach(node => {
+              if (node instanceof Element) discover(node)
+            })
+            playbackChanged = true
+          } else if (mutation.attributeName === 'src') {
+            playbackChanged = true
+          }
+        })
+        if (playbackChanged) queueMicrotask(syncPlayingVideos)
+      }).observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'style', 'class'] })
+    }
+    window.addEventListener('__hls_downloader_shadow__', event => {
+      const host = event.composedPath().find(value => value instanceof Element) as Element | undefined
+      if (host?.shadowRoot) {
+        registerMediaRoot(host.shadowRoot)
         queueMicrotask(syncPlayingVideos)
       }
-    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'style', 'class'] })
-    document.addEventListener('play', markPlayback, true)
-    document.addEventListener('playing', markPlayback, true)
-    document.addEventListener('loadedmetadata', markPlayback, true)
-    document.addEventListener('loadeddata', markPlayback, true)
-    document.addEventListener('timeupdate', markPlayback, true)
+    }, true)
+    registerMediaRoot(document)
     document.removeEventListener('play', rememberPendingPlayback, true)
     document.removeEventListener('playing', rememberPendingPlayback, true)
     pendingPlaybackVideos.forEach(video => markVideoPlayback(video, 'initializing'))
@@ -604,13 +684,6 @@ export default defineContentScript({
     syncPlayingVideos()
     document.documentElement.setAttribute('data-hls-downloader-extension', '1')
 
-    const add = (url: string, mimeType = '') => {
-      const kind = classifyResource(url, mimeType); if (!kind) return
-      let filename = ''
-      try { filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch {}
-      const resource = { id: resourceId(url), url, kind, mimeType, pageUrl: location.href, title: pageMediaTitle() || filename, filename, seenAt: Date.now() }
-      addResource(resource); render(); void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
-    }
     const handleResourceEvent = (event: Event) => {
       const detail = (event as CustomEvent).detail || {}
       add(detail.url, detail.mimeType)
@@ -627,7 +700,7 @@ export default defineContentScript({
       // Refresh insertion order so the bounded map behaves like a small LRU.
       mseEvidenceByBlob.delete(blobUrl)
       mseEvidenceByBlob.set(blobUrl, evidence)
-      for (const video of document.querySelectorAll<HTMLVideoElement>('video')) {
+      for (const video of currentVideos()) {
         const playback = playbackByVideo.get(video)
         if (!playback?.sourceUrls.includes(blobUrl)) continue
         const updated = {
@@ -656,7 +729,10 @@ export default defineContentScript({
     window.dispatchEvent(new Event('__hls_downloader_replay__'))
     earlyResourceEvents.splice(0).forEach(event => add(event.url, event.mimeType))
     earlyMseEvents.splice(0).forEach(event => handleMseEvent(new CustomEvent('__hls_downloader_mse__', { detail: event })))
-    document.querySelectorAll<HTMLMediaElement>('video[src],audio[src],source[src]').forEach(media => add(media.currentSrc || media.src))
+    document.querySelectorAll<HTMLVideoElement | HTMLAudioElement | HTMLSourceElement>('video[src],audio[src],source[src]').forEach(media => {
+      const url = media instanceof HTMLSourceElement ? media.src : media.currentSrc || media.src
+      add(url, media instanceof HTMLSourceElement ? media.type : '', true)
+    })
     new PerformanceObserver(list => list.getEntries().forEach(entry => add(entry.name))).observe({ type: 'resource', buffered: true })
     browser.runtime.onMessage.addListener(message => {
       if (message?.type === 'captured-resource' && message.resource?.url) {
@@ -674,7 +750,16 @@ export default defineContentScript({
       if (message?.type === 'collect-selection') {
         const selection = window.getSelection(); if (!selection?.rangeCount) return
         const root = selection.getRangeAt(0).cloneContents()
+        selectionMode = true
+        activePlayback = null
+        activeVideo = null
         root.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => add(anchor.href))
+        setOpen(true)
+        render()
+      }
+      if (message?.type === 'open-media-panel') {
+        setOpen(true)
+        render()
       }
     })
     contentReady = true
@@ -709,13 +794,17 @@ export default defineContentScript({
       currentPageUrl = next
       activePlayback = null
       activeVideo = null
+      selectionMode = false
       playbackByVideo = new WeakMap<HTMLVideoElement, PlaybackContext>()
       videoButtonPositions = new WeakMap<HTMLVideoElement, { x: number, y: number }>()
       panelPosition = null
       if (pinned) setPinned(false)
       setOpen(false)
       resources.clear(); render(); loadPageResources(location.href)
-      document.querySelectorAll<HTMLMediaElement>('video[src],audio[src],source[src]').forEach(media => add(media.currentSrc || media.src))
+      document.querySelectorAll<HTMLVideoElement | HTMLAudioElement | HTMLSourceElement>('video[src],audio[src],source[src]').forEach(media => {
+        const url = media instanceof HTMLSourceElement ? media.src : media.currentSrc || media.src
+        add(url, media instanceof HTMLSourceElement ? media.type : '', true)
+      })
       syncPlayingVideos()
     }
     loadPageResources(location.href)

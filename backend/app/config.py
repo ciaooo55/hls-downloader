@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     queue_active_days: list[int] = Field(default_factory=lambda: list(range(7)))
     live_record_max_minutes: int = Field(default=0, ge=0, le=2880)
     download_subtitles: bool = True
+    # Skip only segments explicitly marked by HLS SCTE-35/CUE-OUT metadata or
+    # an unambiguous ad segment path. Ordinary media names are never filtered.
+    skip_ad_segments: bool = True
     clipboard_watch: bool = True
     tvbox_endpoint: str = ""
     cast_device: dict[str, str] = Field(default_factory=dict)

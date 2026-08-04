@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   browserCleanupAction,
   canContinueTakeover,
+  canResumeBrowserDownload,
   desktopAcceptedHandoff,
   handoffStatusLabel,
   handoffTerminalStatus,
@@ -18,6 +19,12 @@ describe('browser download takeover helpers', () => {
     expect(canContinueTakeover('in_progress')).toBe(true)
     expect(canContinueTakeover('complete')).toBe(true)
     expect(canContinueTakeover('interrupted')).toBe(false)
+  })
+
+  it('resumes a paused item even when Chromium transiently marks it interrupted', () => {
+    expect(canResumeBrowserDownload('in_progress')).toBe(true)
+    expect(canResumeBrowserDownload('interrupted')).toBe(true)
+    expect(canResumeBrowserDownload('complete')).toBe(false)
   })
 
   it('accepts only successful desktop handoff responses that can be presented', () => {

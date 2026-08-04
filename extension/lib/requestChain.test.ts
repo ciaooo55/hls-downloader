@@ -267,6 +267,35 @@ describe('browser request chains', () => {
     expect(replayablePostRequest(chain)).toEqual({})
   })
 
+  it('bounds captured headers and strips header injection bytes', () => {
+    const store = new RequestChainStore()
+    const chain = store.observeRequest({
+      requestId: 'bounded-headers',
+      url: 'https://api.test/export',
+      tabId: 3,
+      timeStamp: 1000,
+      requestHeaders: [
+        { name: 'X-Test\r\nInjected', value: 'bad' },
+        { name: 'Authorization', value: `Bearer ${'x'.repeat(40_000)}` },
+        ...Array.from({ length: 80 }, (_, index) => ({ name: `X-${index}`, value: 'v' })),
+      ],
+    })
+
+    expect(requestHeader(chain, 'x-test\r\ninjected')).toBe('')
+    expect(requestHeader(chain, 'authorization').length).toBeLessThanOrEqual(16 * 1024)
+    expect(Object.keys(chain.requestHeaders).length).toBeLessThanOrEqual(64)
+    expect(Object.values(chain.requestHeaders).join('').length).toBeLessThanOrEqual(32 * 1024)
+  })
+
+  it('rejects oversized replay bodies before copying them', () => {
+    expect(captureReplayableRequestBody({
+      raw: [{ bytes: new Uint8Array(128 * 1024 + 1).buffer }],
+    })).toBe('')
+    expect(captureReplayableRequestBody({
+      formData: { value: ['x'.repeat(300_000)] },
+    })).toBe('')
+  })
+
   it('drops only the navigated tab request chains', () => {
     const store = new RequestChainStore()
     store.observeRequest({ requestId: 'old-page', url: 'https://cdn.test/old.m3u8', tabId: 7, timeStamp: 1000 })

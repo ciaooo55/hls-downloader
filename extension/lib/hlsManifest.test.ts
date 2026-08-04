@@ -35,7 +35,24 @@ describe('HLS metadata', () => {
       isLive: true,
       lowLatencyLive: true,
       partOnlyLive: true,
+      playbackUrls: [
+        'https://cdn.test/p0.m4s',
+        'https://cdn.test/p1.m4s',
+      ],
     })
+  })
+
+  it('retains recent segment and init URLs as concrete MSE ownership evidence', () => {
+    const info = parseHlsManifest(
+      '#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:4,\nseg-20.m4s\n#EXT-X-PART:DURATION=0.5,URI="part-21.m4s"\n',
+      'https://cdn.test/channel/index.m3u8?token=secret',
+    )
+
+    expect(info.playbackUrls).toEqual([
+      'https://cdn.test/channel/init.mp4?token=secret',
+      'https://cdn.test/channel/seg-20.m4s?token=secret',
+      'https://cdn.test/channel/part-21.m4s?token=secret',
+    ])
   })
 
   it('inherits a raw signed playlist token to a relative variant', () => {
@@ -56,5 +73,15 @@ describe('HLS metadata', () => {
     expect(info.variants[0].url).toBe(
       'https://edge.test/live/video.m3u8?playlistType=child&pkey=key&psch=v2&token=secret',
     )
+  })
+
+  it('keeps alternate rendition playlists attached to their master', () => {
+    const info = parseHlsManifest(
+      '#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",URI="audio/live.m3u8"\n'
+      + '#EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO="a"\nvideo/live.m3u8\n',
+      'https://cdn.test/master.m3u8?token=secret',
+    )
+
+    expect(info.renditionUrls).toEqual(['https://cdn.test/audio/live.m3u8?token=secret'])
   })
 })

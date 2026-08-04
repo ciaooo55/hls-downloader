@@ -45,7 +45,7 @@ from .errors import (
     should_retry_download_error,
     should_share_retry_window,
 )
-from .merge import _run_ffmpeg, _verify_output
+from .merge import _local_hls_input_options, _run_ffmpeg, _verify_output, write_local_hls_playlist
 from .disk_space import MIN_FREE_RESERVE, ensure_free_space, estimate_paths_size
 from .mpd import NativeDashUnsupported, parse_mpd
 from .playback import playback_service, write_playback_plan
@@ -70,6 +70,23 @@ LIVE_MIN_POLL_SECONDS = 1.0
 LIVE_MAX_POLL_SECONDS = 10.0
 LIVE_STALL_MIN_SECONDS = 90.0
 LIVE_STALL_TARGET_MULTIPLIER = 6.0
+
+
+def _dash_live_poll_seconds(parsed: dict) -> float:
+    segment_basis = max(
+        [
+            float(segment.get("duration") or 0)
+            for kind in ("video", "audio")
+            for segment in (parsed.get(kind) or {}).get("segments", [])[:1]
+        ]
+        or [2.0]
+    )
+    return min(
+        LIVE_MAX_POLL_SECONDS,
+        max(LIVE_MIN_POLL_SECONDS, float(parsed.get("update_period") or segment_basis)),
+    )
+
+
 _TTML_CLOCK_RE = re.compile(r"^(?:(\d+):)?(\d{2}):(\d{2}(?:\.\d+)?)$")
 _TTML_SECONDS_RE = re.compile(r"^(\d+(?:\.\d+)?)s$")
 
@@ -591,6 +608,7 @@ class NativeDashEngine:
             tracks,
             {kind: len(track["segments"]) for kind, track in tracks.items()},
             duration,
+            segment_entries={kind: track["segments"] for kind, track in tracks.items()},
             starts={
                 kind: float((track["segments"][0] or {}).get("start") or 0)
                 for kind, track in tracks.items()
@@ -613,21 +631,25 @@ class NativeDashEngine:
         counts: dict[str, int],
         duration: float,
         starts: dict[str, float] | None = None,
+        segment_entries: dict[str, list[dict]] | None = None,
         cleanup: bool = True,
     ) -> bool:
-        """Concat each downloaded track and mux them into the output file.
+        """Rebuild local HLS timelines for tracks and mux them into output.
 
         starts carries each track's first-segment position on the media
         timeline; live tracks routinely begin a segment apart, so the mux
-        offsets them instead of stacking both at zero (A/V desync).
+        offsets them instead of stacking both at zero (A/V desync). Using a
+        local HLS manifest also preserves fMP4 ``tfdt``/init boundaries; raw
+        byte concatenation can otherwise create a wildly overlong file.
         """
         task = self.task
         task.status = TaskStatus.MERGING
         task.progress.post_percent = 5.0
         self._set_stage("merging", "正在拼接 DASH 轨道")
         track_files: list[tuple[str, Path]] = []
+        playlist_files: list[Path] = []
+        merge_inputs: list[Path] = []
         for kind, track in tracks.items():
-            joined = task_dir / f"{kind}.track.mp4"
             if kind == "video":
                 seg_dir = task_dir / VIDEO_SEG_DIR
                 init_path = (
@@ -640,15 +662,33 @@ class NativeDashEngine:
                     task_dir / AUDIO_DIR / "init.mp4" if track["init_url"] else None
                 )
                 extension = ".m4s"
+            entries = [
+                dict(item)
+                for item in (segment_entries or {}).get(kind, [])[:counts[kind]]
+            ]
+            if len(entries) < counts[kind]:
+                entries = [dict(item) for item in (track.get("segments") or [])[:counts[kind]]]
+            if len(entries) < counts[kind]:
+                entries.extend(
+                    {"index": index, "duration": 0.0}
+                    for index in range(len(entries), counts[kind])
+                )
+            for index, entry in enumerate(entries):
+                entry["index"] = index
+                entry["init_path"] = str(init_path) if init_path is not None else ""
+                merge_inputs.append(seg_dir / f"{index:06d}{extension}")
+            if init_path is not None:
+                merge_inputs.append(init_path)
+            playlist = task_dir / f"{kind}.local.m3u8"
             await asyncio.to_thread(
-                self._concat_track,
+                write_local_hls_playlist,
+                playlist,
                 seg_dir,
-                init_path,
-                counts[kind],
+                entries,
                 extension,
-                joined,
             )
-            track_files.append((kind, joined))
+            playlist_files.append(playlist)
+            track_files.append((kind, playlist))
 
         # VP8 (and some VP9) streams are WebM-only; Matroska accepts any
         # codec losslessly, so it is the safe container for those.
@@ -663,13 +703,16 @@ class NativeDashEngine:
         await asyncio.to_thread(
             ensure_free_space,
             output,
-            estimate_paths_size(path for _kind, path in track_files) + MIN_FREE_RESERVE,
+            estimate_paths_size(merge_inputs) + MIN_FREE_RESERVE,
             operation="DASH 合并输出盘",
         )
         task.status = TaskStatus.REMUXING
         self._set_stage("remuxing", "正在无损合并音视频轨")
         temporary = output.with_name(f"{output.stem}.merging{output.suffix}")
         temporary.unlink(missing_ok=True)
+        hls_input_options = await asyncio.to_thread(
+            _local_hls_input_options, settings.ffmpeg_path
+        )
         command = [settings.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error"]
         offsets = starts or {}
         base_start = min((offsets.get(kind, 0.0) for kind, _ in track_files), default=0.0)
@@ -678,8 +721,14 @@ class NativeDashEngine:
             # -itsoffset is an input option: it must precede its own -i.
             if offset > 0.001:
                 command += ["-itsoffset", f"{offset:.3f}"]
-            command += ["-i", str(path)]
-        command += ["-c", "copy"]
+            command += [
+                *hls_input_options,
+                "-protocol_whitelist",
+                "file,crypto,data",
+                "-i",
+                str(path),
+            ]
+        command += ["-c", "copy", "-avoid_negative_ts", "make_zero"]
         if container == ".mp4":
             command += ["-movflags", "+faststart"]
         command += ["-progress", "pipe:1", str(temporary)]
@@ -699,6 +748,9 @@ class NativeDashEngine:
             if output.exists() and output.stat().st_size == 0:
                 output.unlink(missing_ok=True)
             raise
+        finally:
+            for playlist in playlist_files:
+                playlist.unlink(missing_ok=True)
         task.engine_state.pop("reserved_output_path", None)
 
         task.filename = output.name
@@ -1180,6 +1232,10 @@ class NativeDashEngine:
             {kind: tracks[kind] for kind in counts},
             counts,
             duration,
+            segment_entries={
+                kind: ((saved_state.get("tracks") or {}).get(kind) or {}).get("segments") or []
+                for kind in counts
+            },
             starts=starts,
         )
 
@@ -1204,10 +1260,7 @@ class NativeDashEngine:
             [seg["duration"] for track in tracks.values() for seg in track["segments"][:1]]
             or [2.0]
         )
-        poll_seconds = min(
-            LIVE_MAX_POLL_SECONDS,
-            max(LIVE_MIN_POLL_SECONDS, float(parsed.get("update_period") or segment_basis)),
-        )
+        poll_seconds = _dash_live_poll_seconds(parsed)
         stall_window = max(
             LIVE_STALL_MIN_SECONDS,
             LIVE_STALL_TARGET_MULTIPLIER * max(segment_basis, poll_seconds),
@@ -1359,6 +1412,7 @@ class NativeDashEngine:
 
         loop = asyncio.get_running_loop()
         last_new_segment = loop.time()
+        manifest_loaded_at = loop.time()
         current = tracks
         finish_reason = ""
 
@@ -1454,7 +1508,10 @@ class NativeDashEngine:
                     break
                 raise RuntimeError("直播清单长时间没有新分片，直播源可能已停止")
 
-            deadline = loop.time() + poll_seconds
+            # MPD processing and segment downloads count toward
+            # minimumUpdatePeriod. Waiting a new full period after them makes
+            # the recorder drift behind the live window on slower links.
+            deadline = manifest_loaded_at + poll_seconds
             while loop.time() < deadline:
                 if self._is_canceled() or self._is_pausing():
                     break
@@ -1478,6 +1535,8 @@ class NativeDashEngine:
                     preferred_video=task.selected_video,
                     preferred_audio=task.selected_audio,
                 )
+                manifest_loaded_at = loop.time()
+                poll_seconds = _dash_live_poll_seconds(refreshed)
                 manifest_url = str(response.url or manifest_url)
             except asyncio.CancelledError:
                 raise
@@ -1608,27 +1667,6 @@ class NativeDashEngine:
                         await asyncio.sleep(delay)
         if last_error is not None:
             raise last_error
-
-    @staticmethod
-    def _concat_track(
-        seg_dir: Path,
-        init_path: Path | None,
-        count: int,
-        extension: str,
-        destination: Path,
-    ) -> None:
-        """Join init + media segments into one continuous fMP4 track file."""
-        with destination.open("wb") as output:
-            if init_path is not None and init_path.exists():
-                output.write(init_path.read_bytes())
-            for index in range(count):
-                segment_path = seg_dir / f"{index:06d}{extension}"
-                with segment_path.open("rb") as source:
-                    while True:
-                        block = source.read(1024 * 1024)
-                        if not block:
-                            break
-                        output.write(block)
 
     @staticmethod
     def _reserve_output(task: Task, container: str = ".mp4") -> Path:

@@ -20,4 +20,12 @@ describe('HLS inspection cache', () => {
     cache.claim('3:page:c', 4)
     expect(cache.claim('2:page:b', 5)).toBe(true)
   })
+
+  it('backs off failed probes without making the resource permanently blind', () => {
+    const cache = new InspectionCache(10_000, 10)
+    expect(cache.claim('live', 1_000)).toBe(true)
+    cache.defer('live', 3_000, 1_100)
+    expect(cache.claim('live', 4_099)).toBe(false)
+    expect(cache.claim('live', 4_100)).toBe(true)
+  })
 })

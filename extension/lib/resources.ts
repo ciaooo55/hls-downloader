@@ -43,6 +43,12 @@ export interface MediaResource {
   inspected?: boolean
   manifestType?: 'master' | 'media'
   variants?: MediaVariant[]
+  /** Child rendition playlists owned by a master (audio, subtitles, alternate video). */
+  renditionUrls?: string[]
+  /** Recent media/init URLs parsed from the manifest for concrete MSE ownership. */
+  playbackUrls?: string[]
+  /** DASH SegmentTemplate URLs where `*` represents Number/Time/Bandwidth. */
+  playbackPatterns?: string[]
   seenAt: number
 }
 
@@ -72,10 +78,13 @@ const VOLATILE_QUERY = /^(?:signature|sig|expires?|expiry|policy|key-pair-id|hdn
 const MEDIA_AUTH_QUERY = /^(?:token|auth|authorization|jwt|session|sessionid)$/i
 const LL_HLS_RELOAD_QUERY = new Set(['_hls_msn', '_hls_part', '_hls_skip'])
 const AD_SIGNAL = /(?:^|[\/_-])(?:ad|ads|advert|advertisement|preroll|midroll|postroll|promo)(?:[\/_-]|$)/i
+const AD_QUERY_KEYS = new Set(['ad', 'ads', 'advert', 'advertisement', 'preroll', 'midroll', 'postroll', 'promo'])
+const AD_QUERY_VALUE_KEYS = new Set(['type', 'kind', 'media', 'role', 'content', 'contenttype'])
 const NON_VIDEO_MANIFEST_SIGNAL = /(?:^|[\/_.-])(?:audio(?:only|track)?|subtitle(?:s)?|caption(?:s)?|thumbnail(?:s)?|thumb(?:s)?|sprite(?:s)?|storyboard(?:s)?|preview(?:s)?|iframe|trickplay|ad(?:s)?|advert(?:s|ising)?|preroll|midroll|postroll)(?:[\/_.-]|$)/i
 const NON_VIDEO_MANIFEST_QUERY = new Set(['audio', 'subtitle', 'subtitles', 'caption', 'captions', 'ad', 'ads', 'advertisement', 'iframe'])
 const GENERIC_MEDIA_NAME = /^(?:(?:video|stream|master|index|playlist|manifest|chunklist|media|output|download|file|vod|live)(?:[-_ ]*(?:\d{3,4}p?|low|medium|high|sd|hd|fhd|uhd|4k))?|(?:hls[-_ ]*)?(?:\d{3,4}p[-_ ]*)?(?:hls[-_ ]*)?(?:video[-_ ]*stream|视频流)?|(?:hls[-_ ]*)?\d{3,4}p)$/i
 const OPAQUE_MEDIA_NAME = /^(?:[a-f0-9]{16,}|[a-z0-9_-]{28,})$/i
+const PLAYBACK_DISCOVERY_GRACE_MS = 650
 
 function cleanName(value = '', pathValue = false): string {
   let result = value.trim()
@@ -129,6 +138,22 @@ export function classifyResource(url: string, mimeType = ''): ResourceKind | nul
   return MEDIA_EXT.test(url) || mime.includes('octet-stream') ? 'file' : null
 }
 
+/**
+ * Classify a URL taken from a media element that has actually started playing.
+ *
+ * Unlike a passive network response, `HTMLMediaElement.currentSrc` is direct
+ * playback evidence. It can therefore safely promote extension-less endpoints
+ * and ordinary MP4 file URLs to `media` while still preserving HLS/DASH kinds.
+ * This also avoids waiting for PerformanceObserver/webRequest, which Firefox
+ * does not consistently deliver for media created inside an iframe.
+ */
+export function classifyPlaybackSource(url: string, mimeType = ''): ResourceKind | null {
+  if (!/^https?:\/\//i.test(url)) return null
+  const kind = classifyResource(url, mimeType)
+  if (kind === 'hls' || kind === 'dash') return kind
+  return 'media'
+}
+
 /** Remove LL-HLS blocking-reload cursors that expire after each playlist poll. */
 export function canonicalMediaUrl(url: string, kind?: ResourceKind | null): string {
   const resourceKind = kind || classifyResource(url)
@@ -161,6 +186,37 @@ function msePathAffinity(resourceUrl: string, mediaUrl: string): number {
   }
 }
 
+function mseEvidenceAffinity(resource: MediaResource, mediaUrl: string): number {
+  const candidates = [resource.url, ...(resource.playbackUrls || [])]
+  const exact = Math.max(...candidates.map(candidate => {
+    try {
+      // Use the same stable-query rules as resource deduplication: rotating
+      // signatures may differ, but semantic parameters such as camera/channel
+      // ids must still distinguish two resources on one CDN endpoint.
+      if (resourceFingerprint({ kind: resource.kind, url: candidate })
+        === resourceFingerprint({ kind: resource.kind, url: mediaUrl })) return 1_000
+    } catch {}
+    return msePathAffinity(candidate, mediaUrl)
+  }))
+  const pattern = Math.max(-1, ...(resource.playbackPatterns || []).map(candidate => {
+    try {
+      const expected = stableResourceUrl({ kind: resource.kind, url: candidate })
+      const actual = stableResourceUrl({ kind: resource.kind, url: mediaUrl })
+      if (expected.origin !== actual.origin || expected.search !== actual.search) return -1
+      const expression = expected.pathname
+        .split('*')
+        .map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('.*')
+      return new RegExp(`^${expression}$`).test(actual.pathname)
+        ? 900 + expected.pathname.replace(/\*/g, '').length
+        : -1
+    } catch {
+      return -1
+    }
+  }))
+  return Math.max(exact, pattern)
+}
+
 function mseCorrelatedResources(
   resources: MediaResource[],
   playback: PlaybackContext,
@@ -170,10 +226,10 @@ function mseCorrelatedResources(
   if (!evidence.length) return []
   const floor = playback.startedAt - 3 * 60_000
   const ranked = compactResources(resources, 40)
-    .filter(item => (item.kind === 'hls' || item.kind === 'dash') && item.seenAt >= floor)
+    .filter(item => ['hls', 'dash', 'media'].includes(item.kind) && item.seenAt >= floor)
     .map(item => ({
       item,
-      affinity: Math.max(...evidence.map(url => msePathAffinity(item.url, url))),
+      affinity: Math.max(...evidence.map(url => mseEvidenceAffinity(item, url))),
     }))
     // A same-origin match alone is not evidence: unrelated players and ads
     // frequently share one CDN host.
@@ -200,31 +256,51 @@ function isNonVideoManifest(resource: Pick<MediaResource, 'url'>): boolean {
   return NON_VIDEO_MANIFEST_SIGNAL.test(pathnameAndQuery)
 }
 
+function hasAdvertSignal(value: string): boolean {
+  try {
+    const url = new URL(value)
+    if (AD_SIGNAL.test(decodeURIComponent(url.pathname))) return true
+    for (const [rawKey, rawValue] of url.searchParams) {
+      const key = rawKey.toLowerCase()
+      const parameter = rawValue.trim().toLowerCase()
+      if (AD_QUERY_KEYS.has(key) && !['', '0', 'false', 'no', 'off'].includes(parameter)) return true
+      if (AD_QUERY_VALUE_KEYS.has(key) && /^(?:ad|ads|advert|advertisement|preroll|midroll|postroll|promo)(?:[-_].*)?$/.test(parameter)) return true
+    }
+    return false
+  } catch {
+    return AD_SIGNAL.test(value)
+  }
+}
+
 export function resourceFingerprint(resource: Pick<MediaResource, 'url' | 'kind'>): string {
   try {
-    const url = new URL(canonicalMediaUrl(resource.url, resource.kind))
-    url.hash = ''
-    // A few CDN families use terse signature keys (s/e/_t) rather than the
-    // conventional token/expires names.  Treat the trio as volatile only when
-    // s and e occur together, so an ordinary semantic `e` query parameter on
-    // another site is not silently discarded.
-    const names = new Set([...url.searchParams.keys()].map(key => key.toLowerCase()))
-    const hasShortLivedSignature = names.has('s') && names.has('e')
-    const adaptiveOrMedia = ['hls', 'dash', 'media'].includes(resource.kind)
-    for (const key of [...url.searchParams.keys()]) {
-      if (
-        VOLATILE_QUERY.test(key)
-        || (adaptiveOrMedia && MEDIA_AUTH_QUERY.test(key))
-        || (hasShortLivedSignature && ['s', 'e', '_t'].includes(key.toLowerCase()))
-      ) {
-        url.searchParams.delete(key)
-      }
-    }
-    url.searchParams.sort()
+    const url = stableResourceUrl(resource)
     return `${resource.kind}:${url.href}`
   } catch {
     return `${resource.kind}:${resource.url.split('#', 1)[0]}`
   }
+}
+
+function stableResourceUrl(resource: Pick<MediaResource, 'url' | 'kind'>): URL {
+  const url = new URL(canonicalMediaUrl(resource.url, resource.kind))
+  url.hash = ''
+  // A few CDN families use terse signature keys (s/e/_t) rather than the
+  // conventional token/expires names. Treat the trio as volatile only when s
+  // and e occur together, so an ordinary semantic `e` stays meaningful.
+  const names = new Set([...url.searchParams.keys()].map(key => key.toLowerCase()))
+  const hasShortLivedSignature = names.has('s') && names.has('e')
+  const adaptiveOrMedia = ['hls', 'dash', 'media'].includes(resource.kind)
+  for (const key of [...url.searchParams.keys()]) {
+    if (
+      VOLATILE_QUERY.test(key)
+      || (adaptiveOrMedia && MEDIA_AUTH_QUERY.test(key))
+      || (hasShortLivedSignature && ['s', 'e', '_t'].includes(key.toLowerCase()))
+    ) {
+      url.searchParams.delete(key)
+    }
+  }
+  url.searchParams.sort()
+  return url
 }
 
 /**
@@ -257,7 +333,7 @@ export function isUsefulResource(resource: MediaResource): boolean {
   try { path = decodeURIComponent(new URL(resource.url).pathname) } catch {}
   if (SEGMENT_EXT.test(resource.url) || SEGMENT_MIME.test(resource.mimeType || '')) return false
   if (SEGMENT_PATH.test(path) && (!resource.size || resource.size < 8 * 1024 * 1024)) return false
-  if (AD_SIGNAL.test(path) && (!resource.duration || resource.duration < 60) && (!resource.size || resource.size < 20 * 1024 * 1024)) return false
+  if (hasAdvertSignal(resource.url) && (!resource.duration || resource.duration < 60) && (!resource.size || resource.size < 20 * 1024 * 1024)) return false
   return true
 }
 
@@ -335,7 +411,7 @@ export function visiblePlaybackResources(
     // expose the bounded candidates shortly afterwards instead of leaving the
     // overlay in an endless “正在识别” state.
     if (inspected.length) visible = inspected
-    else if (Date.now() - playback.startedAt >= 1_500) visible = visible.slice(0, limit)
+    else if (Date.now() - playback.startedAt >= PLAYBACK_DISCOVERY_GRACE_MS) visible = visible.slice(0, limit)
     else return []
     // A pre-roll is normally a short, end-listed VOD requested immediately
     // before the real live manifest. Once inspection has confirmed a live
@@ -411,7 +487,14 @@ export function playerPlaybackResources(
   )
 }
 
-export function compactResources(resources: MediaResource[], limit = 40): MediaResource[] {
+function frameKey(resource: Pick<MediaResource, 'frameId'>): string {
+  const raw = resource.frameId as unknown
+  if (raw === undefined || raw === null || raw === '') return 'unknown'
+  const frameId = Number(raw)
+  return Number.isInteger(frameId) && frameId >= 0 ? String(frameId) : 'unknown'
+}
+
+export function compactResources(resources: MediaResource[], limit = 40, separateFrames = false): MediaResource[] {
   const byKey = new Map<string, MediaResource>()
   for (const rawResource of resources) {
     const canonicalUrl = canonicalMediaUrl(rawResource.url, rawResource.kind)
@@ -419,7 +502,9 @@ export function compactResources(resources: MediaResource[], limit = 40): MediaR
       ? rawResource
       : { ...rawResource, url: canonicalUrl, id: resourceId(canonicalUrl) }
     if (!isUsefulResource(resource)) continue
-    const key = resourceFingerprint(resource)
+    const key = separateFrames
+      ? `${resourceFingerprint(resource)}:frame:${frameKey(resource)}`
+      : resourceFingerprint(resource)
     const previous = byKey.get(key)
     if (!previous) {
       byKey.set(key, resource)
@@ -431,34 +516,80 @@ export function compactResources(resources: MediaResource[], limit = 40): MediaR
       ...older,
       ...newer,
       variants: newer.variants?.length ? newer.variants : older.variants,
+      renditionUrls: [...new Set([...(newer.renditionUrls || []), ...(older.renditionUrls || [])])].slice(-24),
+      playbackUrls: [...new Set([...(newer.playbackUrls || []), ...(older.playbackUrls || [])])].slice(-48),
+      playbackPatterns: [...new Set([...(newer.playbackPatterns || []), ...(older.playbackPatterns || [])])].slice(-48),
       seenAt: Math.max(previous.seenAt || 0, resource.seenAt || 0),
     })
   }
   const result = [...byKey.values()]
   const childToParents = new Map<string, number[]>()
   result.forEach((item, parentIndex) => {
-    for (const variant of item.variants || []) {
-      const fingerprint = resourceFingerprint({ url: variant.url, kind: 'hls' })
+    const childUrls = [
+      ...(item.variants || []).map(variant => variant.url),
+      ...(item.renditionUrls || []),
+    ]
+    for (const childUrl of childUrls) {
+      const fingerprint = separateFrames
+        ? `${resourceFingerprint({ url: childUrl, kind: 'hls' })}:frame:${frameKey(result[parentIndex])}`
+        : resourceFingerprint({ url: childUrl, kind: 'hls' })
       childToParents.set(fingerprint, [...(childToParents.get(fingerprint) || []), parentIndex])
     }
   })
   const refreshedParents = new Map<number, number>()
+  const parentPlaybackUrls = new Map<number, string[]>()
+  const parentPlaybackPatterns = new Map<number, string[]>()
   for (const child of result) {
-    const parents = childToParents.get(resourceFingerprint(child)) || []
+    const parents = childToParents.get(separateFrames
+      ? `${resourceFingerprint(child)}:frame:${frameKey(child)}`
+      : resourceFingerprint(child)) || []
     for (const parentIndex of parents) {
       refreshedParents.set(parentIndex, Math.max(
         refreshedParents.get(parentIndex) || 0,
         child.seenAt || 0,
       ))
+      parentPlaybackUrls.set(parentIndex, [...new Set([
+        ...(parentPlaybackUrls.get(parentIndex) || []),
+        ...(child.playbackUrls || []),
+      ])].slice(-48))
+      parentPlaybackPatterns.set(parentIndex, [...new Set([
+        ...(parentPlaybackPatterns.get(parentIndex) || []),
+        ...(child.playbackPatterns || []),
+      ])].slice(-48))
     }
   }
   const refreshed = result.map((item, index) => {
     const seenAt = Math.max(item.seenAt || 0, refreshedParents.get(index) || 0)
-    return seenAt === item.seenAt ? item : { ...item, seenAt }
+    const playbackUrls = [...new Set([
+      ...(item.playbackUrls || []),
+      ...(parentPlaybackUrls.get(index) || []),
+    ])].slice(-48)
+    const playbackPatterns = [...new Set([
+      ...(item.playbackPatterns || []),
+      ...(parentPlaybackPatterns.get(index) || []),
+    ])].slice(-48)
+    return seenAt === item.seenAt
+      && playbackUrls.length === (item.playbackUrls || []).length
+      && playbackPatterns.length === (item.playbackPatterns || []).length
+      ? item
+      : { ...item, seenAt, playbackUrls, playbackPatterns }
   })
-  const childVariants = new Set(refreshed.flatMap(item => item.variants || []).map(item => resourceFingerprint({ url: item.url, kind: 'hls' })))
+  const childVariants = new Set<string>()
+  for (const item of refreshed) {
+    for (const url of [
+      ...(item.variants || []).map(variant => variant.url),
+      ...(item.renditionUrls || []),
+    ]) {
+      const fingerprint = resourceFingerprint({ url, kind: 'hls' })
+      childVariants.add(separateFrames
+        ? `${fingerprint}:frame:${frameKey(item)}`
+        : fingerprint)
+    }
+  }
   return refreshed
-    .filter(item => Boolean(item.variants?.length) || !childVariants.has(resourceFingerprint(item)))
+    .filter(item => Boolean(item.variants?.length || item.renditionUrls?.length) || !childVariants.has(separateFrames
+      ? `${resourceFingerprint(item)}:frame:${frameKey(item)}`
+      : resourceFingerprint(item)))
     .sort((left, right) => resourceRank(right) - resourceRank(left) || right.seenAt - left.seenAt)
     .slice(0, limit)
 }
@@ -517,10 +648,10 @@ export function resourceId(url: string): string {
   return `${forward.toString(16).padStart(16, '0')}${reverse.toString(16).padStart(16, '0')}`
 }
 
-export function mergeResources(current: MediaResource[], incoming: MediaResource, limit = 100): MediaResource[] {
+export function mergeResources(current: MediaResource[], incoming: MediaResource, limit = 100, separateFrames = false): MediaResource[] {
   const now = Date.now()
   return compactResources([incoming, ...current]
-    .filter(item => now - item.seenAt < 30 * 60_000), limit)
+    .filter(item => now - item.seenAt < 30 * 60_000), limit, separateFrames)
 }
 
 export function shouldTakeover(input: {
@@ -574,6 +705,27 @@ export function pageResourceKey(tabId: number, pageUrl = ''): string {
   const page = pageIdentity(pageUrl)
   if (tabId >= 0) return page ? `resources:tab:${tabId}:page:${resourceId(page)}` : `resources:tab:${tabId}`
   return `resources:page:${resourceId(page || 'global')}`
+}
+
+/**
+ * Keep a frame's resource view separate from sibling iframes when the
+ * background service returns the page cache.  The cache itself intentionally
+ * stays page-scoped so the popup can show every media source, but an overlay
+ * inside an iframe must not see a sibling player's MSE manifest and bind the
+ * wrong floating button to it.
+ *
+ * A resource without frame evidence is retained for the top frame.  This is
+ * needed for media discovered by page scripts/performance entries that were
+ * reported before webRequest supplied a frame id.
+ */
+export function resourceBelongsToFrame(resource: Pick<MediaResource, 'frameId'>, frameId: number): boolean {
+  const target = Number(frameId)
+  if (!Number.isInteger(target) || target < 0) return true
+  const raw = resource.frameId as unknown
+  if (raw === undefined || raw === null || raw === '') return target === 0
+  const observed = Number(raw)
+  if (target === 0) return !Number.isInteger(observed) || observed === 0
+  return observed === target
 }
 
 const UNSAFE_REPLAY_HEADERS = new Set([

@@ -10,7 +10,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 try:
@@ -55,7 +55,7 @@ from .errors import (
 )
 from .throttle import throttle_bytes
 from .engine import task_output_dir, task_work_dir
-from .parser import UnsupportedPlaylistError, parse_m3u8
+from .parser import UnsupportedPlaylistError, filter_ad_segments, parse_m3u8
 from .playback import playback_service, write_playback_plan
 from .progress import ProgressTracker
 from .subtitles import has_cues, merge_webvtt_segments, webvtt_to_srt
@@ -81,6 +81,62 @@ LIVE_STALL_MIN_SECONDS = 90.0
 LIVE_STALL_TARGET_MULTIPLIER = 6.0
 LIVE_BATCH_CONCURRENCY = 3
 LIVE_MAX_POLL_SECONDS = 10.0
+
+
+def _live_reload_delay(playlist: dict, received_new_segments: bool) -> float:
+    """Choose an HLS reload cadence without losing LL-HLS partial windows."""
+    try:
+        part_target = max(0.0, float(playlist.get("part_target_duration") or 0))
+    except (TypeError, ValueError):
+        part_target = 0.0
+    if part_target > 0:
+        # PART-TARGET is the publication cadence. A one-second minimum (used
+        # for ordinary HLS) can skip several parts on low-latency origins.
+        return min(LIVE_MAX_POLL_SECONDS, max(0.2, part_target))
+    try:
+        target = max(1.0, float(playlist.get("target_duration") or 6.0))
+    except (TypeError, ValueError):
+        target = 6.0
+    delay = target if received_new_segments else max(1.0, target / 2)
+    return min(delay, LIVE_MAX_POLL_SECONDS)
+
+
+def _blocking_reload_url(url: str, playlist: dict | None) -> str:
+    """Build an LL-HLS blocking-reload URL from the last observed cursor.
+
+    RFC 8216bis allows an origin advertising ``CAN-BLOCK-RELOAD=YES`` to hold
+    the request until ``_HLS_msn``/``_HLS_part`` is newer than the current
+    window.  A recorder that keeps polling the bare URL can repeatedly receive
+    the same cached response and eventually lose the sliding PART window.
+    Keep the signed URL intact, replace stale cursor parameters, and only send
+    a cursor when the previous playlist exposes a concrete media sequence.
+    """
+    if not playlist or not playlist.get("can_block_reload"):
+        return url
+    segments = list(playlist.get("segments") or [])
+    if not segments:
+        return url
+    last = segments[-1]
+    try:
+        media_sequence = int(last.get("media_sequence"))
+    except (TypeError, ValueError):
+        return url
+    if media_sequence < 0:
+        return url
+    try:
+        parsed = urlsplit(url)
+        query = [
+            (key, value)
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            if key.lower() not in {"_hls_msn", "_hls_part", "_hls_skip"}
+        ]
+        query.append(("_HLS_msn", str(media_sequence)))
+        part_index = last.get("part_index")
+        if part_index is not None:
+            query.append(("_HLS_part", str(max(0, int(part_index)))))
+        return urlunsplit(parsed._replace(query=urlencode(query, doseq=True)))
+    except (TypeError, ValueError):
+        return url
 
 
 class _BrowserHLSClient:
@@ -734,6 +790,13 @@ class HLSDownloader:
                 response.headers.get("content-disposition", "")
             )
             if parsed["type"] == "media":
+                parsed = filter_ad_segments(
+                    parsed,
+                    enabled=bool(getattr(settings, "skip_ad_segments", True)),
+                )
+                skipped = int(parsed.get("ad_segments_skipped") or 0)
+                if skipped:
+                    self._log(f"[parsing] 已跳过 {skipped} 个 HLS 广告标记分片")
                 parsed["content"] = response.text
                 parsed["title"] = manifest_title
                 parsed["response_filename"] = response_filename
@@ -1886,6 +1949,7 @@ class HLSDownloader:
         client: Any,
         url: str,
         headers: dict[str, str],
+        previous: dict | None = None,
     ) -> dict:
         async def load_playlist():
             # Live manifests are sliding windows. Explicitly bypass caches on
@@ -1895,7 +1959,18 @@ class HLSDownloader:
             request_headers = dict(headers)
             request_headers["Cache-Control"] = "no-cache, no-store, max-age=0"
             request_headers["Pragma"] = "no-cache"
-            response = await client.get(url, headers=self._headers(url, request_headers))
+            request_url = _blocking_reload_url(url, previous)
+            response = await client.get(
+                request_url,
+                headers=self._headers(request_url, request_headers),
+            )
+            # A few CDN edges advertise CAN-BLOCK-RELOAD but reject the query
+            # when a request reaches a non-LL-HLS edge.  Do not turn that
+            # deployment quirk into a failed recording: retry the ordinary
+            # no-cache URL once, while retaining the same auth headers.
+            if request_url != url and response.status_code in {400, 404, 412, 422}:
+                await response.aclose()
+                response = await client.get(url, headers=self._headers(url, request_headers))
             response.raise_for_status()
             return response
 
@@ -1909,6 +1984,13 @@ class HLSDownloader:
         parsed = parse_m3u8(final_url, response.text)
         if parsed["type"] != "media":
             raise RuntimeError("直播清单刷新后不再是媒体清单")
+        parsed = filter_ad_segments(
+            parsed,
+            enabled=bool(getattr(settings, "skip_ad_segments", True)),
+        )
+        skipped = int(parsed.get("ad_segments_skipped") or 0)
+        if skipped:
+            self._log(f"[recording] 已跳过 {skipped} 个 HLS 广告标记分片")
         parsed["final_url"] = final_url
         return parsed
 
@@ -2052,6 +2134,7 @@ class HLSDownloader:
         loop = asyncio.get_running_loop()
         last_new_segment = loop.time()
         current = parsed
+        playlist_loaded_at = loop.time()
         finish_reason = ""
         pending_gap = False
 
@@ -2273,10 +2356,24 @@ class HLSDownloader:
                 if recorded:
                     finish_reason = "直播源已停止更新，自动结束录制"
                     break
+                if task.progress.failed_segments:
+                    # Do not collapse an authentication/segment CDN failure
+                    # into the misleading "playlist stopped" message.  A
+                    # signed stream can return a perfectly valid playlist
+                    # while every media URI is already expired; surfacing the
+                    # last worker error tells the user to refresh the source
+                    # page instead of retrying an unchanged URL forever.
+                    detail = str(task.progress.last_worker_error or "首批直播分片下载失败")[:240]
+                    raise RuntimeError(f"直播首批分片下载失败：{detail}")
                 raise RuntimeError("直播清单长时间没有新分片，直播源可能已停止")
 
-            delay = target_duration if new_batch else max(1.0, target_duration / 2)
-            await self._live_wait(min(delay, LIVE_MAX_POLL_SECONDS))
+            delay = _live_reload_delay(current, bool(new_batch))
+            # Keep a strict playlist cadence: segment downloads and state
+            # writes already consumed part of the interval. Adding a fresh
+            # full delay here made LL-HLS polling drift farther behind on every
+            # iteration, eventually allowing the PART window to slide away.
+            elapsed = max(0.0, loop.time() - playlist_loaded_at)
+            await self._live_wait(max(0.0, delay - elapsed))
             if self._is_canceled():
                 raise asyncio.CancelledError
             if self._is_pausing():
@@ -2285,8 +2382,9 @@ class HLSDownloader:
 
             try:
                 current = await self._reload_live_playlist(
-                    client, playlist_url, headers
+                    client, playlist_url, headers, current
                 )
+                playlist_loaded_at = loop.time()
                 playlist_url = str(current.get("final_url") or playlist_url)
             except asyncio.CancelledError:
                 if (

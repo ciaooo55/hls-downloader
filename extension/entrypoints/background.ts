@@ -1,22 +1,25 @@
 import { browser } from 'wxt/browser'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
-import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyResource, compactResources, matchesDownloadClick, mergeResources, normalizeHost, pageResourceKey, replayableRequestHeaders, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
+import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, mergeResources, normalizeHost, pageResourceKey, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
-import { browserCleanupAction, canContinueTakeover, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus } from '../lib/takeover'
+import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus } from '../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
 import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
 import { inspectHlsResource } from '../lib/hlsInspection'
+import { inspectDashResource } from '../lib/dashInspection'
 import { contentDispositionFilename } from '../lib/contentDisposition'
 import { InspectionCache } from '../lib/inspectionCache'
 import { cookieLookupUrl } from '../lib/browserCookies'
 import { detectBrowserFamily, stableBrowserClientId } from '../lib/browserClient'
 import { BrowserDirectBackend } from '../lib/directBackend'
 import { isEarlyDirectDownloadResponse, type ObservedDownloadResource } from '../lib/directResponse'
+import { ClickIntentStore } from '../lib/clickIntentStore'
+import { TakeoverSettingsSync } from '../lib/takeoverSettingsSync'
+import { SessionListStore } from '../lib/sessionListStore'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 const CLICK_INTENT_STORAGE_KEY = 'click-intents'
-let clickIntents: DownloadClickIntent[] = []
-let clickIntentsHydrated = false
+const clickIntentStore = new ClickIntentStore(browser.storage.session, CLICK_INTENT_STORAGE_KEY)
 let browserFallbacks: Array<{ url: string, at: number }> = []
 const MAX_BROWSER_FALLBACKS = 128
 const determinedDownloads = new Map<number, Browser.downloads.DownloadItem>()
@@ -37,9 +40,11 @@ const earlyBrowserTakeovers = new Map<string, EarlyBrowserTakeover>()
 const requestChains = new RequestChainStore()
 let nativeBridge: NativeBridge | null = null
 let directBackend: BrowserDirectBackend | null = null
+let takeoverSettingsSync: TakeoverSettingsSync | null = null
 let concealedDownloadCount = 0
 let downloadUiFailsafe: ReturnType<typeof setTimeout> | null = null
-const inspectedHls = new InspectionCache()
+const inspectedAdaptive = new InspectionCache()
+const resourceSessionStore = new SessionListStore<MediaResource>(browser.storage.session)
 let browserClientIdPromise: Promise<string> | null = null
 const HANDOFF_TRACKER_STORAGE_KEY = 'handoff-tracker-v1'
 
@@ -259,10 +264,12 @@ async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabI
     pageUrl = await topLevelPageUrl(tabId, pageUrl)
   }
   const key = storageKey(tabId, pageUrl)
-  const stored = await browser.storage.session.get(key)
-  const resources = Array.isArray(stored[key]) ? stored[key] : []
-  const merged = mergeResources(resources, { ...resource, pageUrl, kind, id: resourceId(resource.url), seenAt: Date.now() })
-  await browser.storage.session.set({ [key]: merged })
+  const merged = await resourceSessionStore.update(key, resources => mergeResources(
+    resources,
+    { ...resource, pageUrl, kind, id: resourceId(resource.url), seenAt: Date.now() },
+    100,
+    true,
+  ))
   await browser.action.setBadgeText({ text: String(Math.min(99, merged.length)), ...(tabId >= 0 ? { tabId } : {}) })
 }
 
@@ -328,31 +335,41 @@ async function native(message: Record<string, unknown>, timeoutMs?: number): Pro
   return response
 }
 
-async function applyDesktopTakeoverSettings(response: any): Promise<any> {
-  if (typeof response?.takeover_enabled === 'boolean' && Number.isFinite(Number(response?.takeover_minimum_bytes))) {
-    await browser.storage.local.set({
-      enabled: response.takeover_enabled,
-      minimumBytes: Math.max(0, Number(response.takeover_minimum_bytes)),
-    })
-  }
-  return response
-}
-
 async function pingDesktop(): Promise<any> {
-  const response = await applyDesktopTakeoverSettings(await native({ op: 'ping' }))
+  const response = takeoverSettingsSync
+    ? await takeoverSettingsSync.applyPing(await native({ op: 'ping' }))
+    : await native({ op: 'ping' })
   if (response?.ok) lastDesktopPingAt = Date.now()
   return response
 }
 
-async function inspectHls(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1): Promise<void> {
+async function inspectAdaptive(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1): Promise<void> {
   const normalized = {
     ...resource,
     url: canonicalMediaUrl(resource.url, resource.kind),
   }
-  const inspectionKey = `${tabId}:${normalized.pageUrl || ''}:${normalized.url}`
-  if (normalized.kind !== 'hls' || !inspectedHls.claim(inspectionKey)) return
+  const inspectionKey = `${tabId}:${normalized.pageUrl || ''}:${normalized.kind}:${normalized.url}`
+  if (!['hls', 'dash'].includes(normalized.kind) || !inspectedAdaptive.claim(inspectionKey)) return
   try {
-    const metadata = await inspectHlsResource(normalized)
+    // Manifest probes must use the same page identity as the observed request.
+    // A CDN may return 403 to an extension-origin fetch even though the media
+    // request in the tab succeeded. Cookies are looked up for this exact CDN
+    // URL; they are never copied from the page origin to another host.
+    const inspectionHeaders: Record<string, string> = {}
+    const pageUrl = String(resource.pageUrl || '')
+    try {
+      const page = new URL(pageUrl)
+      if (/^https?:$/i.test(page.protocol)) {
+        inspectionHeaders.referer = page.href.split('#', 1)[0]
+        inspectionHeaders.origin = page.origin
+      }
+    } catch {}
+    const cookie = await cookiesFor(normalized.url, pageUrl)
+    if (cookie) inspectionHeaders.cookie = cookie
+    const probeResource = { ...normalized, inspectionHeaders }
+    const metadata = normalized.kind === 'hls'
+      ? await inspectHlsResource(probeResource)
+      : await inspectDashResource(probeResource)
     if (metadata) {
       const enriched = {
         ...normalized,
@@ -360,11 +377,16 @@ async function inspectHls(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId 
       }
       await saveResource(enriched, tabId)
       await sendCapturedResource(tabId, enriched)
+    } else {
+      // A response can be temporarily unauthorized, truncated or not yet a
+      // real manifest. Back off to avoid doubling every live poll, but do not
+      // keep the URL blind for the full success TTL.
+      inspectedAdaptive.defer(inspectionKey)
     }
   } catch {
     // A transient CDN/auth failure must not permanently suppress inspection.
     // The captured manifest remains downloadable and the next observation can retry.
-    inspectedHls.release(inspectionKey)
+    inspectedAdaptive.defer(inspectionKey)
   }
 }
 
@@ -583,95 +605,29 @@ async function pauseBrowserDownload(item: Browser.downloads.DownloadItem): Promi
 async function resumeBrowserDownload(item: Browser.downloads.DownloadItem, paused: boolean): Promise<void> {
   if (!paused) return
   const [current] = await browser.downloads.search({ id: item.id }).catch(() => [])
-  if (current?.state !== 'in_progress') return
+  // Edge/Chrome may report a just-paused response as `interrupted` while it is
+  // still resumable. Refusing that state left excluded downloads and failed or
+  // rejected handoffs stuck forever at 0 B.
+  if (!current || !canResumeBrowserDownload(current.state)) return
   try { await browser.downloads.resume(item.id) } catch {}
 }
 
-async function hydrateClickIntents(): Promise<void> {
-  if (clickIntentsHydrated) return
-  clickIntentsHydrated = true
-  try {
-    const stored = await browser.storage.session.get(CLICK_INTENT_STORAGE_KEY)
-    const values = Array.isArray(stored[CLICK_INTENT_STORAGE_KEY]) ? stored[CLICK_INTENT_STORAGE_KEY] : []
-    const now = Date.now()
-    const restored = values
-      .filter((item: any) => item && typeof item === 'object')
-      .map((item: any) => ({
-        href: String(item.href || ''),
-        pageUrl: String(item.pageUrl || ''),
-        altBypass: Boolean(item.altBypass),
-        ctrlForce: Boolean(item.ctrlForce),
-        generic: Boolean(item.generic),
-        tabId: Number.isFinite(Number(item.tabId)) ? Number(item.tabId) : undefined,
-        frameId: Number.isFinite(Number(item.frameId)) ? Number(item.frameId) : undefined,
-        opensNewTab: Boolean(item.opensNewTab),
-        controlHint: Boolean(item.controlHint),
-        at: Number(item.at) || now,
-      }))
-      .filter((item: DownloadClickIntent) => now - item.at <= 7000)
-    // Prefer fresher in-memory intents if both exist after a race.
-    const merged = [...clickIntents, ...restored]
-    const seen = new Set<string>()
-    clickIntents = []
-    for (const intent of merged) {
-      const key = [intent.at, intent.href, intent.pageUrl, intent.tabId ?? '', intent.generic ? 1 : 0].join('|')
-      if (seen.has(key)) continue
-      seen.add(key)
-      clickIntents.push(intent)
-    }
-    clickIntents = clickIntents
-      .sort((left, right) => right.at - left.at)
-      .slice(0, 20)
-  } catch {
-    // Session storage may be unavailable in rare test/host environments.
-  }
-}
-
-async function persistClickIntents(): Promise<void> {
-  const now = Date.now()
-  clickIntents = clickIntents
-    .filter(intent => now - intent.at <= 7000)
-    .sort((left, right) => right.at - left.at)
-    .slice(0, 20)
-  try {
-    await browser.storage.session.set({ [CLICK_INTENT_STORAGE_KEY]: clickIntents })
-  } catch {
-    // Ignore persistence failures; in-memory intents still work for the current worker.
-  }
-}
-
 async function rememberClickIntent(intent: DownloadClickIntent): Promise<void> {
-  await hydrateClickIntents()
-  clickIntents.unshift(intent)
-  await persistClickIntents()
+  await clickIntentStore.remember(intent)
   console.debug('HLS Downloader received explicit click intent', intent.href || intent.pageUrl || '')
-}
-
-async function consumeClickIntent(url: string, finalUrl = '', referrer = '', chain?: RequestChain): Promise<DownloadClickIntent | undefined> {
-  await hydrateClickIntents()
-  const now = Date.now()
-  clickIntents = clickIntents.filter(intent => now - intent.at <= 7000)
-  const index = clickIntents.findIndex(intent => matchesDownloadClick(intent, {
-    url,
-    finalUrl,
-    referrer: referrer || chain?.pageUrl || '',
-    chainUrls: chain?.urls,
-    tabId: chain?.tabId,
-  }, now))
-  if (index < 0) {
-    await persistClickIntents()
-    return undefined
-  }
-  const [matched] = clickIntents.splice(index, 1)
-  await persistClickIntents()
-  return matched
 }
 
 async function waitForClickIntent(url: string, finalUrl = '', referrer = '', chain?: RequestChain): Promise<DownloadClickIntent | undefined> {
   // Downloads can lag behind click-intent by a few hundred ms on slow pages,
   // and Chrome may wake the service worker after the click message arrives.
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const intent = await consumeClickIntent(url, finalUrl, referrer, chain)
+    const intent = await clickIntentStore.consume({
+      url,
+      finalUrl,
+      referrer: referrer || chain?.pageUrl || '',
+      chainUrls: chain?.urls,
+      tabId: chain?.tabId,
+    })
     if (intent) return intent
     await new Promise(resolve => setTimeout(resolve, 50))
   }
@@ -749,7 +705,7 @@ function observedResponse(details: any, chain?: RequestChain) {
     requestHeaders: chain?.requestHeaders,
   }
   void saveResource(resource, details.tabId)
-  void inspectHls(resource, details.tabId)
+  void inspectAdaptive(resource, details.tabId)
   void sendCapturedResource(details.tabId, resource)
   return { disposition, resource }
 }
@@ -840,7 +796,7 @@ export default defineBackground(() => {
   browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.status === 'loading' || changeInfo.url) {
       requestChains.clearTab(tabId)
-      inspectedHls.releasePrefix(`${tabId}:`)
+      inspectedAdaptive.releasePrefix(`${tabId}:`)
       void browser.action.setBadgeText({ tabId, text: '' }).catch(() => undefined)
       if (changeInfo.url) {
         const keep = storageKey(tabId, changeInfo.url)
@@ -854,7 +810,7 @@ export default defineBackground(() => {
   })
   browser.tabs.onRemoved.addListener(tabId => {
     requestChains.clearTab(tabId)
-    inspectedHls.releasePrefix(`${tabId}:`)
+    inspectedAdaptive.releasePrefix(`${tabId}:`)
     void browser.storage.session.get(null).then(values => {
       const keys = Object.keys(values).filter(key => key.startsWith(`resources:tab:${tabId}`))
       if (keys.length) return browser.storage.session.remove(keys)
@@ -867,6 +823,10 @@ export default defineBackground(() => {
       concealedDownloadCount = 0
       revealBrowserDownload()
     },
+  )
+  takeoverSettingsSync = new TakeoverSettingsSync(
+    browser.storage.local,
+    message => native(message),
   )
   void hydrateHandoffTracker().then(() => pollTrackedHandoffs()).catch(() => undefined)
   void setBrowserDownloadUi(true)
@@ -986,17 +946,16 @@ export default defineBackground(() => {
     let paused = false
     let accepted = false
     try {
+      // IDM pauses the browser item immediately in onCreated and resolves
+      // ownership afterwards. Do the same before any storage/native await so a
+      // fast local/CDN file cannot visibly advance behind the desktop prompt.
+      paused = await pauseBrowserDownload(item)
       const config = await settings()
       if (!config.enabled) return
-      // Chrome emits onCreated after accepting the browser request. Pause it
-      // while click/resource evidence and the desktop handoff are resolved.
-      paused = await pauseBrowserDownload(item)
-      const actual = await refreshedDownload(item.id, item)
-      if (!canContinueTakeover(actual.state)) return
       // Prefer the request chain first so click matching can use tabId even when
       // Chrome leaves DownloadItem.referrer empty. After a click is known, re-bind
       // the chain to that tab so we never replay another page's auth headers.
-      const provisionalChain = requestChains.find(actual)
+      let provisionalChain = requestChains.find(item)
       const earlyTakeover = provisionalChain
         ? earlyBrowserTakeovers.get(provisionalChain.requestId)
         : undefined
@@ -1012,11 +971,17 @@ export default defineBackground(() => {
           const handoff = await waitForHandoffResolution(String(earlyResult.response.handoff.id))
           if (handoff?.status !== 'accepted') return
           concealBrowserDownload()
-          await removeBrowserDownload(actual)
+          await removeBrowserDownload(item)
           accepted = true
           return
         }
       }
+      // Filename determination is useful for generated downloads but can take
+      // hundreds of milliseconds. The response-header path above never waits
+      // for it, which keeps ordinary link takeover prompt latency low.
+      const actual = await refreshedDownload(item.id, item)
+      if (!canContinueTakeover(actual.state)) return
+      provisionalChain = requestChains.find(actual) || provisionalChain
       let intent = await waitForClickIntent(
         actual.url,
         actual.finalUrl,
@@ -1090,7 +1055,24 @@ export default defineBackground(() => {
       return
     }
     const url = info.linkUrl || info.srcUrl
-    if (url) void offer({ id: resourceId(url), url, kind: classifyResource(url) || 'file', pageUrl: tab?.url, title: tab?.title, tabId: tab?.id, seenAt: Date.now() })
+    if (!url) return
+    const kind = classifyResource(url)
+      || ((info.mediaType === 'video' || info.mediaType === 'audio') ? classifyPlaybackSource(url) : null)
+    if (!kind || /^blob:/i.test(url)) {
+      // MSE players expose only a blob: URL in the browser context menu. It is
+      // not a downloadable origin; open the correlated player panel instead
+      // of mislabelling it as a file task.
+      if (tab?.id !== undefined) {
+        const frameId = Number((info as any).frameId)
+        void browser.tabs.sendMessage(
+          tab.id,
+          { type: 'open-media-panel' },
+          Number.isInteger(frameId) && frameId >= 0 ? { frameId } : undefined,
+        ).catch(() => undefined)
+      }
+      return
+    }
+    void offer({ id: resourceId(url), url, kind, pageUrl: tab?.url, title: tab?.title, tabId: tab?.id, seenAt: Date.now() })
   })
 
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -1122,7 +1104,7 @@ export default defineBackground(() => {
         frameId: message.resource.frameId ?? sender.frameId,
       }
       void saveResource(resource, sender.tab?.id ?? -1)
-      void inspectHls(resource, sender.tab?.id ?? -1)
+      void inspectAdaptive(resource, sender.tab?.id ?? -1)
       return
     }
     if (message?.type === 'download' || message?.type === 'offer') {
@@ -1153,14 +1135,29 @@ export default defineBackground(() => {
     }
     if (message?.type === 'list') {
       const tabId = Number(message.tabId ?? sender.tab?.id ?? -1)
+      // Content scripts run in every frame, while the session cache is kept
+      // page-scoped so the popup can aggregate all players.  A frame overlay
+      // must receive only its own observations; otherwise two same-page MSE
+      // players (especially in cross-origin iframes) can exchange manifests
+      // and show a download button for the wrong video.  Extension pages such
+      // as the popup do not have an http(s) sender URL, so they intentionally
+      // keep the aggregate view.
+      const pageSender = /^https?:\/\//i.test(String(sender.url || ''))
+      const senderFrameId = pageSender && Number.isInteger(Number(sender.frameId))
+        ? Number(sender.frameId)
+        : -1
       void topLevelPageUrl(tabId, String(message.pageUrl || ''))
         .then(pageUrl => storageKey(tabId, pageUrl))
-        .then(key => browser.storage.session.get(key).then(async value => {
-          const raw = Array.isArray(value[key]) ? value[key] : []
-          const cleaned = compactResources(raw, 40)
-          if (cleaned.length !== raw.length) await browser.storage.session.set({ [key]: cleaned })
-          if (tabId >= 0) await browser.action.setBadgeText({ tabId, text: cleaned.length ? String(Math.min(99, cleaned.length)) : '' })
-          sendResponse(cleaned)
+        .then(key => resourceSessionStore.update(key, raw => compactResources(raw, 40, true)).then(async cleaned => {
+          // Never write the frame-filtered view back to the page cache: doing
+          // so would erase sibling iframe resources just because one frame
+          // opened its panel first.
+          const scoped = senderFrameId >= 0
+            ? cleaned.filter(resource => resourceBelongsToFrame(resource, senderFrameId))
+            : cleaned
+          const visible = senderFrameId >= 0 ? compactResources(scoped, 40, true) : compactResources(cleaned, 40)
+          if (tabId >= 0) await browser.action.setBadgeText({ tabId, text: visible.length ? String(Math.min(99, visible.length)) : '' })
+          sendResponse(visible)
         }))
         .catch(error => sendResponse({ ok: false, error: String(error) }))
       return true
@@ -1176,11 +1173,13 @@ export default defineBackground(() => {
       return true
     }
     if (message?.type === 'set-takeover-settings') {
-      void native({
-        op: 'set_takeover_settings',
+      const update = {
         ...(typeof message.enabled === 'boolean' ? { enabled: message.enabled } : {}),
-        ...(Number.isFinite(Number(message.minimumBytes)) ? { minimum_bytes: Number(message.minimumBytes) } : {}),
-      }).then(applyDesktopTakeoverSettings)
+        ...(Number.isFinite(Number(message.minimumBytes)) ? { minimumBytes: Number(message.minimumBytes) } : {}),
+      }
+      void (takeoverSettingsSync
+        ? takeoverSettingsSync.queue(update)
+        : Promise.reject(new Error('接管设置同步尚未初始化')))
         .then(response => sendResponse(response))
         .catch(error => sendResponse({ ok: false, error: String(error) }))
       return true

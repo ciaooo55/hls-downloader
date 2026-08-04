@@ -32,6 +32,7 @@ def test_ci_runs_windows_python_and_frontend_checks():
     assert "browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd" in workflow
     assert "browser-actions/setup-firefox@0bc507ddf224827e3b1af68e014d5e42ab93e795" in workflow
     assert "scripts/smoke_extension_browsers.py" in workflow
+    assert "scripts/smoke_extension_takeover.py" in workflow
     assert "actions/setup-java@v5" not in workflow
     assert "permissions:\n  contents: read" in workflow
 
@@ -74,6 +75,7 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd" in workflow
     assert "browser-actions/setup-firefox@0bc507ddf224827e3b1af68e014d5e42ab93e795" in workflow
     assert "scripts/smoke_extension_browsers.py" in workflow
+    assert "scripts/smoke_extension_takeover.py" in workflow
     assert "scripts/smoke_real_download.py --archive $archive" in workflow
     assert "scripts/smoke-portable-upgrade.ps1" in workflow
     assert "scripts/smoke-installer-upgrade.ps1" in workflow

@@ -331,6 +331,39 @@ def test_http_probe_requests_identity_and_rejects_compressed_range_metadata():
     assert metadata["content_type"] == "application/pdf"
 
 
+def test_http_probe_does_not_wait_forever_for_first_chunk_when_headers_are_reliable(monkeypatch):
+    task = Task(id="probe-header-first", url="https://files.test/video.mp4", task_type=TaskType.HTTP)
+    monkeypatch.setattr(http_file_module, "PROBE_RESPONSE_TIMEOUT", 0.01)
+
+    class DelayedBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            await asyncio.sleep(1)
+            yield b"not-read"
+
+        async def aclose(self):
+            return None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            206,
+            stream=DelayedBody(),
+            headers={
+                "Content-Range": "bytes 0-255/104857600",
+                "Content-Length": "256",
+                "Content-Type": "video/mp4",
+            },
+            request=request,
+        )
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await HTTPDownloader(task)._probe(client, {})
+
+    metadata = asyncio.run(run())
+    assert metadata["ranges"] is True
+    assert metadata["total"] == 104857600
+
+
 def test_task_process_files_use_configured_temp_directory(tmp_path):
     task = Task(
         id="temp-location",

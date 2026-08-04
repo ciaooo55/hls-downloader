@@ -109,6 +109,7 @@ export interface Settings {
   queue_active_days?: number[]
   live_record_max_minutes?: number
   download_subtitles?: boolean
+  skip_ad_segments?: boolean
   clipboard_watch?: boolean
   tvbox_endpoint?: string
   cast_device?: { id: string; protocol: 'dlna' | 'chromecast'; location: string; control_url: string; service_type: string; label: string; host: string }

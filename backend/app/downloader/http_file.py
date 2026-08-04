@@ -114,6 +114,48 @@ def _response_decodes_content(response: httpx.Response) -> bool:
     return bool(encoding and encoding != "identity")
 
 
+def _metadata_probe_can_skip_body(
+    *,
+    content_type: str,
+    final_url: str,
+    server_filename: str,
+    content_length: int,
+) -> bool:
+    """Whether response headers are strong enough to start a transfer.
+
+    A few signed CDNs send headers immediately but hold the first body chunk
+    until their edge has assembled a range.  Waiting for that chunk made a
+    valid MP4 appear stuck in ``正在读取文件信息``.  We may proceed without a
+    preview only when the server has already supplied a positive size and an
+    unambiguous binary/media identity; HTML/JSON error pages still require a
+    body prefix and are rejected by ``validate_download_response``.
+    """
+    if content_length <= 0:
+        return False
+    mime = str(content_type or "").split(";", 1)[0].strip().lower()
+    if mime.startswith(("audio/", "video/", "image/")):
+        return True
+    if mime in {
+        "application/octet-stream",
+        "binary/octet-stream",
+        "application/zip",
+        "application/x-7z-compressed",
+        "application/x-rar-compressed",
+        "application/pdf",
+    }:
+        value = f"{server_filename} {final_url}".lower()
+        return bool(re.search(r"\.(?:7z|zip|rar|pdf|mp3|m4a|flac|wav|mp4|mkv|webm|mov|avi|ts|m4s)(?:$|[?#\s])", value))
+    # Unknown application types are not enough by themselves: a login/error
+    # gateway is often mislabeled as ``application/octet-stream``.  An explicit
+    # strong binary suffix can add the missing evidence without accepting a
+    # generic JavaScript/XML response on headers alone.
+    value = f"{server_filename} {final_url}".lower()
+    return bool(re.search(
+        r"\.(?:7z|apk|avi|bin|bz2|cab|dmg|docx?|exe|flac|gz|img|iso|jar|m4a|mkv|mov|mp3|mp4|msi|pdf|pptx?|rar|tar|tgz|torrent|wav|webm|whl|xlsx?|xz|zip)(?:$|[?#\s])",
+        value,
+    ))
+
+
 def _strong_etag(value: str) -> str:
     etag = str(value or "").strip()
     return "" if etag.lower().startswith("w/") else etag
@@ -485,18 +527,40 @@ class HTTPDownloader(SeeklessEngine):
             filename = _content_disposition_filename(response.headers.get("content-disposition", ""))
             if not filename and fallback is not None:
                 filename = _content_disposition_filename(fallback.headers.get("content-disposition", ""))
-            preview = b""
-            async for chunk in response.aiter_bytes():
-                preview = bytes(chunk[:65536])
-                break
             content_type = (response.headers.get("content-type", "") or (fallback.headers.get("content-type", "") if fallback else "")).split(";", 1)[0]
+            server_filename = filename
+            preview = b""
+            # Read only a bounded first chunk for the content validation.  Do
+            # not let a CDN that has sent reliable metadata but is slow to
+            # release bytes hold the task in the metadata stage indefinitely.
+            # The outer probe deadline still protects ambiguous responses.
+            stream = response.aiter_bytes()
+            try:
+                preview = bytes(await asyncio.wait_for(
+                    stream.__anext__(),
+                    timeout=min(3.0, PROBE_RESPONSE_TIMEOUT),
+                ))[:65536]
+            except StopAsyncIteration:
+                preview = b""
+            except asyncio.TimeoutError:
+                if not _metadata_probe_can_skip_body(
+                    content_type=content_type,
+                    final_url=str(response.url),
+                    server_filename=server_filename,
+                    content_length=total,
+                ):
+                    raise
+                self.on_log(
+                    self.task.id,
+                    "[probing] 服务器已返回可靠文件信息，首个数据块较慢，继续下载",
+                )
             validate_download_response(
                 self.task,
                 content_type=content_type,
                 content_length=total,
                 preview=preview,
                 final_url=str(response.url),
-                server_filename=filename,
+                server_filename=server_filename,
             )
             return {
                 "total": total,

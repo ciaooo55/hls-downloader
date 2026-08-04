@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   canonicalMediaUrl,
   classifyDownload,
+  classifyPlaybackSource,
   classifyResource,
   compactResources,
   isGenericMediaName,
@@ -21,6 +22,7 @@ import {
   suggestedResourceFilename,
   visibleMediaResources,
   normalizeHost,
+  resourceBelongsToFrame,
   type MediaResource,
 } from './resources'
 
@@ -40,6 +42,12 @@ describe('resource rules', () => {
     expect(classifyResource('https://cdn.test/0001.ts')).toBeNull()
     expect(classifyResource('https://cdn.test/file.torrent?token=1')).toBe('file')
     expect(classifyResource('https://cdn.test/get?id=1', 'application/x-bittorrent')).toBe('file')
+  })
+  it('uses an actually playing media element as direct classification evidence', () => {
+    expect(classifyPlaybackSource('https://cdn.test/movie.mp4')).toBe('media')
+    expect(classifyPlaybackSource('https://cdn.test/play?id=42')).toBe('media')
+    expect(classifyPlaybackSource('https://cdn.test/master.m3u8')).toBe('hls')
+    expect(classifyPlaybackSource('blob:https://site.test/opaque')).toBeNull()
   })
   it('deduplicates resources', () => {
     const item = { id: '1', url: 'https://a.test/v.mp4', kind: 'media' as const, seenAt: Date.now() }
@@ -87,6 +95,25 @@ describe('resource rules', () => {
     expect(isUsefulResource(resource({ kind: 'dash', url: 'https://cdn.test/video/manifest.mpd?track=audio' }))).toBe(false)
     expect(isUsefulResource(resource({ kind: 'hls', url: 'https://cdn.test/video/master.m3u8' }))).toBe(true)
     expect(isUsefulResource(resource({ kind: 'hls', url: 'https://cdn.test/adventure/master.m3u8' }))).toBe(true)
+  })
+  it('keeps iframe resource views isolated while allowing untagged top-frame evidence', () => {
+    expect(resourceBelongsToFrame({ frameId: 2 }, 2)).toBe(true)
+    expect(resourceBelongsToFrame({ frameId: 1 }, 2)).toBe(false)
+    expect(resourceBelongsToFrame({}, 0)).toBe(true)
+    expect(resourceBelongsToFrame({ frameId: 3 }, 0)).toBe(false)
+    expect(resourceBelongsToFrame({ frameId: 2 }, -1)).toBe(true)
+  })
+  it('can retain identical media URLs from distinct frames in the shared cache', () => {
+    const first = resource({ frameId: 1, seenAt: Date.now() - 2 })
+    const second = resource({ frameId: 2, seenAt: Date.now() })
+    expect(compactResources([first, second], 40)).toHaveLength(1)
+    expect(compactResources([first, second], 40, true)).toHaveLength(2)
+  })
+  it('filters explicit advert query signals without rejecting ordinary words or disabled flags', () => {
+    expect(isUsefulResource(resource({ url: 'https://cdn.test/play.mp4?ad=preroll' }))).toBe(false)
+    expect(isUsefulResource(resource({ url: 'https://cdn.test/play.mp4?role=midroll' }))).toBe(false)
+    expect(isUsefulResource(resource({ url: 'https://cdn.test/play.mp4?ad=0&topic=adventure' }))).toBe(true)
+    expect(isUsefulResource(resource({ url: 'https://cdn.test/adventure/play.mp4' }))).toBe(true)
   })
   it('stably deduplicates refreshed signed URLs while preserving meaningful query parameters', () => {
     const now = Date.now()
@@ -176,6 +203,24 @@ describe('resource rules', () => {
     expect(compactResources([high, master, medium])).toMatchObject([{
       id: 'master',
       url: master.url,
+      seenAt: now,
+    }])
+  })
+  it('folds a generic external audio playlist into its owning HLS master', () => {
+    const now = Date.now()
+    const master = resource({
+      id: 'master', kind: 'hls', url: 'https://cdn.test/session/master.m3u8', seenAt: now - 1_000,
+      variants: [{ url: 'https://cdn.test/session/video.m3u8', height: 1080 }],
+      renditionUrls: ['https://cdn.test/session/track.m3u8?token=old'],
+    })
+    const audio = resource({
+      id: 'audio', kind: 'hls', url: 'https://cdn.test/session/track.m3u8?token=new',
+      playbackUrls: ['https://cdn.test/session/audio-10.m4s'], seenAt: now,
+    })
+
+    expect(compactResources([audio, master])).toMatchObject([{
+      id: 'master',
+      playbackUrls: ['https://cdn.test/session/audio-10.m4s'],
       seenAt: now,
     }])
   })
@@ -314,6 +359,67 @@ describe('resource rules', () => {
       mseResourceUrls: ['https://cdn.test/segments/chunk.m4s'],
       startedAt: now,
     }, 2)).toEqual([])
+  })
+  it('uses parsed segment URLs when two manifests share one CDN directory', () => {
+    const now = Date.now()
+    const first = resource({
+      id: 'first', kind: 'hls', inspected: true,
+      url: 'https://cdn.test/live/one.m3u8',
+      playbackUrls: ['https://cdn.test/live/shared-101.m4s?token=old'],
+      seenAt: now,
+    })
+    const second = resource({
+      id: 'second', kind: 'hls', inspected: true,
+      url: 'https://cdn.test/live/two.m3u8',
+      playbackUrls: ['https://cdn.test/live/shared-202.m4s?token=old'],
+      seenAt: now,
+    })
+
+    expect(playerPlaybackResources([first, second], {
+      sourceUrls: ['blob:https://site.test/player-two'],
+      mseResourceUrls: ['https://cdn.test/live/shared-202.m4s?token=new'],
+      startedAt: now,
+    }, 2).map(item => item.id)).toEqual(['second'])
+  })
+  it('associates a response Blob URL with its exact direct media resource', () => {
+    const now = Date.now()
+    const direct = resource({
+      id: 'direct', kind: 'media', url: 'https://cdn.test/movie.mp4?sig=old', seenAt: now,
+    })
+
+    expect(playerPlaybackResources([direct], {
+      sourceUrls: ['blob:https://site.test/movie'],
+      mseResourceUrls: ['https://cdn.test/movie.mp4?sig=new'],
+      startedAt: now,
+    }, 1).map(item => item.id)).toEqual(['direct'])
+  })
+  it('does not erase semantic query ids when assigning one MSE player', () => {
+    const now = Date.now()
+    const first = resource({ id: 'first', kind: 'media', url: 'https://cdn.test/video.mp4?id=one', seenAt: now })
+    const second = resource({ id: 'second', kind: 'media', url: 'https://cdn.test/video.mp4?id=two', seenAt: now })
+
+    expect(playerPlaybackResources([first, second], {
+      sourceUrls: ['blob:https://site.test/two'],
+      mseResourceUrls: ['https://cdn.test/video.mp4?id=two'],
+      startedAt: now,
+    }, 2).map(item => item.id)).toEqual(['second'])
+  })
+  it('matches DASH SegmentTemplate wildcards without confusing representations', () => {
+    const now = Date.now()
+    const first = resource({
+      id: 'first', kind: 'dash', url: 'https://cdn.test/manifest.mpd?camera=one',
+      playbackPatterns: ['https://cdn.test/chunk-v1-*.m4s?camera=one'], seenAt: now,
+    })
+    const second = resource({
+      id: 'second', kind: 'dash', url: 'https://cdn.test/manifest.mpd?camera=two',
+      playbackPatterns: ['https://cdn.test/chunk-v2-*.m4s?camera=two'], seenAt: now,
+    })
+
+    expect(playerPlaybackResources([first, second], {
+      sourceUrls: ['blob:https://site.test/dash-two'],
+      mseResourceUrls: ['https://cdn.test/chunk-v2-00042.m4s?camera=two&token=rotated'],
+      startedAt: now,
+    }, 2).map(item => item.id)).toEqual(['second'])
   })
   it('waits for inspection when multiple raw MSE manifests could include an advert', () => {
     const now = Date.now()

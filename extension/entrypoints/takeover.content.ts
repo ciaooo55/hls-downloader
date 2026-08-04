@@ -6,7 +6,8 @@ export default defineContentScript({
   allFrames: true,
   runAt: 'document_start',
   main() {
-    window.addEventListener('click', event => {
+    let lastIntent = { key: '', at: 0 }
+    const recordIntent = (event: MouseEvent) => {
       if (!event.isTrusted || event.button !== 0) return
       const anchor = event.composedPath()
         .find(value => value instanceof HTMLAnchorElement) as HTMLAnchorElement | undefined
@@ -52,6 +53,15 @@ export default defineContentScript({
         hints: [downloadHint ? 'download' : ''],
       })) return
       const href = downloadHref || directHref || hintedHref
+      const intentKey = [href, location.href, event.altKey ? 1 : 0, event.ctrlKey ? 1 : 0, downloadHint ? 1 : 0].join('|')
+      const now = Date.now()
+      // A pointerdown followed by click describes one user action. Keeping two
+      // entries is dangerous: the first can be consumed by the intended file
+      // while the second remains eligible for an unrelated download in the
+      // same tab. Keyboard activation has no pointerdown and still reaches the
+      // click listener normally.
+      if (lastIntent.key === intentKey && now - lastIntent.at < 1_500) return
+      lastIntent = { key: intentKey, at: now }
       void browser.runtime.sendMessage({
         type: 'click-intent',
         href,
@@ -62,6 +72,11 @@ export default defineContentScript({
         opensNewTab: anchor?.target.toLowerCase() === '_blank',
         controlHint: downloadHint,
       })
-    }, true)
+    }
+    // Many download controls start navigation from pointerdown or tear down the
+    // document before their click handler returns. Record strong intent at the
+    // earliest trusted phase so onHeadersReceived can present immediately.
+    window.addEventListener('pointerdown', recordIntent, true)
+    window.addEventListener('click', recordIntent, true)
   },
 })

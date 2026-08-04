@@ -47,6 +47,10 @@ export interface RequestChain {
 }
 
 const MAX_REPLAY_BODY_BYTES = 128 * 1024
+const MAX_REQUEST_HEADERS = 64
+const MAX_HEADER_NAME_LENGTH = 256
+const MAX_HEADER_VALUE_LENGTH = 16 * 1024
+const MAX_REQUEST_HEADER_BYTES = 32 * 1024
 const REPLAYABLE_POST_CONTENT_TYPES = new Set([
   'application/json',
   'application/x-www-form-urlencoded',
@@ -62,9 +66,15 @@ export interface DownloadLike {
 
 function headers(values: HeaderLike[] | undefined): Record<string, string> {
   const result: Record<string, string> = {}
-  for (const header of values || []) {
-    const name = String(header.name || '').toLowerCase()
-    if (name && header.value !== undefined) result[name] = String(header.value)
+  let totalBytes = 0
+  for (const header of (values || []).slice(0, MAX_REQUEST_HEADERS)) {
+    const name = String(header.name || '').trim().toLowerCase().slice(0, MAX_HEADER_NAME_LENGTH)
+    if (!name || header.value === undefined || /[\r\n]/.test(name)) continue
+    const value = String(header.value).replace(/[\r\n]/g, '').slice(0, MAX_HEADER_VALUE_LENGTH)
+    const bytes = name.length + value.length
+    if (totalBytes + bytes > MAX_REQUEST_HEADER_BYTES) break
+    totalBytes += bytes
+    result[name] = value
   }
   return result
 }
@@ -86,17 +96,28 @@ export function captureReplayableRequestBody(body?: RequestBodyLike): string {
   if (!body) return ''
   const raw = body.raw || []
   if (raw.length === 1 && raw[0]?.bytes) {
-    const bytes = raw[0].bytes instanceof Uint8Array
-      ? raw[0].bytes
-      : new Uint8Array(raw[0].bytes)
+    const rawBytes = raw[0].bytes
+    const byteLength = rawBytes instanceof Uint8Array ? rawBytes.byteLength : Number(rawBytes.byteLength || 0)
+    if (!Number.isFinite(byteLength) || byteLength <= 0 || byteLength > MAX_REPLAY_BODY_BYTES) return ''
+    const bytes = rawBytes instanceof Uint8Array
+      ? rawBytes
+      : new Uint8Array(rawBytes)
     return bytes.length && bytes.length <= MAX_REPLAY_BODY_BYTES ? base64(bytes) : ''
   }
   if (raw.length) return ''
   if (!body.formData) return ''
   const params = new URLSearchParams()
-  for (const [name, values] of Object.entries(body.formData)) {
+  let fieldCount = 0
+  let totalChars = 0
+  for (const [name, values] of Object.entries(body.formData).slice(0, 128)) {
     if (!Array.isArray(values)) return ''
-    for (const value of values) params.append(name, String(value))
+    if (++fieldCount > 128 || name.length > MAX_HEADER_NAME_LENGTH) return ''
+    for (const value of values.slice(0, 128)) {
+      const stringValue = String(value)
+      totalChars += name.length + stringValue.length
+      if (totalChars > MAX_REPLAY_BODY_BYTES * 2) return ''
+      params.append(name, stringValue)
+    }
   }
   const bytes = new TextEncoder().encode(params.toString())
   return bytes.length && bytes.length <= MAX_REPLAY_BODY_BYTES ? base64(bytes) : ''

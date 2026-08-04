@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import re
+from copy import deepcopy
 from urllib.parse import urljoin
 from xml.etree import ElementTree
 
@@ -238,7 +239,7 @@ def _list_segments(node: ElementTree.Element, base_url: str) -> tuple[str | None
         if source:
             init_url = _resolve_url(base_url, source)
     segments: list[dict] = []
-    for segment_url in _children(segment_list, "SegmentURL"):
+    for index, segment_url in enumerate(_children(segment_list, "SegmentURL")):
         if segment_url.get("mediaRange"):
             raise NativeDashUnsupported("SegmentList 使用字节区间分片")
         media = segment_url.get("media")
@@ -247,6 +248,8 @@ def _list_segments(node: ElementTree.Element, base_url: str) -> tuple[str | None
         segments.append({
             "url": _resolve_url(base_url, media),
             "duration": duration_units / timescale if duration_units else 0.0,
+            "start": index * duration_units / timescale if duration_units else 0.0,
+            "identity": index,
         })
     return init_url, segments
 
@@ -297,6 +300,174 @@ def _is_subtitle(adaptation: ElementTree.Element, representation: ElementTree.El
     )
 
 
+def _single_period_manifest(root: ElementTree.Element, period: ElementTree.Element) -> str:
+    """Create a bounded one-Period view while preserving inherited MPD nodes."""
+    single = ElementTree.Element(root.tag, dict(root.attrib))
+    single.attrib.pop("mediaPresentationDuration", None)
+    single.set("type", "static")
+    for child in root:
+        if _local(child.tag) != "Period":
+            single.append(deepcopy(child))
+    if period.get("duration"):
+        single.set("mediaPresentationDuration", period.get("duration") or "")
+    single.append(deepcopy(period))
+    return ElementTree.tostring(single, encoding="unicode")
+
+
+def _merge_multi_period_tracks(
+    parts: list[dict],
+    *,
+    kind: str,
+) -> dict | None:
+    """Flatten compatible static Period tracks for the native segment engine.
+
+    A Period may have its own initialization segment. Concatenating unlike
+    initializations byte-for-byte produces a corrupt fMP4, so only merge when
+    every participating track uses the same init URL (or no init at all).
+    Segment indexes are namespaced by Period to keep resume checkpoints stable.
+    """
+    tracks = [part.get(kind) for part in parts if part.get(kind)]
+    if not tracks:
+        return None
+    if any(track.get("single_file") for track in tracks):
+        raise NativeDashUnsupported("多 Period 含单文件 Representation，使用兼容引擎")
+    init_urls = {str(track.get("init_url") or "") for track in tracks}
+    if len(init_urls) > 1:
+        raise NativeDashUnsupported("多 Period 的初始化段不同，使用兼容引擎")
+    signatures = {
+        (str(track.get("mime") or "").lower(), str(track.get("codecs") or "").lower())
+        for track in tracks
+    }
+    if len(signatures) > 1:
+        raise NativeDashUnsupported("多 Period 轨道编码不同，使用兼容引擎")
+
+    merged = dict(tracks[0])
+    merged["segments"] = []
+    offset = 0.0
+    for period_index, part in enumerate(parts):
+        track = part.get(kind)
+        period_duration = _period_span(part)
+        if track:
+            for segment_index, raw in enumerate(track.get("segments") or []):
+                segment = dict(raw)
+                segment["period_index"] = period_index
+                segment["identity"] = (
+                    f"{period_index}:{raw.get('identity', segment_index)}"
+                )
+                if "start" in segment:
+                    segment["start"] = offset + float(raw.get("start") or 0)
+                merged["segments"].append(segment)
+        offset += period_duration
+    merged["single_file"] = False
+    merged["period_count"] = len(parts)
+    return merged
+
+
+def _period_span(part: dict) -> float:
+    """Return a reliable presentation span for one flattened Period."""
+    declared = float(part.get("duration") or 0)
+    if declared > 0:
+        return declared
+    ends: list[float] = []
+    for kind in ("video", "audio"):
+        candidate = part.get(kind)
+        ends.extend(
+            float(segment.get("start") or 0) + float(segment.get("duration") or 0)
+            for segment in (candidate or {}).get("segments") or []
+        )
+    for track in part.get("subtitle_tracks") or []:
+        ends.extend(
+            float(segment.get("start") or 0) + float(segment.get("duration") or 0)
+            for segment in track.get("segments") or []
+        )
+    return max(ends, default=0.0)
+
+
+def _merge_multi_period_subtitles(parts: list[dict]) -> list[dict]:
+    groups: dict[tuple[str, str, str], dict] = {}
+    offsets: list[float] = []
+    running = 0.0
+    for part in parts:
+        offsets.append(running)
+        running += _period_span(part)
+    for period_index, part in enumerate(parts):
+        for raw in part.get("subtitle_tracks") or []:
+            language = str(raw.get("lang") or "")
+            name = str(raw.get("name") or "")
+            representation_id = str(raw.get("id") or "")
+            # Period-local Representation ids commonly change while the
+            # language/label stays stable. Merge those slices into one
+            # subtitle track; only use the id when the manifest exposes no
+            # human-readable identity at all.
+            key = (language, name) if language or name else ("", "", representation_id)
+            track = groups.get(key)
+            if track is None:
+                track = dict(raw)
+                track["segments"] = []
+                groups[key] = track
+            elif str(track.get("init_url") or "") != str(raw.get("init_url") or ""):
+                raise NativeDashUnsupported("多 Period 字幕初始化段不同，使用兼容引擎")
+            for segment_index, raw_segment in enumerate(raw.get("segments") or []):
+                segment = dict(raw_segment)
+                segment["period_index"] = period_index
+                segment["identity"] = f"{period_index}:{raw_segment.get('identity', segment_index)}"
+                if "start" in segment:
+                    segment["start"] = offsets[period_index] + float(raw_segment.get("start") or 0)
+                track["segments"].append(segment)
+    return list(groups.values())
+
+
+def _parse_multi_period(
+    url: str,
+    root: ElementTree.Element,
+    periods: list[ElementTree.Element],
+    preferred_video: str,
+    preferred_audio: str,
+) -> dict:
+    if (root.get("type") or "static").lower() == "dynamic":
+        raise NativeDashUnsupported("动态多 Period MPD 使用兼容引擎")
+    parts = [
+        parse_mpd(
+            url,
+            _single_period_manifest(root, period),
+            preferred_video=preferred_video,
+            preferred_audio=preferred_audio,
+        )
+        for period in periods
+    ]
+    duration = sum(float(part.get("duration") or 0) for part in parts)
+    video = _merge_multi_period_tracks(parts, kind="video")
+    audio = _merge_multi_period_tracks(parts, kind="audio")
+    if video is None and audio is None:
+        raise NativeDashUnsupported("多 Period MPD 中没有可下载的音视频轨道")
+    video_options = []
+    audio_options = []
+    for part in parts:
+        video_options.extend(part.get("video_options") or [])
+        audio_options.extend(part.get("audio_options") or [])
+    def unique_options(values: list[dict]) -> list[dict]:
+        seen: set[tuple] = set()
+        result: list[dict] = []
+        for value in values:
+            key = tuple(value.get(name) for name in ("id", "lang", "width", "height", "bandwidth"))
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(value)
+        return result
+    return {
+        "type": "static",
+        "duration": duration,
+        "update_period": 0.0,
+        "video": video,
+        "audio": audio,
+        "video_options": unique_options(video_options),
+        "audio_options": unique_options(audio_options),
+        "subtitle_tracks": _merge_multi_period_subtitles(parts),
+        "period_count": len(periods),
+    }
+
+
 def parse_mpd(
     url: str,
     content: str,
@@ -321,7 +492,13 @@ def parse_mpd(
     if not periods:
         raise NativeDashUnsupported("MPD 中没有 Period")
     if len(periods) > 1:
-        raise NativeDashUnsupported("多 Period MPD 暂不支持原生下载")
+        return _parse_multi_period(
+            url,
+            root,
+            periods,
+            preferred_video,
+            preferred_audio,
+        )
     period = periods[0]
     total_duration = parse_iso_duration(period.get("duration")) or parse_iso_duration(
         root.get("mediaPresentationDuration")

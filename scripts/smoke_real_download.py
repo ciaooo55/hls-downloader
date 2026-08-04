@@ -129,7 +129,9 @@ class SmokeOrigin(BaseHTTPRequestHandler):
                 poll = type(self)._llhls_polls
             head = (
                 "#EXTM3U\n#EXT-X-VERSION:9\n#EXT-X-TARGETDURATION:2\n"
-                "#EXT-X-PART-INF:PART-TARGET=2.0\n#EXT-X-MEDIA-SEQUENCE:0\n"
+                "#EXT-X-PART-INF:PART-TARGET=0.333\n"
+                "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=1.0\n"
+                "#EXT-X-MEDIA-SEQUENCE:0\n"
                 '#EXT-X-MAP:URI="init.mp4"\n'
                 '#EXT-X-PART:DURATION=2.0,URI="segment-000.m4s",INDEPENDENT=YES\n'
             )

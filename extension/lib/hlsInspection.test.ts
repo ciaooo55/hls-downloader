@@ -8,6 +8,20 @@ const live = '#EXTM3U\n#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES\n#EXTINF:6,\na
 const partOnlyLive = '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-PART:DURATION=0.333,URI="tail.part"\n'
 
 describe('HLS browser inspection', () => {
+  it('does not let a high-bitrate audio-only variant replace video', async () => {
+    const fetcher = vi.fn<ManifestFetcher>(async url => new Response(
+      url.endsWith('master.m3u8')
+        ? '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=12000000,CODECS="mp4a.40.2"\naudio.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2"\nvideo.m3u8\n'
+        : vod,
+      { status: 200 },
+    ))
+
+    const result = await inspectHlsResource({ url: 'https://cdn.test/master.m3u8' }, fetcher)
+    expect(result?.height).toBe(1080)
+    expect(result?.variants).toHaveLength(1)
+    expect(fetcher.mock.calls[1][0]).toBe('https://cdn.test/video.m3u8')
+  })
+
   it('follows the best VOD rendition and estimates its full size', async () => {
     const fetcher = vi.fn<ManifestFetcher>(async url => new Response(
       url.endsWith('master.m3u8') ? master : vod,
@@ -26,7 +40,7 @@ describe('HLS browser inspection', () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
     expect(fetcher.mock.calls[1][0]).toBe('https://cdn.test/1080/index.m3u8')
     expect(fetcher.mock.calls[0][1].headers).toMatchObject({ authorization: 'Bearer playback-token' })
-    expect(fetcher.mock.calls[0][1].headers).not.toHaveProperty('referer')
+    expect(fetcher.mock.calls[0][1].headers).toMatchObject({ referer: 'https://page.test/watch' })
     expect(result).toMatchObject({
       inspected: true,
       manifestType: 'master',
@@ -35,6 +49,10 @@ describe('HLS browser inspection', () => {
       height: 1080,
       bandwidth: 8_000_000,
       estimatedSize: 10_000_000,
+      playbackUrls: [
+        'https://cdn.test/1080/a.ts',
+        'https://cdn.test/1080/b.ts',
+      ],
     })
   })
 
@@ -72,5 +90,16 @@ describe('HLS browser inspection', () => {
       lowLatencyLive: true,
       partOnlyLive: true,
     })
+  })
+
+  it('rejects oversized or non-HLS responses instead of parsing arbitrary bodies', async () => {
+    await expect(inspectHlsResource({ url: 'https://cdn.test/huge.m3u8' }, async () => new Response(
+      '#EXTM3U\n#EXTINF:1,\na.ts\n',
+      { status: 200, headers: { 'content-length': String(3 * 1024 * 1024) } },
+    ))).resolves.toBeNull()
+    await expect(inspectHlsResource({ url: 'https://cdn.test/fake.m3u8' }, async () => new Response(
+      '<html>not a playlist</html>',
+      { status: 200 },
+    ))).resolves.toBeNull()
   })
 })

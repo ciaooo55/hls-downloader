@@ -324,15 +324,84 @@ def test_drm_content_protection_is_rejected_hard():
         parse_mpd("https://cdn.test/m.mpd", mpd)
 
 
-def test_dynamic_and_multi_period_fall_back():
+def test_dynamic_and_incompatible_multi_period_fall_back():
     dynamic = f'<MPD {MPD_NS} type="dynamic"><Period/></MPD>'
     with pytest.raises(NativeDashUnsupported):
         parse_mpd("https://cdn.test/m.mpd", dynamic)
-    multi = f'<MPD {MPD_NS} type="static"><Period/><Period/></MPD>'
+    multi = f'''<MPD {MPD_NS} type="static">
+  <Period duration="PT2S"><AdaptationSet mimeType="video/mp4">
+    <SegmentTemplate initialization="init-1.mp4" media="one-$Number$.m4s" duration="2"/>
+    <Representation id="v" bandwidth="1" width="2" height="2"/>
+  </AdaptationSet></Period>
+  <Period duration="PT2S"><AdaptationSet mimeType="video/mp4">
+    <SegmentTemplate initialization="init-2.mp4" media="two-$Number$.m4s" duration="2"/>
+    <Representation id="v" bandwidth="1" width="2" height="2"/>
+  </AdaptationSet></Period>
+</MPD>'''
     with pytest.raises(NativeDashUnsupported):
         parse_mpd("https://cdn.test/m.mpd", multi)
     with pytest.raises(NativeDashUnsupported):
         parse_mpd("https://cdn.test/m.mpd", "#EXTM3U not xml")
+
+
+def test_compatible_static_multi_period_is_flattened_for_native_segments():
+    manifest = f'''<MPD {MPD_NS} type="static">
+  <BaseURL>https://cdn.test/media/</BaseURL>
+  <Period id="p1" duration="PT2S"><AdaptationSet mimeType="video/mp4">
+    <SegmentTemplate initialization="init.mp4" media="one-$Number$.m4s" duration="2"/>
+    <Representation id="v" bandwidth="1000" width="640" height="360"/>
+  </AdaptationSet></Period>
+  <Period id="p2" duration="PT2S"><AdaptationSet mimeType="video/mp4">
+    <SegmentTemplate initialization="init.mp4" media="two-$Number$.m4s" duration="2"/>
+    <Representation id="v" bandwidth="1000" width="640" height="360"/>
+  </AdaptationSet></Period>
+</MPD>'''
+    parsed = parse_mpd("https://origin.test/main.mpd", manifest)
+    assert parsed["period_count"] == 2
+    assert parsed["duration"] == pytest.approx(4.0)
+    assert parsed["video"]["init_url"] == "https://cdn.test/media/init.mp4"
+    assert [item["url"] for item in parsed["video"]["segments"]] == [
+        "https://cdn.test/media/one-1.m4s",
+        "https://cdn.test/media/two-1.m4s",
+    ]
+    assert [item["period_index"] for item in parsed["video"]["segments"]] == [0, 1]
+    assert [item["start"] for item in parsed["video"]["segments"]] == [0.0, 2.0]
+
+
+def test_multi_period_without_period_durations_uses_segment_timeline_offsets():
+    manifest = f'''<MPD {MPD_NS} type="static">
+  <Period><AdaptationSet mimeType="video/mp4">
+    <SegmentTemplate initialization="init.mp4" media="one-$Number$.m4s" timescale="1"><SegmentTimeline><S t="0" d="2"/></SegmentTimeline></SegmentTemplate>
+    <Representation id="v" bandwidth="1000" width="640" height="360"/>
+  </AdaptationSet></Period>
+  <Period><AdaptationSet mimeType="video/mp4">
+    <SegmentTemplate initialization="init.mp4" media="two-$Number$.m4s" timescale="1"><SegmentTimeline><S t="0" d="2"/></SegmentTimeline></SegmentTemplate>
+    <Representation id="v" bandwidth="1000" width="640" height="360"/>
+  </AdaptationSet></Period>
+</MPD>'''
+    parsed = parse_mpd("https://origin.test/main.mpd", manifest)
+    assert parsed["duration"] == pytest.approx(4.0)
+    assert [item["start"] for item in parsed["video"]["segments"]] == [0.0, 2.0]
+
+
+def test_multi_period_subtitles_merge_period_local_ids_and_use_timeline_offsets():
+    manifest = f'''<MPD {MPD_NS} type="static">
+  <Period><AdaptationSet mimeType="video/mp4">
+    <SegmentTemplate initialization="init.mp4" media="one-$Number$.m4s" timescale="1"><SegmentTimeline><S t="0" d="2"/></SegmentTimeline></SegmentTemplate>
+    <Representation id="v" bandwidth="1000" width="640" height="360"/>
+  </AdaptationSet><AdaptationSet contentType="text" mimeType="text/vtt" lang="zh" label="中文">
+    <Representation id="sub-p1"><SegmentList duration="2"><SegmentURL media="one.vtt"/></SegmentList></Representation>
+  </AdaptationSet></Period>
+  <Period><AdaptationSet mimeType="video/mp4">
+    <SegmentTemplate initialization="init.mp4" media="two-$Number$.m4s" timescale="1"><SegmentTimeline><S t="0" d="2"/></SegmentTimeline></SegmentTemplate>
+    <Representation id="v" bandwidth="1000" width="640" height="360"/>
+  </AdaptationSet><AdaptationSet contentType="text" mimeType="text/vtt" lang="zh" label="中文">
+    <Representation id="sub-p2"><SegmentList duration="2"><SegmentURL media="two.vtt"/></SegmentList></Representation>
+  </AdaptationSet></Period>
+</MPD>'''
+    parsed = parse_mpd("https://origin.test/main.mpd", manifest)
+    assert len(parsed["subtitle_tracks"]) == 1
+    assert [item["start"] for item in parsed["subtitle_tracks"][0]["segments"]] == [0.0, 2.0]
 
 
 def test_parse_exposes_dash_webvtt_subtitle_tracks():

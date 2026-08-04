@@ -1,6 +1,6 @@
 import pytest
 
-from backend.app.downloader.parser import UnsupportedPlaylistError, parse_m3u8
+from backend.app.downloader.parser import UnsupportedPlaylistError, filter_ad_segments, parse_m3u8
 
 
 def test_parse_media_playlist_builds_encryption_ranges_and_maps():
@@ -119,6 +119,8 @@ def test_parse_ll_hls_exposes_completed_parts_but_not_preload_hint():
     playlist = """#EXTM3U
 #EXT-X-VERSION:9
 #EXT-X-TARGETDURATION:2
+#EXT-X-PART-INF:PART-TARGET=0.333
+#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=1.0
 #EXT-X-MEDIA-SEQUENCE:40
 #EXTINF:2.0,
 complete-40.m4s
@@ -130,6 +132,8 @@ complete-40.m4s
     parsed = parse_m3u8("https://example.test/live.m3u8", playlist)
 
     assert parsed["is_live"] is True
+    assert parsed["part_target_duration"] == 0.333
+    assert parsed["can_block_reload"] is True
     assert [segment["url"] for segment in parsed["segments"]] == [
         "https://example.test/complete-40.m4s",
         "https://example.test/part-41-0.m4s",
@@ -172,6 +176,23 @@ after.ts
     ]
 
 
+def test_parse_vod_keeps_valid_segments_when_one_uri_is_torn():
+    playlist = """#EXTM3U
+#EXT-X-TARGETDURATION:2
+#EXTINF:2.0,
+before.ts
+#EXTINF:2.0,
+#EXTINF:2.0,
+after.ts
+#EXT-X-ENDLIST
+"""
+    parsed = parse_m3u8("https://example.test/vod.m3u8", playlist)
+    assert [segment["url"] for segment in parsed["segments"]] == [
+        "https://example.test/before.ts",
+        "https://example.test/after.ts",
+    ]
+
+
 def test_parse_ll_hls_part_inherits_map_and_delta_skip_sequence():
     playlist = """#EXTM3U
 #EXT-X-VERSION:9
@@ -208,6 +229,30 @@ one.ts
 #EXT-X-ENDLIST
 """
     assert parse_m3u8("https://example.test/video.m3u8", content)["title"] == "真实片名"
+
+
+def test_parse_marks_explicit_hls_ad_ranges_without_guessing_regular_names():
+    content = """#EXTM3U
+#EXT-X-TARGETDURATION:6
+#EXT-X-CUE-OUT:12
+#EXTINF:6,
+ads/spot-1.ts
+#EXTINF:6,
+ads/spot-2.ts
+#EXT-X-CUE-IN
+#EXTINF:6,
+adventure/main.ts
+#EXT-X-ENDLIST
+"""
+
+    parsed = parse_m3u8("https://example.test/live.m3u8", content)
+    assert [item["is_ad"] for item in parsed["segments"]] == [True, True, False]
+    filtered = filter_ad_segments(parsed)
+    assert [item["url"] for item in filtered["segments"]] == [
+        "https://example.test/adventure/main.ts",
+    ]
+    assert filtered["segments"][0]["discontinuity"] is True
+    assert filtered["total_duration"] == 6
 
 
 def test_master_playlist_prefers_video_resolution_before_bitrate():

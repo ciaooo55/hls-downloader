@@ -41,10 +41,11 @@ def _local_hls_uri(playlist_dir: Path, path: Path) -> str:
     return quote(relative.as_posix(), safe="/-._~")
 
 
-def _write_local_hls_playlist(
+def write_local_hls_playlist(
     destination: Path,
     seg_dir: Path,
     segments: list[dict],
+    segment_suffix: str = ".seg",
 ) -> None:
     """Recreate HLS timeline semantics around already downloaded segments.
 
@@ -68,7 +69,7 @@ def _write_local_hls_playlist(
     previous_init = ""
     for position, segment in enumerate(segments):
         index = int(segment["index"])
-        segment_path = seg_dir / f"{index:06d}.seg"
+        segment_path = seg_dir / f"{index:06d}{segment_suffix}"
         if not segment_path.exists() or segment_path.stat().st_size == 0:
             raise FileNotFoundError(f"缺少分片: {segment_path.name}")
 
@@ -92,6 +93,17 @@ def _write_local_hls_playlist(
         lines.append(_local_hls_uri(destination.parent, segment_path))
     lines.append("#EXT-X-ENDLIST")
     destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+# Compatibility hook retained for existing callers/tests; new protocol
+# engines should use the shared public helper above.
+def _write_local_hls_playlist(
+    destination: Path,
+    seg_dir: Path,
+    segments: list[dict],
+    segment_suffix: str = ".seg",
+) -> None:
+    write_local_hls_playlist(destination, seg_dir, segments, segment_suffix)
 
 
 @lru_cache(maxsize=8)

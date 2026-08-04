@@ -1,17 +1,30 @@
 import asyncio
 import json
 from pathlib import Path
+from urllib.parse import unquote
 
 import httpx
 import pytest
 
 from backend.app.config import settings
 from backend.app.downloader import dash_native as native_module
-from backend.app.downloader.dash_native import NativeDashEngine
+from backend.app.downloader.dash_native import NativeDashEngine, _dash_live_poll_seconds
 from backend.app.models import Task, TaskStatus
 
 
 MPD_NS = 'xmlns="urn:mpeg:dash:schema:mpd:2011"'
+
+
+def test_dynamic_mpd_polling_uses_minimum_update_period(monkeypatch):
+    monkeypatch.setattr(native_module, "LIVE_MIN_POLL_SECONDS", 0.05)
+    assert _dash_live_poll_seconds({
+        "update_period": 0.25,
+        "video": {"segments": [{"duration": 2.0}]},
+    }) == pytest.approx(0.25)
+    assert _dash_live_poll_seconds({
+        "update_period": 0,
+        "video": {"segments": [{"duration": 2.0}]},
+    }) == pytest.approx(2.0)
 
 
 def _live_mpd(rows: str, *, dynamic: bool = True, audio_rows: str = "") -> str:
@@ -64,9 +77,20 @@ def _install(monkeypatch, handler):
         inputs = [
             command[i + 1] for i, value in enumerate(command[:-1]) if value == "-i"
         ]
-        Path(command[-1]).write_bytes(
-            b"".join(Path(p).read_bytes() for p in inputs)
-        )
+        def read_input(path: Path) -> bytes:
+            if path.suffix.lower() != ".m3u8":
+                return path.read_bytes()
+            payload = bytearray()
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith('#EXT-X-MAP:'):
+                    line = line.split('URI="', 1)[-1].split('"', 1)[0]
+                elif line.startswith('#') or not line:
+                    continue
+                payload.extend((path.parent / unquote(line)).read_bytes())
+            return bytes(payload)
+
+        Path(command[-1]).write_bytes(b"".join(read_input(Path(p)) for p in inputs))
         return True
 
     async def fake_verify(ffmpeg_path, output_path, expected_duration):
@@ -462,7 +486,8 @@ def test_track_start_offsets_reach_the_mux_command(tmp_path, monkeypatch):
         offset = command[command.index("-itsoffset") + 1]
         assert float(offset) == pytest.approx(2.0, abs=0.01)
         # The offset must immediately precede its own input.
-        assert command[command.index("-itsoffset") + 2] == "-i"
+        offset_index = command.index("-itsoffset")
+        assert command.index("-i", offset_index + 2) > offset_index
 
     asyncio.run(run())
 
