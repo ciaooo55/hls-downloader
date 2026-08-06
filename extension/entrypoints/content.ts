@@ -34,6 +34,14 @@ export default defineContentScript({
       return (path.find(value => value instanceof HTMLVideoElement)
         || (event.target instanceof HTMLVideoElement ? event.target : null)) as HTMLVideoElement | null
     }
+    let activateContent: (() => void) | null = null
+    let activationRequested = false
+    const activation = new Promise<void>(resolve => { activateContent = resolve })
+    const requestActivation = () => {
+      if (activationRequested) return
+      activationRequested = true
+      activateContent?.()
+    }
     // The shadow UI is mounted asynchronously.  A fast player can emit its
     // first play/playing event while that work is still in progress (Firefox
     // exposes this race more readily than Chromium).  Buffer those events so
@@ -43,7 +51,10 @@ export default defineContentScript({
     const pendingPlaybackVideos = new Set<HTMLVideoElement>()
     const rememberPendingPlayback = (event: Event) => {
       const video = eventVideo(event)
-      if (video) pendingPlaybackVideos.add(video)
+      if (video) {
+        pendingPlaybackVideos.add(video)
+        requestActivation()
+      }
     }
     document.addEventListener('play', rememberPendingPlayback, true)
     document.addEventListener('playing', rememberPendingPlayback, true)
@@ -53,12 +64,15 @@ export default defineContentScript({
     // player (which otherwise leaves the overlay in “正在识别” forever).
     const earlyResourceEvents: Array<{ url: string; mimeType?: string }> = []
     const earlyMseEvents: Array<{ blobUrl: string; mediaUrl: string }> = []
-    const earlyCapturedMessages: any[] = []
+    const earlyRuntimeMessages: any[] = []
     let contentReady = false
     const earlyResourceListener = (event: Event) => {
       if (contentReady) return
       const detail = (event as CustomEvent).detail || {}
-      if (typeof detail.url === 'string') earlyResourceEvents.push({ url: detail.url, mimeType: detail.mimeType })
+      if (typeof detail.url === 'string') {
+        earlyResourceEvents.push({ url: detail.url, mimeType: detail.mimeType })
+        if (classifyResource(detail.url, detail.mimeType)) requestActivation()
+      }
       if (earlyResourceEvents.length > 200) earlyResourceEvents.splice(0, earlyResourceEvents.length - 200)
     }
     const earlyMseListener = (event: Event) => {
@@ -67,16 +81,53 @@ export default defineContentScript({
       if (typeof detail.blobUrl === 'string' && typeof detail.mediaUrl === 'string') {
         earlyMseEvents.push({ blobUrl: detail.blobUrl, mediaUrl: detail.mediaUrl })
         if (earlyMseEvents.length > 200) earlyMseEvents.splice(0, earlyMseEvents.length - 200)
+        requestActivation()
       }
     }
     const earlyRuntimeListener = (message: any) => {
-      if (contentReady || message?.type !== 'captured-resource' || !message.resource?.url) return
-      earlyCapturedMessages.push(message)
-      if (earlyCapturedMessages.length > 100) earlyCapturedMessages.splice(0, earlyCapturedMessages.length - 100)
+      if (contentReady || !['captured-resource', 'collect-selection', 'open-media-panel'].includes(String(message?.type || ''))) return
+      if (message.type === 'captured-resource' && !message.resource?.url) return
+      earlyRuntimeMessages.push(message)
+      if (earlyRuntimeMessages.length > 100) earlyRuntimeMessages.splice(0, earlyRuntimeMessages.length - 100)
+      requestActivation()
     }
     window.addEventListener('__hls_downloader_resource__', earlyResourceListener)
     window.addEventListener('__hls_downloader_mse__', earlyMseListener)
     browser.runtime.onMessage.addListener(earlyRuntimeListener)
+    const activationRoots = new WeakSet<Document | ShadowRoot>()
+    const activationMediaRoots: Array<Document | ShadowRoot> = []
+    const discoverActivationShadowRoots = (node: ParentNode | Element) => {
+      const elements = node instanceof Element
+        ? [node, ...node.querySelectorAll<HTMLElement>('*')]
+        : [...node.querySelectorAll<HTMLElement>('*')]
+      elements.forEach(element => {
+        if (element.shadowRoot) observeActivationRoot(element.shadowRoot)
+      })
+    }
+    const observeActivationRoot = (root: Document | ShadowRoot) => {
+      if (activationRoots.has(root)) return
+      activationRoots.add(root)
+      activationMediaRoots.push(root)
+      root.addEventListener('play', rememberPendingPlayback, true)
+      root.addEventListener('playing', rememberPendingPlayback, true)
+      if (root.querySelector('video,audio,source[src]')) {
+        requestActivation()
+      }
+    }
+    const earlyShadowListener = (event: Event) => {
+      const host = event.composedPath().find(value => value instanceof Element) as Element | undefined
+      if (host?.shadowRoot) observeActivationRoot(host.shadowRoot)
+    }
+    window.addEventListener('__hls_downloader_shadow__', earlyShadowListener, true)
+    observeActivationRoot(document)
+    // The page may create an open ShadowRoot from an inline document-start
+    // script before this isolated-world bootstrap is scheduled. One bounded
+    // initial scan closes that race without enabling the full DOM observer/UI.
+    discoverActivationShadowRoots(document)
+    // The bootstrap is ready for download-intent and background messages even
+    // though the expensive media UI remains dormant until concrete evidence.
+    document.documentElement.setAttribute('data-hls-downloader-extension', '1')
+    await activation
     // Rendering is intentionally frequent on live pages. Keep handoff state
     // outside the DOM so a network event cannot replace an in-flight button.
     const resourceSendStates = new Map<string, { label: string, disabled: boolean }>()
@@ -573,6 +624,7 @@ export default defineContentScript({
     }
     window.addEventListener('scroll', scheduleVideoButtons, { capture: true, passive: true })
     window.addEventListener('resize', scheduleVideoButtons)
+    document.addEventListener('fullscreenchange', scheduleVideoButtons)
 
     const add = (url: string, mimeType = '', playbackSource = false) => {
       const kind = playbackSource ? classifyPlaybackSource(url, mimeType) : classifyResource(url, mimeType)
@@ -667,7 +719,7 @@ export default defineContentScript({
           }
         })
         if (playbackChanged) queueMicrotask(syncPlayingVideos)
-      }).observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'style', 'class'] })
+      }).observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] })
     }
     window.addEventListener('__hls_downloader_shadow__', event => {
       const host = event.composedPath().find(value => value instanceof Element) as Element | undefined
@@ -677,8 +729,12 @@ export default defineContentScript({
       }
     }, true)
     registerMediaRoot(document)
-    document.removeEventListener('play', rememberPendingPlayback, true)
-    document.removeEventListener('playing', rememberPendingPlayback, true)
+    window.removeEventListener('__hls_downloader_shadow__', earlyShadowListener, true)
+    activationMediaRoots.forEach(root => {
+      root.removeEventListener('play', rememberPendingPlayback, true)
+      root.removeEventListener('playing', rememberPendingPlayback, true)
+    })
+    activationMediaRoots.length = 0
     pendingPlaybackVideos.forEach(video => markVideoPlayback(video, 'initializing'))
     pendingPlaybackVideos.clear()
     syncPlayingVideos()
@@ -734,7 +790,7 @@ export default defineContentScript({
       add(url, media instanceof HTMLSourceElement ? media.type : '', true)
     })
     new PerformanceObserver(list => list.getEntries().forEach(entry => add(entry.name))).observe({ type: 'resource', buffered: true })
-    browser.runtime.onMessage.addListener(message => {
+    const handleRuntimeMessage = (message: any) => {
       if (message?.type === 'captured-resource' && message.resource?.url) {
         const pageTitle = pageMediaTitle()
         const resource = {
@@ -744,7 +800,11 @@ export default defineContentScript({
           seenAt: Date.now(),
         } as MediaResource
         addResource(resource); render()
-        void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
+        // The background already persisted captured-resource. Send a second
+        // update only when this frame contributes a better human title.
+        if (resource.title && resource.title !== message.resource.title) {
+          void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
+        }
         return
       }
       if (message?.type === 'collect-selection') {
@@ -761,20 +821,11 @@ export default defineContentScript({
         setOpen(true)
         render()
       }
-    })
+    }
+    browser.runtime.onMessage.addListener(handleRuntimeMessage)
     contentReady = true
-    const bufferedCapturedMessages = earlyCapturedMessages.splice(0)
-    bufferedCapturedMessages.forEach(message => {
-      const pageTitle = pageMediaTitle()
-      const resource = {
-        ...message.resource,
-        title: !message.resource.title || isGenericMediaName(message.resource.title) ? pageTitle || message.resource.title : message.resource.title,
-        id: resourceId(message.resource.url),
-        seenAt: Date.now(),
-      } as MediaResource
-      addResource(resource)
-    })
-    if (bufferedCapturedMessages.length) render()
+    browser.runtime.onMessage.removeListener(earlyRuntimeListener)
+    earlyRuntimeMessages.splice(0).forEach(handleRuntimeMessage)
     let currentPageUrl = pageKey(location.href)
     const loadPageResources = (pageUrl: string) => {
       void runtimeMessage({ type: 'list', pageUrl }).then((stored: MediaResource[]) => {
@@ -810,7 +861,14 @@ export default defineContentScript({
     loadPageResources(location.href)
     window.addEventListener('popstate', syncPage)
     window.addEventListener('hashchange', syncPage)
-    window.setInterval(() => { syncPage(); syncPlayingVideos() }, 800)
+    window.addEventListener('__hls_downloader_navigation__', syncPage)
+    window.addEventListener('pageshow', () => { syncPage(); syncPlayingVideos() })
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        syncPage()
+        syncPlayingVideos()
+      }
+    })
   },
 })
 

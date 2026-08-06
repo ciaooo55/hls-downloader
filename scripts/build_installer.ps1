@@ -5,7 +5,7 @@ param(
     [switch]$SkipInstaller,
     [switch]$SkipSmoke,
     [switch]$IncludeExtensionAssets,
-    [string]$Version = "3.0.16"
+    [string]$Version = "3.0.17"
 )
 
 $ErrorActionPreference = "Stop"
@@ -623,6 +623,7 @@ if (-not $SkipSmoke) {
             Remove-Item -LiteralPath $smokePortableMarker -Force -ErrorAction SilentlyContinue
             Copy-Item -Force -LiteralPath (Join-Path $Root "config.default.json") -Destination (Join-Path $StageDir "config.json")
             Remove-Item -LiteralPath (Join-Path $StageDir "data.db"), (Join-Path $StageDir "data.db-shm"), (Join-Path $StageDir "data.db-wal") -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath (Join-Path $StageDir "core.log"), (Join-Path $StageDir "core-error.log") -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath (Join-Path $StageDir "downloads") -Recurse -Force -ErrorAction SilentlyContinue
         }
     }

@@ -144,6 +144,13 @@ if (mode === 'shadow') {
 } else if (mode === 'ad-direct') {
   const value=video(); value.src='/stream.mp4?ad=preroll'; mount.append(value);
   setTimeout(() => { value.src='/stream.mp4?player=main'; void value.play().catch(()=>{}); }, 1200);
+} else if (mode === 'spa') {
+  const value=video(); value.src='/stream.mp4?player=spa-one'; mount.append(value);
+  setTimeout(() => {
+    history.pushState({},'',location.pathname+'?mode=spa&route=two');
+    value.src='/stream.mp4?player=spa-two';
+    void value.play().catch(()=>{});
+  }, 1200);
 } else {
   const value=video(); value.src='/stream.mp4?player=direct'; mount.append(value);
 }
@@ -368,7 +375,7 @@ def run(
                 driver.install_addon(str(resolved_addon), temporary=True)
             for mode in (
                 "direct", "shadow", "dynamic-shadow", "iframe", "cross-iframe",
-                "ad-direct", "mse", "mse-sliced", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
+                "ad-direct", "spa", "mse", "mse-sliced", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
             ):
                 driver.get(f"http://127.0.0.1:{server.server_port}/index.html?mode={mode}")
                 deadline = time.monotonic() + 15
@@ -378,8 +385,9 @@ def run(
                     expected = 2 if mode == "multi-mse" else 1
                     playing = sum(float(item.get("currentTime") or 0) > 0 for item in state.get("videos", [])) == expected
                     actionable = state.get("labels", []).count("下载视频") == expected
-                    main_ready = mode != "ad-direct" or any(
-                        "player=main" in str(item.get("src") or "")
+                    expected_player = "main" if mode == "ad-direct" else "spa-two" if mode == "spa" else ""
+                    main_ready = not expected_player or any(
+                        f"player={expected_player}" in str(item.get("src") or "")
                         for item in state.get("videos", [])
                     )
                     expected_frames = 2 if mode in {"iframe", "cross-iframe"} else 1
@@ -406,6 +414,10 @@ def run(
                     main_url = next((item["src"] for item in state["videos"] if "player=main" in item.get("src", "")), "")
                     if state.get("resourceIds") != [_resource_id(main_url)]:
                         raise AssertionError(f"{mode}: 广告切主片后按钮仍绑定错误资源: {state}")
+                if mode == "spa":
+                    main_url = next((item["src"] for item in state["videos"] if "player=spa-two" in item.get("src", "")), "")
+                    if state.get("resourceIds") != [_resource_id(main_url)]:
+                        raise AssertionError(f"{mode}: pushState 后按钮仍绑定旧资源: {state}")
                 if mode == "multi-mse":
                     resource_ids = [value for value in state.get("resourceIds", []) if value]
                     if len(resource_ids) != 2 or len(set(resource_ids)) != 2:

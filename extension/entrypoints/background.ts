@@ -22,6 +22,15 @@ const CLICK_INTENT_STORAGE_KEY = 'click-intents'
 const clickIntentStore = new ClickIntentStore(browser.storage.session, CLICK_INTENT_STORAGE_KEY)
 let browserFallbacks: Array<{ url: string, at: number }> = []
 const MAX_BROWSER_FALLBACKS = 128
+// Images, stylesheets, scripts and fonts can dominate busy pages but cannot
+// become a replayable browser download or adaptive media request. Keeping
+// them out of the request-chain store avoids copying headers twice for every
+// passive asset while preserving navigations, fetch/XHR, media and legacy
+// object requests used by real downloads.
+const TRACKED_REQUEST_FILTER = {
+  urls: ['<all_urls>'],
+  types: ['main_frame', 'sub_frame', 'xmlhttprequest', 'media', 'other', 'object'],
+} as any
 const determinedDownloads = new Map<number, Browser.downloads.DownloadItem>()
 const determinationWaiters = new Map<number, (item: Browser.downloads.DownloadItem) => void>()
 /**
@@ -849,13 +858,13 @@ export default defineBackground(() => {
 
   ;(browser.webRequest.onSendHeaders.addListener as any)((details: any) => {
     requestChains.observeRequest(details)
-  }, { urls: ['<all_urls>'] }, requestHeaderExtraInfo(import.meta.env.CHROME))
+  }, TRACKED_REQUEST_FILTER, requestHeaderExtraInfo(import.meta.env.CHROME))
   ;(browser.webRequest.onBeforeRequest.addListener as any)((details: any) => {
     requestChains.observeRequest(details)
-  }, { urls: ['<all_urls>'] }, ['requestBody'])
+  }, TRACKED_REQUEST_FILTER, ['requestBody'])
   browser.webRequest.onBeforeRedirect.addListener(details => {
     requestChains.observeRedirect(details as any)
-  }, { urls: ['<all_urls>'] }, ['responseHeaders'])
+  }, TRACKED_REQUEST_FILTER, ['responseHeaders'])
 
   if (import.meta.env.FIREFOX) {
     ;(browser.webRequest.onHeadersReceived.addListener as any)(async (details: any) => {
@@ -906,7 +915,7 @@ export default defineBackground(() => {
         console.warn('HLS Downloader could not preempt Firefox response', error)
         return {}
       }
-    }, { urls: ['<all_urls>'] }, ['blocking', 'responseHeaders'])
+    }, TRACKED_REQUEST_FILTER, ['blocking', 'responseHeaders'])
   } else {
     browser.webRequest.onHeadersReceived.addListener(details => {
       const chain = requestChains.observeResponse(details as any)
@@ -918,14 +927,14 @@ export default defineBackground(() => {
       // fallback if the app is unavailable.
       rememberEarlyBrowserTakeover(details, chain, observed)
       return undefined
-    }, { urls: ['<all_urls>'] }, ['responseHeaders'])
+    }, TRACKED_REQUEST_FILTER, ['responseHeaders'])
   }
   browser.webRequest.onCompleted.addListener(details => {
     requestChains.finish(details.requestId, details.timeStamp || Date.now())
-  }, { urls: ['<all_urls>'] })
+  }, TRACKED_REQUEST_FILTER)
   browser.webRequest.onErrorOccurred.addListener(details => {
     requestChains.fail(details.requestId)
-  }, { urls: ['<all_urls>'] })
+  }, TRACKED_REQUEST_FILTER)
 
   filenameDeterminationEvent(import.meta.env.CHROME, browser.downloads as any)?.addListener((item: any, suggest: any) => {
     determinedDownloads.set(item.id, item)

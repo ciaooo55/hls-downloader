@@ -430,6 +430,19 @@ def run(
                     ) == "1",
                     "生产 content script 就绪",
                 )
+                idle_media_ui = driver.execute_script(
+                    """
+                    const roots=[]; const seen=new Set();
+                    const visit=(root) => {
+                      if (!root || seen.has(root)) return; seen.add(root); roots.push(root);
+                      root.querySelectorAll('*').forEach(element => { if (element.shadowRoot) visit(element.shadowRoot); });
+                    };
+                    visit(document);
+                    return roots.some(root => root.querySelector('.video-buttons, .wrap .panel'));
+                    """
+                )
+                if idle_media_ui:
+                    raise RuntimeError("无媒体页面不应初始化完整媒体悬浮窗")
                 driver.switch_to.new_window("tab")
                 inspector = driver.current_window_handle
                 popup_url = f"chrome-extension://{EXTENSION_ID}/popup.html?inspector=1"

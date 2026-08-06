@@ -1,4 +1,4 @@
-import { detectManifestKind, manifestMimeType, shouldInspectManifestResponse } from '../lib/manifestSniff'
+import { detectManifestKind, manifestMimeType, shouldInspectManifestResponse, shouldReportMediaResponse } from '../lib/manifestSniff'
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -13,6 +13,7 @@ export default defineContentScript({
     const pendingMse: Array<{ blobUrl: string; mediaUrl: string }> = []
     const report = (url: unknown, mimeType = '') => {
       if (typeof url !== 'string') return
+      if (!shouldReportMediaResponse(url, mimeType)) return
       pendingResources.push({ url, mimeType })
       if (pendingResources.length > 200) pendingResources.shift()
       window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: { url, mimeType } }))
@@ -69,6 +70,22 @@ export default defineContentScript({
       pendingResources.forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: event })))
       pendingMse.forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', { detail: event })))
     })
+    try {
+      const notifyNavigation = () => queueMicrotask(() => {
+        window.dispatchEvent(new Event('__hls_downloader_navigation__'))
+      })
+      for (const method of ['pushState', 'replaceState'] as const) {
+        const original = history[method]
+        history[method] = function (this: History, ...args: Parameters<History['pushState']>) {
+          const result = original.apply(this, args)
+          notifyNavigation()
+          return result
+        } as History[typeof method]
+      }
+    } catch {
+      // Frozen History methods only disable immediate SPA navigation signals;
+      // popstate/hashchange and media events remain available.
+    }
     try {
       const attachShadow = Element.prototype.attachShadow
       Element.prototype.attachShadow = function (init: ShadowRootInit) {

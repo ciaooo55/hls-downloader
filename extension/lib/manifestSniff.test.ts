@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectManifestKind, manifestMimeType, shouldInspectManifestResponse } from './manifestSniff'
+import { detectManifestKind, manifestMimeType, shouldInspectManifestResponse, shouldReportMediaResponse } from './manifestSniff'
 
 describe('extensionless manifest sniffing', () => {
   it('only opts into the bounded clone for manifest-like responses', () => {
@@ -14,5 +14,13 @@ describe('extensionless manifest sniffing', () => {
     expect(detectManifestKind('<html>login</html>')).toBeNull()
     expect(manifestMimeType('hls')).toBe('application/vnd.apple.mpegurl')
     expect(manifestMimeType('dash')).toBe('application/dash+xml')
+  })
+
+  it('does not wake the isolated media UI for ordinary page traffic', () => {
+    expect(shouldReportMediaResponse('https://api.test/events', 'application/json')).toBe(false)
+    expect(shouldReportMediaResponse('https://static.test/app.js', 'text/javascript')).toBe(false)
+    expect(shouldReportMediaResponse('https://cdn.test/movie.mp4?token=1', 'application/octet-stream')).toBe(true)
+    expect(shouldReportMediaResponse('https://cdn.test/media?id=1', 'video/mp4; charset=binary')).toBe(true)
+    expect(shouldReportMediaResponse('https://cdn.test/live/playlist?id=1', 'application/octet-stream')).toBe(true)
   })
 })

@@ -151,6 +151,8 @@ def test_windows_build_emits_setup_and_portable_assets():
     assert '"chrome-$Version.json"' in build_script
     assert 'Join-Path $Root "scripts\\upgrade-portable.ps1"' in build_script
     assert "upgrade-portable.ps1 -TargetDir" in build_script
+    assert 'Join-Path $StageDir "core.log"' in build_script
+    assert 'Join-Path $StageDir "core-error.log"' in build_script
     assert "Compress-Archive" in build_script
 
 
@@ -159,7 +161,7 @@ def test_installer_and_portable_upgrade_stop_partial_old_installs():
     nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
     portable_upgrade = (root / "scripts" / "upgrade-portable.ps1").read_text(encoding="utf-8")
 
-    assert '!define APP_VERSION "3.0.16"' in nsis_script
+    assert '!define APP_VERSION "3.0.17"' in nsis_script
     close_macro = nsis_script[nsis_script.index("!macro CloseRunningApp") : nsis_script.index("!macroend", nsis_script.index("!macro CloseRunningApp"))]
     assert 'IfFileExists "$INSTDIR\\HLSDownloader.exe"' not in close_macro
     assert 'shutdown-running.ps1" -InstallDir "$INSTDIR"' in close_macro

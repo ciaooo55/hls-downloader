@@ -15,34 +15,32 @@ def build_icon() -> Image.Image:
     image = Image.new("RGBA", (CANVAS_SIZE, CANVAS_SIZE), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
 
-    # A restrained dark app tile that belongs with the native Compose shell.
-    # The previous pastel status lights looked playful at 512 px and became
-    # visual noise at 16 px; this mark stays legible in the taskbar and toolbar.
+    # Bright, flat product mark.  Keep the construction deliberately simple:
+    # the same silhouette has to survive Windows taskbar rendering and a 16 px
+    # browser toolbar without relying on glow, texture or hairline details.
     draw.rounded_rectangle(
-        (36, 36, 988, 988),
-        radius=218,
-        fill=(24, 29, 38, 255),
-        outline=(57, 68, 84, 255),
-        width=18,
+        (44, 44, 980, 980),
+        radius=224,
+        fill=(247, 251, 255, 255),
+        outline=(186, 224, 255, 255),
+        width=20,
     )
-    draw.rounded_rectangle((68, 68, 956, 956), radius=190, outline=(35, 42, 54, 255), width=12)
 
-    # Two short transfer lanes add motion without competing with the glyph.
-    draw.rounded_rectangle((186, 252, 342, 290), radius=19, fill=(59, 130, 246, 210))
-    draw.rounded_rectangle((682, 252, 838, 290), radius=19, fill=(139, 92, 246, 210))
+    blue = (37, 99, 235, 255)
+    cyan = (14, 165, 233, 255)
+    coral = (255, 107, 74, 255)
+    tile = (247, 251, 255, 255)
 
-    cyan = (56, 189, 248, 255)
-    cyan_shadow = (14, 116, 144, 170)
-    draw.rounded_rectangle((444, 188, 580, 574), radius=66, fill=cyan_shadow)
-    draw.polygon(((294, 500), (512, 738), (730, 500)), fill=cyan_shadow)
-    draw.rounded_rectangle((428, 172, 564, 558), radius=66, fill=cyan)
-    draw.polygon(((278, 484), (496, 722), (714, 484)), fill=cyan)
+    # One combined download/media glyph: the play cut-out makes the product's
+    # media focus clear without adding a second competing symbol.
+    draw.rounded_rectangle((420, 178, 604, 548), radius=86, fill=blue)
+    draw.polygon(((250, 448), (774, 448), (512, 736)), fill=blue)
+    draw.polygon(((466, 374), (466, 568), (620, 471)), fill=tile)
 
-    # The open tray reads clearly as a destination even at favicon sizes.
-    mint = (52, 211, 153, 255)
-    draw.line(((226, 746), (226, 814), (798, 814), (798, 746)), fill=(9, 78, 74, 210), width=80, joint="curve")
-    draw.line(((210, 730), (210, 798), (782, 798), (782, 730)), fill=mint, width=64, joint="curve")
-    draw.rounded_rectangle((326, 766, 666, 814), radius=24, fill=(224, 255, 247, 255))
+    # A cyan destination tray and one warm progress accent keep the mark lively
+    # while remaining readable when the browser asks for a 16 px icon.
+    draw.line(((230, 744), (230, 824), (794, 824), (794, 744)), fill=cyan, width=68, joint="curve")
+    draw.rounded_rectangle((382, 790, 642, 846), radius=28, fill=coral)
     return image
 
 
