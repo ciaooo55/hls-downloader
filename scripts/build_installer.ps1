@@ -129,7 +129,21 @@ function Get-VerifiedArchive([string]$Url, [string]$Path, [string]$Expected, [st
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         try {
             Write-Host "Downloading pinned $Label (attempt $attempt/3)..."
-            Invoke-WebRequest -Uri $Url -OutFile $Path -MaximumRedirection 10
+            # Windows PowerShell's Invoke-WebRequest can fail with
+            # "Operation is not valid due to the current state of the
+            # object" on SourceForge's redirect chain.  Prefer the native
+            # curl.exe available on supported Windows 10/11 installations,
+            # while retaining an Invoke-WebRequest fallback for minimal
+            # environments without curl.
+            $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+            if ($curl) {
+                & $curl.Source --location --fail --retry 3 --retry-delay 2 --max-time 300 --output $Path $Url
+                if ($LASTEXITCODE -ne 0) {
+                    throw "curl.exe failed with exit code $LASTEXITCODE"
+                }
+            } else {
+                Invoke-WebRequest -Uri $Url -OutFile $Path -MaximumRedirection 10
+            }
             Assert-FileSha256 $Path $Expected $Label
             return
         } catch {
