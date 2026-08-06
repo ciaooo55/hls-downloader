@@ -339,6 +339,12 @@ def test_windows_build_uses_pinned_verified_packaging_tools():
     assert "$FFmpegArchiveSha256 = \"a082da6d5ce0cbb9a8ad0112ab7f654d480c707b8caf9d332f4532d78b65257f\"" in build_script
     assert "generate_sbom.py" in build_script
     assert 'File "${STAGE_DIR}\\sbom.cdx.json"' in installer
+    assert 'Copy-Item -LiteralPath (Join-Path $Root "TERMS.md")' in build_script
+    assert 'Copy-Item -LiteralPath (Join-Path $Root "PRIVACY.md")' in build_script
+    assert '[Text.Encoding]::Unicode' in build_script
+    assert '!insertmacro MUI_PAGE_LICENSE "${STAGE_DIR}\\TERMS.txt"' in installer
+    assert 'File "${STAGE_DIR}\\TERMS.md"' in installer
+    assert 'File "${STAGE_DIR}\\PRIVACY.md"' in installer
     assert "Assert-FileSha256" in build_script
     assert "Get-VerifiedArchive" in build_script
     assert 'attempt $attempt/3' in build_script

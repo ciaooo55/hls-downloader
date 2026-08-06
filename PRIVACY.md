@@ -1,26 +1,77 @@
-# Privacy Policy
+# HLS Downloader 隐私政策（中国大陆版）
 
-HLS Downloader and its browser extension operate locally on the user's computer.
-They do not send analytics, telemetry, browsing history, download history, or
-personal information to the developer or to an advertising service.
+版本：`2026-08-06-cn-1`
+生效日期：2026 年 8 月 6 日
 
-The extension observes download and media response metadata so it can show files
-available on the current page. When the user sends a resource to HLS Downloader,
-the extension transfers the resource URL, filename, MIME type, source page,
-Referer, Origin, and browser User-Agent to the locally installed desktop program
-through Firefox or Chrome Native Messaging.
+## 一、处理方式概览
 
-Cookie access is disabled per site until the user explicitly authorizes that site
-in the extension popup. Authorized cookies are sent only to the local desktop
-program so it can repeat an authenticated download request. The desktop program
-stores credentials locally using Windows DPAPI encryption and does not expose
-them through its task API or event stream.
+HLS Downloader 和浏览器插件主要在用户本机运行。项目开发者不运营账号系统、下载云服务、广告系统或遥测后台，默认不会接收用户的浏览历史、下载历史、Cookie、任务日志、个人文件或协议接受记录。
 
-Settings and detected-resource lists are stored in browser-local storage. Tasks,
-configuration, temporary files, and completed downloads remain on the user's
-computer. The user can delete tasks and associated files from the desktop app and
-can revoke cookie authorization from the extension popup at any time.
+本政策说明软件在用户设备上的本地处理，以及用户主动连接第三方网站、GitHub、BT Peer 或局域网设备时可能发生的数据传输。用户自行修改、二次开发或接入其他服务后的处理活动不属于原项目的默认行为。
 
-The software does not execute remotely hosted code. Network requests are made only
-to resources selected by the user and to GitHub Releases when the desktop user
-explicitly checks for an application update.
+## 二、本地处理的数据
+
+软件可能在用户设备上处理：
+
+- 下载 URL、网页来源地址、标题、文件名、MIME 类型、大小、进度和错误日志；
+- 为重放用户选定请求所需的 Referer、Origin、User-Agent、自定义请求头、Cookie、Authorization、POST 请求体和短效签名参数；
+- 下载任务、断点、分片、BT 元数据、所选文件、保存目录、代理设置和站点规则；
+- 浏览器插件检测到的媒体候选、标签页/页面/frame 归属、插件版本和本机连接状态；
+- 局域网投屏或 TVBox 设备的地址、协议和临时本机媒体共享记录；
+- 用户协议版本、协议正文 SHA-256 摘要和 UTC 接受时间。
+
+这些数据用于识别用户选择的资源、建立下载、恢复任务、显示进度、连接浏览器、投屏和保存本机设置。软件不会要求用户提供姓名、手机号、身份证号或广告标识符。
+
+## 三、Cookie 和账号凭据
+
+浏览器插件默认不读取站点 Cookie。只有用户在插件中为具体站点明确授权后，插件才会把该站点下载所需的 Cookie 或请求身份交给本机桌面程序。
+
+桌面程序在 Windows 上使用 DPAPI 保护持久化的 Cookie、Authorization、可重放请求上下文和代理凭据。敏感值不会通过任务列表 API 或事件流原样返回。DPAPI 不能代替 Windows 账户安全；能够控制用户 Windows 会话或注入软件进程的主体仍可能取得数据。
+
+用户应只使用本人或已获合法授权的账号和凭据，并应避免公开分享包含签名 URL、Cookie、请求头或日志的截图、配置和数据库。
+
+## 四、数据可能发送给谁
+
+只有在相应功能被用户触发时，数据才可能发送给下列接收方：
+
+1. **用户选择的目标网站、CDN、Tracker 和下载服务器**：接收网络请求、IP 地址和必要请求身份；其处理受对方隐私政策约束。
+2. **BT/P2P Peer、Tracker 和 DHT 节点**：BT 期间可能看到用户 IP、端口、种子哈希、客户端行为并接收文件分片。关闭 DHT 不能完全隐藏 P2P 身份。
+3. **GitHub Releases**：用户检查软件更新时，软件会请求版本和发布资产；GitHub 会按其政策处理 IP、User-Agent 等连接信息。
+4. **用户选择的局域网电视、TVBox、DLNA 或 Chromecast 设备**：接收媒体 URL，或在临时共享有效期内访问用户本机选定的媒体文件。
+5. **用户配置的代理、DNS、网络运营商或安全软件**：可能观察或转发相应网络连接。
+
+项目开发者不从上述接收方获取用户数据，也不出售或出租个人信息。用户主动访问境外网站或使用境外服务时，网络数据可能由用户选择的境外接收方处理；这不是项目开发者建立的集中式跨境数据传输服务。
+
+## 五、保存位置和期限
+
+- 安装版配置和任务历史默认位于 `%LOCALAPPDATA%\HLS Downloader`；便携版数据位于解压目录。
+- 浏览器插件设置和候选资源保存在浏览器本地存储中。
+- 临时分片、日志和检查点位于配置的缓存目录；成功任务会清理不再需要的过程文件，暂停或失败任务可能保留续传数据。
+- 完成文件保留到用户自行删除。任务、配置和协议接受记录保留到用户删除、重置或卸载。
+- 浏览器接管和本地媒体共享使用有容量和时间上限的临时记录，过期后自动清理。
+
+## 六、用户控制
+
+用户可以：
+
+- 在桌面端删除任务、日志、临时数据和最终文件；
+- 在插件中撤销某一站点的 Cookie 授权、清空识别结果或卸载插件；
+- 修改下载目录、缓存目录、代理、站点规则、BT/DHT 和投屏设置；
+- 在“设置 → 维护 → 法律与隐私”查看当前用户协议及本机接受记录；
+- 通过卸载程序删除应用数据，并自行决定是否删除已下载文件。
+
+由于原项目没有接收这些本地数据，开发者无法代替用户查询、导出或删除用户设备上的记录。
+
+## 七、未成年人
+
+本软件不是面向未成年人的内容服务，不主动收集未成年人信息。未成年人应在监护人同意和监督下使用，不得通过本软件处理不适宜内容、他人个人信息或无权下载的作品。
+
+## 八、安全措施与局限
+
+项目采用本机回环地址、内部凭据、Native Messaging 配对、请求边界、私网目标限制、敏感字段屏蔽、Windows DPAPI、原子配置写入和有限缓存等措施。任何软件均无法保证绝对安全；用户仍需维护 Windows、浏览器、防病毒软件、文件权限和备份，并及时安装安全更新。
+
+## 九、政策更新和联系
+
+隐私处理发生实质变化时，应提高政策版本，并在软件内重新提示。原项目问题和权利请求可通过 <https://github.com/ciaooo55/hls-downloader/issues> 提交。请勿在公开 Issue 中附带 Cookie、Authorization、签名 URL、下载记录或其他敏感信息。
+
+主要参考：《中华人民共和国个人信息保护法》<https://www.npc.gov.cn/npc/c2/c30834/202108/t20210820_313088.html>。

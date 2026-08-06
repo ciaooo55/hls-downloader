@@ -36,7 +36,7 @@ def _is_leaked_token(value: object) -> bool:
 
 
 class Settings(BaseSettings):
-    config_version: int = 20
+    config_version: int = 21
     host: str = "127.0.0.1"
     port: int = Field(default=8765, ge=1, le=65535)
     token: str = Field(default_factory=_new_internal_token, min_length=32)
@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     proxy_mode: str = "system"
     proxy_url: str = ""
     proxy_bypass: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1", "::1"])
+    # Installation-local, versioned proof of explicit first-run acceptance.
+    # The document digest forces re-consent if TERMS.md changes unexpectedly.
+    legal_terms_accepted_version: str = Field(default="", max_length=64)
+    legal_terms_accepted_digest: str = Field(default="", max_length=64)
+    legal_terms_accepted_at: str = Field(default="", max_length=64)
 
     # Ignore fields written by a newer release so downgrade/upgrade helpers can
     # still start far enough to close the running application cleanly.
@@ -275,6 +280,13 @@ def _load_settings_file() -> Settings:
             data["config_version"] = 20
             migrated = True
             version = 20
+        if version < 21:
+            data.setdefault("legal_terms_accepted_version", "")
+            data.setdefault("legal_terms_accepted_digest", "")
+            data.setdefault("legal_terms_accepted_at", "")
+            data["config_version"] = 21
+            migrated = True
+            version = 21
         if not isinstance(data.get("tvbox_endpoint"), str):
             data["tvbox_endpoint"] = ""
             migrated = True

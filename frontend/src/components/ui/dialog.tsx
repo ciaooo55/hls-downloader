@@ -1,4 +1,4 @@
-import type { HTMLAttributes, ReactNode } from 'react'
+import { forwardRef, type HTMLAttributes, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { Button } from './button'
@@ -16,16 +16,17 @@ export function DialogOverlay({
   )
 }
 
-export function Dialog({
+export const Dialog = forwardRef<HTMLElement, HTMLAttributes<HTMLElement> & { onClose?: () => void; label?: string }>(function Dialog({
   className,
   children,
   onClose,
   label,
   role = 'dialog',
   ...props
-}: HTMLAttributes<HTMLElement> & { onClose?: () => void; label?: string }) {
+}, ref) {
   return (
     <section
+      ref={ref}
       className={cn('modal', className)}
       role={role}
       aria-modal="true"
@@ -36,7 +37,7 @@ export function Dialog({
       {children}
     </section>
   )
-}
+})
 
 export function DialogHeader({
   title,

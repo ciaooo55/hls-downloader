@@ -492,6 +492,36 @@ def test_load_from_db_auto_resumes_only_update_marked_tasks(monkeypatch):
     asyncio.run(run())
 
 
+def test_load_from_db_does_not_auto_resume_before_legal_acceptance(monkeypatch):
+    row = _db_row("paused", task_id="legal-gated-update")
+    row["engine_state"] = '{"resume_after_update": true}'
+
+    async def fake_iter_db_rows(sql, params=(), **_kwargs):
+        yield row
+
+    async def run():
+        manager = TaskManager()
+        started = []
+
+        async def fake_start(task_id):
+            started.append(task_id)
+
+        monkeypatch.setattr(manager_module, "iter_db_rows", fake_iter_db_rows)
+        monkeypatch.setattr(manager, "_save_db", _async_noop)
+        monkeypatch.setattr(manager, "start_task", fake_start)
+
+        await manager.load_from_db(auto_start_allowed=False)
+
+        task = manager.tasks["legal-gated-update"]
+        assert started == []
+        assert task.status is TaskStatus.PAUSED
+        assert task.stage == "paused"
+        assert task.engine_state["state_reason"] == "legal_terms_required"
+        assert "同意用户协议" in task.last_log
+
+    asyncio.run(run())
+
+
 def test_retry_clears_structured_failure_fields(monkeypatch):
     async def run():
         manager = TaskManager()

@@ -1,4 +1,4 @@
-import type { PlaybackSeek, PlaybackSession, PlaybackStatus } from './types'
+import type { LegalAcceptanceInput, LegalDocument, LegalStatus, PlaybackSeek, PlaybackSession, PlaybackStatus } from './types'
 import { coreOrigin, internalCredential, prepareTauriRuntime } from './tauri'
 
 // The Tauri core port is loaded asynchronously from the runtime config.  Do
@@ -63,6 +63,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const fetchSettings = () => request<any>('/settings')
 export const fetchHealth = () => request<{ status: string; version: string }>('/health')
+export const fetchLegalStatus = () => request<LegalStatus>('/legal/status')
+export const fetchLegalTerms = () => request<LegalDocument>('/legal/terms')
+export const acceptLegalTerms = (data: LegalAcceptanceInput) =>
+  request<LegalStatus>('/legal/accept', { method: 'POST', body: JSON.stringify(data) })
 export const saveSettings = (data: any) =>
   request<any>('/settings', { method: 'POST', body: JSON.stringify(data) })
 export const fetchTasks = () => request<any[]>('/tasks')

@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from ..config import settings
+from ..legal import legal_acceptance_current
 from ..database import iter_db_rows, run_db
 from ..models import Task, TaskProgress, TaskStatus, TaskType
 from ..naming import suggest_manifest_name
@@ -1376,7 +1377,7 @@ class TaskManager:
                     await self._cleanup_task_temp(task)
         await self._cleanup_temp_root_if_all_done()
 
-    async def load_from_db(self) -> None:
+    async def load_from_db(self, *, auto_start_allowed: bool = True) -> None:
         interrupted: list[Task] = []
         resume_after_update: list[Task] = []
         scheduled_queue: list[Task] = []
@@ -1548,7 +1549,7 @@ class TaskManager:
         for task in secret_migrations:
             if task.id not in interrupted_ids:
                 await self._save_db(task)
-        if self._queue_auto_start_due():
+        if auto_start_allowed and self._queue_auto_start_due():
             for task in scheduled_queue:
                 task.engine_state.pop("queue_waiting_for_schedule", None)
                 task.last_log = "定时队列已开始"
@@ -1564,6 +1565,12 @@ class TaskManager:
             # Save the cleared marker before starting.  If startup itself is
             # interrupted, the persisted task remains resumable rather than
             # repeatedly carrying a stale update marker.
+            if not auto_start_allowed:
+                task.stage = "paused"
+                task.last_log = "请先在主窗口同意用户协议，再手动恢复下载"
+                task.engine_state["state_reason"] = "legal_terms_required"
+                await self._save_db(task)
+                continue
             await self._save_db(task)
             try:
                 await self.start_task(task.id)
@@ -1702,7 +1709,7 @@ class TaskManager:
     async def _maintain_scheduled_tasks(self, now: datetime | None = None) -> None:
         current = now or datetime.now()
         queue_active, queue_should_stop = self._queue_schedule_state(current)
-        if queue_active:
+        if queue_active and legal_acceptance_current():
             for task in list(self.tasks.values()):
                 if not task.engine_state.get("queue_waiting_for_schedule"):
                     continue

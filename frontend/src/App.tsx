@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FastForward, LoaderCircle, Pause, Play, Trash2, X } from 'lucide-react'
-import { cancelPowerAction, castLocalFile, castMediaUrl, clearCompletedTasks, completeBrowserMediaPush, confirmPowerAction, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLocalTvboxShare, fetchPendingPowerActions, fetchSettings, fetchTasks, importTorrentPath, launchFile, openExplorer, openTaskInExplorer, pushLocalTvboxFile, pushTvboxUrl, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
+import { cancelPowerAction, castLocalFile, castMediaUrl, clearCompletedTasks, completeBrowserMediaPush, confirmPowerAction, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLegalStatus, fetchLocalTvboxShare, fetchPendingPowerActions, fetchSettings, fetchTasks, importTorrentPath, launchFile, openExplorer, openTaskInExplorer, pushLocalTvboxFile, pushTvboxUrl, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
 import { fmtBytes, fmtSpeed } from './format'
 import { isRunningStatus, mergeTaskEvent, mergeTaskEvents } from './taskState'
 import { commandState } from './taskCommands'
 import { filterAndSortTasks } from './taskPresentation'
 import type { ThemePreference } from './theme'
-import type { BrowserStatus, Settings, Task } from './types'
+import type { BrowserStatus, LegalStatus, Settings, Task } from './types'
 import DesktopToolbar from './components/DesktopToolbar'
 import WindowChrome from './components/WindowChrome'
 import Sidebar, { type TaskFilter } from './components/Sidebar'
@@ -22,12 +22,13 @@ import UpdateDialog from './components/UpdateDialog'
 import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffCancelDecision, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
 import ConfirmDialog from './components/ConfirmDialog'
 import DevicePickerDialog from './components/DevicePickerDialog'
+import LegalAgreementDialog from './components/LegalAgreementDialog'
 
 const UI_EVENT_ID_CAP = 4096
 import { Button, Dialog, DialogFooter, DialogHeader, DialogOverlay } from './components/ui'
 import { isTauriDesktop, startTauriDesktopSession } from './tauri'
 import { selectTheme, useUiStore } from './store/uiStore'
-import { pickLocalMediaFile } from './desktop'
+import { pickLocalMediaFile, quitApplication } from './desktop'
 
 const VideoPlayerModal = lazy(() => import('./components/VideoPlayerModal'))
 const launchParams = new URLSearchParams(window.location.search)
@@ -55,6 +56,8 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [settings, setSettings] = useState<Settings>({})
   const [appVersion, setAppVersion] = useState('')
+  const [legalStatus, setLegalStatus] = useState<LegalStatus | null>(null)
+  const [legalLoadError, setLegalLoadError] = useState('')
   const [browserStatus, setBrowserStatus] = useState<BrowserStatus | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const filter = useUiStore(s => s.filter)
@@ -105,7 +108,20 @@ export default function App() {
   const handoffRefreshInFlight = useRef(false)
   const autoPlayHandled = useRef(false)
 
+  const loadLegal = useCallback(async () => {
+    setLegalLoadError('')
+    setLegalStatus(null)
+    try {
+      setLegalStatus(await fetchLegalStatus())
+    } catch (reason: any) {
+      setLegalLoadError(reason?.message || '无法读取本机协议状态')
+    }
+  }, [])
+
+  useEffect(() => { void loadLegal() }, [loadLegal])
+
   useEffect(() => {
+    if (!legalStatus?.accepted) return
     let disposed = false
     let stop: (() => void) | undefined
     void startTauriDesktopSession()
@@ -120,7 +136,7 @@ export default function App() {
       disposed = true
       stop?.()
     }
-  }, [])
+  }, [legalStatus?.accepted])
 
   useEffect(() => {
     const receive = (event: Event) => {
@@ -219,7 +235,7 @@ export default function App() {
     // Tauri owns dedicated handoff windows. The standalone /ui surface uses
     // the manager modal fallback instead.
     const desktopShell = isTauriDesktop()
-    if (desktopShell) return
+    if (desktopShell || !legalStatus?.accepted) return
     const refresh = () => {
       if (handoffRefreshInFlight.current) return
       handoffRefreshInFlight.current = true
@@ -238,7 +254,7 @@ export default function App() {
       window.removeEventListener('focus', refresh)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [])
+  }, [legalStatus?.accepted])
 
   useEffect(() => { document.documentElement.dataset.theme = theme }, [theme])
   useEffect(() => {
@@ -261,10 +277,10 @@ export default function App() {
   useEffect(() => { setSelected(current => new Set([...current].filter(id => tasks.some(task => task.id === id)))) }, [tasks])
   useEffect(() => {
     const requestedTask = launchParams.get('play')
-    if (!requestedTask || playing || autoPlayHandled.current) return
+    if (!legalStatus?.accepted || !requestedTask || playing || autoPlayHandled.current) return
     const task = tasks.find(item => item.id === requestedTask)
     if (task) { autoPlayHandled.current = true; setPlaying(task) }
-  }, [tasks, playing])
+  }, [tasks, playing, legalStatus?.accepted])
   useEffect(() => () => { if (feedbackTimer.current) window.clearTimeout(feedbackTimer.current) }, [])
   useEffect(() => { tasksRef.current = tasks }, [tasks])
   useEffect(() => {
@@ -276,7 +292,7 @@ export default function App() {
   useEffect(() => {
     // IDM-style clipboard watching, desktop shell only: the Rust side emits
     // an event when copied text looks like a downloadable link.
-    if (!isTauriDesktop() || settings.clipboard_watch === false) return
+    if (!legalStatus?.accepted || !isTauriDesktop() || settings.clipboard_watch === false) return
     let disposed = false
     const unlisteners: Array<() => void> = []
     void import('@tauri-apps/api/event')
@@ -306,7 +322,7 @@ export default function App() {
       for (const fn of unlisteners) fn()
       if (clipboardOfferTimer.current) window.clearTimeout(clipboardOfferTimer.current)
     }
-  }, [settings.clipboard_watch])
+  }, [settings.clipboard_watch, legalStatus?.accepted])
   useEffect(() => {
     if (!localShare) return
     let stopped = false
@@ -648,5 +664,13 @@ export default function App() {
     {confirmation && <ConfirmDialog title={confirmation.title} message={confirmation.message} confirmLabel={confirmation.confirmLabel} danger={confirmation.danger} onCancel={() => setConfirmation(null)} onConfirm={confirmation.run} />}
     {powerAction && <ConfirmDialog title={`${powerAction.task_title || '任务'} 已完成`} message={`${powerAction.delay_seconds || 30} 秒后将${powerAction.action === 'shutdown' ? '关机' : powerAction.action === 'sleep' ? '进入睡眠' : '进入休眠'}。可以立即执行或取消。`} confirmLabel="立即执行" danger={powerAction.action === 'shutdown'} onCancel={() => { const id = powerAction.power_action_id; setPowerAction(null); void cancelPowerAction(id).catch(() => {}) }} onConfirm={() => { const id = powerAction.power_action_id; setPowerAction(null); void confirmPowerAction(id).catch(reason => setError(reason?.message || '无法执行电源动作')) }} />}
     {devicePick && <DevicePickerDialog mode={devicePick.kind} onClose={() => { if (devicePick.requestId) void completeBrowserMediaPush(devicePick.requestId, 'canceled', '已取消设备选择'); setDevicePick(null) }} onChoose={completeDevicePick} />}
+    {(!legalStatus || !legalStatus.accepted) && <LegalAgreementDialog
+      status={legalStatus}
+      required
+      loadError={legalLoadError}
+      onRetry={() => void loadLegal()}
+      onAccepted={next => { setLegalStatus(next); setLegalLoadError(''); void load() }}
+      onExit={() => { void quitApplication() }}
+    />}
   </div>
 }

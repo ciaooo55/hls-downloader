@@ -86,6 +86,20 @@ export async function closeDesktopWindow(): Promise<NativeResult> {
   }
 }
 
+export async function quitApplication(): Promise<NativeResult> {
+  try {
+    if (!isTauriDesktop()) {
+      window.close()
+      return { ok: true }
+    }
+    const { exit } = await import('@tauri-apps/plugin-process')
+    await exit(0)
+    return { ok: true }
+  } catch (reason) {
+    return unavailable(reason instanceof Error ? reason.message : '无法退出应用')
+  }
+}
+
 export async function resizeDesktopWindow(width: number, height: number): Promise<NativeResult> {
   try {
     if (!isTauriDesktop()) return unavailable('native-resize-unavailable')

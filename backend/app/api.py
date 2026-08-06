@@ -22,6 +22,7 @@ from .schemas import (
     BrowserPing,
     BrowserTakeoverSettings,
     HealthResponse,
+    LegalAcceptanceRequest,
     SettingsUpdate,
     TaskBatchCreate,
     TaskCreate,
@@ -71,6 +72,13 @@ from .updater import (
 )
 from .paths import RUNTIME_PATHS
 from .version import APP_VERSION
+from .legal import (
+    TERMS_VERSION,
+    legal_acceptance_current,
+    legal_status,
+    record_legal_acceptance,
+    terms_payload,
+)
 from .power_actions import power_action_service
 from .models import TaskStatus, TaskType
 from .browser_handoff import browser_handoffs
@@ -159,7 +167,12 @@ def _browser_payload(value: BrowserHandoffCreate) -> dict:
 
 def _public_settings() -> dict:
     """Return user-configurable settings without the internal IPC credential."""
-    body = settings.model_dump(exclude={"token", "host", "port"})
+    body = settings.model_dump(exclude={
+        "token", "host", "port",
+        "legal_terms_accepted_version",
+        "legal_terms_accepted_digest",
+        "legal_terms_accepted_at",
+    })
     body["default_cookie_configured"] = bool(settings.default_cookie)
     # A default Cookie is an authentication credential, not a display value.
     # Manual task dialogs therefore receive an empty value and must not replay
@@ -169,6 +182,50 @@ def _public_settings() -> dict:
     body["proxy_url"] = SECRET_MASK if settings.proxy_url else ""
     body["site_profiles"] = mask_site_profiles(settings.site_profiles)
     return body
+
+
+def _require_legal_acceptance() -> None:
+    if legal_acceptance_current():
+        return
+    raise HTTPException(
+        status_code=428,
+        detail={
+            "code": "LEGAL_TERMS_REQUIRED",
+            "message": "首次使用前必须在桌面主窗口阅读并同意用户协议与免责声明",
+            "required_version": TERMS_VERSION,
+        },
+    )
+
+
+@router.get("/legal/status")
+async def get_legal_status(x_token: str = Header(default="")):
+    _check_token(x_token)
+    try:
+        return legal_status()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/legal/terms")
+async def get_legal_terms(x_token: str = Header(default="")):
+    _check_token(x_token)
+    try:
+        return terms_payload()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/legal/accept")
+async def accept_legal_terms(body: LegalAcceptanceRequest, x_token: str = Header(default="")):
+    _check_token(x_token)
+    try:
+        return record_legal_acceptance(
+            version=body.version,
+            digest=body.document_digest,
+            accepted=body.accepted,
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 def _check_host(url: str):
     if url.lower().startswith("magnet:") or url.lower().startswith("torrent-file:"):
@@ -324,6 +381,7 @@ def _handoff_detail(item) -> dict:
 @router.post("/browser/handoffs")
 async def create_browser_handoff(request: Request, x_token: str = Header(default="")):
     _check_browser_token(x_token)
+    _require_legal_acceptance()
     model = await _read_browser_json(request, BrowserHandoffCreate)
     payload = _browser_payload(model)
     url = payload["url"]
@@ -436,6 +494,7 @@ async def get_browser_handoff(handoff_id: str, x_token: str = Header(default="")
 @router.post("/browser/handoffs/{handoff_id}/accept")
 async def accept_browser_handoff(handoff_id: str, body: BrowserHandoffAccept | None = None, x_token: str = Header(default="")):
     _check_browser_token(x_token)
+    _require_legal_acceptance()
     body = body or BrowserHandoffAccept()
     item = browser_handoffs.claim(handoff_id)
     if not item:
@@ -557,6 +616,7 @@ async def _create_browser_task(item, output_dir: str = ""):
 @router.post("/browser/downloads")
 async def create_browser_download(request: Request, x_token: str = Header(default="")):
     _check_browser_token(x_token)
+    _require_legal_acceptance()
     model = await _read_browser_json(request, BrowserHandoffCreate)
     payload = _browser_payload(model)
     url = payload["url"]
@@ -967,6 +1027,7 @@ async def scan_cast_devices_endpoint(x_token: str = Header(default="")):
 @router.post("/tvbox/push")
 async def push_tvbox_url(body: TvboxPush, x_token: str = Header(default="")):
     _check_token(x_token)
+    _require_legal_acceptance()
     endpoint = body.endpoint or settings.tvbox_endpoint
     if not endpoint:
         raise HTTPException(status_code=409, detail="请先在设置中选择电视推送设备")
@@ -979,6 +1040,7 @@ async def push_tvbox_url(body: TvboxPush, x_token: str = Header(default="")):
 @router.post("/tvbox/push-local")
 async def push_local_tvbox_file(body: TvboxLocalPush, x_token: str = Header(default="")):
     _check_token(x_token)
+    _require_legal_acceptance()
     endpoint = body.endpoint or settings.tvbox_endpoint
     if not endpoint:
         raise HTTPException(status_code=409, detail="请先在设置中选择电视推送设备")
@@ -998,6 +1060,7 @@ async def push_local_tvbox_file(body: TvboxLocalPush, x_token: str = Header(defa
 @router.post("/cast/push-local")
 async def cast_local_file(body: CastLocalPush, x_token: str = Header(default="")):
     _check_token(x_token)
+    _require_legal_acceptance()
     device = body.device or settings.cast_device
     if not device:
         raise HTTPException(status_code=409, detail="请先在设置中扫描并选择投屏设备")
@@ -1018,6 +1081,7 @@ async def cast_local_file(body: CastLocalPush, x_token: str = Header(default="")
 @router.post("/cast/push")
 async def cast_url(body: CastUrlPush, x_token: str = Header(default="")):
     _check_token(x_token)
+    _require_legal_acceptance()
     device = body.device or settings.cast_device
     if not device:
         raise HTTPException(status_code=409, detail="请选择投屏设备")
@@ -1032,6 +1096,7 @@ async def cast_url(body: CastUrlPush, x_token: str = Header(default="")):
 @router.post("/browser/media-push")
 async def create_browser_media_push(request: Request, x_token: str = Header(default="")):
     _check_browser_token(x_token)
+    _require_legal_acceptance()
     model = await _read_browser_json(request, BrowserMediaPushCreate)
     kind = model.kind
     resource = _browser_payload(model.resource)
@@ -1123,6 +1188,7 @@ async def get_local_tvbox_share(share_id: str, x_token: str = Header(default="")
 @router.post("/tasks", response_model=TaskResponse)
 async def create_task(body: TaskCreate, x_token: str = Header(default="")):
     _check_token(x_token)
+    _require_legal_acceptance()
     _check_host(body.url)
     _require_allow_duplicate(body.url, body.allow_duplicate)
     task = await manager.create_task(
@@ -1150,6 +1216,7 @@ async def create_task(body: TaskCreate, x_token: str = Header(default="")):
 @router.post("/tasks/batch")
 async def create_batch(body: TaskBatchCreate, x_token: str = Header(default="")):
     _check_token(x_token)
+    _require_legal_acceptance()
     for task in body.tasks:
         _check_host(task.url)
         _require_allow_duplicate(task.url, task.allow_duplicate)
@@ -1185,6 +1252,7 @@ async def create_torrent_file_task(
     x_token: str = Header(default=""),
 ):
     _check_token(x_token)
+    _require_legal_acceptance()
     content_length = request.headers.get("content-length", "").strip()
     if content_length:
         try:
@@ -1238,6 +1306,7 @@ async def create_torrent_file_task(
 @router.post("/tasks/torrent-path", response_model=TaskResponse)
 async def create_torrent_path_task(body: TorrentPathImport, x_token: str = Header(default="")):
     _check_token(x_token)
+    _require_legal_acceptance()
     source = Path(body.path).expanduser()
     if source.suffix.lower() != ".torrent" or not source.is_file():
         raise HTTPException(status_code=400, detail="请选择有效的 .torrent 文件")
@@ -1322,6 +1391,7 @@ async def get_task(task_id: str, x_token: str = Header(default="")):
 @router.post("/tasks/{task_id}/start")
 async def start_task(task_id: str, x_token: str = Header(default="")):
     _check_token(x_token)
+    _require_legal_acceptance()
     await _manager_action(manager.start_task(task_id))
     return {"ok": True}
 
@@ -1334,6 +1404,7 @@ async def pause_task(task_id: str, x_token: str = Header(default="")):
 @router.post("/tasks/{task_id}/resume")
 async def resume_task(task_id: str, x_token: str = Header(default="")):
     _check_token(x_token)
+    _require_legal_acceptance()
     await _manager_action(manager.resume_task(task_id))
     return {"ok": True}
 
@@ -1346,6 +1417,7 @@ async def cancel_task(task_id: str, x_token: str = Header(default="")):
 @router.post("/tasks/{task_id}/retry")
 async def retry_task(task_id: str, x_token: str = Header(default="")):
     _check_token(x_token)
+    _require_legal_acceptance()
     await _manager_action(manager.retry_task(task_id))
     return {"ok": True}
 
@@ -1357,6 +1429,7 @@ async def refresh_task_request(
     x_token: str = Header(default=""),
 ):
     _check_token(x_token)
+    _require_legal_acceptance()
     _check_host(body.url)
     values = body.model_dump(exclude_unset=True)
     values.pop("url", None)

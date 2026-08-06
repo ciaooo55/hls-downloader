@@ -388,6 +388,12 @@ class SettingsUpdate(BaseModel):
             raise ValueError(f"cast_device：{exc}") from exc
 
 
+class LegalAcceptanceRequest(BaseModel):
+    version: str = Field(min_length=1, max_length=64)
+    document_digest: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    accepted: bool = False
+
+
 class BrowserHandoffAccept(BaseModel):
     filename: str = Field(default="", max_length=255)
     download_dir: str = Field(default="", max_length=2048)

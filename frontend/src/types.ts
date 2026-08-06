@@ -120,6 +120,28 @@ export interface Settings {
   proxy_bypass?: string[]
 }
 
+export interface LegalStatus {
+  accepted: boolean
+  required_version: string
+  document_digest: string
+  accepted_version: string
+  accepted_at: string
+  record_location: 'local_config'
+}
+
+export interface LegalDocument extends LegalStatus {
+  title: string
+  content: string
+  privacy_document: string
+  privacy_content: string
+}
+
+export interface LegalAcceptanceInput {
+  version: string
+  document_digest: string
+  accepted: boolean
+}
+
 export interface TorrentFileEntry {
   index: number
   path: string

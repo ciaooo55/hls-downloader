@@ -380,7 +380,17 @@ Invoke-Step "Stage application files" {
     Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloaderNativeHost.exe") -Destination $StageDir
     Copy-Item -LiteralPath (Join-Path $Root "config.default.json") -Destination (Join-Path $StageDir "config.json")
     Copy-Item -LiteralPath (Join-Path $Root "LICENSE") -Destination (Join-Path $StageDir "LICENSE.txt")
+    Copy-Item -LiteralPath (Join-Path $Root "TERMS.md") -Destination (Join-Path $StageDir "TERMS.md")
+    Copy-Item -LiteralPath (Join-Path $Root "PRIVACY.md") -Destination (Join-Path $StageDir "PRIVACY.md")
     Copy-Item -LiteralPath (Join-Path $Root "THIRD_PARTY_NOTICES.md") -Destination (Join-Path $StageDir "THIRD_PARTY_NOTICES.md")
+    # MUI's license page consumes Windows Unicode text.  Keep TERMS.md UTF-8
+    # for the application/API, and generate a UTF-16LE installer copy in both
+    # Windows PowerShell 5.1 and PowerShell 7 without relying on shell defaults.
+    [IO.File]::WriteAllText(
+        (Join-Path $StageDir "TERMS.txt"),
+        [IO.File]::ReadAllText((Join-Path $Root "TERMS.md"), [Text.Encoding]::UTF8),
+        [Text.Encoding]::Unicode
+    )
     python (Join-Path $Root "scripts\generate_sbom.py") --version $Version --output (Join-Path $StageDir "sbom.cdx.json")
     if ($LASTEXITCODE -ne 0) { throw "SBOM generation failed with exit code $LASTEXITCODE" }
 
@@ -709,7 +719,9 @@ Invoke-Step "Assemble release files" {
             (Join-Path $ExtensionDir "pnpm-workspace.yaml"),
             (Join-Path $ExtensionDir "tsconfig.json"),
             (Join-Path $ExtensionDir "wxt.config.ts"),
-            (Join-Path $Root "PRIVACY.md")
+            (Join-Path $Root "PRIVACY.md"),
+            (Join-Path $Root "TERMS.md"),
+            (Join-Path $Root "THIRD_PARTY_NOTICES.md")
         )
         foreach ($sourceVariant in @(
             @{ Id = $FirefoxWebId; Out = $FirefoxWebSourceOut; Stage = (Join-Path $ExtensionBuildDir "source-web-ui"); Label = "web UI enabled" },

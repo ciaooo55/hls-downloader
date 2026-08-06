@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { ChevronDown, ChevronRight, Download, FolderOpen, RefreshCw, Trash2, X } from 'lucide-react'
-import { fetchSettings, fetchUpdateInfo, installUpdate, openExplorer, saveSettings, scanCastDevices, scanTvboxDevices, testConnection } from '../api'
+import { ChevronDown, ChevronRight, Download, FolderOpen, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react'
+import { fetchLegalStatus, fetchSettings, fetchUpdateInfo, installUpdate, openExplorer, saveSettings, scanCastDevices, scanTvboxDevices, testConnection } from '../api'
 import { beginUninstall, getDesktopInfo } from '../desktop'
 import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 import type { ThemePreference } from '../theme'
-import type { UpdateInfo } from '../types'
+import type { LegalStatus, UpdateInfo } from '../types'
 import { friendlyUpdateError } from '../updateError'
 
 const QUEUE_DAY_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 import { pickFolder } from '../desktop'
 import FolderPicker from './FolderPicker'
 import ConfirmDialog from './ConfirmDialog'
+import LegalAgreementDialog from './LegalAgreementDialog'
 import { Button } from './ui'
 
 type SettingsSection = 'general' | 'network' | 'maintenance'
@@ -48,6 +49,8 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   const [siteProfilesText, setSiteProfilesText] = useState('[]')
   const [originalSiteProfilesText, setOriginalSiteProfilesText] = useState('[]')
   const [activeSection, setActiveSection] = useState<SettingsSection>('general')
+  const [legalStatus, setLegalStatus] = useState<LegalStatus | null>(null)
+  const [showLegal, setShowLegal] = useState(false)
   const dialogRef = useRef<HTMLElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
@@ -72,6 +75,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     }).catch(reason => setError(reason.message || '加载设置失败'))
     getDesktopInfo().then(info => { setUninstallAvailable(info.installed === true); setDesktopInfo(info) })
     fetchUpdateInfo().then(setUpdateInfo).catch(() => {})
+    fetchLegalStatus().then(setLegalStatus).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -397,6 +401,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
             <div className="settings-row settings-row-control"><div><strong>运行环境</strong><span>{environment ? `FFmpeg ${environment.ffmpeg ? '正常' : '未找到'} · 并发 ${environment.concurrency} · 同时任务 ${environment.max_tasks}` : '检查 FFmpeg、目录权限和当前并发设置'}</span></div><button className="secondary-button" disabled={checkingEnvironment || dirty} title={dirty ? '请先保存设置' : '检查运行环境'} onClick={checkEnvironment}><RefreshCw size={15} />{dirty ? '保存后检查' : checkingEnvironment ? '检查中…' : '检查环境'}</button></div>
             {desktopInfo?.shell && <div className="settings-row"><div><strong>桌面界面</strong><span>{desktopInfo.shell === 'tauri' ? `Tauri + React · 桌面壳 v${desktopInfo.desktop_version || '未知'}` : desktopInfo.shell}</span></div></div>}
             <div className="settings-row settings-row-control"><div><strong>软件更新</strong><span>{updateInfo ? `当前 v${updateInfo.current_version} · ${updateInfo.available ? `可更新到 v${updateInfo.latest_version}` : '已是最新版本'}` : '尚未检查'}</span></div>{updateInfo?.available && updateInfo.can_auto_install ? <button className="primary-button" disabled={installingUpdate} onClick={() => void updateApp()}><Download size={15} />{installingUpdate ? '正在下载…' : '下载安装'}</button> : <button className="secondary-button" disabled={checkingUpdate} onClick={checkUpdate}><RefreshCw size={15} />{checkingUpdate ? '检查中…' : '检查更新'}</button>}</div>
+            <div className="settings-row settings-row-control"><div><strong>法律与隐私</strong><span>{legalStatus?.accepted ? `已接受中国大陆版 ${legalStatus.accepted_version} · 记录仅在本机` : '读取用户协议与本机接受状态'}</span></div><button className="secondary-button" disabled={!legalStatus} onClick={() => setShowLegal(true)}><ShieldCheck size={15} />查看协议</button></div>
             {updateError && updateInfo?.available && <div className="inline-message update-warning" role="status">无法刷新更新信息，正在使用上次已验证的 v{updateInfo.latest_version} 信息。可以直接安装，或稍后重新检查。</div>}
             {updateError && !updateInfo?.available && <div className="inline-error settings-error" role="alert">{updateError}</div>}
             {uninstallAvailable && <div className="settings-row settings-row-control"><div><strong>卸载程序</strong><span>删除程序、设置、任务历史和缓存</span></div><button className="danger-button" onClick={uninstall}><Trash2 size={15} />卸载</button></div>}
@@ -410,5 +415,6 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     {showTempPicker && <FolderPicker initialPath={settings.temp_dir || ''} onSelect={path => { update('temp_dir', path); setShowTempPicker(false) }} onClose={() => setShowTempPicker(false)} />}
     {confirmAction === 'close' && <ConfirmDialog title="放弃未保存的设置？" message="关闭后，本次修改不会生效。" confirmLabel="放弃修改" danger onCancel={() => setConfirmAction(null)} onConfirm={onClose} />}
     {confirmAction === 'update' && updateInfo && <ConfirmDialog title={`安装 v${updateInfo.latest_version}？`} message={updateInfo.asset_kind === 'portable' ? '便携更新包下载并校验后，下载器会自动关闭、事务式替换程序文件并重新启动；配置、任务和下载文件会保留。' : '安装包下载完成并校验后，下载器会自动关闭并启动安装程序。'} confirmLabel="下载安装" onCancel={() => setConfirmAction(null)} onConfirm={() => { setConfirmAction(null); void updateApp(true) }} />}
+    {showLegal && <LegalAgreementDialog status={legalStatus} required={false} onClose={() => setShowLegal(false)} />}
   </div>
 }
