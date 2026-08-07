@@ -62,14 +62,10 @@ export default function BrowserExtensionDialog({ onClose }: { onClose: () => voi
         <section className="firefox-release-variants" aria-labelledby="firefox-release-variants-title">
           <div className="firefox-release-variants-heading">
             <strong id="firefox-release-variants-title">Firefox 发布包</strong>
-            <span>功能完全相同，仅发布入口与扩展 ID 不同</span>
+            <span>所有 Firefox 包使用同一个扩展 ID，不区分网页显示模式</span>
           </div>
           <div className="firefox-release-variant">
-            <div><b>网页显示版（Firefox 商店）</b><small>用于已发布的 AMO 条目</small></div>
-            <code>browser@hls-downloader.ciaooo55.com</code>
-          </div>
-          <div className="firefox-release-variant">
-            <div><b>网页不显示版（独立包）</b><small>用于 GitHub Release 独立发布</small></div>
+            <div><b>统一 Firefox 扩展</b><small>商店包、独立包和源码包保持同一身份</small></div>
             <code>hls-downloader-store@ciaooo55.com</code>
           </div>
         </section>

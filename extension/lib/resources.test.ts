@@ -22,6 +22,8 @@ import {
   suggestedResourceFilename,
   visibleMediaResources,
   normalizeHost,
+  pruneExpiredResources,
+  RESOURCE_CACHE_RETENTION_MS,
   resourceBelongsToFrame,
   type MediaResource,
 } from './resources'
@@ -95,6 +97,12 @@ describe('resource rules', () => {
     expect(isUsefulResource(resource({ kind: 'dash', url: 'https://cdn.test/video/manifest.mpd?track=audio' }))).toBe(false)
     expect(isUsefulResource(resource({ kind: 'hls', url: 'https://cdn.test/video/master.m3u8' }))).toBe(true)
     expect(isUsefulResource(resource({ kind: 'hls', url: 'https://cdn.test/adventure/master.m3u8' }))).toBe(true)
+  })
+  it('expires old media observations without requiring the popup to open', () => {
+    const now = 1_800_000_000_000
+    const current = resource({ id: 'current', seenAt: now - RESOURCE_CACHE_RETENTION_MS + 1 })
+    const stale = resource({ id: 'stale', url: 'https://cdn.test/stale.mp4', seenAt: now - RESOURCE_CACHE_RETENTION_MS })
+    expect(pruneExpiredResources([current, stale], now).map(item => item.id)).toEqual(['current'])
   })
   it('keeps iframe resource views isolated while allowing untagged top-frame evidence', () => {
     expect(resourceBelongsToFrame({ frameId: 2 }, 2)).toBe(true)

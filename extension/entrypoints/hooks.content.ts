@@ -11,6 +11,8 @@ export default defineContentScript({
     const sourceBufferOwners = new WeakMap<object, object>()
     const pendingResources: Array<{ url: string; mimeType: string }> = []
     const pendingMse: Array<{ blobUrl: string; mediaUrl: string }> = []
+    const mseReportTimes = new Map<string, number>()
+    const MSE_REPORT_INTERVAL_MS = 300
     const report = (url: unknown, mimeType = '') => {
       if (typeof url !== 'string') return
       if (!shouldReportMediaResponse(url, mimeType)) return
@@ -20,8 +22,21 @@ export default defineContentScript({
     }
     const reportMse = (blobUrl: string, mediaUrl: string) => {
       if (!blobUrl.startsWith('blob:') || !/^https?:/i.test(mediaUrl)) return
+      // LL-HLS players append several audio/video chunks per second. Keep the
+      // exact ownership signal, but do not make each append redraw the page.
+      const now = Date.now()
+      const last = mseReportTimes.get(blobUrl) || 0
+      if (now - last < MSE_REPORT_INTERVAL_MS) return
+      mseReportTimes.set(blobUrl, now)
+      if (mseReportTimes.size > 64) {
+        for (const [key, reportedAt] of mseReportTimes) {
+          if (now - reportedAt > 60_000) mseReportTimes.delete(key)
+        }
+      }
+      const existing = pendingMse.findIndex(item => item.blobUrl === blobUrl && item.mediaUrl === mediaUrl)
+      if (existing >= 0) pendingMse.splice(existing, 1)
       pendingMse.push({ blobUrl, mediaUrl })
-      if (pendingMse.length > 200) pendingMse.shift()
+      if (pendingMse.length > 48) pendingMse.shift()
       window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', {
         detail: { blobUrl, mediaUrl },
       }))

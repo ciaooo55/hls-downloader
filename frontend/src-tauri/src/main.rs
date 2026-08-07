@@ -223,7 +223,7 @@ fn app_root() -> PathBuf {
         .unwrap_or(working)
 }
 
-fn load_config(root: &Path) -> LocalConfig {
+fn config_candidates(root: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if root.join("portable").is_file() {
         candidates.push(root.join("config.json"));
@@ -238,6 +238,11 @@ fn load_config(root: &Path) -> LocalConfig {
         candidates.push(root.join("config.json"));
     }
     candidates
+}
+
+fn load_config(root: &Path) -> LocalConfig {
+    let candidates = config_candidates(root);
+    candidates
         .into_iter()
         .find_map(|path| {
             std::fs::read_to_string(path)
@@ -245,6 +250,33 @@ fn load_config(root: &Path) -> LocalConfig {
                 .and_then(|value| serde_json::from_str(&value).ok())
         })
         .unwrap_or_default()
+}
+
+fn persist_runtime_port(root: &Path, port: u16) -> Result<(), String> {
+    let path = config_candidates(root)
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| config_candidates(root).into_iter().next().unwrap());
+    let mut value = if path.is_file() {
+        let raw = fs::read_to_string(&path)
+            .map_err(|error| format!("Unable to read runtime config: {error}"))?;
+        serde_json::from_str::<serde_json::Value>(&raw)
+            .map_err(|error| format!("Unable to parse runtime config: {error}"))?
+    } else {
+        serde_json::json!({})
+    };
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "Runtime config must contain a JSON object".to_string())?;
+    object.insert("port".to_string(), serde_json::json!(port));
+    let mut encoded = serde_json::to_vec_pretty(&value)
+        .map_err(|error| format!("Unable to serialize runtime config: {error}"))?;
+    encoded.push(b'\n');
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Unable to create runtime config directory: {error}"))?;
+    }
+    fs::write(&path, encoded).map_err(|error| format!("Unable to save runtime port: {error}"))
 }
 
 fn wait_for_runtime_config(root: &Path, port: u16) -> LocalConfig {
@@ -262,6 +294,19 @@ fn wait_for_runtime_config(root: &Path, port: u16) -> LocalConfig {
 fn port_open(port: u16) -> bool {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     TcpStream::connect_timeout(&address, Duration::from_millis(180)).is_ok()
+}
+
+fn find_available_port(preferred: u16) -> Option<u16> {
+    (0..64).find_map(|offset| {
+        let candidate = preferred.checked_add(offset).unwrap_or_else(|| {
+            1024 + ((preferred as u32 + offset as u32) % (u16::MAX as u32 - 1023)) as u16
+        });
+        if candidate >= 1024 && !port_open(candidate) {
+            Some(candidate)
+        } else {
+            None
+        }
+    })
 }
 
 fn core_alive(config: &LocalConfig) -> bool {
@@ -327,15 +372,20 @@ fn request_scoped_credential(config: &LocalConfig, path: &str) -> Result<String,
         .ok_or_else(|| "Desktop session credential is missing".to_string())
 }
 
-fn start_core(root: &Path, config: &LocalConfig) -> Result<Option<Child>, String> {
+fn start_core(root: &Path, config: &mut LocalConfig) -> Result<Option<Child>, String> {
     if core_alive(config) {
         return Ok(None);
     }
     if port_open(config.port) {
-        return Err(format!(
-            "Port {} is occupied by another process or an incompatible HLS Downloader Core",
-            config.port
-        ));
+        let occupied = config.port;
+        let next = find_available_port(occupied.saturating_add(1)).ok_or_else(|| {
+            format!(
+                "Port {} is occupied and no alternative loopback port is available",
+                occupied
+            )
+        })?;
+        persist_runtime_port(root, next)?;
+        config.port = next;
     }
     let packaged = root.join("HLSDownloaderCore.exe");
     let mut command = if packaged.is_file() {
@@ -391,7 +441,7 @@ fn runtime_config(runtime: &CoreRuntime) -> LocalConfig {
 }
 
 fn ensure_core(runtime: &CoreRuntime) -> Result<(), String> {
-    let current = runtime_config(runtime);
+    let mut current = runtime_config(runtime);
     if core_alive(&current) {
         return Ok(());
     }
@@ -423,7 +473,7 @@ fn ensure_core(runtime: &CoreRuntime) -> Result<(), String> {
         }
     }
 
-    let child = start_core(&runtime.root, &current)?;
+    let child = start_core(&runtime.root, &mut current)?;
     *slot = child;
     drop(slot);
     let refreshed = wait_for_runtime_config(&runtime.root, current.port);
@@ -431,6 +481,11 @@ fn ensure_core(runtime: &CoreRuntime) -> Result<(), String> {
         *config = refreshed;
     }
     Ok(())
+}
+
+fn record_startup_error(root: &Path, error: &str) {
+    let path = root.join("startup-error.log");
+    let _ = fs::write(path, format!("{error}\n"));
 }
 
 fn supervise_core(runtime: Arc<CoreRuntime>) {
@@ -614,7 +669,9 @@ fn main() {
         .setup(move |app| {
             let startup_runtime = app.state::<Arc<CoreRuntime>>();
             startup_runtime.primary.store(true, Ordering::Relaxed);
-            ensure_core(startup_runtime.inner()).map_err(std::io::Error::other)?;
+            if let Err(error) = ensure_core(startup_runtime.inner()) {
+                record_startup_error(&root, &error);
+            }
             supervise_core(Arc::clone(startup_runtime.inner()));
             let config = runtime_config(startup_runtime.inner());
             for arg in std::env::args().skip(1) {
@@ -745,16 +802,13 @@ mod clipboard_tests {
 
     #[test]
     fn rotates_oversized_core_logs() {
-        let root = std::env::temp_dir().join(format!(
-            "hls-downloader-log-test-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("hls-downloader-log-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("create temp log directory");
         let log = root.join("core.log");
         let file = fs::File::create(&log).expect("create core log");
-        file.set_len(CORE_LOG_MAX_BYTES + 1)
-            .expect("size core log");
+        file.set_len(CORE_LOG_MAX_BYTES + 1).expect("size core log");
         drop(file);
 
         rotate_core_log(&log).expect("rotate core log");

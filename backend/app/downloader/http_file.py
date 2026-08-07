@@ -365,6 +365,170 @@ class HTTPDownloader(SeeklessEngine):
         headers["Accept-Encoding"] = "identity"
         return headers
 
+    def _can_retry_with_browser_profile(self, error: BaseException) -> bool:
+        """Whether a browser-originated 403 merits one curl-cffi retry.
+
+        The normal HTTP engine deliberately uses httpx because it supports a
+        high-quality parallel range transfer.  Some media CDNs nevertheless
+        bind a signed browser URL to the TLS/browser fingerprint and reject
+        that otherwise complete request context.  HLS already uses curl-cffi
+        for exactly this class of origin.  Keep the fallback narrow: only the
+        first direct GET probe, only a browser handoff, and only an actual 403.
+        """
+        if self._is_replay_post() or not bool(self.task.engine_state.get("browser_originated")):
+            return False
+        response = getattr(error, "response", None)
+        return int(getattr(response, "status_code", 0) or 0) == 403
+
+    async def _download_with_browser_profile(
+        self,
+        part_path: Path,
+        state_path: Path,
+        task_dir: Path,
+    ) -> bool:
+        """Retry a rejected browser handoff with curl-cffi's Chrome profile.
+
+        This intentionally remains a one-connection fallback.  The normal
+        multi-range path stays untouched for every successful HTTP download;
+        only a server that rejected the regular client gives up that parallel
+        optimization in exchange for a coherent browser TLS/header profile.
+        """
+        from .hls import CurlAsyncSession, _BrowserHLSClient, _close_response
+
+        if CurlAsyncSession is None:
+            return False
+        task = self.task
+        output: Path | None = None
+        response = None
+        self._sequential = True
+        task.progress.total_segments = 1
+        task.progress.completed_segments = 0
+        task.progress.downloaded_bytes = 0
+        task.progress.progress_percent = 0.0
+        task.progress.max_workers = 1
+        task.progress.connection_status = "connecting"
+        self._set_stage(
+            "probing",
+            "标准客户端被拒绝，正在以浏览器兼容连接重新验证文件",
+        )
+        headers = build_task_headers(
+            task,
+            accept="",
+            request_url=task.url,
+            browser_profile_managed=True,
+        )
+        try:
+            async with _BrowserHLSClient(
+                1,
+                task.url,
+                deny_private_networks=bool(task.engine_state.get("browser_originated")),
+            ) as client:
+                response = await client.get(task.url, headers=headers, stream=True)
+                if int(getattr(response, "status_code", 0) or 0) >= 400:
+                    response.raise_for_status()
+                final_url = str(getattr(response, "url", "") or task.url)
+                content_type = str(response.headers.get("content-type", "")).split(";", 1)[0]
+                total = int(response.headers.get("content-length", 0) or 0)
+                task.mime_type = task.mime_type or content_type
+                task.progress.total_bytes = max(0, total)
+                task.engine_state["total_size"] = task.progress.total_bytes
+                filename = (
+                    _content_disposition_filename(response.headers.get("content-disposition", ""))
+                    or Path(urlparse(final_url).path).name
+                    or Path(urlparse(task.url).path).name
+                    or task.id
+                )
+                filename = _ensure_filename_extension(filename, task.mime_type)
+                requested_name = task.filename.strip()
+                task.filename = sanitize_filename(
+                    filename if not requested_name or is_generic_media_name(requested_name) else requested_name
+                )
+                output = _reserve_output_path(task_output_dir(task) / task.filename)
+                task.engine_state["reserved_output_path"] = str(output)
+                if total > 0:
+                    await asyncio.to_thread(
+                        ensure_download_capacity,
+                        part_path,
+                        output,
+                        total,
+                        current_size=0,
+                    )
+                else:
+                    await asyncio.to_thread(
+                        ensure_free_space,
+                        part_path,
+                        MIN_FREE_RESERVE,
+                        operation="下载临时盘",
+                    )
+                task.progress.connection_status = "running"
+                self._set_stage("downloading", "浏览器兼容连接已建立，正在单连接下载")
+                task.engine_state["stream_path"] = str(part_path)
+                window = _SpeedWindow()
+                first_chunk = True
+                with part_path.open("wb") as stream:
+                    try:
+                        content = response.aiter_content(chunk_size=256 * 1024)
+                    except TypeError:
+                        content = response.aiter_content()
+                    async for chunk in content:
+                        if self._is_canceled():
+                            if getattr(response, "quit_now", None):
+                                response.quit_now.set()
+                            raise asyncio.CancelledError
+                        if self._is_pausing():
+                            task.status = TaskStatus.PAUSED
+                            self._set_stage("paused", "已暂停，可继续下载")
+                            return True
+                        if first_chunk:
+                            validate_download_response(
+                                task,
+                                content_type=content_type,
+                                content_length=task.progress.total_bytes,
+                                preview=bytes(chunk[:65536]),
+                                final_url=final_url,
+                                server_filename=filename,
+                            )
+                            first_chunk = False
+                        if not chunk:
+                            continue
+                        await throttle_bytes(len(chunk), task)
+                        stream.write(chunk)
+                        task.progress.downloaded_bytes += len(chunk)
+                        window.add(len(chunk))
+                        self._apply_speed(window)
+                        self._publish()
+            if not part_path.exists() or part_path.stat().st_size <= 0:
+                raise RuntimeError("浏览器兼容连接没有返回文件数据")
+            if task.progress.total_bytes and part_path.stat().st_size != task.progress.total_bytes:
+                raise RuntimeError(
+                    f"文件长度不匹配，期望 {task.progress.total_bytes}，实际 {part_path.stat().st_size}"
+                )
+            task.progress.completed_segments = 1
+            self._set_stage("verifying", "浏览器兼容下载完成，正在写入并校验最终文件")
+            output = self._refine_output_extension(output)
+            await asyncio.to_thread(publish_path, part_path, output)
+            state_path.unlink(missing_ok=True)
+            task.output_path = str(output)
+            task.engine_state["output_is_file"] = True
+            task.engine_state.pop("reserved_output_path", None)
+            task.engine_state["stream_path"] = str(output)
+            task.engine_state["total_size"] = output.stat().st_size
+            if not await verify_task_checksum(task, output, on_progress=self.on_progress, on_log=self.on_log):
+                return True
+            task.status = TaskStatus.DONE
+            task.finished_at = datetime.now().isoformat()
+            task.progress.progress_percent = 100.0
+            task.progress.connection_status = "idle"
+            self._set_stage("done", f"完成: {output.name}")
+            if not settings.keep_temp_files:
+                await asyncio.to_thread(shutil.rmtree, task_dir, True)
+            return True
+        finally:
+            if response is not None:
+                await _close_response(response)
+            if output and task.status is not TaskStatus.DONE and output.exists() and output.stat().st_size == 0:
+                output.unlink(missing_ok=True)
+
     def _is_replay_post(self) -> bool:
         return str(self.task.request_method or "GET").upper() == "POST"
 
@@ -835,6 +999,23 @@ class HTTPDownloader(SeeklessEngine):
                 output.unlink(missing_ok=True)
             raise
         except Exception as exc:
+            if output is None and self._can_retry_with_browser_profile(exc):
+                self.on_log(
+                    task.id,
+                    "[probing] 标准 HTTP 请求收到 403，正在尝试浏览器兼容 TLS 指纹回退",
+                )
+                try:
+                    if await self._download_with_browser_profile(part_path, state_path, task_dir):
+                        return
+                except Exception as fallback_error:
+                    # Preserve the original, user-actionable 403 diagnosis if
+                    # the browser-profile retry is rejected too (for example
+                    # a genuinely expired one-time URL). The fallback reason
+                    # stays in the task log without exposing credentials.
+                    self.on_log(
+                        task.id,
+                        f"[probing] 浏览器兼容回退未通过: {type(fallback_error).__name__}",
+                    )
             details = diagnose_download_error(exc, stage=task.stage, url=task.url, task_context=task)
             task.error_code = details.code
             task.error_stage = details.stage

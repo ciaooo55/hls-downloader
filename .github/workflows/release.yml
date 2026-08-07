@@ -6,7 +6,7 @@ on:
       version:
         description: Version used in the installer, for example 3.0.10
         required: false
-        default: "3.0.17"
+        default: "3.0.18"
       include_extensions:
         description: Upload browser extension ZIPs for this release
         required: false
@@ -182,10 +182,8 @@ jobs:
           if ("${{ steps.extension-assets.outputs.include_extensions }}" -eq "true") {
             $expected += @(
               "$prefix-Chrome-Edge-Extension.zip",
-              "$prefix-Firefox-Web-UI-Unsigned.zip",
-              "$prefix-Firefox-Web-UI-Source.zip",
-              "$prefix-Firefox-No-Web-UI-Unsigned.zip",
-              "$prefix-Firefox-No-Web-UI-Source.zip"
+              "$prefix-Firefox-Unsigned.zip",
+              "$prefix-Firefox-Source.zip"
             )
           }
           foreach ($name in $expected) {

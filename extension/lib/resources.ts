@@ -78,6 +78,7 @@ const VOLATILE_QUERY = /^(?:signature|sig|expires?|expiry|policy|key-pair-id|hdn
 const MEDIA_AUTH_QUERY = /^(?:token|auth|authorization|jwt|session|sessionid)$/i
 const LL_HLS_RELOAD_QUERY = new Set(['_hls_msn', '_hls_part', '_hls_skip'])
 const AD_SIGNAL = /(?:^|[\/_-])(?:ad|ads|advert|advertisement|preroll|midroll|postroll|promo)(?:[\/_-]|$)/i
+export const RESOURCE_CACHE_RETENTION_MS = 30 * 60_000
 const AD_QUERY_KEYS = new Set(['ad', 'ads', 'advert', 'advertisement', 'preroll', 'midroll', 'postroll', 'promo'])
 const AD_QUERY_VALUE_KEYS = new Set(['type', 'kind', 'media', 'role', 'content', 'contenttype'])
 const NON_VIDEO_MANIFEST_SIGNAL = /(?:^|[\/_.-])(?:audio(?:only|track)?|subtitle(?:s)?|caption(?:s)?|thumbnail(?:s)?|thumb(?:s)?|sprite(?:s)?|storyboard(?:s)?|preview(?:s)?|iframe|trickplay|ad(?:s)?|advert(?:s|ising)?|preroll|midroll|postroll)(?:[\/_.-]|$)/i
@@ -648,10 +649,15 @@ export function resourceId(url: string): string {
   return `${forward.toString(16).padStart(16, '0')}${reverse.toString(16).padStart(16, '0')}`
 }
 
+/** Drop observations from pages the user has left behind before rendering UI. */
+export function pruneExpiredResources(resources: MediaResource[], now = Date.now()): MediaResource[] {
+  return resources.filter(resource => Number.isFinite(resource.seenAt)
+    && now - resource.seenAt < RESOURCE_CACHE_RETENTION_MS)
+}
+
 export function mergeResources(current: MediaResource[], incoming: MediaResource, limit = 100, separateFrames = false): MediaResource[] {
   const now = Date.now()
-  return compactResources([incoming, ...current]
-    .filter(item => now - item.seenAt < 30 * 60_000), limit, separateFrames)
+  return compactResources(pruneExpiredResources([incoming, ...current], now), limit, separateFrames)
 }
 
 export function shouldTakeover(input: {

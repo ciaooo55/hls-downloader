@@ -815,6 +815,135 @@ def test_http_headers_force_identity_even_when_browser_captured_compression():
     assert HTTPDownloader(task)._headers()["Accept-Encoding"] == "identity"
 
 
+def test_browser_originated_http_403_can_retry_with_browser_profile():
+    task = Task(id="http-browser-403", url="https://files.test/video.mp4", task_type=TaskType.HTTP)
+    task.engine_state["browser_originated"] = True
+    request = httpx.Request("GET", task.url)
+    error = httpx.HTTPStatusError("forbidden", request=request, response=httpx.Response(403, request=request))
+
+    assert HTTPDownloader(task)._can_retry_with_browser_profile(error) is True
+    task.engine_state["browser_originated"] = False
+    assert HTTPDownloader(task)._can_retry_with_browser_profile(error) is False
+
+
+def test_browser_profile_http_fallback_downloads_after_a_403(tmp_path, monkeypatch):
+    from backend.app.downloader import hls as hls_module
+
+    class Response:
+        status_code = 200
+        headers = {"content-type": "video/mp4", "content-length": "7"}
+        url = "https://files.test/video.mp4"
+        quit_now = None
+        astream_task = None
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_content(self, chunk_size=0):
+            yield b"browser"
+
+        async def aclose(self):
+            return None
+
+    class BrowserClient:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url, **_kwargs):
+            return Response()
+
+    async def close_response(response):
+        await response.aclose()
+
+    task = Task(id="http-browser-fallback", url="https://files.test/video.mp4", task_type=TaskType.HTTP)
+    task.engine_state.update({"browser_originated": True, "output_dir": str(tmp_path / "downloads")})
+    task_dir = task_work_dir(task)
+    task_dir.mkdir(parents=True)
+    monkeypatch.setattr(hls_module, "CurlAsyncSession", object)
+    monkeypatch.setattr(hls_module, "_BrowserHLSClient", BrowserClient)
+    monkeypatch.setattr(hls_module, "_close_response", close_response)
+
+    downloader = HTTPDownloader(task)
+    complete = asyncio.run(
+        downloader._download_with_browser_profile(
+            task_dir / "payload.downloading",
+            task_dir / "http-resume.json",
+            task_dir,
+        )
+    )
+
+    assert complete is True
+    assert task.status is TaskStatus.DONE
+    assert Path(task.output_path).read_bytes() == b"browser"
+
+
+def test_http_run_uses_browser_profile_only_after_browser_403(tmp_path, monkeypatch):
+    from backend.app.downloader import hls as hls_module
+
+    class StandardClient:
+        def build_request(self, method, url, headers=None):
+            return httpx.Request(method, url, headers=headers)
+
+        async def send(self, request, stream=False):
+            return httpx.Response(403, request=request)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Response:
+        status_code = 200
+        headers = {"content-type": "video/mp4", "content-length": "7"}
+        url = "https://files.test/video.mp4"
+        quit_now = None
+        astream_task = None
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_content(self, chunk_size=0):
+            yield b"browser"
+
+        async def aclose(self):
+            return None
+
+    class BrowserClient:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url, **_kwargs):
+            return Response()
+
+    async def close_response(response):
+        await response.aclose()
+
+    task = Task(id="http-browser-run", url="https://files.test/video.mp4", task_type=TaskType.HTTP)
+    task.engine_state.update({"browser_originated": True, "output_dir": str(tmp_path / "downloads")})
+    monkeypatch.setattr(http_file_module, "policy_httpx_client", lambda **_kwargs: StandardClient())
+    monkeypatch.setattr(hls_module, "CurlAsyncSession", object)
+    monkeypatch.setattr(hls_module, "_BrowserHLSClient", BrowserClient)
+    monkeypatch.setattr(hls_module, "_close_response", close_response)
+
+    asyncio.run(HTTPDownloader(task).run())
+
+    assert task.status is TaskStatus.DONE
+    assert Path(task.output_path).read_bytes() == b"browser"
+
+
 def test_http_resume_rejects_weak_etag_without_last_modified(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
     body = b"current"

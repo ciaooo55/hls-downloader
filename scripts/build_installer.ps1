@@ -4,8 +4,9 @@ param(
     [switch]$SkipDesktop,
     [switch]$SkipInstaller,
     [switch]$SkipSmoke,
+    [switch]$UseSystemFfmpeg,
     [switch]$IncludeExtensionAssets,
-    [string]$Version = "3.0.17"
+    [string]$Version = "3.0.18"
 )
 
 $ErrorActionPreference = "Stop"
@@ -79,15 +80,11 @@ $ReleaseNamePrefix = "HLSDownloader-v$Version"
 $InstallerOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Windows-x64-Setup.exe"
 $PreservedInstaller = Join-Path $Root "build\installer\$ReleaseNamePrefix-Windows-x64-Setup.exe"
 $PortableOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Windows-x64-Portable.zip"
-$FirefoxWebId = "browser@hls-downloader.ciaooo55.com"
-$FirefoxNoWebId = "hls-downloader-store@ciaooo55.com"
+$FirefoxId = "hls-downloader-store@ciaooo55.com"
 $ExtensionBuildDir = Join-Path $Root "build\installer\extensions"
-$FirefoxWebStage = Join-Path $ExtensionBuildDir "firefox-web-ui"
-$FirefoxNoWebStage = Join-Path $ExtensionBuildDir "firefox-no-web-ui"
-$FirefoxWebExtensionOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Firefox-Web-UI-Unsigned.zip"
-$FirefoxWebSourceOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Firefox-Web-UI-Source.zip"
-$FirefoxNoWebExtensionOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Firefox-No-Web-UI-Unsigned.zip"
-$FirefoxNoWebSourceOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Firefox-No-Web-UI-Source.zip"
+$FirefoxStage = Join-Path $ExtensionBuildDir "firefox"
+$FirefoxExtensionOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Firefox-Unsigned.zip"
+$FirefoxSourceOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Firefox-Source.zip"
 $ChromiumExtensionStage = Join-Path $ExtensionBuildDir "chrome-edge"
 $ChromiumExtensionOut = Join-Path $ReleaseDir "$ReleaseNamePrefix-Chrome-Edge-Extension.zip"
 
@@ -188,6 +185,18 @@ function Get-MakeNsis {
 }
 
 function Find-MediaTool($Name) {
+    if ($UseSystemFfmpeg) {
+        # This opt-in is for a local build when the pinned archive mirror is
+        # unavailable. CI and normal releases keep the verified archive path
+        # below, so a developer machine can never silently change release
+        # provenance. Copy-MediaTool still executes the binary to validate it.
+        $systemTool = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if (-not $systemTool -or -not (Test-Path -LiteralPath $systemTool.Source)) {
+            throw "-UseSystemFfmpeg requires $Name to be available on PATH"
+        }
+        return [IO.Path]::GetFullPath($systemTool.Source)
+    }
     Get-VerifiedArchive $FFmpegArchiveUrl $FFmpegArchive $FFmpegArchiveSha256 "FFmpeg archive ($FFmpegArchiveBuild)"
     if (-not (Test-Path -LiteralPath $FFmpegToolsDir)) {
         Expand-Archive -LiteralPath $FFmpegArchive -DestinationPath $FFmpegToolsDir -Force
@@ -271,7 +280,6 @@ if (-not $SkipFrontend) {
     }
     Invoke-Step "Build browser extensions" {
         Push-Location $ExtensionDir
-        $previousFirefoxId = $env:HLS_FIREFOX_EXTENSION_ID
         $previousExtensionVersion = $env:HLS_EXTENSION_VERSION
         try {
             if ($IncludeExtensionAssets) {
@@ -287,28 +295,21 @@ if (-not $SkipFrontend) {
                 throw "Chrome/Edge extension build did not produce Manifest V3"
             }
             Copy-Item -Recurse -Force -Path .output/chrome-mv3/* -Destination $ChromiumExtensionStage
-            Remove-Item -Recurse -Force $FirefoxWebStage, $FirefoxNoWebStage -ErrorAction SilentlyContinue
-            foreach ($variant in @(
-                @{ Id = $FirefoxWebId; Stage = $FirefoxWebStage; Label = "web UI" },
-                @{ Id = $FirefoxNoWebId; Stage = $FirefoxNoWebStage; Label = "no web UI" }
-            )) {
-                $env:HLS_FIREFOX_EXTENSION_ID = $variant.Id
-                pnpm run build:firefox
-                pnpm exec web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors
-                $manifest = Get-Content -LiteralPath .output/firefox-mv3/manifest.json -Raw -Encoding UTF8 | ConvertFrom-Json
-                if ($manifest.browser_specific_settings.gecko.id -ne $variant.Id) {
-                    throw "Firefox $($variant.Label) build used the wrong extension ID"
-                }
-                $mediaScript = @($manifest.content_scripts | Where-Object { $_.js -contains "content-scripts/content.js" })
-                $hookScript = @($manifest.content_scripts | Where-Object { $_.js -contains "content-scripts/hooks.js" })
-                if ($mediaScript.Count -ne 1 -or $mediaScript[0].all_frames -ne $true -or $hookScript.Count -ne 1 -or $hookScript[0].all_frames -ne $true) {
-                    throw "Firefox $($variant.Label) build does not capture media in every frame"
-                }
-                New-Item -ItemType Directory -Force -Path $variant.Stage | Out-Null
-                Copy-Item -Recurse -Force -Path .output/firefox-mv3/* -Destination $variant.Stage
+            Remove-Item -Recurse -Force $FirefoxStage -ErrorAction SilentlyContinue
+            pnpm run build:firefox
+            pnpm exec web-ext lint --source-dir .output/firefox-mv3 --warnings-as-errors
+            $manifest = Get-Content -LiteralPath .output/firefox-mv3/manifest.json -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($manifest.browser_specific_settings.gecko.id -ne $FirefoxId) {
+                throw "Firefox build used the wrong extension ID"
             }
+            $mediaScript = @($manifest.content_scripts | Where-Object { $_.js -contains "content-scripts/content.js" })
+            $hookScript = @($manifest.content_scripts | Where-Object { $_.js -contains "content-scripts/hooks.js" })
+            if ($mediaScript.Count -ne 1 -or $mediaScript[0].all_frames -ne $true -or $hookScript.Count -ne 1 -or $hookScript[0].all_frames -ne $true) {
+                throw "Firefox build does not capture media in every frame"
+            }
+            New-Item -ItemType Directory -Force -Path $FirefoxStage | Out-Null
+            Copy-Item -Recurse -Force -Path .output/firefox-mv3/* -Destination $FirefoxStage
         } finally {
-            $env:HLS_FIREFOX_EXTENSION_ID = $previousFirefoxId
             $env:HLS_EXTENSION_VERSION = $previousExtensionVersion
             Pop-Location
         }
@@ -720,8 +721,7 @@ Invoke-Step "Assemble release files" {
     $expected = @($InstallerOut, $PortableOut)
     if ($IncludeExtensionAssets) {
         Compress-Archive -Path (Join-Path $ChromiumExtensionStage "*") -DestinationPath $ChromiumExtensionOut -CompressionLevel Optimal
-        Compress-Archive -Path (Join-Path $FirefoxWebStage "*") -DestinationPath $FirefoxWebExtensionOut -CompressionLevel Optimal
-        Compress-Archive -Path (Join-Path $FirefoxNoWebStage "*") -DestinationPath $FirefoxNoWebExtensionOut -CompressionLevel Optimal
+        Compress-Archive -Path (Join-Path $FirefoxStage "*") -DestinationPath $FirefoxExtensionOut -CompressionLevel Optimal
         $sourceInputs = @(
             (Join-Path $ExtensionDir "entrypoints"),
             (Join-Path $ExtensionDir "lib"),
@@ -737,34 +737,19 @@ Invoke-Step "Assemble release files" {
             (Join-Path $Root "TERMS.md"),
             (Join-Path $Root "THIRD_PARTY_NOTICES.md")
         )
-        foreach ($sourceVariant in @(
-            @{ Id = $FirefoxWebId; Out = $FirefoxWebSourceOut; Stage = (Join-Path $ExtensionBuildDir "source-web-ui"); Label = "web UI enabled" },
-            @{ Id = $FirefoxNoWebId; Out = $FirefoxNoWebSourceOut; Stage = (Join-Path $ExtensionBuildDir "source-no-web-ui"); Label = "web UI disabled" }
-        )) {
-            Remove-Item -Recurse -Force $sourceVariant.Stage -ErrorAction SilentlyContinue
-            New-Item -ItemType Directory -Force -Path $sourceVariant.Stage | Out-Null
-            Copy-Item -Recurse -Force -Path $sourceInputs -Destination $sourceVariant.Stage
-            # AMO reviewers and users must be able to build each source archive
-            # without an undocumented environment variable.  Keep the functional
-            # source identical, but make this archive's manifest default to the
-            # exact ID carried by its corresponding unsigned ZIP.
-            $sourceConfigPath = Join-Path $sourceVariant.Stage "wxt.config.ts"
-            $sourceConfig = [IO.File]::ReadAllText($sourceConfigPath)
-            $sourceConfig = $sourceConfig -replace "const firefoxId = process\.env\.HLS_FIREFOX_EXTENSION_ID \|\| '[^']+'", "const firefoxId = '$($sourceVariant.Id)'"
-            if ($sourceConfig -notmatch [regex]::Escape("const firefoxId = '$($sourceVariant.Id)'")) {
-                throw "Firefox source archive did not receive the expected extension ID: $($sourceVariant.Id)"
-            }
-            [IO.File]::WriteAllText($sourceConfigPath, $sourceConfig, [Text.UTF8Encoding]::new($false))
-            @"
-Firefox release variant: $($sourceVariant.Label)
-Extension ID: $($sourceVariant.Id)
+        $sourceStage = Join-Path $ExtensionBuildDir "source"
+        Remove-Item -Recurse -Force $sourceStage -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $sourceStage | Out-Null
+        Copy-Item -Recurse -Force -Path $sourceInputs -Destination $sourceStage
+        $sourceInfo = @"
+Firefox extension ID: $FirefoxId
 Build command: pnpm run build:firefox
 
-This source archive defaults to the ID above. Both variants use identical functional source code; only the Mozilla release ID differs.
-"@ | Set-Content -LiteralPath (Join-Path $sourceVariant.Stage "BUILD-VARIANT.txt") -Encoding UTF8
-            Compress-Archive -Path (Join-Path $sourceVariant.Stage "*") -DestinationPath $sourceVariant.Out -CompressionLevel Optimal
-        }
-        $expected += @($ChromiumExtensionOut, $FirefoxWebExtensionOut, $FirefoxWebSourceOut, $FirefoxNoWebExtensionOut, $FirefoxNoWebSourceOut)
+All Firefox release packages use this same ID. The desktop UI mode is selected by the app connection, not by a second extension identity.
+"@
+        Write-Utf8NoBom (Join-Path $sourceStage "BUILD-INFO.txt") $sourceInfo
+        Compress-Archive -Path (Join-Path $sourceStage "*") -DestinationPath $FirefoxSourceOut -CompressionLevel Optimal
+        $expected += @($ChromiumExtensionOut, $FirefoxExtensionOut, $FirefoxSourceOut)
     }
     foreach ($path in $expected) {
         if (-not (Test-Path -LiteralPath $path)) {
@@ -781,8 +766,6 @@ Write-Host $InstallerOut
 Write-Host $PortableOut
 if ($IncludeExtensionAssets) {
     Write-Host $ChromiumExtensionOut
-    Write-Host $FirefoxWebExtensionOut
-    Write-Host $FirefoxWebSourceOut
-    Write-Host $FirefoxNoWebExtensionOut
-    Write-Host $FirefoxNoWebSourceOut
+    Write-Host $FirefoxExtensionOut
+    Write-Host $FirefoxSourceOut
 }

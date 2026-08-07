@@ -4,7 +4,6 @@
   "path": "HLSDownloaderNativeHost.exe",
   "type": "stdio",
   "allowed_extensions": [
-    "hls-downloader-store@ciaooo55.com",
-    "browser@hls-downloader.ciaooo55.com"
+    "hls-downloader-store@ciaooo55.com"
   ]
 }

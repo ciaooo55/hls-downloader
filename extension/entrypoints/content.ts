@@ -97,12 +97,21 @@ export default defineContentScript({
     const activationRoots = new WeakSet<Document | ShadowRoot>()
     const activationMediaRoots: Array<Document | ShadowRoot> = []
     const discoverActivationShadowRoots = (node: ParentNode | Element) => {
-      const elements = node instanceof Element
-        ? [node, ...node.querySelectorAll<HTMLElement>('*')]
-        : [...node.querySelectorAll<HTMLElement>('*')]
-      elements.forEach(element => {
+      // Do not build a NodeList for every element in a busy live/chat page.
+      // This early race-closing scan is best effort; play events and the
+      // document-start attachShadow hook still discover every later player.
+      const inspect = (element: Element) => {
         if (element.shadowRoot) observeActivationRoot(element.shadowRoot)
-      })
+      }
+      if (node instanceof Element) inspect(node)
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_ELEMENT)
+      let visited = 0
+      let current = walker.nextNode() as Element | null
+      while (current && visited < 512) {
+        inspect(current)
+        visited += 1
+        current = walker.nextNode() as Element | null
+      }
     }
     const observeActivationRoot = (root: Document | ShadowRoot) => {
       if (activationRoots.has(root)) return
@@ -617,6 +626,14 @@ export default defineContentScript({
       })
       updateVideoButtons()
     }
+    let renderFrame = 0
+    const scheduleRender = () => {
+      if (renderFrame) return
+      renderFrame = requestAnimationFrame(() => {
+        renderFrame = 0
+        render()
+      })
+    }
     let positionFrame = 0
     const scheduleVideoButtons = () => {
       if (positionFrame) return
@@ -626,13 +643,24 @@ export default defineContentScript({
     window.addEventListener('resize', scheduleVideoButtons)
     document.addEventListener('fullscreenchange', scheduleVideoButtons)
 
+    const observedVideoSizes = new WeakSet<HTMLVideoElement>()
+    const videoResizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(() => scheduleVideoButtons())
+    const trackVideo = (video: HTMLVideoElement) => {
+      knownVideos.add(video)
+      if (observedVideoSizes.has(video)) return
+      observedVideoSizes.add(video)
+      videoResizeObserver?.observe(video)
+    }
+
     const add = (url: string, mimeType = '', playbackSource = false) => {
       const kind = playbackSource ? classifyPlaybackSource(url, mimeType) : classifyResource(url, mimeType)
       if (!kind) return
       let filename = ''
       try { filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch {}
       const resource = { id: resourceId(url), url, kind, mimeType, pageUrl: location.href, title: pageMediaTitle() || filename, filename, seenAt: Date.now() }
-      addResource(resource); render(); void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
+      addResource(resource); scheduleRender(); void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
     }
 
     const markVideoPlayback = (video: HTMLVideoElement, eventType: string) => {
@@ -694,31 +722,51 @@ export default defineContentScript({
       if (observedMediaRoots.has(root)) return
       observedMediaRoots.add(root)
       const discover = (node: ParentNode | Element) => {
-        if (node instanceof HTMLVideoElement) knownVideos.add(node)
-        node.querySelectorAll<HTMLVideoElement>('video').forEach(video => knownVideos.add(video))
-        const elements = node instanceof Element
-          ? [node, ...node.querySelectorAll<HTMLElement>('*')]
-          : [...node.querySelectorAll<HTMLElement>('*')]
-        elements.forEach(element => {
+        if (node instanceof HTMLVideoElement) trackVideo(node)
+        node.querySelectorAll<HTMLVideoElement>('video').forEach(trackVideo)
+        const inspect = (element: Element) => {
           if (element.shadowRoot) registerMediaRoot(element.shadowRoot)
-        })
+        }
+        if (node instanceof Element) inspect(node)
+        // Existing shadow players are worth a bounded scan; an unbounded
+        // `querySelectorAll('*')` makes live-chat DOM churn delay the very
+        // overlay the user is waiting for. New roots are signalled directly
+        // by the MAIN-world attachShadow hook below.
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_ELEMENT)
+        let visited = 0
+        let current = walker.nextNode() as Element | null
+        while (current && visited < 1024) {
+          inspect(current)
+          visited += 1
+          current = walker.nextNode() as Element | null
+        }
       }
       discover(root)
       mediaEvents.forEach(type => root.addEventListener(type, markPlayback, true))
       new MutationObserver(mutations => {
-        scheduleVideoButtons()
         let playbackChanged = false
         mutations.forEach(mutation => {
           if (mutation.type === 'childList') {
             mutation.addedNodes.forEach(node => {
-              if (node instanceof Element) discover(node)
+              if (!(node instanceof Element)) return
+              const containsMedia = node.matches('video,audio,source')
+                || Boolean(node.querySelector('video,audio,source'))
+              if (!containsMedia) return
+              discover(node)
+              playbackChanged = true
             })
-            playbackChanged = true
-          } else if (mutation.attributeName === 'src') {
+          } else if (
+            mutation.attributeName === 'src'
+            && mutation.target instanceof Element
+            && mutation.target.matches('video,audio,source')
+          ) {
             playbackChanged = true
           }
         })
-        if (playbackChanged) queueMicrotask(syncPlayingVideos)
+        if (playbackChanged) {
+          scheduleVideoButtons()
+          queueMicrotask(syncPlayingVideos)
+        }
       }).observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] })
     }
     window.addEventListener('__hls_downloader_shadow__', event => {
@@ -751,7 +799,13 @@ export default defineContentScript({
       if (!blobUrl.startsWith('blob:') || !/^https?:/i.test(mediaUrl)) return
       const now = Date.now()
       const evidence = mseEvidenceByBlob.get(blobUrl) || { urls: new Set<string>(), seenAt: now }
+      const isNewEvidence = !evidence.urls.has(mediaUrl)
       evidence.urls.add(mediaUrl)
+      while (evidence.urls.size > 96) {
+        const oldest = evidence.urls.values().next().value
+        if (!oldest) break
+        evidence.urls.delete(oldest)
+      }
       evidence.seenAt = now
       // Refresh insertion order so the bounded map behaves like a small LRU.
       mseEvidenceByBlob.delete(blobUrl)
@@ -774,7 +828,7 @@ export default defineContentScript({
         if (!oldest) break
         mseEvidenceByBlob.delete(oldest)
       }
-      render()
+      if (isNewEvidence) scheduleRender()
     }
     window.removeEventListener('__hls_downloader_resource__', earlyResourceListener)
     window.removeEventListener('__hls_downloader_mse__', earlyMseListener)

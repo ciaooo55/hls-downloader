@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
-import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, mergeResources, normalizeHost, pageResourceKey, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
+import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus } from '../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
@@ -279,7 +279,44 @@ async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabI
     100,
     true,
   ))
-  await browser.action.setBadgeText({ text: String(Math.min(99, merged.length)), ...(tabId >= 0 ? { tabId } : {}) })
+  await setResourceBadge(tabId, merged)
+}
+
+function badgeText(resources: MediaResource[]): string {
+  return resources.length ? String(Math.min(99, resources.length)) : ''
+}
+
+async function setResourceBadge(tabId: number, resources: MediaResource[]): Promise<void> {
+  if (tabId < 0) return
+  await browser.action.setBadgeText({ tabId, text: badgeText(resources) }).catch(() => undefined)
+}
+
+/**
+ * The popup must never be responsible for clearing the red counter.  An MV3
+ * worker can be resumed long after an inactive tab's page has changed, so
+ * reload the page-scoped cache on activation and drop expired observations.
+ */
+async function refreshTabBadge(tabId: number): Promise<void> {
+  if (tabId < 0) return
+  const pageUrl = await topLevelPageUrl(tabId)
+  if (!/^https?:\/\//i.test(pageUrl)) {
+    await setResourceBadge(tabId, [])
+    return
+  }
+  const key = storageKey(tabId, pageUrl)
+  const resources = await resourceSessionStore.update(
+    key,
+    current => compactResources(pruneExpiredResources(current), 100, true),
+  )
+  await setResourceBadge(tabId, resources)
+}
+
+async function refreshOpenTabBadges(): Promise<void> {
+  const tabs = await browser.tabs.query({}).catch(() => [])
+  await Promise.all(tabs
+    .map(tab => Number(tab.id))
+    .filter(tabId => Number.isInteger(tabId) && tabId >= 0)
+    .map(tabId => refreshTabBadge(tabId)))
 }
 
 async function sendCapturedResource(tabId: number, resource: Omit<MediaResource, 'id' | 'seenAt'>): Promise<void> {
@@ -817,6 +854,9 @@ export default defineBackground(() => {
       }
     }
   })
+  browser.tabs.onActivated.addListener(activeInfo => {
+    void refreshTabBadge(activeInfo.tabId)
+  })
   browser.tabs.onRemoved.addListener(tabId => {
     requestChains.clearTab(tabId)
     inspectedAdaptive.releasePrefix(`${tabId}:`)
@@ -842,12 +882,17 @@ export default defineBackground(() => {
   void pingDesktop().catch(() => undefined)
   browser.alarms.create('desktop-heartbeat', { periodInMinutes: 0.5 })
   browser.alarms.create('handoff-tracker', { periodInMinutes: 0.5 })
+  // Reconcile inactive tabs without waking the worker on every heartbeat.
+  // Activation remains immediate; this only expires a badge on a tab that
+  // has not been selected for a long time.
+  browser.alarms.create('resource-badge-refresh', { periodInMinutes: 5 })
   browser.alarms.onAlarm.addListener(alarm => {
     if (alarm.name === 'desktop-heartbeat') {
       requestChains.cleanup()
       void pingDesktop().catch(() => undefined)
     }
     if (alarm.name === 'handoff-tracker') void pollTrackedHandoffs()
+    if (alarm.name === 'resource-badge-refresh') void refreshOpenTabBadges()
   })
   browser.runtime.onInstalled.addListener(() => {
     void installContextMenus()
@@ -1157,7 +1202,7 @@ export default defineBackground(() => {
         : -1
       void topLevelPageUrl(tabId, String(message.pageUrl || ''))
         .then(pageUrl => storageKey(tabId, pageUrl))
-        .then(key => resourceSessionStore.update(key, raw => compactResources(raw, 40, true)).then(async cleaned => {
+        .then(key => resourceSessionStore.update(key, raw => compactResources(pruneExpiredResources(raw), 40, true)).then(async cleaned => {
           // Never write the frame-filtered view back to the page cache: doing
           // so would erase sibling iframe resources just because one frame
           // opened its panel first.
@@ -1165,7 +1210,7 @@ export default defineBackground(() => {
             ? cleaned.filter(resource => resourceBelongsToFrame(resource, senderFrameId))
             : cleaned
           const visible = senderFrameId >= 0 ? compactResources(scoped, 40, true) : compactResources(cleaned, 40)
-          if (tabId >= 0) await browser.action.setBadgeText({ tabId, text: visible.length ? String(Math.min(99, visible.length)) : '' })
+          await setResourceBadge(tabId, visible)
           sendResponse(visible)
         }))
         .catch(error => sendResponse({ ok: false, error: String(error) }))

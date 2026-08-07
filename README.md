@@ -14,7 +14,7 @@ HLS · DASH · HTTP(S) · BT / magnet · 边下边播 · 断点续传
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows11&logoColor=white)](https://github.com/ciaooo55/hls-downloader/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
 
-[下载最新版](https://github.com/ciaooo55/hls-downloader/releases/latest) · [快速开始](#-快速开始) · [浏览器插件](#-浏览器插件) · [源码开发](#-源码开发) · [发布说明](docs/releases/v3.0.17.md)
+[下载最新版](https://github.com/ciaooo55/hls-downloader/releases/latest) · [快速开始](#-快速开始) · [浏览器插件](#-浏览器插件) · [源码开发](#-源码开发) · [发布说明](docs/releases/v3.0.18.md)
 
 </div>
 
@@ -31,13 +31,11 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 
 | 发布文件 | 适用场景 |
 | --- | --- |
-| `HLSDownloader-v3.0.17-Windows-x64-Setup.exe` | 推荐；支持开始菜单、卸载入口和应用内更新 |
-| `HLSDownloader-v3.0.17-Windows-x64-Portable.zip` | 免安装；完整解压后运行，数据保存在便携目录 |
-| `HLSDownloader-v3.0.17-Chrome-Edge-Extension.zip` | Chrome、Edge、Brave、Chromium、Vivaldi、Opera 的 MV3 扩展 |
-| `HLSDownloader-v3.0.17-Firefox-Web-UI-Unsigned.zip` | Firefox 网页显示版；AMO 提交或临时测试包 |
-| `HLSDownloader-v3.0.17-Firefox-Web-UI-Source.zip` | Firefox 网页显示版对应的 AMO 审核源码 |
-| `HLSDownloader-v3.0.17-Firefox-No-Web-UI-Unsigned.zip` | Firefox 网页不显示版；AMO 提交或临时测试包 |
-| `HLSDownloader-v3.0.17-Firefox-No-Web-UI-Source.zip` | Firefox 网页不显示版对应的 AMO 审核源码 |
+| `HLSDownloader-v3.0.18-Windows-x64-Setup.exe` | 推荐；支持开始菜单、卸载入口和应用内更新 |
+| `HLSDownloader-v3.0.18-Windows-x64-Portable.zip` | 免安装；完整解压后运行，数据保存在便携目录 |
+| `HLSDownloader-v3.0.18-Chrome-Edge-Extension.zip` | Chrome、Edge、Brave、Chromium、Vivaldi、Opera 的 MV3 扩展 |
+| `HLSDownloader-v3.0.18-Firefox-Unsigned.zip` | Firefox 统一扩展；临时测试或 AMO 提交包 |
+| `HLSDownloader-v3.0.18-Firefox-Source.zip` | Firefox 统一扩展的 AMO 审核源码 |
 
 > [!NOTE]
 > 当前安装包没有商业代码签名证书，Windows SmartScreen 首次运行时可能提示“未知发布者”。请只从本仓库 Releases 下载。Git 仓库只保存可继续开发的源码；`release/`、FFmpeg 二进制和构建缓存不提交。
@@ -107,7 +105,7 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 
 ### Chromium
 
-1. 下载并解压 `HLSDownloader-v3.0.17-Chrome-Edge-Extension.zip`。
+1. 下载并解压 `HLSDownloader-v3.0.18-Chrome-Edge-Extension.zip`。
 2. 打开浏览器扩展管理页并启用“开发者模式”。
 3. 选择“加载已解压的扩展程序”，指向解压目录。
 4. 启动桌面端；插件会通过 Native Messaging 自动配对，不需要手动复制 Token。
@@ -116,9 +114,9 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 
 ### Firefox
 
-Firefox 网页显示版 ID 为 `browser@hls-downloader.ciaooo55.com`，网页不显示版 ID 为 `hls-downloader-store@ciaooo55.com`。未签名 ZIP 不能永久安装到正式版 Firefox；临时测试时解压包，在 `about:debugging#/runtime/this-firefox` 中选择“临时载入附加组件”，再选择 `manifest.json`。
+Firefox 所有发布包统一使用 ID `hls-downloader-store@ciaooo55.com`，不再区分网页显示版和网页不显示版。未签名 ZIP 不能永久安装到正式版 Firefox；临时测试时解压包，在 `about:debugging#/runtime/this-firefox` 中选择“临时载入附加组件”，再选择 `manifest.json`。
 
-AMO 首次发布请选择“在此网站上”，上传对应的 `Unsigned.zip`；审核需要源码时上传同一变体的 `Source.zip`。后续更新应在原附加组件条目上传新版本，保持 ID 不变。Firefox 的静默更新需要 Mozilla 签名包和 HTTPS 更新清单。
+AMO 首次发布请选择“在此网站上”，上传 `Firefox-Unsigned.zip`；审核需要源码时上传 `Firefox-Source.zip`。后续更新继续使用同一附加组件条目，保持 ID 不变。Firefox 的静默更新需要 Mozilla 签名包和 HTTPS 更新清单。
 
 Cookie 默认不读取，只有用户为具体站点授权后才随该站点媒体请求传给桌面端。按住 `Alt` 点击下载可临时绕过接管。
 
@@ -210,14 +208,14 @@ pnpm run tauri:build
 
 ```powershell
 python -m pip install -r requirements-build.txt
-.\scripts\build_installer.ps1 -Version 3.0.17
+.\scripts\build_installer.ps1 -Version 3.0.18
 ```
 
 输出位于被 Git 忽略的 `release/`：
 
 ```text
-HLSDownloader-v3.0.17-Windows-x64-Setup.exe
-HLSDownloader-v3.0.17-Windows-x64-Portable.zip
+HLSDownloader-v3.0.18-Windows-x64-Setup.exe
+HLSDownloader-v3.0.18-Windows-x64-Portable.zip
 ```
 
 插件没有改动时不要上传独立插件包。确实需要发布新版插件时，本地打包追加 `-IncludeExtensionAssets`，或在 GitHub Actions 手动运行时勾选 `include_extensions`。

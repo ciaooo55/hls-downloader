@@ -1,8 +1,8 @@
 import { defineConfig } from 'wxt'
-// This is the already-published AMO ID for the variant that appears on the
-// web store. Packaging overrides it only for the separate no-web-store build.
-const firefoxId = process.env.HLS_FIREFOX_EXTENSION_ID || 'browser@hls-downloader.ciaooo55.com'
-const extensionVersion = process.env.HLS_EXTENSION_VERSION || '3.0.17'
+// Keep one stable Firefox ID for every build. The web UI is a desktop
+// capability, not a separate Firefox extension identity.
+const firefoxId = 'hls-downloader-store@ciaooo55.com'
+const extensionVersion = process.env.HLS_EXTENSION_VERSION || '3.0.18'
 
 export default defineConfig({
   manifestVersion: 3,

@@ -8,7 +8,7 @@
 2. 选择 `Windows Release`。
 3. 点击 `Run workflow`，填写版本号后运行。只有浏览器插件本身有改动时才勾选 `include_extensions`。
 4. 等待任务通过，从任务页面下载对应版本的 `HLSDownloader-Windows-x64` artifact。
-5. 默认确认其中只包含安装版和便携版；勾选 `include_extensions` 时，再确认包含 Chrome/Edge MV3 扩展包，以及网页显示和网页不显示两种 Firefox 插件各自的 unsigned/source 文件。
+5. 默认确认其中只包含安装版和便携版；勾选 `include_extensions` 时，再确认包含 Chrome/Edge MV3 扩展包，以及统一 Firefox 扩展的 unsigned/source 文件。
 
 手动运行只生成临时 artifact，不会创建公开 Release。
 
@@ -34,20 +34,22 @@ HLSDownloader-v3.0.8-Windows-x64-Portable.zip
 
 ```text
 HLSDownloader-v3.0.8-Chrome-Edge-Extension.zip
-HLSDownloader-v3.0.8-Firefox-Web-UI-Unsigned.zip
-HLSDownloader-v3.0.8-Firefox-Web-UI-Source.zip
-HLSDownloader-v3.0.8-Firefox-No-Web-UI-Unsigned.zip
-HLSDownloader-v3.0.8-Firefox-No-Web-UI-Source.zip
+HLSDownloader-v3.0.8-Firefox-Unsigned.zip
+HLSDownloader-v3.0.8-Firefox-Source.zip
 ```
 
-Firefox 网页显示商店版使用已发布的 `browser@hls-downloader.ciaooo55.com` ID；网页不显示版使用独立的 `hls-downloader-store@ciaooo55.com` ID。首次提交时在 AMO
+Firefox 所有发布包统一使用 `hls-downloader-store@ciaooo55.com` ID。首次提交时在 AMO
 的“提交新附加组件”页面选择“在此网站上”，上传
 对应变体的 `HLSDownloader-v*-Firefox-*-Unsigned.zip`，由 Mozilla 审核和签名。不要先使用同一 ID
 执行 `web-ext sign --channel unlisted`；该通道用于自分发，会预先占用 ID，导致
 创建公开商店条目时出现“发现重复的附加组件 ID”。后续版本从原附加组件的
 “状态和版本”页面上传并保持 ID 不变。
 
-两个 ID 都保留在桌面端 Native Messaging 允许列表中；网页显示版后续更新必须保持其已发布 ID 不变。
+桌面端 Native Messaging 白名单只保留此统一 ID；后续 Firefox 更新必须保持它不变。
+
+## 本机构建的 FFmpeg
+
+常规发布和 CI 使用脚本内置 SHA-256 校验的 FFmpeg 归档。仅当本机镜像不可用、且已自行核验 PATH 中的 `ffmpeg.exe` / `ffprobe.exe` 时，开发者可显式传入 `-UseSystemFfmpeg` 完成本机烟雾构建；该开关不会被 CI 使用。
 
 ## 失败处理
 

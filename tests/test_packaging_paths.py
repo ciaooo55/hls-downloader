@@ -81,18 +81,17 @@ def test_installer_bundles_loadable_edge_extension_and_removes_it_on_uninstall()
     assert 'RMDir /r "$INSTDIR\\browser-extension"' in nsis_script
 
 
-def test_firefox_web_and_no_web_variants_have_stable_distinct_ids():
+def test_firefox_release_uses_one_stable_id():
     root = Path(__file__).resolve().parent.parent
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
     wxt_config = (root / "extension" / "wxt.config.ts").read_text(encoding="utf-8")
     native_host = (root / "extension" / "native-host" / "firefox.json").read_text(encoding="utf-8")
 
-    assert '$FirefoxWebId = "browser@hls-downloader.ciaooo55.com"' in build_script
-    assert '$FirefoxNoWebId = "hls-downloader-store@ciaooo55.com"' in build_script
-    assert "const firefoxId = process.env.HLS_FIREFOX_EXTENSION_ID || 'browser@hls-downloader.ciaooo55.com'" in wxt_config
-    assert "Firefox source archive did not receive the expected extension ID" in build_script
-    assert '"browser@hls-downloader.ciaooo55.com"' in native_host
+    assert '$FirefoxId = "hls-downloader-store@ciaooo55.com"' in build_script
+    assert "const firefoxId = 'hls-downloader-store@ciaooo55.com'" in wxt_config
+    assert "Firefox build used the wrong extension ID" in build_script
     assert '"hls-downloader-store@ciaooo55.com"' in native_host
+    assert 'browser@hls-downloader.ciaooo55.com' not in native_host
 
 
 def test_app_icon_is_used_by_executable_tray_ui_and_installer():
@@ -161,7 +160,7 @@ def test_installer_and_portable_upgrade_stop_partial_old_installs():
     nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
     portable_upgrade = (root / "scripts" / "upgrade-portable.ps1").read_text(encoding="utf-8")
 
-    assert '!define APP_VERSION "3.0.17"' in nsis_script
+    assert '!define APP_VERSION "3.0.18"' in nsis_script
     close_macro = nsis_script[nsis_script.index("!macro CloseRunningApp") : nsis_script.index("!macroend", nsis_script.index("!macro CloseRunningApp"))]
     assert 'IfFileExists "$INSTDIR\\HLSDownloader.exe"' not in close_macro
     assert 'shutdown-running.ps1" -InstallDir "$INSTDIR"' in close_macro
@@ -304,14 +303,12 @@ def test_windows_build_emits_extension_assets_only_when_requested():
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
 
     assert "[switch]$IncludeExtensionAssets" in build_script
-    assert "$ReleaseNamePrefix-Firefox-Web-UI-Unsigned.zip" in build_script
-    assert "$ReleaseNamePrefix-Firefox-Web-UI-Source.zip" in build_script
-    assert "$ReleaseNamePrefix-Firefox-No-Web-UI-Unsigned.zip" in build_script
-    assert "$ReleaseNamePrefix-Firefox-No-Web-UI-Source.zip" in build_script
+    assert "$ReleaseNamePrefix-Firefox-Unsigned.zip" in build_script
+    assert "$ReleaseNamePrefix-Firefox-Source.zip" in build_script
     assert "$ReleaseNamePrefix-Chrome-Edge-Extension.zip" in build_script
     assert "$ChromiumExtensionStage" in build_script
-    assert "$FirefoxWebId" in build_script and "$FirefoxNoWebId" in build_script
-    assert "HLS_FIREFOX_EXTENSION_ID" in build_script
+    assert "$FirefoxId" in build_script
+    assert "HLS_FIREFOX_EXTENSION_ID" not in build_script
     assert "if ($IncludeExtensionAssets)" in build_script
     assert "Release directory must contain exactly $($expected.Count) files" in build_script
     assert "SHA256SUMS.txt" not in build_script
@@ -524,9 +521,8 @@ def test_firefox_release_includes_reviewable_source_archive():
     build_script = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
     reviewer_notes = (root / "extension" / "AMO-BUILD.md").read_text(encoding="utf-8")
 
-    assert "$ReleaseNamePrefix-Firefox-Web-UI-Source.zip" in build_script
-    assert "$ReleaseNamePrefix-Firefox-No-Web-UI-Source.zip" in build_script
-    assert "BUILD-VARIANT.txt" in build_script
+    assert "$ReleaseNamePrefix-Firefox-Source.zip" in build_script
+    assert "BUILD-INFO.txt" in build_script
     for source in ("entrypoints", "lib", "public", "package.json", "pnpm-lock.yaml", "wxt.config.ts", "AMO-BUILD.md"):
         assert source in build_script
     assert "pnpm install --frozen-lockfile" in reviewer_notes
@@ -544,17 +540,16 @@ def test_extension_source_does_not_assign_untrusted_html():
         assert ".innerHTML" not in source.read_text(encoding="utf-8")
 
 
-def test_firefox_web_store_id_matches_native_host_and_keeps_no_web_compatibility():
+def test_firefox_id_matches_native_host_and_has_no_second_variant():
     root = Path(__file__).resolve().parent.parent
     config = (root / "extension" / "wxt.config.ts").read_text(encoding="utf-8")
     native_host = (root / "extension" / "native-host" / "firefox.json").read_text(encoding="utf-8")
 
-    web_store_id = "browser@hls-downloader.ciaooo55.com"
-    no_web_id = "hls-downloader-store@ciaooo55.com"
-    assert web_store_id in config
-    assert web_store_id in native_host
-    assert no_web_id not in config
-    assert no_web_id in native_host
+    extension_id = "hls-downloader-store@ciaooo55.com"
+    assert extension_id in config
+    assert extension_id in native_host
+    assert "browser@hls-downloader.ciaooo55.com" not in config
+    assert "browser@hls-downloader.ciaooo55.com" not in native_host
 
 
 def test_tauri_enables_csp_and_splits_handoff_permissions():
