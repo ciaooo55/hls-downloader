@@ -122,9 +122,10 @@ def test_readme_documents_windows_release_assets():
     assert "HLSDownloader-v3.0.18-Windows-x64-Setup.exe" in readme
     assert "HLSDownloader-v3.0.18-Windows-x64-Portable.zip" in readme
     assert "m3u8-sniffer.user.js" not in readme
-    assert "HLSDownloader-v3.0.18-Firefox-Unsigned.zip" in readme
-    assert "HLSDownloader-v3.0.18-Firefox-Source.zip" in readme
+    assert "https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/" in readme
+    assert "HLSDownloader-v3.0.18-Firefox-Unsigned.zip" not in readme
+    assert "HLSDownloader-v3.0.18-Firefox-Source.zip" not in readme
     assert "SHA256SUMS.txt" not in readme
     assert "Windows 10/11" in readme
     assert "git tag v" in readme
-    assert "插件没有改动时不要上传独立插件包" in readme
+    assert "需要构建浏览器插件时" in readme
