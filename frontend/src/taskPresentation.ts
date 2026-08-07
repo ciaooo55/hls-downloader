@@ -1,5 +1,6 @@
 import { isRunningStatus } from './taskState'
 import { downloadCategory } from './downloadCategory'
+import { fmtBytes } from './format'
 
 const STATUS_LABELS: Record<string, string> = {
   queued: '排队中',
@@ -46,6 +47,22 @@ const STAGE_LABELS: Record<string, string> = {
 
 export const statusLabel = (status: string) => STATUS_LABELS[status] || status || '--'
 export const stageLabel = (stage: string) => STAGE_LABELS[stage] || stage || '--'
+
+/** Keep byte information visible in every task-table phase. A live stream
+ * has no trustworthy final length, but the amount already recorded must not
+ * disappear while it is being finalized. */
+export function taskSizeSummary(task: {
+  downloaded_bytes?: number
+  total_bytes?: number
+  is_live?: boolean
+}): string {
+  const downloaded = Math.max(0, Number(task.downloaded_bytes) || 0)
+  const total = Math.max(0, Number(task.total_bytes) || 0)
+  const totalLabel = total > 0
+    ? `总大小 ${fmtBytes(total)}`
+    : task.is_live ? '总大小 未知（直播）' : '总大小 未知'
+  return `已下载 ${fmtBytes(downloaded)} · ${totalLabel}`
+}
 
 const ACTIVE = new Set([
   'queued', 'awaiting_confirmation', 'fetching_metadata', 'awaiting_selection',

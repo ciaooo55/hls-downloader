@@ -20,6 +20,17 @@ def test_queue_auto_start_time_is_fail_closed_and_time_aware(monkeypatch):
     assert not manager._queue_auto_start_due(datetime(2026, 7, 23, 22, 0))
 
 
+def test_immediate_download_is_not_global_queue_managed(monkeypatch):
+    manager = TaskManager()
+    settings = __import__("backend.app.downloader.task_manager", fromlist=["settings"]).settings
+    monkeypatch.setattr(settings, "queue_auto_start_enabled", False)
+    monkeypatch.setattr(settings, "queue_auto_stop_enabled", False)
+    assert manager._queue_managed_for_auto_start(True) is False
+    monkeypatch.setattr(settings, "queue_auto_stop_enabled", True)
+    assert manager._queue_managed_for_auto_start(True) is True
+    assert manager._queue_managed_for_auto_start(False) is False
+
+
 def test_weekday_and_overnight_queue_window(monkeypatch):
     manager = TaskManager()
     settings = __import__("backend.app.downloader.task_manager", fromlist=["settings"]).settings

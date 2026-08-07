@@ -66,6 +66,10 @@ export interface DownloadClickIntent {
 }
 
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|torrent|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
+// Keep this narrower than MEDIA_EXT: archive and installer downloads can
+// legitimately use terse `s`/`e` application parameters, while these paths
+// are actual media or adaptive manifests whose signatures are known to rotate.
+const DIRECT_PLAYBACK_EXT = /\.(?:m3u8?|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav)(?:$|[?#])/i
 const SEGMENT_EXT = /\.(?:ts|m4s|cmfv|cmfa|aac)(?:$|[?#])/i
 const IMAGE_EXT = /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)(?:$|[?#])/i
 const PASSIVE_WEB_EXT = /\.(?:cjs|css|eot|js|json|map|mjs|otf|ttf|wasm|woff2?|xml)(?:$|[?#])/i
@@ -152,6 +156,13 @@ export function classifyPlaybackSource(url: string, mimeType = ''): ResourceKind
   if (!/^https?:\/\//i.test(url)) return null
   const kind = classifyResource(url, mimeType)
   if (kind === 'hls' || kind === 'dash') return kind
+  if (kind === 'media') return kind
+  // An empty `video[src]` is resolved by DOM URL getters to the document URL
+  // on several sites.  Never convert a page controller such as
+  // `view_video.php` into a media task merely because it was observed near a
+  // player.  A genuine PHP media endpoint is still retained when its network
+  // response supplies a video/audio MIME type above.
+  if (DYNAMIC_DOCUMENT_EXT.test(url)) return null
   return 'media'
 }
 
@@ -289,7 +300,7 @@ function stableResourceUrl(resource: Pick<MediaResource, 'url' | 'kind'>): URL {
   // conventional token/expires names. Treat the trio as volatile only when s
   // and e occur together, so an ordinary semantic `e` stays meaningful.
   const names = new Set([...url.searchParams.keys()].map(key => key.toLowerCase()))
-  const hasShortLivedSignature = names.has('s') && names.has('e')
+  const hasShortLivedSignature = usesShortLivedMediaSignature(resource)
   const adaptiveOrMedia = ['hls', 'dash', 'media'].includes(resource.kind)
   for (const key of [...url.searchParams.keys()]) {
     if (
@@ -302,6 +313,46 @@ function stableResourceUrl(resource: Pick<MediaResource, 'url' | 'kind'>): URL {
   }
   url.searchParams.sort()
   return url
+}
+
+/**
+ * Some video CDNs use terse `s`/`e`/`_t` values instead of conventional
+ * token/expiry names.  Direct MP4 observations are initially classified as a
+ * generic file by PerformanceObserver, so this deliberately includes known
+ * direct playback paths even when their current kind is `file`.
+ */
+export function usesShortLivedMediaSignature(resource: Pick<MediaResource, 'url' | 'kind'>): boolean {
+  try {
+    const url = new URL(resource.url)
+    const names = new Set([...url.searchParams.keys()].map(key => key.toLowerCase()))
+    return names.has('s')
+      && names.has('e')
+      && (['hls', 'dash', 'media'].includes(resource.kind) || DIRECT_PLAYBACK_EXT.test(url.pathname))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Return false only for a recognised short-lived media signature which has
+ * already expired (or has too little lifetime left for the desktop probe).
+ * Unknown `e` formats are left to the browser's successful response evidence
+ * instead of guessing their server-specific meaning.
+ */
+export function isShortLivedMediaSignatureUsable(
+  resource: Pick<MediaResource, 'url' | 'kind'>,
+  now = Date.now(),
+  minimumRemainingMs = 45_000,
+): boolean {
+  if (!usesShortLivedMediaSignature(resource)) return true
+  try {
+    const raw = new URL(resource.url).searchParams.get('e') || ''
+    if (!/^\d{10}(?:\d{3})?$/.test(raw)) return true
+    const expiresAt = raw.length === 10 ? Number(raw) * 1_000 : Number(raw)
+    return Number.isFinite(expiresAt) && expiresAt > now + minimumRemainingMs
+  } catch {
+    return true
+  }
 }
 
 /**

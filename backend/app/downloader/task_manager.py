@@ -1,10 +1,13 @@
 import asyncio
 import binascii
 import contextlib
+import errno
 import json
 import logging
 import os
+import stat
 import shutil
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +38,13 @@ PROGRESS_EVENT_INTERVAL_SECONDS = 0.25
 LOG_QUEUE_CAPACITY = 2000
 LOG_MAX_BYTES = 4 * 1024 * 1024
 LOG_BACKUP_COUNT = 3
+# Windows cannot unlink a file while a media player, Explorer preview pane,
+# antivirus scanner, or an already-closing local playback request still owns
+# a handle.  Keep retries deliberately bounded: deleting a task must not
+# freeze the UI forever, but a short tail is enough for the normal close path.
+DELETE_RETRY_DELAYS_SECONDS = (0.05, 0.1, 0.25, 0.5, 1.0, 1.5)
+DELETE_RUNNER_JOIN_TIMEOUT_SECONDS = 10
+DELETE_RUNNER_CANCEL_TIMEOUT_SECONDS = 15
 
 
 def _decode_request_headers(value: str) -> dict[str, str]:
@@ -247,6 +257,11 @@ class TaskManager:
         self._pending_saves: dict[str, asyncio.Task] = {}
         self._downloaders: dict[str, DownloadEngine] = {}
         self._deleting_task_ids: set[str] = set()
+        # A task can be deleted from a row action, context menu, keyboard
+        # shortcut, and an SSE-driven refresh at nearly the same time.  Keep a
+        # single operation per id so duplicate requests observe the same
+        # result instead of racing over cancellation, SQLite, and files.
+        self._delete_operations: dict[str, asyncio.Task] = {}
         self._temp_cleanup_lock = asyncio.Lock()
         self._maintenance_task: asyncio.Task | None = None
         self._last_progress_emit: dict[str, float] = {}
@@ -299,6 +314,22 @@ class TaskManager:
     @staticmethod
     def _queue_auto_start_due(now: datetime | None = None) -> bool:
         return TaskManager._queue_schedule_state(now)[0]
+
+    @staticmethod
+    def _queue_managed_for_auto_start(auto_start: bool) -> bool:
+        """Whether an automatically started task opted into global queue rules.
+
+        ``auto_start`` is also used by browser handoff and one-click desktop
+        downloads simply to mean “start now”.  It must not by itself make a
+        live recording subject to the optional global stop window.
+        """
+        return bool(
+            auto_start
+            and (
+                settings.queue_auto_start_enabled
+                or getattr(settings, "queue_auto_stop_enabled", False)
+            )
+        )
 
     @staticmethod
     def _scheduled_time_due(value: str, now: datetime | None = None) -> bool:
@@ -744,7 +775,11 @@ class TaskManager:
                     else {}
                 ),
                 "completion_action": str(completion_action or "none"),
-                "queue_managed": bool(auto_start),
+                "queue_managed": self._queue_managed_for_auto_start(auto_start),
+                # Older rows without this marker are deliberately not treated
+                # as opted into a later global stop-window setting. Per-task
+                # scheduled_stop_at remains independent and is still honored.
+                "queue_schedule_opt_in": self._queue_managed_for_auto_start(auto_start),
                 "browser_originated": bool(browser_originated),
             },
         )
@@ -1218,36 +1253,160 @@ class TaskManager:
         await self.start_task(task_id)
 
     async def delete_task(self, task_id: str, *, delete_files: bool = False) -> None:
-        task = self._get_task(task_id)
-        if len(self._deleting_task_ids) >= 1024:
-            self._deleting_task_ids.pop()
+        """Delete one task exactly once, including a runner's terminal tail.
+
+        ``DONE``/``FAILED`` is published by an engine before its coroutine has
+        necessarily released FFmpeg, HTTP, and filesystem resources.  The old
+        implementation treated any live handle as a regular cancellation and
+        therefore rejected an otherwise terminal task with a 409.  A repeated
+        UI click also started a second deletion concurrently.  Coalescing both
+        cases keeps the visible action idempotent and avoids Windows lock races.
+        """
+        operation = self._delete_operations.get(task_id)
+        if operation is not None:
+            # Do not let one disconnected HTTP/SSE client cancel the shared
+            # deletion that another client is already awaiting.
+            await asyncio.shield(operation)
+            return
+
+        task = self.tasks.get(task_id)
+        if task is None:
+            # A duplicated DELETE which arrives just after the first request
+            # finished is still a successful, idempotent delete.  Unknown ids
+            # continue to return the normal 404 through _get_task().
+            if task_id in self._deleting_task_ids:
+                return
+            self._get_task(task_id)
+            return
+
+        self._trim_delete_tombstones()
         self._deleting_task_ids.add(task_id)
         self._last_progress_emit.pop(task_id, None)
+        operation = asyncio.create_task(
+            self._delete_task_owned(task, delete_files=delete_files),
+            name=f"delete-{task.id}",
+        )
+        self._delete_operations[task_id] = operation
+        operation.add_done_callback(
+            lambda completed: self._finish_delete_operation(task_id, completed)
+        )
+        try:
+            await asyncio.shield(operation)
+        finally:
+            if self._delete_operations.get(task_id) is operation and operation.done():
+                self._delete_operations.pop(task_id, None)
+
+    def _finish_delete_operation(self, task_id: str, operation: asyncio.Task) -> None:
+        """Forget background deletion work even if its original client left."""
+        if self._delete_operations.get(task_id) is operation:
+            self._delete_operations.pop(task_id, None)
+        # A shielded caller may be cancelled by a disconnected HTTP client.
+        # Retrieve an eventual failure here to avoid an unobserved-task warning;
+        # callers still receive the same exception when they remain connected.
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            operation.exception()
+
+    def _trim_delete_tombstones(self) -> None:
+        """Bound late-callback tombstones without dropping active deletions."""
+        while len(self._deleting_task_ids) >= 1024:
+            stale_id = next(
+                (
+                    candidate
+                    for candidate in self._deleting_task_ids
+                    if candidate not in self._delete_operations
+                ),
+                None,
+            )
+            if stale_id is None:
+                # More than 1,024 simultaneous task deletions is not a useful
+                # UI workload.  Preserve all active ownership guards instead
+                # of arbitrarily making one live worker current again.
+                break
+            self._deleting_task_ids.discard(stale_id)
+
+    async def _delete_task_owned(self, task: Task, *, delete_files: bool) -> None:
+        task_id = task.id
         was_complete = task.status is TaskStatus.DONE
         try:
-            if task.task_handle and not task.task_handle.done():
-                await self.cancel_task(task_id)
+            await self._stop_task_runner_for_deletion(task)
             playback_service.close_task(task_id)
             from .throttle import task_throttles
 
             task_throttles.drop(task_id)
+            await self._cancel_pending_save(task_id)
             if delete_files or not was_complete:
                 await self._delete_task_outputs(task)
-            pending = self._pending_saves.pop(task_id, None)
-            if pending and not pending.done():
-                pending.cancel()
-            await run_db("DELETE FROM tasks WHERE id=?", (task_id,))
-            self.tasks.pop(task_id, None)
+
+            # Do not hide task-directory failures.  In particular, a queued
+            # log write may briefly own download.log on Windows; the retrying
+            # remover below lets that writer finish before removing the DB row.
             task_dir = task_work_dir(task)
             if task_dir.exists():
-                await asyncio.to_thread(shutil.rmtree, task_dir, True)
+                await asyncio.to_thread(
+                    self._remove_path_with_retry,
+                    task_dir,
+                    label="任务临时文件",
+                )
+
+            await run_db("DELETE FROM tasks WHERE id=?", (task_id,))
+            if self.tasks.get(task_id) is task:
+                self.tasks.pop(task_id, None)
             self._broadcast_nowait({"type": "task_deleted", "task_id": task_id})
             await self._cleanup_temp_root_if_all_done()
-        except Exception:
+        except BaseException:
             # The task remains managed if deletion did not complete, so permit
-            # normal updates after surfacing the failure to the caller.
+            # normal updates after surfacing the failure to the caller.  This
+            # must include cancellation: otherwise a disconnected client can
+            # leave a permanently undeletable tombstone behind.
             self._deleting_task_ids.discard(task_id)
             raise
+
+    async def _stop_task_runner_for_deletion(self, task: Task) -> None:
+        """Join a terminal tail or stop an active runner before removing files."""
+        handle = task.task_handle
+        if handle is None or handle.done():
+            return
+
+        if task.status in TERMINAL_STATUSES:
+            try:
+                await self._await_task_handle(handle, DELETE_RUNNER_JOIN_TIMEOUT_SECONDS)
+                return
+            except asyncio.TimeoutError:
+                # A terminal task must not keep a file handle forever.  It is
+                # safe to cancel after its normal finalization window elapsed.
+                logger.warning("terminal task %s did not finish its cleanup tail", task.id)
+
+        if task.cancel_event is not None:
+            task.cancel_event.set()
+        if task.pause_event is not None:
+            task.pause_event.clear()
+        handle.cancel()
+        try:
+            await self._await_task_handle(handle, DELETE_RUNNER_CANCEL_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError as exc:
+            raise TaskConflictError(
+                "下载线程仍在退出，暂时无法删除。请稍后重试；若持续出现，请先关闭播放器。"
+            ) from exc
+
+    @staticmethod
+    async def _await_task_handle(handle: asyncio.Task, timeout: float) -> None:
+        """Wait for a task without allowing its cancellation to cancel us."""
+        try:
+            await asyncio.wait_for(asyncio.shield(handle), timeout=timeout)
+        except asyncio.CancelledError:
+            # A cancelled runner is the expected result after handle.cancel().
+            # If it is still alive this cancellation belongs to our caller and
+            # must propagate so _delete_task_owned can release its tombstone.
+            if not handle.done():
+                raise
+
+    async def _cancel_pending_save(self, task_id: str) -> None:
+        pending = self._pending_saves.pop(task_id, None)
+        current = asyncio.current_task()
+        if pending is None or pending.done() or pending is current:
+            return
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
 
     async def _delete_task_outputs(self, task: Task) -> None:
         download_root = Path(task.engine_state.get("output_dir") or settings.download_dir).resolve()
@@ -1258,6 +1417,7 @@ class TaskManager:
         }
 
         def remove() -> None:
+            resolved_paths: list[Path] = []
             for raw_path in candidates:
                 if not raw_path:
                     continue
@@ -1265,12 +1425,63 @@ class TaskManager:
                 if path == download_root or download_root not in path.parents:
                     logger.warning("refusing to delete task output outside download directory: %s", path)
                     continue
-                if path.is_dir():
-                    shutil.rmtree(path, ignore_errors=True)
-                else:
-                    path.unlink(missing_ok=True)
+                resolved_paths.append(path)
+            # Delete children before parents when an engine recorded both a
+            # stream directory and a final file under it.
+            for path in sorted(set(resolved_paths), key=lambda item: len(item.parts), reverse=True):
+                self._remove_path_with_retry(path, label="下载文件")
 
         await asyncio.to_thread(remove)
+
+    @staticmethod
+    def _remove_path_with_retry(path: Path, *, label: str) -> None:
+        """Remove a task-owned file or directory with Windows-safe retries."""
+        path = Path(path)
+        attempts = len(DELETE_RETRY_DELAYS_SECONDS) + 1
+        last_error: OSError | None = None
+        for attempt in range(attempts):
+            try:
+                if not path.exists() and not path.is_symlink():
+                    return
+                if path.is_dir() and not path.is_symlink():
+                    shutil.rmtree(path, onerror=TaskManager._clear_readonly_for_remove)
+                else:
+                    path.unlink()
+                return
+            except FileNotFoundError:
+                return
+            except OSError as exc:
+                last_error = exc
+                if not TaskManager._is_retryable_delete_error(exc) or attempt >= attempts - 1:
+                    break
+                TaskManager._make_writable(path)
+                delay = DELETE_RETRY_DELAYS_SECONDS[attempt]
+                if delay > 0:
+                    time.sleep(delay)
+
+        assert last_error is not None
+        raise TaskConflictError(
+            f"无法删除{label}“{path.name}”：文件仍被其他程序占用或拒绝访问。"
+            "请关闭播放器、资源管理器预览或正在访问该文件的程序后重试。"
+        ) from last_error
+
+    @staticmethod
+    def _is_retryable_delete_error(exc: OSError) -> bool:
+        return isinstance(exc, PermissionError) or exc.errno in {
+            errno.EACCES,
+            errno.EPERM,
+            errno.EBUSY,
+        } or getattr(exc, "winerror", None) in {5, 32, 33}
+
+    @staticmethod
+    def _make_writable(path: Path | str) -> None:
+        with contextlib.suppress(OSError):
+            os.chmod(path, os.stat(path).st_mode | stat.S_IWRITE)
+
+    @staticmethod
+    def _clear_readonly_for_remove(func, path, _exc_info) -> None:
+        TaskManager._make_writable(path)
+        func(path)
 
     async def release_playback(self, task_id: str, session_id: str) -> bool:
         task = self._get_task(task_id)
@@ -1731,7 +1942,9 @@ class TaskManager:
 
         if queue_should_stop:
             for task in list(self.tasks.values()):
-                if not task.engine_state.get("queue_managed"):
+                if not task.engine_state.get("queue_managed") or not task.engine_state.get(
+                    "queue_schedule_opt_in"
+                ):
                     continue
                 if task.engine_state.get("queue_window_stopped"):
                     continue

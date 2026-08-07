@@ -713,7 +713,13 @@ async def mark_native_handoff_presented(handoff_id: str, x_token: str = Header(d
 @router.post("/desktop/core/shutdown")
 async def shutdown_native_core(x_token: str = Header(default="")):
     _check_control_token(x_token)
-    return {"ok": request_core_shutdown()}
+    # The native desktop supervisor can stop/restart Core while a live HLS
+    # task is mid-poll. Persist a resumable marker first; otherwise the normal
+    # asyncio cancellation is indistinguishable from a crash and the next
+    # start only reports ``core_interrupted``. HLS then preserves its segment
+    # checkpoint instead of entering the intentional pause-and-merge path.
+    marked = await manager.prepare_for_update_restart()
+    return {"ok": request_core_shutdown(), "resume_tasks": marked}
 
 
 @router.get("/update/check")

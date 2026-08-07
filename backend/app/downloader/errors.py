@@ -122,6 +122,12 @@ def _looks_like_signed_url(url: str) -> bool:
     }
     if keys & markers:
         return True
+    # mxcontent-style short-lived URLs use a compact triplet rather than a
+    # conventional ``token``/``signature`` parameter.  Require all three
+    # fields together so ordinary media URLs containing a timestamp do not get
+    # misdiagnosed as signed resources.
+    if {"s", "e", "_t"}.issubset(keys):
+        return True
     joined = "&".join(keys)
     return "x-amz-" in joined or "signature" in joined
 

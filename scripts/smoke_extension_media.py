@@ -151,6 +151,11 @@ if (mode === 'shadow') {
     value.src='/stream.mp4?player=spa-two';
     void value.play().catch(()=>{});
   }, 1200);
+} else if (mode === 'empty-video-src') {
+  // Browser DOM URL getters resolve src="" to the document URL. This mirrors
+  // controller pages that mount an empty player before assigning the stream.
+  const value=video(); value.setAttribute('src',''); mount.append(value);
+  setTimeout(() => { value.src='/stream.mp4?player=after-empty'; void value.play().catch(()=>{}); }, 1200);
 } else {
   const value=video(); value.src='/stream.mp4?player=direct'; mount.append(value);
 }
@@ -397,8 +402,14 @@ def run(
             for mode in (
                 "direct", "shadow", "dynamic-shadow", "iframe", "cross-iframe",
                 "ad-direct", "spa", "mse", "mse-sliced", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
+                "empty-video-src",
             ):
                 driver.get(f"http://127.0.0.1:{server.server_port}/index.html?mode={mode}")
+                if mode == "empty-video-src":
+                    time.sleep(0.7)
+                    initial = _overlay_state(driver)
+                    if initial.get("labels"):
+                        raise AssertionError(f"{mode}: 空 src 被误识别为页面下载资源: {initial}")
                 deadline = time.monotonic() + 15
                 state: dict = {}
                 while time.monotonic() < deadline:

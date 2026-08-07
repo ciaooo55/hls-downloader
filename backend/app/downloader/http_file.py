@@ -46,6 +46,10 @@ PROBE_RESPONSE_TIMEOUT = 15.0
 # "正在读取文件信息" forever.
 PROBE_TOTAL_TIMEOUT = 35.0
 PROBE_MAX_ATTEMPTS = 3
+# Some CDN links are minted shortly before they become usable.  Waiting is
+# intentionally bounded and only enabled for the complete, well-formed
+# ``s/e/_t`` triplet; arbitrary future timestamps must fail normally.
+SHORT_SIGNATURE_MAX_WAIT = 15 * 60
 _CONTENT_RANGE_RE = re.compile(
     r"^\s*(?:bytes\s+)?(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*/\s*(?P<total>\d+|\*)\s*$",
     re.IGNORECASE,
@@ -154,6 +158,32 @@ def _metadata_probe_can_skip_body(
         r"\.(?:7z|apk|avi|bin|bz2|cab|dmg|docx?|exe|flac|gz|img|iso|jar|m4a|mkv|mov|mp3|mp4|msi|pdf|pptx?|rar|tar|tgz|torrent|wav|webm|whl|xlsx?|xz|zip)(?:$|[?#\s])",
         value,
     ))
+
+
+def _short_signature_activation_delay(url: str, *, now: float | None = None) -> float:
+    """Return seconds until a compact CDN signature becomes valid.
+
+    ``mxcontent`` links carry ``s`` (signature), ``e`` (expiry) and ``_t``
+    (not-before) as Unix seconds.  A future ``_t`` is not an expired URL and
+    retrying immediately only creates a deterministic 403 loop.  We only wait
+    when all fields are numeric, the window is coherent, the expiry is still
+    ahead, and the delay is small enough to be useful to a user.
+    """
+    try:
+        pairs = dict(parse_qsl(urlsplit(str(url or "")).query, keep_blank_values=True))
+        if not {"s", "e", "_t"}.issubset(pairs):
+            return 0.0
+        not_before = int(pairs["_t"])
+        expires = int(pairs["e"])
+    except (TypeError, ValueError):
+        return 0.0
+    current = time.time() if now is None else float(now)
+    if not_before >= expires or expires <= current:
+        return 0.0
+    delay = float(not_before) - current
+    if delay <= 0 or delay > SHORT_SIGNATURE_MAX_WAIT:
+        return 0.0
+    return delay
 
 
 def _strong_etag(value: str) -> str:
@@ -289,6 +319,7 @@ class HTTPDownloader(SeeklessEngine):
         self._sequential = False
         self._retry_window = SharedRetryWindow()
         self._last_rate_limit_notice = 0.0
+        self._short_signature_waited = False
 
     def request_seek(self, value: int) -> None:
         if value >= 0:
@@ -747,6 +778,25 @@ class HTTPDownloader(SeeklessEngine):
         headers: dict[str, str],
     ) -> dict:
         """Probe through transient CDN failures without hiding permanent errors."""
+        if not self._short_signature_waited:
+            self._short_signature_waited = True
+            delay = _short_signature_activation_delay(self.task.url)
+            if delay > 0:
+                self.task.progress.connection_status = "waiting"
+                self._set_stage(
+                    "probing",
+                    f"短效链接尚未生效，等待约 {int(delay + 0.999)} 秒后再读取文件信息",
+                )
+                deadline = time.monotonic() + delay
+                while True:
+                    if self._is_canceled() or self._is_pausing():
+                        raise asyncio.CancelledError
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    await asyncio.sleep(min(0.25, remaining))
+                self.task.progress.connection_status = "connecting"
+                self._set_stage("probing", "短效链接已生效，正在读取文件信息")
         last_error: Exception | None = None
         for attempt in range(1, PROBE_MAX_ATTEMPTS + 1):
             if self._is_canceled() or self._is_pausing():

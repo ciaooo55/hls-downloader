@@ -58,3 +58,20 @@ def test_browser_credential_cannot_access_desktop_control_routes():
     assert blocked_settings.status_code == 401
     assert desktop_settings.status_code == 200
     assert blocked_shutdown.status_code == 401
+
+
+def test_core_shutdown_marks_running_tasks_for_resume(monkeypatch):
+    from backend.app import api as api_module
+
+    async def mark():
+        return 2
+
+    monkeypatch.setattr(api_module.manager, "prepare_for_update_restart", mark)
+    monkeypatch.setattr(api_module, "request_core_shutdown", lambda: True)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/desktop/core/shutdown",
+            headers={"X-Token": api_module.settings.token},
+        )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "resume_tasks": 2}

@@ -25,6 +25,8 @@ import {
   pruneExpiredResources,
   RESOURCE_CACHE_RETENTION_MS,
   resourceBelongsToFrame,
+  isShortLivedMediaSignatureUsable,
+  usesShortLivedMediaSignature,
   type MediaResource,
 } from './resources'
 
@@ -49,6 +51,8 @@ describe('resource rules', () => {
     expect(classifyPlaybackSource('https://cdn.test/movie.mp4')).toBe('media')
     expect(classifyPlaybackSource('https://cdn.test/play?id=42')).toBe('media')
     expect(classifyPlaybackSource('https://cdn.test/master.m3u8')).toBe('hls')
+    expect(classifyPlaybackSource('https://cn.pornhub.com/view_video.php?viewkey=123')).toBeNull()
+    expect(classifyPlaybackSource('https://cdn.test/player.php?id=42', 'video/mp4')).toBe('media')
     expect(classifyPlaybackSource('blob:https://site.test/opaque')).toBeNull()
   })
   it('deduplicates resources', () => {
@@ -165,6 +169,20 @@ describe('resource rules', () => {
     }))).not.toBe(resourceFingerprint(resource({
       kind: 'file', url: 'https://api.test/export?token=customer-b',
     })))
+
+    const directFileOld = resource({
+      kind: 'file', url: 'https://mxcontent.test/v2/asset.mp4?s=old&e=1786200000&_t=1786180000&quality=1080',
+    })
+    const directFileNew = resource({
+      kind: 'file', url: 'https://mxcontent.test/v2/asset.mp4?s=new&e=1786300000&_t=1786190000&quality=1080',
+    })
+    expect(usesShortLivedMediaSignature(directFileOld)).toBe(true)
+    expect(resourceFingerprint(directFileOld)).toBe(resourceFingerprint(directFileNew))
+    expect(isShortLivedMediaSignatureUsable(directFileNew, 1_786_290_000_000)).toBe(true)
+    expect(isShortLivedMediaSignatureUsable(directFileOld, 1_786_290_000_000)).toBe(false)
+    expect(usesShortLivedMediaSignature(resource({
+      kind: 'file', url: 'https://api.test/export?s=customer-a&e=invoice-42',
+    }))).toBe(false)
   })
 
   it('canonicalizes LL-HLS cursors without re-encoding signed query bytes', () => {

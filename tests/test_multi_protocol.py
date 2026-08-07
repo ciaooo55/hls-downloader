@@ -16,6 +16,7 @@ from backend.app.downloader.http_file import (
     _content_disposition_filename,
     _ensure_filename_extension,
     _parse_content_range,
+    _short_signature_activation_delay,
     _SpeedWindow,
 )
 from backend.app.downloader.errors import DownloadError
@@ -24,6 +25,23 @@ from backend.app.downloader.torrent import TorrentDownloader
 from backend.app.downloader import task_manager as task_manager_module
 from backend.app.downloader.task_manager import TaskManager, resolve_task_type
 from backend.app.models import Task, TaskStatus, TaskType
+
+
+def test_short_signature_wait_is_bounded_and_only_uses_complete_triplet():
+    now = 1_786_000_000
+    url = "https://cdn.test/video.mp4?s=opaque&e=1786000120&_t=1786000030"
+    assert _short_signature_activation_delay(url, now=now) == 30
+    assert _short_signature_activation_delay(
+        "https://cdn.test/video.mp4?e=1786000120&_t=1786000030", now=now
+    ) == 0
+    assert _short_signature_activation_delay(
+        "https://cdn.test/video.mp4?s=opaque&e=1786000120&_t=1786000030",
+        now=1_786_000_000 - 901,
+    ) == 0
+    assert _short_signature_activation_delay(
+        "https://cdn.test/video.mp4?s=opaque&e=1785999990&_t=1785999980",
+        now=now,
+    ) == 0
 
 
 def test_auto_task_type_recognizes_supported_sources():

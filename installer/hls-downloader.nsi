@@ -8,10 +8,10 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-!define APP_VERSION "3.0.19"
+!define APP_VERSION "3.0.20"
 !endif
 !ifndef APP_FILE_VERSION
-!define APP_FILE_VERSION "3.0.19.0"
+!define APP_FILE_VERSION "3.0.20.0"
 !endif
 
 !ifndef STAGE_DIR

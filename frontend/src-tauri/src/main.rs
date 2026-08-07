@@ -469,15 +469,22 @@ fn ensure_core(runtime: &CoreRuntime) -> Result<(), String> {
             }
             Ok(None) => {
                 // A live child can briefly be between process creation and bind.
+                // More importantly, it can take longer than a health probe while
+                // finishing a database checkpoint or a live-stream state write.
+                // Do not kill a child that the OS has confirmed is still running:
+                // doing so interrupts an active recording, and its signed live
+                // playlist may have expired by the time the next Core resumes.
+                // The supervisor will retry the health check on its next cycle.
                 for _ in 0..12 {
                     if core_alive(&current) {
                         return Ok(());
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }
-                let _ = child.kill();
-                let _ = child.wait();
-                *slot = None;
+                return Err(
+                    "Download core is still running but did not answer its health check; preserving active downloads"
+                        .to_string(),
+                );
             }
             Err(_) => {
                 *slot = None;

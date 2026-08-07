@@ -1,7 +1,7 @@
 import { browser } from 'wxt/browser'
 import { mediaPushRequestId } from '../lib/mediaPush'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
-import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
+import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus } from '../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
@@ -470,6 +470,33 @@ function revealBrowserDownload(): void {
   void setBrowserDownloadUi(true)
 }
 
+function successfulChainForResource(resource: MediaResource, explicitChain?: RequestChain): RequestChain | undefined {
+  const isMatchingSuccess = (candidate: RequestChain | undefined): candidate is RequestChain => {
+    if (!candidate || candidate.statusCode < 200 || candidate.statusCode >= 400) return false
+    const finalUrl = canonicalMediaUrl(candidate.finalUrl, resource.kind)
+    return resourceFingerprint({ url: finalUrl, kind: resource.kind }) === resourceFingerprint(resource)
+  }
+  if (isMatchingSuccess(explicitChain)) return explicitChain
+  const found = resource.tabId !== undefined && resource.tabId >= 0
+    ? requestChains.find({ url: resource.url, referrer: resource.pageUrl || '' }, Date.now(), resource.tabId, true)
+    : requestChains.find({ url: resource.url, referrer: resource.pageUrl || '' }, Date.now(), undefined, true)
+  return isMatchingSuccess(found) ? found : undefined
+}
+
+async function readyResourceChain(resource: MediaResource, explicitChain?: RequestChain): Promise<RequestChain | undefined> {
+  let chain = successfulChainForResource(resource, explicitChain)
+  if (!usesShortLivedMediaSignature(resource)) return chain
+  // A Performance/media-element observation may arrive before the browser has
+  // received its signed response. Do not hand the desktop a raw s/e/_t URL in
+  // that gap: wait briefly for the real request and use its latest signature.
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    if (chain && isShortLivedMediaSignatureUsable({ ...resource, url: chain.finalUrl })) return chain
+    if (attempt < 11) await new Promise(resolve => setTimeout(resolve, 125))
+    chain = successfulChainForResource(resource)
+  }
+  throw new Error('浏览器尚未获得可用的短效签名媒体链接；请让视频继续播放或刷新页面后重试')
+}
+
 async function resourcePayload(resource: MediaResource, explicitChain?: RequestChain) {
   resource = { ...resource, url: canonicalMediaUrl(resource.url, resource.kind) }
   const pageUrl = await topLevelPageUrl(resource.tabId ?? -1, resource.pageUrl || '')
@@ -477,9 +504,11 @@ async function resourcePayload(resource: MediaResource, explicitChain?: RequestC
     ? requestChains.pageContext(resource.tabId, pageUrl)
     : undefined
   const requireSuccessfulRequest = resource.kind !== 'magnet'
-  const chain = explicitChain || (resource.tabId !== undefined && resource.tabId >= 0
-    ? requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), resource.tabId, requireSuccessfulRequest)
-    : requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), undefined, requireSuccessfulRequest))
+  const chain = usesShortLivedMediaSignature(resource)
+    ? await readyResourceChain({ ...resource, pageUrl }, explicitChain)
+    : explicitChain || (resource.tabId !== undefined && resource.tabId >= 0
+      ? requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), resource.tabId, requireSuccessfulRequest)
+      : requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), undefined, requireSuccessfulRequest))
   if (chain) {
     const freshUrl = canonicalMediaUrl(chain.finalUrl, resource.kind)
     if (resourceFingerprint({ url: freshUrl, kind: resource.kind }) === resourceFingerprint(resource)) {

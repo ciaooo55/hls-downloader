@@ -1,5 +1,6 @@
 import asyncio
 import os
+from pathlib import Path
 
 import pytest
 
@@ -890,6 +891,143 @@ def test_delete_incomplete_task_always_removes_reserved_output(tmp_path, monkeyp
         await manager.delete_task(task.id)
 
         assert not reserved.exists()
+
+    asyncio.run(run())
+
+
+def test_delete_terminal_task_waits_for_runner_cleanup_tail(tmp_path, monkeypatch):
+    async def fake_run_db(*args, **kwargs):
+        return None
+
+    async def run():
+        manager = TaskManager()
+        task = _task("terminal-tail", TaskStatus.DONE)
+        release_tail = asyncio.Event()
+
+        async def finish_tail():
+            await release_tail.wait()
+
+        task.task_handle = asyncio.create_task(finish_tail())
+        manager.tasks[task.id] = task
+        monkeypatch.setattr(manager_module.settings, "download_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module.settings, "temp_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+
+        deleting = asyncio.create_task(manager.delete_task(task.id))
+        await asyncio.sleep(0)
+        assert not deleting.done()
+        assert task.id in manager.tasks
+
+        release_tail.set()
+        await deleting
+
+        assert task.task_handle.done()
+        assert task.id not in manager.tasks
+
+    asyncio.run(run())
+
+
+def test_concurrent_delete_requests_share_one_operation(tmp_path, monkeypatch):
+    async def run():
+        manager = TaskManager()
+        task = _task("delete-once", TaskStatus.DONE)
+        manager.tasks[task.id] = task
+        database_started = asyncio.Event()
+        release_database = asyncio.Event()
+        database_calls = []
+        events = []
+
+        async def fake_run_db(sql, params=()):
+            database_calls.append((sql, params))
+            database_started.set()
+            await release_database.wait()
+
+        monkeypatch.setattr(manager_module.settings, "download_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module.settings, "temp_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+        monkeypatch.setattr(manager, "_broadcast_nowait", lambda event: events.append(event))
+
+        first = asyncio.create_task(manager.delete_task(task.id))
+        await database_started.wait()
+        second = asyncio.create_task(manager.delete_task(task.id))
+        await asyncio.sleep(0)
+        assert not first.done()
+        assert not second.done()
+
+        release_database.set()
+        await asyncio.gather(first, second)
+
+        assert database_calls == [("DELETE FROM tasks WHERE id=?", (task.id,))]
+        assert events == [{"type": "task_deleted", "task_id": task.id}]
+        assert task.id not in manager.tasks
+
+    asyncio.run(run())
+
+
+def test_delete_retries_transient_windows_file_lock(tmp_path, monkeypatch):
+    async def fake_run_db(*args, **kwargs):
+        return None
+
+    async def run():
+        manager = TaskManager()
+        output = tmp_path / "locked.mp4"
+        output.write_bytes(b"video")
+        task = _task("locked-output", TaskStatus.DONE)
+        task.output_path = str(output)
+        manager.tasks[task.id] = task
+        attempts = 0
+        original_unlink = manager_module.os.unlink
+
+        def temporarily_locked(path, *args, **kwargs):
+            nonlocal attempts
+            if Path(path) == output and attempts < 2:
+                attempts += 1
+                raise PermissionError("sharing violation")
+            return original_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(manager_module.settings, "download_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module.settings, "temp_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+        monkeypatch.setattr(manager_module, "DELETE_RETRY_DELAYS_SECONDS", (0, 0))
+        monkeypatch.setattr(manager_module.os, "unlink", temporarily_locked)
+
+        await manager.delete_task(task.id, delete_files=True)
+
+        assert attempts == 2
+        assert not output.exists()
+        assert task.id not in manager.tasks
+
+    asyncio.run(run())
+
+
+def test_delete_keeps_task_retryable_when_file_stays_locked(tmp_path, monkeypatch):
+    async def fake_run_db(*args, **kwargs):
+        return None
+
+    async def run():
+        manager = TaskManager()
+        output = tmp_path / "still-locked.mp4"
+        output.write_bytes(b"video")
+        task = _task("still-locked", TaskStatus.DONE)
+        task.output_path = str(output)
+        manager.tasks[task.id] = task
+
+        def permanently_locked(_path, *args, **kwargs):
+            raise PermissionError("sharing violation")
+
+        monkeypatch.setattr(manager_module.settings, "download_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module.settings, "temp_dir", str(tmp_path))
+        monkeypatch.setattr(manager_module, "run_db", fake_run_db)
+        monkeypatch.setattr(manager_module, "DELETE_RETRY_DELAYS_SECONDS", (0,))
+        monkeypatch.setattr(manager_module.os, "unlink", permanently_locked)
+
+        with pytest.raises(TaskConflictError, match="无法删除下载文件"):
+            await manager.delete_task(task.id, delete_files=True)
+
+        assert manager.tasks[task.id] is task
+        assert task.id not in manager._deleting_task_ids
+        assert task.id not in manager._delete_operations
+        assert output.exists()
 
     asyncio.run(run())
 

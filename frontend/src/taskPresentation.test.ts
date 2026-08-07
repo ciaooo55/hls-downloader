@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterAndSortTasks, stageLabel, statusLabel } from './taskPresentation'
+import { filterAndSortTasks, stageLabel, statusLabel, taskSizeSummary } from './taskPresentation'
 
 const task = (id: string, status: string, createdAt: string, title = id) => ({
   id,
@@ -31,6 +31,12 @@ describe('task presentation', () => {
   it('localizes internal status and stage names', () => {
     expect(statusLabel('downloading_segments')).toBe('下载分片')
     expect(stageLabel('merging')).toBe('合并视频')
+  })
+
+  it('keeps downloaded and total size visible for completed, live, and post-processing tasks', () => {
+    expect(taskSizeSummary({ downloaded_bytes: 8 * 1024 * 1024, total_bytes: 8 * 1024 * 1024 })).toBe('已下载 8.0 MB · 总大小 8.0 MB')
+    expect(taskSizeSummary({ downloaded_bytes: 3 * 1024 * 1024, total_bytes: 0, is_live: true })).toBe('已下载 3.0 MB · 总大小 未知（直播）')
+    expect(taskSizeSummary({ downloaded_bytes: 0, total_bytes: 0 })).toBe('已下载 0 B · 总大小 未知')
   })
 
   it('filters by simplified file category', () => {

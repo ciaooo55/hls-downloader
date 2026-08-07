@@ -392,3 +392,23 @@ def test_http_403_detects_cloudflare_and_signed_url_cases():
     assert signed.code == "HTTP_403_EXPIRED_SIGNATURE"
     assert "签名" in signed.hint
 
+    compact_signed = diagnose_download_error(
+        httpx.HTTPStatusError(
+            "403",
+            request=httpx.Request(
+                "GET",
+                "https://cdn.test/video.mp4?s=opaque&e=1786000120&_t=1786000030",
+            ),
+            response=httpx.Response(
+                403,
+                request=httpx.Request(
+                    "GET",
+                    "https://cdn.test/video.mp4?s=opaque&e=1786000120&_t=1786000030",
+                ),
+            ),
+        ),
+        stage="probing",
+        url="https://cdn.test/video.mp4?s=opaque&e=1786000120&_t=1786000030",
+    )
+    assert compact_signed.code == "HTTP_403_EXPIRED_SIGNATURE"
+

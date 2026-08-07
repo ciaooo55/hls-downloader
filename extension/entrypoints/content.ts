@@ -672,6 +672,32 @@ export default defineContentScript({
       videoResizeObserver?.observe(video)
     }
 
+    const explicitElementSource = (element: HTMLMediaElement | HTMLSourceElement): string => {
+      // `element.src` resolves an absent/empty attribute to the page URL. Read
+      // the content attribute first so an idle <video src=""> cannot turn the
+      // current document (for example view_video.php) into a download item.
+      const raw = String(element.getAttribute('src') || '').trim()
+      if (!raw) return ''
+      try { return new URL(raw, document.baseURI).href } catch { return '' }
+    }
+    const mediaElementSources = (media: HTMLMediaElement): Array<{ url: string, mimeType: string }> => {
+      const declared = [
+        { url: explicitElementSource(media), mimeType: '' },
+        ...[...media.querySelectorAll<HTMLSourceElement>('source')]
+          .map(source => ({ url: explicitElementSource(source), mimeType: source.type || '' })),
+      ].filter(source => Boolean(source.url))
+      const current = String(media.currentSrc || '').trim()
+      // A blob: currentSrc is legitimate MSE evidence. For http(s), retain the
+      // current source only if it is not the browser's empty-src document
+      // fallback, or if the page explicitly declared that exact source.
+      const currentIsDocumentFallback = /^https?:\/\//i.test(current)
+        && pageKey(current) === pageKey(location.href)
+        && !declared.some(source => pageKey(source.url) === pageKey(current))
+      return [
+        ...(current && !currentIsDocumentFallback ? [{ url: current, mimeType: '' }] : []),
+        ...declared,
+      ]
+    }
     const add = (url: string, mimeType = '', playbackSource = false) => {
       const kind = playbackSource ? classifyPlaybackSource(url, mimeType) : classifyResource(url, mimeType)
       if (!kind) return
@@ -688,7 +714,8 @@ export default defineContentScript({
       // to the element that is actually advancing, not the largest rectangle.
       activeVideo = video
       selectionMode = false
-      const sourceUrls = [video.currentSrc, video.src, ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')].map(source => source.src)].filter(Boolean)
+      const directSources = mediaElementSources(video)
+      const sourceUrls = [...new Set(directSources.map(source => source.url).filter(Boolean))]
       const mseResourceUrls = sourceUrls
         .filter(source => source.startsWith('blob:'))
         .flatMap(source => [...(mseEvidenceByBlob.get(source)?.urls || [])])
@@ -701,11 +728,6 @@ export default defineContentScript({
         // currentSrc is immediate, player-specific evidence. Register it here
         // instead of waiting for PerformanceObserver/webRequest: Firefox can
         // omit those observations for dynamically created iframe media.
-        const directSources = [
-          { url: video.currentSrc || video.src, mimeType: '' },
-          ...[...video.querySelectorAll<HTMLSourceElement>('source[src]')]
-            .map(source => ({ url: source.src, mimeType: source.type || '' })),
-        ]
         const seenDirectSources = new Set<string>()
         directSources.forEach(source => {
           if (!source.url || seenDirectSources.has(source.url)) return
@@ -857,9 +879,12 @@ export default defineContentScript({
     window.dispatchEvent(new Event('__hls_downloader_replay__'))
     earlyResourceEvents.splice(0).forEach(event => add(event.url, event.mimeType))
     earlyMseEvents.splice(0).forEach(event => handleMseEvent(new CustomEvent('__hls_downloader_mse__', { detail: event })))
-    document.querySelectorAll<HTMLVideoElement | HTMLAudioElement | HTMLSourceElement>('video[src],audio[src],source[src]').forEach(media => {
-      const url = media instanceof HTMLSourceElement ? media.src : media.currentSrc || media.src
-      add(url, media instanceof HTMLSourceElement ? media.type : '', true)
+    document.querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video,audio').forEach(media => {
+      mediaElementSources(media).forEach(source => add(source.url, source.mimeType, true))
+    })
+    document.querySelectorAll<HTMLSourceElement>('source').forEach(source => {
+      const url = explicitElementSource(source)
+      if (url) add(url, source.type || '', true)
     })
     new PerformanceObserver(list => list.getEntries().forEach(entry => add(entry.name))).observe({ type: 'resource', buffered: true })
     const handleRuntimeMessage = (message: any) => {
@@ -924,9 +949,12 @@ export default defineContentScript({
       if (pinned) setPinned(false)
       setOpen(false)
       resources.clear(); render(); loadPageResources(location.href)
-      document.querySelectorAll<HTMLVideoElement | HTMLAudioElement | HTMLSourceElement>('video[src],audio[src],source[src]').forEach(media => {
-        const url = media instanceof HTMLSourceElement ? media.src : media.currentSrc || media.src
-        add(url, media instanceof HTMLSourceElement ? media.type : '', true)
+      document.querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video,audio').forEach(media => {
+        mediaElementSources(media).forEach(source => add(source.url, source.mimeType, true))
+      })
+      document.querySelectorAll<HTMLSourceElement>('source').forEach(source => {
+        const url = explicitElementSource(source)
+        if (url) add(url, source.type || '', true)
       })
       syncPlayingVideos()
     }

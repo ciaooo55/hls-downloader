@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AppWindow, Archive, CheckCircle2, Copy, File, FileAudio, FileCode2, FileImage, FileText, FileVideo, Film, FolderOpen, Globe2, Info, LoaderCircle, Magnet, MonitorPlay, MoreHorizontal, Pause, Play, PlayCircle, RadioTower, RotateCcw, ScreenShare, Trash2, Tv, XCircle, ArrowUp, ArrowDown, ChevronsUp, ChevronsDown } from 'lucide-react'
 import { getDisplayedProgress } from '../taskState'
-import { fmtBytes, fmtClock, fmtDate, fmtEta, fmtSpeed } from '../format'
+import { fmtClock, fmtDate, fmtEta, fmtSpeed } from '../format'
 import { taskContextActions, type TaskContextAction } from '../taskContextActions'
 import { pauseLabelFor, resumeLabelFor } from '../taskCommands'
-import { statusLabel } from '../taskPresentation'
+import { statusLabel, taskSizeSummary } from '../taskPresentation'
 import type { Task } from '../types'
 import { Badge, statusTone } from './ui'
 import { filePresentation, type FileKind } from '../filePresentation'
@@ -237,6 +237,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
           const displayName = task.title || task.filename || task.id
           const postProcessing = task.status === 'merging' || task.status === 'remuxing'
           const recordingLive = !!task.is_live && (task.status === 'downloading_segments' || task.status === 'pausing')
+          const sizeSummary = taskSizeSummary(task)
           return <tr key={task.id} data-task-id={task.id} className={`${selected.has(task.id) ? 'selected ' : ''}${pending.has(task.id) ? 'pending' : ''}`.trim()}
             onClick={event => {
               if ((event.target as HTMLElement).closest('input')) return
@@ -265,12 +266,12 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
             }}><span title={displayName}><TaskFileIcon kind={visual.kind} extension={visual.extension} /><b>{displayName}</b><i className={`task-type type-${task.task_type}`} title={typeLabels[task.task_type]}>{typeIcons[task.task_type]}</i></span><small title={task.url}>{task.url}</small></td>
             <td><span className={`status status-${task.status}`}>{pending.has(task.id) && <LoaderCircle className="spin" size={12} />}<Badge tone={statusTone(task.status)}>{task.status === 'queued' && task.queue_position ? `排队中 · 第 ${task.queue_position} 位` : task.is_live && task.status === 'downloading_segments' ? '直播录制' : task.is_live && task.status === 'pausing' ? '正在停止录制' : statusLabel(task.status)}</Badge></span>{task.error_code && <small className="failure-code" title={task.error_message}>{task.error_code}</small>}</td>
             <td>{task.status === 'done'
-              ? <span className="completed-progress"><CheckCircle2 size={15} />已完成</span>
+              ? <><span className="completed-progress"><CheckCircle2 size={15} />已完成</span><small className="progress-bytes">{sizeSummary}</small></>
               : recordingLive
-                ? <><span className="live-progress"><i className="live-dot" />已录制 {fmtClock(task.media_duration)}</span><small className="progress-bytes">{fmtBytes(task.downloaded_bytes)}</small></>
+                ? <><span className="live-progress"><i className="live-dot" />已录制 {fmtClock(task.media_duration)}</span><small className="progress-bytes">{sizeSummary}</small></>
                 : postProcessing
-                  ? <div className="phase-progress"><ProgressLine label="下载" value={100} /><ProgressLine label={task.status === 'merging' ? '拼接' : '转封装'} value={task.post_percent || 0} /></div>
-                  : <><ProgressLine value={progress} /><small className="progress-bytes">{fmtBytes(task.downloaded_bytes)} / {task.total_bytes ? `${task.task_type === 'hls' && task.status !== 'done' ? '约 ' : ''}${fmtBytes(task.total_bytes)}` : '--'}</small></>}</td>
+                  ? <><div className="phase-progress"><ProgressLine label="下载" value={100} /><ProgressLine label={task.status === 'merging' ? '拼接' : '转封装'} value={task.post_percent || 0} /></div><small className="progress-bytes">{sizeSummary}</small></>
+                  : <><ProgressLine value={progress} /><small className="progress-bytes">{sizeSummary}</small></>}</td>
             <td><span className="speed-cell">{fmtSpeed(task.speed_bytes_per_sec)}</span><small className="eta-cell">{recordingLive ? 'LIVE' : task.task_type === 'torrent' && task.upload_speed_bytes_per_sec > 0 ? `↑ ${fmtSpeed(task.upload_speed_bytes_per_sec)}` : fmtEta(task.eta_seconds)}</small></td>
             <td className="segments-col" title={task.task_type === 'torrent' ? `Peer ${task.peer_count} · Seed ${task.seed_count}` : `${task.active_workers || task.active_slots || 0}/${task.max_workers || task.concurrency || 0} 个连接`}>{task.task_type === 'torrent' ? `${task.peer_count} Peer` : task.total_segments ? <><span>{task.completed_segments}/{task.total_segments}</span><small>{task.active_workers || task.active_slots || 0} 连接</small></> : '--'}</td><td className="updated-col">{fmtDate(task.updated_at)}</td>
             <td className="menu-col">
