@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser'
+import { mediaPushRequestId } from '../lib/mediaPush'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
 import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
@@ -570,16 +571,16 @@ async function downloadNow(resource: MediaResource, chain?: RequestChain) {
   return native({ op: 'download', resource: payload })
 }
 
-async function pushToTv(resource: MediaResource): Promise<{ ok: true }> {
+async function pushToTv(resource: MediaResource): Promise<{ ok: true; id: string }> {
   const response = await native({ op: 'media_push', kind: 'tvbox', resource: await resourcePayload(resource) })
-  if (!response?.ok) throw new Error(response?.error || '电视推送失败')
-  return { ok: true }
+  const id = mediaPushRequestId(response, 'TVBox 推送')
+  return { ok: true, id }
 }
 
-async function castToDevice(resource: MediaResource): Promise<{ ok: true }> {
+async function castToDevice(resource: MediaResource): Promise<{ ok: true; id: string }> {
   const response = await native({ op: 'media_push', kind: 'cast', resource: await resourcePayload(resource) })
-  if (!response?.ok) throw new Error(response?.error || '投屏请求失败')
-  return { ok: true }
+  const id = mediaPushRequestId(response, '投屏')
+  return { ok: true, id }
 }
 
 async function offer(resource: MediaResource, chain?: RequestChain) {
@@ -696,6 +697,8 @@ async function installContextMenus(attempt = 0): Promise<void> {
     await browser.contextMenus.removeAll()
     await Promise.all([
       browser.contextMenus.create({ id: 'hls-download-link', title: '使用 HLS Downloader 下载', contexts: ['link', 'video', 'audio'] }),
+      browser.contextMenus.create({ id: 'hls-cast-link', title: '使用 HLS Downloader 投屏媒体链接', contexts: ['link', 'video', 'audio'] }),
+      browser.contextMenus.create({ id: 'hls-push-tvbox-link', title: '使用 HLS Downloader 推送媒体链接到 TVBox', contexts: ['link', 'video', 'audio'] }),
       browser.contextMenus.create({ id: 'hls-download-selection', title: '批量发送选中的链接', contexts: ['selection'] }),
     ])
   } catch (error) {
@@ -1126,7 +1129,16 @@ export default defineBackground(() => {
       }
       return
     }
-    void offer({ id: resourceId(url), url, kind, pageUrl: tab?.url, title: tab?.title, tabId: tab?.id, seenAt: Date.now() })
+    const resource = { id: resourceId(url), url, kind, pageUrl: tab?.url, title: tab?.title, tabId: tab?.id, seenAt: Date.now() }
+    if (info.menuItemId === 'hls-cast-link') {
+      void castToDevice(resource).catch(error => console.warn('HLS Downloader context cast failed', error))
+      return
+    }
+    if (info.menuItemId === 'hls-push-tvbox-link') {
+      void pushToTv(resource).catch(error => console.warn('HLS Downloader context TVBox push failed', error))
+      return
+    }
+    void offer(resource)
   })
 
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {

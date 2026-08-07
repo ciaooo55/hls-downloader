@@ -18,8 +18,13 @@ describe('taskContextActions', () => {
 
   it('offers file access for a completed task', () => {
     expect(taskContextActions(task('done', 'video.mp4'))).toEqual([
-      'details', 'open', 'copyUrl', 'log', 'delete', 'deleteFiles',
+      'details', 'open', 'cast', 'pushTvbox', 'copyUrl', 'log', 'delete', 'deleteFiles',
     ])
+  })
+
+  it('only exposes media delivery after a completed local file exists', () => {
+    expect(taskContextActions(task('downloading_segments', 'video.mp4'))).not.toContain('cast')
+    expect(taskContextActions({ ...task('done', 'collection'), output_is_file: false })).not.toContain('cast')
   })
 
   it('puts built-in playback directly in the context menu when ready', () => {

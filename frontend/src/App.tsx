@@ -22,6 +22,7 @@ import UpdateDialog from './components/UpdateDialog'
 import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffCancelDecision, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
 import ConfirmDialog from './components/ConfirmDialog'
 import DevicePickerDialog from './components/DevicePickerDialog'
+import MediaSourcePickerDialog, { type MediaSourceSelection } from './components/MediaSourcePickerDialog'
 import LegalAgreementDialog from './components/LegalAgreementDialog'
 
 const UI_EVENT_ID_CAP = 4096
@@ -92,6 +93,7 @@ export default function App() {
   const [confirmation, setConfirmation] = useState<{ title: string; message: string; confirmLabel: string; danger: boolean; run: () => void } | null>(null)
   const [powerAction, setPowerAction] = useState<{ power_action_id: string; action: 'shutdown' | 'sleep' | 'hibernate'; task_title: string; delay_seconds: number } | null>(null)
   const [devicePick, setDevicePick] = useState<{ kind: 'cast' | 'tvbox'; path?: string; url?: string; filename: string; requestId?: string } | null>(null)
+  const [mediaSourcePick, setMediaSourcePick] = useState<{ kind: 'cast' | 'tvbox' } | null>(null)
   const [clipboardOffer, setClipboardOffer] = useState('')
   const [clipboardBatch, setClipboardBatch] = useState('')
   const [speedMenuOpen, setSpeedMenuOpen] = useState(false)
@@ -528,6 +530,14 @@ export default function App() {
     if (!selected) return
     setDevicePick({ kind: 'cast', path: selected.path, filename: selected.filename })
   }
+  const chooseDesktopMediaSource = (source: MediaSourceSelection) => {
+    if (!mediaSourcePick) return
+    const kind = mediaSourcePick.kind
+    setMediaSourcePick(null)
+    setDevicePick(source.source === 'url'
+      ? { kind, url: source.url, filename: source.filename }
+      : { kind, path: source.path, filename: source.filename })
+  }
   const stopLocalShare = async () => {
     if (!localShare || localPushBusy || castBusy || castControlBusy) return
     setLocalPushBusy(true)
@@ -590,14 +600,14 @@ export default function App() {
   const desktopShell = isTauriDesktop()
   return <div className={`desktop-app${desktopShell ? ' has-window-chrome' : ''}`}>
     {desktopShell && <WindowChrome />}
-    <DesktopToolbar commands={commands} theme={theme} version={appVersion} query={query} onQueryChange={setQuery} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onPauseAll={() => void pauseAllActive()} onStartAll={() => void startAllWaiting()} onOpen={() => selectedTasks[0]?.output_path && openTaskInExplorer(selectedTasks[0].id)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onBrowserExtension={() => setShowBrowserExtension(true)} onPushLocalMedia={() => void confirmLocalMediaPush()} pushLocalMediaBusy={localPushBusy} onCastLocalMedia={() => void confirmLocalCast()} castLocalMediaBusy={castBusy} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
+    <DesktopToolbar commands={commands} theme={theme} version={appVersion} query={query} onQueryChange={setQuery} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onPauseAll={() => void pauseAllActive()} onStartAll={() => void startAllWaiting()} onOpen={() => selectedTasks[0]?.output_path && openTaskInExplorer(selectedTasks[0].id)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onBrowserExtension={() => setShowBrowserExtension(true)} onPushMedia={() => setMediaSourcePick({ kind: 'tvbox' })} pushLocalMediaBusy={localPushBusy} onCastMedia={() => setMediaSourcePick({ kind: 'cast' })} castLocalMediaBusy={castBusy} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
     <div className="workspace">
       <Sidebar tasks={tasks} active={filter} onChange={setFilter} browserStatus={browserStatus} appVersion={appVersion} onOpenExtensionHelp={() => setShowBrowserExtension(true)} />
       <main className="content">
         <UpdateNotice />
         <div className="content-head"><strong>{filter === 'all' ? '全部任务' : filter === 'running' ? '进行中' : filter === 'done' ? '已完成' : filter === 'failed' ? '失败任务' : filter === 'media' ? '媒体' : filter === 'program' ? '程序' : filter === 'archive' ? '压缩包' : filter === 'other' ? '其他' : '任务列表'} <span>{filtered.length} 项{selected.size > 0 ? ` · 已选 ${selected.size}` : ''}</span></strong><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={() => void clearCompleted()}><Trash2 size={14} />清理已完成</button></div>
         {error && <div className="action-error" role="alert"><span>{error}</span><div className="action-error-actions"><button type="button" className="secondary-button" onClick={() => void load()}>重试</button><button type="button" className="icon-button action-error-dismiss" title="关闭提示" onClick={() => setError('')}><X size={15} /></button></div></div>}
-        <TaskTable key={`${filter}:${query}`} tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openTaskInExplorer(task.id)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onPreview={setPlaying} onPreviewImage={setPreviewImage} onCast={task => task.output_path && void confirmLocalCast(task.output_path)} />
+        <TaskTable key={`${filter}:${query}`} tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openTaskInExplorer(task.id)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onPreview={setPlaying} onPreviewImage={setPreviewImage} onCast={task => task.output_path && void confirmLocalCast(task.output_path)} onPushToTv={task => task.output_path && void confirmLocalMediaPush(task.output_path)} />
       </main>
     </div>
     <footer className="statusbar">
@@ -645,6 +655,7 @@ export default function App() {
     {showBrowserExtension && <BrowserExtensionDialog onClose={() => { setShowBrowserExtension(false); load() }} />}
     {showSettings && <SettingsPanel themePreference={themePreference} onThemePreferenceChange={changeThemePreference} onClose={() => { setShowSettings(false); load() }} />}
     {showUpdate && <UpdateDialog onClose={() => setShowUpdate(false)} />}
+    {mediaSourcePick && <MediaSourcePickerDialog mode={mediaSourcePick.kind} onChoose={chooseDesktopMediaSource} onClose={() => setMediaSourcePick(null)} />}
     {detailTask && <TaskDetailsModal task={detailTask} pending={pending.has(detailTask.id)} onClose={() => setDetails(null)} onLog={() => setLogTaskId(detailTask.id)} onAction={action => perform(action, [detailTask])} onOpenFile={() => detailTask.output_path && openTaskInExplorer(detailTask.id)} onLaunchFile={() => launchOutput(detailTask)} onPushToTv={() => void confirmLocalMediaPush(detailTask.output_path)} onCast={() => void confirmLocalCast(detailTask.output_path)} onPreview={() => { setDetails(null); setPlaying(detailTask) }} />}
     {playingTask && <Suspense fallback={<div className="modal-overlay player-overlay"><div className="player-chunk-loading"><LoaderCircle className="spin" size={24} /><span>正在打开播放器</span></div></div>}><VideoPlayerModal task={playingTask} onClose={() => setPlaying(null)} /></Suspense>}
     {previewImage && <div className="modal-overlay image-preview-overlay" onMouseDown={() => setPreviewImage(null)}><section className="image-preview" onMouseDown={event => event.stopPropagation()}><header><strong>{previewImage.title || previewImage.filename}</strong><button className="modal-close-button" title="关闭预览" onClick={() => setPreviewImage(null)}><X size={18} /></button></header><img src={taskFileUrl(previewImage.id, previewImage.file_access_token || '')} alt={previewImage.title || previewImage.filename} /></section></div>}

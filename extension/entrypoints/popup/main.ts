@@ -251,14 +251,22 @@ async function main() {
       if (sending[item.id]) button.classList.add('busy')
       button.title = '\u53d1\u9001\u5230\u4e0b\u8f7d\u5668'
       button.addEventListener('click', () => void send(selected))
-      const pushLabel = pushing[item.id] || '推电视'
+      const pushKey = `${item.id}:tvbox`
+      const pushLabel = pushing[pushKey] || '推送链接'
       const pushButton = el('button', 'hlsd-button push-button', pushLabel)
-      pushButton.disabled = pushing[item.id] === '推送中'
-      if (pushing[item.id]) pushButton.classList.add('busy')
-      pushButton.title = '推送到电视播放'
+      pushButton.disabled = pushing[pushKey] === '推送中'
+      if (pushing[pushKey]) pushButton.classList.add('busy')
+      pushButton.title = '直接推送当前媒体链接到 TVBox'
       pushButton.addEventListener('click', () => void pushToTv(selected))
+      const castKey = `${item.id}:cast`
+      const castLabel = pushing[castKey] || '投屏链接'
+      const castButton = el('button', 'hlsd-button cast-button', castLabel)
+      castButton.disabled = pushing[castKey] === '投屏中'
+      if (pushing[castKey]) castButton.classList.add('busy')
+      castButton.title = '直接投屏当前媒体链接到 DLNA 或 Chromecast'
+      castButton.addEventListener('click', () => void castToDevice(selected))
       const actionCol = el('div', 'article-actions')
-      actionCol.append(button, pushButton)
+      actionCol.append(button, pushButton, castButton)
       article.append(body, actionCol)
       list.append(article)
     }
@@ -283,19 +291,38 @@ async function main() {
   }
 
   const pushToTv = async (item: MediaResource) => {
+    const key = `${item.id}:tvbox`
     setError('')
-    pushing[item.id] = '等待选择'
+    pushing[key] = '推送中'
     renderList()
     try {
       const response = await browser.runtime.sendMessage({ type: 'push-to-tv', resource: item })
       if (!response?.ok) throw new Error(response?.error || '电视推送失败')
-      pushing[item.id] = '已发送'
+      pushing[key] = '等待选择'
     } catch (reason) {
-      pushing[item.id] = '重试'
+      pushing[key] = '重试'
       setError(reason instanceof Error ? reason.message : '推送到电视失败')
     } finally {
       renderList()
-      setTimeout(() => { delete pushing[item.id]; renderList() }, 1500)
+      setTimeout(() => { delete pushing[key]; renderList() }, 1_500)
+    }
+  }
+
+  const castToDevice = async (item: MediaResource) => {
+    const key = `${item.id}:cast`
+    setError('')
+    pushing[key] = '投屏中'
+    renderList()
+    try {
+      const response = await browser.runtime.sendMessage({ type: 'cast-to-device', resource: item })
+      if (!response?.ok) throw new Error(response?.error || '投屏请求失败')
+      pushing[key] = '等待选择'
+    } catch (reason) {
+      pushing[key] = '重试'
+      setError(reason instanceof Error ? reason.message : '投屏到电视失败')
+    } finally {
+      renderList()
+      setTimeout(() => { delete pushing[key]; renderList() }, 1_500)
     }
   }
 

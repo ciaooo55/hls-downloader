@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   beginUninstall,
+  FIREFOX_ADDON_URL,
   getDesktopInfo,
+  openFirefoxAddonPage,
   pickFolder,
   resizeDesktopWindow,
 } from './desktop'
@@ -11,7 +13,7 @@ describe('standalone web desktop fallbacks', () => {
     vi.restoreAllMocks()
     Object.defineProperty(globalThis, 'window', {
       configurable: true,
-      value: { close: vi.fn() },
+      value: { close: vi.fn(), open: vi.fn() },
     })
   })
 
@@ -32,5 +34,10 @@ describe('standalone web desktop fallbacks', () => {
       ok: false,
       error: 'native-resize-unavailable',
     })
+  })
+
+  it('opens the published Firefox extension page outside the desktop package', async () => {
+    await expect(openFirefoxAddonPage()).resolves.toEqual({ ok: true })
+    expect(window.open).toHaveBeenCalledWith(FIREFOX_ADDON_URL, '_blank', 'noopener,noreferrer')
   })
 })

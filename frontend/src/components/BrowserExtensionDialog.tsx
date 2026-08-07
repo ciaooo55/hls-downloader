@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ExternalLink, FolderOpen, Puzzle } from 'lucide-react'
 import { fetchBrowserStatus } from '../api'
-import { openBrowserExtensionInstaller } from '../desktop'
+import { FIREFOX_ADDON_URL, openBrowserExtensionInstaller, openFirefoxAddonPage } from '../desktop'
 import type { BrowserStatus } from '../types'
 import { Button, Dialog, DialogFooter, DialogHeader, DialogOverlay } from './ui'
 
@@ -25,6 +25,11 @@ export default function BrowserExtensionDialog({ onClose }: { onClose: () => voi
     setMessage(result.ok
       ? `${result.browser_opened ? '已打开浏览器扩展页和插件目录。' : '已打开插件目录，请手动打开浏览器扩展管理页。'} 首次安装请选择“加载已解压的扩展程序”；更新已有插件请点击该插件的“重新加载”，然后刷新正在播放的网页。目录：${result.path}`
       : result.error || '无法打开插件安装工具')
+  }
+
+  const openFirefoxAddon = async () => {
+    const result = await openFirefoxAddonPage()
+    setMessage(result.ok ? '已用默认浏览器打开 Firefox Add-ons 安装页。' : result.error || '无法打开 Firefox Add-ons 安装页')
   }
 
   return (
@@ -65,8 +70,14 @@ export default function BrowserExtensionDialog({ onClose }: { onClose: () => voi
             <span>所有 Firefox 包使用同一个扩展 ID，不区分网页显示模式</span>
           </div>
           <div className="firefox-release-variant">
-            <div><b>统一 Firefox 扩展</b><small>商店包、独立包和源码包保持同一身份</small></div>
-            <code>hls-downloader-store@ciaooo55.com</code>
+            <div>
+              <b>统一 Firefox 扩展</b>
+              <small>商店包、独立包和源码包保持同一身份</small>
+              <a className="firefox-addon-link" href={FIREFOX_ADDON_URL} onClick={event => { event.preventDefault(); void openFirefoxAddon() }}>
+                {FIREFOX_ADDON_URL}
+              </a>
+            </div>
+            <Button variant="secondary" className="firefox-addon-button" onClick={() => void openFirefoxAddon()}><ExternalLink size={15} />在 Firefox Add-ons 安装</Button>
           </div>
         </section>
         {message && <div className="inline-message">{message}</div>}

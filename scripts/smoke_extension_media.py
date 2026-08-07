@@ -248,11 +248,13 @@ def _current_frame_overlay_state(driver) -> dict:
           root.querySelectorAll('*').forEach(element => { if (element.shadowRoot) visit(element.shadowRoot); });
         };
         visit(document);
-        const resourceIds=[];
+        const resourceIds=[]; const moreButtons=[]; const panelActions=[];
         roots.forEach(root => root.querySelectorAll('button.video-download').forEach(button => { labels.push(button.innerText.trim()); resourceIds.push(button.dataset.resourceId || ''); }));
+        roots.forEach(root => root.querySelectorAll('button.video-more').forEach(button => moreButtons.push(button.getAttribute('aria-label') || button.title || '')));
+        roots.forEach(root => root.querySelectorAll('.item-actions button').forEach(button => panelActions.push(button.innerText.trim())));
         const videos=[];
         roots.forEach(root => root.querySelectorAll('video').forEach(video => videos.push({paused:video.paused,currentTime:video.currentTime,src:video.currentSrc})));
-        return {marker:document.documentElement.getAttribute('data-hls-downloader-extension'),labels,resourceIds,videos};
+        return {marker:document.documentElement.getAttribute('data-hls-downloader-extension'),labels,resourceIds,moreButtons,panelActions,videos};
         """
     )
 
@@ -281,6 +283,8 @@ def _overlay_state(driver) -> dict:
         "frameMarkers": [item.get("marker") for item in frames],
         "labels": [label for item in frames for label in item.get("labels", [])],
         "resourceIds": [value for item in frames for value in item.get("resourceIds", [])],
+        "moreButtons": [value for item in frames for value in item.get("moreButtons", [])],
+        "panelActions": [value for item in frames for value in item.get("panelActions", [])],
         "videos": [video for item in frames for video in item.get("videos", [])],
         "frameStates": frames,
     }
@@ -298,6 +302,23 @@ def _resource_id(url: str) -> str:
     forward = fnv64(url, 14_695_981_039_346_656_037)
     reverse = fnv64(url[::-1], 7_809_847_782_465_536_322)
     return f"{forward:016x}{reverse:016x}"
+
+
+def _open_first_media_actions(driver) -> bool:
+    return bool(driver.execute_script(
+        """
+        const roots=[]; const seen=new Set();
+        const visit=(root) => {
+          if (!root || seen.has(root)) return; seen.add(root); roots.push(root);
+          root.querySelectorAll('*').forEach(element => { if (element.shadowRoot) visit(element.shadowRoot); });
+        };
+        visit(document);
+        const button=roots.map(root => root.querySelector('button.video-more')).find(Boolean);
+        if (!button) return false;
+        button.click();
+        return true;
+        """
+    ))
 
 
 def _browser_errors(driver) -> list[str]:
@@ -410,6 +431,19 @@ def run(
                     raise AssertionError(f"{mode}: 视频没有开始播放: {state}")
                 if "下载视频" not in state.get("labels", []):
                     raise AssertionError(f"{mode}: 当前播放器没有得到唯一一键资源: {state}")
+                if mode == "direct":
+                    if not state.get("moreButtons"):
+                        raise AssertionError(f"{mode}: 单资源播放器没有显示投屏/推送更多操作入口: {state}")
+                    if not _open_first_media_actions(driver):
+                        raise AssertionError(f"{mode}: 无法打开单资源播放器的投屏/推送操作面板: {state}")
+                    action_deadline = time.monotonic() + 5
+                    while time.monotonic() < action_deadline:
+                        state = _overlay_state(driver)
+                        if {"投屏链接", "推送链接"}.issubset(set(state.get("panelActions", []))):
+                            break
+                        time.sleep(0.1)
+                    if not {"投屏链接", "推送链接"}.issubset(set(state.get("panelActions", []))):
+                        raise AssertionError(f"{mode}: 投屏/推送链接操作没有出现在资源面板: {state}")
                 if mode == "ad-direct":
                     main_url = next((item["src"] for item in state["videos"] if "player=main" in item.get("src", "")), "")
                     if state.get("resourceIds") != [_resource_id(main_url)]:

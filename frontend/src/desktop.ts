@@ -1,5 +1,7 @@
 import { isTauriDesktop } from './tauri'
 
+export const FIREFOX_ADDON_URL = 'https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/'
+
 export interface NativeResult {
   ok: boolean
   canceled?: boolean
@@ -23,6 +25,21 @@ export async function openBrowserExtensionInstaller(): Promise<NativeResult> {
     return await invoke<NativeResult>('open_browser_extension_installer')
   } catch (reason) {
     return unavailable(reason instanceof Error ? reason.message : '无法打开扩展安装工具')
+  }
+}
+
+/** Opens the published AMO page. The native implementation uses the default
+ * browser and intentionally accepts no caller-provided URL. */
+export async function openFirefoxAddonPage(): Promise<NativeResult> {
+  try {
+    if (!isTauriDesktop()) {
+      window.open(FIREFOX_ADDON_URL, '_blank', 'noopener,noreferrer')
+      return { ok: true }
+    }
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<NativeResult>('open_firefox_addon_page')
+  } catch (reason) {
+    return unavailable(reason instanceof Error ? reason.message : '无法打开 Firefox Add-ons 安装页')
   }
 }
 

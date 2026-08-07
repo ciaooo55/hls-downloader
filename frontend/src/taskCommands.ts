@@ -2,6 +2,7 @@ export interface TaskLike {
   id: string
   status: string
   output_path?: string
+  output_is_file?: boolean
   available_actions?: string[]
   is_live?: boolean
 }

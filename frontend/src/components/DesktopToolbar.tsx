@@ -22,9 +22,9 @@ interface Props {
   onOpen: () => void
   onLog: () => void
   onBrowserExtension: () => void
-  onPushLocalMedia: () => void
+  onPushMedia: () => void
   pushLocalMediaBusy: boolean
-  onCastLocalMedia: () => void
+  onCastMedia: () => void
   castLocalMediaBusy: boolean
   onRefresh: () => void
   onUpdate: () => void
@@ -143,11 +143,11 @@ export default function DesktopToolbar(props: Props) {
         <ToolButton title="浏览器插件" onClick={props.onBrowserExtension}>
           <Users size={18} />
         </ToolButton>
-        <ToolButton title="选择本机文件并投屏到 DLNA 设备" disabled={props.castLocalMediaBusy} onClick={props.onCastLocalMedia}>
+        <ToolButton title="选择媒体链接或本机文件，再投屏到 DLNA / Chromecast 设备" disabled={props.castLocalMediaBusy} onClick={props.onCastMedia}>
           <ScreenShare size={18} />
           <span className="tool-label">投屏</span>
         </ToolButton>
-        <ToolButton title="选择本机文件并推送到 TVBox" disabled={props.pushLocalMediaBusy} onClick={props.onPushLocalMedia}>
+        <ToolButton title="选择媒体链接或本机文件，再推送到 TVBox" disabled={props.pushLocalMediaBusy} onClick={props.onPushMedia}>
           <Tv size={18} />
           <span className="tool-label">TVBox</span>
         </ToolButton>
@@ -183,8 +183,8 @@ export default function DesktopToolbar(props: Props) {
           <button type="button" disabled={!c.delete} role="menuitem" className="danger" onClick={event => { closeOverflow(event); props.onAction('delete') }}><Trash2 size={16} />删除任务</button>
           <span className="toolbar-overflow-separator" />
           <button type="button" role="menuitem" onClick={event => { closeOverflow(event); props.onBrowserExtension() }}><Users size={16} />浏览器插件</button>
-          <button type="button" disabled={props.castLocalMediaBusy} role="menuitem" onClick={event => { closeOverflow(event); props.onCastLocalMedia() }}><ScreenShare size={16} />投屏本机文件</button>
-          <button type="button" disabled={props.pushLocalMediaBusy} role="menuitem" onClick={event => { closeOverflow(event); props.onPushLocalMedia() }}><Tv size={16} />TVBox 推送本机文件</button>
+          <button type="button" disabled={props.castLocalMediaBusy} role="menuitem" onClick={event => { closeOverflow(event); props.onCastMedia() }}><ScreenShare size={16} />投屏媒体</button>
+          <button type="button" disabled={props.pushLocalMediaBusy} role="menuitem" onClick={event => { closeOverflow(event); props.onPushMedia() }}><Tv size={16} />TVBox 推送媒体</button>
           <button type="button" role="menuitem" onClick={event => { closeOverflow(event); props.onUpdate() }}><CircleArrowUp size={16} />检查更新</button>
         </div>
       </details>

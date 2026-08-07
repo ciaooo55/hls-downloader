@@ -51,6 +51,7 @@ struct DesktopPaths {
 
 const CORE_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
 const CORE_LOG_BACKUPS: usize = 3;
+const FIREFOX_ADDON_URL: &str = "https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/";
 
 fn log_backup_path(path: &Path, index: usize) -> PathBuf {
     let name = path
@@ -173,6 +174,17 @@ fn open_browser_extension_installer(paths: tauri::State<'_, DesktopPaths>) -> se
         Ok(_) => {
             serde_json::json!({ "ok": true, "path": extension, "browser_opened": browser_opened })
         }
+        Err(error) => serde_json::json!({ "ok": false, "error": error.to_string() }),
+    }
+}
+
+/// Open the one published Firefox extension page through the user's default
+/// browser. This is deliberately not a general shell-open command: the
+/// frontend cannot turn it into an arbitrary local command or URL launcher.
+#[tauri::command]
+fn open_firefox_addon_page() -> serde_json::Value {
+    match Command::new("explorer.exe").arg(FIREFOX_ADDON_URL).spawn() {
+        Ok(_) => serde_json::json!({ "ok": true }),
         Err(error) => serde_json::json!({ "ok": false, "error": error.to_string() }),
     }
 }
@@ -664,6 +676,7 @@ fn main() {
             get_desktop_info,
             get_core_config,
             open_browser_extension_installer,
+            open_firefox_addon_page,
             begin_uninstall
         ])
         .setup(move |app| {
@@ -743,7 +756,7 @@ fn main() {
 mod clipboard_tests {
     use super::{
         background_launch, downloadable_clipboard_text, log_backup_path, rotate_core_log,
-        uninstall_in_place_argument, CORE_LOG_MAX_BYTES,
+        uninstall_in_place_argument, CORE_LOG_MAX_BYTES, FIREFOX_ADDON_URL,
     };
     use std::fs;
     use std::path::Path;
@@ -753,6 +766,14 @@ mod clipboard_tests {
         assert_eq!(
             uninstall_in_place_argument(Path::new(r"E:\HLS Downloader")),
             r"_?=E:\HLS Downloader"
+        );
+    }
+
+    #[test]
+    fn firefox_store_link_is_the_published_amo_page() {
+        assert_eq!(
+            FIREFOX_ADDON_URL,
+            "https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/"
         );
     }
 

@@ -193,7 +193,7 @@ export default defineContentScript({
           header{display:flex;align-items:center;justify-content:space-between;padding:7px 8px 7px 9px;border-bottom:1px solid var(--border);background:var(--surface-2);color:var(--text);font:600 12px system-ui;cursor:grab;touch-action:none}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:4px}
           .pin,.close{height:27px;border:0;border-radius:5px;background:var(--surface-3);color:var(--text);cursor:pointer}.pin{padding:0 8px;font:11px system-ui}.pin.active{background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green)}.close{display:grid;place-items:center;width:27px;font:700 18px/1 system-ui}.pin:hover,.close:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{max-height:calc(min(520px,calc(100vh - 20px)) - 78px);overflow-y:auto;overscroll-behavior:contain}
           .item{padding:9px 10px;border-bottom:1px solid var(--border)}.item:last-child{border-bottom:0}.item:hover{background:var(--surface-2)}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12px/1.35 system-ui;overflow-wrap:anywhere;color:var(--text)}.kind{overflow:hidden;color:var(--muted);font:10.5px/1.35 system-ui;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.resource-url{display:block;margin-top:4px;color:var(--faint);font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;user-select:text}.quality-select{width:min(184px,100%);margin-top:6px}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:29px;border:0;border-radius:6px;background:var(--primary);color:var(--on-primary);padding:4px 6px;cursor:pointer;font-weight:600;font-size:11px}.download:hover{background:var(--primary-hover)}.download[disabled]{cursor:default;opacity:.6}.download.push-tv{background:color-mix(in srgb,var(--purple) 75%,var(--surface))}.download.push-tv:hover{background:var(--purple)}.download.cast{background:color-mix(in srgb,var(--green) 78%,var(--surface))}.download.cast:hover{background:var(--green)}.result{padding:7px 10px;background:color-mix(in srgb,var(--green) 14%,var(--surface));color:var(--green);font:11px/1.4 system-ui}.result.error{background:color-mix(in srgb,var(--red) 12%,var(--surface));color:var(--red)}
-          .video-buttons{position:fixed;inset:0;z-index:2147483646;pointer-events:none}.video-download{position:fixed;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 10px var(--shadow);pointer-events:auto;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font:600 12px system-ui}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download.identifying{border-color:var(--overlay-border);background:color-mix(in srgb,var(--surface) 88%,var(--primary));color:var(--muted)}.video-download.identifying:hover{background:color-mix(in srgb,var(--surface) 88%,var(--primary))}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}
+          .video-buttons{position:fixed;inset:0;z-index:2147483646;pointer-events:none}.video-action-group{position:fixed;display:flex;align-items:center;gap:4px;pointer-events:auto}.video-download{position:relative;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 10px var(--shadow);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font:600 12px system-ui}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download.identifying{border-color:var(--overlay-border);background:color-mix(in srgb,var(--surface) 88%,var(--primary));color:var(--muted)}.video-download.identifying:hover{background:color-mix(in srgb,var(--surface) 88%,var(--primary))}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}.video-more{display:grid;width:34px;height:34px;place-items:center;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--surface);color:var(--primary);box-shadow:0 3px 10px var(--shadow);cursor:pointer;font:700 18px/1 system-ui}.video-more:hover{background:var(--surface-2)}
           button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
         `
         const image = () => {
@@ -417,6 +417,18 @@ export default defineContentScript({
       })
     }
 
+    const openVideoPanel = (rect: DOMRect) => {
+      if (!wrap) return
+      render()
+      const preferred = panelPosition || { x: rect.right - 344, y: rect.top + 44 }
+      const position = clampOverlayPosition(preferred, { width: 344, height: Math.min(520, innerHeight - 20) }, { width: innerWidth, height: innerHeight })
+      panelPosition = position
+      wrap.style.left = `${position.x}px`
+      wrap.style.top = `${position.y}px`
+      wrap.style.right = 'auto'
+      setOpen(true)
+    }
+
     const updateVideoButtons = () => {
       const layer = ui.shadow.querySelector<HTMLElement>('.video-buttons')
       if (!layer) return
@@ -460,21 +472,24 @@ export default defineContentScript({
         // MSE video open a pointless one-item picker.
         const oneClickChoice = choices.length === 1
         visible += 1
+        const buttonWidth = 156
+        const buttonHeight = 34
+        const controlsWidth = buttonWidth + (oneClickChoice ? 38 : 0)
+        const group = document.createElement('div')
+        group.className = 'video-action-group'
         const button = document.createElement('button')
         button.type = 'button'; button.className = `video-download${identifying ? ' identifying' : ''}`
         if (oneClickChoice) button.dataset.resourceId = choices[0].id
         button.title = identifying ? '正在识别当前播放的视频资源' : oneClickChoice ? '下载当前视频' : '选择当前页面检测到的视频资源'
         if (identifying) button.setAttribute('aria-disabled', 'true')
-        const buttonWidth = 156
-        const buttonHeight = 34
         const besidePlayer = rect.right + 8
-        const defaultLeft = besidePlayer + buttonWidth <= innerWidth - 8
+        const defaultLeft = besidePlayer + controlsWidth <= innerWidth - 8
           ? besidePlayer
-          : Math.max(8, Math.min(rect.right - buttonWidth - 8, innerWidth - buttonWidth - 8))
+          : Math.max(8, Math.min(rect.right - controlsWidth - 8, innerWidth - controlsWidth - 8))
         const defaultTop = Math.max(8, Math.min(rect.top + 8, innerHeight - buttonHeight - 8))
         const saved = videoButtonPositions.get(video)
-        button.style.left = `${saved ? Math.max(8, Math.min(saved.x, innerWidth - buttonWidth - 8)) : defaultLeft}px`
-        button.style.top = `${saved ? Math.max(8, Math.min(saved.y, innerHeight - buttonHeight - 8)) : defaultTop}px`
+        group.style.left = `${saved ? Math.max(8, Math.min(saved.x, innerWidth - controlsWidth - 8)) : defaultLeft}px`
+        group.style.top = `${saved ? Math.max(8, Math.min(saved.y, innerHeight - buttonHeight - 8)) : defaultTop}px`
         const icon = document.createElement('img'); icon.src = browser.runtime.getURL('/icon-32.png'); icon.alt = ''
          const fallbackLabel = identifying ? '正在识别' : oneClickChoice ? '下载视频' : '选择资源'
          const label = document.createElement('span'); label.className = 'download-label'; label.textContent = fallbackLabel
@@ -489,14 +504,13 @@ export default defineContentScript({
           videoDragged = false
           videoControlDragging = true
           const startX = event.clientX; const startY = event.clientY
-          const startLeft = button.offsetLeft; const startTop = button.offsetTop
+          const startLeft = group.offsetLeft; const startTop = group.offsetTop
           const move = (next: PointerEvent) => {
             if (next.pointerId !== event.pointerId) return
             videoDragged ||= Math.abs(next.clientX - startX) + Math.abs(next.clientY - startY) > 4
-            const width = button.offsetWidth || buttonWidth
             const height = button.offsetHeight || buttonHeight
-            button.style.left = `${Math.max(8, Math.min(innerWidth - width - 8, startLeft + next.clientX - startX))}px`
-            button.style.top = `${Math.max(8, Math.min(innerHeight - height - 8, startTop + next.clientY - startY))}px`
+            group.style.left = `${Math.max(8, Math.min(innerWidth - controlsWidth - 8, startLeft + next.clientX - startX))}px`
+            group.style.top = `${Math.max(8, Math.min(innerHeight - height - 8, startTop + next.clientY - startY))}px`
           }
           const finish = (next: PointerEvent) => {
             if (next.pointerId !== event.pointerId) return
@@ -505,7 +519,7 @@ export default defineContentScript({
             window.removeEventListener('pointerup', finish, true)
             window.removeEventListener('pointercancel', cancel, true)
             if (videoDragged) {
-              videoButtonPositions.set(video, { x: button.offsetLeft, y: button.offsetTop })
+              videoButtonPositions.set(video, { x: group.offsetLeft, y: group.offsetTop })
             }
             videoControlDragging = false
             scheduleVideoButtons()
@@ -545,20 +559,24 @@ export default defineContentScript({
              sendResource(choices[0], button)
              return
            }
-           // Ambiguous MSE resources still require an evidence selection panel.
-          if (wrap) {
-            render()
-            const preferred = panelPosition || { x: rect.right - 344, y: rect.top + 44 }
-            const position = clampOverlayPosition(preferred, { width: 344, height: Math.min(520, innerHeight - 20) }, { width: innerWidth, height: innerHeight })
-            panelPosition = position
-            wrap.style.left = `${position.x}px`
-            wrap.style.top = `${position.y}px`
-            wrap.style.right = 'auto'
-            setOpen(true)
-          }
+          // Ambiguous MSE resources still require an evidence selection panel.
+          openVideoPanel(rect)
         })
-         if (choices[0]) applySendState(choices[0], button, fallbackLabel)
-         layer.append(button)
+        if (choices[0]) applySendState(choices[0], button, fallbackLabel)
+        group.append(button)
+        if (oneClickChoice) {
+          const more = document.createElement('button')
+          more.type = 'button'; more.className = 'video-more'; more.textContent = '⋯'
+          more.title = '更多操作：投屏或推送当前媒体链接'
+          more.setAttribute('aria-label', '更多操作：投屏或推送当前媒体链接')
+          more.addEventListener('pointerdown', event => event.stopPropagation())
+          more.addEventListener('click', event => {
+            event.preventDefault(); event.stopPropagation()
+            openVideoPanel(rect)
+          })
+          group.append(more)
+        }
+        layer.append(group)
       })
       if (!visible) {
         if (pinned) setPinned(false)
@@ -615,11 +633,11 @@ export default defineContentScript({
          const button = document.createElement('button'); button.className = 'download'; button.textContent = '下载'
          button.addEventListener('click', () => sendResource(selected, button))
          applySendState(selected, button, '下载')
-        const pushButton = document.createElement('button'); pushButton.className = 'download push-tv'; pushButton.textContent = '推电视'
-        pushButton.title = '推送到电视播放'
+        const pushButton = document.createElement('button'); pushButton.className = 'download push-tv'; pushButton.textContent = '推送链接'
+        pushButton.title = '直接推送当前媒体链接到 TVBox'
         pushButton.addEventListener('click', () => pushToTv(selected, pushButton))
-        const castButton = document.createElement('button'); castButton.className = 'download cast'; castButton.textContent = '投屏'
-        castButton.title = '选择 DLNA 或 Chromecast 设备投屏'
+        const castButton = document.createElement('button'); castButton.className = 'download cast'; castButton.textContent = '投屏链接'
+        castButton.title = '直接投屏当前媒体链接到 DLNA 或 Chromecast'
         castButton.addEventListener('click', () => castResource(selected, castButton))
         actions.append(button, pushButton, castButton)
         row.append(meta, actions); list.append(row)
