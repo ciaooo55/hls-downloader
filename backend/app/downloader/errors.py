@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 import math
+import re
 import time
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
@@ -165,6 +166,8 @@ def _http_hint(
         or getattr(task_context, "cookie", "")
         or getattr(task_context, "referer", "")
         or getattr(task_context, "origin", "")
+        or getattr(task_context, "request_contexts", {})
+        or getattr(task_context, "source_page_url", "")
     )
     has_credentials = bool(getattr(task_context, "cookie", "") or headers.get("authorization"))
     response_headers = _response_headers(response) if response is not None else {}
@@ -199,6 +202,11 @@ def _http_hint(
     if status == 407:
         return "代理服务器要求认证。检查系统/网络代理的账号密码，或临时关闭 VPN、代理和 HTTPS 检查后再试。"
     if status in {404, 410}:
+        if signed and has_browser_context:
+            return (
+                "服务器以 404/410 隐藏了需要浏览器会话的下载地址。已尝试使用原网页的 Cookie、"
+                "请求头和浏览器兼容连接；若仍失败，请在原网页刷新附件/视频后立即重新点击接管。"
+            )
         return "资源不存在或链接已经过期。请回到视频页面重新获取 m3u8 地址。"
     if status == 429:
         return "请求过于频繁。请降低并发和同时任务数，等待一会后重试。"
@@ -367,7 +375,7 @@ def diagnose_download_error(
             if is_http_file
             else "服务器没有正确支持 Range 请求。重新获取链接，或确认 CDN 没有拦截分段请求。"
         )
-    elif "密钥" in raw or "key" in lowered:
+    elif "密钥" in raw or re.search(r"\bkey\b", lowered):
         code = "HLS_KEY_INVALID"
         hint = "AES 密钥无效或无法访问。检查 Referer、Origin、Cookie，并重新获取播放地址。"
     elif "解密" in raw or "padding" in lowered or "encrypted" in lowered:

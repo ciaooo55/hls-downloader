@@ -2,7 +2,7 @@ import { defineConfig } from 'wxt'
 // Keep one stable Firefox ID for every build. The web UI is a desktop
 // capability, not a separate Firefox extension identity.
 const firefoxId = 'hls-downloader-store@ciaooo55.com'
-const extensionVersion = process.env.HLS_EXTENSION_VERSION || '3.0.20'
+const extensionVersion = process.env.HLS_EXTENSION_VERSION || '3.0.22'
 
 export default defineConfig({
   manifestVersion: 3,

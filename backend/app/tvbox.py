@@ -11,6 +11,7 @@ import socket
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -47,11 +48,17 @@ class TvboxDevice:
 @dataclass
 class LocalMediaShare:
     token: str
-    path: Path
+    path: Path | None
     expires_at: float
     last_access_at: float
     allowed_clients: frozenset[str]
     active_streams: int = 0
+    filename: str = ""
+    mime_type: str = ""
+    total_size: int = 0
+    read_range: Callable[[int, int], bytes] | None = None
+    playlist: Callable[[], str] | None = None
+    read_asset: Callable[[str, str], tuple[bytes, str]] | None = None
 
 
 class LocalMediaServer:
@@ -75,7 +82,7 @@ class LocalMediaServer:
         now = time.monotonic()
         expired = [token for token, share in self._shares.items() if (
             share.expires_at <= now
-            or not share.path.is_file()
+            or (share.path is not None and not share.path.is_file())
             or (share.active_streams == 0 and now - share.last_access_at >= LOCAL_MEDIA_IDLE_SECONDS)
         )]
         for token in expired:
@@ -136,7 +143,7 @@ class LocalMediaServer:
 
             def _serve(self, body: bool) -> None:
                 parts = [unquote(item) for item in urlsplit(self.path).path.split("/") if item]
-                if len(parts) != 3 or parts[0] != "media":
+                if len(parts) < 3 or len(parts) > 4 or parts[0] != "media":
                     self.send_error(404)
                     return
                 token = parts[1]
@@ -146,10 +153,73 @@ class LocalMediaServer:
                     return
                 try:
                     self.connection.settimeout(30)
-                    try:
-                        size = share.path.stat().st_size
-                    except OSError:
-                        self.send_error(404)
+                    # A segment share is a local HLS/DASH playback proxy. The
+                    # playlist and each segment are generated from the same
+                    # verified playback session; the TV never receives the
+                    # original CDN URL or its cookies/signature.
+                    if share.playlist is not None or share.read_asset is not None:
+                        if share.playlist is None or share.read_asset is None:
+                            self.send_error(500)
+                            return
+                        if len(parts) == 3 and parts[2].lower() in {"index.m3u8", "playlist.m3u8"}:
+                            try:
+                                content = share.playlist()
+                            except Exception:
+                                self.send_error(425, "播放清单尚未准备好")
+                                return
+                            encoded = content.encode("utf-8")
+                            self.send_response(200)
+                            self.send_header("Content-Type", "application/vnd.apple.mpegurl")
+                            self.send_header("Content-Length", str(len(encoded)))
+                            self.send_header("Cache-Control", "no-store")
+                            self.end_headers()
+                            if body:
+                                self.wfile.write(encoded)
+                            return
+                        if len(parts) != 4 or parts[2] not in {"segments", "maps"}:
+                            self.send_error(404)
+                            return
+                        asset_name = parts[3]
+                        if Path(asset_name).name != asset_name:
+                            self.send_error(404)
+                            return
+                        try:
+                            payload, detected_mime = share.read_asset(parts[2], asset_name)
+                        except Exception:
+                            self.send_error(425, "本地播放分片尚未准备好")
+                            return
+                        mime_type = detected_mime or ("video/mp4" if parts[2] == "maps" else "video/mp2t")
+                        size = len(payload)
+                        requested_range = self.headers.get("Range", "")
+                        byte_range = owner._read_range(requested_range, size) if requested_range else None
+                        if requested_range and byte_range is None:
+                            self.send_response(416)
+                            self.send_header("Content-Range", f"bytes */{size}")
+                            self.end_headers()
+                            return
+                        start, end = byte_range or (0, max(0, size - 1))
+                        response_payload = payload[start:end + 1]
+                        self.send_response(206 if byte_range else 200)
+                        self.send_header("Content-Type", mime_type)
+                        self.send_header("Content-Length", str(len(response_payload)))
+                        self.send_header("Accept-Ranges", "bytes")
+                        if byte_range:
+                            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        if body and response_payload:
+                            self.wfile.write(response_payload)
+                        return
+                    if share.path is not None:
+                        try:
+                            size = share.path.stat().st_size
+                        except OSError:
+                            self.send_error(404)
+                            return
+                    else:
+                        size = max(0, int(share.total_size))
+                    if size <= 0:
+                        self.send_error(425, "媒体尚未准备好")
                         return
                     requested_range = self.headers.get("Range", "")
                     byte_range = owner._read_range(requested_range, size) if requested_range else None
@@ -158,29 +228,59 @@ class LocalMediaServer:
                         self.send_header("Content-Range", f"bytes */{size}")
                         self.end_headers()
                         return
-                    start, end = byte_range or (0, max(0, size - 1))
+                    # A growing task stream cannot safely be sent as one huge
+                    # 200 response: the file may still be sparse or only its
+                    # prefix may have been written. Give players a bounded
+                    # initial range and let them ask for later ranges.
+                    streaming = share.read_range is not None
+                    start, end = byte_range or (
+                        (0, min(size - 1, 2 * 1024 * 1024 - 1))
+                        if streaming else (0, max(0, size - 1))
+                    )
                     length = 0 if size == 0 else end - start + 1
-                    self.send_response(206 if byte_range else 200)
-                    mime_type, _ = mimetypes.guess_type(share.path.name)
+                    payload: bytes | None = None
+                    # Read a growing-task range before committing the HTTP
+                    # response headers.  If the downloader cannot provide a
+                    # contiguous range yet, return a clean 425 response
+                    # instead of attempting send_error() after 206 headers
+                    # have already been sent.
+                    if body and share.read_range is not None and length:
+                        try:
+                            payload = share.read_range(start, end)
+                        except Exception:
+                            self.send_error(425, "目标字节范围尚未完整写入")
+                            return
+                        if len(payload) != length:
+                            self.send_error(425, "目标字节范围尚未完整写入")
+                            return
+                    self.send_response(206 if byte_range or streaming else 200)
+                    mime_type = share.mime_type
+                    if not mime_type and share.path is not None:
+                        mime_type, _ = mimetypes.guess_type(share.path.name)
                     self.send_header("Content-Type", mime_type or "application/octet-stream")
                     self.send_header("Content-Length", str(length))
                     self.send_header("Accept-Ranges", "bytes")
                     self.send_header("Cache-Control", "no-store")
-                    self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{quote(share.path.name)}")
-                    if byte_range:
+                    filename = share.filename or (share.path.name if share.path is not None else "media")
+                    self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{quote(filename)}")
+                    if byte_range or streaming:
                         self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
                     self.end_headers()
                     if not body or not length:
                         return
-                    with share.path.open("rb") as source:
-                        source.seek(start)
-                        remaining = length
-                        while remaining:
-                            chunk = source.read(min(256 * 1024, remaining))
-                            if not chunk:
-                                break
-                            self.wfile.write(chunk)
-                            remaining -= len(chunk)
+                    if share.read_range is not None:
+                        assert payload is not None
+                        self.wfile.write(payload)
+                    elif share.path is not None:
+                        with share.path.open("rb") as source:
+                            source.seek(start)
+                            remaining = length
+                            while remaining:
+                                chunk = source.read(min(256 * 1024, remaining))
+                                if not chunk:
+                                    break
+                                self.wfile.write(chunk)
+                                remaining -= len(chunk)
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     return
                 finally:
@@ -236,12 +336,111 @@ class LocalMediaServer:
             now = time.monotonic()
             self._shares[token] = LocalMediaShare(
                 token, path, now + LOCAL_MEDIA_MAX_SECONDS, now, allowed_clients,
+                filename=path.name, total_size=size,
             )
         return {
             "id": token,
             "url": f"http://{address}:{port}/media/{token}/{quote(path.name)}",
             "filename": path.name,
             "size": size,
+            "expires_in_seconds": LOCAL_MEDIA_MAX_SECONDS,
+            "idle_cleanup_seconds": LOCAL_MEDIA_IDLE_SECONDS,
+        }
+
+    def share_stream(
+        self,
+        *,
+        filename: str,
+        size: int,
+        endpoint: str,
+        read_range: Callable[[int, int], bytes],
+        mime_type: str = "",
+    ) -> dict:
+        """Share a task's verified byte ranges without exposing its sparse file.
+
+        The callback is invoked from the LAN media server thread only after a
+        player asks for a concrete range.  The task manager can therefore wait
+        for that range to become complete before reading it, which makes an
+        in-progress HTTP download playable without sending zero-filled holes.
+        """
+        if not callable(read_range):
+            raise ValueError("下载流读取器无效")
+        address = local_address_for_tvbox(endpoint)
+        if not address:
+            raise RuntimeError("无法确定电视所在局域网的电脑地址，请确认电脑和电视在同一局域网")
+        parsed_endpoint = urlparse(normalize_tvbox_endpoint(endpoint))
+        allowed_clients = private_ipv4_addresses(parsed_endpoint.hostname or "")
+        if not allowed_clients:
+            raise ValueError("电视地址不是可访问的 IPv4 局域网地址")
+        safe_size = int(size or 0)
+        if safe_size <= 0:
+            raise ValueError("下载尚未获得可播放的文件大小")
+        safe_name = Path(str(filename or "media")).name or "media"
+        with self._lock:
+            self._purge_locked()
+            port = self._ensure_server_locked()
+            token = secrets.token_urlsafe(32)
+            now = time.monotonic()
+            self._shares[token] = LocalMediaShare(
+                token,
+                None,
+                now + LOCAL_MEDIA_MAX_SECONDS,
+                now,
+                allowed_clients,
+                filename=safe_name,
+                mime_type=str(mime_type or ""),
+                total_size=safe_size,
+                read_range=read_range,
+            )
+        return {
+            "id": token,
+            "url": f"http://{address}:{port}/media/{token}/{quote(safe_name)}",
+            "filename": safe_name,
+            "size": safe_size,
+            "expires_in_seconds": LOCAL_MEDIA_MAX_SECONDS,
+            "idle_cleanup_seconds": LOCAL_MEDIA_IDLE_SECONDS,
+        }
+
+    def share_playlist(
+        self,
+        *,
+        filename: str,
+        endpoint: str,
+        playlist: Callable[[], str],
+        read_asset: Callable[[str, str], tuple[bytes, str]],
+    ) -> dict:
+        """Share a locally generated HLS playlist and its verified assets."""
+        if not callable(playlist) or not callable(read_asset):
+            raise ValueError("本地播放清单读取器无效")
+        address = local_address_for_tvbox(endpoint)
+        if not address:
+            raise RuntimeError("无法确定电视所在局域网的电脑地址，请确认电脑和电视在同一局域网")
+        parsed_endpoint = urlparse(normalize_tvbox_endpoint(endpoint))
+        allowed_clients = private_ipv4_addresses(parsed_endpoint.hostname or "")
+        if not allowed_clients:
+            raise ValueError("电视地址不是可访问的 IPv4 局域网地址")
+        safe_name = Path(str(filename or "media.m3u8")).name or "media.m3u8"
+        with self._lock:
+            self._purge_locked()
+            port = self._ensure_server_locked()
+            token = secrets.token_urlsafe(32)
+            now = time.monotonic()
+            self._shares[token] = LocalMediaShare(
+                token,
+                None,
+                now + LOCAL_MEDIA_MAX_SECONDS,
+                now,
+                allowed_clients,
+                filename=safe_name,
+                mime_type="application/vnd.apple.mpegurl",
+                playlist=playlist,
+                read_asset=read_asset,
+            )
+        return {
+            "id": token,
+            "url": f"http://{address}:{port}/media/{token}/index.m3u8",
+            "filename": safe_name,
+            "size": 0,
             "expires_in_seconds": LOCAL_MEDIA_MAX_SECONDS,
             "idle_cleanup_seconds": LOCAL_MEDIA_IDLE_SECONDS,
         }
@@ -258,7 +457,7 @@ class LocalMediaServer:
                 return {"active": False}
             return {
                 "active": True,
-                "filename": share.path.name,
+                "filename": share.filename or (share.path.name if share.path is not None else "media"),
                 "active_streams": share.active_streams,
                 "expires_in_seconds": max(0, int(share.expires_at - time.monotonic())),
             }

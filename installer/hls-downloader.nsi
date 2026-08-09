@@ -8,10 +8,10 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-!define APP_VERSION "3.0.20"
+!define APP_VERSION "3.0.22"
 !endif
 !ifndef APP_FILE_VERSION
-!define APP_FILE_VERSION "3.0.20.0"
+!define APP_FILE_VERSION "3.0.22.0"
 !endif
 
 !ifndef STAGE_DIR
@@ -109,7 +109,13 @@ FunctionEnd
 
 Function ScheduleSelfDelete
   System::Call 'kernel32::GetCurrentProcessId() i .r0'
-  Exec `"$PowerShellExe" -NoProfile -NonInteractive -WindowStyle Hidden -Command "Wait-Process -Id $0 -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '$EXEPATH' -Force -ErrorAction SilentlyContinue"`
+  ; Never interpolate the installer path into PowerShell source.  A valid
+  ; Windows directory may contain a single quote or '$'; the old -Command text
+  ; could fail to delete the update or interpret part of that path as code.
+  ; Environment values are inherited by the helper without command parsing.
+  System::Call 'kernel32::SetEnvironmentVariable(t, t)i("HLS_DOWNLOADER_DELETE_SELF_PATH", "$EXEPATH").r1'
+  Exec `"$PowerShellExe" -NoProfile -NonInteractive -WindowStyle Hidden -Command "Wait-Process -Id $0 -ErrorAction SilentlyContinue; Remove-Item -LiteralPath ([Environment]::GetEnvironmentVariable('HLS_DOWNLOADER_DELETE_SELF_PATH','Process')) -Force -ErrorAction SilentlyContinue"`
+  System::Call 'kernel32::SetEnvironmentVariable(t, t)i("HLS_DOWNLOADER_DELETE_SELF_PATH", "").r1'
 FunctionEnd
 
 Function RestoreBrowserRegistrationAfterAbort
@@ -232,6 +238,10 @@ Section "Install" SecInstall
   SetOutPath "$INSTDIR\assets"
   File "${STAGE_DIR}\assets\app-icon.png"
   File "${STAGE_DIR}\assets\app-icon.ico"
+  ; Explorer caches icons by path.  Keep the stable file for application data,
+  ; but point shell registrations and recreated shortcuts at a versioned copy
+  ; so a cover upgrade cannot keep showing the previous release's icon.
+  File /oname=app-icon-${APP_VERSION}.ico "${STAGE_DIR}\assets\app-icon.ico"
 
   ; Switch the registry to fresh manifest files too.  This avoids racing a
   ; browser which happens to be reading the old manifest while upgrading.
@@ -243,7 +253,10 @@ Section "Install" SecInstall
   File "${STAGE_DIR}\scripts\shutdown-running.ps1"
 
   DetailPrint "正在切换 Chromium/Firefox 系浏览器连接到新版本..."
-  nsExec::ExecToStack '"$PowerShellExe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\scripts\register-native-host.ps1" $NativeRegistryArgs'
+  ; Select the host copied by this installer explicitly.  Merely taking the
+  ; numerically newest leftover file breaks supported downgrade/reinstall
+  ; scenarios and can leave browsers attached to a mixed-version Core.
+  nsExec::ExecToStack '"$PowerShellExe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\scripts\register-native-host.ps1" -HostExecutable "$INSTDIR\native-host\versions\HLSDownloaderNativeHost-${APP_VERSION}.exe" $NativeRegistryArgs'
   Pop $0
   Pop $1
   ${If} $0 != 0
@@ -259,7 +272,7 @@ Section "Install" SecInstall
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "DisplayVersion" "${APP_VERSION}"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "Publisher" "${COMPANY_NAME}"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "InstallLocation" "$INSTDIR"
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "DisplayIcon" "$INSTDIR\assets\app-icon.ico"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "DisplayIcon" "$INSTDIR\assets\app-icon-${APP_VERSION}.ico"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "QuietUninstallString" '$\"$INSTDIR\Uninstall.exe$\" /S'
     WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "NoModify" 1
@@ -277,13 +290,13 @@ Section "Install" SecInstall
     ${EndIf}
     WriteRegStr HKCU "Software\Classes\.torrent" "" "HLSDownloader.Torrent"
     WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent" "" "BT 种子文件"
-    WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent\DefaultIcon" "" "$INSTDIR\assets\app-icon.ico,0"
+    WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent\DefaultIcon" "" "$INSTDIR\assets\app-icon-${APP_VERSION}.ico,0"
     WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent\shell\open\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
 
     CreateDirectory "$SMPROGRAMS\${APP_NAME}"
-    CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\assets\app-icon.ico" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
+    CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\assets\app-icon-${APP_VERSION}.ico" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
     CreateShortcut "$SMPROGRAMS\${APP_NAME}\卸载 ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
-    CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\assets\app-icon.ico" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
+    CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\assets\app-icon-${APP_VERSION}.ico" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
   ${EndIf}
   StrCpy $InstallCompleted "1"
   ${If} $DeleteSelf == "1"

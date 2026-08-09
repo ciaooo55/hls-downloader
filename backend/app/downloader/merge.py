@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import subprocess
+import time
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
@@ -30,6 +31,13 @@ def _hidden_subprocess_kwargs() -> dict:
 def _emit_progress(task, on_progress) -> None:
     if task is not None and on_progress is not None:
         on_progress(task)
+
+
+def _emit_log(task, on_log, message: str) -> None:
+    if task is not None:
+        task.last_log = message
+    if task is not None and on_log is not None:
+        on_log(task.id, f"[merge] {message}")
 
 
 def _local_hls_uri(playlist_dir: Path, path: Path) -> str:
@@ -148,6 +156,7 @@ async def merge_segments(
     task=None,
     total_duration: float = 0,
     on_progress=None,
+    on_log=None,
 ) -> None:
     if not segments:
         raise ValueError("没有可合并的分片")
@@ -205,11 +214,17 @@ async def merge_segments(
         task.progress.post_percent = PREPARE_PROGRESS_END
         task.last_log = "ffmpeg 正在转封装"
         _emit_progress(task, on_progress)
+    _emit_log(
+        task,
+        on_log,
+        f"开始无损转封装：{len(segments)} 个分片，预计时长 {total_duration:.3f} 秒",
+    )
 
     temporary_output = output_path.with_name(
         f"{output_path.stem}.merging{output_path.suffix or '.tmp'}"
     )
     temporary_output.unlink(missing_ok=True)
+    duration_args = ["-t", f"{float(total_duration):.6f}"] if total_duration > 0 else []
     copy_command = [
         ffmpeg_path,
         "-y",
@@ -226,17 +241,20 @@ async def merge_segments(
         "make_zero",
         "-movflags",
         "+faststart",
+        *duration_args,
         "-progress",
         "pipe:1",
         "-nostats",
         str(temporary_output),
     ]
     try:
+        merge_started = time.monotonic()
         success = await _run_ffmpeg(
             copy_command,
             task=task,
             duration_sec=total_duration,
             on_progress=on_progress,
+            **({"on_log": on_log} if on_log is not None else {}),
         )
         copy_verified = False
         if success:
@@ -248,8 +266,14 @@ async def merge_segments(
             try:
                 await _verify_output(ffmpeg_path, temporary_output, total_duration)
                 copy_verified = True
+                _emit_log(
+                    task,
+                    on_log,
+                    f"无损转封装与校验完成，用时 {time.monotonic() - merge_started:.1f} 秒",
+                )
             except RuntimeError as exc:
                 success = False
+                _emit_log(task, on_log, f"无损输出校验未通过：{exc}")
                 if task is not None:
                     task.last_log = f"无损输出时间轴异常（{exc}），正在重新编码修复"
                     _emit_progress(task, on_progress)
@@ -258,6 +282,7 @@ async def merge_segments(
             if task is not None and not task.last_log.startswith("无损输出时间轴异常"):
                 task.last_log = "无损转封装失败，正在尝试重新编码"
                 _emit_progress(task, on_progress)
+            _emit_log(task, on_log, "无损转封装失败，开始兼容重新编码；该阶段会明显慢于无损合并")
             encode_command = [
                 ffmpeg_path,
                 "-y",
@@ -276,6 +301,7 @@ async def merge_segments(
                 "make_zero",
                 "-movflags",
                 "+faststart",
+                *duration_args,
                 "-progress",
                 "pipe:1",
                 "-nostats",
@@ -286,9 +312,10 @@ async def merge_segments(
                 task=task,
                 duration_sec=total_duration,
                 on_progress=on_progress,
+                **({"on_log": on_log} if on_log is not None else {}),
             )
         if not success:
-            if task is not None and task.last_log.startswith("ffmpeg"):
+            if task is not None and "ffmpeg" in task.last_log.lower():
                 raise RuntimeError(task.last_log)
             raise RuntimeError("ffmpeg 合并失败，未返回可读取的错误信息")
 
@@ -299,6 +326,11 @@ async def merge_segments(
                 task.last_log = "正在验证重新编码输出"
                 _emit_progress(task, on_progress)
             await _verify_output(ffmpeg_path, temporary_output, total_duration)
+            _emit_log(
+                task,
+                on_log,
+                f"兼容重新编码与校验完成，总用时 {time.monotonic() - merge_started:.1f} 秒",
+            )
         # FlushFileBuffers can take seconds on Windows when Defender or a
         # network-backed download directory inspects the new media. Keep the
         # API/event loop responsive while retaining durable atomic publish.
@@ -321,6 +353,7 @@ async def mux_media_tracks(
     task=None,
     total_duration: float = 0,
     on_progress=None,
+    on_log=None,
 ) -> None:
     """Mux independently recorded HLS video/audio tracks into one output."""
     if not video_path.is_file() or video_path.stat().st_size <= 0:
@@ -346,6 +379,7 @@ async def mux_media_tracks(
         task.progress.post_percent = PREPARE_PROGRESS_END
         task.last_log = "ffmpeg 正在合并独立视频与音频轨道"
         _emit_progress(task, on_progress)
+    _emit_log(task, on_log, "开始无损合并独立视频与音频轨道")
     command = [
         ffmpeg_path,
         "-y",
@@ -375,10 +409,12 @@ async def mux_media_tracks(
             task=task,
             duration_sec=total_duration,
             on_progress=on_progress,
+            **({"on_log": on_log} if on_log is not None else {}),
         ):
             detail = task.last_log if task is not None else ""
             raise RuntimeError(detail or "ffmpeg 无法合并独立视频与音频轨道")
         await _verify_output(ffmpeg_path, temporary, total_duration)
+        _emit_log(task, on_log, "独立视频与音频轨道合并并校验完成")
         await asyncio.to_thread(durable_replace, temporary, output_path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -419,6 +455,7 @@ async def _run_ffmpeg(
     task=None,
     duration_sec: float = 0,
     on_progress=None,
+    on_log=None,
 ) -> bool:
     process: subprocess.Popen[bytes] | None = None
     stderr_tail = bytearray()
@@ -472,6 +509,7 @@ async def _run_ffmpeg(
             if task is not None:
                 task.last_log = f"ffmpeg 失败: {error_text[-500:]}"
                 _emit_progress(task, on_progress)
+                _emit_log(task, on_log, f"ffmpeg 失败: {error_text[-2000:]}")
             else:
                 logger.error("ffmpeg failed: %s", error_text[-500:])
             return False
@@ -486,6 +524,7 @@ async def _run_ffmpeg(
         if task is not None:
             task.last_log = "ffmpeg 超过 600 秒没有输出，已终止"
             _emit_progress(task, on_progress)
+            _emit_log(task, on_log, task.last_log)
         return False
     except Exception as exc:
         if process is not None:
@@ -493,6 +532,7 @@ async def _run_ffmpeg(
         if task is not None:
             task.last_log = f"ffmpeg 启动失败: {exc}"
             _emit_progress(task, on_progress)
+            _emit_log(task, on_log, task.last_log)
         else:
             logger.exception("ffmpeg exception")
         return False

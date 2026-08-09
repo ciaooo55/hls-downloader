@@ -63,6 +63,68 @@ def test_local_media_share_only_exposes_selected_file_with_range_support(tmp_pat
         server.shutdown()
 
 
+def test_local_media_stream_share_waits_for_the_requested_range(monkeypatch):
+    monkeypatch.setattr(tvbox, "local_address_for_tvbox", lambda _endpoint: "127.0.0.1")
+    monkeypatch.setattr(tvbox, "private_ipv4_addresses", lambda _host: frozenset({"127.0.0.1"}))
+    requested = []
+    server = tvbox.LocalMediaServer()
+    try:
+        share = server.share_stream(
+            filename="growing.mp4",
+            size=10,
+            endpoint="http://192.168.1.20:9979",
+            read_range=lambda start, end: requested.append((start, end)) or b"0123456789"[start:end + 1],
+            mime_type="video/mp4",
+        )
+        request = Request(share["url"], headers={"Range": "bytes=4-7"})
+        with urlopen(request, timeout=3) as response:
+            assert response.status == 206
+            assert response.headers["Content-Range"] == "bytes 4-7/10"
+            assert response.read() == b"4567"
+        assert requested == [(4, 7)]
+    finally:
+        server.shutdown()
+
+
+def test_local_media_playlist_share_serves_playlist_and_local_segments(monkeypatch):
+    monkeypatch.setattr(tvbox, "local_address_for_tvbox", lambda _endpoint: "127.0.0.1")
+    monkeypatch.setattr(tvbox, "private_ipv4_addresses", lambda _host: frozenset({"127.0.0.1"}))
+    server = tvbox.LocalMediaServer()
+    try:
+        def read_asset(kind, name):
+            if kind == "segments" and name == "000000.seg":
+                return b"segment-bytes", "video/mp4"
+            if kind == "maps" and name == "init-000000.init":
+                return b"init-bytes", "video/mp4"
+            raise ValueError("unexpected asset")
+
+        share = server.share_playlist(
+            filename="直播.m3u8",
+            endpoint="http://192.168.1.20:9979",
+            playlist=lambda: '#EXTM3U\n#EXT-X-MAP:URI="maps/init-000000.init?session=x&token=y"\n#EXTINF:1,\nsegments/000000.seg?session=x&token=y\n',
+            read_asset=read_asset,
+        )
+        with urlopen(share["url"], timeout=3) as response:
+            assert response.status == 200
+            assert response.headers["Content-Type"].startswith("application/vnd.apple.mpegurl")
+            playlist = response.read().decode()
+        with urlopen(Request(share["url"], method="HEAD"), timeout=3) as response:
+            assert int(response.headers["Content-Length"]) == len(playlist.encode())
+        assert "segments/000000.seg" in playlist
+        assert "maps/init-000000.init" in playlist
+        segment_url = share["url"].replace("index.m3u8", "segments/000000.seg")
+        with urlopen(segment_url, timeout=3) as response:
+            assert response.status == 200
+            assert response.read() == b"segment-bytes"
+        map_url = share["url"].replace("index.m3u8", "maps/init-000000.init")
+        with urlopen(Request(map_url, headers={"Range": "bytes=1-4"}), timeout=3) as response:
+            assert response.status == 206
+            assert response.headers["Content-Range"] == "bytes 1-4/10"
+            assert response.read() == b"nit-"
+    finally:
+        server.shutdown()
+
+
 def test_local_media_share_rejects_missing_files(monkeypatch, tmp_path):
     monkeypatch.setattr(tvbox, "local_address_for_tvbox", lambda _endpoint: "127.0.0.1")
     with pytest.raises(ValueError, match="找不到"):

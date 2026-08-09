@@ -44,6 +44,12 @@ export interface RequestChain {
   statusCode: number
   startedAt: number
   updatedAt: number
+  /**
+   * Browser cancellation/pause can terminate the network request just before
+   * downloads.onCreated runs. Keep that exact request identity briefly so the
+   * item can still be matched without borrowing another tab's headers.
+   */
+  failedAt?: number
 }
 
 const MAX_REPLAY_BODY_BYTES = 128 * 1024
@@ -219,6 +225,7 @@ export class RequestChainStore {
       statusCode: previous?.statusCode || 0,
       startedAt: previous?.startedAt || now,
       updatedAt: now,
+      failedAt: 0,
     }
     this.chains.set(details.requestId, chain)
     this.trim()
@@ -307,8 +314,14 @@ export class RequestChainStore {
     if (chain) chain.updatedAt = now
   }
 
-  fail(requestId: string): void {
-    this.chains.delete(requestId)
+  fail(requestId: string, now = Date.now()): void {
+    const chain = this.chains.get(requestId)
+    if (!chain) return
+    // Chrome/Edge may report ERR_ABORTED when a just-created DownloadItem is
+    // paused by the takeover path. Deleting the chain here races onCreated and
+    // loses the final URL, tab and authenticated headers.
+    chain.failedAt = now
+    chain.updatedAt = now
   }
 
   clearTab(tabId: number): void {
@@ -331,7 +344,8 @@ export class RequestChainStore {
 
   cleanup(now = Date.now(), maxAgeMs = 5 * 60_000): void {
     for (const [requestId, chain] of this.chains) {
-      if (now - chain.updatedAt > maxAgeMs) this.chains.delete(requestId)
+      const retention = chain.failedAt ? Math.min(maxAgeMs, 20_000) : maxAgeMs
+      if (now - chain.updatedAt > retention) this.chains.delete(requestId)
     }
   }
 }

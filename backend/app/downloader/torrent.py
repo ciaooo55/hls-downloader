@@ -5,6 +5,7 @@ import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 
 from ..config import settings
@@ -20,6 +21,67 @@ from .engine import publish_path, task_output_dir, task_work_dir
 _SESSION_LOCK = threading.Lock()
 _SHARED_SESSION = None
 _RESUME_ALERT_LOCK = asyncio.Lock()
+
+
+def _torrent_proxy_settings() -> dict:
+    """Translate the app's manual proxy into libtorrent session settings.
+
+    Fetching a ``.torrent`` file already uses the shared HTTP policy, but peer
+    and tracker traffic is owned by libtorrent.  Leaving that session on its
+    defaults silently bypassed a configured manual proxy.  Return an explicit
+    disabled configuration too, because the session is process-wide and must
+    not retain credentials/routes after the user switches back to direct mode.
+    """
+    disabled = {
+        "proxy_type": 0,
+        "proxy_hostname": "",
+        "proxy_port": 0,
+        "proxy_username": "",
+        "proxy_password": "",
+        "proxy_hostnames": False,
+        "proxy_peer_connections": False,
+        "proxy_tracker_connections": False,
+        "force_proxy": False,
+    }
+    mode = str(getattr(settings, "proxy_mode", "system") or "system").lower()
+    raw = str(getattr(settings, "proxy_url", "") or "").strip()
+    if mode != "manual" or not raw:
+        return disabled
+    try:
+        parsed = urlsplit(raw)
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname or ""
+        port = int(parsed.port or (1080 if scheme.startswith("socks") else 8080))
+    except (TypeError, ValueError):
+        return disabled
+    if not hostname or not (1 <= port <= 65535):
+        return disabled
+    username = unquote(parsed.username or "")
+    password = unquote(parsed.password or "")
+    authenticated = bool(username or password)
+    proxy_types = {
+        "socks4": 1,
+        "socks5": 3 if authenticated else 2,
+        "socks5h": 3 if authenticated else 2,
+        "http": 5 if authenticated else 4,
+        "https": 5 if authenticated else 4,
+    }
+    proxy_type = proxy_types.get(scheme)
+    if proxy_type is None:
+        return disabled
+    return {
+        "proxy_type": proxy_type,
+        "proxy_hostname": hostname,
+        "proxy_port": port,
+        "proxy_username": username,
+        "proxy_password": password,
+        # Resolve tracker/peer hostnames through the proxy and forbid silent
+        # direct fallback; this is the least surprising meaning of manual mode.
+        "proxy_hostnames": True,
+        "proxy_peer_connections": True,
+        "proxy_tracker_connections": True,
+        "force_proxy": True,
+    }
 
 
 def _torrent_session(lt):
@@ -51,6 +113,7 @@ def _torrent_session(lt):
             "announce_to_all_trackers": True,
             "announce_to_all_tiers": True,
             "alert_mask": int(lt.alert.category_t.error_notification | lt.alert.category_t.storage_notification),
+            **_torrent_proxy_settings(),
         }
         if created:
             session_settings["listen_interfaces"] = "0.0.0.0:0"

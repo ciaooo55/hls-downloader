@@ -74,9 +74,23 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 if (-not (Test-Path -LiteralPath $hostExecutable)) {
     throw "Native Messaging host executable not found: $hostExecutable"
 }
-$chromeManifest = Get-VersionedManifest -Directory $manifestsDir -Name "chrome"
+$selectedHostVersion = ""
+if ([IO.Path]::GetFileNameWithoutExtension($hostExecutable) -match '^HLSDownloaderNativeHost-(?<version>\d+(?:\.\d+){0,3})$') {
+    $selectedHostVersion = $Matches.version
+}
+$chromeManifest = if ($selectedHostVersion) {
+    Join-Path $manifestsDir "chrome-$selectedHostVersion.json"
+} else { $null }
+if (-not $chromeManifest -or -not (Test-Path -LiteralPath $chromeManifest -PathType Leaf)) {
+    $chromeManifest = Get-VersionedManifest -Directory $manifestsDir -Name "chrome"
+}
 if (-not $chromeManifest) { $chromeManifest = Join-Path $manifestDir "chrome.json" }
-$firefoxManifest = Get-VersionedManifest -Directory $manifestsDir -Name "firefox"
+$firefoxManifest = if ($selectedHostVersion) {
+    Join-Path $manifestsDir "firefox-$selectedHostVersion.json"
+} else { $null }
+if (-not $firefoxManifest -or -not (Test-Path -LiteralPath $firefoxManifest -PathType Leaf)) {
+    $firefoxManifest = Get-VersionedManifest -Directory $manifestsDir -Name "firefox"
+}
 if (-not $firefoxManifest) { $firefoxManifest = Join-Path $manifestDir "firefox.json" }
 foreach ($entry in @(
     @($chrome, $chromeManifest),

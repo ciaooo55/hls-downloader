@@ -26,10 +26,13 @@ export function taskContextActions(input: TaskLike | TaskLike[]): TaskContextAct
   }
   if (tasks.length === 1 && task.available_actions?.includes('launch')) actions.push('launch')
   if (commands.open) actions.push('open')
-  // Casting a task must use its completed local file, never its original
-  // remote URL.  A running task may still be a sparse/partial file, so wait
-  // until it is safely published as one complete media file.
-  if (tasks.length === 1 && task.status === 'done' && task.output_path && task.output_is_file !== false) {
+  // Completed tasks use the published local file. Active tasks expose either
+  // a verified byte-range stream (HTTP/Torrent) or a rewritten local HLS
+  // playlist (HLS/DASH); neither path sends the original CDN URL to a TV.
+  const canDeliverCompletedFile = task.status === 'done' && Boolean(task.output_path) && task.output_is_file !== false
+  const canDeliverGrowingHttp = Boolean(task.playback_ready)
+    && ['http', 'torrent', 'hls', 'dash'].includes(task.task_type || '')
+  if (tasks.length === 1 && (canDeliverCompletedFile || canDeliverGrowingHttp)) {
     actions.push('cast', 'pushTvbox')
   }
   if (tasks.length === 1) actions.push('copyUrl')

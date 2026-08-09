@@ -126,7 +126,7 @@ describe('browser request chains', () => {
     }, 1100, 3, true)).toBeUndefined()
   })
 
-  it('bounds request history and immediately drops failed network requests', () => {
+  it('bounds request history while retaining a recent failed request', () => {
     const store = new RequestChainStore(3)
     for (let index = 1; index <= 4; index += 1) {
       store.observeRequest({
@@ -139,8 +139,8 @@ describe('browser request chains', () => {
 
     expect(store.find({ url: 'https://cdn.test/1.bin' }, 1100)).toBeUndefined()
     expect(store.find({ url: 'https://cdn.test/4.bin' }, 1100)?.requestId).toBe('request-4')
-    store.fail('request-4')
-    expect(store.find({ url: 'https://cdn.test/4.bin' }, 1100)).toBeUndefined()
+    store.fail('request-4', 1_200)
+    expect(store.find({ url: 'https://cdn.test/4.bin' }, 1_300)?.requestId).toBe('request-4')
   })
 
   it('prefers the request from the download referrer when URLs are shared across tabs', () => {
@@ -305,5 +305,25 @@ describe('browser request chains', () => {
 
     expect(store.find({ url: 'https://cdn.test/old.m3u8' }, 1200)).toBeUndefined()
     expect(store.find({ url: 'https://cdn.test/other.m3u8' }, 1200)?.requestId).toBe('other-tab')
+  })
+
+  it('keeps a failed request briefly for the downloads.onCreated race', () => {
+    const store = new RequestChainStore()
+    store.observeRequest({
+      requestId: 'paused-download',
+      url: 'https://download.test/generated-file',
+      tabId: 7,
+      type: 'main_frame',
+      method: 'GET',
+      documentUrl: 'https://page.test/export',
+      requestHeaders: [{ name: 'Referer', value: 'https://page.test/export' }],
+      timeStamp: 1_000,
+    })
+    store.fail('paused-download', 1_100)
+
+    expect(store.find({ url: 'https://download.test/generated-file' }, 20_000)?.requestId)
+      .toBe('paused-download')
+    expect(store.find({ url: 'https://download.test/generated-file' }, 21_101))
+      .toBeUndefined()
   })
 })

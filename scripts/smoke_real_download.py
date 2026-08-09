@@ -315,6 +315,10 @@ def run(archive: Path | None = None) -> dict:
                 dirs_exist_ok=True,
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "data.db", "data.db-*", "dist"),
             )
+            # Legal documents are resolved relative to the isolated runtime
+            # root, so copy them alongside the source Core for this smoke run.
+            for legal_name in ("TERMS.md", "PRIVACY.md"):
+                shutil.copy2(root / legal_name, portable / legal_name)
             ffmpeg_command = shutil.which("ffmpeg")
             if not ffmpeg_command:
                 raise RuntimeError("ffmpeg is not available on PATH")
@@ -386,6 +390,27 @@ def run(archive: Path | None = None) -> dict:
             time.sleep(0.15)
         if not health:
             raise RuntimeError("packaged Core did not become healthy")
+
+        # Task creation is intentionally gated by the first-use legal
+        # acceptance.  The smoke harness runs against an isolated temporary
+        # config, so accept the exact document digest returned by the Core
+        # rather than bypassing the production gate or hard-coding a digest.
+        legal_status, legal_terms = api_request(base, "/api/legal/terms", token=token)
+        if legal_status != 200 or not isinstance(legal_terms, dict):
+            raise RuntimeError(f"legal terms read failed: {legal_status}")
+        legal_accept_status, _ = api_request(
+            base,
+            "/api/legal/accept",
+            token=token,
+            method="POST",
+            body={
+                "version": legal_terms.get("required_version", ""),
+                "document_digest": legal_terms.get("document_digest", ""),
+                "accepted": True,
+            },
+        )
+        if legal_accept_status != 200:
+            raise RuntimeError(f"legal terms acceptance failed: {legal_accept_status}")
 
         file_url = f"http://127.0.0.1:{origin_port}/range.bin?signature=smoke&expires=4102444800"
         SmokeOrigin.reset_range_stats()

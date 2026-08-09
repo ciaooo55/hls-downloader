@@ -5,12 +5,49 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from backend.app import config as config_module
+from backend.app.api import _rewrite_local_playback_playlist
 from backend.app.downloader.task_manager import TaskConflictError, TaskNotFoundError
 from backend.app.main import app
 from backend.app.models import Task, TaskStatus, TaskType
 from backend.app.schemas import SettingsUpdate, TaskBatchCreate, TaskCreate
 
 AUTH = {"X-Token": config_module.settings.token}
+
+
+def test_lan_playback_playlist_rewrites_segments_and_fmp4_maps_without_session_tokens():
+    source = (
+        '#EXTM3U\n#EXT-X-MAP:URI="maps/init-000000.init?session=local&token=secret"\n'
+        '#EXTINF:1.0,\nsegments/000000.seg?session=local&token=secret\n'
+    )
+    rewritten = _rewrite_local_playback_playlist(source, "share-token")
+    assert 'URI="/media/share-token/maps/init-000000.init"' in rewritten
+    assert "/media/share-token/segments/000000.seg" in rewritten
+    assert "session=" not in rewritten
+    assert "token=secret" not in rewritten
+
+
+def test_handoff_status_exposes_only_safe_desktop_task_progress(monkeypatch):
+    from types import SimpleNamespace
+    from backend.app import api as api_module
+
+    task = Task(id="task-progress", url="https://cdn.example.test/file.bin")
+    task.status = TaskStatus.DOWNLOADING
+    task.stage = "downloading"
+    task.progress.downloaded_bytes = 4096
+    task.progress.total_bytes = 8192
+    task.error_code = ""
+    monkeypatch.setattr(api_module.manager, "tasks", {task.id: task})
+    item = SimpleNamespace(
+        task_id=task.id,
+        url=task.url,
+        detail=lambda: {"id": "handoff-progress", "task_id": task.id},
+    )
+    payload = api_module._handoff_detail(item)
+    assert payload["task_status"] == "downloading"
+    assert payload["task_stage"] == "downloading"
+    assert payload["task_downloaded_bytes"] == 4096
+    assert payload["task_total_bytes"] == 8192
+    assert payload["task_error_code"] == ""
 
 
 def test_task_schema_rejects_invalid_url_concurrency_and_oversized_batch():

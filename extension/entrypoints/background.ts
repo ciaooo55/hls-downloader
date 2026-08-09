@@ -3,7 +3,7 @@ import { mediaPushRequestId } from '../lib/mediaPush'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
 import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
-import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, handoffStatusLabel, handoffTerminalStatus } from '../lib/takeover'
+import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, desktopTaskReadiness, handoffStatusLabel, handoffTerminalStatus, type BrowserHandoffPayload, type DesktopTaskReadiness } from '../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
 import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
 import { inspectHlsResource } from '../lib/hlsInspection'
@@ -17,6 +17,7 @@ import { isEarlyDirectDownloadResponse, type ObservedDownloadResource } from '..
 import { ClickIntentStore } from '../lib/clickIntentStore'
 import { TakeoverSettingsSync } from '../lib/takeoverSettingsSync'
 import { SessionListStore } from '../lib/sessionListStore'
+import { BlobSourceStore, type BlobSourceRecord } from '../lib/blobSourceStore'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 const CLICK_INTENT_STORAGE_KEY = 'click-intents'
@@ -48,6 +49,7 @@ interface EarlyBrowserTakeover {
 }
 const earlyBrowserTakeovers = new Map<string, EarlyBrowserTakeover>()
 const requestChains = new RequestChainStore()
+const blobSources = new BlobSourceStore()
 let nativeBridge: NativeBridge | null = null
 let directBackend: BrowserDirectBackend | null = null
 let takeoverSettingsSync: TakeoverSettingsSync | null = null
@@ -66,6 +68,11 @@ interface TrackedHandoff {
   failures: number
   presentation?: string
   suppression?: unknown
+  taskStatus?: string
+  taskStage?: string
+  taskDownloadedBytes?: number
+  taskTotalBytes?: number
+  taskErrorCode?: string
 }
 
 const trackedHandoffs = new Map<string, TrackedHandoff>()
@@ -161,9 +168,31 @@ async function hydrateHandoffTracker(): Promise<void> {
       failures: Math.max(0, Number(item.failures || 0)),
       presentation: typeof item.presentation === 'string' ? item.presentation : undefined,
       suppression: item.suppression,
+      taskStatus: typeof item.taskStatus === 'string' ? item.taskStatus : undefined,
+      taskStage: typeof item.taskStage === 'string' ? item.taskStage : undefined,
+      taskDownloadedBytes: Number.isFinite(Number(item.taskDownloadedBytes)) ? Math.max(0, Number(item.taskDownloadedBytes)) : undefined,
+      taskTotalBytes: Number.isFinite(Number(item.taskTotalBytes)) ? Math.max(0, Number(item.taskTotalBytes)) : undefined,
+      taskErrorCode: typeof item.taskErrorCode === 'string' ? item.taskErrorCode : undefined,
     })
   }
   pruneTrackedHandoffs()
+}
+
+function updateTrackedHandoff(target: TrackedHandoff, handoff: BrowserHandoffPayload): void {
+  target.status = String(handoff.status || target.status || 'pending')
+  target.checkedAt = Date.now()
+  target.failures = 0
+  target.presentation = typeof handoff.presentation === 'string' ? handoff.presentation : target.presentation
+  target.suppression = (handoff as BrowserHandoffPayload & { suppression?: unknown }).suppression
+  target.taskStatus = typeof handoff.task_status === 'string' ? handoff.task_status : target.taskStatus
+  target.taskStage = typeof handoff.task_stage === 'string' ? handoff.task_stage : target.taskStage
+  target.taskDownloadedBytes = Number.isFinite(Number(handoff.task_downloaded_bytes))
+    ? Math.max(0, Number(handoff.task_downloaded_bytes))
+    : target.taskDownloadedBytes
+  target.taskTotalBytes = Number.isFinite(Number(handoff.task_total_bytes))
+    ? Math.max(0, Number(handoff.task_total_bytes))
+    : target.taskTotalBytes
+  target.taskErrorCode = typeof handoff.task_error_code === 'string' ? handoff.task_error_code : target.taskErrorCode
 }
 
 function pruneTrackedHandoffs(now = Date.now()): void {
@@ -228,11 +257,7 @@ async function pollTrackedHandoffs(): Promise<void> {
     const response = await native({ op: 'handoff_status', handoff_id: next.id }, 2_500)
     const handoff = response?.handoff || response
     const status = String(handoff?.status || 'pending')
-    next.status = status
-    next.checkedAt = Date.now()
-    next.failures = 0
-    next.presentation = typeof handoff?.presentation === 'string' ? handoff.presentation : next.presentation
-    next.suppression = handoff?.suppression
+    updateTrackedHandoff(next, handoff || {})
     if (handoffTerminalStatus(status)) await rememberHandoffSuppression(handoff?.suppression)
   } catch {
     next.checkedAt = Date.now()
@@ -260,6 +285,40 @@ async function waitForHandoffResolution(handoffId: string): Promise<TrackedHando
     await new Promise(resolve => setTimeout(resolve, 450))
   }
   return { id: handoffId, resourceId: '', status: 'expired', checkedAt: Date.now(), failures: 0 }
+}
+
+type BrowserFallbackDecision = DesktopTaskReadiness | 'keep-paused'
+
+async function waitForDesktopTaskReadiness(
+  handoffId: string,
+  timeoutMs = 90_000,
+): Promise<BrowserFallbackDecision> {
+  const tracked = await trackHandoff(handoffId)
+  const deadline = Date.now() + timeoutMs
+  let failures = 0
+  while (Date.now() < deadline) {
+    try {
+      const response = await native({ op: 'handoff_status', handoff_id: handoffId }, 2_500)
+      const handoff = (response?.handoff || response || {}) as BrowserHandoffPayload
+      updateTrackedHandoff(tracked, handoff)
+      failures = 0
+      const readiness = desktopTaskReadiness(handoff)
+      if (readiness !== 'waiting') {
+        await persistHandoffTracker()
+        return readiness
+      }
+    } catch {
+      failures += 1
+      tracked.checkedAt = Date.now()
+      tracked.failures = failures
+    }
+    await new Promise(resolve => setTimeout(resolve, failures ? 1_000 : 500))
+  }
+  // Status uncertainty is not permission to start a second transfer. Keep the
+  // original item visibly paused so the user still owns the fallback and can
+  // resume it manually; confirmed task failure is resumed automatically.
+  await persistHandoffTracker()
+  return 'keep-paused'
 }
 
 async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1) {
@@ -497,18 +556,40 @@ async function readyResourceChain(resource: MediaResource, explicitChain?: Reque
   throw new Error('浏览器尚未获得可用的短效签名媒体链接；请让视频继续播放或刷新页面后重试')
 }
 
-async function resourcePayload(resource: MediaResource, explicitChain?: RequestChain) {
+async function resourcePayload(
+  resource: MediaResource,
+  explicitChain?: RequestChain,
+  options: { allowUnverified?: boolean } = {},
+) {
   resource = { ...resource, url: canonicalMediaUrl(resource.url, resource.kind) }
   const pageUrl = await topLevelPageUrl(resource.tabId ?? -1, resource.pageUrl || '')
   const pageChain = resource.tabId !== undefined && resource.tabId >= 0
     ? requestChains.pageContext(resource.tabId, pageUrl)
     : undefined
   const requireSuccessfulRequest = resource.kind !== 'magnet'
-  const chain = usesShortLivedMediaSignature(resource)
+  let chain = usesShortLivedMediaSignature(resource)
     ? await readyResourceChain({ ...resource, pageUrl }, explicitChain)
     : explicitChain || (resource.tabId !== undefined && resource.tabId >= 0
       ? requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), resource.tabId, requireSuccessfulRequest)
-      : requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), undefined, requireSuccessfulRequest))
+      : requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), undefined, requireSuccessfulRequest)
+    )
+  if (!chain && !options.allowUnverified && resource.kind !== 'magnet') {
+    // A visible URL is not by itself a browser request. Replaying a page
+    // controller or stale signed gateway without a successful response chain
+    // is how HTML pages became download tasks. Close the short observation
+    // race, then fail closed for ordinary media/files.
+    for (let attempt = 0; !chain && attempt < 8; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 75))
+      chain = resource.tabId !== undefined && resource.tabId >= 0
+        ? requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), resource.tabId, true)
+        : requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), undefined, true)
+    }
+    const successfulResponse = resource.statusCode !== undefined
+      && resource.statusCode >= 200 && resource.statusCode < 400
+    if (!chain && !successfulResponse && resource.kind !== 'hls' && resource.kind !== 'dash' && resource.inspected !== true) {
+      throw new Error('浏览器尚未确认该媒体请求；请继续播放或重新点击下载')
+    }
+  }
   if (chain) {
     const freshUrl = canonicalMediaUrl(chain.finalUrl, resource.kind)
     if (resourceFingerprint({ url: freshUrl, kind: resource.kind }) === resourceFingerprint(resource)) {
@@ -601,18 +682,18 @@ async function downloadNow(resource: MediaResource, chain?: RequestChain) {
 }
 
 async function pushToTv(resource: MediaResource): Promise<{ ok: true; id: string }> {
-  const response = await native({ op: 'media_push', kind: 'tvbox', resource: await resourcePayload(resource) })
+  const response = await native({ op: 'media_push', kind: 'tvbox', resource: await resourcePayload(resource, undefined, { allowUnverified: true }) })
   const id = mediaPushRequestId(response, 'TVBox 推送')
   return { ok: true, id }
 }
 
 async function castToDevice(resource: MediaResource): Promise<{ ok: true; id: string }> {
-  const response = await native({ op: 'media_push', kind: 'cast', resource: await resourcePayload(resource) })
+  const response = await native({ op: 'media_push', kind: 'cast', resource: await resourcePayload(resource, undefined, { allowUnverified: true }) })
   const id = mediaPushRequestId(response, '投屏')
   return { ok: true, id }
 }
 
-async function offer(resource: MediaResource, chain?: RequestChain) {
+async function offer(resource: MediaResource, chain?: RequestChain, options: { allowUnverified?: boolean } = {}) {
   const fingerprint = `${resource.tabId ?? -1}:${resourceFingerprint(resource)}`
   let requestId = ''
   try {
@@ -623,7 +704,7 @@ async function offer(resource: MediaResource, chain?: RequestChain) {
       || `offer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
   }
   const payload = {
-    ...await resourcePayload(resource, chain),
+    ...await resourcePayload(resource, chain, options),
     client_request_id: requestId,
   }
   const response = await native({ op: 'offer', resource: payload })
@@ -668,6 +749,19 @@ async function removeBrowserDownload(item: Browser.downloads.DownloadItem): Prom
   await browser.downloads.erase({ id: item.id }).catch(() => undefined)
 }
 
+function downloadRequestItem(
+  item: Browser.downloads.DownloadItem,
+  blobSource?: BlobSourceRecord,
+): Browser.downloads.DownloadItem {
+  if (!blobSource) return item
+  return {
+    ...item,
+    url: blobSource.sourceUrl,
+    finalUrl: blobSource.sourceUrl,
+    referrer: blobSource.pageUrl || item.referrer,
+  }
+}
+
 async function pauseBrowserDownload(item: Browser.downloads.DownloadItem): Promise<boolean> {
   if (item.state !== 'in_progress') return false
   try {
@@ -690,13 +784,15 @@ async function resumeBrowserDownload(item: Browser.downloads.DownloadItem, pause
 
 async function rememberClickIntent(intent: DownloadClickIntent): Promise<void> {
   await clickIntentStore.remember(intent)
-  console.debug('HLS Downloader received explicit click intent', intent.href || intent.pageUrl || '')
+  console.debug('HLS Downloader received an explicit click intent')
 }
 
 async function waitForClickIntent(url: string, finalUrl = '', referrer = '', chain?: RequestChain): Promise<DownloadClickIntent | undefined> {
-  // Downloads can lag behind click-intent by a few hundred ms on slow pages,
-  // and Chrome may wake the service worker after the click message arrives.
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  // The trusted pointerdown message normally precedes the network request.
+  // Keep only a short MV3 wake-up grace period: a classified DownloadItem is
+  // already strong evidence, so waiting seconds for a missing optional intent
+  // merely delays the desktop prompt.
+  for (let attempt = 0; attempt < 12; attempt += 1) {
     const intent = await clickIntentStore.consume({
       url,
       finalUrl,
@@ -705,7 +801,7 @@ async function waitForClickIntent(url: string, finalUrl = '', referrer = '', cha
       tabId: chain?.tabId,
     })
     if (intent) return intent
-    await new Promise(resolve => setTimeout(resolve, 50))
+    await new Promise(resolve => setTimeout(resolve, 25))
   }
   return undefined
 }
@@ -766,7 +862,7 @@ function observedResponse(details: any, chain?: RequestChain) {
   const disposition = header('content-disposition')
   const filename = responseFilename(disposition)
   const kind = disposition || mimeType.toLowerCase().includes('octet-stream')
-    ? classifyDownload(details.url, mimeType, filename)
+    ? classifyDownload(details.url, mimeType, filename, disposition)
     : classifyResource(details.url, mimeType)
   if (!kind) return { disposition, resource: null }
   const resource = {
@@ -891,6 +987,7 @@ export default defineBackground(() => {
   })
   browser.tabs.onRemoved.addListener(tabId => {
     requestChains.clearTab(tabId)
+    blobSources.clearTab(tabId)
     inspectedAdaptive.releasePrefix(`${tabId}:`)
     void browser.storage.session.get(null).then(values => {
       const keys = Object.keys(values).filter(key => key.startsWith(`resources:tab:${tabId}`))
@@ -921,6 +1018,7 @@ export default defineBackground(() => {
   browser.alarms.onAlarm.addListener(alarm => {
     if (alarm.name === 'desktop-heartbeat') {
       requestChains.cleanup()
+      blobSources.cleanup()
       void pingDesktop().catch(() => undefined)
     }
     if (alarm.name === 'handoff-tracker') void pollTrackedHandoffs()
@@ -1021,14 +1119,20 @@ export default defineBackground(() => {
   })
 
   browser.downloads.onCreated.addListener(async item => {
-    if (!item.url || item.url.startsWith('blob:')) return
+    if (!item.url) return
+    const blobSource = item.url.startsWith('blob:') ? blobSources.find(item.url) : undefined
+    // A client-generated Blob has no replayable HTTP origin. Leave it entirely
+    // browser-owned. Fetched blobs proceed only when the page hook correlated
+    // this exact object URL to its successful response.
+    if (item.url.startsWith('blob:') && !blobSource) return
+    const originalRequest = downloadRequestItem(item, blobSource)
     const creatingExtension = String((item as any).byExtensionId || '')
     if (creatingExtension && creatingExtension !== browser.runtime.id) return
-    if (consumeBrowserFallback(item.url)) {
+    if (consumeBrowserFallback(originalRequest.url)) {
       revealBrowserDownload()
       return
     }
-    console.debug('HLS Downloader observed browser download', item.url)
+    console.debug('HLS Downloader observed a browser download candidate')
     let paused = false
     let accepted = false
     try {
@@ -1041,7 +1145,7 @@ export default defineBackground(() => {
       // Prefer the request chain first so click matching can use tabId even when
       // Chrome leaves DownloadItem.referrer empty. After a click is known, re-bind
       // the chain to that tab so we never replay another page's auth headers.
-      let provisionalChain = requestChains.find(item)
+      let provisionalChain = requestChains.find(originalRequest, Date.now(), blobSource?.tabId)
       const earlyTakeover = provisionalChain
         ? earlyBrowserTakeovers.get(provisionalChain.requestId)
         : undefined
@@ -1056,6 +1160,12 @@ export default defineBackground(() => {
           if (!desktopAcceptedHandoff(earlyResult.response)) return
           const handoff = await waitForHandoffResolution(String(earlyResult.response.handoff.id))
           if (handoff?.status !== 'accepted') return
+          const readiness = await waitForDesktopTaskReadiness(String(earlyResult.response.handoff.id))
+          if (readiness === 'browser-fallback') return
+          if (readiness === 'keep-paused') {
+            accepted = true
+            return
+          }
           concealBrowserDownload()
           await removeBrowserDownload(item)
           accepted = true
@@ -1065,9 +1175,10 @@ export default defineBackground(() => {
       // Filename determination is useful for generated downloads but can take
       // hundreds of milliseconds. The response-header path above never waits
       // for it, which keeps ordinary link takeover prompt latency low.
-      const actual = await refreshedDownload(item.id, item)
-      if (!canContinueTakeover(actual.state)) return
-      provisionalChain = requestChains.find(actual) || provisionalChain
+      const actualBrowser = await refreshedDownload(item.id, item)
+      if (!canContinueTakeover(actualBrowser.state, paused)) return
+      const actual = downloadRequestItem(actualBrowser, blobSource)
+      provisionalChain = requestChains.find(actual, Date.now(), blobSource?.tabId) || provisionalChain
       let intent = await waitForClickIntent(
         actual.url,
         actual.finalUrl,
@@ -1077,9 +1188,6 @@ export default defineBackground(() => {
       let chain = intent?.tabId === undefined
         ? provisionalChain
         : requestChains.find(actual, Date.now(), intent.tabId) || provisionalChain
-      if (!intent) {
-        intent = await waitForClickIntent(actual.url, actual.finalUrl, actual.referrer || '')
-      }
       const url = chain?.finalUrl || actual.finalUrl || actual.url
       const contentDisposition = responseHeader(chain, 'content-disposition')
       const responseName = responseFilename(contentDisposition)
@@ -1091,10 +1199,15 @@ export default defineBackground(() => {
         || (actual.totalBytes && actual.totalBytes > 0 ? actual.totalBytes : 0)
         || trackedSize(chain)
       const pageUrl = actual.referrer || chain?.pageUrl || requestHeader(chain, 'referer')
-      const sourcePageUrl = await topLevelPageUrl(chain?.tabId ?? -1, pageUrl)
+      const sourcePageUrl = await topLevelPageUrl(chain?.tabId ?? blobSource?.tabId ?? -1, pageUrl)
       const resource: MediaResource = {
         id: resourceId(url), url, kind, mimeType, size, title: filename, filename,
-        pageUrl: sourcePageUrl, tabId: chain?.tabId, method: chain?.method, requestHeaders: chain?.requestHeaders, seenAt: Date.now(),
+        pageUrl: sourcePageUrl,
+        tabId: chain?.tabId ?? blobSource?.tabId,
+        frameId: chain?.frameId ?? blobSource?.frameId,
+        method: chain?.method,
+        requestHeaders: chain?.requestHeaders,
+        seenAt: Date.now(),
       }
       if (String(chain?.method || '').toUpperCase() === 'POST' && !replayablePostRequest(chain).request_body) {
         return
@@ -1112,7 +1225,7 @@ export default defineBackground(() => {
       }) || (!intent?.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) {
         return
       }
-      console.debug('HLS Downloader offering verified browser download', url)
+      console.debug('HLS Downloader offering a verified browser download')
       const response = await offer(resource, chain)
       if (!desktopAcceptedHandoff(response)) throw new Error(response?.error || 'desktop rejected')
       // Do not discard the browser download just because the confirmation
@@ -1120,10 +1233,16 @@ export default defineBackground(() => {
       // this original download in the browser.
       const handoff = await waitForHandoffResolution(String(response.handoff.id))
       if (handoff?.status !== 'accepted') return
+      const readiness = await waitForDesktopTaskReadiness(String(response.handoff.id))
+      if (readiness === 'browser-fallback') return
+      if (readiness === 'keep-paused') {
+        accepted = true
+        return
+      }
       // Do not hide Chrome's downloads UI merely because a browser download was
       // observed. Suppress it only after the desktop accepted the handoff.
       concealBrowserDownload()
-      await removeBrowserDownload(actual)
+      await removeBrowserDownload(actualBrowser)
       accepted = true
     } catch (error) {
       console.warn('HLS Downloader takeover failed; browser download remains untouched', error)
@@ -1167,10 +1286,23 @@ export default defineBackground(() => {
       void pushToTv(resource).catch(error => console.warn('HLS Downloader context TVBox push failed', error))
       return
     }
-    void offer(resource)
+    void offer(resource, undefined, { allowUnverified: true })
   })
 
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type === 'blob-source') {
+      const tabId = Number(sender.tab?.id ?? -1)
+      if (tabId >= 0) {
+        blobSources.remember({
+          blobUrl: String(message.blobUrl || ''),
+          sourceUrl: String(message.sourceUrl || ''),
+          tabId,
+          frameId: Number(sender.frameId ?? -1),
+          pageUrl: String(message.pageUrl || sender.url || sender.tab?.url || ''),
+        })
+      }
+      return
+    }
     if (message?.type === 'click-intent') {
       // Keep the MV3 worker alive until the intent is durable. Without an
       // asynchronous response, Chrome may suspend the worker between the
@@ -1251,7 +1383,10 @@ export default defineBackground(() => {
             ? cleaned.filter(resource => resourceBelongsToFrame(resource, senderFrameId))
             : cleaned
           const visible = senderFrameId >= 0 ? compactResources(scoped, 40, true) : compactResources(cleaned, 40)
-          await setResourceBadge(tabId, visible)
+          // The toolbar badge is tab-wide. An iframe asking for its scoped
+          // overlay list must never overwrite that badge with only its own
+          // candidates (or clear resources found by a sibling/top frame).
+          await setResourceBadge(tabId, cleaned)
           sendResponse(visible)
         }))
         .catch(error => sendResponse({ ok: false, error: String(error) }))

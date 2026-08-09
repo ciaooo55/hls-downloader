@@ -150,6 +150,17 @@ def test_hls_unsupported_messages_do_not_claim_separate_audio_is_unsupported():
     assert "独立音视频 HLS 已支持" in unknown.hint
 
 
+def test_unrelated_keyword_error_in_merge_is_not_misreported_as_aes_key():
+    details = diagnose_download_error(
+        TypeError("worker got an unexpected keyword argument 'on_log'"),
+        stage="remuxing",
+        url="https://example.test/manifest.mpd",
+    )
+
+    assert details.code == "FFMPEG_MERGE_FAILED"
+    assert "FFmpeg" in details.hint
+
+
 def test_auth_failure_distinguishes_missing_and_expired_browser_context():
     missing = diagnose_download_error(
         _http_error(403, "https://example.test/file.bin"),
@@ -174,6 +185,27 @@ def test_auth_failure_distinguishes_missing_and_expired_browser_context():
     assert should_retry_download_error(_http_error(429)) is True
     assert should_retry_download_error(_http_error(503)) is True
     assert should_retry_download_error(PrivateDestinationError("private route")) is False
+
+
+def test_signed_404_recognizes_scoped_browser_request_context():
+    url = "https://files.test/backend/content?id=attachment&sig=short-lived"
+    details = diagnose_download_error(
+        _http_error(404, url),
+        stage="probing",
+        url=url,
+        task_context=Task(
+            id="captured-404",
+            url=url,
+            source_page_url="https://files.test/chat",
+            request_contexts={
+                "https://files.test": {"request_headers": {"x-session": "captured"}}
+            },
+        ),
+    )
+
+    assert details.code == "HTTP_404"
+    assert "已尝试使用原网页" in details.hint
+    assert details.url == "https://files.test/backend/content"
 
 
 def test_proxy_authentication_has_a_specific_recovery_hint():

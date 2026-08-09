@@ -47,7 +47,7 @@ class _DownloadHandler(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/page":
             links = "".join(
                 f'<a id="{name}" href="/{name}.bin" download>{name} 下载</a><br>'
-                for name in ("disabled", "excluded", "accept", "reject", "disconnect")
+                for name in ("disabled", "excluded", "accept", "fallback", "reject", "disconnect")
             )
             payload = (
                 "<!doctype html><html lang=zh-CN><head><meta charset=utf-8>"
@@ -62,7 +62,7 @@ class _DownloadHandler(BaseHTTPRequestHandler):
             return
         name = self.path.split("?", 1)[0].removeprefix("/")
         if name not in {
-            "disabled.bin", "excluded.bin", "accept.bin", "reject.bin", "disconnect.bin"
+            "disabled.bin", "excluded.bin", "accept.bin", "fallback.bin", "reject.bin", "disconnect.bin"
         }:
             self.send_error(404)
             return
@@ -189,7 +189,20 @@ func main() {{
       if statusChecks[id] >= threshold {{
         if strings.HasPrefix(id, "rejected:") {{ status = "rejected" }} else {{ status = "accepted" }}
       }}
-      response["handoff"] = map[string]interface{{}}{{"id": id, "status": status}}
+      handoff := map[string]interface{{}}{{"id": id, "status": status}}
+      if status == "accepted" {{
+        if strings.Contains(id, "fallback.bin") {{
+          handoff["task_status"] = "failed"
+          handoff["task_stage"] = "failed"
+          handoff["task_error_code"] = "HTTP_404"
+          handoff["task_downloaded_bytes"] = 0
+        }} else {{
+          handoff["task_status"] = "downloading"
+          handoff["task_stage"] = "downloading"
+          handoff["task_downloaded_bytes"] = 4096
+        }}
+      }}
+      response["handoff"] = handoff
       event["handoff_id"] = id
       event["status"] = status
     }}
@@ -582,6 +595,18 @@ def run(
                     20,
                 )
 
+                _click_download(driver, page, "fallback")
+                fallback = _assert_browser_completed(driver, inspector, "fallback.bin")
+                _wait_until(
+                    lambda: any(
+                        event.get("op") == "handoff_status"
+                        and event.get("status") == "accepted"
+                        and "fallback.bin" in str(event.get("handoff_id", ""))
+                        for event in _host_events(host_log)
+                    ),
+                    "桌面任务失败后恢复浏览器原下载",
+                )
+
                 _click_download(driver, page, "reject")
                 rejected = _assert_browser_completed(driver, inspector, "reject.bin")
                 _wait_until(
@@ -606,6 +631,7 @@ def run(
                 return {
                     "sitePopupTab": site_popup_tab,
                     "acceptPausedBytes": paused.get("bytesReceived"),
+                    "fallbackCompletedBytes": fallback.get("bytesReceived"),
                     "rejectCompletedBytes": rejected.get("bytesReceived"),
                     "disconnectCompletedBytes": disconnected.get("bytesReceived"),
                     "nativeEvents": len(_host_events(host_log)),

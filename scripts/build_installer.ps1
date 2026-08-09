@@ -6,7 +6,7 @@ param(
     [switch]$SkipSmoke,
     [switch]$UseSystemFfmpeg,
     [switch]$IncludeExtensionAssets,
-    [string]$Version = "3.0.20"
+    [string]$Version = "3.0.22"
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,6 +62,7 @@ $AssetsDir = Join-Path $Root "assets"
 $IconFile = Join-Path $AssetsDir "app-icon.ico"
 $StageDir = Join-Path $Root "build\installer\stage"
 $PortableStage = Join-Path $Root "build\installer\portable"
+$PyInstallerVersionFile = Join-Path $Root "build\installer\pyinstaller-version.txt"
 $ReleaseDir = Join-Path $Root "release"
 $ToolsDir = Join-Path $Root "tools"
 $BinDir = Join-Path $Root "bin"
@@ -342,6 +343,35 @@ if (-not $SkipDesktop) {
 
 if (-not $SkipBackend) {
 Invoke-Step "Build backend executable" {
+    New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($PyInstallerVersionFile)) | Out-Null
+    $numericFileVersion = ($versionParts | ForEach-Object { [int]$_ }) -join ", "
+    $pyInstallerVersion = @"
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=($numericFileVersion),
+    prodvers=($numericFileVersion),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable('040904B0', [
+        StringStruct('CompanyName', 'HLS Downloader'),
+        StringStruct('FileDescription', 'HLS Downloader background component'),
+        StringStruct('FileVersion', '$Version'),
+        StringStruct('ProductName', 'HLS Downloader'),
+        StringStruct('ProductVersion', '$Version')
+      ])
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
+"@
+    Write-Utf8NoBom $PyInstallerVersionFile $pyInstallerVersion
     Push-Location $BackendDir
     $previousPythonPath = $env:PYTHONPATH
     try {
@@ -355,6 +385,7 @@ Invoke-Step "Build backend executable" {
                 --noconsole `
                 --name HLSDownloaderCore `
                 --icon $IconFile `
+                --version-file $PyInstallerVersionFile `
                 --paths . `
                 --collect-all curl_cffi `
                 --collect-all libtorrent `
@@ -376,6 +407,8 @@ Invoke-Step "Build backend executable" {
                 --onefile `
                 --console `
                 --name HLSDownloaderNativeHost `
+                --icon $IconFile `
+                --version-file $PyInstallerVersionFile `
                 native_host.py
         }
     } finally {

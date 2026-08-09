@@ -507,7 +507,24 @@ def parse_m3u8(
         )
 
     if not segments:
-        raise ValueError("m3u8 中没有可用分片")
+        # A freshly started live encoder may legally publish the media
+        # playlist metadata (and sometimes only a PRELOAD-HINT) before its
+        # first complete PART/segment exists. Rejecting that snapshot makes a
+        # valid LL-HLS recording fail at startup instead of polling for the
+        # first media bytes. Keep fail-fast behavior for VOD/ENDLIST and for
+        # documents that merely happen to start with EXTM3U.
+        upper_content = content.upper()
+        live_metadata_present = any(
+            marker in upper_content
+            for marker in (
+                "#EXT-X-TARGETDURATION:",
+                "#EXT-X-PART-INF:",
+                "#EXT-X-SERVER-CONTROL:",
+                "#EXT-X-PRELOAD-HINT:",
+            )
+        )
+        if playlist.is_endlist or not live_metadata_present:
+            raise ValueError("m3u8 中没有可用分片")
 
     target_duration = float(playlist.target_duration or 0)
     if target_duration <= 0:

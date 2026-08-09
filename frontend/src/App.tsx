@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FastForward, LoaderCircle, Pause, Play, Trash2, X } from 'lucide-react'
-import { cancelPowerAction, castLocalFile, castMediaUrl, clearCompletedTasks, completeBrowserMediaPush, confirmPowerAction, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLegalStatus, fetchLocalTvboxShare, fetchPendingPowerActions, fetchSettings, fetchTasks, importTorrentPath, launchFile, openExplorer, openTaskInExplorer, pushLocalTvboxFile, pushTvboxUrl, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
+import { cancelPowerAction, castLocalFile, castMediaUrl, castTask, clearCompletedTasks, completeBrowserMediaPush, confirmPowerAction, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLegalStatus, fetchLocalTvboxShare, fetchPendingPowerActions, fetchSettings, fetchTasks, importTorrentPath, launchFile, openExplorer, openTaskInExplorer, pushLocalTvboxFile, pushTaskToTvbox, pushTvboxUrl, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
 import { fmtBytes, fmtSpeed } from './format'
 import { isRunningStatus, mergeTaskEvent, mergeTaskEvents } from './taskState'
 import { commandState } from './taskCommands'
@@ -92,7 +92,7 @@ export default function App() {
   const [error, setError] = useState('')
   const [confirmation, setConfirmation] = useState<{ title: string; message: string; confirmLabel: string; danger: boolean; run: () => void } | null>(null)
   const [powerAction, setPowerAction] = useState<{ power_action_id: string; action: 'shutdown' | 'sleep' | 'hibernate'; task_title: string; delay_seconds: number } | null>(null)
-  const [devicePick, setDevicePick] = useState<{ kind: 'cast' | 'tvbox'; path?: string; url?: string; filename: string; requestId?: string } | null>(null)
+  const [devicePick, setDevicePick] = useState<{ kind: 'cast' | 'tvbox'; path?: string; url?: string; taskId?: string; filename: string; requestId?: string } | null>(null)
   const [mediaSourcePick, setMediaSourcePick] = useState<{ kind: 'cast' | 'tvbox' } | null>(null)
   const [clipboardOffer, setClipboardOffer] = useState('')
   const [clipboardBatch, setClipboardBatch] = useState('')
@@ -520,13 +520,23 @@ export default function App() {
     }
     return { path: selectedPath, filename: selectedPath.split(/[\\/]/).pop() || selectedPath }
   }
-  const confirmLocalMediaPush = async (path?: string) => {
-    const selected = await chooseLocalMedia(path)
+  const confirmLocalMediaPush = async (taskOrPath?: Task | string) => {
+    if (taskOrPath && typeof taskOrPath !== 'string' && taskOrPath.status !== 'done' && taskOrPath.playback_ready
+      && ['http', 'torrent', 'hls', 'dash'].includes(taskOrPath.task_type || '')) {
+      setDevicePick({ kind: 'tvbox', taskId: taskOrPath.id, filename: taskOrPath.filename || taskOrPath.title || taskOrPath.id })
+      return
+    }
+    const selected = await chooseLocalMedia(typeof taskOrPath === 'string' ? taskOrPath : taskOrPath?.output_path)
     if (!selected) return
     setDevicePick({ kind: 'tvbox', path: selected.path, filename: selected.filename })
   }
-  const confirmLocalCast = async (path?: string) => {
-    const selected = await chooseLocalMedia(path)
+  const confirmLocalCast = async (taskOrPath?: Task | string) => {
+    if (taskOrPath && typeof taskOrPath !== 'string' && taskOrPath.status !== 'done' && taskOrPath.playback_ready
+      && ['http', 'torrent', 'hls', 'dash'].includes(taskOrPath.task_type || '')) {
+      setDevicePick({ kind: 'cast', taskId: taskOrPath.id, filename: taskOrPath.filename || taskOrPath.title || taskOrPath.id })
+      return
+    }
+    const selected = await chooseLocalMedia(typeof taskOrPath === 'string' ? taskOrPath : taskOrPath?.output_path)
     if (!selected) return
     setDevicePick({ kind: 'cast', path: selected.path, filename: selected.filename })
   }
@@ -582,6 +592,10 @@ export default function App() {
             const result = await castLocalFile(pick.path, device)
             setLocalShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'cast', device })
             showFeedback(`已投屏到 ${result.label}：${pick.filename}`)
+          } else if (pick.taskId) {
+            const result = await castTask(pick.taskId, device)
+            setLocalShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'cast', device })
+            showFeedback(`已投屏当前下载到 ${result.label}：${pick.filename}`)
           }
         } else if (pick.url) {
           await pushTvboxUrl(pick.url, device.endpoint)
@@ -590,6 +604,10 @@ export default function App() {
           const result = await pushLocalTvboxFile(pick.path, device.endpoint)
           setLocalShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'tvbox' })
           showFeedback(`已 TVBox 推送：${pick.filename}`)
+        } else if (pick.taskId) {
+          const result = await pushTaskToTvbox(pick.taskId, device.endpoint)
+          setLocalShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'tvbox' })
+          showFeedback(`已 TVBox 推送当前下载：${pick.filename}`)
         }
         if (pick.requestId) await completeBrowserMediaPush(pick.requestId, 'done', `已发送到 ${device.label || device.host || '所选设备'}`)
       } catch (reason: any) { setError(reason.message || '发送失败'); if (pick.requestId) void completeBrowserMediaPush(pick.requestId, 'failed', reason.message || '发送失败') }
@@ -607,7 +625,7 @@ export default function App() {
         <UpdateNotice />
         <div className="content-head"><strong>{filter === 'all' ? '全部任务' : filter === 'running' ? '进行中' : filter === 'done' ? '已完成' : filter === 'failed' ? '失败任务' : filter === 'media' ? '媒体' : filter === 'program' ? '程序' : filter === 'archive' ? '压缩包' : filter === 'other' ? '其他' : '任务列表'} <span>{filtered.length} 项{selected.size > 0 ? ` · 已选 ${selected.size}` : ''}</span></strong><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={() => void clearCompleted()}><Trash2 size={14} />清理已完成</button></div>
         {error && <div className="action-error" role="alert"><span>{error}</span><div className="action-error-actions"><button type="button" className="secondary-button" onClick={() => void load()}>重试</button><button type="button" className="icon-button action-error-dismiss" title="关闭提示" onClick={() => setError('')}><X size={15} /></button></div></div>}
-        <TaskTable key={`${filter}:${query}`} tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openTaskInExplorer(task.id)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onPreview={setPlaying} onPreviewImage={setPreviewImage} onCast={task => task.output_path && void confirmLocalCast(task.output_path)} onPushToTv={task => task.output_path && void confirmLocalMediaPush(task.output_path)} />
+    <TaskTable key={`${filter}:${query}`} tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openTaskInExplorer(task.id)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onPreview={setPlaying} onPreviewImage={setPreviewImage} onCast={task => void confirmLocalCast(task)} onPushToTv={task => void confirmLocalMediaPush(task)} />
       </main>
     </div>
     <footer className="statusbar">
@@ -656,7 +674,7 @@ export default function App() {
     {showSettings && <SettingsPanel themePreference={themePreference} onThemePreferenceChange={changeThemePreference} onClose={() => { setShowSettings(false); load() }} />}
     {showUpdate && <UpdateDialog onClose={() => setShowUpdate(false)} />}
     {mediaSourcePick && <MediaSourcePickerDialog mode={mediaSourcePick.kind} onChoose={chooseDesktopMediaSource} onClose={() => setMediaSourcePick(null)} />}
-    {detailTask && <TaskDetailsModal task={detailTask} pending={pending.has(detailTask.id)} onClose={() => setDetails(null)} onLog={() => setLogTaskId(detailTask.id)} onAction={action => perform(action, [detailTask])} onOpenFile={() => detailTask.output_path && openTaskInExplorer(detailTask.id)} onLaunchFile={() => launchOutput(detailTask)} onPushToTv={() => void confirmLocalMediaPush(detailTask.output_path)} onCast={() => void confirmLocalCast(detailTask.output_path)} onPreview={() => { setDetails(null); setPlaying(detailTask) }} />}
+    {detailTask && <TaskDetailsModal task={detailTask} pending={pending.has(detailTask.id)} onClose={() => setDetails(null)} onLog={() => setLogTaskId(detailTask.id)} onAction={action => perform(action, [detailTask])} onOpenFile={() => detailTask.output_path && openTaskInExplorer(detailTask.id)} onLaunchFile={() => launchOutput(detailTask)} onPushToTv={() => void confirmLocalMediaPush(detailTask)} onCast={() => void confirmLocalCast(detailTask)} onPreview={() => { setDetails(null); setPlaying(detailTask) }} />}
     {playingTask && <Suspense fallback={<div className="modal-overlay player-overlay"><div className="player-chunk-loading"><LoaderCircle className="spin" size={24} /><span>正在打开播放器</span></div></div>}><VideoPlayerModal task={playingTask} onClose={() => setPlaying(null)} /></Suspense>}
     {previewImage && <div className="modal-overlay image-preview-overlay" onMouseDown={() => setPreviewImage(null)}><section className="image-preview" onMouseDown={event => event.stopPropagation()}><header><strong>{previewImage.title || previewImage.filename}</strong><button className="modal-close-button" title="关闭预览" onClick={() => setPreviewImage(null)}><X size={18} /></button></header><img src={taskFileUrl(previewImage.id, previewImage.file_access_token || '')} alt={previewImage.title || previewImage.filename} /></section></div>}
     {logTaskId && <LogModal taskId={logTaskId} onClose={() => setLogTaskId(null)} />}

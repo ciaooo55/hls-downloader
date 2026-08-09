@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import ipaddress
 import mimetypes
@@ -193,6 +194,8 @@ def _private_lan_addresses() -> list[str]:
 
 
 def _scan_chromecasts(timeout: float) -> list[CastDevice]:
+    zeroconf = None
+    browser = None
     try:
         import pychromecast
         from zeroconf import InterfaceChoice, Zeroconf
@@ -203,6 +206,15 @@ def _scan_chromecasts(timeout: float) -> list[CastDevice]:
             timeout=timeout, tries=1, zeroconf_instance=zeroconf,
         )
     except Exception:
+        # Zeroconf owns a background socket/thread. If discovery raises after
+        # it was constructed, returning without closing it leaks one worker on
+        # every device-picker refresh.
+        if browser is not None:
+            with contextlib.suppress(Exception):
+                browser.stop_discovery()
+        if zeroconf is not None:
+            with contextlib.suppress(Exception):
+                zeroconf.close()
         return []
     try:
         devices = []
@@ -214,8 +226,12 @@ def _scan_chromecasts(timeout: float) -> list[CastDevice]:
                 devices.append(CastDevice(f"http://{host}", "", "", label, host, "chromecast", device_id))
         return devices
     finally:
-        browser.stop_discovery()
-        zeroconf.close()
+        if browser is not None:
+            with contextlib.suppress(Exception):
+                browser.stop_discovery()
+        if zeroconf is not None:
+            with contextlib.suppress(Exception):
+                zeroconf.close()
 
 
 async def _describe(location: str, timeout: float) -> CastDevice | None:

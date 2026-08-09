@@ -5,6 +5,8 @@ export interface TaskLike {
   output_is_file?: boolean
   available_actions?: string[]
   is_live?: boolean
+  task_type?: 'hls' | 'dash' | 'http' | 'torrent'
+  playback_ready?: boolean
 }
 
 export interface CommandState {

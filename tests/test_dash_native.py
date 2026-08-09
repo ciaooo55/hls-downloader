@@ -49,7 +49,7 @@ def _install_transport(monkeypatch, handler):
     monkeypatch.setattr(native_module.httpx, "AsyncClient", fake_client)
 
 
-def _install_fake_mux(monkeypatch):
+def _install_fake_mux(monkeypatch, captured_commands=None):
     def read_input(path: Path) -> bytes:
         if path.suffix.lower() != ".m3u8":
             return path.read_bytes()
@@ -64,6 +64,8 @@ def _install_fake_mux(monkeypatch):
         return bytes(payload)
 
     async def fake_ffmpeg(command, task=None, duration_sec=0, on_progress=None):
+        if captured_commands is not None:
+            captured_commands.append(list(command))
         inputs = [
             command[index + 1]
             for index, value in enumerate(command[:-1])
@@ -82,6 +84,7 @@ def _install_fake_mux(monkeypatch):
 
 def test_native_dash_downloads_and_muxes_both_tracks(tmp_path, monkeypatch):
     requests: list[str] = []
+    captured_commands: list[list[str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         target = str(request.url)
@@ -92,7 +95,7 @@ def test_native_dash_downloads_and_muxes_both_tracks(tmp_path, monkeypatch):
         return httpx.Response(200, content=name.encode())
 
     _install_transport(monkeypatch, handler)
-    _install_fake_mux(monkeypatch)
+    _install_fake_mux(monkeypatch, captured_commands)
 
     async def run():
         task = _task(tmp_path)
@@ -107,8 +110,13 @@ def test_native_dash_downloads_and_muxes_both_tracks(tmp_path, monkeypatch):
         assert task.progress.total_segments == 6
         assert task.progress.completed_segments == 6
         assert task.progress.progress_percent == pytest.approx(100.0)
+        assert task.progress.downloaded_bytes == len(payload)
+        assert task.progress.total_bytes == len(payload)
 
     asyncio.run(run())
+    assert captured_commands
+    command = captured_commands[0]
+    assert command[command.index("-t") + 1] == "8.000000"
 
 
 def test_native_dash_downloads_compatible_multi_period_without_fallback(tmp_path, monkeypatch):

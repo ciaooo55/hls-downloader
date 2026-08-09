@@ -10,7 +10,8 @@ export default defineContentScript({
     const mediaSourceBlobs = new WeakMap<object, string>()
     const sourceBufferOwners = new WeakMap<object, object>()
     const pendingResources: Array<{ url: string; mimeType: string }> = []
-    const pendingMse: Array<{ blobUrl: string; mediaUrl: string }> = []
+    type MediaOwnershipPurpose = 'mse' | 'download'
+    const pendingMse: Array<{ blobUrl: string; mediaUrl: string; purpose: MediaOwnershipPurpose }> = []
     const mseReportTimes = new Map<string, number>()
     const MSE_REPORT_INTERVAL_MS = 300
     const report = (url: unknown, mimeType = '') => {
@@ -20,7 +21,7 @@ export default defineContentScript({
       if (pendingResources.length > 200) pendingResources.shift()
       window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: { url, mimeType } }))
     }
-    const reportMse = (blobUrl: string, mediaUrl: string) => {
+    const reportMse = (blobUrl: string, mediaUrl: string, purpose: MediaOwnershipPurpose = 'mse') => {
       if (!blobUrl.startsWith('blob:') || !/^https?:/i.test(mediaUrl)) return
       // LL-HLS players append several audio/video chunks per second. Keep the
       // exact ownership signal, but do not make each append redraw the page.
@@ -33,12 +34,13 @@ export default defineContentScript({
           if (now - reportedAt > 60_000) mseReportTimes.delete(key)
         }
       }
-      const existing = pendingMse.findIndex(item => item.blobUrl === blobUrl && item.mediaUrl === mediaUrl)
+      const existing = pendingMse.findIndex(item => item.blobUrl === blobUrl
+        && item.mediaUrl === mediaUrl && item.purpose === purpose)
       if (existing >= 0) pendingMse.splice(existing, 1)
-      pendingMse.push({ blobUrl, mediaUrl })
+      pendingMse.push({ blobUrl, mediaUrl, purpose })
       if (pendingMse.length > 48) pendingMse.shift()
       window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', {
-        detail: { blobUrl, mediaUrl },
+        detail: { blobUrl, mediaUrl, purpose },
       }))
     }
     const inspectManifestResponse = async (response: Response, mimeType: string) => {
@@ -119,10 +121,76 @@ export default defineContentScript({
       // Frozen prototypes only disable late ShadowRoot discovery.
     }
     // MSE libraries do not all consume fetch responses through arrayBuffer().
-    // Preserve request ownership through clone/blob/bytes and streaming readers
-    // so appendBuffer can still be tied to the correct player.
+    // Record direct Response ownership immediately, but defer the expensive
+    // global slice/stream-reader instrumentation until a page actually creates
+    // a SourceBuffer. Most pages never use MSE and should pay no hot-path cost.
     const streamSources = new WeakMap<object, string>()
     const readerSources = new WeakMap<object, string>()
+    let bytePropagationInstalled = false
+    const installBytePropagationHooks = () => {
+      if (bytePropagationInstalled) return
+      bytePropagationInstalled = true
+      try {
+        const blobArrayBuffer = Blob.prototype.arrayBuffer
+        Blob.prototype.arrayBuffer = async function () {
+          const value = await blobArrayBuffer.call(this)
+          const source = bufferSources.get(this)
+          if (source) rememberBufferSource(value, source)
+          return value
+        }
+        // Player libraries commonly normalize or trim fetched bytes before
+        // appendBuffer. Preserve ownership across those copies only on MSE
+        // pages; patching every typed-array slice on every website caused
+        // measurable jank on busy live/chat applications.
+        const arrayBufferSlice = ArrayBuffer.prototype.slice
+        ArrayBuffer.prototype.slice = function (start?: number, end?: number) {
+          const value = arrayBufferSlice.call(this, start, end)
+          const source = bufferSources.get(this)
+          if (source) rememberBufferSource(value, source)
+          return value
+        }
+        const blobSlice = Blob.prototype.slice
+        Blob.prototype.slice = function (start?: number, end?: number, contentType?: string) {
+          const value = blobSlice.call(this, start, end, contentType)
+          const source = bufferSources.get(this)
+          if (source) rememberBufferSource(value, source)
+          return value
+        }
+        const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as {
+          slice?: (start?: number, end?: number) => ArrayBufferView
+        }
+        const typedArraySlice = typedArrayPrototype.slice
+        if (typeof typedArraySlice === 'function') {
+          typedArrayPrototype.slice = function (this: ArrayBufferView, start?: number, end?: number) {
+            const value = typedArraySlice.call(this, start, end)
+            const source = bufferSources.get(this) || bufferSources.get(this.buffer)
+            if (source) rememberBufferSource(value, source)
+            return value
+          }
+        }
+        const getReader = ReadableStream.prototype.getReader
+        ReadableStream.prototype.getReader = function (this: ReadableStream<any>, ...args: any[]) {
+          const reader = (getReader as any).apply(this, args)
+          const source = streamSources.get(this)
+          if (source) readerSources.set(reader, source)
+          return reader
+        } as typeof ReadableStream.prototype.getReader
+        const patchReader = (prototype: any) => {
+          if (!prototype?.read) return
+          const read = prototype.read
+          prototype.read = async function (...args: any[]) {
+            const result = await read.apply(this, args)
+            const source = readerSources.get(this)
+            if (source && result && 'value' in result) rememberBufferSource(result.value, source)
+            return result
+          }
+        }
+        patchReader(globalThis.ReadableStreamDefaultReader?.prototype)
+        patchReader(globalThis.ReadableStreamBYOBReader?.prototype)
+      } catch {
+        // Frozen prototypes disable only optional byte-copy correlation.
+      }
+    }
     try {
       const responseArrayBuffer = Response.prototype.arrayBuffer
       Response.prototype.arrayBuffer = async function () {
@@ -151,64 +219,8 @@ export default defineContentScript({
         if (value.body) streamSources.set(value.body, value.url || this.url)
         return value
       }
-      const blobArrayBuffer = Blob.prototype.arrayBuffer
-      Blob.prototype.arrayBuffer = async function () {
-        const value = await blobArrayBuffer.call(this)
-        const source = bufferSources.get(this)
-        if (source) rememberBufferSource(value, source)
-        return value
-      }
-      // Player libraries commonly normalize or trim fetched bytes before
-      // appendBuffer. Preserve ownership across those copies; otherwise one
-      // harmless `arrayBuffer.slice()`/`Uint8Array.slice()` turns a precisely
-      // identified player back into a page-level guess.
-      const arrayBufferSlice = ArrayBuffer.prototype.slice
-      ArrayBuffer.prototype.slice = function (start?: number, end?: number) {
-        const value = arrayBufferSlice.call(this, start, end)
-        const source = bufferSources.get(this)
-        if (source) rememberBufferSource(value, source)
-        return value
-      }
-      const blobSlice = Blob.prototype.slice
-      Blob.prototype.slice = function (start?: number, end?: number, contentType?: string) {
-        const value = blobSlice.call(this, start, end, contentType)
-        const source = bufferSources.get(this)
-        if (source) rememberBufferSource(value, source)
-        return value
-      }
-      const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as {
-        slice?: (start?: number, end?: number) => ArrayBufferView
-      }
-      const typedArraySlice = typedArrayPrototype.slice
-      if (typeof typedArraySlice === 'function') {
-        typedArrayPrototype.slice = function (this: ArrayBufferView, start?: number, end?: number) {
-          const value = typedArraySlice.call(this, start, end)
-          const source = bufferSources.get(this) || bufferSources.get(this.buffer)
-          if (source) rememberBufferSource(value, source)
-          return value
-        }
-      }
-      const getReader = ReadableStream.prototype.getReader
-      ReadableStream.prototype.getReader = function (this: ReadableStream<any>, ...args: any[]) {
-        const reader = (getReader as any).apply(this, args)
-        const source = streamSources.get(this)
-        if (source) readerSources.set(reader, source)
-        return reader
-      } as typeof ReadableStream.prototype.getReader
-      const patchReader = (prototype: any) => {
-        if (!prototype?.read) return
-        const read = prototype.read
-        prototype.read = async function (...args: any[]) {
-          const result = await read.apply(this, args)
-          const source = readerSources.get(this)
-          if (source && result && 'value' in result) rememberBufferSource(result.value, source)
-          return result
-        }
-      }
-      patchReader(globalThis.ReadableStreamDefaultReader?.prototype)
-      patchReader(globalThis.ReadableStreamBYOBReader?.prototype)
     } catch {
-      // Frozen prototypes disable only this optional ownership layer.
+      // Frozen Response prototypes disable only this optional ownership layer.
     }
 
     const originalFetch = window.fetch
@@ -275,6 +287,7 @@ export default defineContentScript({
       try {
         const addSourceBuffer = MediaSource.prototype.addSourceBuffer
         MediaSource.prototype.addSourceBuffer = function (mimeType: string) {
+          installBytePropagationHooks()
           const sourceBuffer = addSourceBuffer.call(this, mimeType)
           sourceBufferOwners.set(sourceBuffer, this)
           return sourceBuffer
@@ -286,7 +299,7 @@ export default defineContentScript({
               || (ArrayBuffer.isView(data) ? bufferSources.get(data.buffer) : '')
             const owner = sourceBufferOwners.get(this)
             const blobUrl = owner ? mediaSourceBlobs.get(owner) || '' : ''
-            if (source && blobUrl) reportMse(blobUrl, source)
+            if (source && blobUrl) reportMse(blobUrl, source, 'mse')
           } catch {
             // Preserve the page's original append behavior on every observer
             // failure; the extension may miss evidence but cannot break video.
@@ -300,7 +313,11 @@ export default defineContentScript({
             if (object instanceof MediaSource) mediaSourceBlobs.set(object, value)
             else {
               const source = bufferSources.get(object)
-              if (source) reportMse(value, source)
+              // A page that fetched a server response into a Blob often starts
+              // the browser download through this object URL. Preserve that
+              // exact HTTP ownership separately from MSE playback ownership;
+              // client-generated blobs have no source and are never reported.
+              if (source) reportMse(value, source, 'download')
             }
           } catch {}
           return value

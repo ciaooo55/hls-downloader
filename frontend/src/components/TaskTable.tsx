@@ -280,8 +280,8 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
                 {task.available_actions?.includes('pause') && <button title={task.is_live ? '停止录制' : '暂停'} onClick={() => onTasksAction([task], 'pause')}><Pause size={16} /></button>}
                 {task.available_actions?.includes('resume') && <button title={task.is_live ? '继续录制' : '恢复'} onClick={() => onTasksAction([task], 'resume')}><Play size={16} /></button>}
                 {(task.available_actions?.includes('preview') || task.status === 'done') && <button title={task.status === 'done' ? '播放' : '边下边播'} onClick={() => onPreview(task)}><MonitorPlay size={16} /></button>}
-                {task.output_path && task.output_is_file && task.status === 'done' && <button title="投屏已下载文件" onClick={() => onCast(task)}><ScreenShare size={16} /></button>}
-                {task.output_path && task.output_is_file && task.status === 'done' && <button title="TVBox 推送已下载文件" onClick={() => onPushToTv(task)}><Tv size={16} /></button>}
+                {((task.output_path && task.output_is_file && task.status === 'done') || (task.playback_ready && ['http', 'torrent', 'hls', 'dash'].includes(task.task_type))) && <button title={task.status === 'done' ? '投屏已下载文件' : '投屏当前已下载内容'} onClick={() => onCast(task)}><ScreenShare size={16} /></button>}
+                {((task.output_path && task.output_is_file && task.status === 'done') || (task.playback_ready && ['http', 'torrent', 'hls', 'dash'].includes(task.task_type))) && <button title={task.status === 'done' ? 'TVBox 推送已下载文件' : 'TVBox 推送当前已下载内容'} onClick={() => onPushToTv(task)}><Tv size={16} /></button>}
                 <button title="复制链接" onClick={() => onCopyUrl(task)}><Copy size={16} /></button>
                 <i className="row-actions-divider" />
                 <button className="danger" title="删除" onClick={() => onTasksAction([task], 'delete')}><Trash2 size={16} /></button>
@@ -301,7 +301,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
       {menu && createPortal(
         <div className="task-context-menu" role="menu" style={{ left: menu.x, top: menu.y }} onPointerDown={event => event.stopPropagation()}>
           {menu.actions.map(action => <button key={action} role="menuitem" className={action === 'deleteFiles' ? 'danger' : ''} onClick={() => runMenuAction(action)}>
-            {menuIcons[action]}<span>{action === 'pause' ? pauseLabelFor(menuTargets.length ? menuTargets : [menu.task]) : action === 'resume' ? resumeLabelFor(menuTargets.length ? menuTargets : [menu.task]) : action === 'preview' && menu.task.status !== 'done' ? '边下边播' : action === 'deleteFiles' && menu.taskIds.some(id => tasks.find(task => task.id === id)?.status !== 'done') ? '停止并删除任务及文件' : menuLabels[action]}</span>
+            {menuIcons[action]}<span>{action === 'pause' ? pauseLabelFor(menuTargets.length ? menuTargets : [menu.task]) : action === 'resume' ? resumeLabelFor(menuTargets.length ? menuTargets : [menu.task]) : action === 'preview' && menu.task.status !== 'done' ? '边下边播' : action === 'cast' && menu.task.status !== 'done' ? '投屏当前已下载内容' : action === 'pushTvbox' && menu.task.status !== 'done' ? 'TVBox 推送当前已下载内容' : action === 'deleteFiles' && menu.taskIds.some(id => tasks.find(task => task.id === id)?.status !== 'done') ? '停止并删除任务及文件' : menuLabels[action]}</span>
           </button>)}
         </div>,
         document.body,

@@ -895,6 +895,44 @@ def test_delete_incomplete_task_always_removes_reserved_output(tmp_path, monkeyp
     asyncio.run(run())
 
 
+def test_create_task_persists_the_same_local_timestamps_shown_by_the_ui(tmp_path, monkeypatch):
+    from backend.app import database as database_module
+
+    async def run():
+        monkeypatch.setattr(database_module, "DB_PATH", tmp_path / "tasks.db")
+        manager = TaskManager()
+        task = await manager.create_task("https://example.test/file.bin")
+        rows = await database_module.run_db(
+            "SELECT created_at,updated_at FROM tasks WHERE id=?", (task.id,)
+        )
+        assert rows[0]["created_at"] == task.created_at
+        assert rows[0]["updated_at"] == task.updated_at
+        assert "T" in rows[0]["created_at"]
+
+    asyncio.run(run())
+
+
+def test_load_from_db_converts_legacy_sqlite_utc_timestamp_to_local_time(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from backend.app import database as database_module
+
+    async def run():
+        monkeypatch.setattr(database_module, "DB_PATH", tmp_path / "tasks.db")
+        manager = TaskManager()
+        task = await manager.create_task("https://example.test/file.bin")
+        await database_module.run_db(
+            "UPDATE tasks SET created_at=?,updated_at=? WHERE id=?",
+            ("2026-01-01 00:00:00", "2026-01-01 00:00:01", task.id),
+        )
+        restored = TaskManager()
+        await restored.load_from_db()
+        expected = datetime(2026, 1, 1, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+        assert restored.tasks[task.id].created_at == expected.isoformat()
+        assert manager_module._database_timestamp("2026-01-01 00:00:01") == expected.replace(second=1).isoformat()
+
+    asyncio.run(run())
+
+
 def test_delete_terminal_task_waits_for_runner_cleanup_tail(tmp_path, monkeypatch):
     async def fake_run_db(*args, **kwargs):
         return None

@@ -105,6 +105,32 @@ def test_scan_cast_devices_includes_chromecast(monkeypatch):
     assert devices[0]["id"] == "cast-uuid"
 
 
+def test_failed_chromecast_discovery_closes_zeroconf(monkeypatch):
+    closed = []
+
+    class FakeZeroconf:
+        def __init__(self, **_kwargs):
+            pass
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(dlna, "_private_lan_addresses", lambda: ["192.168.1.2"])
+    monkeypatch.setitem(
+        sys.modules,
+        "zeroconf",
+        SimpleNamespace(InterfaceChoice=SimpleNamespace(Default="default"), Zeroconf=FakeZeroconf),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pychromecast",
+        SimpleNamespace(get_chromecasts=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("scan failed"))),
+    )
+
+    assert dlna._scan_chromecasts(1.0) == []
+    assert closed == [True]
+
+
 def test_ssdp_scan_uses_a_response_window_that_cannot_expire_before_mx():
     assert dlna.SSDP_RESPONSE_DELAY_SECONDS == 1
     assert dlna.MEDIA_RENDERER_TARGET_V2 in dlna.SSDP_TARGETS

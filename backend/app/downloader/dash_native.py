@@ -166,6 +166,7 @@ class NativeDashEngine:
     def __init__(self, task: Task, on_progress=None, on_log=None) -> None:
         self.task = task
         self.on_progress = on_progress or (lambda task: None)
+        self._on_log_callback = on_log
         self.on_log = on_log or (lambda task_id, message: None)
         self._retry_window = SharedRetryWindow()
         self.tracker = ProgressTracker()
@@ -568,6 +569,10 @@ class NativeDashEngine:
                         snapshot = self.tracker.snapshot()
                         task.progress.completed_segments = snapshot["completed"]
                         task.progress.downloaded_bytes = snapshot["downloaded_bytes"]
+                        # DASH manifests normally do not declare byte sizes.
+                        # Keep a running observed estimate, matching HLS, until
+                        # the exact merged file size is known at completion.
+                        task.progress.total_bytes = snapshot["total_bytes"]
                         task.progress.speed_bytes_per_sec = snapshot["speed"]
                         task.progress.eta_seconds = snapshot["eta"]
                         if total_segments:
@@ -731,10 +736,21 @@ class NativeDashEngine:
         command += ["-c", "copy", "-avoid_negative_ts", "make_zero"]
         if container == ".mp4":
             command += ["-movflags", "+faststart"]
+        # fMP4 fragments retain their media timeline.  Broken/non-zero tfdt
+        # values used to let stream copy produce a file far longer than the
+        # manifest and then fail verification at the very last step.  The
+        # locally rebuilt playlists define the intended media span, so cap the
+        # mux output to that proven duration just like the HLS merge path.
+        if duration > 0:
+            command += ["-t", f"{duration:.6f}"]
         command += ["-progress", "pipe:1", str(temporary)]
         try:
             success = await _run_ffmpeg(
-                command, task=task, duration_sec=duration, on_progress=self.on_progress
+                command,
+                task=task,
+                duration_sec=duration,
+                on_progress=self.on_progress,
+                **({"on_log": self.on_log} if self._on_log_callback is not None else {}),
             )
             if not success or not temporary.exists() or temporary.stat().st_size <= 0:
                 raise RuntimeError("ffmpeg 合并 DASH 轨道失败")
@@ -759,8 +775,11 @@ class NativeDashEngine:
         task.engine_state["stream_path"] = str(output)
         size = output.stat().st_size
         task.engine_state["total_size"] = size
-        task.progress.downloaded_bytes = max(task.progress.downloaded_bytes, size)
-        task.progress.total_bytes = task.progress.downloaded_bytes
+        # Once muxing is complete, the durable output size is the only useful
+        # completed-task size. Network bytes can be larger because separate
+        # audio/video/init fragments and retries were counted during transfer.
+        task.progress.downloaded_bytes = size
+        task.progress.total_bytes = size
         task.progress.progress_percent = 100.0
         task.progress.post_percent = 100.0
         task.progress.connection_status = "idle"
@@ -879,6 +898,7 @@ class NativeDashEngine:
                 task=self.task,
                 duration_sec=0,
                 on_progress=self.on_progress,
+                **({"on_log": self.on_log} if self._on_log_callback is not None else {}),
             )
             if not success or not vtt_path.is_file():
                 raise RuntimeError("FFmpeg 无法转换 fMP4 DASH 字幕")
@@ -1397,6 +1417,7 @@ class NativeDashEngine:
             task.progress.completed_segments = total
             snapshot = self.tracker.snapshot()
             task.progress.downloaded_bytes = snapshot["downloaded_bytes"]
+            task.progress.total_bytes = snapshot["total_bytes"]
             task.progress.speed_bytes_per_sec = snapshot["speed"]
             if duration_state:
                 task.progress.media_duration = float(duration_state["total_duration"])

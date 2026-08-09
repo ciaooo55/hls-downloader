@@ -144,6 +144,29 @@ complete-40.m4s
     assert [segment["part_index"] for segment in parsed["segments"]] == [None, 0, 1]
 
 
+def test_parse_accepts_empty_live_startup_snapshot_but_not_empty_vod():
+    startup = """#EXTM3U
+#EXT-X-VERSION:9
+#EXT-X-TARGETDURATION:2
+#EXT-X-PART-INF:PART-TARGET=0.333
+#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES
+#EXT-X-PRELOAD-HINT:TYPE=PART,URI="first-part.m4s"
+"""
+
+    parsed = parse_m3u8("https://example.test/live.m3u8", startup)
+
+    assert parsed["is_live"] is True
+    assert parsed["segments"] == []
+    assert parsed["target_duration"] == 2.0
+    assert parsed["part_target_duration"] == 0.333
+
+    with pytest.raises(ValueError, match="没有可用分片"):
+        parse_m3u8(
+            "https://example.test/empty-vod.m3u8",
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-ENDLIST\n",
+        )
+
+
 def test_parse_live_defers_an_incomplete_trailing_extinf_without_uri():
     playlist = """#EXTM3U
 #EXT-X-TARGETDURATION:2

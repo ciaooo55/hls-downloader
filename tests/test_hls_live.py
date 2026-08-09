@@ -112,6 +112,40 @@ async def _instant_wait(self, seconds: float) -> None:
     await asyncio.sleep(0)
 
 
+def test_live_recording_waits_for_first_segment_after_empty_startup_snapshot(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(HLSDownloader, "_live_wait", _instant_wait)
+    url = "https://example.test/live.m3u8"
+    startup = (
+        "#EXTM3U\n#EXT-X-VERSION:9\n#EXT-X-TARGETDURATION:2\n"
+        "#EXT-X-PART-INF:PART-TARGET=0.333\n"
+        '#EXT-X-PRELOAD-HINT:TYPE=PART,URI="first.m4s"\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == url:
+            return httpx.Response(
+                200,
+                text=_live_playlist(0, ["first.ts"], ended=True),
+                request=request,
+            )
+        return httpx.Response(200, content=b"first-segment", request=request)
+
+    async def run():
+        task = _task(tmp_path, url)
+        downloader = _downloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await downloader._record_live(client, _parsed(url, startup), {}, None)
+        assert result is not None
+        segments, duration = result
+        assert len(segments) == 1
+        assert duration == pytest.approx(4.0)
+        assert (downloader._seg_dir() / "000000.seg").read_bytes() == b"first-segment"
+
+    asyncio.run(run())
+
+
 def test_live_recording_appends_segments_and_finishes_on_endlist(tmp_path, monkeypatch):
     monkeypatch.setattr(HLSDownloader, "_live_wait", _instant_wait)
     url = "https://example.test/live.m3u8"

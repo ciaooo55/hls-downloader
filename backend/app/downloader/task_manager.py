@@ -121,6 +121,26 @@ def _safe_float(value, default: float = 0.0, *, minimum: float | None = None) ->
         result = max(minimum, result)
     return result
 
+
+def _database_timestamp(value) -> str:
+    """Normalize only SQLite's legacy UTC default into local task time.
+
+    Older INSERT statements omitted these columns, so SQLite wrote
+    ``datetime('now')`` as a naive ``YYYY-MM-DD HH:MM:SS`` UTC value while all
+    runtime updates used local ISO timestamps.  The exact legacy shape is
+    unambiguous; leave every ISO/offset/custom value untouched.
+    """
+    text = str(value or "")
+    if len(text) != 19 or text[10] != " ":
+        return text
+    try:
+        utc_value = datetime.strptime(text, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        return text
+    return utc_value.astimezone().replace(tzinfo=None).isoformat()
+
 ACTIVE_STATUSES = {
     TaskStatus.FETCHING_METADATA,
     TaskStatus.CHECKING,
@@ -789,8 +809,8 @@ class TaskManager:
             await run_db(
                 "INSERT INTO tasks "
                 "(id,task_type,source_page_url,mime_type,title,url,referer,origin,user_agent,cookie,request_headers,request_contexts,request_method,request_body,filename,concurrency,"
-                "status,stage,last_log,started_at,finished_at,post_percent,expected_checksum,checksum_algorithm,checksum_actual,checksum_verified,selected_video,selected_audio,engine_state) "
-                "VALUES (" + ",".join("?" for _ in range(29)) + ")",
+                "status,stage,last_log,started_at,finished_at,post_percent,expected_checksum,checksum_algorithm,checksum_actual,checksum_verified,selected_video,selected_audio,created_at,updated_at,engine_state) "
+                "VALUES (" + ",".join("?" for _ in range(31)) + ")",
                 (
                     task.id,
                     task.task_type.value,
@@ -820,6 +840,8 @@ class TaskManager:
                     None,
                     protect_secret(task.selected_video),
                     protect_secret(task.selected_audio),
+                    task.created_at,
+                    task.updated_at,
                     json.dumps(task.engine_state, ensure_ascii=False),
                 ),
             )
@@ -1710,8 +1732,8 @@ class TaskManager:
                 checksum_actual=_row_value(row, "checksum_actual", "") or "",
                 checksum_verified=(None if _row_value(row, "checksum_verified", None) is None else bool(_row_value(row, "checksum_verified", 0))),
                 output_path=_row_value(row, "output_path", "") or "",
-                created_at=_row_value(row, "created_at", "") or "",
-                updated_at=_row_value(row, "updated_at", "") or "",
+                created_at=_database_timestamp(_row_value(row, "created_at", "")),
+                updated_at=_database_timestamp(_row_value(row, "updated_at", "")),
                 started_at=_row_value(row, "started_at", "") or "",
                 finished_at=_row_value(row, "finished_at", "") or "",
                 engine_state=engine_state,

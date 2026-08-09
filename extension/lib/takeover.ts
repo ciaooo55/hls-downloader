@@ -4,8 +4,12 @@ export function browserCleanupAction(state: BrowserDownloadState): 'remove-file'
   return state === 'complete' ? 'remove-file' : 'cancel'
 }
 
-export function canContinueTakeover(state: BrowserDownloadState): boolean {
-  return state === 'in_progress' || state === 'complete'
+export function canContinueTakeover(state: BrowserDownloadState, paused = false): boolean {
+  // Chromium may briefly report a download as interrupted immediately after
+  // downloads.pause(). In that case the item is still resumable and must be
+  // inspected for takeover. An unpaused interrupted item remains a genuine
+  // failure/cancellation and is not eligible.
+  return state === 'in_progress' || state === 'complete' || (paused && state === 'interrupted')
 }
 
 /** A paused Chromium item can transiently become interrupted and remain resumable. */
@@ -25,6 +29,37 @@ export interface BrowserHandoffPayload {
   presentation_queued?: boolean
   presentation_error?: string
   task_id?: string
+  task_status?: string
+  task_stage?: string
+  task_downloaded_bytes?: number
+  task_total_bytes?: number
+  task_error_code?: string
+}
+
+export type DesktopTaskReadiness = 'waiting' | 'safe-to-remove' | 'browser-fallback'
+
+/**
+ * Decide whether Chromium may discard its paused DownloadItem. Handoff
+ * acceptance proves only that a task was created; it does not prove that a
+ * short-lived/one-use request can be replayed by the desktop downloader.
+ */
+export function desktopTaskReadiness(handoff: BrowserHandoffPayload): DesktopTaskReadiness {
+  const handoffStatus = String(handoff.status || '')
+  if (['canceled', 'rejected', 'expired', 'failed'].includes(handoffStatus)) return 'browser-fallback'
+  if (handoffStatus !== 'accepted') return 'waiting'
+
+  const taskStatus = String(handoff.task_status || '')
+  if (['failed', 'canceled', 'unsupported', 'paused'].includes(taskStatus)) return 'browser-fallback'
+  if (taskStatus === 'done') return 'safe-to-remove'
+  if (Math.max(0, Number(handoff.task_downloaded_bytes || 0)) > 0) return 'safe-to-remove'
+
+  // Merging/verifying can only be reached after the transfer succeeded. Do
+  // not use status=downloading alone: HTTP tasks enter that status before the
+  // probing request, which is exactly where a one-use URL can still fail.
+  if (['merging', 'remuxing', 'verifying', 'verifying_checksum'].includes(String(handoff.task_stage || ''))) {
+    return 'safe-to-remove'
+  }
+  return 'waiting'
 }
 
 export function desktopAcceptedHandoff(response: unknown): boolean {

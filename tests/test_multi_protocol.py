@@ -44,6 +44,26 @@ def test_short_signature_wait_is_bounded_and_only_uses_complete_triplet():
     ) == 0
 
 
+def test_http_run_waits_for_a_future_short_signature_before_probing(monkeypatch):
+    task = Task(
+        id="future-signature",
+        url="https://cdn.test/video.mp4?s=opaque&e=1786000120&_t=1786000030",
+        task_type=TaskType.HTTP,
+    )
+    messages: list[str] = []
+    downloader = HTTPDownloader(task, on_log=lambda _task_id, message: messages.append(message))
+    monkeypatch.setattr(
+        http_file_module,
+        "_short_signature_activation_delay",
+        lambda _url: 0.001,
+    )
+
+    asyncio.run(downloader._wait_for_short_signature_activation())
+
+    assert any("短效签名尚未生效" in message for message in messages)
+    assert messages[-1].endswith("短效签名已到可用时间，正在读取文件信息")
+
+
 def test_auto_task_type_recognizes_supported_sources():
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/video.m3u8?token=1") is TaskType.HLS
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/manifest.mpd") is TaskType.DASH
@@ -844,6 +864,29 @@ def test_browser_originated_http_403_can_retry_with_browser_profile():
     assert HTTPDownloader(task)._can_retry_with_browser_profile(error) is False
 
 
+def test_browser_originated_signed_404_can_retry_with_browser_profile():
+    task = Task(
+        id="http-browser-authenticated-404",
+        url="https://files.test/backend/content?id=attachment&sig=short-lived",
+        task_type=TaskType.HTTP,
+        source_page_url="https://files.test/chat",
+        request_contexts={"https://files.test": {"request_headers": {"x-session": "captured"}}},
+    )
+    task.engine_state["browser_originated"] = True
+    request = httpx.Request("GET", task.url)
+    error = httpx.HTTPStatusError(
+        "not found",
+        request=request,
+        response=httpx.Response(404, request=request),
+    )
+
+    assert HTTPDownloader(task)._can_retry_with_browser_profile(error) is True
+
+    task.request_contexts = {}
+    task.source_page_url = ""
+    assert HTTPDownloader(task)._can_retry_with_browser_profile(error) is False
+
+
 def test_browser_profile_http_fallback_downloads_after_a_403(tmp_path, monkeypatch):
     from backend.app.downloader import hls as hls_module
 
@@ -1055,6 +1098,57 @@ def test_http_v2_resume_keeps_partial_chunk_across_signed_url_change(tmp_path, m
     assert "url" not in saved
     assert "token" not in state.read_text(encoding="utf-8")
     assert saved["ranges"][0]["current"] == 10
+
+
+def test_torrent_session_applies_and_clears_manual_peer_proxy(monkeypatch):
+    from backend.app.downloader import torrent as torrent_module
+
+    applied: list[dict] = []
+
+    class Session:
+        def apply_settings(self, values):
+            applied.append(dict(values))
+
+    session = Session()
+
+    class Category:
+        error_notification = 1
+        storage_notification = 2
+
+    class Alert:
+        category_t = Category
+
+    class Libtorrent:
+        alert = Alert
+
+        @staticmethod
+        def session():
+            return session
+
+    monkeypatch.setattr(torrent_module, "_SHARED_SESSION", None)
+    monkeypatch.setattr(settings, "proxy_mode", "manual")
+    monkeypatch.setattr(
+        settings,
+        "proxy_url",
+        "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
+    )
+
+    assert torrent_module._torrent_session(Libtorrent) is session
+    manual = applied[-1]
+    assert manual["proxy_type"] == 3
+    assert manual["proxy_hostname"] == "127.0.0.1"
+    assert manual["proxy_port"] == 1080
+    assert manual["proxy_peer_connections"] is True
+    assert manual["proxy_tracker_connections"] is True
+    assert manual["force_proxy"] is True
+
+    monkeypatch.setattr(settings, "proxy_mode", "direct")
+    assert torrent_module._torrent_session(Libtorrent) is session
+    cleared = applied[-1]
+    assert cleared["proxy_type"] == 0
+    assert cleared["proxy_hostname"] == ""
+    assert cleared["proxy_peer_connections"] is False
+    assert cleared["force_proxy"] is False
 
 
 def test_torrent_downloads_from_local_peer_and_stops_at_completion(tmp_path, monkeypatch):

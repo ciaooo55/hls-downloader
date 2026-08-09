@@ -63,7 +63,7 @@ export default defineContentScript({
     // during that window instead of losing the first manifest from a fast MSE
     // player (which otherwise leaves the overlay in “正在识别” forever).
     const earlyResourceEvents: Array<{ url: string; mimeType?: string }> = []
-    const earlyMseEvents: Array<{ blobUrl: string; mediaUrl: string }> = []
+    const earlyMseEvents: Array<{ blobUrl: string; mediaUrl: string; purpose?: 'mse' | 'download' }> = []
     const earlyRuntimeMessages: any[] = []
     let contentReady = false
     const earlyResourceListener = (event: Event) => {
@@ -79,7 +79,11 @@ export default defineContentScript({
       if (contentReady) return
       const detail = (event as CustomEvent).detail || {}
       if (typeof detail.blobUrl === 'string' && typeof detail.mediaUrl === 'string') {
-        earlyMseEvents.push({ blobUrl: detail.blobUrl, mediaUrl: detail.mediaUrl })
+        earlyMseEvents.push({
+          blobUrl: detail.blobUrl,
+          mediaUrl: detail.mediaUrl,
+          purpose: detail.purpose === 'download' ? 'download' : 'mse',
+        })
         if (earlyMseEvents.length > 200) earlyMseEvents.splice(0, earlyMseEvents.length - 200)
         requestActivation()
       }
@@ -159,8 +163,21 @@ export default defineContentScript({
       resources.clear()
       for (const value of values) resources.set(resourceFingerprint(value), value)
     }
+    const resourcePresentationSignature = () => [...resources.values()]
+      .map(resource => [
+        resourceFingerprint(resource), resource.url, resource.title || '', resource.filename || '',
+        resource.kind, resource.mimeType || '', resource.size || 0, resource.estimatedSize || 0,
+        resource.width || 0, resource.height || 0, resource.bandwidth || 0, resource.duration || 0,
+        resource.isLive === true ? 1 : resource.isLive === false ? 0 : '', resource.inspected ? 1 : 0,
+        (resource.variants || []).map(variant => `${variant.url}:${variant.width || 0}:${variant.height || 0}:${variant.bandwidth || 0}`).join(','),
+        (resource.playbackUrls || []).join(','), (resource.playbackPatterns || []).join(','),
+      ].join('|'))
+      .sort()
+      .join('\n')
     const addResource = (resource: MediaResource) => {
+      const before = resourcePresentationSignature()
       replaceResources(mergeResources([...resources.values()], resource, 40))
+      return before !== resourcePresentationSignature()
     }
     const pageMediaTitle = () => {
       const metadata = [
@@ -704,16 +721,23 @@ export default defineContentScript({
       let filename = ''
       try { filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch {}
       const resource = { id: resourceId(url), url, kind, mimeType, pageUrl: location.href, title: pageMediaTitle() || filename, filename, seenAt: Date.now() }
-      addResource(resource); scheduleRender(); void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
+      const changed = addResource(resource)
+      if (changed) scheduleRender()
+      void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
     }
 
     const markVideoPlayback = (video: HTMLVideoElement, eventType: string) => {
       const rect = video.getBoundingClientRect()
       if (rect.width < 180 || rect.height < 100 || rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) return
-      // MSE and nested players can fire on a non-dominant video node. Anchor
-      // to the element that is actually advancing, not the largest rectangle.
-      activeVideo = video
-      selectionMode = false
+      const previousActiveVideo = activeVideo
+      const explicitActivation = ['play', 'playing', 'initializing'].includes(eventType)
+      // timeupdate fires several times per second for every playing element.
+      // It may refresh source evidence, but must not continuously steal the
+      // active-player identity or rebuild the complete overlay DOM.
+      if (explicitActivation || !activeVideo || !activeVideo.isConnected || activeVideo.paused || activeVideo.ended) {
+        activeVideo = video
+        selectionMode = false
+      }
       const directSources = mediaElementSources(video)
       const sourceUrls = [...new Set(directSources.map(source => source.url).filter(Boolean))]
       const mseResourceUrls = sourceUrls
@@ -723,8 +747,9 @@ export default defineContentScript({
       const changedSource = sourceUrls.join('\n') !== (previousPlayback?.sourceUrls || []).join('\n')
       if (!previousPlayback || changedSource) {
         if (changedSource) videoButtonPositions.delete(video)
-        activePlayback = { sourceUrls, startedAt: Date.now(), mseResourceUrls }
-        playbackByVideo.set(video, activePlayback)
+        const playback = { sourceUrls, startedAt: Date.now(), mseResourceUrls }
+        playbackByVideo.set(video, playback)
+        if (video === activeVideo) activePlayback = playback
         // currentSrc is immediate, player-specific evidence. Register it here
         // instead of waiting for PerformanceObserver/webRequest: Firefox can
         // omit those observations for dynamically created iframe media.
@@ -735,8 +760,8 @@ export default defineContentScript({
           add(source.url, source.mimeType, true)
         })
       } else {
-        activePlayback = previousPlayback
-        scheduleVideoButtons()
+        if (video === activeVideo) activePlayback = previousPlayback
+        if (previousActiveVideo !== activeVideo) scheduleVideoButtons()
         return
       }
       render()
@@ -837,6 +862,17 @@ export default defineContentScript({
       const blobUrl = String(detail.blobUrl || '')
       const mediaUrl = String(detail.mediaUrl || '')
       if (!blobUrl.startsWith('blob:') || !/^https?:/i.test(mediaUrl)) return
+      if (detail.purpose === 'download') {
+        // Keep this page-scoped correlation in extension memory only. It lets
+        // downloads.onCreated replace an opaque blob: item with the successful
+        // HTTP response that produced it, without guessing for generated data.
+        void runtimeMessage({
+          type: 'blob-source',
+          blobUrl,
+          sourceUrl: mediaUrl,
+          pageUrl: location.href,
+        }).catch(() => undefined)
+      }
       const now = Date.now()
       const evidence = mseEvidenceByBlob.get(blobUrl) || { urls: new Set<string>(), seenAt: now }
       const isNewEvidence = !evidence.urls.has(mediaUrl)
@@ -896,7 +932,7 @@ export default defineContentScript({
           id: resourceId(message.resource.url),
           seenAt: Date.now(),
         } as MediaResource
-        addResource(resource); render()
+        if (addResource(resource)) scheduleRender()
         // The background already persisted captured-resource. Send a second
         // update only when this frame contributes a better human title.
         if (resource.title && resource.title !== message.resource.title) {

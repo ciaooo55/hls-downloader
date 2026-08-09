@@ -76,7 +76,12 @@ function Invoke-Installer([string]$Path) {
         "/S",
         "/BUILD-SMOKE=1",
         "/D=$installDir"
-    ) -WindowStyle Hidden -Wait -PassThru
+    ) -WindowStyle Hidden -PassThru
+    if (-not $process.WaitForExit(90000)) {
+        $process | Stop-Process -Force -ErrorAction SilentlyContinue
+        throw "Installer did not finish within the bounded 90-second smoke window"
+    }
+    $process.Refresh()
     if ($process.ExitCode -ne 0) {
         throw "Installer returned exit code $($process.ExitCode)"
     }
@@ -85,6 +90,43 @@ function Invoke-Installer([string]$Path) {
 function Write-JsonNoBom([string]$Path, [object]$Value) {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [IO.File]::WriteAllText($Path, ($Value | ConvertTo-Json -Depth 12), $utf8NoBom)
+}
+
+function Get-Sha256([string]$Path) {
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Mutate-ExecutableDosStub([string]$Path) {
+    # Change one ignored DOS-stub byte without changing the file size or the
+    # PyInstaller archive footer.  Appending an ordinary PE overlay is not a
+    # valid fixture here because PyInstaller locates its package cookie at EOF.
+    # The result remains runnable but has a different SHA-256, which proves the
+    # cover installer actually restored the packaged Core.
+    $stream = [IO.File]::Open(
+        $Path,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::ReadWrite,
+        [IO.FileShare]::None
+    )
+    try {
+        $pePointer = New-Object byte[] 4
+        $null = $stream.Seek(0x3c, [IO.SeekOrigin]::Begin)
+        if ($stream.Read($pePointer, 0, $pePointer.Length) -ne $pePointer.Length) {
+            throw "Core executable is too small to contain a PE header"
+        }
+        $peOffset = [BitConverter]::ToInt32($pePointer, 0)
+        if ($peOffset -le 0x41) {
+            throw "Core executable has no safe DOS-stub byte for the stale fixture"
+        }
+        $null = $stream.Seek(0x40, [IO.SeekOrigin]::Begin)
+        $original = $stream.ReadByte()
+        if ($original -lt 0) { throw "Core executable DOS stub is truncated" }
+        $null = $stream.Seek(0x40, [IO.SeekOrigin]::Begin)
+        $stream.WriteByte([byte]($original -bxor 1))
+        $stream.Flush($true)
+    } finally {
+        $stream.Dispose()
+    }
 }
 
 function Start-SmokeApplication {
@@ -171,6 +213,26 @@ try {
             throw "Initial install is missing: $required"
         }
     }
+    $desktopPath = Join-Path $installDir "HLSDownloader.exe"
+    $corePath = Join-Path $installDir "HLSDownloaderCore.exe"
+    $expectedDesktopHash = Get-Sha256 $desktopPath
+    $expectedCoreHash = Get-Sha256 $corePath
+    if ((Get-Item -LiteralPath $desktopPath).VersionInfo.ProductVersion -ne $packageVersion) {
+        throw "Installed desktop version does not match the package version"
+    }
+    if ((Get-Item -LiteralPath $corePath).VersionInfo.ProductVersion -ne $packageVersion) {
+        throw "Installed Core version does not match the package version"
+    }
+    $versionedIcon = Join-Path $installDir "assets\app-icon-$packageVersion.ico"
+    if (-not (Test-Path -LiteralPath $versionedIcon -PathType Leaf)) {
+        throw "Initial install is missing the versioned shell icon"
+    }
+    $expectedNativeHost = [IO.Path]::GetFullPath(
+        (Join-Path $installDir "native-host\versions\HLSDownloaderNativeHost-$packageVersion.exe")
+    )
+    if ((Get-Item -LiteralPath $expectedNativeHost).VersionInfo.ProductVersion -ne $packageVersion) {
+        throw "Installed Native Host version does not match the package version"
+    }
     foreach ($browserKey in @(
         "Google\Chrome",
         "Microsoft\Edge",
@@ -184,6 +246,14 @@ try {
         $manifest = (Get-Item -LiteralPath $key -ErrorAction Stop).GetValue("")
         if (-not $manifest -or -not [IO.Path]::GetFullPath($manifest).StartsWith($installDir, [StringComparison]::OrdinalIgnoreCase)) {
             throw "Isolated Native Messaging registration points outside the smoke install: $browserKey"
+        }
+        $registeredManifest = Get-Content -LiteralPath $manifest -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not [string]::Equals(
+            [IO.Path]::GetFullPath([string]$registeredManifest.path),
+            $expectedNativeHost,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+            throw "Isolated Native Messaging registration did not select the package host: $browserKey"
         }
     }
     Assert-OfficialState $officialRegistryBefore $officialProcessIdsBefore
@@ -199,6 +269,9 @@ try {
     Set-Content -LiteralPath (Join-Path $installDir "runtime\stale.txt") -Value "legacy runtime" -Encoding UTF8
 
     Invoke-Installer $installer
+    if ((Get-Sha256 $desktopPath) -ne $expectedDesktopHash -or (Get-Sha256 $corePath) -ne $expectedCoreHash) {
+        throw "Cover install did not restore the packaged desktop/Core executables"
+    }
     if ((Get-Content -LiteralPath (Join-Path $installDir "config.json") -Raw) -notmatch "installer-smoke.invalid/preserved") {
         throw "Cover install did not preserve config.json"
     }
@@ -236,6 +309,10 @@ try {
         throw "Packaged shutdown helper left isolated processes running: $details"
     }
 
+    Mutate-ExecutableDosStub $corePath
+    if ((Get-Sha256 $corePath) -eq $expectedCoreHash) {
+        throw "Installer smoke could not create a stale Core fixture"
+    }
     $upgradeDesktopId = Start-SmokeApplication
     Invoke-Installer $installer
     if (Get-Process -Id $upgradeDesktopId -ErrorAction SilentlyContinue) {
@@ -256,6 +333,9 @@ try {
     if ($remaining.Count) {
         $details = ($remaining | ForEach-Object { "$($_.Name):$($_.Id):$($_.Path)" }) -join "; "
         throw "Cover install left isolated desktop/Core/Native Host processes running: $details"
+    }
+    if ((Get-Sha256 $desktopPath) -ne $expectedDesktopHash -or (Get-Sha256 $corePath) -ne $expectedCoreHash) {
+        throw "Running cover install left a stale desktop/Core executable behind"
     }
     if ((Get-Content -LiteralPath (Join-Path $installDir "config.json") -Raw) -notmatch "installer-smoke.invalid/preserved") {
         throw "Running cover install did not preserve config.json"
@@ -319,6 +399,11 @@ try {
         CoverInstallPreservedDatabase = $true
         CoverInstallPreservedDownloads = $true
         CoverInstallRemovedLegacyRuntime = $true
+        CoverInstallReplacedExecutables = $true
+        RunningCoverInstallReplacedStaleCore = $true
+        VersionedShellIcon = $true
+        ExactNativeHostRegistered = $true
+        ExecutableVersionsMatchPackage = $true
         PackagedShutdownHelperClosedRunningApp = $true
         CoverInstallClosedRunningApp = $true
         UninstallClosedRunningApp = $true

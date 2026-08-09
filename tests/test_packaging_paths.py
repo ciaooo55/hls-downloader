@@ -108,6 +108,9 @@ def test_app_icon_is_used_by_executable_tray_ui_and_installer():
     assert (root / "assets" / "app-icon.ico").stat().st_size > 10_000
     assert (root / "assets" / "app-icon.png").stat().st_size > 10_000
     assert "--icon $IconFile" in build_script
+    assert "--version-file $PyInstallerVersionFile" in build_script
+    assert "--name HLSDownloaderNativeHost" in build_script
+    assert build_script.count("--icon $IconFile") >= 2
     assert 'Copy-Item -Path (Join-Path $AssetsDir "app-icon.png")' in build_script
     assert 'Icon "${ICON_FILE}"' in nsis_script
     assert 'UninstallIcon "${ICON_FILE}"' in nsis_script
@@ -116,6 +119,8 @@ def test_app_icon_is_used_by_executable_tray_ui_and_installer():
     assert 'VIProductVersion "${APP_FILE_VERSION}"' in nsis_script
     assert '"FileVersion" "${APP_FILE_VERSION}"' in nsis_script
     assert '"/DAPP_FILE_VERSION=$FileVersion"' in build_script
+    assert 'File /oname=app-icon-${APP_VERSION}.ico' in nsis_script
+    assert '$INSTDIR\\assets\\app-icon-${APP_VERSION}.ico' in nsis_script
     assert '"../../assets/app-icon.png"' in tauri_config
     assert '"../../assets/app-icon.ico"' in tauri_config
     assert "app.default_window_icon()" in tauri_main
@@ -160,7 +165,7 @@ def test_installer_and_portable_upgrade_stop_partial_old_installs():
     nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
     portable_upgrade = (root / "scripts" / "upgrade-portable.ps1").read_text(encoding="utf-8")
 
-    assert '!define APP_VERSION "3.0.20"' in nsis_script
+    assert '!define APP_VERSION "3.0.22"' in nsis_script
     close_macro = nsis_script[nsis_script.index("!macro CloseRunningApp") : nsis_script.index("!macroend", nsis_script.index("!macro CloseRunningApp"))]
     assert 'IfFileExists "$INSTDIR\\HLSDownloader.exe"' not in close_macro
     assert 'shutdown-running.ps1" -InstallDir "$INSTDIR"' in close_macro
@@ -185,6 +190,10 @@ def test_installer_unregistration_survives_a_missing_legacy_helper():
     assert "!define MUI_CUSTOMFUNCTION_ABORT RestoreBrowserRegistrationAfterAbort" in nsis
     assert "Function .onUserAbort" not in nsis
     assert "Call RestoreBrowserRegistrationAfterAbort" in nsis
+    self_delete = nsis.split("Function ScheduleSelfDelete", 1)[1].split("FunctionEnd", 1)[0]
+    assert "HLS_DOWNLOADER_DELETE_SELF_PATH" in self_delete
+    assert "GetEnvironmentVariable" in self_delete
+    assert "-LiteralPath '$EXEPATH'" not in self_delete
     install_section = nsis.split('Section "Install"', 1)[1].split("SectionEnd", 1)[0]
     assert install_section.index("InitPluginsDir") < install_section.index('File /oname=shutdown-running.ps1')
     close_macro = nsis.split("!macro CloseRunningApp", 1)[1].split("!macroend", 1)[0]
@@ -213,6 +222,14 @@ def test_installer_upgrade_smoke_isolated_and_runs_from_release_build():
     assert "HLSDownloaderInstallerSmoke" in smoke
     assert "Assert-OfficialState" in smoke
     assert "CoverInstallClosedRunningApp" in smoke
+    assert "CoverInstallReplacedExecutables" in smoke
+    assert "RunningCoverInstallReplacedStaleCore" in smoke
+    assert "VersionedShellIcon" in smoke
+    assert "ExactNativeHostRegistered" in smoke
+    assert "ExecutableVersionsMatchPackage" in smoke
+    assert "Mutate-ExecutableDosStub" in smoke
+    assert "PyInstaller locates its package cookie at EOF" in smoke
+    assert "WaitForExit(90000)" in smoke
     assert "UninstallClosedRunningApp" in smoke
     assert 'StrCpy $NativeRegistryArgs \'-RegistryPrefix "HKCU:\\Software\\HLSDownloaderInstallerSmoke"\'' in nsis
     assert '${If} $BuildSmoke != "1"' in nsis
@@ -427,7 +444,8 @@ def test_windows_package_uses_tauri_tray_and_clean_uninstall():
     assert install_cleanup < install_copy
     assert '"/DELETESELF="' in nsis_script
     assert "Wait-Process -Id $0" in nsis_script
-    assert "Remove-Item -LiteralPath '$EXEPATH'" in nsis_script
+    assert "Remove-Item -LiteralPath ([Environment]::GetEnvironmentVariable" in nsis_script
+    assert "Remove-Item -LiteralPath '$EXEPATH'" not in nsis_script
     assert "Call ScheduleSelfDelete" in nsis_script
     assert "NSIS first launches a temporary uninstaller" in installer_smoke
     assert "-not (Test-Path -LiteralPath $uninstaller)" in installer_smoke
@@ -480,6 +498,8 @@ def test_native_host_registration_uses_a_versioned_executable_path():
     assert 'Join-Path $manifestDir "versions"' in script
     assert 'Join-Path $root "HLSDownloaderNativeHost.exe"' in script
     assert "$manifest.path = $hostExecutable" in script
+    assert 'Join-Path $manifestsDir "chrome-$selectedHostVersion.json"' in script
+    assert 'Join-Path $manifestsDir "firefox-$selectedHostVersion.json"' in script
     assert "HLSDownloaderNativeHost-*.exe" in script
     assert "HLSDownloaderNativeHost-${APP_VERSION}.exe" in nsis_script
     assert 'SetOutPath "$INSTDIR\\native-host\\versions"' in nsis_script
@@ -487,6 +507,7 @@ def test_native_host_registration_uses_a_versioned_executable_path():
     assert 'File /oname=chrome-${APP_VERSION}.json' in nsis_script
     assert 'File "${STAGE_DIR}\\HLSDownloaderNativeHost.exe"' not in nsis_script
     assert 'register-native-host.ps1" -Unregister' in nsis_script
+    assert '-HostExecutable "$INSTDIR\\native-host\\versions\\HLSDownloaderNativeHost-${APP_VERSION}.exe"' in nsis_script
     assert r'Microsoft\Edge\NativeMessagingHosts' in script
     assert r'BraveSoftware\Brave-Browser\NativeMessagingHosts' in script
     assert r'Chromium\NativeMessagingHosts' in script
@@ -503,12 +524,92 @@ def test_native_host_registration_uses_a_versioned_executable_path():
     assert r'Software\Microsoft\Edge\NativeMessagingHosts' in nsis_script
 
 
+def test_native_host_registration_honors_explicit_package_version(tmp_path):
+    root = Path(__file__).resolve().parent.parent
+    app = tmp_path / "app"
+    scripts = app / "scripts"
+    versions = app / "native-host" / "versions"
+    manifests = app / "native-host" / "manifests"
+    scripts.mkdir(parents=True)
+    versions.mkdir(parents=True)
+    manifests.mkdir(parents=True)
+    shutil.copy2(root / "scripts" / "register-native-host.ps1", scripts)
+
+    registry_root = rf"HKCU:\Software\HLSDownloaderNativeHostUnitTest\{tmp_path.name}"
+    for shell in ("powershell.exe", "pwsh.exe"):
+        selected_host = versions / "HLSDownloaderNativeHost-1.2.3.exe"
+        newer_host = versions / "HLSDownloaderNativeHost-9.9.9.exe"
+        selected_host.write_bytes(b"selected")
+        newer_host.write_bytes(b"newer-leftover")
+        for browser in ("chrome", "firefox"):
+            for version in ("1.2.3", "9.9.9"):
+                (manifests / f"{browser}-{version}.json").write_text(
+                    json.dumps(
+                        {
+                            "name": "com.ciaooo55.hls_downloader",
+                            "description": "unit test",
+                            "path": "placeholder.exe",
+                            "type": "stdio",
+                            **(
+                                {"allowed_origins": ["chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/"]}
+                                if browser == "chrome"
+                                else {"allowed_extensions": ["hls-downloader-store@ciaooo55.com"]}
+                            ),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+        shell_registry = registry_root + "\\" + shell.replace(".", "-")
+        try:
+            subprocess.run(
+                [
+                    shell,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(scripts / "register-native-host.ps1"),
+                    "-RegistryPrefix",
+                    shell_registry,
+                    "-HostExecutable",
+                    str(selected_host),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            for browser in ("chrome", "firefox"):
+                manifest = json.loads(
+                    (manifests / f"{browser}-1.2.3.json").read_text(encoding="utf-8")
+                )
+                assert Path(manifest["path"]).resolve() == selected_host.resolve()
+            assert not newer_host.exists()
+            assert not (manifests / "chrome-9.9.9.json").exists()
+            assert not (manifests / "firefox-9.9.9.json").exists()
+        finally:
+            subprocess.run(
+                [
+                    shell,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    f"Remove-Item -LiteralPath '{shell_registry}' -Recurse -Force -ErrorAction SilentlyContinue",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+
 def test_installer_does_not_require_a_browser_owned_native_host_to_be_writable():
     root = Path(__file__).resolve().parent.parent
     shutdown_script = (root / "scripts" / "shutdown-running.ps1").read_text(encoding="utf-8")
     register_script = (root / "scripts" / "register-native-host.ps1").read_text(encoding="utf-8")
 
     assert "Test-ApplicationFilesWritable" in shutdown_script
+    assert "-OperationTimeoutSec 2" in shutdown_script
+    assert "$script:processPathCache" in shutdown_script
     assert "Native Messaging host is deliberately excluded" in shutdown_script
     assert "HLSDownloaderNativeHost.exe\"))" not in shutdown_script
     assert 'Get-TargetProcesses @("HLSDownloaderNativeHost*")' in shutdown_script

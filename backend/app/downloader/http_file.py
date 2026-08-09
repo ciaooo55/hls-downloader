@@ -29,6 +29,7 @@ from .disk_space import MIN_FREE_RESERVE, ensure_download_capacity, ensure_free_
 from .errors import (
     MetadataProbeTimeout,
     SharedRetryWindow,
+    _looks_like_signed_url,
     diagnose_download_error,
     format_download_error,
     retry_delay_seconds,
@@ -400,16 +401,34 @@ class HTTPDownloader(SeeklessEngine):
         """Whether a browser-originated 403 merits one curl-cffi retry.
 
         The normal HTTP engine deliberately uses httpx because it supports a
-        high-quality parallel range transfer.  Some media CDNs nevertheless
-        bind a signed browser URL to the TLS/browser fingerprint and reject
-        that otherwise complete request context.  HLS already uses curl-cffi
-        for exactly this class of origin.  Keep the fallback narrow: only the
-        first direct GET probe, only a browser handoff, and only an actual 403.
+        high-quality parallel range transfer.  Some application download
+        endpoints (notably authenticated attachment APIs) deliberately mask a
+        missing browser session as ``404`` instead of returning ``401/403``.
+        That is still a browser-profile failure, not proof that the file is
+        absent.  HLS already uses curl-cffi for exactly this class of origin.
+        Keep the fallback narrow: only the first direct GET probe, only a
+        browser handoff, and only a 403 or a signed 404/410 with a captured
+        browser context.
         """
         if self._is_replay_post() or not bool(self.task.engine_state.get("browser_originated")):
             return False
         response = getattr(error, "response", None)
-        return int(getattr(response, "status_code", 0) or 0) == 403
+        status = int(getattr(response, "status_code", 0) or 0)
+        if status == 403:
+            return True
+        if status not in {404, 410} or not _looks_like_signed_url(self.task.url):
+            return False
+        # A signed URL without any browser evidence is just a normal expired
+        # link. Only replay it through curl-cffi when the extension supplied a
+        # page identity, cookies, headers, or a scoped request context.
+        return bool(
+            self.task.source_page_url
+            or self.task.cookie
+            or self.task.referer
+            or self.task.origin
+            or self.task.request_headers
+            or self.task.request_contexts
+        )
 
     async def _download_with_browser_profile(
         self,
@@ -606,6 +625,27 @@ class HTTPDownloader(SeeklessEngine):
         self.task.last_log = message
         self.on_log(self.task.id, f"[{stage}] {message}")
         self._publish()
+
+    async def _wait_for_short_signature_activation(self) -> None:
+        """Wait briefly for a verified mxcontent not-before timestamp."""
+        delay = _short_signature_activation_delay(self.task.url)
+        if delay <= 0:
+            return
+        deadline = time.monotonic() + delay
+        next_notice = 0.0
+        while True:
+            if self._is_canceled() or self._is_pausing():
+                raise asyncio.CancelledError
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            now = time.monotonic()
+            if now >= next_notice:
+                seconds = max(1, int(remaining + 0.999))
+                self._set_stage("probing", f"短效签名尚未生效，等待约 {seconds} 秒")
+                next_notice = now + 5.0
+            await asyncio.sleep(min(1.0, remaining))
+        self._set_stage("probing", "短效签名已到可用时间，正在读取文件信息")
 
     def _is_canceled(self) -> bool:
         return bool(self.task.cancel_event and self.task.cancel_event.is_set())
@@ -939,6 +979,7 @@ class HTTPDownloader(SeeklessEngine):
                 if self._is_replay_post():
                     output = await self._download_replay_post(client, headers, part_path)
                 else:
+                    await self._wait_for_short_signature_activation()
                     metadata = await self._probe_with_retry(client, headers)
                     total = int(metadata["total"])
                     self._total_size = total
@@ -1050,9 +1091,10 @@ class HTTPDownloader(SeeklessEngine):
             raise
         except Exception as exc:
             if output is None and self._can_retry_with_browser_profile(exc):
+                status = int(getattr(getattr(exc, "response", None), "status_code", 0) or 0)
                 self.on_log(
                     task.id,
-                    "[probing] 标准 HTTP 请求收到 403，正在尝试浏览器兼容 TLS 指纹回退",
+                    f"[probing] 标准 HTTP 请求收到 {status or '拒绝'}，正在尝试浏览器兼容 TLS 指纹回退",
                 )
                 try:
                     if await self._download_with_browser_profile(part_path, state_path, task_dir):

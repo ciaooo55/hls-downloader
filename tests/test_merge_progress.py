@@ -32,6 +32,7 @@ def test_merge_segments_builds_local_hls_timeline_and_emits_progress(tmp_path, m
     task = _task()
     updates = []
     captured_playlist = []
+    captured_commands = []
 
     async def fake_run_ffmpeg(
         cmd,
@@ -39,6 +40,7 @@ def test_merge_segments_builds_local_hls_timeline_and_emits_progress(tmp_path, m
         duration_sec=0,
         on_progress=None,
     ):
+        captured_commands.append(list(cmd))
         playlist_path = Path(cmd[cmd.index("-i") + 1])
         captured_playlist.extend(playlist_path.read_text(encoding="utf-8").splitlines())
         Path(cmd[-1]).write_bytes(b"mp4")
@@ -70,6 +72,7 @@ def test_merge_segments_builds_local_hls_timeline_and_emits_progress(tmp_path, m
     assert any(line.endswith("segments/000000.seg") for line in captured_playlist)
     assert any(line.endswith("segments/000001.seg") for line in captured_playlist)
     assert "concat" not in captured_playlist
+    assert captured_commands[0][captured_commands[0].index("-t") + 1] == "9.000000"
     assert any("准备" in log for _, log in updates)
     assert any("ffmpeg" in log for _, log in updates)
 

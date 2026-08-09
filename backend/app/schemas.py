@@ -449,6 +449,16 @@ class CastLocalPush(BaseModel):
         return value
 
 
+class TvboxTaskPush(BaseModel):
+    task_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    endpoint: str = Field(default="", max_length=512)
+
+
+class CastTaskPush(BaseModel):
+    task_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    device: dict[str, str] | None = None
+
+
 class CastUrlPush(BaseModel):
     url: str = Field(min_length=1, max_length=8192)
     filename: str = Field(default="", max_length=255)

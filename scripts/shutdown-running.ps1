@@ -5,22 +5,37 @@ param(
 )
 
 $ErrorActionPreference = "SilentlyContinue"
+$script:processPathCache = @{}
 
 function Get-ProcessExecutablePath {
     param([System.Diagnostics.Process]$Process)
 
+    $cacheKey = [string]$Process.Id
+    if ($script:processPathCache.ContainsKey($cacheKey)) {
+        return [string]$script:processPathCache[$cacheKey]
+    }
+    $resolved = ""
     try {
-        $path = [string]$Process.Path
-        if ($path) { return $path }
+        $resolved = [string]$Process.Path
     } catch {
     }
     # A 32-bit caller cannot always read MainModule/Path for a 64-bit target.
     # CIM remains architecture-neutral and keeps shutdown scoped to InstallDir.
-    try {
-        return [string](Get-CimInstance Win32_Process -Filter "ProcessId = $($Process.Id)" -ErrorAction Stop).ExecutablePath
-    } catch {
-        return ""
+    # Bound and cache this fallback: repeatedly starting an unbounded WMI query
+    # from the installer progress page was able to exceed the advertised
+    # shutdown timeout and made an otherwise healthy cover upgrade look hung.
+    if (-not $resolved) {
+        try {
+            $resolved = [string](Get-CimInstance Win32_Process `
+                -Filter "ProcessId = $($Process.Id)" `
+                -OperationTimeoutSec 2 `
+                -ErrorAction Stop).ExecutablePath
+        } catch {
+            $resolved = ""
+        }
     }
+    $script:processPathCache[$cacheKey] = $resolved
+    return $resolved
 }
 
 function Get-TargetProcesses {

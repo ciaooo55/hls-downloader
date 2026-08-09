@@ -419,6 +419,10 @@ def test_hls_run_completes_after_an_unrequested_segment_cancellation(tmp_path, m
     assert attempts == 2
     assert downloader.task.status.value == "done"
     assert downloader.task.stage == "done"
+    assert downloader.task.progress.downloaded_bytes == len(b"merged")
+    assert downloader.task.progress.total_bytes == len(b"merged")
+    assert downloader.task.engine_state["total_size"] == len(b"merged")
+    assert downloader.task.engine_state["stream_path"] == downloader.task.output_path
 
 
 def test_hls_control_resources_retry_transient_failures(tmp_path, monkeypatch):

@@ -12,12 +12,16 @@ export default defineContentScript({
       const anchor = event.composedPath()
         .find(value => value instanceof HTMLAnchorElement) as HTMLAnchorElement | undefined
       const control = event.composedPath().find(value => value instanceof HTMLElement
-        && value.matches('button, input[type="button"], input[type="submit"], [role="button"]')) as HTMLElement | undefined
+        && value.matches('button, input[type="button"], input[type="submit"], [role="button"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [data-download-url], [data-file-url], [data-export-url]')) as HTMLElement | undefined
       if (!anchor?.href && !control) return
       const rawHref = anchor?.getAttribute('href')?.trim() || ''
       const directHref = rawHref && !rawHref.startsWith('#') && !/^javascript:/i.test(rawHref) ? anchor?.href || '' : ''
       const rawDownloadHref = anchor?.getAttribute('data-download-url')
         || control?.getAttribute('data-download-url')
+        || anchor?.getAttribute('data-file-url')
+        || control?.getAttribute('data-file-url')
+        || anchor?.getAttribute('data-export-url')
+        || control?.getAttribute('data-export-url')
         || ''
       const rawHintedHref = anchor?.getAttribute('data-url')
         || anchor?.getAttribute('data-href')

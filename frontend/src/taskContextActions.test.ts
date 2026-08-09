@@ -27,6 +27,18 @@ describe('taskContextActions', () => {
     expect(taskContextActions({ ...task('done', 'collection'), output_is_file: false })).not.toContain('cast')
   })
 
+  it('exposes delivery for an HTTP task once a verified growing range is playable', () => {
+    const active = { ...task('downloading', 'video.mp4'), task_type: 'http' as const, playback_ready: true }
+    expect(taskContextActions(active)).toContain('cast')
+    expect(taskContextActions(active)).toContain('pushTvbox')
+  })
+
+  it('exposes delivery for an active HLS task through a local playlist', () => {
+    const active = { ...task('downloading_segments', 'live.m3u8'), task_type: 'hls' as const, playback_ready: true }
+    expect(taskContextActions(active)).toContain('cast')
+    expect(taskContextActions(active)).toContain('pushTvbox')
+  })
+
   it('puts built-in playback directly in the context menu when ready', () => {
     expect(taskContextActions({
       id: 'playing',

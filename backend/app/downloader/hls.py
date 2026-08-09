@@ -1006,6 +1006,7 @@ class HLSDownloader:
                 task=task,
                 total_duration=total_duration,
                 on_progress=self.on_progress,
+                on_log=self.on_log,
             )
             if external_audio_task is not None and external_audio_runner is not None:
                 audio_output = await self._finish_external_audio_recorder(
@@ -1022,11 +1023,21 @@ class HLSDownloader:
                         task=task,
                         total_duration=total_duration,
                         on_progress=self.on_progress,
+                        on_log=self.on_log,
                     )
 
             task.output_path = str(output)
             task.engine_state["output_is_file"] = True
             task.engine_state.pop("reserved_output_path", None)
+            # Segment protocols can only estimate the network byte total while
+            # downloading.  Once the merged output is durable, expose its exact
+            # file size so a completed HLS task never keeps showing the old
+            # segment estimate (or "unknown") in the task list.
+            output_size = output.stat().st_size
+            task.engine_state["stream_path"] = str(output)
+            task.engine_state["total_size"] = output_size
+            task.progress.downloaded_bytes = output_size
+            task.progress.total_bytes = output_size
             if not await verify_task_checksum(task, output, on_progress=self.on_progress, on_log=self.on_log):
                 return
             if task.engine_state.get("live"):
@@ -1039,7 +1050,7 @@ class HLSDownloader:
             task.finished_at = datetime.now().isoformat()
             task.progress.post_percent = 100.0
             task.progress.connection_status = "idle"
-            size_mb = output.stat().st_size / 1048576
+            size_mb = output_size / 1048576
             self._set_stage("done", f"完成: {output.name} ({size_mb:.1f} MB)")
             await self._cleanup_task_dir(task_dir)
 

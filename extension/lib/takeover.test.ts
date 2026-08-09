@@ -3,6 +3,7 @@ import {
   browserCleanupAction,
   canContinueTakeover,
   canResumeBrowserDownload,
+  desktopTaskReadiness,
   desktopAcceptedHandoff,
   handoffStatusLabel,
   handoffTerminalStatus,
@@ -15,10 +16,11 @@ describe('browser download takeover helpers', () => {
     expect(browserCleanupAction('interrupted')).toBe('cancel')
   })
 
-  it('observes live browser downloads without pausing them first', () => {
+  it('observes live browser downloads and paused transient interruptions', () => {
     expect(canContinueTakeover('in_progress')).toBe(true)
     expect(canContinueTakeover('complete')).toBe(true)
     expect(canContinueTakeover('interrupted')).toBe(false)
+    expect(canContinueTakeover('interrupted', true)).toBe(true)
   })
 
   it('resumes a paused item even when Chromium transiently marks it interrupted', () => {
@@ -48,5 +50,17 @@ describe('browser download takeover helpers', () => {
     // reconnect and report the real accepted/rejected state afterwards.
     expect(handoffTerminalStatus('connection_lost')).toBe(false)
     expect(handoffStatusLabel('connection_lost')).toBe('连接中断')
+  })
+
+  it('keeps Chromium fallback until the desktop transfer proves progress', () => {
+    expect(desktopTaskReadiness({ status: 'accepted', task_status: 'downloading', task_stage: 'probing' }))
+      .toBe('waiting')
+    expect(desktopTaskReadiness({ status: 'accepted', task_status: 'downloading', task_stage: 'downloading', task_downloaded_bytes: 1 }))
+      .toBe('safe-to-remove')
+    expect(desktopTaskReadiness({ status: 'accepted', task_status: 'done', task_downloaded_bytes: 0 }))
+      .toBe('safe-to-remove')
+    expect(desktopTaskReadiness({ status: 'accepted', task_status: 'failed', task_stage: 'probing', task_error_code: 'HTTP_404' }))
+      .toBe('browser-fallback')
+    expect(desktopTaskReadiness({ status: 'rejected' })).toBe('browser-fallback')
   })
 })

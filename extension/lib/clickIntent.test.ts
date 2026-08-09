@@ -35,6 +35,12 @@ describe('download click intent', () => {
     expect(shouldTrackDownloadIntent({ ctrlForce: true })).toBe(true)
   })
 
+  it('recognizes signed attachment gateways and localized download controls', () => {
+    expect(isLikelyDownloadUrl('https://app.test/backend/content?id=42&fn=project.zip&cd=attachment')).toBe(true)
+    expect(isLikelyDownloadControl(['Télécharger'])).toBe(true)
+    expect(isLikelyDownloadControl(['ダウンロード'])).toBe(true)
+  })
+
   it('never records Google or third-party OAuth navigation as a download intent', () => {
     const google = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=app&redirect_uri=https%3A%2F%2Fsite.test%2Fcallback&response_type=code&scope=profile'
     const microsoft = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=app&redirect_uri=https%3A%2F%2Fsite.test%2Fcallback&response_type=code'

@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 from fastapi import APIRouter, HTTPException, Header, Request, UploadFile, File, Form
@@ -37,9 +37,11 @@ from .schemas import (
     BrowserHandoffAccept,
     BrowserHandoffCancel,
     CastLocalPush,
+    CastTaskPush,
     CastUrlPush,
     CastControl,
     TvboxLocalPush,
+    TvboxTaskPush,
     TvboxPush,
 )
 from .config import apply_settings_update, settings, save_settings
@@ -376,6 +378,17 @@ def _handoff_detail(item) -> dict:
         )
     else:
         body["duplicate_message"] = ""
+    # Chromium keeps its original DownloadItem paused until the desktop task
+    # has proved that it can replay the request. Expose only non-sensitive
+    # progress metadata so the extension can safely fall back to the browser
+    # for one-use signed URLs instead of discarding the only working transfer.
+    task = manager.tasks.get(str(item.task_id or "")) if item.task_id else None
+    if task is not None:
+        body["task_status"] = task.status.value
+        body["task_stage"] = task.stage
+        body["task_downloaded_bytes"] = max(0, int(task.progress.downloaded_bytes or 0))
+        body["task_total_bytes"] = max(0, int(task.progress.total_bytes or 0))
+        body["task_error_code"] = str(task.error_code or "")
     return body
 
 @router.post("/browser/handoffs")
@@ -1082,6 +1095,213 @@ async def cast_local_file(body: CastLocalPush, x_token: str = Header(default="")
         if share:
             local_media_server.revoke(share.get("id", ""))
         raise HTTPException(status_code=502, detail=f"投屏失败：{exc}") from exc
+
+
+def _task_stream_share(task_id: str, endpoint: str) -> dict:
+    """Create a LAN URL that waits for verified ranges of an active HTTP task."""
+    task = manager.tasks.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.task_type not in {TaskType.HTTP, TaskType.TORRENT}:
+        raise HTTPException(
+            status_code=409,
+            detail="当前下载是分片直播，尚未生成连续本地文件；请先录制完成再投屏",
+        )
+    if not manager.playback_ready(task):
+        raise HTTPException(status_code=425, detail="下载尚未获得可播放的文件范围")
+    try:
+        _, size = manager.get_stream_info(task.id)
+    except TaskConflictError as exc:
+        raise HTTPException(status_code=425, detail=str(exc)) from exc
+    loop = asyncio.get_running_loop()
+
+    def read_range(start: int, end: int) -> bytes:
+        future = asyncio.run_coroutine_threadsafe(
+            manager.wait_for_stream_range(task.id, start, end, timeout=45.0),
+            loop,
+        )
+        try:
+            path, _total = future.result(timeout=52.0)
+            with path.open("rb") as stream:
+                stream.seek(start)
+                return stream.read(end - start + 1)
+        except Exception as exc:
+            raise RuntimeError("目标下载范围尚未准备好") from exc
+
+    filename = task.filename or task.title or task.id
+    return local_media_server.share_stream(
+        filename=filename,
+        size=size,
+        endpoint=endpoint,
+        read_range=read_range,
+        mime_type=task.mime_type,
+    )
+
+
+def _rewrite_local_playback_playlist(content: str, share_id: str) -> str:
+    """Rewrite loopback playback URIs to one token-scoped LAN share."""
+    token = str(share_id or "").strip()
+    if not token:
+        raise RuntimeError("本地媒体共享尚未初始化")
+
+    def rewrite_uri(raw_uri: str) -> str:
+        parsed = urlsplit(raw_uri.strip().strip('"'))
+        path = parsed.path.lstrip("/")
+        parts = path.split("/")
+        if len(parts) != 2 or parts[0] not in {"segments", "maps"}:
+            raise RuntimeError("本地播放清单包含未识别的资源 URI")
+        name = Path(parts[1]).name
+        if name != parts[1] or (parts[0] == "segments" and not re.fullmatch(r"\d{6}\.seg", name)):
+            raise RuntimeError("本地播放清单包含无效的分片路径")
+        if parts[0] == "maps" and not name.endswith(".init"):
+            raise RuntimeError("本地播放清单包含无效的初始化片段")
+        return f"/media/{token}/{parts[0]}/{quote(name)}"
+
+    lines: list[str] = []
+    for raw_line in str(content or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            lines.append(raw_line)
+            continue
+        # EXT-X-MAP stores the URI inside a tag rather than on its own line.
+        # Strip the playback session/access token from both URI forms.
+        if line.startswith("#EXT-X-MAP:"):
+            match = re.search(r'URI="([^"]+)"', line)
+            if not match:
+                raise RuntimeError("本地播放清单的初始化片段缺少 URI")
+            replacement = rewrite_uri(match.group(1))
+            lines.append(line[:match.start(1)] + replacement + line[match.end(1):])
+            continue
+        if line.startswith("#"):
+            lines.append(raw_line)
+            continue
+        lines.append(rewrite_uri(line))
+    return "\n".join(lines) + "\n"
+
+
+def _task_segment_share(task_id: str, endpoint: str) -> dict:
+    """Expose an HLS/DASH task's verified local playback session to a TV.
+
+    The LAN server receives a rewritten local playlist and local segment/map
+    callbacks.  It never forwards the original CDN URL, cookies, or signed
+    query string to a television.
+    """
+    task = manager.tasks.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if not _uses_segment_playback(task):
+        raise HTTPException(status_code=409, detail="该任务尚未生成可投屏的本地分片播放清单")
+    try:
+        session_id, _snapshot = playback_service.open_ready_session(
+            task.id,
+            task.status.value,
+            task.output_path,
+        )
+        access_token = playback_service.access_token(task.id, session_id)
+    except PlaybackError as exc:
+        _raise_playback_error(exc)
+    loop = asyncio.get_running_loop()
+    share_ref: dict[str, str] = {"id": ""}
+
+    def playlist() -> str:
+        playback_service.authorize(task.id, session_id, access_token)
+        content = playback_service.playlist(
+            task.id,
+            task.status.value,
+            session_id,
+            access_token=access_token,
+        )
+        return _rewrite_local_playback_playlist(content, share_ref["id"])
+
+    def read_asset(kind: str, name: str) -> tuple[bytes, str]:
+        playback_service.authorize(task.id, session_id, access_token)
+        if kind == "maps":
+            path = playback_service.map_path(task.id, name, session_id)
+            mime = "video/mp4"
+        elif kind == "segments":
+            match = re.fullmatch(r"(\d{6})\.seg", name)
+            if not match:
+                raise PlaybackError("无效的本地分片")
+            future = asyncio.run_coroutine_threadsafe(
+                playback_service.wait_for_segment(
+                    task.id,
+                    int(match.group(1)),
+                    session_id,
+                    sparse=False,
+                    timeout=45.0,
+                ),
+                loop,
+            )
+            path, is_fmp4 = future.result(timeout=52.0)
+            mime = "video/mp4" if is_fmp4 else "video/mp2t"
+        else:
+            raise PlaybackError("无效的本地播放资源")
+        if not path.is_file():
+            raise PlaybackNotReadyError("本地播放资源尚未准备好")
+        size = path.stat().st_size
+        if size <= 0 or size > 64 * 1024 * 1024:
+            raise PlaybackError("本地播放分片大小异常")
+        return path.read_bytes(), mime
+
+    share = local_media_server.share_playlist(
+        filename=f"{task.filename or task.title or task.id}.m3u8",
+        endpoint=endpoint,
+        playlist=playlist,
+        read_asset=read_asset,
+    )
+    share_ref["id"] = str(share.get("id") or "")
+    return share
+
+
+def _task_share(task_id: str, endpoint: str) -> dict:
+    task = manager.tasks.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.status is TaskStatus.DONE and task.output_path and task_output_is_file(task):
+        return local_media_server.share(task.output_path, endpoint)
+    if task.task_type in {TaskType.HLS, TaskType.DASH}:
+        return _task_segment_share(task_id, endpoint)
+    return _task_stream_share(task_id, endpoint)
+
+
+@router.post("/tvbox/push-task")
+async def push_tvbox_task(body: TvboxTaskPush, x_token: str = Header(default="")):
+    _check_token(x_token)
+    _require_legal_acceptance()
+    endpoint = body.endpoint or settings.tvbox_endpoint
+    if not endpoint:
+        raise HTTPException(status_code=409, detail="请先在设置中选择电视推送设备")
+    share: dict | None = None
+    try:
+        share = _task_share(body.task_id, endpoint)
+        result = await push_tvbox(endpoint, share["url"])
+        return {**result, "share": share}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if share:
+            local_media_server.revoke(share.get("id", ""))
+        raise HTTPException(status_code=502, detail=f"下载中任务 TVBox 推送失败：{exc}") from exc
+
+
+@router.post("/cast/push-task")
+async def cast_task(body: CastTaskPush, x_token: str = Header(default="")):
+    _check_token(x_token)
+    _require_legal_acceptance()
+    if not body.device:
+        raise HTTPException(status_code=409, detail="请先选择投屏设备")
+    share: dict | None = None
+    try:
+        device = normalize_cast_device(body.device)
+        share = _task_share(body.task_id, device["location"])
+        result = await cast_media(device, share["url"], share["filename"])
+        return {**result, "share": share}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if share:
+            local_media_server.revoke(share.get("id", ""))
+        raise HTTPException(status_code=502, detail=f"下载中任务投屏失败：{exc}") from exc
 
 
 @router.post("/cast/push")

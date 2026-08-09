@@ -25,6 +25,7 @@ class DashDownloader(SeeklessEngine):
     def __init__(self, task: Task, on_progress=None, on_log=None, source_label: str = "DASH") -> None:
         self.task = task
         self.on_progress = on_progress or (lambda task: None)
+        self._on_log_callback = on_log
         self.on_log = on_log or (lambda task_id, message: None)
         self.source_label = source_label
 
@@ -59,7 +60,7 @@ class DashDownloader(SeeklessEngine):
                 # yt-dlp fallback loses nothing.
                 try:
                     handled = await NativeDashEngine(
-                        task, self.on_progress, self.on_log
+                        task, self.on_progress, self._on_log_callback
                     ).run()
                 except NativeDashUnsupported as exc:
                     self._set_stage(
