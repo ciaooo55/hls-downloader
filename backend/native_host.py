@@ -92,20 +92,17 @@ def _start_app() -> None:
 def _wait_presenter(timeout: float = 18.0) -> None:
     """Wait until the desktop shell can queue or show handoff windows."""
     deadline = time.monotonic() + timeout
-    saw_session = False
     while time.monotonic() < deadline:
         try:
             status = _request("GET", "/browser/presenter")
-            if status.get("ready"):
+            # A registered desktop session can durably queue the handoff even
+            # before its presenter callback has attached. Waiting for `ready`
+            # here made a healthy cold start consume the full 18-second window.
+            if status.get("ready") or status.get("session"):
                 return
-            if status.get("session"):
-                saw_session = True
         except Exception:
             pass
         time.sleep(0.12)
-    # Session alone is enough for queuing; presenter attaches when GUI boots.
-    if saw_session:
-        return
 
 
 def _ensure_app(require_presenter: bool = True) -> None:
@@ -115,6 +112,12 @@ def _ensure_app(require_presenter: bool = True) -> None:
     except Exception:
         _start_app()
         started = True
+        if require_presenter:
+            # `/browser/presenter` is also a readiness probe. Poll it directly
+            # instead of first spending up to 12 seconds on `/health` and then
+            # starting another independent 18-second wait.
+            _wait_presenter(18.0)
+            return
         for _ in range(80):
             time.sleep(0.15)
             try:

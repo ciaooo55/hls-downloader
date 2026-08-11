@@ -171,11 +171,11 @@ async def serve_help():
     </div>
     <div class="status">
       <strong>仅使用正式浏览器插件</strong>
-      <span>安装包内含 Chromium 扩展目录；Firefox 插件包请从 GitHub Release 下载。</span>
+      <span>安装包内含 Chromium 扩展目录；Firefox 请从 <a href="https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/" target="_blank" rel="noopener">Firefox Add-ons 官方页面</a> 安装。</span>
     </div>
     <h2>使用步骤</h2>
     <ol>
-      <li>在桌面端“浏览器集成”中打开 Chromium 扩展目录并加载插件，或安装经过 Mozilla 签名的 Firefox 版本。</li>
+      <li>在桌面端“浏览器集成”中打开 Chromium 扩展目录并加载插件，或从 Firefox Add-ons 官方页面安装经过 Mozilla 签名的版本。</li>
       <li>打开网页并播放媒体，插件会在当前页面显示捕获结果。</li>
       <li>点击资源或真实下载链接，确认后交给桌面端下载。</li>
       <li>点击下载后，可回到下载管理器查看分片和合并进度。</li>

@@ -46,6 +46,7 @@ from .errors import (
     should_share_retry_window,
 )
 from .merge import _local_hls_input_options, _run_ffmpeg, _verify_output, write_local_hls_playlist
+from .postprocess_slot import acquire_postprocess_lease
 from .disk_space import MIN_FREE_RESERVE, ensure_free_space, estimate_paths_size
 from .mpd import NativeDashUnsupported, parse_mpd
 from .playback import playback_service, write_playback_plan
@@ -744,7 +745,16 @@ class NativeDashEngine:
         if duration > 0:
             command += ["-t", f"{duration:.6f}"]
         command += ["-progress", "pipe:1", str(temporary)]
+        postprocess_lease = None
         try:
+            postprocess_lease = await acquire_postprocess_lease(
+                (task_dir, output),
+                task=task,
+                waiting_stage="remuxing",
+                waiting_message="正在等待同一磁盘上的其他任务完成 DASH 合并",
+                on_progress=self.on_progress,
+                on_log=self.on_log if self._on_log_callback is not None else None,
+            )
             success = await _run_ffmpeg(
                 command,
                 task=task,
@@ -767,6 +777,8 @@ class NativeDashEngine:
         finally:
             for playlist in playlist_files:
                 playlist.unlink(missing_ok=True)
+            if postprocess_lease is not None:
+                postprocess_lease.release()
         task.engine_state.pop("reserved_output_path", None)
 
         task.filename = output.name

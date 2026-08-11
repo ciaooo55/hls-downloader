@@ -13,6 +13,7 @@ from urllib.parse import quote
 from ..models import TaskStatus
 from ..utils import durable_replace
 from .disk_space import MIN_FREE_RESERVE, ensure_free_space, estimate_paths_size
+from .postprocess_slot import acquire_postprocess_lease
 
 
 PREPARE_PROGRESS_END = 30.0
@@ -103,6 +104,44 @@ def write_local_hls_playlist(
     destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _looks_like_mpeg_ts(path: Path) -> bool:
+    """Accept only confidently identified MPEG-TS files for byte-stream concat."""
+    try:
+        with path.open("rb") as source:
+            sample = source.read(188 * 3)
+    except OSError:
+        return False
+    return len(sample) >= 188 * 2 and all(sample[offset] == 0x47 for offset in (0, 188))
+
+
+def _can_use_mpeg_ts_concat(seg_dir: Path, segments: list[dict]) -> bool:
+    """Return whether HLS timeline reconstruction is unnecessary and unsafe to use."""
+    if not segments or any(item.get("init_path") or item.get("discontinuity") for item in segments):
+        return False
+    return all(
+        _looks_like_mpeg_ts(seg_dir / f"{int(item['index']):06d}.seg")
+        for item in segments
+    )
+
+
+def write_local_concatf_playlist(
+    destination: Path,
+    seg_dir: Path,
+    segments: list[dict],
+    segment_suffix: str = ".seg",
+) -> None:
+    """Write FFmpeg concatf input without creating a second multi-GB file."""
+    lines = []
+    for segment in segments:
+        path = seg_dir / f"{int(segment['index']):06d}{segment_suffix}"
+        if not path.exists() or path.stat().st_size == 0:
+            raise FileNotFoundError(f"缺少分片: {path.name}")
+        # concatf on the bundled Windows FFmpeg accepts ``file:D:/...``;
+        # the RFC form ``file:///D:/...`` is rejected as an invalid input.
+        lines.append(f"file:{path.resolve().as_posix()}")
+    destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 # Compatibility hook retained for existing callers/tests; new protocol
 # engines should use the shared public helper above.
 def _write_local_hls_playlist(
@@ -161,6 +200,40 @@ async def merge_segments(
     if not segments:
         raise ValueError("没有可合并的分片")
 
+    lease = await acquire_postprocess_lease(
+        (seg_dir, output_path),
+        task=task,
+        waiting_stage="merging",
+        waiting_message="正在等待同一磁盘上的其他任务完成合并",
+        on_progress=on_progress,
+        on_log=on_log,
+    )
+    try:
+        await _merge_segments_unlocked(
+            seg_dir=seg_dir,
+            output_path=output_path,
+            segments=segments,
+            ffmpeg_path=ffmpeg_path,
+            task=task,
+            total_duration=total_duration,
+            on_progress=on_progress,
+            on_log=on_log,
+        )
+    finally:
+        lease.release()
+
+
+async def _merge_segments_unlocked(
+    seg_dir: Path,
+    output_path: Path,
+    segments: list[dict],
+    ffmpeg_path: str,
+    task=None,
+    total_duration: float = 0,
+    on_progress=None,
+    on_log=None,
+) -> None:
+
     merge_inputs: list[Path] = []
     for segment in segments:
         merge_inputs.append(seg_dir / f"{int(segment['index']):06d}.seg")
@@ -174,8 +247,11 @@ async def merge_segments(
         operation="HLS 合并输出盘",
     )
 
-    local_playlist = seg_dir.parent / "local-merge.m3u8"
-    hls_input_options = await asyncio.to_thread(
+    use_mpeg_ts_concat = _can_use_mpeg_ts_concat(seg_dir, segments)
+    local_playlist = seg_dir.parent / (
+        "local-merge.concatf" if use_mpeg_ts_concat else "local-merge.m3u8"
+    )
+    hls_input_options = () if use_mpeg_ts_concat else await asyncio.to_thread(
         _local_hls_input_options, ffmpeg_path
     )
     for position, segment in enumerate(segments):
@@ -202,7 +278,7 @@ async def merge_segments(
         await asyncio.sleep(0)
 
     await asyncio.to_thread(
-        _write_local_hls_playlist,
+        write_local_concatf_playlist if use_mpeg_ts_concat else _write_local_hls_playlist,
         local_playlist,
         seg_dir,
         segments,
@@ -214,6 +290,8 @@ async def merge_segments(
         task.progress.post_percent = PREPARE_PROGRESS_END
         task.last_log = "ffmpeg 正在转封装"
         _emit_progress(task, on_progress)
+    if use_mpeg_ts_concat:
+        _emit_log(task, on_log, "检测到 MPEG-TS 分片，使用快速本地拼接")
     _emit_log(
         task,
         on_log,
@@ -225,16 +303,30 @@ async def merge_segments(
     )
     temporary_output.unlink(missing_ok=True)
     duration_args = ["-t", f"{float(total_duration):.6f}"] if total_duration > 0 else []
+    input_command = (
+        [
+            "-protocol_whitelist",
+            "file,concatf,concat,crypto,data",
+            "-f",
+            "mpegts",
+            "-i",
+            f"concatf:{local_playlist.resolve().as_posix()}",
+        ]
+        if use_mpeg_ts_concat
+        else [
+            *hls_input_options,
+            "-protocol_whitelist",
+            "file,crypto,data",
+            "-i",
+            str(local_playlist),
+        ]
+    )
     copy_command = [
         ffmpeg_path,
         "-y",
         "-fflags",
         "+genpts+discardcorrupt",
-        *hls_input_options,
-        "-protocol_whitelist",
-        "file,crypto,data",
-        "-i",
-        str(local_playlist),
+        *input_command,
         "-c",
         "copy",
         "-avoid_negative_ts",
@@ -288,11 +380,7 @@ async def merge_segments(
                 "-y",
                 "-fflags",
                 "+genpts+discardcorrupt",
-                *hls_input_options,
-                "-protocol_whitelist",
-                "file,crypto,data",
-                "-i",
-                str(local_playlist),
+                *input_command,
                 "-c:v",
                 "libx264",
                 "-c:a",
@@ -360,6 +448,41 @@ async def mux_media_tracks(
         raise FileNotFoundError("独立视频轨道不存在或为空")
     if not audio_path.is_file() or audio_path.stat().st_size <= 0:
         raise FileNotFoundError("独立音频轨道不存在或为空")
+
+    lease = await acquire_postprocess_lease(
+        (video_path, audio_path, output_path),
+        task=task,
+        waiting_stage="remuxing",
+        waiting_message="正在等待同一磁盘上的其他任务完成音视频合并",
+        on_progress=on_progress,
+        on_log=on_log,
+    )
+    try:
+        await _mux_media_tracks_unlocked(
+            video_path=video_path,
+            audio_path=audio_path,
+            output_path=output_path,
+            ffmpeg_path=ffmpeg_path,
+            task=task,
+            total_duration=total_duration,
+            on_progress=on_progress,
+            on_log=on_log,
+        )
+    finally:
+        lease.release()
+
+
+async def _mux_media_tracks_unlocked(
+    *,
+    video_path: Path,
+    audio_path: Path,
+    output_path: Path,
+    ffmpeg_path: str,
+    task=None,
+    total_duration: float = 0,
+    on_progress=None,
+    on_log=None,
+) -> None:
     await asyncio.to_thread(
         ensure_free_space,
         output_path,

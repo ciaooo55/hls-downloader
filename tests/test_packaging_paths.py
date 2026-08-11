@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from backend.app.version import APP_VERSION
+
 
 def test_project_root_uses_executable_directory_when_frozen(monkeypatch, tmp_path):
     exe = tmp_path / "install" / "HLSDownloader.exe"
@@ -158,6 +160,8 @@ def test_windows_build_emits_setup_and_portable_assets():
     assert 'Join-Path $StageDir "core.log"' in build_script
     assert 'Join-Path $StageDir "core-error.log"' in build_script
     assert "Compress-Archive" in build_script
+    assert 'Join-Path $env:LOCALAPPDATA "HLSDownloaderBuildTools"' in build_script
+    assert '$NsisToolsDir = Join-Path $NsisRuntimeRoot' in build_script
 
 
 def test_installer_and_portable_upgrade_stop_partial_old_installs():
@@ -165,7 +169,7 @@ def test_installer_and_portable_upgrade_stop_partial_old_installs():
     nsis_script = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
     portable_upgrade = (root / "scripts" / "upgrade-portable.ps1").read_text(encoding="utf-8")
 
-    assert '!define APP_VERSION "3.0.22"' in nsis_script
+    assert f'!define APP_VERSION "{APP_VERSION}"' in nsis_script
     close_macro = nsis_script[nsis_script.index("!macro CloseRunningApp") : nsis_script.index("!macroend", nsis_script.index("!macro CloseRunningApp"))]
     assert 'IfFileExists "$INSTDIR\\HLSDownloader.exe"' not in close_macro
     assert 'shutdown-running.ps1" -InstallDir "$INSTDIR"' in close_macro
@@ -187,9 +191,9 @@ def test_installer_unregistration_survives_a_missing_legacy_helper():
     assert 'StrCpy $RemoveDownloads "delete"' in nsis
     assert '${If} $RemoveDownloads == "delete"' in nsis
     assert "Function .onInstFailed" in nsis
-    assert "!define MUI_CUSTOMFUNCTION_ABORT RestoreBrowserRegistrationAfterAbort" in nsis
+    assert "!define MUI_CUSTOMFUNCTION_ABORT RestoreUpgradeAfterAbort" in nsis
     assert "Function .onUserAbort" not in nsis
-    assert "Call RestoreBrowserRegistrationAfterAbort" in nsis
+    assert "Call RestoreUpgradeAfterAbort" in nsis
     self_delete = nsis.split("Function ScheduleSelfDelete", 1)[1].split("FunctionEnd", 1)[0]
     assert "HLS_DOWNLOADER_DELETE_SELF_PATH" in self_delete
     assert "GetEnvironmentVariable" in self_delete
@@ -236,6 +240,19 @@ def test_installer_upgrade_smoke_isolated_and_runs_from_release_build():
     assert 'Invoke-Step "Smoke test installer cover upgrade and uninstall"' in build
 
 
+def test_installer_keeps_transactional_program_backup_until_success():
+    root = Path(__file__).resolve().parent.parent
+    nsis = (root / "installer" / "hls-downloader.nsi").read_text(encoding="utf-8")
+
+    assert 'StrCpy $UpgradeBackupDir "$INSTDIR\\.hls-upgrade-backup"' in nsis
+    assert '!insertmacro BackupUpgradeDirectory "_internal"' in nsis
+    assert '!insertmacro RestoreUpgradeDirectory "_internal"' in nsis
+    assert "Function RestoreApplicationAfterAbort" in nsis
+    assert "Call RestoreUpgradeAfterAbort" in nsis
+    completed = nsis.index('StrCpy $InstallCompleted "1"')
+    assert completed < nsis.index('RMDir /r "$UpgradeBackupDir"', completed)
+
+
 def _portable_upgrade_fixture(tmp_path: Path, *, registration_fails: bool = False):
     root = Path(__file__).resolve().parent.parent
     source = tmp_path / "new-portable"
@@ -253,6 +270,8 @@ def _portable_upgrade_fixture(tmp_path: Path, *, registration_fails: bool = Fals
     (source / "config.json").write_text('{"version":"new"}', encoding="utf-8")
     (target / "config.json").write_text('{"version":"old"}', encoding="utf-8")
     (target / "data.db").write_text("old task database", encoding="utf-8")
+    (target / "downloads").mkdir()
+    (target / "downloads" / "keep.bin").write_bytes(b"download payload")
     helper = (
         "param([int]$TimeoutSeconds=1,[string]$InstallDir='',[switch]$IncludeNativeHost)\n"
         "$global:LASTEXITCODE=0\n"
@@ -270,6 +289,7 @@ def _portable_upgrade_fixture(tmp_path: Path, *, registration_fails: bool = Fals
 
 def test_portable_upgrade_swaps_complete_tree_and_preserves_runtime_state(tmp_path):
     source, target = _portable_upgrade_fixture(tmp_path)
+    original_download_id = (target / "downloads" / "keep.bin").stat().st_ino
 
     subprocess.run(
         [
@@ -288,6 +308,8 @@ def test_portable_upgrade_swaps_complete_tree_and_preserves_runtime_state(tmp_pa
     assert not (target / "old-program-file.txt").exists()
     assert (target / "config.json").read_text(encoding="utf-8") == '{"version":"old"}'
     assert (target / "data.db").read_text(encoding="utf-8") == "old task database"
+    assert (target / "downloads" / "keep.bin").read_bytes() == b"download payload"
+    assert (target / "downloads" / "keep.bin").stat().st_ino == original_download_id
     assert not (tmp_path / ".old-portable.hls-upgrade-new").exists()
     assert not (tmp_path / ".old-portable.hls-upgrade-backup").exists()
 
@@ -310,6 +332,7 @@ def test_portable_upgrade_restores_old_tree_when_registration_fails(tmp_path):
     assert result.returncode != 0
     assert (target / "HLSDownloader.exe").read_text(encoding="utf-8") == "old"
     assert (target / "old-program-file.txt").read_text(encoding="utf-8") == "old"
+    assert (target / "downloads" / "keep.bin").read_bytes() == b"download payload"
     assert not (target / "new-program-file.txt").exists()
     assert not (tmp_path / ".old-portable.hls-upgrade-new").exists()
     assert not (tmp_path / ".old-portable.hls-upgrade-backup").exists()

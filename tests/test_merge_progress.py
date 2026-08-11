@@ -1,6 +1,7 @@
 import asyncio
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -210,6 +211,51 @@ def test_merge_segments_writes_temp_output_then_replaces_placeholder(tmp_path, m
     assert not output_path.with_name("out.merging.mp4").exists()
 
 
+def test_mpeg_ts_segments_use_fast_concatf_input(tmp_path, monkeypatch):
+    seg_dir = tmp_path / "segments"
+    seg_dir.mkdir()
+    for index in range(2):
+        payload = bytearray(188 * 2)
+        payload[0] = 0x47
+        payload[188] = 0x47
+        (seg_dir / f"{index:06d}.seg").write_bytes(payload)
+    output_path = tmp_path / "out.mp4"
+    commands = []
+
+    async def fake_run_ffmpeg(command, **_kwargs):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"mp4")
+        return True
+
+    async def fake_verify(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(merge_mod, "_run_ffmpeg", fake_run_ffmpeg)
+    monkeypatch.setattr(merge_mod, "_verify_output", fake_verify)
+
+    asyncio.run(
+        merge_mod.merge_segments(
+            seg_dir=seg_dir,
+            output_path=output_path,
+            segments=[
+                {"index": 0, "duration": 1},
+                {"index": 1, "duration": 1},
+            ],
+            ffmpeg_path="ffmpeg",
+            total_duration=2,
+        )
+    )
+
+    command = commands[0]
+    assert "concatf:" in command[command.index("-i") + 1]
+    assert command[command.index("-f") + 1] == "mpegts"
+    assert not (seg_dir.parent / "local-merge.m3u8").exists()
+    concat_lines = (seg_dir.parent / "local-merge.concatf").read_text(
+        encoding="utf-8"
+    )
+    assert "file:///" not in concat_lines
+
+
 def test_merge_failure_preserves_ffmpeg_stderr_reason(tmp_path, monkeypatch):
     seg_dir = tmp_path / "segments"
     seg_dir.mkdir()
@@ -330,6 +376,75 @@ def test_verify_output_rejects_implausibly_long_timeline(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="输出时长异常"):
         asyncio.run(merge_mod._verify_output("ffmpeg", output, 60))
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is unavailable")
+def test_real_mpeg_ts_hls_merge_uses_fast_concatf_input(tmp_path):
+    ffmpeg = str(shutil.which("ffmpeg"))
+    source_playlist = tmp_path / "source-ts.m3u8"
+    subprocess.run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=160x90:rate=25:duration=3",
+            "-c:v",
+            "libx264",
+            "-g",
+            "25",
+            "-keyint_min",
+            "25",
+            "-sc_threshold",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            "-f",
+            "hls",
+            "-hls_time",
+            "1",
+            "-hls_list_size",
+            "0",
+            str(source_playlist),
+        ],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+
+    lines = source_playlist.read_text(encoding="utf-8").splitlines()
+    media = [
+        (float(line.split(":", 1)[1].split(",", 1)[0]), lines[index + 1])
+        for index, line in enumerate(lines)
+        if line.startswith("#EXTINF:")
+    ]
+    seg_dir = tmp_path / "segments"
+    seg_dir.mkdir()
+    segments = []
+    for index, (duration, name) in enumerate(media):
+        (seg_dir / f"{index:06d}.seg").write_bytes((tmp_path / name).read_bytes())
+        segments.append({"index": index, "duration": duration})
+
+    expected = sum(item["duration"] for item in segments)
+    output = tmp_path / "merged-ts.mp4"
+    asyncio.run(
+        merge_mod.merge_segments(
+            seg_dir=seg_dir,
+            output_path=output,
+            segments=segments,
+            ffmpeg_path=ffmpeg,
+            total_duration=expected,
+        )
+    )
+
+    actual = asyncio.run(merge_mod._probe_duration(ffmpeg, output))
+    assert actual == pytest.approx(expected, abs=0.25)
+    assert (tmp_path / "local-merge.concatf").is_file()
+    assert not (tmp_path / "local-merge.m3u8").exists()
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is unavailable")
@@ -487,21 +602,33 @@ async def _async_positive(*args, **kwargs):
 def test_ffprobe_process_start_does_not_block_api_event_loop(tmp_path, monkeypatch):
     output = tmp_path / "output.mp4"
     output.write_bytes(b"media")
+    process_started = threading.Event()
+    allow_process_return = threading.Event()
 
     def slow_process_start(*_args, **_kwargs):
         # Models Windows Defender scanning a newly extracted ffprobe.exe while
         # CreateProcess is still synchronous.
-        time.sleep(0.2)
+        process_started.set()
+        allow_process_return.wait(timeout=2)
         return SimpleNamespace(returncode=1, stdout=b"", stderr=b"")
 
     monkeypatch.setattr(merge_mod.subprocess, "run", slow_process_start)
 
-    async def scenario() -> float:
-        started = time.monotonic()
+    async def scenario() -> None:
         probe = asyncio.create_task(merge_mod._probe_duration("ffmpeg.exe", output))
-        await asyncio.sleep(0.02)
-        heartbeat_latency = time.monotonic() - started
-        assert await probe == 0.0
-        return heartbeat_latency
+        try:
+            for _ in range(100):
+                if process_started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert process_started.is_set()
+            # The worker is deliberately blocked above. The probe can only be
+            # unfinished here if subprocess.run is outside the event loop.
+            await asyncio.sleep(0)
+            assert not probe.done()
+            allow_process_return.set()
+            assert await asyncio.wait_for(probe, timeout=1) == 0.0
+        finally:
+            allow_process_return.set()
 
-    assert asyncio.run(scenario()) < 0.1
+    asyncio.run(scenario())

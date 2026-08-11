@@ -6,7 +6,7 @@ param(
     [switch]$SkipSmoke,
     [switch]$UseSystemFfmpeg,
     [switch]$IncludeExtensionAssets,
-    [string]$Version = "3.0.22"
+    [string]$Version = "3.0.23"
 )
 
 $ErrorActionPreference = "Stop"
@@ -73,7 +73,18 @@ $FFmpegArchiveBuild = "BtbN autobuild 2026-08-01 13:21 (FFmpeg g946272b79a)"
 $FFmpegArchiveSha256 = "a082da6d5ce0cbb9a8ad0112ab7f654d480c707b8caf9d332f4532d78b65257f"
 $NsisVersion = "3.12"
 $NsisZip = Join-Path $ToolsDir "nsis-$NsisVersion.zip"
-$NsisToolsDir = Join-Path $ToolsDir "nsis-$NsisVersion"
+# makensis 3.x still resolves its built-in Stubs directory through an ANSI
+# path on Windows.  Keeping the executable under a Chinese project path makes
+# even an otherwise Unicode installer fail before parsing the script.  Extract
+# the verified tool into a per-user ASCII-safe runtime directory instead.
+$NsisRuntimeRoot = if ($env:LOCALAPPDATA) {
+    Join-Path $env:LOCALAPPDATA "HLSDownloaderBuildTools"
+} elseif ($env:TEMP) {
+    Join-Path $env:TEMP "HLSDownloaderBuildTools"
+} else {
+    Join-Path ([IO.Path]::GetTempPath()) "HLSDownloaderBuildTools"
+}
+$NsisToolsDir = Join-Path $NsisRuntimeRoot "nsis-$NsisVersion"
 $NsisUrl = "https://master.dl.sourceforge.net/project/nsis/NSIS%203/$NsisVersion/nsis-$NsisVersion.zip?viasf=1"
 $NsisSha256 = "56581f90db321581c5381193d796fffcf2d24b2f8fed2160a6c6a3baa67f2c4f"
 $InstallerScript = Join-Path $Root "installer\hls-downloader.nsi"

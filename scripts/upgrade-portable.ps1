@@ -86,6 +86,7 @@ $preservedNames = @(
 $oldUnregistered = $false
 $oldMoved = $false
 $newMoved = $false
+$movedPreservedNames = @()
 try {
     if (Test-Path -LiteralPath $oldRegistration -PathType Leaf) {
         & $oldRegistration -Unregister -RegistryPrefix $RegistryPrefix
@@ -98,20 +99,12 @@ try {
         throw "The running portable application could not be closed. Close it and all browser extension connections, then try again."
     }
 
-    # Build a complete replacement beside the target. Runtime state is copied
-    # from the old folder only after all application processes are closed.
+    # Build the program image beside the target. Runtime state is moved only
+    # after the directory swap, so a large downloads/.tasks tree is never
+    # duplicated merely to upgrade a comparatively small application image.
     New-Item -ItemType Directory -Path $stageDir | Out-Null
     Get-ChildItem -LiteralPath $sourceDir -Force | ForEach-Object {
         Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $stageDir $_.Name) -Recurse -Force
-    }
-    foreach ($name in $preservedNames) {
-        $existing = Join-Path $targetDirFull $name
-        if (-not (Test-Path -LiteralPath $existing)) { continue }
-        $staged = Join-Path $stageDir $name
-        if (Test-Path -LiteralPath $staged) {
-            Remove-Item -LiteralPath $staged -Recurse -Force
-        }
-        Copy-Item -LiteralPath $existing -Destination $staged -Recurse -Force
     }
     foreach ($required in @("HLSDownloader.exe", "HLSDownloaderCore.exe", "portable", "scripts\register-native-host.ps1")) {
         if (-not (Test-Path -LiteralPath (Join-Path $stageDir $required))) {
@@ -126,6 +119,20 @@ try {
     Move-Item -LiteralPath $stageDir -Destination $targetDirFull
     $newMoved = $true
 
+    # Both trees are now under the same parent/volume. Moving each preserved
+    # entry keeps its bytes and file identity in place and remains reversible
+    # until browser registration succeeds and the backup is retired.
+    foreach ($name in $preservedNames) {
+        $existing = Join-Path $backupDir $name
+        if (-not (Test-Path -LiteralPath $existing)) { continue }
+        $replacement = Join-Path $targetDirFull $name
+        if (Test-Path -LiteralPath $replacement) {
+            Remove-Item -LiteralPath $replacement -Recurse -Force
+        }
+        Move-Item -LiteralPath $existing -Destination $replacement
+        $movedPreservedNames += $name
+    }
+
     $newRegistration = Join-Path $targetDirFull "scripts\register-native-host.ps1"
     & $newRegistration -RegistryPrefix $RegistryPrefix
     if (-not $? -or $LASTEXITCODE -ne 0) {
@@ -136,6 +143,19 @@ try {
     $oldMoved = $false
 } catch {
     $failure = $_
+    if ($oldMoved -and $newMoved) {
+        for ($index = $movedPreservedNames.Count - 1; $index -ge 0; $index--) {
+            $name = $movedPreservedNames[$index]
+            $replacement = Join-Path $targetDirFull $name
+            $existing = Join-Path $backupDir $name
+            if (Test-Path -LiteralPath $replacement) {
+                if (Test-Path -LiteralPath $existing) {
+                    Remove-Item -LiteralPath $existing -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                Move-Item -LiteralPath $replacement -Destination $existing -ErrorAction SilentlyContinue
+            }
+        }
+    }
     if ($newMoved -and (Test-Path -LiteralPath $targetDirFull)) {
         Remove-Item -LiteralPath $targetDirFull -Recurse -Force -ErrorAction SilentlyContinue
     }

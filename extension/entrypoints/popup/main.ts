@@ -3,6 +3,7 @@ import { normalizeHost, visibleMediaResources, type MediaResource } from '../../
 import { resourceQuality } from '../../lib/hlsManifest'
 import { handoffStatusLabel, handoffTerminalStatus } from '../../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, normalizeHandoffSuppressions, type HandoffSuppression } from '../../lib/handoffSuppression'
+import { normalizeCookiePermissionHosts } from '../../lib/browserCookies'
 import { extensionNeedsUpgrade } from '../../lib/version'
 import {
   THEME_BASE_CSS,
@@ -142,7 +143,7 @@ async function main() {
 
   let enabled = true
   let host = ''
-  let useBrowserCookies = true
+  let authorizedCookieHosts: string[] = []
   let excluded: string[] = []
   let suppressions: HandoffSuppression[] = []
   const sending: Record<string, string> = {}
@@ -275,10 +276,13 @@ async function main() {
   const refreshButtons = () => {
     enableBtn.textContent = enabled ? '\u81ea\u52a8\u63a5\u7ba1\u5f00' : '\u81ea\u52a8\u63a5\u7ba1\u5173'
     enableBtn.classList.toggle('active', enabled)
-    cookieBtn.textContent = useBrowserCookies ? '\u7f51\u9875 Cookie \u5f00' : '\u7f51\u9875 Cookie \u5173'
-    cookieBtn.title = useBrowserCookies ? '\u53d1\u9001\u5a92\u4f53\u5230\u684c\u9762\u7aef\u65f6\uff0c\u4f7f\u7528\u6d4f\u89c8\u5668\u5bf9\u8be5\u5a92\u4f53\u5730\u5740\u4f1a\u53d1\u9001\u7684 Cookie' : '\u4e0d\u4f20\u9012\u6d4f\u89c8\u5668 Cookie\uff0c\u53ef\u80fd\u964d\u4f4e\u767b\u5f55\u7ad9\u70b9\u4e0b\u8f7d\u6210\u529f\u7387'
-    cookieBtn.classList.toggle('active', useBrowserCookies)
-    cookieBtn.disabled = false
+    const cookieAuthorized = Boolean(host && authorizedCookieHosts.includes(host))
+    cookieBtn.textContent = cookieAuthorized ? '\u672c\u7ad9 Cookie \u5df2\u6388\u6743' : '\u6388\u6743\u672c\u7ad9 Cookie'
+    cookieBtn.title = cookieAuthorized
+      ? '\u53d1\u9001\u672c\u7ad9\u5a92\u4f53\u65f6\uff0c\u53ea\u8bfb\u53d6\u6d4f\u89c8\u5668\u5bf9\u5b9e\u9645\u8d44\u6e90\u5730\u5740\u4f1a\u53d1\u9001\u7684 Cookie\uff1b\u70b9\u51fb\u53ef\u64a4\u9500'
+      : '\u9ed8\u8ba4\u4e0d\u8bfb\u53d6 Cookie\uff1b\u4ec5\u6388\u6743\u5f53\u524d\u7ad9\u70b9\u540e\uff0c\u53d1\u9001\u8d44\u6e90\u65f6\u624d\u4f1a\u8bfb\u53d6'
+    cookieBtn.classList.toggle('active', cookieAuthorized)
+    cookieBtn.disabled = !host
     const siteExcluded = excluded.includes(host)
     excludeBtn.textContent = siteExcluded ? '\u672c\u7ad9\u5df2\u6392\u9664' : '\u6392\u9664\u672c\u7ad9'
     excludeBtn.classList.toggle('active', siteExcluded)
@@ -369,10 +373,12 @@ async function main() {
   })
   cookieBtn.addEventListener('click', async () => {
     if (!host) return
-    const next = !useBrowserCookies
+    const next = authorizedCookieHosts.includes(host)
+      ? authorizedCookieHosts.filter(value => value !== host)
+      : normalizeCookiePermissionHosts([...authorizedCookieHosts, host])
     try {
-      await browser.storage.local.set({ useBrowserCookies: next })
-      useBrowserCookies = next
+      await browser.storage.local.set({ authorizedCookieHosts: next, useBrowserCookies: false })
+      authorizedCookieHosts = next
       refreshButtons()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Cookie 设置保存失败')
@@ -408,10 +414,10 @@ async function main() {
   // opened exactly while a page starts a download; controls must be usable even
   // if the desktop ping or resource query is temporarily slow.
   const stored = await browser.storage.local.get([
-    'enabled', 'excludedHosts', 'useBrowserCookies', HANDOFF_SUPPRESSION_STORAGE_KEY,
+    'enabled', 'excludedHosts', 'authorizedCookieHosts', HANDOFF_SUPPRESSION_STORAGE_KEY,
   ]).catch(() => ({} as Record<string, unknown>))
   enabled = stored.enabled !== false
-  useBrowserCookies = stored.useBrowserCookies !== false
+  authorizedCookieHosts = normalizeCookiePermissionHosts(stored.authorizedCookieHosts)
   excluded = Array.isArray(stored.excludedHosts)
     ? stored.excludedHosts.map(value => normalizeHost(String(value || ''))).filter(Boolean)
     : []

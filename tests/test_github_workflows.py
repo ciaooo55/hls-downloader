@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from backend.app.version import APP_VERSION
+
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -41,7 +43,7 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     workflow = _workflow("release.yml")
 
     assert "workflow_dispatch:" in workflow
-    assert 'default: "3.0.22"' in workflow
+    assert f'default: "{APP_VERSION}"' in workflow
     assert "include_extensions:" in workflow
     assert "Upload browser extension ZIPs for this release" in workflow
     assert "tags:" in workflow and "v*" in workflow
@@ -119,12 +121,12 @@ def test_readme_documents_windows_release_assets():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "ciaooo55/hls-downloader/actions/workflows/ci.yml" in readme
-    assert "HLSDownloader-v3.0.22-Windows-x64-Setup.exe" in readme
-    assert "HLSDownloader-v3.0.22-Windows-x64-Portable.zip" in readme
+    assert f"HLSDownloader-v{APP_VERSION}-Windows-x64-Setup.exe" in readme
+    assert f"HLSDownloader-v{APP_VERSION}-Windows-x64-Portable.zip" in readme
     assert "m3u8-sniffer.user.js" not in readme
     assert "https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/" in readme
-    assert "HLSDownloader-v3.0.22-Firefox-Unsigned.zip" not in readme
-    assert "HLSDownloader-v3.0.22-Firefox-Source.zip" not in readme
+    assert f"HLSDownloader-v{APP_VERSION}-Firefox-Unsigned.zip" not in readme
+    assert f"HLSDownloader-v{APP_VERSION}-Firefox-Source.zip" not in readme
     assert "SHA256SUMS.txt" not in readme
     assert "Windows 10/11" in readme
     assert "git tag v" in readme

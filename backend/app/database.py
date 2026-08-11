@@ -1,10 +1,15 @@
 import aiosqlite
 import asyncio
+import logging
+import os
+import shutil
+import sqlite3
 import weakref
 from pathlib import Path
 from .paths import RUNTIME_PATHS
 
 DB_PATH = RUNTIME_PATHS.database_path
+logger = logging.getLogger(__name__)
 
 SCHEMA = """CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
@@ -104,6 +109,71 @@ _connection_path: Path | None = None
 _operation_lock: asyncio.Lock | None = None
 _ephemeral_locks: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
+
+def _backup_paths(path: Path | None = None) -> tuple[Path, Path, Path]:
+    database = Path(path or DB_PATH)
+    return (
+        database.with_name(database.name + ".backup"),
+        database.with_name(database.name + ".backup.1"),
+        database.with_name(database.name + ".corrupt"),
+    )
+
+
+async def _quick_check(db: aiosqlite.Connection) -> None:
+    cursor = await db.execute("PRAGMA quick_check")
+    try:
+        row = await cursor.fetchone()
+    finally:
+        await cursor.close()
+    if not row or str(row[0]).strip().lower() != "ok":
+        detail = str(row[0]) if row else "no result"
+        raise sqlite3.DatabaseError(f"SQLite integrity check failed: {detail}")
+
+
+async def _backup_connection(db: aiosqlite.Connection, path: Path) -> None:
+    """Create a consistent SQLite backup, including any WAL state."""
+    if not path.exists() or path.stat().st_size <= 0:
+        return
+    backup, previous, _ = _backup_paths(path)
+    temporary = backup.with_name(backup.name + ".tmp")
+    temporary.unlink(missing_ok=True)
+    target = sqlite3.connect(str(temporary))
+    try:
+        await db.backup(target)
+        target.execute("PRAGMA quick_check")
+        target.commit()
+    finally:
+        target.close()
+    if backup.exists():
+        os.replace(backup, previous)
+    os.replace(temporary, backup)
+
+
+def _restore_backup(path: Path) -> bool:
+    backup, previous, corrupt = _backup_paths(path)
+    for candidate in (backup, previous):
+        if not candidate.is_file() or candidate.stat().st_size <= 0:
+            continue
+        try:
+            check = sqlite3.connect(str(candidate), timeout=5)
+            try:
+                result = check.execute("PRAGMA quick_check").fetchone()
+            finally:
+                check.close()
+            if not result or str(result[0]).strip().lower() != "ok":
+                continue
+            if path.exists():
+                corrupt.unlink(missing_ok=True)
+                os.replace(path, corrupt)
+            for suffix in ("-wal", "-shm"):
+                path.with_name(path.name + suffix).unlink(missing_ok=True)
+            shutil.copy2(candidate, path)
+            logger.warning("restored SQLite database from %s after integrity failure", candidate)
+            return True
+        except (OSError, sqlite3.DatabaseError) as exc:
+            logger.warning("SQLite backup %s could not be restored: %s", candidate, exc)
+    return False
+
 async def _migrate(db):
     """Apply the legacy-column baseline once, then record explicit versions."""
     await db.execute(
@@ -153,12 +223,27 @@ async def initialize_database() -> None:
     if _connection is not None:
         await _connection.close()
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = await aiosqlite.connect(str(path), timeout=30)
+    async def connect_and_prepare() -> aiosqlite.Connection:
+        connection = await aiosqlite.connect(str(path), timeout=30)
+        try:
+            # Check before applying pragmas or migrations. A previous process
+            # may have left a WAL; a consistent backup is made from the live
+            # connection so that WAL pages are included.
+            await _quick_check(connection)
+            await _backup_connection(connection, path)
+            await _prepare(connection)
+            await _quick_check(connection)
+            return connection
+        except Exception:
+            await connection.close()
+            raise
+
     try:
-        await _prepare(connection)
-    except Exception:
-        await connection.close()
-        raise
+        connection = await connect_and_prepare()
+    except (sqlite3.DatabaseError, aiosqlite.Error):
+        if not _restore_backup(path):
+            raise
+        connection = await connect_and_prepare()
     _connection = connection
     _connection_loop = loop
     _connection_path = path
@@ -173,6 +258,10 @@ async def close_database() -> None:
     _connection_path = None
     _operation_lock = None
     if connection is not None:
+        try:
+            await _backup_connection(connection, Path(DB_PATH).resolve())
+        except (OSError, sqlite3.DatabaseError, aiosqlite.Error) as exc:
+            logger.warning("could not create SQLite shutdown backup: %s", exc)
         await connection.close()
 
 

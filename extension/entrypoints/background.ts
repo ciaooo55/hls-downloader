@@ -10,7 +10,7 @@ import { inspectHlsResource } from '../lib/hlsInspection'
 import { inspectDashResource } from '../lib/dashInspection'
 import { contentDispositionFilename } from '../lib/contentDisposition'
 import { InspectionCache } from '../lib/inspectionCache'
-import { cookieLookupUrl } from '../lib/browserCookies'
+import { cookieLookupUrl, cookiePermissionAllows, normalizeCookiePermissionHosts } from '../lib/browserCookies'
 import { detectBrowserFamily, stableBrowserClientId } from '../lib/browserClient'
 import { BrowserDirectBackend } from '../lib/directBackend'
 import { isEarlyDirectDownloadResponse, type ObservedDownloadResource } from '../lib/directResponse'
@@ -106,7 +106,7 @@ function extensionIdentity() {
 async function settings() {
   const data = await browser.storage.local.get([
     'enabled', 'minimumBytes', 'excludedHosts', 'authorizedCookieHosts',
-    'useBrowserCookies', HANDOFF_SUPPRESSION_STORAGE_KEY,
+    HANDOFF_SUPPRESSION_STORAGE_KEY,
   ])
   return {
     enabled: data.enabled !== false,
@@ -114,12 +114,8 @@ async function settings() {
     excludedHosts: Array.isArray(data.excludedHosts)
       ? data.excludedHosts.map(value => normalizeHost(String(value || ''))).filter(Boolean)
       : [],
-    authorizedCookieHosts: Array.isArray(data.authorizedCookieHosts) ? data.authorizedCookieHosts : [],
+    authorizedCookieHosts: normalizeCookiePermissionHosts(data.authorizedCookieHosts),
     suppressions: normalizeHandoffSuppressions(data[HANDOFF_SUPPRESSION_STORAGE_KEY]),
-    // Media URLs commonly require the logged-in browser session. This is on by
-    // default; cookies are read only for the exact resource when the user
-    // explicitly sends it to the desktop app, never while merely sniffing.
-    useBrowserCookies: data.useBrowserCookies !== false,
   }
 }
 
@@ -394,16 +390,10 @@ async function cookiesFor(url: string, pageUrl = ''): Promise<string> {
   const cookieUrl = cookieLookupUrl(url)
   if (!cookieUrl) return ''
   const config = await settings()
-  const host = new URL(cookieUrl).host
-  let pageHost = ''
-  try {
-    const lookup = cookieLookupUrl(pageUrl)
-    pageHost = lookup ? new URL(lookup).host : ''
-  } catch {}
   // Authorizing a page means its detected resources may reuse only cookies
   // that the browser would send to the resource URL itself. Page cookies are
   // never copied across origins.
-  if (!config.useBrowserCookies && !config.authorizedCookieHosts.includes(host) && !config.authorizedCookieHosts.includes(pageHost)) return ''
+  if (!cookiePermissionAllows(cookieUrl, pageUrl, config.authorizedCookieHosts)) return ''
   const values = await browser.cookies.getAll({ url: cookieUrl }).catch(() => [])
   return values.map(cookie => `${cookie.name}=${cookie.value}`).join('; ')
 }

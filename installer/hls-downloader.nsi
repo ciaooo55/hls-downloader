@@ -8,10 +8,10 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-!define APP_VERSION "3.0.22"
+!define APP_VERSION "3.0.23"
 !endif
 !ifndef APP_FILE_VERSION
-!define APP_FILE_VERSION "3.0.22.0"
+!define APP_FILE_VERSION "3.0.23.0"
 !endif
 
 !ifndef STAGE_DIR
@@ -46,6 +46,7 @@ Var RemoveDownloads
 Var BuildSmoke
 Var NativeRegistryArgs
 Var PowerShellExe
+Var UpgradeBackupDir
 
 !macro InitializePowerShell
   ; makensis emits a 32-bit bootstrapper. On 64-bit Windows, $SYSDIR points to
@@ -64,7 +65,7 @@ Var PowerShellExe
 ; MUI2 owns .onUserAbort.  Use its supported hook instead of declaring the
 ; callback a second time, while still restoring browser registration after a
 ; cancelled upgrade.
-!define MUI_CUSTOMFUNCTION_ABORT RestoreBrowserRegistrationAfterAbort
+!define MUI_CUSTOMFUNCTION_ABORT RestoreUpgradeAfterAbort
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${STAGE_DIR}\TERMS.txt"
@@ -131,8 +132,91 @@ Function RestoreBrowserRegistrationAfterAbort
 RestoreBrowserRegistrationAfterAbortDone:
 FunctionEnd
 
-Function .onInstFailed
+!macro BackupUpgradeFile Name
+  IfFileExists "$INSTDIR\${Name}" 0 +2
+    Rename "$INSTDIR\${Name}" "$UpgradeBackupDir\${Name}"
+!macroend
+
+!macro BackupUpgradeDirectory Name
+  IfFileExists "$INSTDIR\${Name}\*.*" 0 +2
+    Rename "$INSTDIR\${Name}" "$UpgradeBackupDir\${Name}"
+!macroend
+
+!macro RestoreUpgradeFile Name
+  IfFileExists "$UpgradeBackupDir\${Name}" 0 +2
+    Rename "$UpgradeBackupDir\${Name}" "$INSTDIR\${Name}"
+!macroend
+
+!macro RestoreUpgradeDirectory Name
+  IfFileExists "$UpgradeBackupDir\${Name}\*.*" 0 +2
+    Rename "$UpgradeBackupDir\${Name}" "$INSTDIR\${Name}"
+!macroend
+
+Function RestoreApplicationAfterAbort
+  ${If} $InstallCompleted == "1"
+    Return
+  ${EndIf}
+  ${If} $UpgradeBackupDir == ""
+    Return
+  ${EndIf}
+  IfFileExists "$UpgradeBackupDir\*.*" 0 RestoreApplicationAfterAbortDone
+
+  Delete "$INSTDIR\HLSDownloader.exe"
+  Delete "$INSTDIR\HLSDownloaderCore.exe"
+  Delete "$INSTDIR\config.default.json"
+  Delete "$INSTDIR\LICENSE.txt"
+  Delete "$INSTDIR\TERMS.md"
+  Delete "$INSTDIR\TERMS.txt"
+  Delete "$INSTDIR\PRIVACY.md"
+  Delete "$INSTDIR\THIRD_PARTY_NOTICES.md"
+  Delete "$INSTDIR\sbom.cdx.json"
+  Delete "$INSTDIR\Uninstall.exe"
+  RMDir /r "$INSTDIR\_internal"
+  RMDir /r "$INSTDIR\app"
+  RMDir /r "$INSTDIR\runtime"
+  RMDir /r "$INSTDIR\bin"
+  RMDir /r "$INSTDIR\frontend"
+  RMDir /r "$INSTDIR\browser-extension"
+  RMDir /r "$INSTDIR\assets"
+  RMDir /r "$INSTDIR\scripts"
+  Delete "$INSTDIR\native-host\versions\HLSDownloaderNativeHost-${APP_VERSION}.exe"
+  Delete "$INSTDIR\native-host\manifests\chrome-${APP_VERSION}.json"
+  Delete "$INSTDIR\native-host\manifests\firefox-${APP_VERSION}.json"
+
+  !insertmacro RestoreUpgradeFile "HLSDownloader.exe"
+  !insertmacro RestoreUpgradeFile "HLSDownloaderCore.exe"
+  !insertmacro RestoreUpgradeFile "config.default.json"
+  !insertmacro RestoreUpgradeFile "LICENSE.txt"
+  !insertmacro RestoreUpgradeFile "TERMS.md"
+  !insertmacro RestoreUpgradeFile "TERMS.txt"
+  !insertmacro RestoreUpgradeFile "PRIVACY.md"
+  !insertmacro RestoreUpgradeFile "THIRD_PARTY_NOTICES.md"
+  !insertmacro RestoreUpgradeFile "sbom.cdx.json"
+  !insertmacro RestoreUpgradeFile "Uninstall.exe"
+  !insertmacro RestoreUpgradeDirectory "_internal"
+  !insertmacro RestoreUpgradeDirectory "app"
+  !insertmacro RestoreUpgradeDirectory "runtime"
+  !insertmacro RestoreUpgradeDirectory "bin"
+  !insertmacro RestoreUpgradeDirectory "frontend"
+  !insertmacro RestoreUpgradeDirectory "browser-extension"
+  !insertmacro RestoreUpgradeDirectory "assets"
+  !insertmacro RestoreUpgradeDirectory "scripts"
+  CreateDirectory "$INSTDIR\native-host\versions"
+  CreateDirectory "$INSTDIR\native-host\manifests"
+  !insertmacro RestoreUpgradeFile "native-host\versions\HLSDownloaderNativeHost-${APP_VERSION}.exe"
+  !insertmacro RestoreUpgradeFile "native-host\manifests\chrome-${APP_VERSION}.json"
+  !insertmacro RestoreUpgradeFile "native-host\manifests\firefox-${APP_VERSION}.json"
+  RMDir /r "$UpgradeBackupDir"
+RestoreApplicationAfterAbortDone:
+FunctionEnd
+
+Function RestoreUpgradeAfterAbort
+  Call RestoreApplicationAfterAbort
   Call RestoreBrowserRegistrationAfterAbort
+FunctionEnd
+
+Function .onInstFailed
+  Call RestoreUpgradeAfterAbort
 FunctionEnd
 
 !macro DisconnectLegacyNativeHost Suffix
@@ -196,6 +280,35 @@ Section "Install" SecInstall
   ; versioned old Host can receive a heartbeat and relaunch the just-closed
   ; desktop/Core, re-locking files while this installer replaces them.
   !insertmacro CloseRunningApp Install "-IncludeNativeHost"
+  ; Keep the previous program image as same-volume renames until every new file
+  ; and registration step has completed. A failed extraction can then restore
+  ; a runnable old version without copying user downloads or task data.
+  StrCpy $UpgradeBackupDir "$INSTDIR\.hls-upgrade-backup"
+  RMDir /r "$UpgradeBackupDir"
+  CreateDirectory "$UpgradeBackupDir"
+  !insertmacro BackupUpgradeFile "HLSDownloader.exe"
+  !insertmacro BackupUpgradeFile "HLSDownloaderCore.exe"
+  !insertmacro BackupUpgradeFile "config.default.json"
+  !insertmacro BackupUpgradeFile "LICENSE.txt"
+  !insertmacro BackupUpgradeFile "TERMS.md"
+  !insertmacro BackupUpgradeFile "TERMS.txt"
+  !insertmacro BackupUpgradeFile "PRIVACY.md"
+  !insertmacro BackupUpgradeFile "THIRD_PARTY_NOTICES.md"
+  !insertmacro BackupUpgradeFile "sbom.cdx.json"
+  !insertmacro BackupUpgradeFile "Uninstall.exe"
+  !insertmacro BackupUpgradeDirectory "_internal"
+  !insertmacro BackupUpgradeDirectory "app"
+  !insertmacro BackupUpgradeDirectory "runtime"
+  !insertmacro BackupUpgradeDirectory "bin"
+  !insertmacro BackupUpgradeDirectory "frontend"
+  !insertmacro BackupUpgradeDirectory "browser-extension"
+  !insertmacro BackupUpgradeDirectory "assets"
+  !insertmacro BackupUpgradeDirectory "scripts"
+  CreateDirectory "$UpgradeBackupDir\native-host\versions"
+  CreateDirectory "$UpgradeBackupDir\native-host\manifests"
+  !insertmacro BackupUpgradeFile "native-host\versions\HLSDownloaderNativeHost-${APP_VERSION}.exe"
+  !insertmacro BackupUpgradeFile "native-host\manifests\chrome-${APP_VERSION}.json"
+  !insertmacro BackupUpgradeFile "native-host\manifests\firefox-${APP_VERSION}.json"
   ; Remove both generations of the old desktop shell before writing Tauri.
   ; v1.4.0 shipped a Kotlin/Compose image in app/ and runtime/.  Leaving it
   ; behind made a half-updated install easy to launch from a stale shortcut.
@@ -299,6 +412,7 @@ Section "Install" SecInstall
     CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\assets\app-icon-${APP_VERSION}.ico" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
   ${EndIf}
   StrCpy $InstallCompleted "1"
+  RMDir /r "$UpgradeBackupDir"
   ${If} $DeleteSelf == "1"
     Call ScheduleSelfDelete
   ${EndIf}

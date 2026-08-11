@@ -7,6 +7,7 @@ import { stageLabel, statusLabel } from '../taskPresentation'
 import type { Task } from '../types'
 import { fetchTorrentFiles, refreshTaskRequest, selectTorrentFiles, setTaskSpeedLimit } from '../api'
 import { Button, Dialog, DialogOverlay } from './ui'
+import { redactUrlForDiagnostics } from '../diagnosticUrl'
 
 export default function TaskDetailsModal({ task, pending, onClose, onLog, onAction, onOpenFile, onLaunchFile, onPushToTv, onCast, onPreview }: {
   task: Task
@@ -110,7 +111,7 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
         <button className="text-button failure-copy" title="复制诊断信息，便于反馈问题" onClick={() => {
           const lines = [
             `任务: ${task.title || task.filename || task.id}`,
-            `链接: ${task.url}`,
+            `链接（已脱敏）: ${redactUrlForDiagnostics(task.url)}`,
             `状态: ${task.status}`,
             ...failure.items.map(item => `${item.label}: ${item.value}`),
             failure.message ? `失败原因: ${failure.message}` : '',

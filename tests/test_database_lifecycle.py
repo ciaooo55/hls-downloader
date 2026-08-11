@@ -72,3 +72,33 @@ def test_large_select_can_be_streamed_in_bounded_batches(tmp_path, monkeypatch):
             await database.close_database()
 
     asyncio.run(run())
+
+
+def test_corrupt_database_is_restored_from_last_clean_backup(tmp_path, monkeypatch):
+    from backend.app import database
+
+    async def run():
+        await database.close_database()
+        db_path = tmp_path / "recover.db"
+        monkeypatch.setattr(database, "DB_PATH", db_path)
+        try:
+            await database.initialize_database()
+            await database.run_db(
+                "INSERT INTO tasks (id,url,title) VALUES (?,?,?)",
+                ("recoverable", "https://example.test/file", "kept"),
+            )
+            await database.close_database()
+            backup, _, _ = database._backup_paths(db_path)
+            assert backup.is_file()
+
+            db_path.write_bytes(b"not a sqlite database")
+            await database.initialize_database()
+            rows = await database.run_db(
+                "SELECT title FROM tasks WHERE id=?",
+                ("recoverable",),
+            )
+            assert rows[0]["title"] == "kept"
+        finally:
+            await database.close_database()
+
+    asyncio.run(run())
