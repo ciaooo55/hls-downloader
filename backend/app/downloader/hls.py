@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime
@@ -80,7 +81,23 @@ VOD_STATE_VERSION = 1
 LIVE_STALL_MIN_SECONDS = 90.0
 LIVE_STALL_TARGET_MULTIPLIER = 6.0
 LIVE_BATCH_CONCURRENCY = 3
+LIVE_BATCH_CONCURRENCY_MAX = 16
 LIVE_MAX_POLL_SECONDS = 10.0
+
+
+def _live_concurrency(task_concurrency: int) -> int:
+    """Live recording follows the task's concurrency within a safe band.
+
+    The historical hard-coded 3 was fine for ordinary streams but dropped
+    segments on high-bitrate origins and ignored the user's setting entirely.
+    """
+    try:
+        configured = int(task_concurrency or 0)
+    except (TypeError, ValueError):
+        configured = 0
+    if configured <= 0:
+        return LIVE_BATCH_CONCURRENCY
+    return max(LIVE_BATCH_CONCURRENCY, min(LIVE_BATCH_CONCURRENCY_MAX, configured))
 
 
 def _live_reload_delay(playlist: dict, received_new_segments: bool) -> float:
@@ -410,7 +427,10 @@ def _decrypt_aes128_file(source: Path, destination: Path, key: bytes, iv: bytes)
             output.write(unpadder.finalize())
         if temporary.stat().st_size == 0:
             raise ValueError("AES-128 解密结果为空")
-        durable_replace(temporary, destination)
+        # Plain rename: per-segment fsync turned thousands of small segments
+        # into a disk-flush storm. The VOD checkpoint records identity+size,
+        # so a torn post-crash file is detected and re-downloaded on resume.
+        os.replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -436,6 +456,8 @@ class HLSDownloader:
         self._vod_resume_records: dict[str, dict[str, int | str]] = {}
         self._vod_resume_identities: dict[int, str] = {}
         self._vod_resume_lock = asyncio.Lock()
+        self._vod_state_dirty = False
+        self._vod_state_last_write = 0.0
         self._live_checkpoint_records: dict[int, dict] | None = None
         self._live_checkpoint_duration = 0.0
 
@@ -528,6 +550,10 @@ class HLSDownloader:
             accept="",
             request_url=request_url,
             base_headers=base_headers,
+            # Only the curl-cffi client injects a browser profile. The httpx
+            # fallback (curl_cffi unavailable) must carry an explicit
+            # User-Agent instead of announcing python-httpx to the CDN.
+            browser_profile_managed=CurlAsyncSession is not None,
         )
 
     def _task_dir(self) -> Path:
@@ -1659,6 +1685,26 @@ class HLSDownloader:
                 "identity": identity,
                 "size": int(size),
             }
+            # Rewriting (and fsync-ing) the whole state file for every one of
+            # thousands of segments serializes the worker pool behind disk
+            # flushes. Losing at most one second of checkpoint records only
+            # means re-downloading those segments after a crash.
+            self._vod_state_dirty = True
+            now = time.monotonic()
+            if now - self._vod_state_last_write < 1.0:
+                return
+            self._vod_state_last_write = now
+            self._vod_state_dirty = False
+            await asyncio.to_thread(self._write_vod_state)
+
+    async def _flush_vod_state(self) -> None:
+        if not self._vod_resume_enabled or not self._vod_state_dirty:
+            return
+        async with self._vod_resume_lock:
+            if not self._vod_state_dirty:
+                return
+            self._vod_state_dirty = False
+            self._vod_state_last_write = time.monotonic()
             await asyncio.to_thread(self._write_vod_state)
 
     def _live_state_journal_path(self) -> Path:
@@ -2027,7 +2073,7 @@ class HLSDownloader:
         flag is carried across batches so a failure at a batch boundary still
         marks the next kept segment.
         """
-        semaphore = asyncio.Semaphore(LIVE_BATCH_CONCURRENCY)
+        semaphore = asyncio.Semaphore(_live_concurrency(self.task.concurrency))
         outcomes: dict[int, bool] = {}
 
         async def fetch(entry: dict) -> None:
@@ -2134,7 +2180,7 @@ class HLSDownloader:
 
         task.status = TaskStatus.DOWNLOADING_SEGMENTS
         task.progress.total_segments = len(recorded)
-        task.progress.max_workers = LIVE_BATCH_CONCURRENCY
+        task.progress.max_workers = _live_concurrency(task.concurrency)
         task.progress.connection_status = "running"
         task.progress.media_duration = total_duration
         if recorded:
@@ -2554,6 +2600,9 @@ class HLSDownloader:
                 if not worker_task.done():
                     worker_task.cancel()
             await asyncio.gather(*workers, return_exceptions=True)
+            # The debounced checkpoint may still hold the last few completed
+            # segments in memory; make them durable before pause/merge/exit.
+            await self._flush_vod_state()
 
         if not pending and not self._is_pausing() and not self._is_canceled():
             self._playback_priority_index = None
@@ -2786,7 +2835,11 @@ class HLSDownloader:
                 raise RuntimeError(
                     f"BYTERANGE 长度不匹配，期望 {expected_length}，实际 {written}"
                 )
-            await asyncio.to_thread(durable_replace, temporary, destination)
+            # No per-segment fsync: mainstream downloaders rely on the OS
+            # cache here. Resume validation compares identity+size and the
+            # merge step verifies the output, so the crash window only costs
+            # a re-download instead of a per-file flush on every segment.
+            await asyncio.to_thread(os.replace, temporary, destination)
             return written
         finally:
             temporary.unlink(missing_ok=True)

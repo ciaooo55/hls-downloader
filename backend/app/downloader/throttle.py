@@ -55,6 +55,11 @@ class GlobalDownloadThrottle:
         remaining = max(0, int(nbytes or 0))
         if remaining <= 0:
             return
+        # Unlimited transfers must not serialize every chunk of every worker
+        # on the shared lock. configure() and consume() only run on the API
+        # event loop, so this unlocked read cannot observe a torn value.
+        if self._limit_bps <= 0:
+            return
         while True:
             async with self._lock:
                 if self._limit_bps <= 0:

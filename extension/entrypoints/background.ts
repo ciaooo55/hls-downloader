@@ -45,9 +45,25 @@ const determinationWaiters = new Map<number, (item: Browser.downloads.DownloadIt
 interface EarlyBrowserTakeover {
   requestId: string
   startedAt: number
+  urls: string[]
   promise: Promise<{ resource: MediaResource, response: any } | null>
 }
 const earlyBrowserTakeovers = new Map<string, EarlyBrowserTakeover>()
+
+/**
+ * Locate an early takeover when the request chain is no longer available.
+ * Tab navigation events routinely clear the chain between onHeadersReceived
+ * and downloads.onCreated; matching by URL prevents offering the same
+ * download to the desktop twice (duplicate confirmation/task).
+ */
+function findEarlyBrowserTakeoverByUrl(candidates: Array<string | undefined>): EarlyBrowserTakeover | undefined {
+  const wanted = candidates.filter((value): value is string => Boolean(value))
+  if (!wanted.length) return undefined
+  for (const entry of earlyBrowserTakeovers.values()) {
+    if (entry.urls.some(url => wanted.includes(url))) return entry
+  }
+  return undefined
+}
 const requestChains = new RequestChainStore()
 const blobSources = new BlobSourceStore()
 let nativeBridge: NativeBridge | null = null
@@ -941,7 +957,8 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
       return null
     }
   })()
-  earlyBrowserTakeovers.set(requestId, { requestId, startedAt: Date.now(), promise })
+  const urls = [...new Set([observedResource.url, String(details.url || '')].filter(Boolean))]
+  earlyBrowserTakeovers.set(requestId, { requestId, startedAt: Date.now(), urls, promise })
   void promise.finally(() => {
     setTimeout(() => {
       const current = earlyBrowserTakeovers.get(requestId)
@@ -1136,12 +1153,13 @@ export default defineBackground(() => {
       // Chrome leaves DownloadItem.referrer empty. After a click is known, re-bind
       // the chain to that tab so we never replay another page's auth headers.
       let provisionalChain = requestChains.find(originalRequest, Date.now(), blobSource?.tabId)
-      const earlyTakeover = provisionalChain
+      const earlyTakeover = (provisionalChain
         ? earlyBrowserTakeovers.get(provisionalChain.requestId)
-        : undefined
+        : undefined)
+        ?? findEarlyBrowserTakeoverByUrl([(item as any).finalUrl, item.url, originalRequest.url])
       if (earlyTakeover) {
         const earlyResult = await earlyTakeover.promise
-        earlyBrowserTakeovers.delete(provisionalChain!.requestId)
+        earlyBrowserTakeovers.delete(earlyTakeover.requestId)
         if (earlyResult?.response?.handoff?.id) {
           // The early response already created the desktop handoff.  If the
           // desktop rejected presentation, leave the original browser item

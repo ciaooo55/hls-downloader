@@ -7,12 +7,14 @@ from backend.app.network_proxy import (
     HostNotAllowedError,
     PrivateDestinationError,
     PolicyAsyncClient,
+    _normalize_system_proxy,
     _proxy_route,
     curl_proxy,
     ensure_url_allowed,
     ensure_public_destination,
     host_matches_patterns,
     httpx_proxy_options,
+    reset_proxy_runtime_state,
 )
 import httpx
 
@@ -33,7 +35,60 @@ def test_manual_proxy_and_bypass(monkeypatch):
 
 def test_system_proxy_uses_environment(monkeypatch):
     monkeypatch.setattr(settings, "proxy_mode", "system")
+    monkeypatch.setattr(settings, "proxy_bypass", [])
+    reset_proxy_runtime_state()
+    monkeypatch.setattr(
+        "backend.app.network_proxy.urllib.request.getproxies",
+        lambda: {},
+    )
     assert httpx_proxy_options("https://cdn.test/file") == {"trust_env": True}
+    assert curl_proxy("https://cdn.test/file") is None
+    assert _proxy_route("https://cdn.test/file") == ("system", "")
+
+
+def test_system_proxy_reads_os_settings_for_httpx_and_curl(monkeypatch):
+    monkeypatch.setattr(settings, "proxy_mode", "system")
+    monkeypatch.setattr(settings, "proxy_bypass", [])
+    reset_proxy_runtime_state()
+    monkeypatch.setattr(
+        "backend.app.network_proxy.urllib.request.getproxies",
+        lambda: {"http": "127.0.0.1:7890", "https": "127.0.0.1:7890"},
+    )
+    monkeypatch.setattr(
+        "backend.app.network_proxy.urllib.request.proxy_bypass",
+        lambda _host: False,
+    )
+    assert httpx_proxy_options("https://github.com/file") == {
+        "proxy": "http://127.0.0.1:7890",
+        "trust_env": False,
+    }
+    assert curl_proxy("https://github.com/file") == "http://127.0.0.1:7890"
+    assert _proxy_route("https://github.com/file") == ("proxy", "http://127.0.0.1:7890")
+
+
+def test_system_proxy_honors_os_bypass_and_app_bypass(monkeypatch):
+    monkeypatch.setattr(settings, "proxy_mode", "system")
+    monkeypatch.setattr(settings, "proxy_bypass", ["*.lan"])
+    reset_proxy_runtime_state()
+    monkeypatch.setattr(
+        "backend.app.network_proxy.urllib.request.getproxies",
+        lambda: {"https": "http://127.0.0.1:7890"},
+    )
+    monkeypatch.setattr(
+        "backend.app.network_proxy.urllib.request.proxy_bypass",
+        lambda host: host == "intranet.test",
+    )
+    assert httpx_proxy_options("https://intranet.test/file") == {"trust_env": True}
+    assert curl_proxy("https://intranet.test/file") is None
+    assert httpx_proxy_options("http://media.lan/file") == {"trust_env": True}
+    assert curl_proxy("https://github.com/file") == "http://127.0.0.1:7890"
+
+
+def test_windows_socks_entry_is_normalized_to_socks5():
+    assert _normalize_system_proxy("127.0.0.1:1080") == "http://127.0.0.1:1080"
+    assert _normalize_system_proxy("socks://127.0.0.1:1080") == "socks5://127.0.0.1:1080"
+    assert _normalize_system_proxy("socks4://127.0.0.1:1080") == "socks5://127.0.0.1:1080"
+    assert _normalize_system_proxy("socks5://127.0.0.1:1080") == "socks5://127.0.0.1:1080"
 
 
 def test_proxy_bypass_supports_ipv6_cidr_suffix_and_port(monkeypatch):
@@ -67,7 +122,13 @@ def test_allowed_host_patterns_cover_wildcards_and_redirect_destinations(monkeyp
         asyncio.run(hook(request))
 
 
-def test_host_pattern_does_not_confuse_ipv6_colons_with_ports():
+def test_host_pattern_does_not_confuse_ipv6_colons_with_ports(monkeypatch):
+    monkeypatch.setattr(settings, "proxy_mode", "system")
+    reset_proxy_runtime_state()
+    monkeypatch.setattr(
+        "backend.app.network_proxy.urllib.request.getproxies",
+        lambda: {},
+    )
     assert host_matches_patterns("http://[::1]:8765/", ["::1"])
     assert host_matches_patterns("http://[::1]:8765/", ["[::1]:8765"])
     assert not host_matches_patterns("http://[::1]:9000/", ["[::1]:8765"])
@@ -76,6 +137,7 @@ def test_host_pattern_does_not_confuse_ipv6_colons_with_ports():
 
 def test_browser_destination_policy_blocks_loopback_and_private_dns(monkeypatch):
     monkeypatch.setattr(settings, "allowed_hosts", [])
+    reset_proxy_runtime_state()
 
     async def run():
         with pytest.raises(PrivateDestinationError):
@@ -95,6 +157,7 @@ def test_browser_destination_policy_blocks_loopback_and_private_dns(monkeypatch)
 
 def test_browser_destination_policy_allows_dns_proxy_fake_ip_but_not_literal(monkeypatch):
     monkeypatch.setattr(settings, "allowed_hosts", [])
+    reset_proxy_runtime_state()
     monkeypatch.setattr(
         "backend.app.network_proxy.socket.getaddrinfo",
         lambda *_args, **_kwargs: [
@@ -115,6 +178,7 @@ def test_browser_destination_policy_allows_dns_proxy_fake_ip_but_not_literal(mon
 
 def test_browser_destination_policy_rejects_fake_ip_mixed_with_private_dns(monkeypatch):
     monkeypatch.setattr(settings, "allowed_hosts", [])
+    reset_proxy_runtime_state()
     monkeypatch.setattr(
         "backend.app.network_proxy.socket.getaddrinfo",
         lambda *_args, **_kwargs: [
@@ -128,6 +192,25 @@ def test_browser_destination_policy_rejects_fake_ip_mixed_with_private_dns(monke
             await ensure_public_destination("https://rebinding.example/master.m3u8")
 
     asyncio.run(run())
+
+
+def test_browser_destination_policy_caches_successful_public_dns(monkeypatch):
+    monkeypatch.setattr(settings, "allowed_hosts", [])
+    reset_proxy_runtime_state()
+    lookups = {"count": 0}
+
+    def fake_getaddrinfo(*_args, **_kwargs):
+        lookups["count"] += 1
+        return [(2, 1, 6, "", ("8.8.8.8", 443))]
+
+    monkeypatch.setattr("backend.app.network_proxy.socket.getaddrinfo", fake_getaddrinfo)
+
+    async def run():
+        await ensure_public_destination("https://cdn.example.test/a.ts")
+        await ensure_public_destination("https://cdn.example.test/b.ts")
+
+    asyncio.run(run())
+    assert lookups["count"] == 1
 
 
 def test_manual_destination_policy_still_allows_lan_addresses(monkeypatch):

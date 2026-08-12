@@ -219,6 +219,10 @@ export function connectSSE(
           boundary = buffer.indexOf('\n\n')
         }
       }
+      // Proxies, sleep/resume and backend restarts commonly end the stream
+      // with a clean EOF rather than an error; without reconnecting here the
+      // UI silently froze until the slow polling fallback noticed.
+      if (!closed) reconnectTimer = setTimeout(() => { void connect() }, 1000)
     } catch {
       if (!closed) reconnectTimer = setTimeout(() => { void connect() }, 3000)
     }

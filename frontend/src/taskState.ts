@@ -80,6 +80,11 @@ export function getDisplayedProgress(task: TaskRecord): number {
   if (Number(task.progress_percent || 0) > 0) {
     return Math.max(0, Math.min(100, Number(task.progress_percent)))
   }
+  // A resumed/starting task can carry bytes before the engine publishes a
+  // percent; showing 0% next to a non-zero size summary reads as a bug.
+  if (Number(task.total_bytes || 0) > 0) {
+    return Math.max(0, Math.min(100, (Number(task.downloaded_bytes || 0) * 100) / Number(task.total_bytes)))
+  }
   if (!task.total_segments) return 0
   return (Number(task.completed_segments || 0) / Number(task.total_segments)) * 100
 }

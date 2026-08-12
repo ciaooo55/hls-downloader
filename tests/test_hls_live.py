@@ -7,12 +7,19 @@ import pytest
 
 from backend.app.config import settings
 from backend.app.downloader import hls as hls_module
-from backend.app.downloader.hls import HLSDownloader, _blocking_reload_url, _live_reload_delay
+from backend.app.downloader.hls import HLSDownloader, _blocking_reload_url, _live_concurrency, _live_reload_delay
 from backend.app.downloader.parser import parse_m3u8
 from backend.app.models import Task, TaskStatus
 
 
 LIVE_HEAD = "#EXTM3U\n#EXT-X-TARGETDURATION:4\n"
+
+
+def test_live_concurrency_follows_task_setting_within_safe_band():
+    assert _live_concurrency(0) == 3
+    assert _live_concurrency(1) == 3
+    assert _live_concurrency(8) == 8
+    assert _live_concurrency(64) == 16
 
 
 def test_live_reload_delay_uses_part_target_without_one_second_floor():

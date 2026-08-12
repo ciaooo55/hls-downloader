@@ -321,6 +321,13 @@ class HTTPDownloader(SeeklessEngine):
         self._retry_window = SharedRetryWindow()
         self._last_rate_limit_notice = 0.0
         self._short_signature_waited = False
+        # Data requests go to the redirect-resolved URL. Re-walking the
+        # original redirect chain (github.com -> objects.githubusercontent.com
+        # and similar) for every byte range adds a slow round trip per chunk
+        # and often trips the origin's rate limiter.
+        self._download_url = task.url
+        self._url_generation = 0
+        self._url_refresh_lock = asyncio.Lock()
 
     def request_seek(self, value: int) -> None:
         if value >= 0:
@@ -878,6 +885,45 @@ class HTTPDownloader(SeeklessEngine):
             raise last_error
         raise RuntimeError("服务器未返回可用的文件信息")
 
+    async def _refresh_download_url(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        *,
+        generation: int,
+    ) -> bool:
+        """Re-resolve an expired redirect target from the original task URL.
+
+        Signed CDN redirects (GitHub releases, S3 presigned links) expire in
+        minutes while a large transfer is still running.  One worker probes
+        the original URL again; the others simply retry with the refreshed
+        address instead of stacking duplicate probes.
+        """
+        async with self._url_refresh_lock:
+            if self._url_generation != generation:
+                return True
+            if self._download_url == self.task.url:
+                return False
+            try:
+                metadata = await asyncio.wait_for(
+                    self._probe(client, headers),
+                    timeout=PROBE_TOTAL_TIMEOUT,
+                )
+            except Exception:
+                return False
+            total = int(metadata.get("total") or 0)
+            if self._total_size and total and total != self._total_size:
+                # A different object now lives behind the URL. Let the range
+                # validators fail the transfer safely instead of stitching.
+                return False
+            self._download_url = str(metadata.get("final_url") or "") or self.task.url
+            self._url_generation += 1
+            self.on_log(
+                self.task.id,
+                "[downloading] 跳转后的下载地址已过期，已从原始链接重新解析并继续",
+            )
+            return True
+
     async def _download_replay_post(
         self,
         client: httpx.AsyncClient,
@@ -967,7 +1013,13 @@ class HTTPDownloader(SeeklessEngine):
             task.status = TaskStatus.DOWNLOADING
             task.progress.connection_status = "connecting"
             self._set_stage("probing", "正在读取文件信息")
-            limits = httpx.Limits(max_connections=max(2, task.concurrency + 2))
+            # Leave headroom above the worker count: redirect hops, the probe
+            # and playback range requests share this pool, and a pool sized
+            # exactly to the workers serializes chunk startup behind them.
+            limits = httpx.Limits(
+                max_connections=max(8, task.concurrency * 2),
+                max_keepalive_connections=max(8, task.concurrency * 2),
+            )
             timeout = httpx.Timeout(connect=15, read=60, write=30, pool=30)
             headers = self._headers()
             async with policy_httpx_client(
@@ -983,6 +1035,7 @@ class HTTPDownloader(SeeklessEngine):
                     metadata = await self._probe_with_retry(client, headers)
                     total = int(metadata["total"])
                     self._total_size = total
+                    self._download_url = str(metadata.get("final_url") or "") or task.url
                     task.mime_type = task.mime_type or metadata["content_type"]
                     task.progress.total_bytes = total
                     name = (
@@ -1150,10 +1203,11 @@ class HTTPDownloader(SeeklessEngine):
                 raise asyncio.CancelledError
             if self._is_pausing():
                 return
+            url_generation = self._url_generation
             try:
                 task.progress.downloaded_bytes = 0
                 task.progress.progress_percent = 0.0
-                async with client.stream("GET", task.url, headers=headers) as response:
+                async with client.stream("GET", self._download_url, headers=headers) as response:
                     response.raise_for_status()
                     content_type = response.headers.get("content-type", "").split(";", 1)[0]
                     task.mime_type = task.mime_type or content_type
@@ -1197,6 +1251,17 @@ class HTTPDownloader(SeeklessEngine):
                 last_error = exc
                 if self._is_pausing():
                     return
+                status = int(
+                    getattr(getattr(exc, "response", None), "status_code", 0) or 0
+                )
+                if (
+                    status in {401, 403, 404, 410}
+                    and attempt < MAX_RETRIES
+                    and await self._refresh_download_url(
+                        client, headers, generation=url_generation
+                    )
+                ):
+                    continue
                 if not should_retry_download_error(exc) or attempt >= MAX_RETRIES:
                     break
                 delay = retry_delay_seconds(exc, min(4, attempt))
@@ -1456,6 +1521,7 @@ class HTTPDownloader(SeeklessEngine):
                 if not await retry_window.wait(lambda: self._is_canceled() or self._is_pausing()):
                     return False
                 self._clear_rate_limit_notice()
+                url_generation = self._url_generation
                 try:
                     while True:
                         target_end = stop_at[index] if dynamic_stop else end
@@ -1470,7 +1536,7 @@ class HTTPDownloader(SeeklessEngine):
                             request_headers["If-Range"] = validator
                         async with client.stream(
                             "GET",
-                            task.url,
+                            self._download_url,
                             headers=request_headers,
                         ) as response:
                             # 200 after a Range/If-Range request is a legitimate
@@ -1590,6 +1656,17 @@ class HTTPDownloader(SeeklessEngine):
                         break
                     if isinstance(exc, _HTTPRangeValidationError):
                         break
+                    status = int(
+                        getattr(getattr(exc, "response", None), "status_code", 0) or 0
+                    )
+                    if (
+                        status in {401, 403, 404, 410}
+                        and attempt < MAX_RETRIES
+                        and await self._refresh_download_url(
+                            client, headers, generation=url_generation
+                        )
+                    ):
+                        continue
                     if not should_retry_download_error(exc):
                         break
                     if attempt < MAX_RETRIES:

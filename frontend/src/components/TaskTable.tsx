@@ -237,6 +237,9 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
           const displayName = task.title || task.filename || task.id
           const postProcessing = task.status === 'merging' || task.status === 'remuxing'
           const recordingLive = !!task.is_live && (task.status === 'downloading_segments' || task.status === 'pausing')
+          // Paused/queued/finished rows must not keep showing the last
+          // sampled transfer rate and a stale countdown.
+          const activeTransfer = ['downloading', 'downloading_segments', 'fetching_metadata', 'checking', 'downloading_m3u8', 'parsing'].includes(task.status)
           const sizeSummary = taskSizeSummary(task)
           return <tr key={task.id} data-task-id={task.id} className={`${selected.has(task.id) ? 'selected ' : ''}${pending.has(task.id) ? 'pending' : ''}`.trim()}
             onClick={event => {
@@ -272,14 +275,14 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
                 : postProcessing
                   ? <><div className="phase-progress"><ProgressLine label="下载" value={100} /><ProgressLine label={task.status === 'merging' ? '拼接' : '转封装'} value={task.post_percent || 0} /></div><small className="progress-bytes">{sizeSummary}</small></>
                   : <><ProgressLine value={progress} /><small className="progress-bytes">{sizeSummary}</small></>}</td>
-            <td><span className="speed-cell">{fmtSpeed(task.speed_bytes_per_sec)}</span><small className="eta-cell">{recordingLive ? 'LIVE' : task.task_type === 'torrent' && task.upload_speed_bytes_per_sec > 0 ? `↑ ${fmtSpeed(task.upload_speed_bytes_per_sec)}` : fmtEta(task.eta_seconds)}</small></td>
+            <td><span className="speed-cell">{activeTransfer ? fmtSpeed(task.speed_bytes_per_sec) : '--'}</span><small className="eta-cell">{recordingLive ? 'LIVE' : activeTransfer && task.task_type === 'torrent' && task.upload_speed_bytes_per_sec > 0 ? `↑ ${fmtSpeed(task.upload_speed_bytes_per_sec)}` : activeTransfer ? fmtEta(task.eta_seconds) : '--'}</small></td>
             <td className="segments-col" title={task.task_type === 'torrent' ? `Peer ${task.peer_count} · Seed ${task.seed_count}` : `${task.active_workers || task.active_slots || 0}/${task.max_workers || task.concurrency || 0} 个连接`}>{task.task_type === 'torrent' ? `${task.peer_count} Peer` : task.total_segments ? <><span>{task.completed_segments}/{task.total_segments}</span><small>{task.active_workers || task.active_slots || 0} 连接</small></> : '--'}</td><td className="updated-col">{fmtDate(task.updated_at)}</td>
             <td className="menu-col">
               <button className="row-menu-button" title="任务操作" onClick={event => { event.stopPropagation(); openMenu(event, task) }}><MoreHorizontal size={17} /></button>
               <div className="row-actions" onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()}>
                 {task.available_actions?.includes('pause') && <button title={task.is_live ? '停止录制' : '暂停'} onClick={() => onTasksAction([task], 'pause')}><Pause size={16} /></button>}
                 {task.available_actions?.includes('resume') && <button title={task.is_live ? '继续录制' : '恢复'} onClick={() => onTasksAction([task], 'resume')}><Play size={16} /></button>}
-                {(task.available_actions?.includes('preview') || task.status === 'done') && <button title={task.status === 'done' ? '播放' : '边下边播'} onClick={() => onPreview(task)}><MonitorPlay size={16} /></button>}
+                {(task.available_actions?.includes('preview') || (task.status === 'done' && (visual.kind === 'video' || visual.kind === 'audio'))) && <button title={task.status === 'done' ? '播放' : '边下边播'} onClick={() => onPreview(task)}><MonitorPlay size={16} /></button>}
                 {((task.output_path && task.output_is_file && task.status === 'done') || (task.playback_ready && ['http', 'torrent', 'hls', 'dash'].includes(task.task_type))) && <button title={task.status === 'done' ? '投屏已下载文件' : '投屏当前已下载内容'} onClick={() => onCast(task)}><ScreenShare size={16} /></button>}
                 {((task.output_path && task.output_is_file && task.status === 'done') || (task.playback_ready && ['http', 'torrent', 'hls', 'dash'].includes(task.task_type))) && <button title={task.status === 'done' ? 'TVBox 推送已下载文件' : 'TVBox 推送当前已下载内容'} onClick={() => onPushToTv(task)}><Tv size={16} /></button>}
                 <button title="复制链接" onClick={() => onCopyUrl(task)}><Copy size={16} /></button>

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import time
+import urllib.request
 import weakref
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -250,6 +251,16 @@ def _is_synthetic_proxy_address(value: str) -> bool:
     return any(address in network for network in SYNTHETIC_PROXY_NETWORKS)
 
 
+# A multi-connection HTTP task and a segmented HLS/DASH stream repeat the
+# public-destination check for every request and redirect hop.  Caching only
+# *successful* validations for a short window removes a per-range DNS lookup
+# from the hot path while keeping the DNS-rebinding window narrow; failures
+# are never cached so a recovering resolver retries immediately.
+_PUBLIC_HOST_TTL_SECONDS = 60.0
+_PUBLIC_HOST_CACHE_LIMIT = 256
+_public_host_cache: OrderedDict[tuple[str, int], float] = OrderedDict()
+
+
 async def ensure_public_destination(url: str) -> None:
     """Reject browser-originated requests that resolve outside public IP space.
 
@@ -268,6 +279,12 @@ async def ensure_public_destination(url: str) -> None:
     if literal is not None:
         if not _is_public_address(host):
             raise PrivateDestinationError(f"浏览器来源任务禁止访问非公网地址 {host}")
+        return
+    cache_key = (host, int(port or 443))
+    now = time.monotonic()
+    cached_until = _public_host_cache.get(cache_key, 0.0)
+    if cached_until > now:
+        _public_host_cache.move_to_end(cache_key)
         return
     try:
         records = await asyncio.to_thread(
@@ -289,6 +306,10 @@ async def ensure_public_destination(url: str) -> None:
         for address in addresses
     ):
         raise PrivateDestinationError(f"浏览器来源任务禁止访问解析到非公网地址的主机 {host}")
+    _public_host_cache[cache_key] = now + _PUBLIC_HOST_TTL_SECONDS
+    _public_host_cache.move_to_end(cache_key)
+    while len(_public_host_cache) > _PUBLIC_HOST_CACHE_LIMIT:
+        _public_host_cache.popitem(last=False)
 
 
 async def _validate_httpx_request(request) -> None:
@@ -299,11 +320,90 @@ def _bypassed(url: str) -> bool:
     return host_matches_patterns(url, settings.proxy_bypass)
 
 
+# ``urllib.request.getproxies()`` prefers *_PROXY environment variables and
+# falls back to the OS configuration (WinINET registry on Windows, System
+# Configuration on macOS).  IDM and browsers read the same Windows settings,
+# so resolving them explicitly keeps "system" mode consistent across httpx
+# and curl-cffi instead of leaving curl with environment variables only.
+# A short TTL keeps toggling a local proxy client (Clash/v2rayN) effective
+# for new requests without re-reading the registry on every byte range.
+_SYSTEM_PROXY_TTL_SECONDS = 15.0
+_system_proxy_state: tuple[float, dict[str, str]] = (0.0, {})
+
+
+def _normalize_system_proxy(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "://" not in text:
+        return f"http://{text}"
+    lowered = text.lower()
+    # CPython labels a bare Windows SOCKS entry socks4; every contemporary
+    # local proxy (Clash, v2rayN, sing-box, SSR) speaks SOCKS5 with remote
+    # DNS, and httpx/socksio only implements SOCKS5.  Normalizing here keeps
+    # httpx and curl-cffi behavior identical.
+    if lowered.startswith(("socks://", "socks4://", "socks4a://")):
+        # httpx/httpcore speak SOCKS5; curl-cffi accepts the same URL.
+        return "socks5://" + text.split("://", 1)[1]
+    return text
+
+
+def reset_proxy_runtime_state() -> None:
+    """Drop cached OS proxy and public-host DNS results (tests / settings)."""
+    global _system_proxy_state
+    _system_proxy_state = (0.0, {})
+    _public_host_cache.clear()
+
+
+def system_proxies(*, now: float | None = None) -> dict[str, str]:
+    """Return scheme -> proxy URL from environment or OS settings (cached)."""
+    global _system_proxy_state
+    current = time.monotonic() if now is None else float(now)
+    expires, cached = _system_proxy_state
+    if current < expires:
+        return cached
+    try:
+        raw = urllib.request.getproxies()
+    except Exception:
+        raw = {}
+    proxies = {
+        str(scheme).lower(): _normalize_system_proxy(value)
+        for scheme, value in raw.items()
+        if str(scheme).lower() != "no" and str(value or "").strip()
+    }
+    _system_proxy_state = (current + _SYSTEM_PROXY_TTL_SECONDS, proxies)
+    return proxies
+
+
+def system_proxy_for(url: str) -> str:
+    """Resolve the effective system proxy for one URL, honoring bypass rules."""
+    proxies = system_proxies()
+    if not proxies:
+        return ""
+    try:
+        parsed = urlsplit(str(url or ""))
+        scheme = (parsed.scheme or "http").lower()
+        host = parsed.hostname or ""
+    except (TypeError, ValueError):
+        return ""
+    if host:
+        try:
+            # Covers NO_PROXY and the Windows ProxyOverride/<local> list.
+            if urllib.request.proxy_bypass(host):
+                return ""
+        except Exception:
+            pass
+    return proxies.get(scheme, "") or proxies.get("all", "")
+
+
 def httpx_proxy_options(url: str) -> dict:
     """Build explicit httpx proxy policy for a task URL."""
     mode = str(getattr(settings, "proxy_mode", "system") or "system").lower()
     options = {"event_hooks": {"request": [_validate_httpx_request]}} if settings.allowed_hosts else {}
     if mode == "system":
+        proxy = "" if _bypassed(url) else system_proxy_for(url)
+        if proxy:
+            return {"proxy": proxy, "trust_env": False, **options}
         return {"trust_env": True, **options}
     if mode == "manual" and settings.proxy_url and not _bypassed(url):
         return {"proxy": settings.proxy_url, "trust_env": False, **options}
@@ -314,6 +414,12 @@ def _proxy_route(url: str) -> tuple[str, str]:
     """Return a stable transport route, recalculated for every request URL."""
     mode = str(getattr(settings, "proxy_mode", "system") or "system").lower()
     if mode == "system":
+        # Resolve the concrete proxy (environment first, then the Windows /
+        # macOS system configuration) so redirects and long-lived tasks react
+        # when the user toggles a local proxy client mid-session.
+        proxy = "" if _bypassed(url) else system_proxy_for(url)
+        if proxy:
+            return "proxy", proxy
         return "system", ""
     if mode == "manual" and settings.proxy_url and not _bypassed(url):
         return "proxy", str(settings.proxy_url)
@@ -453,7 +559,11 @@ def curl_proxy(url: str) -> str | None:
     """Return curl-cffi's proxy argument; an empty string disables env proxy."""
     mode = str(getattr(settings, "proxy_mode", "system") or "system").lower()
     if mode == "system":
-        return None
+        # curl only reads environment variables on its own; hand it the same
+        # explicitly resolved system proxy that the httpx clients use so HLS
+        # and browser-profile transfers follow WinINET settings too.
+        proxy = "" if _bypassed(url) else system_proxy_for(url)
+        return proxy or None
     if mode == "manual" and settings.proxy_url and not _bypassed(url):
         return settings.proxy_url
     return ""

@@ -104,6 +104,7 @@ export default function App() {
   const lastClipboardOffer = useRef('')
   const tasksRef = useRef<Task[]>([])
   const loadInFlight = useRef<Promise<void> | null>(null)
+  const loadQueued = useRef(false)
   const progressEventBatch = useRef<Map<string, Record<string, any>>>(new Map())
   const progressFlushTimer = useRef<number | null>(null)
   const deletedTaskIds = useRef<Set<string>>(new Set())
@@ -152,8 +153,20 @@ export default function App() {
     return () => window.removeEventListener('hls-browser-media-push', receive)
   }, [])
 
-  const load = useCallback(async () => {
-    if (loadInFlight.current) return loadInFlight.current
+  const load = useCallback(async (): Promise<void> => {
+    if (loadInFlight.current) {
+      // A refresh requested while another is in flight must not silently
+      // reuse the older snapshot: it may predate the operation (pause/resume)
+      // that triggered this call. Chain one follow-up fetch instead.
+      if (!loadQueued.current) {
+        loadQueued.current = true
+        return loadInFlight.current.then((): Promise<void> => {
+          loadQueued.current = false
+          return load()
+        })
+      }
+      return loadInFlight.current
+    }
     const request = (async () => { try {
       const [taskData, settingData, browserData, healthData, powerActions] = await Promise.all([fetchTasks(), fetchSettings(), fetchBrowserStatus(), fetchHealth(), fetchPendingPowerActions()])
       const pendingProgress = [...progressEventBatch.current.values()]
@@ -326,7 +339,10 @@ export default function App() {
     }
   }, [settings.clipboard_watch, legalStatus?.accepted])
   useEffect(() => {
-    if (!localShare) return
+    // A direct URL cast has no local share id: there is no file share to
+    // poll or auto-clean, and polling an empty id only produced errors that
+    // kept the "共享中" state forever.
+    if (!localShare || !localShare.id) return
     let stopped = false
     const refresh = async () => {
       try {
@@ -349,7 +365,13 @@ export default function App() {
   const playingTask = playing ? tasks.find(task => task.id === playing.id) || playing : null
   const commands = commandState(selectedTasks.some(task => pending.has(task.id)) ? [] : selectedTasks)
   const running = tasks.filter(task => isRunningStatus(task.status))
-  const totalSpeed = running.reduce((sum, task) => sum + (task.speed_bytes_per_sec || 0), 0)
+  // "pausing" and post-processing stages carry the last sampled rate; only
+  // stages that are actually transferring belong in the status-bar total.
+  const totalSpeed = running.reduce((sum, task) => (
+    ['downloading', 'downloading_segments', 'fetching_metadata', 'checking', 'downloading_m3u8', 'parsing'].includes(task.status)
+      ? sum + (task.speed_bytes_per_sec || 0)
+      : sum
+  ), 0)
   const completedSize = tasks.filter(task => task.status === 'done').reduce((sum, task) => sum + (task.downloaded_bytes || 0), 0)
   const queued = tasks.filter(task => task.status === 'queued').length
   const completed = tasks.filter(task => task.status === 'done')
@@ -476,7 +498,9 @@ export default function App() {
     }
   }
   const pauseAllActive = async () => {
-    const targets = tasks.filter(task => ['downloading', 'downloading_m3u8', 'downloading_segments', 'fetching_metadata', 'checking', 'parsing'].includes(task.status)
+    // Mirror the backend's pausable set: manifest download/parsing stages
+    // reject pause and only produced "当前阶段不能暂停" failures in the batch.
+    const targets = tasks.filter(task => ['downloading', 'downloading_segments', 'fetching_metadata', 'checking'].includes(task.status)
       || task.available_actions?.includes('pause'))
     if (!targets.length) { showFeedback('没有可暂停的任务'); return }
     await perform('pause', targets)

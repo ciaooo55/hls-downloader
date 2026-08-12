@@ -520,6 +520,50 @@ def test_endgame_splits_tail_of_last_slow_chunk(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
+def test_http_range_requests_follow_the_redirected_download_url(tmp_path, monkeypatch):
+    body = b"0123456789abcdef" * 64
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
+    task = Task(
+        id="redir-range",
+        url="https://github.test/releases/file.bin",
+        task_type=TaskType.HTTP,
+        concurrency=1,
+    )
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        value = request.headers.get("range", "")
+        start_text, end_text = value.removeprefix("bytes=").split("-", 1)
+        start, end = int(start_text), int(end_text)
+        return httpx.Response(
+            206,
+            content=body[start : end + 1],
+            headers={"Content-Range": f"bytes {start}-{end}/{len(body)}"},
+            request=request,
+        )
+
+    async def run():
+        part = tmp_path / "payload.downloading"
+        downloader = HTTPDownloader(task)
+        downloader._total_size = len(body)
+        downloader._download_url = "https://objects.test/file.bin"
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_ranges(
+                client,
+                {},
+                part,
+                tmp_path / "resume.json",
+                {"total": len(body), "etag": '"v1"', "last_modified": "now"},
+            )
+        assert part.read_bytes() == body
+
+    asyncio.run(run())
+    assert seen
+    assert all(url.startswith("https://objects.test/file.bin") for url in seen)
+    assert not any("github.test" in url for url in seen)
+
+
 def test_http_range_downloader_writes_one_sparse_file_and_validates_ranges(tmp_path, monkeypatch):
     body = (b"0123456789abcdef" * 131072) + b"tail"
     monkeypatch.setattr(settings, "http_chunk_size_mb", 1)

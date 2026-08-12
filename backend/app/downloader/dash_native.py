@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -175,6 +176,8 @@ class NativeDashEngine:
         self._live_checkpoint_tracks: dict[str, dict] | None = None
         self._vod_resume_records: dict[str, dict[str, int | str]] = {}
         self._vod_resume_lock = asyncio.Lock()
+        self._vod_state_dirty = False
+        self._vod_state_last_write = 0.0
 
     def _publish(self) -> None:
         self.on_progress(self.task)
@@ -316,6 +319,25 @@ class NativeDashEngine:
                 "identity": identity,
                 "size": size,
             }
+            # Debounced like the HLS checkpoint: rewriting and fsync-ing the
+            # whole state file per segment serialized the worker pool behind
+            # disk flushes. A crash costs at most one second of records.
+            self._vod_state_dirty = True
+            now = time.monotonic()
+            if now - self._vod_state_last_write < 1.0:
+                return
+            self._vod_state_last_write = now
+            self._vod_state_dirty = False
+            await asyncio.to_thread(self._write_vod_state, task_dir)
+
+    async def _flush_vod_state(self, task_dir: Path) -> None:
+        if not self._vod_state_dirty:
+            return
+        async with self._vod_resume_lock:
+            if not self._vod_state_dirty:
+                return
+            self._vod_state_dirty = False
+            self._vod_state_last_write = time.monotonic()
             await asyncio.to_thread(self._write_vod_state, task_dir)
 
     def _headers(self, request_url: str = "") -> dict[str, str]:
@@ -334,7 +356,15 @@ class NativeDashEngine:
                 origin = request_url
         cached = self._header_cache.get(origin)
         if cached is None:
-            cached = build_task_headers(self.task, request_url=request_url)
+            # This engine transfers with httpx, which never injects a browser
+            # profile of its own. Without an explicit User-Agent every segment
+            # request would go out as ``python-httpx/...`` and several CDNs
+            # reject exactly that while the curl-cffi HLS path works.
+            cached = build_task_headers(
+                self.task,
+                request_url=request_url,
+                browser_profile_managed=False,
+            )
             self._header_cache[origin] = cached
         return cached
 
@@ -549,6 +579,27 @@ class NativeDashEngine:
             semaphore = asyncio.Semaphore(task.progress.max_workers)
             self.tracker.start(total_segments)
             stopped = False
+            pending_jobs: list[dict] = []
+            for job in jobs:
+                destination = job["destination"]
+                relative = destination.relative_to(task_dir).as_posix()
+                record = self._vod_resume_records.get(relative)
+                if record and int(record.get("size") or 0) > 0:
+                    # Validated during _prepare_vod_resume; skip the network
+                    # round trip, stat, and checkpoint rewrite entirely.
+                    self.tracker.add_completed(int(record["size"]))
+                else:
+                    pending_jobs.append(job)
+            if pending_jobs != jobs:
+                snapshot = self.tracker.snapshot()
+                task.progress.completed_segments = snapshot["completed"]
+                task.progress.downloaded_bytes = snapshot["downloaded_bytes"]
+                task.progress.total_bytes = snapshot["total_bytes"]
+                if total_segments:
+                    task.progress.progress_percent = (
+                        snapshot["completed"] * 100 / total_segments
+                    )
+                self._publish()
 
             async def fetch(destination: Path, url: str, identity: str) -> None:
                 nonlocal stopped
@@ -590,10 +641,13 @@ class NativeDashEngine:
             results = await asyncio.gather(
                 *(
                     fetch(job["destination"], job["url"], job["identity"])
-                    for job in jobs
+                    for job in pending_jobs
                 ),
                 return_exceptions=True,
             )
+            # Make the last debounced checkpoint records durable before the
+            # pause/merge/error paths decide what already exists on disk.
+            await self._flush_vod_state(task_dir)
             if self._is_canceled():
                 raise asyncio.CancelledError
             error = next(
@@ -1673,7 +1727,11 @@ class NativeDashEngine:
                             received += len(chunk)
                 if received <= 0:
                     raise RuntimeError("分片响应为空")
-                await asyncio.to_thread(durable_replace, temporary, destination)
+                # No per-segment fsync; resume validation compares
+                # identity+size and ffmpeg verifies the merged output, so a
+                # torn post-crash file costs one re-download instead of a
+                # flush per segment.
+                await asyncio.to_thread(os.replace, temporary, destination)
                 return
             except asyncio.CancelledError:
                 temporary.unlink(missing_ok=True)

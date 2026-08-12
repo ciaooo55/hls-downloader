@@ -93,4 +93,12 @@ describe('task progress presentation', () => {
     expect(isPausable({ status: 'merging' })).toBe(false)
     expect(isPausable({ status: 'pausing' })).toBe(false)
   })
+
+  it('falls back to byte progress when percent has not been published', () => {
+    expect(getDisplayedProgress({
+      status: 'downloading',
+      downloaded_bytes: 25,
+      total_bytes: 100,
+    })).toBe(25)
+  })
 })

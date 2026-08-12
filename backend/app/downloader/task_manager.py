@@ -276,6 +276,12 @@ class TaskManager:
         self._event_subscribers: list[asyncio.Queue] = []
         self._pending_saves: dict[str, asyncio.Task] = {}
         self._downloaders: dict[str, DownloadEngine] = {}
+        # Slots claimed by tasks that passed _acquire_run_slot but have not
+        # registered their engine in _downloaders yet.  Registration happens
+        # synchronously today, but counting reservations keeps the
+        # max_concurrent_tasks limit correct if an await ever lands between
+        # the two steps.
+        self._slot_reservations: set[str] = set()
         self._deleting_task_ids: set[str] = set()
         # A task can be deleted from a row action, context menu, keyboard
         # shortcut, and an SSE-driven refresh at nearly the same time.  Keep a
@@ -634,7 +640,9 @@ class TaskManager:
                 if task.cancel_event is not None and task.cancel_event.is_set():
                     return False
                 limit = max(1, int(settings.max_concurrent_tasks))
-                active = len(self._downloaders)
+                active = len(
+                    set(self._downloaders) | (self._slot_reservations - {task.id})
+                )
                 free = limit - active
                 if free > 0:
                     waiting = [
@@ -643,6 +651,7 @@ class TaskManager:
                     ]
                     waiting.sort(key=self._queue_sort_key)
                     if task in waiting[:free]:
+                        self._slot_reservations.add(task.id)
                         return True
                 await asyncio.sleep(0.12)
         finally:
@@ -916,6 +925,7 @@ class TaskManager:
                         self._downloaders.pop(task.id, None)
                         sleep_inhibitor.update(bool(self._downloaders))
                 finally:
+                    self._slot_reservations.discard(task.id)
                     self._broadcast_queue_updates()
             except asyncio.CancelledError:
                 if task.cancel_event and task.cancel_event.is_set():
@@ -1977,6 +1987,17 @@ class TaskManager:
                     TaskStatus.UNSUPPORTED,
                 }:
                     continue
+                # Manifest parsing and ffmpeg merge/remux stages cannot pause.
+                # Marking them "stopped" anyway left the flags lying while the
+                # work continued; skip them now and revisit on the next tick,
+                # when they are either pausable or already terminal.
+                if task.status in {
+                    TaskStatus.DOWNLOADING_M3U8,
+                    TaskStatus.PARSING,
+                    TaskStatus.MERGING,
+                    TaskStatus.REMUXING,
+                }:
+                    continue
                 task.engine_state["queue_window_stopped"] = True
                 task.engine_state["queue_waiting_for_schedule"] = True
                 task.last_log = f"定时队列已在 {settings.queue_auto_stop_time} 停止"
@@ -1985,11 +2006,8 @@ class TaskManager:
                     if task.status in {
                         TaskStatus.CHECKING,
                         TaskStatus.DOWNLOADING,
-                        TaskStatus.DOWNLOADING_M3U8,
-                        TaskStatus.PARSING,
                         TaskStatus.DOWNLOADING_SEGMENTS,
-                        TaskStatus.MERGING,
-                        TaskStatus.REMUXING,
+                        TaskStatus.FETCHING_METADATA,
                     }:
                         await self.pause_task(task.id)
                 except (TaskConflictError, TaskNotFoundError):
@@ -2000,6 +2018,15 @@ class TaskManager:
                 continue
             if not self._task_scheduled_stop_due(task, current):
                 continue
+            # Retry on the next tick instead of consuming the one-shot flag
+            # while the task is in a stage that cannot pause.
+            if task.status in {
+                TaskStatus.DOWNLOADING_M3U8,
+                TaskStatus.PARSING,
+                TaskStatus.MERGING,
+                TaskStatus.REMUXING,
+            }:
+                continue
             task.engine_state["scheduled_stop_handled"] = True
             task.last_log = "已到任务计划停止时间"
             await self._save_db(task)
@@ -2009,11 +2036,8 @@ class TaskManager:
                 elif task.status in {
                     TaskStatus.CHECKING,
                     TaskStatus.DOWNLOADING,
-                    TaskStatus.DOWNLOADING_M3U8,
-                    TaskStatus.PARSING,
                     TaskStatus.DOWNLOADING_SEGMENTS,
-                    TaskStatus.MERGING,
-                    TaskStatus.REMUXING,
+                    TaskStatus.FETCHING_METADATA,
                 }:
                     await self.pause_task(task.id)
             except (TaskConflictError, TaskNotFoundError):

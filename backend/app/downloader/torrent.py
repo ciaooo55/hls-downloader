@@ -20,7 +20,46 @@ from .engine import publish_path, task_output_dir, task_work_dir
 
 _SESSION_LOCK = threading.Lock()
 _SHARED_SESSION = None
-_RESUME_ALERT_LOCK = asyncio.Lock()
+# The libtorrent session (and therefore its alert queue) is shared by every
+# torrent task.  Alerts are only valid until the next pop_alerts() call, so a
+# single drain pass must extract what each waiter needs into these per-torrent
+# result maps; draining inside one task while another waits must never discard
+# the other task's save_resume/cache_flushed acknowledgement.
+_ALERT_DRAIN_LOCK = asyncio.Lock()
+_RESUME_RESULTS: dict[str, bytes | None] = {}
+_FLUSHED_TORRENTS: set[str] = set()
+
+
+def _torrent_key(handle) -> str:
+    try:
+        return str(handle.info_hash())
+    except Exception:
+        # Real libtorrent handles always expose info_hash(); this fallback
+        # keeps identity-based matching working for exotic/mock handles where
+        # the alert carries the very same object.
+        return f"handle-{id(handle)}"
+
+
+async def _drain_session_alerts(lt, session) -> None:
+    """Distribute pending session alerts into per-torrent result maps."""
+    saved_alert = getattr(lt, "save_resume_data_alert", ())
+    failed_alert = getattr(lt, "save_resume_data_failed_alert", ())
+    flushed_alert = getattr(lt, "cache_flushed_alert", ())
+    async with _ALERT_DRAIN_LOCK:
+        for alert in session.pop_alerts():
+            handle = getattr(alert, "handle", None)
+            key = _torrent_key(handle) if handle is not None else ""
+            if not key:
+                continue
+            if saved_alert and isinstance(alert, saved_alert):
+                try:
+                    _RESUME_RESULTS[key] = bytes(lt.write_resume_data_buf(alert.params))
+                except Exception:
+                    _RESUME_RESULTS[key] = None
+            elif failed_alert and isinstance(alert, failed_alert):
+                _RESUME_RESULTS[key] = None
+            elif flushed_alert and isinstance(alert, flushed_alert):
+                _FLUSHED_TORRENTS.add(key)
 
 
 def _torrent_proxy_settings() -> dict:
@@ -504,49 +543,48 @@ class TorrentDownloader:
         self._handle.prioritize_files(priorities)
 
     async def _save_resume(self, lt, session, handle, destination: Path) -> None:
-        async with _RESUME_ALERT_LOCK:
-            try:
-                handle.save_resume_data()
-                deadline = asyncio.get_running_loop().time() + 10
-                while asyncio.get_running_loop().time() < deadline:
-                    for alert in session.pop_alerts():
-                        alert_handle = getattr(alert, "handle", None)
-                        if alert_handle is not None and alert_handle != handle:
-                            continue
-                        if isinstance(alert, lt.save_resume_data_alert):
-                            payload = bytes(lt.write_resume_data_buf(alert.params))
-
-                            def persist() -> None:
-                                temporary = destination.with_name(
-                                    destination.name + ".tmp"
-                                )
-                                try:
-                                    temporary.write_bytes(payload)
-                                    durable_replace(temporary, destination)
-                                finally:
-                                    temporary.unlink(missing_ok=True)
-
-                            await asyncio.to_thread(persist)
-                            return
-                        if isinstance(alert, lt.save_resume_data_failed_alert):
-                            return
-                    await asyncio.sleep(0.1)
-            except Exception:
+        try:
+            key = _torrent_key(handle)
+            if not key:
                 return
+            _RESUME_RESULTS.pop(key, None)
+            handle.save_resume_data()
+            deadline = asyncio.get_running_loop().time() + 10
+            while asyncio.get_running_loop().time() < deadline:
+                await _drain_session_alerts(lt, session)
+                if key in _RESUME_RESULTS:
+                    payload = _RESUME_RESULTS.pop(key)
+                    if payload is None:
+                        return
+
+                    def persist() -> None:
+                        temporary = destination.with_name(
+                            destination.name + ".tmp"
+                        )
+                        try:
+                            temporary.write_bytes(payload)
+                            durable_replace(temporary, destination)
+                        finally:
+                            temporary.unlink(missing_ok=True)
+
+                    await asyncio.to_thread(persist)
+                    return
+                await asyncio.sleep(0.1)
+        except Exception:
+            return
 
     async def _flush_storage(self, lt, session, handle, timeout: float = 30.0) -> None:
         """Wait until completed pieces are physically committed before moving files."""
-        async with _RESUME_ALERT_LOCK:
-            handle.flush_cache()
-            deadline = asyncio.get_running_loop().time() + timeout
-            while asyncio.get_running_loop().time() < deadline:
-                for alert in session.pop_alerts():
-                    alert_handle = getattr(alert, "handle", None)
-                    if alert_handle is not None and alert_handle != handle:
-                        continue
-                    if isinstance(alert, lt.cache_flushed_alert):
-                        return
-                await asyncio.sleep(0.1)
+        key = _torrent_key(handle)
+        _FLUSHED_TORRENTS.discard(key)
+        handle.flush_cache()
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            await _drain_session_alerts(lt, session)
+            if key and key in _FLUSHED_TORRENTS:
+                _FLUSHED_TORRENTS.discard(key)
+                return
+            await asyncio.sleep(0.1)
         raise RuntimeError("BT 数据写入磁盘超时，临时文件已保留，可重试任务")
 
     def _move_payload(self, info, payload_dir: Path) -> Path:

@@ -135,3 +135,44 @@ def test_schedule_maintenance_starts_and_stops_due_tasks(monkeypatch):
     assert "queue_waiting_for_schedule" not in start.engine_state
     assert stop.engine_state["scheduled_stop_handled"] is True
 
+
+def test_schedule_stop_skips_unpausable_merge_and_parse_stages(monkeypatch):
+    manager = TaskManager()
+    settings = __import__("backend.app.downloader.task_manager", fromlist=["settings"]).settings
+    monkeypatch.setattr(settings, "queue_auto_start_enabled", False)
+    monkeypatch.setattr(settings, "queue_auto_stop_enabled", True)
+    monkeypatch.setattr(settings, "queue_auto_stop_time", "12:00")
+    now = datetime(2026, 8, 1, 12, 0)
+    merging = Task(id="merge", url="https://example.test/merge", status=TaskStatus.MERGING)
+    merging.engine_state.update({
+        "queue_managed": True,
+        "queue_schedule_opt_in": True,
+        "scheduled_stop_at": (now - timedelta(seconds=1)).isoformat(),
+    })
+    downloading = Task(
+        id="dl", url="https://example.test/dl", status=TaskStatus.DOWNLOADING
+    )
+    downloading.engine_state.update({
+        "queue_managed": True,
+        "queue_schedule_opt_in": True,
+    })
+    manager.tasks = {merging.id: merging, downloading.id: downloading}
+    actions: list[tuple[str, str]] = []
+
+    async def save(_task):
+        return None
+
+    async def pause_task(task_id):
+        actions.append(("pause", task_id))
+
+    monkeypatch.setattr(manager, "_save_db", save)
+    monkeypatch.setattr(manager, "pause_task", pause_task)
+    monkeypatch.setattr(manager, "_queue_schedule_state", lambda _current: (False, True))
+
+    asyncio.run(manager._maintain_scheduled_tasks(now))
+
+    assert actions == [("pause", "dl")]
+    assert "queue_window_stopped" not in merging.engine_state
+    assert "scheduled_stop_handled" not in merging.engine_state
+    assert downloading.engine_state["queue_window_stopped"] is True
+

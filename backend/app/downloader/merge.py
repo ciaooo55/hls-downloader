@@ -266,7 +266,10 @@ async def _merge_segments_unlocked(
             if not init_path.exists() or init_path.stat().st_size == 0:
                 raise FileNotFoundError(f"缺少 init map: {init_path}")
 
-        if task is not None:
+        # Emitting one progress event and one event-loop hop per segment made
+        # "准备合并" alone take seconds on recordings with thousands of parts.
+        checkpoint = position + 1 == len(segments) or (position + 1) % 100 == 0
+        if task is not None and checkpoint:
             percent = ((position + 1) / len(segments)) * PREPARE_PROGRESS_END
             task.status = TaskStatus.MERGING
             task.stage = "merging"
@@ -275,7 +278,8 @@ async def _merge_segments_unlocked(
                 f"准备合并 {position + 1}/{len(segments)} ({percent:.1f}%)"
             )
             _emit_progress(task, on_progress)
-        await asyncio.sleep(0)
+        if checkpoint:
+            await asyncio.sleep(0)
 
     await asyncio.to_thread(
         write_local_concatf_playlist if use_mpeg_ts_concat else _write_local_hls_playlist,

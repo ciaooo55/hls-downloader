@@ -82,6 +82,14 @@ def _install_fake_mux(monkeypatch, captured_commands=None):
     monkeypatch.setattr(native_module, "_verify_output", fake_verify)
 
 
+def test_native_dash_headers_send_an_explicit_browser_user_agent():
+    task = Task(id="dash-ua", url="https://cdn.test/stream/manifest.mpd")
+    headers = NativeDashEngine(task)._headers("https://cdn.test/stream/v/1.m4s")
+    user_agent = headers.get("User-Agent") or headers.get("user-agent") or ""
+    assert user_agent
+    assert "python-httpx" not in user_agent.lower()
+
+
 def test_native_dash_downloads_and_muxes_both_tracks(tmp_path, monkeypatch):
     requests: list[str] = []
     captured_commands: list[list[str]] = []
