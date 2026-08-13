@@ -13,6 +13,7 @@ from backend.app.config import settings
 from backend.app.downloader import http_file as http_file_module
 from backend.app.downloader.http_file import (
     HTTPDownloader,
+    _HTTPRangeValidationError,
     _content_disposition_filename,
     _ensure_filename_extension,
     _parse_content_range,
@@ -1100,6 +1101,69 @@ def test_browser_profile_http_fallback_resumes_unmarked_prefix(tmp_path, monkeyp
     assert complete is True
     assert captured["headers"].get("Range") == "bytes=4-"
     assert Path(task.output_path).read_bytes() == b"browser"
+
+
+def test_browser_profile_http_fallback_rejects_mismatched_206(tmp_path, monkeypatch):
+    from backend.app.downloader import hls as hls_module
+
+    class Response:
+        status_code = 206
+        headers = {
+            "content-type": "video/mp4",
+            "content-length": "7",
+            "content-range": "bytes 0-6/7",
+        }
+        url = "https://files.test/video.mp4"
+        quit_now = None
+        astream_task = None
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_content(self, chunk_size=0):
+            yield b"browser"
+
+        async def aclose(self):
+            return None
+
+    class BrowserClient:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url, **_kwargs):
+            return Response()
+
+    async def close_response(response):
+        await response.aclose()
+
+    task = Task(id="http-browser-bad-206", url="https://files.test/video.mp4", task_type=TaskType.HTTP)
+    task.engine_state.update({"browser_originated": True, "output_dir": str(tmp_path / "downloads")})
+    task.progress.total_bytes = 7
+    task_dir = task_work_dir(task)
+    task_dir.mkdir(parents=True)
+    part = task_dir / "payload.downloading"
+    part.write_bytes(b"brow")
+    monkeypatch.setattr(hls_module, "CurlAsyncSession", object)
+    monkeypatch.setattr(hls_module, "_BrowserHLSClient", BrowserClient)
+    monkeypatch.setattr(hls_module, "_close_response", close_response)
+
+    downloader = HTTPDownloader(task)
+    with pytest.raises(_HTTPRangeValidationError):
+        asyncio.run(
+            downloader._download_with_browser_profile(
+                part,
+                task_dir / "http-resume.json",
+                task_dir,
+            )
+        )
+
+    assert part.read_bytes() == b"brow"
 
 
 def test_browser_profile_http_fallback_completes_on_trusted_416(tmp_path, monkeypatch):

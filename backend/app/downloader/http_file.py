@@ -726,6 +726,12 @@ class HTTPDownloader(SeeklessEngine):
                         task.engine_state.pop("sequential_bytes", None)
                         task.progress.downloaded_bytes = 0
                         task.progress.progress_percent = 0.0
+                    elif existing > 0 and status_code == 206:
+                        content_range = _parse_content_range(
+                            str(response.headers.get("content-range") or "")
+                        )
+                        if content_range is not None and content_range[0] != existing:
+                            raise _HTTPRangeValidationError("Range 续传响应与本地已下载偏移不一致")
                     final_url = str(getattr(response, "url", "") or task.url)
                     content_type = str(response.headers.get("content-type", "")).split(";", 1)[0]
                     encoding = str(response.headers.get("content-encoding") or "").strip().lower()

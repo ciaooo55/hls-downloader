@@ -267,8 +267,8 @@ export default function CastSessionHud({
                 onKeyDown={event => {
                   if (event.key === 'ArrowLeft' && duration > 0) { event.preventDefault(); flushSeek(relativeSeekTarget(position, -10, duration)) }
                   if (event.key === 'ArrowRight' && duration > 0) { event.preventDefault(); flushSeek(relativeSeekTarget(position, 10, duration)) }
-                  if (event.key === 'Home') { event.preventDefault(); onSeekTo(0) }
-                  if (event.key === 'End' && duration) { event.preventDefault(); onSeekTo(duration) }
+                  if (event.key === 'Home') { event.preventDefault(); flushSeek(0) }
+                  if (event.key === 'End' && duration) { event.preventDefault(); flushSeek(duration) }
                   if (event.key === ' ') { event.preventDefault(); onControl(playing ? 'pause' : 'play') }
                 }}
               >
