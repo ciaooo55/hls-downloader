@@ -80,7 +80,8 @@ def test_http_headers_supply_checksum_without_overriding_user_value():
 
 
 def test_goog_hash_and_hex_content_md5_are_accepted():
-    import base64, hashlib
+    import base64
+    import hashlib
     digest = hashlib.md5(b"payload").digest()
     assert parse_http_content_checksum({"x-goog-hash": "crc32c=ignore,md5=" + base64.b64encode(digest).decode("ascii")}) == "md5:" + digest.hex()
     assert parse_http_content_checksum({"content-md5": digest.hex()}) == "md5:" + digest.hex()

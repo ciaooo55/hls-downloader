@@ -11,6 +11,7 @@ from backend.app.page_harvest import (
     extract_page_links,
     harvest_page,
     normalize_harvest_extensions,
+    probe_harvest_links,
 )
 
 
@@ -157,9 +158,6 @@ def test_harvest_api_requires_authentication(monkeypatch):
         unauthorized = client.post("/api/recognize/harvest", json={"url": "https://site.test/album"})
 
     assert unauthorized.status_code == 401
-
-
-from backend.app.page_harvest import probe_harvest_links
 
 
 def run_probe(urls, handler):

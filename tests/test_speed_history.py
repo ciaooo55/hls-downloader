@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 
 from backend.app.models import Task, TaskProgress, TaskStatus
 from backend.app.speed_history import (

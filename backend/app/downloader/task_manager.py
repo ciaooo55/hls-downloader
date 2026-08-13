@@ -18,7 +18,7 @@ from ..speed_history import record_speed_sample, record_speed_samples, speed_his
 from ..connection_parts import connection_parts_payload
 from ..legal import legal_acceptance_current
 from ..torrent_watch import collect_new_torrents, read_watch_torrent, watch_state
-from ..link_file import LinkFileError, read_link_file
+from ..link_file import read_link_file
 from ..av_scan import apply_post_download_scan
 from ..database import iter_db_rows, run_db
 from ..models import Task, TaskProgress, TaskStatus, TaskType

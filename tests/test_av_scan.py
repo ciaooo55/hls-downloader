@@ -1,10 +1,8 @@
 import asyncio
-from pathlib import Path
 
 import pytest
 
 from backend.app.av_scan import (
-    AvScanResult,
     apply_post_download_scan,
     build_custom_command,
     interpret_scan_exit,

@@ -1,5 +1,4 @@
 import asyncio
-from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -7,6 +6,7 @@ from pydantic import ValidationError
 from backend.app.link_file import (
     LinkFileError,
     extract_download_url,
+    extract_download_urls,
     read_link_file,
 )
 from backend.app.schemas import LinkPathImport, TaskCreate
@@ -79,8 +79,6 @@ def test_maintain_watch_imports_new_url_file(tmp_path, monkeypatch):
         assert imported == [("https://cdn.example.test/fresh.mp4", "fresh", False)]
 
     asyncio.run(run())
-
-from backend.app.link_file import extract_download_urls
 
 
 def test_extracts_classic_m3u_file_list_and_rejects_local_hls_segments():

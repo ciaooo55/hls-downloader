@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, Mapping
+from typing import Mapping
 
 CONNECTION_PARTS_LIMIT = 64
 CONNECTION_PART_STATES = ("done", "active", "queued")

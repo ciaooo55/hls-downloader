@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Ordinary SFTP file downloads.
 
 One SSH session plus one SFTP file stream. Resume uses SFTP seek after STAT
@@ -7,6 +5,7 @@ succeeds and the remote identity still matches. This engine never
 range-stitches, never consumes HTTP mirrors, and leaves FTP/HTTP paths
 untouched.
 """
+from __future__ import annotations
 
 import asyncio
 import getpass
@@ -31,7 +30,7 @@ from ..paths import RUNTIME_PATHS
 from ..utils import atomic_write_text, sanitize_filename
 from .disk_space import MIN_FREE_RESERVE, ensure_download_capacity, ensure_free_space
 from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
-from .errors import diagnose_download_error, format_download_error
+from .errors import diagnose_download_error
 from .throttle import throttle_bytes
 
 MAX_RETRIES = 5

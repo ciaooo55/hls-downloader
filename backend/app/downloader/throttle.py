@@ -114,7 +114,6 @@ async def throttle_bytes(nbytes: int, task=None) -> None:
     Both limits must admit the bytes, so a per-task cap can never exceed
     the global cap and vice versa.
     """
-    from ..config import settings
 
     if task is not None:
         limit = int(getattr(task, "speed_limit_kib", 0) or 0)
