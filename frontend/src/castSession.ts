@@ -72,7 +72,8 @@ export function livePlaybackPosition(
 ): number {
   if (scrubbing != null) return scrubbing
   const base = Math.max(0, Number(playback.position) || 0)
-  if (!playback.playing || playback.paused) return base
+    if (!playback.playing || playback.paused) return base
+  if (!playback.duration) return base
   const elapsed = Math.max(0, (nowMs - sampledAtMs) / 1000)
   return clampSeekSeconds(base + elapsed, playback.duration || 0)
 }

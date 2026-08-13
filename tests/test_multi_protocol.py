@@ -1670,3 +1670,45 @@ def test_http_sequential_416_completes_when_watermark_matches(tmp_path):
     assert part.read_bytes() == body
     assert task.progress.downloaded_bytes == 10
     assert task.progress.completed_segments == 1
+
+
+def test_http_discards_unmarked_partial_and_keeps_watermarked_prefix(tmp_path):
+    task = Task(id="seq-discard", url="https://files.test/a.bin", task_type=TaskType.HTTP)
+    downloader = HTTPDownloader(task)
+    unmarked = tmp_path / "unmarked.part"
+    unmarked.write_bytes(b"\x00\x00\x00\x00")
+    downloader._discard_untrusted_sequential_part(unmarked)
+    assert not unmarked.exists()
+
+    marked = tmp_path / "marked.part"
+    marked.write_bytes(b"abcd")
+    task.engine_state["sequential_bytes"] = 4
+    downloader._discard_untrusted_sequential_part(marked)
+    assert marked.read_bytes() == b"abcd"
+
+
+def test_http_sequential_keeps_known_total_when_content_range_omits_size(tmp_path):
+    body = b"0123456789"
+    part = tmp_path / "payload.part"
+    part.write_bytes(body[:4])
+    task = Task(id="seq-star-total", url="https://files.test/a.bin", task_type=TaskType.HTTP)
+    task.progress.total_bytes = 10
+    task.engine_state["sequential_bytes"] = 4
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            206,
+            content=body[4:],
+            headers={"Content-Range": "bytes 4-9/*", "Content-Type": "application/octet-stream"},
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_sequential(client, downloader._headers(), part)
+
+    asyncio.run(run())
+    assert part.read_bytes() == body
+    assert task.progress.total_bytes == 10
+    assert task.progress.downloaded_bytes == 10

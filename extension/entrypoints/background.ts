@@ -337,13 +337,19 @@ function followUpPausedHandoffCleanup(item: Browser.downloads.DownloadItem, hand
   void waitForDesktopTaskReadiness(handoffId, 180_000).then(async later => {
     if (later === 'safe-to-remove') {
       concealBrowserDownload()
-      await removeBrowserDownload(item)
+      try {
+        await removeBrowserDownload(item)
+      } finally {
+        revealBrowserDownload()
+      }
       return
     }
     if (later === 'browser-fallback') {
       await resumeBrowserDownload(item, true)
       revealBrowserDownload()
+      return
     }
+    followUpPausedHandoffCleanup(item, handoffId)
   }).catch(() => undefined)
 }
 

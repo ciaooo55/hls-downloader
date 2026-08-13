@@ -26,6 +26,7 @@ import {
 } from '../castSession'
 import { pauseLabelFor } from '../taskCommands'
 import { fmtBytes, fmtClock } from '../format'
+import { taskStatusLabel } from '../taskPresentation'
 import type { Task } from '../types'
 
 const HUD_BOTTOM_INSET = 44
@@ -235,11 +236,11 @@ export default function CastSessionHud({
           {transport ? (
             <>
               <div className="cast-hud-transport" data-no-drag>
-                <button type="button" disabled={busy} title="后退 10 秒" aria-label="后退 10 秒" onClick={() => onSeekTo(relativeSeekTarget(position, -10, duration))}><Rewind size={16} /></button>
+                <button type="button" disabled={duration <= 0} title="后退 10 秒" aria-label="后退 10 秒" onClick={() => flushSeek(relativeSeekTarget(position, -10, duration))}><Rewind size={16} /></button>
                 <button type="button" className="cast-hud-play" disabled={busy} title={playing ? '暂停投屏播放' : '继续投屏播放'} aria-label={playing ? '暂停' : '播放'} onClick={() => onControl(playing ? 'pause' : 'play')}>
                   {playing ? <Pause size={18} /> : <Play size={18} />}
                 </button>
-                <button type="button" disabled={busy} title="快进 10 秒" aria-label="快进 10 秒" onClick={() => onSeekTo(relativeSeekTarget(position, 10, duration))}><FastForward size={16} /></button>
+                <button type="button" disabled={duration <= 0} title="快进 10 秒" aria-label="快进 10 秒" onClick={() => flushSeek(relativeSeekTarget(position, 10, duration))}><FastForward size={16} /></button>
                 <span className="cast-hud-times">
                   <b>{fmtClock(position)}</b>
                   <i>/</i>
@@ -264,8 +265,8 @@ export default function CastSessionHud({
                 onPointerUp={commitSeek}
                 onPointerCancel={commitSeek}
                 onKeyDown={event => {
-                  if (event.key === 'ArrowLeft') { event.preventDefault(); onSeekTo(relativeSeekTarget(position, -10, duration)) }
-                  if (event.key === 'ArrowRight') { event.preventDefault(); onSeekTo(relativeSeekTarget(position, 10, duration)) }
+                  if (event.key === 'ArrowLeft' && duration > 0) { event.preventDefault(); flushSeek(relativeSeekTarget(position, -10, duration)) }
+                  if (event.key === 'ArrowRight' && duration > 0) { event.preventDefault(); flushSeek(relativeSeekTarget(position, 10, duration)) }
                   if (event.key === 'Home') { event.preventDefault(); onSeekTo(0) }
                   if (event.key === 'End' && duration) { event.preventDefault(); onSeekTo(duration) }
                   if (event.key === ' ') { event.preventDefault(); onControl(playing ? 'pause' : 'play') }
@@ -281,7 +282,7 @@ export default function CastSessionHud({
           {task && (
             <div className="cast-hud-download" data-no-drag>
               <div className="cast-hud-download-meta">
-                <span>下载{task.status === 'done' ? '已完成' : task.status === 'paused' ? '已暂停' : '进行中'}</span>
+                <span>下载 · {taskStatusLabel(task)}</span>
                 <em>{fmtBytes(task.downloaded_bytes)}{task.total_bytes > 0 ? ` / ${fmtBytes(task.total_bytes)}` : ''}</em>
               </div>
               <div className="cast-hud-download-bar" aria-hidden>
@@ -290,7 +291,7 @@ export default function CastSessionHud({
               <div className="cast-hud-download-actions">
                 {downloads.pause && <button type="button" disabled={busy} onClick={onPauseDownload}><Pause size={13} />{downloadPauseLabel}</button>}
                 {downloads.resume && <button type="button" disabled={busy} onClick={onResumeDownload}><Play size={13} />恢复下载</button>}
-                {!downloads.pause && !downloads.resume && <small>{task.status === 'done' ? '文件已可边播边看' : '当前阶段不能暂停下载'}</small>}
+                {!downloads.pause && !downloads.resume && <small>{task.status === 'done' ? '文件已可边播边看' : task.status === 'failed' ? '下载已失败' : task.status === 'queued' ? '正在排队' : '当前阶段不能暂停下载'}</small>}
               </div>
             </div>
           )}

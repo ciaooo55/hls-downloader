@@ -671,6 +671,20 @@ class HTTPDownloader(SeeklessEngine):
             request_url=task.url,
             browser_profile_managed=True,
         )
+        headers["Accept-Encoding"] = "identity"
+        existing = part_path.stat().st_size if part_path.exists() else 0
+        marked = int(task.engine_state.get("sequential_bytes") or 0)
+        trusted = marked > 0 and existing == marked
+        if not trusted:
+            existing = 0
+            if part_path.exists():
+                part_path.unlink(missing_ok=True)
+            task.engine_state.pop("sequential_bytes", None)
+        if trusted:
+            headers["Range"] = f"bytes={existing}-"
+            task.progress.downloaded_bytes = existing
+            if task.progress.total_bytes:
+                task.progress.progress_percent = min(100.0, existing * 100 / task.progress.total_bytes)
         try:
             async with _BrowserHLSClient(
                 1,
@@ -680,12 +694,24 @@ class HTTPDownloader(SeeklessEngine):
                 response = await client.get(task.url, headers=headers, stream=True)
                 if int(getattr(response, "status_code", 0) or 0) >= 400:
                     response.raise_for_status()
+                status_code = int(getattr(response, "status_code", 0) or 0)
+                if trusted and status_code == 200:
+                    existing = 0
+                    trusted = False
+                    task.engine_state.pop("sequential_bytes", None)
+                    task.progress.downloaded_bytes = 0
                 final_url = str(getattr(response, "url", "") or task.url)
                 content_type = str(response.headers.get("content-type", "")).split(";", 1)[0]
+                encoding = str(response.headers.get("content-encoding") or "").strip().lower()
                 total = int(response.headers.get("content-length", 0) or 0)
+                if encoding and encoding != "identity":
+                    total = 0
+                if trusted and existing > 0 and total > 0:
+                    total = existing + total
                 task.mime_type = task.mime_type or content_type
-                task.progress.total_bytes = max(0, total)
-                task.engine_state["total_size"] = task.progress.total_bytes
+                if total > 0:
+                    task.progress.total_bytes = total
+                    task.engine_state["total_size"] = total
                 filename = (
                     _content_disposition_filename(response.headers.get("content-disposition", ""))
                     or Path(urlparse(final_url).path).name
@@ -705,7 +731,7 @@ class HTTPDownloader(SeeklessEngine):
                         part_path,
                         output,
                         total,
-                        current_size=0,
+                        current_size=existing,
                     )
                 else:
                     await asyncio.to_thread(
@@ -719,7 +745,7 @@ class HTTPDownloader(SeeklessEngine):
                 task.engine_state["stream_path"] = str(part_path)
                 window = _SpeedWindow()
                 first_chunk = True
-                with part_path.open("wb") as stream:
+                with part_path.open("ab" if trusted and existing > 0 else "wb") as stream:
                     try:
                         content = response.aiter_content(chunk_size=256 * 1024)
                     except TypeError:
@@ -730,6 +756,7 @@ class HTTPDownloader(SeeklessEngine):
                                 response.quit_now.set()
                             raise asyncio.CancelledError
                         if self._is_pausing():
+                            task.engine_state["sequential_bytes"] = task.progress.downloaded_bytes
                             task.status = TaskStatus.PAUSED
                             self._set_stage("paused", "已暂停，可继续下载")
                             return True
@@ -748,6 +775,7 @@ class HTTPDownloader(SeeklessEngine):
                         await throttle_bytes(len(chunk), task)
                         stream.write(chunk)
                         task.progress.downloaded_bytes += len(chunk)
+                        task.engine_state["sequential_bytes"] = task.progress.downloaded_bytes
                         window.add(len(chunk))
                         self._apply_speed(window)
                         self._publish()
@@ -1281,9 +1309,11 @@ class HTTPDownloader(SeeklessEngine):
                             operation="下载临时盘",
                         )
 
-                    if total <= 0 or not metadata["ranges"]:
+                    marked = int(task.engine_state.get("sequential_bytes") or 0)
+                    trusted_sequential = marked > 0 and current_size == marked
+                    if total <= 0 or not metadata["ranges"] or (trusted_sequential and (total <= 0 or current_size < total)):
                         self._sequential = True
-                        self._discard_untrusted_sequential_part(part_path, total)
+                        self._discard_untrusted_sequential_part(part_path)
                         await self._download_sequential(client, headers, part_path)
                     else:
                         try:
@@ -1401,11 +1431,12 @@ class HTTPDownloader(SeeklessEngine):
             ):
                 output.unlink(missing_ok=True)
 
-    def _discard_untrusted_sequential_part(self, part_path: Path, total: int) -> None:
-        """Drop a Range-preallocated sparse file before sequential restart.
+    def _discard_untrusted_sequential_part(self, part_path: Path) -> None:
+        """Drop a Range leftover before sequential restart.
 
         Multi-connection downloads truncate the part to Content-Length with
-        zeros. Size alone must not look like a finished sequential prefix.
+        zeros. Only a sequential watermark that matches the on-disk size is a
+        real prefix; any other non-empty part can 206-append onto sparse bytes.
         """
         if not part_path.exists():
             return
@@ -1413,7 +1444,7 @@ class HTTPDownloader(SeeklessEngine):
         marked = int(self.task.engine_state.get("sequential_bytes") or 0)
         if marked > 0 and existing == marked:
             return
-        if total > 0 and existing >= total:
+        if existing > 0:
             part_path.unlink(missing_ok=True)
             self.task.engine_state.pop("sequential_bytes", None)
 
@@ -1483,14 +1514,17 @@ class HTTPDownloader(SeeklessEngine):
                         content_range = _parse_content_range(response.headers.get("content-range", ""))
                         if content_range is None or content_range[0] != existing:
                             raise _HTTPRangeValidationError("Range 续传响应与本地已下载偏移不一致")
-                        reported_total = int(content_range[2] or 0)
+                        reported_total = int(content_range[2] or 0) or int(
+                            task.progress.total_bytes or self._total_size or 0
+                        )
                     else:
                         reported_total = int(response.headers.get("content-length", 0) or 0)
                         if _response_decodes_content(response):
                             reported_total = 0
-                    task.progress.total_bytes = reported_total
-                    self._total_size = reported_total
-                    task.engine_state["total_size"] = reported_total
+                    if reported_total:
+                        task.progress.total_bytes = reported_total
+                        self._total_size = reported_total
+                        task.engine_state["total_size"] = reported_total
                     task.progress.downloaded_bytes = existing
                     if reported_total:
                         task.progress.progress_percent = min(100.0, existing * 100 / reported_total)

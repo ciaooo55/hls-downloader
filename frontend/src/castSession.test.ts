@@ -97,5 +97,6 @@ describe('cast session helpers', () => {
     expect(livePlaybackPosition(playing, 1_000, 3_400, null)).toBe(12)
     expect(livePlaybackPosition(playing, 1_000, 3_400, 40)).toBe(40)
     expect(livePlaybackPosition({ ...playing, paused: true, playing: false }, 1_000, 9_000, null)).toBe(10)
+    expect(livePlaybackPosition({ playing: true, paused: false, position: 10, duration: 0 }, 1_000, 9_000, null)).toBe(10)
   })
 })

@@ -259,6 +259,11 @@ export default function VideoPlayerModal({ task, onClose }: {
           }, 600)
           return
         }
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          setLoading(false)
+          setError('播放连接中断，可稍后重试或使用系统播放器打开')
+          return
+        }
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaErrorRecoveries.current < 2) {
           mediaErrorRecoveries.current += 1
           hls.recoverMediaError()
@@ -373,7 +378,7 @@ export default function VideoPlayerModal({ task, onClose }: {
     // Seeking inside the contiguous local prefix must never round-trip through
     // the backend. This is what keeps the first seconds and ordinary rewinds
     // responsive even while the task is still downloading.
-    if (!sparsePlayback && available > 0 && bounded <= Math.max(0, available - 0.25)) {
+    if (available > 0 && bounded <= Math.max(0, available - 0.25)) {
       resumePositionRef.current = bounded
       video.currentTime = bounded
       setCurrentTime(bounded)

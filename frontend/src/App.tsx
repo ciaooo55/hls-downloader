@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LoaderCircle, Trash2, X } from 'lucide-react'
 import { cancelPowerAction, castLocalFile, castMediaUrl, castTask, clearCompletedTasks, completeBrowserMediaPush, confirmPowerAction, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLegalStatus, fetchLocalTvboxShare, fetchPendingPowerActions, fetchSettings, fetchTasks, importLinkPath, importTorrentPath, launchFile, openExplorer, openTaskInExplorer, pushLocalTvboxFile, pushTaskToTvbox, pushTvboxUrl, resolveBrowserHandoff, saveSettings, saveTaskSiteProfile, stopLocalTvboxShare, reorderQueue, taskAction, taskFileUrl, uploadTorrent } from './api'
-import { fmtBytes, fmtSpeed } from './format'
+import { fmtBytes, fmtClock, fmtSpeed } from './format'
 import { isActiveTransfer, isRunningStatus, mergeTaskEvent, mergeTaskEvents } from './taskState'
 import { commandState } from './taskCommands'
 import { emptyCastPlayback, mergeCastPlayback, shareActivityLabel, shareStopLabel, type CastPlaybackStatus, type LocalShareSession } from './castSession'
@@ -467,9 +467,13 @@ export default function App() {
       try {
         const status = await fetchLocalTvboxShare(localShare.id)
         if (!stopped && !status.active) {
+          if (localShare.kind === 'cast' && localShare.device) {
+            try { await controlCast('stop', 0, localShare.device) } catch { /* share already gone */ }
+          }
+          if (stopped) return
           setLocalShare(null)
           setCastPlayback(emptyCastPlayback())
-          showFeedback(`${localShare.kind === 'cast' ? '投屏' : 'TVBox 推送'}访问结束，已自动清理本机文件共享`)
+          showFeedback(localShare.kind === 'cast' ? '投屏共享已结束，已尝试停止电视播放' : 'TVBox 推送访问结束，已自动清理本机文件共享')
         }
       } catch {
         // A transient local API failure should not falsely claim cleanup.
@@ -782,6 +786,7 @@ export default function App() {
     try {
       const delta = action === 'seek' ? seconds || 10 : seconds
       const result = await controlCast(action, delta, localShare.device)
+      let seekedTo = 0
       setCastPlayback(current => {
         const next = mergeCastPlayback(current, result)
         if (action === 'play') return { ...next, playing: true, paused: false }
@@ -791,13 +796,14 @@ export default function App() {
           const target = action === 'seek_to' ? Math.max(0, delta) : Math.max(0, (current.position || 0) + delta)
           const reported = Number(next.position) || 0
           const useTarget = next.position_ok === false || (reported === 0 && target > 1)
-          return { ...next, playing: current.playing, paused: current.paused, position: useTarget ? target : reported }
+          seekedTo = useTarget ? target : reported
+          return { ...next, playing: current.playing, paused: current.paused, position: seekedTo }
         }
         return next
       })
       if (action === 'pause') showFeedback(`已暂停 ${result.label}`)
       else if (action === 'play') showFeedback(`已继续播放 ${result.label}`)
-      else if (action === 'seek') showFeedback(`${delta < 0 ? '已后退' : '已快进'} ${Math.abs(delta)} 秒：${result.label}`)
+      else if (action === 'seek' || action === 'seek_to') showFeedback(`已跳到 ${fmtClock(seekedTo)}：${result.label}`)
     } catch (reason: any) {
       setError(reason.message || '投屏控制失败')
     } finally {
