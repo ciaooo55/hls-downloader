@@ -1102,6 +1102,69 @@ def test_browser_profile_http_fallback_resumes_unmarked_prefix(tmp_path, monkeyp
     assert Path(task.output_path).read_bytes() == b"browser"
 
 
+def test_browser_profile_http_fallback_completes_on_trusted_416(tmp_path, monkeypatch):
+    from backend.app.downloader import hls as hls_module
+
+    class Response:
+        status_code = 416
+        headers = {"content-range": "bytes */7"}
+        url = "https://files.test/video.mp4"
+        quit_now = None
+        astream_task = None
+
+        def raise_for_status(self):
+            raise AssertionError("complete 416 resume must not fail")
+
+        async def aiter_content(self, chunk_size=0):
+            raise AssertionError("complete 416 resume must not reread the body")
+
+        async def aclose(self):
+            return None
+
+    class BrowserClient:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url, **_kwargs):
+            return Response()
+
+    async def close_response(response):
+        await response.aclose()
+
+    body = b"browser"
+    task = Task(id="http-browser-416", url="https://files.test/video.mp4", task_type=TaskType.HTTP)
+    task.engine_state.update({"browser_originated": True, "output_dir": str(tmp_path / "downloads")})
+    task.progress.total_bytes = len(body)
+    task.engine_state["sequential_bytes"] = len(body)
+    task.filename = "video.mp4"
+    task_dir = task_work_dir(task)
+    task_dir.mkdir(parents=True)
+    part = task_dir / "payload.downloading"
+    part.write_bytes(body)
+    monkeypatch.setattr(hls_module, "CurlAsyncSession", object)
+    monkeypatch.setattr(hls_module, "_BrowserHLSClient", BrowserClient)
+    monkeypatch.setattr(hls_module, "_close_response", close_response)
+
+    downloader = HTTPDownloader(task)
+    complete = asyncio.run(
+        downloader._download_with_browser_profile(
+            part,
+            task_dir / "http-resume.json",
+            task_dir,
+        )
+    )
+
+    assert complete is True
+    assert task.status is TaskStatus.DONE
+    assert Path(task.output_path).read_bytes() == body
+
+
 def test_http_run_uses_browser_profile_only_after_browser_403(tmp_path, monkeypatch):
     from backend.app.downloader import hls as hls_module
 

@@ -288,6 +288,7 @@ def test_full_playlist_reports_total_duration_and_seek_target(tmp_path, monkeypa
             assert "#EXT-X-PLAYLIST-TYPE:VOD" in playlist.text
             assert "#EXT-X-START" not in playlist.text
             assert playlist.text.rstrip().endswith("#EXT-X-ENDLIST")
+            assert "segments/000000.seg" in playlist.text
             assert "segments/000003.seg" in playlist.text
             assert "segments/000002.seg" in playlist.text
             assert "full=1" in playlist.text

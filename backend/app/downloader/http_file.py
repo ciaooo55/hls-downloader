@@ -686,93 +686,125 @@ class HTTPDownloader(SeeklessEngine):
                 deny_private_networks=bool(task.engine_state.get("browser_originated")),
             ) as client:
                 response = await client.get(task.url, headers=headers, stream=True)
-                if int(getattr(response, "status_code", 0) or 0) >= 400:
-                    response.raise_for_status()
                 status_code = int(getattr(response, "status_code", 0) or 0)
-                if existing > 0 and status_code == 200:
-                    existing = 0
-                    task.engine_state.pop("sequential_bytes", None)
-                    task.progress.downloaded_bytes = 0
-                    task.progress.progress_percent = 0.0
-                final_url = str(getattr(response, "url", "") or task.url)
-                content_type = str(response.headers.get("content-type", "")).split(";", 1)[0]
-                encoding = str(response.headers.get("content-encoding") or "").strip().lower()
-                total = int(response.headers.get("content-length", 0) or 0)
-                if encoding and encoding != "identity":
-                    total = 0
-                if existing > 0 and total > 0:
-                    total = existing + total
-                task.mime_type = task.mime_type or content_type
-                if total > 0:
-                    task.progress.total_bytes = total
-                    task.engine_state["total_size"] = total
-                filename = (
-                    _content_disposition_filename(response.headers.get("content-disposition", ""))
-                    or Path(urlparse(final_url).path).name
-                    or Path(urlparse(task.url).path).name
-                    or task.id
-                )
-                filename = _ensure_filename_extension(filename, task.mime_type)
-                requested_name = task.filename.strip()
-                task.filename = sanitize_filename(
-                    filename if not requested_name or is_generic_media_name(requested_name) else requested_name
-                )
-                output = _reserve_output_path(task_output_dir(task) / task.filename)
-                task.engine_state["reserved_output_path"] = str(output)
-                if total > 0:
-                    await asyncio.to_thread(
-                        ensure_download_capacity,
-                        part_path,
-                        output,
-                        total,
-                        current_size=existing,
+                complete_from_range = False
+                if existing > 0 and status_code == 416:
+                    marked = int(task.engine_state.get("sequential_bytes") or 0)
+                    unsatisfied = _parse_unsatisfied_range(
+                        str(response.headers.get("content-range") or "")
                     )
-                else:
-                    await asyncio.to_thread(
-                        ensure_free_space,
-                        part_path,
-                        MIN_FREE_RESERVE,
-                        operation="下载临时盘",
+                    known_total = int(
+                        task.progress.total_bytes or self._total_size or unsatisfied or 0
                     )
-                task.progress.connection_status = "running"
-                self._set_stage("downloading", "浏览器兼容连接已建立，正在单连接下载")
-                task.engine_state["stream_path"] = str(part_path)
-                window = _SpeedWindow()
-                first_chunk = True
-                with part_path.open("ab" if existing > 0 else "wb") as stream:
-                    try:
-                        content = response.aiter_content(chunk_size=256 * 1024)
-                    except TypeError:
-                        content = response.aiter_content()
-                    async for chunk in content:
-                        if self._is_canceled():
-                            if getattr(response, "quit_now", None):
-                                response.quit_now.set()
-                            raise asyncio.CancelledError
-                        if self._is_pausing():
+                    trusted_complete = bool(
+                        known_total
+                        and existing >= known_total
+                        and marked > 0
+                        and marked >= min(existing, known_total)
+                    )
+                    if trusted_complete:
+                        task.progress.downloaded_bytes = existing
+                        task.progress.completed_segments = 1
+                        if known_total:
+                            task.progress.total_bytes = known_total
+                            self._total_size = known_total
+                        complete_from_range = True
+                        reserved = str(task.engine_state.get("reserved_output_path") or "")
+                        if reserved:
+                            output = Path(reserved)
+                        else:
+                            name = task.filename.strip() or part_path.name
+                            output = _reserve_output_path(task_output_dir(task) / name)
+                            task.engine_state["reserved_output_path"] = str(output)
+                    else:
+                        response.raise_for_status()
+                elif status_code >= 400:
+                    response.raise_for_status()
+                if not complete_from_range:
+                    if existing > 0 and status_code == 200:
+                        existing = 0
+                        task.engine_state.pop("sequential_bytes", None)
+                        task.progress.downloaded_bytes = 0
+                        task.progress.progress_percent = 0.0
+                    final_url = str(getattr(response, "url", "") or task.url)
+                    content_type = str(response.headers.get("content-type", "")).split(";", 1)[0]
+                    encoding = str(response.headers.get("content-encoding") or "").strip().lower()
+                    total = int(response.headers.get("content-length", 0) or 0)
+                    if encoding and encoding != "identity":
+                        total = 0
+                    if existing > 0 and total > 0:
+                        total = existing + total
+                    task.mime_type = task.mime_type or content_type
+                    if total > 0:
+                        task.progress.total_bytes = total
+                        task.engine_state["total_size"] = total
+                    filename = (
+                        _content_disposition_filename(response.headers.get("content-disposition", ""))
+                        or Path(urlparse(final_url).path).name
+                        or Path(urlparse(task.url).path).name
+                        or task.id
+                    )
+                    filename = _ensure_filename_extension(filename, task.mime_type)
+                    requested_name = task.filename.strip()
+                    task.filename = sanitize_filename(
+                        filename if not requested_name or is_generic_media_name(requested_name) else requested_name
+                    )
+                    output = _reserve_output_path(task_output_dir(task) / task.filename)
+                    task.engine_state["reserved_output_path"] = str(output)
+                    if total > 0:
+                        await asyncio.to_thread(
+                            ensure_download_capacity,
+                            part_path,
+                            output,
+                            total,
+                            current_size=existing,
+                        )
+                    else:
+                        await asyncio.to_thread(
+                            ensure_free_space,
+                            part_path,
+                            MIN_FREE_RESERVE,
+                            operation="下载临时盘",
+                        )
+                    task.progress.connection_status = "running"
+                    self._set_stage("downloading", "浏览器兼容连接已建立，正在单连接下载")
+                    task.engine_state["stream_path"] = str(part_path)
+                    window = _SpeedWindow()
+                    first_chunk = True
+                    with part_path.open("ab" if existing > 0 else "wb") as stream:
+                        try:
+                            content = response.aiter_content(chunk_size=256 * 1024)
+                        except TypeError:
+                            content = response.aiter_content()
+                        async for chunk in content:
+                            if self._is_canceled():
+                                if getattr(response, "quit_now", None):
+                                    response.quit_now.set()
+                                raise asyncio.CancelledError
+                            if self._is_pausing():
+                                task.engine_state["sequential_bytes"] = task.progress.downloaded_bytes
+                                task.status = TaskStatus.PAUSED
+                                self._set_stage("paused", "已暂停，可继续下载")
+                                return True
+                            if first_chunk:
+                                validate_download_response(
+                                    task,
+                                    content_type=content_type,
+                                    content_length=task.progress.total_bytes,
+                                    preview=bytes(chunk[:65536]),
+                                    final_url=final_url,
+                                    server_filename=filename,
+                                )
+                                first_chunk = False
+                            if not chunk:
+                                continue
+                            await throttle_bytes(len(chunk), task)
+                            stream.write(chunk)
+                            task.progress.downloaded_bytes += len(chunk)
                             task.engine_state["sequential_bytes"] = task.progress.downloaded_bytes
-                            task.status = TaskStatus.PAUSED
-                            self._set_stage("paused", "已暂停，可继续下载")
-                            return True
-                        if first_chunk:
-                            validate_download_response(
-                                task,
-                                content_type=content_type,
-                                content_length=task.progress.total_bytes,
-                                preview=bytes(chunk[:65536]),
-                                final_url=final_url,
-                                server_filename=filename,
-                            )
-                            first_chunk = False
-                        if not chunk:
-                            continue
-                        await throttle_bytes(len(chunk), task)
-                        stream.write(chunk)
-                        task.progress.downloaded_bytes += len(chunk)
-                        task.engine_state["sequential_bytes"] = task.progress.downloaded_bytes
-                        window.add(len(chunk))
-                        self._apply_speed(window)
-                        self._publish()
+                            window.add(len(chunk))
+                            self._apply_speed(window)
+                            self._publish()
             if not part_path.exists() or part_path.stat().st_size <= 0:
                 raise RuntimeError("浏览器兼容连接没有返回文件数据")
             if task.progress.total_bytes and part_path.stat().st_size != task.progress.total_bytes:
