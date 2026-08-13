@@ -22,6 +22,7 @@ import time
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
+from ..output_path import reserve_output_path
 from xml.etree import ElementTree
 
 import httpx
@@ -1771,17 +1772,4 @@ class NativeDashEngine:
         if not name.lower().endswith(container):
             name += container
         directory = task_output_dir(task)
-        directory.mkdir(parents=True, exist_ok=True)
-        base = directory / name
-        for index in range(10000):
-            candidate = base if index == 0 else base.with_name(
-                f"{base.stem}_{index}{base.suffix}"
-            )
-            try:
-                # Atomically claim the name so two same-named tasks can
-                # never write the same output file concurrently.
-                candidate.open("xb").close()
-                return candidate
-            except FileExistsError:
-                continue
-        raise RuntimeError(f"无法分配输出名称: {base.name}")
+        return reserve_output_path(directory / name)

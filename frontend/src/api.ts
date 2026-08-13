@@ -69,6 +69,8 @@ export const acceptLegalTerms = (data: LegalAcceptanceInput) =>
   request<LegalStatus>('/legal/accept', { method: 'POST', body: JSON.stringify(data) })
 export const saveSettings = (data: any) =>
   request<any>('/settings', { method: 'POST', body: JSON.stringify(data) })
+export const saveTaskSiteProfile = (id: string) =>
+  request<{ ok: boolean; action: string; host: string }>(`/tasks/${id}/site-profile`, { method: 'POST' })
 export const fetchTasks = () => request<any[]>('/tasks')
 export const createTask = (data: any) =>
   request<any>('/tasks', { method: 'POST', body: JSON.stringify(data) })
@@ -81,6 +83,7 @@ export const uploadTorrent = (file: File, title = '') => {
   return request<any>('/tasks/torrent-file', { method: 'POST', body, headers: {} })
 }
 export const importTorrentPath = (path: string) => request<any>('/tasks/torrent-path', { method: 'POST', body: JSON.stringify({ path }) })
+export const importLinkPath = (path: string) => request<any>('/tasks/link-path', { method: 'POST', body: JSON.stringify({ path }) })
 export const fetchTorrentFiles = (id: string) =>
   request<{ files: any[]; selected: number[] }>(`/tasks/${id}/files`)
 export const selectTorrentFiles = (id: string, indexes: number[]) =>
@@ -90,6 +93,8 @@ export const selectTorrentFiles = (id: string, indexes: number[]) =>
   })
 export const taskAction = (id: string, action: string) =>
   request<{ ok: boolean }>(`/tasks/${id}/${action}`, { method: 'POST' })
+export const reorderQueue = (id: string, direction: string) =>
+  request<{ ok: boolean }>(`/tasks/${encodeURIComponent(id)}/queue/${encodeURIComponent(direction)}`, { method: 'POST' })
 export const refreshTaskRequest = (id: string, data: Record<string, unknown>) =>
   request<any>(`/tasks/${id}/request`, { method: 'PATCH', body: JSON.stringify(data) })
 export const setTaskSpeedLimit = (id: string, limitKib: number) =>
@@ -134,6 +139,8 @@ export const controlCast = (action: 'play' | 'pause' | 'seek', seconds = 0, devi
 export const stopLocalTvboxShare = (shareId: string) => request<{ ok: boolean }>(`/tvbox/shares/${encodeURIComponent(shareId)}/stop`, { method: 'POST' })
 export const fetchLocalTvboxShare = (shareId: string) => request<{ active: boolean; filename?: string; active_streams?: number; expires_in_seconds?: number }>(`/tvbox/shares/${encodeURIComponent(shareId)}`)
 export const recognizeUrl = (data: any) => request<any>('/recognize', { method: 'POST', body: JSON.stringify(data) })
+export const harvestPage = (data: any) => request<any>('/recognize/harvest', { method: 'POST', body: JSON.stringify(data) })
+export const harvestPageProbe = (data: any) => request<{ probes: Array<{ url: string; size?: number | null; ok?: boolean }> }>('/recognize/harvest/probe', { method: 'POST', body: JSON.stringify(data) })
 export interface ManifestTrackOption { id: string; width?: number; height?: number; bandwidth?: number; codecs?: string; lang?: string }
 export const fetchManifestTracks = (data: any) =>
   request<{ format: string; video: ManifestTrackOption[]; audio: ManifestTrackOption[] }>('/manifest/tracks', { method: 'POST', body: JSON.stringify(data) })

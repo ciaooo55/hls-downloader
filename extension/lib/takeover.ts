@@ -62,6 +62,14 @@ export function desktopTaskReadiness(handoff: BrowserHandoffPayload): DesktopTas
   return 'waiting'
 }
 
+/** Presentation of a confirmation window is not ownership of the transfer. */
+export function mayDiscardBrowserTransfer(
+  handoffStatus?: string,
+  readiness?: DesktopTaskReadiness,
+): boolean {
+  return handoffStatus === 'accepted' && readiness === 'safe-to-remove'
+}
+
 export function desktopAcceptedHandoff(response: unknown): boolean {
   if (!response || typeof response !== 'object') return false
   const value = response as { ok?: boolean; handoff?: BrowserHandoffPayload }

@@ -1,7 +1,7 @@
 {
   "name": "hls-downloader-extension",
   "private": true,
-  "version": "3.0.24",
+  "version": "3.0.25",
   "type": "module",
   "scripts": {
     "build:chrome": "wxt build -b chrome",

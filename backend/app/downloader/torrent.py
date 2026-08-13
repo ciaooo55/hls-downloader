@@ -5,6 +5,7 @@ import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
+from ..output_path import choose_output_path
 from urllib.parse import unquote, urlsplit
 
 
@@ -589,12 +590,7 @@ class TorrentDownloader:
 
     def _move_payload(self, info, payload_dir: Path) -> Path:
         root = payload_dir / info.name()
-        destination = task_output_dir(self.task) / sanitize_filename(info.name())
-        for index in range(10000):
-            candidate = destination if index == 0 else destination.with_name(f"{destination.stem}_{index}{destination.suffix}")
-            if not candidate.exists():
-                destination = candidate
-                break
+        destination = choose_output_path(task_output_dir(self.task) / sanitize_filename(info.name()))
         storage = info.files()
         selected = set(self.task.engine_state.get("selected_files", []))
         all_selected = not selected or selected == set(range(storage.num_files()))
@@ -617,14 +613,7 @@ class TorrentDownloader:
         if len(files) == 1:
             single_destination = destination
             if destination.suffix.lower() != files[0].suffix.lower():
-                single_destination = destination.with_name(files[0].name)
-                for index in range(10000):
-                    candidate = single_destination if index == 0 else single_destination.with_name(
-                        f"{single_destination.stem}_{index}{single_destination.suffix}"
-                    )
-                    if not candidate.exists():
-                        single_destination = candidate
-                        break
+                single_destination = choose_output_path(destination.with_name(files[0].name))
             publish_path(files[0], single_destination)
             return single_destination
         destination.mkdir(parents=True, exist_ok=False)

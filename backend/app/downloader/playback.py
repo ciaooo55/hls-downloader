@@ -437,10 +437,13 @@ class PlaybackService:
         status: str,
         output_path: str = "",
     ) -> tuple[str, PlaybackSnapshot]:
+        # snapshot() may take _PLAN_WRITE_LOCK. playlist()/segment reads take
+        # that lock first, then self._lock. Holding self._lock here while
+        # loading the plan deadlocks against LAN/cast playlist requests.
+        snapshot = self.snapshot(task_id, status, output_path)
+        if not snapshot.ready:
+            raise PlaybackNotReadyError("至少需要一个完整分片才能开始播放")
         with self._lock:
-            snapshot = self.snapshot(task_id, status, output_path)
-            if not snapshot.ready:
-                raise PlaybackNotReadyError("至少需要一个完整分片才能开始播放")
             self._expire_locked(time.monotonic())
             self._evict_oldest_sessions_locked()
             session_id = uuid.uuid4().hex

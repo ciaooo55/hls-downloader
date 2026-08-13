@@ -3,7 +3,7 @@ import asyncio
 
 import pytest
 
-from backend.app.checksum import normalize_checksum, verify_checksum, verify_task_checksum
+from backend.app.checksum import apply_http_content_checksum, normalize_checksum, parse_http_content_checksum, prefer_http_content_checksum, verify_checksum, verify_task_checksum
 from backend.app.models import Task, TaskStatus
 
 
@@ -55,3 +55,34 @@ def test_finalization_accepts_matching_file(tmp_path):
 def test_checksum_rejects_ambiguous_or_unsupported_values(value):
     with pytest.raises(ValueError):
         normalize_checksum(value)
+
+
+def test_http_headers_supply_checksum_without_overriding_user_value():
+    payload = b"download payload"
+    md5 = __import__("hashlib").md5(payload).digest()
+    sha = __import__("hashlib").sha256(payload).digest()
+    import base64
+    headers = {
+        "Content-MD5": base64.b64encode(md5).decode("ascii"),
+        "Digest": "SHA-256=" + base64.b64encode(sha).decode("ascii"),
+    }
+    assert parse_http_content_checksum(headers).startswith("sha256:")
+    assert parse_http_content_checksum({}) == ""
+    assert parse_http_content_checksum({"etag": '"abc"'}) == ""
+    assert prefer_http_content_checksum("md5:" + "a" * 32, "sha256:" + "b" * 64).startswith("sha256:")
+
+    task = Task(id="hdr", url="https://example.test/file")
+    assert apply_http_content_checksum(task, headers).startswith("sha256:")
+    assert task.engine_state["checksum_from"] == "http_header"
+    kept = Task(id="user", url="https://example.test/file", expected_checksum="md5:" + "0" * 32)
+    assert apply_http_content_checksum(kept, headers) == ""
+    assert kept.expected_checksum == "md5:" + "0" * 32
+
+
+def test_goog_hash_and_hex_content_md5_are_accepted():
+    import base64, hashlib
+    digest = hashlib.md5(b"payload").digest()
+    assert parse_http_content_checksum({"x-goog-hash": "crc32c=ignore,md5=" + base64.b64encode(digest).decode("ascii")}) == "md5:" + digest.hex()
+    assert parse_http_content_checksum({"content-md5": digest.hex()}) == "md5:" + digest.hex()
+    assert parse_http_content_checksum({"content-md5": "%%%not-a-digest%%%"}) == ""
+

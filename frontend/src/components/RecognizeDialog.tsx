@@ -1,11 +1,13 @@
 import { useRef, useState, useEffect } from 'react'
 import { Download, FileUp, Globe2, Link } from 'lucide-react'
-import { ApiError, createTask, fetchManifestTracks, isDuplicateUrlError, recognizeUrl, uploadTorrent, type ManifestTrackOption } from '../api'
+import { ApiError, createTask, fetchManifestTracks, isDuplicateUrlError, openTaskInExplorer, recognizeUrl, taskAction, uploadTorrent, type ManifestTrackOption } from '../api'
 import { recognitionCandidateViews, recognitionView, type RecognitionResult } from '../recognition'
 import type { Settings, Task } from '../types'
 import { parseRequestHeaders, REQUEST_EXAMPLES, REQUEST_FIELD_HELP, sourcePageRequestContext } from '../requestHelp'
 import { parseCurlCommand } from '../curlImport'
 import ConfirmDialog from './ConfirmDialog'
+import DuplicateTaskDialog from './DuplicateTaskDialog'
+import { parseDuplicateError, type DuplicateMatch } from '../duplicateTask'
 import { Button, DialogFooter, DialogHeader, Field, Input } from './ui'
 
 function encodeRequestBody(value: string): string {
@@ -26,6 +28,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const [filename, setFilename] = useState('')
   const [concurrency, setConcurrency] = useState(settings.default_concurrency || 12)
   const [checksum, setChecksum] = useState('')
+  const [mirrorsText, setMirrorsText] = useState('')
   const [scheduledStartAt, setScheduledStartAt] = useState('')
   const [scheduledStopAt, setScheduledStopAt] = useState('')
   const [completionAction, setCompletionAction] = useState<'none' | 'shutdown' | 'sleep' | 'hibernate'>('none')
@@ -44,7 +47,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const [busy, setBusy] = useState(false)
   const [startingCandidate, setStartingCandidate] = useState('')
   const [error, setError] = useState('')
-  const [duplicatePrompt, setDuplicatePrompt] = useState<{ message: string; candidate: string; video: string; audio: string } | null>(null)
+  const [duplicatePrompt, setDuplicatePrompt] = useState<{ message: string; candidate: string; video: string; audio: string; duplicates: DuplicateMatch[] } | null>(null)
   const [trackChoice, setTrackChoice] = useState<{ candidate: string; format: string; video: ManifestTrackOption[]; audio: ManifestTrackOption[] } | null>(null)
   const [selectedVideo, setSelectedVideo] = useState('')
   const [selectedAudio, setSelectedAudio] = useState('')
@@ -79,6 +82,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
       filename,
       concurrency,
       checksum,
+      mirrors: mirrorsText.split(/\r?\n/).map(item => item.trim()).filter(Boolean),
       referer: context.referer,
       origin: context.origin,
       user_agent: context.userAgent,
@@ -120,7 +124,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
       if (!allowDuplicate && isDuplicateUrlError(reason)) {
         // Keep the chosen tracks (and skip re-probing) so confirming does
         // not loop back into the chooser or silently fall back to auto.
-        setDuplicatePrompt({ message: reason.message || '下载列表中已有相同链接', candidate, video, audio })
+        setDuplicatePrompt({ ...parseDuplicateError(reason), candidate, video, audio })
         return
       }
       throw reason
@@ -166,6 +170,8 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
 
   const directType = (value: string) => {
     if (value.toLowerCase().startsWith('magnet:')) return 'torrent'
+    if (value.toLowerCase().startsWith('ftp://') || value.toLowerCase().startsWith('ftps://')) return 'ftp'
+    if (value.toLowerCase().startsWith('sftp://')) return 'sftp'
     try {
       const path = new URL(value).pathname.toLowerCase()
       if (path.endsWith('.m3u8')) return 'hls'
@@ -188,6 +194,10 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
       const context = contextFor()
       const found = await recognizeUrl({ url: value, referer: context.referer, origin: context.origin, user_agent: context.userAgent, cookie: context.cookie, request_headers: context.requestHeaders })
       setResult(found)
+      const first = found.candidates[0]
+      if (first?.label) setFilename(first.label)
+      if (first?.checksum) setChecksum(first.checksum)
+      if (first?.mirrors?.length) setMirrorsText(first.mirrors.join('\n'))
       if (recognitionView(found).mode === 'ready') await startCandidate(found.candidates[0].url)
     } catch (reason: unknown) {
       if (reason instanceof ApiError) setError(reason.message)
@@ -208,8 +218,20 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
   const importTorrent = async (file?: File) => {
     if (!file) return
     setBusy(true); setError('')
-    try { const task = await uploadTorrent(file, filename); onAdded(task); onClose() }
-    catch (reason: any) { setError(reason.message || '种子文件导入失败') }
+    try {
+      const name = file.name.toLowerCase()
+      if (name.endsWith('.url') || name.endsWith('.magnet')) {
+        const text = await file.text()
+        const match = text.match(/^url\s*=\s*(.+)$/im) || text.match(/^(https?:\/\/|ftps?:\/\/|sftp:\/\/|magnet:\?).+$/im)
+        const extracted = (match?.[1] || match?.[0] || '').trim().replace(/^["']|["']$/g, '')
+        if (!extracted) throw new Error('文件中没有可下载链接')
+        setUrl(extracted)
+        await startCandidate(extracted)
+        return
+      }
+      const task = await uploadTorrent(file, filename); onAdded(task); onClose()
+    }
+    catch (reason: any) { setError(reason.message || '文件导入失败') }
     finally { setBusy(false) }
   }
 
@@ -217,7 +239,7 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
     <>
       <div className="recognize-popover-backdrop" onMouseDown={onClose} />
       <section className="recognize-popover" role="dialog" aria-label="新建下载">
-          <DialogHeader title="新建下载" description="支持普通文件、HLS、DASH、magnet 和 .torrent" onClose={onClose} />
+          <DialogHeader title="新建下载" description="支持普通文件、HLS、DASH、FTP/FTPS、magnet 和 .torrent" onClose={onClose} />
           <section className="download-entry-surface">
             <Field label="下载链接" htmlFor="recognize-url">
               <div className="url-entry">
@@ -259,8 +281,8 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
               </div>
             </Field>
             <div className="recognize-quick-actions">
-              <input ref={torrentInput} type="file" accept=".torrent,application/x-bittorrent" hidden onChange={event => void importTorrent(event.target.files?.[0])} />
-              <Button variant="ghost" className="text-button" disabled={busy} onClick={() => torrentInput.current?.click()}><FileUp size={14} />导入 .torrent</Button>
+              <input ref={torrentInput} type="file" accept=".torrent,.url,.magnet,application/x-bittorrent,application/internet-shortcut" hidden onChange={event => void importTorrent(event.target.files?.[0])} />
+              <Button variant="ghost" className="text-button" disabled={busy} onClick={() => torrentInput.current?.click()}><FileUp size={14} />导入 .torrent / .url</Button>
               <span>{curlNotice || '磁力链接和“复制为 cURL”可直接粘贴'}</span>
             </div>
           </section>
@@ -276,6 +298,9 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
             </div>
             <Field label="校验和" htmlFor="recognize-checksum" help="可选；下载完成后核对。多文件 BT 不支持单一校验和。">
               <Input id="recognize-checksum" value={checksum} onChange={event => setChecksum(event.target.value)} placeholder="SHA-256、SHA-1 或 MD5" />
+            </Field>
+            <Field label="备用下载地址" htmlFor="recognize-mirrors" help="可选；每行一个 HTTP(S) 镜像。仅普通文件使用：身份匹配后可故障切换并并行分段，HLS/DASH/BT 会忽略。">
+              <textarea id="recognize-mirrors" value={mirrorsText} onChange={event => setMirrorsText(event.target.value)} placeholder={"https://mirror.example.test/file.bin"} rows={3} />
             </Field>
             <div className="form-row">
               <Field label="计划开始" htmlFor="recognize-scheduled-start" help="可选；到本机时间后自动开始，关闭程序后计划仍会保留。">
@@ -383,22 +408,33 @@ export default function RecognizeDialog({ settings, initialUrl = '', onClose, on
           </DialogFooter>
       </section>
       {duplicatePrompt && (
-        <ConfirmDialog
-          title="检测到重复下载"
-          message={`${duplicatePrompt.message}\n仍可继续添加为新任务。`}
-          confirmLabel="仍要下载"
+        <DuplicateTaskDialog
+          message={duplicatePrompt.message}
+          duplicates={duplicatePrompt.duplicates || []}
+          busy={busy}
           onCancel={() => setDuplicatePrompt(null)}
-          onConfirm={() => {
+          onAddNew={() => {
             const { candidate, video, audio } = duplicatePrompt
             setDuplicatePrompt(null)
             setBusy(true)
-            // skipTrackProbe: the tracks were already chosen (or left auto).
             void startCandidate(candidate, true, video, audio, true)
               .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : '添加失败'))
               .finally(() => setBusy(false))
           }}
+          onReuse={(match) => {
+            const action = match.suggested_action || 'none'
+            setDuplicatePrompt(null)
+            setBusy(true)
+            const run = action === 'open'
+              ? openTaskInExplorer(match.id)
+              : action === 'focus'
+                ? Promise.resolve()
+                : taskAction(match.id, action)
+            void run.then(() => { onAdded(); onClose() }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : '操作失败')).finally(() => setBusy(false))
+          }}
         />
       )}
+
     </>
   )
 }

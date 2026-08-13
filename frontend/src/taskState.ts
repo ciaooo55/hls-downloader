@@ -96,6 +96,19 @@ export function isPausable(task: TaskRecord): boolean {
   )
 }
 
+export const ACTIVE_TRANSFER_STATUSES = [
+  'downloading',
+  'downloading_segments',
+  'fetching_metadata',
+  'checking',
+  'downloading_m3u8',
+  'parsing',
+] as const
+
+export function isActiveTransfer(status?: string): boolean {
+  return Boolean(status && (ACTIVE_TRANSFER_STATUSES as readonly string[]).includes(status))
+}
+
 export function isRunningStatus(status?: string): boolean {
   if (!status) return false
   return [

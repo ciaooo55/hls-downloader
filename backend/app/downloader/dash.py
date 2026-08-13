@@ -28,6 +28,7 @@ class DashDownloader(SeeklessEngine):
         self._on_log_callback = on_log
         self.on_log = on_log or (lambda task_id, message: None)
         self.source_label = source_label
+        self._progress_loop = None
 
     def _publish(self) -> None:
         self.on_progress(self.task)
@@ -69,6 +70,7 @@ class DashDownloader(SeeklessEngine):
                 else:
                     if handled:
                         return
+            self._progress_loop = asyncio.get_running_loop()
             result = await asyncio.to_thread(self._run_ytdlp, task_dir)
             if self._stopping():
                 if task.cancel_event and task.cancel_event.is_set():
@@ -153,6 +155,14 @@ class DashDownloader(SeeklessEngine):
 
         task = self.task
         before = {path.resolve() for path in task_dir.glob("*") if path.is_file()}
+        headers = build_task_headers(task, browser_profile_managed=False)
+
+        def _publish_progress() -> None:
+            loop = self._progress_loop
+            if loop is not None:
+                loop.call_soon_threadsafe(self._publish)
+            else:
+                self._publish()
 
         def progress_hook(data: dict) -> None:
             if self._stopping():
@@ -172,15 +182,14 @@ class DashDownloader(SeeklessEngine):
                         task.progress.downloaded_bytes * 100 / task.progress.total_bytes,
                     )
                 task.last_log = f"{self.source_label} 下载 {task.progress.progress_percent:.1f}%"
-                self._publish()
+                _publish_progress()
             elif status == "finished":
                 task.status = TaskStatus.REMUXING
                 task.stage = "remuxing"
                 task.progress.post_percent = 95.0
                 task.last_log = f"正在合并 {self.source_label} 音视频轨"
-                self._publish()
+                _publish_progress()
 
-        headers = build_task_headers(task)
         options = {
             "outtmpl": str(task_dir / "payload.%(ext)s"),
             "format": "bestvideo+bestaudio/best",

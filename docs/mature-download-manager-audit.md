@@ -86,8 +86,15 @@ IDM 下载核心闭源。本项目只能依据插件、已安装组件、公开�
 ### 本项目状态
 
 - `backend/app/downloader/http_file.py` 已实现 Range 探测、Content-Range 严格校验、ETag/Last-Modified/If-Range、断点 checkpoint、动态 end-game 拆分、无 Range/未知长度回退、POST 单流和最终文件原子发布。
+- HTTP 备用镜像由 `backend/app/downloader/mirrors.py` 规范化；只接受长度一致且 ETag/Last-Modified/校验和/双方 Range 可核对的地址。主地址失败会切换备用源，匹配的 Range 源可并行分段。未配置镜像时探测和请求路径与原来一致。
 - 本地真实 smoke 已验证 24 个不同 Range worker 请求、同时连接、暂停/恢复、无 Range 回退、签名 URL 从 403 刷新后恢复以及最终 SHA-256，不以 UI 进度代替磁盘长度校验。
 - `backend/app/network_proxy.py` 提供进程级连接预算、每 Host 上限和 429/503 共享退避，避免“单任务并发 × 多任务”失控。
+- HTTP Range connection map is display-only: backend/app/connection_parts.py snapshots live chunks/range_current/partials into at most 64 non-overlapping {start,end,done,state} parts. Task API and SSE expose connection_parts; Task details and the HTTP progress row render the bar. Sequential / no-Range / non-HTTP tasks keep an empty list. Split, resume, mirror and default single-URL behavior are unchanged.
+- HTTP end-game now splits any in-flight Range part, not just the original chunk owner. Idle workers keep bisecting tails down to 512 KiB (`backend/app/downloader/http_split.py`). Sequential / no-Range / POST single-stream paths and the on-disk resume checkpoint are unchanged.
+- Per-site rules are edited as a form list in Settings. Optional cookie and download_dir apply only when the task does not already have them; browser-captured values and an explicit save folder still win. An empty rule list remains a no-op.
+- A single HTTP/FTP/SFTP task can save its host, cookie, headers, concurrency and output folder as a site rule via POST /api/tasks/{id}/site-profile. The UI never receives the cookie; same host updates in place, new hosts are prepended. Magnet/BT tasks stay unavailable. Default download behavior is unchanged until the user clicks save.
+- Duplicate URL create still requires allow_duplicate. The 409 payload now includes suggested_action (resume/retry/start/open/focus). Recognize dialog can reuse the existing task or open the finished file instead of only adding another copy. Default single-URL create stays blocked on duplicates.
+- Sidebar now has dedicated Queued and Paused lists. Running/All/Done/Failed meanings stay the same; paused tasks are no longer only visible under All.
 
 ## HLS、LL-HLS、DASH 与直播收尾
 
@@ -105,6 +112,10 @@ IDM 下载核心闭源。本项目只能依据插件、已安装组件、公开�
 
 - 安装/升级用 NSIS 和 Tauri 单实例关闭协议；覆盖安装 smoke 同时验证配置、数据库和下载文件保留。
 - SQLite 在 `backend/app/database.py` 使用生命周期连接、WAL 和启动迁移，不在每次进度保存时重新建表。
+- 已完成任务在列表/详情中实时检查最终文件是否仍在；缺失时保留 DONE 记录，提供重新下载和打开原目录，不再提供播放/投屏。
+- 分类保存目录与浏览器接管共用 `browser_category_dirs`。默认关闭自动分类，不改变现有下载根目录；开启后未指定目录的任务进入“媒体/程序/压缩包/其他”，用户显式选择的文件夹不会被改走。
+- 批量添加用 `frontend/src/urlList.ts` 从杂乱文本/HTML/文件提取 HTTP(S)、FTP/FTPS 与 magnet；任务列表可导出为带注释的链接文件并再导入。单条新建和 `/tasks/batch` 语义不变。
+- 可选种子监视目录由 `backend/app/torrent_watch.py` 实现：默认关闭；首次扫描只记录已有文件，之后只导入新出现的 `.torrent`，损坏/超大文件跳过且不再重试。
 - TaskManager 对任务 URL、来源页、Cookie、请求头、请求上下文、POST Body 以及 HLS/DASH 选择的变体地址统一使用 DPAPI；旧版明文选择字段可兼容读取，下一次保存会迁移为加密值。
 - `TaskManager` 使用有界异步日志队列和轮换；SSE 队列也有容量上限。
 - 插件商店版由浏览器更新；开发者模式解压插件受浏览器安全模型限制，不能伪装成在线静默更新。
@@ -116,6 +127,116 @@ IDM 下载核心闭源。本项目只能依据插件、已安装组件、公开�
 - 源码真实下载：24 MiB Range 并发及暂停恢复、6 MiB 无 Range、签名 403 刷新、HLS 增量播放、0.333 秒 LL-HLS PART、DASH、ffprobe 时长验证与任务/文件清理全部通过。
 - 真实 Edge 普通下载接管 smoke：接受前暂停在 0 B、接受后清除浏览器副本；拒绝和 Native Host 连续断开后均恢复并完成 8 MiB；真实 popup 的排除本站与自动接管开关通过。
 - CI 和发布工作流现已调用真实 Firefox 媒体归属 smoke；发布工作流还执行便携真实下载、便携覆盖升级和安装版覆盖升级。
+
+## Explorer and watch-folder link files
+
+- `.url` and `.magnet` files can be imported through `/api/tasks/link-path` and the optional watch folder. Existing files are primed, not imported.
+- The installer adds a context-menu verb only; it does not replace the default Internet Shortcut handler.
+
+## Site grabber / single-page harvest
+
+- Opt-in page harvest lives in `backend/app/page_harvest.py` and `POST /api/recognize/harvest`.
+- It fetches one HTML page only, extracts static file/magnet/FTP links, and returns a confirm list. No JavaScript, no recursive crawl, no per-link HEAD probing.
+- Images, scripts and HTML pages are excluded by default. The existing `/api/recognize` single-URL path is unchanged.
+- The batch dialog can switch to harvest mode; selected links still go through `/api/tasks/batch`.
+
+## Explorer playlist and page files
+
+- Context-menu only on `.m3u`, `.m3u8`, `.mpd`, `.html` and `.htm`. Default open handlers are not replaced.
+- `backend/app/link_file.py` extracts remote HTTP(S)/FTP/magnet links. Local HLS media playlists made of `.ts`/`.m4s` segments are rejected instead of exploding into hundreds of tasks.
+- Multi-link files are queued (`auto_start=False`). A single `.url`/`.magnet` keeps the previous auto-start behavior.
+- The optional watch folder still only imports `.torrent`, `.url` and `.magnet`.
+
+## Desktop drag-and-drop import
+
+- Dropping remote HTTP(S)/FTP/magnet links onto the main window opens the existing recognize dialog for one URL, or batch add for several.
+- Dropped `.torrent` / `.url` / `.magnet` / playlist / HTML files reuse `/api/tasks/torrent-path` and `/api/tasks/link-path`.
+- Local `127.0.0.1` task-file URLs dragged out of the table are ignored. Input fields keep native text drop.
+
+## Harvest size probe
+
+- Optional `POST /api/recognize/harvest/probe` reads sizes after the confirm list is shown. Default harvest still does not HEAD every link.
+- HEAD Content-Length is used first; otherwise a Range 0-0 request reads Content-Range. Magnet/FTP stay unknown. One failed URL does not fail the batch.
+
+## Existing file policy
+
+- `existing_file_policy` defaults to `rename`, matching the previous auto-rename behavior.
+- `overwrite` and `skip` are opt-in in Settings. HTTP/HLS/DASH/FTP share `reserve_output_path`; BitTorrent uses `choose_output_path`.
+- Skip never deletes a populated file. Multi-file torrent folders are not recursively deleted.
+
+## Antivirus scan
+
+- Optional post-download scan in `backend/app/av_scan.py`, default off.
+- Uses Windows Defender MpCmdRun when no custom `{file}` command is set. A missing scanner never fails a successful download.
+- A threat can mark the task failed without deleting the file. Completion power actions wait until the scan hook returns.
+
+## FTP / FTPS
+
+- Isolated SeeklessEngine in `backend/app/downloader/ftp_file.py`: one control connection, one data stream, REST resume only after SIZE+REST succeed.
+- `ftp://` is plaintext; `ftps://` is explicit TLS, port 990 uses implicit TLS. Browser-originated private hosts stay blocked; manual LAN/NAS FTP remains allowed.
+- HTTP mirrors, HLS, DASH and BitTorrent paths are unchanged. FTP tasks reject mirror lists.
+
+## Scheduled speed limit
+
+- `speed_schedule_enabled` defaults to off. Existing `download_speed_limit_kib` behavior is unchanged until the user opts in.
+- When enabled, `[start, end)` uses `speed_schedule_limit_kib` (0 = unlimited in that window). Overnight windows wrap midnight the same way as the queue schedule.
+- Invalid or identical HH:MM values fall back to the global cap. The status-bar chip shows `effective_download_speed_limit_kib`; the quick menu still edits only the global cap.
+
+## Completion sound
+
+- `completion_sound_enabled` defaults to off. Existing toast/system notifications are unchanged.
+- When enabled, a short original Web Audio chime plays on `done`. Completions within 700ms share one sound.
+- Settings can preview the chime without enabling it. Autoplay/AudioContext failures stay silent.
+
+## Speed graph
+
+- Backend samples transfer speed at most once per second into an in-memory window of 180 points. Download engines and default limits are unchanged.
+- Task details, the list speed column, and the status-bar total share the same filled chart. Closing the dialog no longer wipes history.
+- Idle/paused tasks record a single trailing zero so the line drops, then stop growing.
+
+## Metalink
+
+- `.metalink` / `.meta4` import uses the existing link-path, drag-and-drop and Explorer verb paths. Default handlers are not replaced.
+- Metalink 3 and 4 files become ordinary HTTP/FTP/magnet tasks with filename, checksum and HTTP mirrors. FTP/magnet entries never receive a mirror list.
+- Watch-folder auto-import still ignores metalink. Remote recognize prefills checksum/mirrors when the response is a metalink document.
+
+## SFTP
+
+- Isolated SeeklessEngine in `backend/app/downloader/sftp_file.py`: one SSH session, one SFTP stream, seek resume after STAT identity matches.
+- Unknown hosts are stored in the app-local known_hosts file (TOFU). A changed key fails closed. Browser-originated private hosts stay blocked; handoff still rejects `sftp://`.
+- HTTP/FTP/HLS/DASH/BitTorrent paths are unchanged. SFTP tasks reject mirror lists.
+
+## Failed-task auto retry
+
+- auto_retry_failed_max defaults to 0. In-engine HTTP/HLS chunk retries and the manual Retry action are unchanged.
+- When set to 1-10, a FAILED task is retried after 5/10/20/40/60s unless the error is a checksum, AV threat, 401/403/404 or similar permanent status. Manual retry/start/delete cancels a pending timer.
+
+## Startup resume
+
+- resume_interrupted_on_startup defaults to off. Existing crash recovery still pauses in-flight/queued work as interrupted until the user clicks resume.
+- When enabled and legal terms are accepted, those interrupted tasks are started in queue-priority order. Manually paused tasks and the update-restart path are unchanged.
+
+## HTTP response checksum
+
+- Probe headers may supply a whole-file digest via Content-MD5, Digest, x-goog-hash or x-checksum-*. SHA-256 wins over SHA-1/MD5. Invalid headers are ignored.
+- A user or Metalink checksum is never replaced. Responses without a digest keep the previous no-verify path.
+
+## HTTP keep-alive reuse
+
+- PolicyAsyncClient now shares an HTTP transport per proxy route so sequential or concurrent tasks can reuse TCP/TLS keep-alive to the same host. Each task still has its own client, cookies and headers.
+- Explicit transports (tests, special callers) are unchanged. Process-wide host/global connection budgets still cap concurrency. Default single-URL probe, Range and POST paths are unchanged.
+
+## Per-site proxy
+
+- A site rule may set proxy_mode to direct, system, or manual. Empty mode still inherits the global proxy. An empty rule list remains a no-op.
+- HTTP/HLS/DASH use the same per-request route as the global policy, so redirects re-evaluate the destination host. BitTorrent, FTP/SFTP and the updater keep the global proxy.
+- Saving a task as a site rule preserves an existing per-host proxy. proxy_url is stored with DPAPI and masked in Settings like the global proxy.
+
+## Queue drag reorder
+
+- Queued rows can be dragged onto another queued row. Dropping above the midpoint inserts before; below inserts after. Non-queued rows ignore the drop and completed-file drag is unchanged.
+- reorder_queue still accepts up/down/top/bottom and now also before:<id>, after:<id>, and index:<n>. A non-queued target is a no-op. Default start, save location, and speed behavior are unchanged.
+- The task list sorts queued items by queue_position so the visual order matches start order. queue_position now counts every QUEUED task, not only those already waiting for a slot.
 
 ## 仍需保留的边界与后续验证
 

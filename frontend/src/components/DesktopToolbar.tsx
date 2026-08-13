@@ -1,6 +1,6 @@
 import {
-  ClipboardPaste, FileText, FolderOpen, Layers3, Moon, MoreHorizontal, Pause, Play,
-  CircleArrowUp, Plus, RefreshCw, RotateCcw, ScreenShare, Search, Settings, Sun, Trash2, Tv, Users, X, XCircle,
+  ClipboardPaste, FileText, FolderOpen, Globe2, Layers3, Moon, MoreHorizontal, Pause, Play,
+  CircleArrowUp, FileDown, Plus, RefreshCw, RotateCcw, ScreenShare, Search, Settings, Sun, Trash2, Tv, Users, X, XCircle,
 } from 'lucide-react'
 import type { CommandState } from '../taskCommands'
 import type { Theme } from '../theme'
@@ -16,6 +16,8 @@ interface Props {
   onNew: () => void
   onPaste: () => void
   onBatch: () => void
+  onHarvest: () => void
+  onExportUrls: () => void
   onAction: (action: string) => void
   onPauseAll: () => void
   onStartAll: () => void
@@ -174,6 +176,8 @@ export default function DesktopToolbar(props: Props) {
         <summary title="更多操作" aria-label="更多操作"><MoreHorizontal size={18} /></summary>
         <div className="toolbar-overflow-menu" role="menu" aria-label="更多操作">
           <button type="button" role="menuitem" onClick={event => { closeOverflow(event); props.onBatch() }}><Layers3 size={16} />批量添加</button>
+          <button type="button" role="menuitem" onClick={event => { closeOverflow(event); props.onHarvest() }}><Globe2 size={16} />网页抓取</button>
+          <button type="button" role="menuitem" onClick={event => { closeOverflow(event); props.onExportUrls() }}><FileDown size={16} />导出链接</button>
           <button type="button" role="menuitem" onClick={event => { closeOverflow(event); props.onStartAll() }}><Play size={16} />全部开始</button>
           <button type="button" role="menuitem" onClick={event => { closeOverflow(event); props.onPauseAll() }}><Pause size={16} />全部暂停</button>
           <button type="button" disabled={!c.resume} role="menuitem" onClick={event => { closeOverflow(event); props.onAction('resume') }}><RotateCcw size={16} />恢复任务</button>

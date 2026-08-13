@@ -18,12 +18,14 @@ class PendingPowerAction:
     action: str
     execute_at: str
     handle: asyncio.Task
+    executor: Callable[[str], None]
 
 
 class PowerActionService:
     def __init__(self, delay_seconds: int = 30) -> None:
         self.delay_seconds = max(5, int(delay_seconds))
         self._pending: dict[str, PendingPowerAction] = {}
+        self._fired: set[str] = set()
 
     def schedule(
         self,
@@ -42,13 +44,14 @@ class PowerActionService:
                 return pending.id
         action_id = uuid.uuid4().hex
         execute_at = (datetime.now() + timedelta(seconds=self.delay_seconds)).isoformat()
+        run = executor or self._execute
 
         async def wait_and_execute() -> None:
             try:
                 publish(self._event(action_id, task_id, task_title, normalized, execute_at))
                 await asyncio.sleep(self.delay_seconds)
-                (executor or self._execute)(normalized)
-                publish({"type": "power_action_executed", "power_action_id": action_id})
+                if self._fire(action_id, normalized, run):
+                    publish({"type": "power_action_executed", "power_action_id": action_id})
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -68,8 +71,19 @@ class PowerActionService:
             action=normalized,
             execute_at=execute_at,
             handle=handle,
+            executor=run,
         )
         return action_id
+
+    def _fire(self, action_id: str, action: str, executor: Callable[[str], None]) -> bool:
+        if action_id in self._fired:
+            return False
+        self._fired.add(action_id)
+        if len(self._fired) > 64:
+            extra = list(self._fired)[:-32]
+            self._fired.difference_update(extra)
+        executor(action)
+        return True
 
     def _event(
         self,
@@ -114,16 +128,18 @@ class PowerActionService:
         item = self._pending.pop(action_id, None)
         if item is None:
             return False
+        self._fired.add(action_id)
         item.handle.cancel()
         return True
 
     def confirm(self, action_id: str) -> bool:
-        item = self._pending.pop(action_id, None)
+        item = self._pending.get(action_id)
         if item is None:
             return False
+        fired = self._fire(action_id, item.action, item.executor)
+        self._pending.pop(action_id, None)
         item.handle.cancel()
-        self._execute(item.action)
-        return True
+        return fired
 
     def close(self) -> None:
         for item in list(self._pending.values()):

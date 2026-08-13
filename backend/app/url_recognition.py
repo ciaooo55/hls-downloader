@@ -23,6 +23,8 @@ class HlsCandidate(BaseModel):
     label: str = ""
     quality: str | None = None
     confidence: float = 0.0
+    checksum: str = ""
+    mirrors: list[str] = []
 
 
 class RecognitionResult(BaseModel):
@@ -96,7 +98,15 @@ _QUALITY_QUERY_KEYS = {
 }
 
 
+def _is_metalink_response(content_type: str, final_url: str) -> bool:
+    path = urlparse(final_url).path.lower()
+    mime = content_type.split(";", 1)[0].strip().lower()
+    return path.endswith((".metalink", ".meta4")) or "metalink" in mime
+
+
 def _is_direct_file_response(content_type: str, disposition: str, final_url: str) -> bool:
+    if _is_metalink_response(content_type, final_url):
+        return False
     mime = content_type.split(";", 1)[0].strip().lower()
     if re.search(r"(?:^|;)\s*attachment(?:;|$)", disposition, re.IGNORECASE):
         return True
@@ -466,8 +476,37 @@ def _direct_candidate(url: str, source: str, playlist_text: str = "") -> HlsCand
     )
 
 
+def _metalink_result(url: str, text: str) -> RecognitionResult | None:
+    from .metalink import looks_like_metalink, parse_metalink
+    if not looks_like_metalink(text):
+        return None
+    files = parse_metalink(text)
+    return RecognitionResult(
+        kind="file" if len(files) == 1 else "page",
+        final_url=url,
+        candidates=[
+            HlsCandidate(
+                url=item.url,
+                source="metalink",
+                label=item.name,
+                confidence=1.0,
+                checksum=item.checksum,
+                mirrors=item.mirrors,
+            )
+            for item in files
+        ],
+        message="Metalink",
+    )
+
+
 async def recognize_url(url: str, headers: dict[str, str], client=None) -> RecognitionResult:
     parsed = urlparse(url)
+    if parsed.scheme in {"ftp", "ftps", "sftp"} and parsed.hostname:
+        return RecognitionResult(
+            kind="file",
+            final_url=url,
+            candidates=[_direct_candidate(url, "file")],
+        )
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RecognitionError("链接必须是有效的 HTTP(S) 地址")
 
@@ -532,6 +571,9 @@ async def recognize_url(url: str, headers: dict[str, str], client=None) -> Recog
                 candidates=[_direct_candidate(final_url, "file")],
             )
 
+        metalink = _metalink_result(final_url, text)
+        if metalink is not None:
+            return metalink
         candidates = extract_html_candidates(text, final_url)
         if candidates:
             return RecognitionResult(kind="page", final_url=final_url, candidates=candidates)

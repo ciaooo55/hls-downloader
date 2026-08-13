@@ -1,13 +1,32 @@
 import { useEffect, useState } from 'react'
-import { AppWindow, Archive, AlertCircle, CheckCircle2, Download, File, Images, List, X } from 'lucide-react'
+import { AppWindow, Archive, AlertCircle, CheckCircle2, Clock3, Download, File, Images, List, PauseCircle, X } from 'lucide-react'
 import type { BrowserStatus, Task } from '../types'
-import { downloadCategory } from '../downloadCategory'
+import { taskMatchesFilter } from '../taskPresentation'
 
-export type TaskFilter = 'all' | 'running' | 'done' | 'failed' | 'media' | 'program' | 'archive' | 'other'
+export const TASK_FILTER_LABELS: Record<TaskFilter, string> = {
+  all: '全部任务',
+  running: '进行中',
+  queued: '排队中',
+  paused: '已暂停',
+  done: '已完成',
+  failed: '失败任务',
+  media: '媒体',
+  program: '程序',
+  archive: '压缩包',
+  other: '其他',
+}
+
+export function taskFilterLabel(filter: TaskFilter): string {
+  return TASK_FILTER_LABELS[filter] || '任务列表'
+}
+
+export type TaskFilter = 'all' | 'running' | 'queued' | 'paused' | 'done' | 'failed' | 'media' | 'program' | 'archive' | 'other'
 
 const filters: Array<{ id: TaskFilter; label: string; icon: typeof List }> = [
   { id: 'all', label: '全部任务', icon: List },
   { id: 'running', label: '进行中', icon: Download },
+  { id: 'queued', label: '排队中', icon: Clock3 },
+  { id: 'paused', label: '已暂停', icon: PauseCircle },
   { id: 'done', label: '已完成', icon: CheckCircle2 },
   { id: 'failed', label: '失败', icon: AlertCircle },
   { id: 'media', label: '媒体', icon: Images },
@@ -17,11 +36,7 @@ const filters: Array<{ id: TaskFilter; label: string; icon: typeof List }> = [
 ]
 
 function countFor(tasks: Task[], filter: TaskFilter): number {
-  if (filter === 'all') return tasks.length
-  if (filter === 'running') return tasks.filter(task => ['queued', 'fetching_metadata', 'checking', 'downloading', 'downloading_m3u8', 'parsing', 'downloading_segments', 'pausing', 'merging', 'remuxing'].includes(task.status)).length
-  if (filter === 'failed') return tasks.filter(task => task.status === 'failed' || task.status === 'unsupported').length
-  if (['media', 'program', 'archive', 'other'].includes(filter)) return tasks.filter(task => downloadCategory(task.output_path || task.filename || task.url, task.mime_type, task.task_type) === filter).length
-  return tasks.filter(task => task.status === filter).length
+  return tasks.filter(task => taskMatchesFilter(task, filter)).length
 }
 
 export default function Sidebar({ tasks, active, onChange, browserStatus, appVersion = '', onOpenExtensionHelp }: {

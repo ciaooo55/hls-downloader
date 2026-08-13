@@ -52,7 +52,7 @@ def test_handoff_status_exposes_only_safe_desktop_task_progress(monkeypatch):
 
 def test_task_schema_rejects_invalid_url_concurrency_and_oversized_batch():
     with pytest.raises(ValidationError):
-        TaskCreate(url="ftp://example.test/video.m3u8")
+        TaskCreate(url="file:///tmp/video.m3u8")
     with pytest.raises(ValidationError):
         TaskCreate(url="https://example.test/video.m3u8", concurrency=65)
     with pytest.raises(ValidationError):
@@ -611,7 +611,7 @@ def test_distributable_default_config_does_not_force_site_specific_request_heade
 
     # The checked-in template must not ship a reusable privileged credential.
     # The release template already uses the current credential-protection schema.
-    assert data["config_version"] == 21
+    assert data["config_version"] == 27
     assert "token" not in data
     assert data["temp_dir"] == "."
     assert data["default_referer"] == ""
@@ -649,11 +649,11 @@ def test_old_blank_request_defaults_remain_blank_after_migration(tmp_path, monke
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 21
+    assert loaded.config_version == 27
     assert loaded.default_referer == ""
     assert loaded.default_origin == ""
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["config_version"] == 21
+    assert saved["config_version"] == 27
     assert saved["token"] != "55555"
     assert len(saved["token"]) >= 32
     assert saved["temp_dir"] == "."
@@ -709,7 +709,7 @@ def test_publicly_leaked_token_is_rotated_on_load(tmp_path, monkeypatch):
     assert len(loaded.token) >= 32
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["token"] == loaded.token
-    assert saved["config_version"] == 21
+    assert saved["config_version"] == 27
 
 
 def test_runtime_config_is_not_tracked_by_git():
@@ -744,8 +744,8 @@ def test_v13_template_generates_a_per_install_native_transport_token(tmp_path, m
     loaded = config_module.load_settings()
     saved = json.loads(config_path.read_text(encoding="utf-8"))
 
-    assert loaded.config_version == 21
-    assert saved["config_version"] == 21
+    assert loaded.config_version == 27
+    assert saved["config_version"] == 27
     assert len(saved["token"]) >= 32
 
 
@@ -767,7 +767,7 @@ def test_v2_legacy_concurrency_defaults_migrate_to_new_defaults(tmp_path, monkey
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 21
+    assert loaded.config_version == 27
     assert loaded.default_concurrency == 12
     assert loaded.max_concurrent_tasks == 3
 
@@ -790,7 +790,7 @@ def test_v2_custom_concurrency_values_are_preserved_during_migration(tmp_path, m
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 21
+    assert loaded.config_version == 27
     assert loaded.default_concurrency == 6
     assert loaded.max_concurrent_tasks == 5
 
@@ -816,7 +816,7 @@ def test_v19_excessive_worker_counts_are_clamped_to_global_budget(tmp_path, monk
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 21
+    assert loaded.config_version == 27
     assert loaded.default_concurrency == 64
     assert loaded.site_profiles[0]["concurrency"] == 64
 
@@ -838,7 +838,7 @@ def test_v11_legacy_takeover_default_migrates_to_capture_all_explicit_downloads(
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 21
+    assert loaded.config_version == 27
     assert loaded.browser_takeover_min_mb == 0
 
 
@@ -859,7 +859,7 @@ def test_v11_custom_takeover_threshold_is_preserved(tmp_path, monkeypatch):
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 21
+    assert loaded.config_version == 27
     assert loaded.browser_takeover_min_mb == 3
 
 
@@ -1125,3 +1125,11 @@ def test_directory_browser_is_bounded_to_configured_roots(tmp_path, monkeypatch)
     assert allowed.json()["limit"] == 1
     assert allowed.json()["items"][0]["name"] == "child"
     assert blocked.status_code == 403
+
+
+def test_wait_handoff_treats_accepting_as_in_progress():
+    from backend.app.api import _HANDOFF_WAIT_TERMINAL
+
+    assert "accepting" not in _HANDOFF_WAIT_TERMINAL
+    assert "pending" not in _HANDOFF_WAIT_TERMINAL
+    assert _HANDOFF_WAIT_TERMINAL == {"accepted", "rejected", "canceled", "expired", "failed"}

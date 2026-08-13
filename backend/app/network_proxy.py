@@ -349,10 +349,11 @@ def _normalize_system_proxy(value: str) -> str:
 
 
 def reset_proxy_runtime_state() -> None:
-    """Drop cached OS proxy and public-host DNS results (tests / settings)."""
+    """Drop cached OS proxy, public-host DNS results, and shared keep-alive pools."""
     global _system_proxy_state
     _system_proxy_state = (0.0, {})
     _public_host_cache.clear()
+    reset_shared_keepalive_transports()
 
 
 def system_proxies(*, now: float | None = None) -> dict[str, str]:
@@ -396,22 +397,30 @@ def system_proxy_for(url: str) -> str:
     return proxies.get(scheme, "") or proxies.get("all", "")
 
 
-def httpx_proxy_options(url: str) -> dict:
-    """Build explicit httpx proxy policy for a task URL."""
-    mode = str(getattr(settings, "proxy_mode", "system") or "system").lower()
-    options = {"event_hooks": {"request": [_validate_httpx_request]}} if settings.allowed_hosts else {}
+def _site_proxy_route(url: str) -> tuple[str, str] | None:
+    """Apply an opt-in per-host proxy override. Missing/empty mode inherits."""
+    try:
+        from .site_profiles import resolve_site_profile
+        profile = resolve_site_profile(url)
+    except Exception:
+        return None
+    mode = str((profile or {}).get("proxy_mode") or "").strip().lower()
+    if mode not in {"direct", "system", "manual"}:
+        return None
+    if mode == "direct":
+        return "direct", ""
     if mode == "system":
         proxy = "" if _bypassed(url) else system_proxy_for(url)
         if proxy:
-            return {"proxy": proxy, "trust_env": False, **options}
-        return {"trust_env": True, **options}
-    if mode == "manual" and settings.proxy_url and not _bypassed(url):
-        return {"proxy": settings.proxy_url, "trust_env": False, **options}
-    return {"trust_env": False, **options}
+            return "proxy", proxy
+        return "system", ""
+    proxy_url = str((profile or {}).get("proxy_url") or "").strip()
+    if proxy_url and not _bypassed(url):
+        return "proxy", proxy_url
+    return None
 
 
-def _proxy_route(url: str) -> tuple[str, str]:
-    """Return a stable transport route, recalculated for every request URL."""
+def _global_proxy_route(url: str) -> tuple[str, str]:
     mode = str(getattr(settings, "proxy_mode", "system") or "system").lower()
     if mode == "system":
         # Resolve the concrete proxy (environment first, then the Windows /
@@ -424,6 +433,67 @@ def _proxy_route(url: str) -> tuple[str, str]:
     if mode == "manual" and settings.proxy_url and not _bypassed(url):
         return "proxy", str(settings.proxy_url)
     return "direct", ""
+
+
+def httpx_proxy_options(url: str) -> dict:
+    """Build explicit httpx proxy policy for a task URL."""
+    options = {"event_hooks": {"request": [_validate_httpx_request]}} if settings.allowed_hosts else {}
+    kind, proxy = _proxy_route(url)
+    if kind == "system":
+        return {"trust_env": True, **options}
+    if kind == "proxy":
+        return {"proxy": proxy, "trust_env": False, **options}
+    return {"trust_env": False, **options}
+
+
+def _proxy_route(url: str) -> tuple[str, str]:
+    """Return a stable transport route, recalculated for every request URL."""
+    override = _site_proxy_route(url)
+    if override is not None:
+        return override
+    return _global_proxy_route(url)
+
+
+class _SharedAsyncTransport(httpx.AsyncBaseTransport):
+    """Wrap a process-wide HTTP transport so task clients can close independently."""
+
+    def __init__(self, inner: httpx.AsyncHTTPTransport) -> None:
+        self.inner = inner
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return await self.inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        return
+
+
+_shared_keepalive_transports: dict[tuple[str, str], _SharedAsyncTransport] = {}
+_SHARED_KEEPALIVE_LIMITS = httpx.Limits(
+    max_connections=GLOBAL_CONNECTION_LIMIT,
+    max_keepalive_connections=min(64, GLOBAL_CONNECTION_LIMIT),
+    keepalive_expiry=30.0,
+)
+
+
+def reset_shared_keepalive_transports() -> None:
+    _shared_keepalive_transports.clear()
+
+
+def shared_keepalive_transport(route: tuple[str, str]) -> httpx.AsyncBaseTransport:
+    """Reuse TCP/TLS keep-alive across tasks on the same proxy route."""
+    existing = _shared_keepalive_transports.get(route)
+    if existing is not None:
+        return existing
+    kind, proxy = route
+    inner = httpx.AsyncHTTPTransport(
+        proxy=proxy if kind == "proxy" and proxy else None,
+        trust_env=kind == "system",
+        limits=_SHARED_KEEPALIVE_LIMITS,
+        retries=0,
+    )
+    wrapper = _SharedAsyncTransport(inner)
+    _shared_keepalive_transports[route] = wrapper
+    return wrapper
 
 
 class PolicyAsyncClient:
@@ -463,7 +533,9 @@ class PolicyAsyncClient:
         options = dict(self._kwargs)
         options["follow_redirects"] = False
         options["trust_env"] = kind == "system"
-        if kind == "proxy":
+        if options.get("transport") is None:
+            options["transport"] = shared_keepalive_transport(route)
+        elif kind == "proxy":
             options["proxy"] = proxy
         client = httpx.AsyncClient(**options)
         self._clients[route] = client
@@ -557,13 +629,12 @@ def policy_httpx_client(**kwargs: Any) -> PolicyAsyncClient:
 
 def curl_proxy(url: str) -> str | None:
     """Return curl-cffi's proxy argument; an empty string disables env proxy."""
-    mode = str(getattr(settings, "proxy_mode", "system") or "system").lower()
-    if mode == "system":
+    kind, proxy = _proxy_route(url)
+    if kind == "system":
         # curl only reads environment variables on its own; hand it the same
         # explicitly resolved system proxy that the httpx clients use so HLS
         # and browser-profile transfers follow WinINET settings too.
-        proxy = "" if _bypassed(url) else system_proxy_for(url)
         return proxy or None
-    if mode == "manual" and settings.proxy_url and not _bypassed(url):
-        return settings.proxy_url
+    if kind == "proxy":
+        return proxy
     return ""

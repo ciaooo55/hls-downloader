@@ -8,6 +8,7 @@ const STATUS_LABELS: Record<string, string> = {
   fetching_metadata: '获取 BT 元数据',
   awaiting_selection: '等待选择文件',
   checking: '校验文件',
+  scanning: '病毒扫描',
   downloading: '准备下载',
   downloading_m3u8: '获取清单',
   parsing: '解析中',
@@ -46,6 +47,14 @@ const STAGE_LABELS: Record<string, string> = {
 }
 
 export const statusLabel = (status: string) => STATUS_LABELS[status] || status || '--'
+
+export function taskStatusLabel(task: { status: string; output_missing?: boolean; is_live?: boolean; queue_position?: number }): string {
+  if (task.status === 'done' && task.output_missing) return '文件已删除'
+  if (task.status === 'queued' && task.queue_position) return `排队中 · 第 ${task.queue_position} 位`
+  if (task.is_live && task.status === 'downloading_segments') return '直播录制'
+  if (task.is_live && task.status === 'pausing') return '正在停止录制'
+  return statusLabel(task.status)
+}
 export const stageLabel = (stage: string) => STAGE_LABELS[stage] || stage || '--'
 
 /** Keep byte information visible in every task-table phase. A live stream
@@ -70,6 +79,19 @@ const ACTIVE = new Set([
   'downloading_segments', 'pausing', 'paused', 'merging', 'remuxing',
 ])
 
+export function taskMatchesFilter(task: Record<string, any>, filter: string): boolean {
+  const status = String(task.status || '')
+  if (!filter || filter === 'all') return true
+  if (filter === 'running') return isRunningStatus(status) || status === 'queued'
+  if (filter === 'queued') return ['queued', 'awaiting_confirmation', 'awaiting_selection'].includes(status)
+  if (filter === 'paused') return status === 'paused' || status === 'pausing'
+  if (filter === 'failed') return status === 'failed' || status === 'unsupported'
+  if (['media', 'program', 'archive', 'other'].includes(filter)) {
+    return downloadCategory(task.output_path || task.filename || task.url, task.mime_type, task.task_type) === filter
+  }
+  return status === filter
+}
+
 export function filterAndSortTasks<T extends Record<string, any>>(
   tasks: T[],
   filter: string,
@@ -77,12 +99,7 @@ export function filterAndSortTasks<T extends Record<string, any>>(
 ): T[] {
   const needle = query.trim().toLocaleLowerCase()
   return tasks.filter(task => {
-    if (filter === 'running' && !(isRunningStatus(task.status) || task.status === 'queued')) return false
-    if (filter === 'failed') {
-      if (task.status !== 'failed' && task.status !== 'unsupported') return false
-    } else if (['media', 'program', 'archive', 'other'].includes(filter)) {
-      if (downloadCategory(task.output_path || task.filename || task.url, task.mime_type, task.task_type) !== filter) return false
-    } else if (filter !== 'all' && filter !== 'running' && task.status !== filter) return false
+    if (!taskMatchesFilter(task, filter)) return false
     if (!needle) return true
     return [task.id, task.title, task.filename, task.url, task.error_code, task.error_message]
       .some(value => String(value || '').toLocaleLowerCase().includes(needle))
@@ -90,6 +107,14 @@ export function filterAndSortTasks<T extends Record<string, any>>(
     const priority = (status: string) => ACTIVE.has(status) ? 0 : status === 'failed' || status === 'unsupported' ? 1 : status === 'canceled' ? 2 : 3
     const priorityDifference = priority(a.status) - priority(b.status)
     if (priorityDifference) return priorityDifference
+    if (a.status === 'queued' && b.status === 'queued') {
+      const position = (task: T) => {
+        const value = Number(task.queue_position) || 0
+        return value > 0 ? value : Number.MAX_SAFE_INTEGER
+      }
+      const positionDifference = position(a) - position(b)
+      if (positionDifference) return positionDifference
+    }
     const createdDifference = String(b.created_at || '').localeCompare(String(a.created_at || ''))
     return createdDifference || String(a.id).localeCompare(String(b.id))
   })

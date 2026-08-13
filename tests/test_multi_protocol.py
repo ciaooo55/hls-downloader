@@ -69,6 +69,8 @@ def test_auto_task_type_recognizes_supported_sources():
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/manifest.mpd") is TaskType.DASH
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/archive.zip") is TaskType.HTTP
     assert resolve_task_type(TaskType.AUTO, "magnet:?xt=urn:btih:abc") is TaskType.TORRENT
+    assert resolve_task_type(TaskType.AUTO, "ftp://nas.example.test/pub/a.bin") is TaskType.FTP
+    assert resolve_task_type(TaskType.AUTO, "ftps://nas.example.test/pub/a.bin") is TaskType.FTP
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/file.torrent") is TaskType.TORRENT
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/stream?id=1", "application/vnd.apple.mpegurl") is TaskType.HLS
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/manifest?id=1", "application/dash+xml; charset=utf-8") is TaskType.DASH
@@ -516,6 +518,51 @@ def test_endgame_splits_tail_of_last_slow_chunk(tmp_path, monkeypatch):
         # The idle worker split the in-flight chunk at least once.
         assert len(ranges) >= 2
         assert any(not value.startswith("bytes=0-") for value in ranges)
+
+    asyncio.run(run())
+
+
+def test_endgame_can_resplit_a_stolen_tail(tmp_path, monkeypatch):
+    body = bytes(range(256)) * 32768  # 8 MiB
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 8)
+    task = Task(
+        id="endgame-resplit",
+        url="https://files.test/big.bin",
+        task_type=TaskType.HTTP,
+        concurrency=4,
+    )
+    starts: list[int] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        value = request.headers.get("range", "")
+        start_text, end_text = value.removeprefix("bytes=").split("-", 1)
+        start, end = int(start_text), int(end_text)
+        starts.append(start)
+        if start == 0:
+            await asyncio.sleep(0.3)
+        return httpx.Response(
+            206,
+            content=body[start : end + 1],
+            headers={"Content-Range": f"bytes {start}-{end}/{len(body)}"},
+            request=request,
+        )
+
+    async def run():
+        part = tmp_path / "payload.downloading"
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_ranges(
+                client,
+                {},
+                part,
+                tmp_path / "resume.json",
+                {"total": len(body), "etag": '"v1"', "last_modified": "now"},
+            )
+        assert part.read_bytes() == body
+        assert task.progress.downloaded_bytes == len(body)
+        # Primary plus at least two stolen tails means the first stolen
+        # half was itself split by another idle worker.
+        assert len({start for start in starts if start > 0}) >= 2
 
     asyncio.run(run())
 

@@ -1,15 +1,20 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FastForward, LoaderCircle, Pause, Play, Trash2, X } from 'lucide-react'
-import { cancelPowerAction, castLocalFile, castMediaUrl, castTask, clearCompletedTasks, completeBrowserMediaPush, confirmPowerAction, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLegalStatus, fetchLocalTvboxShare, fetchPendingPowerActions, fetchSettings, fetchTasks, importTorrentPath, launchFile, openExplorer, openTaskInExplorer, pushLocalTvboxFile, pushTaskToTvbox, pushTvboxUrl, resolveBrowserHandoff, saveSettings, stopLocalTvboxShare, taskAction, taskFileUrl } from './api'
+import { cancelPowerAction, castLocalFile, castMediaUrl, castTask, clearCompletedTasks, completeBrowserMediaPush, confirmPowerAction, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLegalStatus, fetchLocalTvboxShare, fetchPendingPowerActions, fetchSettings, fetchTasks, importLinkPath, importTorrentPath, launchFile, openExplorer, openTaskInExplorer, pushLocalTvboxFile, pushTaskToTvbox, pushTvboxUrl, resolveBrowserHandoff, saveSettings, saveTaskSiteProfile, stopLocalTvboxShare, reorderQueue, taskAction, taskFileUrl, uploadTorrent } from './api'
 import { fmtBytes, fmtSpeed } from './format'
-import { isRunningStatus, mergeTaskEvent, mergeTaskEvents } from './taskState'
+import { isActiveTransfer, isRunningStatus, mergeTaskEvent, mergeTaskEvents } from './taskState'
 import { commandState } from './taskCommands'
 import { filterAndSortTasks } from './taskPresentation'
 import type { ThemePreference } from './theme'
 import type { BrowserStatus, LegalStatus, Settings, Task } from './types'
+import { downloadTextFile, formatTaskExport, parseUrlList } from './urlList'
+import { isEditableDropTarget, payloadFromDataTransfer, planDroppedPayload } from './dropImport'
+import { applyQueueReorder, isQueueReorderDrag } from './queueReorder'
+import { playCompletionChime, setCompletionSoundEnabled } from './completionSound'
+import SpeedChart from './components/SpeedChart'
 import DesktopToolbar from './components/DesktopToolbar'
 import WindowChrome from './components/WindowChrome'
-import Sidebar, { type TaskFilter } from './components/Sidebar'
+import Sidebar, { taskFilterLabel, type TaskFilter } from './components/Sidebar'
 import TaskTable from './components/TaskTable'
 import TaskDetailsModal from './components/TaskDetailsModal'
 import RecognizeDialog from './components/RecognizeDialog'
@@ -97,7 +102,11 @@ export default function App() {
   const [clipboardOffer, setClipboardOffer] = useState('')
   const [clipboardBatch, setClipboardBatch] = useState('')
   const [speedMenuOpen, setSpeedMenuOpen] = useState(false)
+  const [totalSpeedHistory, setTotalSpeedHistory] = useState<number[]>([])
+  const totalSpeedRef = useRef(0)
   const [batchInitialText, setBatchInitialText] = useState('')
+  const [batchInitialMode, setBatchInitialMode] = useState<'list' | 'harvest'>('list')
+  const [dropActive, setDropActive] = useState(false)
   const lastStatuses = useRef<Record<string, string>>({})
   const feedbackTimer = useRef<number | null>(null)
   const clipboardOfferTimer = useRef<number | null>(null)
@@ -188,6 +197,10 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    setCompletionSoundEnabled(Boolean(settings.completion_sound_enabled))
+  }, [settings.completion_sound_enabled])
+
+  useEffect(() => {
     load()
     const events = connectSSE(event => {
       if (event.type === 'task_deleted' && event.task_id) {
@@ -213,7 +226,10 @@ export default function App() {
             const oldest = Object.keys(lastStatuses.current)[0]
             if (oldest) delete lastStatuses.current[oldest]
           }
-          if (event.status === 'done') void notifySystem('下载完成', event.title || event.task_id)
+          if (event.status === 'done') {
+            void notifySystem('下载完成', event.title || event.task_id)
+            playCompletionChime()
+          }
           if (event.status === 'failed') void notifySystem('下载失败', event.error_message || event.task_id)
         }
         progressEventBatch.current.set(event.task_id, event)
@@ -245,6 +261,87 @@ export default function App() {
       window.removeEventListener('desktop-activated', onActivated)
     }
   }, [load])
+
+  const applyDropPlan = async (plan: ReturnType<typeof planDroppedPayload>, fileBlobs?: File[]) => {
+    if (plan.kind === 'none') { showFeedback('没有可导入的链接或种子'); return }
+    if (plan.kind === 'recognize') { setRecognizeInitialUrl(plan.url); setShowRecognize(true); return }
+    if (plan.kind === 'batch') { setBatchInitialMode('list'); setBatchInitialText(plan.urls.join('\n')); setShowBatch(true); return }
+    let imported = 0
+    for (const [index, item] of plan.items.entries()) {
+      try {
+        if (item.path && item.kind === 'torrent') await importTorrentPath(item.path)
+        else if (item.path && item.kind === 'link') await importLinkPath(item.path)
+        else if (fileBlobs?.[index] && item.kind === 'torrent') await uploadTorrent(fileBlobs[index])
+        else if (fileBlobs?.[index] && item.kind === 'link') {
+          const nested = planDroppedPayload({ text: await fileBlobs[index].text() })
+          if (nested.kind === 'recognize' || nested.kind === 'batch') await applyDropPlan(nested)
+          else continue
+        } else continue
+        imported += 1
+      } catch (reason: any) {
+        setError(reason?.message || '拖放导入失败')
+      }
+    }
+    if (imported) { showFeedback('已导入 ' + imported + ' 个文件'); void load() }
+  }
+
+  useEffect(() => {
+    const onDragOver = (event: DragEvent) => {
+      if (isEditableDropTarget(event.target)) return
+      const types = Array.from(event.dataTransfer?.types || [])
+      if (isQueueReorderDrag(types)) return
+      if (!types.length || !(types.includes('Files') || types.includes('text/uri-list') || types.includes('text/plain'))) return
+      event.preventDefault()
+      setDropActive(true)
+    }
+    const onDragLeave = (event: DragEvent) => {
+      if (event.relatedTarget) return
+      setDropActive(false)
+    }
+    const onDrop = (event: DragEvent) => {
+      if (isEditableDropTarget(event.target)) return
+      event.preventDefault()
+      setDropActive(false)
+      const payload = payloadFromDataTransfer(event.dataTransfer)
+      void applyDropPlan(planDroppedPayload(payload), event.dataTransfer ? Array.from(event.dataTransfer.files) : undefined)
+    }
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('dragleave', onDragLeave)
+    window.addEventListener('drop', onDrop)
+    let stopTauri: (() => void) | undefined
+    if (isTauriDesktop()) {
+      void import('@tauri-apps/api/webview').then(async api => {
+        const webview = api.getCurrentWebview()
+        stopTauri = await webview.onDragDropEvent(event => {
+          const kind = event.payload.type
+          if (kind === 'enter' || kind === 'over') setDropActive(true)
+          else if (kind === 'leave') setDropActive(false)
+          else if (kind === 'drop') {
+            setDropActive(false)
+            const paths = event.payload.paths || []
+            void applyDropPlan(planDroppedPayload({ files: paths.map(path => ({ name: path, path })) }))
+          }
+        })
+      }).catch(() => {})
+    }
+    return () => {
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('dragleave', onDragLeave)
+      window.removeEventListener('drop', onDrop)
+      stopTauri?.()
+    }
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const current = totalSpeedRef.current
+      setTotalSpeedHistory(previous => {
+        if (current <= 0 && (previous.length === 0 || previous[previous.length - 1] === 0)) return previous
+        return [...previous.slice(-59), current]
+      })
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   useEffect(() => {
     // Tauri owns dedicated handoff windows. The standalone /ui surface uses
@@ -284,7 +381,7 @@ export default function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       if (previewImage) { setPreviewImage(null); return }
-      if (showBatch) { setShowBatch(false); setBatchInitialText('') }
+      if (showBatch) { setShowBatch(false); setBatchInitialText(''); setBatchInitialMode('list') }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -368,12 +465,12 @@ export default function App() {
   // "pausing" and post-processing stages carry the last sampled rate; only
   // stages that are actually transferring belong in the status-bar total.
   const totalSpeed = running.reduce((sum, task) => (
-    ['downloading', 'downloading_segments', 'fetching_metadata', 'checking', 'downloading_m3u8', 'parsing'].includes(task.status)
-      ? sum + (task.speed_bytes_per_sec || 0)
-      : sum
+    isActiveTransfer(task.status) ? sum + (task.speed_bytes_per_sec || 0) : sum
   ), 0)
   const completedSize = tasks.filter(task => task.status === 'done').reduce((sum, task) => sum + (task.downloaded_bytes || 0), 0)
   const queued = tasks.filter(task => task.status === 'queued').length
+  const effectiveSpeedLimitKib = settings.effective_download_speed_limit_kib ?? settings.download_speed_limit_kib ?? 0
+  totalSpeedRef.current = totalSpeed
   const completed = tasks.filter(task => task.status === 'done')
 
   const showFeedback = (message: string) => {
@@ -382,6 +479,16 @@ export default function App() {
     feedbackTimer.current = window.setTimeout(() => setFeedback(''), 3500)
   }
 
+
+  const exportTaskUrls = (targets?: Task[]) => {
+    const list = (targets && targets.length ? targets : (selectedTasks.length ? selectedTasks : filtered))
+    const content = formatTaskExport(list)
+    const count = parseUrlList(content).urls.length
+    if (!count) { showFeedback('没有可导出的链接'); return }
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')
+    downloadTextFile(`hls-urls-${stamp}.txt`, content)
+    showFeedback(`已导出 ${count} 条链接`)
+  }
   const perform = async (action: string, targets: Task[] = selectedTasks, confirmed = false) => {
     if (!targets.length) return
     if (!confirmed && (action === 'delete' || action === 'deleteFiles')) {
@@ -406,7 +513,7 @@ export default function App() {
     setPending(current => new Set([...current, ...fresh.map(task => task.id)]))
     try {
       const apiAction = action.startsWith('queue_') ? `queue/${action.slice('queue_'.length)}` : action
-      const results = await Promise.allSettled(fresh.map(task => action === 'delete' || action === 'deleteFiles' ? deleteTask(task.id, action === 'deleteFiles') : taskAction(task.id, apiAction)))
+      const results = await Promise.allSettled(fresh.map(task => action === 'delete' || action === 'deleteFiles' ? deleteTask(task.id, action === 'deleteFiles') : action === 'saveSiteProfile' ? saveTaskSiteProfile(task.id) : taskAction(task.id, apiAction)))
       const failures = results.filter(result => result.status === 'rejected') as PromiseRejectedResult[]
       if (deleting && failures.length) {
         results.forEach((result, index) => {
@@ -418,11 +525,26 @@ export default function App() {
         const reason = failures[0].reason
         setError(`成功 ${successCount} 项，失败 ${failures.length} 项：${reason?.message || '任务操作失败'}`)
       } else {
-        showFeedback(`${action === 'delete' || action === 'deleteFiles' ? '已删除' : '操作完成'} ${successCount} 项`)
+        showFeedback(`${action === 'delete' || action === 'deleteFiles' ? '已删除' : action === 'saveSiteProfile' ? '已保存站点规则' : '操作完成'} ${successCount} 项`)
         setSelected(new Set())
       }
     } finally {
       setPending(current => new Set([...current].filter(id => !fresh.some(task => task.id === id))))
+      await load()
+    }
+  }
+  const reorderQueuedTask = async (taskId: string, direction: string) => {
+    if (pending.has(taskId)) return
+    const placement = direction.startsWith('after:') ? 'after' : 'before'
+    const targetId = direction.split(':').slice(1).join(':')
+    if (targetId) {
+      setTasks(current => applyQueueReorder(current, taskId, targetId, placement))
+    }
+    try {
+      await reorderQueue(taskId, direction)
+      await load()
+    } catch (error: any) {
+      setError(error?.message || '调整队列顺序失败')
       await load()
     }
   }
@@ -640,29 +762,30 @@ export default function App() {
   }
 
   const desktopShell = isTauriDesktop()
-  return <div className={`desktop-app${desktopShell ? ' has-window-chrome' : ''}`}>
-    {desktopShell && <WindowChrome />}
-    <DesktopToolbar commands={commands} theme={theme} version={appVersion} query={query} onQueryChange={setQuery} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => setShowBatch(true)} onAction={perform} onPauseAll={() => void pauseAllActive()} onStartAll={() => void startAllWaiting()} onOpen={() => selectedTasks[0]?.output_path && openTaskInExplorer(selectedTasks[0].id)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onBrowserExtension={() => setShowBrowserExtension(true)} onPushMedia={() => setMediaSourcePick({ kind: 'tvbox' })} pushLocalMediaBusy={localPushBusy} onCastMedia={() => setMediaSourcePick({ kind: 'cast' })} castLocalMediaBusy={castBusy} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
+  return <div className={`desktop-app${desktopShell ? ' has-window-chrome' : ''}${dropActive ? ' is-drop-target' : ''}`}>
+    {desktopShell && <WindowChrome />}{dropActive && <div className="drop-import-overlay" role="status">松开以添加下载</div>}
+    <DesktopToolbar commands={commands} theme={theme} version={appVersion} query={query} onQueryChange={setQuery} onNew={openRecognize} onPaste={pasteAndRecognize} onBatch={() => { setBatchInitialMode('list'); setShowBatch(true) }} onHarvest={() => { setBatchInitialMode('harvest'); setShowBatch(true) }} onExportUrls={() => exportTaskUrls()} onAction={perform} onPauseAll={() => void pauseAllActive()} onStartAll={() => void startAllWaiting()} onOpen={() => selectedTasks[0]?.output_path && openTaskInExplorer(selectedTasks[0].id)} onLog={() => setLogTaskId(selectedTasks[0]?.id || null)} onBrowserExtension={() => setShowBrowserExtension(true)} onPushMedia={() => setMediaSourcePick({ kind: 'tvbox' })} pushLocalMediaBusy={localPushBusy} onCastMedia={() => setMediaSourcePick({ kind: 'cast' })} castLocalMediaBusy={castBusy} onRefresh={load} onUpdate={() => setShowUpdate(true)} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme} />
     <div className="workspace">
       <Sidebar tasks={tasks} active={filter} onChange={setFilter} browserStatus={browserStatus} appVersion={appVersion} onOpenExtensionHelp={() => setShowBrowserExtension(true)} />
       <main className="content">
         <UpdateNotice />
-        <div className="content-head"><strong>{filter === 'all' ? '全部任务' : filter === 'running' ? '进行中' : filter === 'done' ? '已完成' : filter === 'failed' ? '失败任务' : filter === 'media' ? '媒体' : filter === 'program' ? '程序' : filter === 'archive' ? '压缩包' : filter === 'other' ? '其他' : '任务列表'} <span>{filtered.length} 项{selected.size > 0 ? ` · 已选 ${selected.size}` : ''}</span></strong><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={() => void clearCompleted()}><Trash2 size={14} />清理已完成</button></div>
+        <div className="content-head"><strong>{taskFilterLabel(filter)} <span>{filtered.length} 项{selected.size > 0 ? ` · 已选 ${selected.size}` : ''}</span></strong><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={() => void clearCompleted()}><Trash2 size={14} />清理已完成</button></div>
         {error && <div className="action-error" role="alert"><span>{error}</span><div className="action-error-actions"><button type="button" className="secondary-button" onClick={() => void load()}>重试</button><button type="button" className="icon-button action-error-dismiss" title="关闭提示" onClick={() => setError('')}><X size={15} /></button></div></div>}
-    <TaskTable key={`${filter}:${query}`} tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openTaskInExplorer(task.id)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onPreview={setPlaying} onPreviewImage={setPreviewImage} onCast={task => void confirmLocalCast(task)} onPushToTv={task => void confirmLocalMediaPush(task)} />
+    <TaskTable key={`${filter}:${query}`} tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openTaskInExplorer(task.id)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onExportUrls={exportTaskUrls} onPreview={setPlaying} onPreviewImage={setPreviewImage} onCast={task => void confirmLocalCast(task)} onPushToTv={task => void confirmLocalMediaPush(task)} onReorderQueue={reorderQueuedTask} />
       </main>
     </div>
     <footer className="statusbar">
       <span>活动任务 <b>{running.length}</b></span>
       <span>排队 <b>{queued}</b></span>
-      <span>总速度 <b>{fmtSpeed(totalSpeed)}</b></span>
-      <span className="speed-limit-control" title="全局下载限速">
+      <span className="total-speed-status">总速度 <b>{fmtSpeed(totalSpeed)}</b><SpeedChart samples={totalSpeedHistory} current={totalSpeed} compact /></span>
+      <span className="speed-limit-control" title={settings.speed_schedule_enabled ? '当前生效限速（分时段已开启）' : '全局下载限速'}>
         <button type="button" className="speed-limit-trigger" aria-label="全局下载限速" onClick={() => setSpeedMenuOpen(open => !open)}>
-          限速 <b>{(settings.download_speed_limit_kib ?? 0) > 0 ? fmtSpeed((settings.download_speed_limit_kib ?? 0) * 1024) : '关'}</b>
+          限速 <b>{effectiveSpeedLimitKib > 0 ? fmtSpeed(effectiveSpeedLimitKib * 1024) : '关'}</b>{settings.speed_schedule_enabled ? ' · 时段' : ''}
         </button>
         {speedMenuOpen && <>
           <div className="floating-menu-backdrop" onMouseDown={() => setSpeedMenuOpen(false)} />
           <div className="floating-menu speed-limit-menu" role="menu">
+            {settings.speed_schedule_enabled ? <p className="speed-limit-menu-note">勾选改的是基础限速；按钮显示当前时段生效值</p> : null}
             {[[0, '不限速'], [256, '256 KiB/s'], [512, '512 KiB/s'], [1024, '1 MiB/s'], [2048, '2 MiB/s'], [5120, '5 MiB/s'], [10240, '10 MiB/s']].map(([value, label]) => (
               <button key={value} role="menuitemradio" aria-checked={Number(settings.download_speed_limit_kib ?? 0) === value}
                 onClick={() => { setSpeedMenuOpen(false); void applySpeedLimit(Number(value)) }}>
@@ -684,12 +807,12 @@ export default function App() {
     </footer>
     {showRecognize && <RecognizeDialog settings={settings} initialUrl={recognizeInitialUrl} onClose={() => setShowRecognize(false)} onAdded={task => { void load(); if (task?.task_type === 'torrent') setDetails(task) }} onNeedExtension={() => { setShowRecognize(false); setShowBrowserExtension(true) }} />}
     {showBatch && (
-      <DialogOverlay onClose={() => { setShowBatch(false); setBatchInitialText('') }}>
-        <Dialog className="batch-modal" label="批量添加" onClose={() => { setShowBatch(false); setBatchInitialText('') }}>
-          <DialogHeader title="批量添加" description="每行一个链接：普通文件、HLS、DASH 或 magnet" onClose={() => { setShowBatch(false); setBatchInitialText('') }} />
-          <BatchAddPanel key={batchInitialText || 'default'} settings={settings} initialText={batchInitialText} onAdded={() => { setShowBatch(false); setBatchInitialText(''); void load() }} />
+      <DialogOverlay onClose={() => { setShowBatch(false); setBatchInitialText(''); setBatchInitialMode('list') }}>
+        <Dialog className="batch-modal" label="批量添加" onClose={() => { setShowBatch(false); setBatchInitialText(''); setBatchInitialMode('list') }}>
+          <DialogHeader title="批量添加" description="粘贴链接列表，或从当前网页抓取可下载文件" onClose={() => { setShowBatch(false); setBatchInitialText(''); setBatchInitialMode('list') }} />
+          <BatchAddPanel key={`${batchInitialMode}:${batchInitialText || 'default'}`} settings={settings} initialText={batchInitialText} initialMode={batchInitialMode} onAdded={() => { setShowBatch(false); setBatchInitialText(''); setBatchInitialMode('list'); void load() }} />
           <DialogFooter>
-            <Button variant="secondary" className="secondary-button" onClick={() => { setShowBatch(false); setBatchInitialText('') }}>关闭</Button>
+            <Button variant="secondary" className="secondary-button" onClick={() => { setShowBatch(false); setBatchInitialText(''); setBatchInitialMode('list') }}>关闭</Button>
           </DialogFooter>
         </Dialog>
       </DialogOverlay>

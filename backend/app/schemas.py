@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from .version import APP_VERSION
 from .models import TaskType
 from .checksum import normalize_checksum
+from .downloader.mirrors import normalize_mirror_urls
 from .tvbox import normalize_tvbox_endpoint
 from .dlna import normalize_cast_device
 from .credentials import SECRET_MASK
@@ -100,6 +101,7 @@ class TaskCreate(BaseModel):
     scheduled_start_at: Optional[datetime] = None
     scheduled_stop_at: Optional[datetime] = None
     completion_action: Literal["none", "shutdown", "sleep", "hibernate"] = "none"
+    mirrors: list[str] = Field(default_factory=list, max_length=16)
 
     @field_validator("scheduled_start_at", "scheduled_stop_at")
     @classmethod
@@ -118,8 +120,10 @@ class TaskCreate(BaseModel):
         parsed = urlparse(value)
         if parsed.scheme == "magnet" and parsed.query:
             return value
+        if parsed.scheme in {"ftp", "ftps", "sftp"} and parsed.hostname:
+            return value
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ValueError("url 必须是有效的 HTTP(S) 或 magnet 地址")
+            raise ValueError("url 必须是有效的 HTTP(S)、FTP(S)、SFTP 或 magnet 地址")
         return value
 
     @field_validator("checksum")
@@ -139,6 +143,12 @@ class TaskCreate(BaseModel):
             and self.scheduled_stop_at.timestamp() <= self.scheduled_start_at.timestamp()
         ):
             raise ValueError("计划停止时间必须晚于计划开始时间")
+        lowered = str(self.url or "").lower()
+        if lowered.startswith("magnet:") and self.mirrors:
+            raise ValueError("magnet 任务不支持备用下载地址")
+        if lowered.startswith(("ftp://", "ftps://", "sftp://")) and self.mirrors:
+            raise ValueError("FTP/SFTP 任务不支持备用下载地址")
+        self.mirrors = normalize_mirror_urls(self.url, self.mirrors)
         return self
 
 class TaskBatchCreate(BaseModel):
@@ -227,6 +237,7 @@ class TaskResponse(BaseModel):
     checksum_actual: str = ""
     checksum_verified: Optional[bool] = None
     output_is_file: bool = False
+    output_missing: bool = False
     file_access_token: str = ""
     created_at: str
     updated_at: str
@@ -237,6 +248,12 @@ class TaskResponse(BaseModel):
     scheduled_start_at: str = ""
     scheduled_stop_at: str = ""
     completion_action: str = "none"
+    mirrors: list[str] = Field(default_factory=list)
+    mirror_status: list[dict] = Field(default_factory=list)
+    av_scan: dict = Field(default_factory=dict)
+    speed_history: list[int] = Field(default_factory=list)
+    speed_peak_bytes_per_sec: float = 0.0
+    connection_parts: list[dict] = Field(default_factory=list)
 
 class TaskSpeedLimit(BaseModel):
     limit_kib: int = Field(ge=0, le=1048576)
@@ -249,8 +266,17 @@ class SiteProfile(BaseModel):
     referer: str = Field(default="", max_length=4096)
     origin: str = Field(default="", max_length=1024)
     request_headers: dict[str, str] = Field(default_factory=dict, max_length=64)
+    cookie: str = Field(default="", max_length=16 * 1024)
+    download_dir: str = Field(default="", max_length=32767)
     concurrency: int = Field(default=0, ge=0, le=64)
     speed_limit_kib: int = Field(default=0, ge=0, le=1048576)
+    proxy_mode: str = Field(default="", pattern=r"^(|direct|system|manual)$")
+    proxy_url: str = Field(default="", max_length=2048)
+
+    @field_validator("proxy_url")
+    @classmethod
+    def validate_site_proxy_url(cls, value: str) -> str:
+        return SettingsUpdate.validate_proxy_url(value)
 
 
 class SettingsUpdate(BaseModel):
@@ -267,12 +293,19 @@ class SettingsUpdate(BaseModel):
     max_concurrent_tasks: Optional[int] = Field(default=None, ge=1, le=16)
     http_chunk_size_mb: Optional[int] = Field(default=None, ge=1, le=64)
     download_speed_limit_kib: Optional[int] = Field(default=None, ge=0, le=1048576)
+    speed_schedule_enabled: Optional[bool] = None
+    speed_schedule_start: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    speed_schedule_end: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    speed_schedule_limit_kib: Optional[int] = Field(default=None, ge=0, le=1048576)
     bt_upload_limit_kib: Optional[int] = Field(default=None, ge=0, le=1048576)
     bt_max_connections: Optional[int] = Field(default=None, ge=10, le=1000)
     bt_enable_dht: Optional[bool] = None
+    watch_torrents: Optional[bool] = None
+    watch_dir: Optional[str] = Field(default=None, max_length=32767)
     browser_takeover_enabled: Optional[bool] = None
     browser_takeover_min_mb: Optional[int] = Field(default=None, ge=0, le=10240)
     browser_category_dirs: Optional[dict[str, str]] = None
+    auto_category_dirs: Optional[bool] = None
     queue_auto_start_enabled: Optional[bool] = None
     queue_auto_start_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     queue_auto_stop_enabled: Optional[bool] = None
@@ -282,6 +315,25 @@ class SettingsUpdate(BaseModel):
     download_subtitles: Optional[bool] = None
     skip_ad_segments: Optional[bool] = None
     clipboard_watch: Optional[bool] = None
+    completion_sound_enabled: Optional[bool] = None
+    resume_interrupted_on_startup: Optional[bool] = None
+    auto_retry_failed_max: Optional[int] = Field(default=None, ge=0, le=10)
+    av_scan_enabled: Optional[bool] = None
+    av_scan_command: Optional[str] = Field(default=None, max_length=2048)
+    av_scan_fail_on_threat: Optional[bool] = None
+    existing_file_policy: Optional[str] = Field(default=None, pattern="^(rename|overwrite|skip)$")
+
+    @field_validator("av_scan_command")
+    @classmethod
+    def validate_av_scan_command(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return ""
+        if "{file}" not in text or any(ord(character) < 32 for character in text):
+            raise ValueError("av_scan_command must include {file}")
+        return text
     tvbox_endpoint: Optional[str] = Field(default=None, max_length=512)
     cast_device: Optional[dict[str, str]] = None
     site_profiles: Optional[list[SiteProfile]] = Field(default=None, max_length=100)
@@ -499,6 +551,11 @@ class TorrentPathImport(BaseModel):
     path: str = Field(min_length=1, max_length=32767)
 
 
+class LinkPathImport(BaseModel):
+    path: str = Field(min_length=1, max_length=32767)
+    auto_start: bool = True
+
+
 class FileSystemAction(BaseModel):
     task_id: str = Field(default="", max_length=64, pattern=r"^[A-Za-z0-9_-]*$")
     path: str = Field(default="", max_length=32767)
@@ -509,6 +566,68 @@ class FileSystemAction(BaseModel):
         if not self.task_id and not self.path:
             raise ValueError("task_id or path required")
         return self
+
+
+
+
+
+
+class PageHarvestProbeRequest(BaseModel):
+    urls: list[str] = Field(min_length=1, max_length=100)
+    referer: str = Field(default="", max_length=4096)
+    origin: str = Field(default="", max_length=1024)
+    user_agent: str = Field(default="", max_length=2048)
+    cookie: str = Field(default="", max_length=16 * 1024)
+    request_headers: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("urls")
+    @classmethod
+    def validate_probe_urls(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in value or []:
+            url = str(item or "").strip()
+            lowered = url.lower()
+            if not url or len(url) > 8192:
+                continue
+            if lowered.startswith(("javascript:", "data:", "blob:", "file:")):
+                continue
+            key = lowered
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(url)
+        if not cleaned:
+            raise ValueError("没有可探测的链接")
+        return cleaned
+
+
+class PageHarvestRequest(BaseModel):
+    url: str = Field(max_length=8192)
+    referer: str = Field(default="", max_length=4096)
+    origin: str = Field(default="", max_length=1024)
+    user_agent: str = Field(default="", max_length=2048)
+    cookie: str = Field(default="", max_length=16 * 1024)
+    request_headers: dict[str, str] = Field(default_factory=dict)
+    extensions: list[str] = Field(default_factory=list, max_length=64)
+
+    @field_validator("url")
+    @classmethod
+    def validate_harvest_url(cls, value: str) -> str:
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("页面抓取只支持 HTTP(S) 网页地址")
+        return value
+
+    @field_validator("extensions")
+    @classmethod
+    def validate_extensions(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for item in value or []:
+            ext = str(item or "").strip().lower().lstrip(".")
+            if ext and len(ext) <= 8 and ext.isalnum() and ext not in cleaned:
+                cleaned.append(ext)
+        return cleaned
 
 
 class UrlRecognitionRequest(BaseModel):
@@ -523,6 +642,8 @@ class UrlRecognitionRequest(BaseModel):
     @classmethod
     def validate_url(cls, value: str) -> str:
         parsed = urlparse(value)
+        if parsed.scheme in {"ftp", "ftps", "sftp"} and parsed.hostname:
+            return value
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ValueError("url 必须是有效的 HTTP(S) 地址")
+            raise ValueError("url 必须是有效的 HTTP(S)、FTP(S) 或 SFTP 地址")
         return value

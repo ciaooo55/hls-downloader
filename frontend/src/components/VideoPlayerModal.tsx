@@ -245,7 +245,7 @@ export default function VideoPlayerModal({ task, onClose }: {
       })
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) return
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && task.status !== 'done') {
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && isRunningStatus(task.status) && task.status !== 'pausing' && task.status !== 'merging' && task.status !== 'remuxing') {
           window.setTimeout(() => hls.startLoad(video.currentTime), 600)
           return
         }
@@ -275,7 +275,7 @@ export default function VideoPlayerModal({ task, onClose }: {
       video.removeAttribute('src')
       video.load()
     }
-  }, [mode, playbackReload, session, sparsePlayback, task.id])
+  }, [mode, playbackReload, session, sparsePlayback, task.id, task.status])
 
   useEffect(() => {
     const video = videoRef.current
@@ -419,7 +419,14 @@ export default function VideoPlayerModal({ task, onClose }: {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.target as HTMLElement)?.matches('input, select, textarea')) return
-      if (event.key === 'Escape') { onClose(); return }
+      if (event.key === 'Escape') {
+        if (document.fullscreenElement) {
+          void document.exitFullscreen()
+          return
+        }
+        onClose()
+        return
+      }
       if (event.key === ' ' || event.key.toLowerCase() === 'k') { event.preventDefault(); togglePlay() }
       if (event.key === 'ArrowLeft') { event.preventDefault(); seekBy(-10) }
       if (event.key === 'ArrowRight') { event.preventDefault(); seekBy(10) }

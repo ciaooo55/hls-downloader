@@ -1,6 +1,6 @@
 export interface Task {
   id: string
-  task_type: 'hls' | 'dash' | 'http' | 'torrent'
+  task_type: 'hls' | 'dash' | 'http' | 'torrent' | 'ftp' | 'sftp'
   request_method?: 'GET' | 'POST'
   source_page_url: string
   mime_type: string
@@ -38,6 +38,7 @@ export interface Task {
   checksum_actual: string
   checksum_verified: boolean | null
   output_is_file: boolean
+  output_missing?: boolean
   file_access_token?: string
   created_at: string
   updated_at: string
@@ -46,6 +47,9 @@ export interface Task {
   scheduled_start_at?: string
   scheduled_stop_at?: string
   completion_action?: 'none' | 'shutdown' | 'sleep' | 'hibernate'
+  mirrors?: string[]
+  av_scan?: { state?: string; engine?: string; detail?: string; exit_code?: number }
+  mirror_status?: Array<{ url: string; final_url?: string; state: string; detail?: string; ranges?: boolean }>
   available_actions: string[]
   queue_position: number
   playable_segments: number
@@ -54,6 +58,9 @@ export interface Task {
   playback_ready: boolean
   is_live?: boolean
   speed_limit_kib?: number
+  speed_history?: number[]
+  speed_peak_bytes_per_sec?: number
+  connection_parts?: Array<{ start: number; end: number; done: number; state: string }>
   progress_percent: number
   uploaded_bytes: number
   upload_speed_bytes_per_sec: number
@@ -96,12 +103,20 @@ export interface Settings {
   default_cookie_configured?: boolean
   http_chunk_size_mb?: number
   download_speed_limit_kib?: number
+  speed_schedule_enabled?: boolean
+  speed_schedule_start?: string
+  speed_schedule_end?: string
+  speed_schedule_limit_kib?: number
+  effective_download_speed_limit_kib?: number
   bt_upload_limit_kib?: number
   bt_max_connections?: number
   bt_enable_dht?: boolean
+  watch_torrents?: boolean
+  watch_dir?: string
   browser_takeover_enabled?: boolean
   browser_takeover_min_mb?: number
   browser_category_dirs?: Record<string, string>
+  auto_category_dirs?: boolean
   queue_auto_start_enabled?: boolean
   queue_auto_start_time?: string
   queue_auto_stop_enabled?: boolean
@@ -111,9 +126,16 @@ export interface Settings {
   download_subtitles?: boolean
   skip_ad_segments?: boolean
   clipboard_watch?: boolean
+  completion_sound_enabled?: boolean
+  resume_interrupted_on_startup?: boolean
+  auto_retry_failed_max?: number
+  av_scan_enabled?: boolean
+  av_scan_command?: string
+  av_scan_fail_on_threat?: boolean
+  existing_file_policy?: 'rename' | 'overwrite' | 'skip'
   tvbox_endpoint?: string
   cast_device?: { id: string; protocol: 'dlna' | 'chromecast'; location: string; control_url: string; service_type: string; label: string; host: string }
-  site_profiles?: Array<{ host: string; enabled?: boolean; user_agent?: string; referer?: string; origin?: string; request_headers?: Record<string, string>; concurrency?: number; speed_limit_kib?: number }>
+  site_profiles?: Array<{ host: string; enabled?: boolean; user_agent?: string; referer?: string; origin?: string; cookie?: string; download_dir?: string; request_headers?: Record<string, string>; concurrency?: number; speed_limit_kib?: number; proxy_mode?: '' | 'direct' | 'system' | 'manual'; proxy_url?: string }>
   proxy_mode?: 'system' | 'direct' | 'manual'
   proxy_url?: string
   proxy_url_configured?: boolean

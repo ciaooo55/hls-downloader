@@ -445,6 +445,18 @@ def test_windows_package_uses_tauri_tray_and_clean_uninstall():
     assert 'File /oname=config.default.json "${STAGE_DIR}\\config.json"' in nsis_script
     assert 'CopyFiles /SILENT "$INSTDIR\\config.default.json" "$INSTDIR\\config.json"' not in nsis_script
     assert 'PreviousTorrentProgId' in nsis_script
+    assert 'Software\\Classes\\.url\\shell\\HLSDownload' in nsis_script
+    assert 'Software\\Classes\\InternetShortcut\\shell\\HLSDownload' in nsis_script
+    assert 'Software\\Classes\\.magnet\\shell\\HLSDownload' in nsis_script
+    assert 'Software\\Classes\\.m3u8\\shell\\HLSDownload' in nsis_script
+    assert 'Software\\Classes\\.html\\shell\\HLSDownload' in nsis_script
+    assert 'Software\\Classes\\.metalink\\shell\\HLSDownload' in nsis_script
+    assert 'Software\\Classes\\.meta4\\shell\\HLSDownload' in nsis_script
+    assert 'DeleteRegKey HKCU "Software\\Classes\\.metalink\\shell\\HLSDownload"' in nsis_script
+    assert 'DeleteRegKey HKCU "Software\\Classes\\.m3u8\\shell\\HLSDownload"' in nsis_script
+    assert 'Software\\Classes\\.m3u8" ""' not in nsis_script
+    assert 'Software\\Classes\\.html" ""' not in nsis_script
+    assert 'Software\\Classes\\.url" ""' not in nsis_script
     assert 'DeleteRegValue HKCU "Software\\Classes\\.torrent" ""' in nsis_script
     assert 'DeleteRegKey HKCU "Software\\Classes\\.torrent"' not in nsis_script
     assert "HLSDownloader.exe$\\\" $\\\"%1$\\\"" in nsis_script

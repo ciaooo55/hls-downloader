@@ -22,6 +22,7 @@ describe('commandState', () => {
     expect(commandState([task('failed')]).retry).toBe(true)
     expect(commandState([task('done')]).open).toBe(true)
     expect(commandState([task('done')]).delete).toBe(true)
+    expect(commandState([{ id: 'missing', status: 'done', output_missing: true }]).retry).toBe(true)
   })
 
   it('uses backend action flags instead of guessing from status', () => {

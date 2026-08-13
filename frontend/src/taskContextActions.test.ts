@@ -16,9 +16,20 @@ describe('taskContextActions', () => {
     ])
   })
 
+  it('exports links for any selected task that has a url', () => {
+    expect(taskContextActions({ id: 'one', status: 'done', url: 'https://cdn.example.test/a.bin' })).toContain('exportUrls')
+    expect(taskContextActions({ id: 'none', status: 'done' })).not.toContain('exportUrls')
+  })
+
   it('offers file access for a completed task', () => {
     expect(taskContextActions(task('done', 'video.mp4'))).toEqual([
       'details', 'open', 'cast', 'pushTvbox', 'copyUrl', 'log', 'delete', 'deleteFiles',
+    ])
+  })
+
+  it('offers redownload instead of playback when the completed file is gone', () => {
+    expect(taskContextActions({ ...task('done', 'video.mp4'), output_missing: true, available_actions: ['open', 'retry', 'log', 'delete'] })).toEqual([
+      'details', 'retry', 'open', 'copyUrl', 'log', 'delete',
     ])
   })
 
@@ -51,5 +62,15 @@ describe('taskContextActions', () => {
     expect(taskContextActions([task('done', 'one.zip'), task('done', 'two.exe')])).toEqual([
       'delete', 'deleteFiles',
     ])
+  })
+
+
+  it('saves a site rule only for a single hosted URL', () => {
+    expect(taskContextActions({ id: 'http', status: 'downloading', url: 'https://cdn.example.test/a.bin' })).toContain('saveSiteProfile')
+    expect(taskContextActions({ id: 'magnet', status: 'downloading', url: 'magnet:?xt=urn:btih:abc' })).not.toContain('saveSiteProfile')
+    expect(taskContextActions([
+      { id: 'a', status: 'downloading', url: 'https://cdn.example.test/a.bin' },
+      { id: 'b', status: 'downloading', url: 'https://cdn.example.test/b.bin' },
+    ])).not.toContain('saveSiteProfile')
   })
 })

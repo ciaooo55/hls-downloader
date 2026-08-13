@@ -195,6 +195,41 @@ def test_explicit_base_headers_survive_same_origin_but_not_cross_origin_credenti
     assert "cookie" not in {name.lower() for name in unrelated}
 
 
+def test_empty_scoped_cookie_falls_back_to_top_level_on_same_origin(monkeypatch):
+    monkeypatch.setattr(request_context.settings, "default_cookie", "")
+    task = Task(
+        id="top-cookie",
+        url="https://cdn.example.test/file.bin",
+        cookie="session=secret",
+        request_contexts={
+            "https://cdn.example.test": {
+                "request_headers": {"referer": "https://cdn.example.test/watch"},
+                "cookie": "",
+            }
+        },
+    )
+
+    headers = request_context.build_task_headers(task)
+
+    assert headers["Cookie"] == "session=secret"
+
+
+def test_empty_scoped_cookie_does_not_leak_across_origins(monkeypatch):
+    monkeypatch.setattr(request_context.settings, "default_cookie", "")
+    task = Task(
+        id="no-cookie-leak",
+        url="https://page.example.test/master.m3u8",
+        cookie="session=secret",
+        request_contexts={"https://cdn.example.test": {"cookie": ""}},
+    )
+
+    headers = request_context.build_task_headers(
+        task, request_url="https://cdn.example.test/segment.ts"
+    )
+
+    assert "cookie" not in {name.lower() for name in headers}
+
+
 def test_exact_origin_context_overrides_supplied_credentials(monkeypatch):
     monkeypatch.setattr(request_context.settings, "default_cookie", "")
     task = Task(

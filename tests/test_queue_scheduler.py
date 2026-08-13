@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from backend.app.models import Task, TaskStatus, TaskType
-from backend.app.downloader.task_manager import TaskManager
+from backend.app.downloader.task_manager import TaskConflictError, TaskManager, parse_queue_direction
 from backend.app.schemas import TaskCreate
 
 
@@ -66,6 +66,71 @@ def test_reorder_queue_updates_priority_and_position():
         assert {item.id for item in ordered} == {"a", "b", "c"}
 
     asyncio.run(run())
+
+
+def _queued(manager: TaskManager) -> list[str]:
+    return [item.id for item in sorted(manager.tasks.values(), key=manager._queue_sort_key)]
+
+
+def test_reorder_queue_before_after_updates_priority():
+    manager = TaskManager()
+    first = Task(id="a", url="https://example.test/a", task_type=TaskType.HTTP, status=TaskStatus.QUEUED, created_at="2026-01-01T00:00:00")
+    second = Task(id="b", url="https://example.test/b", task_type=TaskType.HTTP, status=TaskStatus.QUEUED, created_at="2026-01-01T00:00:01")
+    third = Task(id="c", url="https://example.test/c", task_type=TaskType.HTTP, status=TaskStatus.QUEUED, created_at="2026-01-01T00:00:02")
+    manager.tasks = {first.id: first, second.id: second, third.id: third}
+
+    async def save(_task):
+        return None
+
+    manager._save_db = save
+
+    async def run():
+        await manager.reorder_queue("a", "after:c")
+        assert _queued(manager) == ["b", "c", "a"]
+        assert first.engine_state["queue_priority"] < second.engine_state["queue_priority"]
+        await manager.reorder_queue("a", "before:b")
+        assert _queued(manager) == ["a", "b", "c"]
+        await manager.reorder_queue("c", "index:0")
+        assert _queued(manager) == ["c", "a", "b"]
+
+    asyncio.run(run())
+
+
+def test_reorder_queue_nonqueued_target_is_noop():
+    manager = TaskManager()
+    queued = Task(id="a", url="https://example.test/a", task_type=TaskType.HTTP, status=TaskStatus.QUEUED, created_at="2026-01-01T00:00:00")
+    other = Task(id="done", url="https://example.test/done", task_type=TaskType.HTTP, status=TaskStatus.DONE, created_at="2026-01-01T00:00:01")
+    sibling = Task(id="b", url="https://example.test/b", task_type=TaskType.HTTP, status=TaskStatus.QUEUED, created_at="2026-01-01T00:00:02")
+    queued.engine_state["queue_priority"] = 2
+    sibling.engine_state["queue_priority"] = 1
+    manager.tasks = {queued.id: queued, other.id: other, sibling.id: sibling}
+
+    async def save(_task):
+        raise AssertionError("non-queued drop must not rewrite priorities")
+
+    manager._save_db = save
+
+    async def run():
+        result = await manager.reorder_queue("a", "before:done")
+        assert result.id == "a"
+        assert queued.engine_state["queue_priority"] == 2
+        assert sibling.engine_state["queue_priority"] == 1
+        assert _queued(manager)[:2] == ["a", "b"]
+
+    asyncio.run(run())
+
+
+def test_parse_queue_direction_accepts_absolute_targets():
+    assert parse_queue_direction("UP") == ("up", None)
+    assert parse_queue_direction("before:abc") == ("before", "abc")
+    assert parse_queue_direction("after:xyz") == ("after", "xyz")
+    assert parse_queue_direction("index=2") == ("index", "2")
+    try:
+        parse_queue_direction("sideways")
+    except TaskConflictError:
+        pass
+    else:
+        raise AssertionError("invalid direction must fail")
 
 
 def test_queue_sort_key_prefers_higher_priority():

@@ -60,7 +60,7 @@ export default function UpdateDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
-  return <div className="modal-overlay" onMouseDown={onClose}>
+  return <div className="modal-overlay" onMouseDown={() => { if (!installing) onClose() }}>
     <section className="modal update-modal" onMouseDown={event => event.stopPropagation()}>
       <header>
         <div><h2>软件更新</h2><p>检查、下载并安装最新版 · 任务与已下载文件会保留</p></div>

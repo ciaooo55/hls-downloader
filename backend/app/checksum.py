@@ -1,5 +1,7 @@
-import hashlib
 import asyncio
+import base64
+import binascii
+import hashlib
 from datetime import datetime
 from pathlib import Path
 
@@ -7,6 +9,122 @@ from .models import Task, TaskStatus
 
 
 SUPPORTED_ALGORITHMS = {"md5", "sha1", "sha256"}
+_DIGEST_SIZES = {"md5": 16, "sha1": 20, "sha256": 32}
+_HEADER_ALGORITHMS = (
+    ("sha256", ("sha-256", "sha256")),
+    ("sha1", ("sha-1", "sha1", "sha")),
+    ("md5", ("md5",)),
+)
+
+
+def _hex_or_b64_digest(value: str, size: int) -> str:
+    text = str(value or "").strip().strip('"').strip("'")
+    if not text:
+        return ""
+    hexed = text.lower().replace(":", "").replace(" ", "")
+    if len(hexed) == size * 2 and all(char in "0123456789abcdef" for char in hexed):
+        return hexed
+    try:
+        pad = "=" * ((4 - len(text) % 4) % 4)
+        raw = base64.b64decode(text + pad, validate=False)
+        if len(raw) != size:
+            raw = base64.urlsafe_b64decode(text + pad)
+        if len(raw) == size:
+            return raw.hex()
+    except (ValueError, binascii.Error):
+        return ""
+    return ""
+
+
+def _pairs_from_http_header(value: str) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for part in str(value or "").split(","):
+        name, separator, raw = part.partition("=")
+        if not separator:
+            continue
+        pairs.append((name.strip().lower(), raw.strip()))
+    return pairs
+
+
+def parse_http_content_checksum(headers) -> str:
+    """Return algo:hex when a response advertises a whole-file digest.
+
+    Missing or unusable headers return empty so ordinary downloads stay unchanged.
+    """
+    if headers is None:
+        return ""
+    lowered = {}
+    try:
+        items = headers.items()
+    except Exception:
+        items = []
+    for name, value in items:
+        lowered[str(name or "").lower()] = value
+
+    def getter(name, default=""):
+        if lowered:
+            return lowered.get(str(name).lower(), default)
+        if hasattr(headers, "get"):
+            return headers.get(name, default)
+        return default
+
+    found: dict[str, str] = {}
+
+    content_md5 = _hex_or_b64_digest(str(getter("content-md5", "") or ""), 16)
+    if content_md5:
+        found["md5"] = content_md5
+
+    for name, raw in _pairs_from_http_header(str(getter("digest", "") or "")):
+        for algorithm, aliases in _HEADER_ALGORITHMS:
+            if name in aliases:
+                digest = _hex_or_b64_digest(raw, _DIGEST_SIZES[algorithm])
+                if digest:
+                    found[algorithm] = digest
+                break
+
+    for name, raw in _pairs_from_http_header(str(getter("x-goog-hash", "") or "")):
+        if name == "md5":
+            digest = _hex_or_b64_digest(raw, 16)
+            if digest:
+                found["md5"] = digest
+
+    for algorithm, size in (("md5", 16), ("sha1", 20), ("sha256", 32)):
+        digest = _hex_or_b64_digest(str(getter(f"x-checksum-{algorithm}", "") or ""), size)
+        if digest:
+            found[algorithm] = digest
+
+    for algorithm in ("sha256", "sha1", "md5"):
+        if algorithm in found:
+            return f"{algorithm}:{found[algorithm]}"
+    return ""
+
+
+def prefer_http_content_checksum(*values: str) -> str:
+    rank = {"sha256": 3, "sha1": 2, "md5": 1}
+    best = ""
+    best_rank = 0
+    for value in values:
+        algorithm = str(value or "").split(":", 1)[0]
+        score = rank.get(algorithm, 0)
+        if score > best_rank:
+            best = str(value)
+            best_rank = score
+    return best
+
+
+def apply_http_content_checksum(task: Task, headers=None, checksum: str = "") -> str:
+    """Adopt a server digest only when the task does not already have one."""
+    if str(getattr(task, "expected_checksum", "") or "").strip():
+        return ""
+    checksum = str(checksum or parse_http_content_checksum(headers) or "").strip()
+    if not checksum:
+        return ""
+    task.expected_checksum = checksum
+    task.checksum_algorithm = checksum.split(":", 1)[0]
+    engine = getattr(task, "engine_state", None)
+    if isinstance(engine, dict):
+        engine["checksum_from"] = "http_header"
+    return checksum
 
 
 def normalize_checksum(value: str) -> tuple[str, str]:

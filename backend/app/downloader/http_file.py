@@ -12,13 +12,15 @@ from collections.abc import Callable, Coroutine
 from collections import deque
 from datetime import datetime
 from pathlib import Path
+from ..output_path import reserve_output_path
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, unquote, unquote_to_bytes, urlparse, urlsplit, urlunsplit
 
 import httpx
 
 from ..config import settings
-from ..checksum import verify_task_checksum
+from ..checksum import apply_http_content_checksum, parse_http_content_checksum, prefer_http_content_checksum, verify_task_checksum
 from ..models import Task, TaskStatus
 from ..naming import is_generic_media_name
 from ..request_context import build_task_headers, replay_request_body
@@ -32,12 +34,16 @@ from .errors import (
     _looks_like_signed_url,
     diagnose_download_error,
     format_download_error,
+    redact_url,
     retry_delay_seconds,
     should_retry_download_error,
     should_share_retry_window,
 )
 from .throttle import throttle_bytes
+from ..connection_parts import build_connection_parts, set_connection_parts
+from .http_split import pick_endgame_split
 from .response_validation import validate_download_response
+from .mirrors import mirror_identity_compatible, normalize_mirror_urls
 
 
 MAX_RETRIES = 5
@@ -51,6 +57,10 @@ PROBE_MAX_ATTEMPTS = 3
 # intentionally bounded and only enabled for the complete, well-formed
 # ``s/e/_t`` triplet; arbitrary future timestamps must fail normally.
 SHORT_SIGNATURE_MAX_WAIT = 15 * 60
+# Batch unbuffered range writes to cut syscall cost. Do not pass this size to
+# httpx aiter_bytes(): ByteChunker holds a partial chunk until flush(), and a
+# mid-stream ReadError never flushes, so the retry Range would restart at 0.
+RANGE_WRITE_BATCH = 256 * 1024
 _CONTENT_RANGE_RE = re.compile(
     r"^\s*(?:bytes\s+)?(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*/\s*(?P<total>\d+|\*)\s*$",
     re.IGNORECASE,
@@ -253,15 +263,7 @@ class _SpeedWindow:
 
 
 def _reserve_output_path(path: Path) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    for index in range(10000):
-        candidate = path if index == 0 else path.with_name(f"{path.stem}_{index}{path.suffix}")
-        try:
-            candidate.open("xb").close()
-            return candidate
-        except FileExistsError:
-            continue
-    raise RuntimeError(f"无法为输出文件分配唯一名称: {path.name}")
+    return reserve_output_path(path)
 
 
 def _content_disposition_filename(value: str) -> str:
@@ -302,6 +304,17 @@ def _content_disposition_filename(value: str) -> str:
     return ""
 
 
+@dataclass
+class _HttpSource:
+    url: str
+    final_url: str
+    ranges: bool = True
+    etag: str = ""
+    last_modified: str = ""
+    disabled: bool = False
+    reason: str = ""
+
+
 class HTTPDownloader(SeeklessEngine):
     def __init__(self, task: Task, on_progress=None, on_log=None) -> None:
         self.task = task
@@ -328,6 +341,177 @@ class HTTPDownloader(SeeklessEngine):
         self._download_url = task.url
         self._url_generation = 0
         self._url_refresh_lock = asyncio.Lock()
+        self._sources: list[_HttpSource] = []
+        self._source_cursor = 0
+        self._source_lock = asyncio.Lock()
+
+    def _configured_mirrors(self) -> list[str]:
+        return normalize_mirror_urls(self.task.url, (self.task.engine_state or {}).get("mirrors"))
+
+    def _publish_mirror_status(self) -> None:
+        status = []
+        for source in self._sources:
+            state = "failed" if source.disabled else "active"
+            status.append({
+                "url": source.url,
+                "final_url": source.final_url,
+                "state": state,
+                "detail": source.reason,
+                "ranges": bool(source.ranges),
+            })
+        self.task.engine_state["mirror_status"] = status
+
+    def _install_source(self, metadata: dict, *, origin_url: str) -> _HttpSource:
+        source = _HttpSource(
+            url=origin_url or str(metadata.get("final_url") or self.task.url),
+            final_url=str(metadata.get("final_url") or origin_url or self.task.url),
+            ranges=bool(metadata.get("ranges")),
+            etag=str(metadata.get("etag") or ""),
+            last_modified=str(metadata.get("last_modified") or ""),
+        )
+        existing = next((item for item in self._sources if item.url == source.url or item.final_url == source.final_url), None)
+        if existing is not None:
+            existing.final_url = source.final_url
+            existing.ranges = source.ranges
+            existing.etag = source.etag
+            existing.last_modified = source.last_modified
+            existing.disabled = False
+            existing.reason = ""
+            source = existing
+        else:
+            self._sources.append(source)
+        if not self._download_url or self._download_url == self.task.url:
+            self._download_url = source.final_url
+        self._publish_mirror_status()
+        return source
+
+    def _accept_mirror_metadata(self, origin_url: str, metadata: dict, primary: dict) -> tuple[bool, str]:
+        ok, reason = mirror_identity_compatible(
+            primary,
+            metadata,
+            has_checksum=bool(self.task.expected_checksum),
+        )
+        if ok:
+            self._install_source(metadata, origin_url=origin_url)
+        else:
+            status = list(self.task.engine_state.get("mirror_status") or [])
+            status.append({"url": origin_url, "final_url": str(metadata.get("final_url") or origin_url), "state": "skipped", "detail": reason, "ranges": bool(metadata.get("ranges"))})
+            self.task.engine_state["mirror_status"] = status
+        return ok, reason
+
+    def _ensure_default_source(self, metadata: dict | None = None) -> None:
+        if self._sources:
+            return
+        payload = dict(metadata or {})
+        payload.setdefault("final_url", self._download_url or self.task.url)
+        payload.setdefault("ranges", True)
+        self._install_source(payload, origin_url=self.task.url)
+
+    def _enabled_sources(self, *, require_ranges: bool = False) -> list[_HttpSource]:
+        return [
+            source
+            for source in self._sources
+            if not source.disabled and (not require_ranges or source.ranges)
+        ]
+
+    def _pick_source(self, *, require_ranges: bool = False) -> _HttpSource:
+        self._ensure_default_source()
+        candidates = self._enabled_sources(require_ranges=require_ranges)
+        if not candidates:
+            candidates = self._enabled_sources()
+        if not candidates:
+            return _HttpSource(url=self.task.url, final_url=self._download_url or self.task.url)
+        source = candidates[self._source_cursor % len(candidates)]
+        self._source_cursor += 1
+        return source
+
+    def _disable_source(self, source: _HttpSource, reason: str) -> None:
+        source.disabled = True
+        source.reason = reason[:300]
+        self._publish_mirror_status()
+        self.on_log(self.task.id, f"[downloading] 已停用地址 {redact_url(source.url)}：{reason}")
+        remaining = self._enabled_sources()
+        if remaining:
+            self._download_url = remaining[0].final_url
+
+    def _has_other_sources(self, source: _HttpSource, *, require_ranges: bool = False) -> bool:
+        return any(item is not source for item in self._enabled_sources(require_ranges=require_ranges))
+
+    async def _probe_metadata_with_failover(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+    ) -> dict:
+        mirrors = self._configured_mirrors()
+        primary_error: Exception | None = None
+        try:
+            metadata = await self._probe_with_retry(client, headers)
+            self._install_source(metadata, origin_url=self.task.url)
+            await self._discover_mirrors(client, headers, metadata)
+            return metadata
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            primary_error = exc
+            if not mirrors:
+                raise
+            self.on_log(
+                self.task.id,
+                f"[probing] 主地址失败，正在尝试 {len(mirrors)} 个备用地址：{exc}",
+            )
+        last_error = primary_error
+        for mirror in mirrors:
+            if self._is_canceled() or self._is_pausing():
+                raise asyncio.CancelledError
+            try:
+                metadata = await asyncio.wait_for(self._probe(client, headers, url=mirror), timeout=PROBE_TOTAL_TIMEOUT)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                status = list(self.task.engine_state.get("mirror_status") or [])
+                status.append({"url": mirror, "final_url": mirror, "state": "failed", "detail": str(exc)[:300], "ranges": False})
+                self.task.engine_state["mirror_status"] = status
+                self.on_log(self.task.id, f"[probing] 备用地址不可用 {redact_url(mirror)}")
+                continue
+            self._install_source(metadata, origin_url=mirror)
+            self._download_url = str(metadata.get("final_url") or mirror)
+            self.on_log(self.task.id, f"[probing] 已切换到备用地址 {redact_url(mirror)}")
+            remaining = [item for item in mirrors if item != mirror]
+            if remaining:
+                self.task.engine_state["mirrors"] = remaining
+                await self._discover_mirrors(client, headers, metadata)
+            return metadata
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("服务器未返回可用的文件信息")
+
+    async def _discover_mirrors(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        primary: dict,
+    ) -> None:
+        for mirror in self._configured_mirrors():
+            if self._is_canceled() or self._is_pausing():
+                return
+            if any(item.url == mirror or item.final_url == mirror for item in self._sources):
+                continue
+            try:
+                metadata = await asyncio.wait_for(self._probe(client, headers, url=mirror), timeout=min(12.0, PROBE_TOTAL_TIMEOUT))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                status = list(self.task.engine_state.get("mirror_status") or [])
+                status.append({"url": mirror, "final_url": mirror, "state": "failed", "detail": str(exc)[:300], "ranges": False})
+                self.task.engine_state["mirror_status"] = status
+                self.on_log(self.task.id, f"[probing] 备用地址探测失败 {redact_url(mirror)}")
+                continue
+            ok, reason = self._accept_mirror_metadata(mirror, metadata, primary)
+            if ok:
+                self.on_log(self.task.id, f"[probing] 已启用备用地址 {redact_url(mirror)}（{reason}）")
+            else:
+                self.on_log(self.task.id, f"[probing] 已忽略备用地址 {redact_url(mirror)}：{reason}")
 
     def request_seek(self, value: int) -> None:
         if value >= 0:
@@ -676,7 +860,8 @@ class HTTPDownloader(SeeklessEngine):
         self.task.progress.connection_status = "running"
         self._set_stage("downloading", "服务器限流结束，继续分段下载")
 
-    async def _probe(self, client: httpx.AsyncClient, headers: dict[str, str]) -> dict:
+    async def _probe(self, client: httpx.AsyncClient, headers: dict[str, str], url: str | None = None) -> dict:
+        target_url = url or self.task.url
         fallback: httpx.Response | None = None
         ranged: httpx.Response | None = None
         try:
@@ -687,7 +872,7 @@ class HTTPDownloader(SeeklessEngine):
             try:
                 request = client.build_request(
                     "GET",
-                    self.task.url,
+                    target_url,
                     headers={**headers, "Range": "bytes=0-255"},
                 )
                 ranged = await asyncio.wait_for(
@@ -713,7 +898,7 @@ class HTTPDownloader(SeeklessEngine):
                     await ranged.aclose()
                     ranged = None
                 try:
-                    request = client.build_request("GET", self.task.url, headers=headers)
+                    request = client.build_request("GET", target_url, headers=headers)
                     fallback = await asyncio.wait_for(
                         client.send(request, stream=True),
                         timeout=PROBE_RESPONSE_TIMEOUT,
@@ -804,6 +989,12 @@ class HTTPDownloader(SeeklessEngine):
                 final_url=str(response.url),
                 server_filename=server_filename,
             )
+            checksum = prefer_http_content_checksum(
+                parse_http_content_checksum(response.headers),
+                parse_http_content_checksum(fallback.headers) if fallback is not None else "",
+            )
+            if checksum:
+                apply_http_content_checksum(self.task, checksum=checksum)
             return {
                 "total": total,
                 "ranges": range_supported,
@@ -812,6 +1003,7 @@ class HTTPDownloader(SeeklessEngine):
                 "content_type": content_type,
                 "filename": filename,
                 "final_url": str(response.url),
+                "checksum": checksum,
             }
         finally:
             if ranged is not None:
@@ -823,11 +1015,12 @@ class HTTPDownloader(SeeklessEngine):
         self,
         client: httpx.AsyncClient,
         headers: dict[str, str],
+        url: str | None = None,
     ) -> dict:
         """Probe through transient CDN failures without hiding permanent errors."""
         if not self._short_signature_waited:
             self._short_signature_waited = True
-            delay = _short_signature_activation_delay(self.task.url)
+            delay = _short_signature_activation_delay(url or self.task.url)
             if delay > 0:
                 self.task.progress.connection_status = "waiting"
                 self._set_stage(
@@ -850,7 +1043,7 @@ class HTTPDownloader(SeeklessEngine):
                 raise asyncio.CancelledError
             try:
                 return await asyncio.wait_for(
-                    self._probe(client, headers),
+                    self._probe(client, headers, url) if url else self._probe(client, headers),
                     timeout=PROBE_TOTAL_TIMEOUT,
                 )
             except asyncio.TimeoutError as exc:
@@ -917,6 +1110,10 @@ class HTTPDownloader(SeeklessEngine):
                 # validators fail the transfer safely instead of stitching.
                 return False
             self._download_url = str(metadata.get("final_url") or "") or self.task.url
+            if self._sources:
+                current = next((item for item in self._sources if not item.disabled), self._sources[0])
+                current.final_url = self._download_url
+                self._publish_mirror_status()
             self._url_generation += 1
             self.on_log(
                 self.task.id,
@@ -944,9 +1141,12 @@ class HTTPDownloader(SeeklessEngine):
         task.progress.total_segments = 1
         task.progress.max_workers = 1
         task.progress.connection_status = "running"
+        task.progress.active_workers = 1
+        task.progress.active_slots = 1
         task.progress.downloaded_bytes = 0
         task.progress.total_bytes = 0
         task.progress.progress_percent = 0.0
+        set_connection_parts(task, [])
         self._set_stage("downloading", "正在安全重放浏览器 POST 下载（单连接）")
         task.engine_state["stream_path"] = str(part_path)
         task.engine_state["post_replay"] = True
@@ -1032,10 +1232,11 @@ class HTTPDownloader(SeeklessEngine):
                     output = await self._download_replay_post(client, headers, part_path)
                 else:
                     await self._wait_for_short_signature_activation()
-                    metadata = await self._probe_with_retry(client, headers)
+                    metadata = await self._probe_metadata_with_failover(client, headers)
                     total = int(metadata["total"])
                     self._total_size = total
                     self._download_url = str(metadata.get("final_url") or "") or task.url
+                    self._ensure_default_source(metadata)
                     task.mime_type = task.mime_type or metadata["content_type"]
                     task.progress.total_bytes = total
                     name = (
@@ -1193,6 +1394,9 @@ class HTTPDownloader(SeeklessEngine):
         task.progress.total_segments = 1
         task.progress.max_workers = 1
         task.progress.connection_status = "running"
+        task.progress.active_workers = 1
+        task.progress.active_slots = 1
+        set_connection_parts(task, [])
         self._set_stage("downloading", "服务器不支持分段，正在单连接下载")
         task.engine_state["stream_path"] = str(part_path)
         task.engine_state["total_size"] = task.progress.total_bytes
@@ -1207,7 +1411,8 @@ class HTTPDownloader(SeeklessEngine):
             try:
                 task.progress.downloaded_bytes = 0
                 task.progress.progress_percent = 0.0
-                async with client.stream("GET", self._download_url, headers=headers) as response:
+                source = self._pick_source()
+                async with client.stream("GET", source.final_url or self._download_url, headers=headers) as response:
                     response.raise_for_status()
                     content_type = response.headers.get("content-type", "").split(";", 1)[0]
                     task.mime_type = task.mime_type or content_type
@@ -1254,6 +1459,9 @@ class HTTPDownloader(SeeklessEngine):
                 status = int(
                     getattr(getattr(exc, "response", None), "status_code", 0) or 0
                 )
+                if status in {401, 403, 404, 410} and self._has_other_sources(source):
+                    self._disable_source(source, f"HTTP {status}")
+                    continue
                 if (
                     status in {401, 403, 404, 410}
                     and attempt < MAX_RETRIES
@@ -1282,6 +1490,7 @@ class HTTPDownloader(SeeklessEngine):
         metadata: dict,
     ) -> None:
         task = self.task
+        self._ensure_default_source(metadata)
         total = int(metadata["total"])
         chunk_size = max(1, int(settings.http_chunk_size_mb)) * 1024 * 1024
         self._chunk_size = chunk_size
@@ -1362,6 +1571,16 @@ class HTTPDownloader(SeeklessEngine):
             max(len(chunks), total // (4 * 1024 * 1024) + 1),
         ))
         task.progress.connection_status = "running"
+        set_connection_parts(
+            task,
+            build_connection_parts(
+                total=total,
+                chunks=chunks,
+                range_current=range_current,
+                completed=completed,
+            ),
+            total=total,
+        )
         self._set_stage("downloading", f"正在分段下载，并发={task.progress.max_workers}")
         queue: asyncio.PriorityQueue[tuple[int, int]] = asyncio.PriorityQueue()
         self._priority_queue = queue
@@ -1388,6 +1607,22 @@ class HTTPDownloader(SeeklessEngine):
         last_publish = 0.0
         last_saved_bytes = task.progress.downloaded_bytes
 
+        parts_open: dict[int, int] = {}
+
+        def remember_connection_parts() -> None:
+            parts = build_connection_parts(
+                total=total,
+                chunks=chunks,
+                range_current=range_current,
+                completed=completed,
+                partials=partials,
+                finished_intervals=finished_intervals,
+            )
+            set_connection_parts(task, parts, total=total)
+            live = sum(max(0, int(parts_open.get(index, 0) or 0)) for index in parts_open)
+            task.progress.active_workers = live
+            task.progress.active_slots = live
+
         def refresh_progress(publish: bool = False) -> None:
             nonlocal last_publish
             task.progress.downloaded_bytes = (
@@ -1397,6 +1632,7 @@ class HTTPDownloader(SeeklessEngine):
             now = time.monotonic()
             if publish or now - last_publish >= 0.5:
                 last_publish = now
+                remember_connection_parts()
                 self._publish()
 
         def snapshot_currents() -> dict[int, int]:
@@ -1455,18 +1691,12 @@ class HTTPDownloader(SeeklessEngine):
             return last_saved_bytes
 
         # IDM-style end-game: when the queue drains, idle workers split the
-        # remaining half of the largest in-flight chunk instead of exiting,
-        # so the tail of a large file is never limited to one connection.
-        # A chunk is only recorded as completed (resumable) when every part
-        # of it has finished, so the on-disk state format is unchanged.
-        SPLIT_MIN_BYTES = 4 * 1024 * 1024
-        stop_at: dict[int, int] = {}
-        parts_open: dict[int, int] = {}
-        # Only a primary part that is still streaming may be split: once it
-        # finishes, its bytes are committed and re-splitting that range would
-        # re-download and double-count them.
-        splittable: set[int] = set()
-        primary_start: dict[int, int] = {}
+        # remaining half of the largest in-flight part instead of exiting,
+        # including tails created by an earlier split. A chunk is only
+        # recorded as completed (resumable) when every part of it has
+        # finished, so the on-disk state format is unchanged.
+        part_stop: dict[tuple[int, int], int] = {}
+        parts_open.clear()
 
         async def finish_part(index: int, part_key: tuple[int, int], size: int) -> None:
             nonlocal committed_bytes
@@ -1474,6 +1704,7 @@ class HTTPDownloader(SeeklessEngine):
                 finished_parts[index] = finished_parts.get(index, 0) + size
                 partials.pop(part_key, None)
                 finished_intervals.setdefault(index, {})[part_key[1]] = part_key[1] + size
+                part_stop.pop(part_key, None)
                 current = range_current[index]
                 while True:
                     advanced = current
@@ -1512,9 +1743,10 @@ class HTTPDownloader(SeeklessEngine):
             part_key = (index, start)
             last_error: Exception | None = None
             received = 0 if playback_only else int(partials.get(part_key, 0))
-            strong_etag = _strong_etag(metadata.get("etag", ""))
+            source = self._pick_source(require_ranges=True)
+            strong_etag = _strong_etag(source.etag or metadata.get("etag", ""))
             validator = strong_etag
-            validator = validator or str(metadata.get("last_modified", "") or "")
+            validator = validator or str(source.last_modified or metadata.get("last_modified", "") or "")
             for attempt in range(1, MAX_RETRIES + 1):
                 if self._is_canceled():
                     raise asyncio.CancelledError
@@ -1524,7 +1756,7 @@ class HTTPDownloader(SeeklessEngine):
                 url_generation = self._url_generation
                 try:
                     while True:
-                        target_end = stop_at[index] if dynamic_stop else end
+                        target_end = part_stop.get(part_key, end) if dynamic_stop else end
                         request_start = start + received
                         if request_start > target_end:
                             break
@@ -1536,7 +1768,7 @@ class HTTPDownloader(SeeklessEngine):
                             request_headers["If-Range"] = validator
                         async with client.stream(
                             "GET",
-                            self._download_url,
+                            source.final_url or self._download_url,
                             headers=request_headers,
                         ) as response:
                             # 200 after a Range/If-Range request is a legitimate
@@ -1588,40 +1820,58 @@ class HTTPDownloader(SeeklessEngine):
                             response_received = 0
                             with part_path.open("r+b", buffering=0) as output_file:
                                 output_file.seek(request_start)
-                                async for content in response.aiter_bytes():
-                                    if request_start == 0 and response_received == 0:
-                                        validate_download_response(
-                                            task,
-                                            content_type=response.headers.get("content-type", ""),
-                                            content_length=total,
-                                            preview=bytes(content[:65536]),
-                                            final_url=str(response.url),
-                                            server_filename=str(metadata.get("filename", "") or ""),
-                                        )
-                                    live_end = stop_at[index] if dynamic_stop else end
-                                    live_allowed_end = min(response_end, live_end)
-                                    needed = live_allowed_end - request_start + 1 - response_received
-                                    if needed <= 0:
-                                        break
-                                    data = content[:needed]
-                                    await throttle_bytes(len(data), task)
-                                    written = output_file.write(data)
-                                    if written != len(data):
+                                pending = bytearray()
+
+                                def flush_pending() -> None:
+                                    nonlocal pending, response_received, received
+                                    if not pending:
+                                        return
+                                    size = len(pending)
+                                    written = output_file.write(pending)
+                                    if written != size:
                                         raise OSError(
-                                            f"本地文件写入不完整，期望 {len(data)} 字节，实际 {written} 字节"
+                                            f"本地文件写入不完整，期望 {size} 字节，实际 {written} 字节"
                                         )
-                                    response_received += len(data)
-                                    received += len(data)
+                                    pending.clear()
+                                    response_received += size
+                                    received += size
                                     self._written_intervals[start] = max(
                                         self._written_intervals.get(start, start),
                                         start + received,
                                     )
                                     if not playback_only:
                                         partials[part_key] = received
-                                        window.add(len(data))
+                                        window.add(size)
                                         refresh_progress()
-                                    if response_received >= live_allowed_end - request_start + 1:
-                                        break
+
+                                try:
+                                    async for content in response.aiter_bytes():
+                                        accepted = response_received + len(pending)
+                                        if request_start == 0 and accepted == 0:
+                                            validate_download_response(
+                                                task,
+                                                content_type=response.headers.get("content-type", ""),
+                                                content_length=total,
+                                                preview=bytes(content[:65536]),
+                                                final_url=str(response.url),
+                                                server_filename=str(metadata.get("filename", "") or ""),
+                                            )
+                                        live_end = part_stop.get(part_key, end) if dynamic_stop else end
+                                        live_allowed_end = min(response_end, live_end)
+                                        needed = live_allowed_end - request_start + 1 - accepted
+                                        if needed <= 0:
+                                            break
+                                        data = content[:needed]
+                                        await throttle_bytes(len(data), task)
+                                        pending.extend(data)
+                                        if len(pending) >= RANGE_WRITE_BATCH:
+                                            flush_pending()
+                                        if response_received + len(pending) >= live_allowed_end - request_start + 1:
+                                            break
+                                except BaseException:
+                                    flush_pending()
+                                    raise
+                                flush_pending()
                             if response_received <= 0:
                                 raise httpx.RemoteProtocolError(
                                     "Range 响应未返回任何数据"
@@ -1629,7 +1879,7 @@ class HTTPDownloader(SeeklessEngine):
                             # If the body ended before the range declared in its
                             # own Content-Range, preserve what arrived and retry
                             # from the exact next byte.
-                            final_target_end = stop_at[index] if dynamic_stop else end
+                            final_target_end = part_stop.get(part_key, end) if dynamic_stop else end
                             expected_this_response = min(response_end, final_target_end) - request_start + 1
                             if response_received < expected_this_response:
                                 raise httpx.RemoteProtocolError(
@@ -1638,7 +1888,7 @@ class HTTPDownloader(SeeklessEngine):
                             # A server-capped response ends before our requested
                             # target. Loop immediately from the next byte.
                             continue
-                    expected = (stop_at[index] if dynamic_stop else end) - start + 1
+                    expected = (part_stop.get(part_key, end) if dynamic_stop else end) - start + 1
                     if received < expected:
                         raise httpx.RemoteProtocolError(
                             f"Range 长度不足，期望 {expected}，实际 {received}"
@@ -1653,12 +1903,24 @@ class HTTPDownloader(SeeklessEngine):
                 except Exception as exc:
                     last_error = exc
                     if isinstance(exc, _HTTPRangeUnsupported):
+                        if self._has_other_sources(source, require_ranges=True):
+                            self._disable_source(source, str(exc))
+                            source = self._pick_source(require_ranges=True)
+                            strong_etag = _strong_etag(source.etag or metadata.get("etag", ""))
+                            validator = strong_etag or str(source.last_modified or metadata.get("last_modified", "") or "")
+                            continue
                         break
                     if isinstance(exc, _HTTPRangeValidationError):
                         break
                     status = int(
                         getattr(getattr(exc, "response", None), "status_code", 0) or 0
                     )
+                    if status in {401, 403, 404, 410} and self._has_other_sources(source):
+                        self._disable_source(source, f"HTTP {status}")
+                        source = self._pick_source(require_ranges=True)
+                        strong_etag = _strong_etag(source.etag or metadata.get("etag", ""))
+                        validator = strong_etag or str(source.last_modified or metadata.get("last_modified", "") or "")
+                        continue
                     if (
                         status in {401, 403, 404, 410}
                         and attempt < MAX_RETRIES
@@ -1666,6 +1928,10 @@ class HTTPDownloader(SeeklessEngine):
                             client, headers, generation=url_generation
                         )
                     ):
+                        refreshed = next((item for item in self._sources if not item.disabled), None)
+                        if refreshed is not None:
+                            source = refreshed
+                            self._download_url = refreshed.final_url
                         continue
                     if not should_retry_download_error(exc):
                         break
@@ -1704,20 +1970,12 @@ class HTTPDownloader(SeeklessEngine):
 
         self._playback_fetcher = fetch_playback_range
 
-        def pick_split() -> tuple[int, int, int] | None:
-            best: tuple[int, int, int] | None = None
-            best_remaining = SPLIT_MIN_BYTES - 1
-            for index in list(splittable):
-                if index not in stop_at or index in completed:
-                    continue
-                chunk_start = primary_start.get(index, chunks[index][0])
-                received = partials.get((index, chunk_start), 0)
-                remaining = stop_at[index] - (chunk_start + received) + 1
-                if remaining > best_remaining:
-                    split_start = chunk_start + received + remaining // 2
-                    best = (index, split_start, stop_at[index])
-                    best_remaining = remaining
-            return best
+        def pick_split() -> tuple[int, int, int, int] | None:
+            return pick_endgame_split(
+                live_parts=part_stop,
+                partials=partials,
+                completed=completed,
+            )
 
         async def worker() -> None:
             while not queue.empty() and not self._is_canceled() and not self._is_pausing():
@@ -1736,14 +1994,12 @@ class HTTPDownloader(SeeklessEngine):
                     self._completed_chunks.add(index)
                     queue.task_done()
                     continue
-                stop_at[index] = end
+                part_stop[(index, start)] = end
                 parts_open[index] = 1
-                primary_start[index] = start
-                splittable.add(index)
                 try:
                     ok = await fetch_range(index, start, end, dynamic_stop=True)
                 finally:
-                    splittable.discard(index)
+                    part_stop.pop((index, start), None)
                 if not ok:
                     self._claimed_chunks.discard(index)
                     queue.task_done()
@@ -1754,15 +2010,19 @@ class HTTPDownloader(SeeklessEngine):
                 target = pick_split()
                 if target is None:
                     return
-                index, split_start, split_end = target
-                stop_at[index] = split_start - 1
+                index, parent_start, split_start, split_end = target
+                part_stop[(index, parent_start)] = split_start - 1
+                part_stop[(index, split_start)] = split_end
                 parts_open[index] += 1
-                if not await fetch_range(index, split_start, split_end, dynamic_stop=False):
-                    return
+                try:
+                    if not await fetch_range(index, split_start, split_end, dynamic_stop=True):
+                        return
+                finally:
+                    part_stop.pop((index, split_start), None)
 
         async def checkpoint_loop() -> None:
             while True:
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(5.0)
                 async with state_lock:
                     try:
                         await save_state()
@@ -1820,6 +2080,14 @@ class HTTPDownloader(SeeklessEngine):
         if len(completed) == len(chunks) and part_path.exists() and part_path.stat().st_size == total:
             task.progress.downloaded_bytes = total
             task.progress.completed_segments = len(chunks)
+            task.progress.active_workers = 0
+            task.progress.active_slots = 0
+            if total:
+                set_connection_parts(
+                    task,
+                    [{"start": 0, "end": total - 1, "done": total, "state": "done"}],
+                    total=total,
+                )
             self._apply_speed(window)
             self._publish()
         self._priority_queue = None

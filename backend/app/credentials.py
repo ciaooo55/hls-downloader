@@ -75,6 +75,8 @@ def protect_site_profiles(values: object) -> list[dict]:
             }
         if "cookie" in profile:
             profile["cookie"] = protect_secret(str(profile.get("cookie") or ""))
+        if profile.get("proxy_url"):
+            profile["proxy_url"] = protect_secret(str(profile.get("proxy_url") or ""))
         result.append(profile)
     return result
 
@@ -99,6 +101,11 @@ def unprotect_site_profiles(values: object) -> list[dict]:
                 profile["cookie"] = unprotect_secret(str(profile.get("cookie") or ""))
             except (OSError, UnicodeError, ValueError, TypeError, binascii.Error):
                 profile["cookie"] = ""
+        if profile.get("proxy_url"):
+            try:
+                profile["proxy_url"] = unprotect_secret(str(profile.get("proxy_url") or ""))
+            except (OSError, UnicodeError, ValueError, TypeError, binascii.Error):
+                profile["proxy_url"] = ""
         result.append(profile)
     return result
 
@@ -117,6 +124,8 @@ def mask_site_profiles(values: object) -> list[dict]:
             }
         if profile.get("cookie"):
             profile["cookie"] = SECRET_MASK
+        if profile.get("proxy_url"):
+            profile["proxy_url"] = SECRET_MASK
         result.append(profile)
     return result
 
@@ -146,5 +155,7 @@ def restore_masked_site_profiles(values: object, previous: object) -> list[dict]
             }
         if profile.get("cookie") == SECRET_MASK:
             profile["cookie"] = str(old.get("cookie") or "")
+        if profile.get("proxy_url") == SECRET_MASK:
+            profile["proxy_url"] = str(old.get("proxy_url") or "")
         result.append(profile)
     return result

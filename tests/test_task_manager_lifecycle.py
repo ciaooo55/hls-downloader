@@ -300,6 +300,8 @@ def test_site_profile_fills_manual_task_defaults(monkeypatch):
         monkeypatch.setattr(manager_module.settings, "site_profiles", [{
             "host": "*.example.test",
             "referer": "https://example.test/watch",
+            "cookie": "sid=from-profile",
+            "download_dir": str(Path.cwd() / "site-out"),
             "concurrency": 3,
             "speed_limit_kib": 512,
             "request_headers": {"X-Site-Token": "profile"},
@@ -309,9 +311,33 @@ def test_site_profile_fills_manual_task_defaults(monkeypatch):
         task = await manager.create_task("https://cdn.example.test/file.bin")
 
         assert task.referer == "https://example.test/watch"
+        assert task.cookie == "sid=from-profile"
         assert task.concurrency == 3
         assert task.speed_limit_kib == 512
         assert task.request_headers == {"x-site-token": "profile"}
+        assert Path(task.engine_state["output_dir"]).name == "site-out"
+
+    asyncio.run(run())
+
+
+def test_site_profile_does_not_override_explicit_cookie_or_directory(monkeypatch):
+    async def run():
+        manager = TaskManager()
+        monkeypatch.setattr(manager_module.settings, "site_profiles", [{
+            "host": "*.example.test",
+            "cookie": "sid=from-profile",
+            "download_dir": str(Path.cwd() / "site-out"),
+        }])
+        monkeypatch.setattr(manager_module, "run_db", _async_noop)
+
+        task = await manager.create_task(
+            "https://cdn.example.test/file.bin",
+            cookie="sid=captured",
+            output_dir=str(Path.cwd() / "explicit-out"),
+        )
+
+        assert task.cookie == "sid=captured"
+        assert Path(task.engine_state["output_dir"]).name == "explicit-out"
 
     asyncio.run(run())
 

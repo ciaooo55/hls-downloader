@@ -10,6 +10,8 @@ class TaskType(str, Enum):
     DASH = "dash"
     HTTP = "http"
     TORRENT = "torrent"
+    FTP = "ftp"
+    SFTP = "sftp"
 
 
 class TaskStatus(str, Enum):
@@ -56,6 +58,7 @@ class TaskProgress:
     upload_speed_bytes_per_sec: float = 0.0
     peer_count: int = 0
     seed_count: int = 0
+    connection_parts: list[dict] = field(default_factory=list)
 
 @dataclass
 class Task:
@@ -104,3 +107,6 @@ class Task:
     task_handle: Optional[asyncio.Task] = field(default=None, repr=False)
     playback_seek_index: Optional[int] = field(default=None, repr=False)
     engine_state: dict = field(default_factory=dict, repr=False)
+    speed_history: list[int] = field(default_factory=list, repr=False)
+    speed_history_at: float = field(default=0.0, repr=False)
+    speed_peak_bytes_per_sec: float = 0.0

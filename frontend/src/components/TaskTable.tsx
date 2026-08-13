@@ -1,40 +1,45 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AppWindow, Archive, CheckCircle2, Copy, File, FileAudio, FileCode2, FileImage, FileText, FileVideo, Film, FolderOpen, Globe2, Info, LoaderCircle, Magnet, MonitorPlay, MoreHorizontal, Pause, Play, PlayCircle, RadioTower, RotateCcw, ScreenShare, Trash2, Tv, XCircle, ArrowUp, ArrowDown, ChevronsUp, ChevronsDown } from 'lucide-react'
-import { getDisplayedProgress } from '../taskState'
+import { AppWindow, Archive, CheckCircle2, Copy, File, FileAudio, FileCode2, FileImage, FileText, FileVideo, Film, FolderOpen, Globe2, Info, LoaderCircle, Magnet, MonitorPlay, Bookmark, MoreHorizontal, Pause, Play, PlayCircle, RadioTower, RotateCcw, ScreenShare, Server, Trash2, Tv, XCircle, ArrowUp, ArrowDown, ChevronsUp, ChevronsDown } from 'lucide-react'
+import { getDisplayedProgress, isActiveTransfer } from '../taskState'
 import { fmtClock, fmtDate, fmtEta, fmtSpeed } from '../format'
+import SpeedChart from './SpeedChart'
+import ConnectionMap from './ConnectionMap'
 import { taskContextActions, type TaskContextAction } from '../taskContextActions'
 import { pauseLabelFor, resumeLabelFor } from '../taskCommands'
-import { statusLabel, taskSizeSummary } from '../taskPresentation'
+import { taskStatusLabel, taskSizeSummary } from '../taskPresentation'
 import type { Task } from '../types'
 import { Badge, statusTone } from './ui'
 import { filePresentation, type FileKind } from '../filePresentation'
 import { taskFileUrl } from '../api'
+import { isQueuedTask, QUEUE_DRAG_MIME, queueDropPlacement, queueReorderDirection } from '../queueReorder'
 
 const menuLabels: Record<TaskContextAction, string> = {
   details: '查看详情', start: '开始下载', pause: '暂停', resume: '恢复',
-  cancel: '取消任务', retry: '重试', preview: '内置播放', launch: '系统播放', open: '打开文件位置', cast: '投屏已下载文件', pushTvbox: 'TVBox 推送已下载文件', copyUrl: '复制下载链接', log: '查看日志', delete: '仅删除任务记录', deleteFiles: '删除任务及文件', queue_up: '队列上移', queue_down: '队列下移', queue_top: '移到队首', queue_bottom: '移到队尾',
+  cancel: '取消任务', retry: '重试', preview: '内置播放', launch: '系统播放', open: '打开文件位置', cast: '投屏已下载文件', pushTvbox: 'TVBox 推送已下载文件', copyUrl: '复制下载链接', saveSiteProfile: '保存为站点规则', exportUrls: '导出链接列表', log: '查看日志', delete: '仅删除任务记录', deleteFiles: '删除任务及文件', queue_up: '队列上移', queue_down: '队列下移', queue_top: '移到队首', queue_bottom: '移到队尾',
 }
 
 const menuIcons: Record<TaskContextAction, React.ReactNode> = {
   details: <Info size={16} />, start: <Play size={16} />, pause: <Pause size={16} />,
   resume: <RotateCcw size={16} />, cancel: <XCircle size={16} />, retry: <RotateCcw size={16} />,
-  preview: <MonitorPlay size={16} />, launch: <PlayCircle size={16} />, open: <FolderOpen size={16} />, cast: <ScreenShare size={16} />, pushTvbox: <Tv size={16} />, copyUrl: <Copy size={16} />, log: <FileText size={16} />, delete: <Trash2 size={16} />, deleteFiles: <Trash2 size={16} />, queue_up: <ArrowUp size={16} />, queue_down: <ArrowDown size={16} />, queue_top: <ChevronsUp size={16} />, queue_bottom: <ChevronsDown size={16} />,
+  preview: <MonitorPlay size={16} />, launch: <PlayCircle size={16} />, open: <FolderOpen size={16} />, cast: <ScreenShare size={16} />, pushTvbox: <Tv size={16} />, copyUrl: <Copy size={16} />, saveSiteProfile: <Bookmark size={16} />, exportUrls: <FileText size={16} />, log: <FileText size={16} />, delete: <Trash2 size={16} />, deleteFiles: <Trash2 size={16} />, queue_up: <ArrowUp size={16} />, queue_down: <ArrowDown size={16} />, queue_top: <ChevronsUp size={16} />, queue_bottom: <ChevronsDown size={16} />,
 }
 
 interface ContextMenuState { task: Task; taskIds: string[]; actions: TaskContextAction[]; x: number; y: number }
 
-const typeLabels = { hls: 'HLS', dash: 'DASH', http: 'HTTP', torrent: 'BT' }
+const typeLabels = { hls: 'HLS', dash: 'DASH', http: 'HTTP', torrent: 'BT', ftp: 'FTP', sftp: 'SFTP' }
 const typeIcons = {
   hls: <Film size={15} />,
   dash: <RadioTower size={15} />,
   http: <Globe2 size={15} />,
   torrent: <Magnet size={15} />,
+  ftp: <Server size={15} />,
+  sftp: <Server size={15} />,
 }
 
 const TASK_PAGE_SIZE = 250
 
-export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTasksAction, onOpenLog, onOpenFile, onLaunchFile, onCopyUrl, onPreview, onPreviewImage, onCast, onPushToTv }: {
+export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTasksAction, onOpenLog, onOpenFile, onLaunchFile, onCopyUrl, onExportUrls, onPreview, onPreviewImage, onCast, onPushToTv, onReorderQueue }: {
   tasks: Task[]
   selected: Set<string>
   pending: Set<string>
@@ -45,14 +50,18 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
   onOpenFile: (task: Task) => void
   onLaunchFile: (task: Task) => void
   onCopyUrl: (task: Task) => void
+  onExportUrls: (tasks: Task[]) => void
   onPreview: (task: Task) => void
   onPreviewImage: (task: Task) => void
   onCast: (task: Task) => void
   onPushToTv: (task: Task) => void
+  onReorderQueue: (taskId: string, direction: string) => void
 }) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
   const [visibleLimit, setVisibleLimit] = useState(TASK_PAGE_SIZE)
   const [selectionBox, setSelectionBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
+  const [queueDrop, setQueueDrop] = useState<{ id: string; placement: 'before' | 'after' } | null>(null)
+  const queueDragId = useRef('')
   const selectionAnchor = useRef<string | null>(null)
   const suppressClick = useRef(false)
   const allSelected = tasks.length > 0 && tasks.every(task => selected.has(task.id))
@@ -138,7 +147,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
 
   const beginMarqueeSelection = (event: React.PointerEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement
-    if (event.button !== 0 || target.closest('input,button,a,.draggable-file')) return
+    if (event.button !== 0 || target.closest('input,button,a,.draggable-file,tr[data-queue-draggable]')) return
     const container = event.currentTarget
     const startX = event.clientX
     const startY = event.clientY
@@ -219,6 +228,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
     else if (action === 'cast') onCast(task)
     else if (action === 'pushTvbox') onPushToTv(task)
     else if (action === 'copyUrl') onCopyUrl(task)
+    else if (action === 'exportUrls') onExportUrls(targets)
     else if (action === 'log') onOpenLog(task)
     else onTasksAction(targets, action)
   }
@@ -239,16 +249,50 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
           const recordingLive = !!task.is_live && (task.status === 'downloading_segments' || task.status === 'pausing')
           // Paused/queued/finished rows must not keep showing the last
           // sampled transfer rate and a stale countdown.
-          const activeTransfer = ['downloading', 'downloading_segments', 'fetching_metadata', 'checking', 'downloading_m3u8', 'parsing'].includes(task.status)
+          const activeTransfer = isActiveTransfer(task.status)
           const sizeSummary = taskSizeSummary(task)
-          return <tr key={task.id} data-task-id={task.id} className={`${selected.has(task.id) ? 'selected ' : ''}${pending.has(task.id) ? 'pending' : ''}`.trim()}
+          const queueDraggable = isQueuedTask(task)
+          const dropPlacement = queueDrop?.id === task.id ? queueDrop.placement : ''
+          return <tr key={task.id} data-task-id={task.id} data-queue-draggable={queueDraggable ? '1' : undefined} draggable={queueDraggable} className={`${selected.has(task.id) ? 'selected ' : ''}${pending.has(task.id) ? 'pending ' : ''}${queueDraggable ? 'queue-draggable ' : ''}${dropPlacement ? 'queue-drop-' + dropPlacement : ''}`.trim()}
+            onDragStart={event => {
+              const origin = event.target as HTMLElement
+              if (!queueDraggable || origin.closest('input,button,a,.draggable-file')) { event.preventDefault(); return }
+              queueDragId.current = task.id
+              event.dataTransfer.effectAllowed = 'move'
+              event.dataTransfer.setData(QUEUE_DRAG_MIME, task.id)
+            }}
+            onDragEnd={() => { queueDragId.current = ''; setQueueDrop(null) }}
+            onDragOver={event => {
+              if (!queueDraggable || (!queueDragId.current && !Array.from(event.dataTransfer.types).includes(QUEUE_DRAG_MIME))) return
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'move'
+              const rect = event.currentTarget.getBoundingClientRect()
+              const placement = queueDropPlacement(event.clientY, rect.top, rect.height)
+              setQueueDrop(current => current?.id === task.id && current.placement === placement ? current : { id: task.id, placement })
+            }}
+            onDragLeave={event => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+                setQueueDrop(current => current?.id === task.id ? null : current)
+              }
+            }}
+            onDrop={event => {
+              const sourceId = event.dataTransfer.getData(QUEUE_DRAG_MIME) || queueDragId.current
+              setQueueDrop(null)
+              if (!queueDraggable) return
+              event.preventDefault()
+              event.stopPropagation()
+              const rect = event.currentTarget.getBoundingClientRect()
+              const direction = queueReorderDirection(sourceId, task.id, queueDropPlacement(event.clientY, rect.top, rect.height))
+              if (direction) onReorderQueue(sourceId, direction)
+            }}
             onClick={event => {
               if ((event.target as HTMLElement).closest('input')) return
               selectRow(event, task)
             }}
             onContextMenu={event => openMenu(event, task)}
             onDoubleClick={() => {
-              if (task.status === 'done' && visual.kind === 'image' && task.output_is_file) onPreviewImage(task)
+              if (task.output_missing) onOpenDetails(task)
+              else if (task.status === 'done' && visual.kind === 'image' && task.output_is_file) onPreviewImage(task)
               else if ((visual.kind === 'video' || visual.kind === 'audio') && task.available_actions?.includes('preview')) onPreview(task)
               else if (task.status === 'done' && task.output_is_file) onLaunchFile(task)
               else onOpenDetails(task)
@@ -259,32 +303,35 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
               if (event.shiftKey) selectRangeTo(task.id, true)
               else toggleOne(task.id)
             }} onChange={() => { /* selection is controlled by onClick */ }} aria-label={`选择 ${task.title || task.filename || task.id}`} /></td>
-            <td className={`name-cell${task.output_is_file ? ' draggable-file' : ''}`} draggable={task.status === 'done' && task.output_is_file} title={task.output_is_file ? '从文件名拖到桌面或资源管理器可复制文件' : undefined} onDragStart={event => {
-              if (!task.output_is_file) { event.preventDefault(); return }
+            <td className={`name-cell${task.output_is_file && !task.output_missing ? ' draggable-file' : ''}`} draggable={task.status === 'done' && task.output_is_file && !task.output_missing} title={task.output_is_file ? '从文件名拖到桌面或资源管理器可复制文件' : undefined} onDragStart={event => {
+              if (task.status !== 'done' || !task.output_is_file || task.output_missing) { if (task.status === 'done') event.preventDefault(); return }
               const filename = task.output_path.split(/[\\/]/).pop() || task.filename || task.id
               const url = new URL(taskFileUrl(task.id, task.file_access_token || ''), window.location.href).href
               event.dataTransfer.effectAllowed = 'copy'
               event.dataTransfer.setData('DownloadURL', `${task.mime_type || 'application/octet-stream'}:${filename}:${url}`)
               event.dataTransfer.setData('text/uri-list', url)
             }}><span title={displayName}><TaskFileIcon kind={visual.kind} extension={visual.extension} /><b>{displayName}</b><i className={`task-type type-${task.task_type}`} title={typeLabels[task.task_type]}>{typeIcons[task.task_type]}</i></span><small title={task.url}>{task.url}</small></td>
-            <td><span className={`status status-${task.status}`}>{pending.has(task.id) && <LoaderCircle className="spin" size={12} />}<Badge tone={statusTone(task.status)}>{task.status === 'queued' && task.queue_position ? `排队中 · 第 ${task.queue_position} 位` : task.is_live && task.status === 'downloading_segments' ? '直播录制' : task.is_live && task.status === 'pausing' ? '正在停止录制' : statusLabel(task.status)}</Badge></span>{task.error_code && <small className="failure-code" title={task.error_message}>{task.error_code}</small>}</td>
-            <td>{task.status === 'done'
+            <td><span className={`status status-${task.status}${task.output_missing ? ' status-missing' : ''}`}>{pending.has(task.id) && <LoaderCircle className="spin" size={12} />}<Badge tone={task.output_missing ? 'warning' : statusTone(task.status)}>{taskStatusLabel(task)}</Badge></span>{task.error_code && <small className="failure-code" title={task.error_message}>{task.error_code}</small>}</td>
+            <td>{task.status === 'done' && task.output_missing
+              ? <><span className="completed-progress missing-progress" title="最终文件已从磁盘删除，可重新下载"><RotateCcw size={15} />文件已删除</span><small className="progress-bytes">{sizeSummary}</small></>
+              : task.status === 'done'
               ? <><span className="completed-progress"><CheckCircle2 size={15} />已完成</span><small className="progress-bytes">{sizeSummary}</small></>
               : recordingLive
                 ? <><span className="live-progress"><i className="live-dot" />已录制 {fmtClock(task.media_duration)}</span><small className="progress-bytes">{sizeSummary}</small></>
                 : postProcessing
                   ? <><div className="phase-progress"><ProgressLine label="下载" value={100} /><ProgressLine label={task.status === 'merging' ? '拼接' : '转封装'} value={task.post_percent || 0} /></div><small className="progress-bytes">{sizeSummary}</small></>
-                  : <><ProgressLine value={progress} /><small className="progress-bytes">{sizeSummary}</small></>}</td>
-            <td><span className="speed-cell">{activeTransfer ? fmtSpeed(task.speed_bytes_per_sec) : '--'}</span><small className="eta-cell">{recordingLive ? 'LIVE' : activeTransfer && task.task_type === 'torrent' && task.upload_speed_bytes_per_sec > 0 ? `↑ ${fmtSpeed(task.upload_speed_bytes_per_sec)}` : activeTransfer ? fmtEta(task.eta_seconds) : '--'}</small></td>
+                  : <><ProgressLine value={progress} /><ConnectionMap parts={task.connection_parts} total={task.total_bytes} compact /><small className="progress-bytes">{sizeSummary}</small></>}</td>
+            <td className="speed-col"><span className="speed-cell">{activeTransfer ? fmtSpeed(task.speed_bytes_per_sec) : '--'}</span><SpeedChart samples={task.speed_history} current={task.speed_bytes_per_sec} peak={task.speed_peak_bytes_per_sec} compact /><small className="eta-cell">{recordingLive ? 'LIVE' : activeTransfer && task.task_type === 'torrent' && task.upload_speed_bytes_per_sec > 0 ? `↑ ${fmtSpeed(task.upload_speed_bytes_per_sec)}` : activeTransfer ? fmtEta(task.eta_seconds) : '--'}</small></td>
             <td className="segments-col" title={task.task_type === 'torrent' ? `Peer ${task.peer_count} · Seed ${task.seed_count}` : `${task.active_workers || task.active_slots || 0}/${task.max_workers || task.concurrency || 0} 个连接`}>{task.task_type === 'torrent' ? `${task.peer_count} Peer` : task.total_segments ? <><span>{task.completed_segments}/{task.total_segments}</span><small>{task.active_workers || task.active_slots || 0} 连接</small></> : '--'}</td><td className="updated-col">{fmtDate(task.updated_at)}</td>
             <td className="menu-col">
               <button className="row-menu-button" title="任务操作" onClick={event => { event.stopPropagation(); openMenu(event, task) }}><MoreHorizontal size={17} /></button>
               <div className="row-actions" onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()}>
                 {task.available_actions?.includes('pause') && <button title={task.is_live ? '停止录制' : '暂停'} onClick={() => onTasksAction([task], 'pause')}><Pause size={16} /></button>}
                 {task.available_actions?.includes('resume') && <button title={task.is_live ? '继续录制' : '恢复'} onClick={() => onTasksAction([task], 'resume')}><Play size={16} /></button>}
-                {(task.available_actions?.includes('preview') || (task.status === 'done' && (visual.kind === 'video' || visual.kind === 'audio'))) && <button title={task.status === 'done' ? '播放' : '边下边播'} onClick={() => onPreview(task)}><MonitorPlay size={16} /></button>}
-                {((task.output_path && task.output_is_file && task.status === 'done') || (task.playback_ready && ['http', 'torrent', 'hls', 'dash'].includes(task.task_type))) && <button title={task.status === 'done' ? '投屏已下载文件' : '投屏当前已下载内容'} onClick={() => onCast(task)}><ScreenShare size={16} /></button>}
-                {((task.output_path && task.output_is_file && task.status === 'done') || (task.playback_ready && ['http', 'torrent', 'hls', 'dash'].includes(task.task_type))) && <button title={task.status === 'done' ? 'TVBox 推送已下载文件' : 'TVBox 推送当前已下载内容'} onClick={() => onPushToTv(task)}><Tv size={16} /></button>}
+                {task.available_actions?.includes('retry') && <button title={task.status === 'done' ? '重新下载丢失的文件' : '重试'} onClick={() => onTasksAction([task], 'retry')}><RotateCcw size={16} /></button>}
+                {!task.output_missing && (task.available_actions?.includes('preview') || (task.status === 'done' && (visual.kind === 'video' || visual.kind === 'audio'))) && <button title={task.status === 'done' ? '播放' : '边下边播'} onClick={() => onPreview(task)}><MonitorPlay size={16} /></button>}
+                {!task.output_missing && ((task.output_path && task.output_is_file && task.status === 'done') || (task.playback_ready && ['http', 'torrent', 'hls', 'dash'].includes(task.task_type))) && <button title={task.status === 'done' ? '投屏已下载文件' : '投屏当前已下载内容'} onClick={() => onCast(task)}><ScreenShare size={16} /></button>}
+                {!task.output_missing && ((task.output_path && task.output_is_file && task.status === 'done') || (task.playback_ready && ['http', 'torrent', 'hls', 'dash'].includes(task.task_type))) && <button title={task.status === 'done' ? 'TVBox 推送已下载文件' : 'TVBox 推送当前已下载内容'} onClick={() => onPushToTv(task)}><Tv size={16} /></button>}
                 <button title="复制链接" onClick={() => onCopyUrl(task)}><Copy size={16} /></button>
                 <i className="row-actions-divider" />
                 <button className="danger" title="删除" onClick={() => onTasksAction([task], 'delete')}><Trash2 size={16} /></button>

@@ -11,14 +11,14 @@ from .config import PROJECT_ROOT, settings
 from .api import router
 from .downloader.task_manager import manager
 from .database import close_database, initialize_database
-from .downloader.throttle import download_throttle
+from .downloader.throttle import download_throttle, effective_download_speed_limit_kib
 from .updater import cleanup_update_cache
 from .legal import legal_acceptance_current
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cleanup_update_cache()
-    download_throttle.configure(getattr(settings, "download_speed_limit_kib", 0) or 0)
+    download_throttle.configure(effective_download_speed_limit_kib())
     await initialize_database()
     await manager.load_from_db(auto_start_allowed=legal_acceptance_current())
     manager.start_maintenance()

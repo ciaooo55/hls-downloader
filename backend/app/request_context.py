@@ -302,13 +302,17 @@ def build_task_headers(
         or getattr(task, "origin", "")
         or ("" if browser_context else settings.default_origin)
     )
-    cookie_value = (
-        str(scoped.get("cookie", ""))
-        if scoped is not None
-        else ("" if cross_origin else supplied_cookie)
-        or ("" if cross_origin else getattr(task, "cookie", ""))
-        or ("" if browser_context else settings.default_cookie)
-    )
+    # Cookie is the exception: the confirmation window uses
+    # `scoped.cookie or task.cookie`. Extensions often put Cookie on the
+    # top-level handoff while still sending an origin context whose cookie
+    # field is empty. Do not leak that cookie across origins.
+    cookie_value = str((scoped or {}).get("cookie") or "") if scoped is not None else ""
+    if not str(cookie_value or "").strip():
+        cookie_value = (
+            ("" if cross_origin else supplied_cookie)
+            or ("" if cross_origin else getattr(task, "cookie", ""))
+            or ("" if browser_context else settings.default_cookie)
+        )
     set_header("Referer", referer_value)
     set_header("Origin", origin_value)
     set_header("Cookie", cookie_value)

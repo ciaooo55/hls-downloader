@@ -60,6 +60,9 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS tasks (
     checksum_actual TEXT DEFAULT '',
     checksum_verified INTEGER,
     output_path TEXT DEFAULT '',
+    speed_limit_kib INTEGER DEFAULT 0,
+    selected_video TEXT DEFAULT '',
+    selected_audio TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
     started_at TEXT DEFAULT '',
@@ -101,7 +104,7 @@ MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN selected_video TEXT DEFAULT ''",
     "ALTER TABLE tasks ADD COLUMN selected_audio TEXT DEFAULT ''",
 ]
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _connection: aiosqlite.Connection | None = None
 _connection_loop: asyncio.AbstractEventLoop | None = None
@@ -175,33 +178,42 @@ def _restore_backup(path: Path) -> bool:
     return False
 
 async def _migrate(db):
-    """Apply the legacy-column baseline once, then record explicit versions."""
+    """Apply missing columns even when schema_migrations already records a version.
+
+    SCHEMA_VERSION used to stay at 1 while MIGRATIONS kept growing. Existing
+    installs that had already recorded version=1 then skipped later ALTER
+    statements (speed_limit_kib / selected_video / selected_audio). Always
+    reconcile columns from PRAGMA table_info; only the version row is gated.
+    """
     await db.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations ("
         "version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))"
     )
     cursor = await db.execute("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
     current = int((await cursor.fetchone())[0] or 0)
-    if current >= SCHEMA_VERSION:
-        return
     cursor = await db.execute("PRAGMA table_info(tasks)")
     cols = {row[1] for row in await cursor.fetchall()}
+    added = False
     for sql in MIGRATIONS:
         col_name = sql.split("ADD COLUMN")[1].strip().split()[0]
         if col_name not in cols:
             await db.execute(sql)
             cols.add(col_name)
+            added = True
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at DESC)"
     )
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at DESC)"
     )
-    await db.execute(
-        "INSERT INTO schema_migrations(version) VALUES (?)",
-        (SCHEMA_VERSION,),
-    )
-    await db.commit()
+    if current < SCHEMA_VERSION:
+        await db.execute(
+            "INSERT INTO schema_migrations(version) VALUES (?)",
+            (SCHEMA_VERSION,),
+        )
+        await db.commit()
+    elif added:
+        await db.commit()
 
 
 async def _prepare(db: aiosqlite.Connection) -> None:

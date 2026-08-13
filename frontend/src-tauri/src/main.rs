@@ -542,15 +542,35 @@ fn request_core_shutdown(config: &LocalConfig) {
     }
 }
 
-fn import_torrent_path(config: &LocalConfig, path: &str) {
-    if !path.to_ascii_lowercase().ends_with(".torrent") {
-        return;
+fn download_import_route(path: &str) -> Option<&'static str> {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".torrent") {
+        return Some("/api/tasks/torrent-path");
     }
+    if lower.ends_with(".url") || lower.ends_with(".magnet") {
+        return Some("/api/tasks/link-path");
+    }
+    if lower.ends_with(".m3u8") || lower.ends_with(".m3u") || lower.ends_with(".mpd") {
+        return Some("/api/tasks/link-path");
+    }
+    if lower.ends_with(".metalink") || lower.ends_with(".meta4") {
+        return Some("/api/tasks/link-path");
+    }
+    if lower.ends_with(".html") || lower.ends_with(".htm") {
+        return Some("/api/tasks/link-path");
+    }
+    None
+}
+
+fn import_torrent_path(config: &LocalConfig, path: &str) {
+    let Some(route) = download_import_route(path) else {
+        return;
+    };
     let body = serde_json::json!({ "path": path }).to_string();
     if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", config.port)) {
         let request = format!(
-            "POST /api/tasks/torrent-path HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Token: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            config.port, config.token, body.len(), body
+            "POST {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Token: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            route, config.port, config.token, body.len(), body
         );
         let _ = stream.write_all(request.as_bytes());
     }
@@ -583,7 +603,7 @@ fn downloadable_clipboard_text(raw: &str) -> Option<String> {
     if lowered.starts_with("magnet:?xt=") {
         return Some(text.to_string());
     }
-    if !lowered.starts_with("http://") && !lowered.starts_with("https://") {
+    if !(lowered.starts_with("http://") || lowered.starts_with("https://") || lowered.starts_with("ftp://") || lowered.starts_with("ftps://")) {
         return None;
     }
     let path = lowered.split(['?', '#']).next().unwrap_or("");
@@ -785,11 +805,28 @@ mod clipboard_tests {
     }
 
     #[test]
+    fn explorer_import_routes_cover_torrent_and_link_files() {
+        assert_eq!(download_import_route(r"C:\seed\a.torrent"), Some("/api/tasks/torrent-path"));
+        assert_eq!(download_import_route(r"C:\links\movie.url"), Some("/api/tasks/link-path"));
+        assert_eq!(download_import_route(r"C:\links\hash.magnet"), Some("/api/tasks/link-path"));
+        assert_eq!(download_import_route(r"C:\lists\songs.m3u"), Some("/api/tasks/link-path"));
+        assert_eq!(download_import_route(r"C:\lists\master.m3u8"), Some("/api/tasks/link-path"));
+        assert_eq!(download_import_route(r"C:\lists\movie.mpd"), Some("/api/tasks/link-path"));
+        assert_eq!(download_import_route(r"C:\pages\files.html"), Some("/api/tasks/link-path"));
+        assert_eq!(download_import_route(r"C:\lists\ubuntu.meta4"), Some("/api/tasks/link-path"));
+        assert_eq!(download_import_route(r"C:\lists\pkg.metalink"), Some("/api/tasks/link-path"));
+        assert_eq!(download_import_route(r"C:\notes\readme.txt"), None);
+    }
+
+    #[test]
     fn accepts_media_archive_and_magnet_links() {
+
         for text in [
             "https://cdn.example.com/video/master.m3u8",
             "https://cdn.example.com/movie.mp4?token=abc",
             "http://mirror.example.com/tool.zip",
+            "ftp://nas.example.test/pub/file.zip",
+            "ftps://nas.example.test/pub/file.zip",
             "magnet:?xt=urn:btih:0123456789abcdef",
             "  https://cdn.example.com/show.mkv  ",
         ] {
@@ -822,7 +859,7 @@ mod clipboard_tests {
             "https://example.com/article/how-to-download",
             "https://example.com/watch?v=abc123",
             "https://example.com/a.mp4\nhttps://example.com/b.mp4",
-            "ftp://example.com/file.zip",
+            "ftp://example.com/readme",
         ] {
             assert!(downloadable_clipboard_text(text).is_none(), "{text:?}");
         }

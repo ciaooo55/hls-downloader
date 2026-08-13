@@ -15,6 +15,7 @@ from backend.app.network_proxy import (
     host_matches_patterns,
     httpx_proxy_options,
     reset_proxy_runtime_state,
+    shared_keepalive_transport,
 )
 import httpx
 
@@ -308,3 +309,58 @@ def test_network_budget_limits_each_host_and_shares_rate_limit_backoff(monkeypat
 
     asyncio.run(run())
     assert maximum == 1
+
+
+def test_site_proxy_overrides_global_manual_and_empty_inherits(monkeypatch):
+    monkeypatch.setattr(settings, "proxy_mode", "manual")
+    monkeypatch.setattr(settings, "proxy_url", "socks5://127.0.0.1:1080")
+    monkeypatch.setattr(settings, "proxy_bypass", ["localhost"])
+    monkeypatch.setattr(settings, "site_profiles", [
+        {"host": "direct.test", "enabled": True, "proxy_mode": "direct"},
+        {"host": "manual.test", "enabled": True, "proxy_mode": "manual", "proxy_url": "http://127.0.0.1:8080"},
+        {"host": "empty.test", "enabled": True, "proxy_mode": "manual", "proxy_url": ""},
+    ])
+
+    assert _proxy_route("https://direct.test/a.bin") == ("direct", "")
+    assert httpx_proxy_options("https://direct.test/a.bin") == {"trust_env": False}
+    assert curl_proxy("https://direct.test/a.bin") == ""
+
+    assert _proxy_route("https://manual.test/a.bin") == ("proxy", "http://127.0.0.1:8080")
+    assert curl_proxy("https://manual.test/a.bin") == "http://127.0.0.1:8080"
+
+    assert _proxy_route("https://empty.test/a.bin") == ("proxy", "socks5://127.0.0.1:1080")
+    assert _proxy_route("https://other.test/a.bin") == ("proxy", "socks5://127.0.0.1:1080")
+
+
+def test_http_keepalive_transport_is_shared_across_tasks(monkeypatch):
+    monkeypatch.setattr(settings, "proxy_mode", "direct")
+    monkeypatch.setattr(settings, "site_profiles", [])
+    monkeypatch.setattr(settings, "allowed_hosts", [])
+    reset_proxy_runtime_state()
+    first = PolicyAsyncClient()
+    second = PolicyAsyncClient()
+    url = "https://cdn.example.test/file.bin"
+    client_a = first._client_for(url)
+    client_b = second._client_for(url)
+    assert client_a is not client_b
+    assert client_a.cookies is not client_b.cookies
+    transport_a = shared_keepalive_transport(_proxy_route(url))
+    assert getattr(client_a, "_transport", None) is transport_a
+    assert getattr(client_b, "_transport", None) is transport_a
+    other = shared_keepalive_transport(("proxy", "http://127.0.0.1:8080"))
+    assert other is not transport_a
+
+
+def test_explicit_transport_is_not_replaced_by_shared_pool(monkeypatch):
+    monkeypatch.setattr(settings, "proxy_mode", "direct")
+    monkeypatch.setattr(settings, "site_profiles", [])
+    reset_proxy_runtime_state()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"ok", request=request)
+
+    mock = httpx.MockTransport(handler)
+    client = PolicyAsyncClient(transport=mock)
+    inner = client._client_for("https://cdn.example.test/file.bin")
+    assert getattr(inner, "_transport", None) is mock
+

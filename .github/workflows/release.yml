@@ -6,7 +6,7 @@ on:
       version:
         description: Version used in the installer, for example 3.0.10
         required: false
-        default: "3.0.24"
+        default: "3.0.25"
       include_extensions:
         description: Upload browser extension ZIPs for this release
         required: false

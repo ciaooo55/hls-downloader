@@ -8,10 +8,10 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-!define APP_VERSION "3.0.24"
+!define APP_VERSION "3.0.25"
 !endif
 !ifndef APP_FILE_VERSION
-!define APP_FILE_VERSION "3.0.24.0"
+!define APP_FILE_VERSION "3.0.25.0"
 !endif
 
 !ifndef STAGE_DIR
@@ -406,6 +406,28 @@ Section "Install" SecInstall
     WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent\DefaultIcon" "" "$INSTDIR\assets\app-icon-${APP_VERSION}.ico,0"
     WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent\shell\open\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
 
+    ; Context menu only: do not replace the default Internet Shortcut handler.
+    WriteRegStr HKCU "Software\Classes\.url\shell\HLSDownload" "" "Download with HLS Downloader"
+    WriteRegStr HKCU "Software\Classes\.url\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\InternetShortcut\shell\HLSDownload" "" "Download with HLS Downloader"
+    WriteRegStr HKCU "Software\Classes\InternetShortcut\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.magnet\shell\HLSDownload" "" "Download with HLS Downloader"
+    WriteRegStr HKCU "Software\Classes\.magnet\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.m3u\shell\HLSDownload" "" "Download with HLS Downloader"
+    WriteRegStr HKCU "Software\Classes\.m3u\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.m3u8\shell\HLSDownload" "" "Download with HLS Downloader"
+    WriteRegStr HKCU "Software\Classes\.m3u8\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.mpd\shell\HLSDownload" "" "Download with HLS Downloader"
+    WriteRegStr HKCU "Software\Classes\.mpd\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.html\shell\HLSDownload" "" "Download with HLS Downloader"
+    WriteRegStr HKCU "Software\Classes\.html\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.htm\shell\HLSDownload" "" "Download with HLS Downloader"
+    WriteRegStr HKCU "Software\Classes\.metalink\shell\HLSDownload" "" "Download with HLS Downloader"
+    WriteRegStr HKCU "Software\Classes\.meta4\shell\HLSDownload" "" "Download with HLS Downloader"
+    WriteRegStr HKCU "Software\Classes\.htm\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.metalink\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.meta4\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+
     CreateDirectory "$SMPROGRAMS\${APP_NAME}"
     CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\assets\app-icon-${APP_VERSION}.ico" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
     CreateShortcut "$SMPROGRAMS\${APP_NAME}\卸载 ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
@@ -480,6 +502,16 @@ RemoveApplicationData:
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
     DeleteRegKey HKCU "Software\${APP_NAME}"
     DeleteRegKey HKCU "Software\Classes\HLSDownloader.Torrent"
+    DeleteRegKey HKCU "Software\Classes\.url\shell\HLSDownload"
+    DeleteRegKey HKCU "Software\Classes\InternetShortcut\shell\HLSDownload"
+    DeleteRegKey HKCU "Software\Classes\.magnet\shell\HLSDownload"
+    DeleteRegKey HKCU "Software\Classes\.m3u\shell\HLSDownload"
+    DeleteRegKey HKCU "Software\Classes\.m3u8\shell\HLSDownload"
+    DeleteRegKey HKCU "Software\Classes\.mpd\shell\HLSDownload"
+    DeleteRegKey HKCU "Software\Classes\.html\shell\HLSDownload"
+    DeleteRegKey HKCU "Software\Classes\.htm\shell\HLSDownload"
+    DeleteRegKey HKCU "Software\Classes\.metalink\shell\HLSDownload"
+    DeleteRegKey HKCU "Software\Classes\.meta4\shell\HLSDownload"
     DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader"
     DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.ciaooo55.hls_downloader"
     DeleteRegKey HKCU "Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.ciaooo55.hls_downloader"

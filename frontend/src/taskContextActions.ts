@@ -3,7 +3,7 @@ import { commandState, type TaskLike } from './taskCommands'
 export type TaskContextAction =
   | 'details' | 'start' | 'pause' | 'resume' | 'cancel'
   | 'retry' | 'preview' | 'launch' | 'open' | 'log' | 'delete'
-  | 'deleteFiles' | 'copyUrl' | 'cast' | 'pushTvbox'
+  | 'deleteFiles' | 'copyUrl' | 'exportUrls' | 'saveSiteProfile' | 'cast' | 'pushTvbox'
   | 'queue_up' | 'queue_down' | 'queue_top' | 'queue_bottom'
 
 export function taskContextActions(input: TaskLike | TaskLike[]): TaskContextAction[] {
@@ -29,13 +29,15 @@ export function taskContextActions(input: TaskLike | TaskLike[]): TaskContextAct
   // Completed tasks use the published local file. Active tasks expose either
   // a verified byte-range stream (HTTP/Torrent) or a rewritten local HLS
   // playlist (HLS/DASH); neither path sends the original CDN URL to a TV.
-  const canDeliverCompletedFile = task.status === 'done' && Boolean(task.output_path) && task.output_is_file !== false
+  const canDeliverCompletedFile = task.status === 'done' && Boolean(task.output_path) && task.output_is_file !== false && !task.output_missing
   const canDeliverGrowingHttp = Boolean(task.playback_ready)
     && ['http', 'torrent', 'hls', 'dash'].includes(task.task_type || '')
   if (tasks.length === 1 && (canDeliverCompletedFile || canDeliverGrowingHttp)) {
     actions.push('cast', 'pushTvbox')
   }
+  if (tasks.some(value => Boolean(value.url))) actions.push('exportUrls')
   if (tasks.length === 1) actions.push('copyUrl')
+  if (tasks.length === 1 && canSaveSiteProfile(task)) actions.push('saveSiteProfile')
   if (commands.log) actions.push('log')
   if (commands.delete) actions.push('delete')
   const canDeleteFiles = tasks.every(value => value.available_actions
@@ -43,4 +45,15 @@ export function taskContextActions(input: TaskLike | TaskLike[]): TaskContextAct
     : value.status !== 'done' || Boolean(value.output_path))
   if (canDeleteFiles) actions.push('deleteFiles')
   return actions
+}
+
+
+export function canSaveSiteProfile(task: TaskLike): boolean {
+  const url = String(task.url || '')
+  try {
+    const parsed = new URL(url)
+    return ['http:', 'https:', 'ftp:', 'ftps:', 'sftp:'].includes(parsed.protocol) && Boolean(parsed.hostname)
+  } catch {
+    return false
+  }
 }

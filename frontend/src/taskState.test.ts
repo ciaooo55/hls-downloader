@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   getDisplayedProgress,
+  isActiveTransfer,
   isPausable,
   mergeTaskEvent,
   mergeTaskEvents,
@@ -92,6 +93,13 @@ describe('task progress presentation', () => {
     expect(isPausable({ status: 'downloading_segments' })).toBe(true)
     expect(isPausable({ status: 'merging' })).toBe(false)
     expect(isPausable({ status: 'pausing' })).toBe(false)
+  })
+
+  it('hides leftover transfer rates after pause or completion', () => {
+    expect(isActiveTransfer('downloading')).toBe(true)
+    expect(isActiveTransfer('paused')).toBe(false)
+    expect(isActiveTransfer('queued')).toBe(false)
+    expect(isActiveTransfer('done')).toBe(false)
   })
 
   it('falls back to byte progress when percent has not been published', () => {

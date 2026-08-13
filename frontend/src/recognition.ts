@@ -6,6 +6,8 @@ export interface RecognitionResult {
     label?: string
     quality?: string | null
     confidence?: number
+    checksum?: string
+    mirrors?: string[]
   }>
   message?: string
 }

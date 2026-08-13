@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from ..output_path import reserve_output_path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
@@ -375,15 +376,7 @@ def _create_hls_client(
 
 
 def _reserve_output_path(path: Path) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    for index in range(10000):
-        candidate = path if index == 0 else path.with_name(f"{path.stem}_{index}{path.suffix}")
-        try:
-            candidate.open("xb").close()
-            return candidate
-        except FileExistsError:
-            continue
-    raise RuntimeError(f"无法为输出文件分配唯一名称: {path.name}")
+    return reserve_output_path(path)
 
 
 def _externally_cancelled() -> bool:

@@ -36,7 +36,7 @@ def _is_leaked_token(value: object) -> bool:
 
 
 class Settings(BaseSettings):
-    config_version: int = 21
+    config_version: int = 27
     host: str = "127.0.0.1"
     port: int = Field(default=8765, ge=1, le=65535)
     token: str = Field(default_factory=_new_internal_token, min_length=32)
@@ -53,12 +53,19 @@ class Settings(BaseSettings):
     max_concurrent_tasks: int = Field(default=3, ge=1, le=16)
     http_chunk_size_mb: int = Field(default=8, ge=1, le=64)
     download_speed_limit_kib: int = Field(default=0, ge=0, le=1048576)
+    speed_schedule_enabled: bool = False
+    speed_schedule_start: str = "08:00"
+    speed_schedule_end: str = "23:00"
+    speed_schedule_limit_kib: int = Field(default=0, ge=0, le=1048576)
     bt_upload_limit_kib: int = Field(default=1024, ge=0, le=1048576)
     bt_max_connections: int = Field(default=200, ge=10, le=1000)
     bt_enable_dht: bool = True
+    watch_torrents: bool = False
+    watch_dir: str = ""
     browser_takeover_enabled: bool = True
     browser_takeover_min_mb: int = 0
     browser_category_dirs: dict[str, str] = Field(default_factory=dict)
+    auto_category_dirs: bool = False
     queue_auto_start_enabled: bool = False
     queue_auto_start_time: str = "00:00"
     queue_auto_stop_enabled: bool = False
@@ -70,6 +77,13 @@ class Settings(BaseSettings):
     # an unambiguous ad segment path. Ordinary media names are never filtered.
     skip_ad_segments: bool = True
     clipboard_watch: bool = True
+    completion_sound_enabled: bool = False
+    resume_interrupted_on_startup: bool = False
+    auto_retry_failed_max: int = 0
+    av_scan_enabled: bool = False
+    av_scan_command: str = ""
+    av_scan_fail_on_threat: bool = True
+    existing_file_policy: str = "rename"
     tvbox_endpoint: str = ""
     cast_device: dict[str, str] = Field(default_factory=dict)
     site_profiles: list[dict] = Field(default_factory=list)
@@ -93,6 +107,12 @@ class Settings(BaseSettings):
         if not normalized or any(day < 0 or day > 6 for day in normalized):
             raise ValueError("queue_active_days 必须包含 0 到 6 的星期编号")
         return normalized
+
+    @field_validator("existing_file_policy")
+    @classmethod
+    def validate_existing_file_policy(cls, value: str) -> str:
+        from .output_path import normalize_existing_file_policy
+        return normalize_existing_file_policy(value)
 
 def _resolve_path(v: str, base: Path = PROJECT_ROOT) -> str:
     if not v:
@@ -287,6 +307,41 @@ def _load_settings_file() -> Settings:
             data["config_version"] = 21
             migrated = True
             version = 21
+        if version < 22:
+            data.setdefault("av_scan_enabled", False)
+            data.setdefault("av_scan_command", "")
+            data.setdefault("av_scan_fail_on_threat", True)
+            data["config_version"] = 22
+            migrated = True
+            version = 22
+        if version < 23:
+            data.setdefault("existing_file_policy", "rename")
+            data["config_version"] = 23
+            migrated = True
+            version = 23
+        if version < 24:
+            data.setdefault("speed_schedule_enabled", False)
+            data.setdefault("speed_schedule_start", "08:00")
+            data.setdefault("speed_schedule_end", "23:00")
+            data.setdefault("speed_schedule_limit_kib", 0)
+            data["config_version"] = 24
+            migrated = True
+            version = 24
+        if version < 25:
+            data.setdefault("completion_sound_enabled", False)
+            data["config_version"] = 25
+            migrated = True
+            version = 25
+        if version < 26:
+            data.setdefault("resume_interrupted_on_startup", False)
+            data["config_version"] = 26
+            migrated = True
+            version = 26
+        if version < 27:
+            data.setdefault("auto_retry_failed_max", 0)
+            data["config_version"] = 27
+            migrated = True
+            version = 27
         if not isinstance(data.get("tvbox_endpoint"), str):
             data["tvbox_endpoint"] = ""
             migrated = True

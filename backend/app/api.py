@@ -30,9 +30,12 @@ from .schemas import (
     TaskRequestUpdate,
     TaskSpeedLimit,
     UrlRecognitionRequest,
+    PageHarvestRequest,
+    PageHarvestProbeRequest,
     PlaybackSeekRequest,
     TorrentFileSelection,
     TorrentPathImport,
+    LinkPathImport,
     FileSystemAction,
     BrowserHandoffAccept,
     BrowserHandoffCancel,
@@ -45,12 +48,15 @@ from .schemas import (
     TvboxPush,
 )
 from .config import apply_settings_update, settings, save_settings
+from .download_category import resolve_category_output_dir
 from .credentials import SECRET_MASK, mask_site_profiles, restore_masked_site_profiles
 from .downloader.task_manager import (
     TaskConflictError,
     TaskNotFoundError,
     manager,
+    parse_queue_direction,
     task_output_is_file,
+    task_output_missing,
 )
 from .downloader.engine import task_work_dir
 from .downloader.playback import (
@@ -64,6 +70,7 @@ from .desktop_runtime import activate_window, present_browser_handoff, has_brows
 from .desktop_runtime import register_activation, register_browser_handoff, register_shutdown, set_desktop_handoff_session
 from .native_desktop import native_desktop_session, request_core_shutdown
 from .url_recognition import RecognitionError, recognize_url
+from .page_harvest import HarvestError, harvest_page, probe_harvest_links
 from .updater import (
     UpdateCheckError,
     UpdateError,
@@ -92,7 +99,11 @@ from .access_tokens import (
     verify_desktop_access_token,
     verify_file_access_token,
 )
-from .downloader.throttle import download_throttle
+from .downloader.throttle import download_throttle, effective_download_speed_limit_kib
+from .speed_history import speed_history_payload, speed_peak_payload
+from .connection_parts import connection_parts_payload
+from .duplicate_task import duplicate_task_entry
+from .site_profiles import normalize_site_proxy, site_profile_from_task, upsert_site_profile
 from .network_proxy import ensure_url_allowed, policy_httpx_client
 from .request_context import request_origin, sanitize_request_contexts, sanitize_request_headers
 from .tvbox import local_media_server, push_tvbox, scan_tvboxes
@@ -105,6 +116,7 @@ MAX_BROWSER_MEDIA_PUSHES = 64
 _update_launch_tasks: set[str] = set()
 MAX_BROWSER_JSON_BODY_BYTES = 256 * 1024
 MAX_TORRENT_MULTIPART_BODY_BYTES = 17 * 1024 * 1024
+_HANDOFF_WAIT_TERMINAL = frozenset({"accepted", "rejected", "canceled", "expired", "failed"})
 
 def _check_token(x_token: str = Header(default="")):
     if not (
@@ -169,20 +181,22 @@ def _browser_payload(value: BrowserHandoffCreate) -> dict:
 
 def _public_settings() -> dict:
     """Return user-configurable settings without the internal IPC credential."""
-    body = settings.model_dump(exclude={
+    from .config import settings as current
+    body = current.model_dump(exclude={
         "token", "host", "port",
         "legal_terms_accepted_version",
         "legal_terms_accepted_digest",
         "legal_terms_accepted_at",
     })
-    body["default_cookie_configured"] = bool(settings.default_cookie)
+    body["default_cookie_configured"] = bool(current.default_cookie)
     # A default Cookie is an authentication credential, not a display value.
     # Manual task dialogs therefore receive an empty value and must not replay
     # a mask as though it were a real Cookie.
     body["default_cookie"] = ""
-    body["proxy_url_configured"] = bool(settings.proxy_url)
-    body["proxy_url"] = SECRET_MASK if settings.proxy_url else ""
-    body["site_profiles"] = mask_site_profiles(settings.site_profiles)
+    body["proxy_url_configured"] = bool(current.proxy_url)
+    body["proxy_url"] = SECRET_MASK if current.proxy_url else ""
+    body["site_profiles"] = mask_site_profiles(current.site_profiles)
+    body["effective_download_speed_limit_kib"] = effective_download_speed_limit_kib()
     return body
 
 
@@ -317,16 +331,14 @@ def _normalize_resource_url(url: str) -> str:
 
 def _duplicate_task_payload(url: str) -> list[dict]:
     matches = manager.find_tasks_by_url(url, limit=5)
-    payload = []
-    for task in matches:
-        payload.append({
-            'id': task.id,
-            'status': task.status.value,
-            'filename': task.filename or task.title or '',
-            'output_path': task.output_path or '',
-            'updated_at': task.updated_at or task.created_at or '',
-        })
-    return payload
+    return [
+        duplicate_task_entry(
+            task,
+            manager.get_available_actions(task),
+            output_missing=task_output_missing(task),
+        )
+        for task in matches
+    ]
 
 
 def _require_allow_duplicate(url: str, allow_duplicate: bool) -> None:
@@ -515,7 +527,14 @@ async def accept_browser_handoff(handoff_id: str, body: BrowserHandoffAccept | N
         if not existing:
             raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
         raise HTTPException(status_code=409, detail=f"接管请求当前状态为 {existing.status}")
-    output_dir = Path(body.download_dir or settings.browser_category_dirs.get(body.category) or settings.download_dir).expanduser().resolve()
+    resolved = resolve_category_output_dir(
+        filename=item.filename,
+        url=item.url,
+        mime_type=item.mime_type,
+        category=body.category,
+        explicit_dir=body.download_dir,
+    )
+    output_dir = Path(resolved or settings.download_dir).expanduser().resolve()
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -579,7 +598,7 @@ async def wait_browser_handoff(handoff_id: str, x_token: str = Header(default=""
         item = browser_handoffs.get(handoff_id)
         if not item:
             raise HTTPException(status_code=404, detail="接管请求不存在或已过期")
-        if item.status != "pending" or asyncio.get_running_loop().time() >= deadline:
+        if item.status in _HANDOFF_WAIT_TERMINAL or asyncio.get_running_loop().time() >= deadline:
             return item.public()
         await asyncio.sleep(0.25)
 
@@ -635,9 +654,15 @@ async def create_browser_download(request: Request, x_token: str = Header(defaul
     url = payload["url"]
     _check_host(url)
     item = browser_handoffs.create(payload)
-    task = await _create_browser_task(item)
-    item.status = "accepted"
-    item.task_id = task.id
+    claimed = browser_handoffs.claim(item.id)
+    if claimed is None:
+        raise HTTPException(status_code=409, detail="接管请求无法确认")
+    try:
+        task = await _create_browser_task(claimed)
+    except Exception:
+        browser_handoffs.fail_accept(claimed.id)
+        raise
+    browser_handoffs.complete_accept(claimed.id, task.id)
     activate_window()
     return _to_resp(task)
 
@@ -900,6 +925,41 @@ async def _launch_managed_update(task_id: str) -> None:
     timer.start()
 
 
+@router.post("/recognize/harvest/probe")
+async def harvest_probe_links(body: PageHarvestProbeRequest, x_token: str = Header(default="")):
+    _check_token(x_token)
+    headers = sanitize_request_headers(body.request_headers)
+    headers["user-agent"] = body.user_agent or settings.default_user_agent
+    if body.referer:
+        headers["referer"] = body.referer
+    if body.origin:
+        headers["origin"] = body.origin
+    cookie = body.cookie or settings.default_cookie
+    if cookie:
+        headers["cookie"] = cookie
+    probes = await probe_harvest_links(body.urls, headers=headers)
+    return {"probes": probes}
+
+
+@router.post("/recognize/harvest")
+async def harvest_input_page(body: PageHarvestRequest, x_token: str = Header(default="")):
+    _check_token(x_token)
+    _check_host(body.url)
+    headers = sanitize_request_headers(body.request_headers)
+    headers["user-agent"] = body.user_agent or settings.default_user_agent
+    if body.referer:
+        headers["referer"] = body.referer
+    if body.origin:
+        headers["origin"] = body.origin
+    cookie = body.cookie or settings.default_cookie
+    if cookie:
+        headers["cookie"] = cookie
+    try:
+        return await harvest_page(body.url, headers=headers, extensions=body.extensions)
+    except HarvestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/recognize")
 async def recognize_input_url(body: UrlRecognitionRequest, x_token: str = Header(default="")):
     _check_token(x_token)
@@ -1027,7 +1087,7 @@ async def update_settings(body: SettingsUpdate, x_token: str = Header(default=""
             data["site_profiles"], settings.site_profiles
         )
     apply_settings_update(settings, data)
-    download_throttle.configure(getattr(settings, "download_speed_limit_kib", 0) or 0)
+    download_throttle.configure(effective_download_speed_limit_kib())
     return _public_settings()
 
 
@@ -1102,7 +1162,7 @@ def _task_stream_share(task_id: str, endpoint: str) -> dict:
     task = manager.tasks.get(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if task.task_type not in {TaskType.HTTP, TaskType.TORRENT}:
+    if task.task_type not in {TaskType.HTTP, TaskType.TORRENT, TaskType.FTP}:
         raise HTTPException(
             status_code=409,
             detail="当前下载是分片直播，尚未生成连续本地文件；请先录制完成再投屏",
@@ -1416,6 +1476,8 @@ async def create_task(body: TaskCreate, x_token: str = Header(default="")):
     _check_token(x_token)
     _require_legal_acceptance()
     _check_host(body.url)
+    for mirror in body.mirrors:
+        _check_host(mirror)
     _require_allow_duplicate(body.url, body.allow_duplicate)
     task = await manager.create_task(
         url=body.url, task_type=body.task_type,
@@ -1436,6 +1498,7 @@ async def create_task(body: TaskCreate, x_token: str = Header(default="")):
         scheduled_start_at=body.scheduled_start_at.isoformat() if body.scheduled_start_at else "",
         scheduled_stop_at=body.scheduled_stop_at.isoformat() if body.scheduled_stop_at else "",
         completion_action=body.completion_action,
+        mirrors=body.mirrors,
     )
     return _to_resp(task)
 
@@ -1445,6 +1508,8 @@ async def create_batch(body: TaskBatchCreate, x_token: str = Header(default=""))
     _require_legal_acceptance()
     for task in body.tasks:
         _check_host(task.url)
+        for mirror in task.mirrors:
+            _check_host(mirror)
         _require_allow_duplicate(task.url, task.allow_duplicate)
     results = []
     for t in body.tasks:
@@ -1465,6 +1530,7 @@ async def create_batch(body: TaskBatchCreate, x_token: str = Header(default=""))
             scheduled_start_at=t.scheduled_start_at.isoformat() if t.scheduled_start_at else "",
             scheduled_stop_at=t.scheduled_stop_at.isoformat() if t.scheduled_stop_at else "",
             completion_action=t.completion_action,
+            mirrors=t.mirrors,
         )
         results.append(_to_resp(task))
     return results
@@ -1569,6 +1635,58 @@ async def create_torrent_path_task(body: TorrentPathImport, x_token: str = Heade
     return _to_resp(task)
 
 
+
+@router.post("/tasks/link-path", response_model=TaskResponse)
+async def create_link_path_task(body: LinkPathImport, x_token: str = Header(default="")):
+    _check_token(x_token)
+    _require_legal_acceptance()
+    source = Path(body.path).expanduser()
+    try:
+        from .link_file import LinkFileError, read_link_urls
+        from .metalink import METALINK_SUFFIXES, read_metalink_files
+        if source.suffix.lower() in METALINK_SUFFIXES:
+            jobs = [
+                {"url": item.url, "title": item.name, "filename": item.name, "checksum": item.checksum, "mirrors": item.mirrors}
+                for item in read_metalink_files(source)
+            ]
+        else:
+            urls = read_link_urls(source)
+            jobs = [{"url": url, "title": "", "filename": "", "checksum": "", "mirrors": []} for url in urls]
+    except (OSError, LinkFileError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "link file invalid") from exc
+    if not jobs:
+        raise HTTPException(status_code=400, detail="link file invalid")
+    # A single Explorer shortcut keeps its previous auto-start behavior.
+    # Multi-link playlists/pages are queued so a saved HTML file cannot
+    # suddenly start dozens of downloads.
+    auto_start = bool(body.auto_start) and len(jobs) == 1
+    created = None
+    last_conflict = None
+    for index, job in enumerate(jobs):
+        url = job["url"]
+        _check_host(url)
+        try:
+            _require_allow_duplicate(url, False)
+        except HTTPException as exc:
+            last_conflict = exc
+            continue
+        title = job["title"] or (source.stem if len(jobs) == 1 else f"{source.stem}-{index + 1}")
+        task = await manager.create_task(
+            url=url,
+            title=title,
+            filename=job["filename"] or title,
+            checksum=job["checksum"],
+            mirrors=job["mirrors"],
+            auto_start=auto_start,
+        )
+        created = created or task
+    if created is None:
+        if last_conflict is not None:
+            raise last_conflict
+        raise HTTPException(status_code=400, detail="link file invalid")
+    return _to_resp(created)
+
+
 @router.get("/tasks/{task_id}/files")
 async def get_task_files(task_id: str, x_token: str = Header(default="")):
     _check_token(x_token)
@@ -1613,6 +1731,33 @@ async def get_task(task_id: str, x_token: str = Header(default="")):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return _to_resp(task)
+
+
+@router.post("/tasks/{task_id}/site-profile")
+async def save_task_site_profile(task_id: str, x_token: str = Header(default="")):
+    _check_token(x_token)
+    task = manager.tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    try:
+        profile = site_profile_from_task(task)
+        host = str(profile.get("host") or "")
+        for item in settings.site_profiles or []:
+            if not isinstance(item, dict):
+                continue
+            existing = str(item.get("host") or "").strip().lower().rstrip(".")
+            if existing == host:
+                mode, proxy_url = normalize_site_proxy(item)
+                profile["proxy_mode"] = mode
+                profile["proxy_url"] = proxy_url
+                break
+    except ValueError:
+        raise HTTPException(status_code=409, detail="task has no hostname")
+    next_profiles, action = upsert_site_profile(list(settings.site_profiles or []), profile)
+    apply_settings_update(settings, {"site_profiles": next_profiles})
+    public = mask_site_profiles([profile])[0]
+    return {"ok": True, "action": action, "host": profile["host"], "profile": public}
+
 
 @router.post("/tasks/{task_id}/start")
 async def start_task(task_id: str, x_token: str = Header(default="")):
@@ -1677,10 +1822,21 @@ async def set_task_speed_limit(
 
 @router.post("/tasks/{task_id}/queue/{direction}", response_model=TaskResponse)
 async def reorder_task_queue(task_id: str, direction: str, x_token: str = Header(default="")):
-    """Move a queued task up/down/top/bottom. Direction is part of the path for simple clients."""
+    """Move a queued task by relative direction or an absolute before/after/index target."""
     _check_token(x_token)
-    if direction not in {"up", "down", "top", "bottom"}:
-        raise HTTPException(status_code=422, detail="direction must be up, down, top, or bottom")
+    try:
+        kind, payload = parse_queue_direction(direction)
+    except TaskConflictError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="direction must be up, down, top, bottom, before:<id>, after:<id>, or index:<n>",
+        ) from exc
+    if kind in {"before", "after"}:
+        direction = f"{kind}:{payload}"
+    elif kind == "index":
+        direction = f"index:{payload}"
+    else:
+        direction = kind
     try:
         task = await manager.reorder_queue(task_id, direction)
     except TaskNotFoundError as exc:
@@ -2109,7 +2265,11 @@ async def open_explorer(body: FileSystemAction, x_token: str = Header(default=""
     import subprocess
     p = _task_output_path(body.task_id) if body.task_id else _allowed_explorer_path(body.path)
     if not p.exists():
-        raise HTTPException(status_code=404, detail="path not found")
+        parent = p.parent
+        if parent.exists():
+            subprocess.Popen(["explorer", str(parent)])
+            return {"ok": True, "missing": True}
+        raise HTTPException(status_code=404, detail="文件已删除，且所在目录也不存在")
     if p.is_file():
         subprocess.Popen(["explorer", "/select,", str(p)])
     else:
@@ -2128,7 +2288,7 @@ async def launch_file(body: FileSystemAction, x_token: str = Header(default=""))
         raise HTTPException(status_code=409, detail="任务尚未完成")
     target = _task_output_path(body.task_id)
     if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="file not found")
+        raise HTTPException(status_code=404, detail="最终文件已删除或不可访问，可重新下载")
     if target.suffix.lower() in {".bat", ".cmd", ".com", ".exe", ".js", ".msi", ".ps1", ".scr", ".vbs"} and not body.confirm_executable:
         raise HTTPException(status_code=409, detail="启动可执行文件前需要明确确认")
     import os
@@ -2247,6 +2407,10 @@ def _to_resp(task) -> TaskResponse:
         seed_count=task.progress.seed_count,
         playback_ready=manager.playback_ready(task),
         speed_limit_kib=task.speed_limit_kib,
+        speed_history=speed_history_payload(task),
+        speed_peak_bytes_per_sec=speed_peak_payload(task),
+        connection_parts=connection_parts_payload(task),
+        av_scan=dict(task.engine_state.get("av_scan") or {}),
         is_live=bool(task.engine_state.get("live")),
         error_message=task.error_message,
         error_code=task.error_code,
@@ -2261,9 +2425,10 @@ def _to_resp(task) -> TaskResponse:
         checksum_actual=task.checksum_actual,
         checksum_verified=task.checksum_verified,
         output_is_file=task_output_is_file(task),
+        output_missing=task_output_missing(task),
         file_access_token=(
             issue_file_access_token(task.id)
-            if task.status is TaskStatus.DONE and task_output_is_file(task)
+            if task.status is TaskStatus.DONE and task_output_is_file(task) and not task_output_missing(task)
             else ""
         ),
         created_at=task.created_at or "",
@@ -2273,6 +2438,8 @@ def _to_resp(task) -> TaskResponse:
         scheduled_start_at=str(task.engine_state.get("scheduled_start_at") or ""),
         scheduled_stop_at=str(task.engine_state.get("scheduled_stop_at") or ""),
         completion_action=str(task.engine_state.get("completion_action") or "none"),
+        mirrors=list(task.engine_state.get("mirrors") or []),
+        mirror_status=list(task.engine_state.get("mirror_status") or []),
         available_actions=manager.get_available_actions(task),
         queue_position=manager.get_queue_position(task),
     )

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterAndSortTasks, stageLabel, statusLabel, taskSizeSummary } from './taskPresentation'
+import { filterAndSortTasks, stageLabel, statusLabel, taskStatusLabel, taskSizeSummary } from './taskPresentation'
 
 const task = (id: string, status: string, createdAt: string, title = id) => ({
   id,
@@ -31,6 +31,8 @@ describe('task presentation', () => {
   it('localizes internal status and stage names', () => {
     expect(statusLabel('downloading_segments')).toBe('下载分片')
     expect(stageLabel('merging')).toBe('合并视频')
+    expect(taskStatusLabel({ status: 'done' })).toBe('已完成')
+    expect(taskStatusLabel({ status: 'done', output_missing: true })).toBe('文件已删除')
   })
 
   it('keeps downloaded and total size visible for completed, live, and post-processing tasks', () => {
@@ -55,5 +57,26 @@ describe('task presentation', () => {
       task('c', 'done', '2026-01-01T00:00:02'),
     ]
     expect(filterAndSortTasks(tasks, 'failed', '').map(item => item.id).sort()).toEqual(['a', 'b'])
+  })
+  it('filters queued and paused without changing running', () => {
+    const tasks = [
+      task('q', 'queued', '2026-01-01T00:00:00'),
+      task('wait', 'awaiting_selection', '2026-01-01T00:00:01'),
+      task('p', 'paused', '2026-01-01T00:00:02'),
+      task('d', 'downloading', '2026-01-01T00:00:03'),
+    ]
+    expect(filterAndSortTasks(tasks, 'queued', '').map(item => item.id)).toEqual(['wait', 'q'])
+    expect(filterAndSortTasks(tasks, 'paused', '').map(item => item.id)).toEqual(['p'])
+    expect(filterAndSortTasks(tasks, 'running', '').map(item => item.id)).toEqual(['d', 'q'])
+  })
+
+  it('orders queued tasks by queue_position without changing other statuses', () => {
+    const tasks = [
+      { ...task('late', 'queued', '2026-01-01T00:00:02'), queue_position: 2 },
+      { ...task('early', 'queued', '2026-01-01T00:00:00'), queue_position: 1 },
+      task('dl', 'downloading', '2026-01-01T00:00:03'),
+    ]
+    expect(filterAndSortTasks(tasks, 'queued', '').map(item => item.id)).toEqual(['early', 'late'])
+    expect(filterAndSortTasks(tasks, 'all', '').map(item => item.id)).toEqual(['dl', 'early', 'late'])
   })
 })

@@ -5,7 +5,7 @@ import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyP
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, desktopTaskReadiness, handoffStatusLabel, handoffTerminalStatus, type BrowserHandoffPayload, type DesktopTaskReadiness } from '../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
-import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from '../lib/browserCapabilities'
+import { filenameDeterminationEvent, requestHeaderExtraInfo } from '../lib/browserCapabilities'
 import { inspectHlsResource } from '../lib/hlsInspection'
 import { inspectDashResource } from '../lib/dashInspection'
 import { contentDispositionFilename } from '../lib/contentDisposition'
@@ -896,13 +896,6 @@ function trackedSize(chain: RequestChain | undefined): number {
   return rangeTotal || Number(responseHeader(chain, 'content-length') || 0)
 }
 
-function isDownloadResponse(disposition: string, resource: { mimeType?: string, filename?: string } | null): boolean {
-  if (!resource) return false
-  return /(?:^|;)\s*attachment(?:;|$)/i.test(disposition)
-    || Boolean(resource.filename)
-    || resource.mimeType?.toLowerCase().includes('application/octet-stream') === true
-}
-
 function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefined, observed: { disposition: string, resource: ObservedDownloadResource | null }): void {
   if (!chain || !observed.resource || !isEarlyDirectDownloadResponse(details, observed)) return
   const observedResource = observed.resource
@@ -1048,69 +1041,17 @@ export default defineBackground(() => {
     requestChains.observeRedirect(details as any)
   }, TRACKED_REQUEST_FILTER, ['responseHeaders'])
 
-  if (import.meta.env.FIREFOX) {
-    ;(browser.webRequest.onHeadersReceived.addListener as any)(async (details: any) => {
-      const chain = requestChains.observeResponse(details)
-      const observed = observedResponse(details, chain)
-      if (details.statusCode >= 300 && details.statusCode < 400) return {}
-      if (!isDownloadResponse(observed.disposition, observed.resource)) return {}
-      const intent = await resolveFirefoxClickIntent(
-        undefined,
-        () => waitForClickIntent(
-          details.url,
-          '',
-          details.documentUrl || details.initiator || requestHeader(chain, 'referer'),
-          chain,
-        ),
-      )
-      if (!intent) return {}
-      const config = await settings()
-      const resource = observed.resource!
-      resource.pageUrl = await topLevelPageUrl(details.tabId, resource.pageUrl)
-      if (String(chain.method || '').toUpperCase() === 'POST' && !replayablePostRequest(chain).request_body) {
-        // Never cancel a browser POST that cannot be reproduced exactly.
-        return {}
-      }
-      if (!shouldTakeover({
-        url: resource.url,
-        sourcePageUrl: resource.pageUrl,
-        size: resource.size,
-        mimeType: resource.mimeType,
-        filename: resource.filename,
-        ...config,
-        ...intent,
-        explicitClick: true,
-      }) || (!intent.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) {
-        return {}
-      }
-      try {
-        const response = await offer({
-          ...resource,
-          requestHeaders: chain.requestHeaders,
-          pageUrl: resource.pageUrl || chain.pageUrl || requestHeader(chain, 'referer'),
-          id: resourceId(resource.url),
-          seenAt: Date.now(),
-        }, chain)
-        const transferred = desktopAcceptedHandoff(response)
-        return transferred ? { cancel: true } : {}
-      } catch (error) {
-        console.warn('HLS Downloader could not preempt Firefox response', error)
-        return {}
-      }
-    }, TRACKED_REQUEST_FILTER, ['blocking', 'responseHeaders'])
-  } else {
-    browser.webRequest.onHeadersReceived.addListener(details => {
-      const chain = requestChains.observeResponse(details as any)
-      const observed = observedResponse(details, chain)
-      // AB's Chromium path sends an early direct-download offer here and
-      // leaves only the browser-item cleanup for onCreated.  This makes the
-      // desktop confirmation window appear as soon as response headers prove
-      // that the navigation is a real download, while preserving the browser
-      // fallback if the app is unavailable.
-      rememberEarlyBrowserTakeover(details, chain, observed)
-      return undefined
-    }, TRACKED_REQUEST_FILTER, ['responseHeaders'])
-  }
+  browser.webRequest.onHeadersReceived.addListener(details => {
+    const chain = requestChains.observeResponse(details as any)
+    const observed = observedResponse(details, chain)
+    // Offer as soon as response headers prove a download, but never cancel
+    // the navigation here. Firefox used to {cancel:true} once the desktop
+    // window opened; rejecting that window then left no DownloadItem to
+    // resume. onCreated pauses the browser item and either removes it after
+    // a successful desktop transfer or resumes it on reject/expire.
+    rememberEarlyBrowserTakeover(details, chain, observed)
+    return undefined
+  }, TRACKED_REQUEST_FILTER, ['responseHeaders'])
   browser.webRequest.onCompleted.addListener(details => {
     requestChains.finish(details.requestId, details.timeStamp || Date.now())
   }, TRACKED_REQUEST_FILTER)

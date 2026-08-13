@@ -21,24 +21,27 @@ export default function BrowserHandoffWindow({
   const [settings, setSettings] = useState<Settings>({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [closing, setClosing] = useState(false)
   const [queueRemaining, setQueueRemaining] = useState(0)
   const resolvedRef = useRef(false)
+  const closingRef = useRef(false)
+  const onClosedRef = useRef(onClosed)
+  onClosedRef.current = onClosed
 
   const close = useCallback(() => {
-    if (closing) return
-    setClosing(true)
+    if (closingRef.current) return
+    closingRef.current = true
     if (persistent && isTauriDesktop()) {
       void import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
         await getCurrentWindow().hide()
-        onClosed?.(handoffId)
+        onClosedRef.current?.(handoffId)
       })
     } else {
       void closeDesktopWindow()
     }
-  }, [closing, handoffId, onClosed, persistent])
+  }, [handoffId, persistent])
 
   const load = useCallback(async () => {
+    if (closingRef.current || resolvedRef.current) return
     setError('')
     try {
       const [handoff, currentSettings, pendingHandoffs] = await Promise.all([
@@ -46,6 +49,7 @@ export default function BrowserHandoffWindow({
         fetchSettings(),
         fetchBrowserHandoffs(),
       ])
+      if (closingRef.current || resolvedRef.current) return
       if (handoff.status && handoff.status !== 'pending') {
         close()
         return
@@ -54,6 +58,7 @@ export default function BrowserHandoffWindow({
       setSettings(currentSettings)
       setQueueRemaining(Math.max(0, pendingHandoffs.filter(item => item.id !== handoffId && item.status === 'pending').length))
     } catch (reason: any) {
+      if (closingRef.current || resolvedRef.current) return
       setError(reason?.message || '无法读取浏览器下载请求')
     }
   }, [close, handoffId])
@@ -86,9 +91,10 @@ export default function BrowserHandoffWindow({
     )
     void load()
     const timer = window.setInterval(() => {
-      if (resolvedRef.current || document.hidden) return
+      if (resolvedRef.current || closingRef.current || document.hidden) return
       void Promise.all([fetchBrowserHandoff(handoffId), fetchBrowserHandoffs()])
         .then(([handoff, pendingHandoffs]) => {
+          if (resolvedRef.current || closingRef.current) return
           if (handoff.status && handoff.status !== 'pending') close()
           else {
             setItem(handoff)
@@ -98,7 +104,7 @@ export default function BrowserHandoffWindow({
         .catch(() => {})
     }, 2000)
     return () => window.clearInterval(timer)
-  }, [close, handoffId, load])
+  }, [handoffId, load, close])
 
   const resolve = async (action: 'accept' | 'cancel', decision?: BrowserHandoffDecision | BrowserHandoffCancelDecision) => {
     if (busy || resolvedRef.current) return

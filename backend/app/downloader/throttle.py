@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime
 
 
 class GlobalDownloadThrottle:
@@ -121,5 +122,42 @@ async def throttle_bytes(nbytes: int, task=None) -> None:
             bucket = task_throttles.bucket(task.id)
             bucket.configure(limit)
             await bucket.consume(nbytes)
-    download_throttle.configure(getattr(settings, "download_speed_limit_kib", 0) or 0)
+    download_throttle.configure(effective_download_speed_limit_kib())
     await download_throttle.consume(nbytes)
+
+
+def _parse_hhmm(value: object) -> tuple[int, int] | None:
+    try:
+        hour_text, minute_text = str(value or '').strip().split(':', 1)
+        hour, minute = int(hour_text), int(minute_text)
+    except (TypeError, ValueError):
+        return None
+    if 0 <= hour <= 23 and 0 <= minute <= 59:
+        return hour, minute
+    return None
+
+
+def _inside_speed_window(now: datetime, start: tuple[int, int], end: tuple[int, int]) -> bool:
+    current = (now.hour, now.minute)
+    if start < end:
+        return start <= current < end
+    return current >= start or current < end
+
+
+def effective_download_speed_limit_kib(now: datetime | None = None) -> int:
+    """Return the active global cap. Schedule is opt-in and fail-closed."""
+    from ..config import settings
+
+    base = max(0, min(1048576, int(getattr(settings, 'download_speed_limit_kib', 0) or 0)))
+    if not getattr(settings, 'speed_schedule_enabled', False):
+        return base
+    start = _parse_hhmm(getattr(settings, 'speed_schedule_start', '08:00'))
+    end = _parse_hhmm(getattr(settings, 'speed_schedule_end', '23:00'))
+    if start is None or end is None or start == end:
+        return base
+    current = now or datetime.now()
+    if _inside_speed_window(current, start, end):
+        scheduled = max(0, min(1048576, int(getattr(settings, 'speed_schedule_limit_kib', 0) or 0)))
+        return scheduled
+    return base
+

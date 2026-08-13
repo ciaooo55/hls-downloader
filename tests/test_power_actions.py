@@ -63,6 +63,41 @@ def test_power_action_service_executes_after_countdown(monkeypatch):
     asyncio.run(run())
 
 
+def test_power_action_confirm_does_not_execute_twice():
+    original_sleep = asyncio.sleep
+
+    async def run():
+        service = PowerActionService(delay_seconds=5)
+        events = []
+        executed = []
+        released = asyncio.Event()
+
+        async def gated_sleep(_seconds):
+            await released.wait()
+
+        import backend.app.power_actions as power_module
+        original = power_module.asyncio.sleep
+        power_module.asyncio.sleep = gated_sleep
+        try:
+            action_id = service.schedule(
+                task_id="task",
+                task_title="download",
+                action="sleep",
+                publish=events.append,
+                executor=executed.append,
+            )
+            await original_sleep(0)
+            assert service.confirm(action_id) is True
+            released.set()
+            await original_sleep(0)
+            await original_sleep(0)
+            assert executed == ["sleep"]
+        finally:
+            power_module.asyncio.sleep = original
+
+    asyncio.run(run())
+
+
 def test_completed_task_schedules_configured_power_action(monkeypatch):
     async def run():
         manager = TaskManager()

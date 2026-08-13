@@ -46,6 +46,47 @@ def test_core_lifecycle_reuses_one_wal_connection_and_migrates_once(tmp_path, mo
     asyncio.run(run())
 
 
+def test_recorded_schema_v1_still_gains_later_columns(tmp_path, monkeypatch):
+    import sqlite3
+
+    from backend.app import database
+
+    async def run():
+        await database.close_database()
+        path = tmp_path / "legacy.db"
+        monkeypatch.setattr(database, "DB_PATH", path)
+        connection = sqlite3.connect(path)
+        try:
+            connection.execute(
+                "CREATE TABLE tasks ("
+                "id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT DEFAULT '', "
+                "status TEXT DEFAULT 'queued', created_at TEXT DEFAULT '', updated_at TEXT DEFAULT '')"
+            )
+            connection.execute(
+                "CREATE TABLE schema_migrations ("
+                "version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))"
+            )
+            connection.execute("INSERT INTO schema_migrations(version) VALUES (1)")
+            connection.commit()
+        finally:
+            connection.close()
+        try:
+            await database.initialize_database()
+            columns = await database.run_db("PRAGMA table_info(tasks)")
+            names = {row["name"] for row in columns}
+            assert "speed_limit_kib" in names
+            assert "selected_video" in names
+            assert "selected_audio" in names
+            versions = await database.run_db(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            )
+            assert [row["version"] for row in versions][-1] == database.SCHEMA_VERSION
+        finally:
+            await database.close_database()
+
+    asyncio.run(run())
+
+
 def test_large_select_can_be_streamed_in_bounded_batches(tmp_path, monkeypatch):
     from backend.app import database
 

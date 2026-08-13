@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Download, FolderOpen, Globe2, ShieldCheck } from 'lucide-react'
 import { fmtBytes } from '../format'
+import { openTaskInExplorer, taskAction } from '../api'
+import { duplicateActionLabel } from '../duplicateTask'
 import type { Settings } from '../types'
 import { downloadCategory, DOWNLOAD_CATEGORY_LABELS, type DownloadCategory } from '../downloadCategory'
 import { pickFolder } from '../desktop'
@@ -14,6 +16,7 @@ export interface BrowserHandoffDuplicate {
   filename: string
   output_path?: string
   updated_at?: string
+  suggested_action?: 'resume' | 'retry' | 'start' | 'open' | 'focus' | 'none'
 }
 
 export interface BrowserHandoff {
@@ -213,7 +216,7 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
           </details>
         </div>
         <DialogFooter>
-          <Button type="button" variant="secondary" className="secondary-button" disabled={busy} onClick={cancel}>取消</Button>
+          {item.duplicate && topDuplicate && duplicateActionLabel(topDuplicate.suggested_action) ? <Button type="button" variant="secondary" className="secondary-button" disabled={busy} onClick={() => void (async () => { const action = topDuplicate.suggested_action || 'none'; if (action === 'open') await openTaskInExplorer(topDuplicate.id); else if (action !== 'focus' && action !== 'none') await taskAction(topDuplicate.id, action); onResolve('cancel') })()}>{duplicateActionLabel(topDuplicate.suggested_action)}</Button> : null}<Button type="button" variant="secondary" className="secondary-button" disabled={busy} onClick={cancel}>取消</Button>
           <Button type="button" className="primary-button" disabled={!canAccept} onClick={accept}><Download size={15} />{busy ? '处理中…' : '确认下载'}</Button>
         </DialogFooter>
       </Dialog>

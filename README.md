@@ -6,7 +6,7 @@
 
 **一个专注媒体下载、直播录制与浏览器接管的 Windows 本地下载管理器。**
 
-HLS · DASH · HTTP(S) · BT / magnet · 边下边播 · 断点续传
+HLS · DASH · HTTP(S) · FTP/FTPS · SFTP · BT / magnet · 边下边播 · 断点续传
 
 [![Latest release](https://img.shields.io/github/v/release/ciaooo55/hls-downloader?display_name=tag&sort=semver)](https://github.com/ciaooo55/hls-downloader/releases/latest)
 [![CI](https://github.com/ciaooo55/hls-downloader/actions/workflows/ci.yml/badge.svg)](https://github.com/ciaooo55/hls-downloader/actions/workflows/ci.yml)
@@ -14,7 +14,7 @@ HLS · DASH · HTTP(S) · BT / magnet · 边下边播 · 断点续传
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows11&logoColor=white)](https://github.com/ciaooo55/hls-downloader/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
 
-[下载最新版](https://github.com/ciaooo55/hls-downloader/releases/latest) · [Firefox 插件](https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/) · [快速开始](#-快速开始) · [浏览器插件](#-浏览器插件) · [源码开发](#-源码开发) · [发布说明](docs/releases/v3.0.24.md)
+[下载最新版](https://github.com/ciaooo55/hls-downloader/releases/latest) · [Firefox 插件](https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/) · [快速开始](#-快速开始) · [浏览器插件](#-浏览器插件) · [源码开发](#-源码开发) · [发布说明](docs/releases/v3.0.25.md)
 
 </div>
 
@@ -31,9 +31,9 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 
 | 获取方式 | 适用场景 |
 | --- | --- |
-| `HLSDownloader-v3.0.24-Windows-x64-Setup.exe` | 推荐；支持开始菜单、卸载入口和应用内更新 |
-| `HLSDownloader-v3.0.24-Windows-x64-Portable.zip` | 免安装；完整解压后运行，数据保存在便携目录 |
-| `HLSDownloader-v3.0.24-Chrome-Edge-Extension.zip` | Chrome、Edge、Brave、Chromium、Vivaldi、Opera 的 MV3 扩展 |
+| `HLSDownloader-v3.0.25-Windows-x64-Setup.exe` | 推荐；支持开始菜单、卸载入口和应用内更新 |
+| `HLSDownloader-v3.0.25-Windows-x64-Portable.zip` | 免安装；完整解压后运行，数据保存在便携目录 |
+| `HLSDownloader-v3.0.25-Chrome-Edge-Extension.zip` | Chrome、Edge、Brave、Chromium、Vivaldi、Opera 的 MV3 扩展 |
 | [Firefox Add-ons 插件](https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/) | Firefox 正式版；安装后由 Firefox 自动更新 |
 
 > [!NOTE]
@@ -51,11 +51,15 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 
 ### ⚡ 稳定下载
 
-- 普通 HTTP(S) 文件支持严格 Range 分段、字节级断点和源站不支持 Range 时自动单连接回退。
+- 普通 FTP/FTPS 文件支持单连接下载与 SIZE+REST 断点续传；SFTP 使用单 SSH 会话和 STAT 后续传，未知主机密钥按本机 TOFU 记录；两者都不影响 HTTP Range 路径。
+- 资源管理器可对 .url / .magnet 右键“用 HLS Downloader 下载”，不会抢走网页快捷方式的默认打开。监视目录也可导入这些链接文件。
+- 可选的下载完成提示音：默认关闭，与系统通知独立；短时间内批量完成会合并为一声。
+- 可选的下载完成后病毒扫描：默认关闭，优先 Windows Defender，也可自定义命令；发现威胁不删除文件。
+- 普通 HTTP(S) 文件支持严格 Range 分段、字节级断点和源站不支持 Range 时自动单连接回退；可添加备用镜像，身份匹配后故障切换并并行分段。
 - 默认每任务 12 路并发，最高 64 路；同时受全局连接预算、单站并发和共享退避限制，避免多个任务把网络打满。
-- 支持暂停、恢复、取消、重试、优先级、限速、代理、批量任务、同名保护和重启恢复。
+- 支持暂停、恢复、取消、重试、优先级、限速（可分时段）、速度曲线、代理、批量任务（支持从文本/HTML/Metalink 文件导入并导出链接列表）、同名保护和重启恢复；已完成文件被删除后任务会标明“文件已删除”，并可从原地址重新下载。
 - 签名 URL 更新后可依据资源标识安全续传；过程文件使用原子写入，跨磁盘完成时安全复制。
-- BT / magnet 基于 libtorrent，和 HTTP、HLS、DASH 任务使用同一套任务列表与调度。
+- BT / magnet 基于 libtorrent，和 HTTP、HLS、DASH 任务使用同一套任务列表与调度；可监视文件夹自动导入新放入的 .torrent，默认关闭。
 
 ### 🎬 媒体与直播
 
@@ -79,7 +83,7 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 - Tauri 2 原生窗口、系统托盘、单实例唤醒、深浅色主题和剪贴板下载提示。
 - 直播或下载期间阻止系统休眠，任务结束后立即恢复原电源策略。
 - 安装版支持应用内检查更新、SHA-256 digest 校验、可靠关闭旧实例和覆盖升级。
-- 设置、任务历史、缓存与最终文件各自有清晰目录；卸载时可选择是否保留已下载视频。
+- 设置、任务历史、缓存与最终文件各自有清晰目录；可按媒体/程序/压缩包/其他自动分类保存，任务里指定的目录不会被改走；卸载时可选择是否保留已下载视频。
 
 ### 🔐 本地与安全
 
@@ -105,7 +109,7 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 
 ### Chromium
 
-1. 下载并解压 `HLSDownloader-v3.0.24-Chrome-Edge-Extension.zip`。
+1. 下载并解压 `HLSDownloader-v3.0.25-Chrome-Edge-Extension.zip`。
 2. 打开浏览器扩展管理页并启用“开发者模式”。
 3. 选择“加载已解压的扩展程序”，指向解压目录。
 4. 启动桌面端；插件会通过 Native Messaging 自动配对，不需要手动复制 Token。
@@ -206,14 +210,14 @@ pnpm run tauri:build
 
 ```powershell
 python -m pip install -r requirements-build.txt
-.\scripts\build_installer.ps1 -Version 3.0.24
+.\scripts\build_installer.ps1 -Version 3.0.25
 ```
 
 输出位于被 Git 忽略的 `release/`：
 
 ```text
-HLSDownloader-v3.0.24-Windows-x64-Setup.exe
-HLSDownloader-v3.0.24-Windows-x64-Portable.zip
+HLSDownloader-v3.0.25-Windows-x64-Setup.exe
+HLSDownloader-v3.0.25-Windows-x64-Portable.zip
 ```
 
 需要构建浏览器插件时，本地打包追加 `-IncludeExtensionAssets`，或在 GitHub Actions 手动运行时勾选 `include_extensions`。
@@ -223,8 +227,8 @@ HLSDownloader-v3.0.24-Windows-x64-Portable.zip
 - 推送 `v*` 标签：测试、打包并创建 GitHub Release；只有相对上一标签检测到 `extension/` 变化时才附带插件资产。
 
 ```powershell
-git tag v3.0.24
-git push origin v3.0.24
+git tag v3.0.25
+git push origin v3.0.25
 ```
 
 完整流程和 PowerShell 5.1 / 7 编码要求见 [发布文档](docs/releasing.md)。

@@ -27,6 +27,7 @@ def test_create_task_rejects_duplicate_url_without_opt_in(monkeypatch):
     detail = response.json()["detail"]
     assert detail["code"] == "DUPLICATE_URL"
     assert detail["duplicates"][0]["id"] == "dup1"
+    assert detail["duplicates"][0]["suggested_action"] == "start"
 
 
 def test_create_task_allows_duplicate_when_flag_set(monkeypatch):

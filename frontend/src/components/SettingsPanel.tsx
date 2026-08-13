@@ -6,13 +6,16 @@ import { REQUEST_EXAMPLES, REQUEST_FIELD_HELP } from '../requestHelp'
 import type { ThemePreference } from '../theme'
 import type { LegalStatus, UpdateInfo } from '../types'
 import { friendlyUpdateError } from '../updateError'
+import { playCompletionChime } from '../completionSound'
 
 const QUEUE_DAY_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 import { pickFolder } from '../desktop'
 import FolderPicker from './FolderPicker'
+import SiteProfilesEditor from './SiteProfilesEditor'
 import ConfirmDialog from './ConfirmDialog'
 import LegalAgreementDialog from './LegalAgreementDialog'
 import { Button } from './ui'
+import { DOWNLOAD_CATEGORY_LABELS, type DownloadCategory } from '../downloadCategory'
 
 type SettingsSection = 'general' | 'network' | 'maintenance'
 const SETTINGS_SECTIONS: SettingsSection[] = ['general', 'network', 'maintenance']
@@ -46,15 +49,13 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   const [castDevices, setCastDevices] = useState<Array<{ id: string; protocol: 'dlna' | 'chromecast'; location: string; control_url: string; service_type: string; label: string; host: string }>>([])
   const [scanningCast, setScanningCast] = useState(false)
   const [castScanMessage, setCastScanMessage] = useState('')
-  const [siteProfilesText, setSiteProfilesText] = useState('[]')
-  const [originalSiteProfilesText, setOriginalSiteProfilesText] = useState('[]')
   const [activeSection, setActiveSection] = useState<SettingsSection>('general')
   const [legalStatus, setLegalStatus] = useState<LegalStatus | null>(null)
   const [showLegal, setShowLegal] = useState(false)
   const dialogRef = useRef<HTMLElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
-  const dirty = JSON.stringify(settings) !== JSON.stringify(original) || siteProfilesText !== originalSiteProfilesText
+  const dirty = JSON.stringify(settings) !== JSON.stringify(original)
   const selectedTvboxDevice = tvboxDevices.some(device => device.endpoint === settings.tvbox_endpoint)
   const tvboxSelectValue = settings.tvbox_endpoint
     ? (selectedTvboxDevice ? settings.tvbox_endpoint : '__manual__')
@@ -70,8 +71,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
         ...data,
         default_cookie: data.default_cookie_configured ? SECRET_MASK : '',
       }
-      const profiles = JSON.stringify(editable.site_profiles || [], null, 2)
-      setSettings(editable); setOriginal(editable); setSiteProfilesText(profiles); setOriginalSiteProfilesText(profiles)
+      setSettings(editable); setOriginal(editable)
     }).catch(reason => setError(reason.message || '加载设置失败'))
     getDesktopInfo().then(info => { setUninstallAvailable(info.installed === true); setDesktopInfo(info) })
     fetchUpdateInfo().then(setUpdateInfo).catch(() => {})
@@ -136,24 +136,22 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   }
   const doSave = async () => {
     setError('')
-    let siteProfiles: unknown
-    try {
-      siteProfiles = JSON.parse(siteProfilesText || '[]')
-      if (!Array.isArray(siteProfiles)) throw new Error()
-    } catch {
-      setError('按站点规则必须是 JSON 数组')
-      setActiveSection('network')
-      return
-    }
     if (!String(settings.download_dir || '').trim()) { setError('下载保存目录不能为空'); return }
     if (!String(settings.temp_dir || '').trim()) { setError('缓存与过程文件目录不能为空'); return }
     if (settings.default_concurrency < 1 || settings.default_concurrency > 64) { setError('默认并发数必须在 1 到 64 之间'); return }
     if (settings.max_concurrent_tasks < 1 || settings.max_concurrent_tasks > 16) { setError('最大同时任务数必须在 1 到 16 之间'); return }
     if (settings.http_chunk_size_mb < 1 || settings.http_chunk_size_mb > 64) { setError('HTTP 分段大小必须在 1 到 64 MiB 之间'); return }
     if (settings.download_speed_limit_kib != null && settings.download_speed_limit_kib < 0) { setError('下载限速不能小于 0'); return }
+    if (settings.speed_schedule_enabled) {
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(settings.speed_schedule_start || ''))) { setError('分时段开始时间必须为 HH:MM'); return }
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(settings.speed_schedule_end || ''))) { setError('分时段结束时间必须为 HH:MM'); return }
+      if (settings.speed_schedule_limit_kib != null && settings.speed_schedule_limit_kib < 0) { setError('分时段限速不能小于 0'); return }
+    }
     if (settings.live_record_max_minutes != null && (settings.live_record_max_minutes < 0 || settings.live_record_max_minutes > 2880)) { setError('直播录制时长上限必须在 0 到 2880 分钟之间'); return }
     if (settings.proxy_mode === 'manual' && !String(settings.proxy_url || '').trim()) { setError('手动代理模式必须填写代理地址'); setActiveSection('network'); return }
     if (settings.bt_upload_limit_kib < 0) { setError('BT 上传限制不能小于 0'); return }
+    const avCommand = String(settings.av_scan_command || '').trim()
+    if (avCommand && !avCommand.includes('{file}')) { setError('自定义扫描命令必须包含 {file}'); return }
     if (settings.queue_auto_start_enabled && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(settings.queue_auto_start_time || ''))) { setError('定时开始时间必须为 HH:MM'); return }
     if (!String(settings.ffmpeg_path || '').trim()) { setError('ffmpeg 路径不能为空'); return }
     const tvboxEndpoint = String(settings.tvbox_endpoint || '').trim()
@@ -169,14 +167,12 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     }
     setSaving(true)
     try {
-      const normalized = await saveSettings({ ...settings, site_profiles: siteProfiles })
+      const normalized = await saveSettings({ ...settings, site_profiles: (settings.site_profiles || []).filter((item: { host?: string }) => String(item?.host || "").trim()) })
       const editable = {
         ...normalized,
         default_cookie: normalized.default_cookie_configured ? SECRET_MASK : '',
       }
-      const normalizedProfiles = JSON.stringify(editable.site_profiles || [], null, 2)
       setSettings(editable); setOriginal(editable)
-      setSiteProfilesText(normalizedProfiles); setOriginalSiteProfilesText(normalizedProfiles)
       setSaved(true)
       window.setTimeout(() => setSaved(false), 2000)
     } catch (reason: any) {
@@ -276,6 +272,17 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
                 if (native.canceled) return
                 setShowPicker(true)
               })()}>选择目录</button><button className="icon-button bordered" title="打开目录" onClick={() => openExplorer(settings.download_dir || '')}><FolderOpen size={17} /></button></div>
+            <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={Boolean(settings.auto_category_dirs)} onChange={event => update('auto_category_dirs', event.target.checked)} />按文件类型自动分类到子目录</label>
+            <p className="field-note">关闭时全部进入上方下载目录。开启后，未单独指定分类目录的任务会保存到“媒体 / 程序 / 压缩包 / 其他”。任务里手动选择的目录不会被改走。</p>
+            {(['media', 'program', 'archive', 'other'] as DownloadCategory[]).map(category => (
+              <div className="settings-row" key={category}>
+                <div><strong>{DOWNLOAD_CATEGORY_LABELS[category]}</strong><span>可覆盖该类型的默认分类目录</span></div>
+                <div className="input-action"><input aria-label={`${DOWNLOAD_CATEGORY_LABELS[category]}保存目录`} value={settings.browser_category_dirs?.[category] || ''} placeholder={settings.auto_category_dirs ? `默认：下载目录\\${DOWNLOAD_CATEGORY_LABELS[category]}` : '使用下载保存目录'} onChange={event => update('browser_category_dirs', { ...(settings.browser_category_dirs || {}), [category]: event.target.value })} /><button className="secondary-button" onClick={() => void (async () => {
+                  const native = await pickFolder(settings.browser_category_dirs?.[category] || settings.download_dir || '')
+                  if (native.ok && native.path) update('browser_category_dirs', { ...(settings.browser_category_dirs || {}), [category]: native.path })
+                })()}>选择目录</button><button className="icon-button bordered" title="打开目录" onClick={() => openExplorer(settings.browser_category_dirs?.[category] || settings.download_dir || '')}><FolderOpen size={17} /></button></div>
+              </div>
+            ))}
             </div>
             <div className="settings-row settings-row-stack">
               <div><strong>缓存与过程文件目录</strong><span>分片、断点、BT 数据和任务日志保存在该目录的 .tasks 中</span></div>
@@ -293,14 +300,25 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
             <div className="settings-field"><label htmlFor="setting-default-concurrency">默认并发数</label><input id="setting-default-concurrency" type="number" min={1} max={64} value={settings.default_concurrency ?? 12} onChange={event => update('default_concurrency', Number(event.target.value))} /><p>{REQUEST_FIELD_HELP.concurrency}</p></div>
             <div className="settings-field"><label htmlFor="setting-max-tasks">最大同时任务数</label><input id="setting-max-tasks" type="number" min={1} max={16} value={settings.max_concurrent_tasks ?? 3} onChange={event => update('max_concurrent_tasks', Number(event.target.value))} /><p>{REQUEST_FIELD_HELP.maxTasks}</p></div>
             <div className="settings-field"><label htmlFor="setting-speed-limit">全局下载限速（KiB/s）</label><input id="setting-speed-limit" type="number" min={0} max={1048576} value={settings.download_speed_limit_kib ?? 0} onChange={event => update('download_speed_limit_kib', Number(event.target.value))} /><p>{REQUEST_FIELD_HELP.speedLimit}</p></div>
-            <div className="settings-field"><label htmlFor="setting-http-chunk">HTTP 分段大小（MiB）</label><input id="setting-http-chunk" type="number" min={1} max={64} value={settings.http_chunk_size_mb ?? 8} onChange={event => update('http_chunk_size_mb', Number(event.target.value))} /><p>每段完成后可安全暂停；较小更灵活，较大请求更少。</p></div>
+            <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={settings.speed_schedule_enabled ?? false} onChange={event => update('speed_schedule_enabled', event.target.checked)} />分时段限速</label>
+            <div className="settings-field"><label htmlFor="setting-speed-schedule-start">时段开始</label><input id="setting-speed-schedule-start" type="time" disabled={!settings.speed_schedule_enabled} value={settings.speed_schedule_start ?? '08:00'} onChange={event => update('speed_schedule_start', String(event.target.value).slice(0, 5))} /><p>开始晚于结束时按跨午夜处理，与定时队列相同。</p></div>
+            <div className="settings-field"><label htmlFor="setting-speed-schedule-end">时段结束</label><input id="setting-speed-schedule-end" type="time" disabled={!settings.speed_schedule_enabled} value={settings.speed_schedule_end ?? '23:00'} onChange={event => update('speed_schedule_end', String(event.target.value).slice(0, 5))} /><p>时段为半开区间 [start, end)。</p></div>
+            <div className="settings-field"><label htmlFor="setting-speed-schedule-limit">时段限速（KiB/s）</label><input id="setting-speed-schedule-limit" type="number" min={0} max={1048576} disabled={!settings.speed_schedule_enabled} value={settings.speed_schedule_limit_kib ?? 0} onChange={event => update('speed_schedule_limit_kib', Number(event.target.value))} /><p>0 表示该时段不限速。关闭后仍使用上方的全局限速。</p></div>
+            <div className="settings-field"><label htmlFor="setting-exist-policy">同名文件</label><select id="setting-exist-policy" value={settings.existing_file_policy || 'rename'} onChange={event => update('existing_file_policy', event.target.value)}><option value="rename">自动重命名</option><option value="overwrite">覆盖</option><option value="skip">跳过</option></select><p>默认与之前一样自动加 _1。覆盖会替换已有文件；跳过则让任务失败并保留原文件。</p></div><div className="settings-field"><label htmlFor="setting-http-chunk">HTTP 分段大小（MiB）</label><input id="setting-http-chunk" type="number" min={1} max={64} value={settings.http_chunk_size_mb ?? 8} onChange={event => update('http_chunk_size_mb', Number(event.target.value))} /><p>每段完成后可安全暂停；较小更灵活，较大请求更少。</p></div>
             <div className="settings-field"><label htmlFor="setting-live-max">直播录制时长上限（分钟）</label><input id="setting-live-max" type="number" min={0} max={2880} value={settings.live_record_max_minutes ?? 0} onChange={event => update('live_record_max_minutes', Number(event.target.value))} /><p>录制直播 HLS 达到该时长后自动停止并合并；0 表示不限制，随时可手动停止录制。</p></div>
             <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={settings.download_subtitles ?? true} onChange={event => update('download_subtitles', event.target.checked)} />下载 HLS 外挂字幕（保存为 .vtt / .srt）</label>
             <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={settings.skip_ad_segments ?? true} onChange={event => update('skip_ad_segments', event.target.checked)} />跳过 HLS 明确标记的广告分片</label>
             <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={settings.clipboard_watch ?? true} onChange={event => update('clipboard_watch', event.target.checked)} />监视剪贴板中的下载链接（仅桌面版）</label>
+            <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={Boolean(settings.completion_sound_enabled)} onChange={event => update('completion_sound_enabled', event.target.checked)} />下载完成时播放提示音（默认关闭）</label>
+            <div className="settings-field"><button type="button" className="secondary-button" onClick={() => playCompletionChime(true)}>试听提示音</button><p>与系统通知独立；短时间内多个任务完成只响一次。</p></div>
+            <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={Boolean(settings.av_scan_enabled)} onChange={event => update('av_scan_enabled', event.target.checked)} />下载完成后扫描病毒（默认关闭）</label>
+            <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={settings.av_scan_fail_on_threat ?? true} disabled={!settings.av_scan_enabled} onChange={event => update('av_scan_fail_on_threat', event.target.checked)} />发现威胁时将任务标为失败（不删除文件）</label>
+            <div className="settings-field settings-field-wide"><label htmlFor="setting-av-cmd">自定义扫描命令</label><input id="setting-av-cmd" disabled={!settings.av_scan_enabled} value={settings.av_scan_command || ''} onChange={event => update('av_scan_command', event.target.value)} placeholder='"C:\Program Files\ClamAV\clamscan.exe" --no-summary {file}' /><p>留空时优先使用 Windows Defender；自定义命令必须包含 {'{file}'}。找不到扫描器时仍保留下载结果。</p></div>
           </section>
           <h3 className="settings-group-label">定时队列</h3>
           <section className="settings-group settings-grid-group">
+            <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={Boolean(settings.resume_interrupted_on_startup)} onChange={event => update('resume_interrupted_on_startup', event.target.checked)} />启动时自动恢复上次中断的下载（默认关闭）</label>
+            <div className="settings-field"><label htmlFor="setting-auto-retry-max">失败后自动重试次数</label><input id="setting-auto-retry-max" type="number" min={0} max={10} value={settings.auto_retry_failed_max ?? 0} onChange={event => update('auto_retry_failed_max', Math.max(0, Math.min(10, Number(event.target.value) || 0)))} /><p>0 表示关闭。只重试网络/5xx 等瞬时失败，不重试 403/校验失败/病毒结果。默认关闭。</p></div>
             <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={settings.queue_auto_start_enabled ?? false} onChange={event => update('queue_auto_start_enabled', event.target.checked)} />在指定时间自动开始新队列</label>
             <div className="settings-field"><label htmlFor="setting-queue-auto-start">自动开始时间</label><input id="setting-queue-auto-start" type="time" disabled={!settings.queue_auto_start_enabled} value={settings.queue_auto_start_time ?? '00:00'} onChange={event => update('queue_auto_start_time', event.target.value)} /><p>开启后，新任务保持排队，直到当天该时间开始。排队中可右键调整优先级（上移/下移/队首/队尾）。</p></div>
             <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={settings.queue_auto_stop_enabled ?? false} onChange={event => update('queue_auto_stop_enabled', event.target.checked)} />在指定时间自动停止队列</label>
@@ -312,17 +330,15 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
         {activeSection === 'network' && <div id="settings-network" role="tabpanel" aria-labelledby="settings-tab-network" className="settings-page">
           <h3 className="settings-group-label settings-group-label-first">代理</h3>
           <section className="settings-group settings-grid-group">
-            <div className="settings-field"><label htmlFor="setting-proxy-mode">连接方式</label><select id="setting-proxy-mode" value={settings.proxy_mode || 'system'} onChange={event => update('proxy_mode', event.target.value)}><option value="system">跟随系统 / 环境</option><option value="direct">始终直连</option><option value="manual">手动代理</option></select><p>应用于 HTTP、HLS 和 DASH 下载连接。</p></div>
+            <div className="settings-field"><label htmlFor="setting-proxy-mode">连接方式</label><select id="setting-proxy-mode" value={settings.proxy_mode || 'system'} onChange={event => update('proxy_mode', event.target.value)}><option value="system">跟随系统代理</option><option value="direct">始终直连</option><option value="manual">手动代理</option></select><p>读取 Windows 系统代理（含 WinINET）和环境变量，应用于 HTTP、HLS 和 DASH。</p></div>
             <div className="settings-field"><label htmlFor="setting-proxy-url">代理地址</label><input id="setting-proxy-url" disabled={settings.proxy_mode !== 'manual'} value={settings.proxy_url || ''} onChange={event => update('proxy_url', event.target.value)} placeholder="http://user:pass@127.0.0.1:7890" /><p>支持 HTTP(S)、SOCKS5 与带认证的代理 URL。</p></div>
             <div className="settings-field"><label htmlFor="setting-proxy-bypass">不走代理的 Host</label><input id="setting-proxy-bypass" value={(settings.proxy_bypass || []).join(', ')} onChange={event => update('proxy_bypass', event.target.value.split(',').map(value => value.trim()).filter(Boolean))} placeholder="localhost, 127.0.0.1, *.lan" /><p>逗号分隔，支持通配符。</p></div>
           </section>
 
-          <h3 className="settings-group-label">按站点下载规则</h3>
+                    <h3 className="settings-group-label">按站点下载规则</h3>
           <section className="settings-group settings-grid-group">
             <div className="settings-field settings-field-wide">
-              <label htmlFor="setting-site-profiles">Host 通配规则（JSON）</label>
-              <textarea id="setting-site-profiles" className="settings-json-editor" value={siteProfilesText} onChange={event => setSiteProfilesText(event.target.value)} spellCheck={false} placeholder={'[{"host":"*.example.com","concurrency":4,"speed_limit_kib":0,"referer":"https://example.com/"}]'} />
-              <p>第一条匹配规则生效。支持 host、user_agent、referer、origin、request_headers、concurrency 和 speed_limit_kib；浏览器实际捕获的请求值优先。</p>
+              <SiteProfilesEditor value={settings.site_profiles || []} onChange={(profiles) => update('site_profiles', profiles)} />
             </div>
           </section>
 
@@ -331,6 +347,15 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
             <div className="settings-field"><label htmlFor="setting-bt-upload">上传上限（KiB/s）</label><input id="setting-bt-upload" type="number" min={0} max={1048576} value={settings.bt_upload_limit_kib ?? 1024} onChange={event => update('bt_upload_limit_kib', Number(event.target.value))} /><p>0 表示不限速；完成后会立即停止做种。</p></div>
             <div className="settings-field"><label htmlFor="setting-bt-peers">最大 Peer 连接</label><input id="setting-bt-peers" type="number" min={10} max={1000} value={settings.bt_max_connections ?? 200} onChange={event => update('bt_max_connections', Number(event.target.value))} /><p>默认 200；种子稀少时可提高连接发现速度，网络受限时再降低。</p></div>
             <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={settings.bt_enable_dht ?? true} onChange={event => update('bt_enable_dht', event.target.checked)} />启用 DHT 节点发现</label>
+            <label className="checkbox-label settings-checkbox"><input type="checkbox" checked={Boolean(settings.watch_torrents)} onChange={event => update('watch_torrents', event.target.checked)} />监视文件夹中的新种子</label>
+            <div className="settings-row">
+              <div><strong>种子监视目录</strong><span>只导入开启后新放入的 .torrent / .url / .magnet；已有文件不会自动添加</span></div>
+              <div className="input-action"><input aria-label="种子监视目录" value={settings.watch_dir || ''} onChange={event => update('watch_dir', event.target.value)} placeholder="选择一个专门放种子的文件夹" /><button className="secondary-button" onClick={() => void (async () => {
+                const native = await pickFolder(settings.watch_dir || settings.download_dir || '')
+                if (native.ok && native.path) update('watch_dir', native.path)
+              })()}>选择目录</button><button className="icon-button bordered" title="打开目录" onClick={() => openExplorer(settings.watch_dir || '')}><FolderOpen size={17} /></button></div>
+            </div>
+
           </section>
 
           <h3 className="settings-group-label">电视推送（TVBox）</h3>

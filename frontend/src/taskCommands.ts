@@ -1,12 +1,14 @@
 export interface TaskLike {
   id: string
   status: string
+  url?: string
   output_path?: string
   output_is_file?: boolean
   available_actions?: string[]
   is_live?: boolean
-  task_type?: 'hls' | 'dash' | 'http' | 'torrent'
+  task_type?: 'hls' | 'dash' | 'http' | 'torrent' | 'ftp' | 'sftp'
   playback_ready?: boolean
+  output_missing?: boolean
 }
 
 export interface CommandState {
@@ -63,7 +65,7 @@ export function commandState(tasks: TaskLike[]): CommandState {
     pause: allowed('pause') ?? tasks.every(task => PAUSABLE.has(task.status)),
     resume: allowed('resume') ?? tasks.every(task => task.status === 'paused'),
     cancel: allowed('cancel') ?? tasks.every(task => CANCELABLE.has(task.status)),
-    retry: allowed('retry') ?? tasks.every(task => RETRYABLE.has(task.status)),
+    retry: allowed('retry') ?? tasks.every(task => RETRYABLE.has(task.status) || (task.status === 'done' && Boolean(task.output_missing))),
     delete: allowed('delete') ?? true,
     open: tasks.length === 1 && (allowed('open') ?? tasks[0].status === 'done'),
     log: tasks.length === 1 && (allowed('log') ?? true),
