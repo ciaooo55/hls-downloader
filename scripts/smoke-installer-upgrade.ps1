@@ -354,6 +354,10 @@ try {
     # exit. Start-Process -Wait therefore does not reliably mean the real
     # uninstall section has finished. Wait for observable completion instead
     # of reporting a healthy asynchronous uninstall as a shutdown failure.
+    # Uninstall.exe is deleted before RMDir /r _internal, so the missing
+    # uninstaller image is not enough: a large runtime tree can still be
+    # disappearing after that file is gone.
+    $removedNames = @("HLSDownloader.exe", "HLSDownloaderCore.exe", "Uninstall.exe", "frontend", "_internal", "native-host")
     $processDeadline = [DateTime]::UtcNow.AddSeconds(60)
     do {
         $remaining = @(Get-ApplicationProcesses -OnlySmoke)
@@ -362,10 +366,14 @@ try {
         } else {
             ""
         }
+        $leftover = @(
+            $removedNames | Where-Object { Test-Path -LiteralPath (Join-Path $installDir $_) }
+        )
         $uninstallFinished = (
             -not $remaining.Count -and
             -not (Test-Path -LiteralPath $uninstaller) -and
-            $shutdownLog -match '(?m)^exit=0\r?$'
+            $shutdownLog -match '(?m)^exit=0\r?$' -and
+            -not $leftover.Count
         )
         if ($uninstallFinished) { break }
         if ($shutdownLog -match '(?m)^exit=(?!0\r?$)') { break }

@@ -235,6 +235,9 @@ def test_installer_upgrade_smoke_isolated_and_runs_from_release_build():
     assert "PyInstaller locates its package cookie at EOF" in smoke
     assert "WaitForExit(90000)" in smoke
     assert "UninstallClosedRunningApp" in smoke
+    assert 'Uninstaller left application content behind' in smoke
+    assert '-not $leftover.Count' in smoke
+    assert "Uninstall.exe is deleted before RMDir /r _internal" in smoke
     assert 'StrCpy $NativeRegistryArgs \'-RegistryPrefix "HKCU:\\Software\\HLSDownloaderInstallerSmoke"\'' in nsis
     assert '${If} $BuildSmoke != "1"' in nsis
     assert 'Invoke-Step "Smoke test installer cover upgrade and uninstall"' in build
