@@ -377,12 +377,30 @@ export default function VideoPlayerModal({ task, onClose }: {
     const available = playbackStatus?.available_duration || 0
     // Seeking inside the contiguous local prefix must never round-trip through
     // the backend. This is what keeps the first seconds and ordinary rewinds
-    // responsive even while the task is still downloading.
-    if (available > 0 && bounded <= Math.max(0, available - 0.25)) {
+    // responsive even while the task is still downloading. After a sparse
+    // rebuild the playlist no longer contains that prefix, so only seek
+    // locally when the target is already in the current buffer.
+    const inDownloadedPrefix = available > 0 && bounded <= Math.max(0, available - 0.25)
+    if (inDownloadedPrefix && !sparsePlayback) {
       resumePositionRef.current = bounded
       video.currentTime = bounded
       setCurrentTime(bounded)
       return
+    }
+    if (sparsePlayback) {
+      try {
+        const ranges = video.buffered
+        for (let index = 0; index < ranges.length; index += 1) {
+          if (bounded >= ranges.start(index) && bounded < ranges.end(index)) {
+            resumePositionRef.current = bounded
+            video.currentTime = bounded
+            setCurrentTime(bounded)
+            return
+          }
+        }
+      } catch {
+        // Sparse playlist without a loaded range still needs a backend seek.
+      }
     }
 
     if (seekTimerRef.current) window.clearTimeout(seekTimerRef.current)

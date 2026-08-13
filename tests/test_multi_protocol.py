@@ -1039,6 +1039,69 @@ def test_browser_profile_http_fallback_downloads_after_a_403(tmp_path, monkeypat
     assert Path(task.output_path).read_bytes() == b"browser"
 
 
+def test_browser_profile_http_fallback_resumes_unmarked_prefix(tmp_path, monkeypatch):
+    from backend.app.downloader import hls as hls_module
+
+    captured = {}
+
+    class Response:
+        status_code = 206
+        headers = {"content-type": "video/mp4", "content-length": "3"}
+        url = "https://files.test/video.mp4"
+        quit_now = None
+        astream_task = None
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_content(self, chunk_size=0):
+            yield b"ser"
+
+        async def aclose(self):
+            return None
+
+    class BrowserClient:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url, **kwargs):
+            captured["headers"] = kwargs.get("headers") or {}
+            return Response()
+
+    async def close_response(response):
+        await response.aclose()
+
+    task = Task(id="http-browser-resume", url="https://files.test/video.mp4", task_type=TaskType.HTTP)
+    task.engine_state.update({"browser_originated": True, "output_dir": str(tmp_path / "downloads")})
+    task.progress.total_bytes = 7
+    task_dir = task_work_dir(task)
+    task_dir.mkdir(parents=True)
+    part = task_dir / "payload.downloading"
+    part.write_bytes(b"brow")
+    monkeypatch.setattr(hls_module, "CurlAsyncSession", object)
+    monkeypatch.setattr(hls_module, "_BrowserHLSClient", BrowserClient)
+    monkeypatch.setattr(hls_module, "_close_response", close_response)
+
+    downloader = HTTPDownloader(task)
+    complete = asyncio.run(
+        downloader._download_with_browser_profile(
+            part,
+            task_dir / "http-resume.json",
+            task_dir,
+        )
+    )
+
+    assert complete is True
+    assert captured["headers"].get("Range") == "bytes=4-"
+    assert Path(task.output_path).read_bytes() == b"browser"
+
+
 def test_http_run_uses_browser_profile_only_after_browser_403(tmp_path, monkeypatch):
     from backend.app.downloader import hls as hls_module
 
@@ -1672,13 +1735,24 @@ def test_http_sequential_416_completes_when_watermark_matches(tmp_path):
     assert task.progress.completed_segments == 1
 
 
-def test_http_discards_unmarked_partial_and_keeps_watermarked_prefix(tmp_path):
+def test_http_discards_unmarked_full_size_part_but_keeps_sequential_prefix(tmp_path):
     task = Task(id="seq-discard", url="https://files.test/a.bin", task_type=TaskType.HTTP)
     downloader = HTTPDownloader(task)
-    unmarked = tmp_path / "unmarked.part"
-    unmarked.write_bytes(b"\x00\x00\x00\x00")
-    downloader._discard_untrusted_sequential_part(unmarked)
-    assert not unmarked.exists()
+    prefix = tmp_path / "prefix.part"
+    prefix.write_bytes(b"abcd")
+    downloader._discard_untrusted_sequential_part(prefix)
+    assert prefix.read_bytes() == b"abcd"
+
+    task.progress.total_bytes = 10
+    known_prefix = tmp_path / "known-prefix.part"
+    known_prefix.write_bytes(b"abcd")
+    downloader._discard_untrusted_sequential_part(known_prefix)
+    assert known_prefix.read_bytes() == b"abcd"
+
+    sparse = tmp_path / "sparse.part"
+    sparse.write_bytes(b"\x00" * 10)
+    downloader._discard_untrusted_sequential_part(sparse)
+    assert not sparse.exists()
 
     marked = tmp_path / "marked.part"
     marked.write_bytes(b"abcd")

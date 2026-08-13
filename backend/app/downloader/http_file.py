@@ -672,15 +672,9 @@ class HTTPDownloader(SeeklessEngine):
             browser_profile_managed=True,
         )
         headers["Accept-Encoding"] = "identity"
+        self._discard_untrusted_sequential_part(part_path)
         existing = part_path.stat().st_size if part_path.exists() else 0
-        marked = int(task.engine_state.get("sequential_bytes") or 0)
-        trusted = marked > 0 and existing == marked
-        if not trusted:
-            existing = 0
-            if part_path.exists():
-                part_path.unlink(missing_ok=True)
-            task.engine_state.pop("sequential_bytes", None)
-        if trusted:
+        if existing > 0:
             headers["Range"] = f"bytes={existing}-"
             task.progress.downloaded_bytes = existing
             if task.progress.total_bytes:
@@ -695,18 +689,18 @@ class HTTPDownloader(SeeklessEngine):
                 if int(getattr(response, "status_code", 0) or 0) >= 400:
                     response.raise_for_status()
                 status_code = int(getattr(response, "status_code", 0) or 0)
-                if trusted and status_code == 200:
+                if existing > 0 and status_code == 200:
                     existing = 0
-                    trusted = False
                     task.engine_state.pop("sequential_bytes", None)
                     task.progress.downloaded_bytes = 0
+                    task.progress.progress_percent = 0.0
                 final_url = str(getattr(response, "url", "") or task.url)
                 content_type = str(response.headers.get("content-type", "")).split(";", 1)[0]
                 encoding = str(response.headers.get("content-encoding") or "").strip().lower()
                 total = int(response.headers.get("content-length", 0) or 0)
                 if encoding and encoding != "identity":
                     total = 0
-                if trusted and existing > 0 and total > 0:
+                if existing > 0 and total > 0:
                     total = existing + total
                 task.mime_type = task.mime_type or content_type
                 if total > 0:
@@ -745,7 +739,7 @@ class HTTPDownloader(SeeklessEngine):
                 task.engine_state["stream_path"] = str(part_path)
                 window = _SpeedWindow()
                 first_chunk = True
-                with part_path.open("ab" if trusted and existing > 0 else "wb") as stream:
+                with part_path.open("ab" if existing > 0 else "wb") as stream:
                     try:
                         content = response.aiter_content(chunk_size=256 * 1024)
                     except TypeError:
@@ -1432,11 +1426,11 @@ class HTTPDownloader(SeeklessEngine):
                 output.unlink(missing_ok=True)
 
     def _discard_untrusted_sequential_part(self, part_path: Path) -> None:
-        """Drop a Range leftover before sequential restart.
+        """Drop a Range-preallocated sparse file before sequential restart.
 
         Multi-connection downloads truncate the part to Content-Length with
-        zeros. Only a sequential watermark that matches the on-disk size is a
-        real prefix; any other non-empty part can 206-append onto sparse bytes.
+        zeros. A shorter unmarked file is a sequential prefix and must be
+        kept so pause/resume from older builds still continues with Range.
         """
         if not part_path.exists():
             return
@@ -1444,7 +1438,8 @@ class HTTPDownloader(SeeklessEngine):
         marked = int(self.task.engine_state.get("sequential_bytes") or 0)
         if marked > 0 and existing == marked:
             return
-        if existing > 0:
+        total = int(self.task.progress.total_bytes or self._total_size or 0)
+        if total > 0 and existing >= total:
             part_path.unlink(missing_ok=True)
             self.task.engine_state.pop("sequential_bytes", None)
 
