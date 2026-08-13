@@ -1473,6 +1473,7 @@ class HTTPDownloader(SeeklessEngine):
                     if existing > 0 and response.status_code == 200:
                         existing = 0
                         append = False
+                        task.engine_state.pop("sequential_bytes", None)
                     elif not append:
                         response.raise_for_status()
                     content_type = response.headers.get("content-type", "").split(";", 1)[0]

@@ -63,6 +63,14 @@ describe('cast session helpers', () => {
       position: 0,
       duration: 0,
     })).toMatchObject({ playing: false, paused: true, position: 40, duration: 90 })
+    expect(mergeCastPlayback(current, {
+      ok: true,
+      position_ok: false,
+      duration: 120,
+      playing: true,
+      paused: false,
+      position: 0,
+    }).duration).toBe(120)
   })
 
   it('labels share activity and stop actions', () => {

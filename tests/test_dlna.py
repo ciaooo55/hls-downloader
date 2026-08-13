@@ -224,6 +224,33 @@ def test_dlna_status_is_not_ok_when_soap_calls_fail(monkeypatch):
     assert result["position"] == 0
 
 
+def test_dlna_status_does_not_trust_missing_or_unimplemented_reltime(monkeypatch):
+    bodies = {
+        "GetPositionInfo": "<Envelope><RelTime>NOT_IMPLEMENTED</RelTime><TrackDuration>00:10:00</TrackDuration></Envelope>",
+        "GetTransportInfo": "<Envelope><CurrentTransportState>PLAYING</CurrentTransportState></Envelope>",
+    }
+
+    async def fake_action(_device, action, arguments, timeout=8.0):
+        return bodies[action]
+
+    monkeypatch.setattr(dlna, "_av_transport_action", fake_action)
+    device = dlna.normalize_cast_device({
+        "location": "http://192.168.1.25/description.xml",
+        "control_url": "http://192.168.1.25/control",
+        "service_type": "urn:schemas-upnp-org:service:AVTransport:1",
+        "label": "客厅电视",
+    })
+    result = asyncio.run(dlna._dlna_status(device))
+    assert result["ok"] is True
+    assert result["position_ok"] is False
+    assert result["transport_ok"] is True
+    assert result["playing"] is True
+    assert result["position"] == 0
+    assert result["duration"] == 600
+    assert dlna.rel_time_available("<Envelope><RelTime></RelTime></Envelope>") is False
+    assert dlna.rel_time_available("<Envelope><RelTime>00:01:02</RelTime></Envelope>") is True
+
+
 def test_cast_control_stop_and_seek_to(monkeypatch):
     calls = []
 

@@ -219,12 +219,12 @@ export default function CastSessionHud({
           )}
           {downloads.pause && (
             <button type="button" disabled={busy} title={downloadPauseLabel} aria-label={downloadPauseLabel} onClick={onPauseDownload}>
-              <Pause size={15} />
+              <Pause size={15} /><span className="cast-hud-mini-tag">下</span>
             </button>
           )}
           {downloads.resume && (
             <button type="button" disabled={busy} title="恢复下载" aria-label="恢复下载" onClick={onResumeDownload}>
-              <Play size={15} />
+              <Play size={15} /><span className="cast-hud-mini-tag">下</span>
             </button>
           )}
           <button type="button" className="cast-hud-restore" onClick={onRestore}>{transport ? fmtClock(position) : '共享中'}</button>

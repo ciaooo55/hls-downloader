@@ -48,7 +48,7 @@ export function mergeCastPlayback(
     playing: transportOk ? Boolean(incoming.playing) : current.playing,
     paused: transportOk ? Boolean(incoming.paused) : current.paused,
     position: positionOk ? Math.max(0, Number(incoming.position) || 0) : current.position,
-    duration: positionOk ? (nextDuration || current.duration) : current.duration,
+    duration: nextDuration || current.duration,
     state: incoming.state || current.state,
   }
 }

@@ -1062,6 +1062,7 @@ html[data-surface="handoff"] #root {
   background: color-mix(in srgb, var(--primary) 10%, var(--surface-2));
 }
 .cast-hud-restore { flex: 1; min-width: 0; font-variant-numeric: tabular-nums; }
+.cast-hud-mini-tag { font-size: 10px; font-weight: 650; color: var(--muted); }
 .cast-hud-body { display: grid; gap: 10px; padding: 0 12px 12px; }
 .cast-hud-play { width: 42px; height: 36px !important; border-radius: 12px !important; background: var(--primary) !important; border-color: transparent !important; color: #fff !important; }
 .cast-hud-play:hover { filter: brightness(1.06); }

@@ -111,6 +111,7 @@ export default function App() {
   const [totalSpeedHistory, setTotalSpeedHistory] = useState<number[]>([])
   const totalSpeedRef = useRef(0)
   const castControlBusyRef = useRef(false)
+  const localPushBusyRef = useRef(false)
   const [batchInitialText, setBatchInitialText] = useState('')
   const [batchInitialMode, setBatchInitialMode] = useState<'list' | 'harvest'>('list')
   const [dropActive, setDropActive] = useState(false)
@@ -482,7 +483,7 @@ export default function App() {
     let stopped = false
     let inFlight = false
     const refresh = async () => {
-      if (stopped || inFlight || castControlBusyRef.current) return
+      if (stopped || inFlight || castControlBusyRef.current || localPushBusyRef.current) return
       inFlight = true
       try {
         const status = await controlCast('status', 0, localShare.device)
@@ -516,6 +517,7 @@ export default function App() {
   totalSpeedRef.current = totalSpeed
   const completed = tasks.filter(task => task.status === 'done')
   castControlBusyRef.current = castControlBusy
+  localPushBusyRef.current = localPushBusy
 
   const showFeedback = (message: string) => {
     setFeedback(message)
@@ -739,6 +741,17 @@ export default function App() {
       : { kind, path: source.path, filename: source.filename })
   }
   const beginShare = (session: LocalShareSession) => {
+    const previous = localShare
+    if (previous) {
+      const previousDeviceId = String((previous.device as { id?: string } | undefined)?.id || '')
+      const nextDeviceId = String((session.device as { id?: string } | undefined)?.id || '')
+      if (previous.kind === 'cast' && previous.device && previousDeviceId && previousDeviceId !== nextDeviceId) {
+        void controlCast('stop', 0, previous.device).catch(() => undefined)
+      }
+      if (previous.id && previous.id !== session.id) {
+        void stopLocalTvboxShare(previous.id).catch(() => undefined)
+      }
+    }
     setLocalShare(session)
     setHudMinimized(false)
     setCastPlayback(emptyCastPlayback())
@@ -752,9 +765,10 @@ export default function App() {
       }
       if (localShare.id) await stopLocalTvboxShare(localShare.id)
       const hadShare = Boolean(localShare.id)
+      const kind = localShare.kind
       setLocalShare(null)
       setCastPlayback(emptyCastPlayback())
-      showFeedback(hadShare ? '已停止本机文件共享' : '已停止投屏播放')
+      showFeedback(hadShare ? '已停止本机文件共享' : (kind === 'cast' ? '已停止投屏播放' : '已结束 TVBox 推送'))
     } catch (reason: any) {
       setError(reason.message || '停止本机文件共享失败')
     } finally {
@@ -773,6 +787,12 @@ export default function App() {
         if (action === 'play') return { ...next, playing: true, paused: false }
         if (action === 'pause') return { ...next, playing: false, paused: true }
         if (action === 'stop') return { ...emptyCastPlayback(), label: next.label }
+        if (action === 'seek' || action === 'seek_to') {
+          const target = action === 'seek_to' ? Math.max(0, delta) : Math.max(0, (current.position || 0) + delta)
+          const reported = Number(next.position) || 0
+          const useTarget = next.position_ok === false || (reported === 0 && target > 1)
+          return { ...next, playing: current.playing, paused: current.paused, position: useTarget ? target : reported }
+        }
         return next
       })
       if (action === 'pause') showFeedback(`已暂停 ${result.label}`)

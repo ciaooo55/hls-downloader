@@ -505,6 +505,17 @@ def parse_position_info(body: str) -> tuple[int, int]:
     return position, total
 
 
+def rel_time_available(body: str) -> bool:
+    rel = _xml_text(body, "RelTime")
+    if not rel:
+        return False
+    try:
+        _parse_duration(rel)
+        return True
+    except ValueError:
+        return False
+
+
 def parse_transport_state(body: str) -> str:
     return (_xml_text(body, "CurrentTransportState") or "").upper()
 
@@ -529,8 +540,12 @@ async def _dlna_status(device: dict) -> dict[str, str | bool | int]:
     position, duration = 0, 0
     position_ok = not isinstance(position_result, BaseException)
     if position_ok:
+        body = str(position_result or "")
         try:
-            position, duration = parse_position_info(str(position_result or ""))
+            position, duration = parse_position_info(body)
+            position_ok = rel_time_available(body)
+            if not position_ok:
+                position = 0
         except Exception:
             position_ok = False
             position, duration = 0, 0
