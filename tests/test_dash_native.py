@@ -673,3 +673,20 @@ def test_segmented_ttml_is_merged_and_relative_times_are_shifted(tmp_path):
     assert "one" in text and "two" in text
     assert 'begin="00:00:02.000"' in text
     assert 'end="00:00:03.000"' in text
+
+
+def test_native_dash_rejects_truncated_content_length(tmp_path, monkeypatch):
+    monkeypatch.setattr(native_module, "MAX_RETRIES", 1)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"short", headers={"Content-Length": "12"})
+
+    async def run():
+        engine = NativeDashEngine(_task(tmp_path))
+        destination = tmp_path / "seg.m4s"
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(RuntimeError, match="长度不匹配"):
+                await engine._download_one(client, "https://cdn.test/v/1.m4s", destination)
+        assert not destination.exists()
+
+    asyncio.run(run())

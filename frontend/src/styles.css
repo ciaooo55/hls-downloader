@@ -981,6 +981,127 @@ html[data-surface="handoff"] #root {
 .desktop-app.is-drop-target { outline: 2px dashed var(--accent, #3b82f6); outline-offset: -8px; }
 .drop-import-overlay { position: fixed; inset: 10px; z-index: 1400; display: grid; place-items: center; pointer-events: none; border: 2px dashed var(--accent, #3b82f6); border-radius: 12px; background: color-mix(in srgb, var(--bg) 78%, transparent); color: var(--text); font-size: 18px; font-weight: 600; }
 
+.local-share-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; height: 22px; padding: 0 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: inherit; cursor: pointer; }
+.local-share-chip:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); background: color-mix(in srgb, var(--primary) 10%, var(--surface-2)); }
+.local-share-chip b { color: var(--text); font-weight: 600; }
+.local-share-chip em { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: normal; color: var(--muted); }
+.settings-installing { padding: 8px 18px; border-bottom: 1px solid color-mix(in srgb, var(--amber) 40%, var(--border)); background: color-mix(in srgb, var(--amber) 12%, var(--surface)); color: var(--text); font-size: 12px; }
+
+.cast-session-hud {
+  position: fixed;
+  right: 16px;
+  bottom: 44px;
+  z-index: 860;
+  width: 320px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 18px 48px var(--shadow);
+  backdrop-filter: blur(16px);
+  color: var(--text);
+  animation: cast-hud-in .2s ease-out;
+}
+.cast-session-hud.is-min { width: 248px; }
+.cast-session-hud.is-busy { opacity: .86; }
+.cast-hud-head {
+  display: grid;
+  grid-template-columns: 14px 10px minmax(0, 1fr) 28px 28px;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 8px 0 12px;
+  cursor: grab;
+  user-select: none;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 10%, transparent), transparent);
+}
+.cast-hud-head:active { cursor: grabbing; }
+.cast-hud-grip { color: var(--faint); }
+.cast-hud-live { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.cast-session-hud.is-live .cast-hud-live.on {
+  background: var(--green);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 22%, transparent);
+  animation: cast-live-pulse 1.6s ease-in-out infinite;
+}
+.cast-hud-titles { min-width: 0; }
+.cast-hud-titles strong, .cast-hud-titles em { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cast-hud-titles strong { font-size: 12px; font-weight: 650; }
+.cast-hud-titles em { margin-top: 1px; color: var(--muted); font-size: 11px; font-style: normal; }
+.cast-hud-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.cast-hud-icon:hover { background: var(--surface-3); color: var(--text); }
+.cast-hud-icon.danger:hover { background: color-mix(in srgb, var(--red) 16%, var(--surface)); color: var(--red); }
+.cast-hud-icon:disabled, .cast-hud-body button:disabled { opacity: .4; cursor: default; }
+.cast-hud-mini, .cast-hud-transport, .cast-hud-download-actions { display: flex; align-items: center; gap: 6px; }
+.cast-hud-mini { padding: 0 10px 10px; }
+.cast-hud-mini button, .cast-hud-transport button, .cast-hud-download-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.cast-hud-mini button:hover, .cast-hud-transport button:hover, .cast-hud-download-actions button:hover {
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface-2));
+}
+.cast-hud-restore { flex: 1; min-width: 0; font-variant-numeric: tabular-nums; }
+.cast-hud-body { display: grid; gap: 10px; padding: 0 12px 12px; }
+.cast-hud-play { width: 42px; height: 36px !important; border-radius: 12px !important; background: var(--primary) !important; border-color: transparent !important; color: #fff !important; }
+.cast-hud-play:hover { filter: brightness(1.06); }
+.cast-hud-times { margin-left: auto; display: inline-flex; gap: 4px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.cast-hud-times b { color: var(--text); }
+.cast-hud-times i { font-style: normal; color: var(--faint); }
+.cast-hud-scrub, .cast-hud-download-bar {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-3);
+  cursor: pointer;
+}
+.cast-hud-scrub:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.cast-hud-scrub > i, .cast-hud-download-bar > i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: linear-gradient(90deg, var(--primary), color-mix(in srgb, var(--primary) 55%, var(--green)));
+  transition: transform .18s ease-out;
+}
+.cast-hud-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.cast-hud-download { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+.cast-hud-download-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }
+.cast-hud-download-bar { cursor: default; height: 6px; }
+.cast-hud-download-bar > i { background: var(--green); }
+.cast-hud-download-actions small { color: var(--faint); font-size: 11px; }
+@keyframes cast-hud-in {
+  from { opacity: 0; transform: translateY(10px) scale(.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes cast-live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cast-session-hud, .cast-hud-live.on, .cast-hud-scrub > i, .cast-hud-download-bar > i { animation: none; transition: none; }
+}
+
 .site-profiles { display: flex; flex-direction: column; gap: 10px; width: 100%; }
 .site-profile-card { display: flex; flex-direction: column; gap: 8px; padding: 10px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
 .site-profile-card > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

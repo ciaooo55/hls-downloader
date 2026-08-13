@@ -952,7 +952,7 @@ def test_browser_originated_http_403_can_retry_with_browser_profile():
 
     assert HTTPDownloader(task)._can_retry_with_browser_profile(error) is True
     task.engine_state["browser_originated"] = False
-    assert HTTPDownloader(task)._can_retry_with_browser_profile(error) is False
+    assert HTTPDownloader(task)._can_retry_with_browser_profile(error) is True
 
 
 def test_browser_originated_signed_404_can_retry_with_browser_profile():
@@ -1569,3 +1569,34 @@ def test_torrent_partial_selection_publishes_only_selected_files(tmp_path):
     assert destination.name == "keep.mp4"
     assert destination.read_bytes() == b"selected"
     assert not (tmp_path / "out" / "skip.txt").exists()
+
+
+def test_http_sequential_resumes_from_partial_file(tmp_path):
+    body = b"0123456789"
+    part = tmp_path / "payload.part"
+    part.write_bytes(body[:4])
+    task = Task(id="seq-resume", url="https://files.test/a.bin", task_type=TaskType.HTTP)
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.headers.get("range"))
+        return httpx.Response(
+            206,
+            content=body[4:],
+            headers={
+                "Content-Range": "bytes 4-9/10",
+                "Content-Type": "application/octet-stream",
+            },
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_sequential(client, downloader._headers(), part)
+
+    asyncio.run(run())
+    assert requests == ["bytes=4-"]
+    assert part.read_bytes() == body
+    assert task.progress.downloaded_bytes == 10
+    assert task.progress.total_bytes == 10

@@ -2800,6 +2800,17 @@ class HLSDownloader:
                     f"{actual_start}-{actual_end}"
                 )
 
+        def declared_length(response) -> int | None:
+            encoding = str(response.headers.get("content-encoding") or "").strip().lower()
+            if encoding and encoding != "identity":
+                return None
+            raw = response.headers.get("content-length")
+            try:
+                length = int(raw or 0)
+            except (TypeError, ValueError):
+                return None
+            return length if length > 0 else None
+
         written = 0
         try:
             if hasattr(client, "download_to_file"):
@@ -2811,9 +2822,13 @@ class HLSDownloader:
                     self.task,
                 )
                 validate_response(response)
+                if expected_length is None:
+                    expected_length = declared_length(response)
             else:
                 async with client.stream("GET", url, headers=request_headers) as response:
                     validate_response(response)
+                    if expected_length is None:
+                        expected_length = declared_length(response)
                     with temporary.open("wb") as output:
                         async for chunk in response.aiter_bytes(256 * 1024):
                             if self._is_canceled():
@@ -2826,7 +2841,7 @@ class HLSDownloader:
                 raise RuntimeError("下载结果为空")
             if expected_length is not None and written != expected_length:
                 raise RuntimeError(
-                    f"BYTERANGE 长度不匹配，期望 {expected_length}，实际 {written}"
+                    f"{'BYTERANGE' if byte_range else '分片'}长度不匹配，期望 {expected_length}，实际 {written}"
                 )
             # No per-segment fsync: mainstream downloaders rely on the OS
             # cache here. Resume validation compares identity+size and the

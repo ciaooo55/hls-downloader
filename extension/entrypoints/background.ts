@@ -333,6 +333,14 @@ async function waitForDesktopTaskReadiness(
   return 'keep-paused'
 }
 
+function followUpPausedHandoffCleanup(item: chrome.downloads.DownloadItem, handoffId: string): void {
+  void waitForDesktopTaskReadiness(handoffId, 180_000).then(async later => {
+    if (later !== 'safe-to-remove') return
+    concealBrowserDownload()
+    await removeBrowserDownload(item)
+  }).catch(() => undefined)
+}
+
 async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1) {
   const kind = resource.kind || classifyResource(resource.url, resource.mimeType)
   if (!kind) return
@@ -1113,6 +1121,7 @@ export default defineBackground(() => {
           if (readiness === 'browser-fallback') return
           if (readiness === 'keep-paused') {
             accepted = true
+            followUpPausedHandoffCleanup(item, String(earlyResult.response.handoff.id))
             return
           }
           concealBrowserDownload()
@@ -1186,6 +1195,7 @@ export default defineBackground(() => {
       if (readiness === 'browser-fallback') return
       if (readiness === 'keep-paused') {
         accepted = true
+        followUpPausedHandoffCleanup(actualBrowser, String(response.handoff.id))
         return
       }
       // Do not hide Chrome's downloads UI merely because a browser download was

@@ -214,7 +214,20 @@ body,
 .local-share-status b { color: var(--green); font-weight: 650; }
 .local-share-status em { overflow: hidden; max-width: min(28vw, 280px); color: var(--muted); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 .local-share-status button { height: 22px; padding: 0 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; cursor: pointer; }
-.local-share-status button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--red) 50%, var(--border)); color: var(--red); }
+.local-share-status > button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--red) 50%, var(--border)); color: var(--red); }
+.local-share-status .local-share-chip {
+  max-width: min(42vw, 280px);
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: inherit;
+}
+.local-share-status .local-share-chip:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  color: var(--text);
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+}
 .cast-controls { display: inline-flex; gap: 2px; }
 .local-share-status .cast-controls button { display: grid; width: 22px; padding: 0; place-items: center; }
 .local-share-status .cast-controls button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); color: var(--primary); }

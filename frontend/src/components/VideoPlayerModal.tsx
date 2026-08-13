@@ -85,6 +85,9 @@ export default function VideoPlayerModal({ task, onClose }: {
   const seekRequestRef = useRef(0)
   const resumePositionRef = useRef(0)
   const mediaErrorRecoveries = useRef(0)
+  const taskStatusRef = useRef(task.status)
+  const startLoadTimerRef = useRef<number | null>(null)
+  taskStatusRef.current = task.status
 
   const [session, setSession] = useState<PlaybackSession | null>(null)
   const [playbackStatus, setPlaybackStatus] = useState<PlaybackStatus | null>(null)
@@ -245,8 +248,15 @@ export default function VideoPlayerModal({ task, onClose }: {
       })
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) return
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && isRunningStatus(task.status) && task.status !== 'pausing' && task.status !== 'merging' && task.status !== 'remuxing') {
-          window.setTimeout(() => hls.startLoad(video.currentTime), 600)
+        const status = taskStatusRef.current
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && isRunningStatus(status) && status !== 'pausing' && status !== 'merging' && status !== 'remuxing') {
+          if (startLoadTimerRef.current) window.clearTimeout(startLoadTimerRef.current)
+          const instance = hls
+          startLoadTimerRef.current = window.setTimeout(() => {
+            startLoadTimerRef.current = null
+            if (mainHlsRef.current !== instance) return
+            instance.startLoad(video.currentTime)
+          }, 600)
           return
         }
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaErrorRecoveries.current < 2) {
@@ -267,6 +277,10 @@ export default function VideoPlayerModal({ task, onClose }: {
 
     return () => {
       seekRequestRef.current += 1
+      if (startLoadTimerRef.current) {
+        window.clearTimeout(startLoadTimerRef.current)
+        startLoadTimerRef.current = null
+      }
       if (mainHlsRef.current) {
         mainHlsRef.current.destroy()
         mainHlsRef.current = null
@@ -275,7 +289,7 @@ export default function VideoPlayerModal({ task, onClose }: {
       video.removeAttribute('src')
       video.load()
     }
-  }, [mode, playbackReload, session, sparsePlayback, task.id, task.status])
+  }, [mode, playbackReload, session, sparsePlayback, task.id])
 
   useEffect(() => {
     const video = videoRef.current

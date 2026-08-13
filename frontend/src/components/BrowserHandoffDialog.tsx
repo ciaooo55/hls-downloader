@@ -132,7 +132,12 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
       const typing = Boolean(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable))
       if (event.key === 'Escape') {
         event.preventDefault()
-        if (!busy) onResolve('cancel')
+        if (busy) return
+        if (showPicker) {
+          setShowPicker(false)
+          return
+        }
+        onResolve('cancel')
         return
       }
       if (event.key === 'Enter' && !typing && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -143,7 +148,7 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [busy, filename, directory, category, remember, cookie, headersText, onResolve])
+  }, [busy, filename, directory, category, remember, cookie, headersText, showPicker, onResolve])
 
   const topDuplicate = item.duplicates?.[0]
   const duplicateHint = item.duplicate_message || (

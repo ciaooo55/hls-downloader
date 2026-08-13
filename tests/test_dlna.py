@@ -153,11 +153,14 @@ def test_cast_control_seeks_forward_from_the_reported_position(monkeypatch):
         "service_type": "urn:schemas-upnp-org:service:AVTransport:1",
     }
 
-    asyncio.run(dlna.cast_control(device, "seek", 10))
+    result = asyncio.run(dlna.cast_control(device, "seek", 10))
 
+    assert result["ok"] is True
     assert calls == [
         ("GetPositionInfo", {"InstanceID": "0"}),
         ("Seek", {"InstanceID": "0", "Unit": "REL_TIME", "Target": "00:02:25"}),
+        ("GetPositionInfo", {"InstanceID": "0"}),
+        ("GetTransportInfo", {"InstanceID": "0"}),
     ]
 
 
@@ -174,3 +177,30 @@ def test_invalid_dlna_duration_is_rejected():
         dlna._parse_duration("00:99:00")
     with pytest.raises(ValueError):
         dlna._parse_duration("00:00:61")
+
+
+def test_parse_duration_accepts_fractional_and_short_forms():
+    assert dlna._parse_duration("1:02:03.500") == 3723
+    assert dlna._parse_duration("2:03") == 123
+
+
+def test_parse_position_and_transport_from_soap():
+    position_body = """<?xml version="1.0"?>
+    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+      <s:Body>
+        <u:GetPositionInfoResponse xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
+          <RelTime>0:01:23</RelTime>
+          <TrackDuration>0:10:00</TrackDuration>
+        </u:GetPositionInfoResponse>
+      </s:Body>
+    </s:Envelope>"""
+    transport_body = """<?xml version="1.0"?>
+    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+      <s:Body>
+        <u:GetTransportInfoResponse xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
+          <CurrentTransportState>PAUSED_PLAYBACK</CurrentTransportState>
+        </u:GetTransportInfoResponse>
+      </s:Body>
+    </s:Envelope>"""
+    assert dlna.parse_position_info(position_body) == (83, 600)
+    assert dlna.parse_transport_state(transport_body) == "PAUSED_PLAYBACK"

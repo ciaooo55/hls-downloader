@@ -1717,8 +1717,16 @@ class NativeDashEngine:
             temporary = destination.with_name(destination.name + ".tmp")
             try:
                 received = 0
+                expected = None
                 async with client.stream("GET", url, headers=headers) as response:
                     response.raise_for_status()
+                    encoding = str(response.headers.get("content-encoding") or "").strip().lower()
+                    if not encoding or encoding == "identity":
+                        try:
+                            length = int(response.headers.get("content-length", 0) or 0)
+                        except (TypeError, ValueError):
+                            length = 0
+                        expected = length if length > 0 else None
                     with temporary.open("wb") as stream:
                         async for chunk in response.aiter_bytes(256 * 1024):
                             if self._is_canceled() or self._is_pausing():
@@ -1728,6 +1736,10 @@ class NativeDashEngine:
                             received += len(chunk)
                 if received <= 0:
                     raise RuntimeError("分片响应为空")
+                if expected is not None and received != expected:
+                    raise RuntimeError(
+                        f"分片长度不匹配，期望 {expected}，实际 {received}"
+                    )
                 # No per-segment fsync; resume validation compares
                 # identity+size and ffmpeg verifies the merged output, so a
                 # torn post-crash file costs one re-download instead of a

@@ -364,22 +364,6 @@ def _cast_chromecast_media(device: dict, media_url: str, filename: str) -> None:
     _with_chromecast(device, play)
 
 
-def _control_chromecast(device: dict, action: str, seconds: int) -> None:
-    def control(chromecast, _selected):
-        controller = chromecast.media_controller
-        if action == "play":
-            controller.play()
-        elif action == "pause":
-            controller.pause()
-        elif action == "seek":
-            controller.update_status()
-            controller.seek(max(0, float(controller.status.current_time or 0) + seconds))
-        else:
-            raise ValueError("不支持的投屏控制操作")
-
-    _with_chromecast(device, control)
-
-
 async def cast_media(device: dict, media_url: str, filename: str) -> dict[str, str | bool]:
     selected = normalize_cast_device(device)
     if selected["protocol"] == "chromecast":
@@ -405,7 +389,14 @@ def _format_duration(seconds: int) -> str:
 
 
 def _parse_duration(value: str) -> int:
-    parts = value.strip().split(":")
+    text = str(value or "").strip()
+    if not text or text.upper() in {"NOT_IMPLEMENTED", "NOT IMPLEMENTED"}:
+        raise ValueError("投屏设备没有返回当前播放进度")
+    if "." in text:
+        text = text.split(".", 1)[0]
+    parts = text.split(":")
+    if len(parts) == 2:
+        parts = ["0", *parts]
     if len(parts) != 3:
         raise ValueError("投屏设备没有返回当前播放进度")
     hours, minutes, seconds = (int(part) for part in parts)
@@ -414,37 +405,130 @@ def _parse_duration(value: str) -> int:
     return hours * 3600 + minutes * 60 + seconds
 
 
+def _xml_text(body: str, local_name: str) -> str:
+    text = str(body or "").strip()
+    if not text:
+        return ""
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return ""
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1] == local_name and element.text:
+            return element.text
+    return ""
+
+
+def parse_position_info(body: str) -> tuple[int, int]:
+    """Return (position, duration) seconds from a GetPositionInfo SOAP body."""
+    rel = _xml_text(body, "RelTime")
+    duration = _xml_text(body, "TrackDuration")
+    position = 0
+    total = 0
+    try:
+        if rel:
+            position = _parse_duration(rel)
+    except ValueError:
+        position = 0
+    try:
+        if duration:
+            total = _parse_duration(duration)
+    except ValueError:
+        total = 0
+    return position, total
+
+
+def parse_transport_state(body: str) -> str:
+    return (_xml_text(body, "CurrentTransportState") or "").upper()
+
+
 async def _current_position(device: dict) -> int:
     body = await _av_transport_action(device, "GetPositionInfo", {"InstanceID": "0"})
     try:
-        root = ET.fromstring(body)
-        for element in root.iter():
-            if element.tag.rsplit("}", 1)[-1] == "RelTime" and element.text:
-                return _parse_duration(element.text)
-    except ET.ParseError as exc:
+        rel = _xml_text(body, "RelTime")
+        if not rel:
+            raise ValueError("missing RelTime")
+        return _parse_duration(rel)
+    except (ET.ParseError, ValueError) as exc:
         raise RuntimeError("投屏设备没有返回可用的播放进度") from exc
-    raise RuntimeError("投屏设备不支持读取当前播放进度，无法快进")
 
 
-async def cast_control(device: dict, action: str, seconds: int = 0) -> dict[str, str | bool]:
+async def _dlna_status(device: dict) -> dict[str, str | bool | int]:
+    position_result, transport_result = await asyncio.gather(
+        _av_transport_action(device, "GetPositionInfo", {"InstanceID": "0"}),
+        _av_transport_action(device, "GetTransportInfo", {"InstanceID": "0"}),
+        return_exceptions=True,
+    )
+    position, duration = 0, 0
+    if not isinstance(position_result, BaseException):
+        try:
+            position, duration = parse_position_info(str(position_result or ""))
+        except Exception:
+            position, duration = 0, 0
+    state = ""
+    if not isinstance(transport_result, BaseException):
+        state = parse_transport_state(str(transport_result or ""))
+    return {
+        "ok": True,
+        "label": device["label"],
+        "playing": state in {"PLAYING", "TRANSITIONING"},
+        "paused": state == "PAUSED_PLAYBACK",
+        "position": position,
+        "duration": duration,
+        "state": state or "UNKNOWN",
+    }
+
+
+def _control_chromecast(device: dict, action: str, seconds: int) -> dict[str, str | bool | int]:
+    def control(chromecast, selected):
+        controller = chromecast.media_controller
+        if action == "play":
+            controller.play()
+        elif action == "pause":
+            controller.pause()
+        elif action == "seek":
+            controller.update_status()
+            controller.seek(max(0, float(controller.status.current_time or 0) + seconds))
+        elif action == "seek_to":
+            controller.seek(max(0, float(seconds)))
+        elif action != "status":
+            raise ValueError("不支持的投屏控制操作")
+        controller.update_status()
+        status = controller.status
+        state = str(getattr(status, "player_state", "") or "").upper()
+        return {
+            "ok": True,
+            "label": selected["label"],
+            "playing": state in {"PLAYING", "BUFFERING"},
+            "paused": state == "PAUSED",
+            "position": int(float(getattr(status, "current_time", 0) or 0)),
+            "duration": int(float(getattr(status, "duration", 0) or 0)),
+            "state": state or "UNKNOWN",
+        }
+
+    return _with_chromecast(device, control)
+
+
+async def cast_control(device: dict, action: str, seconds: int = 0) -> dict[str, str | bool | int]:
     selected = normalize_cast_device(device)
     if selected["protocol"] == "chromecast":
         try:
-            await asyncio.to_thread(_control_chromecast, selected, action, seconds)
+            return await asyncio.to_thread(_control_chromecast, selected, action, seconds)
         except Exception as exc:
             raise RuntimeError(f"Chromecast 控制失败：{exc}") from exc
-        return {"ok": True, "label": selected["label"]}
     if action == "play":
         await _av_transport_action(selected, "Play", {"InstanceID": "0", "Speed": "1"})
     elif action == "pause":
         await _av_transport_action(selected, "Pause", {"InstanceID": "0"})
-    elif action == "seek":
-        position = await _current_position(selected)
+    elif action in {"seek", "seek_to"}:
+        position = seconds if action == "seek_to" else await _current_position(selected) + seconds
         await _av_transport_action(selected, "Seek", {
             "InstanceID": "0",
             "Unit": "REL_TIME",
-            "Target": _format_duration(position + seconds),
+            "Target": _format_duration(max(0, int(position))),
         })
-    else:
+    elif action != "status":
         raise ValueError("不支持的投屏控制操作")
-    return {"ok": True, "label": selected["label"]}
+    status = await _dlna_status(selected)
+    status["label"] = selected["label"]
+    return status

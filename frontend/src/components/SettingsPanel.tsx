@@ -88,6 +88,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
   }, [])
 
   const requestClose = () => {
+    if (installingUpdate) return
     if (dirty) { setConfirmAction('close'); return }
     onClose()
   }
@@ -118,7 +119,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     }
     window.addEventListener('keydown', close)
     return () => window.removeEventListener('keydown', close)
-  }, [dirty, showPicker, showTempPicker, confirmAction])
+  }, [dirty, showPicker, showTempPicker, confirmAction, installingUpdate])
 
   const update = (key: string, value: unknown) => setSettings((current: any) => ({ ...current, [key]: value }))
   const moveSettingsTab = (event: ReactKeyboardEvent<HTMLElement>) => {
@@ -240,7 +241,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
     }
   }
 
-  return <div className="modal-overlay settings-overlay" onMouseDown={requestClose}>
+  return <div className="modal-overlay settings-overlay" onMouseDown={() => { if (!installingUpdate) requestClose() }}>
     <section ref={dialogRef} className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title" onMouseDown={event => event.stopPropagation()}>
       <header className="settings-header">
         <div className="settings-title"><h2 id="settings-dialog-title">应用设置{dirty ? ' *' : ''}</h2><p>界面、下载行为与运行环境</p></div>
@@ -249,8 +250,9 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
           <button id="settings-tab-network" type="button" role="tab" aria-selected={activeSection === 'network'} aria-controls="settings-network" className={activeSection === 'network' ? 'active' : ''} onClick={() => setActiveSection('network')}>网络与下载</button>
           <button id="settings-tab-maintenance" type="button" role="tab" aria-selected={activeSection === 'maintenance'} aria-controls="settings-maintenance" className={activeSection === 'maintenance' ? 'active' : ''} onClick={() => setActiveSection('maintenance')}>维护</button>
         </nav>
-        <Button ref={closeButtonRef} variant="ghost" size="icon" className="icon-button settings-close" title="关闭" aria-label="关闭" onClick={requestClose}><X size={18} /></Button>
+        <Button ref={closeButtonRef} variant="ghost" size="icon" className="icon-button settings-close" title={installingUpdate ? '正在安装更新' : '关闭'} aria-label="关闭" disabled={installingUpdate} onClick={requestClose}><X size={18} /></Button>
       </header>
+      {installingUpdate && <div className="settings-installing" role="status">正在下载并启动安装程序，请勿关闭设置窗口。</div>}
       <div className="settings-body">
         {activeSection === 'general' && <div id="settings-general" role="tabpanel" aria-labelledby="settings-tab-general" className="settings-page">
           <section className="settings-group">

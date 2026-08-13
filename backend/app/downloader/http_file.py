@@ -601,7 +601,7 @@ class HTTPDownloader(SeeklessEngine):
         browser handoff, and only a 403 or a signed 404/410 with a captured
         browser context.
         """
-        if self._is_replay_post() or not bool(self.task.engine_state.get("browser_originated")):
+        if self._is_replay_post():
             return False
         response = getattr(error, "response", None)
         status = int(getattr(response, "status_code", 0) or 0)
@@ -1409,20 +1409,47 @@ class HTTPDownloader(SeeklessEngine):
                 return
             url_generation = self._url_generation
             try:
-                task.progress.downloaded_bytes = 0
-                task.progress.progress_percent = 0.0
                 source = self._pick_source()
-                async with client.stream("GET", source.final_url or self._download_url, headers=headers) as response:
-                    response.raise_for_status()
+                existing = part_path.stat().st_size if part_path.exists() else 0
+                request_headers = dict(headers)
+                if existing > 0:
+                    request_headers["Range"] = f"bytes={existing}-"
+                    request_headers["Accept-Encoding"] = "identity"
+                async with client.stream("GET", source.final_url or self._download_url, headers=request_headers) as response:
+                    if existing > 0 and response.status_code == 416:
+                        known_total = int(task.progress.total_bytes or self._total_size or 0)
+                        if known_total and existing >= known_total:
+                            task.progress.downloaded_bytes = existing
+                            task.progress.completed_segments = 1
+                            return
+                        existing = 0
+                        part_path.unlink(missing_ok=True)
+                        continue
+                    append = existing > 0 and response.status_code == 206
+                    if existing > 0 and response.status_code == 200:
+                        existing = 0
+                        append = False
+                    elif not append:
+                        response.raise_for_status()
                     content_type = response.headers.get("content-type", "").split(";", 1)[0]
                     task.mime_type = task.mime_type or content_type
-                    reported_total = int(response.headers.get("content-length", 0) or 0)
-                    if _response_decodes_content(response):
-                        reported_total = 0
+                    reported_total = 0
+                    if append:
+                        content_range = _parse_content_range(response.headers.get("content-range", ""))
+                        if content_range is None or content_range[0] != existing:
+                            raise _HTTPRangeValidationError("Range 续传响应与本地已下载偏移不一致")
+                        reported_total = int(content_range[2] or 0)
+                    else:
+                        reported_total = int(response.headers.get("content-length", 0) or 0)
+                        if _response_decodes_content(response):
+                            reported_total = 0
                     task.progress.total_bytes = reported_total
                     self._total_size = reported_total
                     task.engine_state["total_size"] = reported_total
-                    with part_path.open("wb") as output:
+                    task.progress.downloaded_bytes = existing
+                    if reported_total:
+                        task.progress.progress_percent = min(100.0, existing * 100 / reported_total)
+                    with part_path.open("ab" if append else "wb") as output:
                         first_chunk = True
                         async for chunk in response.aiter_bytes():
                             if first_chunk:
@@ -1475,7 +1502,7 @@ class HTTPDownloader(SeeklessEngine):
                 delay = retry_delay_seconds(exc, min(4, attempt))
                 self._set_stage(
                     "downloading",
-                    f"单连接传输中断，{delay:g} 秒后从头自动重试（{attempt}/{MAX_RETRIES - 1}）",
+                    f"单连接传输中断，{delay:g} 秒后续传重试（{attempt}/{MAX_RETRIES - 1}）",
                 )
                 await asyncio.sleep(delay)
         if last_error is not None:

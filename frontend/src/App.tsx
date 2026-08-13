@@ -1,9 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { FastForward, LoaderCircle, Pause, Play, Trash2, X } from 'lucide-react'
+import { LoaderCircle, Trash2, X } from 'lucide-react'
 import { cancelPowerAction, castLocalFile, castMediaUrl, castTask, clearCompletedTasks, completeBrowserMediaPush, confirmPowerAction, connectSSE, controlCast, deleteTask, fetchBrowserHandoffs, fetchBrowserStatus, fetchHealth, fetchLegalStatus, fetchLocalTvboxShare, fetchPendingPowerActions, fetchSettings, fetchTasks, importLinkPath, importTorrentPath, launchFile, openExplorer, openTaskInExplorer, pushLocalTvboxFile, pushTaskToTvbox, pushTvboxUrl, resolveBrowserHandoff, saveSettings, saveTaskSiteProfile, stopLocalTvboxShare, reorderQueue, taskAction, taskFileUrl, uploadTorrent } from './api'
 import { fmtBytes, fmtSpeed } from './format'
 import { isActiveTransfer, isRunningStatus, mergeTaskEvent, mergeTaskEvents } from './taskState'
 import { commandState } from './taskCommands'
+import { emptyCastPlayback, mergeCastPlayback, type CastPlaybackStatus, type LocalShareSession } from './castSession'
 import { filterAndSortTasks } from './taskPresentation'
 import type { ThemePreference } from './theme'
 import type { BrowserStatus, LegalStatus, Settings, Task } from './types'
@@ -28,6 +29,7 @@ import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffCancelDec
 import ConfirmDialog from './components/ConfirmDialog'
 import DevicePickerDialog from './components/DevicePickerDialog'
 import MediaSourcePickerDialog, { type MediaSourceSelection } from './components/MediaSourcePickerDialog'
+import CastSessionHud from './components/CastSessionHud'
 import LegalAgreementDialog from './components/LegalAgreementDialog'
 
 const UI_EVENT_ID_CAP = 4096
@@ -91,7 +93,9 @@ export default function App() {
   const [localPushBusy, setLocalPushBusy] = useState(false)
   const [castBusy, setCastBusy] = useState(false)
   const [castControlBusy, setCastControlBusy] = useState(false)
-  const [localShare, setLocalShare] = useState<{ id: string; filename: string; idleCleanupSeconds: number; kind: 'cast' | 'tvbox'; device?: object } | null>(null)
+  const [localShare, setLocalShare] = useState<LocalShareSession | null>(null)
+  const [hudMinimized, setHudMinimized] = useState(false)
+  const [castPlayback, setCastPlayback] = useState<CastPlaybackStatus>(emptyCastPlayback())
   const [handoffs, setHandoffs] = useState<BrowserHandoff[]>([])
   const [handoffBusy, setHandoffBusy] = useState(false)
   const [error, setError] = useState('')
@@ -446,6 +450,7 @@ export default function App() {
         const status = await fetchLocalTvboxShare(localShare.id)
         if (!stopped && !status.active) {
           setLocalShare(null)
+          setCastPlayback(emptyCastPlayback())
           showFeedback(`${localShare.kind === 'cast' ? '投屏' : 'TVBox 推送'}访问结束，已自动清理本机文件共享`)
         }
       } catch {
@@ -453,6 +458,21 @@ export default function App() {
       }
     }
     const timer = window.setInterval(() => { void refresh() }, 20_000)
+    return () => { stopped = true; window.clearInterval(timer) }
+  }, [localShare])
+  useEffect(() => {
+    if (!localShare || localShare.kind !== 'cast') return
+    let stopped = false
+    const refresh = async () => {
+      try {
+        const status = await controlCast('status', 0, localShare.device)
+        if (!stopped) setCastPlayback(current => mergeCastPlayback(current, status))
+      } catch {
+        // A renderer that cannot report position still accepts play/pause.
+      }
+    }
+    void refresh()
+    const timer = window.setInterval(() => { void refresh() }, 1_000)
     return () => { stopped = true; window.clearInterval(timer) }
   }, [localShare])
 
@@ -694,12 +714,18 @@ export default function App() {
       ? { kind, url: source.url, filename: source.filename }
       : { kind, path: source.path, filename: source.filename })
   }
+  const beginShare = (session: LocalShareSession) => {
+    setLocalShare(session)
+    setHudMinimized(false)
+    setCastPlayback(emptyCastPlayback())
+  }
   const stopLocalShare = async () => {
     if (!localShare || localPushBusy || castBusy || castControlBusy) return
     setLocalPushBusy(true)
     try {
       if (localShare.id) await stopLocalTvboxShare(localShare.id)
       setLocalShare(null)
+      setCastPlayback(emptyCastPlayback())
       showFeedback('已停止本机文件共享')
     } catch (reason: any) {
       setError(reason.message || '停止本机文件共享失败')
@@ -707,13 +733,24 @@ export default function App() {
       setLocalPushBusy(false)
     }
   }
-  const runCastControl = async (action: 'play' | 'pause' | 'seek') => {
+  const runCastControl = async (action: 'play' | 'pause' | 'seek' | 'seek_to', seconds = 0) => {
     if (!localShare || localShare.kind !== 'cast' || castControlBusy || castBusy) return
     setCastControlBusy(true)
     setError('')
     try {
-      const result = await controlCast(action, action === 'seek' ? 10 : 0, localShare.device)
-      showFeedback(action === 'pause' ? `已暂停 ${result.label}` : action === 'play' ? `已继续播放 ${result.label}` : `已快进 10 秒：${result.label}`)
+      const delta = action === 'seek' ? seconds || 10 : seconds
+      const result = await controlCast(action, delta, localShare.device)
+      setCastPlayback(current => {
+        const next = mergeCastPlayback(current, result)
+        if (action === 'play') return { ...next, playing: true, paused: false }
+        if (action === 'pause') return { ...next, playing: false, paused: true }
+        if (action === 'seek') return { ...next, playing: current.playing, paused: current.paused, position: Math.max(0, (current.position || 0) + delta) }
+        if (action === 'seek_to') return { ...next, playing: current.playing, paused: current.paused, position: delta }
+        return next
+      })
+      if (action === 'pause') showFeedback(`已暂停 ${result.label}`)
+      else if (action === 'play') showFeedback(`已继续播放 ${result.label}`)
+      else if (action === 'seek') showFeedback(`${delta < 0 ? '已后退' : '已快进'} ${Math.abs(delta)} 秒：${result.label}`)
     } catch (reason: any) {
       setError(reason.message || '投屏控制失败')
     } finally {
@@ -732,15 +769,15 @@ export default function App() {
         if (pick.kind === 'cast') {
           if (pick.url) {
             const result = await castMediaUrl(pick.url, pick.filename, device)
-            setLocalShare({ id: '', filename: pick.filename, idleCleanupSeconds: 0, kind: 'cast', device })
+            beginShare({ id: '', filename: pick.filename, idleCleanupSeconds: 0, kind: 'cast', device })
             showFeedback(`已投屏到 ${result.label}：${pick.filename}`)
           } else if (pick.path) {
             const result = await castLocalFile(pick.path, device)
-            setLocalShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'cast', device })
+            beginShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'cast', device })
             showFeedback(`已投屏到 ${result.label}：${pick.filename}`)
           } else if (pick.taskId) {
             const result = await castTask(pick.taskId, device)
-            setLocalShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'cast', device })
+            beginShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'cast', device, taskId: pick.taskId })
             showFeedback(`已投屏当前下载到 ${result.label}：${pick.filename}`)
           }
         } else if (pick.url) {
@@ -748,11 +785,11 @@ export default function App() {
           showFeedback(`已 TVBox 推送：${pick.filename}`)
         } else if (pick.path) {
           const result = await pushLocalTvboxFile(pick.path, device.endpoint)
-          setLocalShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'tvbox' })
+          beginShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'tvbox' })
           showFeedback(`已 TVBox 推送：${pick.filename}`)
         } else if (pick.taskId) {
           const result = await pushTaskToTvbox(pick.taskId, device.endpoint)
-          setLocalShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'tvbox' })
+          beginShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'tvbox', taskId: pick.taskId })
           showFeedback(`已 TVBox 推送当前下载：${pick.filename}`)
         }
         if (pick.requestId) await completeBrowserMediaPush(pick.requestId, 'done', `已发送到 ${device.label || device.host || '所选设备'}`)
@@ -803,7 +840,7 @@ export default function App() {
         </>}
       </span>
       <span>已完成 <b>{fmtBytes(completedSize)}</b></span>
-      {localShare ? <span className="local-share-status" title={localShare.kind === 'cast' ? 'DLNA 投屏支持暂停、继续和快进；停止共享会立即取消本机媒体链接。' : 'TVBox 推送不定义通用播放控制；停止共享会立即取消本机媒体链接。'}><b>{localShare.kind === 'cast' ? '投屏共享中' : 'TVBox 共享中'}</b><em>{localShare.filename}</em>{localShare.kind === 'cast' && <span className="cast-controls"><button type="button" disabled={castControlBusy || castBusy} title="暂停投屏播放" aria-label="暂停投屏播放" onClick={() => void runCastControl('pause')}><Pause size={13} /></button><button type="button" disabled={castControlBusy || castBusy} title="继续投屏播放" aria-label="继续投屏播放" onClick={() => void runCastControl('play')}><Play size={13} /></button><button type="button" disabled={castControlBusy || castBusy} title="快进 10 秒" aria-label="快进 10 秒" onClick={() => void runCastControl('seek')}><FastForward size={13} /></button></span>}<button type="button" disabled={localPushBusy || castBusy || castControlBusy} onClick={() => void stopLocalShare()}>停止共享</button></span> : <span>{browserStatus?.detected ? `插件已连接${browserStatus.version ? ` · v${browserStatus.version}` : ''}` : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span>}
+      {localShare ? <span className="local-share-status" title={localShare.kind === 'cast' ? '点击打开投屏悬浮窗，可暂停、拖动进度和停止共享。' : '点击打开推送悬浮窗；TVBox 播放由电视端控制，本机可停止共享。'}><button type="button" className="local-share-chip" onClick={() => setHudMinimized(false)}><b>{localShare.kind === 'cast' ? '投屏共享中' : 'TVBox 共享中'}</b><em>{localShare.filename}</em></button><button type="button" disabled={localPushBusy || castBusy || castControlBusy} onClick={() => void stopLocalShare()}>停止共享</button></span> : <span>{browserStatus?.detected ? `插件已连接${browserStatus.version ? ` · v${browserStatus.version}` : ''}` : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span>}
     </footer>
     {showRecognize && <RecognizeDialog settings={settings} initialUrl={recognizeInitialUrl} onClose={() => setShowRecognize(false)} onAdded={task => { void load(); if (task?.task_type === 'torrent') setDetails(task) }} onNeedExtension={() => { setShowRecognize(false); setShowBrowserExtension(true) }} />}
     {showBatch && (
@@ -820,6 +857,26 @@ export default function App() {
     {showBrowserExtension && <BrowserExtensionDialog onClose={() => { setShowBrowserExtension(false); load() }} />}
     {showSettings && <SettingsPanel themePreference={themePreference} onThemePreferenceChange={changeThemePreference} onClose={() => { setShowSettings(false); load() }} />}
     {showUpdate && <UpdateDialog onClose={() => setShowUpdate(false)} />}
+    {localShare && <CastSessionHud
+      share={localShare}
+      task={localShare.taskId ? tasks.find(item => item.id === localShare.taskId) || null : null}
+      playback={castPlayback}
+      busy={castControlBusy || castBusy || localPushBusy}
+      minimized={hudMinimized}
+      onMinimize={() => setHudMinimized(true)}
+      onRestore={() => setHudMinimized(false)}
+      onControl={(action, seconds) => void runCastControl(action, seconds)}
+      onSeekTo={seconds => void runCastControl('seek_to', seconds)}
+      onStop={() => void stopLocalShare()}
+      onPauseDownload={() => {
+        const task = localShare.taskId ? tasks.find(item => item.id === localShare.taskId) : null
+        if (task) void perform('pause', [task])
+      }}
+      onResumeDownload={() => {
+        const task = localShare.taskId ? tasks.find(item => item.id === localShare.taskId) : null
+        if (task) void perform('resume', [task])
+      }}
+    />}
     {mediaSourcePick && <MediaSourcePickerDialog mode={mediaSourcePick.kind} onChoose={chooseDesktopMediaSource} onClose={() => setMediaSourcePick(null)} />}
     {detailTask && <TaskDetailsModal task={detailTask} pending={pending.has(detailTask.id)} onClose={() => setDetails(null)} onLog={() => setLogTaskId(detailTask.id)} onAction={action => perform(action, [detailTask])} onOpenFile={() => detailTask.output_path && openTaskInExplorer(detailTask.id)} onLaunchFile={() => launchOutput(detailTask)} onPushToTv={() => void confirmLocalMediaPush(detailTask)} onCast={() => void confirmLocalCast(detailTask)} onPreview={() => { setDetails(null); setPlaying(detailTask) }} />}
     {playingTask && <Suspense fallback={<div className="modal-overlay player-overlay"><div className="player-chunk-loading"><LoaderCircle className="spin" size={24} /><span>正在打开播放器</span></div></div>}><VideoPlayerModal task={playingTask} onClose={() => setPlaying(null)} /></Suspense>}

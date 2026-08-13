@@ -782,8 +782,8 @@ fn main() {
 #[cfg(test)]
 mod clipboard_tests {
     use super::{
-        background_launch, downloadable_clipboard_text, log_backup_path, rotate_core_log,
-        uninstall_in_place_argument, CORE_LOG_MAX_BYTES, FIREFOX_ADDON_URL,
+        background_launch, download_import_route, downloadable_clipboard_text, log_backup_path,
+        rotate_core_log, uninstall_in_place_argument, CORE_LOG_MAX_BYTES, FIREFOX_ADDON_URL,
     };
     use std::fs;
     use std::path::Path;

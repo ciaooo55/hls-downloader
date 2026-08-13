@@ -566,6 +566,25 @@ def test_download_resource_validates_byte_range_and_renames_atomically(tmp_path)
     asyncio.run(run_bad())
 
 
+def test_download_resource_rejects_truncated_content_length(tmp_path):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"short", headers={"Content-Length": "12"})
+
+    async def run():
+        downloader = HLSDownloader(_task())
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(RuntimeError, match="长度不匹配"):
+                await downloader._download_resource(
+                    client,
+                    "https://example.test/seg.ts",
+                    tmp_path / "seg.ts",
+                    {},
+                )
+        assert not (tmp_path / "seg.ts").exists()
+
+    asyncio.run(run())
+
+
 def test_byte_range_http_error_keeps_real_status_code(tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, text="forbidden")
