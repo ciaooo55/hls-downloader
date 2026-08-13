@@ -92,6 +92,31 @@ export function taskMatchesFilter(task: Record<string, any>, filter: string): bo
   return status === filter
 }
 
+const FILTER_EMPTY_TITLES: Record<string, string> = {
+  running: '没有正在进行的任务',
+  queued: '队列是空的',
+  paused: '没有已暂停的任务',
+  done: '还没有完成的任务',
+  failed: '没有失败的任务',
+  media: '没有媒体任务',
+  program: '没有程序任务',
+  archive: '没有压缩包任务',
+  other: '没有其他分类任务',
+}
+
+export function emptyTaskListCopy(filter: string, query: string, totalCount = 0): { title: string; hint: string } {
+  if (query.trim()) {
+    return { title: '没有匹配的任务', hint: '试试缩短关键词，或清空搜索框查看全部任务' }
+  }
+  if (filter && filter !== 'all') {
+    return {
+      title: FILTER_EMPTY_TITLES[filter] || '当前分类没有任务',
+      hint: totalCount > 0 ? '可切换到“全部任务”查看其它状态' : '点击“新建”添加文件、HLS、DASH、magnet 或种子',
+    }
+  }
+  return { title: '暂无任务', hint: '点击“新建”添加文件、HLS、DASH、magnet 或种子' }
+}
+
 export function filterAndSortTasks<T extends Record<string, any>>(
   tasks: T[],
   filter: string,

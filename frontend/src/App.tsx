@@ -5,7 +5,8 @@ import { fmtBytes, fmtSpeed } from './format'
 import { isActiveTransfer, isRunningStatus, mergeTaskEvent, mergeTaskEvents } from './taskState'
 import { commandState } from './taskCommands'
 import { emptyCastPlayback, mergeCastPlayback, type CastPlaybackStatus, type LocalShareSession } from './castSession'
-import { filterAndSortTasks } from './taskPresentation'
+import { filterAndSortTasks, emptyTaskListCopy } from './taskPresentation'
+import { effectiveSpeedLimitKib as localEffectiveSpeedLimitKib } from './speedSchedule'
 import type { ThemePreference } from './theme'
 import type { BrowserStatus, LegalStatus, Settings, Task } from './types'
 import { downloadTextFile, formatTaskExport, parseUrlList } from './urlList'
@@ -106,6 +107,7 @@ export default function App() {
   const [clipboardOffer, setClipboardOffer] = useState('')
   const [clipboardBatch, setClipboardBatch] = useState('')
   const [speedMenuOpen, setSpeedMenuOpen] = useState(false)
+  const [scheduleClock, setScheduleClock] = useState(() => Date.now())
   const [totalSpeedHistory, setTotalSpeedHistory] = useState<number[]>([])
   const totalSpeedRef = useRef(0)
   const [batchInitialText, setBatchInitialText] = useState('')
@@ -203,6 +205,11 @@ export default function App() {
   useEffect(() => {
     setCompletionSoundEnabled(Boolean(settings.completion_sound_enabled))
   }, [settings.completion_sound_enabled])
+  useEffect(() => {
+    if (!settings.speed_schedule_enabled) return
+    const timer = window.setInterval(() => setScheduleClock(Date.now()), 15_000)
+    return () => window.clearInterval(timer)
+  }, [settings.speed_schedule_enabled])
 
   useEffect(() => {
     load()
@@ -489,7 +496,8 @@ export default function App() {
   ), 0)
   const completedSize = tasks.filter(task => task.status === 'done').reduce((sum, task) => sum + (task.downloaded_bytes || 0), 0)
   const queued = tasks.filter(task => task.status === 'queued').length
-  const effectiveSpeedLimitKib = settings.effective_download_speed_limit_kib ?? settings.download_speed_limit_kib ?? 0
+  const effectiveSpeedLimitKib = localEffectiveSpeedLimitKib(settings, new Date(scheduleClock))
+  const emptyCopy = emptyTaskListCopy(filter, query, tasks.length)
   totalSpeedRef.current = totalSpeed
   const completed = tasks.filter(task => task.status === 'done')
 
@@ -808,7 +816,7 @@ export default function App() {
         <UpdateNotice />
         <div className="content-head"><strong>{taskFilterLabel(filter)} <span>{filtered.length} 项{selected.size > 0 ? ` · 已选 ${selected.size}` : ''}</span></strong><button className="compact-button" disabled={!completed.length} title="只清除任务记录，不删除视频文件" onClick={() => void clearCompleted()}><Trash2 size={14} />清理已完成</button></div>
         {error && <div className="action-error" role="alert"><span>{error}</span><div className="action-error-actions"><button type="button" className="secondary-button" onClick={() => void load()}>重试</button><button type="button" className="icon-button action-error-dismiss" title="关闭提示" onClick={() => setError('')}><X size={15} /></button></div></div>}
-    <TaskTable key={`${filter}:${query}`} tasks={filtered} selected={selected} pending={pending} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openTaskInExplorer(task.id)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onExportUrls={exportTaskUrls} onPreview={setPlaying} onPreviewImage={setPreviewImage} onCast={task => void confirmLocalCast(task)} onPushToTv={task => void confirmLocalMediaPush(task)} onReorderQueue={reorderQueuedTask} />
+    <TaskTable key={`${filter}:${query}`} tasks={filtered} selected={selected} pending={pending} emptyTitle={emptyCopy.title} emptyHint={emptyCopy.hint} onSelect={setSelected} onOpenDetails={setDetails} onTasksAction={(targets, action) => perform(action, targets)} onOpenLog={task => setLogTaskId(task.id)} onOpenFile={task => task.output_path && openTaskInExplorer(task.id)} onLaunchFile={launchOutput} onCopyUrl={task => void copyTaskUrl(task)} onExportUrls={exportTaskUrls} onPreview={setPlaying} onPreviewImage={setPreviewImage} onCast={task => void confirmLocalCast(task)} onPushToTv={task => void confirmLocalMediaPush(task)} onReorderQueue={reorderQueuedTask} />
       </main>
     </div>
     <footer className="statusbar">

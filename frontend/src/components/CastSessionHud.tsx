@@ -16,6 +16,7 @@ import {
   downloadControls,
   downloadPercent,
   emptyCastPlayback,
+  livePlaybackPosition,
   playbackPercent,
   shareKindLabel,
   type CastPlaybackStatus,
@@ -55,13 +56,38 @@ export default function CastSessionHud({
   const dragRef = useRef<{ pointer: number; startX: number; startY: number; left: number; top: number } | null>(null)
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
   const [scrubbing, setScrubbing] = useState<number | null>(null)
+  const [clock, setClock] = useState(() => Date.now())
+  const sampledAtRef = useRef(Date.now())
+  const lastSampleRef = useRef(`${playback.playing}:${playback.paused}:${playback.position}`)
+  const sampleKey = `${playback.playing}:${playback.paused}:${playback.position}`
+  if (sampleKey !== lastSampleRef.current) {
+    lastSampleRef.current = sampleKey
+    sampledAtRef.current = Date.now()
+  }
   const status = playback.playing || playback.paused ? playback : { ...emptyCastPlayback(), ...playback }
   const duration = Math.max(0, status.duration || 0)
-  const position = scrubbing ?? status.position
+  const position = livePlaybackPosition(status, sampledAtRef.current, clock, scrubbing)
   const transport = canControlTransport(share.kind)
   const downloads = downloadControls(task)
   const deviceLabel = (share.device as { label?: string } | undefined)?.label || status.label || (share.kind === 'cast' ? '电视' : 'TVBox')
   const playing = transport && status.playing && !status.paused
+
+  useEffect(() => {
+    if (!playing || scrubbing != null) return
+    const timer = window.setInterval(() => setClock(Date.now()), 250)
+    return () => window.clearInterval(timer)
+  }, [playing, scrubbing])
+
+  useEffect(() => {
+    const onResize = () => {
+      if (!pos || !panelRef.current) return
+      const box = panelRef.current.getBoundingClientRect()
+      const next = clampHudPosition(pos.left, pos.top, box.width, box.height, window.innerWidth, window.innerHeight, 12)
+      if (next.left !== pos.left || next.top !== pos.top) setPos(next)
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [pos, minimized])
 
   useEffect(() => {
     if (!pos || !panelRef.current) return

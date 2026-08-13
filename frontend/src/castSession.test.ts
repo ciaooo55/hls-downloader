@@ -7,6 +7,7 @@ import {
   emptyCastPlayback,
   mergeCastPlayback,
   playbackPercent,
+  livePlaybackPosition,
   relativeSeekTarget,
   shareKindLabel,
   canControlTransport,
@@ -51,5 +52,12 @@ describe('cast session helpers', () => {
 
   it('keeps the HUD inside the viewport', () => {
     expect(clampHudPosition(-40, 900, 320, 120, 800, 600, 12)).toEqual({ left: 12, top: 468 })
+  })
+
+  it('advances the HUD clock between status polls while playing', () => {
+    const playing = { playing: true, paused: false, position: 10, duration: 90 }
+    expect(livePlaybackPosition(playing, 1_000, 3_400, null)).toBe(12)
+    expect(livePlaybackPosition(playing, 1_000, 3_400, 40)).toBe(40)
+    expect(livePlaybackPosition({ ...playing, paused: true, playing: false }, 1_000, 9_000, null)).toBe(10)
   })
 })

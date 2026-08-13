@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterAndSortTasks, stageLabel, statusLabel, taskStatusLabel, taskSizeSummary } from './taskPresentation'
+import { filterAndSortTasks, stageLabel, statusLabel, taskStatusLabel, taskSizeSummary, emptyTaskListCopy } from './taskPresentation'
 
 const task = (id: string, status: string, createdAt: string, title = id) => ({
   id,
@@ -78,5 +78,14 @@ describe('task presentation', () => {
     ]
     expect(filterAndSortTasks(tasks, 'queued', '').map(item => item.id)).toEqual(['early', 'late'])
     expect(filterAndSortTasks(tasks, 'all', '').map(item => item.id)).toEqual(['dl', 'early', 'late'])
+  })
+
+  it('explains an empty filtered list instead of saying there are no tasks', () => {
+    expect(emptyTaskListCopy('all', '', 0)).toEqual({
+      title: '暂无任务',
+      hint: '点击“新建”添加文件、HLS、DASH、magnet 或种子',
+    })
+    expect(emptyTaskListCopy('paused', '', 4).title).toBe('没有已暂停的任务')
+    expect(emptyTaskListCopy('all', 'movie', 4).title).toBe('没有匹配的任务')
   })
 })

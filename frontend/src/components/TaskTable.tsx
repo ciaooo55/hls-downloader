@@ -39,10 +39,12 @@ const typeIcons = {
 
 const TASK_PAGE_SIZE = 250
 
-export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDetails, onTasksAction, onOpenLog, onOpenFile, onLaunchFile, onCopyUrl, onExportUrls, onPreview, onPreviewImage, onCast, onPushToTv, onReorderQueue }: {
+export default function TaskTable({ tasks, selected, pending, emptyTitle = '暂无任务', emptyHint = '点击“新建”添加文件、HLS、DASH、magnet 或种子', onSelect, onOpenDetails, onTasksAction, onOpenLog, onOpenFile, onLaunchFile, onCopyUrl, onExportUrls, onPreview, onPreviewImage, onCast, onPushToTv, onReorderQueue }: {
   tasks: Task[]
   selected: Set<string>
   pending: Set<string>
+  emptyTitle?: string
+  emptyHint?: string
   onSelect: (ids: Set<string>) => void
   onOpenDetails: (task: Task) => void
   onTasksAction: (tasks: Task[], action: string) => void
@@ -233,7 +235,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
     else onTasksAction(targets, action)
   }
 
-  if (!tasks.length) return <div className="empty-state"><DownloadCloudIcon /><strong>暂无任务</strong><span>点击“新建”添加文件、HLS、DASH、magnet 或种子</span></div>
+  if (!tasks.length) return <div className="empty-state"><DownloadCloudIcon /><strong>{emptyTitle}</strong><span>{emptyHint}</span></div>
   // The context menu acts on every selected task, so pause/resume wording
   // must account for all of them, not just the right-clicked row.
   const menuTargets = menu ? tasks.filter(task => menu.taskIds.includes(task.id)) : []
@@ -321,7 +323,7 @@ export default function TaskTable({ tasks, selected, pending, onSelect, onOpenDe
                 : postProcessing
                   ? <><div className="phase-progress"><ProgressLine label="下载" value={100} /><ProgressLine label={task.status === 'merging' ? '拼接' : '转封装'} value={task.post_percent || 0} /></div><small className="progress-bytes">{sizeSummary}</small></>
                   : <><ProgressLine value={progress} /><ConnectionMap parts={task.connection_parts} total={task.total_bytes} compact /><small className="progress-bytes">{sizeSummary}</small></>}</td>
-            <td className="speed-col"><span className="speed-cell">{activeTransfer ? fmtSpeed(task.speed_bytes_per_sec) : '--'}</span><SpeedChart samples={task.speed_history} current={task.speed_bytes_per_sec} peak={task.speed_peak_bytes_per_sec} compact /><small className="eta-cell">{recordingLive ? 'LIVE' : activeTransfer && task.task_type === 'torrent' && task.upload_speed_bytes_per_sec > 0 ? `↑ ${fmtSpeed(task.upload_speed_bytes_per_sec)}` : activeTransfer ? fmtEta(task.eta_seconds) : '--'}</small></td>
+            <td className="speed-col"><span className="speed-cell">{activeTransfer ? fmtSpeed(task.speed_bytes_per_sec) : '--'}</span><SpeedChart samples={task.speed_history} current={activeTransfer ? task.speed_bytes_per_sec : 0} peak={task.speed_peak_bytes_per_sec} compact /><small className="eta-cell">{recordingLive ? 'LIVE' : activeTransfer && task.task_type === 'torrent' && task.upload_speed_bytes_per_sec > 0 ? `↑ ${fmtSpeed(task.upload_speed_bytes_per_sec)}` : activeTransfer ? fmtEta(task.eta_seconds) : '--'}</small></td>
             <td className="segments-col" title={task.task_type === 'torrent' ? `Peer ${task.peer_count} · Seed ${task.seed_count}` : `${task.active_workers || task.active_slots || 0}/${task.max_workers || task.concurrency || 0} 个连接`}>{task.task_type === 'torrent' ? `${task.peer_count} Peer` : task.total_segments ? <><span>{task.completed_segments}/{task.total_segments}</span><small>{task.active_workers || task.active_slots || 0} 连接</small></> : '--'}</td><td className="updated-col">{fmtDate(task.updated_at)}</td>
             <td className="menu-col">
               <button className="row-menu-button" title="任务操作" onClick={event => { event.stopPropagation(); openMenu(event, task) }}><MoreHorizontal size={17} /></button>

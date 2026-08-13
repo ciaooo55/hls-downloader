@@ -54,6 +54,19 @@ export function clampSeekSeconds(seconds: number, duration: number): number {
   return Math.min(duration, next)
 }
 
+export function livePlaybackPosition(
+  playback: CastPlaybackStatus,
+  sampledAtMs: number,
+  nowMs: number,
+  scrubbing: number | null = null,
+): number {
+  if (scrubbing != null) return scrubbing
+  const base = Math.max(0, Number(playback.position) || 0)
+  if (!playback.playing || playback.paused) return base
+  const elapsed = Math.max(0, (nowMs - sampledAtMs) / 1000)
+  return clampSeekSeconds(base + elapsed, playback.duration || 0)
+}
+
 export function relativeSeekTarget(position: number, delta: number, duration: number): number {
   return clampSeekSeconds(position + delta, duration)
 }
