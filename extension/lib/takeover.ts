@@ -49,7 +49,7 @@ export function desktopTaskReadiness(handoff: BrowserHandoffPayload): DesktopTas
   if (handoffStatus !== 'accepted') return 'waiting'
 
   const taskStatus = String(handoff.task_status || '')
-  if (['failed', 'canceled', 'unsupported', 'paused'].includes(taskStatus)) return 'browser-fallback'
+  if (['failed', 'canceled', 'unsupported'].includes(taskStatus)) return 'browser-fallback'
   if (taskStatus === 'done') return 'safe-to-remove'
   if (Math.max(0, Number(handoff.task_downloaded_bytes || 0)) > 0) return 'safe-to-remove'
 

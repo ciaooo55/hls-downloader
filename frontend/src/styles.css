@@ -1013,6 +1013,7 @@ html[data-surface="handoff"] #root {
   padding: 0 8px 0 12px;
   cursor: grab;
   user-select: none;
+  touch-action: none;
   background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 10%, transparent), transparent);
 }
 .cast-hud-head:active { cursor: grabbing; }
@@ -1073,6 +1074,7 @@ html[data-surface="handoff"] #root {
   border-radius: 999px;
   background: var(--surface-3);
   cursor: pointer;
+  touch-action: none;
 }
 .cast-hud-scrub:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .cast-hud-scrub > i, .cast-hud-download-bar > i {
@@ -1084,6 +1086,7 @@ html[data-surface="handoff"] #root {
   background: linear-gradient(90deg, var(--primary), color-mix(in srgb, var(--primary) 55%, var(--green)));
   transition: transform .18s ease-out;
 }
+.cast-session-hud.is-live .cast-hud-scrub > i { transition: none; }
 .cast-hud-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .cast-hud-download { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
 .cast-hud-download-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }

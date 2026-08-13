@@ -7,6 +7,7 @@ import ipaddress
 import mimetypes
 import selectors
 import socket
+import threading
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -332,25 +333,91 @@ async def _av_transport_action(device: dict, action: str, arguments: dict[str, s
     return response.text
 
 
+class _ChromecastHandle:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.chromecast = None
+        self.browser = None
+        self.chromecasts: list = []
+
+
+_chromecast_guard = threading.Lock()
+_chromecast_handles: dict[str, _ChromecastHandle] = {}
+
+
+def _chromecast_handle(device_id: str) -> _ChromecastHandle:
+    with _chromecast_guard:
+        handle = _chromecast_handles.get(device_id)
+        if handle is None:
+            handle = _ChromecastHandle()
+            _chromecast_handles[device_id] = handle
+        return handle
+
+
+def _disconnect_chromecast_handle(handle: _ChromecastHandle) -> None:
+    chromecasts = handle.chromecasts
+    browser = handle.browser
+    handle.chromecast = None
+    handle.browser = None
+    handle.chromecasts = []
+    for item in chromecasts:
+        with contextlib.suppress(Exception):
+            item.disconnect()
+    if browser is not None:
+        with contextlib.suppress(Exception):
+            browser.stop_discovery()
+
+
+def close_chromecast_session(device: dict | None = None) -> None:
+    if device is None:
+        with _chromecast_guard:
+            handles = list(_chromecast_handles.values())
+            _chromecast_handles.clear()
+        for handle in handles:
+            with handle.lock:
+                _disconnect_chromecast_handle(handle)
+        return
+    selected = normalize_cast_device(device)
+    with _chromecast_guard:
+        handle = _chromecast_handles.pop(selected["id"], None)
+    if handle is None:
+        return
+    with handle.lock:
+        _disconnect_chromecast_handle(handle)
+
+
 def _with_chromecast(device: dict, operation):
     import pychromecast
 
     selected = normalize_cast_device(device)
     if not private_ipv4_addresses(selected["host"]):
         raise ValueError("Chromecast 设备不是可访问的 IPv4 局域网设备")
-    chromecasts, browser = pychromecast.get_chromecasts(
-        known_hosts=[selected["host"]], timeout=8, tries=1,
-    )
-    try:
-        chromecast = next((item for item in chromecasts if str(item.uuid) == selected["id"]), None)
-        if chromecast is None:
-            raise RuntimeError("找不到已选择的 Chromecast 设备，请重新扫描")
-        chromecast.wait(timeout=8)
-        return operation(chromecast, selected)
-    finally:
-        for chromecast in chromecasts:
-            chromecast.disconnect()
-        browser.stop_discovery()
+    handle = _chromecast_handle(selected["id"])
+    with handle.lock:
+        if handle.chromecast is None:
+            chromecasts, browser = pychromecast.get_chromecasts(
+                known_hosts=[selected["host"]], timeout=8, tries=1,
+            )
+            try:
+                chromecast = next((item for item in chromecasts if str(item.uuid) == selected["id"]), None)
+                if chromecast is None:
+                    raise RuntimeError("找不到已选择的 Chromecast 设备，请重新扫描")
+                chromecast.wait(timeout=8)
+            except Exception:
+                for item in chromecasts:
+                    with contextlib.suppress(Exception):
+                        item.disconnect()
+                with contextlib.suppress(Exception):
+                    browser.stop_discovery()
+                raise
+            handle.chromecast = chromecast
+            handle.browser = browser
+            handle.chromecasts = list(chromecasts)
+        try:
+            return operation(handle.chromecast, selected)
+        except Exception:
+            _disconnect_chromecast_handle(handle)
+            raise
 
 
 def _cast_chromecast_media(device: dict, media_url: str, filename: str) -> None:
@@ -460,19 +527,24 @@ async def _dlna_status(device: dict) -> dict[str, str | bool | int]:
         return_exceptions=True,
     )
     position, duration = 0, 0
-    if not isinstance(position_result, BaseException):
+    position_ok = not isinstance(position_result, BaseException)
+    if position_ok:
         try:
             position, duration = parse_position_info(str(position_result or ""))
         except Exception:
+            position_ok = False
             position, duration = 0, 0
     state = ""
-    if not isinstance(transport_result, BaseException):
+    transport_ok = not isinstance(transport_result, BaseException)
+    if transport_ok:
         state = parse_transport_state(str(transport_result or ""))
     return {
-        "ok": True,
+        "ok": position_ok or transport_ok,
+        "position_ok": position_ok,
+        "transport_ok": transport_ok,
         "label": device["label"],
-        "playing": state in {"PLAYING", "TRANSITIONING"},
-        "paused": state == "PAUSED_PLAYBACK",
+        "playing": state in {"PLAYING", "TRANSITIONING"} if transport_ok else False,
+        "paused": state == "PAUSED_PLAYBACK" if transport_ok else False,
         "position": position,
         "duration": duration,
         "state": state or "UNKNOWN",
@@ -486,18 +558,26 @@ def _control_chromecast(device: dict, action: str, seconds: int) -> dict[str, st
             controller.play()
         elif action == "pause":
             controller.pause()
+        elif action == "stop":
+            controller.stop()
         elif action == "seek":
             controller.update_status()
-            controller.seek(max(0, float(controller.status.current_time or 0) + seconds))
+            current = float(getattr(controller.status, "current_time", 0) or 0)
+            controller.seek(max(0, current + seconds))
         elif action == "seek_to":
             controller.seek(max(0, float(seconds)))
         elif action != "status":
             raise ValueError("不支持的投屏控制操作")
-        controller.update_status()
+        if action != "stop":
+            controller.update_status()
         status = controller.status
         state = str(getattr(status, "player_state", "") or "").upper()
+        if action == "stop":
+            state = "STOPPED"
         return {
             "ok": True,
+            "position_ok": True,
+            "transport_ok": True,
             "label": selected["label"],
             "playing": state in {"PLAYING", "BUFFERING"},
             "paused": state == "PAUSED",
@@ -513,13 +593,18 @@ async def cast_control(device: dict, action: str, seconds: int = 0) -> dict[str,
     selected = normalize_cast_device(device)
     if selected["protocol"] == "chromecast":
         try:
-            return await asyncio.to_thread(_control_chromecast, selected, action, seconds)
+            result = await asyncio.to_thread(_control_chromecast, selected, action, seconds)
         except Exception as exc:
             raise RuntimeError(f"Chromecast 控制失败：{exc}") from exc
+        if action == "stop":
+            await asyncio.to_thread(close_chromecast_session, selected)
+        return result
     if action == "play":
         await _av_transport_action(selected, "Play", {"InstanceID": "0", "Speed": "1"})
     elif action == "pause":
         await _av_transport_action(selected, "Pause", {"InstanceID": "0"})
+    elif action == "stop":
+        await _av_transport_action(selected, "Stop", {"InstanceID": "0"})
     elif action in {"seek", "seek_to"}:
         position = seconds if action == "seek_to" else await _current_position(selected) + seconds
         await _av_transport_action(selected, "Seek", {

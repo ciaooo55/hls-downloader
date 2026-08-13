@@ -436,7 +436,7 @@ export default function SettingsPanel({ themePreference, onThemePreferenceChange
         </div>}
         {error && <div className="inline-error settings-error" role="alert">{error}</div>}
       </div>
-      <footer><span className="settings-save-note">{dirty ? '有未保存的下载设置' : saved ? '设置已保存' : '更改主题会立即生效'}</span><Button variant="secondary" className="secondary-button" onClick={requestClose}>关闭</Button><Button className="primary-button" disabled={!dirty || saving} onClick={doSave}>{saving ? '保存中…' : saved ? '已保存' : '保存设置'}</Button></footer>
+      <footer><span className="settings-save-note">{dirty ? '有未保存的下载设置' : saved ? '设置已保存' : '更改主题会立即生效'}</span><Button variant="secondary" className="secondary-button" disabled={installingUpdate} onClick={requestClose}>关闭</Button><Button className="primary-button" disabled={!dirty || saving} onClick={doSave}>{saving ? '保存中…' : saved ? '已保存' : '保存设置'}</Button></footer>
     </section>
     {showPicker && <FolderPicker initialPath={settings.download_dir || ''} onSelect={path => { update('download_dir', path); setShowPicker(false) }} onClose={() => setShowPicker(false)} />}
     {showTempPicker && <FolderPicker initialPath={settings.temp_dir || ''} onSelect={path => { update('temp_dir', path); setShowTempPicker(false) }} onClose={() => setShowTempPicker(false)} />}

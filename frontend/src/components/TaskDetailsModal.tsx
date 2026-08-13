@@ -36,6 +36,7 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
   const [limitBusy, setLimitBusy] = useState(false)
   const [limitNotice, setLimitNotice] = useState('')
   const [limitFocused, setLimitFocused] = useState(false)
+  const [limitDirty, setLimitDirty] = useState(false)
   const [showRequestRefresh, setShowRequestRefresh] = useState(false)
   const [requestUrl, setRequestUrl] = useState(task.url)
   const [requestCookie, setRequestCookie] = useState('')
@@ -48,6 +49,7 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
     try {
       await setTaskSpeedLimit(task.id, value)
       setLimitDraft(String(value))
+      setLimitDirty(false)
       setLimitNotice(value > 0 ? `已限速 ${value} KiB/s，立即生效` : '已取消该任务的限速')
     } catch {
       setLimitNotice('保存限速失败，请检查连接后重试')
@@ -68,8 +70,12 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
     }).catch(() => {})
   }, [task.id, task.task_type, task.status])
   useEffect(() => {
-    if (!limitFocused) setLimitDraft(String(task.speed_limit_kib || 0))
-  }, [task.id, task.speed_limit_kib, limitFocused])
+    setLimitDirty(false)
+    setLimitDraft(String(task.speed_limit_kib || 0))
+  }, [task.id])
+  useEffect(() => {
+    if (!limitFocused && !limitDirty) setLimitDraft(String(task.speed_limit_kib || 0))
+  }, [task.speed_limit_kib, limitFocused, limitDirty])
   return <DialogOverlay onClose={onClose}><Dialog className="task-details" label="任务详情">
     <header><div><h2>{task.title || task.filename || task.id}</h2><p title={task.url}>{task.url}</p></div><button className="modal-close-button" title="关闭" onClick={onClose}><X size={18} /></button></header>
     <div className="task-details-body">
@@ -80,8 +86,8 @@ export default function TaskDetailsModal({ task, pending, onClose, onLog, onActi
       {task.status !== 'done' && task.task_type !== 'torrent' && <section className="task-speed-limit">
         <b>任务限速（KiB/s）</b>
         <div className="task-speed-limit-row">
-          <input type="number" min={0} max={1048576} value={limitDraft} onChange={event => setLimitDraft(event.target.value)} onFocus={() => setLimitFocused(true)} onBlur={() => setLimitFocused(false)} aria-label="任务限速" />
-          <button className="secondary-button" disabled={limitBusy} onClick={() => void applySpeedLimit()}>{limitBusy ? '保存中…' : '应用'}</button>
+          <input type="number" min={0} max={1048576} value={limitDraft} onChange={event => { setLimitDraft(event.target.value); setLimitDirty(true) }} onFocus={() => setLimitFocused(true)} onBlur={() => setLimitFocused(false)} aria-label="任务限速" />
+          <button className="secondary-button" disabled={limitBusy} onMouseDown={event => event.preventDefault()} onClick={() => void applySpeedLimit()}>{limitBusy ? '保存中…' : '应用'}</button>
         </div>
         <p className="field-note">0 表示不限制；与全局限速同时生效，取两者更严格值。</p>
         {limitNotice && <p className="torrent-selection-notice" role="status">{limitNotice}</p>}

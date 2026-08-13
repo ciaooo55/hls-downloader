@@ -204,3 +204,115 @@ def test_parse_position_and_transport_from_soap():
     </s:Envelope>"""
     assert dlna.parse_position_info(position_body) == (83, 600)
     assert dlna.parse_transport_state(transport_body) == "PAUSED_PLAYBACK"
+
+
+def test_dlna_status_is_not_ok_when_soap_calls_fail(monkeypatch):
+    async def fake_action(_device, action, arguments, timeout=8.0):
+        raise RuntimeError(action)
+
+    monkeypatch.setattr(dlna, "_av_transport_action", fake_action)
+    device = dlna.normalize_cast_device({
+        "location": "http://192.168.1.25/description.xml",
+        "control_url": "http://192.168.1.25/control",
+        "service_type": "urn:schemas-upnp-org:service:AVTransport:1",
+        "label": "客厅电视",
+    })
+    result = asyncio.run(dlna._dlna_status(device))
+    assert result["ok"] is False
+    assert result["position_ok"] is False
+    assert result["transport_ok"] is False
+    assert result["position"] == 0
+
+
+def test_cast_control_stop_and_seek_to(monkeypatch):
+    calls = []
+
+    async def fake_action(_device, action, arguments, timeout=8.0):
+        calls.append((action, arguments))
+        if action == "GetPositionInfo":
+            return "<Envelope><RelTime>00:01:00</RelTime><TrackDuration>00:10:00</TrackDuration></Envelope>"
+        if action == "GetTransportInfo":
+            return "<Envelope><CurrentTransportState>PAUSED_PLAYBACK</CurrentTransportState></Envelope>"
+        return ""
+
+    monkeypatch.setattr(dlna, "_av_transport_action", fake_action)
+    device = {
+        "location": "http://192.168.1.25/description.xml",
+        "control_url": "http://192.168.1.25/control",
+        "service_type": "urn:schemas-upnp-org:service:AVTransport:1",
+        "label": "客厅电视",
+    }
+    stopped = asyncio.run(dlna.cast_control(device, "stop"))
+    seeked = asyncio.run(dlna.cast_control(device, "seek_to", 45))
+    backed = asyncio.run(dlna.cast_control(device, "seek", -10))
+    assert stopped["ok"] is True
+    assert seeked["position_ok"] is True
+    assert ("Stop", {"InstanceID": "0"}) in calls
+    assert ("Seek", {"InstanceID": "0", "Unit": "REL_TIME", "Target": "00:00:45"}) in calls
+    assert ("Seek", {"InstanceID": "0", "Unit": "REL_TIME", "Target": "00:00:50"}) in calls
+    assert backed["paused"] is True
+
+
+def test_chromecast_control_reuses_a_connected_session(monkeypatch):
+    dlna.close_chromecast_session()
+    discoveries = []
+
+    class Status:
+        player_state = "PLAYING"
+        current_time = 5
+        duration = 90
+
+    class Controller:
+        status = Status()
+
+        def play(self):
+            return None
+
+        def pause(self):
+            return None
+
+        def seek(self, _seconds):
+            return None
+
+        def update_status(self):
+            return None
+
+        def stop(self):
+            self.status.player_state = "IDLE"
+
+    class Cast:
+        uuid = "0a5b5c58-3524-4e69-b245-6e0f9cf39024"
+        media_controller = Controller()
+
+        def wait(self, timeout=8):
+            return None
+
+        def disconnect(self):
+            return None
+
+    class Browser:
+        def stop_discovery(self):
+            return None
+
+    monkeypatch.setattr(dlna, "private_ipv4_addresses", lambda _host: frozenset({"192.168.1.30"}))
+    monkeypatch.setitem(
+        sys.modules,
+        "pychromecast",
+        SimpleNamespace(get_chromecasts=lambda **_kwargs: discoveries.append(True) or ([Cast()], Browser())),
+    )
+    device = {
+        "id": "0a5b5c58-3524-4e69-b245-6e0f9cf39024",
+        "protocol": "chromecast",
+        "location": "http://192.168.1.30",
+        "label": "客厅电视",
+        "host": "192.168.1.30",
+    }
+    first = asyncio.run(dlna.cast_control(device, "status"))
+    second = asyncio.run(dlna.cast_control(device, "status"))
+    assert first["playing"] is True
+    assert second["ok"] is True
+    assert discoveries == [True]
+    asyncio.run(dlna.cast_control(device, "stop"))
+    asyncio.run(dlna.cast_control(device, "status"))
+    assert discoveries == [True, True]
+    dlna.close_chromecast_session()

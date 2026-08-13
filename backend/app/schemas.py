@@ -527,7 +527,7 @@ class CastUrlPush(BaseModel):
 
 
 class CastControl(BaseModel):
-    action: str = Field(pattern="^(play|pause|seek|seek_to|status)$")
+    action: str = Field(pattern="^(play|pause|seek|seek_to|status|stop)$")
     seconds: int = Field(default=0, ge=-86400, le=86400)
     device: dict[str, str] | None = None
 

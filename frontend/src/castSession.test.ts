@@ -9,7 +9,9 @@ import {
   playbackPercent,
   livePlaybackPosition,
   relativeSeekTarget,
+  shareActivityLabel,
   shareKindLabel,
+  shareStopLabel,
   canControlTransport,
 } from './castSession'
 
@@ -41,6 +43,34 @@ describe('cast session helpers', () => {
     expect(merged.label).toBe('客厅电视')
     expect(merged.playing).toBe(true)
     expect(merged.position).toBe(12)
+  })
+
+  it('keeps the last good clock when a status poll soft-fails', () => {
+    const current = mergeCastPlayback(emptyCastPlayback(), {
+      label: '客厅电视',
+      playing: true,
+      paused: false,
+      position: 40,
+      duration: 90,
+    })
+    expect(mergeCastPlayback(current, { ok: false, playing: false, position: 0, duration: 0 }).position).toBe(40)
+    expect(mergeCastPlayback(current, {
+      ok: true,
+      position_ok: false,
+      transport_ok: true,
+      playing: false,
+      paused: true,
+      position: 0,
+      duration: 0,
+    })).toMatchObject({ playing: false, paused: true, position: 40, duration: 90 })
+  })
+
+  it('labels share activity and stop actions', () => {
+    expect(shareActivityLabel({ kind: 'cast', id: 'share-1' })).toBe('投屏共享中')
+    expect(shareActivityLabel({ kind: 'cast', id: '' })).toBe('投屏播放中')
+    expect(shareActivityLabel({ kind: 'tvbox', id: '' })).toBe('TVBox 推送中')
+    expect(shareStopLabel({ id: '' })).toBe('停止播放')
+    expect(shareStopLabel({ id: 'share-1' })).toBe('停止共享')
   })
 
   it('exposes download pause from the live task', () => {

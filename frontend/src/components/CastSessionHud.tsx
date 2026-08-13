@@ -19,11 +19,15 @@ import {
   livePlaybackPosition,
   playbackPercent,
   shareKindLabel,
+  shareStopLabel,
   type CastPlaybackStatus,
   type LocalShareSession,
 } from '../castSession'
+import { pauseLabelFor } from '../taskCommands'
 import { fmtBytes, fmtClock } from '../format'
 import type { Task } from '../types'
+
+const HUD_BOTTOM_INSET = 44
 
 export default function CastSessionHud({
   share,
@@ -54,6 +58,7 @@ export default function CastSessionHud({
 }) {
   const panelRef = useRef<HTMLElement | null>(null)
   const dragRef = useRef<{ pointer: number; startX: number; startY: number; left: number; top: number } | null>(null)
+  const pendingSeekRef = useRef<number | null>(null)
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
   const [scrubbing, setScrubbing] = useState<number | null>(null)
   const [clock, setClock] = useState(() => Date.now())
@@ -71,6 +76,8 @@ export default function CastSessionHud({
   const downloads = downloadControls(task)
   const deviceLabel = (share.device as { label?: string } | undefined)?.label || status.label || (share.kind === 'cast' ? '电视' : 'TVBox')
   const playing = transport && status.playing && !status.paused
+  const downloadPauseLabel = task ? pauseLabelFor([task]) : '暂停下载'
+  const stopLabel = shareStopLabel(share)
 
   useEffect(() => {
     if (!playing || scrubbing != null) return
@@ -82,7 +89,7 @@ export default function CastSessionHud({
     const onResize = () => {
       if (!pos || !panelRef.current) return
       const box = panelRef.current.getBoundingClientRect()
-      const next = clampHudPosition(pos.left, pos.top, box.width, box.height, window.innerWidth, window.innerHeight, 12)
+      const next = clampHudPosition(pos.left, pos.top, box.width, box.height, window.innerWidth, window.innerHeight, 12, HUD_BOTTOM_INSET)
       if (next.left !== pos.left || next.top !== pos.top) setPos(next)
     }
     window.addEventListener('resize', onResize)
@@ -92,9 +99,28 @@ export default function CastSessionHud({
   useEffect(() => {
     if (!pos || !panelRef.current) return
     const box = panelRef.current.getBoundingClientRect()
-    const next = clampHudPosition(pos.left, pos.top, box.width, box.height, window.innerWidth, window.innerHeight, 12)
+    const next = clampHudPosition(pos.left, pos.top, box.width, box.height, window.innerWidth, window.innerHeight, 12, HUD_BOTTOM_INSET)
     if (next.left !== pos.left || next.top !== pos.top) setPos(next)
   }, [minimized, pos])
+
+  useEffect(() => {
+    if (busy || pendingSeekRef.current == null) return
+    const seconds = pendingSeekRef.current
+    pendingSeekRef.current = null
+    onSeekTo(seconds)
+    setScrubbing(null)
+  }, [busy, onSeekTo])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || minimized) return
+      if (document.querySelector('.modal-overlay')) return
+      event.preventDefault()
+      onMinimize()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [minimized, onMinimize])
 
   const beginDrag = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0) return
@@ -125,6 +151,7 @@ export default function CastSessionHud({
       window.innerWidth,
       window.innerHeight,
       12,
+      HUD_BOTTOM_INSET,
     )
     setPos(next)
   }
@@ -141,13 +168,22 @@ export default function CastSessionHud({
     setScrubbing(seconds)
   }
 
+  const flushSeek = (seconds: number) => {
+    if (busy) {
+      pendingSeekRef.current = seconds
+      return
+    }
+    pendingSeekRef.current = null
+    onSeekTo(seconds)
+    setScrubbing(null)
+  }
+
   const commitSeek = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (scrubbing == null) return
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
-    onSeekTo(scrubbing)
-    setScrubbing(null)
+    flushSeek(scrubbing)
   }
 
   return (
@@ -155,7 +191,7 @@ export default function CastSessionHud({
       ref={panelRef}
       className={`cast-session-hud${minimized ? ' is-min' : ''}${playing ? ' is-live' : ''}${busy ? ' is-busy' : ''}`}
       style={pos ? { left: pos.left, top: pos.top, right: 'auto', bottom: 'auto' } : undefined}
-      role="dialog"
+      role="complementary"
       aria-label={`${shareKindLabel(share.kind)}控制`}
       data-kind={share.kind}
     >
@@ -169,7 +205,7 @@ export default function CastSessionHud({
         <button type="button" className="cast-hud-icon" title={minimized ? '展开控制面板' : '收起为悬浮条'} aria-label={minimized ? '展开' : '收起'} onClick={minimized ? onRestore : onMinimize}>
           {minimized ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
-        <button type="button" className="cast-hud-icon danger" title="停止共享" aria-label="停止共享" disabled={busy} onClick={onStop}>
+        <button type="button" className="cast-hud-icon danger" title={stopLabel} aria-label={stopLabel} disabled={busy} onClick={onStop}>
           <Square size={13} />
         </button>
       </header>
@@ -179,6 +215,16 @@ export default function CastSessionHud({
           {transport && (
             <button type="button" disabled={busy} title={playing ? '暂停投屏' : '继续投屏'} aria-label={playing ? '暂停' : '播放'} onClick={() => onControl(playing ? 'pause' : 'play')}>
               {playing ? <Pause size={15} /> : <Play size={15} />}
+            </button>
+          )}
+          {downloads.pause && (
+            <button type="button" disabled={busy} title={downloadPauseLabel} aria-label={downloadPauseLabel} onClick={onPauseDownload}>
+              <Pause size={15} />
+            </button>
+          )}
+          {downloads.resume && (
+            <button type="button" disabled={busy} title="恢复下载" aria-label="恢复下载" onClick={onResumeDownload}>
+              <Play size={15} />
             </button>
           )}
           <button type="button" className="cast-hud-restore" onClick={onRestore}>{transport ? fmtClock(position) : '共享中'}</button>
@@ -207,6 +253,7 @@ export default function CastSessionHud({
                 aria-valuemin={0}
                 aria-valuemax={Math.max(1, duration)}
                 aria-valuenow={Math.floor(position)}
+                aria-valuetext={`${fmtClock(position)} / ${duration > 0 ? fmtClock(duration) : '--:--'}`}
                 tabIndex={0}
                 onPointerDown={event => {
                   event.currentTarget.setPointerCapture(event.pointerId)
@@ -214,10 +261,12 @@ export default function CastSessionHud({
                 }}
                 onPointerMove={event => { if (scrubbing != null) seekFromBar(event) }}
                 onPointerUp={commitSeek}
-                onPointerCancel={() => setScrubbing(null)}
+                onPointerCancel={commitSeek}
                 onKeyDown={event => {
-                  if (event.key === 'ArrowLeft') onControl('seek', -10)
-                  if (event.key === 'ArrowRight') onControl('seek', 10)
+                  if (event.key === 'ArrowLeft') { event.preventDefault(); onControl('seek', -10) }
+                  if (event.key === 'ArrowRight') { event.preventDefault(); onControl('seek', 10) }
+                  if (event.key === 'Home') { event.preventDefault(); onSeekTo(0) }
+                  if (event.key === 'End' && duration) { event.preventDefault(); onSeekTo(duration) }
                   if (event.key === ' ') { event.preventDefault(); onControl(playing ? 'pause' : 'play') }
                 }}
               >
@@ -238,7 +287,7 @@ export default function CastSessionHud({
                 <i style={{ transform: `scaleX(${downloadPercent(task) / 100})` }} />
               </div>
               <div className="cast-hud-download-actions">
-                {downloads.pause && <button type="button" disabled={busy} onClick={onPauseDownload}><Pause size={13} />暂停下载</button>}
+                {downloads.pause && <button type="button" disabled={busy} onClick={onPauseDownload}><Pause size={13} />{downloadPauseLabel}</button>}
                 {downloads.resume && <button type="button" disabled={busy} onClick={onResumeDownload}><Play size={13} />恢复下载</button>}
                 {!downloads.pause && !downloads.resume && <small>{task.status === 'done' ? '文件已可边播边看' : '当前阶段不能暂停下载'}</small>}
               </div>

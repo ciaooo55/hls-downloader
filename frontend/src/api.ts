@@ -135,8 +135,8 @@ export const pushTaskToTvbox = (taskId: string, endpoint = '') => request<{ ok: 
 export const castTask = (taskId: string, device?: object) => request<{ ok: boolean; label: string; share: { id: string; url: string; filename: string; size: number; expires_in_seconds: number; idle_cleanup_seconds: number } }>('/cast/push-task', { method: 'POST', body: JSON.stringify({ task_id: taskId, device }) })
 export const pushTvboxUrl = (url: string, endpoint: string) => request<{ ok: boolean; endpoint: string }>('/tvbox/push', { method: 'POST', body: JSON.stringify({ url, endpoint }) })
 export const castMediaUrl = (url: string, filename: string, device: object) => request<{ ok: boolean; label: string }>('/cast/push', { method: 'POST', body: JSON.stringify({ url, filename, device }) })
-export const controlCast = (action: 'play' | 'pause' | 'seek' | 'seek_to' | 'status', seconds = 0, device?: object) =>
-  request<{ ok: boolean; label: string; playing?: boolean; paused?: boolean; position?: number; duration?: number; state?: string }>('/cast/control', { method: 'POST', body: JSON.stringify({ action, seconds, device }) })
+export const controlCast = (action: 'play' | 'pause' | 'seek' | 'seek_to' | 'status' | 'stop', seconds = 0, device?: object) =>
+  request<{ ok: boolean; label: string; playing?: boolean; paused?: boolean; position?: number; duration?: number; state?: string; position_ok?: boolean; transport_ok?: boolean }>('/cast/control', { method: 'POST', body: JSON.stringify({ action, seconds, device }) })
 export const stopLocalTvboxShare = (shareId: string) => request<{ ok: boolean }>(`/tvbox/shares/${encodeURIComponent(shareId)}/stop`, { method: 'POST' })
 export const fetchLocalTvboxShare = (shareId: string) => request<{ active: boolean; filename?: string; active_streams?: number; expires_in_seconds?: number }>(`/tvbox/shares/${encodeURIComponent(shareId)}`)
 export const recognizeUrl = (data: any) => request<any>('/recognize', { method: 'POST', body: JSON.stringify(data) })

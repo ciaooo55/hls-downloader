@@ -65,6 +65,10 @@ _CONTENT_RANGE_RE = re.compile(
     r"^\s*(?:bytes\s+)?(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*/\s*(?P<total>\d+|\*)\s*$",
     re.IGNORECASE,
 )
+_UNSATISFIED_RANGE_RE = re.compile(
+    r"^\s*(?:bytes\s+)?\*\s*/\s*(?P<total>\d+)\s*$",
+    re.IGNORECASE,
+)
 _VOLATILE_RESUME_QUERY = re.compile(
     r"^(?:token|auth|authorization|signature|sig|expires?|expiry|policy|"
     r"key-pair-id|hdnea|hmac|jwt|session|sessionid|access[_-]?key|x-amz-.+)$",
@@ -108,6 +112,15 @@ def _parse_content_range(value: str) -> tuple[int, int, int | None] | None:
     if end < start or (total is not None and (total <= 0 or end >= total)):
         return None
     return start, end, total
+
+
+def _parse_unsatisfied_range(value: str) -> int | None:
+    """Parse RFC 9110 unsatisfied-range Content-Range: bytes */N."""
+    match = _UNSATISFIED_RANGE_RE.match(str(value or ""))
+    if not match:
+        return None
+    total = int(match.group("total"))
+    return total if total > 0 else None
 
 
 def _ensure_filename_extension(filename: str, content_type: str) -> str:
@@ -1270,6 +1283,7 @@ class HTTPDownloader(SeeklessEngine):
 
                     if total <= 0 or not metadata["ranges"]:
                         self._sequential = True
+                        self._discard_untrusted_sequential_part(part_path, total)
                         await self._download_sequential(client, headers, part_path)
                     else:
                         try:
@@ -1278,12 +1292,15 @@ class HTTPDownloader(SeeklessEngine):
                             # A CDN can advertise 206 during probing and later
                             # ignore Range or fail If-Range after an object
                             # rotation. Never stitch its full 200 response into
-                            # sparse offsets: discard the range checkpoint and
-                            # restart one verified sequential transfer.
+                            # sparse offsets: discard the range checkpoint, the
+                            # preallocated sparse part, and restart one verified
+                            # sequential transfer from byte 0.
                             self._sequential = True
                             self._completed_chunks.clear()
                             self._claimed_chunks.clear()
                             state_path.unlink(missing_ok=True)
+                            part_path.unlink(missing_ok=True)
+                            task.engine_state.pop("sequential_bytes", None)
                             task.progress.completed_segments = 0
                             task.progress.downloaded_bytes = 0
                             task.progress.progress_percent = 0.0
@@ -1384,6 +1401,22 @@ class HTTPDownloader(SeeklessEngine):
             ):
                 output.unlink(missing_ok=True)
 
+    def _discard_untrusted_sequential_part(self, part_path: Path, total: int) -> None:
+        """Drop a Range-preallocated sparse file before sequential restart.
+
+        Multi-connection downloads truncate the part to Content-Length with
+        zeros. Size alone must not look like a finished sequential prefix.
+        """
+        if not part_path.exists():
+            return
+        existing = part_path.stat().st_size
+        marked = int(self.task.engine_state.get("sequential_bytes") or 0)
+        if marked > 0 and existing == marked:
+            return
+        if total > 0 and existing >= total:
+            part_path.unlink(missing_ok=True)
+            self.task.engine_state.pop("sequential_bytes", None)
+
     async def _download_sequential(
         self,
         client: httpx.AsyncClient,
@@ -1417,13 +1450,24 @@ class HTTPDownloader(SeeklessEngine):
                     request_headers["Accept-Encoding"] = "identity"
                 async with client.stream("GET", source.final_url or self._download_url, headers=request_headers) as response:
                     if existing > 0 and response.status_code == 416:
-                        known_total = int(task.progress.total_bytes or self._total_size or 0)
-                        if known_total and existing >= known_total:
+                        unsatisfied = _parse_unsatisfied_range(response.headers.get("content-range", ""))
+                        known_total = int(task.progress.total_bytes or self._total_size or unsatisfied or 0)
+                        marked = int(task.engine_state.get("sequential_bytes") or 0)
+                        trusted_complete = bool(
+                            known_total
+                            and existing >= known_total
+                            and marked > 0
+                            and marked >= min(existing, known_total)
+                        )
+                        if trusted_complete:
                             task.progress.downloaded_bytes = existing
                             task.progress.completed_segments = 1
+                            if known_total:
+                                task.progress.total_bytes = known_total
                             return
                         existing = 0
                         part_path.unlink(missing_ok=True)
+                        task.engine_state.pop("sequential_bytes", None)
                         continue
                     append = existing > 0 and response.status_code == 206
                     if existing > 0 and response.status_code == 200:
@@ -1468,6 +1512,7 @@ class HTTPDownloader(SeeklessEngine):
                             await throttle_bytes(len(chunk), task)
                             output.write(chunk)
                             task.progress.downloaded_bytes += len(chunk)
+                            task.engine_state["sequential_bytes"] = task.progress.downloaded_bytes
                             window.add(len(chunk))
                             self._apply_speed(window)
                             self._publish()

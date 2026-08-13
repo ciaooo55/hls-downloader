@@ -4,7 +4,7 @@ import { cancelPowerAction, castLocalFile, castMediaUrl, castTask, clearComplete
 import { fmtBytes, fmtSpeed } from './format'
 import { isActiveTransfer, isRunningStatus, mergeTaskEvent, mergeTaskEvents } from './taskState'
 import { commandState } from './taskCommands'
-import { emptyCastPlayback, mergeCastPlayback, type CastPlaybackStatus, type LocalShareSession } from './castSession'
+import { emptyCastPlayback, mergeCastPlayback, shareActivityLabel, shareStopLabel, type CastPlaybackStatus, type LocalShareSession } from './castSession'
 import { filterAndSortTasks, emptyTaskListCopy } from './taskPresentation'
 import { effectiveSpeedLimitKib as localEffectiveSpeedLimitKib } from './speedSchedule'
 import type { ThemePreference } from './theme'
@@ -110,6 +110,7 @@ export default function App() {
   const [scheduleClock, setScheduleClock] = useState(() => Date.now())
   const [totalSpeedHistory, setTotalSpeedHistory] = useState<number[]>([])
   const totalSpeedRef = useRef(0)
+  const castControlBusyRef = useRef(false)
   const [batchInitialText, setBatchInitialText] = useState('')
   const [batchInitialMode, setBatchInitialMode] = useState<'list' | 'harvest'>('list')
   const [dropActive, setDropActive] = useState(false)
@@ -207,9 +208,18 @@ export default function App() {
   }, [settings.completion_sound_enabled])
   useEffect(() => {
     if (!settings.speed_schedule_enabled) return
-    const timer = window.setInterval(() => setScheduleClock(Date.now()), 15_000)
-    return () => window.clearInterval(timer)
-  }, [settings.speed_schedule_enabled])
+    setScheduleClock(Date.now())
+    let timer = 0
+    const ms = 60_000 - (Date.now() % 60_000) + 50
+    const first = window.setTimeout(function tick() {
+      setScheduleClock(Date.now())
+      timer = window.setTimeout(tick, 60_000)
+    }, ms)
+    return () => {
+      window.clearTimeout(first)
+      window.clearTimeout(timer)
+    }
+  }, [settings.speed_schedule_enabled, settings.speed_schedule_start, settings.speed_schedule_end, settings.speed_schedule_limit_kib])
 
   useEffect(() => {
     load()
@@ -470,12 +480,17 @@ export default function App() {
   useEffect(() => {
     if (!localShare || localShare.kind !== 'cast') return
     let stopped = false
+    let inFlight = false
     const refresh = async () => {
+      if (stopped || inFlight || castControlBusyRef.current) return
+      inFlight = true
       try {
         const status = await controlCast('status', 0, localShare.device)
         if (!stopped) setCastPlayback(current => mergeCastPlayback(current, status))
       } catch {
         // A renderer that cannot report position still accepts play/pause.
+      } finally {
+        inFlight = false
       }
     }
     void refresh()
@@ -500,6 +515,7 @@ export default function App() {
   const emptyCopy = emptyTaskListCopy(filter, query, tasks.length)
   totalSpeedRef.current = totalSpeed
   const completed = tasks.filter(task => task.status === 'done')
+  castControlBusyRef.current = castControlBusy
 
   const showFeedback = (message: string) => {
     setFeedback(message)
@@ -731,17 +747,21 @@ export default function App() {
     if (!localShare || localPushBusy || castBusy || castControlBusy) return
     setLocalPushBusy(true)
     try {
+      if (localShare.kind === 'cast' && localShare.device) {
+        try { await controlCast('stop', 0, localShare.device) } catch { /* still revoke the local share */ }
+      }
       if (localShare.id) await stopLocalTvboxShare(localShare.id)
+      const hadShare = Boolean(localShare.id)
       setLocalShare(null)
       setCastPlayback(emptyCastPlayback())
-      showFeedback('已停止本机文件共享')
+      showFeedback(hadShare ? '已停止本机文件共享' : '已停止投屏播放')
     } catch (reason: any) {
       setError(reason.message || '停止本机文件共享失败')
     } finally {
       setLocalPushBusy(false)
     }
   }
-  const runCastControl = async (action: 'play' | 'pause' | 'seek' | 'seek_to', seconds = 0) => {
+  const runCastControl = async (action: 'play' | 'pause' | 'seek' | 'seek_to' | 'stop', seconds = 0) => {
     if (!localShare || localShare.kind !== 'cast' || castControlBusy || castBusy) return
     setCastControlBusy(true)
     setError('')
@@ -752,8 +772,7 @@ export default function App() {
         const next = mergeCastPlayback(current, result)
         if (action === 'play') return { ...next, playing: true, paused: false }
         if (action === 'pause') return { ...next, playing: false, paused: true }
-        if (action === 'seek') return { ...next, playing: current.playing, paused: current.paused, position: Math.max(0, (current.position || 0) + delta) }
-        if (action === 'seek_to') return { ...next, playing: current.playing, paused: current.paused, position: delta }
+        if (action === 'stop') return { ...emptyCastPlayback(), label: next.label }
         return next
       })
       if (action === 'pause') showFeedback(`已暂停 ${result.label}`)
@@ -790,14 +809,15 @@ export default function App() {
           }
         } else if (pick.url) {
           await pushTvboxUrl(pick.url, device.endpoint)
+          beginShare({ id: '', filename: pick.filename, idleCleanupSeconds: 0, kind: 'tvbox', device })
           showFeedback(`已 TVBox 推送：${pick.filename}`)
         } else if (pick.path) {
           const result = await pushLocalTvboxFile(pick.path, device.endpoint)
-          beginShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'tvbox' })
+          beginShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'tvbox', device })
           showFeedback(`已 TVBox 推送：${pick.filename}`)
         } else if (pick.taskId) {
           const result = await pushTaskToTvbox(pick.taskId, device.endpoint)
-          beginShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'tvbox', taskId: pick.taskId })
+          beginShare({ id: result.share.id, filename: result.share.filename, idleCleanupSeconds: result.share.idle_cleanup_seconds, kind: 'tvbox', device, taskId: pick.taskId })
           showFeedback(`已 TVBox 推送当前下载：${pick.filename}`)
         }
         if (pick.requestId) await completeBrowserMediaPush(pick.requestId, 'done', `已发送到 ${device.label || device.host || '所选设备'}`)
@@ -848,7 +868,7 @@ export default function App() {
         </>}
       </span>
       <span>已完成 <b>{fmtBytes(completedSize)}</b></span>
-      {localShare ? <span className="local-share-status" title={localShare.kind === 'cast' ? '点击打开投屏悬浮窗，可暂停、拖动进度和停止共享。' : '点击打开推送悬浮窗；TVBox 播放由电视端控制，本机可停止共享。'}><button type="button" className="local-share-chip" onClick={() => setHudMinimized(false)}><b>{localShare.kind === 'cast' ? '投屏共享中' : 'TVBox 共享中'}</b><em>{localShare.filename}</em></button><button type="button" disabled={localPushBusy || castBusy || castControlBusy} onClick={() => void stopLocalShare()}>停止共享</button></span> : <span>{browserStatus?.detected ? `插件已连接${browserStatus.version ? ` · v${browserStatus.version}` : ''}` : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span>}
+      {localShare ? <span className="local-share-status" title={localShare.kind === 'cast' ? '点击打开投屏悬浮窗，可暂停、拖动进度和停止。' : '点击打开推送悬浮窗；TVBox 播放由电视端控制，本机可停止。'}><button type="button" className="local-share-chip" onClick={() => setHudMinimized(false)}><b>{shareActivityLabel(localShare)}</b><em>{localShare.filename}</em></button><button type="button" disabled={localPushBusy || castBusy || castControlBusy} onClick={() => void stopLocalShare()}>{shareStopLabel(localShare)}</button></span> : <span>{browserStatus?.detected ? `插件已连接${browserStatus.version ? ` · v${browserStatus.version}` : ''}` : `本地服务正常${appVersion ? ` · v${appVersion}` : ''}`}</span>}
     </footer>
     {showRecognize && <RecognizeDialog settings={settings} initialUrl={recognizeInitialUrl} onClose={() => setShowRecognize(false)} onAdded={task => { void load(); if (task?.task_type === 'torrent') setDetails(task) }} onNeedExtension={() => { setShowRecognize(false); setShowBrowserExtension(true) }} />}
     {showBatch && (

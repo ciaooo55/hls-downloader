@@ -333,11 +333,17 @@ async function waitForDesktopTaskReadiness(
   return 'keep-paused'
 }
 
-function followUpPausedHandoffCleanup(item: chrome.downloads.DownloadItem, handoffId: string): void {
+function followUpPausedHandoffCleanup(item: Browser.downloads.DownloadItem, handoffId: string): void {
   void waitForDesktopTaskReadiness(handoffId, 180_000).then(async later => {
-    if (later !== 'safe-to-remove') return
-    concealBrowserDownload()
-    await removeBrowserDownload(item)
+    if (later === 'safe-to-remove') {
+      concealBrowserDownload()
+      await removeBrowserDownload(item)
+      return
+    }
+    if (later === 'browser-fallback') {
+      await resumeBrowserDownload(item, true)
+      revealBrowserDownload()
+    }
   }).catch(() => undefined)
 }
 

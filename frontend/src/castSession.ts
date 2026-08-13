@@ -13,6 +13,8 @@ export interface LocalShareSession {
 
 export interface CastPlaybackStatus {
   ok?: boolean
+  position_ok?: boolean
+  transport_ok?: boolean
   label?: string
   playing: boolean
   paused: boolean
@@ -21,7 +23,7 @@ export interface CastPlaybackStatus {
   state?: string
 }
 
-export type CastTransportAction = 'play' | 'pause' | 'seek' | 'seek_to' | 'status'
+export type CastTransportAction = 'play' | 'pause' | 'seek' | 'seek_to' | 'status' | 'stop'
 
 export function emptyCastPlayback(): CastPlaybackStatus {
   return { playing: false, paused: false, position: 0, duration: 0 }
@@ -32,13 +34,21 @@ export function mergeCastPlayback(
   incoming: Partial<CastPlaybackStatus> | null | undefined,
 ): CastPlaybackStatus {
   if (!incoming) return current
+  if (incoming.ok === false) {
+    return { ...current, ok: false, label: incoming.label || current.label }
+  }
+  const transportOk = incoming.transport_ok !== false
+  const positionOk = incoming.position_ok !== false
+  const nextDuration = Math.max(0, Number(incoming.duration) || 0)
   return {
     ok: incoming.ok ?? current.ok,
+    position_ok: positionOk,
+    transport_ok: transportOk,
     label: incoming.label || current.label,
-    playing: Boolean(incoming.playing),
-    paused: Boolean(incoming.paused),
-    position: Math.max(0, Number(incoming.position) || 0),
-    duration: Math.max(0, Number(incoming.duration) || 0),
+    playing: transportOk ? Boolean(incoming.playing) : current.playing,
+    paused: transportOk ? Boolean(incoming.paused) : current.paused,
+    position: positionOk ? Math.max(0, Number(incoming.position) || 0) : current.position,
+    duration: positionOk ? (nextDuration || current.duration) : current.duration,
     state: incoming.state || current.state,
   }
 }
@@ -88,6 +98,15 @@ export function canControlTransport(kind: LocalShareKind): boolean {
   return kind === 'cast'
 }
 
+export function shareActivityLabel(share: Pick<LocalShareSession, 'kind' | 'id'>): string {
+  if (share.kind === 'cast') return share.id ? '投屏共享中' : '投屏播放中'
+  return share.id ? 'TVBox 共享中' : 'TVBox 推送中'
+}
+
+export function shareStopLabel(share: Pick<LocalShareSession, 'id'>): string {
+  return share.id ? '停止共享' : '停止播放'
+}
+
 export function downloadControls(task: { id: string; status: string; available_actions?: string[] } | null | undefined): { pause: boolean; resume: boolean } {
   if (!task) return { pause: false, resume: false }
   const commands = commandState([task])
@@ -102,9 +121,11 @@ export function clampHudPosition(
   viewportWidth: number,
   viewportHeight: number,
   margin = 12,
+  bottomMargin?: number,
 ): { left: number; top: number } {
+  const floor = bottomMargin ?? margin
   const maxLeft = Math.max(margin, viewportWidth - width - margin)
-  const maxTop = Math.max(margin, viewportHeight - height - margin)
+  const maxTop = Math.max(margin, viewportHeight - height - floor)
   return {
     left: Math.min(maxLeft, Math.max(margin, left)),
     top: Math.min(maxTop, Math.max(margin, top)),

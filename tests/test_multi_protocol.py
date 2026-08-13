@@ -16,6 +16,7 @@ from backend.app.downloader.http_file import (
     _content_disposition_filename,
     _ensure_filename_extension,
     _parse_content_range,
+    _parse_unsatisfied_range,
     _short_signature_activation_delay,
     _SpeedWindow,
 )
@@ -335,6 +336,9 @@ def test_http_content_range_and_mime_filename_cover_non_media_files():
     assert _parse_content_range("4-9/10") == (4, 9, 10)
     assert _parse_content_range("bytes 4-9/*") == (4, 9, None)
     assert _parse_content_range("bytes 9-4/10") is None
+    assert _parse_unsatisfied_range("bytes */10") == 10
+    assert _parse_unsatisfied_range("*/1048576") == 1048576
+    assert _parse_unsatisfied_range("bytes 4-9/10") is None
     assert _ensure_filename_extension("download", "application/pdf") == "download.pdf"
     assert _ensure_filename_extension("release", "application/x-7z-compressed") == "release.7z"
     assert _ensure_filename_extension("unknown", "application/octet-stream") == "unknown"
@@ -1600,3 +1604,69 @@ def test_http_sequential_resumes_from_partial_file(tmp_path):
     assert part.read_bytes() == body
     assert task.progress.downloaded_bytes == 10
     assert task.progress.total_bytes == 10
+    assert task.engine_state["sequential_bytes"] == 10
+
+
+def test_http_sequential_416_does_not_complete_a_sparse_preallocated_part(tmp_path):
+    body = b"0123456789"
+    part = tmp_path / "payload.part"
+    part.write_bytes(b"\x00" * len(body))
+    task = Task(id="seq-sparse", url="https://files.test/a.bin", task_type=TaskType.HTTP)
+    task.progress.total_bytes = len(body)
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        value = request.headers.get("range")
+        requests.append(value)
+        if value:
+            return httpx.Response(
+                416,
+                headers={"Content-Range": f"bytes */{len(body)}"},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            content=body,
+            headers={"Content-Length": str(len(body)), "Content-Type": "application/octet-stream"},
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_sequential(client, downloader._headers(), part)
+
+    asyncio.run(run())
+    assert requests[0] == "bytes=10-"
+    assert requests[-1] in (None, "")
+    assert part.read_bytes() == body
+    assert task.progress.downloaded_bytes == 10
+
+
+def test_http_sequential_416_completes_when_watermark_matches(tmp_path):
+    body = b"0123456789"
+    part = tmp_path / "payload.part"
+    part.write_bytes(body)
+    task = Task(id="seq-complete", url="https://files.test/a.bin", task_type=TaskType.HTTP)
+    task.progress.total_bytes = len(body)
+    task.engine_state["sequential_bytes"] = len(body)
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.headers.get("range"))
+        return httpx.Response(
+            416,
+            headers={"Content-Range": f"bytes */{len(body)}"},
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_sequential(client, downloader._headers(), part)
+
+    asyncio.run(run())
+    assert requests == ["bytes=10-"]
+    assert part.read_bytes() == body
+    assert task.progress.downloaded_bytes == 10
+    assert task.progress.completed_segments == 1
