@@ -7,35 +7,31 @@ import sys
 from pathlib import Path
 
 from .config import PROJECT_ROOT
+from .native_shell import locate_native_shell_executable
 
 
 def locate_native_engine_executable(project_root: Path | None = None) -> Path | None:
-    """Packaged HTTP engine next to Core/Shell. Source debug builds are last."""
-    names = ("HLSNativeEngine.exe", "hls-native-engine.exe", "hls-native-engine")
+    """Same HLSNativeShell.exe, invoked with --job. No second binary."""
     env_path = str(os.environ.get("HLS_NATIVE_ENGINE") or "").strip()
     if env_path:
         configured = Path(env_path)
         if configured.is_file():
             return configured
-        if configured.is_dir():
-            for name in names:
-                candidate = configured / name
-                if candidate.is_file():
-                    return candidate
-
-    roots: list[Path] = []
-    if project_root is not None:
-        roots.append(Path(project_root))
-    roots.append(Path(PROJECT_ROOT))
-    roots.append(Path(os.environ.get("HLS_NATIVE_SHELL_ROOT") or "."))
+    packaged = locate_native_shell_executable(project_root)
+    if packaged is not None:
+        return packaged
+    names = ("HLSNativeShell.exe", "hls-native-shell.exe", "hls-native-shell")
+    roots = [
+        Path(PROJECT_ROOT),
+        Path(os.environ.get("HLS_NATIVE_SHELL_ROOT") or "."),
+        Path.cwd(),
+    ]
     if getattr(sys, "frozen", False):
-        roots.append(Path(sys.executable).resolve().parent)
-    roots.append(Path.cwd())
-    crate = native_engine_source_dir()
-    if crate is not None:
+        roots.insert(0, Path(sys.executable).resolve().parent)
+    crate = Path(__file__).resolve().parents[2] / "native_shell"
+    if (crate / "Cargo.toml").is_file():
         roots.append(crate / "target" / "release")
         roots.append(crate / "target" / "debug")
-
     seen: set[Path] = set()
     for root in roots:
         try:
@@ -52,25 +48,16 @@ def locate_native_engine_executable(project_root: Path | None = None) -> Path | 
     return None
 
 
-def native_engine_source_dir() -> Path | None:
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        candidate = parent / "native_engine"
-        if (candidate / "Cargo.toml").is_file():
-            return candidate
-    return None
-
-
 def build_native_engine_debug() -> Path | None:
-    source = native_engine_source_dir()
-    if source is None:
+    crate = Path(__file__).resolve().parents[2] / "native_shell"
+    if not (crate / "Cargo.toml").is_file():
         return None
     cargo = "cargo.exe" if os.name == "nt" else "cargo"
-    target_name = "hls-native-engine.exe" if os.name == "nt" else "hls-native-engine"
-    target = source / "target" / "debug" / target_name
+    target_name = "hls-native-shell.exe" if os.name == "nt" else "hls-native-shell"
+    target = crate / "target" / "debug" / target_name
     completed = subprocess.run(
-        [cargo, "build", "--manifest-path", str(source / "Cargo.toml")],
-        cwd=str(source),
+        [cargo, "build", "--manifest-path", str(crate / "Cargo.toml")],
+        cwd=str(crate),
         capture_output=True,
         text=True,
         check=False,
@@ -82,7 +69,7 @@ def build_native_engine_debug() -> Path | None:
 
 def write_native_job(*, job_path: Path, payload: dict) -> Path:
     job_path.parent.mkdir(parents=True, exist_ok=True)
-    job_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    job_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return job_path
 
 

@@ -1650,8 +1650,8 @@ class HTTPDownloader(SeeklessEngine):
         task.progress.active_slots = connections
         task.progress.connection_status = "running"
         task.engine_state["stream_path"] = str(part_path)
-        task.engine_state["http_engine"] = "native-rust"
-        self._set_stage("downloading", "正在用原生引擎下载")
+        task.engine_state["http_engine"] = "native-shell"
+        self._set_stage("downloading", "正在下载")
         self._write_native_control(control_path, "run")
 
         async def launch(sequential_mode: bool, resume: int) -> int:

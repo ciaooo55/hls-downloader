@@ -204,7 +204,6 @@ try {
         "HLSDownloader.exe",
         "HLSDownloaderCore.exe",
         "HLSNativeShell.exe",
-        "HLSNativeEngine.exe",
         "Uninstall.exe",
         "config.default.json",
         "scripts\register-native-host.ps1",

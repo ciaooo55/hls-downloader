@@ -18,6 +18,9 @@ use std::time::Duration;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
+    if let Some(job_path) = flag_value(&args, "--job") {
+        return run_job_file(&job_path);
+    }
     if args.iter().any(|arg| arg == "--self-test") {
         return self_test();
     }
@@ -26,6 +29,17 @@ fn main() -> ExitCode {
         Err(err) => {
             eprintln!("{err}");
             ExitCode::from(1)
+        }
+    }
+}
+
+fn run_job_file(path: &str) -> ExitCode {
+    match hls_native_shell::load_job(Path::new(path)).and_then(|job| hls_native_shell::run_job(&job))
+    {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(error.exit_code() as u8)
         }
     }
 }

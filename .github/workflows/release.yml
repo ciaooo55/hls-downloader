@@ -6,7 +6,7 @@ on:
       version:
         description: Version used in the installer, for example 3.0.10
         required: false
-        default: "5.0.7"
+        default: "5.0.8"
       include_extensions:
         description: Upload browser extension ZIPs for this release
         required: false
@@ -132,9 +132,6 @@ jobs:
           cargo test --locked
           Pop-Location
           Push-Location native_shell
-          cargo test --locked
-          Pop-Location
-          Push-Location native_engine
           cargo test --locked
           Pop-Location
           Push-Location extension

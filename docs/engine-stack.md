@@ -1,23 +1,23 @@
 # 技术栈、下载引擎、文件怎么拼成最终文件
 
-对照 IDM 和 AB Download Manager，这一页谈 **技术栈、下载引擎、落盘拼接**。5.0.7 起，普通 HTTP 文件下载的运行时已经换成编译后的 Rust 引擎；HLS/DASH/BT 仍留在 Python 核心，因为那是这个产品相对 IDM/ABDM 的能力，不是还能再抠的外形。
+对照 IDM 和 AB Download Manager，这一页谈 **技术栈、下载引擎、落盘拼接**。普通 HTTP GET 跑在已经常驻的 `HLSNativeShell.exe` 里（`--job`，Windows 走系统 WinHTTP）。不再多带一个引擎 exe，也不再链 rustls/icu。HLS/DASH/BT 仍留在 Python 核心。
 
 ## 1. 技术栈（诚实对照）
 
-| | IDM | AB Download Manager | HLS Downloader 5.0.7 |
+| | IDM | AB Download Manager | HLS Downloader 5.0.8 |
 | --- | --- | --- | --- |
-| 壳 | 很小的 C++ 原生窗 | Kotlin / Compose 原生窗 | Rust Win32 监督进程：预创建确认/进度/完成 + 原生任务列表；设置/新建仍可打开 Tauri |
-| 普通 HTTP 文件 | C++ HTTP/FTP，Range 写入一个文件 | JVM + OkHttp，RandomAccessFile 写入一个文件 | **Rust `hls-native-engine`（ureq）+ Range seek 写入一个 `payload.downloading`** |
+| 壳 | 很小的 C++ 原生窗 | Kotlin / Compose 原生窗 | 同一个 Rust Win32 监督进程：确认/进度/完成 + 任务列表 + HTTP GET |
+| 普通 HTTP 文件 | C++ + 系统 HTTP | OkHttp | **监督进程 `--job`：Range seek 写入一个 `payload.downloading`；https 用 WinHTTP** |
 | 媒体 | 几乎不管 HLS/DASH 时间轴 | 窄的 m3u8 扫描 | HLS / LL-HLS / 非 DRM DASH + 本地清单 + FFmpeg |
 | BT | 无 | 有限/无 | libtorrent |
 | 捕获 | 驱动/注入级挂钩 | 扩展 `webRequest` / `downloads.onCreated` | 扩展接管；不复制 IDM 的 DLL/WFP/注入 |
-| 体积 | 十到二十兆量级 | 要 JRE | HTTP 热路径已是编译引擎；HLS/FFmpeg/libtorrent 还在，**总内存不和 IDM 比** |
+| 体积 | 十到二十兆量级 | 要 JRE | 原生侧仍是一个 `HLSNativeShell.exe`；Python/FFmpeg/libtorrent 还在，**总内存不和 IDM 比** |
 
-要和 IDM/ABDM **技术栈持平**，指的是：确认窗是已在跑的原生进程、普通文件用编译运行时按 Range 写入一个文件。不是把 HLS/BT 用 C++/Kotlin 重写一遍，也不是去抄挂钩。
+要和 IDM/ABDM **技术栈持平**，指的是：确认窗是已在跑的原生进程、普通文件用编译运行时按 Range 写入一个文件。不是再叠一个引擎进程，也不是去抄挂钩。
 
-5.0.7 之前 HTTP 模型已经是「一个文件 + seek」，语言还是 Python/httpx。5.0.7 把这条 GET 热路径换成 Rust 子进程；探测元数据、校验、发布最终文件名、HLS/DASH/BT 仍由 Python 核心编排。
+5.0.7 曾单独打包 `HLSNativeEngine.exe`（ureq + rustls）。5.0.8 把它收进监督进程，安装时删掉那个多余 exe。
 
-回退到 Python 的情况：POST 重放、全局限速、已有 Range 检查点续传、原生引擎不在或退出失败、浏览器 TLS 指纹回退。
+回退到 Python 的情况：POST 重放、全局限速、已有 Range 检查点续传、监督进程不在或 `--job` 失败、浏览器 TLS 指纹回退。
 
 ## 2. HTTP：和 IDM 同一类拼接（单文件 seek，不是 cat）
 
@@ -35,7 +35,7 @@ publish_path() 重命名/挪到最终文件名
 
 对应代码：
 
-- 原生 GET 热路径：`native_engine/`（`HLSNativeEngine.exe`），由 `HTTPDownloader.run()` 在探测完成后拉起
+- 原生 GET 热路径：`HLSNativeShell.exe --job`（`native_shell/src/http_engine.rs`），探测完成后由 `HTTPDownloader.run()` 拉起；https 走 WinHTTP
 - Python 回退：`backend/app/downloader/http_file.py`（同一条 `payload.downloading`）
 - 预分配：`backend/app/downloader/disk_space.py` → `preallocate_payload`
 - 动态拆尾巴（Python 回退）：`backend/app/downloader/http_split.py`
@@ -63,7 +63,7 @@ publish_path() 重命名/挪到最终文件名
 
 HLS/DASH 分片同样把 `write` 移出事件循环。MPEG-TS 仍走 `concatf` + FFmpeg copy；fMP4 仍走本地清单，不改拼接语义。
 
-ABDM 也是 RandomAccessFile / 动态 part 写进一个文件，模型和这里一样。5.0.7 之后普通 GET 的运行时也是编译引擎，不再只是 Python 实现了同一模型。
+ABDM 也是 RandomAccessFile / 动态 part 写进一个文件，模型和这里一样。普通 GET 的运行时在监督进程里，不再多一个引擎包。
 
 ## 3. HLS / DASH：不能按 IDM 的字节拼接
 
@@ -101,4 +101,4 @@ ABDM 也是 RandomAccessFile / 动态 part 写进一个文件，模型和这里�
 | 浏览器 POST 重放不能 Range 续传 | 只下一遍，避免表单/API 副作用；5.0.5 只把写盘改成和无 Range GET 一样随到随写 |
 | 已有 `http-resume.json` 的 Range 续传仍走 Python | 原生引擎这一刀先覆盖新任务；检查点格式对齐后可以再迁 |
 
-5.0.7 是引擎技术栈的第一刀：HTTP GET 离开 Python/httpx。下一刀若还做产品，是设置/播放器原生化，或把 Range 续传检查点交给原生引擎，不是再把 HLS 字节拼接。
+5.0.8 把 HTTP GET 收进同一个 `HLSNativeShell.exe`。下一刀若还做产品，是设置/播放器原生化，或把 Range 续传检查点交给 `--job`，不是再叠进程。

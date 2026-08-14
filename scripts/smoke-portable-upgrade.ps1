@@ -100,7 +100,6 @@ try {
         "HLSDownloader.exe",
         "HLSDownloaderCore.exe",
         "HLSNativeShell.exe",
-        "HLSNativeEngine.exe",
         "scripts\upgrade-portable.ps1",
         "scripts\shutdown-running.ps1",
         "portable"

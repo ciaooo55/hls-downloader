@@ -26,11 +26,6 @@ def test_desktop_release_versions_are_consistent():
     assert _match("installer/hls-downloader.nsi", r'!define APP_VERSION\s+"([^"]+)"') == version
     assert _match("scripts/build_installer.ps1", r'\[string\]\$Version\s*=\s*"([^"]+)"') == version
     assert _match("native_shell/Cargo.toml", r'^version\s*=\s*"([^"]+)"') == version
-    assert _match("native_engine/Cargo.toml", r'^version\s*=\s*"([^"]+)"') == version
-    assert _match(
-        "native_engine/Cargo.lock",
-        r'name = "hls-native-engine"\s+version = "([^"]+)"',
-    ) == version
     assert f'default: "{version}"' in (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
 
 

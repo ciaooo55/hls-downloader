@@ -1,14 +1,13 @@
-//! Compiled HTTP file engine.
+//! Range GET into one `payload.downloading`.
 //!
-//! IDM and AB Download Manager both download ordinary files with a compiled
-//! runtime (C++ / JVM) and write Range parts into one payload by seek. This
-//! crate is that class of engine: multi-connection `Range` + `seek` into a
-//! single `payload.downloading`. HLS/DASH/BT stay in the Python core.
+//! No extra process and no TLS crate: loopback/http uses the same tiny
+//! TcpStream client as the core poller; Windows https uses WinHTTP.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -138,38 +137,6 @@ pub fn run_job(job: &Job) -> Result<(), EngineError> {
     }
 }
 
-fn agent(job: &Job) -> Result<ureq::Agent, EngineError> {
-    let mut builder = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(15))
-        .timeout_read(Duration::from_secs(60))
-        .timeout_write(Duration::from_secs(30))
-        .redirects(16);
-    if let Some(ua) = job.headers.get("User-Agent").filter(|value| !value.is_empty()) {
-        builder = builder.user_agent(ua);
-    }
-    if !job.proxy.trim().is_empty() {
-        let proxy = ureq::Proxy::new(&job.proxy)
-            .map_err(|err| EngineError::Failed(err.to_string()))?;
-        builder = builder.proxy(proxy);
-    }
-    Ok(builder.build())
-}
-
-fn apply_headers(mut request: ureq::Request, job: &Job) -> ureq::Request {
-    for (key, value) in &job.headers {
-        if key.eq_ignore_ascii_case("host")
-            || key.eq_ignore_ascii_case("content-length")
-            || key.eq_ignore_ascii_case("connection")
-            || key.eq_ignore_ascii_case("range")
-            || key.eq_ignore_ascii_case("user-agent")
-        {
-            continue;
-        }
-        request = request.set(key, value);
-    }
-    request
-}
-
 fn check_control(path: &Path) -> Result<(), EngineError> {
     match read_control(path) {
         Control::Run => Ok(()),
@@ -179,20 +146,18 @@ fn check_control(path: &Path) -> Result<(), EngineError> {
 }
 
 fn download_sequential(job: &Job) -> Result<(), EngineError> {
-    let agent = agent(job)?;
     let resume_from = if job.resume_from > 0 && job.output.exists() {
-        job.resume_from.min(job.output.metadata().map(|meta| meta.len()).unwrap_or(0))
+        job.resume_from
+            .min(job.output.metadata().map(|meta| meta.len()).unwrap_or(0))
     } else {
         0
     };
-    let mut request = apply_headers(agent.get(&job.url), job);
-    if resume_from > 0 {
-        request = request.set("Range", &format!("bytes={resume_from}-"));
-    }
-    let response = request
-        .call()
-        .map_err(|err| EngineError::Failed(err.to_string()))?;
-    let status = response.status();
+    let range = if resume_from > 0 {
+        Some(format!("bytes={resume_from}-"))
+    } else {
+        None
+    };
+    let (status, mut reader) = fetch(job, range.as_deref())?;
     if resume_from > 0 && status == 200 {
         return Err(EngineError::RangeUnsupported(
             "server ignored sequential resume Range".into(),
@@ -214,7 +179,6 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
         file.seek(SeekFrom::Start(resume_from))
             .map_err(|err| EngineError::Failed(err.to_string()))?;
     }
-    let mut reader = response.into_reader();
     let mut buffer = vec![0u8; 64 * 1024];
     let mut downloaded = resume_from;
     let started = Instant::now();
@@ -327,9 +291,7 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     }
     let got = downloaded.load(Ordering::SeqCst);
     if got != total {
-        return Err(EngineError::Failed(format!(
-            "downloaded {got} of {total}"
-        )));
+        return Err(EngineError::Failed(format!("downloaded {got} of {total}")));
     }
     let final_len = fs::metadata(&job.output)
         .map(|meta| meta.len())
@@ -370,9 +332,6 @@ fn range_worker(
     failed: Arc<Mutex<Option<EngineErrorCode>>>,
     stop: Arc<AtomicBool>,
 ) {
-    let Ok(agent) = agent(job) else {
-        return;
-    };
     let Ok(mut file) = OpenOptions::new().read(true).write(true).open(&job.output) else {
         let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
         if slot.is_none() {
@@ -414,7 +373,7 @@ fn range_worker(
             index
         };
         let (start, end) = ranges[index];
-        if let Err(error) = fetch_range(job, &agent, &mut file, start, end, &downloaded) {
+        if let Err(error) = fetch_range(job, &mut file, start, end, &downloaded) {
             let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
             if slot.is_none() {
                 *slot = Some(error);
@@ -427,7 +386,6 @@ fn range_worker(
 
 fn fetch_range(
     job: &Job,
-    agent: &ureq::Agent,
     file: &mut File,
     start: u64,
     end: u64,
@@ -435,12 +393,9 @@ fn fetch_range(
 ) -> Result<(), EngineErrorCode> {
     let mut cursor = start;
     while cursor <= end {
-        let request = apply_headers(agent.get(&job.url), job)
-            .set("Range", &format!("bytes={cursor}-{end}"));
-        let response = request
-            .call()
-            .map_err(|err| EngineErrorCode::Failed(err.to_string()))?;
-        let status = response.status();
+        let range = format!("bytes={cursor}-{end}");
+        let (status, mut reader) =
+            fetch(job, Some(&range)).map_err(|err| EngineErrorCode::Failed(err.to_string()))?;
         if status == 200 {
             return Err(EngineErrorCode::RangeUnsupported(
                 "server ignored Range and returned 200".into(),
@@ -452,7 +407,6 @@ fn fetch_range(
         if file.seek(SeekFrom::Start(cursor)).is_err() {
             return Err(EngineErrorCode::Failed("seek failed".into()));
         }
-        let mut reader = response.into_reader();
         let mut buffer = vec![0u8; WRITE_BATCH];
         loop {
             match read_control(&job.control) {
@@ -478,11 +432,423 @@ fn fetch_range(
             }
         }
         if cursor <= end {
-            // CDN truncated this 206; continue the same handle from the next byte.
             continue;
         }
     }
     Ok(())
+}
+
+enum Body {
+    Tcp {
+        prefix: Vec<u8>,
+        at: usize,
+        stream: TcpStream,
+        remaining: Option<u64>,
+    },
+    #[cfg(windows)]
+    WinHttp(winhttp::WinHttpBody),
+}
+
+impl Read for Body {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Tcp {
+                prefix,
+                at,
+                stream,
+                remaining,
+            } => {
+                if let Some(0) = remaining {
+                    return Ok(0);
+                }
+                if *at < prefix.len() {
+                    let take = (prefix.len() - *at).min(buf.len());
+                    let take = match remaining {
+                        Some(left) => take.min(*left as usize),
+                        None => take,
+                    };
+                    buf[..take].copy_from_slice(&prefix[*at..*at + take]);
+                    *at += take;
+                    if let Some(left) = remaining.as_mut() {
+                        *left = left.saturating_sub(take as u64);
+                    }
+                    return Ok(take);
+                }
+                let want = match remaining {
+                    Some(left) => buf.len().min(*left as usize),
+                    None => buf.len(),
+                };
+                let count = stream.read(&mut buf[..want])?;
+                if let Some(left) = remaining.as_mut() {
+                    *left = left.saturating_sub(count as u64);
+                }
+                Ok(count)
+            }
+            #[cfg(windows)]
+            Self::WinHttp(body) => body.read(buf),
+        }
+    }
+}
+
+fn fetch(job: &Job, range: Option<&str>) -> Result<(u16, Body), EngineError> {
+    let mut url = job.url.clone();
+    for _ in 0..16 {
+        let parsed = parse_http_url(&url)?;
+        let use_winhttp = parsed.https || !job.proxy.trim().is_empty();
+        if use_winhttp {
+            #[cfg(windows)]
+            {
+                return winhttp::get(job, &url, range);
+            }
+            #[cfg(not(windows))]
+            {
+                return Err(EngineError::Failed("https/proxy needs WinHTTP".into()));
+            }
+        }
+        let (status, location, body) = http_get(job, &parsed, range)?;
+        if matches!(status, 301 | 302 | 303 | 307 | 308) {
+            let next = location.ok_or_else(|| EngineError::Failed("redirect without Location".into()))?;
+            url = resolve_location(&parsed, &next);
+            continue;
+        }
+        return Ok((status, body));
+    }
+    Err(EngineError::Failed("too many redirects".into()))
+}
+
+struct ParsedUrl {
+    https: bool,
+    host: String,
+    port: u16,
+    path: String,
+}
+
+fn parse_http_url(raw: &str) -> Result<ParsedUrl, EngineError> {
+    let (https, rest) = if let Some(rest) = raw.strip_prefix("https://") {
+        (true, rest)
+    } else if let Some(rest) = raw.strip_prefix("http://") {
+        (false, rest)
+    } else {
+        return Err(EngineError::Failed("url must be http(s)".into()));
+    };
+    let (hostport, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let (host, port) = if let Some((host, port)) = hostport.rsplit_once(':') {
+        if host.starts_with('[') {
+            return Err(EngineError::Failed("ipv6 url unsupported".into()));
+        }
+        (
+            host.to_string(),
+            port.parse::<u16>()
+                .map_err(|_| EngineError::Failed("invalid port".into()))?,
+        )
+    } else {
+        (hostport.to_string(), if https { 443 } else { 80 })
+    };
+    if host.is_empty() {
+        return Err(EngineError::Failed("url host missing".into()));
+    }
+    Ok(ParsedUrl {
+        https,
+        host,
+        port,
+        path: format!("/{path}"),
+    })
+}
+
+fn resolve_location(current: &ParsedUrl, location: &str) -> String {
+    if location.starts_with("http://") || location.starts_with("https://") {
+        return location.to_string();
+    }
+    let scheme = if current.https { "https" } else { "http" };
+    if location.starts_with('/') {
+        format!("{scheme}://{}:{}{location}", current.host, current.port)
+    } else {
+        format!(
+            "{scheme}://{}:{}{}",
+            current.host, current.port, location
+        )
+    }
+}
+
+fn http_get(
+    job: &Job,
+    parsed: &ParsedUrl,
+    range: Option<&str>,
+) -> Result<(u16, Option<String>, Body), EngineError> {
+    let mut stream = if job.proxy.trim().is_empty() {
+        TcpStream::connect((parsed.host.as_str(), parsed.port))
+            .map_err(|err| EngineError::Failed(err.to_string()))?
+    } else {
+        return Err(EngineError::Failed("http proxy uses WinHTTP".into()));
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .map_err(|err| EngineError::Failed(err.to_string()))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(30)))
+        .map_err(|err| EngineError::Failed(err.to_string()))?;
+    let mut header = format!(
+        "GET {} HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\nAccept-Encoding: identity\r\n",
+        parsed.path, parsed.host, parsed.port
+    );
+    if let Some(ua) = job
+        .headers
+        .get("User-Agent")
+        .filter(|value| !value.is_empty())
+    {
+        header.push_str(&format!("User-Agent: {ua}\r\n"));
+    }
+    if let Some(range) = range {
+        header.push_str(&format!("Range: {range}\r\n"));
+    }
+    for (key, value) in &job.headers {
+        if key.eq_ignore_ascii_case("host")
+            || key.eq_ignore_ascii_case("content-length")
+            || key.eq_ignore_ascii_case("connection")
+            || key.eq_ignore_ascii_case("range")
+            || key.eq_ignore_ascii_case("user-agent")
+        {
+            continue;
+        }
+        header.push_str(&format!("{key}: {value}\r\n"));
+    }
+    header.push_str("\r\n");
+    stream
+        .write_all(header.as_bytes())
+        .map_err(|err| EngineError::Failed(err.to_string()))?;
+    let mut buf = Vec::new();
+    let mut byte = [0u8; 1];
+    while buf.len() < 64 * 1024 {
+        let count = stream
+            .read(&mut byte)
+            .map_err(|err| EngineError::Failed(err.to_string()))?;
+        if count == 0 {
+            break;
+        }
+        buf.push(byte[0]);
+        if buf.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    let split = buf
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| EngineError::Failed("response headers truncated".into()))?;
+    let head = String::from_utf8_lossy(&buf[..split]);
+    let leftover = buf[split + 4..].to_vec();
+    let status = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .unwrap_or(0);
+    let mut location = None;
+    let mut content_length = None;
+    for line in head.lines().skip(1) {
+        if let Some(value) = line.strip_prefix("Location:").or_else(|| line.strip_prefix("location:"))
+        {
+            location = Some(value.trim().to_string());
+        }
+        if let Some(value) = line
+            .strip_prefix("Content-Length:")
+            .or_else(|| line.strip_prefix("content-length:"))
+        {
+            content_length = value.trim().parse::<u64>().ok();
+        }
+    }
+    let remaining = content_length.map(|total| total.saturating_sub(leftover.len() as u64));
+    Ok((
+        status,
+        location,
+        Body::Tcp {
+            prefix: leftover,
+            at: 0,
+            stream,
+            remaining,
+        },
+    ))
+}
+
+#[cfg(windows)]
+mod winhttp {
+    use super::{Body, EngineError, Job};
+    use std::io::Read;
+    use std::ptr::null_mut;
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::Networking::WinHttp::{
+        WinHttpAddRequestHeaders, WinHttpCloseHandle, WinHttpConnect, WinHttpOpen,
+        WinHttpOpenRequest, WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse,
+        WinHttpSendRequest, WinHttpSetTimeouts, WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+        WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_ADDREQ_FLAG_ADD, WINHTTP_FLAG_SECURE,
+        WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
+    };
+
+    pub struct WinHttpBody {
+        session: *mut core::ffi::c_void,
+        connect: *mut core::ffi::c_void,
+        request: *mut core::ffi::c_void,
+    }
+
+    unsafe impl Send for WinHttpBody {}
+
+    impl Drop for WinHttpBody {
+        fn drop(&mut self) {
+            unsafe {
+                if !self.request.is_null() {
+                    WinHttpCloseHandle(self.request);
+                }
+                if !self.connect.is_null() {
+                    WinHttpCloseHandle(self.connect);
+                }
+                if !self.session.is_null() {
+                    WinHttpCloseHandle(self.session);
+                }
+            }
+        }
+    }
+
+    impl Read for WinHttpBody {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let mut got: u32 = 0;
+            let ok = unsafe {
+                WinHttpReadData(
+                    self.request,
+                    buf.as_mut_ptr() as *mut _,
+                    buf.len() as u32,
+                    &mut got,
+                )
+            };
+            if ok == 0 {
+                return Err(std::io::Error::other(format!(
+                    "WinHttpReadData {}",
+                    unsafe { GetLastError() }
+                )));
+            }
+            Ok(got as usize)
+        }
+    }
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    pub fn get(job: &Job, url: &str, range: Option<&str>) -> Result<(u16, Body), EngineError> {
+        let parsed = super::parse_http_url(url)?;
+        unsafe {
+            let proxy = job.proxy.trim();
+            let session = if proxy.is_empty() {
+                WinHttpOpen(
+                    wide("HLS Downloader").as_ptr(),
+                    WINHTTP_ACCESS_TYPE_NO_PROXY,
+                    null_mut(),
+                    null_mut(),
+                    0,
+                )
+            } else {
+                WinHttpOpen(
+                    wide("HLS Downloader").as_ptr(),
+                    WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+                    wide(proxy).as_ptr(),
+                    wide("").as_ptr(),
+                    0,
+                )
+            };
+            if session.is_null() {
+                return Err(EngineError::Failed(format!(
+                    "WinHttpOpen {}",
+                    GetLastError()
+                )));
+            }
+            let _ = WinHttpSetTimeouts(session, 15_000, 15_000, 30_000, 60_000);
+            let connect = WinHttpConnect(session, wide(&parsed.host).as_ptr(), parsed.port, 0);
+            if connect.is_null() {
+                WinHttpCloseHandle(session);
+                return Err(EngineError::Failed(format!(
+                    "WinHttpConnect {}",
+                    GetLastError()
+                )));
+            }
+            let flags = if parsed.https { WINHTTP_FLAG_SECURE } else { 0 };
+            let request = WinHttpOpenRequest(
+                connect,
+                wide("GET").as_ptr(),
+                wide(&parsed.path).as_ptr(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                flags,
+            );
+            if request.is_null() {
+                WinHttpCloseHandle(connect);
+                WinHttpCloseHandle(session);
+                return Err(EngineError::Failed(format!(
+                    "WinHttpOpenRequest {}",
+                    GetLastError()
+                )));
+            }
+            let mut extra = String::from("Accept-Encoding: identity\r\n");
+            if let Some(range) = range {
+                extra.push_str(&format!("Range: {range}\r\n"));
+            }
+            for (key, value) in &job.headers {
+                if key.eq_ignore_ascii_case("host")
+                    || key.eq_ignore_ascii_case("content-length")
+                    || key.eq_ignore_ascii_case("connection")
+                    || key.eq_ignore_ascii_case("range")
+                {
+                    continue;
+                }
+                extra.push_str(&format!("{key}: {value}\r\n"));
+            }
+            if !extra.is_empty() {
+                let _ = WinHttpAddRequestHeaders(
+                    request,
+                    wide(&extra).as_ptr(),
+                    extra.encode_utf16().count() as u32,
+                    WINHTTP_ADDREQ_FLAG_ADD,
+                );
+            }
+            if WinHttpSendRequest(request, null_mut(), 0, null_mut(), 0, 0, 0) == 0 {
+                let err = GetLastError();
+                WinHttpCloseHandle(request);
+                WinHttpCloseHandle(connect);
+                WinHttpCloseHandle(session);
+                return Err(EngineError::Failed(format!("WinHttpSendRequest {err}")));
+            }
+            if WinHttpReceiveResponse(request, null_mut()) == 0 {
+                let err = GetLastError();
+                WinHttpCloseHandle(request);
+                WinHttpCloseHandle(connect);
+                WinHttpCloseHandle(session);
+                return Err(EngineError::Failed(format!("WinHttpReceiveResponse {err}")));
+            }
+            let mut status: u32 = 0;
+            let mut status_size = std::mem::size_of::<u32>() as u32;
+            if WinHttpQueryHeaders(
+                request,
+                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                null_mut(),
+                &mut status as *mut u32 as *mut _,
+                &mut status_size,
+                null_mut(),
+            ) == 0
+            {
+                let err = GetLastError();
+                WinHttpCloseHandle(request);
+                WinHttpCloseHandle(connect);
+                WinHttpCloseHandle(session);
+                return Err(EngineError::Failed(format!("WinHttpQueryHeaders {err}")));
+            }
+            Ok((
+                status as u16,
+                Body::WinHttp(WinHttpBody {
+                    session,
+                    connect,
+                    request,
+                }),
+            ))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -490,7 +856,6 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
-    use std::thread;
 
     fn serve_body(body: &'static [u8]) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -546,7 +911,7 @@ mod tests {
 
     fn temp_job(url: &str, sequential: bool, total: u64, connections: usize) -> (Job, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
-            "hls-native-engine-{}-{}",
+            "hls-http-engine-{}-{}",
             std::process::id(),
             Instant::now().elapsed().as_nanos()
         ));

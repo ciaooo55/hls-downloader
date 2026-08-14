@@ -19,7 +19,7 @@ BODY = bytes(range(256)) * 48
 
 
 def test_locate_native_engine_prefers_explicit_file(tmp_path, monkeypatch):
-    exe = tmp_path / "HLSNativeEngine.exe"
+    exe = tmp_path / "HLSNativeShell.exe"
     exe.write_bytes(b"not-a-real-binary")
     monkeypatch.setenv("HLS_NATIVE_ENGINE", str(exe))
     assert locate_native_engine_executable() == exe
@@ -121,6 +121,6 @@ def test_native_engine_range_download_writes_one_file(tmp_path, monkeypatch):
     finally:
         server.shutdown()
     assert task.status is TaskStatus.DONE
-    assert task.engine_state.get("http_engine") == "native-rust"
+    assert task.engine_state.get("http_engine") == "native-shell"
     output = Path(task.output_path)
     assert output.read_bytes() == BODY

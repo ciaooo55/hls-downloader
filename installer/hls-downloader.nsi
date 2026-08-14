@@ -8,10 +8,10 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-!define APP_VERSION "5.0.7"
+!define APP_VERSION "5.0.8"
 !endif
 !ifndef APP_FILE_VERSION
-!define APP_FILE_VERSION "5.0.7.0"
+!define APP_FILE_VERSION "5.0.8.0"
 !endif
 
 !ifndef STAGE_DIR
@@ -327,7 +327,9 @@ Section "Install" SecInstall
   File "${STAGE_DIR}\HLSDownloader.exe"
   File "${STAGE_DIR}\HLSDownloaderCore.exe"
   File "${STAGE_DIR}\HLSNativeShell.exe"
-  File "${STAGE_DIR}\HLSNativeEngine.exe"
+  ; 5.0.8 briefly shipped a second HTTP engine exe. 5.0.8 folded that into the
+  ; supervisor --job path; drop any leftover so the install stays one native binary.
+  Delete "$INSTDIR\HLSNativeEngine.exe"
   ; Native Messaging processes are launched by Chrome, Edge and Firefox and
   ; may legitimately remain alive after the desktop app has exited.  Never
   ; overwrite their executable in place: a versioned target lets an existing
