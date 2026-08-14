@@ -768,6 +768,20 @@ def test_identity_body_uses_raw_chunks_when_not_decoded():
     assert http_file_module._identity_body(FakeResponse("identity")) == "raw"
     assert http_file_module._identity_body(FakeResponse("gzip")) == "bytes"
 
+    class Buffered:
+        headers = {"content-encoding": ""}
+        _content = b"buffered"
+        is_stream_consumed = True
+        is_closed = True
+
+        def aiter_raw(self):
+            return "raw"
+
+        def aiter_bytes(self):
+            return "bytes"
+
+    assert http_file_module._identity_body(Buffered()) == "bytes"
+
 
 def test_http_range_downloader_uses_twelve_workers_by_default(tmp_path, monkeypatch):
     chunk_size = 1024 * 1024
@@ -1130,7 +1144,7 @@ def test_browser_profile_http_fallback_downloads_after_a_403(tmp_path, monkeypat
     task = Task(id="http-browser-fallback", url="https://files.test/video.mp4", task_type=TaskType.HTTP)
     task.engine_state.update({"browser_originated": True, "output_dir": str(tmp_path / "downloads")})
     task_dir = task_work_dir(task)
-    task_dir.mkdir(parents=True)
+    task_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(hls_module, "CurlAsyncSession", object)
     monkeypatch.setattr(hls_module, "_BrowserHLSClient", BrowserClient)
     monkeypatch.setattr(hls_module, "_close_response", close_response)
@@ -1191,7 +1205,7 @@ def test_browser_profile_http_fallback_resumes_unmarked_prefix(tmp_path, monkeyp
     task.engine_state.update({"browser_originated": True, "output_dir": str(tmp_path / "downloads")})
     task.progress.total_bytes = 7
     task_dir = task_work_dir(task)
-    task_dir.mkdir(parents=True)
+    task_dir.mkdir(parents=True, exist_ok=True)
     part = task_dir / "payload.downloading"
     part.write_bytes(b"brow")
     monkeypatch.setattr(hls_module, "CurlAsyncSession", object)
@@ -1255,7 +1269,7 @@ def test_browser_profile_http_fallback_rejects_mismatched_206(tmp_path, monkeypa
     task.engine_state.update({"browser_originated": True, "output_dir": str(tmp_path / "downloads")})
     task.progress.total_bytes = 7
     task_dir = task_work_dir(task)
-    task_dir.mkdir(parents=True)
+    task_dir.mkdir(parents=True, exist_ok=True)
     part = task_dir / "payload.downloading"
     part.write_bytes(b"brow")
     monkeypatch.setattr(hls_module, "CurlAsyncSession", object)
@@ -1317,7 +1331,7 @@ def test_browser_profile_http_fallback_completes_on_trusted_416(tmp_path, monkey
     task.engine_state["sequential_bytes"] = len(body)
     task.filename = "video.mp4"
     task_dir = task_work_dir(task)
-    task_dir.mkdir(parents=True)
+    task_dir.mkdir(parents=True, exist_ok=True)
     part = task_dir / "payload.downloading"
     part.write_bytes(body)
     monkeypatch.setattr(hls_module, "CurlAsyncSession", object)

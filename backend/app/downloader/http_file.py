@@ -150,17 +150,21 @@ def _response_decodes_content(response: httpx.Response) -> bool:
 
 
 def _identity_body(response: httpx.Response):
-    """Yield payload bytes without httpx ByteChunker reassembly.
+    """Yield payload bytes, preferring an unconsumed raw stream.
 
-    ``aiter_bytes()`` can hold a partial slice until flush(); a mid-stream
-    error then drops those bytes from both the iterator and our write batch.
-    After Content-Encoding has been rejected, ``aiter_raw()`` is the socket
-    payload with HTTP framing already removed.
+    Live Range downloads have already rejected Content-Encoding, so
+    ``aiter_raw()`` skips httpx ByteChunker reassembly. MockTransport and
+    other fully-buffered responses already have ``_content`` and mark the
+    stream consumed; ``aiter_bytes()`` still yields that buffer.
     """
+    if _response_decodes_content(response) or hasattr(response, "_content"):
+        return response.aiter_bytes()
+    if getattr(response, "is_stream_consumed", False) or getattr(response, "is_closed", False):
+        return response.aiter_bytes()
     aiter_raw = getattr(response, "aiter_raw", None)
-    if aiter_raw is not None and not _response_decodes_content(response):
-        return aiter_raw()
-    return response.aiter_bytes()
+    if aiter_raw is None:
+        return response.aiter_bytes()
+    return aiter_raw()
 
 
 def _metadata_probe_can_skip_body(
