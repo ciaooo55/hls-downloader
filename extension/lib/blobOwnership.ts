@@ -16,3 +16,14 @@ export function inheritHttpBufferSource(
   }
   return ''
 }
+
+/** Copy HTTP ownership across Blob.slice() and similar derived objects. */
+export function copyHttpBufferSource(
+  sourceObject: object,
+  target: object,
+  lookup: (value: object) => string | undefined,
+  remember: (value: object, sourceUrl: string) => void,
+): void {
+  const source = lookup(sourceObject) || ''
+  if (/^https?:\/\//i.test(source)) remember(target, source)
+}

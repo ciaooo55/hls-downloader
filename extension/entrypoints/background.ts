@@ -1,7 +1,7 @@
 import { browser } from 'wxt/browser'
 import { mediaPushRequestId } from '../lib/mediaPush'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
-import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
+import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isConcreteDownloadMime, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, desktopTaskReadiness, handoffStatusLabel, handoffTerminalStatus, type BrowserHandoffPayload, type DesktopTaskReadiness } from '../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
@@ -887,7 +887,9 @@ function observedResponse(details: any, chain?: RequestChain) {
   const length = rangeTotal || Number(header('content-length') || 0)
   const disposition = header('content-disposition')
   const filename = responseFilename(disposition)
-  const kind = disposition || mimeType.toLowerCase().includes('octet-stream')
+  const kind = disposition
+    || mimeType.toLowerCase().includes('octet-stream')
+    || isConcreteDownloadMime(mimeType)
     ? classifyDownload(details.url, mimeType, filename, disposition)
     : classifyResource(details.url, mimeType)
   if (!kind) return { disposition, resource: null }

@@ -102,6 +102,13 @@ function cleanName(value = '', pathValue = false): string {
   return result.slice(0, 200)
 }
 
+/** Server MIME types that already name a file, not a page or octet-stream guess. */
+const CONCRETE_DOWNLOAD_MIME = /^(?:application\/(?:(?:x-)?(?:7z-compressed|apple-diskimage|bittorrent|bzip2|debian-package|gzip|iso9660-image|msdownload|msi|rar(?:-compressed)?|tar|zip(?:-compressed)?)|epub\+zip|force-download|gzip|java-archive|pdf|vnd\.(?:android\.package-archive|debian\.binary-package|microsoft\.portable-executable|ms-(?:excel|powerpoint|word)|openxmlformats-officedocument\.[a-z0-9.+-]+)|x-download|zip))\b/i
+
+export function isConcreteDownloadMime(value = ''): boolean {
+  return CONCRETE_DOWNLOAD_MIME.test(String(value || '').split(';', 1)[0].trim())
+}
+
 /** True when a URL path or filename already names an ordinary download file. */
 export function looksLikeDownloadFile(value = ''): boolean {
   const candidate = String(value || '').trim()
@@ -693,7 +700,10 @@ export function classifyDownload(
   // and ad targets. Attachment is the server saying this response is a file,
   // which is the same signal already used for JSON/script downloads.
   const urlLooksLikeFile = looksLikeDownloadFile(url)
-  if (!attachment && DYNAMIC_DOCUMENT_EXT.test(url) && !urlLooksLikeFile && (!suppliedHasExtension || suppliedIsDocument)) return null
+  const concreteMime = isConcreteDownloadMime(mime)
+  // A concrete zip/pdf/apk MIME is the server naming a file, same as
+  // attachment. Leave octet-stream on PHP/ASP endpoints in the browser.
+  if (!attachment && !concreteMime && DYNAMIC_DOCUMENT_EXT.test(url) && !urlLooksLikeFile && (!suppliedHasExtension || suppliedIsDocument)) return null
   if (!attachment && mime.includes('octet-stream') && !MEDIA_EXT.test(url) && !urlLooksLikeFile && (!suppliedHasExtension || suppliedIsDocument)) return null
   const classified = classifyResource(url, mimeType)
     || classifyResource(`https://download.invalid/${encodeURIComponent(filename)}`, mimeType)

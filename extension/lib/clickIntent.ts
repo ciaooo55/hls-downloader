@@ -1,5 +1,5 @@
 const DOWNLOAD_HINT = /(?:^|[\s_:/-])(?:download|save|export|install|offline)(?:$|[\s_:/-])|下载|保存|另存|导出|安装|离线|缓存|ダウンロード|다운로드|скачать|télécharger|descargar|herunterladen|scarica|baixar/i
-const DOWNLOAD_URL_HINT = /\.(?:m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|torrent|zip|7z|rar|tar|gz|bz2|xz|iso|exe|msi|apk|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?)(?:$|[?#])|\/(?:downloads?|attachments?|exports?)(?:[/?#]|$)|[?&](?:download|attachment|disposition|filename|file_name|fn|export)=|[?&](?:cd|content-disposition)=attachment(?:[&#]|$)/i
+const DOWNLOAD_URL_HINT = /\.(?:m3u8|mpd|mp4|m4v|webm|mkv|mov|avi|flv|m4a|mp3|flac|wav|ogg|opus|torrent|zip|7z|rar|tar|tgz|gz|bz2|xz|iso|img|exe|msi|msix|appx|apk|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|bin|jar)(?:$|[?#])|\/(?:downloads?|attachments?|exports?)(?:[/?#]|$)|[?&](?:download|attachment|disposition|filename|file_name|fn|export)=|[?&](?:cd|content-disposition)=attachment(?:[&#]|$)/i
 const AUTHENTICATION_HOSTS = new Set([
   'accounts.google.com',
   'login.live.com',

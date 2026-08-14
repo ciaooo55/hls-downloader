@@ -53,6 +53,8 @@ describe('download click intent', () => {
 
   it('keeps real download gateways eligible without treating every route as a file', () => {
     expect(isLikelyDownloadUrl('https://files.test/attachments/report?id=1')).toBe(true)
+    expect(isLikelyDownloadUrl('https://cdn.test/firmware.bin')).toBe(true)
+    expect(isLikelyDownloadUrl('https://cdn.test/lib.jar')).toBe(true)
     expect(isLikelyDownloadUrl('https://site.test/watch/episode-1')).toBe(false)
   })
 

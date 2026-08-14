@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { inheritHttpBufferSource } from './blobOwnership'
+import { copyHttpBufferSource, inheritHttpBufferSource } from './blobOwnership'
 
 describe('blob download ownership', () => {
   it('recovers the HTTP source wrapped by new Blob([fetchedBytes])', () => {
@@ -18,5 +18,14 @@ describe('blob download ownership', () => {
     expect(inheritHttpBufferSource([bytes], value => sources.get(value))).toBe('')
     expect(inheritHttpBufferSource(['hello'], value => sources.get(value))).toBe('')
     expect(inheritHttpBufferSource(undefined, value => sources.get(value))).toBe('')
+  })
+
+  it('copies HTTP ownership onto a sliced Blob', () => {
+    const sources = new WeakMap<object, string>()
+    const original = { id: 'blob' }
+    const sliced = { id: 'slice' }
+    sources.set(original, 'https://cdn.test/export.zip')
+    copyHttpBufferSource(original, sliced, value => sources.get(value), (value, source) => sources.set(value, source))
+    expect(sources.get(sliced)).toBe('https://cdn.test/export.zip')
   })
 })

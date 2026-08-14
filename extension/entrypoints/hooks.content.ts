@@ -1,4 +1,4 @@
-import { inheritHttpBufferSource } from '../lib/blobOwnership'
+import { copyHttpBufferSource, inheritHttpBufferSource } from '../lib/blobOwnership'
 import { detectManifestKind, manifestMimeType, shouldInspectManifestResponse, shouldReportMediaResponse } from '../lib/manifestSniff'
 
 export default defineContentScript({
@@ -125,6 +125,18 @@ export default defineContentScript({
     } catch {
       // Frozen URL.createObjectURL only disables blob: download correlation.
     }
+    try {
+      // Blob.slice is common for fetch-then-save helpers that retag MIME.
+      // Typed-array/ArrayBuffer slice stays MSE-only because those run hot.
+      const blobSlice = Blob.prototype.slice
+      Blob.prototype.slice = function (start?: number, end?: number, contentType?: string) {
+        const value = blobSlice.call(this, start, end, contentType)
+        copyHttpBufferSource(this, value, object => bufferSources.get(object), rememberBufferSource)
+        return value
+      }
+    } catch {
+      // Frozen Blob.slice only disables sliced-blob download correlation.
+    }
     window.addEventListener('__hls_downloader_replay__', () => {
       pendingResources.forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: event })))
       pendingMse.forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', { detail: event })))
@@ -187,13 +199,6 @@ export default defineContentScript({
         const arrayBufferSlice = ArrayBuffer.prototype.slice
         ArrayBuffer.prototype.slice = function (start?: number, end?: number) {
           const value = arrayBufferSlice.call(this, start, end)
-          const source = bufferSources.get(this)
-          if (source) rememberBufferSource(value, source)
-          return value
-        }
-        const blobSlice = Blob.prototype.slice
-        Blob.prototype.slice = function (start?: number, end?: number, contentType?: string) {
-          const value = blobSlice.call(this, start, end, contentType)
           const source = bufferSources.get(this)
           if (source) rememberBufferSource(value, source)
           return value

@@ -3,6 +3,7 @@ import {
   canonicalMediaUrl,
   classifyDownload,
   looksLikeDownloadFile,
+  isConcreteDownloadMime,
   classifyPlaybackSource,
   classifyResource,
   compactResources,
@@ -587,6 +588,16 @@ describe('resource rules', () => {
     expect(classifyDownload('https://cdn.test/report.docx', 'application/octet-stream', '')).toBe('file')
     expect(classifyDownload('https://site.test/advert.php', 'application/octet-stream')).toBeNull()
     expect(classifyDownload('https://cdn.test/get?id=1', 'application/octet-stream', 'download')).toBeNull()
+  })
+  it('takes over PHP/ASP downloads when the server names a concrete file MIME', () => {
+    expect(isConcreteDownloadMime('application/zip; charset=binary')).toBe(true)
+    expect(isConcreteDownloadMime('application/pdf')).toBe(true)
+    expect(isConcreteDownloadMime('application/octet-stream')).toBe(false)
+    expect(classifyDownload('https://site.test/export.php', 'application/zip', 'export.php')).toBe('file')
+    expect(classifyDownload('https://site.test/get.aspx', 'application/pdf', 'get.aspx')).toBe('file')
+    expect(classifyDownload('https://site.test/download.php', 'application/force-download', '')).toBe('file')
+    expect(classifyDownload('https://site.test/advert.php', 'application/octet-stream')).toBeNull()
+    expect(classifyDownload('https://site.test/export.php', 'application/javascript', 'export.php')).toBeNull()
   })
   it('excludes passive web resources unless the server marks an attachment', () => {
     expect(classifyDownload('https://site.test/app.js', 'application/javascript', 'app.js')).toBeNull()
