@@ -390,6 +390,7 @@ export default defineContentScript({
           return
         }
         setSendState(resource, button, '重试', false)
+        if (result) { result.hidden = false; result.classList.add('error'); result.textContent = '桌面端确认超时，请重试' }
       }).catch(reason => {
         setSendState(resource, button, '重试', false)
         if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '发送失败' }
@@ -440,8 +441,10 @@ export default defineContentScript({
         button.textContent = '已发送'
         if (result) result.textContent = status.message || '投屏成功'
       }).catch(reason => {
-        button.removeAttribute('disabled'); button.textContent = '投屏'
+        button.removeAttribute('disabled'); button.textContent = '投屏链接'
         if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '投屏请求失败' }
+      }).finally(() => {
+        setTimeout(() => { if (button.textContent === '已发送') { button.removeAttribute('disabled'); button.textContent = '投屏链接' } }, 2000)
       })
     }
 
@@ -967,6 +970,7 @@ export default defineContentScript({
         render()
       }
       if (message?.type === 'open-media-panel') {
+        if (!activePlayback) selectionMode = true
         setOpen(true)
         render()
       }

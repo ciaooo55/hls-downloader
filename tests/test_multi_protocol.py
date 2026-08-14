@@ -76,6 +76,9 @@ def test_auto_task_type_recognizes_supported_sources():
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/file.torrent") is TaskType.TORRENT
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/stream?id=1", "application/vnd.apple.mpegurl") is TaskType.HLS
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/manifest?id=1", "application/dash+xml; charset=utf-8") is TaskType.DASH
+    assert resolve_task_type(TaskType.AUTO, "https://cdn.test/playlist.m3u") is TaskType.HLS
+    assert resolve_task_type(TaskType.AUTO, "https://cdn.test/stream?id=2", "audio/mpegurl") is TaskType.HLS
+    assert resolve_task_type(TaskType.AUTO, "https://cdn.test/manifest?id=3", "application/dash+xml") is TaskType.DASH
 
 
 def test_create_task_uses_captured_manifest_mime_when_url_has_no_extension(monkeypatch):

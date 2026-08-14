@@ -639,6 +639,18 @@ async def wait_browser_handoff(handoff_id: str, x_token: str = Header(default=""
         await asyncio.sleep(0.25)
 
 
+def _browser_offer_task_type(item) -> TaskType:
+    """Trust the overlay's HLS/DASH kind; URL-only AUTO misses .m3u / mpegurl variants."""
+    kind = str(getattr(item, "resource_kind", "") or "").lower()
+    if kind == "hls":
+        return TaskType.HLS
+    if kind == "dash":
+        return TaskType.DASH
+    if kind == "magnet":
+        return TaskType.TORRENT
+    return TaskType.AUTO
+
+
 async def _create_browser_task(item, output_dir: str = ""):
     expired = manager.find_expired_request_task(item.url, item.source_page_url)
     if expired is not None:
@@ -660,7 +672,7 @@ async def _create_browser_task(item, output_dir: str = ""):
         )
     task = await manager.create_task(
         url=item.url,
-        task_type=TaskType.AUTO,
+        task_type=_browser_offer_task_type(item),
         source_page_url=item.source_page_url,
         mime_type=item.mime_type,
         referer=item.referer,
@@ -821,11 +833,11 @@ async def hide_native_shell_main(x_token: str = Header(default="")):
 
 @router.post("/desktop/native-shell/settings")
 async def open_native_shell_settings(x_token: str = Header(default="")):
-    """Show the existing desktop window for new-task / settings / logs."""
+    """Show settings / new-task / device picker. Idle native-shell has no WebView."""
     _check_token(x_token)
-    from .desktop_runtime import activate_window
-
-    return {"ok": activate_window()}
+    spawned = maybe_spawn_desktop_ui_process(project_root=PROJECT_ROOT)
+    activated = activate_window()
+    return {"ok": bool(activated or spawned)}
 
 
 @router.post("/desktop/native-shell/ipc/start")

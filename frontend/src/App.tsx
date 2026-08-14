@@ -188,8 +188,14 @@ export default function App() {
     const receive = (event: Event) => {
       const item = (event as CustomEvent).detail
       const resource = item?.resource || {}
+      if (item?.status && item.status !== 'pending') return
       if ((item?.kind === 'cast' || item?.kind === 'tvbox') && resource.url) {
-        setDevicePick({ kind: item.kind, url: String(resource.url), filename: String(resource.filename || resource.title || '网页视频'), requestId: String(item.id || '') || undefined })
+        setDevicePick(previous => {
+          if (previous?.requestId && previous.requestId !== String(item.id || '')) {
+            void completeBrowserMediaPush(previous.requestId, 'canceled', '已被新的投送请求替换')
+          }
+          return { kind: item.kind, url: String(resource.url), filename: String(resource.filename || resource.title || '网页视频'), requestId: String(item.id || '') || undefined }
+        })
       }
     }
     window.addEventListener('hls-browser-media-push', receive)

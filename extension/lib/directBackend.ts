@@ -60,7 +60,7 @@ export class BrowserDirectBackend {
         takeover_minimum_bytes: Math.max(0, Number(current.takeover_minimum_bytes || 0)),
       }
     }
-    if (op === 'push_to_tv') return post('/tvbox/push', { url: String(message.resource?.url || '') })
+    if (op === 'push_to_tv') return post('/browser/media-push', { kind: 'tvbox', resource: message.resource || { url: String(message.resource?.url || '') } })
     if (op === 'media_push') return post('/browser/media-push', { kind: String(message.kind || ''), resource: message.resource || {} })
     if (op === 'media_push_status') return get(`/browser/media-push/${encodeURIComponent(message.request_id || '')}/status`)
     throw new Error(`Direct backend does not support ${op}`)

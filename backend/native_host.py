@@ -230,7 +230,11 @@ def dispatch(message: dict) -> dict:
         task = _request("POST", "/browser/downloads", message.get("resource", {}))
         return {"ok": True, "task": task, "activated": False}
     if operation == "push_to_tv":
-        return _request("POST", "/tvbox/push", {"url": str(message.get("resource", {}).get("url", ""))})
+        _start_desktop_ui()
+        return _request("POST", "/browser/media-push", {
+            "kind": "tvbox",
+            "resource": message.get("resource", {}),
+        })
     if operation == "media_push":
         _start_desktop_ui()
         return _request("POST", "/browser/media-push", {

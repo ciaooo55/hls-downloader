@@ -252,6 +252,32 @@ def test_browser_media_push_queues_until_desktop_session_starts(monkeypatch):
         native_desktop_session.stop()
 
 
+def test_browser_offer_uses_overlay_hls_kind_when_url_has_no_extension():
+    from types import SimpleNamespace
+    from backend.app.api import _browser_offer_task_type
+
+    assert _browser_offer_task_type(SimpleNamespace(resource_kind="hls")) is TaskType.HLS
+    assert _browser_offer_task_type(SimpleNamespace(resource_kind="dash")) is TaskType.DASH
+    assert _browser_offer_task_type(SimpleNamespace(resource_kind="magnet")) is TaskType.TORRENT
+    assert _browser_offer_task_type(SimpleNamespace(resource_kind="file")) is TaskType.AUTO
+
+
+def test_native_shell_settings_spawns_desktop_ui_when_session_is_idle(monkeypatch):
+    from pathlib import Path
+    from backend.app import api as api_module
+    from backend.app.native_desktop import native_desktop_session
+
+    native_desktop_session.stop()
+    monkeypatch.setattr(
+        api_module,
+        "maybe_spawn_desktop_ui_process",
+        lambda **_kwargs: Path("HLSDownloader.exe"),
+    )
+    shown = TestClient(app).post("/api/desktop/native-shell/settings", headers=AUTH)
+    assert shown.status_code == 200
+    assert shown.json()["ok"] is True
+
+
 def test_task_api_preserves_cross_origin_request_contexts(monkeypatch):
     """Manual/API clients need the same CDN authentication path as the extension."""
     from backend.app import api as api_module

@@ -255,6 +255,7 @@ async function createTauriDesktopSession(): Promise<() => void> {
           else if (command.kind === 'media_push') {
             await showMain()
             const item = await localRequest(`/browser/media-push/${encodeURIComponent(String(command.handoff_id || ''))}`)
+            if (item?.status && item.status !== 'pending') continue
             window.dispatchEvent(new CustomEvent('hls-browser-media-push', { detail: item }))
           }
           else if (command.kind === 'shutdown') {

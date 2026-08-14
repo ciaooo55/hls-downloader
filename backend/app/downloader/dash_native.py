@@ -1693,6 +1693,7 @@ class NativeDashEngine:
                 kind: float(state[kind]["entries"][0].get("start") or 0)
                 for kind in counts
             },
+            segment_entries={kind: state[kind]["entries"] for kind in counts},
         )
 
     async def _download_one(

@@ -190,11 +190,9 @@ def resolve_task_type(value: TaskType | str, url: str, mime_type: str = "") -> T
     mime = mime_type.lower().split(";", 1)[0].strip()
     if url.lower().startswith("magnet:") or lowered.endswith(".torrent"):
         return TaskType.TORRENT
-    if lowered.endswith(".mpd") or mime == "application/dash+xml":
+    if lowered.endswith(".mpd") or "dash+xml" in mime:
         return TaskType.DASH
-    if ".m3u8" in lowered or mime in {
-        "application/vnd.apple.mpegurl", "application/x-mpegurl", "application/mpegurl",
-    }:
+    if lowered.endswith(".m3u8") or lowered.endswith(".m3u") or "mpegurl" in mime:
         return TaskType.HLS
     return TaskType.HTTP
 

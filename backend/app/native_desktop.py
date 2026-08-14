@@ -39,6 +39,9 @@ class NativeDesktopSession:
             self._started_at = time.time()
             pending = self._pending
             self._pending = []
+            # A new WebView session must not replay activate/handoff/media_push
+            # from the previous UI process.
+            self._commands.clear()
             for kind, handoff_id in pending:
                 self._sequence += 1
                 self._commands.append(DesktopCommand(self._sequence, kind, handoff_id))

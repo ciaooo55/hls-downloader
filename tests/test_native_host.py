@@ -186,3 +186,26 @@ def test_start_desktop_ui_uses_settings_and_detached_flags(tmp_path, monkeypatch
     assert flags & 0x00000200
     assert flags & 0x08000000 == 0
     assert captured["kwargs"]["close_fds"] is False
+
+
+def test_legacy_push_to_tv_uses_media_push_device_picker(monkeypatch):
+    started = []
+    calls = []
+    monkeypatch.setattr(native_host, "_ensure_app", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(native_host, "_start_desktop_ui", lambda: started.append(True))
+
+    def request(method, path, payload=None, timeout=4):
+        calls.append((method, path, payload))
+        return {"ok": True, "id": "push-tv"}
+
+    monkeypatch.setattr(native_host, "_request", request)
+    result = native_host.dispatch({
+        "op": "push_to_tv",
+        "resource": {"url": "https://cdn.test/a.m3u8"},
+    })
+    assert started == [True]
+    assert result == {"ok": True, "id": "push-tv"}
+    assert calls == [("POST", "/browser/media-push", {
+        "kind": "tvbox",
+        "resource": {"url": "https://cdn.test/a.m3u8"},
+    })]
