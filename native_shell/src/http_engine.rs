@@ -155,6 +155,56 @@ fn last_progress_bytes(path: &Path) -> (u64, u64) {
     )
 }
 
+fn completed_ranges_path(job: &Job) -> PathBuf {
+    job.progress.with_file_name("native-engine.ranges.json")
+}
+
+fn range_covered(completed: &[(u64, u64)], start: u64, end: u64) -> bool {
+    completed
+        .iter()
+        .any(|(done_start, done_end)| *done_start <= start && *done_end >= end)
+}
+
+fn load_completed_ranges(job: &Job) -> Vec<(u64, u64)> {
+    let Ok(text) = fs::read_to_string(completed_ranges_path(job)) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let Some(items) = value.get("ranges").and_then(|item| item.as_array()) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let pair = item.as_array()?;
+            Some((pair.first()?.as_u64()?, pair.get(1)?.as_u64()?))
+        })
+        .filter(|(start, end)| end >= start)
+        .collect()
+}
+
+fn save_completed_ranges(job: &Job, ranges: &[(u64, u64)]) {
+    let payload = serde_json::json!({
+        "ranges": ranges.iter().map(|(start, end)| serde_json::json!([start, end])).collect::<Vec<_>>(),
+    });
+    let path = completed_ranges_path(job);
+    let tmp = path.with_extension("json.tmp");
+    if fs::write(&tmp, payload.to_string()).is_ok() {
+        let _ = fs::rename(tmp, path);
+    }
+}
+
+fn record_completed_range(job: &Job, completed: &Mutex<Vec<(u64, u64)>>, start: u64, end: u64) {
+    let mut list = completed.lock().unwrap_or_else(|err| err.into_inner());
+    if range_covered(&list, start, end) {
+        return;
+    }
+    list.push((start, end));
+    save_completed_ranges(job, &list);
+}
+
 fn report_terminal(job: &Job, error: &EngineError) {
     let (downloaded, total) = last_progress_bytes(&job.progress);
     let status = match error {
@@ -220,6 +270,7 @@ pub fn run_job(job: &Job) -> Result<(), EngineError> {
         Control::Run => {}
     }
     if job.sequential || job.total == 0 {
+        let _ = fs::remove_file(completed_ranges_path(job));
         download_sequential(job)
     } else {
         download_ranges(job)
@@ -318,6 +369,32 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         ranges.push((start, end));
         start = end + 1;
     }
+    let output_existed = job.output.exists()
+        && job
+            .output
+            .metadata()
+            .map(|meta| meta.len())
+            .unwrap_or(0)
+            > 0;
+    let loaded = if output_existed {
+        load_completed_ranges(job)
+    } else {
+        let _ = fs::remove_file(completed_ranges_path(job));
+        Vec::new()
+    };
+    let mut already = 0u64;
+    let pending: Vec<(u64, u64)> = ranges
+        .iter()
+        .copied()
+        .filter(|(range_start, range_end)| {
+            if range_covered(&loaded, *range_start, *range_end) {
+                already += range_end.saturating_sub(*range_start) + 1;
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
     {
         let file = OpenOptions::new()
             .create(true)
@@ -329,22 +406,28 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         file.set_len(total)
             .map_err(|err| EngineError::Failed(err.to_string()))?;
     }
-    let workers = job.connections.clamp(1, 64).min(ranges.len());
+    if pending.is_empty() {
+        write_progress(&job.progress, total, total, 0.0, "done");
+        return Ok(());
+    }
+    let workers = job.connections.clamp(1, 64).min(pending.len());
     let next = Arc::new(Mutex::new(0usize));
-    let downloaded = Arc::new(AtomicU64::new(0));
+    let downloaded = Arc::new(AtomicU64::new(already));
+    let completed = Arc::new(Mutex::new(loaded));
     let failed = Arc::new(Mutex::new(None::<EngineErrorCode>));
     let stop = Arc::new(AtomicBool::new(false));
     let started = Instant::now();
     let mut handles = Vec::new();
     for _ in 0..workers {
         let job = job.clone();
-        let ranges = ranges.clone();
+        let ranges = pending.clone();
         let next = Arc::clone(&next);
         let downloaded = Arc::clone(&downloaded);
+        let completed = Arc::clone(&completed);
         let failed = Arc::clone(&failed);
         let stop = Arc::clone(&stop);
         handles.push(thread::spawn(move || {
-            range_worker(&job, &ranges, next, downloaded, failed, stop);
+            range_worker(&job, &ranges, next, downloaded, completed, failed, stop);
         }));
     }
     let progress_stop = Arc::clone(&stop);
@@ -422,6 +505,7 @@ fn range_worker(
     ranges: &[(u64, u64)],
     next: Arc<Mutex<usize>>,
     downloaded: Arc<AtomicU64>,
+    completed: Arc<Mutex<Vec<(u64, u64)>>>,
     failed: Arc<Mutex<Option<EngineErrorCode>>>,
     stop: Arc<AtomicBool>,
 ) {
@@ -474,6 +558,7 @@ fn range_worker(
             stop.store(true, Ordering::SeqCst);
             return;
         }
+        record_completed_range(job, &completed, start, end);
     }
 }
 
@@ -1083,6 +1168,7 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
 
     fn serve_body(body: &'static [u8]) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1369,6 +1455,109 @@ mod tests {
         assert_eq!(err.exit_code(), EXIT_ERROR);
         assert!(err.to_string().contains("chunked"));
         assert!(!job.output.exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    fn serve_recording_ranges(
+        body: &'static [u8],
+        seen: Arc<Mutex<Vec<String>>>,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).is_err() {
+                    continue;
+                }
+                let mut range = None;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("range:") {
+                        range = Some(value.trim().to_string());
+                    }
+                }
+                if let Some(value) = range.clone() {
+                    seen.lock().unwrap_or_else(|err| err.into_inner()).push(value);
+                }
+                let mut stream = reader.into_inner();
+                if let Some(value) = range {
+                    let spec = value.trim().strip_prefix("bytes=").unwrap_or("");
+                    let (start_text, end_text) = spec.split_once('-').unwrap();
+                    let start: usize = start_text.parse().unwrap();
+                    let end: usize = if end_text.is_empty() {
+                        body.len() - 1
+                    } else {
+                        end_text.parse().unwrap()
+                    };
+                    let slice = &body[start..=end.min(body.len() - 1)];
+                    let header = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len() - 1,
+                        body.len(),
+                        slice.len()
+                    );
+                    let _ = stream.write_all(header.as_bytes());
+                    let _ = stream.write_all(slice);
+                } else {
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(header.as_bytes());
+                    let _ = stream.write_all(body);
+                }
+            }
+        });
+        format!("http://127.0.0.1:{}", addr.port())
+    }
+
+    #[test]
+    fn range_resume_skips_sidecar_covered_chunks() {
+        let body: &'static [u8] = Box::leak(
+            (0..70 * 1024)
+                .map(|index| (index % 251) as u8)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let url = serve_recording_ranges(body, Arc::clone(&seen));
+        let (job, dir) = temp_job(&url, false, body.len() as u64, 2);
+        let first_end = 64 * 1024 - 1;
+        fs::write(&job.output, &body[..=first_end]).unwrap();
+        fs::write(
+            job.progress.with_file_name("native-engine.ranges.json"),
+            r#"{"ranges":[[0,65535]]}"#,
+        )
+        .unwrap();
+        run_job(&job).unwrap();
+        assert_eq!(fs::read(&job.output).unwrap(), body);
+        let ranges = seen.lock().unwrap_or_else(|err| err.into_inner()).clone();
+        assert!(
+            ranges.iter().all(|item| !item.starts_with("bytes=0-")),
+            "covered first chunk was requested again: {ranges:?}"
+        );
+        assert!(
+            ranges.iter().any(|item| item.starts_with("bytes=65536-")),
+            "remaining chunk was not requested: {ranges:?}"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sequential_job_deletes_range_sidecar() {
+        let body: &'static [u8] = b"sequential-clears-sidecar";
+        let url = serve_body(body);
+        let (job, dir) = temp_job(&url, true, 0, 1);
+        let sidecar = job.progress.with_file_name("native-engine.ranges.json");
+        fs::write(&sidecar, r#"{"ranges":[[0,1]]}"#).unwrap();
+        run_job(&job).unwrap();
+        assert_eq!(fs::read(&job.output).unwrap(), body);
+        assert!(!sidecar.exists());
         let _ = fs::remove_dir_all(dir);
     }
 }

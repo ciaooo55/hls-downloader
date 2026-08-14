@@ -140,6 +140,35 @@ def test_progress_and_complete_use_the_same_warm_windows():
     assert shell.status()["resident"] is False
 
 
+def test_complete_before_boot_is_flushed_when_shell_returns():
+    from backend.app.native_shell import sync_native_shell_from_event
+
+    reset_native_shell()
+    assert is_native_shell_ready() is False
+    queued = native_shell_supervisor().complete({"id": "late", "filename": "c.bin"})
+    assert queued["queued"] is True
+    sync_native_shell_from_event(
+        {
+            "type": "task_progress",
+            "status": "done",
+            "id": "late2",
+            "filename": "d.bin",
+            "output_path": r"D:\Downloads\d.bin",
+            "downloaded_bytes": 8,
+        },
+        [],
+    )
+    native_shell_supervisor().shutdown()
+    assert is_native_shell_ready() is False
+    boot_native_shell()
+    events = native_shell_supervisor().wait_event(0, 0)["events"]
+    complete = next(item for item in events if item["kind"] == "complete")
+    assert complete["presentable"] is True
+    assert complete["item"]["id"] == "late2"
+    assert complete["item"]["filename"] == "d.bin"
+    reset_native_shell()
+
+
 def test_paint_snapshot_drops_unknown_size_and_keeps_name(monkeypatch):
     monkeypatch.setattr("backend.app.native_shell.local_download_dir", lambda: r"D:\Downloads")
     assert paint_snapshot({

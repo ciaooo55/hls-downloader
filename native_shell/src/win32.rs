@@ -889,6 +889,7 @@ fn run_selected_action(host: &Win32Host, action: &str) {
         (task.id.clone(), mapped.to_string())
     };
     let Some(core) = host.core.lock().ok().and_then(|slot| slot.clone()) else {
+        host.enqueue(json!({"kind": "action_error", "message": "桌面核心未连接"}));
         return;
     };
     std::thread::spawn(move || {

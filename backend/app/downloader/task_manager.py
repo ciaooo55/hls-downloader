@@ -516,7 +516,7 @@ class TaskManager:
             from ..native_shell import is_native_shell_ready, sync_native_shell_from_event
         except Exception:
             return
-        if not is_native_shell_ready():
+        if not is_native_shell_ready() and str(event.get("status") or "") != "done":
             return
         running = []
         for task in self.tasks.values():

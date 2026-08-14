@@ -204,6 +204,57 @@ def test_http_run_does_not_use_native_engine_under_pytest(tmp_path, monkeypatch)
     assert downloader._native_http_engine_eligible(tmp_path / "http-resume.json") is False
 
 
+def test_reset_range_state_unlinks_native_ranges_sidecar(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path / "downloads"))
+    monkeypatch.setattr(settings, "temp_dir", str(tmp_path / "temp"))
+    task = Task(id="native-sidecar", url="http://127.0.0.1/a.bin", task_type=TaskType.HTTP)
+    downloader = HTTPDownloader(task)
+    part_path = tmp_path / "payload.downloading"
+    state_path = tmp_path / "http-resume.json"
+    sidecar = tmp_path / "native-engine.ranges.json"
+    part_path.write_bytes(b"partial")
+    state_path.write_text("{}", encoding="utf-8")
+    sidecar.write_text('{"ranges":[[0,1]]}', encoding="utf-8")
+    downloader._reset_range_state_for_sequential(part_path, state_path)
+    assert not part_path.exists()
+    assert not state_path.exists()
+    assert not sidecar.exists()
+
+
+def test_native_pause_exit_does_not_publish_preallocated_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path / "downloads"))
+    monkeypatch.setattr(settings, "temp_dir", str(tmp_path / "temp"))
+    monkeypatch.setattr(settings, "proxy_mode", "direct")
+    monkeypatch.setattr(HTTPDownloader, "_native_http_engine_eligible", lambda self, *_args, **_kwargs: True)
+
+    async def fake_native(self, headers, part_path, state_path, metadata):
+        total = int(metadata.get("total") or self.task.progress.total_bytes or 0)
+        part_path.write_bytes(b"\x00" * total)
+        self.task.engine_state["native_exit"] = "paused"
+        return True
+
+    monkeypatch.setattr(HTTPDownloader, "_download_with_native_engine", fake_native)
+    server, url = _range_server(BODY)
+    try:
+        task = Task(
+            id="native-pause-publish",
+            url=url,
+            task_type=TaskType.HTTP,
+            filename="payload.bin",
+            concurrency=4,
+        )
+        asyncio.run(HTTPDownloader(task).run())
+    finally:
+        server.shutdown()
+    assert task.status is TaskStatus.PAUSED
+    assert not task.output_path
+    downloads = tmp_path / "downloads"
+    if downloads.exists():
+        for path in downloads.rglob("*"):
+            if path.is_file():
+                assert path.stat().st_size == 0
+
+
 def _range_server(body: bytes) -> tuple[ThreadingHTTPServer, str]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"

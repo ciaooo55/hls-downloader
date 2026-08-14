@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import os
 import re
 import secrets
 import shutil
@@ -1544,7 +1545,13 @@ async def create_browser_media_push(request: Request, x_token: str = Header(defa
         _browser_media_pushes[request_id] = {"id": request_id, "kind": kind, "resource": resource, "created_at": now, "status": "pending", "message": "等待在桌面端选择设备"}
     native_desktop_session.queue("media_push", request_id)
     if not native_desktop_session.status().get("active"):
-        maybe_spawn_desktop_ui_process(project_root=PROJECT_ROOT)
+        spawned = maybe_spawn_desktop_ui_process(project_root=PROJECT_ROOT)
+        if spawned is None and not os.environ.get("PYTEST_CURRENT_TEST"):
+            with _browser_media_push_lock:
+                item = _browser_media_pushes.get(request_id)
+                if item is not None and item.get("status") == "pending":
+                    item["status"] = "failed"
+                    item["message"] = "未能打开桌面设置窗口，请先打开下载器再投屏"
     activate_window()
     return {"ok": True, "id": request_id}
 

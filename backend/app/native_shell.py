@@ -136,6 +136,7 @@ class NativeShellSupervisor:
         self._waiters = 0
         self._closed = False
         self._events: deque[dict[str, Any]] = deque(maxlen=128)
+        self._pending_complete: dict[str, Any] | None = None
 
     def boot_resident(self) -> dict[str, Any]:
         """Login/start: tray + hidden dialogs. Do not open the task list."""
@@ -145,6 +146,14 @@ class NativeShellSupervisor:
             self.main_open = False
             self.windows = {name: True for name in WINDOW_NAMES}
             self._started_at = time.time()
+            pending = self._pending_complete
+            self._pending_complete = None
+            if pending:
+                self._sequence += 1
+                event = self._event("complete")
+                event["item"] = dict(pending)
+                event["presentable"] = True
+                self._events.append(event)
             self._lock.notify_all()
             return self.status()
 
@@ -224,11 +233,13 @@ class NativeShellSupervisor:
 
     def complete(self, item: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
+            payload = dict(item)
             if not self.resident or not self.windows["complete"]:
-                raise RuntimeError("桌面界面尚未就绪")
+                self._pending_complete = payload
+                return {"queued": True, "kind": "complete", "item": payload, "presentable": True}
             self._sequence += 1
             event = self._event("complete")
-            event["item"] = dict(item)
+            event["item"] = payload
             event["presentable"] = True
             self._events.append(event)
             self._lock.notify_all()
@@ -586,8 +597,6 @@ def sync_native_shell_from_event(
     running_tasks: list[dict[str, Any]] | None = None,
 ) -> None:
     """Drive pre-created progress/complete windows from core task events."""
-    if not is_native_shell_ready():
-        return
     try:
         from .config import settings
     except Exception:
@@ -602,6 +611,8 @@ def sync_native_shell_from_event(
                 supervisor.complete(item)
             except RuntimeError:
                 pass
+    if not is_native_shell_ready():
+        return
     items: list[dict[str, Any]] = []
     if getattr(settings, "download_progress_window_enabled", True) is not False:
         for task in running_tasks or []:

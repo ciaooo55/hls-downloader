@@ -217,6 +217,27 @@ def test_browser_media_push_reports_final_desktop_result(monkeypatch):
     assert final.json() == {"id": request_id, "status": "canceled", "message": "用户取消"}
 
 
+def test_browser_media_push_fails_when_settings_window_cannot_spawn(monkeypatch):
+    from backend.app import api as api_module
+    from backend.app.native_desktop import native_desktop_session
+
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(api_module, "maybe_spawn_desktop_ui_process", lambda **_kwargs: None)
+    native_desktop_session.stop()
+    client = TestClient(app)
+    created = client.post(
+        "/api/browser/media-push",
+        headers=AUTH,
+        json={"kind": "cast", "resource": {"url": "https://media.example/video.mp4", "filename": "video.mp4"}},
+    )
+    assert created.status_code == 200
+    request_id = created.json()["id"]
+    assert created.json()["ok"] is True
+    status = client.get(f"/api/browser/media-push/{request_id}/status", headers=AUTH)
+    assert status.json()["status"] == "failed"
+    assert "桌面设置窗口" in status.json()["message"]
+
+
 def test_browser_media_push_queues_until_desktop_session_starts(monkeypatch):
     from backend.app import api as api_module
     from backend.app.native_desktop import native_desktop_session

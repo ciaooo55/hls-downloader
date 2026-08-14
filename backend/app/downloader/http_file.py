@@ -1404,6 +1404,7 @@ class HTTPDownloader(SeeklessEngine):
                                 self._claimed_chunks.clear()
                                 state_path.unlink(missing_ok=True)
                                 part_path.unlink(missing_ok=True)
+                                self._unlink_native_ranges_sidecar(part_path)
                                 task.engine_state.pop("sequential_bytes", None)
                                 task.progress.completed_segments = 0
                                 task.progress.downloaded_bytes = 0
@@ -1414,12 +1415,13 @@ class HTTPDownloader(SeeklessEngine):
                                 )
                                 await self._download_sequential(client, headers, part_path)
 
-            if self._is_canceled():
+            native_exit = str(task.engine_state.pop("native_exit", "") or "")
+            if self._is_canceled() or native_exit == "canceled":
                 task.status = TaskStatus.CANCELED
                 task.finished_at = datetime.now().isoformat()
                 self._set_stage("canceled", "已取消")
                 return
-            if self._is_pausing():
+            if self._is_pausing() or native_exit == "paused":
                 task.status = TaskStatus.PAUSED
                 self._set_stage("paused", "已暂停，可继续下载")
                 return
@@ -1615,12 +1617,16 @@ class HTTPDownloader(SeeklessEngine):
                         process.kill()
             raise
 
+    def _unlink_native_ranges_sidecar(self, part_path: Path) -> None:
+        (part_path.parent / "native-engine.ranges.json").unlink(missing_ok=True)
+
     def _reset_range_state_for_sequential(self, part_path: Path, state_path: Path) -> None:
         self._sequential = True
         self._completed_chunks.clear()
         self._claimed_chunks.clear()
         state_path.unlink(missing_ok=True)
         part_path.unlink(missing_ok=True)
+        self._unlink_native_ranges_sidecar(part_path)
         self.task.engine_state.pop("sequential_bytes", None)
         self.task.progress.completed_segments = 0
         self.task.progress.downloaded_bytes = 0
@@ -1728,8 +1734,10 @@ class HTTPDownloader(SeeklessEngine):
         if code == 20:
             if sequential and part_path.exists():
                 task.engine_state["sequential_bytes"] = part_path.stat().st_size
+            task.engine_state["native_exit"] = "paused"
             return True
         if code == 21:
+            task.engine_state["native_exit"] = "canceled"
             return True
         if sequential and part_path.exists() and part_path.stat().st_size > 0:
             existing = part_path.stat().st_size
@@ -1739,6 +1747,7 @@ class HTTPDownloader(SeeklessEngine):
         elif not sequential:
             part_path.unlink(missing_ok=True)
             state_path.unlink(missing_ok=True)
+            self._unlink_native_ranges_sidecar(part_path)
         task.engine_state.pop("http_engine", None)
         self.on_log(task.id, f"[downloading] 原生引擎退出 {code}，已回退到 Python")
         return False
