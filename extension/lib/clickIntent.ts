@@ -1,4 +1,4 @@
-const DOWNLOAD_HINT = /(?:^|[\s_:/-])(?:download|save|export|install|offline)(?:$|[\s_:/-])|下载|保存|另存|导出|安装|离线|缓存|ダウンロード|다운로드|скачать|télécharger|descargar|herunterladen|scarica|baixar/i
+const DOWNLOAD_HINT = /(?:^|[\s_:/-])(?:download|save|export|install|offline)(?:$|[\s_:/-])|下载|下載|保存|儲存|另存|导出|匯出|安装|安裝|离线|離線|缓存|ダウンロード|다운로드|скачать|télécharger|descargar|herunterladen|scarica|baixar/i
 const DOWNLOAD_URL_HINT = /\.(?:m3u8|mpd|mp4|m4v|webm|mkv|mov|avi|flv|m4a|mp3|flac|wav|ogg|opus|torrent|zip|7z|rar|tar|tgz|gz|bz2|xz|iso|img|exe|msi|msix|appx|apk|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|bin|jar)(?:$|[?#])|\/(?:downloads?|attachments?|exports?)(?:[/?#]|$)|[?&](?:download|attachment|disposition|filename|file_name|fn|export)=|[?&](?:cd|content-disposition)=attachment(?:[&#]|$)/i
 const AUTHENTICATION_HOSTS = new Set([
   'accounts.google.com',
@@ -71,10 +71,52 @@ export function shouldTrackDownloadIntent(input: {
 
 /** Resolve only resource schemes that the desktop downloader can own. */
 export function resolveDownloadTarget(value: string, baseUrl: string): string {
+  const raw = String(value || '').trim()
+  if (!raw || raw.startsWith('#') || /^javascript:/i.test(raw)) return ''
   try {
-    const target = new URL(String(value || '').trim(), baseUrl)
+    const target = new URL(raw, baseUrl)
     return ['http:', 'https:', 'magnet:'].includes(target.protocol) ? target.href : ''
   } catch {
     return ''
   }
+}
+
+function usableHrefAttribute(value = ''): string {
+  const raw = String(value || '').trim()
+  if (!raw || raw.startsWith('#') || /^javascript:/i.test(raw)) return ''
+  return raw
+}
+
+/** HTML `<a>`/`<area>` use `.href`; SVG `<a>` exposes href as an animated string. */
+export function resolveClickedLinkHref(input: {
+  htmlHref?: string
+  htmlHrefAttribute?: string
+  svgHrefAttribute?: string
+  svgXlinkHref?: string
+  svgBaseVal?: string
+  baseUrl: string
+}): string {
+  const htmlAttribute = usableHrefAttribute(input.htmlHrefAttribute)
+  if (htmlAttribute && input.htmlHref) {
+    return resolveDownloadTarget(input.htmlHref, input.baseUrl) || String(input.htmlHref)
+  }
+  return resolveDownloadTarget(
+    usableHrefAttribute(input.svgHrefAttribute || input.svgXlinkHref || input.svgBaseVal),
+    input.baseUrl,
+  )
+}
+
+/**
+ * Submit buttons often put the file on `formaction` or the form `action`
+ * instead of an `<a href>`. Only keep targets that already look like downloads
+ * so a login form cannot become a pending intent.
+ */
+export function resolveFormDownloadUrl(formActionAttribute: string, submitFormAction: string, baseUrl: string): string {
+  const raw = usableHrefAttribute(submitFormAction) || usableHrefAttribute(formActionAttribute)
+  const resolved = resolveDownloadTarget(raw, baseUrl)
+  return isLikelyDownloadUrl(resolved) ? resolved : ''
+}
+
+export function linkOpensNewTab(target = ''): boolean {
+  return String(target || '').trim().toLowerCase() === '_blank'
 }

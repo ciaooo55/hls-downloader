@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isAuthenticationNavigation, isLikelyDownloadControl, isLikelyDownloadUrl, resolveDownloadTarget, shouldTrackDownloadIntent } from './clickIntent'
+import { isAuthenticationNavigation, isLikelyDownloadControl, isLikelyDownloadUrl, linkOpensNewTab, resolveClickedLinkHref, resolveDownloadTarget, resolveFormDownloadUrl, shouldTrackDownloadIntent } from './clickIntent'
 import { matchesDownloadClick, type DownloadClickIntent } from './resources'
 
 function intent(overrides: Partial<DownloadClickIntent> = {}): DownloadClickIntent {
@@ -39,6 +39,8 @@ describe('download click intent', () => {
     expect(isLikelyDownloadUrl('https://app.test/backend/content?id=42&fn=project.zip&cd=attachment')).toBe(true)
     expect(isLikelyDownloadControl(['Télécharger'])).toBe(true)
     expect(isLikelyDownloadControl(['ダウンロード'])).toBe(true)
+    expect(isLikelyDownloadControl(['下載檔案'])).toBe(true)
+    expect(isLikelyDownloadControl(['儲存'])).toBe(true)
   })
 
   it('never records Google or third-party OAuth navigation as a download intent', () => {
@@ -63,6 +65,34 @@ describe('download click intent', () => {
     expect(resolveDownloadTarget('magnet:?xt=urn:btih:abc', 'https://site.test/watch')).toBe('magnet:?xt=urn:btih:abc')
     expect(resolveDownloadTarget('javascript:download()', 'https://site.test/watch')).toBe('')
     expect(resolveDownloadTarget('data:text/plain,nope', 'https://site.test/watch')).toBe('')
+    expect(resolveDownloadTarget('', 'https://site.test/watch')).toBe('')
+    expect(resolveDownloadTarget('#', 'https://site.test/watch')).toBe('')
+  })
+
+  it('resolves SVG, image-map and form-action download targets', () => {
+    expect(resolveClickedLinkHref({
+      svgHrefAttribute: '../file.zip',
+      baseUrl: 'https://site.test/watch/page',
+    })).toBe('https://site.test/file.zip')
+    expect(resolveClickedLinkHref({
+      svgXlinkHref: 'https://cdn.test/app.apk',
+      baseUrl: 'https://site.test/watch',
+    })).toBe('https://cdn.test/app.apk')
+    expect(resolveClickedLinkHref({
+      htmlHref: 'https://site.test/file.zip',
+      htmlHrefAttribute: 'file.zip',
+      baseUrl: 'https://site.test/watch/page',
+    })).toBe('https://site.test/file.zip')
+    expect(resolveClickedLinkHref({
+      htmlHref: 'https://site.test/watch#',
+      htmlHrefAttribute: '#',
+      baseUrl: 'https://site.test/watch',
+    })).toBe('')
+    expect(resolveFormDownloadUrl('/preview', '/files/report.pdf', 'https://site.test/page')).toBe('https://site.test/files/report.pdf')
+    expect(resolveFormDownloadUrl('/files/app.zip', '', 'https://site.test/page')).toBe('https://site.test/files/app.zip')
+    expect(resolveFormDownloadUrl('/login', '', 'https://site.test/page')).toBe('')
+    expect(linkOpensNewTab('_blank')).toBe(true)
+    expect(linkOpensNewTab('_self')).toBe(false)
   })
 
   it('never lets a generic click consume an unrelated tab download', () => {

@@ -1,5 +1,24 @@
 import { browser } from 'wxt/browser'
-import { isLikelyDownloadControl, resolveDownloadTarget, shouldTrackDownloadIntent } from '../lib/clickIntent'
+import {
+  isLikelyDownloadControl,
+  linkOpensNewTab,
+  resolveClickedLinkHref,
+  resolveDownloadTarget,
+  resolveFormDownloadUrl,
+  shouldTrackDownloadIntent,
+} from '../lib/clickIntent'
+
+function isHtmlLink(value: EventTarget | undefined): value is HTMLAnchorElement | HTMLAreaElement {
+  return value instanceof HTMLAnchorElement || value instanceof HTMLAreaElement
+}
+
+function isSvgLink(value: EventTarget | undefined): value is SVGAElement {
+  return typeof SVGAElement !== 'undefined' && value instanceof SVGAElement
+}
+
+function attribute(element: Element | undefined, name: string): string {
+  return element?.getAttribute(name)?.trim() || ''
+}
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -9,36 +28,60 @@ export default defineContentScript({
     let lastIntent = { key: '', at: 0 }
     const recordIntent = (event: MouseEvent) => {
       if (!event.isTrusted || event.button !== 0) return
-      const anchor = event.composedPath()
-        .find(value => value instanceof HTMLAnchorElement) as HTMLAnchorElement | undefined
-      const control = event.composedPath().find(value => value instanceof HTMLElement
+      const path = event.composedPath()
+      const link = path.find(value => isHtmlLink(value) || isSvgLink(value)) as
+        | HTMLAnchorElement
+        | HTMLAreaElement
+        | SVGAElement
+        | undefined
+      const control = path.find(value => value instanceof HTMLElement
         && value.matches('button, input[type="button"], input[type="submit"], [role="button"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [data-download-url], [data-file-url], [data-export-url]')) as HTMLElement | undefined
-      if (!anchor?.href && !control) return
-      const rawHref = anchor?.getAttribute('href')?.trim() || ''
-      const directHref = rawHref && !rawHref.startsWith('#') && !/^javascript:/i.test(rawHref) ? anchor?.href || '' : ''
-      const rawDownloadHref = anchor?.getAttribute('data-download-url')
-        || control?.getAttribute('data-download-url')
-        || anchor?.getAttribute('data-file-url')
-        || control?.getAttribute('data-file-url')
-        || anchor?.getAttribute('data-export-url')
-        || control?.getAttribute('data-export-url')
+      if (!link && !control) return
+      const htmlLink = isHtmlLink(link) ? link : undefined
+      const svgLink = isSvgLink(link) ? link : undefined
+      const directHref = resolveClickedLinkHref({
+        htmlHref: htmlLink?.href || '',
+        htmlHrefAttribute: htmlLink ? attribute(htmlLink, 'href') : '',
+        svgHrefAttribute: svgLink ? attribute(svgLink, 'href') : '',
+        svgXlinkHref: svgLink ? attribute(svgLink, 'xlink:href') : '',
+        svgBaseVal: svgLink?.href?.baseVal || '',
+        baseUrl: location.href,
+      })
+      const rawDownloadHref = attribute(htmlLink, 'data-download-url')
+        || attribute(control, 'data-download-url')
+        || attribute(htmlLink, 'data-file-url')
+        || attribute(control, 'data-file-url')
+        || attribute(htmlLink, 'data-export-url')
+        || attribute(control, 'data-export-url')
         || ''
-      const rawHintedHref = anchor?.getAttribute('data-url')
-        || anchor?.getAttribute('data-href')
-        || control?.getAttribute('data-url')
-        || control?.getAttribute('data-href')
+      const rawHintedHref = attribute(htmlLink, 'data-url')
+        || attribute(htmlLink, 'data-href')
+        || attribute(control, 'data-url')
+        || attribute(control, 'data-href')
         || ''
+      const formOwner = (control && 'form' in control ? (control as HTMLButtonElement | HTMLInputElement).form : null)
+        || control?.closest('form')
+        || htmlLink?.closest('form')
+        || null
+      const formActionHref = resolveFormDownloadUrl(
+        formOwner?.getAttribute('action') || '',
+        attribute(control, 'formaction'),
+        location.href,
+      )
       const downloadHref = resolveDownloadTarget(rawDownloadHref, location.href)
-      const hintedHref = resolveDownloadTarget(rawHintedHref, location.href)
+      const hintedHref = resolveDownloadTarget(rawHintedHref, location.href) || formActionHref
       const downloadHint = isLikelyDownloadControl([
-        anchor?.textContent,
-        anchor?.getAttribute('aria-label'),
-        anchor?.getAttribute('title'),
-        anchor?.getAttribute('name'),
-        anchor?.id,
-        anchor?.className,
-        anchor?.getAttribute('data-testid'),
-        anchor?.hasAttribute('download') ? 'download' : '',
+        htmlLink?.textContent,
+        htmlLink?.getAttribute('aria-label'),
+        htmlLink?.getAttribute('title'),
+        htmlLink?.getAttribute('name'),
+        htmlLink?.id,
+        htmlLink instanceof HTMLAnchorElement || htmlLink instanceof HTMLAreaElement ? htmlLink.className : '',
+        htmlLink?.getAttribute('data-testid'),
+        htmlLink?.hasAttribute('download') ? 'download' : '',
+        svgLink?.textContent,
+        svgLink?.getAttribute('aria-label'),
+        svgLink?.getAttribute('title'),
         control?.textContent,
         control?.getAttribute('aria-label'),
         control?.getAttribute('title'),
@@ -48,7 +91,7 @@ export default defineContentScript({
         control?.className,
         control?.getAttribute('data-testid'),
       ])
-      const explicitDownloadTarget = Boolean(anchor?.hasAttribute('download') || downloadHref)
+      const explicitDownloadTarget = Boolean(htmlLink?.hasAttribute('download') || downloadHref)
       if (!shouldTrackDownloadIntent({
         directHref,
         hintedHref: downloadHref || hintedHref,
@@ -66,6 +109,9 @@ export default defineContentScript({
       // click listener normally.
       if (lastIntent.key === intentKey && now - lastIntent.at < 1_500) return
       lastIntent = { key: intentKey, at: now }
+      const targetValue = htmlLink && typeof htmlLink.target === 'string'
+        ? htmlLink.target
+        : svgLink?.target?.baseVal || ''
       void browser.runtime.sendMessage({
         type: 'click-intent',
         href,
@@ -73,7 +119,7 @@ export default defineContentScript({
         altBypass: event.altKey,
         ctrlForce: event.ctrlKey,
         generic: !href,
-        opensNewTab: anchor?.target.toLowerCase() === '_blank',
+        opensNewTab: linkOpensNewTab(targetValue),
         controlHint: downloadHint,
       })
     }

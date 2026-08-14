@@ -14,7 +14,7 @@ HLS · DASH · HTTP(S) · FTP/FTPS · SFTP · BT / magnet · 边下边播 · 断
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows11&logoColor=white)](https://github.com/ciaooo55/hls-downloader/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
 
-[下载最新版](https://github.com/ciaooo55/hls-downloader/releases/latest) · [Firefox 插件](https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/) · [快速开始](#-快速开始) · [浏览器插件](#-浏览器插件) · [源码开发](#-源码开发) · [发布说明](docs/releases/v3.0.35.md)
+[下载最新版](https://github.com/ciaooo55/hls-downloader/releases/latest) · [Firefox 插件](https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/) · [快速开始](#-快速开始) · [浏览器插件](#-浏览器插件) · [源码开发](#-源码开发) · [发布说明](docs/releases/v3.0.36.md)
 
 </div>
 
@@ -31,9 +31,9 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 
 | 获取方式 | 适用场景 |
 | --- | --- |
-| `HLSDownloader-v3.0.35-Windows-x64-Setup.exe` | 推荐；支持开始菜单、卸载入口和应用内更新 |
-| `HLSDownloader-v3.0.35-Windows-x64-Portable.zip` | 免安装；完整解压后运行，数据保存在便携目录 |
-| `HLSDownloader-v3.0.35-Chrome-Edge-Extension.zip` | Chrome、Edge、Brave、Chromium、Vivaldi、Opera 的 MV3 扩展 |
+| `HLSDownloader-v3.0.36-Windows-x64-Setup.exe` | 推荐；支持开始菜单、卸载入口和应用内更新 |
+| `HLSDownloader-v3.0.36-Windows-x64-Portable.zip` | 免安装；完整解压后运行，数据保存在便携目录 |
+| `HLSDownloader-v3.0.36-Chrome-Edge-Extension.zip` | Chrome、Edge、Brave、Chromium、Vivaldi、Opera 的 MV3 扩展 |
 | [Firefox Add-ons 插件](https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/) | Firefox 正式版；安装后由 Firefox 自动更新 |
 
 > [!NOTE]
@@ -109,7 +109,7 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 
 ### Chromium
 
-1. 下载并解压 `HLSDownloader-v3.0.35-Chrome-Edge-Extension.zip`。
+1. 下载并解压 `HLSDownloader-v3.0.36-Chrome-Edge-Extension.zip`。
 2. 打开浏览器扩展管理页并启用“开发者模式”。
 3. 选择“加载已解压的扩展程序”，指向解压目录。
 4. 启动桌面端；插件会通过 Native Messaging 自动配对，不需要手动复制 Token。
@@ -210,14 +210,14 @@ pnpm run tauri:build
 
 ```powershell
 python -m pip install -r requirements-build.txt
-.\scripts\build_installer.ps1 -Version 3.0.35
+.\scripts\build_installer.ps1 -Version 3.0.36
 ```
 
 输出位于被 Git 忽略的 `release/`：
 
 ```text
-HLSDownloader-v3.0.35-Windows-x64-Setup.exe
-HLSDownloader-v3.0.35-Windows-x64-Portable.zip
+HLSDownloader-v3.0.36-Windows-x64-Setup.exe
+HLSDownloader-v3.0.36-Windows-x64-Portable.zip
 ```
 
 需要构建浏览器插件时，本地打包追加 `-IncludeExtensionAssets`，或在 GitHub Actions 手动运行时勾选 `include_extensions`。
@@ -227,8 +227,8 @@ HLSDownloader-v3.0.35-Windows-x64-Portable.zip
 - 推送 `v*` 标签：测试、打包并创建 GitHub Release；只有相对上一标签检测到 `extension/` 变化时才附带插件资产。
 
 ```powershell
-git tag v3.0.35
-git push origin v3.0.35
+git tag v3.0.36
+git push origin v3.0.36
 ```
 
 完整流程和 PowerShell 5.1 / 7 编码要求见 [发布文档](docs/releasing.md)。
