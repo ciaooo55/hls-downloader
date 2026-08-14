@@ -55,11 +55,15 @@ impl CoreClient {
         self.request("GET", &path, None, timeout + 2.0)
     }
 
-    pub fn accept(&self, handoff_id: &str) -> Result<Value, String> {
+    pub fn accept(&self, handoff_id: &str, filename: &str, download_dir: &str) -> Result<Value, String> {
         self.request(
             "POST",
             &format!("/browser/handoffs/{handoff_id}/accept"),
-            Some(json!({})),
+            Some(json!({
+                "filename": filename,
+                "download_dir": download_dir,
+                "remember": true,
+            })),
             8.0,
         )
     }
@@ -119,7 +123,7 @@ impl CoreClient {
             "cancel" => self.cancel_task(task_id),
             "delete" => self.delete_task(task_id),
             "open" => self.open_explorer(task_id),
-            "launch" => self.launch_file(task_id, false),
+            "launch" => self.launch_file(task_id, true),
             "settings" => self.open_settings(),
             _ => Err(format!("unknown task action {action}")),
         }

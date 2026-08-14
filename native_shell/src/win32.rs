@@ -26,18 +26,20 @@ use windows_sys::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    AppendMenuW, BringWindowToTop, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    DispatchMessageW,
     EnableWindow, GetClientRect, GetCursorPos, GetDlgItem, GetMessageW, GetSystemMetrics,
     GetWindowTextW, KillTimer, LoadCursorW, LoadIconW, MoveWindow, PostMessageW, PostQuitMessage,
     RegisterClassW, RegisterWindowMessageW, SendMessageW, SetForegroundWindow, SetTimer,
     SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
     CS_VREDRAW, CW_USEDEFAULT, ES_AUTOHSCROLL, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW,
     IDI_APPLICATION, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, MF_STRING, MSG, SM_CXSCREEN, SM_CYSCREEN,
-    SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_RIGHTBUTTON, WM_APP,
-    WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_PAINT, WM_RBUTTONUP, WM_SETFONT, WM_SIZE,
-    WM_TIMER, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
-    WS_EX_CLIENTEDGE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
-    WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
+    TPM_RIGHTBUTTON, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_PAINT,
+    WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
+    WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 pub const WM_SHELL_EVENT: u32 = WM_APP + 1;
@@ -49,6 +51,8 @@ const ID_PROGRESS_HIDE: usize = 1004;
 const ID_COMPLETE_CLOSE: usize = 1005;
 const ID_COMPLETE_OPEN_FOLDER: usize = 1006;
 const ID_COMPLETE_OPEN_FILE: usize = 1007;
+const ID_FILENAME: usize = 1010;
+const ID_SAVE_DIR: usize = 1011;
 const ID_TRAY_OPEN: usize = 2001;
 const ID_TRAY_EXIT: usize = 2002;
 const ID_FILTER_ALL: usize = 3101;
@@ -68,6 +72,7 @@ const ID_START: usize = 3140;
 const ID_PAUSE: usize = 3141;
 const ID_DELETE: usize = 3142;
 const ID_OPEN_FOLDER: usize = 3143;
+const ID_OPEN_FILE: usize = 3146;
 const ID_NEW_TASK: usize = 3144;
 const ID_SETTINGS: usize = 3145;
 const MAIN_REFRESH_TIMER: usize = 1;
@@ -114,7 +119,7 @@ impl Win32Host {
                 class_handoff(),
                 "浏览器下载",
                 520,
-                268,
+                292,
                 false,
                 true,
             )?;
@@ -155,8 +160,34 @@ impl Win32Host {
             if tray.is_null() {
                 return Err("failed to create tray message window".into());
             }
-            create_child_button(handoff, instance, ID_ACCEPT, "确认下载", 290, 196, 100, 28);
-            create_child_button(handoff, instance, ID_REJECT, "取消", 400, 196, 80, 28);
+            create_child(
+                handoff,
+                instance,
+                "EDIT",
+                "",
+                ID_FILENAME,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL as u32,
+                0,
+                16,
+                36,
+                488,
+                24,
+            );
+            create_child(
+                handoff,
+                instance,
+                "EDIT",
+                "",
+                ID_SAVE_DIR,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL as u32,
+                0,
+                16,
+                112,
+                488,
+                24,
+            );
+            create_child_button(handoff, instance, ID_ACCEPT, "确认下载", 290, 220, 100, 28);
+            create_child_button(handoff, instance, ID_REJECT, "取消", 400, 220, 80, 28);
             create_child_button(
                 progress,
                 instance,
@@ -207,7 +238,7 @@ impl Win32Host {
                 72,
                 28,
             );
-            place_center(handoff, 520, 268);
+            place_center(handoff, 520, 292);
             place_bottom_right(progress, 360, 128);
             ShowWindow(handoff, SW_HIDE);
             ShowWindow(progress, SW_HIDE);
@@ -256,10 +287,10 @@ impl Win32Host {
             unsafe {
                 match kind.as_str() {
                     "handoff" => {
+                        fill_handoff_fields(self.hwnds.handoff);
                         Invalidate(self.hwnds.handoff);
-                        place_center(self.hwnds.handoff, 520, 268);
-                        ShowWindow(self.hwnds.handoff, SW_SHOWNORMAL);
-                        SetForegroundWindow(self.hwnds.handoff);
+                        place_center(self.hwnds.handoff, 520, 292);
+                        show_popup(self.hwnds.handoff);
                     }
                     "progress" => {
                         Invalidate(self.hwnds.progress);
@@ -286,7 +317,7 @@ impl Win32Host {
                     "complete" => {
                         Invalidate(self.hwnds.complete);
                         place_center(self.hwnds.complete, 440, 188);
-                        ShowWindow(self.hwnds.complete, SW_SHOWNORMAL);
+                        show_popup(self.hwnds.complete);
                         if self
                             .shell
                             .lock()
@@ -587,6 +618,7 @@ unsafe fn create_main_children(parent: HWND, instance: windows_sys::Win32::Found
         88,
         28,
     );
+    create_child_button(parent, instance, ID_OPEN_FILE, "打开", 342, 470, 72, 28);
     create_child_button(parent, instance, ID_NEW_TASK, "新建", 680, 470, 72, 28);
     create_child_button(parent, instance, ID_SETTINGS, "设置", 758, 470, 72, 28);
     layout_main(parent);
@@ -674,12 +706,13 @@ unsafe fn layout_main(hwnd: HWND) {
     let list = GetDlgItem(hwnd, ID_LIST as i32);
     MoveWindow(list, 12, 74, width - 24, (height - 120).max(80), 1);
     let status = GetDlgItem(hwnd, ID_STATUS as i32);
-    MoveWindow(status, 12, height - 42, (width - 360).max(160), 22, 1);
+    MoveWindow(status, 12, height - 42, (width - 430).max(120), 22, 1);
     let y = height - 40;
     MoveWindow(GetDlgItem(hwnd, ID_START as i32), 12, y, 72, 28, 1);
     MoveWindow(GetDlgItem(hwnd, ID_PAUSE as i32), 90, y, 72, 28, 1);
     MoveWindow(GetDlgItem(hwnd, ID_DELETE as i32), 168, y, 72, 28, 1);
     MoveWindow(GetDlgItem(hwnd, ID_OPEN_FOLDER as i32), 246, y, 88, 28, 1);
+    MoveWindow(GetDlgItem(hwnd, ID_OPEN_FILE as i32), 342, y, 72, 28, 1);
     MoveWindow(
         GetDlgItem(hwnd, ID_NEW_TASK as i32),
         width - 164,
@@ -739,6 +772,7 @@ unsafe fn refresh_main_list(host: &Win32Host) {
     EnableWindow(GetDlgItem(hwnd, ID_PAUSE as i32), i32::from(can_pause));
     EnableWindow(GetDlgItem(hwnd, ID_DELETE as i32), i32::from(selected >= 0));
     EnableWindow(GetDlgItem(hwnd, ID_OPEN_FOLDER as i32), i32::from(can_open));
+    EnableWindow(GetDlgItem(hwnd, ID_OPEN_FILE as i32), i32::from(can_open));
     mark_filter(
         hwnd,
         ID_FILTER_ALL,
@@ -842,6 +876,54 @@ unsafe fn place_center(hwnd: HWND, width: i32, height: i32) {
     SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, 0);
 }
 
+unsafe fn show_popup(hwnd: HWND) {
+    ShowWindow(hwnd, SW_SHOWNORMAL);
+    SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+    );
+    BringWindowToTop(hwnd);
+    SetForegroundWindow(hwnd);
+}
+
+unsafe fn fill_handoff_fields(hwnd: HWND) {
+    let snapshot = host()
+        .and_then(|item| {
+            item.shell
+                .lock()
+                .ok()
+                .and_then(|shell| shell.snapshot.clone())
+        })
+        .unwrap_or_default();
+    SetWindowTextW(
+        GetDlgItem(hwnd, ID_FILENAME as i32),
+        wide(&snapshot.filename).as_ptr(),
+    );
+    SetWindowTextW(
+        GetDlgItem(hwnd, ID_SAVE_DIR as i32),
+        wide(&snapshot.download_dir).as_ptr(),
+    );
+}
+
+unsafe fn dlg_text(parent: HWND, id: usize) -> String {
+    let hwnd = GetDlgItem(parent, id as i32);
+    if hwnd.is_null() {
+        return String::new();
+    }
+    let mut buffer = [0u16; 1024];
+    let len = GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
+    if len <= 0 {
+        String::new()
+    } else {
+        String::from_utf16_lossy(&buffer[..len as usize])
+    }
+}
+
 unsafe fn place_bottom_right(hwnd: HWND, width: i32, height: i32) {
     let x = (GetSystemMetrics(SM_CXSCREEN) - width - 16).max(12);
     let y = (GetSystemMetrics(SM_CYSCREEN) - height - 48).max(12);
@@ -897,6 +979,8 @@ unsafe extern "system" fn handoff_proc(
         WM_COMMAND => {
             let id = (wparam as usize) & 0xffff;
             if let Some(host) = host() {
+                let filename = dlg_text(hwnd, ID_FILENAME);
+                let download_dir = dlg_text(hwnd, ID_SAVE_DIR);
                 let (handoff_id, core) = {
                     let mut shell = host.shell.lock().unwrap_or_else(|err| err.into_inner());
                     let handoff_id = shell
@@ -916,15 +1000,17 @@ unsafe extern "system" fn handoff_proc(
                         .clone();
                     (handoff_id, core)
                 };
-                ShowWindow(hwnd, SW_HIDE);
-                if let Some(core) = core {
-                    std::thread::spawn(move || {
-                        if id == ID_ACCEPT {
-                            let _ = core.accept(&handoff_id);
-                        } else if id == ID_REJECT {
-                            let _ = core.reject(&handoff_id);
-                        }
-                    });
+                if id == ID_ACCEPT || id == ID_REJECT {
+                    ShowWindow(hwnd, SW_HIDE);
+                    if let Some(core) = core {
+                        std::thread::spawn(move || {
+                            if id == ID_ACCEPT {
+                                let _ = core.accept(&handoff_id, &filename, &download_dir);
+                            } else {
+                                let _ = core.reject(&handoff_id);
+                            }
+                        });
+                    }
                 }
             }
             0
@@ -932,10 +1018,26 @@ unsafe extern "system" fn handoff_proc(
         WM_CLOSE => {
             ShowWindow(hwnd, SW_HIDE);
             if let Some(host) = host() {
-                host.shell
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner())
-                    .hide_handoff();
+                let (handoff_id, core) = {
+                    let mut shell = host.shell.lock().unwrap_or_else(|err| err.into_inner());
+                    let handoff_id = shell
+                        .snapshot
+                        .as_ref()
+                        .map(|item| item.id.clone())
+                        .unwrap_or_default();
+                    shell.reject();
+                    let core = host
+                        .core
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .clone();
+                    (handoff_id, core)
+                };
+                if let Some(core) = core {
+                    std::thread::spawn(move || {
+                        let _ = core.reject(&handoff_id);
+                    });
+                }
             }
             0
         }
@@ -1054,6 +1156,10 @@ unsafe extern "system" fn main_proc(
                             run_selected_action(host, "open");
                             return 0;
                         }
+                        ID_OPEN_FILE => {
+                            run_selected_action(host, "launch");
+                            return 0;
+                        }
                         ID_NEW_TASK | ID_SETTINGS => {
                             let root = crate::install_root();
                             let spawned = root
@@ -1154,7 +1260,7 @@ unsafe extern "system" fn overlay_proc(
                             let _ = core.open_explorer(&task_id);
                         }
                         ID_COMPLETE_OPEN_FILE => {
-                            let _ = core.launch_file(&task_id, false);
+                            let _ = core.launch_file(&task_id, true);
                         }
                         _ => {}
                     });
@@ -1254,38 +1360,22 @@ unsafe fn paint_handoff(hwnd: HWND) {
                 .and_then(|shell| shell.snapshot.clone())
         })
         .unwrap_or_default();
+    draw_line(hdc, 16, 16, 80, 18, "文件名");
     draw_line(
         hdc,
         16,
-        16,
+        66,
         480,
-        24,
-        &format!("文件：{}", snapshot.filename),
-    );
-    draw_line(
-        hdc,
-        16,
-        48,
-        480,
-        24,
+        20,
         &format!(
             "大小：{} · {}",
             format_size(snapshot.size),
             kind_label(&snapshot.resource_kind)
         ),
     );
-    if !snapshot.download_dir.is_empty() {
-        draw_line(
-            hdc,
-            16,
-            76,
-            480,
-            24,
-            &format!("保存到：{}", snapshot.download_dir),
-        );
-        draw_line(hdc, 16, 108, 480, 40, &format!("链接：{}", snapshot.url));
-    } else {
-        draw_line(hdc, 16, 76, 480, 40, &format!("链接：{}", snapshot.url));
+    draw_line(hdc, 16, 92, 80, 18, "保存到");
+    if !snapshot.url.is_empty() {
+        draw_line(hdc, 16, 144, 480, 36, &format!("链接：{}", snapshot.url));
     }
     EndPaint(hwnd, &ps);
 }
@@ -1338,16 +1428,23 @@ unsafe fn paint_generic(hwnd: HWND) {
                 .unwrap_or("");
             draw_line(hdc, 16, 16, 400, 24, &format!("已完成：{name}"));
             if !path.is_empty() {
-                draw_line(hdc, 16, 48, 400, 40, path);
+                draw_line(hdc, 16, 48, 400, 36, path);
+            }
+            let size = item
+                .get("downloaded_bytes")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            if size > 0 {
+                draw_line(hdc, 16, 88, 400, 20, &format!("大小：{}", format_size(size)));
             }
             if looks_executable(path) {
                 draw_line(
                     hdc,
                     16,
-                    96,
+                    108,
                     400,
-                    24,
-                    "可执行文件请用「打开目录」核对后再运行",
+                    20,
+                    "可执行文件请核对来源后再打开",
                 );
             }
         }

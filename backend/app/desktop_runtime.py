@@ -1,6 +1,7 @@
 from collections import deque
 from collections.abc import Callable
 import logging
+import os
 import threading
 
 
@@ -13,6 +14,8 @@ _activation_generation = 0
 _handoff_lock = threading.Lock()
 _pending_handoffs: deque[str] = deque()
 _pending_handoff_ids: set[str] = set()
+_pending_native_offers: deque[tuple[str, dict | None]] = deque()
+_pending_native_ids: set[str] = set()
 _desktop_session_active = False
 logger = logging.getLogger(__name__)
 
@@ -103,6 +106,66 @@ def register_browser_handoff(callback: Callable[[str], None] | None) -> None:
         ).start()
 
 
+def native_shell_expected() -> bool:
+    """True when a click must wait for HLSNativeShell instead of a WebView fallback."""
+    try:
+        from .native_shell import is_native_shell_ready
+    except Exception:
+        return False
+    if is_native_shell_ready():
+        return True
+    flag = os.environ.get("HLS_STARTED_BY_NATIVE_SHELL", "").strip().lower()
+    if flag in {"1", "true", "yes", "on"}:
+        return True
+    native_flag = os.environ.get("HLS_NATIVE_SHELL", "").strip().lower()
+    if native_flag in {"1", "true", "yes", "on"}:
+        return True
+    return False
+
+
+def has_pending_native_handoffs() -> bool:
+    with _handoff_lock:
+        return bool(_pending_native_ids)
+
+
+def clear_pending_native_handoffs() -> None:
+    with _handoff_lock:
+        _pending_native_offers.clear()
+        _pending_native_ids.clear()
+
+
+def _queue_native_handoff(handoff_id: str, snapshot: dict | None) -> None:
+    with _handoff_lock:
+        if handoff_id in _pending_native_ids:
+            return
+        _pending_native_offers.append((handoff_id, dict(snapshot) if isinstance(snapshot, dict) else None))
+        _pending_native_ids.add(handoff_id)
+
+
+def flush_pending_native_handoffs() -> None:
+    """Paint queued confirmations after the supervisor POSTs boot."""
+    with _handoff_lock:
+        pending = list(_pending_native_offers)
+        _pending_native_offers.clear()
+        _pending_native_ids.clear()
+    for handoff_id, snapshot in pending:
+        if _present_via_native_shell(handoff_id, snapshot) is None:
+            logger.warning("native shell still not ready for queued handoff %s", handoff_id)
+
+
+def _ensure_native_shell_process() -> None:
+    try:
+        from .config import settings
+        from .native_shell import maybe_spawn_native_shell_process
+
+        maybe_spawn_native_shell_process(
+            core_url=f"http://127.0.0.1:{int(settings.port)}/api",
+            token=str(settings.token or ""),
+        )
+    except Exception:
+        logger.exception("failed to start native shell for a browser confirmation")
+
+
 def _present_via_native_shell(handoff_id: str, snapshot: dict | None) -> dict | None:
     """Prefer the resident supervisor when its confirmation window is already warm."""
     try:
@@ -146,6 +209,7 @@ def present_browser_handoff(handoff_id: str, snapshot: dict | None = None) -> di
 
     Returns a presentation report so callers can distinguish:
     - native-shell: resident supervisor painted a pre-created confirmation window
+    - native-shell-pending: supervisor is expected and the offer waits for boot
     - desktop: presenter is live and a show call was scheduled
     - desktop-pending: desktop session is starting and the offer was queued
     - ui-fallback: no desktop shell; browser manager UI must show the offer
@@ -157,6 +221,17 @@ def present_browser_handoff(handoff_id: str, snapshot: dict | None = None) -> di
     native = _present_via_native_shell(handoff_id, snapshot)
     if native is not None:
         return native
+
+    if native_shell_expected():
+        _queue_native_handoff(handoff_id, snapshot)
+        _ensure_native_shell_process()
+        return {
+            "ok": True,
+            "presented": False,
+            "queued": True,
+            "mode": "native-shell-pending",
+            "presentable": False,
+        }
 
     with _handoff_lock:
         callback = _handoff_callback

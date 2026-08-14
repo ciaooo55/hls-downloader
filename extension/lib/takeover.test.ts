@@ -33,6 +33,7 @@ describe('browser download takeover helpers', () => {
   it('accepts only successful desktop handoff responses that can be presented', () => {
     expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation_mode: 'desktop', presentation_ok: true } })).toBe(true)
     expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation_mode: 'native-shell', presentation_ok: true, presentable: true } })).toBe(true)
+    expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation_mode: 'native-shell-pending', presentation_ok: true, presentation_queued: true } })).toBe(true)
     expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation_mode: 'ui-fallback', presentation_ok: true } })).toBe(true)
     expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation_mode: 'desktop-pending', presentation_ok: true, presentation_queued: true } })).toBe(true)
     expect(desktopAcceptedHandoff({ ok: false, handoff: { id: 'one' } })).toBe(false)

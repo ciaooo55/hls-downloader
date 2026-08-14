@@ -450,7 +450,14 @@ def is_native_shell_ready() -> bool:
 
 
 def boot_native_shell() -> dict[str, Any]:
-    return native_shell_supervisor().boot_resident()
+    status = native_shell_supervisor().boot_resident()
+    try:
+        from .desktop_runtime import flush_pending_native_handoffs
+
+        flush_pending_native_handoffs()
+    except Exception:
+        pass
+    return status
 
 
 def shutdown_native_shell() -> dict[str, Any]:
@@ -482,6 +489,12 @@ def reset_native_shell() -> None:
     """Tests and core shutdown: drop resident state without leaking IPC threads."""
     global _supervisor
     stop_native_shell_ipc()
+    try:
+        from .desktop_runtime import clear_pending_native_handoffs
+
+        clear_pending_native_handoffs()
+    except Exception:
+        pass
     with _supervisor_lock:
         previous = _supervisor
         _supervisor = NativeShellSupervisor()

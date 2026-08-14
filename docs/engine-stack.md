@@ -4,7 +4,7 @@
 
 ## 1. 技术栈（诚实对照）
 
-| | IDM | AB Download Manager | HLS Downloader 5.0.13 |
+| | IDM | AB Download Manager | HLS Downloader 5.0.14 |
 | --- | --- | --- | --- |
 | 壳 | 很小的 C++ 原生窗 | Kotlin / Compose 原生窗 | **空闲时只有 `HLSNativeShell.exe`：托盘 + 预创建确认/进度/完成 + 原生任务列表。WebView2 只在设置/新建/播放器时启动** |
 | 普通 HTTP 文件 | 已运行进程里传 | OkHttp，同一 JVM | **已运行的监督进程：Range seek 写入一个 `payload.downloading`；https 用 WinHTTP** |
@@ -101,4 +101,4 @@ ABDM 也是 RandomAccessFile / 动态 part 写进一个文件，模型和这里�
 | 浏览器 POST 重放不能 Range 续传 | 只下一遍，避免表单/API 副作用；5.0.5 只把写盘改成和无 Range GET 一样随到随写 |
 | 已有 `http-resume.json` 的 Range 续传仍走 Python | 原生引擎这一刀先覆盖新任务；检查点格式对齐后可以再迁 |
 
-5.0.10 把安装入口改成常驻 `HLSNativeShell.exe`，空闲不创建 WebView2。5.0.13 把普通文件接管收回热路径：zip/exe/pdf 不靠播放点击也能 offer。HLS/DASH/BT 仍在 Python 核心。下一刀若还做产品，是设置/播放器原生化，或把 Range 续传检查点交给原生引擎。
+5.0.10 把安装入口改成常驻 `HLSNativeShell.exe`，空闲不创建 WebView2。5.0.13 把普通文件接管收回热路径：zip/exe/pdf 不靠播放点击也能 offer。5.0.14 保证点击确认窗和下载完成窗真正置顶弹出，冷启动走 native-shell 而不是无界面 fallback。HLS/DASH/BT 仍在 Python 核心。下一刀若还做产品，是设置/播放器原生化，或把 Range 续传检查点交给原生引擎。

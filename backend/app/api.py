@@ -66,7 +66,15 @@ from .downloader.playback import (
     PlaybackSessionError,
     playback_service,
 )
-from .desktop_runtime import activate_window, present_browser_handoff, has_browser_handoff_presenter, is_desktop_handoff_session, request_shutdown
+from .desktop_runtime import (
+    activate_window,
+    has_browser_handoff_presenter,
+    has_pending_native_handoffs,
+    is_desktop_handoff_session,
+    native_shell_expected,
+    present_browser_handoff,
+    request_shutdown,
+)
 from .desktop_runtime import register_activation, register_browser_handoff, register_shutdown, set_desktop_handoff_session
 from .native_desktop import native_desktop_session, request_core_shutdown
 from .native_shell import (
@@ -426,7 +434,7 @@ async def create_browser_handoff(request: Request, x_token: str = Header(default
     if mode == "native-shell":
         # Pre-created confirmation window already has the offer snapshot.
         browser_handoffs.mark_presentation(item.id, "presented")
-    elif mode == "desktop-pending":
+    elif mode in {"desktop-pending", "native-shell-pending"}:
         browser_handoffs.mark_presentation(item.id, "queued")
     elif mode == "desktop":
         # Presenter thread will upgrade this to presented; do not overwrite later.
@@ -497,10 +505,13 @@ async def browser_presenter_status(x_token: str = Header(default="")):
     """Desktop shell readiness for cold-start handoffs."""
     _check_browser_token(x_token)
     shell_ready = is_native_shell_ready()
+    expected = native_shell_expected() or has_pending_native_handoffs()
     ready = has_browser_handoff_presenter() or shell_ready
-    session = is_desktop_handoff_session() or shell_ready
+    session = is_desktop_handoff_session() or shell_ready or expected
     if shell_ready:
         mode = "native-shell"
+    elif expected:
+        mode = "native-shell-pending"
     elif has_browser_handoff_presenter():
         mode = "desktop"
     elif is_desktop_handoff_session():

@@ -68,6 +68,41 @@ def test_present_keeps_tauri_queue_when_native_shell_is_not_booted():
         set_desktop_handoff_session(False)
 
 
+def test_present_queues_until_native_shell_boots(monkeypatch):
+    register_browser_handoff(None)
+    set_desktop_handoff_session(False)
+    reset_native_shell()
+    monkeypatch.setenv("HLS_STARTED_BY_NATIVE_SHELL", "1")
+    try:
+        queued = present_browser_handoff(
+            "pending-native",
+            snapshot={
+                "id": "pending-native",
+                "filename": "pack.zip",
+                "url": "https://cdn.test/pack.zip",
+                "size": 8,
+            },
+        )
+        assert queued["mode"] == "native-shell-pending"
+        assert queued["queued"] is True
+        assert is_native_shell_ready() is False
+        client = TestClient(app)
+        presenter = client.get("/api/browser/presenter", headers=AUTH).json()
+        assert presenter["mode"] == "native-shell-pending"
+        assert presenter["session"] is True
+        assert presenter["ready"] is False
+        boot_native_shell()
+        events = native_shell_supervisor().wait_event(0, 0)["events"]
+        handoff = next(item for item in events if item["kind"] == "handoff")
+        assert handoff["snapshot"]["filename"] == "pack.zip"
+        assert handoff["presentable"] is True
+    finally:
+        monkeypatch.delenv("HLS_STARTED_BY_NATIVE_SHELL", raising=False)
+        reset_native_shell()
+        register_browser_handoff(None)
+        set_desktop_handoff_session(False)
+
+
 def test_create_handoff_uses_native_shell_snapshot_without_tauri():
     from backend.app import api as api_module
     from backend.app.browser_handoff import browser_handoffs

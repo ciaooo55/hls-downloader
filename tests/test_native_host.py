@@ -1,6 +1,66 @@
 from backend import native_host
 
 
+def test_frozen_install_root_accepts_native_shell_marker(tmp_path):
+    install_root = tmp_path / "HLS Downloader"
+    host = (
+        install_root
+        / "native-host"
+        / "versions"
+        / "HLSDownloaderNativeHost-5.0.14.exe"
+    )
+    host.parent.mkdir(parents=True)
+    host.write_bytes(b"host")
+    (install_root / "HLSNativeShell.exe").write_bytes(b"MZ")
+
+    assert native_host._frozen_install_root(host) == install_root
+
+
+def test_start_app_prefers_native_shell(tmp_path, monkeypatch):
+    (tmp_path / "HLSNativeShell.exe").write_bytes(b"MZ")
+    (tmp_path / "HLSDownloader.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(native_host, "ROOT", tmp_path)
+    captured = {}
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = list(args)
+        captured["kwargs"] = kwargs
+
+        class Process:
+            pass
+
+        return Process()
+
+    monkeypatch.setattr(native_host.subprocess, "Popen", fake_popen)
+    native_host._start_app()
+    assert captured["args"][0].endswith("HLSNativeShell.exe")
+    assert "--background" not in captured["args"]
+    flags = captured["kwargs"]["creationflags"]
+    assert flags & 0x00000008
+    assert flags & 0x08000000 == 0
+
+
+def test_start_app_falls_back_to_desktop_background(tmp_path, monkeypatch):
+    (tmp_path / "HLSDownloader.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(native_host, "ROOT", tmp_path)
+    captured = {}
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = list(args)
+        captured["kwargs"] = kwargs
+
+        class Process:
+            pass
+
+        return Process()
+
+    monkeypatch.setattr(native_host.subprocess, "Popen", fake_popen)
+    native_host._start_app()
+    assert captured["args"][0].endswith("HLSDownloader.exe")
+    assert "--background" in captured["args"]
+    assert captured["kwargs"]["creationflags"] == 0x08000000
+
+
 def test_wait_presenter_returns_as_soon_as_session_can_queue(monkeypatch):
     calls = []
 
