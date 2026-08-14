@@ -79,10 +79,33 @@ export default defineContentScript({
       const kind = detectManifestKind(prefix)
       if (kind) report(response.url, manifestMimeType(kind))
     }
+    let blobSliceInstalled = false
+    const installBlobSliceHook = () => {
+      if (blobSliceInstalled) return
+      blobSliceInstalled = true
+      try {
+        // Fetch-then-save helpers often slice a downloaded Blob to retag MIME.
+        // Do not patch slice until an HTTP-backed Blob exists: Chrome also
+        // slices in-memory media blobs while playing the overlay smoke fixture.
+        const blobSlice = Blob.prototype.slice
+        Blob.prototype.slice = function (this: Blob, ...args: Parameters<Blob['slice']>) {
+          const value = blobSlice.apply(this, args)
+          try {
+            if (this && typeof this === 'object') {
+              copyHttpBufferSource(this, value, object => bufferSources.get(object), rememberBufferSource)
+            }
+          } catch {}
+          return value
+        }
+      } catch {
+        // Frozen Blob.slice only disables sliced-blob download correlation.
+      }
+    }
     const rememberBufferSource = (value: unknown, sourceUrl: string) => {
       if (!sourceUrl || (!value || (typeof value !== 'object' && typeof value !== 'function'))) return
       bufferSources.set(value as object, sourceUrl)
       if (ArrayBuffer.isView(value)) bufferSources.set(value.buffer, sourceUrl)
+      if (/^https?:\/\//i.test(sourceUrl)) installBlobSliceHook()
     }
     try {
       const OriginalBlob = window.Blob
@@ -124,18 +147,6 @@ export default defineContentScript({
       }
     } catch {
       // Frozen URL.createObjectURL only disables blob: download correlation.
-    }
-    try {
-      // Blob.slice is common for fetch-then-save helpers that retag MIME.
-      // Typed-array/ArrayBuffer slice stays MSE-only because those run hot.
-      const blobSlice = Blob.prototype.slice
-      Blob.prototype.slice = function (start?: number, end?: number, contentType?: string) {
-        const value = blobSlice.call(this, start, end, contentType)
-        copyHttpBufferSource(this, value, object => bufferSources.get(object), rememberBufferSource)
-        return value
-      }
-    } catch {
-      // Frozen Blob.slice only disables sliced-blob download correlation.
     }
     window.addEventListener('__hls_downloader_replay__', () => {
       pendingResources.forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: event })))
