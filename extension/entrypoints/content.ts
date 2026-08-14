@@ -85,6 +85,17 @@ export default defineContentScript({
           purpose: detail.purpose === 'download' ? 'download' : 'mse',
         })
         if (earlyMseEvents.length > 200) earlyMseEvents.splice(0, earlyMseEvents.length - 200)
+        if (detail.purpose === 'download') {
+          // Do not wait for the media UI. downloads.onCreated can fire while
+          // overlay activation is still pending, and an unmatched blob: item
+          // is left entirely in the browser.
+          void runtimeMessage({
+            type: 'blob-source',
+            blobUrl: detail.blobUrl,
+            sourceUrl: detail.mediaUrl,
+            pageUrl: location.href,
+          }).catch(() => undefined)
+        }
         requestActivation()
       }
     }

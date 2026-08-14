@@ -1,3 +1,4 @@
+import { inheritHttpBufferSource } from '../lib/blobOwnership'
 import { detectManifestKind, manifestMimeType, shouldInspectManifestResponse, shouldReportMediaResponse } from '../lib/manifestSniff'
 
 export default defineContentScript({
@@ -82,6 +83,47 @@ export default defineContentScript({
       if (!sourceUrl || (!value || (typeof value !== 'object' && typeof value !== 'function'))) return
       bufferSources.set(value as object, sourceUrl)
       if (ArrayBuffer.isView(value)) bufferSources.set(value.buffer, sourceUrl)
+    }
+    try {
+      const OriginalBlob = window.Blob
+      window.Blob = class extends OriginalBlob {
+        constructor(parts?: BlobPart[], options?: BlobPropertyBag) {
+          super(parts as BlobPart[], options)
+          const source = inheritHttpBufferSource(parts as unknown[], value => bufferSources.get(value))
+          if (source) rememberBufferSource(this, source)
+        }
+      } as typeof Blob
+      const OriginalFile = window.File
+      window.File = class extends OriginalFile {
+        constructor(parts: BlobPart[], name: string, options?: FilePropertyBag) {
+          super(parts, name, options)
+          const source = inheritHttpBufferSource(parts as unknown[], value => bufferSources.get(value))
+          if (source) rememberBufferSource(this, source)
+        }
+      } as typeof File
+    } catch {
+      // Frozen Blob/File constructors only disable wrapped-buffer correlation.
+    }
+    try {
+      const createObjectURL = URL.createObjectURL.bind(URL)
+      URL.createObjectURL = function (object: Blob | MediaSource): string {
+        const value = createObjectURL(object)
+        try {
+          if (typeof MediaSource !== 'undefined' && object instanceof MediaSource) {
+            mediaSourceBlobs.set(object, value)
+          } else {
+            const source = bufferSources.get(object)
+            // A page that fetched a server response into a Blob often starts
+            // the browser download through this object URL. Preserve that
+            // exact HTTP ownership separately from MSE playback ownership;
+            // client-generated blobs have no source and are never reported.
+            if (source) reportMse(value, source, 'download')
+          }
+        } catch {}
+        return value
+      }
+    } catch {
+      // Frozen URL.createObjectURL only disables blob: download correlation.
     }
     window.addEventListener('__hls_downloader_replay__', () => {
       pendingResources.forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: event })))
@@ -305,22 +347,6 @@ export default defineContentScript({
             // failure; the extension may miss evidence but cannot break video.
           }
           return appendBuffer.call(this, data)
-        }
-        const createObjectURL = URL.createObjectURL.bind(URL)
-        URL.createObjectURL = function (object: Blob | MediaSource): string {
-          const value = createObjectURL(object)
-          try {
-            if (object instanceof MediaSource) mediaSourceBlobs.set(object, value)
-            else {
-              const source = bufferSources.get(object)
-              // A page that fetched a server response into a Blob often starts
-              // the browser download through this object URL. Preserve that
-              // exact HTTP ownership separately from MSE playback ownership;
-              // client-generated blobs have no source and are never reported.
-              if (source) reportMse(value, source, 'download')
-            }
-          } catch {}
-          return value
         }
       } catch {
         // Frozen browser/page prototypes disable this optional correlation

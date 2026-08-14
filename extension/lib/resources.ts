@@ -66,6 +66,9 @@ export interface DownloadClickIntent {
 }
 
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|torrent|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
+// Ordinary downloads the desktop already owns. MEDIA_EXT stays narrower so
+// page sniffing does not promote every .docx/.apk request into the media HUD.
+const DOWNLOAD_FILE_EXT = /\.(?:m3u8|mpd|mp4|m4v|webm|mkv|mov|avi|flv|m4a|mp3|flac|wav|ogg|opus|torrent|zip|7z|rar|tar|tgz|gz|bz2|xz|iso|img|exe|msi|msix|appx|apk|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|bin|jar)(?:$|[?#])/i
 // Keep this narrower than MEDIA_EXT: archive and installer downloads can
 // legitimately use terse `s`/`e` application parameters, while these paths
 // are actual media or adaptive manifests whose signatures are known to rotate.
@@ -97,6 +100,22 @@ function cleanName(value = '', pathValue = false): string {
   if (pathValue) result = result.replace(/\\/g, '/').split('/').pop() || ''
   result = result.split(/[?#]/, 1)[0].replace(MANIFEST_EXT, '').replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, ' ').trim().replace(/^[. ]+|[. ]+$/g, '')
   return result.slice(0, 200)
+}
+
+/** True when a URL path or filename already names an ordinary download file. */
+export function looksLikeDownloadFile(value = ''): boolean {
+  const candidate = String(value || '').trim()
+  if (!candidate) return false
+  try {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(candidate)) {
+      const url = new URL(candidate)
+      if (!['http:', 'https:'].includes(url.protocol)) return false
+      return DOWNLOAD_FILE_EXT.test(url.pathname)
+    }
+  } catch {
+    return false
+  }
+  return DOWNLOAD_FILE_EXT.test(candidate.split(/[\\/]/).pop() || candidate)
 }
 
 export function isGenericMediaName(value = ''): boolean {
@@ -673,11 +692,13 @@ export function classifyDownload(
   // Dynamic endpoints and nameless octet-stream bodies are common navigation
   // and ad targets. Attachment is the server saying this response is a file,
   // which is the same signal already used for JSON/script downloads.
-  if (!attachment && DYNAMIC_DOCUMENT_EXT.test(url) && (!suppliedHasExtension || suppliedIsDocument)) return null
-  if (!attachment && mime.includes('octet-stream') && !MEDIA_EXT.test(url) && (!suppliedHasExtension || suppliedIsDocument)) return null
+  const urlLooksLikeFile = looksLikeDownloadFile(url)
+  if (!attachment && DYNAMIC_DOCUMENT_EXT.test(url) && !urlLooksLikeFile && (!suppliedHasExtension || suppliedIsDocument)) return null
+  if (!attachment && mime.includes('octet-stream') && !MEDIA_EXT.test(url) && !urlLooksLikeFile && (!suppliedHasExtension || suppliedIsDocument)) return null
   const classified = classifyResource(url, mimeType)
     || classifyResource(`https://download.invalid/${encodeURIComponent(filename)}`, mimeType)
   if (classified) return classified
+  if (urlLooksLikeFile || looksLikeDownloadFile(suppliedName)) return 'file'
   const extension = filename.split(/[\\/]/).pop()?.match(/\.([A-Za-z0-9]{1,10})$/)?.[1]?.toLowerCase()
   if (extension && !['htm', 'html', 'xhtml'].includes(extension)) return 'file'
   if (mime && !mime.includes('text/html') && !mime.includes('application/xhtml')) return 'file'

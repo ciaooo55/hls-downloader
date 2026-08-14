@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   canonicalMediaUrl,
   classifyDownload,
+  looksLikeDownloadFile,
   classifyPlaybackSource,
   classifyResource,
   compactResources,
@@ -573,6 +574,18 @@ describe('resource rules', () => {
       '',
       'attachment',
     )).toBe('file')
+    expect(classifyDownload('https://cdn.test/get?id=1', 'application/octet-stream', 'download')).toBeNull()
+  })
+  it('takes over ordinary files whose URL already has a download extension', () => {
+    expect(looksLikeDownloadFile('https://mirror.test/ubuntu-24.04.iso?token=1')).toBe(true)
+    expect(looksLikeDownloadFile('https://site.test/export.php?file=ubuntu.iso')).toBe(false)
+    expect(classifyDownload('https://cdn.test/ubuntu-24.04.iso', 'application/octet-stream', 'download')).toBe('file')
+    expect(classifyDownload('https://cdn.test/ubuntu-24.04.iso', '', '')).toBe('file')
+    expect(classifyDownload('https://cdn.test/app-1.2.3.apk', 'application/octet-stream', '')).toBe('file')
+    expect(classifyDownload('https://cdn.test/archive.tar.gz', 'application/octet-stream', '')).toBe('file')
+    expect(classifyDownload('https://cdn.test/Setup.dmg', 'application/octet-stream', 'download')).toBe('file')
+    expect(classifyDownload('https://cdn.test/report.docx', 'application/octet-stream', '')).toBe('file')
+    expect(classifyDownload('https://site.test/advert.php', 'application/octet-stream')).toBeNull()
     expect(classifyDownload('https://cdn.test/get?id=1', 'application/octet-stream', 'download')).toBeNull()
   })
   it('excludes passive web resources unless the server marks an attachment', () => {

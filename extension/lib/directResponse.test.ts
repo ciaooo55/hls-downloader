@@ -23,6 +23,20 @@ describe('early Chromium direct-download response detection', () => {
     )).toBe(true)
   })
 
+  it('accepts a direct installer/archive navigation without Content-Disposition', () => {
+    expect(isEarlyDirectDownloadResponse(
+      { type: 'main_frame', method: 'GET', statusCode: 200 },
+      {
+        disposition: '',
+        resource: {
+          url: 'https://mirror.test/ubuntu-24.04.iso',
+          kind: 'file',
+          mimeType: 'application/octet-stream',
+        },
+      },
+    )).toBe(true)
+  })
+
   it('does not pre-offer XHR, HTML, or failed responses', () => {
     expect(isEarlyDirectDownloadResponse(
       { type: 'xmlhttprequest', method: 'GET', statusCode: 200 },
