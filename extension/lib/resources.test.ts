@@ -561,6 +561,19 @@ describe('resource rules', () => {
     expect(classifyDownload('https://cdn.test/photo.jpg', 'application/octet-stream', 'photo.jpg')).toBeNull()
     expect(classifyDownload('https://site.test/advert.php', 'application/octet-stream')).toBeNull()
     expect(classifyDownload('https://site.test/export.php', 'application/pdf', 'report.pdf')).toBe('file')
+    expect(classifyDownload(
+      'https://cdn.test/get?id=1',
+      'application/octet-stream',
+      'download',
+      'attachment; filename="download"',
+    )).toBe('file')
+    expect(classifyDownload(
+      'https://site.test/export.php',
+      'application/octet-stream',
+      '',
+      'attachment',
+    )).toBe('file')
+    expect(classifyDownload('https://cdn.test/get?id=1', 'application/octet-stream', 'download')).toBeNull()
   })
   it('excludes passive web resources unless the server marks an attachment', () => {
     expect(classifyDownload('https://site.test/app.js', 'application/javascript', 'app.js')).toBeNull()
@@ -581,6 +594,14 @@ describe('resource rules', () => {
     expect(shouldTakeover({ ...base, size: 9 })).toBe(false)
     expect(shouldTakeover({ ...base, size: 0 })).toBe(true)
     expect(shouldTakeover({ ...base, url: 'https://sub.blocked.test/file.zip', excludedHosts: ['blocked.test'] })).toBe(false)
+    expect(shouldTakeover({
+      url: 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567',
+      size: 0, enabled: true, minimumBytes: 10, excludedHosts: [], explicitClick: true,
+    })).toBe(true)
+    expect(shouldTakeover({
+      url: 'ftp://files.test/a.bin',
+      size: 20, enabled: true, minimumBytes: 0, excludedHosts: [], explicitClick: true,
+    })).toBe(false)
   })
   it('applies an excluded source page to CDN downloads and normalizes ports', () => {
     expect(normalizeHost('https://WWW.Example.test:443/watch')).toBe('example.test')

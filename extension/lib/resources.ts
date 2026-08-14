@@ -670,10 +670,11 @@ export function classifyDownload(
   // subresources. Keep those in the browser unless the server explicitly
   // marks the response as an attachment.
   if (!attachment && (PASSIVE_WEB_MIME.test(mime) || PASSIVE_WEB_EXT.test(url) || PASSIVE_WEB_EXT.test(suppliedName))) return null
-  // Dynamic endpoints are common navigation and ad targets. Only take one over
-  // when the server explicitly gives it a real, non-web download filename.
-  if (DYNAMIC_DOCUMENT_EXT.test(url) && (!suppliedHasExtension || suppliedIsDocument)) return null
-  if (mime.includes('octet-stream') && !MEDIA_EXT.test(url) && (!suppliedHasExtension || suppliedIsDocument)) return null
+  // Dynamic endpoints and nameless octet-stream bodies are common navigation
+  // and ad targets. Attachment is the server saying this response is a file,
+  // which is the same signal already used for JSON/script downloads.
+  if (!attachment && DYNAMIC_DOCUMENT_EXT.test(url) && (!suppliedHasExtension || suppliedIsDocument)) return null
+  if (!attachment && mime.includes('octet-stream') && !MEDIA_EXT.test(url) && (!suppliedHasExtension || suppliedIsDocument)) return null
   const classified = classifyResource(url, mimeType)
     || classifyResource(`https://download.invalid/${encodeURIComponent(filename)}`, mimeType)
   if (classified) return classified
@@ -737,7 +738,7 @@ export function shouldTakeover(input: {
     const url = new URL(input.url)
     const hosts = [url.hostname, hostnameOf(input.sourcePageUrl || '')].filter(Boolean)
     const excluded = hosts.some(host => isExcludedHost(host, input.excludedHosts))
-    if (!['http:', 'https:'].includes(url.protocol) || excluded) return false
+    if (!['http:', 'https:', 'magnet:'].includes(url.protocol) || excluded) return false
   } catch {
     return false
   }
