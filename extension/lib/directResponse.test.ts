@@ -51,4 +51,31 @@ describe('early Chromium direct-download response detection', () => {
       { disposition: 'attachment', resource: resource() },
     )).toBe(false)
   })
+
+  it('accepts extensionless zip/pdf responses that already classified as files', () => {
+    expect(isEarlyDirectDownloadResponse(
+      { type: 'main_frame', method: 'GET', statusCode: 200 },
+      {
+        disposition: '',
+        resource: {
+          url: 'https://cdn.test/get?id=1',
+          kind: 'file',
+          mimeType: 'application/zip',
+          filename: '',
+        },
+      },
+    )).toBe(true)
+    expect(isEarlyDirectDownloadResponse(
+      { type: 'main_frame', method: 'GET', statusCode: 200 },
+      {
+        disposition: '',
+        resource: {
+          url: 'https://cdn.test/get?id=1',
+          kind: 'file',
+          mimeType: 'application/octet-stream',
+          filename: 'report.pdf',
+        },
+      },
+    )).toBe(true)
+  })
 })

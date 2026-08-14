@@ -597,6 +597,7 @@ describe('resource rules', () => {
   })
   it('takes over ordinary files whose URL already has a download extension', () => {
     expect(looksLikeDownloadFile('https://mirror.test/ubuntu-24.04.iso?token=1')).toBe(true)
+    expect(looksLikeDownloadFile('https://site.test/export.csv')).toBe(true)
     expect(looksLikeDownloadFile('https://site.test/export.php?file=ubuntu.iso')).toBe(false)
     expect(classifyDownload('https://cdn.test/ubuntu-24.04.iso', 'application/octet-stream', 'download')).toBe('file')
     expect(classifyDownload('https://cdn.test/ubuntu-24.04.iso', '', '')).toBe('file')

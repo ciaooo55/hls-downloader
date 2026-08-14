@@ -1,7 +1,8 @@
 const DOWNLOAD_HINT = /(?:^|[\s_:/-])(?:download|export|install|offline)(?:$|[\s_:/-])|(?:^|[\s_:/-])save[\s_-]*(?:as|file|video|audio|media|download|offline)(?:$|[\s_:/-])|下载|下載|另存|保存(?:到)?(?:本地|文件|檔案|档案|视频|影片|音[频頻])|儲存(?:到)?(?:本[機机地]|檔案|文件)|导出|匯出|安装|安裝|离线|離線|缓存|ダウンロード|다운로드|скачать|télécharger|descargar|herunterladen|scarica|baixar/i
-const DOWNLOAD_PATH_EXT = /\.(?:m3u8?|mpd|mp4|m4v|webm|mkv|mov|avi|flv|f4v|3gp|m4a|mp3|flac|wav|ogg|opus|aac|torrent|metalink|meta4|zip|7z|rar|tar|tgz|gz|bz2|xz|iso|img|exe|msi|msix|appx|apk|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|bin|jar)(?:$|[?#])/i
+const DOWNLOAD_PATH_EXT = /\.(?:m3u8?|mpd|mp4|m4v|webm|mkv|mov|avi|flv|f4v|3gp|m4a|mp3|flac|wav|ogg|opus|aac|torrent|metalink|meta4|zip|7z|rar|tar|tgz|gz|bz2|xz|iso|img|exe|msi|msix|appx|apk|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|csv|vsix|nupkg|cab|bin|jar)(?:$|[?#])/i
 const MEDIA_PATH_EXT = /\.(?:m3u8?|mpd|mp4|m4v|webm|mkv|mov|avi|flv|f4v|3gp|m4a|mp3|flac|wav|ogg|opus|aac)(?:$|[?#])/i
-const DOWNLOAD_PATH_SEGMENT = /\/(?:downloads?|attachments?|exports?)(?:\/|$)/i
+const DOWNLOAD_PATH_SEGMENT = /\/(?:downloads?|attachments?|exports?|files?|dl)(?:\/|$)/i
+const FILE_NAME_IN_TEXT = /\.(?:zip|7z|rar|tar|tgz|gz|bz2|xz|iso|img|exe|msi|msix|appx|apk|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|csv|vsix|nupkg|cab|bin|jar|torrent|metalink|meta4)\b/i
 const PLAYBACK_PAGE_PATH = /(?:^|\/)(?:watch|shorts?|play(?:er|ing|back)?|videos?|episode(?:s)?|view(?:_video)?|movies?|films?|vod|clips?|listen|tracks?|embed|live|bangumi|festival|reel(?:s)?|status|v_show|v_[A-Za-z0-9]{4,}|x\/cover|x\/page|av\d+|BV[\w]+)(?:\/|$|\.[a-z0-9]+)/i
 const PLAYBACK_CONTROL = /(?:^|[\s_:/-])(?:play|pause|playing|replay|unmute|mute|fullscreen|theater|theatre|pip|cast|share|like|subscribe|follow|comment|danmaku|quality|speed|volume|next|prev|previous|forward|rewind)(?:$|[\s_:/-])|播放|暂停|繼續|继续|重播|全屏|全螢幕|画中画|畫中畫|投屏|分享|点赞|投币|收藏|关注|訂閱|订阅|评论|彈幕|弹幕|清晰度|分辨率|倍速|音量|下一集|上一集|下一个|上一个|快进|快退|选集|連播|连播/i
 const NEGATIVE_DOWNLOAD_FLAGS = new Set(['0', 'false', 'no', 'off', 'none', 'null', 'undefined', 'n', 'f'])
@@ -23,6 +24,11 @@ function controlText(hints: Array<string | null | undefined>): string {
 
 export function isLikelyDownloadControl(hints: Array<string | null | undefined>): boolean {
   return DOWNLOAD_HINT.test(controlText(hints))
+}
+
+/** Users often click the filename itself (`ubuntu-24.04.iso`) rather than a 下载 button. */
+export function hintsLookLikeDownloadFile(hints: Array<string | null | undefined>): boolean {
+  return FILE_NAME_IN_TEXT.test(controlText(hints))
 }
 
 /** Player chrome: play/pause, next episode, quality, danmaku, like, share. */
@@ -148,6 +154,7 @@ export function shouldTrackDownloadIntent(input: {
   if (input.explicitDownloadTarget) return true
   const hints = input.hints || []
   if (isLikelyDownloadControl(hints)) return true
+  if (hintsLookLikeDownloadFile(hints)) return true
   const playbackChrome = isPlaybackControl(hints)
   if (isMediaFileUrl(input.hintedHref) && !isLikelyDownloadUrl(input.directHref) && !playbackChrome) {
     // `data-url="movie.mp4"` on an unlabeled player button is playback config.

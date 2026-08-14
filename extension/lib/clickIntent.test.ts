@@ -140,7 +140,20 @@ describe('download click intent', () => {
     expect(shouldTrackDownloadIntent({ directHref: 'https://site.test/watch?file=episode.mp4' })).toBe(false)
     expect(shouldTrackDownloadIntent({ directHref: 'https://site.test/next-episode', hints: ['下一集'] })).toBe(false)
     expect(shouldTrackDownloadIntent({ directHref: 'https://site.test/watch/episode-1', hints: ['播放'] })).toBe(false)
-    expect(shouldTrackDownloadIntent({ hints: ['保存'] })).toBe(false)
+    expect(isLikelyDownloadUrl('https://files.test/dl/token')).toBe(true)
+    expect(isLikelyDownloadUrl('https://files.test/files/report?id=1')).toBe(true)
+    expect(shouldTrackDownloadIntent({
+      directHref: 'https://cdn.test/get?id=7',
+      hints: ['ubuntu-24.04.iso'],
+    })).toBe(true)
+    expect(shouldTrackDownloadIntent({
+      directHref: 'https://cdn.test/get?id=7',
+      hints: ['report.pdf 12 MB'],
+    })).toBe(true)
+    expect(shouldTrackDownloadIntent({
+      directHref: 'https://site.test/watch/episode-1',
+      hints: ['intro.mp4'],
+    })).toBe(false)
   })
 
   it('accepts only downloader-owned schemes from data download targets', () => {

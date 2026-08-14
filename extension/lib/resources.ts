@@ -69,7 +69,7 @@ export interface DownloadClickIntent {
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|torrent|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
 // Ordinary downloads the desktop already owns. MEDIA_EXT stays narrower so
 // page sniffing does not promote every .docx/.apk request into the media HUD.
-const DOWNLOAD_FILE_EXT = /\.(?:m3u8?|mpd|mp4|m4v|webm|mkv|mov|avi|flv|f4v|3gp|m4a|mp3|flac|wav|ogg|opus|aac|torrent|metalink|meta4|zip|7z|rar|tar|tgz|gz|bz2|xz|iso|img|exe|msi|msix|appx|apk|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|bin|jar)(?:$|[?#])/i
+const DOWNLOAD_FILE_EXT = /\.(?:m3u8?|mpd|mp4|m4v|webm|mkv|mov|avi|flv|f4v|3gp|m4a|mp3|flac|wav|ogg|opus|aac|torrent|metalink|meta4|zip|7z|rar|tar|tgz|gz|bz2|xz|iso|img|exe|msi|msix|appx|apk|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|csv|vsix|nupkg|cab|bin|jar)(?:$|[?#])/i
 // Keep this narrower than MEDIA_EXT: archive and installer downloads can
 // legitimately use terse `s`/`e` application parameters, while these paths
 // are actual media or adaptive manifests whose signatures are known to rotate.

@@ -14,6 +14,7 @@ import { cookieLookupUrl, cookiePermissionAllows, normalizeCookiePermissionHosts
 import { detectBrowserFamily, stableBrowserClientId } from '../lib/browserClient'
 import { BrowserDirectBackend } from '../lib/directBackend'
 import { isEarlyDirectDownloadResponse, type ObservedDownloadResource } from '../lib/directResponse'
+import { clickIntentPollsForKind, earlyTakeoverRequiresClick } from '../lib/fileTakeover'
 import { ClickIntentStore } from '../lib/clickIntentStore'
 import { TakeoverSettingsSync } from '../lib/takeoverSettingsSync'
 import { SessionListStore } from '../lib/sessionListStore'
@@ -813,12 +814,19 @@ async function rememberClickIntent(intent: DownloadClickIntent): Promise<void> {
   console.debug('HLS Downloader received an explicit click intent')
 }
 
-async function waitForClickIntent(url: string, finalUrl = '', referrer = '', chain?: RequestChain): Promise<DownloadClickIntent | undefined> {
+async function waitForClickIntent(
+  url: string,
+  finalUrl = '',
+  referrer = '',
+  chain?: RequestChain,
+  attempts = 12,
+): Promise<DownloadClickIntent | undefined> {
   // The trusted pointerdown message normally precedes the network request.
   // Keep only a short MV3 wake-up grace period: a classified DownloadItem is
   // already strong evidence, so waiting seconds for a missing optional intent
   // merely delays the desktop prompt.
-  for (let attempt = 0; attempt < 12; attempt += 1) {
+  const polls = Math.max(1, Math.min(12, Math.floor(attempts)))
+  for (let attempt = 0; attempt < polls; attempt += 1) {
     const intent = await clickIntentStore.consume({
       url,
       finalUrl,
@@ -827,7 +835,7 @@ async function waitForClickIntent(url: string, finalUrl = '', referrer = '', cha
       tabId: chain?.tabId,
     })
     if (intent) return intent
-    await new Promise(resolve => setTimeout(resolve, 25))
+    if (attempt + 1 < polls) await new Promise(resolve => setTimeout(resolve, 25))
   }
   return undefined
 }
@@ -948,8 +956,9 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
         resource.url,
         resource.pageUrl || chain.pageUrl || '',
         chain,
+        clickIntentPollsForKind(resource.kind),
       )
-      if (!intent) return null
+      if (!intent && earlyTakeoverRequiresClick(resource.kind)) return null
       if (!shouldTakeover({
         url: resource.url,
         sourcePageUrl: resource.pageUrl,
@@ -957,10 +966,10 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
         mimeType: resource.mimeType,
         filename: resource.filename,
         ...config,
-        ...intent,
-        explicitClick: true,
+        ...(intent || {}),
+        explicitClick: Boolean(intent),
         strongEvidence: true,
-      }) || (!intent.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) return null
+      }) || (!intent?.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) return null
       const response = await offer(resource, chain)
       // Keep a response with a handoff id even when its presentation was
       // rejected; onCreated must not issue a duplicate desktop task in that
@@ -1145,28 +1154,55 @@ export default defineBackground(() => {
         }
       }
       // Filename determination is useful for generated downloads but can take
-      // hundreds of milliseconds. The response-header path above never waits
-      // for it, which keeps ordinary link takeover prompt latency low.
-      const actualBrowser = await refreshedDownload(item.id, item)
-      if (!canContinueTakeover(actualBrowser.state, paused)) return
-      const actual = downloadRequestItem(actualBrowser, blobSource)
-      provisionalChain = requestChains.find(actual, Date.now(), blobSource?.tabId) || provisionalChain
+      // hundreds of milliseconds. A zip/exe/pdf URL is already a file: skip
+      // that wait so the confirm window can appear as soon as Chrome pauses.
+      const classifyBrowserItem = (
+        browserItem: Browser.downloads.DownloadItem,
+        chain?: RequestChain,
+      ) => {
+        const actual = downloadRequestItem(browserItem, blobSource)
+        const url = chain?.finalUrl || actual.finalUrl || actual.url
+        const contentDisposition = responseHeader(chain, 'content-disposition')
+        const responseName = responseFilename(contentDisposition)
+        const filename = responseName || actual.filename.split(/[\\/]/).pop() || ''
+        const mimeType = actual.mime || responseHeader(chain, 'content-type')
+        return {
+          actual,
+          url,
+          contentDisposition,
+          filename,
+          mimeType,
+          kind: classifyDownload(url, mimeType, filename, contentDisposition),
+        }
+      }
+      let classified = classifyBrowserItem(item, provisionalChain)
+      let actualBrowser = item
+      if (!classified.kind) {
+        actualBrowser = await refreshedDownload(item.id, item)
+        if (!canContinueTakeover(actualBrowser.state, paused)) return
+        provisionalChain = requestChains.find(downloadRequestItem(actualBrowser, blobSource), Date.now(), blobSource?.tabId) || provisionalChain
+        classified = classifyBrowserItem(actualBrowser, provisionalChain)
+      } else {
+        const [current] = await browser.downloads.search({ id: item.id }).catch(() => [])
+        actualBrowser = { ...item, ...(current || {}) }
+        if (!canContinueTakeover(actualBrowser.state, paused)) return
+      }
+      if (!classified.kind) return
       let intent = await waitForClickIntent(
-        actual.url,
-        actual.finalUrl,
-        actual.referrer || provisionalChain?.pageUrl || '',
+        classified.actual.url,
+        classified.actual.finalUrl,
+        classified.actual.referrer || provisionalChain?.pageUrl || '',
         provisionalChain,
+        clickIntentPollsForKind(classified.kind),
       )
       let chain = intent?.tabId === undefined
         ? provisionalChain
-        : requestChains.find(actual, Date.now(), intent.tabId) || provisionalChain
-      const url = chain?.finalUrl || actual.finalUrl || actual.url
-      const contentDisposition = responseHeader(chain, 'content-disposition')
-      const responseName = responseFilename(contentDisposition)
-      const filename = responseName || actual.filename.split(/[\\/]/).pop() || ''
-      const mimeType = actual.mime || responseHeader(chain, 'content-type')
-      const kind = classifyDownload(url, mimeType, filename, contentDisposition)
-      if (!kind) return
+        : requestChains.find(classified.actual, Date.now(), intent.tabId) || provisionalChain
+      if (chain && chain !== provisionalChain) {
+        classified = classifyBrowserItem(actualBrowser, chain)
+        if (!classified.kind) return
+      }
+      const { actual, url, filename, mimeType, kind } = classified
       const size = (actual.fileSize && actual.fileSize > 0 ? actual.fileSize : 0)
         || (actual.totalBytes && actual.totalBytes > 0 ? actual.totalBytes : 0)
         || trackedSize(chain)

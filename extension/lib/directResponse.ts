@@ -1,4 +1,5 @@
-import { looksLikeDownloadFile, type MediaResource } from './resources'
+import { type MediaResource } from './resources'
+import { ordinaryFileResponseIdentified } from './fileTakeover'
 
 export type ObservedDownloadResource = Pick<MediaResource,
   'url' | 'kind' | 'mimeType' | 'size' | 'filename' | 'pageUrl' | 'tabId' | 'frameId' | 'statusCode' | 'method' | 'requestHeaders'>
@@ -41,5 +42,5 @@ export function isEarlyDirectDownloadResponse(
   // Restrict the fallback to already-classified media/file responses so an
   // ordinary HTML, script, or JSON navigation cannot be pre-offered.
   if (resource.kind === 'media' && /^(?:video|audio)\//i.test(resource.mimeType || '')) return true
-  return resource.kind === 'file' && looksLikeDownloadFile(resource.url)
+  return ordinaryFileResponseIdentified(resource)
 }
