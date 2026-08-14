@@ -58,7 +58,18 @@ def paint_snapshot(handoff: dict[str, Any] | None) -> dict[str, Any]:
         snapshot["size"] = max(0, int(snapshot.get("size") or 0))
     except (TypeError, ValueError):
         snapshot["size"] = 0
+    # Save folder is always the local setting, never a field from the offer.
+    snapshot["download_dir"] = local_download_dir()
     return snapshot
+
+
+def local_download_dir() -> str:
+    try:
+        from .config import settings
+
+        return str(getattr(settings, "download_dir", "") or "")
+    except Exception:
+        return ""
 
 
 def encode_frame(message: dict[str, Any]) -> bytes:
@@ -185,7 +196,10 @@ class NativeShellSupervisor:
             event = self._event("progress")
             event["tasks"] = list(tasks)
             event["presentable"] = True
-            self._events.append(event)
+            if self._events and self._events[-1].get("kind") == "progress":
+                self._events[-1] = event
+            else:
+                self._events.append(event)
             self._lock.notify_all()
             return event
 
@@ -433,6 +447,105 @@ def reset_native_shell() -> None:
         _supervisor = NativeShellSupervisor()
     if previous is not None and previous.resident:
         previous.shutdown()
+
+
+NATIVE_PROGRESS_STATUSES = {
+    "fetching_metadata",
+    "checking",
+    "downloading",
+    "downloading_m3u8",
+    "parsing",
+    "downloading_segments",
+    "pausing",
+    "merging",
+    "remuxing",
+}
+
+
+def overlay_progress_item(task: dict[str, Any] | None) -> dict[str, Any]:
+    source = task if isinstance(task, dict) else {}
+    try:
+        percent = max(0.0, min(100.0, float(source.get("progress_percent") or source.get("percent") or 0)))
+    except (TypeError, ValueError):
+        percent = 0.0
+    try:
+        downloaded = max(0, int(source.get("downloaded_bytes") or 0))
+    except (TypeError, ValueError):
+        downloaded = 0
+    try:
+        total = max(0, int(source.get("total_bytes") or 0))
+    except (TypeError, ValueError):
+        total = 0
+    try:
+        speed = max(0.0, float(source.get("speed_bytes_per_sec") or 0))
+    except (TypeError, ValueError):
+        speed = 0.0
+    try:
+        eta = max(0.0, float(source.get("eta_seconds") or 0))
+    except (TypeError, ValueError):
+        eta = 0.0
+    return {
+        "id": str(source.get("id") or source.get("task_id") or ""),
+        "filename": str(source.get("filename") or source.get("title") or ""),
+        "status": str(source.get("status") or ""),
+        "progress_percent": percent,
+        "downloaded_bytes": downloaded,
+        "total_bytes": total,
+        "speed_bytes_per_sec": speed,
+        "eta_seconds": eta,
+        "is_live": bool(source.get("is_live")),
+    }
+
+
+def overlay_complete_item(task: dict[str, Any] | None) -> dict[str, Any]:
+    source = task if isinstance(task, dict) else {}
+    try:
+        downloaded = max(0, int(source.get("downloaded_bytes") or source.get("total_bytes") or 0))
+    except (TypeError, ValueError):
+        downloaded = 0
+    return {
+        "id": str(source.get("id") or source.get("task_id") or ""),
+        "filename": str(source.get("filename") or source.get("title") or ""),
+        "title": str(source.get("title") or source.get("filename") or ""),
+        "output_path": str(source.get("output_path") or ""),
+        "downloaded_bytes": downloaded,
+        "output_is_file": source.get("output_is_file") is not False,
+    }
+
+
+def sync_native_shell_from_event(
+    event: dict[str, Any] | None,
+    running_tasks: list[dict[str, Any]] | None = None,
+) -> None:
+    """Drive pre-created progress/complete windows from core task events."""
+    if not is_native_shell_ready():
+        return
+    try:
+        from .config import settings
+    except Exception:
+        return
+    supervisor = native_shell_supervisor()
+    payload = event if isinstance(event, dict) else {}
+    status = str(payload.get("status") or "")
+    if status == "done" and getattr(settings, "download_complete_popup_enabled", True) is not False:
+        item = overlay_complete_item(payload)
+        if item["id"]:
+            try:
+                supervisor.complete(item)
+            except RuntimeError:
+                pass
+    items: list[dict[str, Any]] = []
+    if getattr(settings, "download_progress_window_enabled", True) is not False:
+        for task in running_tasks or []:
+            item = overlay_progress_item(task)
+            if item["id"] and str(item.get("status") or "") in NATIVE_PROGRESS_STATUSES:
+                items.append(item)
+            if len(items) >= 4:
+                break
+    try:
+        supervisor.progress(items)
+    except RuntimeError:
+        pass
 
 
 def running_on_windows() -> bool:

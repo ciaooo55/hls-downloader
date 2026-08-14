@@ -509,6 +509,40 @@ class TaskManager:
         for queue in dead:
             if queue in self._event_subscribers:
                 self._event_subscribers.remove(queue)
+        event_type = str(event.get("type") or "")
+        if event_type in {"task_progress", "task_created", "task_deleted"}:
+            self._sync_native_shell_overlays(event)
+
+    def _sync_native_shell_overlays(self, event: dict) -> None:
+        try:
+            from ..native_shell import is_native_shell_ready, sync_native_shell_from_event
+        except Exception:
+            return
+        if not is_native_shell_ready():
+            return
+        running = []
+        for task in self.tasks.values():
+            if task.status not in ACTIVE_STATUSES:
+                continue
+            progress = task.progress
+            running.append(
+                {
+                    "id": task.id,
+                    "filename": task.filename,
+                    "title": task.title,
+                    "status": task.status.value,
+                    "progress_percent": progress.progress_percent,
+                    "downloaded_bytes": progress.downloaded_bytes,
+                    "total_bytes": progress.total_bytes,
+                    "speed_bytes_per_sec": progress.speed_bytes_per_sec,
+                    "eta_seconds": progress.eta_seconds,
+                    "is_live": bool(task.engine_state.get("live")),
+                }
+            )
+        try:
+            sync_native_shell_from_event(event, running)
+        except Exception:
+            logger.exception("native shell overlay sync failed")
 
     async def _broadcast(self, event: dict) -> None:
         self._broadcast_nowait(event)

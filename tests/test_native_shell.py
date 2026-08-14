@@ -96,8 +96,15 @@ def test_progress_and_complete_use_the_same_warm_windows():
     assert shell.status()["resident"] is False
 
 
-def test_paint_snapshot_drops_unknown_size_and_keeps_name():
-    assert paint_snapshot({"id": "x", "filename": "doc.pdf", "size": "nope"}) == {
+def test_paint_snapshot_drops_unknown_size_and_keeps_name(monkeypatch):
+    monkeypatch.setattr("backend.app.native_shell.local_download_dir", lambda: r"D:\Downloads")
+    assert paint_snapshot({
+        "id": "x",
+        "filename": "doc.pdf",
+        "size": "nope",
+        "download_dir": r"C:\evil",
+        "cookie": "secret",
+    }) == {
         "id": "x",
         "url": "",
         "filename": "doc.pdf",
@@ -106,7 +113,50 @@ def test_paint_snapshot_drops_unknown_size_and_keeps_name():
         "size": 0,
         "resource_kind": "file",
         "status": "pending",
+        "download_dir": r"D:\Downloads",
     }
+
+
+def test_progress_events_coalesce_and_task_events_drive_overlays():
+    from backend.app.native_shell import sync_native_shell_from_event
+
+    shell = NativeShellSupervisor()
+    shell.boot_resident()
+    first = shell.progress([{"id": "t1", "filename": "a.bin", "progress_percent": 10}])
+    second = shell.progress([{"id": "t1", "filename": "a.bin", "progress_percent": 80}])
+    waited = shell.wait_event(0, 0)
+    progress_events = [item for item in waited["events"] if item["kind"] == "progress"]
+    assert first["sequence"] < second["sequence"]
+    assert len(progress_events) == 1
+    assert progress_events[0]["tasks"][0]["progress_percent"] == 80
+
+    reset_native_shell()
+    boot_native_shell()
+    sync_native_shell_from_event(
+        {"type": "task_progress", "status": "downloading", "id": "t2", "filename": "b.bin"},
+        [{"id": "t2", "filename": "b.bin", "status": "downloading", "progress_percent": 25}],
+    )
+    sync_native_shell_from_event(
+        {
+            "type": "task_progress",
+            "status": "done",
+            "id": "t2",
+            "filename": "b.bin",
+            "output_path": r"D:\Downloads\b.bin",
+            "downloaded_bytes": 8,
+            "output_is_file": True,
+        },
+        [],
+    )
+    events = native_shell_supervisor().wait_event(0, 0)["events"]
+    kinds = [item["kind"] for item in events]
+    assert "progress" in kinds
+    assert "complete" in kinds
+    complete = next(item for item in events if item["kind"] == "complete")
+    assert complete["item"]["filename"] == "b.bin"
+    assert complete["item"]["output_path"] == r"D:\Downloads\b.bin"
+    assert "url" not in complete["item"]
+    reset_native_shell()
 
 
 def test_global_supervisor_boot_and_reset():

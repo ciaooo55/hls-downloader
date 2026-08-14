@@ -50,6 +50,7 @@ pub fn paint_snapshot(handoff: &Value) -> Value {
         .unwrap_or(0)
         .max(0);
     snapshot.insert("size".into(), Value::from(size));
+    snapshot.insert("download_dir".into(), json_string(&source, "download_dir"));
     Value::Object(snapshot)
 }
 

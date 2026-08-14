@@ -77,6 +77,31 @@ impl CoreClient {
         self.request("GET", "/health", None, 2.0)
     }
 
+    pub fn pause_task(&self, task_id: &str) -> Result<Value, String> {
+        self.request("POST", &format!("/tasks/{task_id}/pause"), None, 8.0)
+    }
+
+    pub fn open_explorer(&self, task_id: &str) -> Result<Value, String> {
+        self.request(
+            "POST",
+            "/open-explorer",
+            Some(json!({"task_id": task_id})),
+            8.0,
+        )
+    }
+
+    pub fn launch_file(&self, task_id: &str, confirm_executable: bool) -> Result<Value, String> {
+        self.request(
+            "POST",
+            "/launch-file",
+            Some(json!({
+                "task_id": task_id,
+                "confirm_executable": confirm_executable
+            })),
+            8.0,
+        )
+    }
+
     fn request(
         &self,
         method: &str,

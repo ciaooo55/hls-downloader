@@ -86,6 +86,15 @@ function apiHeaders(): Record<string, string> {
   }
 }
 
+async function nativeShellResident(): Promise<boolean> {
+  try {
+    const status = await localRequest('/desktop/native-shell/status')
+    return Boolean(status?.resident && status?.windows?.handoff)
+  } catch {
+    return false
+  }
+}
+
 async function localRequest(path: string, init: RequestInit = {}): Promise<any> {
   let response = await fetch(`${coreOrigin()}/api${path}`, {
     ...init,
@@ -261,18 +270,26 @@ async function createTauriDesktopSession(): Promise<() => void> {
     }
   }
   void poll()
-  // Warm the hidden confirmation WebView in the background. Command polling
-  // must start first; waiting here made the first click sit until WebView2 booted.
-  void ensureHandoffWindow().catch(() => {})
   let stopOverlayWindows = () => {}
-  void initDownloadOverlayWindows(WebviewWindow)
-    .then(stop => {
+  void (async () => {
+    let nativeReady = await nativeShellResident()
+    if (!nativeReady) {
+      await new Promise(resolve => window.setTimeout(resolve, 900))
+      nativeReady = await nativeShellResident()
+    }
+    if (nativeReady) {
+      return
+    }
+    // Fallback: native supervisor not resident, keep the existing WebView overlays.
+    void ensureHandoffWindow().catch(() => {})
+    try {
+      const stop = await initDownloadOverlayWindows(WebviewWindow)
       if (stopped) stop()
       else stopOverlayWindows = stop
-    })
-    .catch(() => {
+    } catch {
       // Progress/complete popups are optional; browser handoff must not wait.
-    })
+    }
+  })()
   return () => {
     stopped = true
     unlistenHostReady()

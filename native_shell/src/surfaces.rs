@@ -18,6 +18,7 @@ pub struct Snapshot {
     pub size: i64,
     pub resource_kind: String,
     pub status: String,
+    pub download_dir: String,
 }
 
 impl Snapshot {
@@ -32,6 +33,7 @@ impl Snapshot {
             size: painted["size"].as_i64().unwrap_or(0),
             resource_kind: painted["resource_kind"].as_str().unwrap_or("file").to_string(),
             status: painted["status"].as_str().unwrap_or("pending").to_string(),
+            download_dir: painted["download_dir"].as_str().unwrap_or("").to_string(),
         }
     }
 }
@@ -191,7 +193,7 @@ impl ResidentShell {
             return Err("桌面界面尚未就绪".into());
         }
         self.progress_tasks = tasks;
-        self.windows.progress.visible = true;
+        self.windows.progress.visible = !self.progress_tasks.is_empty();
         Ok(())
     }
 
@@ -335,5 +337,7 @@ mod tests {
         assert!(shell.windows.progress.visible);
         assert!(shell.windows.complete.visible);
         assert!(shell.windows.progress.created && shell.windows.complete.created);
+        shell.progress(vec![]).unwrap();
+        assert!(!shell.windows.progress.visible);
     }
 }

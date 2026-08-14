@@ -15,9 +15,9 @@ use windows_sys::Win32::Foundation::{
     COLORREF, ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, DrawTextW, EndPaint, FillRect, GetStockObject, SetBkMode, SetTextColor,
-    COLOR_WINDOW, DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE,
-    DT_WORDBREAK, HDC, PAINTSTRUCT, TRANSPARENT, SelectObject,
+    BeginPaint, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect, GetStockObject,
+    SetBkMode, SetTextColor, COLOR_WINDOW, DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX,
+    DT_SINGLELINE, DT_WORDBREAK, HDC, PAINTSTRUCT, TRANSPARENT, SelectObject,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::CreateMutexW;
@@ -40,7 +40,11 @@ pub const WM_SHELL_EVENT: u32 = WM_APP + 1;
 const WM_TRAY: u32 = WM_APP + 20;
 const ID_ACCEPT: usize = 1001;
 const ID_REJECT: usize = 1002;
+const ID_PROGRESS_PAUSE: usize = 1003;
+const ID_PROGRESS_HIDE: usize = 1004;
 const ID_COMPLETE_CLOSE: usize = 1005;
+const ID_COMPLETE_OPEN_FOLDER: usize = 1006;
+const ID_COMPLETE_OPEN_FILE: usize = 1007;
 const ID_TRAY_OPEN: usize = 2001;
 const ID_TRAY_EXIT: usize = 2002;
 
@@ -79,8 +83,8 @@ impl Win32Host {
                 instance,
                 class_handoff(),
                 "浏览器下载",
-                480,
-                240,
+                520,
+                268,
                 false,
                 true,
             )?;
@@ -88,8 +92,8 @@ impl Win32Host {
                 instance,
                 class_progress(),
                 "下载进度",
-                320,
-                96,
+                360,
+                128,
                 true,
                 false,
             )?;
@@ -97,8 +101,8 @@ impl Win32Host {
                 instance,
                 class_complete(),
                 "下载完成",
-                420,
-                168,
+                440,
+                188,
                 false,
                 true,
             )?;
@@ -120,10 +124,15 @@ impl Win32Host {
             if tray.is_null() {
                 return Err("failed to create tray message window".into());
             }
-            create_child_button(handoff, instance, ID_ACCEPT, "确认下载", 250, 170, 100, 28);
-            create_child_button(handoff, instance, ID_REJECT, "取消", 360, 170, 80, 28);
-            create_child_button(complete, instance, ID_COMPLETE_CLOSE, "关闭", 310, 120, 80, 28);
-            place_bottom_right(progress, 320, 96);
+            create_child_button(handoff, instance, ID_ACCEPT, "确认下载", 290, 196, 100, 28);
+            create_child_button(handoff, instance, ID_REJECT, "取消", 400, 196, 80, 28);
+            create_child_button(progress, instance, ID_PROGRESS_PAUSE, "暂停", 168, 88, 72, 26);
+            create_child_button(progress, instance, ID_PROGRESS_HIDE, "隐藏", 248, 88, 72, 26);
+            create_child_button(complete, instance, ID_COMPLETE_OPEN_FOLDER, "打开目录", 148, 140, 88, 28);
+            create_child_button(complete, instance, ID_COMPLETE_OPEN_FILE, "打开", 244, 140, 72, 28);
+            create_child_button(complete, instance, ID_COMPLETE_CLOSE, "关闭", 324, 140, 72, 28);
+            place_center(handoff, 520, 268);
+            place_bottom_right(progress, 360, 128);
             ShowWindow(handoff, SW_HIDE);
             ShowWindow(progress, SW_HIDE);
             ShowWindow(complete, SW_HIDE);
@@ -173,15 +182,22 @@ impl Win32Host {
                 match kind.as_str() {
                     "handoff" => {
                         Invalidate(self.hwnds.handoff);
+                        place_center(self.hwnds.handoff, 520, 268);
                         ShowWindow(self.hwnds.handoff, SW_SHOWNORMAL);
                         SetForegroundWindow(self.hwnds.handoff);
                     }
                     "progress" => {
                         Invalidate(self.hwnds.progress);
-                        ShowWindow(self.hwnds.progress, SW_SHOWNOACTIVATE);
+                        place_bottom_right(self.hwnds.progress, 360, 128);
+                        if self.shell.lock().map(|state| state.windows.progress.visible).unwrap_or(false) {
+                            ShowWindow(self.hwnds.progress, SW_SHOWNOACTIVATE);
+                        } else {
+                            ShowWindow(self.hwnds.progress, SW_HIDE);
+                        }
                     }
                     "complete" => {
                         Invalidate(self.hwnds.complete);
+                        place_center(self.hwnds.complete, 440, 188);
                         ShowWindow(self.hwnds.complete, SW_SHOWNORMAL);
                     }
                     "shutdown" => {
@@ -201,6 +217,12 @@ impl Win32Host {
             }
             if !shell.windows.handoff.visible {
                 ShowWindow(self.hwnds.handoff, SW_HIDE);
+            }
+            if !shell.windows.progress.visible {
+                ShowWindow(self.hwnds.progress, SW_HIDE);
+            }
+            if !shell.windows.complete.visible {
+                ShowWindow(self.hwnds.complete, SW_HIDE);
             }
         }
     }
@@ -327,6 +349,12 @@ unsafe fn create_child_button(parent: HWND, instance: windows_sys::Win32::Founda
     );
 }
 
+unsafe fn place_center(hwnd: HWND, width: i32, height: i32) {
+    let x = ((GetSystemMetrics(SM_CXSCREEN) - width) / 2).max(12);
+    let y = ((GetSystemMetrics(SM_CYSCREEN) - height) / 3).max(12);
+    SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, 0);
+}
+
 unsafe fn place_bottom_right(hwnd: HWND, width: i32, height: i32) {
     let x = (GetSystemMetrics(SM_CXSCREEN) - width - 16).max(12);
     let y = (GetSystemMetrics(SM_CYSCREEN) - height - 48).max(12);
@@ -416,8 +444,57 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
             0
         }
         WM_COMMAND => {
-            if ((wparam as usize) & 0xffff) == ID_COMPLETE_CLOSE {
-                ShowWindow(hwnd, SW_HIDE);
+            let id = (wparam as usize) & 0xffff;
+            if let Some(host) = host() {
+                let (task_id, core, hide) = {
+                    let mut shell = host.shell.lock().unwrap_or_else(|err| err.into_inner());
+                    let task_id = if hwnd == host.hwnds.progress {
+                        shell
+                            .progress_tasks
+                            .first()
+                            .and_then(|item| item.get("id"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string()
+                    } else {
+                        shell
+                            .complete_item
+                            .as_ref()
+                            .and_then(|item| item.get("id"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string()
+                    };
+                    let mut hide = false;
+                    if id == ID_PROGRESS_HIDE {
+                        shell.windows.progress.visible = false;
+                        hide = true;
+                    } else if id == ID_COMPLETE_CLOSE {
+                        shell.windows.complete.visible = false;
+                        hide = true;
+                    }
+                    let core = host.core.lock().unwrap_or_else(|err| err.into_inner()).clone();
+                    (task_id, core, hide)
+                };
+                if hide {
+                    ShowWindow(hwnd, SW_HIDE);
+                }
+                if let Some(core) = core {
+                    std::thread::spawn(move || {
+                        match id {
+                            ID_PROGRESS_PAUSE => {
+                                let _ = core.pause_task(&task_id);
+                            }
+                            ID_COMPLETE_OPEN_FOLDER => {
+                                let _ = core.open_explorer(&task_id);
+                            }
+                            ID_COMPLETE_OPEN_FILE => {
+                                let _ = core.launch_file(&task_id, false);
+                            }
+                            _ => {}
+                        }
+                    });
+                }
             }
             0
         }
@@ -493,16 +570,21 @@ unsafe fn paint_handoff(hwnd: HWND) {
     let snapshot = host()
         .and_then(|item| item.shell.lock().ok().and_then(|shell| shell.snapshot.clone()))
         .unwrap_or_default();
-    draw_line(hdc, 16, 16, 440, 24, &format!("文件：{}", snapshot.filename));
-    draw_line(hdc, 16, 48, 440, 40, &format!("链接：{}", snapshot.url));
+    draw_line(hdc, 16, 16, 480, 24, &format!("文件：{}", snapshot.filename));
     draw_line(
         hdc,
         16,
-        96,
-        440,
+        48,
+        480,
         24,
-        &format!("大小：{}", format_size(snapshot.size)),
+        &format!("大小：{} · {}", format_size(snapshot.size), kind_label(&snapshot.resource_kind)),
     );
+    if !snapshot.download_dir.is_empty() {
+        draw_line(hdc, 16, 76, 480, 24, &format!("保存到：{}", snapshot.download_dir));
+        draw_line(hdc, 16, 108, 480, 40, &format!("链接：{}", snapshot.url));
+    } else {
+        draw_line(hdc, 16, 76, 480, 40, &format!("链接：{}", snapshot.url));
+    }
     EndPaint(hwnd, &ps);
 }
 
@@ -515,28 +597,50 @@ unsafe fn paint_generic(hwnd: HWND) {
     if let Some(host) = host() {
         let shell = host.shell.lock().unwrap_or_else(|err| err.into_inner());
         if hwnd == host.hwnds.progress {
-            let label = shell
-                .progress_tasks
-                .first()
-                .and_then(|item| item.get("filename"))
+            let task = shell.progress_tasks.first().cloned().unwrap_or(Value::Null);
+            let label = task
+                .get("filename")
                 .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
                 .unwrap_or("正在下载");
-            draw_line(hdc, 16, 16, 280, 24, label);
-            let percent = shell
-                .progress_tasks
-                .first()
-                .and_then(|item| item.get("percent"))
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
-            draw_line(hdc, 16, 48, 280, 24, &format!("{percent}%"));
+            draw_line(hdc, 16, 12, 328, 22, label);
+            let percent = task
+                .get("progress_percent")
+                .and_then(Value::as_f64)
+                .or_else(|| task.get("percent").and_then(Value::as_f64))
+                .unwrap_or(0.0)
+                .clamp(0.0, 100.0);
+            let speed = task
+                .get("speed_bytes_per_sec")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            draw_line(
+                hdc,
+                16,
+                36,
+                328,
+                20,
+                &format!("{:.0}% · {}", percent, format_speed(speed)),
+            );
+            draw_progress_bar(hdc, 16, 62, 328, 14, percent);
         } else if hwnd == host.hwnds.complete {
-            let name = shell
-                .complete_item
-                .as_ref()
-                .and_then(|item| item.get("filename"))
+            let item = shell.complete_item.clone().unwrap_or(Value::Null);
+            let name = item
+                .get("filename")
                 .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
                 .unwrap_or("下载完成");
-            draw_line(hdc, 16, 16, 380, 24, &format!("已完成：{name}"));
+            let path = item
+                .get("output_path")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            draw_line(hdc, 16, 16, 400, 24, &format!("已完成：{name}"));
+            if !path.is_empty() {
+                draw_line(hdc, 16, 48, 400, 40, path);
+            }
+            if looks_executable(path) {
+                draw_line(hdc, 16, 96, 400, 24, "可执行文件请用「打开目录」核对后再运行");
+            }
         } else if hwnd == host.hwnds.main {
             draw_line(hdc, 16, 16, 680, 24, "任务列表将在 5.0.0-beta 接入同一套 API");
             draw_line(hdc, 16, 48, 680, 24, "关闭本窗口回到托盘，下载继续。");
@@ -560,6 +664,52 @@ unsafe fn draw_line(hdc: HDC, x: i32, y: i32, w: i32, h: i32, text: &str) {
         &mut rect,
         DT_LEFT | DT_NOPREFIX | DT_WORDBREAK | DT_END_ELLIPSIS | DT_SINGLELINE,
     );
+}
+
+unsafe fn draw_progress_bar(hdc: HDC, x: i32, y: i32, w: i32, h: i32, percent: f64) {
+    let mut track = RECT {
+        left: x,
+        top: y,
+        right: x + w,
+        bottom: y + h,
+    };
+    FillRect(hdc, &track, (COLOR_WINDOW + 1) as _);
+    let brush = CreateSolidBrush(0x00D47800);
+    if !brush.is_null() {
+        let filled = ((w as f64) * (percent / 100.0)).round() as i32;
+        track.right = x + filled.max(0).min(w);
+        FillRect(hdc, &track, brush);
+        DeleteObject(brush);
+    }
+}
+
+fn kind_label(kind: &str) -> &'static str {
+    match kind {
+        "hls" => "HLS",
+        "dash" => "DASH",
+        "torrent" => "BT",
+        "media" => "媒体",
+        _ => "文件",
+    }
+}
+
+fn looks_executable(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    [".bat", ".cmd", ".com", ".exe", ".js", ".msi", ".ps1", ".scr", ".vbs"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
+fn format_speed(speed: f64) -> String {
+    if speed <= 0.0 {
+        "0 B/s".into()
+    } else if speed < 1024.0 {
+        format!("{speed:.0} B/s")
+    } else if speed < 1024.0 * 1024.0 {
+        format!("{:.1} KB/s", speed / 1024.0)
+    } else {
+        format!("{:.1} MB/s", speed / (1024.0 * 1024.0))
+    }
 }
 
 fn format_size(size: i64) -> String {
