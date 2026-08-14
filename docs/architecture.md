@@ -18,7 +18,13 @@
 - Do **not** copy IDM capture DLLs, WFP/TDI, or process injection.
 - Do **not** rewrite HLS/BT out of Python before the shell is resident, small, and instant.
 
-5.0.0 is a major shell cut-over, not a new download engine. Full scope, IDM/ABDM takeaways, phases and acceptance numbers: `docs/v5.0.0-plan.md`.
+5.0.0 is a major shell cut-over, not a new download engine. Full scope, IDM/ABDM takeaways, phases and acceptance numbers: `docs/v5.0.0-plan.md`. Stack / engine / how bytes become the final file: `docs/engine-stack.md`.
+
+## File assembly
+
+- **HTTP:** one `payload.downloading`, `Range` + `seek`, then rename. Never `cat` part files. NTFS sparse preallocate; one `r+b` handle per worker across capped 206s.
+- **MPEG-TS HLS** (no init / discontinuity): FFmpeg `concatf:` local concat.
+- **fMP4 HLS / DASH:** local `ENDLIST` playlist + FFmpeg timeline. Do not byte-concat `init.mp4` + `.m4s`.
 
 ## UI architecture
 

@@ -660,6 +660,99 @@ def test_http_range_downloader_writes_one_sparse_file_and_validates_ranges(tmp_p
     asyncio.run(run())
 
 
+def test_http_range_preallocates_one_payload_file(tmp_path, monkeypatch):
+    body = b"0123456789abcdef" * 64
+    allocated: list[tuple[Path, int]] = []
+    original = http_file_module.preallocate_payload
+
+    def tracking_preallocate(path, size):
+        allocated.append((Path(path), int(size)))
+        original(path, size)
+
+    monkeypatch.setattr(http_file_module, "preallocate_payload", tracking_preallocate)
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
+    task = Task(id="http-prealloc", url="https://files.test/a.bin", task_type=TaskType.HTTP, concurrency=2)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        value = request.headers.get("range", "")
+        start_text, end_text = value.removeprefix("bytes=").split("-", 1)
+        start, end = int(start_text), int(end_text)
+        return httpx.Response(
+            206,
+            content=body[start : end + 1],
+            headers={"Content-Range": f"bytes {start}-{end}/{len(body)}"},
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_ranges(
+                client,
+                {},
+                tmp_path / "payload.downloading",
+                tmp_path / "resume.json",
+                {"total": len(body), "etag": '"v1"', "last_modified": ""},
+            )
+
+    asyncio.run(run())
+    assert allocated == [(tmp_path / "payload.downloading", len(body))]
+    assert (tmp_path / "payload.downloading").read_bytes() == body
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_http_range_keeps_one_payload_handle_across_capped_206(tmp_path, monkeypatch):
+    body = b"x" * (64 * 1024)
+    cap = 4096
+    ranges: list[str] = []
+    reopen = {"r+b": 0}
+    original_open = Path.open
+
+    def counting_open(self, mode="r", *args, **kwargs):
+        if self.name == "payload.downloading" and "r+b" in str(mode):
+            reopen["r+b"] += 1
+        return original_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
+    task = Task(
+        id="http-one-fd",
+        url="https://files.test/capped.bin",
+        task_type=TaskType.HTTP,
+        concurrency=1,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        value = request.headers.get("range", "")
+        ranges.append(value)
+        start_text, end_text = value.removeprefix("bytes=").split("-", 1)
+        start, end = int(start_text), int(end_text)
+        capped_end = min(end, start + cap - 1)
+        return httpx.Response(
+            206,
+            content=body[start : capped_end + 1],
+            headers={"Content-Range": f"bytes {start}-{capped_end}/{len(body)}"},
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_ranges(
+                client,
+                {},
+                tmp_path / "payload.downloading",
+                tmp_path / "resume.json",
+                {"total": len(body), "etag": '"v1"', "last_modified": ""},
+            )
+
+    asyncio.run(run())
+    assert (tmp_path / "payload.downloading").read_bytes() == body
+    assert len(ranges) >= 8
+    assert reopen["r+b"] < len(ranges)
+    assert reopen["r+b"] <= 6
+
+
 def test_http_range_downloader_uses_twelve_workers_by_default(tmp_path, monkeypatch):
     chunk_size = 1024 * 1024
     total = chunk_size * 13

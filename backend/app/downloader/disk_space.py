@@ -76,3 +76,57 @@ def estimate_paths_size(paths) -> int:
         except OSError:
             continue
     return total
+
+
+def preallocate_payload(path: Path, size: int) -> None:
+    """Create one Range payload with the final logical size.
+
+    HTTP workers seek and write into this file. They never concatenate part
+    files. On NTFS the file is marked sparse so a 4 GiB download does not
+    physically zero-fill 4 GiB at start (IDM-style). Other volumes fall back
+    to a normal truncate.
+    """
+    size = max(0, int(size))
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as stream:
+        if os.name == "nt":
+            _mark_sparse_windows(stream.fileno())
+        stream.truncate(size)
+
+
+def _mark_sparse_windows(fd: int) -> None:
+    try:
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+    except ImportError:
+        return
+    try:
+        handle = msvcrt.get_osfhandle(fd)
+        returned = wintypes.DWORD(0)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        FSCTL_SET_SPARSE = 0x000900C4
+        kernel32.DeviceIoControl.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            wintypes.LPVOID,
+        ]
+        kernel32.DeviceIoControl.restype = wintypes.BOOL
+        kernel32.DeviceIoControl(
+            handle,
+            FSCTL_SET_SPARSE,
+            None,
+            0,
+            None,
+            0,
+            ctypes.byref(returned),
+            None,
+        )
+    except OSError:
+        return

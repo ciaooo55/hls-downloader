@@ -27,7 +27,7 @@ from ..request_context import build_task_headers, replay_request_body
 from ..network_proxy import policy_httpx_client
 from ..utils import atomic_write_text, sanitize_filename
 from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
-from .disk_space import MIN_FREE_RESERVE, ensure_download_capacity, ensure_free_space
+from .disk_space import MIN_FREE_RESERVE, ensure_download_capacity, ensure_free_space, preallocate_payload
 from .errors import (
     MetadataProbeTimeout,
     SharedRetryWindow,
@@ -1686,8 +1686,7 @@ class HTTPDownloader(SeeklessEngine):
         if not part_path.exists() or part_path.stat().st_size != total:
             completed.clear()
             range_current = {index: start for index, (start, _end) in enumerate(chunks)}
-            with part_path.open("wb") as output:
-                output.truncate(total)
+            await asyncio.to_thread(preallocate_payload, part_path, total)
         self._written_intervals = {
             chunks[index][0]: current
             for index, current in range_current.items()
@@ -1887,78 +1886,82 @@ class HTTPDownloader(SeeklessEngine):
             strong_etag = _strong_etag(source.etag or metadata.get("etag", ""))
             validator = strong_etag
             validator = validator or str(source.last_modified or metadata.get("last_modified", "") or "")
-            for attempt in range(1, MAX_RETRIES + 1):
-                if self._is_canceled():
-                    raise asyncio.CancelledError
-                if not await retry_window.wait(lambda: self._is_canceled() or self._is_pausing()):
-                    return False
-                self._clear_rate_limit_notice()
-                url_generation = self._url_generation
-                try:
-                    while True:
-                        target_end = part_stop.get(part_key, end) if dynamic_stop else end
-                        request_start = start + received
-                        if request_start > target_end:
-                            break
-                        request_headers = {
-                            **headers,
-                            "Range": f"bytes={request_start}-{target_end}",
-                        }
-                        if validator:
-                            request_headers["If-Range"] = validator
-                        async with client.stream(
-                            "GET",
-                            source.final_url or self._download_url,
-                            headers=request_headers,
-                        ) as response:
-                            # 200 after a Range/If-Range request is a legitimate
-                            # capability or object-version change, but its body
-                            # starts at byte zero. Let the caller restart one
-                            # sequential transfer instead of corrupting offsets.
-                            if response.status_code == 200:
-                                raise _HTTPRangeUnsupported(
-                                    "服务器忽略了 Range 或远程文件版本已经变化"
+            # One handle per worker: seek+write is not atomic across tasks on a
+            # shared fd. Keep this file open across retries and CDN-capped 206
+            # loops instead of reopening on every response.
+            output_file = part_path.open("r+b", buffering=0)
+            try:
+                for attempt in range(1, MAX_RETRIES + 1):
+                    if self._is_canceled():
+                        raise asyncio.CancelledError
+                    if not await retry_window.wait(lambda: self._is_canceled() or self._is_pausing()):
+                        return False
+                    self._clear_rate_limit_notice()
+                    url_generation = self._url_generation
+                    try:
+                        while True:
+                            target_end = part_stop.get(part_key, end) if dynamic_stop else end
+                            request_start = start + received
+                            if request_start > target_end:
+                                break
+                            request_headers = {
+                                **headers,
+                                "Range": f"bytes={request_start}-{target_end}",
+                            }
+                            if validator:
+                                request_headers["If-Range"] = validator
+                            async with client.stream(
+                                "GET",
+                                source.final_url or self._download_url,
+                                headers=request_headers,
+                            ) as response:
+                                # 200 after a Range/If-Range request is a legitimate
+                                # capability or object-version change, but its body
+                                # starts at byte zero. Let the caller restart one
+                                # sequential transfer instead of corrupting offsets.
+                                if response.status_code == 200:
+                                    raise _HTTPRangeUnsupported(
+                                        "服务器忽略了 Range 或远程文件版本已经变化"
+                                    )
+                                response.raise_for_status()
+                                content_range = _parse_content_range(
+                                    response.headers.get("content-range", "")
                                 )
-                            response.raise_for_status()
-                            content_range = _parse_content_range(
-                                response.headers.get("content-range", "")
-                            )
-                            if response.status_code != 206 or content_range is None:
-                                raise _HTTPRangeUnsupported(
-                                    "Range 响应缺少有效 Content-Range"
-                                )
-                            response_start, response_end, response_total = content_range
-                            if response_start != request_start:
-                                raise _HTTPRangeValidationError(
-                                    f"Range 起点不匹配，期望 {request_start}，实际 {response_start}"
-                                )
-                            if response_total is not None and response_total != total:
-                                raise _HTTPRangeUnsupported(
-                                    f"远程文件长度已从 {total} 变化为 {response_total}"
-                                )
-                            response_etag = response.headers.get("etag", "")
-                            response_modified = response.headers.get("last-modified", "")
-                            if strong_etag and response_etag and _strong_etag(response_etag) != strong_etag:
-                                raise _HTTPRangeUnsupported("远程文件 ETag 已变化")
-                            if (
-                                not strong_etag
-                                and metadata.get("last_modified")
-                                and response_modified
-                                and response_modified != metadata["last_modified"]
-                            ):
-                                raise _HTTPRangeUnsupported("远程文件修改时间已变化")
-                            if _response_decodes_content(response):
-                                raise _HTTPRangeUnsupported(
-                                    "服务器对 Range 响应启用了内容压缩"
-                                )
+                                if response.status_code != 206 or content_range is None:
+                                    raise _HTTPRangeUnsupported(
+                                        "Range 响应缺少有效 Content-Range"
+                                    )
+                                response_start, response_end, response_total = content_range
+                                if response_start != request_start:
+                                    raise _HTTPRangeValidationError(
+                                        f"Range 起点不匹配，期望 {request_start}，实际 {response_start}"
+                                    )
+                                if response_total is not None and response_total != total:
+                                    raise _HTTPRangeUnsupported(
+                                        f"远程文件长度已从 {total} 变化为 {response_total}"
+                                    )
+                                response_etag = response.headers.get("etag", "")
+                                response_modified = response.headers.get("last-modified", "")
+                                if strong_etag and response_etag and _strong_etag(response_etag) != strong_etag:
+                                    raise _HTTPRangeUnsupported("远程文件 ETag 已变化")
+                                if (
+                                    not strong_etag
+                                    and metadata.get("last_modified")
+                                    and response_modified
+                                    and response_modified != metadata["last_modified"]
+                                ):
+                                    raise _HTTPRangeUnsupported("远程文件修改时间已变化")
+                                if _response_decodes_content(response):
+                                    raise _HTTPRangeUnsupported(
+                                        "服务器对 Range 响应启用了内容压缩"
+                                    )
 
-                            # Some CDNs cap each 206 response to a smaller range;
-                            # others return a wider suffix. Accept both as long
-                            # as the starting offset and object length are safe.
-                            allowed_end = min(response_end, target_end)
-                            expected_this_response = allowed_end - request_start + 1
-                            response_received = 0
-                            with part_path.open("r+b", buffering=0) as output_file:
+                                # Some CDNs cap each 206 response to a smaller range;
+                                # others return a wider suffix. Accept both as long
+                                # as the starting offset and object length are safe.
+                                allowed_end = min(response_end, target_end)
+                                expected_this_response = allowed_end - request_start + 1
+                                response_received = 0
                                 output_file.seek(request_start)
                                 pending = bytearray()
 
@@ -2012,82 +2015,84 @@ class HTTPDownloader(SeeklessEngine):
                                     flush_pending()
                                     raise
                                 flush_pending()
-                            if response_received <= 0:
-                                raise httpx.RemoteProtocolError(
-                                    "Range 响应未返回任何数据"
-                                )
-                            # If the body ended before the range declared in its
-                            # own Content-Range, preserve what arrived and retry
-                            # from the exact next byte.
-                            final_target_end = part_stop.get(part_key, end) if dynamic_stop else end
-                            expected_this_response = min(response_end, final_target_end) - request_start + 1
-                            if response_received < expected_this_response:
-                                raise httpx.RemoteProtocolError(
-                                    "Range 响应在声明的结束位置前中断"
-                                )
-                            # A server-capped response ends before our requested
-                            # target. Loop immediately from the next byte.
-                            continue
-                    expected = (part_stop.get(part_key, end) if dynamic_stop else end) - start + 1
-                    if received < expected:
-                        raise httpx.RemoteProtocolError(
-                            f"Range 长度不足，期望 {expected}，实际 {received}"
+                                if response_received <= 0:
+                                    raise httpx.RemoteProtocolError(
+                                        "Range 响应未返回任何数据"
+                                    )
+                                # If the body ended before the range declared in its
+                                # own Content-Range, preserve what arrived and retry
+                                # from the exact next byte.
+                                final_target_end = part_stop.get(part_key, end) if dynamic_stop else end
+                                expected_this_response = min(response_end, final_target_end) - request_start + 1
+                                if response_received < expected_this_response:
+                                    raise httpx.RemoteProtocolError(
+                                        "Range 响应在声明的结束位置前中断"
+                                    )
+                                # A server-capped response ends before our requested
+                                # target. Loop immediately from the next byte.
+                                continue
+                        expected = (part_stop.get(part_key, end) if dynamic_stop else end) - start + 1
+                        if received < expected:
+                            raise httpx.RemoteProtocolError(
+                                f"Range 长度不足，期望 {expected}，实际 {received}"
+                            )
+                        if received > expected:
+                            raise _HTTPRangeValidationError(
+                                f"Range 长度超过安全边界，期望 {expected}，实际 {received}"
+                            )
+                        if not playback_only:
+                            await finish_part(index, part_key, expected)
+                        return True
+                    except Exception as exc:
+                        last_error = exc
+                        if isinstance(exc, _HTTPRangeUnsupported):
+                            if self._has_other_sources(source, require_ranges=True):
+                                self._disable_source(source, str(exc))
+                                source = self._pick_source(require_ranges=True)
+                                strong_etag = _strong_etag(source.etag or metadata.get("etag", ""))
+                                validator = strong_etag or str(source.last_modified or metadata.get("last_modified", "") or "")
+                                continue
+                            break
+                        if isinstance(exc, _HTTPRangeValidationError):
+                            break
+                        status = int(
+                            getattr(getattr(exc, "response", None), "status_code", 0) or 0
                         )
-                    if received > expected:
-                        raise _HTTPRangeValidationError(
-                            f"Range 长度超过安全边界，期望 {expected}，实际 {received}"
-                        )
-                    if not playback_only:
-                        await finish_part(index, part_key, expected)
-                    return True
-                except Exception as exc:
-                    last_error = exc
-                    if isinstance(exc, _HTTPRangeUnsupported):
-                        if self._has_other_sources(source, require_ranges=True):
-                            self._disable_source(source, str(exc))
+                        if status in {401, 403, 404, 410} and self._has_other_sources(source):
+                            self._disable_source(source, f"HTTP {status}")
                             source = self._pick_source(require_ranges=True)
                             strong_etag = _strong_etag(source.etag or metadata.get("etag", ""))
                             validator = strong_etag or str(source.last_modified or metadata.get("last_modified", "") or "")
                             continue
-                        break
-                    if isinstance(exc, _HTTPRangeValidationError):
-                        break
-                    status = int(
-                        getattr(getattr(exc, "response", None), "status_code", 0) or 0
-                    )
-                    if status in {401, 403, 404, 410} and self._has_other_sources(source):
-                        self._disable_source(source, f"HTTP {status}")
-                        source = self._pick_source(require_ranges=True)
-                        strong_etag = _strong_etag(source.etag or metadata.get("etag", ""))
-                        validator = strong_etag or str(source.last_modified or metadata.get("last_modified", "") or "")
-                        continue
-                    if (
-                        status in {401, 403, 404, 410}
-                        and attempt < MAX_RETRIES
-                        and await self._refresh_download_url(
-                            client, headers, generation=url_generation
-                        )
-                    ):
-                        refreshed = next((item for item in self._sources if not item.disabled), None)
-                        if refreshed is not None:
-                            source = refreshed
-                            self._download_url = refreshed.final_url
-                        continue
-                    if not should_retry_download_error(exc):
-                        break
-                    if attempt < MAX_RETRIES:
-                        delay = retry_delay_seconds(exc, min(4, attempt))
-                        if should_share_retry_window(exc):
-                            remaining, extended = await retry_window.extend(delay)
-                            if extended:
-                                self._announce_rate_limit(remaining)
-                        else:
-                            await asyncio.sleep(delay)
-            if last_error is not None:
-                if not playback_only:
-                    self._claimed_chunks.discard(index)
-                raise last_error
-            return True
+                        if (
+                            status in {401, 403, 404, 410}
+                            and attempt < MAX_RETRIES
+                            and await self._refresh_download_url(
+                                client, headers, generation=url_generation
+                            )
+                        ):
+                            refreshed = next((item for item in self._sources if not item.disabled), None)
+                            if refreshed is not None:
+                                source = refreshed
+                                self._download_url = refreshed.final_url
+                            continue
+                        if not should_retry_download_error(exc):
+                            break
+                        if attempt < MAX_RETRIES:
+                            delay = retry_delay_seconds(exc, min(4, attempt))
+                            if should_share_retry_window(exc):
+                                remaining, extended = await retry_window.extend(delay)
+                                if extended:
+                                    self._announce_rate_limit(remaining)
+                            else:
+                                await asyncio.sleep(delay)
+                if last_error is not None:
+                    if not playback_only:
+                        self._claimed_chunks.discard(index)
+                    raise last_error
+                return True
+            finally:
+                output_file.close()
 
         async def fetch_playback_range(start: int, end: int) -> None:
             """Fetch only the bytes a local player needs without changing resume progress."""
