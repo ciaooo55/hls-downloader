@@ -8,16 +8,17 @@
 
 use crate::core_client::CoreClient;
 use crate::surfaces::{ResidentShell, Snapshot};
-use serde_json::Value;
+use crate::task_list::{FileCategory, StatusFilter};
+use serde_json::{json, Value};
 use std::ptr::{null, null_mut};
 use std::sync::{Arc, Mutex};
 use windows_sys::Win32::Foundation::{
-    COLORREF, ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+    GetLastError, COLORREF, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect, GetStockObject,
-    SetBkMode, SetTextColor, COLOR_WINDOW, DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX,
-    DT_SINGLELINE, DT_WORDBREAK, HDC, PAINTSTRUCT, TRANSPARENT, SelectObject,
+    SelectObject, SetBkMode, SetTextColor, COLOR_WINDOW, DEFAULT_GUI_FONT, DT_END_ELLIPSIS,
+    DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_WORDBREAK, HDC, PAINTSTRUCT, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::CreateMutexW;
@@ -26,14 +27,17 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetCursorPos, GetMessageW, GetSystemMetrics, LoadCursorW, LoadIconW, PostMessageW,
-    PostQuitMessage, RegisterClassW, SetForegroundWindow, SetWindowPos, ShowWindow,
-    TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
-    HWND_TOPMOST, IDC_ARROW, IDI_APPLICATION, MF_STRING, MSG, SM_CXSCREEN, SM_CYSCREEN,
-    SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_RIGHTBUTTON, WM_APP, WM_CLOSE, WM_COMMAND,
-    WM_DESTROY, WM_LBUTTONUP, WM_PAINT, WM_RBUTTONUP, WNDCLASSW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_OVERLAPPED,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, RegisterWindowMessageW,
+    EnableWindow, GetClientRect, GetCursorPos, GetDlgItem, GetMessageW, GetSystemMetrics,
+    GetWindowTextW, KillTimer, LoadCursorW, LoadIconW, MoveWindow, PostMessageW, PostQuitMessage,
+    RegisterClassW, RegisterWindowMessageW, SendMessageW, SetForegroundWindow, SetTimer,
+    SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
+    CS_VREDRAW, CW_USEDEFAULT, ES_AUTOHSCROLL, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW,
+    IDI_APPLICATION, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, MF_STRING, MSG, SM_CXSCREEN, SM_CYSCREEN,
+    SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_RIGHTBUTTON, WM_APP,
+    WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_PAINT, WM_RBUTTONUP, WM_SETFONT, WM_SIZE,
+    WM_TIMER, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
+    WS_EX_CLIENTEDGE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 pub const WM_SHELL_EVENT: u32 = WM_APP + 1;
@@ -47,6 +51,32 @@ const ID_COMPLETE_OPEN_FOLDER: usize = 1006;
 const ID_COMPLETE_OPEN_FILE: usize = 1007;
 const ID_TRAY_OPEN: usize = 2001;
 const ID_TRAY_EXIT: usize = 2002;
+const ID_FILTER_ALL: usize = 3101;
+const ID_FILTER_UNFINISHED: usize = 3102;
+const ID_FILTER_COMPLETED: usize = 3103;
+const ID_CAT_ALL: usize = 3110;
+const ID_CAT_VIDEO: usize = 3111;
+const ID_CAT_MUSIC: usize = 3112;
+const ID_CAT_ARCHIVE: usize = 3113;
+const ID_CAT_DOCUMENT: usize = 3114;
+const ID_CAT_PROGRAM: usize = 3115;
+const ID_CAT_GENERAL: usize = 3116;
+const ID_SEARCH: usize = 3120;
+const ID_LIST: usize = 3130;
+const ID_STATUS: usize = 3131;
+const ID_START: usize = 3140;
+const ID_PAUSE: usize = 3141;
+const ID_DELETE: usize = 3142;
+const ID_OPEN_FOLDER: usize = 3143;
+const ID_NEW_TASK: usize = 3144;
+const ID_SETTINGS: usize = 3145;
+const MAIN_REFRESH_TIMER: usize = 1;
+const EN_CHANGE: u32 = 0x0300;
+const LBN_SELCHANGE: u32 = 1;
+const LB_ADDSTRING: u32 = 0x0180;
+const LB_RESETCONTENT: u32 = 0x0184;
+const LB_SETCURSEL: u32 = 0x0186;
+const LB_GETCURSEL: u32 = 0x0188;
 
 #[derive(Clone, Copy)]
 pub struct Hwnds {
@@ -76,7 +106,7 @@ impl Win32Host {
             register_class(instance, class_handoff(), Some(handoff_proc))?;
             register_class(instance, class_progress(), Some(overlay_proc))?;
             register_class(instance, class_complete(), Some(overlay_proc))?;
-            register_class(instance, class_main(), Some(overlay_proc))?;
+            register_class(instance, class_main(), Some(main_proc))?;
             register_class(instance, class_tray(), Some(tray_proc))?;
 
             let handoff = create_overlay(
@@ -106,7 +136,8 @@ impl Win32Host {
                 false,
                 true,
             )?;
-            let main = create_overlay(instance, class_main(), "HLS Downloader", 720, 480, false, true)?;
+            let main = create_main_window(instance)?;
+            create_main_children(main, instance);
             let tray = CreateWindowExW(
                 0,
                 class_tray().as_ptr(),
@@ -126,11 +157,56 @@ impl Win32Host {
             }
             create_child_button(handoff, instance, ID_ACCEPT, "确认下载", 290, 196, 100, 28);
             create_child_button(handoff, instance, ID_REJECT, "取消", 400, 196, 80, 28);
-            create_child_button(progress, instance, ID_PROGRESS_PAUSE, "暂停", 168, 88, 72, 26);
-            create_child_button(progress, instance, ID_PROGRESS_HIDE, "隐藏", 248, 88, 72, 26);
-            create_child_button(complete, instance, ID_COMPLETE_OPEN_FOLDER, "打开目录", 148, 140, 88, 28);
-            create_child_button(complete, instance, ID_COMPLETE_OPEN_FILE, "打开", 244, 140, 72, 28);
-            create_child_button(complete, instance, ID_COMPLETE_CLOSE, "关闭", 324, 140, 72, 28);
+            create_child_button(
+                progress,
+                instance,
+                ID_PROGRESS_PAUSE,
+                "暂停",
+                168,
+                88,
+                72,
+                26,
+            );
+            create_child_button(
+                progress,
+                instance,
+                ID_PROGRESS_HIDE,
+                "隐藏",
+                248,
+                88,
+                72,
+                26,
+            );
+            create_child_button(
+                complete,
+                instance,
+                ID_COMPLETE_OPEN_FOLDER,
+                "打开目录",
+                148,
+                140,
+                88,
+                28,
+            );
+            create_child_button(
+                complete,
+                instance,
+                ID_COMPLETE_OPEN_FILE,
+                "打开",
+                244,
+                140,
+                72,
+                28,
+            );
+            create_child_button(
+                complete,
+                instance,
+                ID_COMPLETE_CLOSE,
+                "关闭",
+                324,
+                140,
+                72,
+                28,
+            );
             place_center(handoff, 520, 268);
             place_bottom_right(progress, 360, 128);
             ShowWindow(handoff, SW_HIDE);
@@ -189,16 +265,58 @@ impl Win32Host {
                     "progress" => {
                         Invalidate(self.hwnds.progress);
                         place_bottom_right(self.hwnds.progress, 360, 128);
-                        if self.shell.lock().map(|state| state.windows.progress.visible).unwrap_or(false) {
+                        if self
+                            .shell
+                            .lock()
+                            .map(|state| state.windows.progress.visible)
+                            .unwrap_or(false)
+                        {
                             ShowWindow(self.hwnds.progress, SW_SHOWNOACTIVATE);
                         } else {
                             ShowWindow(self.hwnds.progress, SW_HIDE);
+                        }
+                        if self
+                            .shell
+                            .lock()
+                            .map(|state| state.main_open)
+                            .unwrap_or(false)
+                        {
+                            refresh_main_list(self);
                         }
                     }
                     "complete" => {
                         Invalidate(self.hwnds.complete);
                         place_center(self.hwnds.complete, 440, 188);
                         ShowWindow(self.hwnds.complete, SW_SHOWNORMAL);
+                        if self
+                            .shell
+                            .lock()
+                            .map(|state| state.main_open)
+                            .unwrap_or(false)
+                        {
+                            refresh_main_list(self);
+                        }
+                    }
+                    "open_main" => {
+                        place_main(self.hwnds.main);
+                        ShowWindow(self.hwnds.main, SW_SHOWNORMAL);
+                        SetForegroundWindow(self.hwnds.main);
+                        SetTimer(self.hwnds.main, MAIN_REFRESH_TIMER, 1000, None);
+                        self.request_task_refresh();
+                    }
+                    "hide_main" => {
+                        KillTimer(self.hwnds.main, MAIN_REFRESH_TIMER);
+                        ShowWindow(self.hwnds.main, SW_HIDE);
+                    }
+                    "tasks" => {
+                        if self
+                            .shell
+                            .lock()
+                            .map(|state| state.main_open)
+                            .unwrap_or(false)
+                        {
+                            refresh_main_list(self);
+                        }
                     }
                     "shutdown" => {
                         remove_tray_icon(self);
@@ -210,11 +328,6 @@ impl Win32Host {
         }
         let shell = self.shell.lock().unwrap_or_else(|err| err.into_inner());
         unsafe {
-            if shell.main_open {
-                ShowWindow(self.hwnds.main, SW_SHOWNORMAL);
-            } else {
-                ShowWindow(self.hwnds.main, SW_HIDE);
-            }
             if !shell.windows.handoff.visible {
                 ShowWindow(self.hwnds.handoff, SW_HIDE);
             }
@@ -225,6 +338,30 @@ impl Win32Host {
                 ShowWindow(self.hwnds.complete, SW_HIDE);
             }
         }
+        let main_open = shell.main_open;
+        drop(shell);
+        unsafe {
+            if main_open {
+                ShowWindow(self.hwnds.main, SW_SHOWNORMAL);
+                refresh_main_list(self);
+            } else {
+                KillTimer(self.hwnds.main, MAIN_REFRESH_TIMER);
+                ShowWindow(self.hwnds.main, SW_HIDE);
+            }
+        }
+    }
+
+    pub fn request_task_refresh(&self) {
+        let Some(core) = self.core.lock().ok().and_then(|slot| slot.clone()) else {
+            return;
+        };
+        std::thread::spawn(move || {
+            if let Ok(tasks) = core.list_tasks() {
+                if let Some(host) = host() {
+                    host.enqueue(json!({"kind": "tasks", "tasks": tasks}));
+                }
+            }
+        });
     }
 }
 
@@ -332,12 +469,148 @@ unsafe fn create_overlay(
     Ok(hwnd)
 }
 
-unsafe fn create_child_button(parent: HWND, instance: windows_sys::Win32::Foundation::HINSTANCE, id: usize, label: &str, x: i32, y: i32, w: i32, h: i32) {
-    CreateWindowExW(
+unsafe fn create_main_window(
+    instance: windows_sys::Win32::Foundation::HINSTANCE,
+) -> Result<HWND, String> {
+    let class_name = class_main();
+    let style = WS_OVERLAPPED
+        | WS_CAPTION
+        | WS_SYSMENU
+        | WS_THICKFRAME
+        | WS_MINIMIZEBOX
+        | WS_MAXIMIZEBOX
+        | WS_CLIPCHILDREN;
+    let hwnd = CreateWindowExW(
+        WS_EX_APPWINDOW,
+        class_name.as_ptr(),
+        wide("HLS Downloader").as_ptr(),
+        style,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        860,
+        540,
+        null_mut(),
+        null_mut(),
+        instance,
+        null(),
+    );
+    std::mem::forget(class_name);
+    if hwnd.is_null() {
+        return Err("CreateWindowExW failed for main list".into());
+    }
+    place_main(hwnd);
+    Ok(hwnd)
+}
+
+unsafe fn create_main_children(parent: HWND, instance: windows_sys::Win32::Foundation::HINSTANCE) {
+    create_child_button(parent, instance, ID_FILTER_ALL, "全部", 12, 10, 64, 26);
+    create_child_button(
+        parent,
+        instance,
+        ID_FILTER_UNFINISHED,
+        "未完成",
+        80,
+        10,
+        72,
+        26,
+    );
+    create_child_button(
+        parent,
+        instance,
+        ID_FILTER_COMPLETED,
+        "已完成",
+        156,
+        10,
+        72,
+        26,
+    );
+    create_child(
+        parent,
+        instance,
+        "EDIT",
+        "",
+        ID_SEARCH,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL as u32,
         0,
-        wide("BUTTON").as_ptr(),
+        480,
+        10,
+        360,
+        26,
+    );
+    create_child_button(parent, instance, ID_CAT_ALL, "全部类型", 12, 42, 80, 24);
+    create_child_button(parent, instance, ID_CAT_VIDEO, "视频", 96, 42, 56, 24);
+    create_child_button(parent, instance, ID_CAT_MUSIC, "音乐", 156, 42, 56, 24);
+    create_child_button(parent, instance, ID_CAT_ARCHIVE, "压缩包", 216, 42, 64, 24);
+    create_child_button(parent, instance, ID_CAT_DOCUMENT, "文档", 284, 42, 56, 24);
+    create_child_button(parent, instance, ID_CAT_PROGRAM, "程序", 344, 42, 56, 24);
+    create_child_button(parent, instance, ID_CAT_GENERAL, "常规", 404, 42, 56, 24);
+    create_child(
+        parent,
+        instance,
+        "LISTBOX",
+        "",
+        ID_LIST,
+        WS_CHILD
+            | WS_VISIBLE
+            | WS_VSCROLL
+            | WS_TABSTOP
+            | (LBS_NOTIFY as u32)
+            | (LBS_NOINTEGRALHEIGHT as u32),
+        WS_EX_CLIENTEDGE,
+        12,
+        74,
+        820,
+        360,
+    );
+    create_child(
+        parent,
+        instance,
+        "STATIC",
+        "暂无任务 · 关闭窗口回到托盘",
+        ID_STATUS,
+        WS_CHILD | WS_VISIBLE,
+        0,
+        12,
+        444,
+        500,
+        22,
+    );
+    create_child_button(parent, instance, ID_START, "开始", 12, 470, 72, 28);
+    create_child_button(parent, instance, ID_PAUSE, "暂停", 90, 470, 72, 28);
+    create_child_button(parent, instance, ID_DELETE, "删除", 168, 470, 72, 28);
+    create_child_button(
+        parent,
+        instance,
+        ID_OPEN_FOLDER,
+        "打开目录",
+        246,
+        470,
+        88,
+        28,
+    );
+    create_child_button(parent, instance, ID_NEW_TASK, "新建", 680, 470, 72, 28);
+    create_child_button(parent, instance, ID_SETTINGS, "设置", 758, 470, 72, 28);
+    layout_main(parent);
+}
+
+unsafe fn create_child(
+    parent: HWND,
+    instance: windows_sys::Win32::Foundation::HINSTANCE,
+    class_name: &str,
+    label: &str,
+    id: usize,
+    style: u32,
+    ex: u32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> HWND {
+    let hwnd = CreateWindowExW(
+        ex,
+        wide(class_name).as_ptr(),
         wide(label).as_ptr(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+        style,
         x,
         y,
         w,
@@ -347,6 +620,221 @@ unsafe fn create_child_button(parent: HWND, instance: windows_sys::Win32::Founda
         instance,
         null(),
     );
+    if !hwnd.is_null() {
+        SendMessageW(
+            hwnd,
+            WM_SETFONT,
+            GetStockObject(DEFAULT_GUI_FONT) as WPARAM,
+            1,
+        );
+    }
+    hwnd
+}
+
+unsafe fn create_child_button(
+    parent: HWND,
+    instance: windows_sys::Win32::Foundation::HINSTANCE,
+    id: usize,
+    label: &str,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) {
+    create_child(
+        parent,
+        instance,
+        "BUTTON",
+        label,
+        id,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+        0,
+        x,
+        y,
+        w,
+        h,
+    );
+}
+
+unsafe fn place_main(hwnd: HWND) {
+    SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+}
+
+unsafe fn layout_main(hwnd: HWND) {
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    GetClientRect(hwnd, &mut rect);
+    let width = (rect.right - rect.left).max(420);
+    let height = (rect.bottom - rect.top).max(280);
+    let search = GetDlgItem(hwnd, ID_SEARCH as i32);
+    MoveWindow(search, 244, 10, (width - 256).max(120), 26, 1);
+    let list = GetDlgItem(hwnd, ID_LIST as i32);
+    MoveWindow(list, 12, 74, width - 24, (height - 120).max(80), 1);
+    let status = GetDlgItem(hwnd, ID_STATUS as i32);
+    MoveWindow(status, 12, height - 42, (width - 360).max(160), 22, 1);
+    let y = height - 40;
+    MoveWindow(GetDlgItem(hwnd, ID_START as i32), 12, y, 72, 28, 1);
+    MoveWindow(GetDlgItem(hwnd, ID_PAUSE as i32), 90, y, 72, 28, 1);
+    MoveWindow(GetDlgItem(hwnd, ID_DELETE as i32), 168, y, 72, 28, 1);
+    MoveWindow(GetDlgItem(hwnd, ID_OPEN_FOLDER as i32), 246, y, 88, 28, 1);
+    MoveWindow(
+        GetDlgItem(hwnd, ID_NEW_TASK as i32),
+        width - 164,
+        y,
+        72,
+        28,
+        1,
+    );
+    MoveWindow(
+        GetDlgItem(hwnd, ID_SETTINGS as i32),
+        width - 84,
+        y,
+        72,
+        28,
+        1,
+    );
+}
+
+unsafe fn refresh_main_list(host: &Win32Host) {
+    let hwnd = host.hwnds.main;
+    let list = GetDlgItem(hwnd, ID_LIST as i32);
+    let (lines, selected, summary, can_start, can_pause, can_open, status_filter, category) = {
+        let shell = host.shell.lock().unwrap_or_else(|err| err.into_inner());
+        let visible = shell.task_list.visible();
+        let lines: Vec<String> = visible.iter().map(|task| task.display_line()).collect();
+        let selected = shell.task_list.selected_index();
+        let summary = shell.task_list.summary();
+        let row = shell.task_list.selected();
+        let can_start = row
+            .and_then(crate::task_list::TaskRow::start_kind)
+            .is_some();
+        let can_pause = row.map(|task| task.has_action("pause")).unwrap_or(false);
+        let can_open = row
+            .map(|task| task.has_action("open") || task.has_action("launch"))
+            .unwrap_or(false);
+        (
+            lines,
+            selected,
+            summary,
+            can_start,
+            can_pause,
+            can_open,
+            shell.task_list.status_filter,
+            shell.task_list.category,
+        )
+    };
+    SendMessageW(list, LB_RESETCONTENT, 0, 0);
+    for line in &lines {
+        let text = wide(line);
+        SendMessageW(list, LB_ADDSTRING, 0, text.as_ptr() as LPARAM);
+    }
+    if selected >= 0 {
+        SendMessageW(list, LB_SETCURSEL, selected as WPARAM, 0);
+    }
+    SetWindowTextW(GetDlgItem(hwnd, ID_STATUS as i32), wide(&summary).as_ptr());
+    EnableWindow(GetDlgItem(hwnd, ID_START as i32), i32::from(can_start));
+    EnableWindow(GetDlgItem(hwnd, ID_PAUSE as i32), i32::from(can_pause));
+    EnableWindow(GetDlgItem(hwnd, ID_DELETE as i32), i32::from(selected >= 0));
+    EnableWindow(GetDlgItem(hwnd, ID_OPEN_FOLDER as i32), i32::from(can_open));
+    mark_filter(
+        hwnd,
+        ID_FILTER_ALL,
+        status_filter == StatusFilter::All,
+        "全部",
+    );
+    mark_filter(
+        hwnd,
+        ID_FILTER_UNFINISHED,
+        status_filter == StatusFilter::Unfinished,
+        "未完成",
+    );
+    mark_filter(
+        hwnd,
+        ID_FILTER_COMPLETED,
+        status_filter == StatusFilter::Completed,
+        "已完成",
+    );
+    mark_filter(hwnd, ID_CAT_ALL, category == FileCategory::All, "全部类型");
+    mark_filter(hwnd, ID_CAT_VIDEO, category == FileCategory::Video, "视频");
+    mark_filter(hwnd, ID_CAT_MUSIC, category == FileCategory::Music, "音乐");
+    mark_filter(
+        hwnd,
+        ID_CAT_ARCHIVE,
+        category == FileCategory::Archive,
+        "压缩包",
+    );
+    mark_filter(
+        hwnd,
+        ID_CAT_DOCUMENT,
+        category == FileCategory::Document,
+        "文档",
+    );
+    mark_filter(
+        hwnd,
+        ID_CAT_PROGRAM,
+        category == FileCategory::Program,
+        "程序",
+    );
+    mark_filter(
+        hwnd,
+        ID_CAT_GENERAL,
+        category == FileCategory::General,
+        "常规",
+    );
+}
+
+unsafe fn mark_filter(parent: HWND, id: usize, active: bool, label: &str) {
+    let text = if active {
+        format!("● {label}")
+    } else {
+        label.to_string()
+    };
+    SetWindowTextW(GetDlgItem(parent, id as i32), wide(&text).as_ptr());
+}
+
+unsafe fn search_text(parent: HWND) -> String {
+    let hwnd = GetDlgItem(parent, ID_SEARCH as i32);
+    let mut buffer = [0u16; 256];
+    let len = GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
+    if len <= 0 {
+        String::new()
+    } else {
+        String::from_utf16_lossy(&buffer[..len as usize])
+    }
+}
+
+fn run_selected_action(host: &Win32Host, action: &str) {
+    let (task_id, mapped) = {
+        let shell = host.shell.lock().unwrap_or_else(|err| err.into_inner());
+        let Some(task) = shell.task_list.selected() else {
+            return;
+        };
+        let mapped = match action {
+            "start" => task.start_kind().unwrap_or("start"),
+            other => other,
+        };
+        (task.id.clone(), mapped.to_string())
+    };
+    let Some(core) = host.core.lock().ok().and_then(|slot| slot.clone()) else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let _ = core.run_task_action(&task_id, &mapped);
+        if let Some(host) = host() {
+            if mapped == "delete" {
+                host.shell
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .task_list
+                    .remove(&task_id);
+            }
+            host.request_task_refresh();
+        }
+    });
 }
 
 unsafe fn place_center(hwnd: HWND, width: i32, height: i32) {
@@ -371,7 +859,11 @@ unsafe fn add_tray_icon(host: &Win32Host) {
     nid.uCallbackMessage = WM_TRAY;
     nid.hIcon = LoadIconW(null_mut(), IDI_APPLICATION);
     let tip = wide("HLS Downloader");
-    for (index, ch) in tip.iter().take(nid.szTip.len().saturating_sub(1)).enumerate() {
+    for (index, ch) in tip
+        .iter()
+        .take(nid.szTip.len().saturating_sub(1))
+        .enumerate()
+    {
         nid.szTip[index] = *ch;
     }
     if Shell_NotifyIconW(NIM_ADD, &nid) != 0 {
@@ -393,7 +885,12 @@ unsafe fn Invalidate(hwnd: HWND) {
     windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, null(), 1);
 }
 
-unsafe extern "system" fn handoff_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn handoff_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match msg {
         WM_PAINT => {
             paint_handoff(hwnd);
@@ -404,13 +901,21 @@ unsafe extern "system" fn handoff_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
             if let Some(host) = host() {
                 let (handoff_id, core) = {
                     let mut shell = host.shell.lock().unwrap_or_else(|err| err.into_inner());
-                    let handoff_id = shell.snapshot.as_ref().map(|item| item.id.clone()).unwrap_or_default();
+                    let handoff_id = shell
+                        .snapshot
+                        .as_ref()
+                        .map(|item| item.id.clone())
+                        .unwrap_or_default();
                     if id == ID_ACCEPT {
                         shell.accept();
                     } else if id == ID_REJECT {
                         shell.reject();
                     }
-                    let core = host.core.lock().unwrap_or_else(|err| err.into_inner()).clone();
+                    let core = host
+                        .core
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .clone();
                     (handoff_id, core)
                 };
                 ShowWindow(hwnd, SW_HIDE);
@@ -429,7 +934,10 @@ unsafe extern "system" fn handoff_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
         WM_CLOSE => {
             ShowWindow(hwnd, SW_HIDE);
             if let Some(host) = host() {
-                host.shell.lock().unwrap_or_else(|err| err.into_inner()).hide_handoff();
+                host.shell
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .hide_handoff();
             }
             0
         }
@@ -437,7 +945,155 @@ unsafe extern "system" fn handoff_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
     }
 }
 
-unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn main_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_SIZE => {
+            layout_main(hwnd);
+            0
+        }
+        WM_TIMER => {
+            if wparam == MAIN_REFRESH_TIMER {
+                if let Some(host) = host() {
+                    host.request_task_refresh();
+                }
+            }
+            0
+        }
+        WM_COMMAND => {
+            let id = (wparam as usize) & 0xffff;
+            let code = ((wparam as u32) >> 16) & 0xffff;
+            if let Some(host) = host() {
+                if code == EN_CHANGE && id == ID_SEARCH {
+                    let query = search_text(hwnd);
+                    host.shell
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .set_query(query);
+                    refresh_main_list(host);
+                    return 0;
+                }
+                if code == LBN_SELCHANGE && id == ID_LIST {
+                    let list = GetDlgItem(hwnd, ID_LIST as i32);
+                    let index = SendMessageW(list, LB_GETCURSEL, 0, 0) as i32;
+                    host.shell
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .task_list
+                        .select_visible_index(index);
+                    refresh_main_list(host);
+                    return 0;
+                }
+                if code == 0 || code == 1 {
+                    match id {
+                        ID_FILTER_ALL => host
+                            .shell
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .set_status_filter(StatusFilter::All),
+                        ID_FILTER_UNFINISHED => host
+                            .shell
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .set_status_filter(StatusFilter::Unfinished),
+                        ID_FILTER_COMPLETED => host
+                            .shell
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .set_status_filter(StatusFilter::Completed),
+                        ID_CAT_ALL => host
+                            .shell
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .set_category(FileCategory::All),
+                        ID_CAT_VIDEO => host
+                            .shell
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .set_category(FileCategory::Video),
+                        ID_CAT_MUSIC => host
+                            .shell
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .set_category(FileCategory::Music),
+                        ID_CAT_ARCHIVE => host
+                            .shell
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .set_category(FileCategory::Archive),
+                        ID_CAT_DOCUMENT => host
+                            .shell
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .set_category(FileCategory::Document),
+                        ID_CAT_PROGRAM => host
+                            .shell
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .set_category(FileCategory::Program),
+                        ID_CAT_GENERAL => host
+                            .shell
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .set_category(FileCategory::General),
+                        ID_START => {
+                            run_selected_action(host, "start");
+                            return 0;
+                        }
+                        ID_PAUSE => {
+                            run_selected_action(host, "pause");
+                            return 0;
+                        }
+                        ID_DELETE => {
+                            run_selected_action(host, "delete");
+                            return 0;
+                        }
+                        ID_OPEN_FOLDER => {
+                            run_selected_action(host, "open");
+                            return 0;
+                        }
+                        ID_NEW_TASK | ID_SETTINGS => {
+                            if let Some(core) = host.core.lock().ok().and_then(|slot| slot.clone())
+                            {
+                                std::thread::spawn(move || {
+                                    let _ = core.open_settings();
+                                });
+                            }
+                            return 0;
+                        }
+                        _ => return DefWindowProcW(hwnd, msg, wparam, lparam),
+                    }
+                    refresh_main_list(host);
+                }
+            }
+            0
+        }
+        WM_CLOSE => {
+            ShowWindow(hwnd, SW_HIDE);
+            KillTimer(hwnd, MAIN_REFRESH_TIMER);
+            if let Some(host) = host() {
+                host.shell
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .hide_main();
+            }
+            0
+        }
+        WM_DESTROY => 0,
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+unsafe extern "system" fn overlay_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match msg {
         WM_PAINT => {
             paint_generic(hwnd);
@@ -473,26 +1129,28 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
                         shell.windows.complete.visible = false;
                         hide = true;
                     }
-                    let core = host.core.lock().unwrap_or_else(|err| err.into_inner()).clone();
+                    let core = host
+                        .core
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .clone();
                     (task_id, core, hide)
                 };
                 if hide {
                     ShowWindow(hwnd, SW_HIDE);
                 }
                 if let Some(core) = core {
-                    std::thread::spawn(move || {
-                        match id {
-                            ID_PROGRESS_PAUSE => {
-                                let _ = core.pause_task(&task_id);
-                            }
-                            ID_COMPLETE_OPEN_FOLDER => {
-                                let _ = core.open_explorer(&task_id);
-                            }
-                            ID_COMPLETE_OPEN_FILE => {
-                                let _ = core.launch_file(&task_id, false);
-                            }
-                            _ => {}
+                    std::thread::spawn(move || match id {
+                        ID_PROGRESS_PAUSE => {
+                            let _ = core.pause_task(&task_id);
                         }
+                        ID_COMPLETE_OPEN_FOLDER => {
+                            let _ = core.open_explorer(&task_id);
+                        }
+                        ID_COMPLETE_OPEN_FILE => {
+                            let _ = core.launch_file(&task_id, false);
+                        }
+                        _ => {}
                     });
                 }
             }
@@ -517,7 +1175,12 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
     }
 }
 
-unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn tray_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match msg {
         WM_SHELL_EVENT => {
             if let Some(host) = host() {
@@ -535,11 +1198,21 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
             let id = (wparam as usize) & 0xffff;
             if let Some(host) = host() {
                 if id == ID_TRAY_OPEN {
-                    host.shell.lock().unwrap_or_else(|err| err.into_inner()).open_main().ok();
+                    host.shell
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .open_main()
+                        .ok();
+                    place_main(host.hwnds.main);
                     ShowWindow(host.hwnds.main, SW_SHOWNORMAL);
                     SetForegroundWindow(host.hwnds.main);
+                    SetTimer(host.hwnds.main, MAIN_REFRESH_TIMER, 1000, None);
+                    host.request_task_refresh();
                 } else if id == ID_TRAY_EXIT {
-                    host.shell.lock().unwrap_or_else(|err| err.into_inner()).shutdown();
+                    host.shell
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .shutdown();
                     remove_tray_icon(host);
                     PostQuitMessage(0);
                 }
@@ -568,19 +1241,42 @@ unsafe fn paint_handoff(hwnd: HWND) {
     SetTextColor(hdc, 0x001A1A1A);
     SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
     let snapshot = host()
-        .and_then(|item| item.shell.lock().ok().and_then(|shell| shell.snapshot.clone()))
+        .and_then(|item| {
+            item.shell
+                .lock()
+                .ok()
+                .and_then(|shell| shell.snapshot.clone())
+        })
         .unwrap_or_default();
-    draw_line(hdc, 16, 16, 480, 24, &format!("文件：{}", snapshot.filename));
+    draw_line(
+        hdc,
+        16,
+        16,
+        480,
+        24,
+        &format!("文件：{}", snapshot.filename),
+    );
     draw_line(
         hdc,
         16,
         48,
         480,
         24,
-        &format!("大小：{} · {}", format_size(snapshot.size), kind_label(&snapshot.resource_kind)),
+        &format!(
+            "大小：{} · {}",
+            format_size(snapshot.size),
+            kind_label(&snapshot.resource_kind)
+        ),
     );
     if !snapshot.download_dir.is_empty() {
-        draw_line(hdc, 16, 76, 480, 24, &format!("保存到：{}", snapshot.download_dir));
+        draw_line(
+            hdc,
+            16,
+            76,
+            480,
+            24,
+            &format!("保存到：{}", snapshot.download_dir),
+        );
         draw_line(hdc, 16, 108, 480, 40, &format!("链接：{}", snapshot.url));
     } else {
         draw_line(hdc, 16, 76, 480, 40, &format!("链接：{}", snapshot.url));
@@ -639,11 +1335,15 @@ unsafe fn paint_generic(hwnd: HWND) {
                 draw_line(hdc, 16, 48, 400, 40, path);
             }
             if looks_executable(path) {
-                draw_line(hdc, 16, 96, 400, 24, "可执行文件请用「打开目录」核对后再运行");
+                draw_line(
+                    hdc,
+                    16,
+                    96,
+                    400,
+                    24,
+                    "可执行文件请用「打开目录」核对后再运行",
+                );
             }
-        } else if hwnd == host.hwnds.main {
-            draw_line(hdc, 16, 16, 680, 24, "任务列表将在 5.0.0-beta 接入同一套 API");
-            draw_line(hdc, 16, 48, 680, 24, "关闭本窗口回到托盘，下载继续。");
         }
     }
     EndPaint(hwnd, &ps);
@@ -695,9 +1395,11 @@ fn kind_label(kind: &str) -> &'static str {
 
 fn looks_executable(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
-    [".bat", ".cmd", ".com", ".exe", ".js", ".msi", ".ps1", ".scr", ".vbs"]
-        .iter()
-        .any(|ext| lower.ends_with(ext))
+    [
+        ".bat", ".cmd", ".com", ".exe", ".js", ".msi", ".ps1", ".scr", ".vbs",
+    ]
+    .iter()
+    .any(|ext| lower.ends_with(ext))
 }
 
 fn format_speed(speed: f64) -> String {

@@ -6,7 +6,7 @@
 
 | | IDM | AB Download Manager | HLS Downloader |
 | --- | --- | --- | --- |
-| 壳 | 很小的 C++ 原生窗 | Kotlin / Compose 原生窗 | 5.0：Rust Win32 监督进程 + 预创建确认/进度/完成；主列表仍是 Tauri/WebView |
+| 壳 | 很小的 C++ 原生窗 | Kotlin / Compose 原生窗 | 5.0：Rust Win32 监督进程 + 预创建确认/进度/完成 + 原生任务列表；设置/新建仍可打开 Tauri |
 | 下载核心 | C++ HTTP/FTP | JVM + OkHttp | **Python 3.12 + httpx + FastAPI** |
 | 媒体 | 几乎不管 HLS/DASH 时间轴 | 窄的 m3u8 扫描 | HLS / LL-HLS / 非 DRM DASH + 本地清单 + FFmpeg |
 | BT | 无 | 有限/无 | libtorrent |
@@ -88,7 +88,7 @@ HTTP 落盘模型已经对齐 IDM 那一类：一个 `payload.downloading`、Ran
 
 | 还在 | 为什么还在 |
 | --- | --- |
-| 主任务列表仍是 Tauri/WebView | 壳的下一刀，不是下载引擎 |
+| 设置 / 新建 / 播放器仍是 Tauri | 5.0.6 先把任务列表做成原生窗；设置页和播放器后置 |
 | HLS/DASH 收尾仍走 FFmpeg，`+faststart` 会再写一遍 MP4 | 本地点播/Range 播放需要 moov 在文件头；MPEG-TS 也要转成播放器常用的 MP4。fMP4 不能字节拼接 |
 | Python + FFmpeg + libtorrent 的体积 | 不 C++ 重写核心就到不了 IDM 那档内存 |
 | FTP/SFTP 仍是单连接追加 | 本来就不是 HTTP Range 那套；传输已经在独立线程里写盘 |
@@ -96,4 +96,4 @@ HTTP 落盘模型已经对齐 IDM 那一类：一个 `payload.downloading`、Ran
 | 多连接 Range 崩溃窗口仍是 256 KiB | 为了少 syscall，有意保留。单连接已经随到随写 |
 | 浏览器 POST 重放不能 Range 续传 | 只下一遍，避免表单/API 副作用；5.0.5 只把写盘改成和无 Range GET 一样随到随写 |
 
-下一刀若还做产品，是**原生任务列表**，不是再抠 HTTP 拼接。
+5.0.6 已经把主任务列表做成原生窗。下一刀若还做产品，是设置/播放器原生化，或 FFmpeg `+faststart` 收尾，不是再抠 HTTP 拼接。

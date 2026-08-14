@@ -1,8 +1,8 @@
 [package]
 name = "hls-native-shell"
-version = "5.0.5"
+version = "5.0.6"
 edition = "2021"
-description = "Resident native supervisor: tray + pre-created confirm/progress/complete windows"
+description = "Resident native supervisor: tray + pre-created confirm/progress/complete + task list"
 publish = false
 
 [dependencies]

@@ -6,7 +6,7 @@ param(
     [switch]$SkipSmoke,
     [switch]$UseSystemFfmpeg,
     [switch]$IncludeExtensionAssets,
-    [string]$Version = "5.0.5"
+    [string]$Version = "5.0.6"
 )
 
 $ErrorActionPreference = "Stop"

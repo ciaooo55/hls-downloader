@@ -610,12 +610,47 @@ fn import_torrent_path(config: &LocalConfig, path: &str) {
     }
 }
 
+fn post_core_ok(config: &LocalConfig, path: &str) -> bool {
+    if config.token.is_empty() || config.token.contains(['\r', '\n']) {
+        return false;
+    }
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", config.port)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(400)));
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Token: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        config.port, config.token
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+    response.starts_with("HTTP/1.1 200")
+}
+
 fn show_main(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+fn show_task_list(app: &tauri::AppHandle) {
+    let runtime = app.state::<Arc<CoreRuntime>>();
+    let config = runtime_config(runtime.inner());
+    if post_core_ok(&config, "/api/desktop/native-shell/main/open") {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.hide();
+        }
+        return;
+    }
+    show_main(app);
 }
 
 fn background_launch(args: &[String]) -> bool {
@@ -722,7 +757,7 @@ fn main() {
                 import_torrent_path(&config, arg);
             }
             if !background_launch(&args) {
-                show_main(app);
+                show_task_list(app);
             }
         }));
     }
@@ -763,7 +798,7 @@ fn main() {
                 tray = tray.icon(icon.clone());
             }
             tray.on_menu_event(|app, event| match event.id.as_ref() {
-                "open" => show_main(app),
+                "open" => show_task_list(app),
                 "quit" => app.exit(0),
                 _ => {}
             })
@@ -774,13 +809,13 @@ fn main() {
                     ..
                 } = event
                 {
-                    show_main(tray.app_handle());
+                    show_task_list(tray.app_handle());
                 }
             })
             .build(app)?;
             watch_clipboard(app.handle().clone());
             if !background {
-                show_main(app.handle());
+                show_task_list(app.handle());
             }
             Ok(())
         })

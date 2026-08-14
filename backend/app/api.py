@@ -807,6 +807,15 @@ async def hide_native_shell_main(x_token: str = Header(default="")):
     return native_shell_supervisor().hide_main()
 
 
+@router.post("/desktop/native-shell/settings")
+async def open_native_shell_settings(x_token: str = Header(default="")):
+    """Show the existing desktop window for new-task / settings / logs."""
+    _check_token(x_token)
+    from .desktop_runtime import activate_window
+
+    return {"ok": activate_window()}
+
+
 @router.post("/desktop/native-shell/ipc/start")
 async def start_resident_native_shell_ipc(x_token: str = Header(default="")):
     _check_token(x_token)

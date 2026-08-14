@@ -32,6 +32,23 @@ def test_resident_boot_keeps_main_window_closed_and_overlays_warm():
     assert shell.status()["main_open"] is False
 
 
+def test_open_main_emits_event_without_quitting_tray():
+    shell = NativeShellSupervisor()
+    shell.boot_resident()
+    opened = shell.open_main()
+    assert opened["main_open"] is True
+    assert opened["resident"] is True
+    waited = shell.wait_event(0, 0)
+    kinds = [item["kind"] for item in waited["events"]]
+    assert "open_main" in kinds
+    hidden = shell.hide_main()
+    assert hidden["main_open"] is False
+    assert hidden["resident"] is True
+    waited = shell.wait_event(0, 0)
+    kinds = [item["kind"] for item in waited["events"]]
+    assert "hide_main" in kinds
+
+
 def test_offer_before_resident_boot_fails_fast():
     shell = NativeShellSupervisor()
     with pytest.raises(RuntimeError, match="尚未就绪"):

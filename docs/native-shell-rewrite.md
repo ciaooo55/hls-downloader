@@ -69,7 +69,7 @@ no DRM bypass, no IDM DLL / WFP / process injection.
    resident, presenter reports ready without Tauri, loopback IPC tests.
 2. **Windows supervisor:** Rust tray + pre-created confirm/progress/complete.
    Extension Native Host talks to the supervisor pipe.
-3. **Task list:** native main window still talking to the same `/api` as today.
+3. **Task list (5.0.6):** native main window talks to the same `/api` as today (`GET /tasks`, start/pause/resume/delete, open folder). Close hides to tray.
 4. **Cut over:** installer launches the supervisor instead of Tauri; Tauri
    remains until every window has a native twin.
 5. **Optional later:** idle-stop the Python core when the queue is empty.

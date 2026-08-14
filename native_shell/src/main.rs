@@ -126,6 +126,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let stdin_shell = Arc::clone(&shell);
     let stdin_stop = Arc::clone(&stop);
     let stdin_status = status_path.clone();
+    let stdin_client = client.clone();
     thread::spawn(move || {
         for line in io::stdin().lock().lines().map_while(Result::ok) {
             if line.trim().is_empty() {
@@ -147,6 +148,15 @@ fn run(args: &[String]) -> Result<(), String> {
                         stdin_stop.store(true, Ordering::SeqCst);
                     }
                     _ => {}
+                }
+            }
+            if op == "open_main" {
+                if let Some(core) = &stdin_client {
+                    if let Ok(tasks) = core.list_tasks() {
+                        if let Ok(mut state) = stdin_shell.lock() {
+                            state.replace_tasks(tasks);
+                        }
+                    }
                 }
             }
             write_status(stdin_status.as_deref(), &stdin_shell);
@@ -207,7 +217,10 @@ fn poll_core(
         }
         match client.wait_events(after, 4.0) {
             Ok(payload) => {
-                let sequence = payload.get("sequence").and_then(Value::as_u64).unwrap_or(after);
+                let sequence = payload
+                    .get("sequence")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(after);
                 let events = payload
                     .get("events")
                     .and_then(Value::as_array)
@@ -224,6 +237,17 @@ fn poll_core(
                     }
                     if let Ok(mut state) = shell.lock() {
                         let _ = state.apply_event(&event);
+                    }
+                }
+                let refresh = shell
+                    .lock()
+                    .map(|state| state.main_open && state.task_list.needs_refresh)
+                    .unwrap_or(false);
+                if refresh {
+                    if let Ok(tasks) = client.list_tasks() {
+                        if let Ok(mut state) = shell.lock() {
+                            state.replace_tasks(tasks);
+                        }
                     }
                 }
                 after = after.max(sequence);
@@ -284,7 +308,11 @@ fn default_token() -> String {
 fn read_token_from_config() -> Option<String> {
     let mut candidates = Vec::new();
     if let Ok(local) = env::var("LOCALAPPDATA") {
-        candidates.push(PathBuf::from(local).join("HLS Downloader").join("config.json"));
+        candidates.push(
+            PathBuf::from(local)
+                .join("HLS Downloader")
+                .join("config.json"),
+        );
     }
     candidates.push(PathBuf::from("config.json"));
     if let Ok(exe) = env::current_exe() {

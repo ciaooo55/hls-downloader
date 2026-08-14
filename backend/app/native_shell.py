@@ -152,12 +152,20 @@ class NativeShellSupervisor:
             if not self.resident:
                 raise RuntimeError("桌面界面尚未就绪")
             self.main_open = True
+            self._sequence += 1
+            event = self._event("open_main")
+            self._events.append(event)
+            self._lock.notify_all()
             return self.status()
 
     def hide_main(self) -> dict[str, Any]:
         """Close the task list without quitting. Tray and overlays stay."""
         with self._lock:
             self.main_open = False
+            self._sequence += 1
+            event = self._event("hide_main")
+            self._events.append(event)
+            self._lock.notify_all()
             return self.status()
 
     def shutdown(self) -> dict[str, Any]:

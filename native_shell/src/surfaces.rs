@@ -3,7 +3,8 @@
 //! Windows are created once at boot, then shown and hidden. An offer never
 //! creates a window and never fetches the handoff again.
 
-use crate::protocol::{PROTOCOL_NAME, PROTOCOL_VERSION, paint_snapshot};
+use crate::protocol::{paint_snapshot, PROTOCOL_NAME, PROTOCOL_VERSION};
+use crate::task_list::{FileCategory, StatusFilter, TaskList, TaskRow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Instant;
@@ -31,7 +32,10 @@ impl Snapshot {
             title: painted["title"].as_str().unwrap_or("").to_string(),
             mime_type: painted["mime_type"].as_str().unwrap_or("").to_string(),
             size: painted["size"].as_i64().unwrap_or(0),
-            resource_kind: painted["resource_kind"].as_str().unwrap_or("file").to_string(),
+            resource_kind: painted["resource_kind"]
+                .as_str()
+                .unwrap_or("file")
+                .to_string(),
             status: painted["status"].as_str().unwrap_or("pending").to_string(),
             download_dir: painted["download_dir"].as_str().unwrap_or("").to_string(),
         }
@@ -68,6 +72,7 @@ pub struct ResidentShell {
     pub snapshot: Option<Snapshot>,
     pub progress_tasks: Vec<Value>,
     pub complete_item: Option<Value>,
+    pub task_list: TaskList,
     pub last_show_ms: f64,
     pub created_at_boot: bool,
 }
@@ -115,6 +120,7 @@ impl Default for ResidentShell {
             snapshot: None,
             progress_tasks: Vec::new(),
             complete_item: None,
+            task_list: TaskList::default(),
             last_show_ms: 0.0,
             created_at_boot: false,
         }
@@ -212,12 +218,37 @@ impl ResidentShell {
         }
         self.main_open = true;
         self.windows.main.visible = true;
+        self.task_list.needs_refresh = true;
         Ok(())
     }
 
     pub fn hide_main(&mut self) {
         self.main_open = false;
         self.windows.main.visible = false;
+    }
+
+    pub fn replace_tasks(&mut self, items: Vec<Value>) {
+        self.task_list.replace(items);
+    }
+
+    pub fn visible_tasks(&self) -> Vec<&TaskRow> {
+        self.task_list.visible()
+    }
+
+    pub fn selected_task(&self) -> Option<&TaskRow> {
+        self.task_list.selected()
+    }
+
+    pub fn set_status_filter(&mut self, filter: StatusFilter) {
+        self.task_list.set_status_filter(filter);
+    }
+
+    pub fn set_category(&mut self, category: FileCategory) {
+        self.task_list.set_category(category);
+    }
+
+    pub fn set_query(&mut self, query: impl Into<String>) {
+        self.task_list.set_query(query);
     }
 
     pub fn shutdown(&mut self) {
@@ -235,7 +266,10 @@ impl ResidentShell {
         let kind = event.get("kind").and_then(Value::as_str).unwrap_or("");
         match kind {
             "handoff" => {
-                let snapshot = event.get("snapshot").cloned().unwrap_or_else(|| event.clone());
+                let snapshot = event
+                    .get("snapshot")
+                    .cloned()
+                    .unwrap_or_else(|| event.clone());
                 self.offer(&snapshot)?;
                 Ok("handoff".into())
             }
@@ -245,13 +279,35 @@ impl ResidentShell {
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default();
+                self.task_list.upsert(&tasks);
                 self.progress(tasks)?;
                 Ok("progress".into())
             }
             "complete" => {
-                let item = event.get("item").cloned().unwrap_or(Value::Object(Default::default()));
+                let item = event
+                    .get("item")
+                    .cloned()
+                    .unwrap_or(Value::Object(Default::default()));
+                self.task_list.upsert(std::slice::from_ref(&item));
                 self.complete(item)?;
                 Ok("complete".into())
+            }
+            "tasks" => {
+                let tasks = event
+                    .get("tasks")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                self.replace_tasks(tasks);
+                Ok("tasks".into())
+            }
+            "open_main" => {
+                self.open_main()?;
+                Ok("open_main".into())
+            }
+            "hide_main" => {
+                self.hide_main();
+                Ok("hide_main".into())
             }
             "shutdown" => {
                 self.shutdown();
@@ -315,11 +371,36 @@ mod tests {
     fn hide_main_keeps_resident_tray_and_warm_windows() {
         let mut shell = ResidentShell::boot("win32");
         shell.open_main().unwrap();
+        assert!(shell.task_list.needs_refresh);
         shell.hide_main();
         assert!(shell.resident && shell.tray);
         assert!(!shell.main_open);
         assert!(shell.windows.handoff.created);
         assert!(shell.is_ready());
+    }
+
+    #[test]
+    fn open_main_event_shows_filtered_native_list() {
+        let mut shell = ResidentShell::boot("headless");
+        shell.apply_event(&json!({"kind": "open_main"})).unwrap();
+        assert!(shell.main_open && shell.windows.main.visible);
+        shell
+            .apply_event(&json!({
+                "kind": "tasks",
+                "tasks": [
+                    {"id": "1", "filename": "film.mp4", "status": "downloading_segments", "progress_percent": 12},
+                    {"id": "2", "filename": "pack.zip", "status": "done"}
+                ]
+            }))
+            .unwrap();
+        shell.set_status_filter(StatusFilter::Unfinished);
+        let visible = shell.visible_tasks();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].filename, "film.mp4");
+        shell.apply_event(&json!({"kind": "hide_main"})).unwrap();
+        assert!(!shell.main_open);
+        assert!(shell.resident && shell.tray);
+        assert_eq!(shell.task_list.tasks.len(), 2);
     }
 
     #[test]
@@ -333,7 +414,9 @@ mod tests {
         shell
             .progress(vec![json!({"id": "t1", "percent": 40})])
             .unwrap();
-        shell.complete(json!({"id": "t1", "filename": "a.bin"})).unwrap();
+        shell
+            .complete(json!({"id": "t1", "filename": "a.bin"}))
+            .unwrap();
         assert!(shell.windows.progress.visible);
         assert!(shell.windows.complete.visible);
         assert!(shell.windows.progress.created && shell.windows.complete.created);

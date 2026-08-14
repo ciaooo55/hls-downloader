@@ -144,6 +144,24 @@ def test_hide_main_does_not_stop_resident_shell():
     assert presenter.json()["mode"] == "native-shell"
 
 
+def test_native_shell_settings_activates_existing_desktop_session():
+    client = TestClient(app)
+    client.post("/api/desktop/native-shell/boot", headers=AUTH)
+    missing = client.post("/api/desktop/native-shell/settings", headers=AUTH)
+    assert missing.status_code == 200
+    assert missing.json()["ok"] is False
+    client.post("/api/desktop/session/start", headers=AUTH)
+    try:
+        shown = client.post("/api/desktop/native-shell/settings", headers=AUTH)
+        assert shown.status_code == 200
+        assert shown.json()["ok"] is True
+        commands = client.get("/api/desktop/session/commands?after=0&timeout=0", headers=AUTH)
+        kinds = [item["kind"] for item in commands.json()["commands"]]
+        assert "activate" in kinds
+    finally:
+        client.post("/api/desktop/session/stop", headers=AUTH)
+
+
 def test_native_shell_progress_complete_and_ipc_require_boot_and_token():
     client = TestClient(app)
     missing = client.post("/api/desktop/native-shell/progress", json={"tasks": []}, headers=AUTH)

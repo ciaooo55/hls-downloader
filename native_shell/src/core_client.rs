@@ -77,8 +77,56 @@ impl CoreClient {
         self.request("GET", "/health", None, 2.0)
     }
 
+    pub fn list_tasks(&self) -> Result<Vec<Value>, String> {
+        let value = self.request("GET", "/tasks", None, 8.0)?;
+        match value {
+            Value::Array(items) => Ok(items),
+            other if other.get("ok").is_some() => Ok(Vec::new()),
+            _ => Err("core tasks response is not a list".into()),
+        }
+    }
+
     pub fn pause_task(&self, task_id: &str) -> Result<Value, String> {
         self.request("POST", &format!("/tasks/{task_id}/pause"), None, 8.0)
+    }
+
+    pub fn start_task(&self, task_id: &str) -> Result<Value, String> {
+        self.request("POST", &format!("/tasks/{task_id}/start"), None, 8.0)
+    }
+
+    pub fn resume_task(&self, task_id: &str) -> Result<Value, String> {
+        self.request("POST", &format!("/tasks/{task_id}/resume"), None, 8.0)
+    }
+
+    pub fn retry_task(&self, task_id: &str) -> Result<Value, String> {
+        self.request("POST", &format!("/tasks/{task_id}/retry"), None, 8.0)
+    }
+
+    pub fn cancel_task(&self, task_id: &str) -> Result<Value, String> {
+        self.request("POST", &format!("/tasks/{task_id}/cancel"), None, 8.0)
+    }
+
+    pub fn delete_task(&self, task_id: &str) -> Result<Value, String> {
+        self.request("DELETE", &format!("/tasks/{task_id}"), None, 8.0)
+    }
+
+    pub fn run_task_action(&self, task_id: &str, action: &str) -> Result<Value, String> {
+        match action {
+            "start" => self.start_task(task_id),
+            "resume" => self.resume_task(task_id),
+            "retry" => self.retry_task(task_id),
+            "pause" => self.pause_task(task_id),
+            "cancel" => self.cancel_task(task_id),
+            "delete" => self.delete_task(task_id),
+            "open" => self.open_explorer(task_id),
+            "launch" => self.launch_file(task_id, false),
+            "settings" => self.open_settings(),
+            _ => Err(format!("unknown task action {action}")),
+        }
+    }
+
+    pub fn open_settings(&self) -> Result<Value, String> {
+        self.request("POST", "/desktop/native-shell/settings", None, 8.0)
     }
 
     pub fn open_explorer(&self, task_id: &str) -> Result<Value, String> {
@@ -193,5 +241,12 @@ mod tests {
             .request("GET", "/browser/handoffs/abc", None, 1.0)
             .unwrap_err();
         assert!(err.contains("must not GET"));
+    }
+
+    #[test]
+    fn unknown_task_action_is_rejected_without_touching_core() {
+        let client = CoreClient::parse("http://127.0.0.1:8765/api", "x").unwrap();
+        let err = client.run_task_action("t1", "explode").unwrap_err();
+        assert!(err.contains("unknown"));
     }
 }
