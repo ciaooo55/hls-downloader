@@ -1,9 +1,10 @@
 # Native shell rewrite
 
-This branch keeps the current download core and browser extension. It replaces
-the always-visible WebView2 desktop shell with a small resident native process
-so the product can stay running like IDM: tray resident, instant confirmation,
-small UI RAM, fast perceived startup.
+Canonical product plan for the major version: **[docs/v5.0.0-plan.md](v5.0.0-plan.md)**.
+
+This file is the short engineering note. 5.0.0 keeps the Python download core
+and MV3 extension, and replaces WebView2 click-path windows with a resident
+native supervisor (tray + pre-created confirm / progress / complete).
 
 Shipping `main` stays on Tauri until this shell is complete. Do not delete
 HLS / DASH / live / BT / cast / takeover to get there.

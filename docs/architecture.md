@@ -4,7 +4,7 @@
 
 | Layer | Shipping on `main` | Target on `cursor/native-shell-rewrite-5a2e` |
 | --- | --- | --- |
-| Desktop shell | **Tauri 2** + WebView2 | Resident **native supervisor** (tray + pre-created dialogs). Task list on demand. See `docs/native-shell-rewrite.md`. |
+| Desktop shell | **Tauri 2** + WebView2 | Resident **native supervisor** (tray + pre-created dialogs). Task list on demand. See `docs/v5.0.0-plan.md`. |
 | UI framework | **React 19** + **TypeScript** + **Vite 7** | Native confirm / progress / complete first; main list follows |
 | Download core | **Python FastAPI** + uvicorn | Unchanged. HLS/DASH/HTTP/BT workers stay here |
 | Browser extension | **WXT** (Chrome MV3 + Firefox) | Unchanged. Native Host talks to the supervisor pipe |
@@ -17,6 +17,8 @@
 - Do **not** load remote Google Fonts in the packaged app (offline + privacy); use system UI fonts.
 - Do **not** copy IDM capture DLLs, WFP/TDI, or process injection.
 - Do **not** rewrite HLS/BT out of Python before the shell is resident, small, and instant.
+
+5.0.0 is a major shell cut-over, not a new download engine. Full scope, IDM/ABDM takeaways, phases and acceptance numbers: `docs/v5.0.0-plan.md`.
 
 ## UI architecture
 
