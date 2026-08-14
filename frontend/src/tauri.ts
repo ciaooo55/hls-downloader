@@ -1,3 +1,4 @@
+import { createHandoffHostReady } from './handoffHostReady'
 import { HandoffWindowQueue } from './handoffQueue'
 import { initDownloadOverlayWindows } from './downloadOverlayWindows'
 
@@ -153,50 +154,46 @@ async function createTauriDesktopSession(): Promise<() => void> {
   let sequence = 0
   const handoffQueue = new HandoffWindowQueue()
   let openingHandoff = false
-  let handoffHostReady = false
-  let resolveHandoffHostReady: (() => void) | null = null
-  const handoffHostReadyPromise = new Promise<void>(resolve => { resolveHandoffHostReady = resolve })
+  const handoffHostReady = createHandoffHostReady()
+  let handoffWindowPromise: Promise<InstanceType<typeof WebviewWindow>> | null = null
   const unlistenHostReady = await current.listen('handoff-host-ready', () => {
-    handoffHostReady = true
-    resolveHandoffHostReady?.()
+    handoffHostReady.markReady()
   })
   const unlistenResolved = await current.listen<{ id?: string }>('handoff-resolved', event => {
     const id = String(event.payload?.id || '')
     if (handoffQueue.release(id)) void openNextHandoff()
   })
 
-  const ensureHandoffWindow = async (): Promise<InstanceType<typeof WebviewWindow>> => {
-    const existing = await WebviewWindow.getByLabel('handoff-host')
-    if (existing) return existing
-    const child = new WebviewWindow('handoff-host', {
-      url: 'index.html?handoffHost=1',
-      title: '下载文件信息 - HLS Downloader',
-      width: 420,
-      height: 460,
-      minWidth: 380,
-      minHeight: 360,
-      center: true,
-      resizable: true,
-      decorations: false,
-      alwaysOnTop: false,
-      focus: false,
-      visible: false,
-    })
-    await new Promise<void>((resolve, reject) => {
-      void child.once('tauri://created', () => resolve())
-      void child.once('tauri://error', event => reject(new Error(String(event.payload || '无法创建下载确认窗口'))))
-    })
-    return child
-  }
-
-  // Warm one hidden WebView during desktop startup. A later click only swaps
-  // its handoff ID and shows/focuses it, eliminating per-click WebView startup.
-  await ensureHandoffWindow()
-  if (!handoffHostReady) {
-    await Promise.race([
-      handoffHostReadyPromise,
-      new Promise(resolve => window.setTimeout(resolve, 3000)),
-    ])
+  const ensureHandoffWindow = (): Promise<InstanceType<typeof WebviewWindow>> => {
+    if (!handoffWindowPromise) {
+      handoffWindowPromise = (async () => {
+        const existing = await WebviewWindow.getByLabel('handoff-host')
+        if (existing) return existing
+        const child = new WebviewWindow('handoff-host', {
+          url: 'index.html?handoffHost=1',
+          title: '下载文件信息 - HLS Downloader',
+          width: 420,
+          height: 460,
+          minWidth: 380,
+          minHeight: 360,
+          center: true,
+          resizable: true,
+          decorations: false,
+          alwaysOnTop: false,
+          focus: false,
+          visible: false,
+        })
+        await new Promise<void>((resolve, reject) => {
+          void child.once('tauri://created', () => resolve())
+          void child.once('tauri://error', event => reject(new Error(String(event.payload || '无法创建下载确认窗口'))))
+        })
+        return child
+      })().catch(reason => {
+        handoffWindowPromise = null
+        throw reason
+      })
+    }
+    return handoffWindowPromise
   }
 
   const showMain = async () => {
@@ -212,6 +209,7 @@ async function createTauriDesktopSession(): Promise<() => void> {
     openingHandoff = true
     try {
       const child = await ensureHandoffWindow()
+      await handoffHostReady.wait()
       await emitTo('handoff-host', 'handoff-request', { id })
       await child.show().catch(() => {})
       await child.unminimize().catch(() => {})
@@ -263,6 +261,9 @@ async function createTauriDesktopSession(): Promise<() => void> {
     }
   }
   void poll()
+  // Warm the hidden confirmation WebView in the background. Command polling
+  // must start first; waiting here made the first click sit until WebView2 booted.
+  void ensureHandoffWindow().catch(() => {})
   let stopOverlayWindows = () => {}
   void initDownloadOverlayWindows(WebviewWindow)
     .then(stop => {

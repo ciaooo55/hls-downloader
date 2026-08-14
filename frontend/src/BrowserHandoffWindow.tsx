@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { LoaderCircle, RefreshCw, X } from 'lucide-react'
 import { fetchBrowserHandoff, fetchBrowserHandoffs, fetchSettings, resolveBrowserHandoff } from './api'
 import { closeDesktopWindow } from './desktop'
+import { loadHandoffPresentation, pendingHandoffCount } from './handoffWindowLoad'
 import { resolveTheme } from './theme'
 import type { Settings } from './types'
 import BrowserHandoffDialog, { type BrowserHandoff, type BrowserHandoffCancelDecision, type BrowserHandoffDecision } from './components/BrowserHandoffDialog'
@@ -11,14 +12,16 @@ import { isTauriDesktop } from './tauri'
 export default function BrowserHandoffWindow({
   handoffId,
   persistent = false,
+  initialSettings = {},
   onClosed,
 }: {
   handoffId: string
   persistent?: boolean
+  initialSettings?: Settings
   onClosed?: (handoffId: string) => void
 }) {
   const [item, setItem] = useState<BrowserHandoff | null>(null)
-  const [settings, setSettings] = useState<Settings>({})
+  const [settings, setSettings] = useState<Settings>(initialSettings)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [queueRemaining, setQueueRemaining] = useState(0)
@@ -26,6 +29,11 @@ export default function BrowserHandoffWindow({
   const closingRef = useRef(false)
   const onClosedRef = useRef(onClosed)
   onClosedRef.current = onClosed
+
+  useEffect(() => {
+    if (!initialSettings.download_dir && !Object.keys(initialSettings.browser_category_dirs || {}).length) return
+    setSettings(current => current.download_dir ? current : initialSettings)
+  }, [initialSettings])
 
   const close = useCallback(() => {
     if (closingRef.current) return
@@ -44,19 +52,27 @@ export default function BrowserHandoffWindow({
     if (closingRef.current || resolvedRef.current) return
     setError('')
     try {
-      const [handoff, currentSettings, pendingHandoffs] = await Promise.all([
-        fetchBrowserHandoff(handoffId),
-        fetchSettings(),
-        fetchBrowserHandoffs(),
-      ])
+      const result = await loadHandoffPresentation(
+        handoffId,
+        {
+          fetchHandoff: fetchBrowserHandoff,
+          fetchSettings,
+          fetchHandoffs: fetchBrowserHandoffs,
+        },
+        {
+          item: handoff => {
+            if (closingRef.current || resolvedRef.current) return
+            setItem(handoff)
+          },
+          extras: ({ settings: currentSettings, queueRemaining: remaining }) => {
+            if (closingRef.current || resolvedRef.current) return
+            setSettings(currentSettings)
+            setQueueRemaining(remaining)
+          },
+        },
+      )
       if (closingRef.current || resolvedRef.current) return
-      if (handoff.status && handoff.status !== 'pending') {
-        close()
-        return
-      }
-      setItem(handoff)
-      setSettings(currentSettings)
-      setQueueRemaining(Math.max(0, pendingHandoffs.filter(item => item.id !== handoffId && item.status === 'pending').length))
+      if (result.close) close()
     } catch (reason: any) {
       if (closingRef.current || resolvedRef.current) return
       setError(reason?.message || '无法读取浏览器下载请求')
@@ -98,7 +114,7 @@ export default function BrowserHandoffWindow({
           if (handoff.status && handoff.status !== 'pending') close()
           else {
             setItem(handoff)
-            setQueueRemaining(Math.max(0, pendingHandoffs.filter(item => item.id !== handoffId && item.status === 'pending').length))
+            setQueueRemaining(pendingHandoffCount(handoffId, pendingHandoffs))
           }
         })
         .catch(() => {})

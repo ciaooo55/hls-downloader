@@ -141,16 +141,16 @@ def dispatch(message: dict) -> dict:
     }:
         raise ValueError("不支持的 Native Messaging 操作")
     _ensure_app(operation in {"offer", "media_push"})
-    browser_status = _request(
-        "POST",
-        "/browser/ping",
-        {
-            "version": str(message.get("version", "")),
-            "client_id": str(message.get("client_id", "")),
-            "browser": str(message.get("browser", "")),
-        },
-    )
     if operation == "ping":
+        browser_status = _request(
+            "POST",
+            "/browser/ping",
+            {
+                "version": str(message.get("version", "")),
+                "client_id": str(message.get("client_id", "")),
+                "browser": str(message.get("browser", "")),
+            },
+        )
         health = _request("GET", "/health")
         current = _request("GET", "/settings")
         bridge_base, _control_token = _settings()
@@ -169,6 +169,8 @@ def dispatch(message: dict) -> dict:
             "minimum_extension_version": str(browser_status.get("minimum_version", "")),
             "extension_release_url": str(browser_status.get("release_url", "")),
         }
+    # Heartbeats already POST /browser/ping. Interactive offers must not wait
+    # on another round-trip before the desktop can show the confirmation window.
     if operation == "set_takeover_settings":
         payload: dict[str, object] = {}
         if "enabled" in message:

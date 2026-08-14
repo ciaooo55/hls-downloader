@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Download, FolderOpen, Globe2, ShieldCheck } from 'lucide-react'
 import { fmtBytes } from '../format'
 import { openTaskInExplorer, taskAction } from '../api'
@@ -70,6 +70,7 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
   const [filename, setFilename] = useState(item.filename || fallbackName)
   const [category, setCategory] = useState<DownloadCategory>(initialCategory)
   const [directory, setDirectory] = useState(settings.browser_category_dirs?.[initialCategory] || settings.download_dir || '')
+  const seededDirectory = useRef(Boolean((settings.browser_category_dirs?.[initialCategory] || settings.download_dir || '').trim()))
   const [remember, setRemember] = useState(true)
   const [showPicker, setShowPicker] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
@@ -81,6 +82,14 @@ export default function BrowserHandoffDialog({ item, busy, settings, onResolve, 
   let sourceHost = ''
   try { sourceHost = new URL(item.source_page_url).hostname } catch {}
   const resourceKindLabel = ({ hls: 'HLS 视频', dash: 'DASH 视频', media: '媒体文件', magnet: '磁力链接', file: '文件' } as const)[item.resource_kind || 'file']
+
+  useEffect(() => {
+    if (seededDirectory.current) return
+    const next = settings.browser_category_dirs?.[category] || settings.download_dir || ''
+    if (!next.trim()) return
+    setDirectory(next)
+    seededDirectory.current = true
+  }, [settings, category])
 
   const chooseCategory = (value: DownloadCategory) => {
     setCategory(value)

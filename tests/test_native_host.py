@@ -40,3 +40,20 @@ def test_cold_offer_uses_one_presenter_deadline_instead_of_two_waits(monkeypatch
     assert health_calls == 1
     assert starts == [True]
     assert presenter_timeouts == [18.0]
+
+
+def test_offer_posts_handoff_without_a_prior_browser_ping(monkeypatch):
+    calls = []
+    monkeypatch.setattr(native_host, "_ensure_app", lambda *_args, **_kwargs: None)
+
+    def request(method, path, payload=None, timeout=4):
+        calls.append((method, path, payload))
+        if path == "/browser/handoffs":
+            return {"id": "handoff-1", "status": "pending"}
+        raise AssertionError(f"unexpected {method} {path}")
+
+    monkeypatch.setattr(native_host, "_request", request)
+    result = native_host.dispatch({"op": "offer", "resource": {"url": "https://cdn.test/a.mp4"}})
+
+    assert result == {"ok": True, "handoff": {"id": "handoff-1", "status": "pending"}}
+    assert calls == [("POST", "/browser/handoffs", {"url": "https://cdn.test/a.mp4"})]

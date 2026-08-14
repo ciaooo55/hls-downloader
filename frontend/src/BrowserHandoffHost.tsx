@@ -1,12 +1,16 @@
 import { useEffect, useState } from 'react'
+import { fetchSettings } from './api'
 import BrowserHandoffWindow from './BrowserHandoffWindow'
+import type { Settings } from './types'
 
 export default function BrowserHandoffHost() {
   const [handoffId, setHandoffId] = useState('')
+  const [settings, setSettings] = useState<Settings>({})
 
   useEffect(() => {
     let unlisten: (() => void) | undefined
     void import('@tauri-apps/api/event').then(async ({ emitTo, listen }) => {
+      void fetchSettings().then(setSettings).catch(() => {})
       unlisten = await listen<{ id?: string }>('handoff-request', event => {
         setHandoffId(String(event.payload?.id || ''))
       })
@@ -23,5 +27,13 @@ export default function BrowserHandoffHost() {
   }
 
   if (!handoffId) return <main className="handoff-window-root" aria-hidden="true" />
-  return <BrowserHandoffWindow key={handoffId} handoffId={handoffId} persistent onClosed={resolved} />
+  return (
+    <BrowserHandoffWindow
+      key={handoffId}
+      handoffId={handoffId}
+      persistent
+      initialSettings={settings}
+      onClosed={resolved}
+    />
+  )
 }
