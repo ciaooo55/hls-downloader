@@ -50,6 +50,9 @@ describe('resource rules', () => {
     expect(classifyResource('https://cdn.test/get?id=1', 'application/x-bittorrent')).toBe('file')
     expect(classifyResource('https://mirror.test/pkg.meta4')).toBe('file')
     expect(classifyResource('https://mirror.test/pkg.metalink', 'application/metalink4+xml')).toBe('file')
+    expect(classifyResource('https://rr1.googlevideo.test/videoplayback?expire=1&mime=video%2Fmp4&itag=18')).toBe('media')
+    expect(classifyResource('https://rr1.googlevideo.test/videoplayback?id=1', 'application/octet-stream')).toBe('media')
+    expect(classifyResource('https://api.bilibili.test/x/player/playurl?cid=1', 'application/json')).toBeNull()
   })
   it('uses an actually playing media element as direct classification evidence', () => {
     expect(classifyPlaybackSource('https://cdn.test/movie.mp4')).toBe('media')
@@ -57,6 +60,7 @@ describe('resource rules', () => {
     expect(classifyPlaybackSource('https://cdn.test/master.m3u8')).toBe('hls')
     expect(classifyPlaybackSource('https://cn.pornhub.com/view_video.php?viewkey=123')).toBeNull()
     expect(classifyPlaybackSource('https://cdn.test/player.php?id=42', 'video/mp4')).toBe('media')
+    expect(classifyPlaybackSource('https://rr1.googlevideo.test/videoplayback?expire=1&mime=video%2Fmp4&itag=18')).toBe('media')
     expect(classifyPlaybackSource('blob:https://site.test/opaque')).toBeNull()
   })
   it('deduplicates resources', () => {
@@ -373,6 +377,18 @@ describe('resource rules', () => {
       mseResourceUrls: ['https://cdn.test/live/channel-two/segment-20.m4s'],
       startedAt: now,
     }, 2).map(item => item.id)).toEqual(['second'])
+  })
+  it('binds YouTube-style videoplayback MSE bytes to the playing video', () => {
+    const now = Date.now()
+    const stream = 'https://rr1.googlevideo.test/videoplayback?expire=1&mime=video%2Fmp4&itag=18'
+    const item = resource({
+      id: 'yt', kind: 'media', url: stream, seenAt: now,
+    })
+    expect(playerPlaybackResources([item], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: [stream],
+      startedAt: now,
+    }, 1).map(entry => entry.id)).toEqual(['yt'])
   })
   it('does not assign origin-only MSE evidence to either player', () => {
     const now = Date.now()

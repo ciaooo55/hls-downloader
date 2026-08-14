@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectManifestKind, manifestMimeType, shouldInspectManifestResponse, shouldReportMediaResponse } from './manifestSniff'
+import { detectManifestKind, isCommonMediaStreamUrl, manifestMimeType, shouldInspectManifestResponse, shouldReportMediaResponse } from './manifestSniff'
 
 describe('extensionless manifest sniffing', () => {
   it('only opts into the bounded clone for manifest-like responses', () => {
@@ -22,5 +22,14 @@ describe('extensionless manifest sniffing', () => {
     expect(shouldReportMediaResponse('https://cdn.test/movie.mp4?token=1', 'application/octet-stream')).toBe(true)
     expect(shouldReportMediaResponse('https://cdn.test/media?id=1', 'video/mp4; charset=binary')).toBe(true)
     expect(shouldReportMediaResponse('https://cdn.test/live/playlist?id=1', 'application/octet-stream')).toBe(true)
+    expect(shouldReportMediaResponse('https://rr1.googlevideo.test/videoplayback?expire=1&mime=video%2Fmp4&itag=18', '')).toBe(true)
+    expect(shouldReportMediaResponse('https://cdn.test/videoplayback?id=1', 'application/octet-stream')).toBe(true)
+  })
+
+  it('recognizes current-site extensionless media streams without promoting APIs', () => {
+    expect(isCommonMediaStreamUrl('https://rr1.googlevideo.test/videoplayback?expire=1&mime=video%2Fmp4&itag=18')).toBe(true)
+    expect(isCommonMediaStreamUrl('https://cdn.test/get?mime=audio%2Fwebm&itag=251')).toBe(true)
+    expect(isCommonMediaStreamUrl('https://api.bilibili.test/x/player/playurl?cid=1')).toBe(false)
+    expect(isCommonMediaStreamUrl('https://cdn.test/upgcxcode/1/2/3-1-30080.m4s')).toBe(false)
   })
 })

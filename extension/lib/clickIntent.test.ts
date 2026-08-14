@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isAuthenticationNavigation, isLikelyDownloadControl, isLikelyDownloadUrl, linkOpensNewTab, resolveClickedLinkHref, resolveDownloadTarget, resolveFormDownloadUrl, shouldTrackDownloadIntent } from './clickIntent'
+import { isAuthenticationNavigation, isLikelyDownloadControl, isLikelyDownloadUrl, isMediaFileUrl, isPlaybackControl, linkOpensNewTab, resolveClickedLinkHref, resolveDownloadTarget, resolveFormDownloadUrl, shouldTrackDownloadIntent } from './clickIntent'
 import { matchesDownloadClick, type DownloadClickIntent } from './resources'
 
 function intent(overrides: Partial<DownloadClickIntent> = {}): DownloadClickIntent {
@@ -28,6 +28,41 @@ describe('download click intent', () => {
     expect(isLikelyDownloadControl(['儲存'])).toBe(false)
     expect(isLikelyDownloadControl(['Save'])).toBe(false)
     expect(isLikelyDownloadControl(['收藏', 'save-progress'])).toBe(false)
+  })
+
+  it('treats player chrome as playback, not as a download click', () => {
+    expect(isPlaybackControl(['播放', 'play-button'])).toBe(true)
+    expect(isPlaybackControl(['vjs-big-play-button'])).toBe(true)
+    expect(isPlaybackControl(['下一集', 'nextEpisode'])).toBe(true)
+    expect(isPlaybackControl(['清晰度', 'quality'])).toBe(true)
+    expect(isPlaybackControl(['弹幕', 'danmaku'])).toBe(true)
+    expect(isPlaybackControl(['全屏', 'fullscreen'])).toBe(true)
+    expect(isPlaybackControl(['点赞', 'like-button'])).toBe(true)
+    expect(isPlaybackControl(['分享', 'share'])).toBe(true)
+    expect(isPlaybackControl(['下载视频'])).toBe(false)
+    expect(isMediaFileUrl('https://cdn.test/film.mp4')).toBe(true)
+    expect(isMediaFileUrl('https://cdn.test/file.zip')).toBe(false)
+    expect(shouldTrackDownloadIntent({
+      hintedHref: 'https://cdn.test/film.mp4',
+      hints: ['播放', 'dplayer-play-icon'],
+    })).toBe(false)
+    expect(shouldTrackDownloadIntent({
+      hintedHref: 'https://cdn.test/film.mp4',
+    })).toBe(false)
+    expect(shouldTrackDownloadIntent({
+      hintedHref: 'https://cdn.test/film.mp4',
+      hints: ['下载视频'],
+    })).toBe(true)
+    expect(shouldTrackDownloadIntent({
+      directHref: 'https://cdn.test/film.mp4',
+      hints: ['播放', 'play-button'],
+    })).toBe(false)
+    expect(shouldTrackDownloadIntent({
+      directHref: 'https://cdn.test/film.mp4',
+    })).toBe(true)
+    expect(shouldTrackDownloadIntent({
+      hintedHref: 'https://cdn.test/file.zip',
+    })).toBe(true)
   })
 
   it('tracks only download-specific normal links and generated controls', () => {
@@ -96,6 +131,11 @@ describe('download click intent', () => {
     expect(isLikelyDownloadUrl('https://site.test/watch?filename=stream')).toBe(false)
     expect(isLikelyDownloadUrl('https://site.test/video.php?id=1&fn=1')).toBe(false)
     expect(isLikelyDownloadUrl('https://site.test/watch?src=https://cdn.test/movie.mp4')).toBe(false)
+    expect(isLikelyDownloadUrl('https://www.bilibili.com/video/BV1xx411c7mD?download=0')).toBe(false)
+    expect(isLikelyDownloadUrl('https://v.youku.com/v_show/id_XNzE=.html?file=episode.mp4')).toBe(false)
+    expect(isLikelyDownloadUrl('https://v.qq.com/x/cover/mzc00200/mzc00200.html')).toBe(false)
+    expect(isLikelyDownloadUrl('https://www.iqiyi.com/v_1abcde123.html?file=movie.mp4')).toBe(false)
+    expect(shouldTrackDownloadIntent({ directHref: 'https://www.bilibili.com/bangumi/play/ep123', hints: ['下一集'] })).toBe(false)
     expect(shouldTrackDownloadIntent({ directHref: 'https://site.test/watch/episode-1?download=0' })).toBe(false)
     expect(shouldTrackDownloadIntent({ directHref: 'https://site.test/watch?file=episode.mp4' })).toBe(false)
     expect(shouldTrackDownloadIntent({ directHref: 'https://site.test/next-episode', hints: ['下一集'] })).toBe(false)

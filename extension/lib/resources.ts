@@ -1,4 +1,5 @@
 import { isAuthenticationNavigation, isLikelyDownloadUrl } from './clickIntent'
+import { isCommonMediaStreamUrl } from './manifestSniff'
 import { httpOrigin } from './requestChain'
 import { removeRawQueryParameters } from './urlQuery'
 
@@ -165,6 +166,7 @@ export function classifyResource(url: string, mimeType = ''): ResourceKind | nul
   if (/\.m3u8(?:$|[?#])/i.test(url) || mime.includes('mpegurl')) return 'hls'
   if (/\.mpd(?:$|[?#])/i.test(url) || mime.includes('dash+xml')) return 'dash'
   if (mime.startsWith('video/') || mime.startsWith('audio/')) return 'media'
+  if (isCommonMediaStreamUrl(url)) return 'media'
   if (/\.torrent(?:$|[?#])/i.test(url) || mime.includes('bittorrent')) return 'file'
   if (/\.(?:metalink|meta4)(?:$|[?#])/i.test(url) || mime.includes('metalink')) return 'file'
   return MEDIA_EXT.test(url) || mime.includes('octet-stream') ? 'file' : null

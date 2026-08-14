@@ -915,7 +915,13 @@ export default defineContentScript({
         if (!oldest) break
         mseEvidenceByBlob.delete(oldest)
       }
-      if (isNewEvidence) scheduleRender()
+      if (isNewEvidence) {
+        // YouTube-style `/videoplayback` often reaches MSE without a manifest.
+        // Register that stream as the current player resource; `.m4s`/`.ts`
+        // fragments still classify as null and stay out of the overlay.
+        add(mediaUrl)
+        scheduleRender()
+      }
     }
     window.removeEventListener('__hls_downloader_resource__', earlyResourceListener)
     window.removeEventListener('__hls_downloader_mse__', earlyMseListener)

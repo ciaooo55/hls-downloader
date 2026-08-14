@@ -70,7 +70,7 @@ export default defineContentScript({
       )
       const downloadHref = resolveDownloadTarget(rawDownloadHref, location.href)
       const hintedHref = resolveDownloadTarget(rawHintedHref, location.href) || formActionHref
-      const downloadHint = isLikelyDownloadControl([
+      const controlHints = [
         htmlLink?.textContent,
         htmlLink?.getAttribute('aria-label'),
         htmlLink?.getAttribute('title'),
@@ -90,14 +90,15 @@ export default defineContentScript({
         control?.id,
         control?.className,
         control?.getAttribute('data-testid'),
-      ])
+      ]
+      const downloadHint = isLikelyDownloadControl(controlHints)
       const explicitDownloadTarget = Boolean(htmlLink?.hasAttribute('download') || downloadHref)
       if (!shouldTrackDownloadIntent({
         directHref,
         hintedHref: downloadHref || hintedHref,
         ctrlForce: event.ctrlKey,
         explicitDownloadTarget,
-        hints: [downloadHint ? 'download' : ''],
+        hints: controlHints,
       })) return
       const href = downloadHref || directHref || hintedHref
       const intentKey = [href, location.href, event.altKey ? 1 : 0, event.ctrlKey ? 1 : 0, downloadHint ? 1 : 0].join('|')
