@@ -289,6 +289,7 @@ def test_windows_spawn_uses_detached_flags_not_create_no_window(monkeypatch, tmp
     exe.write_bytes(b"MZ")
     monkeypatch.setattr(ns, "running_on_windows", lambda: True)
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("HLS_STARTED_BY_NATIVE_SHELL", raising=False)
     monkeypatch.setattr(ns.subprocess, "Popen", fake_popen)
 
     result = ns.maybe_spawn_native_shell_process(
@@ -304,4 +305,28 @@ def test_windows_spawn_uses_detached_flags_not_create_no_window(monkeypatch, tmp
     assert flags & 0x08000000 == 0
     assert captured["kwargs"]["close_fds"] is False
     assert captured["kwargs"]["stdin"] is ns.subprocess.DEVNULL
+    assert "--no-tray" not in captured["args"][0]
+
+
+def test_core_started_by_native_shell_does_not_spawn_another_shell(monkeypatch, tmp_path):
+    from backend.app import native_shell as ns
+
+    exe = tmp_path / "HLSNativeShell.exe"
+    exe.write_bytes(b"MZ")
+    monkeypatch.setattr(ns, "running_on_windows", lambda: True)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("HLS_STARTED_BY_NATIVE_SHELL", "1")
+    monkeypatch.setattr(
+        ns.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not spawn")),
+    )
+    assert (
+        ns.maybe_spawn_native_shell_process(
+            core_url="http://127.0.0.1:8765/api",
+            token="x" * 40,
+            project_root=tmp_path,
+        )
+        is None
+    )
 

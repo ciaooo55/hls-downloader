@@ -1,4 +1,5 @@
 mod core_client;
+mod core_spawn;
 mod http_engine;
 mod protocol;
 mod surfaces;
@@ -8,6 +9,10 @@ mod task_list;
 pub mod win32;
 
 pub use core_client::CoreClient;
+pub use core_spawn::{
+    download_import_route, install_root, locate_core_executable, locate_desktop_executable,
+    spawn_core, spawn_desktop_ui,
+};
 pub use http_engine::{
     finish_job, load_job, run_job, run_queued_job, EngineError, EXIT_CANCEL, EXIT_ERROR, EXIT_OK,
     EXIT_PAUSE, EXIT_RANGE_UNSUPPORTED,

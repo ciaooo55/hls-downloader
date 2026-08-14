@@ -8,10 +8,10 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-!define APP_VERSION "5.0.9"
+!define APP_VERSION "5.0.10"
 !endif
 !ifndef APP_FILE_VERSION
-!define APP_FILE_VERSION "5.0.9.0"
+!define APP_FILE_VERSION "5.0.10.0"
 !endif
 
 !ifndef STAGE_DIR
@@ -71,7 +71,7 @@ Var UpgradeBackupDir
 !insertmacro MUI_PAGE_LICENSE "${STAGE_DIR}\TERMS.txt"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
-!define MUI_FINISHPAGE_RUN "$INSTDIR\HLSDownloader.exe"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\HLSNativeShell.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "运行 HLS Downloader"
 !insertmacro MUI_PAGE_FINISH
 
@@ -318,7 +318,8 @@ Section "Install" SecInstall
   ; Remove both generations of the old desktop shell before writing Tauri.
   ; v1.4.0 shipped a Kotlin/Compose image in app/ and runtime/.  Leaving it
   ; behind made a half-updated install easy to launch from a stale shortcut.
-  ; The current shell is the single HLSDownloader.exe in $INSTDIR.
+  ; Idle entry is HLSNativeShell.exe (tray + native list + HTTP). HLSDownloader.exe
+  ; is still packaged for settings / new task / player (WebView2 on demand).
   RMDir /r "$INSTDIR\_internal"
   RMDir /r "$INSTDIR\app"
   RMDir /r "$INSTDIR\runtime"
@@ -414,34 +415,34 @@ Section "Install" SecInstall
     WriteRegStr HKCU "Software\Classes\.torrent" "" "HLSDownloader.Torrent"
     WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent" "" "BT 种子文件"
     WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent\DefaultIcon" "" "$INSTDIR\assets\app-icon-${APP_VERSION}.ico,0"
-    WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent\shell\open\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\HLSDownloader.Torrent\shell\open\command" "" '$\"$INSTDIR\HLSNativeShell.exe$\" $\"%1$\"'
 
     ; Context menu only: do not replace the default Internet Shortcut handler.
     WriteRegStr HKCU "Software\Classes\.url\shell\HLSDownload" "" "Download with HLS Downloader"
-    WriteRegStr HKCU "Software\Classes\.url\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.url\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSNativeShell.exe$\" $\"%1$\"'
     WriteRegStr HKCU "Software\Classes\InternetShortcut\shell\HLSDownload" "" "Download with HLS Downloader"
-    WriteRegStr HKCU "Software\Classes\InternetShortcut\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\InternetShortcut\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSNativeShell.exe$\" $\"%1$\"'
     WriteRegStr HKCU "Software\Classes\.magnet\shell\HLSDownload" "" "Download with HLS Downloader"
-    WriteRegStr HKCU "Software\Classes\.magnet\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.magnet\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSNativeShell.exe$\" $\"%1$\"'
     WriteRegStr HKCU "Software\Classes\.m3u\shell\HLSDownload" "" "Download with HLS Downloader"
-    WriteRegStr HKCU "Software\Classes\.m3u\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.m3u\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSNativeShell.exe$\" $\"%1$\"'
     WriteRegStr HKCU "Software\Classes\.m3u8\shell\HLSDownload" "" "Download with HLS Downloader"
-    WriteRegStr HKCU "Software\Classes\.m3u8\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.m3u8\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSNativeShell.exe$\" $\"%1$\"'
     WriteRegStr HKCU "Software\Classes\.mpd\shell\HLSDownload" "" "Download with HLS Downloader"
-    WriteRegStr HKCU "Software\Classes\.mpd\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.mpd\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSNativeShell.exe$\" $\"%1$\"'
     WriteRegStr HKCU "Software\Classes\.html\shell\HLSDownload" "" "Download with HLS Downloader"
-    WriteRegStr HKCU "Software\Classes\.html\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.html\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSNativeShell.exe$\" $\"%1$\"'
     WriteRegStr HKCU "Software\Classes\.htm\shell\HLSDownload" "" "Download with HLS Downloader"
     WriteRegStr HKCU "Software\Classes\.metalink\shell\HLSDownload" "" "Download with HLS Downloader"
     WriteRegStr HKCU "Software\Classes\.meta4\shell\HLSDownload" "" "Download with HLS Downloader"
-    WriteRegStr HKCU "Software\Classes\.htm\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
-    WriteRegStr HKCU "Software\Classes\.metalink\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
-    WriteRegStr HKCU "Software\Classes\.meta4\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSDownloader.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.htm\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSNativeShell.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.metalink\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSNativeShell.exe$\" $\"%1$\"'
+    WriteRegStr HKCU "Software\Classes\.meta4\shell\HLSDownload\command" "" '$\"$INSTDIR\HLSNativeShell.exe$\" $\"%1$\"'
 
     CreateDirectory "$SMPROGRAMS\${APP_NAME}"
-    CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\assets\app-icon-${APP_VERSION}.ico" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
+    CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\HLSNativeShell.exe" "" "$INSTDIR\assets\app-icon-${APP_VERSION}.ico" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
     CreateShortcut "$SMPROGRAMS\${APP_NAME}\卸载 ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
-    CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\HLSDownloader.exe" "" "$INSTDIR\assets\app-icon-${APP_VERSION}.ico" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
+    CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\HLSNativeShell.exe" "" "$INSTDIR\assets\app-icon-${APP_VERSION}.ico" 0 SW_SHOWNORMAL "" "Start ${APP_NAME}"
   ${EndIf}
   StrCpy $InstallCompleted "1"
   RMDir /r "$UpgradeBackupDir"

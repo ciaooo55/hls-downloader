@@ -6,7 +6,7 @@ param(
     [switch]$SkipSmoke,
     [switch]$UseSystemFfmpeg,
     [switch]$IncludeExtensionAssets,
-    [string]$Version = "5.0.9"
+    [string]$Version = "5.0.10"
 )
 
 $ErrorActionPreference = "Stop"
@@ -759,8 +759,10 @@ Invoke-Step "Build portable archive" {
     $portableReadme = @(
         'HLS Downloader portable edition',
         '',
-        'Run HLSDownloader.exe. The application uses the Microsoft Edge WebView2',
-        'runtime that is included with supported Windows 10/11 installations.',
+        'Run HLSNativeShell.exe. The tray, download list, and ordinary HTTP GET stay in',
+        'that native process. HLSDownloader.exe is only started for settings / new task /',
+        'the player, which still uses the Microsoft Edge WebView2 runtime included with',
+        'supported Windows 10/11 installations.',
         '',
         'To enable Chrome/Firefox integration, run:',
         'powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1',

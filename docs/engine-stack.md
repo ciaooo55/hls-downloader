@@ -4,14 +4,14 @@
 
 ## 1. 技术栈（诚实对照）
 
-| | IDM | AB Download Manager | HLS Downloader 5.0.9 |
+| | IDM | AB Download Manager | HLS Downloader 5.0.10 |
 | --- | --- | --- | --- |
-| 壳 | 很小的 C++ 原生窗 | Kotlin / Compose 原生窗 | 同一个 Rust Win32 监督进程：确认/进度/完成 + 任务列表 + HTTP GET |
+| 壳 | 很小的 C++ 原生窗 | Kotlin / Compose 原生窗 | **空闲时只有 `HLSNativeShell.exe`：托盘 + 预创建确认/进度/完成 + 原生任务列表。WebView2 只在设置/新建/播放器时启动** |
 | 普通 HTTP 文件 | 已运行进程里传 | OkHttp，同一 JVM | **已运行的监督进程：Range seek 写入一个 `payload.downloading`；https 用 WinHTTP** |
 | 媒体 | 几乎不管 HLS/DASH 时间轴 | 窄的 m3u8 扫描 | HLS / LL-HLS / 非 DRM DASH + 本地清单 + FFmpeg |
 | BT | 无 | 有限/无 | libtorrent |
 | 捕获 | 驱动/注入级挂钩 | 扩展 `webRequest` / `downloads.onCreated` | 扩展接管；不复制 IDM 的 DLL/WFP/注入 |
-| 体积 | 十到二十兆量级 | 要 JRE | 原生侧仍是一个 `HLSNativeShell.exe`；Python/FFmpeg/libtorrent 还在，**总内存不和 IDM 比** |
+| 体积 | 十到二十兆量级 | 要 JRE | 空闲热路径不再加载 WebView2；Python/FFmpeg/libtorrent 还在，**有媒体任务时总内存不和 IDM 比** |
 
 要和 IDM/ABDM **技术栈持平**，指的是：确认窗是已在跑的原生进程、普通文件用编译运行时按 Range 写入一个文件，并且传输发生在这份已运行的进程里。不是再叠一个引擎进程，也不是去抄挂钩。
 
@@ -92,7 +92,7 @@ ABDM 也是 RandomAccessFile / 动态 part 写进一个文件，模型和这里�
 
 | 还在 | 为什么还在 |
 | --- | --- |
-| 设置 / 新建 / 播放器仍是 Tauri | 5.0.6 先把任务列表做成原生窗；设置页和播放器后置 |
+| 设置 / 新建 / 播放器仍是 Tauri | 空闲不再创建 WebView2；点「设置/新建」才启动 `HLSDownloader.exe --settings` |
 | HLS/DASH 收尾仍走 FFmpeg，`+faststart` 会再写一遍 MP4 | 本地点播/Range 播放需要 moov 在文件头；MPEG-TS 也要转成播放器常用的 MP4。fMP4 不能字节拼接 |
 | Python + FFmpeg + libtorrent 的体积 | 媒体/BT 还在这套核心里；总内存到不了 IDM 那档 |
 | FTP/SFTP 仍是单连接追加 | 本来就不是 HTTP Range 那套；传输已经在独立线程里写盘 |
@@ -101,4 +101,4 @@ ABDM 也是 RandomAccessFile / 动态 part 写进一个文件，模型和这里�
 | 浏览器 POST 重放不能 Range 续传 | 只下一遍，避免表单/API 副作用；5.0.5 只把写盘改成和无 Range GET 一样随到随写 |
 | 已有 `http-resume.json` 的 Range 续传仍走 Python | 原生引擎这一刀先覆盖新任务；检查点格式对齐后可以再迁 |
 
-5.0.9 把 HTTP GET 接到已在跑的监督进程事件队列上。下一刀若还做产品，是设置/播放器原生化，或把 Range 续传检查点交给原生引擎，不是再叠进程。
+5.0.10 把安装入口改成常驻 `HLSNativeShell.exe`，空闲不创建 WebView2。HLS/DASH/BT 仍在 Python 核心。下一刀若还做产品，是设置/播放器原生化，或把 Range 续传检查点交给原生引擎。

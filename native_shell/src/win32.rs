@@ -96,7 +96,7 @@ pub struct Win32Host {
 }
 
 impl Win32Host {
-    pub fn boot(shell: Arc<Mutex<ResidentShell>>) -> Result<&'static Self, String> {
+    pub fn boot(shell: Arc<Mutex<ResidentShell>>, own_tray: bool) -> Result<&'static Self, String> {
         unsafe {
             claim_single_instance()?;
             let instance = GetModuleHandleW(null());
@@ -228,10 +228,9 @@ impl Win32Host {
                 nid_added: Mutex::new(false),
             }));
             HOST = Some(host);
-            // 5.0.0 keeps the existing desktop tray for Open/Quit. Adding a
-            // second NIM_ADD icon here would sit next to it. Confirm/progress/
-            // complete still use the pre-created HWNDs; this message-only
-            // window receives offer events.
+            if own_tray {
+                add_tray_icon(host);
+            }
             Ok(host)
         }
     }
@@ -849,7 +848,6 @@ unsafe fn place_bottom_right(hwnd: HWND, width: i32, height: i32) {
     SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, 0);
 }
 
-#[allow(dead_code)]
 unsafe fn add_tray_icon(host: &Win32Host) {
     let mut nid = std::mem::zeroed::<NOTIFYICONDATAW>();
     nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
@@ -1057,11 +1055,19 @@ unsafe extern "system" fn main_proc(
                             return 0;
                         }
                         ID_NEW_TASK | ID_SETTINGS => {
-                            if let Some(core) = host.core.lock().ok().and_then(|slot| slot.clone())
-                            {
-                                std::thread::spawn(move || {
-                                    let _ = core.open_settings();
-                                });
+                            let root = crate::install_root();
+                            let spawned = root
+                                .as_ref()
+                                .map(|path| crate::spawn_desktop_ui(path))
+                                .unwrap_or(false);
+                            if !spawned {
+                                if let Some(core) =
+                                    host.core.lock().ok().and_then(|slot| slot.clone())
+                                {
+                                    std::thread::spawn(move || {
+                                        let _ = core.open_settings();
+                                    });
+                                }
                             }
                             return 0;
                         }

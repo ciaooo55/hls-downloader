@@ -26,6 +26,10 @@ fn main() -> ExitCode {
     }
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
+        Err(err) if err == "native shell already running" => {
+            notify_existing_instance(&args);
+            ExitCode::SUCCESS
+        }
         Err(err) => {
             eprintln!("{err}");
             ExitCode::from(1)
@@ -91,6 +95,7 @@ fn self_test() -> ExitCode {
 
 fn run(args: &[String]) -> Result<(), String> {
     let headless = args.iter().any(|arg| arg == "--headless") || cfg!(not(windows));
+    let own_tray = !args.iter().any(|arg| arg == "--no-tray");
     let core_url = flag_value(args, "--core-url").unwrap_or_else(default_core_url);
     let token = flag_value(args, "--token").unwrap_or_else(default_token);
     let status_path = flag_value(args, "--status-path").map(PathBuf::from);
@@ -103,13 +108,17 @@ fn run(args: &[String]) -> Result<(), String> {
     } else {
         Some(CoreClient::parse(&core_url, &token)?)
     };
+    if let Some(client) = &client {
+        ensure_core(client)?;
+        import_launch_paths(client, args);
+    }
 
     let stop = Arc::new(AtomicBool::new(false));
 
     #[cfg(windows)]
     if !headless {
         // HWNDs and tray must exist before Python marks the presenter ready.
-        let ui = hls_native_shell::win32::Win32Host::boot(Arc::clone(&shell))?;
+        let ui = hls_native_shell::win32::Win32Host::boot(Arc::clone(&shell), own_tray)?;
         if let Some(client) = client.clone() {
             *ui.core.lock().unwrap() = Some(client.clone());
             let ui_shell = Arc::clone(&shell);
@@ -123,6 +132,7 @@ fn run(args: &[String]) -> Result<(), String> {
         stop.store(true, Ordering::SeqCst);
         return Ok(());
     }
+    let _ = own_tray;
 
     if let Some(client) = client.clone() {
         connect_core(&client, &shell, status_path.as_deref())?;
@@ -316,6 +326,52 @@ fn write_status(path: Option<&Path>, shell: &Mutex<ResidentShell>) {
     if fs::write(&tmp, payload).is_ok() {
         let _ = fs::rename(tmp, path);
     }
+}
+
+fn ensure_core(client: &CoreClient) -> Result<(), String> {
+    if client.health().is_ok() {
+        return Ok(());
+    }
+    if let Some(root) = hls_native_shell::install_root() {
+        if hls_native_shell::locate_core_executable(&root).is_some() {
+            hls_native_shell::spawn_core(&root)?;
+        }
+    }
+    wait_for_core(client);
+    if client.health().is_ok() {
+        Ok(())
+    } else {
+        Err(format!(
+            "download core did not open http://127.0.0.1:{}",
+            client.port
+        ))
+    }
+}
+
+fn import_launch_paths(client: &CoreClient, args: &[String]) {
+    for arg in args.iter().skip(1) {
+        if arg.starts_with("--") {
+            continue;
+        }
+        if hls_native_shell::download_import_route(arg).is_some() {
+            let _ = client.import_path(arg);
+        }
+    }
+}
+
+fn notify_existing_instance(args: &[String]) {
+    // Tauri helper launches use --no-tray. Do not steal focus from an already
+    // running supervisor when that helper process exits on the single-instance mutex.
+    if args.iter().any(|arg| arg == "--no-tray") {
+        return;
+    }
+    let core_url = flag_value(args, "--core-url").unwrap_or_else(default_core_url);
+    let token = flag_value(args, "--token").unwrap_or_else(default_token);
+    let Ok(client) = CoreClient::parse(&core_url, &token) else {
+        return;
+    };
+    import_launch_paths(&client, args);
+    let _ = client.open_main();
 }
 
 fn wait_for_core(client: &CoreClient) {

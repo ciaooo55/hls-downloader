@@ -129,6 +129,16 @@ impl CoreClient {
         self.request("POST", "/desktop/native-shell/settings", None, 8.0)
     }
 
+    pub fn open_main(&self) -> Result<Value, String> {
+        self.request("POST", "/desktop/native-shell/main/open", None, 4.0)
+    }
+
+    pub fn import_path(&self, path: &str) -> Result<Value, String> {
+        let route = crate::download_import_route(path)
+            .ok_or_else(|| "unsupported import path".to_string())?;
+        self.request("POST", route, Some(json!({ "path": path })), 8.0)
+    }
+
     pub fn open_explorer(&self, task_id: &str) -> Result<Value, String> {
         self.request(
             "POST",

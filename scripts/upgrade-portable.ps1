@@ -175,7 +175,7 @@ try {
 
 Write-Host "Portable HLS Downloader upgraded successfully: $targetDirFull" -ForegroundColor Green
 if ($StartAfterUpgrade) {
-    Start-Process -FilePath (Join-Path $targetDirFull "HLSDownloader.exe") -WorkingDirectory $targetDirFull
+    Start-Process -FilePath (Join-Path $targetDirFull "HLSNativeShell.exe") -WorkingDirectory $targetDirFull
 }
 if ($DeleteSourceAfterUpgrade) {
     # The script has already been parsed into this PowerShell process and the

@@ -614,6 +614,13 @@ def maybe_spawn_native_shell_process(
     Tests and Linux source runs keep the Tauri/web fallback. The supervisor
     process POSTs /desktop/native-shell/boot after its windows are warm.
     """
+    if os.environ.get("HLS_STARTED_BY_NATIVE_SHELL", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return None
     if not running_on_windows():
         return None
     if os.environ.get("PYTEST_CURRENT_TEST"):

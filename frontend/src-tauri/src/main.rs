@@ -395,6 +395,7 @@ fn start_native_shell(root: &Path, config: &LocalConfig) {
         .arg(format!("http://127.0.0.1:{}/api", config.port))
         .arg("--token")
         .arg(&config.token)
+        .arg("--no-tray")
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -634,21 +635,39 @@ fn post_core_ok(config: &LocalConfig, path: &str) -> bool {
 }
 
 fn show_main(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = ensure_main_window(app) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
 }
 
+fn ensure_main_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    if let Some(window) = app.get_webview_window("main") {
+        return Some(window);
+    }
+    tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+        .title("HLS Downloader")
+        .inner_size(1440.0, 840.0)
+        .min_inner_size(820.0, 560.0)
+        .center()
+        .decorations(false)
+        .visible(true)
+        .build()
+        .ok()
+}
+
 fn show_task_list(app: &tauri::AppHandle) {
     let runtime = app.state::<Arc<CoreRuntime>>();
     let config = runtime_config(runtime.inner());
-    if post_core_ok(&config, "/api/desktop/native-shell/main/open") {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.hide();
+    for _ in 0..20 {
+        if post_core_ok(&config, "/api/desktop/native-shell/main/open") {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
+            return;
         }
-        return;
+        std::thread::sleep(Duration::from_millis(50));
     }
     show_main(app);
 }
@@ -741,6 +760,9 @@ fn main() {
     let exit_runtime = Arc::clone(&runtime);
     let launch_args: Vec<String> = std::env::args().collect();
     let background = background_launch(&launch_args);
+    let settings_launch = launch_args
+        .iter()
+        .any(|arg| arg == "--settings" || arg == "--new-task");
     // Packaging smoke tests run a staged copy alongside a user's installed
     // application. Keep the production single-instance guard intact, but let
     // the staged process use its isolated core/port when explicitly requested.
@@ -756,7 +778,9 @@ fn main() {
             for arg in args.iter().skip(1) {
                 import_torrent_path(&config, arg);
             }
-            if !background_launch(&args) {
+            if args.iter().any(|arg| arg == "--settings" || arg == "--new-task") {
+                show_main(app);
+            } else if !background_launch(&args) {
                 show_task_list(app);
             }
         }));
@@ -788,33 +812,37 @@ fn main() {
             for arg in std::env::args().skip(1) {
                 import_torrent_path(&config, &arg);
             }
-            let open = MenuItem::with_id(app, "open", "打开下载器", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &quit])?;
-            let mut tray = TrayIconBuilder::with_id("main")
-                .menu(&menu)
-                .show_menu_on_left_click(false);
-            if let Some(icon) = app.default_window_icon() {
-                tray = tray.icon(icon.clone());
-            }
-            tray.on_menu_event(|app, event| match event.id.as_ref() {
-                "open" => show_task_list(app),
-                "quit" => app.exit(0),
-                _ => {}
-            })
-            .on_tray_icon_event(|tray, event| {
-                if let TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                } = event
-                {
-                    show_task_list(tray.app_handle());
+            if !settings_launch {
+                let open = MenuItem::with_id(app, "open", "打开下载器", true, None::<&str>)?;
+                let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&open, &quit])?;
+                let mut tray = TrayIconBuilder::with_id("main")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false);
+                if let Some(icon) = app.default_window_icon() {
+                    tray = tray.icon(icon.clone());
                 }
-            })
-            .build(app)?;
-            watch_clipboard(app.handle().clone());
-            if !background {
+                tray.on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => show_task_list(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_task_list(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+                watch_clipboard(app.handle().clone());
+            }
+            if settings_launch {
+                show_main(app.handle());
+            } else if !background {
                 show_task_list(app.handle());
             }
             Ok(())
