@@ -4,6 +4,7 @@ import asyncio
 import shutil
 import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -211,3 +212,132 @@ def test_native_engine_range_download_writes_one_file(tmp_path, monkeypatch):
     assert task.engine_state.get("http_engine") == "native-shell"
     output = Path(task.output_path)
     assert output.read_bytes() == BODY
+
+
+def _native_shell_job_cmdlines() -> list[str]:
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return []
+    found = []
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        cmdline = raw.replace(b"\x00", b" ").decode("utf-8", "replace")
+        if "--job" in cmdline and "hls-native-shell" in cmdline:
+            found.append(cmdline.strip())
+    return found
+
+
+@pytest.mark.skipif(shutil.which("cargo") is None, reason="cargo is required to build the native HTTP engine")
+def test_resident_supervisor_downloads_http_without_job_fork(tmp_path, monkeypatch):
+    """Prove GET runs in the already-running supervisor, not a second --job process."""
+    import subprocess
+
+    from backend.app.native_engine import build_native_engine_debug
+    from backend.app.native_shell import native_shell_supervisor
+    from tests.test_native_shell_supervisor import (
+        _free_port,
+        _serve,
+        _supervisor_binary,
+        _wait_status,
+    )
+
+    executable = build_native_engine_debug()
+    if executable is None:
+        pytest.skip("native HTTP engine failed to build")
+
+    monkeypatch.setenv("HLS_TEST_NATIVE_HTTP", "1")
+    monkeypatch.delenv("HLS_NATIVE_HTTP_SPAWN", raising=False)
+    monkeypatch.setenv("HLS_NATIVE_ENGINE", str(executable))
+    monkeypatch.setattr(settings, "native_http_engine", True)
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path / "downloads"))
+    monkeypatch.setattr(settings, "temp_dir", str(tmp_path / "temp"))
+    monkeypatch.setattr(settings, "proxy_mode", "direct")
+
+    launches: list[object] = []
+    real_start = start_native_job
+
+    def tracking_start(**kwargs):
+        handle = real_start(**kwargs)
+        launches.append(handle)
+        return handle
+
+    def forbid_spawn(**kwargs):
+        raise AssertionError(f"resident path spawned --job: {kwargs}")
+
+    monkeypatch.setattr("backend.app.downloader.http_file.start_native_job", tracking_start)
+    monkeypatch.setattr("backend.app.native_engine.run_native_engine", forbid_spawn)
+
+    port = _free_port()
+    core, core_worker = _serve(port)
+    status_path = tmp_path / "shell.json"
+    proc = subprocess.Popen(
+        [
+            str(_supervisor_binary()),
+            "--headless",
+            "--core-url",
+            f"http://127.0.0.1:{port}/api",
+            "--token",
+            settings.token,
+            "--status-path",
+            str(status_path),
+        ],
+        cwd=str(Path(__file__).resolve().parent.parent),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    range_server = None
+    try:
+        _wait_status(
+            status_path,
+            lambda body: body.get("resident") and body.get("core_running"),
+        )
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline and not native_shell_supervisor().has_event_poller():
+            time.sleep(0.02)
+        poller = native_shell_supervisor().has_event_poller()
+        waiter_status = native_shell_supervisor().status()
+        assert poller is True, f"supervisor is not polling events: {waiter_status}"
+
+        before_jobs = _native_shell_job_cmdlines()
+        range_server, url = _range_server(BODY)
+        task = Task(
+            id="native-resident",
+            url=url,
+            task_type=TaskType.HTTP,
+            filename="payload.bin",
+            concurrency=4,
+        )
+        asyncio.run(HTTPDownloader(task).run())
+        after_jobs = _native_shell_job_cmdlines()
+        new_jobs = [item for item in after_jobs if item not in before_jobs]
+
+        assert launches, "HTTPDownloader never called start_native_job"
+        assert launches == [None] * len(launches), f"expected in-process queue, got {launches!r}"
+        assert task.status is TaskStatus.DONE, task.error_message
+        assert task.engine_state.get("http_engine") == "native-shell"
+        assert Path(task.output_path).read_bytes() == BODY
+        assert new_jobs == [], f"saw --job processes: {new_jobs}"
+        assert proc.poll() is None, "resident supervisor exited during the download"
+    finally:
+        if range_server is not None:
+            range_server.shutdown()
+        if proc.poll() is None:
+            try:
+                if proc.stdin is not None:
+                    proc.stdin.write('{"op":"shutdown"}\n')
+                    proc.stdin.flush()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                proc.kill()
+        core.should_exit = True
+        core_worker.join(timeout=8)
