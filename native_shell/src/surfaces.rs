@@ -441,4 +441,35 @@ mod tests {
         shell.progress(vec![]).unwrap();
         assert!(!shell.windows.progress.visible);
     }
+
+    #[test]
+    fn complete_event_marks_row_done() {
+        let mut shell = ResidentShell::boot("headless");
+        shell
+            .progress(vec![json!({
+                "id": "t1",
+                "filename": "a.bin",
+                "status": "downloading_segments",
+                "progress_percent": 40.0,
+                "available_actions": ["pause"]
+            })])
+            .unwrap();
+        shell
+            .apply_event(&json!({
+                "kind": "complete",
+                "item": {
+                    "id": "t1",
+                    "filename": "a.bin",
+                    "status": "done",
+                    "progress_percent": 100.0,
+                    "available_actions": ["open", "open_folder", "delete"]
+                }
+            }))
+            .unwrap();
+        let row = &shell.task_list.tasks[0];
+        assert_eq!(row.status, "done");
+        assert_eq!(row.progress_percent, 100.0);
+        assert!(row.available_actions.contains(&"open".to_string()));
+        assert!(row.display_line().contains("已完成"));
+    }
 }

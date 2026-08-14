@@ -828,6 +828,7 @@ fn http_get(
     let mut location = None;
     let mut content_length = None;
     let mut content_range = None;
+    let mut chunked = false;
     for line in head.lines().skip(1) {
         if let Some(value) = header_value(line, "Location") {
             location = Some(value.to_string());
@@ -838,6 +839,16 @@ fn http_get(
         if let Some(value) = header_value(line, "Content-Range") {
             content_range = Some(value.to_string());
         }
+        if let Some(value) = header_value(line, "Transfer-Encoding") {
+            chunked = value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("chunked"));
+        }
+    }
+    if chunked && !matches!(status, 301 | 302 | 303 | 307 | 308) {
+        return Err(EngineError::Failed(
+            "chunked Transfer-Encoding unsupported".into(),
+        ));
     }
     let remaining = content_length.map(|total| total.saturating_sub(leftover.len() as u64));
     Ok((
@@ -1319,6 +1330,45 @@ mod tests {
         let (job, dir) = temp_job(&url, false, body.len() as u64, 3);
         let err = run_job(&job).unwrap_err();
         assert_eq!(err.exit_code(), EXIT_RANGE_UNSUPPORTED);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    fn serve_chunked(body: &'static [u8]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).is_err() {
+                    continue;
+                }
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let mut stream = reader.into_inner();
+                let header = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(format!("{:x}\r\n", body.len()).as_bytes());
+                let _ = stream.write_all(body);
+                let _ = stream.write_all(b"\r\n0\r\n\r\n");
+            }
+        });
+        format!("http://127.0.0.1:{}", addr.port())
+    }
+
+    #[test]
+    fn chunked_body_is_rejected_instead_of_writing_framing() {
+        let body: &'static [u8] = b"hello-chunked";
+        let url = serve_chunked(body);
+        let (job, dir) = temp_job(&url, true, 0, 1);
+        let err = run_job(&job).unwrap_err();
+        assert_eq!(err.exit_code(), EXIT_ERROR);
+        assert!(err.to_string().contains("chunked"));
+        assert!(!job.output.exists());
         let _ = fs::remove_dir_all(dir);
     }
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import socket
 import threading
@@ -14,6 +15,7 @@ from backend.app.config import settings
 from backend.app.downloader.http_file import HTTPDownloader
 from backend.app.models import Task, TaskStatus, TaskType
 from backend.app.native_engine import (
+    begin_native_job_progress,
     locate_native_engine_executable,
     native_job_exit_code,
     start_native_job,
@@ -63,6 +65,69 @@ def test_native_job_exit_code_reads_terminal_progress(tmp_path):
     assert native_job_exit_code(path) == 21
     path.write_text('{"status":"error","code":30}', encoding="utf-8")
     assert native_job_exit_code(path) == 30
+
+
+def test_begin_native_job_progress_clears_terminal_status(tmp_path):
+    path = tmp_path / "native-engine.progress.json"
+    path.write_text('{"status":"paused","code":20,"downloaded":40}', encoding="utf-8")
+    begin_native_job_progress(path)
+    assert native_job_exit_code(path) is None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["status"] == "starting"
+
+
+def test_start_native_job_clears_stale_paused_progress(tmp_path, monkeypatch):
+    exe = tmp_path / "HLSNativeShell.exe"
+    exe.write_bytes(b"not-a-real-binary")
+    job = tmp_path / "native-engine.job.json"
+    progress = tmp_path / "native-engine.progress.json"
+    job.write_text("{}", encoding="utf-8")
+    progress.write_text('{"status":"paused","code":20,"downloaded":40}', encoding="utf-8")
+    spawned = {"called": False}
+
+    def fake_spawn(**_kwargs):
+        spawned["called"] = True
+        raise AssertionError("resident queue must not spawn --job")
+
+    monkeypatch.setattr("backend.app.native_engine.run_native_engine", fake_spawn)
+    shell = NativeShellSupervisor()
+    monkeypatch.setattr("backend.app.native_engine.native_shell_supervisor", lambda: shell)
+    shell.boot_resident()
+    worker = threading.Thread(target=lambda: shell.wait_event(0, 2), daemon=True)
+    worker.start()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not shell.has_event_poller():
+        time.sleep(0.01)
+    handle = start_native_job(executable=exe, job_path=job, progress_path=progress)
+    worker.join(2.0)
+    assert handle is None
+    assert spawned["called"] is False
+    assert native_job_exit_code(progress) is None
+    assert json.loads(progress.read_text(encoding="utf-8"))["status"] == "starting"
+
+
+def test_await_native_engine_ignores_starting_until_new_terminal(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "download_dir", str(tmp_path / "downloads"))
+    monkeypatch.setattr(settings, "temp_dir", str(tmp_path / "temp"))
+    task = Task(id="native-await-stale", url="http://127.0.0.1/a.bin", task_type=TaskType.HTTP)
+    downloader = HTTPDownloader(task)
+    control = tmp_path / "native-engine.control"
+    progress = tmp_path / "native-engine.progress.json"
+    control.write_text("run", encoding="utf-8")
+    progress.write_text('{"status":"paused","code":20}', encoding="utf-8")
+    begin_native_job_progress(progress)
+
+    def finish():
+        time.sleep(0.35)
+        progress.write_text(
+            '{"status":"paused","code":20,"downloaded":4}',
+            encoding="utf-8",
+        )
+
+    threading.Thread(target=finish, daemon=True).start()
+    started = time.monotonic()
+    assert asyncio.run(downloader._await_native_engine(None, control, progress)) == 20
+    assert time.monotonic() - started >= 0.3
 
 
 def test_start_native_job_queues_when_poller_is_waiting(tmp_path, monkeypatch):

@@ -199,6 +199,9 @@ def test_progress_events_coalesce_and_task_events_drive_overlays():
     complete = next(item for item in events if item["kind"] == "complete")
     assert complete["item"]["filename"] == "b.bin"
     assert complete["item"]["output_path"] == r"D:\Downloads\b.bin"
+    assert complete["item"]["status"] == "done"
+    assert complete["item"]["progress_percent"] == 100.0
+    assert "open" in complete["item"]["available_actions"]
     assert "url" not in complete["item"]
     reset_native_shell()
 

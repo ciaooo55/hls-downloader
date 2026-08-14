@@ -352,6 +352,17 @@ impl Win32Host {
                             refresh_main_list(self);
                         }
                     }
+                    "action_error" => {
+                        let message = event
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .filter(|text| !text.is_empty())
+                            .unwrap_or("操作失败");
+                        SetWindowTextW(
+                            GetDlgItem(self.hwnds.main, ID_STATUS as i32),
+                            wide(&format!("操作失败：{message}")).as_ptr(),
+                        );
+                    }
                     "open_main" => {
                         place_main(self.hwnds.main);
                         ShowWindow(self.hwnds.main, SW_SHOWNORMAL);
@@ -881,14 +892,17 @@ fn run_selected_action(host: &Win32Host, action: &str) {
         return;
     };
     std::thread::spawn(move || {
-        let _ = core.run_task_action(&task_id, &mapped);
+        let result = core.run_task_action(&task_id, &mapped);
         if let Some(host) = host() {
-            if mapped == "delete" {
+            if mapped == "delete" && result.is_ok() {
                 host.shell
                     .lock()
                     .unwrap_or_else(|err| err.into_inner())
                     .task_list
                     .remove(&task_id);
+            }
+            if let Err(err) = result {
+                host.enqueue(json!({"kind": "action_error", "message": err}));
             }
             host.request_task_refresh();
         }
@@ -1327,18 +1341,24 @@ unsafe extern "system" fn overlay_proc(
                 if hide {
                     ShowWindow(hwnd, SW_HIDE);
                 }
-                if let Some(core) = core {
-                    std::thread::spawn(move || match id {
-                        ID_PROGRESS_PAUSE => {
-                            let _ = core.pause_task(&task_id);
+                if (id == ID_COMPLETE_OPEN_FOLDER || id == ID_COMPLETE_OPEN_FILE)
+                    && task_id.is_empty()
+                {
+                    host.enqueue(json!({
+                        "kind": "action_error",
+                        "message": "无法打开：任务编号缺失"
+                    }));
+                } else if let Some(core) = core {
+                    std::thread::spawn(move || {
+                        let result = match id {
+                            ID_PROGRESS_PAUSE => core.pause_task(&task_id),
+                            ID_COMPLETE_OPEN_FOLDER => core.open_explorer(&task_id),
+                            ID_COMPLETE_OPEN_FILE => core.launch_file(&task_id, true),
+                            _ => Ok(json!({"ok": true})),
+                        };
+                        if let (Err(err), Some(host)) = (result, host()) {
+                            host.enqueue(json!({"kind": "action_error", "message": err}));
                         }
-                        ID_COMPLETE_OPEN_FOLDER => {
-                            let _ = core.open_explorer(&task_id);
-                        }
-                        ID_COMPLETE_OPEN_FILE => {
-                            let _ = core.launch_file(&task_id, true);
-                        }
-                        _ => {}
                     });
                 }
             }

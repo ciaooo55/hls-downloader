@@ -575,6 +575,9 @@ def overlay_complete_item(task: dict[str, Any] | None) -> dict[str, Any]:
         "output_path": str(source.get("output_path") or ""),
         "downloaded_bytes": downloaded,
         "output_is_file": source.get("output_is_file") is not False,
+        "status": "done",
+        "progress_percent": 100.0,
+        "available_actions": ["open", "open_folder", "delete"],
     }
 
 

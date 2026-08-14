@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .config import PROJECT_ROOT
 from .native_shell import locate_native_shell_executable, native_shell_supervisor
+from .utils import atomic_write_text
 
 
 def locate_native_engine_executable(project_root: Path | None = None) -> Path | None:
@@ -73,6 +74,23 @@ def write_native_job(*, job_path: Path, payload: dict) -> Path:
     return job_path
 
 
+def begin_native_job_progress(progress_path: Path | None) -> None:
+    """Clear a previous terminal status before the next resident or --job run.
+
+    The resident supervisor has no child process. Python waits on progress JSON.
+    A leftover paused/done/error file would be treated as the new job's exit.
+    """
+    if progress_path is None:
+        return
+    atomic_write_text(
+        progress_path,
+        json.dumps(
+            {"status": "starting", "downloaded": 0, "total": 0, "speed": 0},
+            ensure_ascii=False,
+        ),
+    )
+
+
 def run_native_engine(
     *,
     executable: Path,
@@ -122,10 +140,12 @@ def start_native_job(
         supervisor = native_shell_supervisor()
         if supervisor.has_event_poller():
             try:
+                begin_native_job_progress(progress_path)
                 supervisor.queue_http_job(job_path, progress_path)
                 return None
             except Exception:
                 pass
+    begin_native_job_progress(progress_path)
     return run_native_engine(executable=executable, job_path=job_path, cwd=cwd)
 
 
