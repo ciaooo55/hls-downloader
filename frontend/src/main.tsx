@@ -8,6 +8,8 @@ import { prepareTauriRuntime } from './tauri'
 const params = new URLSearchParams(window.location.search)
 const handoffId = params.get('handoff')?.trim() || ''
 const handoffHost = params.get('handoffHost') === '1'
+const progressHost = params.get('progressHost') === '1'
+const completeHost = params.get('completeHost') === '1'
 const backgroundHost = params.get('host') === '1'
 const root = ReactDOM.createRoot(document.getElementById('root')!)
 
@@ -35,6 +37,14 @@ async function boot() {
   if (backgroundHost) {
     document.documentElement.dataset.surface = 'host'
     root.render(<BootScreen label="HLS Downloader 后台服务已就绪" />)
+  } else if (progressHost) {
+    document.documentElement.dataset.surface = 'overlay'
+    const { default: DownloadProgressHost } = await import('./DownloadProgressHost')
+    root.render(<DownloadProgressHost />)
+  } else if (completeHost) {
+    document.documentElement.dataset.surface = 'overlay'
+    const { default: DownloadCompleteHost } = await import('./DownloadCompleteHost')
+    root.render(<DownloadCompleteHost />)
   } else if (handoffHost) {
     document.documentElement.dataset.surface = 'handoff'
     const { default: BrowserHandoffHost } = await import('./BrowserHandoffHost')

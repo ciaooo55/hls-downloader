@@ -1,5 +1,5 @@
 {
-  "config_version": 27,
+  "config_version": 28,
   "host": "127.0.0.1",
   "port": 8765,
   "download_dir": "downloads",
@@ -37,6 +37,8 @@
   "download_subtitles": true,
   "skip_ad_segments": true,
   "completion_sound_enabled": false,
+  "download_progress_window_enabled": true,
+  "download_complete_popup_enabled": true,
   "resume_interrupted_on_startup": false,
   "auto_retry_failed_max": 0,
   "av_scan_enabled": false,

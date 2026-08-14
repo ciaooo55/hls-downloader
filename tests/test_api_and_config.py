@@ -611,7 +611,7 @@ def test_distributable_default_config_does_not_force_site_specific_request_heade
 
     # The checked-in template must not ship a reusable privileged credential.
     # The release template already uses the current credential-protection schema.
-    assert data["config_version"] == 27
+    assert data["config_version"] == 28
     assert "token" not in data
     assert data["temp_dir"] == "."
     assert data["default_referer"] == ""
@@ -649,11 +649,11 @@ def test_old_blank_request_defaults_remain_blank_after_migration(tmp_path, monke
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 27
+    assert loaded.config_version == 28
     assert loaded.default_referer == ""
     assert loaded.default_origin == ""
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["config_version"] == 27
+    assert saved["config_version"] == 28
     assert saved["token"] != "55555"
     assert len(saved["token"]) >= 32
     assert saved["temp_dir"] == "."
@@ -709,7 +709,7 @@ def test_publicly_leaked_token_is_rotated_on_load(tmp_path, monkeypatch):
     assert len(loaded.token) >= 32
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["token"] == loaded.token
-    assert saved["config_version"] == 27
+    assert saved["config_version"] == 28
 
 
 def test_runtime_config_is_not_tracked_by_git():
@@ -744,8 +744,8 @@ def test_v13_template_generates_a_per_install_native_transport_token(tmp_path, m
     loaded = config_module.load_settings()
     saved = json.loads(config_path.read_text(encoding="utf-8"))
 
-    assert loaded.config_version == 27
-    assert saved["config_version"] == 27
+    assert loaded.config_version == 28
+    assert saved["config_version"] == 28
     assert len(saved["token"]) >= 32
 
 
@@ -767,7 +767,7 @@ def test_v2_legacy_concurrency_defaults_migrate_to_new_defaults(tmp_path, monkey
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 27
+    assert loaded.config_version == 28
     assert loaded.default_concurrency == 12
     assert loaded.max_concurrent_tasks == 3
 
@@ -790,7 +790,7 @@ def test_v2_custom_concurrency_values_are_preserved_during_migration(tmp_path, m
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 27
+    assert loaded.config_version == 28
     assert loaded.default_concurrency == 6
     assert loaded.max_concurrent_tasks == 5
 
@@ -816,7 +816,7 @@ def test_v19_excessive_worker_counts_are_clamped_to_global_budget(tmp_path, monk
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 27
+    assert loaded.config_version == 28
     assert loaded.default_concurrency == 64
     assert loaded.site_profiles[0]["concurrency"] == 64
 
@@ -838,7 +838,7 @@ def test_v11_legacy_takeover_default_migrates_to_capture_all_explicit_downloads(
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 27
+    assert loaded.config_version == 28
     assert loaded.browser_takeover_min_mb == 0
 
 
@@ -859,7 +859,7 @@ def test_v11_custom_takeover_threshold_is_preserved(tmp_path, monkeypatch):
 
     loaded = config_module.load_settings()
 
-    assert loaded.config_version == 27
+    assert loaded.config_version == 28
     assert loaded.browser_takeover_min_mb == 3
 
 

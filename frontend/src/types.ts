@@ -127,6 +127,8 @@ export interface Settings {
   skip_ad_segments?: boolean
   clipboard_watch?: boolean
   completion_sound_enabled?: boolean
+  download_progress_window_enabled?: boolean
+  download_complete_popup_enabled?: boolean
   resume_interrupted_on_startup?: boolean
   auto_retry_failed_max?: number
   av_scan_enabled?: boolean

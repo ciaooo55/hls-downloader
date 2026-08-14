@@ -145,7 +145,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px 
 /* Dedicated IDM-style handoff windows use the same UI bundle without the manager shell. */
 html[data-surface="handoff"],
 html[data-surface="handoff"] body,
-html[data-surface="handoff"] #root {
+html[data-surface="handoff"] #root,
+html[data-surface="overlay"],
+html[data-surface="overlay"] body,
+html[data-surface="overlay"] #root {
   min-width: 0;
   min-height: 0;
 }
@@ -1114,3 +1117,196 @@ html[data-surface="handoff"] #root {
 .site-profile-grid .settings-field-wide { grid-column: 1 / -1; }
 .site-profile-toolbar { display: flex; align-items: center; gap: 10px; }
 .site-profile-card textarea, .site-profiles .settings-json-editor { width: 100%; min-height: 68px; }
+
+html[data-surface="overlay"],
+html[data-surface="overlay"] body,
+html[data-surface="overlay"] #root {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+}
+.overlay-window-root {
+  display: grid;
+  grid-template-rows: 30px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  user-select: none;
+}
+.overlay-window-chrome {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  height: 30px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.overlay-window-drag {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  gap: 7px;
+  padding-left: 10px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text);
+  cursor: default;
+}
+.overlay-window-drag span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.overlay-window-controls {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+}
+.overlay-window-controls button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.overlay-window-controls button:hover { background: var(--surface-3); color: var(--text); }
+.overlay-window-controls .hls-window-close:hover { background: var(--red); color: #fff; }
+.download-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 10px 10px;
+  overflow: auto;
+  list-style: none;
+}
+.download-progress-row {
+  display: grid;
+  gap: 6px;
+  padding: 8px 9px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+.download-progress-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.download-progress-copy strong,
+.download-progress-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.download-progress-copy strong { font-size: 12px; }
+.download-progress-copy span { color: var(--muted); font-size: 11px; }
+.download-progress-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--surface-3);
+}
+.download-progress-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--primary), color-mix(in srgb, var(--primary) 55%, var(--green)));
+}
+.download-progress-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.download-progress-empty {
+  display: grid;
+  place-content: center;
+  gap: 4px;
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--muted);
+}
+.download-progress-empty strong { color: var(--text); font-size: 13px; }
+.download-complete-panel {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px 14px;
+  min-width: 0;
+}
+.download-complete-hero {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+.download-complete-hero svg { color: var(--green); }
+.download-complete-hero strong { display: block; font-size: 15px; }
+.download-complete-hero span { color: var(--muted); font-size: 11px; }
+.download-complete-name {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.download-complete-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.download-complete-warn,
+.download-complete-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.download-complete-warn { color: var(--amber); }
+.download-complete-error { color: var(--red); }
+.download-complete-panel footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 6px;
+}
+.download-overlay-dock {
+  position: fixed;
+  z-index: 2400;
+  width: min(392px, calc(100vw - 24px));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 16px 40px var(--shadow);
+  overflow: hidden;
+}
+.download-overlay-dock-progress {
+  right: 12px;
+  bottom: 12px;
+}
+.download-overlay-dock-progress > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 30px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.download-overlay-dock-complete {
+  left: 50%;
+  top: 18%;
+  transform: translateX(-50%);
+}

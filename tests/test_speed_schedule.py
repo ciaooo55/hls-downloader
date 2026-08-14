@@ -115,12 +115,12 @@ def test_v23_config_gains_schedule_defaults(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
     loaded = config_module.load_settings()
-    assert loaded.config_version == 27
+    assert loaded.config_version == 28
     assert loaded.download_speed_limit_kib == 256
     assert loaded.speed_schedule_enabled is False
     assert loaded.speed_schedule_start == "08:00"
     assert loaded.speed_schedule_end == "23:00"
     assert loaded.speed_schedule_limit_kib == 0
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["config_version"] == 27
+    assert saved["config_version"] == 28
     assert saved["speed_schedule_enabled"] is False

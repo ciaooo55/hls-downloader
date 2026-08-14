@@ -11,7 +11,7 @@ from tests.test_task_manager_lifecycle import _async_noop, _db_row
 def test_resume_interrupted_defaults_off():
     loaded = Settings()
     assert loaded.resume_interrupted_on_startup is False
-    assert loaded.config_version == 27
+    assert loaded.config_version == 28
 
 
 def test_v25_config_gains_opt_in_startup_resume(tmp_path, monkeypatch):
@@ -32,11 +32,11 @@ def test_v25_config_gains_opt_in_startup_resume(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
     loaded = config_module.load_settings()
-    assert loaded.config_version == 27
+    assert loaded.config_version == 28
     assert loaded.resume_interrupted_on_startup is False
     assert loaded.completion_sound_enabled is True
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["config_version"] == 27
+    assert saved["config_version"] == 28
     assert saved["resume_interrupted_on_startup"] is False
 
 

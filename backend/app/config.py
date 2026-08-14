@@ -36,7 +36,7 @@ def _is_leaked_token(value: object) -> bool:
 
 
 class Settings(BaseSettings):
-    config_version: int = 27
+    config_version: int = 28
     host: str = "127.0.0.1"
     port: int = Field(default=8765, ge=1, le=65535)
     token: str = Field(default_factory=_new_internal_token, min_length=32)
@@ -78,6 +78,8 @@ class Settings(BaseSettings):
     skip_ad_segments: bool = True
     clipboard_watch: bool = True
     completion_sound_enabled: bool = False
+    download_progress_window_enabled: bool = True
+    download_complete_popup_enabled: bool = True
     resume_interrupted_on_startup: bool = False
     auto_retry_failed_max: int = 0
     av_scan_enabled: bool = False
@@ -342,6 +344,12 @@ def _load_settings_file() -> Settings:
             data["config_version"] = 27
             migrated = True
             version = 27
+        if version < 28:
+            data.setdefault("download_progress_window_enabled", True)
+            data.setdefault("download_complete_popup_enabled", True)
+            data["config_version"] = 28
+            migrated = True
+            version = 28
         if not isinstance(data.get("tvbox_endpoint"), str):
             data["tvbox_endpoint"] = ""
             migrated = True

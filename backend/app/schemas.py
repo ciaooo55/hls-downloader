@@ -316,6 +316,8 @@ class SettingsUpdate(BaseModel):
     skip_ad_segments: Optional[bool] = None
     clipboard_watch: Optional[bool] = None
     completion_sound_enabled: Optional[bool] = None
+    download_progress_window_enabled: Optional[bool] = None
+    download_complete_popup_enabled: Optional[bool] = None
     resume_interrupted_on_startup: Optional[bool] = None
     auto_retry_failed_max: Optional[int] = Field(default=None, ge=0, le=10)
     av_scan_enabled: Optional[bool] = None

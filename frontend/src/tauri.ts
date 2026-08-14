@@ -1,4 +1,5 @@
 import { HandoffWindowQueue } from './handoffQueue'
+import { initDownloadOverlayWindows } from './downloadOverlayWindows'
 
 export interface CoreConfig {
   port: number
@@ -197,6 +198,12 @@ async function createTauriDesktopSession(): Promise<() => void> {
       new Promise(resolve => window.setTimeout(resolve, 3000)),
     ])
   }
+  let stopOverlayWindows = () => {}
+  try {
+    stopOverlayWindows = await initDownloadOverlayWindows(WebviewWindow)
+  } catch {
+    // Progress/complete popups are optional; the manager window still runs.
+  }
 
   const showMain = async () => {
     await current.show().catch(() => {})
@@ -266,6 +273,7 @@ async function createTauriDesktopSession(): Promise<() => void> {
     stopped = true
     unlistenHostReady()
     unlistenResolved()
+    stopOverlayWindows()
     void WebviewWindow.getByLabel('handoff-host').then(window => window?.destroy()).catch(() => {})
     void localRequest('/desktop/session/stop', { method: 'POST', body: '{}' }).catch(() => {})
   }

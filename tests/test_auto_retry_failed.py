@@ -12,7 +12,7 @@ from backend.app.models import Task, TaskStatus
 def test_auto_retry_defaults_off():
     loaded = Settings()
     assert loaded.auto_retry_failed_max == 0
-    assert loaded.config_version == 27
+    assert loaded.config_version == 28
 
 
 def test_should_auto_retry_skips_permanent_and_respects_limit():

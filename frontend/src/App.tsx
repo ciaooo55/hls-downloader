@@ -13,6 +13,18 @@ import { downloadTextFile, formatTaskExport, parseUrlList } from './urlList'
 import { isEditableDropTarget, payloadFromDataTransfer, planDroppedPayload } from './dropImport'
 import { applyQueueReorder, isQueueReorderDrag } from './queueReorder'
 import { playCompletionChime, setCompletionSoundEnabled } from './completionSound'
+import {
+  enqueueCompleteItem,
+  pruneDismissedProgressIds,
+  selectProgressTasks,
+  shouldShowProgressWindow,
+  toCompleteItem,
+  toProgressItem,
+  type DownloadCompleteItem,
+  type DownloadProgressItem,
+} from './downloadOverlay'
+import DownloadCompletePanel from './components/DownloadCompletePanel'
+import DownloadProgressPanel from './components/DownloadProgressPanel'
 import SpeedChart from './components/SpeedChart'
 import DesktopToolbar from './components/DesktopToolbar'
 import WindowChrome from './components/WindowChrome'
@@ -36,6 +48,11 @@ import LegalAgreementDialog from './components/LegalAgreementDialog'
 const UI_EVENT_ID_CAP = 4096
 import { Button, Dialog, DialogFooter, DialogHeader, DialogOverlay } from './components/ui'
 import { isTauriDesktop, startTauriDesktopSession } from './tauri'
+import {
+  enqueueDownloadCompletePopup,
+  setDownloadCompletePopupEnabled,
+  syncDownloadProgressWindow,
+} from './downloadOverlayWindows'
 import { selectTheme, useUiStore } from './store/uiStore'
 import { pickLocalMediaFile, quitApplication } from './desktop'
 
@@ -116,10 +133,18 @@ export default function App() {
   const [batchInitialMode, setBatchInitialMode] = useState<'list' | 'harvest'>('list')
   const [dropActive, setDropActive] = useState(false)
   const lastStatuses = useRef<Record<string, string>>({})
+  const settingsRef = useRef<Settings>({})
+  const webProgressDismissed = useRef<Set<string>>(new Set())
+  const [webProgressItems, setWebProgressItems] = useState<DownloadProgressItem[]>([])
+  const [webCompleteQueue, setWebCompleteQueue] = useState<DownloadCompleteItem[]>([])
+  const [webProgressBusyId, setWebProgressBusyId] = useState('')
+  const [webCompleteBusy, setWebCompleteBusy] = useState(false)
+  const [webCompleteError, setWebCompleteError] = useState('')
   const feedbackTimer = useRef<number | null>(null)
   const clipboardOfferTimer = useRef<number | null>(null)
   const lastClipboardOffer = useRef('')
   const tasksRef = useRef<Task[]>([])
+  tasksRef.current = tasks
   const loadInFlight = useRef<Promise<void> | null>(null)
   const loadQueued = useRef(false)
   const progressEventBatch = useRef<Map<string, Record<string, any>>>(new Map())
@@ -191,6 +216,9 @@ export default function App() {
       if (progressFlushTimer.current !== null) window.clearTimeout(progressFlushTimer.current)
       progressFlushTimer.current = null
       const visibleTasks = taskData.filter(task => !deletedTaskIds.current.has(task.id))
+      for (const task of visibleTasks) {
+        if (task.id && lastStatuses.current[task.id] === undefined) lastStatuses.current[task.id] = task.status
+      }
       setTasks(mergeTaskEvents(visibleTasks, pendingProgress, deletedTaskIds.current) as Task[]); setSettings(settingData); setBrowserStatus(browserData); setAppVersion(healthData.version || ''); setPowerAction(powerActions[0] || null); setError('')
       try {
         if ('Notification' in window && Notification.permission === 'default') {
@@ -207,6 +235,23 @@ export default function App() {
   useEffect(() => {
     setCompletionSoundEnabled(Boolean(settings.completion_sound_enabled))
   }, [settings.completion_sound_enabled])
+  settingsRef.current = settings
+  useEffect(() => {
+    void setDownloadCompletePopupEnabled(settings.download_complete_popup_enabled !== false)
+  }, [settings.download_complete_popup_enabled])
+  useEffect(() => {
+    const enabled = settings.download_progress_window_enabled !== false
+    const items = selectProgressTasks(tasks)
+      .map(task => toProgressItem(task as unknown as Record<string, unknown>))
+      .filter((item): item is DownloadProgressItem => Boolean(item))
+    if (isTauriDesktop()) {
+      void syncDownloadProgressWindow(items, enabled)
+      return
+    }
+    const ids = items.map(item => item.id)
+    webProgressDismissed.current = pruneDismissedProgressIds(webProgressDismissed.current, ids)
+    setWebProgressItems(enabled && shouldShowProgressWindow(ids, webProgressDismissed.current) ? items : [])
+  }, [tasks, settings.download_progress_window_enabled])
   useEffect(() => {
     if (!settings.speed_schedule_enabled) return
     setScheduleClock(Date.now())
@@ -248,9 +293,14 @@ export default function App() {
             const oldest = Object.keys(lastStatuses.current)[0]
             if (oldest) delete lastStatuses.current[oldest]
           }
-          if (event.status === 'done') {
+          if (event.status === 'done' && previous && previous !== 'done') {
             void notifySystem('下载完成', event.title || event.task_id)
             playCompletionChime()
+            const completeItem = toCompleteItem(event)
+            if (completeItem && settingsRef.current.download_complete_popup_enabled !== false) {
+              if (isTauriDesktop()) void enqueueDownloadCompletePopup(completeItem, true)
+              else setWebCompleteQueue(current => enqueueCompleteItem(current, completeItem))
+            }
           }
           if (event.status === 'failed') void notifySystem('下载失败', event.error_message || event.task_id)
         }
@@ -959,5 +1009,67 @@ export default function App() {
       onAccepted={next => { setLegalStatus(next); setLegalLoadError(''); void load() }}
       onExit={() => { void quitApplication() }}
     />}
+    {!desktopShell && webProgressItems.length > 0 && settings.download_progress_window_enabled !== false && (
+      <aside className="download-overlay-dock download-overlay-dock-progress" role="dialog" aria-label="正在下载">
+        <header>
+          <strong>正在下载</strong>
+          <button type="button" className="icon-button" title="关闭" onClick={() => {
+            for (const item of webProgressItems) webProgressDismissed.current.add(item.id)
+            setWebProgressItems([])
+          }}><X size={16} /></button>
+        </header>
+        <DownloadProgressPanel
+          tasks={webProgressItems}
+          busyId={webProgressBusyId}
+          onAction={(task, action) => {
+            void (async () => {
+              setWebProgressBusyId(task.id)
+              try { await taskAction(task.id, action) } catch (reason: any) { setError(reason?.message || '无法更新任务') }
+              finally { setWebProgressBusyId('') }
+            })()
+          }}
+          onOpenFolder={task => { void openTaskInExplorer(task.id).catch(reason => setError(reason?.message || '无法打开目录')) }}
+        />
+      </aside>
+    )}
+    {!desktopShell && webCompleteQueue[0] && settings.download_complete_popup_enabled !== false && (
+      <aside className="download-overlay-dock download-overlay-dock-complete" role="alertdialog" aria-label="下载完成">
+        <DownloadCompletePanel
+          item={webCompleteQueue[0]}
+          remaining={Math.max(0, webCompleteQueue.length - 1)}
+          busy={webCompleteBusy}
+          error={webCompleteError}
+          onClose={() => { setWebCompleteQueue(current => current.slice(1)); setWebCompleteError('') }}
+          onOpenFolder={() => {
+            void (async () => {
+              const item = webCompleteQueue[0]
+              if (!item) return
+              setWebCompleteBusy(true)
+              setWebCompleteError('')
+              try {
+                await openTaskInExplorer(item.id)
+                setWebCompleteQueue(current => current.slice(1))
+              } catch (reason: any) {
+                setWebCompleteError(reason?.message || '无法打开目录')
+              } finally { setWebCompleteBusy(false) }
+            })()
+          }}
+          onOpenFile={confirmed => {
+            void (async () => {
+              const item = webCompleteQueue[0]
+              if (!item) return
+              setWebCompleteBusy(true)
+              setWebCompleteError('')
+              try {
+                await launchFile(item.id, confirmed)
+                setWebCompleteQueue(current => current.slice(1))
+              } catch (reason: any) {
+                setWebCompleteError(reason?.message || '无法打开文件')
+              } finally { setWebCompleteBusy(false) }
+            })()
+          }}
+        />
+      </aside>
+    )}
   </div>
 }
