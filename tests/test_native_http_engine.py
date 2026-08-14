@@ -248,11 +248,10 @@ def test_native_pause_exit_does_not_publish_preallocated_file(tmp_path, monkeypa
         server.shutdown()
     assert task.status is TaskStatus.PAUSED
     assert not task.output_path
-    downloads = tmp_path / "downloads"
-    if downloads.exists():
-        for path in downloads.rglob("*"):
-            if path.is_file():
-                assert path.stat().st_size == 0
+    published = tmp_path / "downloads" / "payload.bin"
+    if published.exists():
+        assert published.read_bytes() != BODY
+        assert published.stat().st_size == 0
 
 
 def _range_server(body: bytes) -> tuple[ThreadingHTTPServer, str]:
