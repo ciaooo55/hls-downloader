@@ -47,7 +47,7 @@ from .schemas import (
     TvboxTaskPush,
     TvboxPush,
 )
-from .config import apply_settings_update, settings, save_settings
+from .config import PROJECT_ROOT, apply_settings_update, settings, save_settings
 from .download_category import resolve_category_output_dir
 from .credentials import SECRET_MASK, mask_site_profiles, restore_masked_site_profiles
 from .downloader.task_manager import (
@@ -80,6 +80,7 @@ from .native_desktop import native_desktop_session, request_core_shutdown
 from .native_shell import (
     boot_native_shell,
     is_native_shell_ready,
+    maybe_spawn_desktop_ui_process,
     native_shell_status,
     native_shell_supervisor,
     shutdown_native_shell,
@@ -1529,10 +1530,9 @@ async def create_browser_media_push(request: Request, x_token: str = Header(defa
             )
             _browser_media_pushes.pop(oldest_id, None)
         _browser_media_pushes[request_id] = {"id": request_id, "kind": kind, "resource": resource, "created_at": now, "status": "pending", "message": "等待在桌面端选择设备"}
-    if not native_desktop_session.push("media_push", request_id):
-        with _browser_media_push_lock:
-            _browser_media_pushes.pop(request_id, None)
-        raise HTTPException(status_code=409, detail="桌面界面尚未就绪")
+    native_desktop_session.queue("media_push", request_id)
+    if not native_desktop_session.status().get("active"):
+        maybe_spawn_desktop_ui_process(project_root=PROJECT_ROOT)
     activate_window()
     return {"ok": True, "id": request_id}
 

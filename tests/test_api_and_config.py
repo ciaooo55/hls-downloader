@@ -217,6 +217,41 @@ def test_browser_media_push_reports_final_desktop_result(monkeypatch):
     assert final.json() == {"id": request_id, "status": "canceled", "message": "用户取消"}
 
 
+def test_browser_media_push_queues_until_desktop_session_starts(monkeypatch):
+    from backend.app import api as api_module
+    from backend.app.native_desktop import native_desktop_session
+
+    spawned = []
+    monkeypatch.setattr(
+        api_module,
+        "maybe_spawn_desktop_ui_process",
+        lambda **_kwargs: spawned.append(True) or True,
+    )
+    native_desktop_session.stop()
+    client = TestClient(app)
+    created = client.post(
+        "/api/browser/media-push",
+        headers=AUTH,
+        json={"kind": "tvbox", "resource": {"url": "https://media.example/video.m3u8", "filename": "video.m3u8"}},
+    )
+    assert created.status_code == 200
+    request_id = created.json()["id"]
+    assert spawned == [True]
+    before = native_desktop_session.poll(0, 0)
+    assert all(item["kind"] != "media_push" or item["handoff_id"] != request_id for item in before["commands"])
+    native_desktop_session.start()
+    try:
+        after = native_desktop_session.poll(0, 0)
+        assert any(
+            item["kind"] == "media_push" and item["handoff_id"] == request_id
+            for item in after["commands"]
+        )
+        pending = client.get(f"/api/browser/media-push/{request_id}/status", headers=AUTH)
+        assert pending.json()["status"] == "pending"
+    finally:
+        native_desktop_session.stop()
+
+
 def test_task_api_preserves_cross_origin_request_contexts(monkeypatch):
     """Manual/API clients need the same CDN authentication path as the extension."""
     from backend.app import api as api_module

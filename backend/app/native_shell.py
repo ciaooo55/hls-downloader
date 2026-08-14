@@ -616,6 +616,47 @@ def locate_native_shell_executable(project_root: Path | None = None) -> Path | N
     return None
 
 
+def locate_desktop_ui_executable(project_root: Path | None = None) -> Path | None:
+    """On-demand WebView2 shell used for settings, new task, and device picker."""
+    root = Path(project_root or os.environ.get("HLS_NATIVE_SHELL_ROOT") or ".")
+    names = ("HLSDownloader.exe", "HLSDownloader")
+    for name in names:
+        candidate = root / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def maybe_spawn_desktop_ui_process(project_root: Path | None = None) -> Path | None:
+    """Start HLSDownloader.exe --settings so DevicePicker / 设置 can appear.
+
+    Idle product is native-shell only. Cast/TVBox picker still lives in the
+    Tauri WebView. DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP; do not use
+    CREATE_NO_WINDOW, which hides the WebView HWND.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return None
+    if not running_on_windows():
+        return None
+    executable = locate_desktop_ui_executable(project_root)
+    if executable is None:
+        return None
+    creationflags = 0x00000008 | 0x00000200
+    try:
+        subprocess.Popen(
+            [str(executable), "--settings"],
+            cwd=str(executable.parent),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=False,
+            creationflags=creationflags,
+        )
+    except OSError:
+        return None
+    return executable
+
+
 def maybe_spawn_native_shell_process(
     *,
     core_url: str,

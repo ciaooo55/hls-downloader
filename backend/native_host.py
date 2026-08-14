@@ -112,6 +112,22 @@ def _start_app() -> None:
     )
 
 
+def _start_desktop_ui() -> None:
+    """Open the on-demand WebView for 投屏 / TVBox device picker."""
+    desktop = ROOT / "HLSDownloader.exe"
+    if not desktop.is_file():
+        return
+    subprocess.Popen(
+        [str(desktop), "--settings"],
+        cwd=str(desktop.parent),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=False,
+        creationflags=0x00000008 | 0x00000200,
+    )
+
+
 def _wait_presenter(timeout: float = 18.0) -> None:
     """Wait until the desktop shell can queue or show handoff windows."""
     deadline = time.monotonic() + timeout
@@ -216,6 +232,7 @@ def dispatch(message: dict) -> dict:
     if operation == "push_to_tv":
         return _request("POST", "/tvbox/push", {"url": str(message.get("resource", {}).get("url", ""))})
     if operation == "media_push":
+        _start_desktop_ui()
         return _request("POST", "/browser/media-push", {
             "kind": str(message.get("kind", "")),
             "resource": message.get("resource", {}),

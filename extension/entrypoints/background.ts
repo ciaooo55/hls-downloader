@@ -1,5 +1,6 @@
 import { browser } from 'wxt/browser'
 import { mediaPushRequestId } from '../lib/mediaPush'
+import { isSniffCurrentPageCommand, openMediaPanelMessage } from '../lib/sniffCommand'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
 import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isConcreteDownloadMime, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
@@ -1061,6 +1062,16 @@ export default defineBackground(() => {
   // Firefox/Chromium can restore an existing service worker without emitting a
   // fresh install event. Ensure an upgrade/restart always reconstructs menus.
   void installContextMenus()
+
+  const commandsApi = (browser as { commands?: { onCommand: { addListener: (listener: (command: string) => void) => void } } }).commands
+  commandsApi?.onCommand.addListener(command => {
+    if (!isSniffCurrentPageCommand(command)) return
+    void browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+      const tab = tabs[0]
+      if (tab?.id === undefined) return
+      void browser.tabs.sendMessage(tab.id, openMediaPanelMessage()).catch(() => undefined)
+    })
+  })
 
   ;(browser.webRequest.onSendHeaders.addListener as any)((details: any) => {
     requestChains.observeRequest(details)

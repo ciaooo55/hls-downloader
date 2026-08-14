@@ -330,3 +330,44 @@ def test_core_started_by_native_shell_does_not_spawn_another_shell(monkeypatch, 
         is None
     )
 
+
+def test_locate_desktop_ui_and_skip_spawn_in_pytest(tmp_path):
+    from backend.app.native_shell import locate_desktop_ui_executable, maybe_spawn_desktop_ui_process
+
+    exe = tmp_path / "HLSDownloader.exe"
+    exe.write_bytes(b"MZ")
+    assert locate_desktop_ui_executable(tmp_path) == exe
+    assert locate_desktop_ui_executable(tmp_path / "missing") is None
+    assert maybe_spawn_desktop_ui_process(project_root=tmp_path) is None
+
+
+def test_desktop_ui_spawn_uses_settings_and_detached_flags(monkeypatch, tmp_path):
+    from backend.app import native_shell as ns
+
+    captured = {}
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    exe = tmp_path / "HLSDownloader.exe"
+    exe.write_bytes(b"MZ")
+    monkeypatch.setattr(ns, "running_on_windows", lambda: True)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(ns.subprocess, "Popen", fake_popen)
+
+    result = ns.maybe_spawn_desktop_ui_process(project_root=tmp_path)
+
+    assert result == exe
+    assert captured["args"][0][0] == str(exe)
+    assert captured["args"][0][1] == "--settings"
+    flags = captured["kwargs"]["creationflags"]
+    assert flags & 0x00000008
+    assert flags & 0x00000200
+    assert flags & 0x08000000 == 0
+    assert captured["kwargs"]["close_fds"] is False
+

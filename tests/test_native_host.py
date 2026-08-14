@@ -136,3 +136,53 @@ def test_offer_posts_handoff_without_a_prior_browser_ping(monkeypatch):
 
     assert result == {"ok": True, "handoff": {"id": "handoff-1", "status": "pending"}}
     assert calls == [("POST", "/browser/handoffs", {"url": "https://cdn.test/a.mp4"})]
+
+
+def test_media_push_starts_desktop_ui_before_posting(monkeypatch):
+    started = []
+    calls = []
+    monkeypatch.setattr(native_host, "_ensure_app", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(native_host, "_start_desktop_ui", lambda: started.append(True))
+
+    def request(method, path, payload=None, timeout=4):
+        calls.append((method, path, payload))
+        return {"ok": True, "id": "push-1"}
+
+    monkeypatch.setattr(native_host, "_request", request)
+    result = native_host.dispatch({
+        "op": "media_push",
+        "kind": "cast",
+        "resource": {"url": "https://cdn.test/a.m3u8"},
+    })
+
+    assert started == [True]
+    assert result == {"ok": True, "id": "push-1"}
+    assert calls == [("POST", "/browser/media-push", {
+        "kind": "cast",
+        "resource": {"url": "https://cdn.test/a.m3u8"},
+    })]
+
+
+def test_start_desktop_ui_uses_settings_and_detached_flags(tmp_path, monkeypatch):
+    (tmp_path / "HLSDownloader.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(native_host, "ROOT", tmp_path)
+    captured = {}
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = list(args)
+        captured["kwargs"] = kwargs
+
+        class Process:
+            pass
+
+        return Process()
+
+    monkeypatch.setattr(native_host.subprocess, "Popen", fake_popen)
+    native_host._start_desktop_ui()
+    assert captured["args"][0].endswith("HLSDownloader.exe")
+    assert "--settings" in captured["args"]
+    flags = captured["kwargs"]["creationflags"]
+    assert flags & 0x00000008
+    assert flags & 0x00000200
+    assert flags & 0x08000000 == 0
+    assert captured["kwargs"]["close_fds"] is False
