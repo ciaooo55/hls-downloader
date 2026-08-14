@@ -1,3 +1,4 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 use hls_native_shell::{
     decode_frame, encode_frame, paint_snapshot, CoreClient, ResidentShell, PROTOCOL_NAME,
     PROTOCOL_VERSION,
@@ -88,17 +89,12 @@ fn run(args: &[String]) -> Result<(), String> {
     } else {
         Some(CoreClient::parse(&core_url, &token)?)
     };
-    if let Some(client) = &client {
-        wait_for_core(client);
-        client.boot().map_err(|err| format!("native-shell boot: {err}"))?;
-        shell.lock().unwrap().core_running = true;
-        write_status(status_path.as_deref(), &shell);
-    }
 
     let stop = Arc::new(AtomicBool::new(false));
 
     #[cfg(windows)]
     if !headless {
+        // HWNDs and tray must exist before Python marks the presenter ready.
         let ui = hls_native_shell::win32::Win32Host::boot(Arc::clone(&shell))?;
         if let Some(client) = client.clone() {
             *ui.core.lock().unwrap() = Some(client.clone());
@@ -115,6 +111,7 @@ fn run(args: &[String]) -> Result<(), String> {
     }
 
     if let Some(client) = client.clone() {
+        connect_core(&client, &shell, status_path.as_deref())?;
         let poll_shell = Arc::clone(&shell);
         let status = status_path.clone();
         let stop_flag = Arc::clone(&stop);
@@ -164,6 +161,29 @@ fn run(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn connect_core(
+    client: &CoreClient,
+    shell: &Mutex<ResidentShell>,
+    status_path: Option<&Path>,
+) -> Result<(), String> {
+    wait_for_core(client);
+    let mut last = "native-shell boot: core not ready".to_string();
+    for _ in 0..40 {
+        match client.boot() {
+            Ok(_) => {
+                if let Ok(mut state) = shell.lock() {
+                    state.core_running = true;
+                }
+                write_status(status_path, shell);
+                return Ok(());
+            }
+            Err(err) => last = format!("native-shell boot: {err}"),
+        }
+        thread::sleep(Duration::from_millis(150));
+    }
+    Err(last)
+}
+
 fn poll_core(
     client: CoreClient,
     shell: Arc<Mutex<ResidentShell>>,
@@ -171,7 +191,20 @@ fn poll_core(
     stop: &AtomicBool,
 ) {
     let mut after = 0u64;
+    let mut booted = shell
+        .lock()
+        .map(|state| state.core_running)
+        .unwrap_or(false);
     while !stop.load(Ordering::SeqCst) {
+        if !booted {
+            match connect_core(&client, &shell, status_path) {
+                Ok(()) => booted = true,
+                Err(_) => {
+                    thread::sleep(Duration::from_millis(200));
+                    continue;
+                }
+            }
+        }
         match client.wait_events(after, 4.0) {
             Ok(payload) => {
                 let sequence = payload.get("sequence").and_then(Value::as_u64).unwrap_or(after);
@@ -223,7 +256,7 @@ fn write_status(path: Option<&Path>, shell: &Mutex<ResidentShell>) {
 }
 
 fn wait_for_core(client: &CoreClient) {
-    for _ in 0..80 {
+    for _ in 0..200 {
         if client.health().is_ok() {
             return;
         }

@@ -162,3 +162,52 @@ def test_tcp_ipc_roundtrip_paints_without_http():
             client.close()
     finally:
         server.stop()
+
+
+def test_locate_packaged_supervisor_and_skip_spawn_in_pytest(tmp_path):
+    from backend.app.native_shell import locate_native_shell_executable, maybe_spawn_native_shell_process
+
+    exe = tmp_path / "HLSNativeShell.exe"
+    exe.write_bytes(b"MZ")
+    assert locate_native_shell_executable(tmp_path) == exe
+    assert locate_native_shell_executable(tmp_path / "missing") is None
+    assert maybe_spawn_native_shell_process(
+        core_url="http://127.0.0.1:8765/api",
+        token="x" * 40,
+        project_root=tmp_path,
+    ) is None
+
+
+def test_windows_spawn_uses_detached_flags_not_create_no_window(monkeypatch, tmp_path):
+    from backend.app import native_shell as ns
+
+    captured = {}
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    exe = tmp_path / "HLSNativeShell.exe"
+    exe.write_bytes(b"MZ")
+    monkeypatch.setattr(ns, "running_on_windows", lambda: True)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(ns.subprocess, "Popen", fake_popen)
+
+    result = ns.maybe_spawn_native_shell_process(
+        core_url="http://127.0.0.1:8765/api",
+        token="x" * 40,
+        project_root=tmp_path,
+    )
+
+    assert result == exe
+    flags = captured["kwargs"]["creationflags"]
+    assert flags & 0x00000008
+    assert flags & 0x00000200
+    assert flags & 0x08000000 == 0
+    assert captured["kwargs"]["close_fds"] is False
+    assert captured["kwargs"]["stdin"] is ns.subprocess.DEVNULL
+

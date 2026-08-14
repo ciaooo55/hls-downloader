@@ -99,6 +99,7 @@ try {
     foreach ($required in @(
         "HLSDownloader.exe",
         "HLSDownloaderCore.exe",
+        "HLSNativeShell.exe",
         "scripts\upgrade-portable.ps1",
         "scripts\shutdown-running.ps1",
         "portable"

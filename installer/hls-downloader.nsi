@@ -8,10 +8,10 @@ Unicode true
 !define APP_NAME "HLS Downloader"
 !define COMPANY_NAME "HLS Downloader"
 !ifndef APP_VERSION
-!define APP_VERSION "3.0.39"
+!define APP_VERSION "5.0.0"
 !endif
 !ifndef APP_FILE_VERSION
-!define APP_FILE_VERSION "3.0.39.0"
+!define APP_FILE_VERSION "5.0.0.0"
 !endif
 
 !ifndef STAGE_DIR
@@ -163,6 +163,7 @@ Function RestoreApplicationAfterAbort
 
   Delete "$INSTDIR\HLSDownloader.exe"
   Delete "$INSTDIR\HLSDownloaderCore.exe"
+  Delete "$INSTDIR\HLSNativeShell.exe"
   Delete "$INSTDIR\config.default.json"
   Delete "$INSTDIR\LICENSE.txt"
   Delete "$INSTDIR\TERMS.md"
@@ -185,6 +186,7 @@ Function RestoreApplicationAfterAbort
 
   !insertmacro RestoreUpgradeFile "HLSDownloader.exe"
   !insertmacro RestoreUpgradeFile "HLSDownloaderCore.exe"
+  !insertmacro RestoreUpgradeFile "HLSNativeShell.exe"
   !insertmacro RestoreUpgradeFile "config.default.json"
   !insertmacro RestoreUpgradeFile "LICENSE.txt"
   !insertmacro RestoreUpgradeFile "TERMS.md"
@@ -288,6 +290,7 @@ Section "Install" SecInstall
   CreateDirectory "$UpgradeBackupDir"
   !insertmacro BackupUpgradeFile "HLSDownloader.exe"
   !insertmacro BackupUpgradeFile "HLSDownloaderCore.exe"
+  !insertmacro BackupUpgradeFile "HLSNativeShell.exe"
   !insertmacro BackupUpgradeFile "config.default.json"
   !insertmacro BackupUpgradeFile "LICENSE.txt"
   !insertmacro BackupUpgradeFile "TERMS.md"
@@ -320,6 +323,7 @@ Section "Install" SecInstall
 
   File "${STAGE_DIR}\HLSDownloader.exe"
   File "${STAGE_DIR}\HLSDownloaderCore.exe"
+  File "${STAGE_DIR}\HLSNativeShell.exe"
   ; Native Messaging processes are launched by Chrome, Edge and Firefox and
   ; may legitimately remain alive after the desktop app has exited.  Never
   ; overwrite their executable in place: a versioned target lets an existing
@@ -469,6 +473,7 @@ RemoveApplicationData:
 
   Delete "$INSTDIR\HLSDownloader.exe"
   Delete "$INSTDIR\HLSDownloaderCore.exe"
+  Delete "$INSTDIR\HLSNativeShell.exe"
   Delete "$INSTDIR\HLSDownloaderNativeHost.exe"
   Delete "$INSTDIR\config.default.json"
   Delete "$INSTDIR\config.json"

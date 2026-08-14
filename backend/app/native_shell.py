@@ -9,11 +9,13 @@ WebView. Python remains the download core.
 from __future__ import annotations
 
 from collections import deque
+from pathlib import Path
 from typing import Any
 import json
 import os
 import socket
 import struct
+import subprocess
 import threading
 import time
 
@@ -431,3 +433,59 @@ def reset_native_shell() -> None:
         _supervisor = NativeShellSupervisor()
     if previous is not None and previous.resident:
         previous.shutdown()
+
+
+def running_on_windows() -> bool:
+    return os.name == "nt"
+
+
+def locate_native_shell_executable(project_root: Path | None = None) -> Path | None:
+    """Packaged supervisor next to the app image. Source debug builds are ignored."""
+    root = Path(project_root or os.environ.get("HLS_NATIVE_SHELL_ROOT") or ".")
+    names = ("HLSNativeShell.exe", "hls-native-shell.exe", "hls-native-shell")
+    for name in names:
+        candidate = root / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def maybe_spawn_native_shell_process(
+    *,
+    core_url: str,
+    token: str,
+    project_root: Path | None = None,
+) -> Path | None:
+    """Start the resident HWND supervisor on Windows when the packaged binary exists.
+
+    Tests and Linux source runs keep the Tauri/web fallback. The supervisor
+    process POSTs /desktop/native-shell/boot after its windows are warm.
+    """
+    if not running_on_windows():
+        return None
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return None
+    if os.environ.get("HLS_NATIVE_SHELL", "").strip().lower() in {"0", "false", "off"}:
+        return None
+    executable = locate_native_shell_executable(project_root)
+    if executable is None or not token:
+        return None
+    # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP. Do not use CREATE_NO_WINDOW;
+    # that hides the pre-created confirmation HWNDs.
+    creationflags = 0x00000008 | 0x00000200
+    subprocess.Popen(
+        [
+            str(executable),
+            "--core-url",
+            core_url,
+            "--token",
+            token,
+        ],
+        cwd=str(executable.parent),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=False,
+        creationflags=creationflags,
+    )
+    return executable

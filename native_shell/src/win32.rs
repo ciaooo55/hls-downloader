@@ -143,7 +143,10 @@ impl Win32Host {
                 nid_added: Mutex::new(false),
             }));
             HOST = Some(host);
-            add_tray_icon(host);
+            // 5.0.0 keeps the existing desktop tray for Open/Quit. Adding a
+            // second NIM_ADD icon here would sit next to it. Confirm/progress/
+            // complete still use the pre-created HWNDs; this message-only
+            // window receives offer events.
             Ok(host)
         }
     }
@@ -330,6 +333,7 @@ unsafe fn place_bottom_right(hwnd: HWND, width: i32, height: i32) {
     SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, 0);
 }
 
+#[allow(dead_code)]
 unsafe fn add_tray_icon(host: &Win32Host) {
     let mut nid = std::mem::zeroed::<NOTIFYICONDATAW>();
     nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;

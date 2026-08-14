@@ -106,7 +106,7 @@ try {
     Get-ChildItem -LiteralPath $sourceDir -Force | ForEach-Object {
         Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $stageDir $_.Name) -Recurse -Force
     }
-    foreach ($required in @("HLSDownloader.exe", "HLSDownloaderCore.exe", "portable", "scripts\register-native-host.ps1")) {
+    foreach ($required in @("HLSDownloader.exe", "HLSDownloaderCore.exe", "HLSNativeShell.exe", "portable", "scripts\register-native-host.ps1")) {
         if (-not (Test-Path -LiteralPath (Join-Path $stageDir $required))) {
             throw "The prepared upgrade is missing: $required"
         }

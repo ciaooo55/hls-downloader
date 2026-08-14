@@ -31,6 +31,14 @@ async def lifespan(app: FastAPI):
         from .native_shell import boot_native_shell
 
         boot_native_shell()
+    else:
+        from .native_shell import maybe_spawn_native_shell_process
+
+        maybe_spawn_native_shell_process(
+            core_url=f"http://127.0.0.1:{settings.port}/api",
+            token=settings.token,
+            project_root=PROJECT_ROOT,
+        )
     try:
         yield
     finally:

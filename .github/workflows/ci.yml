@@ -109,6 +109,10 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
 
+      - name: Check native supervisor
+        working-directory: native_shell
+        run: cargo test --locked
+
       - name: Build Tauri desktop shell
         working-directory: frontend
         run: pnpm run tauri:build

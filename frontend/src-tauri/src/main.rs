@@ -384,6 +384,40 @@ fn request_scoped_credential(config: &LocalConfig, path: &str) -> Result<String,
         .ok_or_else(|| "Desktop session credential is missing".to_string())
 }
 
+#[cfg(windows)]
+fn start_native_shell(root: &Path, config: &LocalConfig) {
+    let Some(exe) = native_shell_exe(root) else {
+        return;
+    };
+    let mut command = Command::new(&exe);
+    command
+        .arg("--core-url")
+        .arg(format!("http://127.0.0.1:{}/api", config.port))
+        .arg("--token")
+        .arg(&config.token)
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command.creation_flags(0x00000008 | 0x00000200); // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    let _ = command.spawn();
+}
+
+#[cfg(not(windows))]
+fn start_native_shell(_root: &Path, _config: &LocalConfig) {}
+
+#[cfg(windows)]
+fn native_shell_exe(root: &Path) -> Option<PathBuf> {
+    [
+        root.join("HLSNativeShell.exe"),
+        root.join("hls-native-shell.exe"),
+        root.join("native_shell").join("target").join("release").join("hls-native-shell.exe"),
+        root.join("native_shell").join("target").join("debug").join("hls-native-shell.exe"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+}
+
 fn start_core(root: &Path, config: &mut LocalConfig) -> Result<Option<Child>, String> {
     if core_alive(config) {
         return Ok(None);
@@ -683,6 +717,7 @@ fn main() {
             let runtime = app.state::<Arc<CoreRuntime>>();
             let _ = ensure_core(runtime.inner());
             let config = runtime_config(runtime.inner());
+            start_native_shell(&runtime.root, &config);
             for arg in args.iter().skip(1) {
                 import_torrent_path(&config, arg);
             }
@@ -712,6 +747,7 @@ fn main() {
             if let Err(error) = ensure_core(startup_runtime.inner()) {
                 record_startup_error(&root, &error);
             }
+            start_native_shell(&root, &runtime_config(startup_runtime.inner()));
             supervise_core(Arc::clone(startup_runtime.inner()));
             let config = runtime_config(startup_runtime.inner());
             for arg in std::env::args().skip(1) {

@@ -6,7 +6,7 @@ on:
       version:
         description: Version used in the installer, for example 3.0.10
         required: false
-        default: "3.0.39"
+        default: "5.0.0"
       include_extensions:
         description: Upload browser extension ZIPs for this release
         required: false
@@ -129,6 +129,9 @@ jobs:
           Push-Location frontend/src-tauri
           cargo check --locked --all-targets
           cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+          Pop-Location
+          Push-Location native_shell
           cargo test --locked
           Pop-Location
           Push-Location extension
