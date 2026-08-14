@@ -22,8 +22,9 @@ import httpx
 from ..config import settings
 from ..native_engine import (
     locate_native_engine_executable,
+    native_job_exit_code,
     resolved_proxy_url,
-    run_native_engine,
+    start_native_job,
     write_native_job,
 )
 from ..checksum import apply_http_content_checksum, parse_http_content_checksum, prefer_http_content_checksum, verify_task_checksum
@@ -1586,20 +1587,32 @@ class HTTPDownloader(SeeklessEngine):
                     self._write_native_control(control_path, "cancel")
                 elif self._is_pausing():
                     self._write_native_control(control_path, "pause")
-                code = process.poll()
-                if code is not None:
-                    return int(code)
+                if process is None:
+                    code = native_job_exit_code(progress_path)
+                    if code is not None:
+                        return int(code)
+                else:
+                    code = process.poll()
+                    if code is not None:
+                        return int(code)
                 await asyncio.sleep(0.2)
         except asyncio.CancelledError:
             self._write_native_control(
                 control_path,
                 "cancel" if self._is_canceled() else "pause",
             )
-            try:
-                await asyncio.to_thread(process.wait, 8)
-            except Exception:
-                with contextlib.suppress(Exception):
-                    process.kill()
+            if process is None:
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline:
+                    if native_job_exit_code(progress_path) is not None:
+                        break
+                    await asyncio.sleep(0.1)
+            else:
+                try:
+                    await asyncio.to_thread(process.wait, 8)
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        process.kill()
             raise
 
     def _reset_range_state_for_sequential(self, part_path: Path, state_path: Path) -> None:
@@ -1667,7 +1680,11 @@ class HTTPDownloader(SeeklessEngine):
                     total=total,
                 ),
             )
-            process = run_native_engine(executable=executable, job_path=job_path)
+            process = start_native_job(
+                executable=executable,
+                job_path=job_path,
+                progress_path=progress_path,
+            )
             return await self._await_native_engine(process, control_path, progress_path)
 
         try:

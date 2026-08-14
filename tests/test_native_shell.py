@@ -98,6 +98,33 @@ def test_click_path_wakes_immediately_instead_of_long_polling():
     assert elapsed_ms < 200
 
 
+def test_queue_http_job_is_not_presentable_and_wakes_poller():
+    shell = NativeShellSupervisor()
+    shell.boot_resident()
+    woken = {"event": None}
+
+    def wait():
+        woken["event"] = shell.wait_event(0, 2)
+
+    worker = threading.Thread(target=wait, name="http-job-wait", daemon=True)
+    worker.start()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not shell.has_event_poller():
+        time.sleep(0.01)
+    assert shell.has_event_poller() is True
+    queued = shell.queue_http_job(
+        r"C:\tmp\native-engine.job.json",
+        r"C:\tmp\native-engine.progress.json",
+    )
+    worker.join(2.0)
+    assert queued["kind"] == "http_job"
+    assert queued["presentable"] is False
+    assert queued["job_path"].endswith("native-engine.job.json")
+    assert queued["progress_path"].endswith("native-engine.progress.json")
+    kinds = [item["kind"] for item in (woken["event"] or {}).get("events", [])]
+    assert "http_job" in kinds
+
+
 def test_progress_and_complete_use_the_same_warm_windows():
     shell = NativeShellSupervisor()
     shell.boot_resident()

@@ -80,7 +80,8 @@ class Settings(BaseSettings):
     completion_sound_enabled: bool = False
     download_progress_window_enabled: bool = True
     download_complete_popup_enabled: bool = True
-    # GET files run inside HLSNativeShell.exe --job (WinHTTP / loopback HTTP).
+    # GET files run in the resident HLSNativeShell (WinHTTP / loopback HTTP).
+    # `--job` is only the fallback when that process is not polling events.
     native_http_engine: bool = True
     resume_interrupted_on_startup: bool = False
     auto_retry_failed_max: int = 0

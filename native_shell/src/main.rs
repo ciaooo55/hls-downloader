@@ -34,7 +34,7 @@ fn main() -> ExitCode {
 }
 
 fn run_job_file(path: &str) -> ExitCode {
-    match hls_native_shell::load_job(Path::new(path)).and_then(|job| hls_native_shell::run_job(&job))
+    match hls_native_shell::load_job(Path::new(path)).and_then(|job| hls_native_shell::finish_job(&job))
     {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -244,6 +244,10 @@ fn poll_core(
                     if let Some(seq) = event.get("sequence").and_then(Value::as_u64) {
                         after = after.max(seq);
                     }
+                    if event.get("kind").and_then(Value::as_str) == Some("http_job") {
+                        spawn_resident_http_job(&event);
+                        continue;
+                    }
                     #[cfg(windows)]
                     if let Some(host) = hls_native_shell::win32::host() {
                         host.enqueue(event);
@@ -275,6 +279,27 @@ fn poll_core(
             }
         }
     }
+}
+
+fn spawn_resident_http_job(event: &Value) {
+    let job_path = event
+        .get("job_path")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if job_path.is_empty() {
+        return;
+    }
+    let progress_path = event
+        .get("progress_path")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    thread::spawn(move || {
+        hls_native_shell::run_queued_job(
+            Path::new(&job_path),
+            progress_path.as_deref().map(Path::new),
+        );
+    });
 }
 
 fn write_status(path: Option<&Path>, shell: &Mutex<ResidentShell>) {

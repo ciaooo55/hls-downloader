@@ -7,11 +7,11 @@ import sys
 from pathlib import Path
 
 from .config import PROJECT_ROOT
-from .native_shell import locate_native_shell_executable
+from .native_shell import locate_native_shell_executable, native_shell_supervisor
 
 
 def locate_native_engine_executable(project_root: Path | None = None) -> Path | None:
-    """Same HLSNativeShell.exe, invoked with --job. No second binary."""
+    """Same HLSNativeShell.exe. Prefer the resident process; `--job` is fallback."""
     env_path = str(os.environ.get("HLS_NATIVE_ENGINE") or "").strip()
     if env_path:
         configured = Path(env_path)
@@ -95,6 +95,61 @@ def run_native_engine(
         startupinfo=startupinfo,
         creationflags=creationflags,
     )
+
+
+def _force_spawn_native_http() -> bool:
+    return os.environ.get("HLS_NATIVE_HTTP_SPAWN", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def start_native_job(
+    *,
+    executable: Path,
+    job_path: Path,
+    progress_path: Path | None = None,
+    cwd: Path | None = None,
+) -> subprocess.Popen[bytes] | None:
+    """Run inside the resident supervisor when it is polling events.
+
+    Returns None when the job was queued in-process. Spawn `--job` when the
+    shell is not booted, no poller is attached, or HLS_NATIVE_HTTP_SPAWN=1.
+    """
+    if not _force_spawn_native_http():
+        supervisor = native_shell_supervisor()
+        if supervisor.has_event_poller():
+            try:
+                supervisor.queue_http_job(job_path, progress_path)
+                return None
+            except Exception:
+                pass
+    return run_native_engine(executable=executable, job_path=job_path, cwd=cwd)
+
+
+def native_job_exit_code(progress_path: Path) -> int | None:
+    """Map a terminal progress JSON to the same codes `--job` used to exit with."""
+    try:
+        payload = json.loads(progress_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    status = str(payload.get("status") or "").strip().lower()
+    if status == "done":
+        return 0
+    if status == "paused":
+        return 20
+    if status == "canceled":
+        return 21
+    if status in {"error", "range_unsupported"}:
+        try:
+            return int(payload.get("code") or 1)
+        except (TypeError, ValueError):
+            return 1
+    return None
 
 
 def resolved_proxy_url(url: str) -> str:

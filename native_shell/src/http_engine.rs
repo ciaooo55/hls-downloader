@@ -106,15 +106,104 @@ pub fn read_control(path: &Path) -> Control {
 }
 
 pub fn write_progress(path: &Path, downloaded: u64, total: u64, speed: f64, status: &str) {
-    let payload = serde_json::json!({
+    write_progress_status(path, downloaded, total, speed, status, None, None);
+}
+
+pub fn write_progress_status(
+    path: &Path,
+    downloaded: u64,
+    total: u64,
+    speed: f64,
+    status: &str,
+    code: Option<i32>,
+    error: Option<&str>,
+) {
+    let mut payload = serde_json::json!({
         "downloaded": downloaded,
         "total": total,
         "speed": speed,
         "status": status,
     });
+    if let Some(code) = code {
+        payload["code"] = serde_json::json!(code);
+    }
+    if let Some(error) = error {
+        payload["error"] = serde_json::json!(error);
+    }
     let tmp = path.with_extension("json.tmp");
     if fs::write(&tmp, payload.to_string()).is_ok() {
         let _ = fs::rename(tmp, path);
+    }
+}
+
+fn last_progress_bytes(path: &Path) -> (u64, u64) {
+    let Ok(text) = fs::read_to_string(path) else {
+        return (0, 0);
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return (0, 0);
+    };
+    (
+        value
+            .get("downloaded")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        value
+            .get("total")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+    )
+}
+
+fn report_terminal(job: &Job, error: &EngineError) {
+    let (downloaded, total) = last_progress_bytes(&job.progress);
+    let status = match error {
+        EngineError::Pause => "paused",
+        EngineError::Cancel => "canceled",
+        EngineError::RangeUnsupported(_) => "error",
+        EngineError::Failed(_) => "error",
+    };
+    write_progress_status(
+        &job.progress,
+        downloaded,
+        total,
+        0.0,
+        status,
+        Some(error.exit_code()),
+        Some(&error.to_string()),
+    );
+}
+
+/// Run a job and always leave a terminal progress JSON (pause/cancel/error too).
+/// `--job` and the resident supervisor share this so Python can wait without a child process.
+pub fn finish_job(job: &Job) -> Result<(), EngineError> {
+    match run_job(job) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            report_terminal(job, &error);
+            Err(error)
+        }
+    }
+}
+
+pub fn run_queued_job(job_path: &Path, progress_path: Option<&Path>) {
+    match load_job(job_path) {
+        Ok(job) => {
+            let _ = finish_job(&job);
+        }
+        Err(error) => {
+            let fallback = job_path.with_file_name("native-engine.progress.json");
+            let progress = progress_path.unwrap_or(fallback.as_path());
+            write_progress_status(
+                progress,
+                0,
+                0,
+                0.0,
+                "error",
+                Some(error.exit_code()),
+                Some(&error.to_string()),
+            );
+        }
     }
 }
 
@@ -966,6 +1055,21 @@ mod tests {
         fs::write(&job.control, "cancel").unwrap();
         let err = run_job(&job).unwrap_err();
         assert_eq!(err.exit_code(), EXIT_CANCEL);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn finish_job_writes_terminal_progress_code() {
+        let body: &'static [u8] = b"0123456789";
+        let url = serve_body(body);
+        let (job, dir) = temp_job(&url, false, body.len() as u64, 2);
+        fs::write(&job.control, "cancel").unwrap();
+        let err = finish_job(&job).unwrap_err();
+        assert_eq!(err.exit_code(), EXIT_CANCEL);
+        let payload: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&job.progress).unwrap()).unwrap();
+        assert_eq!(payload["status"], "canceled");
+        assert_eq!(payload["code"], EXIT_CANCEL);
         let _ = fs::remove_dir_all(dir);
     }
 }

@@ -313,6 +313,7 @@ impl ResidentShell {
                 self.shutdown();
                 Ok("shutdown".into())
             }
+            "http_job" => Ok("http_job".into()),
             _ => Ok(kind.to_string()),
         }
     }
@@ -401,6 +402,23 @@ mod tests {
         assert!(!shell.main_open);
         assert!(shell.resident && shell.tray);
         assert_eq!(shell.task_list.tasks.len(), 2);
+    }
+
+    #[test]
+    fn http_job_event_does_not_show_overlays() {
+        let mut shell = ResidentShell::boot("headless");
+        let kind = shell
+            .apply_event(&json!({
+                "kind": "http_job",
+                "job_path": "C:/tmp/native-engine.job.json",
+                "presentable": false
+            }))
+            .unwrap();
+        assert_eq!(kind, "http_job");
+        assert!(!shell.windows.handoff.visible);
+        assert!(!shell.windows.progress.visible);
+        assert!(!shell.windows.complete.visible);
+        assert!(!shell.main_open);
     }
 
     #[test]

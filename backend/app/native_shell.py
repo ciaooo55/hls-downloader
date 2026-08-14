@@ -3,7 +3,9 @@
 The shipping Tauri UI still long-polls `/desktop/session/commands`. This module
 is the replacement hot path: a supervisor that is already running, with hidden
 confirmation/progress/complete surfaces that can be shown without starting a
-WebView. Python remains the download core.
+WebView. Ordinary HTTP GET is queued onto the same event pipe so the resident
+process runs it on a thread instead of forking `--job`. Python remains the
+HLS/DASH/BT core.
 """
 
 from __future__ import annotations
@@ -131,6 +133,7 @@ class NativeShellSupervisor:
         self.windows = {name: False for name in WINDOW_NAMES}
         self._started_at = 0.0
         self._sequence = 0
+        self._waiters = 0
         self._events: deque[dict[str, Any]] = deque(maxlen=128)
 
     def boot_resident(self) -> dict[str, Any]:
@@ -227,18 +230,47 @@ class NativeShellSupervisor:
         timeout = max(0.0, min(float(timeout), 5.0))
         deadline = time.monotonic() + timeout
         with self._lock:
-            while self.resident and self._sequence <= after:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                self._lock.wait(remaining)
-            events = [item for item in self._events if int(item.get("sequence") or 0) > after]
-            return {
-                "ok": True,
-                "resident": self.resident,
-                "sequence": self._sequence,
-                "events": events,
-            }
+            self._waiters += 1
+            try:
+                while self.resident and self._sequence <= after:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self._lock.wait(remaining)
+                events = [item for item in self._events if int(item.get("sequence") or 0) > after]
+                return {
+                    "ok": True,
+                    "resident": self.resident,
+                    "sequence": self._sequence,
+                    "events": events,
+                }
+            finally:
+                self._waiters -= 1
+
+    def has_event_poller(self) -> bool:
+        """True while the resident HLSNativeShell (or a test) is blocked on wait_event."""
+        with self._lock:
+            return bool(self.resident and self._waiters > 0)
+
+    def queue_http_job(
+        self,
+        job_path: str | Path,
+        progress_path: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """Enqueue GET work for the already-running supervisor. Do not paint a window."""
+        with self._lock:
+            if not self.resident:
+                raise RuntimeError("桌面界面尚未就绪")
+            self.core_running = True
+            self._sequence += 1
+            event = self._event("http_job")
+            event["job_path"] = str(job_path)
+            if progress_path is not None:
+                event["progress_path"] = str(progress_path)
+            event["presentable"] = False
+            self._events.append(event)
+            self._lock.notify_all()
+            return event
 
     def is_ready(self) -> bool:
         with self._lock:
