@@ -134,12 +134,14 @@ class NativeShellSupervisor:
         self._started_at = 0.0
         self._sequence = 0
         self._waiters = 0
+        self._closed = False
         self._events: deque[dict[str, Any]] = deque(maxlen=128)
 
     def boot_resident(self) -> dict[str, Any]:
         """Login/start: tray + hidden dialogs. Do not open the task list."""
         with self._lock:
             self.resident = True
+            self._closed = False
             self.main_open = False
             self.windows = {name: True for name in WINDOW_NAMES}
             self._started_at = time.time()
@@ -174,6 +176,7 @@ class NativeShellSupervisor:
     def shutdown(self) -> dict[str, Any]:
         with self._lock:
             self.resident = False
+            self._closed = True
             self.core_running = False
             self.main_open = False
             self.windows = {name: False for name in WINDOW_NAMES}
@@ -182,6 +185,11 @@ class NativeShellSupervisor:
             self._events.append(event)
             self._lock.notify_all()
             return event
+
+    def was_closed(self) -> bool:
+        """True after tray/process shutdown until the next boot POST."""
+        with self._lock:
+            return bool(self._closed and not self.resident)
 
     def offer(self, handoff: dict[str, Any]) -> dict[str, Any]:
         """Show confirmation from the offer snapshot. No extra fetch required."""
@@ -449,6 +457,10 @@ def is_native_shell_ready() -> bool:
     return native_shell_supervisor().is_ready()
 
 
+def native_shell_was_closed() -> bool:
+    return native_shell_supervisor().was_closed()
+
+
 def boot_native_shell() -> dict[str, Any]:
     status = native_shell_supervisor().boot_resident()
     try:
@@ -662,13 +674,18 @@ def maybe_spawn_native_shell_process(
     core_url: str,
     token: str,
     project_root: Path | None = None,
+    force: bool = False,
 ) -> Path | None:
     """Start the resident HWND supervisor on Windows when the packaged binary exists.
 
     Tests and Linux source runs keep the Tauri/web fallback. The supervisor
     process POSTs /desktop/native-shell/boot after its windows are warm.
+
+    Lifespan boot must not spawn a second shell when this core was already
+    started by HLSNativeShell.exe. After tray exit, callers pass force=True
+    so a dead supervisor can be brought back.
     """
-    if os.environ.get("HLS_STARTED_BY_NATIVE_SHELL", "").strip().lower() in {
+    if not force and os.environ.get("HLS_STARTED_BY_NATIVE_SHELL", "").strip().lower() in {
         "1",
         "true",
         "yes",

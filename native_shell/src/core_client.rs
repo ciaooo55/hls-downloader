@@ -50,6 +50,10 @@ impl CoreClient {
         self.request("POST", "/desktop/native-shell/boot", None, 4.0)
     }
 
+    pub fn shutdown(&self) -> Result<Value, String> {
+        self.request("POST", "/desktop/native-shell/shutdown", None, 1.5)
+    }
+
     pub fn wait_events(&self, after: u64, timeout: f64) -> Result<Value, String> {
         let path = format!("/desktop/native-shell/events?after={after}&timeout={timeout}");
         self.request("GET", &path, None, timeout + 2.0)

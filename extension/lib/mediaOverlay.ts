@@ -13,6 +13,18 @@ export interface OverlayViewport {
   height: number
 }
 
+export type OverlayAction = 'download' | 'tvbox' | 'cast'
+
+export function overlaySendKey(fingerprint: string, action: OverlayAction = 'download'): string {
+  return action === 'download' ? fingerprint : `${fingerprint}:${action}`
+}
+
+export function overlayActionFallback(action: OverlayAction): string {
+  if (action === 'tvbox') return '推送链接'
+  if (action === 'cast') return '投屏链接'
+  return '下载'
+}
+
 /**
  * A visible playing video is enough to show a non-actionable identifying
  * state. The download action is enabled separately only after resource

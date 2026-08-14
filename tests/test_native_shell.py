@@ -371,3 +371,56 @@ def test_desktop_ui_spawn_uses_settings_and_detached_flags(monkeypatch, tmp_path
     assert flags & 0x08000000 == 0
     assert captured["kwargs"]["close_fds"] is False
 
+
+def test_shutdown_marks_supervisor_closed_until_next_boot():
+    shell = NativeShellSupervisor()
+    assert shell.was_closed() is False
+    shell.boot_resident()
+    assert shell.was_closed() is False
+    assert shell.is_ready() is True
+    shell.shutdown()
+    assert shell.is_ready() is False
+    assert shell.was_closed() is True
+    shell.boot_resident()
+    assert shell.was_closed() is False
+    assert shell.is_ready() is True
+
+
+def test_force_spawn_bypasses_started_by_native_shell(monkeypatch, tmp_path):
+    from backend.app import native_shell as ns
+
+    captured = {}
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    exe = tmp_path / "HLSNativeShell.exe"
+    exe.write_bytes(b"MZ")
+    monkeypatch.setattr(ns, "running_on_windows", lambda: True)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("HLS_STARTED_BY_NATIVE_SHELL", "1")
+    monkeypatch.setattr(ns.subprocess, "Popen", fake_popen)
+
+    skipped = ns.maybe_spawn_native_shell_process(
+        core_url="http://127.0.0.1:8765/api",
+        token="x" * 40,
+        project_root=tmp_path,
+    )
+    forced = ns.maybe_spawn_native_shell_process(
+        core_url="http://127.0.0.1:8765/api",
+        token="x" * 40,
+        project_root=tmp_path,
+        force=True,
+    )
+
+    assert skipped is None
+    assert forced == exe
+    flags = captured["kwargs"]["creationflags"]
+    assert flags & 0x00000008
+    assert flags & 0x08000000 == 0
+

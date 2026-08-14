@@ -634,6 +634,36 @@ fn post_core_ok(config: &LocalConfig, path: &str) -> bool {
     response.starts_with("HTTP/1.1 200")
 }
 
+fn native_shell_is_resident(config: &LocalConfig) -> bool {
+    if config.token.is_empty() || config.token.contains(['\r', '\n']) {
+        return false;
+    }
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", config.port)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(400)));
+    let request = format!(
+        "GET /api/desktop/native-shell/status HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Token: {}\r\nConnection: close\r\n\r\n",
+        config.port, config.token
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, value)| value)
+        .unwrap_or("");
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("resident").and_then(|flag| flag.as_bool()))
+        .unwrap_or(false)
+}
+
 fn show_main(app: &tauri::AppHandle) {
     if let Some(window) = ensure_main_window(app) {
         let _ = window.show();
@@ -812,7 +842,8 @@ fn main() {
             for arg in std::env::args().skip(1) {
                 import_torrent_path(&config, &arg);
             }
-            if !settings_launch {
+            let native_resident = native_shell_is_resident(&config);
+            if !settings_launch || !native_resident {
                 let open = MenuItem::with_id(app, "open", "打开下载器", true, None::<&str>)?;
                 let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
                 let menu = Menu::with_items(app, &[&open, &quit])?;

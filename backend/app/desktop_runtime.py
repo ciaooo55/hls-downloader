@@ -109,11 +109,15 @@ def register_browser_handoff(callback: Callable[[str], None] | None) -> None:
 def native_shell_expected() -> bool:
     """True when a click must wait for HLSNativeShell instead of a WebView fallback."""
     try:
-        from .native_shell import is_native_shell_ready
+        from .native_shell import is_native_shell_ready, native_shell_was_closed
     except Exception:
         return False
     if is_native_shell_ready():
         return True
+    if native_shell_was_closed():
+        # Tray exit cleared resident HWNDs. Leftover HLS_STARTED_BY_NATIVE_SHELL
+        # must not keep offers in native-shell-pending unless a respawn is queued.
+        return has_pending_native_handoffs()
     flag = os.environ.get("HLS_STARTED_BY_NATIVE_SHELL", "").strip().lower()
     if flag in {"1", "true", "yes", "on"}:
         return True
@@ -142,6 +146,14 @@ def _queue_native_handoff(handoff_id: str, snapshot: dict | None) -> None:
         _pending_native_ids.add(handoff_id)
 
 
+def _unqueue_native_handoff(handoff_id: str) -> None:
+    with _handoff_lock:
+        _pending_native_ids.discard(handoff_id)
+        remaining = [item for item in _pending_native_offers if item[0] != handoff_id]
+        _pending_native_offers.clear()
+        _pending_native_offers.extend(remaining)
+
+
 def flush_pending_native_handoffs() -> None:
     """Paint queued confirmations after the supervisor POSTs boot."""
     with _handoff_lock:
@@ -153,17 +165,21 @@ def flush_pending_native_handoffs() -> None:
             logger.warning("native shell still not ready for queued handoff %s", handoff_id)
 
 
-def _ensure_native_shell_process() -> None:
+def _ensure_native_shell_process(*, force: bool = False):
     try:
         from .config import settings
-        from .native_shell import maybe_spawn_native_shell_process
+        from .native_shell import is_native_shell_ready, maybe_spawn_native_shell_process
 
-        maybe_spawn_native_shell_process(
+        if is_native_shell_ready():
+            return None
+        return maybe_spawn_native_shell_process(
             core_url=f"http://127.0.0.1:{int(settings.port)}/api",
             token=str(settings.token or ""),
+            force=force,
         )
     except Exception:
         logger.exception("failed to start native shell for a browser confirmation")
+        return None
 
 
 def _present_via_native_shell(handoff_id: str, snapshot: dict | None) -> dict | None:
@@ -232,6 +248,25 @@ def present_browser_handoff(handoff_id: str, snapshot: dict | None = None) -> di
             "mode": "native-shell-pending",
             "presentable": False,
         }
+
+    try:
+        from .native_shell import native_shell_was_closed
+
+        closed = native_shell_was_closed()
+    except Exception:
+        closed = False
+    if closed:
+        _queue_native_handoff(handoff_id, snapshot)
+        spawned = _ensure_native_shell_process(force=True)
+        if spawned is not None:
+            return {
+                "ok": True,
+                "presented": False,
+                "queued": True,
+                "mode": "native-shell-pending",
+                "presentable": False,
+            }
+        _unqueue_native_handoff(handoff_id)
 
     with _handoff_lock:
         callback = _handoff_callback

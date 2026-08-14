@@ -44,6 +44,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 pub const WM_SHELL_EVENT: u32 = WM_APP + 1;
 const WM_TRAY: u32 = WM_APP + 20;
+const WM_HANDOFF_RESULT: u32 = WM_APP + 2;
+const HANDOFF_ACCEPT_OK: usize = 1;
+const HANDOFF_REJECT_OK: usize = 2;
+const HANDOFF_ACCEPT_ERR: usize = 3;
+const HANDOFF_REJECT_ERR: usize = 4;
 const ID_ACCEPT: usize = 1001;
 const ID_REJECT: usize = 1002;
 const ID_PROGRESS_PAUSE: usize = 1003;
@@ -53,6 +58,7 @@ const ID_COMPLETE_OPEN_FOLDER: usize = 1006;
 const ID_COMPLETE_OPEN_FILE: usize = 1007;
 const ID_FILENAME: usize = 1010;
 const ID_SAVE_DIR: usize = 1011;
+const ID_HANDOFF_HINT: usize = 1012;
 const ID_TRAY_OPEN: usize = 2001;
 const ID_TRAY_EXIT: usize = 2002;
 const ID_FILTER_ALL: usize = 3101;
@@ -98,6 +104,8 @@ pub struct Win32Host {
     pub pending: Mutex<Vec<Value>>,
     pub core: Mutex<Option<CoreClient>>,
     nid_added: Mutex<bool>,
+    handoff_error: Mutex<String>,
+    handoff_busy: Mutex<bool>,
 }
 
 impl Win32Host {
@@ -188,6 +196,19 @@ impl Win32Host {
             );
             create_child_button(handoff, instance, ID_ACCEPT, "确认下载", 290, 220, 100, 28);
             create_child_button(handoff, instance, ID_REJECT, "取消", 400, 220, 80, 28);
+            create_child(
+                handoff,
+                instance,
+                "STATIC",
+                "",
+                ID_HANDOFF_HINT,
+                WS_CHILD | WS_VISIBLE,
+                0,
+                16,
+                188,
+                260,
+                28,
+            );
             create_child_button(
                 progress,
                 instance,
@@ -257,6 +278,8 @@ impl Win32Host {
                 pending: Mutex::new(Vec::new()),
                 core: Mutex::new(None),
                 nid_added: Mutex::new(false),
+                handoff_error: Mutex::new(String::new()),
+                handoff_busy: Mutex::new(false),
             }));
             HOST = Some(host);
             if own_tray {
@@ -288,6 +311,8 @@ impl Win32Host {
                 match kind.as_str() {
                     "handoff" => {
                         fill_handoff_fields(self.hwnds.handoff);
+                        set_handoff_busy(self.hwnds.handoff, false);
+                        set_handoff_hint(self.hwnds.handoff, "");
                         Invalidate(self.hwnds.handoff);
                         place_center(self.hwnds.handoff, 520, 292);
                         show_popup(self.hwnds.handoff);
@@ -965,6 +990,105 @@ unsafe fn Invalidate(hwnd: HWND) {
     windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, null(), 1);
 }
 
+unsafe fn set_handoff_busy(hwnd: HWND, busy: bool) {
+    if let Some(host) = host() {
+        if let Ok(mut slot) = host.handoff_busy.lock() {
+            *slot = busy;
+        }
+    }
+    EnableWindow(GetDlgItem(hwnd, ID_ACCEPT as i32), i32::from(!busy));
+    EnableWindow(GetDlgItem(hwnd, ID_REJECT as i32), i32::from(!busy));
+}
+
+unsafe fn set_handoff_hint(hwnd: HWND, text: &str) {
+    SetWindowTextW(GetDlgItem(hwnd, ID_HANDOFF_HINT as i32), wide(text).as_ptr());
+}
+
+unsafe fn handoff_is_busy() -> bool {
+    host()
+        .and_then(|item| item.handoff_busy.lock().ok().map(|slot| *slot))
+        .unwrap_or(false)
+}
+
+unsafe fn begin_handoff_core(hwnd: HWND, accept: bool) {
+    if handoff_is_busy() {
+        return;
+    }
+    let Some(host) = host() else {
+        return;
+    };
+    let filename = dlg_text(hwnd, ID_FILENAME);
+    let download_dir = dlg_text(hwnd, ID_SAVE_DIR);
+    let (handoff_id, core) = {
+        let shell = host.shell.lock().unwrap_or_else(|err| err.into_inner());
+        let handoff_id = shell
+            .snapshot
+            .as_ref()
+            .map(|item| item.id.clone())
+            .unwrap_or_default();
+        let core = host
+            .core
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone();
+        (handoff_id, core)
+    };
+    let Some(core) = core else {
+        set_handoff_hint(hwnd, "桌面核心未连接，请重试");
+        return;
+    };
+    set_handoff_hint(hwnd, if accept { "正在确认…" } else { "正在取消…" });
+    set_handoff_busy(hwnd, true);
+    let hwnd_bits = hwnd as usize;
+    std::thread::spawn(move || {
+        let result = if accept {
+            core.accept(&handoff_id, &filename, &download_dir)
+        } else {
+            core.reject(&handoff_id)
+        };
+        if let Some(host) = host() {
+            let code = match (accept, result.is_ok()) {
+                (true, true) => HANDOFF_ACCEPT_OK,
+                (false, true) => HANDOFF_REJECT_OK,
+                (true, false) => HANDOFF_ACCEPT_ERR,
+                (false, false) => HANDOFF_REJECT_ERR,
+            };
+            if let Err(err) = result {
+                if let Ok(mut slot) = host.handoff_error.lock() {
+                    *slot = err;
+                }
+            }
+            PostMessageW(hwnd_bits as HWND, WM_HANDOFF_RESULT, code, 0);
+        }
+    });
+}
+
+unsafe fn finish_handoff_core(hwnd: HWND, wparam: WPARAM) {
+    let code = wparam as usize;
+    let ok = code == HANDOFF_ACCEPT_OK || code == HANDOFF_REJECT_OK;
+    set_handoff_busy(hwnd, false);
+    if !ok {
+        let err = host()
+            .and_then(|item| item.handoff_error.lock().ok().map(|slot| slot.clone()))
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| "桌面端未接受请求".into());
+        set_handoff_hint(hwnd, &err);
+        ShowWindow(hwnd, SW_SHOWNORMAL);
+        SetForegroundWindow(hwnd);
+        return;
+    }
+    set_handoff_hint(hwnd, "");
+    if let Some(host) = host() {
+        let mut shell = host.shell.lock().unwrap_or_else(|err| err.into_inner());
+        if code == HANDOFF_ACCEPT_OK {
+            shell.accept();
+        } else {
+            shell.reject();
+        }
+    }
+    ShowWindow(hwnd, SW_HIDE);
+}
+
 unsafe extern "system" fn handoff_proc(
     hwnd: HWND,
     msg: u32,
@@ -978,67 +1102,19 @@ unsafe extern "system" fn handoff_proc(
         }
         WM_COMMAND => {
             let id = (wparam as usize) & 0xffff;
-            if let Some(host) = host() {
-                let filename = dlg_text(hwnd, ID_FILENAME);
-                let download_dir = dlg_text(hwnd, ID_SAVE_DIR);
-                let (handoff_id, core) = {
-                    let mut shell = host.shell.lock().unwrap_or_else(|err| err.into_inner());
-                    let handoff_id = shell
-                        .snapshot
-                        .as_ref()
-                        .map(|item| item.id.clone())
-                        .unwrap_or_default();
-                    if id == ID_ACCEPT {
-                        shell.accept();
-                    } else if id == ID_REJECT {
-                        shell.reject();
-                    }
-                    let core = host
-                        .core
-                        .lock()
-                        .unwrap_or_else(|err| err.into_inner())
-                        .clone();
-                    (handoff_id, core)
-                };
-                if id == ID_ACCEPT || id == ID_REJECT {
-                    ShowWindow(hwnd, SW_HIDE);
-                    if let Some(core) = core {
-                        std::thread::spawn(move || {
-                            if id == ID_ACCEPT {
-                                let _ = core.accept(&handoff_id, &filename, &download_dir);
-                            } else {
-                                let _ = core.reject(&handoff_id);
-                            }
-                        });
-                    }
-                }
+            if id == ID_ACCEPT {
+                begin_handoff_core(hwnd, true);
+            } else if id == ID_REJECT {
+                begin_handoff_core(hwnd, false);
             }
             0
         }
+        WM_HANDOFF_RESULT => {
+            finish_handoff_core(hwnd, wparam);
+            0
+        }
         WM_CLOSE => {
-            ShowWindow(hwnd, SW_HIDE);
-            if let Some(host) = host() {
-                let (handoff_id, core) = {
-                    let mut shell = host.shell.lock().unwrap_or_else(|err| err.into_inner());
-                    let handoff_id = shell
-                        .snapshot
-                        .as_ref()
-                        .map(|item| item.id.clone())
-                        .unwrap_or_default();
-                    shell.reject();
-                    let core = host
-                        .core
-                        .lock()
-                        .unwrap_or_else(|err| err.into_inner())
-                        .clone();
-                    (handoff_id, core)
-                };
-                if let Some(core) = core {
-                    std::thread::spawn(move || {
-                        let _ = core.reject(&handoff_id);
-                    });
-                }
-            }
+            begin_handoff_core(hwnd, false);
             0
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -1325,6 +1401,14 @@ unsafe extern "system" fn tray_proc(
                         .lock()
                         .unwrap_or_else(|err| err.into_inner())
                         .shutdown();
+                    let core = host
+                        .core
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .clone();
+                    if let Some(core) = core {
+                        let _ = core.shutdown();
+                    }
                     remove_tray_icon(host);
                     PostQuitMessage(0);
                 }

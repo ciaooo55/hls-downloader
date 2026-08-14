@@ -10,7 +10,9 @@ from backend.app.native_shell import (
     boot_native_shell,
     is_native_shell_ready,
     native_shell_supervisor,
+    native_shell_was_closed,
     reset_native_shell,
+    shutdown_native_shell,
 )
 from backend.app.desktop_runtime import (
     has_browser_handoff_presenter,
@@ -312,5 +314,89 @@ def test_has_tauri_presenter_is_unchanged_when_shell_idle():
         assert body["mode"] == "desktop"
         assert body["ready"] is True
     finally:
+        register_browser_handoff(None)
+        set_desktop_handoff_session(False)
+
+
+def test_present_does_not_stay_pending_after_tray_shutdown(monkeypatch):
+    register_browser_handoff(None)
+    set_desktop_handoff_session(False)
+    reset_native_shell()
+    monkeypatch.setenv("HLS_STARTED_BY_NATIVE_SHELL", "1")
+    boot_native_shell()
+    try:
+        assert is_native_shell_ready() is True
+        shutdown_native_shell()
+        assert is_native_shell_ready() is False
+        assert native_shell_was_closed() is True
+        client = TestClient(app)
+        presenter = client.get("/api/browser/presenter", headers=AUTH).json()
+        assert presenter["mode"] not in {"native-shell", "native-shell-pending"}
+        queued = present_browser_handoff(
+            "after-exit",
+            snapshot={
+                "id": "after-exit",
+                "filename": "setup.exe",
+                "url": "https://cdn.test/setup.exe",
+                "size": 8,
+            },
+        )
+        assert queued["mode"] == "ui-fallback"
+        assert queued["queued"] is False
+    finally:
+        monkeypatch.delenv("HLS_STARTED_BY_NATIVE_SHELL", raising=False)
+        reset_native_shell()
+        register_browser_handoff(None)
+        set_desktop_handoff_session(False)
+
+
+def test_closed_shell_force_respawns_on_next_offer(monkeypatch, tmp_path):
+    from backend.app import native_shell as ns
+
+    captured = {}
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    exe = tmp_path / "HLSNativeShell.exe"
+    exe.write_bytes(b"MZ")
+    monkeypatch.setattr(ns, "running_on_windows", lambda: True)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("HLS_STARTED_BY_NATIVE_SHELL", "1")
+    monkeypatch.setattr(ns, "locate_native_shell_executable", lambda project_root=None: exe)
+    monkeypatch.setattr(ns.subprocess, "Popen", fake_popen)
+    register_browser_handoff(None)
+    set_desktop_handoff_session(False)
+    reset_native_shell()
+    boot_native_shell()
+    try:
+        shutdown_native_shell()
+        assert is_native_shell_ready() is False
+        queued = present_browser_handoff(
+            "respawn-native",
+            snapshot={
+                "id": "respawn-native",
+                "filename": "pack.zip",
+                "url": "https://cdn.test/pack.zip",
+                "size": 8,
+            },
+        )
+        assert queued["mode"] == "native-shell-pending"
+        assert queued["queued"] is True
+        assert captured.get("args")
+        assert captured["args"][0][0] == str(exe)
+        flags = captured["kwargs"]["creationflags"]
+        assert flags & 0x08000000 == 0
+        client = TestClient(app)
+        presenter = client.get("/api/browser/presenter", headers=AUTH).json()
+        assert presenter["mode"] == "native-shell-pending"
+    finally:
+        monkeypatch.delenv("HLS_STARTED_BY_NATIVE_SHELL", raising=False)
+        reset_native_shell()
         register_browser_handoff(None)
         set_desktop_handoff_session(False)

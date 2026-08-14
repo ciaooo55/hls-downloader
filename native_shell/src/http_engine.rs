@@ -246,15 +246,19 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
     } else {
         None
     };
-    let (status, mut reader) = fetch(job, range.as_deref())?;
-    if resume_from > 0 && status == 200 {
+    let fetched = fetch(job, range.as_deref())?;
+    if resume_from > 0 && fetched.status == 200 {
         return Err(EngineError::RangeUnsupported(
             "server ignored sequential resume Range".into(),
         ));
     }
-    if status != 200 && status != 206 {
-        return Err(EngineError::Failed(format!("HTTP {status}")));
+    if fetched.status != 200 && fetched.status != 206 {
+        return Err(EngineError::Failed(format!("HTTP {}", fetched.status)));
     }
+    if fetched.status == 206 {
+        require_content_range_start(fetched.content_range.as_deref(), resume_from)?;
+    }
+    let mut reader = fetched.body;
     let mut file = if resume_from > 0 {
         OpenOptions::new()
             .read(true)
@@ -483,16 +487,32 @@ fn fetch_range(
     let mut cursor = start;
     while cursor <= end {
         let range = format!("bytes={cursor}-{end}");
-        let (status, mut reader) =
-            fetch(job, Some(&range)).map_err(|err| EngineErrorCode::Failed(err.to_string()))?;
-        if status == 200 {
+        let fetched = match fetch(job, Some(&range)) {
+            Ok(result) => result,
+            Err(EngineError::RangeUnsupported(message)) => {
+                return Err(EngineErrorCode::RangeUnsupported(message));
+            }
+            Err(EngineError::Pause) => return Err(EngineErrorCode::Pause),
+            Err(EngineError::Cancel) => return Err(EngineErrorCode::Cancel),
+            Err(err) => return Err(EngineErrorCode::Failed(err.to_string())),
+        };
+        if fetched.status == 200 {
             return Err(EngineErrorCode::RangeUnsupported(
                 "server ignored Range and returned 200".into(),
             ));
         }
-        if status != 206 {
-            return Err(EngineErrorCode::Failed(format!("HTTP {status}")));
+        if fetched.status != 206 {
+            return Err(EngineErrorCode::Failed(format!("HTTP {}", fetched.status)));
         }
+        if let Err(err) = require_content_range_start(fetched.content_range.as_deref(), cursor) {
+            return Err(match err {
+                EngineError::RangeUnsupported(message) => {
+                    EngineErrorCode::RangeUnsupported(message)
+                }
+                other => EngineErrorCode::Failed(other.to_string()),
+            });
+        }
+        let mut reader = fetched.body;
         if file.seek(SeekFrom::Start(cursor)).is_err() {
             return Err(EngineErrorCode::Failed("seek failed".into()));
         }
@@ -579,7 +599,13 @@ impl Read for Body {
     }
 }
 
-fn fetch(job: &Job, range: Option<&str>) -> Result<(u16, Body), EngineError> {
+struct FetchResult {
+    status: u16,
+    content_range: Option<String>,
+    body: Body,
+}
+
+fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
     let mut url = job.url.clone();
     for _ in 0..16 {
         let parsed = parse_http_url(&url)?;
@@ -587,20 +613,29 @@ fn fetch(job: &Job, range: Option<&str>) -> Result<(u16, Body), EngineError> {
         if use_winhttp {
             #[cfg(windows)]
             {
-                return winhttp::get(job, &url, range);
+                let (status, content_range, body) = winhttp::get(job, &url, range)?;
+                return Ok(FetchResult {
+                    status,
+                    content_range,
+                    body,
+                });
             }
             #[cfg(not(windows))]
             {
                 return Err(EngineError::Failed("https/proxy needs WinHTTP".into()));
             }
         }
-        let (status, location, body) = http_get(job, &parsed, range)?;
+        let (status, location, content_range, body) = http_get(job, &parsed, range)?;
         if matches!(status, 301 | 302 | 303 | 307 | 308) {
             let next = location.ok_or_else(|| EngineError::Failed("redirect without Location".into()))?;
             url = resolve_location(&parsed, &next);
             continue;
         }
-        return Ok((status, body));
+        return Ok(FetchResult {
+            status,
+            content_range,
+            body,
+        });
     }
     Err(EngineError::Failed("too many redirects".into()))
 }
@@ -644,26 +679,84 @@ fn parse_http_url(raw: &str) -> Result<ParsedUrl, EngineError> {
     })
 }
 
+fn host_header(parsed: &ParsedUrl) -> String {
+    let default_port = if parsed.https { 443 } else { 80 };
+    if parsed.port == default_port {
+        parsed.host.clone()
+    } else {
+        format!("{}:{}", parsed.host, parsed.port)
+    }
+}
+
+fn header_value<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let (key, value) = line.split_once(':')?;
+    if key.trim().eq_ignore_ascii_case(name) {
+        Some(value.trim())
+    } else {
+        None
+    }
+}
+
+fn parse_content_range(value: &str) -> Option<(u64, u64, Option<u64>)> {
+    let mut text = value.trim();
+    if text.len() >= 5 && text[..5].eq_ignore_ascii_case("bytes") {
+        text = text[5..].trim();
+    }
+    let (range, total_text) = text.split_once('/')?;
+    let (start_text, end_text) = range.split_once('-')?;
+    let start = start_text.trim().parse::<u64>().ok()?;
+    let end = end_text.trim().parse::<u64>().ok()?;
+    let total_text = total_text.trim();
+    let total = if total_text == "*" {
+        None
+    } else {
+        Some(total_text.parse::<u64>().ok()?)
+    };
+    if end < start {
+        return None;
+    }
+    if let Some(total) = total {
+        if total == 0 || end >= total {
+            return None;
+        }
+    }
+    Some((start, end, total))
+}
+
+fn require_content_range_start(header: Option<&str>, expected_start: u64) -> Result<(), EngineError> {
+    match parse_content_range(header.unwrap_or("")) {
+        Some((start, _, _)) if start == expected_start => Ok(()),
+        Some((start, _, _)) => Err(EngineError::RangeUnsupported(format!(
+            "Content-Range start {start} != {expected_start}"
+        ))),
+        None => Err(EngineError::RangeUnsupported(
+            "Range response missing valid Content-Range".into(),
+        )),
+    }
+}
+
 fn resolve_location(current: &ParsedUrl, location: &str) -> String {
+    let location = location.trim();
     if location.starts_with("http://") || location.starts_with("https://") {
         return location.to_string();
     }
     let scheme = if current.https { "https" } else { "http" };
+    let origin = format!("{scheme}://{}", host_header(current));
     if location.starts_with('/') {
-        format!("{scheme}://{}:{}{location}", current.host, current.port)
-    } else {
-        format!(
-            "{scheme}://{}:{}{}",
-            current.host, current.port, location
-        )
+        return format!("{origin}{location}");
     }
+    let dir = match current.path.rfind('/') {
+        Some(index) => &current.path[..=index],
+        None => "/",
+    };
+    format!("{origin}{dir}{location}")
 }
 
 fn http_get(
     job: &Job,
     parsed: &ParsedUrl,
     range: Option<&str>,
-) -> Result<(u16, Option<String>, Body), EngineError> {
+) -> Result<(u16, Option<String>, Option<String>, Body), EngineError> {
     let mut stream = if job.proxy.trim().is_empty() {
         TcpStream::connect((parsed.host.as_str(), parsed.port))
             .map_err(|err| EngineError::Failed(err.to_string()))?
@@ -677,8 +770,9 @@ fn http_get(
         .set_write_timeout(Some(Duration::from_secs(30)))
         .map_err(|err| EngineError::Failed(err.to_string()))?;
     let mut header = format!(
-        "GET {} HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\nAccept-Encoding: identity\r\n",
-        parsed.path, parsed.host, parsed.port
+        "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept-Encoding: identity\r\n",
+        parsed.path,
+        host_header(parsed)
     );
     if let Some(ua) = job
         .headers
@@ -733,22 +827,23 @@ fn http_get(
         .unwrap_or(0);
     let mut location = None;
     let mut content_length = None;
+    let mut content_range = None;
     for line in head.lines().skip(1) {
-        if let Some(value) = line.strip_prefix("Location:").or_else(|| line.strip_prefix("location:"))
-        {
-            location = Some(value.trim().to_string());
+        if let Some(value) = header_value(line, "Location") {
+            location = Some(value.to_string());
         }
-        if let Some(value) = line
-            .strip_prefix("Content-Length:")
-            .or_else(|| line.strip_prefix("content-length:"))
-        {
-            content_length = value.trim().parse::<u64>().ok();
+        if let Some(value) = header_value(line, "Content-Length") {
+            content_length = value.parse::<u64>().ok();
+        }
+        if let Some(value) = header_value(line, "Content-Range") {
+            content_range = Some(value.to_string());
         }
     }
     let remaining = content_length.map(|total| total.saturating_sub(leftover.len() as u64));
     Ok((
         status,
         location,
+        content_range,
         Body::Tcp {
             prefix: leftover,
             at: 0,
@@ -821,7 +916,7 @@ mod winhttp {
         text.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
-    pub fn get(job: &Job, url: &str, range: Option<&str>) -> Result<(u16, Body), EngineError> {
+    pub fn get(job: &Job, url: &str, range: Option<&str>) -> Result<(u16, Option<String>, Body), EngineError> {
         let parsed = super::parse_http_url(url)?;
         unsafe {
             let proxy = job.proxy.trim();
@@ -928,14 +1023,46 @@ mod winhttp {
                 WinHttpCloseHandle(session);
                 return Err(EngineError::Failed(format!("WinHttpQueryHeaders {err}")));
             }
+            let content_range = query_header_string(request, 23);
             Ok((
                 status as u16,
+                content_range,
                 Body::WinHttp(WinHttpBody {
                     session,
                     connect,
                     request,
                 }),
             ))
+        }
+    }
+
+    fn query_header_string(request: *mut core::ffi::c_void, query: u32) -> Option<String> {
+        unsafe {
+            let mut size: u32 = 0;
+            WinHttpQueryHeaders(request, query, null_mut(), null_mut(), &mut size, null_mut());
+            if size == 0 {
+                return None;
+            }
+            let mut buf = vec![0u16; (size as usize / 2).saturating_add(1)];
+            let mut actual = (buf.len() * 2) as u32;
+            if WinHttpQueryHeaders(
+                request,
+                query,
+                null_mut(),
+                buf.as_mut_ptr() as *mut _,
+                &mut actual,
+                null_mut(),
+            ) == 0
+            {
+                return None;
+            }
+            let end = buf.iter().position(|&ch| ch == 0).unwrap_or(buf.len());
+            let text = String::from_utf16_lossy(&buf[..end]);
+            if text.is_empty() {
+                None
+            } else {
+                Some(text)
+            }
         }
     }
 }
@@ -1070,6 +1197,128 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&job.progress).unwrap()).unwrap();
         assert_eq!(payload["status"], "canceled");
         assert_eq!(payload["code"], EXIT_CANCEL);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn content_range_parser_accepts_rfc_and_bare_forms() {
+        assert_eq!(parse_content_range("bytes 0-7/8"), Some((0, 7, Some(8))));
+        assert_eq!(parse_content_range("BYTES 10-19/*"), Some((10, 19, None)));
+        assert_eq!(parse_content_range("0-1/2"), Some((0, 1, Some(2))));
+        assert_eq!(parse_content_range("bytes */8"), None);
+        assert_eq!(parse_content_range(""), None);
+        assert!(require_content_range_start(Some("bytes 4-9/10"), 4).is_ok());
+        assert!(require_content_range_start(Some("bytes 0-9/10"), 4).is_err());
+        assert!(require_content_range_start(None, 0).is_err());
+    }
+
+    #[test]
+    fn host_header_omits_default_ports() {
+        let http = parse_http_url("http://cdn.test/file.bin").unwrap();
+        assert_eq!(host_header(&http), "cdn.test");
+        let custom = parse_http_url("http://127.0.0.1:8765/api").unwrap();
+        assert_eq!(host_header(&custom), "127.0.0.1:8765");
+        let https = parse_http_url("https://cdn.test/a").unwrap();
+        assert_eq!(host_header(&https), "cdn.test");
+    }
+
+    #[test]
+    fn relative_redirect_joins_path_directory() {
+        let current = parse_http_url("http://cdn.test/dir/file.bin").unwrap();
+        assert_eq!(
+            resolve_location(&current, "next.bin"),
+            "http://cdn.test/dir/next.bin"
+        );
+        assert_eq!(
+            resolve_location(&current, "/abs.bin"),
+            "http://cdn.test/abs.bin"
+        );
+        assert_eq!(
+            resolve_location(&current, "https://other.test/x"),
+            "https://other.test/x"
+        );
+        let rooted = parse_http_url("http://cdn.test:8080/file.bin").unwrap();
+        assert_eq!(
+            resolve_location(&rooted, "next.bin"),
+            "http://cdn.test:8080/next.bin"
+        );
+    }
+
+    fn serve_206_without_range(body: &'static [u8]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).is_err() {
+                    continue;
+                }
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let mut stream = reader.into_inner();
+                let header = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+        format!("http://127.0.0.1:{}", addr.port())
+    }
+
+    fn serve_206_wrong_range(body: &'static [u8]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).is_err() {
+                    continue;
+                }
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let mut stream = reader.into_inner();
+                let header = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len() - 1,
+                    body.len(),
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+        format!("http://127.0.0.1:{}", addr.port())
+    }
+
+    #[test]
+    fn missing_content_range_on_206_is_range_unsupported() {
+        let body: &'static [u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+        let url = serve_206_without_range(body);
+        let (job, dir) = temp_job(&url, false, body.len() as u64, 3);
+        let err = run_job(&job).unwrap_err();
+        assert_eq!(err.exit_code(), EXIT_RANGE_UNSUPPORTED);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn mismatched_content_range_start_is_range_unsupported() {
+        let body: &'static [u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+        let url = serve_206_wrong_range(body);
+        let (job, dir) = temp_job(&url, false, body.len() as u64, 3);
+        let err = run_job(&job).unwrap_err();
+        assert_eq!(err.exit_code(), EXIT_RANGE_UNSUPPORTED);
         let _ = fs::remove_dir_all(dir);
     }
 }

@@ -130,6 +130,9 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         hls_native_shell::win32::run_loop();
         stop.store(true, Ordering::SeqCst);
+        if let Some(client) = client {
+            let _ = client.shutdown();
+        }
         return Ok(());
     }
     let _ = own_tray;
@@ -191,6 +194,9 @@ fn run(args: &[String]) -> Result<(), String> {
     });
     while !stop.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(50));
+    }
+    if let Some(client) = &client {
+        let _ = client.shutdown();
     }
     Ok(())
 }

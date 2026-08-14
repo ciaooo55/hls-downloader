@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { clampOverlayPosition, shouldShowMediaOverlay } from '../lib/mediaOverlay'
+import { clampOverlayPosition, overlayActionFallback, overlaySendKey, shouldShowMediaOverlay, type OverlayAction } from '../lib/mediaOverlay'
 import { classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, isSameDocumentPlaybackFallback, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
@@ -344,8 +344,8 @@ export default defineContentScript({
     }))
     window.addEventListener('resize', fitPanel)
 
-    const applySendState = (resource: MediaResource, button: HTMLButtonElement, fallbackLabel: string) => {
-      const state = resourceSendStates.get(resourceFingerprint(resource))
+    const applySendState = (resource: MediaResource, button: HTMLButtonElement, fallbackLabel: string, action: OverlayAction = 'download') => {
+      const state = resourceSendStates.get(overlaySendKey(resourceFingerprint(resource), action))
       const label = button.querySelector<HTMLElement>('.download-label')
       if (label) label.textContent = state?.label || fallbackLabel
       else button.textContent = state?.label || fallbackLabel
@@ -353,9 +353,9 @@ export default defineContentScript({
       else button.removeAttribute('disabled')
     }
 
-    const setSendState = (resource: MediaResource, button: HTMLButtonElement, label: string, disabled: boolean, fallbackLabel = '下载') => {
-      resourceSendStates.set(resourceFingerprint(resource), { label, disabled })
-      applySendState(resource, button, fallbackLabel)
+    const setSendState = (resource: MediaResource, button: HTMLButtonElement, label: string, disabled: boolean, fallbackLabel = '下载', action: OverlayAction = 'download') => {
+      resourceSendStates.set(overlaySendKey(resourceFingerprint(resource), action), { label, disabled })
+      applySendState(resource, button, fallbackLabel, action)
     }
 
     const sendResource = (resource: MediaResource, button: HTMLButtonElement) => {
@@ -399,7 +399,9 @@ export default defineContentScript({
 
     const pushToTv = (resource: MediaResource, button: HTMLButtonElement) => {
       const result = ui.shadow.querySelector<HTMLElement>('.result')
-      button.setAttribute('disabled', ''); button.textContent = '等待选择'
+      const key = overlaySendKey(resourceFingerprint(resource), 'tvbox')
+      if (resourceSendStates.get(key)?.disabled) return
+      setSendState(resource, button, '等待选择', true, overlayActionFallback('tvbox'), 'tvbox')
       const waitForResult = async (requestId: string) => {
         const deadline = Date.now() + 130_000
         while (Date.now() < deadline) {
@@ -414,19 +416,20 @@ export default defineContentScript({
         if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = '请在桌面下载器选择 TVBox 设备' }
         const status = await waitForResult(String(response.id || ''))
         if (status.status !== 'done') throw new Error(status.message || '电视推送未完成')
-        button.textContent = '已发送'
+        setSendState(resource, button, '已发送', true, overlayActionFallback('tvbox'), 'tvbox')
         if (result) result.textContent = status.message || 'TVBox 推送成功'
+        setTimeout(() => resourceSendStates.delete(key), 2_000)
       }).catch(reason => {
-        button.removeAttribute('disabled'); button.textContent = '推电视'
+        setSendState(resource, button, '重试', false, overlayActionFallback('tvbox'), 'tvbox')
         if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '推送失败' }
-      }).finally(() => {
-        setTimeout(() => { if (button.textContent === '已发送') { button.removeAttribute('disabled'); button.textContent = '推电视' } }, 2000)
       })
     }
 
     const castResource = (resource: MediaResource, button: HTMLButtonElement) => {
       const result = ui.shadow.querySelector<HTMLElement>('.result')
-      button.setAttribute('disabled', ''); button.textContent = '等待选择'
+      const key = overlaySendKey(resourceFingerprint(resource), 'cast')
+      if (resourceSendStates.get(key)?.disabled) return
+      setSendState(resource, button, '等待选择', true, overlayActionFallback('cast'), 'cast')
       void runtimeMessage({ type: 'cast-to-device', resource }).then(async response => {
         if (!response?.ok) throw new Error(response?.error || '投屏请求失败')
         if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = '请在桌面下载器选择投屏设备' }
@@ -438,13 +441,12 @@ export default defineContentScript({
           if (['done', 'failed', 'canceled'].includes(String(status?.status || ''))) break
         }
         if (status?.status !== 'done') throw new Error(status?.message || '投屏未完成')
-        button.textContent = '已发送'
+        setSendState(resource, button, '已发送', true, overlayActionFallback('cast'), 'cast')
         if (result) result.textContent = status.message || '投屏成功'
+        setTimeout(() => resourceSendStates.delete(key), 2_000)
       }).catch(reason => {
-        button.removeAttribute('disabled'); button.textContent = '投屏链接'
+        setSendState(resource, button, '重试', false, overlayActionFallback('cast'), 'cast')
         if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '投屏请求失败' }
-      }).finally(() => {
-        setTimeout(() => { if (button.textContent === '已发送') { button.removeAttribute('disabled'); button.textContent = '投屏链接' } }, 2000)
       })
     }
 
@@ -667,9 +669,11 @@ export default defineContentScript({
         const pushButton = document.createElement('button'); pushButton.className = 'download push-tv'; pushButton.textContent = '推送链接'
         pushButton.title = '直接推送当前媒体链接到 TVBox'
         pushButton.addEventListener('click', () => pushToTv(selected, pushButton))
+        applySendState(selected, pushButton, overlayActionFallback('tvbox'), 'tvbox')
         const castButton = document.createElement('button'); castButton.className = 'download cast'; castButton.textContent = '投屏链接'
         castButton.title = '直接投屏当前媒体链接到 DLNA 或 Chromecast'
         castButton.addEventListener('click', () => castResource(selected, castButton))
+        applySendState(selected, castButton, overlayActionFallback('cast'), 'cast')
         actions.append(button, pushButton, castButton)
         row.append(meta, actions); list.append(row)
       })
