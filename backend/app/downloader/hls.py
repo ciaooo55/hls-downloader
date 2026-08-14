@@ -56,6 +56,7 @@ from .errors import (
     should_share_retry_window,
 )
 from .throttle import throttle_bytes
+from .disk_space import write_payload
 from .engine import task_output_dir, task_work_dir
 from .parser import UnsupportedPlaylistError, filter_ad_segments, parse_m3u8
 from .playback import playback_service, write_playback_plan
@@ -292,7 +293,7 @@ class _BrowserHLSClient:
                             response.quit_now.set()
                         raise asyncio.CancelledError
                     await throttle_bytes(len(chunk), task)
-                    output.write(chunk)
+                    await asyncio.to_thread(write_payload, output, chunk)
                     written += len(chunk)
         finally:
             if response.astream_task and not response.astream_task.done():
@@ -2834,7 +2835,7 @@ class HLSDownloader:
                             if self._is_canceled():
                                 raise asyncio.CancelledError
                             await throttle_bytes(len(chunk), self.task)
-                            output.write(chunk)
+                            await asyncio.to_thread(write_payload, output, chunk)
                             written += len(chunk)
 
             if written == 0:

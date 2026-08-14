@@ -27,7 +27,14 @@ from ..request_context import build_task_headers, replay_request_body
 from ..network_proxy import policy_httpx_client
 from ..utils import atomic_write_text, sanitize_filename
 from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
-from .disk_space import MIN_FREE_RESERVE, ensure_download_capacity, ensure_free_space, preallocate_payload
+from .disk_space import (
+    MIN_FREE_RESERVE,
+    ensure_download_capacity,
+    ensure_free_space,
+    open_payload_for_range,
+    preallocate_payload,
+    write_payload,
+)
 from .errors import (
     MetadataProbeTimeout,
     SharedRetryWindow,
@@ -140,6 +147,20 @@ def _ensure_filename_extension(filename: str, content_type: str) -> str:
 def _response_decodes_content(response: httpx.Response) -> bool:
     encoding = response.headers.get("content-encoding", "").strip().lower()
     return bool(encoding and encoding != "identity")
+
+
+def _identity_body(response: httpx.Response):
+    """Yield payload bytes without httpx ByteChunker reassembly.
+
+    ``aiter_bytes()`` can hold a partial slice until flush(); a mid-stream
+    error then drops those bytes from both the iterator and our write batch.
+    After Content-Encoding has been rejected, ``aiter_raw()`` is the socket
+    payload with HTTP framing already removed.
+    """
+    aiter_raw = getattr(response, "aiter_raw", None)
+    if aiter_raw is not None and not _response_decodes_content(response):
+        return aiter_raw()
+    return response.aiter_bytes()
 
 
 def _metadata_probe_can_skip_body(
@@ -1563,7 +1584,22 @@ class HTTPDownloader(SeeklessEngine):
                         task.progress.progress_percent = min(100.0, existing * 100 / reported_total)
                     with part_path.open("ab" if append else "wb") as output:
                         first_chunk = True
-                        async for chunk in response.aiter_bytes():
+                        pending = bytearray()
+
+                        async def flush_sequential() -> None:
+                            nonlocal pending
+                            if not pending:
+                                return
+                            data = pending
+                            pending = bytearray()
+                            await asyncio.to_thread(write_payload, output, data)
+                            task.progress.downloaded_bytes += len(data)
+                            task.engine_state["sequential_bytes"] = task.progress.downloaded_bytes
+                            window.add(len(data))
+                            self._apply_speed(window)
+                            self._publish()
+
+                        async for chunk in _identity_body(response):
                             if first_chunk:
                                 validate_download_response(
                                     task,
@@ -1574,16 +1610,16 @@ class HTTPDownloader(SeeklessEngine):
                                 )
                                 first_chunk = False
                             if self._is_canceled():
+                                await flush_sequential()
                                 raise asyncio.CancelledError
                             if self._is_pausing():
+                                await flush_sequential()
                                 return
                             await throttle_bytes(len(chunk), task)
-                            output.write(chunk)
-                            task.progress.downloaded_bytes += len(chunk)
-                            task.engine_state["sequential_bytes"] = task.progress.downloaded_bytes
-                            window.add(len(chunk))
-                            self._apply_speed(window)
-                            self._publish()
+                            pending.extend(chunk)
+                            if len(pending) >= RANGE_WRITE_BATCH:
+                                await flush_sequential()
+                        await flush_sequential()
                 if task.progress.total_bytes and task.progress.downloaded_bytes != task.progress.total_bytes:
                     raise httpx.RemoteProtocolError(
                         f"响应提前结束，期望 {task.progress.total_bytes} 字节，实际 {task.progress.downloaded_bytes} 字节"
@@ -1793,6 +1829,8 @@ class HTTPDownloader(SeeklessEngine):
                 snapshot[index] = current
             return snapshot
 
+        durable_file = open_payload_for_range(part_path)
+
         async def save_state() -> int:
             nonlocal last_saved_bytes
             snapshot = snapshot_currents()
@@ -1819,8 +1857,7 @@ class HTTPDownloader(SeeklessEngine):
                 # OS/Python buffers. Flush payload first, then atomically
                 # replace the checkpoint. Keep the Windows durability barrier
                 # off the API event loop because it can block during scanning.
-                with part_path.open("r+b", buffering=0) as durable_file:
-                    os.fsync(durable_file.fileno())
+                os.fsync(durable_file.fileno())
                 atomic_write_text(state_path, checkpoint_json)
 
             await asyncio.to_thread(persist_checkpoint)
@@ -1889,7 +1926,7 @@ class HTTPDownloader(SeeklessEngine):
             # One handle per worker: seek+write is not atomic across tasks on a
             # shared fd. Keep this file open across retries and CDN-capped 206
             # loops instead of reopening on every response.
-            output_file = part_path.open("r+b", buffering=0)
+            output_file = open_payload_for_range(part_path)
             try:
                 for attempt in range(1, MAX_RETRIES + 1):
                     if self._is_canceled():
@@ -1965,17 +2002,14 @@ class HTTPDownloader(SeeklessEngine):
                                 output_file.seek(request_start)
                                 pending = bytearray()
 
-                                def flush_pending() -> None:
+                                async def flush_pending() -> None:
                                     nonlocal pending, response_received, received
                                     if not pending:
                                         return
                                     size = len(pending)
-                                    written = output_file.write(pending)
-                                    if written != size:
-                                        raise OSError(
-                                            f"本地文件写入不完整，期望 {size} 字节，实际 {written} 字节"
-                                        )
-                                    pending.clear()
+                                    chunk = pending
+                                    pending = bytearray()
+                                    await asyncio.to_thread(write_payload, output_file, chunk)
                                     response_received += size
                                     received += size
                                     self._written_intervals[start] = max(
@@ -1988,7 +2022,7 @@ class HTTPDownloader(SeeklessEngine):
                                         refresh_progress()
 
                                 try:
-                                    async for content in response.aiter_bytes():
+                                    async for content in _identity_body(response):
                                         accepted = response_received + len(pending)
                                         if request_start == 0 and accepted == 0:
                                             validate_download_response(
@@ -2008,13 +2042,13 @@ class HTTPDownloader(SeeklessEngine):
                                         await throttle_bytes(len(data), task)
                                         pending.extend(data)
                                         if len(pending) >= RANGE_WRITE_BATCH:
-                                            flush_pending()
+                                            await flush_pending()
                                         if response_received + len(pending) >= live_allowed_end - request_start + 1:
                                             break
                                 except BaseException:
-                                    flush_pending()
+                                    await flush_pending()
                                     raise
-                                flush_pending()
+                                await flush_pending()
                                 if response_received <= 0:
                                     raise httpx.RemoteProtocolError(
                                         "Range 响应未返回任何数据"
@@ -2177,62 +2211,65 @@ class HTTPDownloader(SeeklessEngine):
                         # missing payload is terminal for this checkpoint.
                         return
 
-        checkpoint = asyncio.create_task(checkpoint_loop())
-        workers = [asyncio.create_task(worker()) for _ in range(task.progress.max_workers)]
         try:
-            results = await asyncio.gather(*workers, return_exceptions=True)
+            checkpoint = asyncio.create_task(checkpoint_loop())
+            workers = [asyncio.create_task(worker()) for _ in range(task.progress.max_workers)]
+            try:
+                results = await asyncio.gather(*workers, return_exceptions=True)
+            finally:
+                # Always reap children before the task manager is allowed to
+                # remove the work directory. This also runs when app shutdown or
+                # Delete cancels the parent at the gather() await above.
+                for child in workers:
+                    if not child.done():
+                        child.cancel()
+                if workers:
+                    await asyncio.gather(*workers, return_exceptions=True)
+                checkpoint.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await checkpoint
+                self._playback_fetcher = None
+                playback_fetches = [
+                    item for item in self._playback_fetch_tasks.values() if not item.done()
+                ]
+                for item in playback_fetches:
+                    item.cancel()
+                if playback_fetches:
+                    await asyncio.gather(*playback_fetches, return_exceptions=True)
+                self._playback_fetch_tasks.clear()
+                if part_path.exists():
+                    with contextlib.suppress(FileNotFoundError):
+                        async with state_lock:
+                            await save_state()
+            # Only report bytes covered by the durable checkpoint. An interrupted
+            # request therefore resumes at the exact saved byte instead of the
+            # start of its multi-megabyte chunk.
+            partials.clear()
+            finished_parts.clear()
+            task.progress.downloaded_bytes = last_saved_bytes
+            error = next(
+                (result for result in results if isinstance(result, _HTTPRangeUnsupported)),
+                None,
+            ) or next((result for result in results if isinstance(result, Exception)), None)
+            if error:
+                raise error
+            # Every worker has drained and the checkpoint is durable. Publish an
+            # explicit terminal transfer sample before the potentially slow
+            # cross-volume/antivirus-safe rename so the UI cannot remain at 99.x%
+            # while the download is already complete on disk.
+            if len(completed) == len(chunks) and part_path.exists() and part_path.stat().st_size == total:
+                task.progress.downloaded_bytes = total
+                task.progress.completed_segments = len(chunks)
+                task.progress.active_workers = 0
+                task.progress.active_slots = 0
+                if total:
+                    set_connection_parts(
+                        task,
+                        [{"start": 0, "end": total - 1, "done": total, "state": "done"}],
+                        total=total,
+                    )
+                self._apply_speed(window)
+                self._publish()
+            self._priority_queue = None
         finally:
-            # Always reap children before the task manager is allowed to
-            # remove the work directory. This also runs when app shutdown or
-            # Delete cancels the parent at the gather() await above.
-            for child in workers:
-                if not child.done():
-                    child.cancel()
-            if workers:
-                await asyncio.gather(*workers, return_exceptions=True)
-            checkpoint.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await checkpoint
-            self._playback_fetcher = None
-            playback_fetches = [
-                item for item in self._playback_fetch_tasks.values() if not item.done()
-            ]
-            for item in playback_fetches:
-                item.cancel()
-            if playback_fetches:
-                await asyncio.gather(*playback_fetches, return_exceptions=True)
-            self._playback_fetch_tasks.clear()
-            if part_path.exists():
-                with contextlib.suppress(FileNotFoundError):
-                    async with state_lock:
-                        await save_state()
-        # Only report bytes covered by the durable checkpoint. An interrupted
-        # request therefore resumes at the exact saved byte instead of the
-        # start of its multi-megabyte chunk.
-        partials.clear()
-        finished_parts.clear()
-        task.progress.downloaded_bytes = last_saved_bytes
-        error = next(
-            (result for result in results if isinstance(result, _HTTPRangeUnsupported)),
-            None,
-        ) or next((result for result in results if isinstance(result, Exception)), None)
-        if error:
-            raise error
-        # Every worker has drained and the checkpoint is durable. Publish an
-        # explicit terminal transfer sample before the potentially slow
-        # cross-volume/antivirus-safe rename so the UI cannot remain at 99.x%
-        # while the download is already complete on disk.
-        if len(completed) == len(chunks) and part_path.exists() and part_path.stat().st_size == total:
-            task.progress.downloaded_bytes = total
-            task.progress.completed_segments = len(chunks)
-            task.progress.active_workers = 0
-            task.progress.active_slots = 0
-            if total:
-                set_connection_parts(
-                    task,
-                    [{"start": 0, "end": total - 1, "done": total, "state": "done"}],
-                    total=total,
-                )
-            self._apply_speed(window)
-            self._publish()
-        self._priority_queue = None
+            durable_file.close()

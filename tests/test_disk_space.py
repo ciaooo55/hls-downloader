@@ -7,7 +7,9 @@ from backend.app.downloader.disk_space import (
     MIN_FREE_RESERVE,
     ensure_download_capacity,
     ensure_free_space,
+    open_payload_for_range,
     preallocate_payload,
+    write_payload,
 )
 
 
@@ -57,3 +59,23 @@ def test_preallocate_payload_replaces_existing_bytes(tmp_path):
     preallocate_payload(path, 4096)
     assert path.stat().st_size == 4096
     assert path.read_bytes()[:7] != b"keep-me"
+
+
+def test_open_payload_for_range_seek_write(tmp_path):
+    path = tmp_path / "payload.downloading"
+    preallocate_payload(path, 16)
+    with open_payload_for_range(path) as stream:
+        stream.seek(4)
+        write_payload(stream, b"ABCD")
+        stream.seek(8)
+        write_payload(stream, b"EFGH")
+    assert path.read_bytes()[4:12] == b"ABCDEFGH"
+
+
+def test_write_payload_rejects_short_write():
+    class ShortWriter:
+        def write(self, data):
+            return max(0, len(data) - 1)
+
+    with pytest.raises(OSError, match="写入不完整"):
+        write_payload(ShortWriter(), b"abcdef")

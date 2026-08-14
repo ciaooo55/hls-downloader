@@ -753,6 +753,22 @@ def test_http_range_keeps_one_payload_handle_across_capped_206(tmp_path, monkeyp
     assert reopen["r+b"] <= 6
 
 
+def test_identity_body_uses_raw_chunks_when_not_decoded():
+    class FakeResponse:
+        def __init__(self, encoding=""):
+            self.headers = {"content-encoding": encoding}
+
+        def aiter_raw(self):
+            return "raw"
+
+        def aiter_bytes(self):
+            return "bytes"
+
+    assert http_file_module._identity_body(FakeResponse()) == "raw"
+    assert http_file_module._identity_body(FakeResponse("identity")) == "raw"
+    assert http_file_module._identity_body(FakeResponse("gzip")) == "bytes"
+
+
 def test_http_range_downloader_uses_twelve_workers_by_default(tmp_path, monkeypatch):
     chunk_size = 1024 * 1024
     total = chunk_size * 13
