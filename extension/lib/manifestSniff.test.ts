@@ -19,6 +19,8 @@ describe('extensionless manifest sniffing', () => {
   it('does not wake the isolated media UI for ordinary page traffic', () => {
     expect(shouldReportMediaResponse('https://api.test/events', 'application/json')).toBe(false)
     expect(shouldReportMediaResponse('https://static.test/app.js', 'text/javascript')).toBe(false)
+    expect(shouldReportMediaResponse('https://api.bilibili.test/x/player/playurl?cid=1&mime=video%2Fmp4', 'application/json')).toBe(false)
+    expect(shouldReportMediaResponse('https://rr1.googlevideo.test/videoplayback?expire=1&mime=video%2Fmp4&itag=18', 'text/html')).toBe(false)
     expect(shouldReportMediaResponse('https://cdn.test/movie.mp4?token=1', 'application/octet-stream')).toBe(true)
     expect(shouldReportMediaResponse('https://cdn.test/media?id=1', 'video/mp4; charset=binary')).toBe(true)
     expect(shouldReportMediaResponse('https://cdn.test/live/playlist?id=1', 'application/octet-stream')).toBe(true)

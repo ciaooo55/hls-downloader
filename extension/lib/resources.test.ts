@@ -6,6 +6,7 @@ import {
   isConcreteDownloadMime,
   classifyPlaybackSource,
   classifyResource,
+  isSameDocumentPlaybackFallback,
   compactResources,
   isGenericMediaName,
   isUsefulResource,
@@ -53,6 +54,9 @@ describe('resource rules', () => {
     expect(classifyResource('https://rr1.googlevideo.test/videoplayback?expire=1&mime=video%2Fmp4&itag=18')).toBe('media')
     expect(classifyResource('https://rr1.googlevideo.test/videoplayback?id=1', 'application/octet-stream')).toBe('media')
     expect(classifyResource('https://api.bilibili.test/x/player/playurl?cid=1', 'application/json')).toBeNull()
+    expect(classifyResource('https://api.bilibili.test/x/player/playurl?cid=1&mime=video%2Fmp4', 'application/json')).toBeNull()
+    expect(classifyResource('https://cdn.test/playlist.m3u')).toBe('hls')
+    expect(classifyResource('https://cdn.test/poster.jpg', 'image/jpeg')).toBeNull()
   })
   it('uses an actually playing media element as direct classification evidence', () => {
     expect(classifyPlaybackSource('https://cdn.test/movie.mp4')).toBe('media')
@@ -62,6 +66,8 @@ describe('resource rules', () => {
     expect(classifyPlaybackSource('https://cdn.test/player.php?id=42', 'video/mp4')).toBe('media')
     expect(classifyPlaybackSource('https://rr1.googlevideo.test/videoplayback?expire=1&mime=video%2Fmp4&itag=18')).toBe('media')
     expect(classifyPlaybackSource('blob:https://site.test/opaque')).toBeNull()
+    expect(classifyPlaybackSource('https://cdn.test/poster.jpg')).toBeNull()
+    expect(classifyPlaybackSource('https://cdn.test/player.js')).toBeNull()
   })
   it('deduplicates resources', () => {
     const item = { id: '1', url: 'https://a.test/v.mp4', kind: 'media' as const, seenAt: Date.now() }
@@ -426,6 +432,34 @@ describe('resource rules', () => {
       mseResourceUrls: ['https://cdn.test/live/shared-202.m4s?token=new'],
       startedAt: now,
     }, 2).map(item => item.id)).toEqual(['second'])
+  })
+  it('binds an exact MSE progressive MP4 even when the network classified it as a file', () => {
+    const now = Date.now()
+    const item = resource({
+      id: 'movie', kind: 'file', url: 'https://cdn.test/movie.mp4?sig=old', seenAt: now,
+    })
+    expect(playerPlaybackResources([item], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: ['https://cdn.test/movie.mp4?sig=new'],
+      startedAt: now,
+    }, 1).map(entry => entry.id)).toEqual(['movie'])
+  })
+  it('does not bind a same-folder file from weak MSE path affinity', () => {
+    const now = Date.now()
+    const preview = resource({
+      id: 'preview', kind: 'file', url: 'https://cdn.test/vod/preview.mp4', seenAt: now,
+    })
+    expect(playerPlaybackResources([preview], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: ['https://cdn.test/vod/segment-1.m4s'],
+      startedAt: now,
+    }, 1)).toEqual([])
+  })
+  it('does not treat a watch page URL as the playing media file', () => {
+    expect(isSameDocumentPlaybackFallback('https://site.test/watch?v=1', 'https://site.test/watch?v=1')).toBe(true)
+    expect(isSameDocumentPlaybackFallback('https://site.test/watch?v=1#player', 'https://site.test/watch?v=1')).toBe(true)
+    expect(isSameDocumentPlaybackFallback('https://site.test/movie.mp4', 'https://site.test/movie.mp4')).toBe(false)
+    expect(isSameDocumentPlaybackFallback('https://cdn.test/play?id=42', 'https://site.test/watch')).toBe(false)
   })
   it('associates a response Blob URL with its exact direct media resource', () => {
     const now = Date.now()

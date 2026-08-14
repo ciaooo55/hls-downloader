@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser'
 import { clampOverlayPosition, shouldShowMediaOverlay } from '../lib/mediaOverlay'
-import { classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
+import { classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, isSameDocumentPlaybackFallback, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
 
@@ -713,14 +713,13 @@ export default defineContentScript({
         { url: explicitElementSource(media), mimeType: '' },
         ...[...media.querySelectorAll<HTMLSourceElement>('source')]
           .map(source => ({ url: explicitElementSource(source), mimeType: source.type || '' })),
-      ].filter(source => Boolean(source.url))
+      ].filter(source => Boolean(source.url) && !isSameDocumentPlaybackFallback(source.url, location.href))
       const current = String(media.currentSrc || '').trim()
       // A blob: currentSrc is legitimate MSE evidence. For http(s), retain the
       // current source only if it is not the browser's empty-src document
-      // fallback, or if the page explicitly declared that exact source.
+      // fallback, or a watch-page URL written into src="" / src="this page".
       const currentIsDocumentFallback = /^https?:\/\//i.test(current)
-        && pageKey(current) === pageKey(location.href)
-        && !declared.some(source => pageKey(source.url) === pageKey(current))
+        && isSameDocumentPlaybackFallback(current, location.href)
       return [
         ...(current && !currentIsDocumentFallback ? [{ url: current, mimeType: '' }] : []),
         ...declared,

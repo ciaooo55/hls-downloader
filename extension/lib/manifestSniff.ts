@@ -43,6 +43,15 @@ export function shouldInspectManifestResponse(url: string, mimeType = ''): boole
  */
 export function shouldReportMediaResponse(url: string, mimeType = ''): boolean {
   const mime = String(mimeType || '').split(';', 1)[0].trim().toLowerCase()
+  if (
+    mime
+    && !mime.includes('mpegurl')
+    && !mime.includes('dash+xml')
+    && !MEDIA_MIME.test(mime)
+    && /^(?:application\/(?:ecmascript|javascript|json|ld\+json|manifest\+json|wasm|xml)|font\/|text\/(?:css|html|javascript|xml)|image\/)/i.test(mime)
+  ) {
+    return false
+  }
   return MEDIA_MIME.test(mime)
     || mime.includes('mpegurl')
     || mime.includes('dash+xml')
