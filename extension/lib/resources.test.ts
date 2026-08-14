@@ -48,6 +48,8 @@ describe('resource rules', () => {
     expect(classifyResource('https://cdn.test/0001.ts')).toBeNull()
     expect(classifyResource('https://cdn.test/file.torrent?token=1')).toBe('file')
     expect(classifyResource('https://cdn.test/get?id=1', 'application/x-bittorrent')).toBe('file')
+    expect(classifyResource('https://mirror.test/pkg.meta4')).toBe('file')
+    expect(classifyResource('https://mirror.test/pkg.metalink', 'application/metalink4+xml')).toBe('file')
   })
   it('uses an actually playing media element as direct classification evidence', () => {
     expect(classifyPlaybackSource('https://cdn.test/movie.mp4')).toBe('media')
@@ -586,6 +588,12 @@ describe('resource rules', () => {
     expect(classifyDownload('https://cdn.test/archive.tar.gz', 'application/octet-stream', '')).toBe('file')
     expect(classifyDownload('https://cdn.test/Setup.dmg', 'application/octet-stream', 'download')).toBe('file')
     expect(classifyDownload('https://cdn.test/report.docx', 'application/octet-stream', '')).toBe('file')
+    expect(classifyDownload('https://cdn.test/legacy.f4v', '', '')).toBe('file')
+    expect(classifyDownload('https://cdn.test/clip.3gp', '', '')).toBe('file')
+    expect(looksLikeDownloadFile('https://cdn.test/song.aac')).toBe(true)
+    expect(classifyDownload('https://mirror.test/pkg.meta4', 'application/metalink4+xml', 'pkg.meta4')).toBe('file')
+    expect(classifyDownload('https://mirror.test/pkg.metalink', '', 'pkg.metalink')).toBe('file')
+    expect(isConcreteDownloadMime('application/metalink4+xml')).toBe(true)
     expect(classifyDownload('https://site.test/advert.php', 'application/octet-stream')).toBeNull()
     expect(classifyDownload('https://cdn.test/get?id=1', 'application/octet-stream', 'download')).toBeNull()
   })
@@ -763,6 +771,7 @@ describe('resource rules', () => {
       ctrlForce: false,
       at: 1000,
     }
+    const downloadControl = { ...intent, controlHint: true }
     expect(matchesDownloadClick(intent, {
       url: 'https://cdn.test/start',
       finalUrl: 'https://cdn.test/final.zip',
@@ -785,24 +794,33 @@ describe('resource rules', () => {
     // Gateway/JS downloads often report a final CDN URL that differs from the
     // clicked href. Same-tab + same-page (or missing Chrome referrer) still
     // counts as the user's click; cross-tab must stay rejected.
-    expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
+    expect(matchesDownloadClick({ ...downloadControl, tabId: 8 }, {
       url: 'https://cdn.test/generated.zip',
       referrer: 'https://site.test/download',
       tabId: 8,
     }, 2000)).toBe(true)
-    expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
+    expect(matchesDownloadClick({ ...downloadControl, tabId: 8 }, {
       url: 'https://cdn.test/generated.zip',
       referrer: 'https://site.test/download',
       tabId: 9,
     }, 2000)).toBe(false)
-    expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
+    expect(matchesDownloadClick({ ...downloadControl, tabId: 8 }, {
       url: 'https://cdn.test/generated.zip',
       tabId: 8,
     }, 2000)).toBe(true)
-    expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
+    expect(matchesDownloadClick({ ...downloadControl, tabId: 8 }, {
       url: 'https://cdn.test/generated.zip',
       tabId: 8,
     }, 4000)).toBe(false)
+    // A play-page href without a download control must not claim a later zip.
+    expect(matchesDownloadClick({
+      href: 'https://site.test/watch/episode-1?download=0',
+      pageUrl: 'https://site.test/watch/episode-1?download=0',
+      altBypass: false, ctrlForce: false, at: 1000, tabId: 8,
+    }, {
+      url: 'https://cdn.test/generated.zip',
+      tabId: 8,
+    }, 2000)).toBe(false)
     expect(matchesDownloadClick({ ...intent, tabId: 8, opensNewTab: true }, {
       url: 'https://cdn.test/start',
       finalUrl: 'https://cdn.test/file.zip',

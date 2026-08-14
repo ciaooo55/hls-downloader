@@ -1,4 +1,4 @@
-import { isAuthenticationNavigation } from './clickIntent'
+import { isAuthenticationNavigation, isLikelyDownloadUrl } from './clickIntent'
 import { httpOrigin } from './requestChain'
 import { removeRawQueryParameters } from './urlQuery'
 
@@ -68,7 +68,7 @@ export interface DownloadClickIntent {
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|torrent|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
 // Ordinary downloads the desktop already owns. MEDIA_EXT stays narrower so
 // page sniffing does not promote every .docx/.apk request into the media HUD.
-const DOWNLOAD_FILE_EXT = /\.(?:m3u8|mpd|mp4|m4v|webm|mkv|mov|avi|flv|m4a|mp3|flac|wav|ogg|opus|torrent|zip|7z|rar|tar|tgz|gz|bz2|xz|iso|img|exe|msi|msix|appx|apk|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|bin|jar)(?:$|[?#])/i
+const DOWNLOAD_FILE_EXT = /\.(?:m3u8?|mpd|mp4|m4v|webm|mkv|mov|avi|flv|f4v|3gp|m4a|mp3|flac|wav|ogg|opus|aac|torrent|metalink|meta4|zip|7z|rar|tar|tgz|gz|bz2|xz|iso|img|exe|msi|msix|appx|apk|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|bin|jar)(?:$|[?#])/i
 // Keep this narrower than MEDIA_EXT: archive and installer downloads can
 // legitimately use terse `s`/`e` application parameters, while these paths
 // are actual media or adaptive manifests whose signatures are known to rotate.
@@ -103,7 +103,7 @@ function cleanName(value = '', pathValue = false): string {
 }
 
 /** Server MIME types that already name a file, not a page or octet-stream guess. */
-const CONCRETE_DOWNLOAD_MIME = /^(?:application\/(?:(?:x-)?(?:7z-compressed|apple-diskimage|bittorrent|bzip2|debian-package|gzip|iso9660-image|msdownload|msi|rar(?:-compressed)?|tar|zip(?:-compressed)?)|epub\+zip|force-download|gzip|java-archive|pdf|vnd\.(?:android\.package-archive|debian\.binary-package|microsoft\.portable-executable|ms-(?:excel|powerpoint|word)|openxmlformats-officedocument\.[a-z0-9.+-]+)|x-download|zip))\b/i
+const CONCRETE_DOWNLOAD_MIME = /^(?:application\/(?:(?:x-)?(?:7z-compressed|apple-diskimage|bittorrent|bzip2|debian-package|gzip|iso9660-image|msdownload|msi|rar(?:-compressed)?|tar|zip(?:-compressed)?)|epub\+zip|force-download|gzip|java-archive|metalink4?\+xml|pdf|vnd\.(?:android\.package-archive|debian\.binary-package|microsoft\.portable-executable|ms-(?:excel|powerpoint|word)|openxmlformats-officedocument\.[a-z0-9.+-]+)|x-download|x-metalink|zip))\b/i
 
 export function isConcreteDownloadMime(value = ''): boolean {
   return CONCRETE_DOWNLOAD_MIME.test(String(value || '').split(';', 1)[0].trim())
@@ -166,6 +166,7 @@ export function classifyResource(url: string, mimeType = ''): ResourceKind | nul
   if (/\.mpd(?:$|[?#])/i.test(url) || mime.includes('dash+xml')) return 'dash'
   if (mime.startsWith('video/') || mime.startsWith('audio/')) return 'media'
   if (/\.torrent(?:$|[?#])/i.test(url) || mime.includes('bittorrent')) return 'file'
+  if (/\.(?:metalink|meta4)(?:$|[?#])/i.test(url) || mime.includes('metalink')) return 'file'
   return MEDIA_EXT.test(url) || mime.includes('octet-stream') ? 'file' : null
 }
 
@@ -931,8 +932,11 @@ export function matchesDownloadClick(
       if (exact) return false
       // Many download buttons open a short-lived gateway URL, then the browser
       // reports only the final CDN file. Require same-tab or same-page evidence
-      // so a random background download is never claimed.
-      if (linked && tabCompatible && age <= 2500) return true
+      // so a random background download is never claimed. A watch/play page
+      // href is not a download gateway: pairing it with a later zip would
+      // steal an ordinary click.
+      if (linked && tabCompatible && age <= 2500
+        && (intent.controlHint || isLikelyDownloadUrl(intent.href))) return true
       return false
     }
   }

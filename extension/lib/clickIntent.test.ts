@@ -24,6 +24,10 @@ describe('download click intent', () => {
     expect(isLikelyDownloadControl(['展开详情', 'btn primary'])).toBe(false)
     expect(isLikelyDownloadControl(['下一集', 'nextEpisode'])).toBe(false)
     expect(isLikelyDownloadControl(['登录', 'submit'])).toBe(false)
+    expect(isLikelyDownloadControl(['保存'])).toBe(false)
+    expect(isLikelyDownloadControl(['儲存'])).toBe(false)
+    expect(isLikelyDownloadControl(['Save'])).toBe(false)
+    expect(isLikelyDownloadControl(['收藏', 'save-progress'])).toBe(false)
   })
 
   it('tracks only download-specific normal links and generated controls', () => {
@@ -40,7 +44,9 @@ describe('download click intent', () => {
     expect(isLikelyDownloadControl(['Télécharger'])).toBe(true)
     expect(isLikelyDownloadControl(['ダウンロード'])).toBe(true)
     expect(isLikelyDownloadControl(['下載檔案'])).toBe(true)
-    expect(isLikelyDownloadControl(['儲存'])).toBe(true)
+    expect(isLikelyDownloadControl(['另存为'])).toBe(true)
+    expect(isLikelyDownloadControl(['保存到本地'])).toBe(true)
+    expect(isLikelyDownloadControl(['儲存檔案'])).toBe(true)
   })
 
   it('never records Google or third-party OAuth navigation as a download intent', () => {
@@ -58,6 +64,43 @@ describe('download click intent', () => {
     expect(isLikelyDownloadUrl('https://cdn.test/firmware.bin')).toBe(true)
     expect(isLikelyDownloadUrl('https://cdn.test/lib.jar')).toBe(true)
     expect(isLikelyDownloadUrl('https://site.test/watch/episode-1')).toBe(false)
+  })
+
+  it('recognizes media files, metalink and affirmative download flags', () => {
+    expect(isLikelyDownloadUrl('https://cdn.test/film.mp4')).toBe(true)
+    expect(isLikelyDownloadUrl('https://cdn.test/master.m3u8?token=1')).toBe(true)
+    expect(isLikelyDownloadUrl('https://cdn.test/stream.mpd')).toBe(true)
+    expect(isLikelyDownloadUrl('https://cdn.test/show.mkv')).toBe(true)
+    expect(isLikelyDownloadUrl('https://cdn.test/clip.webm')).toBe(true)
+    expect(isLikelyDownloadUrl('https://cdn.test/song.mp3')).toBe(true)
+    expect(isLikelyDownloadUrl('https://cdn.test/track.flac')).toBe(true)
+    expect(isLikelyDownloadUrl('https://cdn.test/audio.aac')).toBe(true)
+    expect(isLikelyDownloadUrl('https://cdn.test/legacy.f4v')).toBe(true)
+    expect(isLikelyDownloadUrl('https://mirror.test/pkg.metalink')).toBe(true)
+    expect(isLikelyDownloadUrl('https://mirror.test/pkg.meta4')).toBe(true)
+    expect(isLikelyDownloadUrl('magnet:?xt=urn:btih:abc')).toBe(true)
+    expect(isLikelyDownloadUrl('https://site.test/get?download=1')).toBe(true)
+    expect(isLikelyDownloadUrl('https://site.test/get?download=true')).toBe(true)
+    expect(isLikelyDownloadUrl('https://site.test/export?export=1')).toBe(true)
+    expect(isLikelyDownloadUrl('https://site.test/get?filename=report.pdf')).toBe(true)
+    expect(isLikelyDownloadUrl('https://site.test/get?download=movie.mp4')).toBe(true)
+  })
+
+  it('does not treat player-page flags or ordinary watch links as downloads', () => {
+    expect(isLikelyDownloadUrl('https://site.test/watch/episode-1?download=0')).toBe(false)
+    expect(isLikelyDownloadUrl('https://site.test/watch?v=abc&download=false')).toBe(false)
+    expect(isLikelyDownloadUrl('https://site.test/watch?download=no')).toBe(false)
+    expect(isLikelyDownloadUrl('https://site.test/watch?download=off')).toBe(false)
+    expect(isLikelyDownloadUrl('https://site.test/play/1?download=0')).toBe(false)
+    expect(isLikelyDownloadUrl('https://site.test/watch?file=episode.mp4')).toBe(false)
+    expect(isLikelyDownloadUrl('https://site.test/watch?filename=stream')).toBe(false)
+    expect(isLikelyDownloadUrl('https://site.test/video.php?id=1&fn=1')).toBe(false)
+    expect(isLikelyDownloadUrl('https://site.test/watch?src=https://cdn.test/movie.mp4')).toBe(false)
+    expect(shouldTrackDownloadIntent({ directHref: 'https://site.test/watch/episode-1?download=0' })).toBe(false)
+    expect(shouldTrackDownloadIntent({ directHref: 'https://site.test/watch?file=episode.mp4' })).toBe(false)
+    expect(shouldTrackDownloadIntent({ directHref: 'https://site.test/next-episode', hints: ['下一集'] })).toBe(false)
+    expect(shouldTrackDownloadIntent({ directHref: 'https://site.test/watch/episode-1', hints: ['播放'] })).toBe(false)
+    expect(shouldTrackDownloadIntent({ hints: ['保存'] })).toBe(false)
   })
 
   it('accepts only downloader-owned schemes from data download targets', () => {
@@ -99,6 +142,22 @@ describe('download click intent', () => {
     expect(matchesDownloadClick(intent(), {
       url: 'https://cdn.test/file.zip', referrer: 'https://site.test/page', tabId: 8,
     }, 10_200)).toBe(false)
+  })
+
+  it('does not pair a watch-page navigation with a later same-tab file', () => {
+    expect(shouldTrackDownloadIntent({
+      directHref: 'https://site.test/watch/episode-1?download=0',
+      hints: ['播放', 'play-button'],
+    })).toBe(false)
+    const watchClick = intent({
+      href: 'https://site.test/watch/episode-1?download=0',
+      generic: false,
+      controlHint: false,
+    })
+    expect(isLikelyDownloadUrl(watchClick.href)).toBe(false)
+    expect(matchesDownloadClick(watchClick, {
+      url: 'https://cdn.test/unrelated.zip', referrer: 'https://site.test/page', tabId: 7,
+    }, 10_400)).toBe(false)
   })
 
   it('accepts redirected or generated downloads for the same tab click window', () => {
