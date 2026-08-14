@@ -1265,9 +1265,9 @@ class HTTPDownloader(SeeklessEngine):
             task.filename = sanitize_filename(filename if not requested_name or is_generic_media_name(requested_name) else requested_name)
             output = _reserve_output_path(task_output_dir(task) / task.filename)
             task.engine_state["reserved_output_path"] = str(output)
-            with part_path.open("wb") as stream:
+            with part_path.open("wb", buffering=0) as stream:
                 first_chunk = True
-                async for chunk in response.aiter_bytes():
+                async for chunk in _identity_body(response):
                     if first_chunk:
                         validate_download_response(
                             task,
@@ -1283,7 +1283,7 @@ class HTTPDownloader(SeeklessEngine):
                     if self._is_pausing():
                         return output
                     await throttle_bytes(len(chunk), task)
-                    stream.write(chunk)
+                    write_payload(stream, chunk)
                     task.progress.downloaded_bytes += len(chunk)
                     window.add(len(chunk))
                     self._apply_speed(window)

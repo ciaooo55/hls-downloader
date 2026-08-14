@@ -81,3 +81,19 @@ ABDM 也是 RandomAccessFile / 动态 part 写进一个文件，模型和这里�
 - 不 C++/Kotlin 重写下载核心
 - 不复制 IDM 捕获 DLL、WFP/TDI、注入
 - 不把接管范围扩到图片、脚本、登录、OAuth、不相干的 `blob:`
+
+## 5. 现在还剩什么
+
+HTTP 落盘模型已经对齐 IDM 那一类：一个 `payload.downloading`、Range seek、稀疏预分配、分片复用句柄、单连接/POST 随到随写。下面这些不是「再改一刀热路径」就能抹平的。
+
+| 还在 | 为什么还在 |
+| --- | --- |
+| 主任务列表仍是 Tauri/WebView | 壳的下一刀，不是下载引擎 |
+| HLS/DASH 收尾仍走 FFmpeg，`+faststart` 会再写一遍 MP4 | 本地点播/Range 播放需要 moov 在文件头；MPEG-TS 也要转成播放器常用的 MP4。fMP4 不能字节拼接 |
+| Python + FFmpeg + libtorrent 的体积 | 不 C++ 重写核心就到不了 IDM 那档内存 |
+| FTP/SFTP 仍是单连接追加 | 本来就不是 HTTP Range 那套；传输已经在独立线程里写盘 |
+| NTFS 稀疏 `DeviceIoControl` 只在 Windows 生效 | 失败就退回 `truncate`，不会把文件打坏；Linux CI 覆盖不到这条 ioctl |
+| 多连接 Range 崩溃窗口仍是 256 KiB | 为了少 syscall，有意保留。单连接已经随到随写 |
+| 浏览器 POST 重放不能 Range 续传 | 只下一遍，避免表单/API 副作用；5.0.5 只把写盘改成和无 Range GET 一样随到随写 |
+
+下一刀若还做产品，是**原生任务列表**，不是再抠 HTTP 拼接。
