@@ -1,24 +1,22 @@
 # Architecture
 
-## Product stack (locked)
+## Product stack
 
-| Layer | Choice | Why |
+| Layer | Shipping on `main` | Target on `cursor/native-shell-rewrite-5a2e` |
 | --- | --- | --- |
-| Desktop shell | **Tauri 2** + WebView2 | Smallest popular native shell for Windows tools; not Electron |
-| UI framework | **React 19** + **TypeScript** + **Vite 7** | Default popular SPA stack for desktop WebViews |
-| Styling | **Tailwind CSS v4** + design tokens + existing component CSS | Industry default utilities; gradual migration without big-bang rewrite |
-| Component variants | **cva** + **clsx** + **tailwind-merge** | shadcn/ui foundation pattern |
-| Icons | **lucide-react** | Standard SVG icon set for product UI |
-| Client state | **Zustand** | Lightweight store for shell UI state |
-| Download core | **Python FastAPI** + uvicorn | Mature async API; HLS/DASH/HTTP/BT workers |
-| Browser extension | **WXT** (Chrome MV3 + Firefox) | Popular extension toolchain |
-| Packaging | NSIS installer + portable zip + GitHub Actions | Existing release path |
+| Desktop shell | **Tauri 2** + WebView2 | Resident **native supervisor** (tray + pre-created dialogs). Task list on demand. See `docs/native-shell-rewrite.md`. |
+| UI framework | **React 19** + **TypeScript** + **Vite 7** | Native confirm / progress / complete first; main list follows |
+| Download core | **Python FastAPI** + uvicorn | Unchanged. HLS/DASH/HTTP/BT workers stay here |
+| Browser extension | **WXT** (Chrome MV3 + Firefox) | Unchanged. Native Host talks to the supervisor pipe |
+| Packaging | NSIS installer + portable zip + GitHub Actions | Installer starts the supervisor, not a WebView |
 
 ## Non-goals
 
 - Do **not** reintroduce the removed Kotlin/Compose or pywebview desktop shells.
 - Do **not** switch to Electron for the main window.
 - Do **not** load remote Google Fonts in the packaged app (offline + privacy); use system UI fonts.
+- Do **not** copy IDM capture DLLs, WFP/TDI, or process injection.
+- Do **not** rewrite HLS/BT out of Python before the shell is resident, small, and instant.
 
 ## UI architecture
 
