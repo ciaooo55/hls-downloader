@@ -115,3 +115,16 @@ export const EXECUTABLE_OPEN_RE = /\.(?:bat|cmd|com|exe|js|msi|ps1|scr|vbs)$/i
 export function needsExecutableConfirm(path: string): boolean {
   return EXECUTABLE_OPEN_RE.test(path || '')
 }
+
+export function shouldAnnounceCompletion(
+  previous: string | undefined,
+  next: string,
+  alreadyListedDone = false,
+): boolean {
+  if (next !== 'done' || previous === 'done') return false
+  // An already-done row from the first task fetch must not pop the complete
+  // dialog again. A brand-new task whose first progress event is `done`
+  // (small HTTP files) still needs the IDM-style popup.
+  if (!previous && alreadyListedDone) return false
+  return true
+}

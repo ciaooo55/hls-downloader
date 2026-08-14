@@ -10,6 +10,7 @@ import {
   shouldShowProgressWindow,
   toCompleteItem,
   toProgressItem,
+  shouldAnnounceCompletion,
   COMPLETE_QUEUE_CAP,
   PROGRESS_CHROME_HEIGHT,
   PROGRESS_MAX_VISIBLE,
@@ -77,6 +78,14 @@ describe('download complete popup queue', () => {
     expect(queue).toHaveLength(COMPLETE_QUEUE_CAP)
     expect(queue[0]?.id).toBe('3')
     expect(dismissCompleteItem(queue as any, '3').map(item => item.id)[0]).toBe('4')
+  })
+
+  it('announces a fast completion even when no prior status was sampled', () => {
+    expect(shouldAnnounceCompletion(undefined, 'done', false)).toBe(true)
+    expect(shouldAnnounceCompletion('downloading', 'done', false)).toBe(true)
+    expect(shouldAnnounceCompletion('done', 'done', false)).toBe(false)
+    expect(shouldAnnounceCompletion(undefined, 'done', true)).toBe(false)
+    expect(shouldAnnounceCompletion('downloading_segments', 'failed', false)).toBe(false)
   })
 
   it('asks before opening an executable from the complete popup', () => {

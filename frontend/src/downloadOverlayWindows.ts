@@ -64,8 +64,9 @@ async function showProgressWindow(tasks: DownloadProgressItem[]) {
   const height = progressWindowHeight(tasks.length)
   await child.setAlwaysOnTop(true).catch(() => {})
   await placeBottomRight(PROGRESS_WINDOW_LABEL, PROGRESS_WINDOW_WIDTH, height)
+  // focusable:false keeps this from stealing the browser while a takeover
+  // download is running; show() still paints the always-on-top box.
   await child.show().catch(() => {})
-  await child.unminimize().catch(() => {})
 }
 
 async function showCompleteWindow() {
@@ -78,6 +79,18 @@ async function showCompleteWindow() {
   await child.show().catch(() => {})
   await child.unminimize().catch(() => {})
   await child.setFocus().catch(() => {})
+}
+
+async function flushPendingOverlays(): Promise<void> {
+  if (!overlayReady) return
+  if (pendingComplete.length) {
+    const { emitTo } = await import('@tauri-apps/api/event')
+    for (const item of pendingComplete) {
+      await emitTo(COMPLETE_WINDOW_LABEL, 'download-complete-enqueue', { item })
+    }
+    pendingComplete = []
+  }
+  await applyDownloadProgressWindow()
 }
 
 export async function applyDownloadProgressWindow(): Promise<void> {
@@ -116,7 +129,6 @@ export async function enqueueDownloadCompletePopup(
   }
   const { emitTo } = await import('@tauri-apps/api/event')
   await emitTo(COMPLETE_WINDOW_LABEL, 'download-complete-enqueue', { item })
-  await showCompleteWindow()
 }
 
 export async function setDownloadCompletePopupEnabled(enabled: boolean): Promise<void> {
@@ -148,16 +160,23 @@ export async function initDownloadOverlayWindows(
     if (completeEnabled) void showCompleteWindow()
   })
   let hostsReady = 0
-  let resolveHostsReady: (() => void) | null = null
-  const hostsReadyPromise = new Promise<void>(resolve => { resolveHostsReady = resolve })
   const markHostReady = () => {
     hostsReady += 1
-    if (hostsReady >= 2) resolveHostsReady?.()
+    if (hostsReady < 2 || overlayReady) return
+    overlayReady = true
+    void flushPendingOverlays()
   }
   const unlistenProgressReady = await current.listen('download-progress-ready', markHostReady)
   const unlistenCompleteHostReady = await current.listen('download-complete-host-ready', markHostReady)
 
-  const ensure = async (label: string, url: string, title: string, width: number, height: number) => {
+  const ensure = async (
+    label: string,
+    url: string,
+    title: string,
+    width: number,
+    height: number,
+    focusable: boolean,
+  ) => {
     const existing = await WindowType.getByLabel(label)
     if (existing) return existing
     const child = new WindowType(label, {
@@ -170,9 +189,10 @@ export async function initDownloadOverlayWindows(
       center: label === COMPLETE_WINDOW_LABEL,
       resizable: false,
       decorations: false,
-      alwaysOnTop: true,
+      alwaysOnTop: false,
       skipTaskbar: false,
       focus: false,
+      focusable,
       visible: false,
       shadow: true,
     })
@@ -190,6 +210,7 @@ export async function initDownloadOverlayWindows(
       '正在下载 - HLS Downloader',
       PROGRESS_WINDOW_WIDTH,
       progressWindowHeight(1),
+      false,
     ),
     ensure(
       COMPLETE_WINDOW_LABEL,
@@ -197,32 +218,17 @@ export async function initDownloadOverlayWindows(
       '下载完成 - HLS Downloader',
       COMPLETE_WINDOW_WIDTH,
       COMPLETE_WINDOW_HEIGHT,
+      true,
     ),
   ])
-
-  await Promise.race([
-    hostsReadyPromise,
-    new Promise(resolve => window.setTimeout(resolve, 3000)),
-  ])
-  unlistenProgressReady()
-  unlistenCompleteHostReady()
-
-  overlayReady = true
-  if (pendingComplete.length) {
-    const { emitTo } = await import('@tauri-apps/api/event')
-    for (const item of pendingComplete) {
-      await emitTo(COMPLETE_WINDOW_LABEL, 'download-complete-enqueue', { item })
-    }
-    pendingComplete = []
-    await showCompleteWindow()
-  }
-  await applyDownloadProgressWindow()
 
   return () => {
     overlayReady = false
     unlistenDismissed()
     unlistenEmpty()
     unlistenCompleteReady()
+    unlistenProgressReady()
+    unlistenCompleteHostReady()
     void WindowType.getByLabel(PROGRESS_WINDOW_LABEL).then(window => window?.destroy()).catch(() => {})
     void WindowType.getByLabel(COMPLETE_WINDOW_LABEL).then(window => window?.destroy()).catch(() => {})
     WebviewWindow = null

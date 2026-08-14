@@ -198,12 +198,6 @@ async function createTauriDesktopSession(): Promise<() => void> {
       new Promise(resolve => window.setTimeout(resolve, 3000)),
     ])
   }
-  let stopOverlayWindows = () => {}
-  try {
-    stopOverlayWindows = await initDownloadOverlayWindows(WebviewWindow)
-  } catch {
-    // Progress/complete popups are optional; the manager window still runs.
-  }
 
   const showMain = async () => {
     await current.show().catch(() => {})
@@ -269,6 +263,15 @@ async function createTauriDesktopSession(): Promise<() => void> {
     }
   }
   void poll()
+  let stopOverlayWindows = () => {}
+  void initDownloadOverlayWindows(WebviewWindow)
+    .then(stop => {
+      if (stopped) stop()
+      else stopOverlayWindows = stop
+    })
+    .catch(() => {
+      // Progress/complete popups are optional; browser handoff must not wait.
+    })
   return () => {
     stopped = true
     unlistenHostReady()

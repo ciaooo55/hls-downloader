@@ -17,6 +17,7 @@ import {
   enqueueCompleteItem,
   pruneDismissedProgressIds,
   selectProgressTasks,
+  shouldAnnounceCompletion,
   shouldShowProgressWindow,
   toCompleteItem,
   toProgressItem,
@@ -293,7 +294,11 @@ export default function App() {
             const oldest = Object.keys(lastStatuses.current)[0]
             if (oldest) delete lastStatuses.current[oldest]
           }
-          if (event.status === 'done' && previous && previous !== 'done') {
+          if (shouldAnnounceCompletion(
+            previous,
+            event.status,
+            tasksRef.current.find(task => task.id === event.task_id)?.status === 'done',
+          )) {
             void notifySystem('下载完成', event.title || event.task_id)
             playCompletionChime()
             const completeItem = toCompleteItem(event)
