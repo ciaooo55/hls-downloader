@@ -1290,10 +1290,10 @@ mod tests {
                 }
                 let mut stream = reader.into_inner();
                 let header = format!(
-                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 1-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     body.len() - 1,
                     body.len(),
-                    body.len()
+                    body.len().saturating_sub(1)
                 );
                 let _ = stream.write_all(header.as_bytes());
                 let _ = stream.write_all(body);
