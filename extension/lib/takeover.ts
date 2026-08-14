@@ -17,7 +17,7 @@ export function canResumeBrowserDownload(state: BrowserDownloadState): boolean {
   return state === 'in_progress' || state === 'interrupted'
 }
 
-export type HandoffPresentationMode = 'desktop' | 'desktop-pending' | 'ui-fallback' | 'none' | string
+export type HandoffPresentationMode = 'native-shell' | 'desktop' | 'desktop-pending' | 'ui-fallback' | 'none' | string
 
 export interface BrowserHandoffPayload {
   id?: string

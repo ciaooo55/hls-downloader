@@ -64,7 +64,9 @@ no DRM bypass, no IDM DLL / WFP / process injection.
 
 ## Phases
 
-1. **Contract (this branch):** supervisor state machine + snapshot events + tests.
+1. **Contract + core hot path (this branch):** supervisor state machine, snapshot
+   events, `/browser/handoffs` prefers `native-shell` when the supervisor is
+   resident, presenter reports ready without Tauri, loopback IPC tests.
 2. **Windows supervisor:** Rust tray + pre-created confirm/progress/complete.
    Extension Native Host talks to the supervisor pipe.
 3. **Task list:** native main window still talking to the same `/api` as today.

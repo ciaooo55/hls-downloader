@@ -69,6 +69,15 @@ from .downloader.playback import (
 from .desktop_runtime import activate_window, present_browser_handoff, has_browser_handoff_presenter, is_desktop_handoff_session, request_shutdown
 from .desktop_runtime import register_activation, register_browser_handoff, register_shutdown, set_desktop_handoff_session
 from .native_desktop import native_desktop_session, request_core_shutdown
+from .native_shell import (
+    boot_native_shell,
+    is_native_shell_ready,
+    native_shell_status,
+    native_shell_supervisor,
+    shutdown_native_shell,
+    start_native_shell_ipc,
+    stop_native_shell_ipc,
+)
 from .url_recognition import RecognitionError, recognize_url
 from .page_harvest import HarvestError, harvest_page, probe_harvest_links
 from .updater import (
@@ -412,9 +421,12 @@ async def create_browser_handoff(request: Request, x_token: str = Header(default
     url = payload["url"]
     _check_host(url)
     item = browser_handoffs.create(payload)
-    presentation = present_browser_handoff(item.id)
+    presentation = present_browser_handoff(item.id, snapshot=item.public())
     mode = str(presentation.get("mode") or "none")
-    if mode == "desktop-pending":
+    if mode == "native-shell":
+        # Pre-created confirmation window already has the offer snapshot.
+        browser_handoffs.mark_presentation(item.id, "presented")
+    elif mode == "desktop-pending":
         browser_handoffs.mark_presentation(item.id, "queued")
     elif mode == "desktop":
         # Presenter thread will upgrade this to presented; do not overwrite later.
@@ -429,6 +441,9 @@ async def create_browser_handoff(request: Request, x_token: str = Header(default
     body["presentation_mode"] = mode
     body["presentation_ok"] = bool(presentation.get("ok"))
     body["presentation_queued"] = bool(presentation.get("queued"))
+    body["presentable"] = bool(presentation.get("presentable"))
+    if presentation.get("snapshot"):
+        body["snapshot"] = presentation["snapshot"]
     return body
 
 
@@ -481,13 +496,22 @@ async def activate_browser_desktop(x_token: str = Header(default="")):
 async def browser_presenter_status(x_token: str = Header(default="")):
     """Desktop shell readiness for cold-start handoffs."""
     _check_browser_token(x_token)
-    ready = has_browser_handoff_presenter()
-    session = is_desktop_handoff_session()
+    shell_ready = is_native_shell_ready()
+    ready = has_browser_handoff_presenter() or shell_ready
+    session = is_desktop_handoff_session() or shell_ready
+    if shell_ready:
+        mode = "native-shell"
+    elif has_browser_handoff_presenter():
+        mode = "desktop"
+    elif is_desktop_handoff_session():
+        mode = "desktop-pending"
+    else:
+        mode = "ui-fallback"
     return {
         "ok": True,
         "ready": ready,
         "session": session,
-        "mode": "desktop" if ready else ("desktop-pending" if session else "ui-fallback"),
+        "mode": mode,
     }
 
 
@@ -737,6 +761,89 @@ async def poll_native_desktop_commands(
 ):
     _check_token(x_token)
     return await asyncio.to_thread(native_desktop_session.poll, after, timeout)
+
+
+@router.post("/desktop/native-shell/boot")
+async def boot_resident_native_shell(x_token: str = Header(default="")):
+    """Mark the supervisor resident: tray + warm confirm/progress/complete windows."""
+    _check_token(x_token)
+    return boot_native_shell()
+
+
+@router.post("/desktop/native-shell/shutdown")
+async def shutdown_resident_native_shell(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return shutdown_native_shell()
+
+
+@router.get("/desktop/native-shell/status")
+async def get_native_shell_status(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return native_shell_status()
+
+
+@router.get("/desktop/native-shell/events")
+async def poll_native_shell_events(
+    after: int = 0,
+    timeout: float = 1.0,
+    x_token: str = Header(default=""),
+):
+    _check_token(x_token)
+    return await asyncio.to_thread(native_shell_supervisor().wait_event, after, timeout)
+
+
+@router.post("/desktop/native-shell/main/open")
+async def open_native_shell_main(x_token: str = Header(default="")):
+    _check_token(x_token)
+    try:
+        return native_shell_supervisor().open_main()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/desktop/native-shell/main/hide")
+async def hide_native_shell_main(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return native_shell_supervisor().hide_main()
+
+
+@router.post("/desktop/native-shell/ipc/start")
+async def start_resident_native_shell_ipc(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return start_native_shell_ipc()
+
+
+@router.post("/desktop/native-shell/ipc/stop")
+async def stop_resident_native_shell_ipc(x_token: str = Header(default="")):
+    _check_token(x_token)
+    stop_native_shell_ipc()
+    return {"ok": True}
+
+
+@router.post("/desktop/native-shell/progress")
+async def present_native_shell_progress(request: Request, x_token: str = Header(default="")):
+    _check_token(x_token)
+    body = await request.json()
+    tasks = body.get("tasks") if isinstance(body, dict) else None
+    if not isinstance(tasks, list):
+        raise HTTPException(status_code=400, detail="progress tasks missing")
+    try:
+        return native_shell_supervisor().progress(tasks)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/desktop/native-shell/complete")
+async def present_native_shell_complete(request: Request, x_token: str = Header(default="")):
+    _check_token(x_token)
+    body = await request.json()
+    item = body.get("item") if isinstance(body, dict) else None
+    if not isinstance(item, dict):
+        raise HTTPException(status_code=400, detail="complete item missing")
+    try:
+        return native_shell_supervisor().complete(item)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/desktop/handoffs/{handoff_id}/presented")

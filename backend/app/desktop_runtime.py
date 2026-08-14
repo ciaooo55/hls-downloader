@@ -103,10 +103,49 @@ def register_browser_handoff(callback: Callable[[str], None] | None) -> None:
         ).start()
 
 
-def present_browser_handoff(handoff_id: str) -> dict:
+def _present_via_native_shell(handoff_id: str, snapshot: dict | None) -> dict | None:
+    """Prefer the resident supervisor when its confirmation window is already warm."""
+    try:
+        from .native_shell import is_native_shell_ready, native_shell_supervisor, paint_snapshot
+    except Exception:
+        return None
+    if not is_native_shell_ready():
+        return None
+    source = dict(snapshot) if isinstance(snapshot, dict) else {}
+    if not source.get("id") or source.get("id") != handoff_id:
+        source["id"] = handoff_id
+    if len(source) <= 1:
+        try:
+            from .browser_handoff import browser_handoffs
+
+            item = browser_handoffs.get(handoff_id)
+            if item is not None:
+                source = item.public()
+                source["id"] = handoff_id
+        except Exception:
+            logger.exception("failed to load browser handoff snapshot %s", handoff_id)
+    try:
+        event = native_shell_supervisor().offer(source)
+    except (RuntimeError, ValueError):
+        return None
+    except Exception:
+        logger.exception("native shell offer failed for %s", handoff_id)
+        return None
+    return {
+        "ok": True,
+        "presented": True,
+        "queued": False,
+        "mode": "native-shell",
+        "presentable": True,
+        "snapshot": event.get("snapshot") or paint_snapshot(source),
+    }
+
+
+def present_browser_handoff(handoff_id: str, snapshot: dict | None = None) -> dict:
     """Present one browser handoff without serializing it behind other dialogs.
 
     Returns a presentation report so callers can distinguish:
+    - native-shell: resident supervisor painted a pre-created confirmation window
     - desktop: presenter is live and a show call was scheduled
     - desktop-pending: desktop session is starting and the offer was queued
     - ui-fallback: no desktop shell; browser manager UI must show the offer
@@ -114,6 +153,10 @@ def present_browser_handoff(handoff_id: str) -> dict:
     handoff_id = str(handoff_id).strip()
     if not handoff_id:
         return {"ok": False, "presented": False, "queued": False, "mode": "none"}
+
+    native = _present_via_native_shell(handoff_id, snapshot)
+    if native is not None:
+        return native
 
     with _handoff_lock:
         callback = _handoff_callback

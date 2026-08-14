@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, RedirectResponse
 from contextlib import asynccontextmanager
+import os
 
 import uvicorn
 
@@ -26,9 +27,16 @@ async def lifespan(app: FastAPI):
         await manager.cleanup_orphan_temp_dirs()
     except Exception:
         pass
+    if os.environ.get("HLS_NATIVE_SHELL", "").strip().lower() in {"1", "true", "yes", "on"}:
+        from .native_shell import boot_native_shell
+
+        boot_native_shell()
     try:
         yield
     finally:
+        from .native_shell import reset_native_shell
+
+        reset_native_shell()
         await manager.shutdown()
         await close_database()
 

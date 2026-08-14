@@ -1,3 +1,4 @@
+import socket
 import threading
 import time
 
@@ -5,9 +6,17 @@ import pytest
 
 from backend.app.native_shell import (
     NativeShellSupervisor,
+    NativeShellIpcServer,
+    boot_native_shell,
     decode_frame,
+    dispatch_ipc,
     encode_frame,
+    is_native_shell_ready,
+    native_shell_supervisor,
     paint_snapshot,
+    read_frame,
+    reset_native_shell,
+    write_frame,
 )
 
 
@@ -98,3 +107,58 @@ def test_paint_snapshot_drops_unknown_size_and_keeps_name():
         "resource_kind": "file",
         "status": "pending",
     }
+
+
+def test_global_supervisor_boot_and_reset():
+    reset_native_shell()
+    assert is_native_shell_ready() is False
+    status = boot_native_shell()
+    assert status["resident"] is True
+    assert is_native_shell_ready() is True
+    assert native_shell_supervisor().windows["handoff"] is True
+    reset_native_shell()
+    assert is_native_shell_ready() is False
+
+
+def test_dispatch_ipc_offer_and_hide_main_keep_resident():
+    shell = NativeShellSupervisor()
+    hello = dispatch_ipc(shell, {"op": "hello"})
+    assert hello["protocol"] == "hls-downloader-native-shell"
+    boot = dispatch_ipc(shell, {"op": "boot"})
+    assert boot["windows"]["complete"] is True
+    event = dispatch_ipc(shell, {
+        "op": "offer",
+        "handoff": {"id": "h3", "filename": "a.exe", "url": "https://cdn.test/a.exe", "cookie": "secret"},
+    })
+    assert event["presentable"] is True
+    assert "cookie" not in event["snapshot"]
+    opened = dispatch_ipc(shell, {"op": "open_main"})
+    assert opened["main_open"] is True
+    hidden = dispatch_ipc(shell, {"op": "hide_main"})
+    assert hidden["main_open"] is False
+    assert hidden["resident"] is True
+    assert shell.is_ready() is True
+
+
+def test_tcp_ipc_roundtrip_paints_without_http():
+    shell = NativeShellSupervisor()
+    server = NativeShellIpcServer(shell)
+    endpoint = server.start()
+    try:
+        client = socket.create_connection((endpoint["host"], endpoint["port"]), timeout=2)
+        try:
+            write_frame(client, {"op": "boot"})
+            boot = read_frame(client)
+            assert boot["resident"] is True
+            write_frame(client, {
+                "op": "offer",
+                "handoff": {"id": "pipe-1", "filename": "setup.exe", "url": "https://cdn.test/setup.exe", "size": 8},
+            })
+            event = read_frame(client)
+            assert event["kind"] == "handoff"
+            assert event["snapshot"]["filename"] == "setup.exe"
+            assert event["presentable"] is True
+        finally:
+            client.close()
+    finally:
+        server.stop()

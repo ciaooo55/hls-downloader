@@ -1,0 +1,17 @@
+[package]
+name = "hls-native-shell"
+version = "0.1.0"
+edition = "2021"
+description = "Resident native-shell protocol codec for HLS Downloader 5.0"
+publish = false
+
+[dependencies]
+serde_json = "1"
+
+[lib]
+name = "hls_native_shell"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hls-native-shell"
+path = "src/main.rs"

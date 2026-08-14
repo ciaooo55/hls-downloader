@@ -42,6 +42,25 @@ def test_cold_offer_uses_one_presenter_deadline_instead_of_two_waits(monkeypatch
     assert presenter_timeouts == [18.0]
 
 
+def test_wait_presenter_returns_for_native_shell_without_tauri(monkeypatch):
+    calls = []
+
+    def request(method, path):
+        calls.append((method, path))
+        return {"ready": True, "session": True, "mode": "native-shell"}
+
+    monkeypatch.setattr(native_host, "_request", request)
+    monkeypatch.setattr(
+        native_host.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(AssertionError("unexpected wait")),
+    )
+
+    native_host._wait_presenter(18.0)
+
+    assert calls == [("GET", "/browser/presenter")]
+
+
 def test_offer_posts_handoff_without_a_prior_browser_ping(monkeypatch):
     calls = []
     monkeypatch.setattr(native_host, "_ensure_app", lambda *_args, **_kwargs: None)
