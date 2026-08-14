@@ -22,7 +22,7 @@
 
 ## File assembly
 
-- **HTTP:** one `payload.downloading`, `Range` + `seek`, then rename. Never `cat` part files. NTFS sparse preallocate; one `r+b` handle per worker across capped 206s; payload writes off the event loop; checkpoint `fsync`s a dedicated handle.
+- **HTTP:** one `payload.downloading`, `Range` + `seek`, then rename. Never `cat` part files. NTFS sparse preallocate; one `r+b` handle per worker across capped 206s; Range payload writes off the event loop; checkpoint `fsync`s a dedicated handle. Sequential/no-Range writes each chunk immediately.
 - **MPEG-TS HLS** (no init / discontinuity): FFmpeg `concatf:` local concat.
 - **fMP4 HLS / DASH:** local `ENDLIST` playlist + FFmpeg timeline. Do not byte-concat `init.mp4` + `.m4s`.
 

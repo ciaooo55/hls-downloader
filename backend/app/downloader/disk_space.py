@@ -92,64 +92,12 @@ def write_payload(stream, data) -> int:
 def open_payload_for_range(path: Path):
     """Open one Range payload for seek+write.
 
-    Each worker keeps its own handle. On NTFS, FILE_FLAG_RANDOM_ACCESS tells
-    the cache manager this is scattered Range I/O rather than a sequential
-    copy. Other platforms use unbuffered r+b.
+    Each worker keeps its own handle. Seek+write is not atomic across tasks
+    on a shared fd. No Windows CreateFile flags here: this process was never
+    executed in Linux CI, and FILE_FLAG_RANDOM_ACCESS is the wrong hint
+    anyway (each handle seeks once, then writes forward).
     """
-    path = Path(path)
-    if os.name == "nt":
-        opened = _windows_open_random_access(path)
-        if opened is not None:
-            return opened
-    return path.open("r+b", buffering=0)
-
-
-def _windows_open_random_access(path: Path):
-    try:
-        import ctypes
-        import msvcrt
-        from ctypes import wintypes
-    except ImportError:
-        return None
-    GENERIC_READ = 0x80000000
-    GENERIC_WRITE = 0x40000000
-    FILE_SHARE_READ = 0x00000001
-    FILE_SHARE_WRITE = 0x00000002
-    FILE_SHARE_DELETE = 0x00000004
-    OPEN_EXISTING = 3
-    FILE_ATTRIBUTE_NORMAL = 0x00000080
-    FILE_FLAG_RANDOM_ACCESS = 0x10000000
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateFileW.argtypes = [
-        wintypes.LPCWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.LPVOID,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.HANDLE,
-    ]
-    kernel32.CreateFileW.restype = wintypes.HANDLE
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel32.CloseHandle.restype = wintypes.BOOL
-    handle = kernel32.CreateFileW(
-        str(path),
-        GENERIC_READ | GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        None,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS,
-        None,
-    )
-    invalid = ctypes.c_void_p(-1).value
-    if handle == invalid or handle is None:
-        return None
-    try:
-        fd = msvcrt.open_osfhandle(int(handle), os.O_RDWR | getattr(os, "O_BINARY", 0))
-    except OSError:
-        kernel32.CloseHandle(handle)
-        return None
-    return os.fdopen(fd, "r+b", buffering=0)
+    return Path(path).open("r+b", buffering=0)
 
 
 def preallocate_payload(path: Path, size: int) -> None:

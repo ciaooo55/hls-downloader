@@ -48,10 +48,14 @@ publish_path() 重命名/挪到最终文件名
 
 5.0.3 继续抠同一条热路径：
 
-3. **落盘不堵事件循环**：256 KiB 一批 `asyncio.to_thread` 写入，网络 worker 不再被 Windows Defender/机械盘的 `write` 卡住。
-4. **检查点复用已打开的载荷句柄** `fsync`，不再每 5 秒对几 GB 稀疏文件 `open/close`。
-5. **Windows `FILE_FLAG_RANDOM_ACCESS`** 打开 Range 载荷，符合散写而不是顺序拷贝。
-6. **`aiter_raw()`** 代替 `aiter_bytes()` 的 ByteChunker，Range 已经拒绝了 Content-Encoding。
+3. **Range 落盘不堵事件循环**：256 KiB 一批 `asyncio.to_thread` 写入，多连接时网络 worker 不再被磁盘 `write` 卡住。
+4. **检查点复用已打开的载荷句柄** `flush` + `fsync`，不再每 5 秒对几 GB 稀疏文件 `open/close`。
+5. **真正的流式 Range 走 `aiter_raw()`**；已经读进内存的响应（测试 Mock 等）仍走 `aiter_bytes()`。
+
+5.0.4 撤回 5.0.3 里看走眼的两处：
+
+- 不在热路径上调用从未在 CI 跑过的 Windows `CreateFile` / `FILE_FLAG_RANDOM_ACCESS`。每个 worker 句柄是 seek 一次再顺序写，RANDOM_ACCESS 提示是反的。
+- 无 Range 单连接改回随到随写（`buffering=0`）。5.0.3 误把 `RANGE_WRITE_BATCH` 套到单连接上，崩溃/暂停会丢掉最多 256 KiB 已收到但未落盘的前缀。多连接 Range 本来就是 256 KiB 一批，窗口没变。
 
 HLS/DASH 分片同样把 `write` 移出事件循环。MPEG-TS 仍走 `concatf` + FFmpeg copy；fMP4 仍走本地清单，不改拼接语义。
 

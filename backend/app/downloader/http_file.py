@@ -1586,23 +1586,8 @@ class HTTPDownloader(SeeklessEngine):
                     task.progress.downloaded_bytes = existing
                     if reported_total:
                         task.progress.progress_percent = min(100.0, existing * 100 / reported_total)
-                    with part_path.open("ab" if append else "wb") as output:
+                    with part_path.open("ab" if append else "wb", buffering=0) as output:
                         first_chunk = True
-                        pending = bytearray()
-
-                        async def flush_sequential() -> None:
-                            nonlocal pending
-                            if not pending:
-                                return
-                            data = pending
-                            pending = bytearray()
-                            await asyncio.to_thread(write_payload, output, data)
-                            task.progress.downloaded_bytes += len(data)
-                            task.engine_state["sequential_bytes"] = task.progress.downloaded_bytes
-                            window.add(len(data))
-                            self._apply_speed(window)
-                            self._publish()
-
                         async for chunk in _identity_body(response):
                             if first_chunk:
                                 validate_download_response(
@@ -1614,16 +1599,16 @@ class HTTPDownloader(SeeklessEngine):
                                 )
                                 first_chunk = False
                             if self._is_canceled():
-                                await flush_sequential()
                                 raise asyncio.CancelledError
                             if self._is_pausing():
-                                await flush_sequential()
                                 return
                             await throttle_bytes(len(chunk), task)
-                            pending.extend(chunk)
-                            if len(pending) >= RANGE_WRITE_BATCH:
-                                await flush_sequential()
-                        await flush_sequential()
+                            write_payload(output, chunk)
+                            task.progress.downloaded_bytes += len(chunk)
+                            task.engine_state["sequential_bytes"] = task.progress.downloaded_bytes
+                            window.add(len(chunk))
+                            self._apply_speed(window)
+                            self._publish()
                 if task.progress.total_bytes and task.progress.downloaded_bytes != task.progress.total_bytes:
                     raise httpx.RemoteProtocolError(
                         f"响应提前结束，期望 {task.progress.total_bytes} 字节，实际 {task.progress.downloaded_bytes} 字节"
@@ -1861,6 +1846,7 @@ class HTTPDownloader(SeeklessEngine):
                 # OS/Python buffers. Flush payload first, then atomically
                 # replace the checkpoint. Keep the Windows durability barrier
                 # off the API event loop because it can block during scanning.
+                durable_file.flush()
                 os.fsync(durable_file.fileno())
                 atomic_write_text(state_path, checkpoint_json)
 

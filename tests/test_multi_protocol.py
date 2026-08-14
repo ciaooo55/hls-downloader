@@ -1920,6 +1920,53 @@ def test_http_sequential_resumes_from_partial_file(tmp_path):
     assert task.engine_state["sequential_bytes"] == 10
 
 
+def test_http_sequential_keeps_small_prefix_after_mid_stream_disconnect(tmp_path, monkeypatch):
+    monkeypatch.setattr(http_file_module, "retry_delay_seconds", lambda *_args: 0)
+    body = b"0123456789"
+    part = tmp_path / "payload.part"
+    task = Task(id="seq-disconnect", url="https://files.test/a.bin", task_type=TaskType.HTTP)
+    requests: list[str | None] = []
+
+    class BrokenStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield body[:4]
+            raise httpx.ReadError("connection dropped")
+
+        async def aclose(self):
+            return None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        value = request.headers.get("range")
+        requests.append(value)
+        if len(requests) == 1:
+            return httpx.Response(
+                200,
+                stream=BrokenStream(),
+                headers={"Content-Length": str(len(body)), "Content-Type": "application/octet-stream"},
+                request=request,
+            )
+        start = 0
+        if value and value.startswith("bytes="):
+            start = int(value.removeprefix("bytes=").split("-", 1)[0] or 0)
+        status = 206 if start else 200
+        headers = {"Content-Type": "application/octet-stream"}
+        if status == 206:
+            headers["Content-Range"] = f"bytes {start}-{len(body) - 1}/{len(body)}"
+        else:
+            headers["Content-Length"] = str(len(body))
+        return httpx.Response(status, content=body[start:], headers=headers, request=request)
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_sequential(client, downloader._headers(), part)
+
+    asyncio.run(run())
+    assert requests[0] is None
+    assert requests[1] == "bytes=4-"
+    assert part.read_bytes() == body
+
+
 def test_http_sequential_416_does_not_complete_a_sparse_preallocated_part(tmp_path):
     body = b"0123456789"
     part = tmp_path / "payload.part"
