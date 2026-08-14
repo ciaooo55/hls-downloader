@@ -20,6 +20,12 @@ from urllib.parse import parse_qsl, urlencode, unquote, unquote_to_bytes, urlpar
 import httpx
 
 from ..config import settings
+from ..native_engine import (
+    locate_native_engine_executable,
+    resolved_proxy_url,
+    run_native_engine,
+    write_native_job,
+)
 from ..checksum import apply_http_content_checksum, parse_http_content_checksum, prefer_http_content_checksum, verify_task_checksum
 from ..models import Task, TaskStatus
 from ..naming import is_generic_media_name
@@ -1366,36 +1372,46 @@ class HTTPDownloader(SeeklessEngine):
                             operation="下载临时盘",
                         )
 
-                    marked = int(task.engine_state.get("sequential_bytes") or 0)
-                    trusted_sequential = marked > 0 and current_size == marked
-                    if total <= 0 or not metadata["ranges"] or (trusted_sequential and (total <= 0 or current_size < total)):
-                        self._sequential = True
-                        self._discard_untrusted_sequential_part(part_path)
-                        await self._download_sequential(client, headers, part_path)
-                    else:
-                        try:
-                            await self._download_ranges(client, headers, part_path, state_path, metadata)
-                        except _HTTPRangeUnsupported:
-                            # A CDN can advertise 206 during probing and later
-                            # ignore Range or fail If-Range after an object
-                            # rotation. Never stitch its full 200 response into
-                            # sparse offsets: discard the range checkpoint, the
-                            # preallocated sparse part, and restart one verified
-                            # sequential transfer from byte 0.
+                    used_native = False
+                    if self._native_http_engine_eligible(state_path):
+                        used_native = await self._download_with_native_engine(
+                            headers,
+                            part_path,
+                            state_path,
+                            metadata,
+                        )
+                    if not used_native:
+                        marked = int(task.engine_state.get("sequential_bytes") or 0)
+                        current_size = part_path.stat().st_size if part_path.exists() else 0
+                        trusted_sequential = marked > 0 and current_size == marked
+                        if total <= 0 or not metadata["ranges"] or (trusted_sequential and (total <= 0 or current_size < total)):
                             self._sequential = True
-                            self._completed_chunks.clear()
-                            self._claimed_chunks.clear()
-                            state_path.unlink(missing_ok=True)
-                            part_path.unlink(missing_ok=True)
-                            task.engine_state.pop("sequential_bytes", None)
-                            task.progress.completed_segments = 0
-                            task.progress.downloaded_bytes = 0
-                            task.progress.progress_percent = 0.0
-                            self._set_stage(
-                                "downloading",
-                                "服务器已停止支持分段，正在自动切换单连接并从头安全下载",
-                            )
+                            self._discard_untrusted_sequential_part(part_path)
                             await self._download_sequential(client, headers, part_path)
+                        else:
+                            try:
+                                await self._download_ranges(client, headers, part_path, state_path, metadata)
+                            except _HTTPRangeUnsupported:
+                                # A CDN can advertise 206 during probing and later
+                                # ignore Range or fail If-Range after an object
+                                # rotation. Never stitch its full 200 response into
+                                # sparse offsets: discard the range checkpoint, the
+                                # preallocated sparse part, and restart one verified
+                                # sequential transfer from byte 0.
+                                self._sequential = True
+                                self._completed_chunks.clear()
+                                self._claimed_chunks.clear()
+                                state_path.unlink(missing_ok=True)
+                                part_path.unlink(missing_ok=True)
+                                task.engine_state.pop("sequential_bytes", None)
+                                task.progress.completed_segments = 0
+                                task.progress.downloaded_bytes = 0
+                                task.progress.progress_percent = 0.0
+                                self._set_stage(
+                                    "downloading",
+                                    "服务器已停止支持分段，正在自动切换单连接并从头安全下载",
+                                )
+                                await self._download_sequential(client, headers, part_path)
 
             if self._is_canceled():
                 task.status = TaskStatus.CANCELED
@@ -1487,6 +1503,228 @@ class HTTPDownloader(SeeklessEngine):
                 and output.stat().st_size == 0
             ):
                 output.unlink(missing_ok=True)
+
+    def _native_http_engine_eligible(self, state_path: Path) -> bool:
+        if self._is_replay_post():
+            return False
+        pytest_active = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+        test_native = os.environ.get("HLS_TEST_NATIVE_HTTP", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if pytest_active and not test_native:
+            return False
+        if os.environ.get("HLS_NATIVE_HTTP_ENGINE", "").strip().lower() in {"0", "false", "off"}:
+            return False
+        if not bool(getattr(settings, "native_http_engine", False)):
+            return False
+        from .throttle import effective_download_speed_limit_kib
+
+        if effective_download_speed_limit_kib() > 0:
+            return False
+        if state_path.exists():
+            try:
+                saved = json.loads(state_path.read_text(encoding="utf-8"))
+                if saved.get("ranges") or saved.get("completed"):
+                    return False
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+        return locate_native_engine_executable() is not None
+
+    def _apply_native_progress(self, progress_path: Path) -> None:
+        try:
+            payload = json.loads(progress_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return
+        downloaded = int(payload.get("downloaded") or 0)
+        total = int(payload.get("total") or self.task.progress.total_bytes or 0)
+        speed = float(payload.get("speed") or 0.0)
+        self.task.progress.downloaded_bytes = max(0, downloaded)
+        self.task.progress.speed_bytes_per_sec = max(0.0, speed)
+        if total > 0:
+            self.task.progress.total_bytes = total
+            self.task.progress.progress_percent = min(100.0, downloaded * 100 / total)
+            remaining = max(0, total - downloaded)
+            self.task.progress.eta_seconds = remaining / speed if speed > 0 else 0.0
+        self._publish()
+
+    def _write_native_control(self, control_path: Path, value: str) -> None:
+        atomic_write_text(control_path, value)
+
+    def _native_job_payload(
+        self,
+        *,
+        headers: dict[str, str],
+        part_path: Path,
+        control_path: Path,
+        progress_path: Path,
+        sequential: bool,
+        resume_from: int,
+        total: int,
+    ) -> dict:
+        return {
+            "url": self._download_url or self.task.url,
+            "headers": dict(headers),
+            "output": str(part_path),
+            "connections": max(1, int(self.task.concurrency or 1)),
+            "chunk_bytes": max(64 * 1024, int(self._chunk_size)),
+            "total": 0 if sequential else max(0, int(total)),
+            "sequential": bool(sequential),
+            "resume_from": max(0, int(resume_from)),
+            "proxy": resolved_proxy_url(self._download_url or self.task.url),
+            "control": str(control_path),
+            "progress": str(progress_path),
+        }
+
+    async def _await_native_engine(self, process, control_path: Path, progress_path: Path) -> int:
+        try:
+            while True:
+                self._apply_native_progress(progress_path)
+                if self._is_canceled():
+                    self._write_native_control(control_path, "cancel")
+                elif self._is_pausing():
+                    self._write_native_control(control_path, "pause")
+                code = process.poll()
+                if code is not None:
+                    return int(code)
+                await asyncio.sleep(0.2)
+        except asyncio.CancelledError:
+            self._write_native_control(
+                control_path,
+                "cancel" if self._is_canceled() else "pause",
+            )
+            try:
+                await asyncio.to_thread(process.wait, 8)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    process.kill()
+            raise
+
+    def _reset_range_state_for_sequential(self, part_path: Path, state_path: Path) -> None:
+        self._sequential = True
+        self._completed_chunks.clear()
+        self._claimed_chunks.clear()
+        state_path.unlink(missing_ok=True)
+        part_path.unlink(missing_ok=True)
+        self.task.engine_state.pop("sequential_bytes", None)
+        self.task.progress.completed_segments = 0
+        self.task.progress.downloaded_bytes = 0
+        self.task.progress.progress_percent = 0.0
+
+    async def _download_with_native_engine(
+        self,
+        headers: dict[str, str],
+        part_path: Path,
+        state_path: Path,
+        metadata: dict,
+    ) -> bool:
+        executable = locate_native_engine_executable()
+        if executable is None:
+            return False
+        task = self.task
+        task_dir = part_path.parent
+        control_path = task_dir / "native-engine.control"
+        progress_path = task_dir / "native-engine.progress.json"
+        job_path = task_dir / "native-engine.job.json"
+        total = int(metadata.get("total") or task.progress.total_bytes or 0)
+        marked = int(task.engine_state.get("sequential_bytes") or 0)
+        current_size = part_path.stat().st_size if part_path.exists() else 0
+        trusted_sequential = marked > 0 and current_size == marked
+        sequential = (
+            total <= 0
+            or not bool(metadata.get("ranges"))
+            or (trusted_sequential and (total <= 0 or current_size < total))
+        )
+        resume_from = marked if sequential and trusted_sequential else 0
+        if sequential:
+            self._sequential = True
+            self._discard_untrusted_sequential_part(part_path)
+            if not (part_path.exists() and trusted_sequential):
+                resume_from = 0
+        connections = 1 if sequential else max(1, int(task.concurrency or 1))
+        task.progress.total_segments = 1 if sequential else max(1, connections)
+        task.progress.max_workers = connections
+        task.progress.active_workers = connections
+        task.progress.active_slots = connections
+        task.progress.connection_status = "running"
+        task.engine_state["stream_path"] = str(part_path)
+        task.engine_state["http_engine"] = "native-rust"
+        self._set_stage("downloading", "正在用原生引擎下载")
+        self._write_native_control(control_path, "run")
+
+        async def launch(sequential_mode: bool, resume: int) -> int:
+            write_native_job(
+                job_path=job_path,
+                payload=self._native_job_payload(
+                    headers=headers,
+                    part_path=part_path,
+                    control_path=control_path,
+                    progress_path=progress_path,
+                    sequential=sequential_mode,
+                    resume_from=resume,
+                    total=total,
+                ),
+            )
+            process = run_native_engine(executable=executable, job_path=job_path)
+            return await self._await_native_engine(process, control_path, progress_path)
+
+        try:
+            code = await launch(sequential, resume_from)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.on_log(task.id, f"[downloading] 原生引擎启动失败，已回退到 Python：{type(exc).__name__}")
+            task.engine_state.pop("http_engine", None)
+            return False
+
+        if code == 30 and not sequential:
+            self._reset_range_state_for_sequential(part_path, state_path)
+            self._set_stage(
+                "downloading",
+                "服务器已停止支持分段，正在用原生引擎单连接从头安全下载",
+            )
+            self._write_native_control(control_path, "run")
+            try:
+                code = await launch(True, 0)
+                sequential = True
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.on_log(task.id, f"[downloading] 原生单连接回退失败：{type(exc).__name__}")
+                task.engine_state.pop("http_engine", None)
+                return False
+
+        self._apply_native_progress(progress_path)
+        if code == 0:
+            size = part_path.stat().st_size if part_path.exists() else 0
+            task.progress.downloaded_bytes = size
+            if size and not task.progress.total_bytes:
+                task.progress.total_bytes = size
+            task.progress.completed_segments = max(1, task.progress.total_segments or 1)
+            task.progress.active_workers = 0
+            task.progress.speed_bytes_per_sec = 0.0
+            if sequential and size:
+                task.engine_state["sequential_bytes"] = size
+            return True
+        if code == 20:
+            if sequential and part_path.exists():
+                task.engine_state["sequential_bytes"] = part_path.stat().st_size
+            return True
+        if code == 21:
+            return True
+        if sequential and part_path.exists() and part_path.stat().st_size > 0:
+            existing = part_path.stat().st_size
+            marked_now = int(task.engine_state.get("sequential_bytes") or 0)
+            if marked_now == 0 or existing == marked_now:
+                task.engine_state["sequential_bytes"] = existing
+        elif not sequential:
+            part_path.unlink(missing_ok=True)
+            state_path.unlink(missing_ok=True)
+        task.engine_state.pop("http_engine", None)
+        self.on_log(task.id, f"[downloading] 原生引擎退出 {code}，已回退到 Python")
+        return False
 
     def _discard_untrusted_sequential_part(self, part_path: Path) -> None:
         """Drop a Range-preallocated sparse file before sequential restart.

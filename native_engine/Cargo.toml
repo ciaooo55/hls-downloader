@@ -1,0 +1,19 @@
+[package]
+name = "hls-native-engine"
+version = "5.0.7"
+edition = "2021"
+description = "Compiled HTTP Range engine: one-file seek writes, IDM/ABDM-class stack"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+
+[lib]
+name = "hls_native_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hls-native-engine"
+path = "src/main.rs"

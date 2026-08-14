@@ -6,7 +6,7 @@ param(
     [switch]$SkipSmoke,
     [switch]$UseSystemFfmpeg,
     [switch]$IncludeExtensionAssets,
-    [string]$Version = "5.0.6"
+    [string]$Version = "5.0.7"
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,6 +48,8 @@ $declaredAppVersions = [ordered]@{
     "frontend/package.json" = (Get-Content -LiteralPath (Join-Path $Root "frontend\package.json") -Raw -Encoding UTF8 | ConvertFrom-Json).version
     "frontend/src-tauri/tauri.conf.json" = (Get-Content -LiteralPath (Join-Path $Root "frontend\src-tauri\tauri.conf.json") -Raw -Encoding UTF8 | ConvertFrom-Json).version
     "frontend/src-tauri/Cargo.toml" = Get-DeclaredVersion (Join-Path $Root "frontend\src-tauri\Cargo.toml") '(?m)^version\s*=\s*"([^"]+)"'
+    "native_shell/Cargo.toml" = Get-DeclaredVersion (Join-Path $Root "native_shell\Cargo.toml") '(?m)^version\s*=\s*"([^"]+)"'
+    "native_engine/Cargo.toml" = Get-DeclaredVersion (Join-Path $Root "native_engine\Cargo.toml") '(?m)^version\s*=\s*"([^"]+)"'
     "installer/hls-downloader.nsi" = Get-DeclaredVersion (Join-Path $Root "installer\hls-downloader.nsi") '!define APP_VERSION\s+"([^"]+)"'
 }
 foreach ($entry in $declaredAppVersions.GetEnumerator()) {
@@ -454,6 +456,24 @@ Invoke-Step "Stage application files" {
             throw "native supervisor binary is missing: $builtShell"
         }
         Copy-Item -LiteralPath $builtShell -Destination (Join-Path $StageDir "HLSNativeShell.exe")
+    }
+    Invoke-Step "Build native HTTP engine" {
+        if (-not (Get-Command cargo.exe -ErrorAction SilentlyContinue)) {
+            throw "Rust/Cargo is required to build HLSNativeEngine.exe"
+        }
+        $nativeEngineDir = Join-Path $Root "native_engine"
+        Push-Location $nativeEngineDir
+        try {
+            cargo build --release --locked
+            if ($LASTEXITCODE -ne 0) { throw "native HTTP engine build failed with exit code $LASTEXITCODE" }
+        } finally {
+            Pop-Location
+        }
+        $builtEngine = Join-Path $nativeEngineDir "target\release\hls-native-engine.exe"
+        if (-not (Test-Path -LiteralPath $builtEngine)) {
+            throw "native HTTP engine binary is missing: $builtEngine"
+        }
+        Copy-Item -LiteralPath $builtEngine -Destination (Join-Path $StageDir "HLSNativeEngine.exe")
     }
     Copy-Item -LiteralPath (Join-Path $Root "config.default.json") -Destination (Join-Path $StageDir "config.json")
     Copy-Item -LiteralPath (Join-Path $Root "LICENSE") -Destination (Join-Path $StageDir "LICENSE.txt")

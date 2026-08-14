@@ -113,6 +113,10 @@ jobs:
         working-directory: native_shell
         run: cargo test --locked
 
+      - name: Check native HTTP engine
+        working-directory: native_engine
+        run: cargo test --locked
+
       - name: Build Tauri desktop shell
         working-directory: frontend
         run: pnpm run tauri:build

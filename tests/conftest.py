@@ -32,3 +32,11 @@ def reset_resident_native_shell():
     reset_native_shell()
     yield
     reset_native_shell()
+
+
+@pytest.fixture(autouse=True)
+def disable_native_http_engine(monkeypatch):
+    """Keep MockTransport HTTP tests on the Python engine unless opted in."""
+    from backend.app.config import settings
+
+    monkeypatch.setattr(settings, "native_http_engine", False)

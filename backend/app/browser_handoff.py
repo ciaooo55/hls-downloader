@@ -15,7 +15,7 @@ from .request_context import request_origin, sanitize_request_contexts, sanitize
 # Browser add-ons have an independent release cadence.  Keep this pinned to
 # the newest extension build whose Native Messaging contract is compatible;
 # desktop-only fixes must not manufacture a browser upgrade prompt.
-RECOMMENDED_BROWSER_EXTENSION_VERSION = "5.0.6"
+RECOMMENDED_BROWSER_EXTENSION_VERSION = "5.0.7"
 MIN_BROWSER_EXTENSION_VERSION = "2.0.11"
 BROWSER_EXTENSION_RELEASE_URL = "https://github.com/ciaooo55/hls-downloader/releases/latest"
 DEFAULT_BROWSER_CLIENT_TTL = 180.0

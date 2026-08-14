@@ -1,6 +1,6 @@
 [package]
 name = "hls-downloader-desktop"
-version = "5.0.6"
+version = "5.0.7"
 description = "Tauri desktop shell for HLS Downloader"
 authors = ["HLS Downloader"]
 edition = "2021"

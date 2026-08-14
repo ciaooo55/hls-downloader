@@ -59,7 +59,7 @@ function Get-RegistrySnapshot {
 }
 
 function Get-ApplicationProcesses([switch]$OnlySmoke) {
-    $items = @(Get-Process -Name "HLSDownloader", "HLSDownloaderCore", "HLSNativeShell", "hls-native-shell", "HLSDownloaderNativeHost*" -ErrorAction SilentlyContinue)
+    $items = @(Get-Process -Name "HLSDownloader", "HLSDownloaderCore", "HLSNativeShell", "hls-native-shell", "HLSNativeEngine", "hls-native-engine", "HLSDownloaderNativeHost*" -ErrorAction SilentlyContinue)
     return @($items | Where-Object {
         try {
             $path = [IO.Path]::GetFullPath($_.Path)
@@ -204,6 +204,7 @@ try {
         "HLSDownloader.exe",
         "HLSDownloaderCore.exe",
         "HLSNativeShell.exe",
+        "HLSNativeEngine.exe",
         "Uninstall.exe",
         "config.default.json",
         "scripts\register-native-host.ps1",
@@ -358,7 +359,7 @@ try {
     # Uninstall.exe is deleted before RMDir /r _internal, so the missing
     # uninstaller image is not enough: a large runtime tree can still be
     # disappearing after that file is gone.
-    $removedNames = @("HLSDownloader.exe", "HLSDownloaderCore.exe", "HLSNativeShell.exe", "Uninstall.exe", "frontend", "_internal", "native-host")
+    $removedNames = @("HLSDownloader.exe", "HLSDownloaderCore.exe", "HLSNativeShell.exe", "HLSNativeEngine.exe", "Uninstall.exe", "frontend", "_internal", "native-host")
     $processDeadline = [DateTime]::UtcNow.AddSeconds(60)
     do {
         $remaining = @(Get-ApplicationProcesses -OnlySmoke)
@@ -392,7 +393,7 @@ try {
         $diagnostic = if ($shutdownLog) { $shutdownLog } else { "missing" }
         throw "Uninstaller did not finish removing its application image; NSIS shutdown [$diagnostic]"
     }
-    foreach ($removed in @("HLSDownloader.exe", "HLSDownloaderCore.exe", "HLSNativeShell.exe", "Uninstall.exe", "frontend", "_internal", "native-host")) {
+    foreach ($removed in @("HLSDownloader.exe", "HLSDownloaderCore.exe", "HLSNativeShell.exe", "HLSNativeEngine.exe", "Uninstall.exe", "frontend", "_internal", "native-host")) {
         if (Test-Path -LiteralPath (Join-Path $installDir $removed)) {
             throw "Uninstaller left application content behind: $removed"
         }

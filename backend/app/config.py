@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     completion_sound_enabled: bool = False
     download_progress_window_enabled: bool = True
     download_complete_popup_enabled: bool = True
+    # Compiled GET engine (native_engine/). POST replay, speed limits, HLS/BT stay Python.
+    native_http_engine: bool = True
     resume_interrupted_on_startup: bool = False
     auto_retry_failed_max: int = 0
     av_scan_enabled: bool = False

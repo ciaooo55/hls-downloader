@@ -31,6 +31,7 @@ def test_ci_runs_windows_python_and_frontend_checks():
     assert "pnpm run tauri:build" in workflow
     assert "cargo check --locked --all-targets" in workflow
     assert "cargo clippy --locked --all-targets -- -D warnings" in workflow
+    assert "working-directory: native_engine" in workflow
     assert "browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd" in workflow
     assert "browser-actions/setup-firefox@0bc507ddf224827e3b1af68e014d5e42ab93e795" in workflow
     assert "scripts/smoke_extension_browsers.py" in workflow
