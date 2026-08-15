@@ -369,13 +369,8 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         ranges.push((start, end));
         start = end + 1;
     }
-    let output_existed = job.output.exists()
-        && job
-            .output
-            .metadata()
-            .map(|meta| meta.len())
-            .unwrap_or(0)
-            > 0;
+    let output_existed =
+        job.output.exists() && job.output.metadata().map(|meta| meta.len()).unwrap_or(0) > 0;
     let loaded = if output_existed {
         load_completed_ranges(job)
     } else {
@@ -436,7 +431,10 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     let progress_control = job.control.clone();
     let progress = thread::spawn(move || {
         while !progress_stop.load(Ordering::SeqCst) {
-            if matches!(read_control(&progress_control), Control::Pause | Control::Cancel) {
+            if matches!(
+                read_control(&progress_control),
+                Control::Pause | Control::Cancel
+            ) {
                 progress_stop.store(true, Ordering::SeqCst);
                 break;
             }
@@ -712,7 +710,8 @@ fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
         }
         let (status, location, content_range, body) = http_get(job, &parsed, range)?;
         if matches!(status, 301 | 302 | 303 | 307 | 308) {
-            let next = location.ok_or_else(|| EngineError::Failed("redirect without Location".into()))?;
+            let next =
+                location.ok_or_else(|| EngineError::Failed("redirect without Location".into()))?;
             url = resolve_location(&parsed, &next);
             continue;
         }
@@ -808,7 +807,10 @@ fn parse_content_range(value: &str) -> Option<(u64, u64, Option<u64>)> {
     Some((start, end, total))
 }
 
-fn require_content_range_start(header: Option<&str>, expected_start: u64) -> Result<(), EngineError> {
+fn require_content_range_start(
+    header: Option<&str>,
+    expected_start: u64,
+) -> Result<(), EngineError> {
     match parse_content_range(header.unwrap_or("")) {
         Some((start, _, _)) if start == expected_start => Ok(()),
         Some((start, _, _)) => Err(EngineError::RangeUnsupported(format!(
@@ -1012,7 +1014,11 @@ mod winhttp {
         text.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
-    pub fn get(job: &Job, url: &str, range: Option<&str>) -> Result<(u16, Option<String>, Body), EngineError> {
+    pub fn get(
+        job: &Job,
+        url: &str,
+        range: Option<&str>,
+    ) -> Result<(u16, Option<String>, Body), EngineError> {
         let parsed = super::parse_http_url(url)?;
         unsafe {
             let proxy = job.proxy.trim();
@@ -1135,7 +1141,14 @@ mod winhttp {
     fn query_header_string(request: *mut core::ffi::c_void, query: u32) -> Option<String> {
         unsafe {
             let mut size: u32 = 0;
-            WinHttpQueryHeaders(request, query, null_mut(), null_mut(), &mut size, null_mut());
+            WinHttpQueryHeaders(
+                request,
+                query,
+                null_mut(),
+                null_mut(),
+                &mut size,
+                null_mut(),
+            );
             if size == 0 {
                 return None;
             }
@@ -1168,7 +1181,12 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
+
+    static NEXT_TEMP_JOB_ID: AtomicUsize = AtomicUsize::new(0);
 
     fn serve_body(body: &'static [u8]) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1223,11 +1241,9 @@ mod tests {
     }
 
     fn temp_job(url: &str, sequential: bool, total: u64, connections: usize) -> (Job, PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "hls-http-engine-{}-{}",
-            std::process::id(),
-            Instant::now().elapsed().as_nanos()
-        ));
+        let id = NEXT_TEMP_JOB_ID.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("hls-http-engine-{}-{}", std::process::id(), id));
         fs::create_dir_all(&dir).unwrap();
         let output = dir.join("payload.downloading");
         let control = dir.join("control");
@@ -1436,7 +1452,8 @@ mod tests {
                     }
                 }
                 let mut stream = reader.into_inner();
-                let header = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+                let header =
+                    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
                 let _ = stream.write_all(header.as_bytes());
                 let _ = stream.write_all(format!("{:x}\r\n", body.len()).as_bytes());
                 let _ = stream.write_all(body);
@@ -1458,10 +1475,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
-    fn serve_recording_ranges(
-        body: &'static [u8],
-        seen: Arc<Mutex<Vec<String>>>,
-    ) -> String {
+    fn serve_recording_ranges(body: &'static [u8], seen: Arc<Mutex<Vec<String>>>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || {
@@ -1482,7 +1496,9 @@ mod tests {
                     }
                 }
                 if let Some(value) = range.clone() {
-                    seen.lock().unwrap_or_else(|err| err.into_inner()).push(value);
+                    seen.lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .push(value);
                 }
                 let mut stream = reader.into_inner();
                 if let Some(value) = range {

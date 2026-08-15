@@ -59,7 +59,12 @@ impl CoreClient {
         self.request("GET", &path, None, timeout + 2.0)
     }
 
-    pub fn accept(&self, handoff_id: &str, filename: &str, download_dir: &str) -> Result<Value, String> {
+    pub fn accept(
+        &self,
+        handoff_id: &str,
+        filename: &str,
+        download_dir: &str,
+    ) -> Result<Value, String> {
         self.request(
             "POST",
             &format!("/browser/handoffs/{handoff_id}/accept"),

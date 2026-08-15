@@ -1548,10 +1548,10 @@ async def create_browser_media_push(request: Request, x_token: str = Header(defa
         spawned = maybe_spawn_desktop_ui_process(project_root=PROJECT_ROOT)
         if spawned is None and not os.environ.get("PYTEST_CURRENT_TEST"):
             with _browser_media_push_lock:
-                item = _browser_media_pushes.get(request_id)
-                if item is not None and item.get("status") == "pending":
-                    item["status"] = "failed"
-                    item["message"] = "未能打开桌面设置窗口，请先打开下载器再投屏"
+                pending_item = _browser_media_pushes.get(request_id)
+                if pending_item is not None and pending_item.get("status") == "pending":
+                    pending_item["status"] = "failed"
+                    pending_item["message"] = "未能打开桌面设置窗口，请先打开下载器再投屏"
     activate_window()
     return {"ok": True, "id": request_id}
 
@@ -2589,5 +2589,4 @@ def _to_resp(task) -> TaskResponse:
         available_actions=manager.get_available_actions(task),
         queue_position=manager.get_queue_position(task),
     )
-
 

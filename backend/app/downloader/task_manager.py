@@ -2208,16 +2208,23 @@ class TaskManager:
         self._pending_saves[task.id] = asyncio.create_task(delayed_save())
 
     async def shutdown(self) -> None:
+        current_loop = asyncio.get_running_loop()
         retries = [handle for handle in self._auto_retry_handles.values() if not handle.done()]
         self._auto_retry_handles.clear()
         for handle in retries:
             handle.cancel()
         if retries:
             await asyncio.gather(*retries, return_exceptions=True)
-        if self._maintenance_task and not self._maintenance_task.done():
-            self._maintenance_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._maintenance_task
+        maintenance_task = self._maintenance_task
+        self._maintenance_task = None
+        if maintenance_task and not maintenance_task.done():
+            maintenance_task.cancel()
+            # TestClient and embedded callers can tear down an app from a new
+            # event loop. A Task belongs to the loop that created it; awaiting
+            # it from another loop raises instead of completing shutdown.
+            if maintenance_task.get_loop() is current_loop:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await maintenance_task
         handles = [
             task.task_handle
             for task in self.tasks.values()
@@ -2337,8 +2344,12 @@ class TaskManager:
                 logger.exception("scheduled task %s failed to stop", task.id)
 
     def start_maintenance(self) -> None:
+        current_loop = asyncio.get_running_loop()
         if self._maintenance_task and not self._maintenance_task.done():
-            return
+            if self._maintenance_task.get_loop() is current_loop:
+                return
+            self._maintenance_task.cancel()
+            self._maintenance_task = None
 
         async def maintain() -> None:
             while True:

@@ -22,13 +22,13 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::CreateMutexW;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows_sys::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, BringWindowToTop, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    DispatchMessageW,
-    EnableWindow, GetClientRect, GetCursorPos, GetDlgItem, GetMessageW, GetSystemMetrics,
+    DispatchMessageW, GetClientRect, GetCursorPos, GetDlgItem, GetMessageW, GetSystemMetrics,
     GetWindowTextW, KillTimer, LoadCursorW, LoadIconW, MoveWindow, PostMessageW, PostQuitMessage,
     RegisterClassW, RegisterWindowMessageW, SendMessageW, SetForegroundWindow, SetTimer,
     SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
@@ -876,9 +876,12 @@ unsafe fn search_text(parent: HWND) -> String {
     }
 }
 
-fn run_selected_action(host: &Win32Host, action: &str) {
+fn run_selected_action(window_host: &Win32Host, action: &str) {
     let (task_id, mapped) = {
-        let shell = host.shell.lock().unwrap_or_else(|err| err.into_inner());
+        let shell = window_host
+            .shell
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let Some(task) = shell.task_list.selected() else {
             return;
         };
@@ -888,8 +891,8 @@ fn run_selected_action(host: &Win32Host, action: &str) {
         };
         (task.id.clone(), mapped.to_string())
     };
-    let Some(core) = host.core.lock().ok().and_then(|slot| slot.clone()) else {
-        host.enqueue(json!({"kind": "action_error", "message": "桌面核心未连接"}));
+    let Some(core) = window_host.core.lock().ok().and_then(|slot| slot.clone()) else {
+        window_host.enqueue(json!({"kind": "action_error", "message": "桌面核心未连接"}));
         return;
     };
     std::thread::spawn(move || {
@@ -1016,7 +1019,10 @@ unsafe fn set_handoff_busy(hwnd: HWND, busy: bool) {
 }
 
 unsafe fn set_handoff_hint(hwnd: HWND, text: &str) {
-    SetWindowTextW(GetDlgItem(hwnd, ID_HANDOFF_HINT as i32), wide(text).as_ptr());
+    SetWindowTextW(
+        GetDlgItem(hwnd, ID_HANDOFF_HINT as i32),
+        wide(text).as_ptr(),
+    );
 }
 
 unsafe fn handoff_is_busy() -> bool {
@@ -1029,19 +1035,22 @@ unsafe fn begin_handoff_core(hwnd: HWND, accept: bool) {
     if handoff_is_busy() {
         return;
     }
-    let Some(host) = host() else {
+    let Some(window_host) = host() else {
         return;
     };
     let filename = dlg_text(hwnd, ID_FILENAME);
     let download_dir = dlg_text(hwnd, ID_SAVE_DIR);
     let (handoff_id, core) = {
-        let shell = host.shell.lock().unwrap_or_else(|err| err.into_inner());
+        let shell = window_host
+            .shell
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let handoff_id = shell
             .snapshot
             .as_ref()
             .map(|item| item.id.clone())
             .unwrap_or_default();
-        let core = host
+        let core = window_host
             .core
             .lock()
             .unwrap_or_else(|err| err.into_inner())
@@ -1052,7 +1061,14 @@ unsafe fn begin_handoff_core(hwnd: HWND, accept: bool) {
         set_handoff_hint(hwnd, "桌面核心未连接，请重试");
         return;
     };
-    set_handoff_hint(hwnd, if accept { "正在确认…" } else { "正在取消…" });
+    set_handoff_hint(
+        hwnd,
+        if accept {
+            "正在确认…"
+        } else {
+            "正在取消…"
+        },
+    );
     set_handoff_busy(hwnd, true);
     let hwnd_bits = hwnd as usize;
     std::thread::spawn(move || {
@@ -1304,10 +1320,13 @@ unsafe extern "system" fn overlay_proc(
         }
         WM_COMMAND => {
             let id = (wparam as usize) & 0xffff;
-            if let Some(host) = host() {
+            if let Some(window_host) = host() {
                 let (task_id, core, hide) = {
-                    let mut shell = host.shell.lock().unwrap_or_else(|err| err.into_inner());
-                    let task_id = if hwnd == host.hwnds.progress {
+                    let mut shell = window_host
+                        .shell
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner());
+                    let task_id = if hwnd == window_host.hwnds.progress {
                         shell
                             .progress_tasks
                             .first()
@@ -1332,7 +1351,7 @@ unsafe extern "system" fn overlay_proc(
                         shell.windows.complete.visible = false;
                         hide = true;
                     }
-                    let core = host
+                    let core = window_host
                         .core
                         .lock()
                         .unwrap_or_else(|err| err.into_inner())
@@ -1345,7 +1364,7 @@ unsafe extern "system" fn overlay_proc(
                 if (id == ID_COMPLETE_OPEN_FOLDER || id == ID_COMPLETE_OPEN_FILE)
                     && task_id.is_empty()
                 {
-                    host.enqueue(json!({
+                    window_host.enqueue(json!({
                         "kind": "action_error",
                         "message": "无法打开：任务编号缺失"
                     }));
@@ -1357,8 +1376,8 @@ unsafe extern "system" fn overlay_proc(
                             ID_COMPLETE_OPEN_FILE => core.launch_file(&task_id, true),
                             _ => Ok(json!({"ok": true})),
                         };
-                        if let (Err(err), Some(host)) = (result, host()) {
-                            host.enqueue(json!({"kind": "action_error", "message": err}));
+                        if let (Err(err), Some(window_host)) = (result, host()) {
+                            window_host.enqueue(json!({"kind": "action_error", "message": err}));
                         }
                     });
                 }
@@ -1540,17 +1559,17 @@ unsafe fn paint_generic(hwnd: HWND) {
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
             if size > 0 {
-                draw_line(hdc, 16, 88, 400, 20, &format!("大小：{}", format_size(size)));
-            }
-            if looks_executable(path) {
                 draw_line(
                     hdc,
                     16,
-                    108,
+                    88,
                     400,
                     20,
-                    "可执行文件请核对来源后再打开",
+                    &format!("大小：{}", format_size(size)),
                 );
+            }
+            if looks_executable(path) {
+                draw_line(hdc, 16, 108, 400, 20, "可执行文件请核对来源后再打开");
             }
         }
     }

@@ -38,7 +38,8 @@ fn main() -> ExitCode {
 }
 
 fn run_job_file(path: &str) -> ExitCode {
-    match hls_native_shell::load_job(Path::new(path)).and_then(|job| hls_native_shell::finish_job(&job))
+    match hls_native_shell::load_job(Path::new(path))
+        .and_then(|job| hls_native_shell::finish_job(&job))
     {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

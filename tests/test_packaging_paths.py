@@ -268,6 +268,7 @@ def _portable_upgrade_fixture(tmp_path: Path, *, registration_fails: bool = Fals
         (folder / "portable").write_text("", encoding="utf-8")
         (folder / "HLSDownloader.exe").write_text(version, encoding="utf-8")
         (folder / "HLSDownloaderCore.exe").write_text(version, encoding="utf-8")
+    (source / "HLSNativeShell.exe").write_text("new", encoding="utf-8")
     (source / "new-program-file.txt").write_text("new", encoding="utf-8")
     (target / "old-program-file.txt").write_text("old", encoding="utf-8")
     (source / "config.json").write_text('{"version":"new"}', encoding="utf-8")

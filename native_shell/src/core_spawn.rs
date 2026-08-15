@@ -32,9 +32,8 @@ pub fn install_root() -> Option<PathBuf> {
 }
 
 pub fn spawn_core(root: &Path) -> Result<PathBuf, String> {
-    let executable = locate_core_executable(root).ok_or_else(|| {
-        "HLSDownloaderCore.exe is not next to the native shell".to_string()
-    })?;
+    let executable = locate_core_executable(root)
+        .ok_or_else(|| "HLSDownloaderCore.exe is not next to the native shell".to_string())?;
     let mut command = Command::new(&executable);
     command.current_dir(root);
     command.env("HLS_STARTED_BY_NATIVE_SHELL", "1");
