@@ -472,7 +472,7 @@ async function native(message: Record<string, unknown>, timeoutMs?: number): Pro
     client_id: await browserClientId(),
     browser: identity.browser,
   }
-  if (directBackend && shouldRouteThroughLoopbackBridge(payload.op, true)) {
+  if (directBackend && shouldRouteThroughLoopbackBridge(operation, true)) {
     try {
       return await directBackend.request(payload, {
         version: identity.version,

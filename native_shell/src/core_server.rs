@@ -577,6 +577,61 @@ mod tests {
         server.shutdown();
     }
 
+    #[test]
+    fn present_handoff_roundtrip_p95_under_100ms() {
+        let server = CoreServer::in_memory().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _worker = server.serve(listener);
+        let mut ui = CoreIpcClient::connect_addr(addr).unwrap();
+        let mut host = CoreIpcClient::connect_addr(addr).unwrap();
+        let offer = ResourceOffer {
+            url: "https://cdn.test/p95.bin".into(),
+            handoff_id: "handoff-p95".into(),
+            filename: "p95.bin".into(),
+            ..Default::default()
+        };
+        let encoded = serde_json::json!({
+            "id": "handoff-p95",
+            "offer": offer,
+            "filename": "p95.bin",
+            "title": "",
+            "mime_type": "",
+            "size": 1,
+            "status": "pending",
+            "presentation": "queued",
+            "task_id": null,
+            "created_at_ms": 1,
+            "request_id": ""
+        })
+        .to_string();
+        host.save_handoff("handoff-p95", &encoded, "pending", None, 1)
+            .unwrap();
+        host.command(CoreCommand::OfferResource { offer }).unwrap();
+        for _ in 0..3 {
+            ui.command(CoreCommand::PresentHandoff {
+                handoff_id: "handoff-p95".into(),
+                ok: true,
+            })
+            .unwrap();
+        }
+        let mut samples = Vec::new();
+        for _ in 0..20 {
+            let started = std::time::Instant::now();
+            ui.command(CoreCommand::PresentHandoff {
+                handoff_id: "handoff-p95".into(),
+                ok: true,
+            })
+            .unwrap();
+            samples.push(started.elapsed());
+        }
+        assert!(
+            samples.iter().all(|sample| *sample < Duration::from_millis(100)),
+            "confirm IPC must stay under 100ms when Core is already running; samples={samples:?}"
+        );
+        server.shutdown();
+    }
+
     #[cfg(windows)]
     #[test]
     fn named_pipe_is_the_product_ipc() {

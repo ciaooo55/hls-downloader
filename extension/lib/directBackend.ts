@@ -8,6 +8,8 @@ export const V6_CORE_PROTOCOL = 'hls-downloader-v6-core'
 
 export function shouldClearLoopbackBridge(response: {
   protocol?: unknown
+  bridge_base?: unknown
+  bridge_token?: unknown
 } | null | undefined): boolean {
   return String(response?.protocol || '') === V6_CORE_PROTOCOL
 }

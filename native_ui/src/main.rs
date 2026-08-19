@@ -19,6 +19,8 @@ use std::{
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     if args.iter().any(|arg| arg == "--self-test") {
+        let confirm = ConfirmWindow::new()?;
+        confirm.hide()?;
         println!("hls-native-ui/1 ok");
         return Ok(());
     }

@@ -18,6 +18,75 @@ $PortableDir = Join-Path $Root "build\v6\portable"
 $UiManifest = Join-Path $Root "native_ui\Cargo.toml"
 $IconFile = Join-Path $Root "assets\app-icon.ico"
 $TermsSource = Join-Path $Root "TERMS.md"
+$ToolsDir = Join-Path $Root "tools"
+$NsisVersion = "3.12"
+$NsisZip = Join-Path $ToolsDir "nsis-$NsisVersion.zip"
+$NsisRuntimeRoot = if ($env:LOCALAPPDATA) {
+    Join-Path $env:LOCALAPPDATA "HLSDownloaderBuildTools"
+} elseif ($env:TEMP) {
+    Join-Path $env:TEMP "HLSDownloaderBuildTools"
+} else {
+    Join-Path ([IO.Path]::GetTempPath()) "HLSDownloaderBuildTools"
+}
+$NsisToolsDir = Join-Path $NsisRuntimeRoot "nsis-$NsisVersion"
+$NsisUrl = "https://master.dl.sourceforge.net/project/nsis/NSIS%203/$NsisVersion/nsis-$NsisVersion.zip?viasf=1"
+$NsisSha256 = "56581f90db321581c5381193d796fffcf2d24b2f8fed2160a6c6a3baa67f2c4f"
+
+function Assert-FileSha256([string]$Path, [string]$Expected, [string]$Label) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "$Label is missing: $Path"
+    }
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $Expected.ToLowerInvariant()) {
+        throw "$Label SHA-256 mismatch. Expected $Expected, got $actual"
+    }
+}
+
+function Get-VerifiedArchive([string]$Url, [string]$Path, [string]$Expected, [string]$Label) {
+    New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($Path)) | Out-Null
+    if (Test-Path -LiteralPath $Path) {
+        try {
+            Assert-FileSha256 $Path $Expected $Label
+            return
+        } catch {
+            [System.IO.File]::Delete($Path)
+        }
+    }
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Write-Host "Downloading pinned $Label (attempt $attempt/3)..."
+            $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+            if ($curl) {
+                & $curl.Source --location --fail --retry 3 --retry-delay 2 --max-time 300 --output $Path $Url
+                if ($LASTEXITCODE -ne 0) {
+                    throw "curl.exe failed with exit code $LASTEXITCODE"
+                }
+            } else {
+                Invoke-WebRequest -Uri $Url -OutFile $Path -MaximumRedirection 10
+            }
+            Assert-FileSha256 $Path $Expected $Label
+            return
+        } catch {
+            $lastError = $_
+            [System.IO.File]::Delete($Path)
+            if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
+        }
+    }
+    throw "$Label download or verification failed: $($lastError.Exception.Message)"
+}
+
+function Get-MakeNsis {
+    Get-VerifiedArchive $NsisUrl $NsisZip $NsisSha256 "NSIS $NsisVersion archive"
+    if (-not (Test-Path -LiteralPath $NsisToolsDir)) {
+        Expand-Archive -LiteralPath $NsisZip -DestinationPath $NsisToolsDir -Force
+    }
+    $makensis = Get-ChildItem -LiteralPath $NsisToolsDir -Recurse -File -Filter "makensis.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $makensis) {
+        throw "Pinned NSIS archive did not contain makensis.exe"
+    }
+    return $makensis.FullName
+}
 
 New-Item -ItemType Directory -Force -Path $StageDir, $PortableDir, $ReleaseDir | Out-Null
 Get-ChildItem -LiteralPath $StageDir -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
@@ -112,25 +181,26 @@ if (-not $SkipZip) {
 }
 
 if (-not $SkipInstaller) {
-    $makensis = Get-Command makensis -ErrorAction SilentlyContinue
     $nsi = Join-Path $Root "installer\hls-downloader-v6.nsi"
-    if (-not $makensis) {
-        Write-Host "makensis not on PATH; skipped v6 Setup.exe"
-    } elseif (-not (Test-Path -LiteralPath $IconFile)) {
+    if (-not (Test-Path -LiteralPath $IconFile)) {
         Write-Host "assets/app-icon.ico missing; skipped v6 Setup.exe"
     } elseif (-not (Test-Path -LiteralPath $nsi)) {
         Write-Host "installer/hls-downloader-v6.nsi missing; skipped v6 Setup.exe"
     } else {
+        $makensis = Get-MakeNsis
         $out = Join-Path $ReleaseDir "HLSDownloader-v$Version-v6-Windows-x64-Setup.exe"
         $stageNsis = ($StageDir -replace '\\', '/')
+        $iconNsis = ($IconFile -replace '\\', '/')
+        $outNsis = ($out -replace '\\', '/')
         $terms = Join-Path $StageDir "TERMS.txt"
         if (-not (Test-Path -LiteralPath $terms)) {
             [System.IO.File]::WriteAllText($terms, "HLS Downloader v6", (New-Object System.Text.UTF8Encoding($false)))
         }
-        & $makensis.Source `
+        & $makensis `
+            "/INPUTCHARSET" "UTF8" `
             "/DSTAGE_DIR=$stageNsis" `
-            "/DOUT_FILE=$out" `
-            "/DICON_FILE=$IconFile" `
+            "/DOUT_FILE=$outNsis" `
+            "/DICON_FILE=$iconNsis" `
             "/DAPP_VERSION=$Version" `
             $nsi
         if ($LASTEXITCODE -ne 0) { throw "makensis failed" }

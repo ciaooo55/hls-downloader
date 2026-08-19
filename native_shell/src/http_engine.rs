@@ -2455,6 +2455,17 @@ mod tests {
     }
 
     #[test]
+    fn pause_control_stops_before_writing() {
+        let body: &'static [u8] = b"0123456789";
+        let url = serve_body(body);
+        let (job, dir) = temp_job(&url, false, body.len() as u64, 2);
+        fs::write(&job.control, "pause").unwrap();
+        let err = run_job(&job).unwrap_err();
+        assert_eq!(err.exit_code(), EXIT_PAUSE);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn cancel_control_stops_before_writing() {
         let body: &'static [u8] = b"0123456789";
         let url = serve_body(body);
@@ -3351,6 +3362,66 @@ mod tests {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .is_empty());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    fn serve_full_body_ignoring_range(body: &'static [u8]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).is_err() {
+                    continue;
+                }
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let mut stream = reader.into_inner();
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nETag: \"changed\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+        format!("http://127.0.0.1:{}", addr.port())
+    }
+
+    #[test]
+    fn etag_change_range_200_does_not_stitch_new_body() {
+        let old: &'static [u8] = b"old-payload-aaaaaaaaaaaaaaaaaaaa";
+        let new_body: &'static [u8] = b"NEW-PAYLOAD-bbbbbbbbbbbbbbbbbbbb";
+        let url = serve_full_body_ignoring_range(new_body);
+        let (job, dir) = temp_job(&url, false, old.len() as u64, 2);
+        let prefix = &old[..16];
+        fs::write(&job.output, prefix).unwrap();
+        fs::write(
+            completed_ranges_path(&job),
+            format!(
+                r#"{{"version":2,"resource_key":"{}","etag":"\"native-test\"","total":{},"ranges":[[0,15]]}}"#,
+                job.resource_key, job.total
+            ),
+        )
+        .unwrap();
+        let err = run_job(&job).unwrap_err();
+        assert_eq!(err.exit_code(), EXIT_RANGE_UNSUPPORTED);
+        let output = fs::read(&job.output).unwrap();
+        assert_eq!(&output[..prefix.len()], prefix);
+        assert_ne!(
+            output.as_slice(),
+            new_body,
+            "If-Range miss must not replace the reserved payload with a 200 body"
+        );
+        assert!(
+            !output.windows(b"NEW-PAYLOAD".len()).any(|window| window == b"NEW-PAYLOAD"),
+            "If-Range miss stitched the new identity into the reserved file: {output:?}"
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
