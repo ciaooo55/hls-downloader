@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser'
 import { clampOverlayPosition, overlayActionFallback, overlaySendKey, shouldShowMediaOverlay, type OverlayAction } from '../lib/mediaOverlay'
-import { classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, isSameDocumentPlaybackFallback, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
+import { boundedConfidence, classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, isSameDocumentPlaybackFallback, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
 
@@ -163,6 +163,15 @@ export default defineContentScript({
     // video in the document.
     let playbackByVideo = new WeakMap<HTMLVideoElement, PlaybackContext>()
     const knownVideos = new Set<HTMLVideoElement>()
+    const mediaOwnerIds = new WeakMap<HTMLMediaElement, string>()
+    let nextMediaOwnerId = 1
+    const mediaOwner = (media: HTMLMediaElement) => {
+      const existing = mediaOwnerIds.get(media)
+      if (existing) return existing
+      const owner = `media-element:${nextMediaOwnerId++}`
+      mediaOwnerIds.set(media, owner)
+      return owner
+    }
     const currentVideos = () => {
       for (const video of knownVideos) {
         if (!video.isConnected) knownVideos.delete(video)
@@ -216,12 +225,12 @@ export default defineContentScript({
           :host{all:initial}*{box-sizing:border-box}button{font:13px system-ui,sans-serif;letter-spacing:0}
           ${THEME_TOKENS_CSS}
           ${THEME_BASE_CSS}
-          .wrap{display:none;position:fixed;z-index:2147483647;color:var(--text);filter:drop-shadow(0 6px 12px var(--shadow))}.wrap.open{display:block}
+          .wrap{display:none;position:fixed;z-index:var(--z-extension-overlay);color:var(--text);filter:drop-shadow(0 6px 12px var(--shadow))}.wrap.open{display:block}
           .panel{display:none;width:min(344px,calc(100vw - 20px));max-height:min(520px,calc(100vh - 20px));background:var(--surface);border:1px solid var(--overlay-border);border-radius:9px;overflow:hidden}.open .panel{display:block}
           header{display:flex;align-items:center;justify-content:space-between;padding:7px 8px 7px 9px;border-bottom:1px solid var(--border);background:var(--surface-2);color:var(--text);font:600 12px system-ui;cursor:grab;touch-action:none}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:4px}
           .pin,.close{height:27px;border:0;border-radius:5px;background:var(--surface-3);color:var(--text);cursor:pointer}.pin{padding:0 8px;font:11px system-ui}.pin.active{background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green)}.close{display:grid;place-items:center;width:27px;font:700 18px/1 system-ui}.pin:hover,.close:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{max-height:calc(min(520px,calc(100vh - 20px)) - 78px);overflow-y:auto;overscroll-behavior:contain}
           .item{padding:9px 10px;border-bottom:1px solid var(--border)}.item:last-child{border-bottom:0}.item:hover{background:var(--surface-2)}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12px/1.35 system-ui;overflow-wrap:anywhere;color:var(--text)}.kind{overflow:hidden;color:var(--muted);font:10.5px/1.35 system-ui;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.resource-url{display:block;margin-top:4px;color:var(--faint);font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;user-select:text}.quality-select{width:min(184px,100%);margin-top:6px}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:29px;border:0;border-radius:6px;background:var(--primary);color:var(--on-primary);padding:4px 6px;cursor:pointer;font-weight:600;font-size:11px}.download:hover{background:var(--primary-hover)}.download[disabled]{cursor:default;opacity:.6}.download.push-tv{background:color-mix(in srgb,var(--purple) 75%,var(--surface))}.download.push-tv:hover{background:var(--purple)}.download.cast{background:color-mix(in srgb,var(--green) 78%,var(--surface))}.download.cast:hover{background:var(--green)}.result{padding:7px 10px;background:color-mix(in srgb,var(--green) 14%,var(--surface));color:var(--green);font:11px/1.4 system-ui}.result.error{background:color-mix(in srgb,var(--red) 12%,var(--surface));color:var(--red)}
-          .video-buttons{position:fixed;inset:0;z-index:2147483646;pointer-events:none}.video-action-group{position:fixed;display:flex;align-items:center;gap:4px;pointer-events:auto}.video-download{position:relative;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 10px var(--shadow);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font:600 12px system-ui}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download.identifying{border-color:var(--overlay-border);background:color-mix(in srgb,var(--surface) 88%,var(--primary));color:var(--muted)}.video-download.identifying:hover{background:color-mix(in srgb,var(--surface) 88%,var(--primary))}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}.video-more{display:grid;width:34px;height:34px;place-items:center;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--surface);color:var(--primary);box-shadow:0 3px 10px var(--shadow);cursor:pointer;font:700 18px/1 system-ui}.video-more:hover{background:var(--surface-2)}
+          .video-buttons{position:fixed;inset:0;z-index:var(--z-extension-video);pointer-events:none}.video-action-group{position:fixed;display:flex;align-items:center;gap:4px;pointer-events:auto}.video-download{position:relative;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 10px var(--shadow);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font:600 12px system-ui}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download.identifying{border-color:var(--overlay-border);background:color-mix(in srgb,var(--surface) 88%,var(--primary));color:var(--muted)}.video-download.identifying:hover{background:color-mix(in srgb,var(--surface) 88%,var(--primary))}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}.video-more{display:grid;width:34px;height:34px;place-items:center;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--surface);color:var(--primary);box-shadow:0 3px 10px var(--shadow);cursor:pointer;font:700 18px/1 system-ui}.video-more:hover{background:var(--surface-2)}
           button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
         `
         const image = () => {
@@ -732,12 +741,26 @@ export default defineContentScript({
         ...declared,
       ]
     }
-    const add = (url: string, mimeType = '', playbackSource = false) => {
+    const add = (
+      url: string,
+      mimeType = '',
+      playbackSource = false,
+      evidence: string[] = [],
+      owner = '',
+      confidence = 0,
+    ) => {
       const kind = playbackSource ? classifyPlaybackSource(url, mimeType) : classifyResource(url, mimeType)
       if (!kind) return
       let filename = ''
       try { filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch {}
-      const resource = { id: resourceId(url), url, kind, mimeType, pageUrl: location.href, title: pageMediaTitle() || filename, filename, seenAt: Date.now() }
+      const resource = {
+        id: resourceId(url), url, kind, mimeType, pageUrl: location.href,
+        title: pageMediaTitle() || filename, filename, seenAt: Date.now(),
+        evidence: evidence.length ? evidence.slice(0, 16) : [playbackSource ? 'current_src' : 'page_observation'],
+        owner: owner || (playbackSource ? 'media-element' : 'page'),
+        confidence: boundedConfidence(confidence || (playbackSource ? 0.98 : 0.58)),
+        replayContext: { method: 'GET', page_url: location.href.split('#', 1)[0] },
+      }
       const changed = addResource(resource)
       if (changed) scheduleRender()
       void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
@@ -774,7 +797,7 @@ export default defineContentScript({
         directSources.forEach(source => {
           if (!source.url || seenDirectSources.has(source.url)) return
           seenDirectSources.add(source.url)
-          add(source.url, source.mimeType, true)
+          add(source.url, source.mimeType, true, ['current_src'], mediaOwner(video), 0.98)
         })
       } else {
         if (video === activeVideo) activePlayback = previousPlayback
@@ -925,7 +948,11 @@ export default defineContentScript({
         // YouTube-style `/videoplayback` often reaches MSE without a manifest.
         // Register that stream as the current player resource; `.m4s`/`.ts`
         // fragments still classify as null and stay out of the overlay.
-        add(mediaUrl)
+        const ownerVideo = currentVideos().find(video =>
+          mediaElementSources(video).some(source => source.url === blobUrl),
+        )
+        const owner = ownerVideo ? mediaOwner(ownerVideo) : `mse-source-buffer:${resourceId(blobUrl)}`
+        add(mediaUrl, '', false, ['mse_source_buffer'], owner, 0.97)
         scheduleRender()
       }
     }
@@ -939,7 +966,7 @@ export default defineContentScript({
     earlyResourceEvents.splice(0).forEach(event => add(event.url, event.mimeType))
     earlyMseEvents.splice(0).forEach(event => handleMseEvent(new CustomEvent('__hls_downloader_mse__', { detail: event })))
     document.querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video,audio').forEach(media => {
-      mediaElementSources(media).forEach(source => add(source.url, source.mimeType, true))
+      mediaElementSources(media).forEach(source => add(source.url, source.mimeType, true, ['current_src'], mediaOwner(media), 0.98))
     })
     document.querySelectorAll<HTMLSourceElement>('source').forEach(source => {
       const url = explicitElementSource(source)

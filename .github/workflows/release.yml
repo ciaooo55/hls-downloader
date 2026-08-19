@@ -132,7 +132,12 @@ jobs:
           cargo test --locked
           Pop-Location
           Push-Location native_shell
+          cargo test --locked --lib --no-default-features
           cargo test --locked
+          Pop-Location
+          Push-Location native_ui
+          cargo test --locked
+          cargo build --locked
           Pop-Location
           Push-Location extension
           pnpm test
@@ -198,6 +203,24 @@ jobs:
           if ($actual.Count -ne $expected.Count) {
             throw "Release directory must contain exactly $($expected.Count) files; found $($actual.Count)"
           }
+
+      - name: Build v6 preview packages
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}".TrimStart("v")
+          }
+          # Writes to release-v6/ so the 5.x exact-file check above stays unchanged.
+          & .\scripts\build_v6.ps1 -Version $version -OutDir .\release-v6
+
+      - name: Upload v6 preview artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: HLSDownloader-v6-Windows-x64-${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', inputs.version) }}
+          path: release-v6/*
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Smoke-test packaged downloads and portable upgrade
         timeout-minutes: 15

@@ -1,6 +1,10 @@
 # 技术栈、下载引擎、文件怎么拼成最终文件
 
-对照 IDM 和 AB Download Manager，这一页谈 **技术栈、下载引擎、落盘拼接**。普通 HTTP GET 跑在已经常驻的 `HLSNativeShell.exe` 里（事件队列进线程，Windows 走系统 WinHTTP）。`--job` 只在监督进程没在听事件时当后备。不再多带一个引擎 exe，也不再链 rustls/icu。HLS/DASH/BT 仍留在 Python 核心。
+> **Frozen 5.x record.** v6 HTTP lives in `native_shell/src/http_engine.rs`
+> inside `HLSDownloader.exe`. There is no Python fallback in the product
+> process. See [v6-architecture.md](v6-architecture.md).
+
+对照 IDM 和 AB Download Manager，这一页谈 **5.x 技术栈、下载引擎、落盘拼接**。普通 HTTP GET 跑在已经常驻的 `HLSNativeShell.exe` 里（事件队列进线程，Windows 走系统 WinHTTP）。`--job` 只在监督进程没在听事件时当后备。不再多带一个引擎 exe，也不再链 rustls/icu。HLS/DASH/BT 仍留在 Python 核心。
 
 ## 1. 技术栈（诚实对照）
 

@@ -35,6 +35,9 @@ def test_recognizes_extensionless_playlist_from_signature():
 
     assert result.kind == "hls"
     assert [item.url for item in result.candidates] == ["https://media.test/play?id=1"]
+    assert result.candidates[0].evidence == ["manifest_body"]
+    assert result.candidates[0].owner == "direct-response"
+    assert result.candidates[0].replay_context == {"method": "GET"}
 
 
 def test_treats_large_direct_archive_as_file_without_page_size_error():

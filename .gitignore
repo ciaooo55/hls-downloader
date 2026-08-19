@@ -19,6 +19,7 @@ frontend/dist/
 frontend/src-tauri/gen/
 frontend/src-tauri/target/
 native_shell/target/
+native_ui/target/
 extension/node_modules/
 extension/.wxt/
 extension/.output/

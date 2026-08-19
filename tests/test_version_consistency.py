@@ -25,8 +25,15 @@ def test_desktop_release_versions_are_consistent():
     ) == version
     assert _match("installer/hls-downloader.nsi", r'!define APP_VERSION\s+"([^"]+)"') == version
     assert _match("scripts/build_installer.ps1", r'\[string\]\$Version\s*=\s*"([^"]+)"') == version
-    assert _match("native_shell/Cargo.toml", r'^version\s*=\s*"([^"]+)"') == version
     assert f'default: "{version}"' in (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+
+
+def test_v6_crate_versions_stay_on_the_preview_line():
+    version = _match("native_ui/Cargo.toml", r'^version\s*=\s*"([^"]+)"')
+    assert version.startswith("6.")
+    assert _match("native_shell/Cargo.toml", r'^version\s*=\s*"([^"]+)"') == version
+    assert _match("installer/hls-downloader-v6.nsi", r'!define APP_VERSION\s+"([^"]+)"') == version
+    assert _match("scripts/build_v6.ps1", r'\[string\]\$Version\s*=\s*"([^"]+)"') == version
 
 
 def test_extension_version_matches_desktop_recommendation():

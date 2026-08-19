@@ -2,7 +2,7 @@ import { browser } from 'wxt/browser'
 import { mediaPushRequestId } from '../lib/mediaPush'
 import { isSniffCurrentPageCommand, openMediaPanelMessage } from '../lib/sniffCommand'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
-import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isConcreteDownloadMime, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
+import { boundedConfidence, canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isConcreteDownloadMime, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, desktopTaskReadiness, handoffStatusLabel, handoffTerminalStatus, type BrowserHandoffPayload, type DesktopTaskReadiness } from '../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
@@ -13,7 +13,7 @@ import { contentDispositionFilename } from '../lib/contentDisposition'
 import { InspectionCache } from '../lib/inspectionCache'
 import { cookieLookupUrl, cookiePermissionAllows, normalizeCookiePermissionHosts } from '../lib/browserCookies'
 import { detectBrowserFamily, stableBrowserClientId } from '../lib/browserClient'
-import { BrowserDirectBackend } from '../lib/directBackend'
+import { BrowserDirectBackend, shouldAttachLoopbackBridge, shouldClearLoopbackBridge, shouldRouteThroughLoopbackBridge } from '../lib/directBackend'
 import { isEarlyDirectDownloadResponse, type ObservedDownloadResource } from '../lib/directResponse'
 import { clickIntentPollsForKind, earlyTakeoverRequiresClick } from '../lib/fileTakeover'
 import { ClickIntentStore } from '../lib/clickIntentStore'
@@ -119,6 +119,29 @@ function extensionIdentity() {
       Boolean(navigatorWithBrave?.brave),
     ),
   }
+}
+
+const SENSITIVE_REPLAY_KEY = /(?:cookie|authorization|token|password|secret|credential|request[_-]?headers)/i
+
+function replayMetadata(value: Record<string, string> | undefined): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(value || {})
+      .map(([key, raw]) => {
+        const normalizedKey = String(key).trim().slice(0, 64)
+        let normalizedValue = String(raw || '').trim().slice(0, 512)
+        if (/url/i.test(normalizedKey)) {
+          try {
+            const url = new URL(normalizedValue)
+            url.search = ''
+            url.hash = ''
+            normalizedValue = url.toString()
+          } catch {}
+        }
+        return [normalizedKey, normalizedValue] as const
+      })
+      .filter(([key, value]) => Boolean(key && value) && !SENSITIVE_REPLAY_KEY.test(key))
+      .slice(0, 12),
+  )
 }
 
 async function settings() {
@@ -449,7 +472,7 @@ async function native(message: Record<string, unknown>, timeoutMs?: number): Pro
     client_id: await browserClientId(),
     browser: identity.browser,
   }
-  if (directBackend) {
+  if (directBackend && shouldRouteThroughLoopbackBridge(payload.op, true)) {
     try {
       return await directBackend.request(payload, {
         version: identity.version,
@@ -463,7 +486,9 @@ async function native(message: Record<string, unknown>, timeoutMs?: number): Pro
     }
   }
   const response = await nativeBridge.request(payload, timeoutMs, retryCount)
-  if (response?.bridge_base && response?.bridge_token) {
+  if (shouldClearLoopbackBridge(response)) {
+    directBackend = null
+  } else if (shouldAttachLoopbackBridge(response)) {
     directBackend = new BrowserDirectBackend(String(response.bridge_base), String(response.bridge_token))
   }
   return response
@@ -508,6 +533,10 @@ async function inspectAdaptive(resource: Omit<MediaResource, 'id' | 'seenAt'>, t
       const enriched = {
         ...normalized,
         ...metadata,
+        evidence: [...new Set([...(normalized.evidence || []), 'manifest_inspection'])].slice(-16),
+        owner: normalized.owner || 'manifest',
+        confidence: Math.max(boundedConfidence(normalized.confidence), 0.96),
+        replayContext: { ...(normalized.replayContext || {}), method: 'GET' },
       }
       await saveResource(enriched, tabId)
       await sendCapturedResource(tabId, enriched)
@@ -697,6 +726,10 @@ async function resourcePayload(
     user_agent: sourceIdentity.userAgent || identity.userAgent,
     request_headers: replayableRequestHeaders(pageChain?.requestHeaders || resource.requestHeaders),
     request_contexts: requestContexts,
+    evidence: [...new Set((resource.evidence || []).map(value => String(value).trim()).filter(Boolean))].slice(0, 16),
+    owner: String(resource.owner || '').slice(0, 160),
+    confidence: boundedConfidence(resource.confidence),
+    replay_context: replayMetadata(resource.replayContext),
     ...replay,
     extension_version: extension.version,
     extension_client_id: await browserClientId(),
@@ -914,6 +947,22 @@ function observedResponse(details: any, chain?: RequestChain) {
     tabId: details.tabId,
     frameId: details.frameId,
     requestHeaders: chain?.requestHeaders,
+    evidence: [
+      'response_headers',
+      ...(disposition ? ['content_disposition'] : []),
+      ...(chain?.requestId ? ['request_chain'] : []),
+    ],
+    owner: `tab:${Number(details.tabId ?? -1)}:frame:${Number(details.frameId ?? -1)}:${String(chain?.requestId || details.requestId || 'response')}`,
+    confidence: disposition
+      ? 0.99
+      : /^video\//i.test(mimeType) || /^audio\//i.test(mimeType)
+        ? 0.92
+        : 0.84,
+    replayContext: {
+      method: String(details.method || 'GET').toUpperCase(),
+      request_id: String(chain?.requestId || details.requestId || ''),
+      final_url: String(chain?.finalUrl || details.url || ''),
+    },
   }
   void saveResource(resource, details.tabId)
   void inspectAdaptive(resource, details.tabId)
@@ -1297,7 +1346,11 @@ export default defineBackground(() => {
       }
       return
     }
-    const resource = { id: resourceId(url), url, kind, pageUrl: tab?.url, title: tab?.title, tabId: tab?.id, seenAt: Date.now() }
+    const resource = {
+      id: resourceId(url), url, kind, pageUrl: tab?.url, title: tab?.title, tabId: tab?.id,
+      seenAt: Date.now(), evidence: ['context_menu'], owner: 'context-menu', confidence: 0.99,
+      replayContext: { method: 'GET', page_url: String(tab?.url || '') },
+    }
     if (info.menuItemId === 'hls-cast-link') {
       void castToDevice(resource).catch(error => console.warn('HLS Downloader context cast failed', error))
       return
@@ -1361,7 +1414,8 @@ export default defineBackground(() => {
         tabId: message.resource.tabId ?? sender.tab?.id,
         frameId: message.resource.frameId ?? sender.frameId,
       }
-      const request = message.type === 'offer' ? offer(resource) : downloadNow(resource)
+      const fromPage = /^https?:\/\//i.test(String(sender.url || ''))
+      const request = fromPage || message.type === 'offer' ? offer(resource) : downloadNow(resource)
       void request
         .then(response => sendResponse(response))
         .catch(error => sendResponse({ ok: false, error: String(error) }))

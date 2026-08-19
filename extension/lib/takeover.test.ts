@@ -73,6 +73,8 @@ describe('browser download takeover helpers', () => {
       .toBe('safe-to-remove')
     expect(desktopTaskReadiness({ status: 'accepted', task_status: 'done', task_downloaded_bytes: 0 }))
       .toBe('safe-to-remove')
+    expect(desktopTaskReadiness({ status: 'accepted', task_status: 'completed', task_downloaded_bytes: 0 }))
+      .toBe('safe-to-remove')
     expect(desktopTaskReadiness({ status: 'accepted', task_status: 'failed', task_stage: 'probing', task_error_code: 'HTTP_404' }))
       .toBe('browser-fallback')
     expect(desktopTaskReadiness({ status: 'accepted', task_status: 'paused', task_downloaded_bytes: 0 }))

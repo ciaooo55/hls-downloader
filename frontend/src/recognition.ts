@@ -6,6 +6,9 @@ export interface RecognitionResult {
     label?: string
     quality?: string | null
     confidence?: number
+    evidence?: string[]
+    owner?: string
+    replay_context?: Record<string, string>
     checksum?: string
     mirrors?: string[]
   }>

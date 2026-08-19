@@ -77,6 +77,48 @@ def test_browser_handoff_confirmation_and_expiry():
     assert service.get(expired.id).status == "expired"
 
 
+def test_browser_handoff_keeps_bounded_recognition_contract_without_secrets():
+    service = BrowserHandoffService()
+    item = service.create({
+        "url": "https://cdn.test/live.m3u8",
+        "evidence": ["current_src", "mse_source_buffer", "x" * 5000],
+        "owner": "mse-source-buffer",
+        "confidence": 1.7,
+        "replay_context": {
+            "method": "GET",
+            "request_id": "req-1",
+            "cookie": "must-not-be-a-contract-field",
+        },
+        "cookie": "session=secret",
+    })
+
+    assert item.evidence == ["current_src", "mse_source_buffer", "x" * 64]
+    assert item.owner == "mse-source-buffer"
+    assert item.confidence == 1.0
+    assert item.replay_context == {
+        "method": "GET",
+        "request_id": "req-1",
+    }
+    public = item.public()
+    assert public["evidence"] == item.evidence
+    assert public["owner"] == item.owner
+    assert "cookie" not in public
+
+
+def test_browser_handoff_bounds_replay_metadata_and_rejects_non_finite_confidence():
+    service = BrowserHandoffService()
+    item = service.create({
+        "url": "https://cdn.test/file.bin",
+        "confidence": float("nan"),
+        "replay_context": {f"field_{index}": str(index) for index in range(20)},
+    })
+
+    assert item.confidence == 0.0
+    assert len(item.replay_context) == 12
+    assert item.replay_context["field_0"] == "0"
+    assert item.replay_context["field_11"] == "11"
+
+
 def test_browser_handoff_transport_retry_is_idempotent():
     service = BrowserHandoffService()
     payload = {

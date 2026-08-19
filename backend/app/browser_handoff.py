@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import secrets
+import math
 import re
+import secrets
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -57,6 +58,10 @@ class BrowserHandoff:
     user_agent: str
     request_headers: dict[str, str]
     request_contexts: dict[str, dict]
+    evidence: list[str]
+    owner: str
+    confidence: float
+    replay_context: dict[str, str]
     request_method: str
     request_body: str
     size: int
@@ -257,6 +262,30 @@ class BrowserHandoffService:
                 fallback="download",
             )
         request_headers = sanitize_request_headers(payload.get("request_headers"))
+        raw_evidence = payload.get("evidence")
+        if not isinstance(raw_evidence, (list, tuple)):
+            raw_evidence = []
+        evidence = [
+            str(value).strip()[:64]
+            for value in raw_evidence[:16]
+            if str(value).strip()
+        ]
+        owner = str(payload.get("owner") or "").strip()[:160]
+        try:
+            raw_confidence = float(payload.get("confidence") or 0.0)
+            confidence = max(0.0, min(1.0, raw_confidence)) if math.isfinite(raw_confidence) else 0.0
+        except (TypeError, ValueError):
+            confidence = 0.0
+        raw_replay_context = payload.get("replay_context")
+        if not isinstance(raw_replay_context, dict):
+            raw_replay_context = {}
+        replay_context = {
+            str(key).strip()[:64]: str(value).strip()[:512]
+            for key, value in list(raw_replay_context.items())[:12]
+            if str(key).strip()
+            and str(value).strip()
+            and not re.search(r"(?:cookie|authorization|token|password|secret|request[_-]?headers)", str(key), re.IGNORECASE)
+        }
         request_method, request_body = sanitize_request_replay(
             payload.get("request_method", "GET"), payload.get("request_body", ""), request_headers
         )
@@ -276,6 +305,10 @@ class BrowserHandoffService:
             user_agent=str(payload.get("user_agent", "")),
             request_headers=request_headers,
             request_contexts=sanitize_request_contexts(payload.get("request_contexts")),
+            evidence=evidence,
+            owner=owner,
+            confidence=confidence,
+            replay_context=replay_context,
             request_method=request_method,
             request_body=request_body,
             size=max(0, int(payload.get("size", 0) or 0)),

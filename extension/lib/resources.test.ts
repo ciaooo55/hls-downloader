@@ -28,6 +28,7 @@ import {
   pruneExpiredResources,
   RESOURCE_CACHE_RETENTION_MS,
   resourceBelongsToFrame,
+  boundedConfidence,
   isShortLivedMediaSignatureUsable,
   usesShortLivedMediaSignature,
   type MediaResource,
@@ -44,6 +45,12 @@ function resource(overrides: Partial<MediaResource> = {}): MediaResource {
 }
 
 describe('resource rules', () => {
+  it('bounds non-finite recognition confidence', () => {
+    expect(boundedConfidence(Number.NaN, 0.58)).toBe(0.58)
+    expect(boundedConfidence(Number.POSITIVE_INFINITY)).toBe(0)
+    expect(boundedConfidence(1.7)).toBe(1)
+  })
+
   it('filters HLS segments but retains manifests', () => {
     expect(classifyResource('https://cdn.test/a.m3u8')).toBe('hls')
     expect(classifyResource('https://cdn.test/0001.ts')).toBeNull()

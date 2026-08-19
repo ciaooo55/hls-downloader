@@ -24,6 +24,12 @@ fn main() -> ExitCode {
     if args.iter().any(|arg| arg == "--self-test") {
         return self_test();
     }
+    if args.iter().any(|arg| arg == "--native-host") {
+        return ExitCode::from(hls_native_shell::run_native_host() as u8);
+    }
+    if args.iter().any(|arg| arg == "--core-service") {
+        return run_core_service();
+    }
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) if err == "native shell already running" => {
@@ -32,6 +38,33 @@ fn main() -> ExitCode {
         }
         Err(err) => {
             eprintln!("{err}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn run_core_service() -> ExitCode {
+    let server = match hls_native_shell::CoreServer::open_default() {
+        Ok(server) => server,
+        Err(error) => {
+            eprintln!("v6 Core startup failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    match server.bind_local() {
+        Ok((addr, worker)) => {
+            eprintln!("v6 Core listening on {addr}");
+            match worker.join() {
+                Ok(Ok(())) => ExitCode::SUCCESS,
+                Ok(Err(error)) => {
+                    eprintln!("{error}");
+                    ExitCode::from(1)
+                }
+                Err(_) => ExitCode::from(1),
+            }
+        }
+        Err(error) => {
+            eprintln!("{error}");
             ExitCode::from(1)
         }
     }
@@ -95,6 +128,8 @@ fn self_test() -> ExitCode {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
+    // 5.x frozen supervisor: Win32 task list + Python Core. v6 product UI is
+    // HLSDownloader.exe (native_ui) and never boots this path.
     let headless = args.iter().any(|arg| arg == "--headless") || cfg!(not(windows));
     let own_tray = !args.iter().any(|arg| arg == "--no-tray");
     let core_url = flag_value(args, "--core-url").unwrap_or_else(default_core_url);

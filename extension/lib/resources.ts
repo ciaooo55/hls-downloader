@@ -29,6 +29,14 @@ export interface MediaResource {
   statusCode?: number
   method?: string
   requestHeaders?: Record<string, string>
+  /** Explain why this URL is a candidate; values are bounded, non-secret labels. */
+  evidence?: string[]
+  /** Stable local owner bucket (page, media-element, MSE, DownloadItem, etc.). */
+  owner?: string
+  /** 0..1 confidence for diagnostics and candidate ordering. */
+  confidence?: number
+  /** Non-secret replay metadata; credentials stay in request_contexts. */
+  replayContext?: Record<string, string>
   width?: number
   height?: number
   bandwidth?: number
@@ -51,6 +59,12 @@ export interface MediaResource {
   /** DASH SegmentTemplate URLs where `*` represents Number/Time/Bandwidth. */
   playbackPatterns?: string[]
   seenAt: number
+}
+
+export function boundedConfidence(value: unknown, fallback = 0): number {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return Math.max(0, Math.min(1, fallback))
+  return Math.max(0, Math.min(1, numeric))
 }
 
 export interface DownloadClickIntent {
@@ -631,6 +645,10 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
     byKey.set(key, {
       ...older,
       ...newer,
+      evidence: [...new Set([...(older.evidence || []), ...(newer.evidence || [])])].slice(-16),
+      owner: newer.owner || older.owner,
+      confidence: Math.max(boundedConfidence(older.confidence), boundedConfidence(newer.confidence)),
+      replayContext: { ...(older.replayContext || {}), ...(newer.replayContext || {}) },
       variants: newer.variants?.length ? newer.variants : older.variants,
       renditionUrls: [...new Set([...(newer.renditionUrls || []), ...(older.renditionUrls || [])])].slice(-24),
       playbackUrls: [...new Set([...(newer.playbackUrls || []), ...(older.playbackUrls || [])])].slice(-48),

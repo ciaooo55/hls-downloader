@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { BrowserDirectBackend } from './directBackend'
+import { BrowserDirectBackend, shouldAttachLoopbackBridge, shouldClearLoopbackBridge, shouldRouteThroughLoopbackBridge } from './directBackend'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -25,5 +25,47 @@ describe('BrowserDirectBackend', () => {
       kind: 'tvbox',
       resource: { url: 'https://cdn.test/a.m3u8' },
     })
+  })
+
+  it('does not attach FastAPI loopback when the host speaks the v6 Core protocol', () => {
+    expect(
+      shouldAttachLoopbackBridge({
+        protocol: 'hls-downloader-v6-core',
+        bridge_base: 'http://127.0.0.1:8765/api',
+        bridge_token: 'secret',
+      }),
+    ).toBe(false)
+  })
+
+  it('clears a stale FastAPI pairing once the host speaks v6 Core', () => {
+    expect(
+      shouldClearLoopbackBridge({
+        protocol: 'hls-downloader-v6-core',
+      }),
+    ).toBe(true)
+    expect(
+      shouldClearLoopbackBridge({
+        protocol: 'hls-downloader-core',
+        bridge_base: 'http://127.0.0.1:8765/api',
+      }),
+    ).toBe(false)
+  })
+
+  it('still pairs the frozen 5.x FastAPI bridge when protocol is absent', () => {
+    expect(
+      shouldAttachLoopbackBridge({
+        bridge_base: 'http://127.0.0.1:8765/api',
+        bridge_token: 'secret',
+      }),
+    ).toBe(true)
+  })
+
+  it('keeps heartbeat ping on Native Messaging so a v6 host can drop a stale FastAPI pairing', () => {
+    expect(shouldRouteThroughLoopbackBridge('offer', true)).toBe(false)
+    expect(shouldRouteThroughLoopbackBridge('download', true)).toBe(false)
+    expect(shouldRouteThroughLoopbackBridge('handoff_status', true)).toBe(false)
+    expect(shouldRouteThroughLoopbackBridge('ping', true)).toBe(false)
+    expect(shouldRouteThroughLoopbackBridge('activate', true)).toBe(true)
+    expect(shouldRouteThroughLoopbackBridge('download', false)).toBe(false)
   })
 })

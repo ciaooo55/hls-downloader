@@ -1,5 +1,7 @@
 # Windows 发布流程
 
+> v6 切包后入口改为单一 `HLSDownloader.exe`（见 [v6-cutover.md](v6-cutover.md)）。在行为矩阵通过前，下列 5.x 流程仍是现网发布路径。
+
 本项目使用 GitHub Actions 从源码生成 Tauri + React Windows 安装版和便携版。工作流使用 Rust stable 构建桌面界面、PyInstaller 构建无窗口下载核心；`bin/` 与 `release/` 由 `.gitignore` 排除，不应手动提交二进制产物。
 
 ## 手动验证构建

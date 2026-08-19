@@ -13,6 +13,7 @@ python_version = "3.12"
 ignore_missing_imports = true
 follow_imports = "skip"
 show_error_codes = true
+exclude = "(^|/)backend/(dist|build)(/|$)"
 
 [tool.coverage.run]
 source = ["backend.app"]

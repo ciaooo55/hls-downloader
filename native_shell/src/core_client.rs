@@ -173,6 +173,20 @@ impl CoreClient {
         )
     }
 
+    /// Versioned bridge used by the Rust Native Messaging host while the v6
+    /// Core replaces the legacy loopback service.  Keeping the transport
+    /// behind this method prevents the browser protocol from depending on a
+    /// particular backend implementation.
+    pub fn call(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+        timeout_secs: f64,
+    ) -> Result<Value, String> {
+        self.request(method, path, body, timeout_secs)
+    }
+
     fn request(
         &self,
         method: &str,

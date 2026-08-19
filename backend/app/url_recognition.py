@@ -6,7 +6,7 @@ from typing import Literal
 from urllib.parse import parse_qsl, unquote, urljoin, urlparse, urlunparse
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .network_proxy import ensure_url_allowed, policy_httpx_client
 
@@ -23,8 +23,11 @@ class HlsCandidate(BaseModel):
     label: str = ""
     quality: str | None = None
     confidence: float = 0.0
+    evidence: list[str] = Field(default_factory=list)
+    owner: str = ""
+    replay_context: dict[str, str] = Field(default_factory=dict)
     checksum: str = ""
-    mirrors: list[str] = []
+    mirrors: list[str] = Field(default_factory=list)
 
 
 class RecognitionResult(BaseModel):
@@ -373,6 +376,9 @@ def _rank_html_candidate(url: str, origin: str, order: int) -> _RankedCandidate:
         label=label,
         quality=quality,
         confidence=confidence,
+        evidence=["html_attribute" if origin == "attribute" else "html_script"],
+        owner="page",
+        replay_context={"base_url": "html"},
     )
     return _RankedCandidate(candidate, _family_identity(url), is_master, height, bitrate, order)
 
@@ -473,6 +479,14 @@ def _direct_candidate(url: str, source: str, playlist_text: str = "") -> HlsCand
         label=label,
         quality=quality,
         confidence=1.0,
+        evidence=[
+            "manifest_body" if source == "playlist" else
+            "dash_body" if source == "dash" else
+            "response_headers" if source == "file" else
+            "manual_url"
+        ],
+        owner="direct-response" if source in {"playlist", "dash", "file"} else "manual",
+        replay_context={"method": "GET"},
     )
 
 
@@ -490,6 +504,9 @@ def _metalink_result(url: str, text: str) -> RecognitionResult | None:
                 source="metalink",
                 label=item.name,
                 confidence=1.0,
+                evidence=["metalink_body"],
+                owner="metalink",
+                replay_context={"method": "GET"},
                 checksum=item.checksum,
                 mirrors=item.mirrors,
             )

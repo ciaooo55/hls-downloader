@@ -2,8 +2,16 @@
 
 ## Cursor Cloud specific instructions
 
-HLS Downloader is a **Windows-first** desktop download manager. The repo has three
-buildable parts (see `README.md` "源码开发" for the canonical commands):
+HLS Downloader is a **Windows-first** desktop download manager.
+
+**v6** is the active architecture: one resident Rust process (`native_shell` core
++ `native_ui` Slint workbench) and the WXT MV3 `extension/`. The v6 process must
+not load Python, Tauri, or WebView2. UI and Native Messaging connect through the
+Core IPC pipe/loopback protocol; only `CoreServer` opens SQLite. See
+Cutover checklist: [v6-cutover.md](docs/v6-cutover.md). `docs/v6-architecture.md`.
+
+**5.x is frozen** (crash/security fixes only). These trees remain as a behavioral
+spec until installer cutover:
 
 - `backend/` — Python 3.12 + FastAPI download core (also serves the web UI at `/ui`).
 - `frontend/` — React 19 + Vite + Tauri 2 desktop shell / player.
@@ -25,15 +33,22 @@ called out as expected caveats.
 
 ### Running the app (dev)
 
+v6 product (`HLSDownloader.exe`): MSVC, then
+`cargo run --manifest-path native_ui/Cargo.toml -- --self-test`.
+`native_ui` links `hls-native-shell` with `default-features = false` (no Win32
+task list, no FastAPI client). Only `CoreServer` opens SQLite.
+
+5.x web UI remains a behavioral spec until installer cutover:
+
 1. Build the web UI once: `cd frontend && pnpm run build` (produces
-   `frontend/dist`, which the backend serves at `/ui`). Backend returns a
-   "Frontend not built" 404 at `/ui` until this exists.
+ `frontend/dist`, which the backend serves at `/ui`). Backend returns a
+ "Frontend not built" 404 at `/ui` until this exists.
 2. Start the backend from the `backend/` directory:
-   `python -m uvicorn app.main:app --host 127.0.0.1 --port 8765`
-   Then open `http://127.0.0.1:8765/ui/`.
+ `python -m uvicorn app.main:app --host 127.0.0.1 --port 8765`
+ Then open `http://127.0.0.1:8765/ui/`.
 3. Optional frontend hot-reload dev server: `cd frontend && pnpm dev` (Vite on
-   port 1420; the backend CORS allow-list includes `127.0.0.1:1420` only in
-   non-frozen/dev mode).
+ port 1420; the backend CORS allow-list includes `127.0.0.1:1420` only in
+ non-frozen/dev mode).
 
 Runtime state in source mode: `config.json`, `backend/data.db`, and `downloads/`
 are created under the repo root and are all gitignored.
@@ -60,6 +75,11 @@ web UI shows a first-run "使用前请确认" dialog — tick the agree checkbox
   `os.name != "nt"`). Expected; not a code defect.
 - Frontend: `cd frontend && pnpm test` (Vitest) and `pnpm run build`.
 - Extension: `cd extension && pnpm test` and `pnpm run build`.
+- v6 Core (product surface, no 5.x supervisor):
+  `cargo test --manifest-path native_shell/Cargo.toml --lib --no-default-features`
+- v6 Core + frozen 5.x supervisor tests:
+  `cargo test --manifest-path native_shell/Cargo.toml`
+- v6 UI: `cargo test --manifest-path native_ui/Cargo.toml` (needs MSVC on Windows).
 
 ### Linux caveats
 

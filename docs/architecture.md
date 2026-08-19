@@ -1,5 +1,10 @@
 # HLS Downloader 5.x architecture
 
+> **Frozen.** Product development moved to v6: one resident Rust process, no
+> Python/Tauri/WebView2 in-process. See [v6-architecture.md](v6-architecture.md).
+> This page remains the 5.x record so the capability matrix can be ported, not
+> extended.
+
 5.x 从最后一条稳定 3.x 线继续演进，不以删功能换轻量。架构目标是：下载接管与普通 HTTP 热路径常驻、原生、低延迟；媒体、BT 和跨协议能力继续由已经成熟的核心提供；设置、新建任务和播放器按需加载。
 
 ## Product reference and decisions

@@ -1566,9 +1566,13 @@ class HTTPDownloader(SeeklessEngine):
         sequential: bool,
         resume_from: int,
         total: int,
+        metadata: dict,
     ) -> dict:
+        source_url = self._download_url or self.task.url
+        strong_etag = _strong_etag(str(metadata.get("etag") or ""))
+        last_modified = str(metadata.get("last_modified") or "").strip()
         return {
-            "url": self._download_url or self.task.url,
+            "url": source_url,
             "headers": dict(headers),
             "output": str(part_path),
             "connections": max(1, int(self.task.concurrency or 1)),
@@ -1576,7 +1580,10 @@ class HTTPDownloader(SeeklessEngine):
             "total": 0 if sequential else max(0, int(total)),
             "sequential": bool(sequential),
             "resume_from": max(0, int(resume_from)),
-            "proxy": resolved_proxy_url(self._download_url or self.task.url),
+            "proxy": resolved_proxy_url(source_url),
+            "resource_key": _resume_resource_identity(self.task.url),
+            "etag": strong_etag,
+            "last_modified": last_modified,
             "control": str(control_path),
             "progress": str(progress_path),
         }
@@ -1684,6 +1691,7 @@ class HTTPDownloader(SeeklessEngine):
                     sequential=sequential_mode,
                     resume_from=resume,
                     total=total,
+                    metadata=metadata,
                 ),
             )
             process = start_native_job(
