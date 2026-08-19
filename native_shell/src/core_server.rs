@@ -340,7 +340,7 @@ fn wait_events(
             return events;
         }
     }
-    let timeout = Duration::from_millis(timeout_ms.max(1));
+    let timeout = Duration::from_millis(timeout_ms.clamp(1, 60_000));
     let (lock, condvar) = notify.as_ref();
     if let Ok(guard) = lock.lock() {
         let _ = condvar.wait_timeout_while(guard, timeout, |sequence| *sequence <= after_sequence);

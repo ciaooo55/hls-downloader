@@ -837,4 +837,17 @@ mod tests {
         }
         assert!(!tcp_loopback_enabled());
     }
+
+    #[test]
+    fn adversarial_pipe_frame_rejects_oversize_and_truncated() {
+        let huge = (V6_PIPE_MAX_FRAME as u32 + 1).to_le_bytes();
+        let mut frame = huge.to_vec();
+        frame.extend_from_slice(&[0u8; 8]);
+        let err = decode_message::<CorePipeRequest>(&frame).unwrap_err();
+        assert!(err.contains("invalid length") || err.contains("too large"));
+        assert!(decode_message::<CorePipeRequest>(&[1, 0]).is_err());
+        let hello = encode_message(&hello_request()).unwrap();
+        let decoded: CorePipeRequest = decode_message(&hello).unwrap();
+        assert_eq!(decoded, hello_request());
+    }
 }

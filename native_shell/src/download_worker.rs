@@ -999,11 +999,18 @@ impl CoreCoordinator {
     }
 
     fn apply_defaults_to_spec(&self, mut spec: TaskSpec) -> Result<TaskSpec, String> {
+        let client_dir = spec.download_dir.trim().to_string();
+        spec = apply_site_rules_to_spec(&self.core(), spec)?;
         let settings = self.settings()?;
         if spec.download_dir.trim().is_empty() {
             spec.download_dir = settings.download_dir.clone();
         }
-        reject_path_escape(&spec.download_dir)?;
+        if client_dir.is_empty() {
+            reject_path_escape(&spec.download_dir)?;
+        } else {
+            spec.download_dir =
+                constrain_untrusted_download_dir(&client_dir, &settings.download_dir)?;
+        }
         if !spec.body_path.trim().is_empty() {
             reject_path_escape(&spec.body_path)?;
             if !Path::new(&spec.body_path).is_file() {
@@ -1022,7 +1029,10 @@ impl CoreCoordinator {
             spec.last_modified.clear();
         }
         spec.mirrors.retain(|url| {
-            !url.contains('\r') && !url.contains('\n') && !url.contains('\0')
+            reject_task_url(url).is_ok()
+                && !url.contains('\r')
+                && !url.contains('\n')
+                && !url.contains('\0')
         });
         if spec.proxy.contains('\r') || spec.proxy.contains('\n') {
             return Err("代理地址无效".into());
@@ -2550,6 +2560,12 @@ mod tests {
             .set_setting("legal_terms_accepted", serde_json::json!(true))
             .unwrap();
         coordinator
+            .set_setting(
+                "download_dir",
+                serde_json::json!(download_dir.to_string_lossy()),
+            )
+            .unwrap();
+        coordinator
             .dispatch(CoreCommand::CreateTask {
                 spec: TaskSpec {
                     url: format!("http://{address}/fixture.bin"),
@@ -2637,6 +2653,12 @@ mod tests {
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         coordinator
             .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting(
+                "download_dir",
+                serde_json::json!(download_dir.to_string_lossy()),
+            )
             .unwrap();
         coordinator
             .dispatch(CoreCommand::CreateTask {
@@ -2928,7 +2950,6 @@ mod tests {
 
     #[test]
     fn coordinator_accept_handoff_creates_task_and_rejects_escaped_dir() {
-        std::env::set_var("HLS_V6_SKIP_LEGAL", "1");
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         coordinator
             .set_setting("legal_terms_accepted", serde_json::json!(true))
@@ -3250,5 +3271,171 @@ mod tests {
             .cloned()
             .unwrap();
         assert_eq!(post_spec.request_method, "POST");
+    }
+
+    #[test]
+    fn adversarial_rejects_script_data_blob_and_refresh() {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting("legal_terms_version", serde_json::json!(crate::LEGAL_TERMS_VERSION))
+            .unwrap();
+        for url in [
+            "  DATA:text/plain,hi",
+            "blob:https://cdn.test/1",
+            "vbscript:msgbox(1)",
+            "http://cdn.test/a.bin\r\nX: 1",
+        ] {
+            let error = coordinator
+                .dispatch(CoreCommand::CreateTask {
+                    spec: TaskSpec {
+                        url: url.into(),
+                        filename: "x.bin".into(),
+                        ..Default::default()
+                    },
+                })
+                .unwrap_err();
+            assert!(
+                error.contains("协议") || error.contains("不受支持") || error.contains("换行"),
+                "url {url:?} leaked through: {error}"
+            );
+        }
+        coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "https://cdn.test/ok.bin".into(),
+                    filename: "ok.bin".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let refresh = coordinator
+            .dispatch(CoreCommand::TaskAction {
+                task_id: "task-1".into(),
+                action: "refresh:javascript:alert(1)".into(),
+            })
+            .unwrap_err();
+        assert!(
+            refresh.contains("不受支持") || refresh.contains("协议"),
+            "refresh leaked: {refresh}"
+        );
+    }
+
+    #[test]
+    fn adversarial_rejects_helper_and_scan_interpreters() {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        assert!(coordinator
+            .set_setting(
+                "av_scan_command",
+                serde_json::json!("powershell -Command Start-Process calc")
+            )
+            .is_err());
+        assert!(coordinator
+            .set_setting("ffmpeg_path", serde_json::json!(r"C:\Windows\System32\cmd.exe"))
+            .is_err());
+        assert!(coordinator
+            .set_setting("ffmpeg_path", serde_json::json!(r"..\ffmpeg.exe"))
+            .is_err());
+        assert!(coordinator
+            .set_setting("default_user_agent", serde_json::json!("UA\r\nCookie: x"))
+            .is_err());
+    }
+
+    #[test]
+    fn adversarial_drops_injected_headers_and_non_http_mirrors() {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting("legal_terms_version", serde_json::json!(crate::LEGAL_TERMS_VERSION))
+            .unwrap();
+        let mut headers = std::collections::BTreeMap::new();
+        headers.insert("X-Injected\r\nX".into(), "1".into());
+        headers.insert("X-Ok".into(), "safe".into());
+        headers.insert("X-Bad".into(), "a\nb".into());
+        let events = coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "https://cdn.test/a.bin".into(),
+                    filename: "a.bin".into(),
+                    headers,
+                    mirrors: vec![
+                        "javascript:alert(1)".into(),
+                        "file:///C:/Windows/win.ini".into(),
+                        "https://mirror.test/a.bin".into(),
+                    ],
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let id = events
+            .iter()
+            .find_map(|envelope| match &envelope.event {
+                crate::CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let spec = coordinator.lock().unwrap().task_spec(&id).cloned().unwrap();
+        assert!(!spec.headers.keys().any(|key| key.contains('\r') || key.contains('\n')));
+        assert_eq!(spec.headers.get("X-Ok").map(String::as_str), Some("safe"));
+        assert!(!spec.headers.contains_key("X-Bad"));
+        let normalized = crate::mirrors::normalize_mirror_urls(&spec.url, &spec.mirrors);
+        assert_eq!(normalized, vec!["https://mirror.test/a.bin".to_string()]);
+        assert_eq!(spec.mirrors, vec!["https://mirror.test/a.bin".to_string()]);
+    }
+
+    #[test]
+    fn create_task_rejects_client_dir_outside_download_root() {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting("legal_terms_version", serde_json::json!(crate::LEGAL_TERMS_VERSION))
+            .unwrap();
+        coordinator
+            .set_setting("download_dir", serde_json::json!("downloads"))
+            .unwrap();
+        let escaped = coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "https://cdn.test/a.bin".into(),
+                    filename: "a.bin".into(),
+                    download_dir: r"C:\Windows".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap_err();
+        assert!(
+            escaped.contains("下载目录") || escaped.contains("根目录"),
+            "absolute escape leaked: {escaped}"
+        );
+        coordinator
+            .set_setting(
+                "site_rules",
+                serde_json::json!(r#"[{"host":"cdn.test","download_dir":"site-cache"}]"#),
+            )
+            .unwrap();
+        let events = coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "https://cdn.test/b.bin".into(),
+                    filename: "b.bin".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let id = events
+            .iter()
+            .find_map(|envelope| match &envelope.event {
+                crate::CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let spec = coordinator.lock().unwrap().task_spec(&id).cloned().unwrap();
+        assert_eq!(spec.download_dir, "site-cache");
     }
 }
