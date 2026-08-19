@@ -11,4 +11,4 @@ def test_sbom_contains_locked_python_node_rust_and_ffmpeg_components():
     assert any(value.startswith("pkg:pypi/fastapi@") for value in purls)
     assert any(value.startswith("pkg:npm/react@") for value in purls)
     assert any(value.startswith("pkg:cargo/tauri@") for value in purls)
-    assert "pkg:generic/ffmpeg@N-125881-g946272b79a" in purls
+    assert "pkg:generic/ffmpeg@N-126217-ge1e325235e" in purls

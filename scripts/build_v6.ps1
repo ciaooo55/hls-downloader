@@ -34,9 +34,9 @@ $NsisUrl = "https://master.dl.sourceforge.net/project/nsis/NSIS%203/$NsisVersion
 $NsisSha256 = "56581f90db321581c5381193d796fffcf2d24b2f8fed2160a6c6a3baa67f2c4f"
 $FFmpegArchive = Join-Path $ToolsDir "ffmpeg-windows.zip"
 $FFmpegToolsDir = Join-Path $ToolsDir "ffmpeg-windows"
-$FFmpegArchiveUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-01-13-21/ffmpeg-N-125881-g946272b79a-win64-gpl.zip"
-$FFmpegArchiveBuild = "BtbN autobuild 2026-08-01 13:21 (FFmpeg g946272b79a)"
-$FFmpegArchiveSha256 = "a082da6d5ce0cbb9a8ad0112ab7f654d480c707b8caf9d332f4532d78b65257f"
+$FFmpegArchiveUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-19-19-21/ffmpeg-N-126217-ge1e325235e-win64-gpl.zip"
+$FFmpegArchiveBuild = "BtbN autobuild 2026-08-19 19:21 (FFmpeg ge1e325235e)"
+$FFmpegArchiveSha256 = "fe5a8f090b9fbc77d5e64c7d8b404b8837e05a09663ed9768ba19284cf929b20"
 
 function Assert-FileSha256([string]$Path, [string]$Expected, [string]$Label) {
     if (-not (Test-Path -LiteralPath $Path)) {

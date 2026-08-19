@@ -67,7 +67,7 @@ def build_sbom(version: str) -> dict:
         *cargo_components(),
         *npm_components(ROOT / "frontend" / "pnpm-lock.yaml"),
         *npm_components(ROOT / "extension" / "pnpm-lock.yaml"),
-        component("application", "generic", "ffmpeg", "N-125881-g946272b79a"),
+        component("application", "generic", "ffmpeg", "N-126217-ge1e325235e"),
     ]
     unique = {item["bom-ref"]: item for item in values}
     components = [unique[key] for key in sorted(unique)]

@@ -375,9 +375,9 @@ def test_windows_build_uses_pinned_verified_packaging_tools():
 
     assert "$NsisVersion = \"3.12\"" in build_script
     assert "$NsisSha256 = \"56581f90db321581c5381193d796fffcf2d24b2f8fed2160a6c6a3baa67f2c4f\"" in build_script
-    assert "$FFmpegArchiveBuild = \"BtbN autobuild 2026-08-01 13:21 (FFmpeg g946272b79a)\"" in build_script
-    assert "releases/download/autobuild-2026-08-01-13-21/ffmpeg-N-125881-g946272b79a-win64-gpl.zip" in build_script
-    assert "$FFmpegArchiveSha256 = \"a082da6d5ce0cbb9a8ad0112ab7f654d480c707b8caf9d332f4532d78b65257f\"" in build_script
+    assert "$FFmpegArchiveBuild = \"BtbN autobuild 2026-08-19 19:21 (FFmpeg ge1e325235e)\"" in build_script
+    assert "releases/download/autobuild-2026-08-19-19-21/ffmpeg-N-126217-ge1e325235e-win64-gpl.zip" in build_script
+    assert "$FFmpegArchiveSha256 = \"fe5a8f090b9fbc77d5e64c7d8b404b8837e05a09663ed9768ba19284cf929b20\"" in build_script
     assert "generate_sbom.py" in build_script
     assert 'File "${STAGE_DIR}\\sbom.cdx.json"' in installer
     assert 'Copy-Item -LiteralPath (Join-Path $Root "TERMS.md")' in build_script
@@ -743,8 +743,8 @@ def test_v6_package_pins_the_same_ffmpeg_as_the_5x_spec():
     nsis = (root / "installer" / "hls-downloader-v6.nsi").read_text(encoding="utf-8")
     smoke = (root / "scripts" / "smoke_v6_package.ps1").read_text(encoding="utf-8")
 
-    pin = 'a082da6d5ce0cbb9a8ad0112ab7f654d480c707b8caf9d332f4532d78b65257f'
-    url = "releases/download/autobuild-2026-08-01-13-21/ffmpeg-N-125881-g946272b79a-win64-gpl.zip"
+    pin = 'fe5a8f090b9fbc77d5e64c7d8b404b8837e05a09663ed9768ba19284cf929b20'
+    url = "releases/download/autobuild-2026-08-19-19-21/ffmpeg-N-126217-ge1e325235e-win64-gpl.zip"
     assert pin in spec_build
     assert pin in v6_build
     assert url in spec_build
