@@ -353,6 +353,7 @@ fn wait_events(
 fn spawn_torrent_watch(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
     thread::spawn(move || {
         let mut watch = crate::torrent_engine::TorrentWatch::default();
+        let mut primed_dir = String::new();
         while !stop.load(Ordering::SeqCst) {
             let dir = coordinator
                 .lock()
@@ -364,33 +365,46 @@ fn spawn_torrent_watch(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
             } else {
                 dir
             };
-            if !dir.trim().is_empty() {
-                if let Ok(files) = watch.scan(std::path::Path::new(&dir)) {
-                    for file in files {
-                        let url = file.to_string_lossy().into_owned();
-                        if url.trim().is_empty() {
-                            continue;
+            let dir = dir.trim().to_string();
+            if dir.is_empty() {
+                watch = crate::torrent_engine::TorrentWatch::default();
+                primed_dir.clear();
+            } else {
+                let path = std::path::Path::new(&dir);
+                if path.is_dir() {
+                    if primed_dir != dir {
+                        watch = crate::torrent_engine::TorrentWatch::default();
+                        if watch.prime(path).is_ok() {
+                            primed_dir = dir;
                         }
-                        let _ = coordinator.dispatch(CoreCommand::CreateTask {
-                            spec: crate::TaskSpec {
-                                url: url.clone(),
-                                resource_kind: crate::classify_url(&url),
-                                filename: file
-                                    .file_stem()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .into(),
-                                ..Default::default()
-                            },
-                        })
-                        .or_else(|error| {
-                            coordinator.lock().and_then(|mut core| {
-                                core.emit(CoreEvent::Toast {
-                                    level: "warn".into(),
-                                    message: format!("监视目录未导入 {url}: {error}"),
+                    } else if let Ok(files) = watch.scan(path) {
+                        for file in files {
+                            let url = file.to_string_lossy().into_owned();
+                            if url.trim().is_empty() {
+                                continue;
+                            }
+                            let _ = coordinator
+                                .dispatch(CoreCommand::CreateTask {
+                                    spec: crate::TaskSpec {
+                                        url: url.clone(),
+                                        resource_kind: crate::classify_url(&url),
+                                        filename: file
+                                            .file_stem()
+                                            .unwrap_or_default()
+                                            .to_string_lossy()
+                                            .into(),
+                                        ..Default::default()
+                                    },
                                 })
-                            })
-                        });
+                                .or_else(|error| {
+                                    coordinator.lock().and_then(|mut core| {
+                                        core.emit(CoreEvent::Toast {
+                                            level: "warn".into(),
+                                            message: format!("监视目录未导入 {url}: {error}"),
+                                        })
+                                    })
+                                });
+                        }
                     }
                 }
             }

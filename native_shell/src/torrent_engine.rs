@@ -1296,6 +1296,22 @@ mod tests {
     }
 
     #[test]
+    fn watch_folder_prime_records_existing_without_reporting() {
+        let dir = std::env::temp_dir().join(format!("hls-watch-prime-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let existing = dir.join("old.torrent");
+        fs::write(&existing, b"d4:infod4:name3:oldeee").unwrap();
+        let mut watch = TorrentWatch::default();
+        watch.prime(&dir).unwrap();
+        assert!(watch.scan(&dir).unwrap().is_empty());
+        let fresh = dir.join("new.torrent");
+        fs::write(&fresh, b"d4:infod4:name3:neweee").unwrap();
+        let reported = watch.scan(&dir).unwrap();
+        assert_eq!(reported, vec![fresh]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn torrent_file_hashes_info_dict() {
         let mut bytes = b"d".to_vec();
         bytes.extend(benc_str("announce"));

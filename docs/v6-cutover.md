@@ -16,7 +16,7 @@ GitHub Windows Release 的现网安装包是 v6：`scripts/build_v6.ps1` 产出 
 powershell -ExecutionPolicy Bypass -File scripts\run_v6_gates.ps1
 cargo test --manifest-path native_shell/Cargo.toml --lib --no-default-features
 cargo test --manifest-path native_ui/Cargo.toml
-powershell -ExecutionPolicy Bypass -File scripts\build_v6.ps1 -Version 6.0.0
+powershell -ExecutionPolicy Bypass -File scripts\build_v6.ps1 -Version 6.0.1
 ```
 
 Native Messaging 安装 `HLSDownloaderNativeHost.exe`（同一二进制的副本或硬链接）。文件名含 `NativeHost` 时走 `--native-host` 路径，**不打开 SQLite**，只连 v6 Core。
@@ -27,7 +27,7 @@ Setup.exe 安装时执行 `register-native-host.ps1 -Cutover`，把现网 host �
 powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1 -Cutover
 ```
 
-`libmpv-2.dll` 若存在于 `HLS_V6_LIBMPV`、仓库根、`native_ui/` 或 exe 旁，会打进安装包；没有 DLL 时播放降级，NSIS 用 `/nonfatal`。`ffmpeg.exe` / `ffprobe.exe` 始终从与 5.x 相同的针定 BtbN 包打入（本地可用 `-UseSystemFfmpeg`）。
+`libmpv-2.dll` 始终从针定的 shinchiro `mpv-dev` x86_64 包抽出并打进 Setup / Portable（构建缓存放在 `%LOCALAPPDATA%\HLSDownloaderBuildTools`，避免中文仓库路径干扰 7zr）。`ffmpeg.exe` / `ffprobe.exe` 始终从与 5.x 相同的针定 BtbN 包打入（本地可用 `-UseSystemFfmpeg`）。
 
 ## 5.x 数据迁移
 
@@ -44,4 +44,4 @@ powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1 -Cutov
 
 ## 诚实口径
 
-源码与 GitHub Release 现网安装包都是 Core+Slint 的 v6。BT 仍是 `TorrentSession` / `BuiltinTorrentEngine`（swarm 冻结，可换 libtorrent）。播放器把 libmpv `wid` 接到播放器 HWND 客户区子窗；没有 `libmpv-2.dll` 时降级。FFmpeg 随包装入，供 HLS/DASH 合并。
+源码与 GitHub Release 现网安装包都是 Core+Slint 的 v6。BT 仍是 `TorrentSession` / `BuiltinTorrentEngine`（swarm 冻结，web seed 是实际路径）。播放器把 libmpv `wid` 接到播放器 HWND 客户区子窗；安装包始终带针定的 `libmpv-2.dll`。FFmpeg 随包装入，供 HLS/DASH 合并。

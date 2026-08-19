@@ -2334,7 +2334,7 @@ dependencies = [
 
 [[package]]
 name = "hls-native-shell"
-version = "6.0.0"
+version = "6.0.1"
 dependencies = [
  "rusqlite",
  "russh",
@@ -2348,7 +2348,7 @@ dependencies = [
 
 [[package]]
 name = "hls-native-ui"
-version = "6.0.0"
+version = "6.0.1"
 dependencies = [
  "hls-native-shell",
  "serde",

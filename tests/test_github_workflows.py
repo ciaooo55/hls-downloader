@@ -135,15 +135,16 @@ def test_build_requirements_pin_pyinstaller():
 
 def test_readme_documents_windows_release_assets():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    v6 = _v6_version()
 
     assert "ciaooo55/hls-downloader/actions/workflows/ci.yml" in readme
-    assert "HLSDownloader-v6.0.0-Windows-x64-Setup.exe" in readme
-    assert "HLSDownloader-v6.0.0-Windows-x64-Portable.zip" in readme
+    assert f"HLSDownloader-v{v6}-Windows-x64-Setup.exe" in readme
+    assert f"HLSDownloader-v{v6}-Windows-x64-Portable.zip" in readme
     assert "scripts\\build_v6.ps1" in readme or "build_v6.ps1" in readme
     assert "m3u8-sniffer.user.js" not in readme
     assert "https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/" in readme
-    assert "HLSDownloader-v6.0.0-Firefox-Unsigned.zip" not in readme
-    assert "HLSDownloader-v6.0.0-Firefox-Source.zip" not in readme
+    assert f"HLSDownloader-v{v6}-Firefox-Unsigned.zip" not in readme
+    assert f"HLSDownloader-v{v6}-Firefox-Source.zip" not in readme
     assert f"HLSDownloader-v{APP_VERSION}-Windows-x64-Setup.exe" not in readme
     assert "SHA256SUMS.txt" not in readme
     assert "Windows 10/11" in readme

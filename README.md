@@ -14,7 +14,7 @@ HLS · DASH · HTTP(S) · FTP/FTPS · SFTP · BT / magnet · 边下边播 · 断
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows11&logoColor=white)](https://github.com/ciaooo55/hls-downloader/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
 
-[下载最新版](https://github.com/ciaooo55/hls-downloader/releases/latest) · [Firefox 插件](https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/) · [快速开始](#-快速开始) · [浏览器插件](#-浏览器插件) · [源码开发](#-源码开发) · [发布说明](docs/releases/v6.0.0.md)
+[下载最新版](https://github.com/ciaooo55/hls-downloader/releases/latest) · [Firefox 插件](https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/) · [快速开始](#-快速开始) · [浏览器插件](#-浏览器插件) · [源码开发](#-源码开发) · [发布说明](docs/releases/v6.0.1.md)
 
 </div>
 
@@ -27,13 +27,13 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 
 ## 📦 下载与安装
 
-前往 [GitHub Releases](https://github.com/ciaooo55/hls-downloader/releases/latest) 获取最新版。现网安装包是 **v6**：单一 `HLSDownloader.exe`、随包 FFmpeg/ffprobe，以及 Chromium 插件。不需要安装 Python。没有 `libmpv-2.dll` 时播放降级，下载不受影响。
+前往 [GitHub Releases](https://github.com/ciaooo55/hls-downloader/releases/latest) 获取最新版。现网安装包是 **v6**：单一 `HLSDownloader.exe`、随包 FFmpeg/ffprobe 与针定的 `libmpv-2.dll`，以及 Chromium 插件。不需要安装 Python。
 
 | 获取方式 | 适用场景 |
 | --- | --- |
-| `HLSDownloader-v6.0.0-Windows-x64-Setup.exe` | 推荐；开始菜单、卸载入口，并切换 Native Messaging 到 v6 |
-| `HLSDownloader-v6.0.0-Windows-x64-Portable.zip` | 免安装；完整解压后运行，数据保存在便携目录 |
-| `HLSDownloader-v6.0.0-Chrome-Edge-Extension.zip` | Chrome、Edge、Brave、Chromium、Vivaldi、Opera 的 MV3 扩展 |
+| `HLSDownloader-v6.0.1-Windows-x64-Setup.exe` | 推荐；开始菜单、卸载入口，并切换 Native Messaging 到 v6 |
+| `HLSDownloader-v6.0.1-Windows-x64-Portable.zip` | 免安装；完整解压后运行，数据保存在便携目录 |
+| `HLSDownloader-v6.0.1-Chrome-Edge-Extension.zip` | Chrome、Edge、Brave、Chromium、Vivaldi、Opera 的 MV3 扩展 |
 | [Firefox Add-ons 插件](https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/) | Firefox 正式版；安装后由 Firefox 自动更新 |
 
 > [!NOTE]
@@ -110,7 +110,7 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 
 ### Chromium
 
-1. 下载并解压 `HLSDownloader-v6.0.0-Chrome-Edge-Extension.zip`。
+1. 下载并解压 `HLSDownloader-v6.0.1-Chrome-Edge-Extension.zip`。
 2. 打开浏览器扩展管理页并启用“开发者模式”。
 3. 选择“加载已解压的扩展程序”，指向解压目录。
 4. 启动桌面端；插件会通过 Native Messaging 自动配对，不需要手动复制 Token。
@@ -197,20 +197,20 @@ pnpm run build
 
 ## 📦 打包与发布
 
-本地 v6 包装需要 MSVC、NSIS 和联网拉取针定的 FFmpeg 包：
+本地 v6 包装需要 MSVC、NSIS 和联网拉取针定的 FFmpeg / libmpv 包：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build_v6.ps1 -Version 6.0.0
+powershell -ExecutionPolicy Bypass -File .\scripts\build_v6.ps1 -Version 6.0.1
 ```
 
 输出位于被 Git 忽略的 `release/`：
 
 ```text
-HLSDownloader-v6.0.0-Windows-x64-Setup.exe
-HLSDownloader-v6.0.0-Windows-x64-Portable.zip
+HLSDownloader-v6.0.1-Windows-x64-Setup.exe
+HLSDownloader-v6.0.1-Windows-x64-Portable.zip
 ```
 
-正式标签使用 `v6.0.0`，产物名为 `HLSDownloader-v6.0.0-Windows-x64-{Setup.exe,Portable.zip}`。
+正式标签使用 `v6.0.1`，产物名为 `HLSDownloader-v6.0.1-Windows-x64-{Setup.exe,Portable.zip}`。
 
 需要构建浏览器插件时，在 GitHub Actions 手动运行时勾选 `include_extensions`。
 
@@ -219,8 +219,8 @@ HLSDownloader-v6.0.0-Windows-x64-Portable.zip
 - 推送 `v*` 标签：测试、打包并创建 GitHub Release；只有相对上一标签检测到 `extension/` 变化时才附带插件资产。
 
 ```powershell
-git tag v6.0.0
-git push origin v6.0.0
+git tag v6.0.1
+git push origin v6.0.1
 ```
 
 完整流程见 [发布文档](docs/releasing.md)。

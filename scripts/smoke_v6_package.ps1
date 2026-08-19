@@ -19,6 +19,7 @@ try {
         $hostExe,
         (Join-Path $root "ffmpeg.exe"),
         (Join-Path $root "ffprobe.exe"),
+        (Join-Path $root "libmpv-2.dll"),
         (Join-Path $root "native-host\chrome.json"),
         (Join-Path $root "scripts\register-native-host.ps1")
     )) {

@@ -21,7 +21,7 @@ try {
         cargo build --manifest-path (Join-Path $Root "native_ui\Cargo.toml") --locked --bin HLSDownloader
         if ($LASTEXITCODE -ne 0) { throw "native_ui build failed" }
     }
-    Write-Host "v6 cargo gates passed. GitHub Release ships Core+Slint; libmpv DLL is optional."
+    Write-Host "v6 cargo gates passed. GitHub Release ships Core+Slint and pinned libmpv-2.dll."
 } finally {
     Pop-Location
 }

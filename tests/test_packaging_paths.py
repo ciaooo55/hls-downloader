@@ -756,3 +756,21 @@ def test_v6_package_pins_the_same_ffmpeg_as_the_5x_spec():
     assert 'File /nonfatal "${STAGE_DIR}\\ffmpeg.exe"' not in nsis
     assert "ffmpeg.exe" in smoke
     assert "ffprobe.exe" in smoke
+
+
+def test_v6_package_pins_and_requires_libmpv():
+    root = Path(__file__).resolve().parent.parent
+    v6_build = (root / "scripts" / "build_v6.ps1").read_text(encoding="utf-8")
+    nsis = (root / "installer" / "hls-downloader-v6.nsi").read_text(encoding="utf-8")
+    smoke = (root / "scripts" / "smoke_v6_package.ps1").read_text(encoding="utf-8")
+
+    assert "$SevenZipSha256 = \"56b8cc9f4971cef253644fafe54063ed7fdca551d4dee0f8c6baa81b855acd72\"" in v6_build
+    assert "releases/download/26.02/7zr.exe" in v6_build
+    assert "mpv-dev-x86_64-20260814-git-7b8915bc1d.7z" in v6_build
+    assert "$LibMpvArchiveSha256 = \"0af22b28e920620036d3ae08fd9283156dc9af0420bf4df84b0e02282094599c\"" in v6_build
+    assert "function Copy-LibMpv" in v6_build
+    assert "Copy-LibMpv" in v6_build
+    assert 'File "${STAGE_DIR}\\libmpv-2.dll"' in nsis
+    assert 'File /nonfatal "${STAGE_DIR}\\libmpv-2.dll"' not in nsis
+    assert "HLS_V6_LIBMPV" not in v6_build
+    assert "libmpv-2.dll" in smoke

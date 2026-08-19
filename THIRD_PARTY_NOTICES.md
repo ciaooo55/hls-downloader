@@ -2,7 +2,7 @@
 
 HLS Downloader 的源码采用 MIT License；发布包还包含或调用下列第三方组件，其许可证分别适用：
 
-- libmpv / mpv：v6 播放器在同进程加载 `libmpv-2.dll`（若存在）或 spawn `mpv`。libmpv 适用 GPL；分发者必须保留许可证与版权通知，并按 GPL 提供对应源代码。
+- libmpv / mpv：v6 播放器在同进程 `LoadLibrary` 加载随包装入的 `libmpv-2.dll`（针定 shinchiro `mpv-dev` x86_64 非 v3 构建）。libmpv 适用 GPL；分发者必须保留许可证与版权通知，并按 GPL 提供对应源代码。构建时用针定的 `7zr.exe` 从 `.7z` 抽出 DLL，该解压器本身不打进安装包。
 - FFmpeg / FFprobe：发布构建使用 BtbN 的 Windows GPL 构建，并以独立可执行文件方式调用。FFmpeg 及启用的外部库可能适用 LGPL、GPL 及其他许可证；构建来源与配置见 <https://github.com/BtbN/FFmpeg-Builds> 和 <https://ffmpeg.org/legal.html>。分发者必须核验实际构建许可、保留许可证与版权通知，并按适用许可证提供对应源代码和构建信息。本项目用户协议不限制第三方许可证依法允许的修改、重新链接或逆向工程。
 - Python、FastAPI、Uvicorn、httpx、Pydantic、aiosqlite、m3u8、curl-cffi、cryptography、yt-dlp、libtorrent、PyChromecast 及其传递依赖：仅存在于冻结的 5.x 规格树（`backend/`、`frontend/`），不再打进 GitHub Release 的 v6 安装包；许可证以各自发行包中的元数据为准。
 - Tauri、React、WXT、hls.js、Lucide 及 npm 传递依赖：5.x 规格树与浏览器扩展使用；v6 桌面端是 Slint + Rust crates。以各自仓库或发行包中的许可证为准。

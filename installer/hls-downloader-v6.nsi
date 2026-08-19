@@ -5,7 +5,7 @@ Unicode true
 
 !define APP_NAME "HLS Downloader"
 !ifndef APP_VERSION
-!define APP_VERSION "6.0.0"
+!define APP_VERSION "6.0.1"
 !endif
 
 !ifndef STAGE_DIR
@@ -63,7 +63,7 @@ Section "Install"
   File "${STAGE_DIR}\HLSDownloaderNativeHost.exe"
   File "${STAGE_DIR}\ffmpeg.exe"
   File "${STAGE_DIR}\ffprobe.exe"
-  File /nonfatal "${STAGE_DIR}\libmpv-2.dll"
+  File "${STAGE_DIR}\libmpv-2.dll"
   File /nonfatal "${STAGE_DIR}\curl-impersonate.exe"
   File /nonfatal "${STAGE_DIR}\curl_chrome131.exe"
   File /nonfatal "${STAGE_DIR}\curl-impersonate-chrome.exe"

@@ -1,6 +1,6 @@
 [package]
 name = "hls-native-shell"
-version = "6.0.0"
+version = "6.0.1"
 edition = "2021"
 description = "v6 Core, engines, pipe, and Native Messaging. Optional 5.x Win32 supervisor."
 publish = false

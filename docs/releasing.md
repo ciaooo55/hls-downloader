@@ -21,23 +21,23 @@
 ```powershell
 git switch main
 git pull --ff-only
-git tag v6.0.0
-git push origin v6.0.0
+git tag v6.0.1
+git push origin v6.0.1
 ```
 
 `v*` 标签会触发完整 Windows 构建。工作流会比较上一个标签到当前标签的 `extension/` 变更：插件有改动时自动附带插件资产，没有改动时只发布桌面端。成功后工作流自动创建同名 GitHub Release，并始终上传：
 
 ```text
-HLSDownloader-v6.0.0-Windows-x64-Setup.exe
-HLSDownloader-v6.0.0-Windows-x64-Portable.zip
+HLSDownloader-v6.0.1-Windows-x64-Setup.exe
+HLSDownloader-v6.0.1-Windows-x64-Portable.zip
 ```
 
 标签间检测到插件变化时会自动额外上传以下文件；手动工作流仍需勾选 `include_extensions`：
 
 ```text
-HLSDownloader-v6.0.0-Chrome-Edge-Extension.zip
-HLSDownloader-v6.0.0-Firefox-Unsigned.zip
-HLSDownloader-v6.0.0-Firefox-Source.zip
+HLSDownloader-v6.0.1-Chrome-Edge-Extension.zip
+HLSDownloader-v6.0.1-Firefox-Unsigned.zip
+HLSDownloader-v6.0.1-Firefox-Source.zip
 ```
 
 Firefox 所有发布包统一使用 `hls-downloader-store@ciaooo55.com` ID。首次提交时在 AMO
@@ -52,10 +52,10 @@ Firefox 所有发布包统一使用 `hls-downloader-store@ciaooo55.com` ID。首
 ## 本机构建
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build_v6.ps1 -Version 6.0.0
+powershell -ExecutionPolicy Bypass -File scripts\build_v6.ps1 -Version 6.0.1
 ```
 
-产物在 `release/`。打包会打入针定的 `ffmpeg.exe` / `ffprobe.exe`。有 `libmpv-2.dll`（`HLS_V6_LIBMPV` 或仓库根）时打进 Setup；没有则播放降级。便携包烟雾：`scripts/smoke_v6_package.ps1`。
+产物在 `release/`。打包会打入针定的 `ffmpeg.exe` / `ffprobe.exe` 和 `libmpv-2.dll`（shinchiro `mpv-dev` x86_64）。便携包烟雾：`scripts/smoke_v6_package.ps1`。
 
 ## 失败处理
 

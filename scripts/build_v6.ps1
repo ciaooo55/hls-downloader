@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "6.0.0",
+    [string]$Version = "6.0.1",
     [string]$OutDir = "",
     [switch]$SkipBuild,
     [switch]$SkipZip,
@@ -37,6 +37,14 @@ $FFmpegToolsDir = Join-Path $ToolsDir "ffmpeg-windows"
 $FFmpegArchiveUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-19-19-21/ffmpeg-N-126217-ge1e325235e-win64-gpl.zip"
 $FFmpegArchiveBuild = "BtbN autobuild 2026-08-19 19:21 (FFmpeg ge1e325235e)"
 $FFmpegArchiveSha256 = "fe5a8f090b9fbc77d5e64c7d8b404b8837e05a09663ed9768ba19284cf929b20"
+$LibMpvToolsDir = Join-Path $NsisRuntimeRoot "libmpv-20260814"
+$SevenZipUrl = "https://github.com/ip7z/7zip/releases/download/26.02/7zr.exe"
+$SevenZipSha256 = "56b8cc9f4971cef253644fafe54063ed7fdca551d4dee0f8c6baa81b855acd72"
+$SevenZipExe = Join-Path $LibMpvToolsDir "7zr.exe"
+$LibMpvArchiveUrl = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260814/mpv-dev-x86_64-20260814-git-7b8915bc1d.7z"
+$LibMpvArchiveBuild = "shinchiro mpv-dev x86_64 20260814 (git 7b8915bc1d)"
+$LibMpvArchiveSha256 = "0af22b28e920620036d3ae08fd9283156dc9af0420bf4df84b0e02282094599c"
+$LibMpvArchive = Join-Path $LibMpvToolsDir "mpv-dev-x86_64.7z"
 
 function Assert-FileSha256([string]$Path, [string]$Expected, [string]$Label) {
     if (-not (Test-Path -LiteralPath $Path)) {
@@ -64,7 +72,7 @@ function Get-VerifiedArchive([string]$Url, [string]$Path, [string]$Expected, [st
             Write-Host "Downloading pinned $Label (attempt $attempt/3)..."
             $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
             if ($curl) {
-                & $curl.Source --location --fail --retry 3 --retry-delay 2 --max-time 300 --output $Path $Url
+                & $curl.Source --location --fail --retry 3 --retry-delay 2 --max-time 600 --output $Path $Url
                 if ($LASTEXITCODE -ne 0) {
                     throw "curl.exe failed with exit code $LASTEXITCODE"
                 }
@@ -129,6 +137,30 @@ function Copy-MediaTool($Name) {
     }
 }
 
+function Copy-LibMpv {
+    Get-VerifiedArchive $SevenZipUrl $SevenZipExe $SevenZipSha256 "7zr.exe"
+    Get-VerifiedArchive $LibMpvArchiveUrl $LibMpvArchive $LibMpvArchiveSha256 "libmpv archive ($LibMpvArchiveBuild)"
+    $extract = Join-Path $LibMpvToolsDir "extract"
+    if (Test-Path -LiteralPath $extract) {
+        Remove-Item -LiteralPath $extract -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $extract | Out-Null
+    try {
+        & $SevenZipExe e -y "-o$extract" $LibMpvArchive "libmpv-2.dll"
+        if ($LASTEXITCODE -ne 0) {
+            throw "7zr failed to extract libmpv-2.dll (exit $LASTEXITCODE)"
+        }
+        $dll = Get-ChildItem -LiteralPath $extract -Filter "libmpv-2.dll" -Recurse -File -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if (-not $dll) {
+            throw "Pinned libmpv archive did not contain libmpv-2.dll"
+        }
+        Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path $StageDir "libmpv-2.dll") -Force
+    } finally {
+        Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 New-Item -ItemType Directory -Force -Path $StageDir, $PortableDir, $ReleaseDir | Out-Null
 Get-ChildItem -LiteralPath $StageDir -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
 
@@ -157,19 +189,7 @@ Copy-Item -LiteralPath $exe -Destination (Join-Path $StageDir "HLSDownloader.exe
 Copy-Item -LiteralPath $exe -Destination (Join-Path $StageDir "HLSDownloaderNativeHost.exe") -Force
 Copy-MediaTool "ffmpeg.exe"
 Copy-MediaTool "ffprobe.exe"
-$libmpvCandidates = @()
-if ($env:HLS_V6_LIBMPV) { $libmpvCandidates += $env:HLS_V6_LIBMPV }
-$libmpvCandidates += @(
-    (Join-Path $Root "libmpv-2.dll"),
-    (Join-Path $Root "native_ui\libmpv-2.dll"),
-    (Join-Path (Split-Path $exe) "libmpv-2.dll")
-)
-foreach ($dll in $libmpvCandidates) {
-    if ($dll -and (Test-Path -LiteralPath $dll)) {
-        Copy-Item -LiteralPath $dll -Destination (Join-Path $StageDir "libmpv-2.dll") -Force
-        break
-    }
-}
+Copy-LibMpv
 $curlNames = @("curl-impersonate.exe", "curl_chrome131.exe", "curl-impersonate-chrome.exe")
 $curlCandidates = @()
 if ($env:HLS_V6_CURL_IMPERSONATE) { $curlCandidates += $env:HLS_V6_CURL_IMPERSONATE }
