@@ -77,11 +77,11 @@ Section "Install"
   CreateShortCut "$SMPROGRAMS\HLS Downloader v6.lnk" "$INSTDIR\HLSDownloader.exe"
   WriteRegStr HKCU "Software\${APP_NAME} v6" "InstallDir" "$INSTDIR"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
-  nsExec::ExecToLog '"$PowerShellExe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\scripts\register-native-host.ps1" -V6 -HostExecutable "$INSTDIR\HLSDownloaderNativeHost.exe"'
+  nsExec::ExecToLog '"$PowerShellExe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\scripts\register-native-host.ps1" -Cutover -HostExecutable "$INSTDIR\HLSDownloaderNativeHost.exe"'
 SectionEnd
 
 Section "Uninstall"
-  nsExec::ExecToLog '"$PowerShellExe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\scripts\register-native-host.ps1" -V6 -Unregister'
+  nsExec::ExecToLog '"$PowerShellExe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\scripts\register-native-host.ps1" -Cutover -Unregister'
   Delete "$SMPROGRAMS\HLS Downloader v6.lnk"
   RMDir /r "$INSTDIR"
   DeleteRegKey HKCU "Software\${APP_NAME} v6"

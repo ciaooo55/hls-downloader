@@ -6,6 +6,7 @@ pub struct HarvestLink {
     pub filename: String,
     pub extension: String,
     pub category: String,
+    pub size_hint: u64,
 }
 
 const DEFAULT_EXTS: &[&str] = &[
@@ -16,13 +17,23 @@ const DEFAULT_EXTS: &[&str] = &[
 ];
 
 pub fn harvest_html(html: &str, base: &str) -> Vec<HarvestLink> {
+    harvest_html_filtered(html, base, 0)
+}
+
+pub fn harvest_html_filtered(html: &str, base: &str, min_bytes: u64) -> Vec<HarvestLink> {
     let mut links = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    for raw in extract_urls(html, base) {
+    for (raw, tag_size) in extract_urls(html, base) {
         if !seen.insert(raw.to_ascii_lowercase()) {
             continue;
         }
-        if let Some(link) = to_link(&raw) {
+        if let Some(mut link) = to_link(&raw) {
+            if link.size_hint == 0 {
+                link.size_hint = tag_size;
+            }
+            if min_bytes > 0 && link.size_hint > 0 && link.size_hint < min_bytes {
+                continue;
+            }
             links.push(link);
             if links.len() >= 100 {
                 break;
@@ -32,7 +43,7 @@ pub fn harvest_html(html: &str, base: &str) -> Vec<HarvestLink> {
     links
 }
 
-fn extract_urls(html: &str, base: &str) -> Vec<String> {
+fn extract_urls(html: &str, base: &str) -> Vec<(String, u64)> {
     let mut urls = Vec::new();
     let mut rest = html;
     while let Some(index) = rest.find("href=") {
@@ -44,8 +55,10 @@ fn extract_urls(html: &str, base: &str) -> Vec<String> {
             Some('\'') => after[1..].split('\'').next().unwrap_or(""),
             _ => continue,
         };
+        let lookahead = after.get(..200.min(after.len())).unwrap_or(after);
+        let tag_size = parse_data_size(lookahead);
         if let Some(url) = resolve(base, value) {
-            urls.push(url);
+            urls.push((url, tag_size));
         }
         if urls.len() >= 512 {
             break;
@@ -59,7 +72,7 @@ fn extract_urls(html: &str, base: &str) -> Vec<String> {
             .unwrap_or(slice.len().min(2048));
         let raw = slice[..end].trim_end_matches(['.', ',', ';']);
         if let Some(url) = resolve(base, raw) {
-            urls.push(url);
+            urls.push((url, 0));
         }
         search = &slice[end.max(1)..];
         if urls.len() >= 512 {
@@ -67,6 +80,33 @@ fn extract_urls(html: &str, base: &str) -> Vec<String> {
         }
     }
     urls
+}
+
+fn parse_data_size(tag: &str) -> u64 {
+    let lower = tag.to_ascii_lowercase();
+    for key in ["data-size=\"", "data-size='", "datasize=\"", "size=\""] {
+        if let Some(index) = lower.find(key) {
+            let rest = &tag[index + key.len()..];
+            let digits: String = rest.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+            if let Ok(value) = digits.parse::<u64>() {
+                return value;
+            }
+        }
+    }
+    0
+}
+
+fn size_hint_from_url(url: &str) -> u64 {
+    let query = url.split_once('?').map(|(_, rest)| rest).unwrap_or("");
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or(("", ""));
+        if matches!(key, "size" | "filesize" | "clen") {
+            if let Ok(parsed) = value.parse::<u64>() {
+                return parsed;
+            }
+        }
+    }
+    0
 }
 
 fn find_abs(text: &str) -> Option<usize> {
@@ -129,6 +169,7 @@ fn to_link(url: &str) -> Option<HarvestLink> {
             filename: "torrent".into(),
             extension: "torrent".into(),
             category: "torrent".into(),
+            size_hint: 0,
         });
     }
     let path = url.split(['?', '#']).next().unwrap_or(url);
@@ -145,6 +186,7 @@ fn to_link(url: &str) -> Option<HarvestLink> {
         filename: filename.to_string(),
         extension: extension.clone(),
         category: category_for(&extension).into(),
+        size_hint: size_hint_from_url(url),
     })
 }
 
@@ -184,6 +226,13 @@ mod tests {
         assert!(links.iter().any(|item| item.category == "archive"));
         assert!(links.iter().any(|item| item.category == "torrent"));
         assert!(links.iter().all(|item| item.url != "https://site.test/about"));
+        let sized = harvest_html_filtered(
+            r#"<a href="/files/tiny.mp4" data-size="100">t</a><a href="/files/big.mp4" data-size="9000">b</a>"#,
+            "https://site.test/page",
+            1000,
+        );
+        assert!(sized.iter().any(|item| item.url.ends_with("/files/big.mp4")));
+        assert!(sized.iter().all(|item| !item.url.ends_with("/files/tiny.mp4")));
         let html = r#"<a href="javascript:alert(1)">x</a><a href="JAVASCRIPT:alert(1)">y</a><a href="file:///C:/secret.mp4">z</a>"#;
         let links = harvest_html(html, "https://site.test/page");
         assert!(links.is_empty());

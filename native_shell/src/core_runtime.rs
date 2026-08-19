@@ -160,6 +160,18 @@ impl CoreRuntime {
         self.specs.get(task_id)
     }
 
+    pub fn replace_spec(&mut self, task_id: &str, spec: TaskSpec) {
+        if let Some(snapshot) = self.tasks.get_mut(task_id) {
+            snapshot.url = spec.url.clone();
+            snapshot.mirror_status = if spec.mirrors.is_empty() {
+                String::new()
+            } else {
+                format!("{} 镜像", spec.mirrors.len())
+            };
+        }
+        self.specs.insert(task_id.to_string(), spec);
+    }
+
     pub fn pending_handoff(&self, handoff_id: &str) -> Option<&ResourceOffer> {
         self.pending_handoffs.get(handoff_id)
     }
@@ -240,6 +252,12 @@ impl CoreRuntime {
             connection_hint: String::new(),
             connection_parts: Vec::new(),
             log_tail: Vec::new(),
+            speed_history: Vec::new(),
+            mirror_status: if spec.mirrors.is_empty() {
+                String::new()
+            } else {
+                format!("{} 镜像", spec.mirrors.len())
+            },
         };
         self.tasks.insert(task_id, snapshot.clone());
         self.specs.insert(snapshot.task_id.clone(), spec);
@@ -471,6 +489,12 @@ impl CoreRuntime {
             snapshot.downloaded_bytes = downloaded_bytes;
             snapshot.total_bytes = total_bytes.or(snapshot.total_bytes);
             snapshot.speed_bytes_per_sec = speed_bytes_per_sec;
+            if speed_bytes_per_sec > 0 {
+                snapshot.speed_history.push(speed_bytes_per_sec);
+                if snapshot.speed_history.len() > 24 {
+                    snapshot.speed_history.remove(0);
+                }
+            }
             snapshot.stage = stage.to_string();
             snapshot.status = status.to_string();
             snapshot.playback_ready = downloaded_bytes > 0

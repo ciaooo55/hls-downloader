@@ -155,15 +155,14 @@ if (Test-Path -LiteralPath $TermsSource) {
 }
 
 $readme = @"
-HLS Downloader v$Version (v6 portable)
+HLS Downloader v$Version (v6)
 
 Launch HLSDownloader.exe. The same file copied as HLSDownloaderNativeHost.exe
 is the Native Messaging host and does not open SQLite.
 
-Register the parallel v6 host name:
-  powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1 -V6
+GitHub Windows Release ships this package as the product. Native Messaging
+cutover is registered by Setup.exe. For a portable copy:
 
-Cut the live 5.x host name over to this binary (after release gates):
   powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1 -Cutover
 "@
 [System.IO.File]::WriteAllText((Join-Path $StageDir "README.txt"), $readme, (New-Object System.Text.UTF8Encoding($false)))
@@ -174,7 +173,7 @@ if (-not $SkipZip) {
     }
     New-Item -ItemType Directory -Force -Path $PortableDir | Out-Null
     Copy-Item -Path (Join-Path $StageDir "*") -Destination $PortableDir -Recurse -Force
-    $zip = Join-Path $ReleaseDir "HLSDownloader-v$Version-v6-Windows-x64-Portable.zip"
+    $zip = Join-Path $ReleaseDir "HLSDownloader-v$Version-Windows-x64-Portable.zip"
     if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
     Compress-Archive -Path (Join-Path $PortableDir "*") -DestinationPath $zip
     Write-Host "Wrote $zip"
@@ -188,7 +187,7 @@ if (-not $SkipInstaller) {
         Write-Host "installer/hls-downloader-v6.nsi missing; skipped v6 Setup.exe"
     } else {
         $makensis = Get-MakeNsis
-        $out = Join-Path $ReleaseDir "HLSDownloader-v$Version-v6-Windows-x64-Setup.exe"
+        $out = Join-Path $ReleaseDir "HLSDownloader-v$Version-Windows-x64-Setup.exe"
         $stageNsis = ($StageDir -replace '\\', '/')
         $iconNsis = ($IconFile -replace '\\', '/')
         $outNsis = ($out -replace '\\', '/')

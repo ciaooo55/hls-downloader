@@ -1480,5 +1480,23 @@ mod tests {
     fn torrent_session_trait_is_the_core_entry() {
         let engine = crate::torrent_session();
         let _session: &dyn crate::TorrentSession = &engine;
+        assert_eq!(
+            std::any::type_name_of_val(&engine),
+            std::any::type_name::<crate::BuiltinTorrentEngine>()
+        );
+        let err = engine
+            .download(
+                "not-a-torrent",
+                std::path::Path::new("nul"),
+                std::path::Path::new("nul"),
+                &std::collections::HashMap::new(),
+                "",
+            )
+            .unwrap_err();
+        assert!(err.contains("unsupported"));
+        assert!(
+            !err.to_ascii_lowercase().contains("libtorrent"),
+            "BT backend must not pretend to be libtorrent: {err}"
+        );
     }
 }

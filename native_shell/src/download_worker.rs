@@ -346,6 +346,12 @@ pub struct CoreSettings {
     pub http_chunk_size_mb: u64,
     pub completion_power_action: String,
     pub start_on_login: bool,
+    pub queue_active_days: String,
+    pub proxy_mode: String,
+    pub proxy_bypass: String,
+    pub legal_terms_version: String,
+    pub reduce_motion: bool,
+    pub harvest_minimum_bytes: u64,
 }
 
 impl CoreCoordinator {
@@ -446,6 +452,16 @@ impl CoreCoordinator {
                 .store()
                 .setting_string("completion_power_action", "none")?,
             start_on_login: core.store().setting_bool("start_on_login", false)?,
+            queue_active_days: core
+                .store()
+                .setting_string("queue_active_days", "1,2,3,4,5,6,7")?,
+            proxy_mode: core.store().setting_string("proxy_mode", "manual")?,
+            proxy_bypass: core.store().setting_string("proxy_bypass", "")?,
+            legal_terms_version: core.store().setting_string("legal_terms_version", "")?,
+            reduce_motion: core.store().setting_bool("reduce_motion", false)?,
+            harvest_minimum_bytes: core
+                .store()
+                .setting_u64("harvest_minimum_bytes", 0)?,
         })
     }
 
@@ -476,11 +492,25 @@ impl CoreCoordinator {
         }
         if matches!(
             key,
-            "proxy_url" | "default_referer" | "default_user_agent" | "tvbox_endpoint"
+            "proxy_url"
+                | "default_referer"
+                | "default_user_agent"
+                | "tvbox_endpoint"
+                | "proxy_mode"
+                | "proxy_bypass"
+                | "queue_active_days"
+                | "legal_terms_version"
         ) {
             if let Some(text) = value.as_str() {
                 if text.contains('\r') || text.contains('\n') {
                     return Err("设置值不能包含换行".into());
+                }
+            }
+        }
+        if key == "proxy_mode" {
+            if let Some(mode) = value.as_str() {
+                if !matches!(mode, "direct" | "manual" | "system" | "") {
+                    return Err("代理模式无效".into());
                 }
             }
         }
@@ -489,6 +519,7 @@ impl CoreCoordinator {
         } else {
             None
         };
+        let stamp_legal = key == "legal_terms_accepted" && value.as_bool() == Some(true);
         {
             let mut core = self.lock()?;
             match value {
@@ -505,6 +536,12 @@ impl CoreCoordinator {
         }
         if let Some(flag) = start_login {
             let _ = crate::startup::apply(flag);
+        }
+        if stamp_legal {
+            let _ = self.set_setting(
+                "legal_terms_version",
+                Value::String(crate::LEGAL_TERMS_VERSION.into()),
+            );
         }
         Ok(())
     }
@@ -591,6 +628,7 @@ impl CoreCoordinator {
                 speed_limit_kib: spec.speed_limit_kib,
                 concurrency: spec.concurrency,
                 proxy: spec.proxy.clone(),
+                ..Default::default()
             },
         );
         let encoded = crate::format_site_rules(&rules);
@@ -758,6 +796,15 @@ impl CoreCoordinator {
             }
             if action == "copy_file" {
                 return copy_completed_file(self, task_id);
+            }
+            if action == "drag_file" {
+                return drag_completed_file(self, task_id);
+            }
+            if let Some(limit) = action.strip_prefix("speed:") {
+                return set_task_speed(self, task_id, limit.parse().unwrap_or(0));
+            }
+            if let Some(url) = action.strip_prefix("refresh:") {
+                return refresh_task_url(self, task_id, url);
             }
             if action == "push_tvbox" {
                 return push_task_tvbox(self, task_id).map(|_| Vec::new());
@@ -980,6 +1027,13 @@ impl CoreCoordinator {
         if spec.proxy.contains('\r') || spec.proxy.contains('\n') {
             return Err("代理地址无效".into());
         }
+        spec.proxy = crate::net_policy::effective_proxy(
+            &settings.proxy_mode,
+            &settings.proxy_url,
+            &settings.proxy_bypass,
+            &spec.url,
+            &spec.proxy,
+        );
         reject_task_url(&spec.url)?;
         if spec.concurrency == 0 {
             spec.concurrency = settings.default_concurrency.max(1) as u32;
@@ -1059,10 +1113,20 @@ impl CoreCoordinator {
     }
 
     fn require_legal(&self) -> Result<(), String> {
-        if !self.settings()?.legal_accepted {
-            return Err("legal terms not accepted".into());
+        let settings = self.settings()?;
+        if settings.legal_accepted
+            && (settings.legal_terms_version.is_empty()
+                || settings.legal_terms_version == crate::LEGAL_TERMS_VERSION)
+        {
+            if settings.legal_terms_version.is_empty() {
+                let _ = self.set_setting(
+                    "legal_terms_version",
+                    Value::String(crate::LEGAL_TERMS_VERSION.into()),
+                );
+            }
+            return Ok(());
         }
-        Ok(())
+        Err("legal terms not accepted".into())
     }
 
     fn accept_handoff_command(
@@ -1187,6 +1251,9 @@ impl CoreCoordinator {
 
     fn queue_allowed(&self) -> Result<bool, String> {
         let settings = self.settings()?;
+        if !crate::net_policy::weekday_allowed(&settings.queue_active_days) {
+            return Ok(false);
+        }
         if settings.queue_auto_start_enabled && settings.queue_auto_stop_enabled {
             Ok(crate::net_policy::schedule_window_active(
                 &settings.queue_auto_start_time,
@@ -1211,6 +1278,13 @@ impl CoreCoordinator {
     }
 
     fn spawn(&self, task_id: String) -> Result<(), String> {
+        if let Some(spec) = self.lock()?.task_spec(&task_id).cloned() {
+            if !crate::net_policy::scheduled_start_reached(&spec.scheduled_start_at)
+                || crate::net_policy::scheduled_stop_hit(&spec.scheduled_stop_at)
+            {
+                return Ok(());
+            }
+        }
         let max = self
             .lock()?
             .store()
@@ -1614,6 +1688,7 @@ fn complete_payload(
     let published =
         crate::output_path::publish_file(payload, &paths.final_output, &policy, keep_temp)?;
     remember_published(paths, &published);
+    crate::motw::mark_downloaded_file(&published, &spec.url);
     let download_subtitles = core
         .lock()
         .ok()
@@ -1705,16 +1780,19 @@ fn maybe_schedule_power(
     core: &Arc<Mutex<PersistentCore>>,
     spec: &TaskSpec,
 ) -> Result<(), String> {
-    let action = core
-        .lock()
-        .ok()
-        .and_then(|guard| {
-            guard
-                .store()
-                .setting_string("completion_power_action", "none")
-                .ok()
-        })
-        .unwrap_or_else(|| "none".into());
+    let action = if !spec.completion_action.trim().is_empty() {
+        spec.completion_action.clone()
+    } else {
+        core.lock()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .store()
+                    .setting_string("completion_power_action", "none")
+                    .ok()
+            })
+            .unwrap_or_else(|| "none".into())
+    };
     if !crate::power_action::is_armed(&action) {
         return Ok(());
     }
@@ -1801,6 +1879,26 @@ fn apply_site_rules_to_spec(
         }
         if !rule.proxy.trim().is_empty() && spec.proxy.trim().is_empty() {
             spec.proxy = rule.proxy.clone();
+        }
+        if !rule.download_dir.trim().is_empty() && spec.download_dir.trim().is_empty() {
+            spec.download_dir = rule.download_dir.clone();
+        }
+        if !rule.user_agent.trim().is_empty()
+            && !spec
+                .headers
+                .keys()
+                .any(|key| key.eq_ignore_ascii_case("user-agent"))
+        {
+            spec.headers
+                .insert("User-Agent".into(), rule.user_agent.clone());
+        }
+        if !rule.referer.trim().is_empty()
+            && !spec
+                .headers
+                .keys()
+                .any(|key| key.eq_ignore_ascii_case("referer"))
+        {
+            spec.headers.insert("Referer".into(), rule.referer.clone());
         }
     }
     Ok(spec)
@@ -2034,15 +2132,21 @@ fn probe_command(coordinator: &CoreCoordinator, url: &str) -> Result<Vec<EventEn
                 variants,
             })?;
             if !harvest.is_empty() {
+                let min = coordinator
+                    .settings()
+                    .map(|item| item.harvest_minimum_bytes)
+                    .unwrap_or(0);
                 events.extend(coordinator.lock()?.emit(CoreEvent::HarvestResult {
                     url: url.to_string(),
                     links: harvest
                         .into_iter()
+                        .filter(|link| min == 0 || link.size_hint == 0 || link.size_hint >= min)
                         .map(|link| crate::HarvestCandidate {
                             url: link.url,
                             filename: link.filename,
                             extension: link.extension,
                             category: link.category,
+                            size: link.size_hint,
                         })
                         .collect(),
                 })?);
@@ -2181,6 +2285,66 @@ fn copy_completed_file(
     })
 }
 
+fn drag_completed_file(
+    coordinator: &CoreCoordinator,
+    task_id: &str,
+) -> Result<Vec<EventEnvelope>, String> {
+    let spec = coordinator
+        .lock()?
+        .task_spec(task_id)
+        .cloned()
+        .ok_or_else(|| format!("unknown task {task_id}"))?;
+    let paths = TaskPaths::for_task(task_id, &spec)?;
+    let published = resolve_published(&paths);
+    crate::completed_file_drag(&published)?;
+    coordinator.lock()?.emit(CoreEvent::Toast {
+        level: "drag_file".into(),
+        message: format!("可拖到资源管理器 {}", published.display()),
+    })
+}
+
+fn set_task_speed(
+    coordinator: &CoreCoordinator,
+    task_id: &str,
+    kib: u32,
+) -> Result<Vec<EventEnvelope>, String> {
+    let mut spec = coordinator
+        .lock()?
+        .task_spec(task_id)
+        .cloned()
+        .ok_or_else(|| format!("unknown task {task_id}"))?;
+    spec.speed_limit_kib = kib;
+    coordinator.lock()?.replace_spec(task_id, spec)?;
+    apply_speed_policy(&coordinator.core(), kib)?;
+    coordinator.lock()?.emit(CoreEvent::Toast {
+        level: "speed".into(),
+        message: if kib == 0 {
+            "已取消任务限速".into()
+        } else {
+            format!("任务限速 {kib} KiB/s")
+        },
+    })
+}
+
+fn refresh_task_url(
+    coordinator: &CoreCoordinator,
+    task_id: &str,
+    url: &str,
+) -> Result<Vec<EventEnvelope>, String> {
+    reject_task_url(url)?;
+    let mut spec = coordinator
+        .lock()?
+        .task_spec(task_id)
+        .cloned()
+        .ok_or_else(|| format!("unknown task {task_id}"))?;
+    spec.url = url.trim().to_string();
+    coordinator.lock()?.replace_spec(task_id, spec)?;
+    coordinator.lock()?.emit(CoreEvent::Toast {
+        level: "refresh".into(),
+        message: "已更新下载地址".into(),
+    })
+}
+
 fn open_path(path: &Path) -> Result<(), String> {
     if path.as_os_str().is_empty() {
         return Err("打开目标为空".into());
@@ -2239,6 +2403,17 @@ fn player_control(action: &str) -> Result<(), String> {
                 .parse::<f64>()
                 .unwrap_or(0.0);
             player.preview_percent(percent)
+        }
+        other if other.starts_with("embed_hwnd:") => {
+            let rest = other.trim_start_matches("embed_hwnd:");
+            let (hwnd_text, rect) = rest.split_once(':').unwrap_or((rest, "0,48,720,220"));
+            let parent = hwnd_text.parse::<i64>().unwrap_or(0);
+            let mut parts = rect.split(',').filter_map(|item| item.parse::<i32>().ok());
+            let x = parts.next().unwrap_or(0);
+            let y = parts.next().unwrap_or(48);
+            let w = parts.next().unwrap_or(720);
+            let h = parts.next().unwrap_or(220);
+            player.attach_embed_hwnd(parent, x, y, w, h)
         }
         other if other.starts_with("embed_host:") => {
             let mut parts = other
@@ -2541,6 +2716,7 @@ mod tests {
         player_control("seek_back").unwrap();
         player_control("preview:42").unwrap();
         player_control("embed_host:0,48,640,200").unwrap();
+        player_control("embed_hwnd:42:0,48,640,200").unwrap();
         player_control("stop").unwrap();
     }
 

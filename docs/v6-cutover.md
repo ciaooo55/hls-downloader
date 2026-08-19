@@ -1,6 +1,6 @@
 # v6 切包清单
 
-5.x 安装器继续按 [releasing.md](releasing.md) 发布。v6 切包前必须通过 [v6-release-gates.md](v6-release-gates.md)。
+GitHub Windows Release 的现网安装包是 v6：`scripts/build_v6.ps1` 产出 `HLSDownloader-v*-Windows-x64-{Setup.exe,Portable.zip}`。5.x `backend/`、`frontend/` 仍是行为规格与测试矿，直到仓库删除它们。
 
 ## 单一入口
 
@@ -14,30 +14,20 @@
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_v6_gates.ps1
-cargo test --manifest-path native_shell/Cargo.toml
+cargo test --manifest-path native_shell/Cargo.toml --lib --no-default-features
 cargo test --manifest-path native_ui/Cargo.toml
-cargo build --manifest-path native_ui/Cargo.toml --release --bin HLSDownloader
-Copy-Item native_ui\target\release\HLSDownloader.exe native_ui\target\release\HLSDownloaderNativeHost.exe
+powershell -ExecutionPolicy Bypass -File scripts\build_v6.ps1 -Version 6.0.0-dev
 ```
 
 Native Messaging 安装 `HLSDownloaderNativeHost.exe`（同一二进制的副本或硬链接）。文件名含 `NativeHost` 时走 `--native-host` 路径，**不打开 SQLite**，只连 v6 Core。
 
-打包：
+Setup.exe 安装时执行 `register-native-host.ps1 -Cutover`，把现网 host 名 `com.ciaooo55.hls_downloader` 指到 v6 二进制。便携包可手动：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build_v6.ps1 -Version 6.0.0-dev
+powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1 -Cutover
 ```
 
-产物在 `release/`：便携 zip；本机有 `makensis` 和 `assets/app-icon.ico` 时再出 Setup.exe。安装包只放这一个主 exe（Native Host 是同文件副本）。5.x 的 `scripts/build_installer.ps1` 仍是现网发布路径。
-
-## Native Messaging
-
-并行开发清单：
-
-- 5.x 继续用 `com.ciaooo55.hls_downloader`
-- v6 用 `com.ciaooo55.hls_downloader.v6`（`extension/native-host/v6-chrome.json` / `v6-firefox.json`）
-  `scripts/register-native-host.ps1 -V6`
-- 切包当天把现网 5.x host 名指到 v6 二进制：`scripts/register-native-host.ps1 -Cutover`（扩展代码不必改 host 名）
+`libmpv-2.dll` 若存在于 `HLS_V6_LIBMPV`、仓库根、`native_ui/` 或 exe 旁，会打进安装包；没有 DLL 时播放降级，NSIS 用 `/nonfatal`。
 
 ## 5.x 数据迁移
 
@@ -50,8 +40,8 @@ powershell -ExecutionPolicy Bypass -File scripts\build_v6.ps1 -Version 6.0.0-dev
 
 ## 行为矩阵
 
-切包后才允许从仓库移除 Python / Tauri 发布路径。在此之前 `backend/`、`frontend/` 仍是行为规格与测试矿。
+切包后才允许从仓库移除 Python / Tauri 发布路径。在此之前 `backend/`、`frontend/` 仍是行为规格与测试矿。Release workflow 在打 v6 包前仍跑 5.x pytest / 前端 / 扩展作为冻结规格。
 
 ## 诚实口径
 
-v6 安装包脚本与并行 Native Messaging 名已经就绪。现网 5.x 安装器仍按 [releasing.md](releasing.md) 发布，直到有人在 Windows 上跑完行为矩阵并执行 `scripts/register-native-host.ps1 -Cutover`。Release workflow 会额外产出 `release-v6/` 预览包，不会并进 5.x 的「恰好 N 个文件」检查，也不会自动改现网 host 名。
+源码与 GitHub Release 现网安装包都是 Core+Slint 的 v6。BT 仍是 `TorrentSession` / `BuiltinTorrentEngine`（swarm 冻结，可换 libtorrent）。播放器把 libmpv `wid` 接到播放器 HWND 客户区子窗；没有 `libmpv-2.dll` 时降级。

@@ -12,6 +12,12 @@ pub struct SiteRule {
     pub concurrency: u32,
     #[serde(default)]
     pub proxy: String,
+    #[serde(default)]
+    pub download_dir: String,
+    #[serde(default)]
+    pub user_agent: String,
+    #[serde(default)]
+    pub referer: String,
 }
 
 pub fn parse_site_rules(raw: &str) -> Vec<SiteRule> {
@@ -34,6 +40,15 @@ fn sanitize_rule(mut rule: SiteRule) -> Option<SiteRule> {
     }
     if !setting_text_ok(&rule.proxy) {
         rule.proxy.clear();
+    }
+    if !setting_text_ok(&rule.download_dir) {
+        rule.download_dir.clear();
+    }
+    if !setting_text_ok(&rule.user_agent) {
+        rule.user_agent.clear();
+    }
+    if !setting_text_ok(&rule.referer) {
+        rule.referer.clear();
     }
     Some(rule)
 }
@@ -61,6 +76,24 @@ fn parse_line(line: &str) -> Option<SiteRule> {
                 let proxy = value.trim().to_string();
                 if setting_text_ok(&proxy) {
                     rule.proxy = proxy;
+                }
+            }
+            "dir" | "download_dir" => {
+                let dir = value.trim().to_string();
+                if setting_text_ok(&dir) {
+                    rule.download_dir = dir;
+                }
+            }
+            "ua" | "user_agent" => {
+                let ua = value.trim().to_string();
+                if setting_text_ok(&ua) {
+                    rule.user_agent = ua;
+                }
+            }
+            "referer" => {
+                let referer = value.trim().to_string();
+                if setting_text_ok(&referer) {
+                    rule.referer = referer;
                 }
             }
             _ => {}
@@ -97,6 +130,15 @@ pub fn upsert_site_rule(rules: &mut Vec<SiteRule>, rule: SiteRule) {
         }
         if !rule.proxy.is_empty() {
             existing.proxy = rule.proxy;
+        }
+        if !rule.download_dir.is_empty() {
+            existing.download_dir = rule.download_dir;
+        }
+        if !rule.user_agent.is_empty() {
+            existing.user_agent = rule.user_agent;
+        }
+        if !rule.referer.is_empty() {
+            existing.referer = rule.referer;
         }
         return;
     }
@@ -144,6 +186,12 @@ mod tests {
     fn parses_json_array() {
         let rules = parse_site_rules(r#"[{"host":"files.test","proxy":"http://127.0.0.1:8080"}]"#);
         assert_eq!(rules[0].proxy, "http://127.0.0.1:8080");
+        let rich = parse_site_rules(
+            r#"[{"host":"cdn.test","user_agent":"UA/1","referer":"https://site.test/","download_dir":"D:\\Videos"}]"#,
+        );
+        assert_eq!(rich[0].user_agent, "UA/1");
+        assert_eq!(rich[0].referer, "https://site.test/");
+        assert_eq!(rich[0].download_dir, "D:\\Videos");
         let poisoned = parse_site_rules(
             r#"[{"host":"files.test","proxy":"http://127.0.0.1:8080\u000d\u000aX:1"}]"#,
         );

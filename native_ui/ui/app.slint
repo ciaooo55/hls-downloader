@@ -16,6 +16,8 @@ export struct TaskRow {
     accent: color,
     picked: bool,
     map_cells: [int],
+    mirror: string,
+    spark: [float],
 }
 
 export struct HarvestRow {
@@ -267,24 +269,33 @@ component SettingsTab inherits Rectangle {
 component WindowHeader inherits Rectangle {
     in property <string> title;
     in property <string> subtitle;
+    callback drag();
     height: Tokens.bar-height;
     background: Tokens.surface;
-    HorizontalLayout {
-        padding-left: Tokens.space-4;
-        padding-right: Tokens.space-4;
-        spacing: Tokens.space-3;
-        Text {
-            text: title;
-            color: Tokens.ink;
-            font-size: Tokens.type-title;
-            font-weight: 700;
-            vertical-alignment: center;
+    TouchArea {
+        mouse-cursor: move;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                root.drag();
+            }
         }
-        Text {
-            text: subtitle;
-            color: Tokens.muted;
-            font-size: Tokens.type-caption;
-            vertical-alignment: center;
+        HorizontalLayout {
+            padding-left: Tokens.space-4;
+            padding-right: Tokens.space-4;
+            spacing: Tokens.space-3;
+            Text {
+                text: title;
+                color: Tokens.ink;
+                font-size: Tokens.type-title;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            Text {
+                text: subtitle;
+                color: Tokens.muted;
+                font-size: Tokens.type-caption;
+                vertical-alignment: center;
+            }
         }
     }
 }
@@ -405,6 +416,12 @@ component TaskRowView inherits Rectangle {
                         overflow: elide;
                         horizontal-stretch: 1;
                     }
+                    if task.mirror != "" : Text {
+                        text: task.mirror;
+                        color: Tokens.faint;
+                        font-size: Tokens.type-caption;
+                        font-weight: 600;
+                    }
                 }
             }
             VerticalLayout {
@@ -432,6 +449,18 @@ component TaskRowView inherits Rectangle {
                 HorizontalLayout {
                     spacing: Tokens.space-2;
                     RangeMosaic { filled: task.ranges; fill: task.accent; }
+                    if task.spark.length > 0 : HorizontalLayout {
+                        spacing: 1px;
+                        height: 10px;
+                        width: 48px;
+                        for bar in task.spark : Rectangle {
+                            width: 2px;
+                            height: parent.height * Math.max(0.12, bar);
+                            y: parent.height - self.height;
+                            background: task.accent;
+                            opacity: 0.7;
+                        }
+                    }
                     Text {
                         text: task.workers;
                         color: Tokens.muted;
@@ -561,7 +590,7 @@ export component ConfirmWindow inherits Window {
     default-font-family: Tokens.type-face;
     default-font-size: Tokens.type-body;
     always-on-top: true;
-    no-frame: false;
+    no-frame: true;
     preferred-width: 420px;
     preferred-height: 228px;
     background: Tokens.surface;
@@ -569,11 +598,22 @@ export component ConfirmWindow inherits Window {
     in-out property <string> url;
     in-out property <string> size_text;
     in-out property <string> remaining;
+    in-out property <float> intro: 1;
     callback command(string);
     VerticalLayout {
         padding: Tokens.space-5;
         spacing: Tokens.space-3;
-        OverlayKicker { label: "确认下载"; }
+        opacity: Tokens.reduce-motion ? 1 : root.intro;
+        animate opacity { duration: Tokens.motion; easing: ease-out; }
+        TouchArea {
+            mouse-cursor: move;
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    root.command("drag");
+                }
+            }
+            OverlayKicker { label: "确认下载"; }
+        }
         LineEdit { text <=> root.filename; }
         Text { text: url; color: Tokens.muted; font-size: Tokens.type-body; overflow: elide; }
         Text { text: size_text; color: Tokens.ink; font-size: Tokens.type-row; font-weight: 600; }
@@ -733,14 +773,24 @@ export component SettingsWindow inherits Window {
     in-out property <string> http_chunk_size_mb: "8";
     in-out property <string> completion_power_action: "none";
     in-out property <bool> start_on_login;
+    in-out property <bool> reduce_motion;
+    in-out property <string> queue_active_days: "1,2,3,4,5,6,7";
+    in-out property <string> proxy_mode: "manual";
+    in-out property <string> proxy_bypass;
+    in-out property <string> takeover_min_mb: "0";
+    in-out property <string> harvest_min_mb: "0";
+    in-out property <string> legal_terms_version;
     in-out property <string> site_host;
     in-out property <string> site_conn: "12";
     in-out property <string> site_speed;
     in-out property <string> site_proxy;
+    in-out property <string> site_dir;
+    in-out property <string> site_ua;
+    in-out property <string> site_referer;
     callback command(string);
     VerticalLayout {
         spacing: 0px;
-        WindowHeader { title: "设置"; subtitle: "界面、下载行为与运行环境"; }
+        WindowHeader { title: "设置"; subtitle: "界面、下载行为与运行环境"; drag => { root.command("drag"); } }
         Rectangle { height: 1px; background: Tokens.line; }
         HorizontalLayout {
             spacing: 0px;
@@ -758,7 +808,7 @@ export component SettingsWindow inherits Window {
             Rectangle { width: 1px; background: Tokens.line; }
             Flickable {
                 vertical-stretch: 1;
-                viewport-height: root.settings_tab == "general" ? 720px : (root.settings_tab == "network" ? 920px : 700px);
+                viewport-height: root.settings_tab == "general" ? 820px : (root.settings_tab == "network" ? 1180px : 700px);
                 VerticalLayout {
                     padding: Tokens.space-4;
                     spacing: Tokens.space-4;
@@ -773,6 +823,9 @@ export component SettingsWindow inherits Window {
                             CheckBox { text: "显示进度小窗"; checked <=> root.progress_window; }
                             CheckBox { text: "显示完成弹窗"; checked <=> root.complete_popup; }
                             CheckBox { text: "完成提示音"; checked <=> root.completion_sound; }
+                            CheckBox { text: "减弱动画"; checked <=> root.reduce_motion; toggled => { Tokens.reduce-motion = root.reduce_motion; } }
+                            FieldLine { caption: "接管最小 MB"; LineEdit { text <=> root.takeover_min_mb; width: 80px; placeholder-text: "0 不限"; } }
+                            HelpText { label: "协议版本 " + root.legal_terms_version; }
                         }
                         GroupCard {
                             SectionLabel { label: "目录与分类"; }
@@ -808,16 +861,22 @@ export component SettingsWindow inherits Window {
                                 LineEdit { text <=> root.queue_auto_start_time; width: 70px; }
                                 LineEdit { text <=> root.queue_auto_stop_time; width: 70px; }
                             }
+                            FieldLine { caption: "队列星期"; LineEdit { text <=> root.queue_active_days; horizontal-stretch: 1; placeholder-text: "1-7，周一=1"; } }
+                            FieldLine { caption: "抓取最小 MB"; LineEdit { text <=> root.harvest_min_mb; width: 80px; } }
                         }
                         GroupCard {
                             SectionLabel { label: "代理与站点"; }
+                            FieldLine { caption: "代理模式"; LineEdit { text <=> root.proxy_mode; width: 100px; placeholder-text: "direct/manual/system"; } }
                             FieldLine { caption: "代理 URL"; LineEdit { text <=> root.proxy_url; horizontal-stretch: 1; } }
+                            FieldLine { caption: "代理绕过"; LineEdit { text <=> root.proxy_bypass; horizontal-stretch: 1; placeholder-text: "host;*.lan;<local>"; } }
                             FieldLine { caption: "默认 Referer"; LineEdit { text <=> root.default_referer; horizontal-stretch: 1; } }
                             FieldLine { caption: "默认 UA"; LineEdit { text <=> root.default_user_agent; horizontal-stretch: 1; placeholder-text: "空则用 Chrome"; } }
                             HelpText { label: "站点规则 host=speed:KiB,conn:N,proxy:..."; }
                             FieldLine { caption: "主机"; LineEdit { text <=> root.site_host; horizontal-stretch: 1; placeholder-text: "cdn.example.com"; } }
                             FieldLine { caption: "连接 / 限速"; LineEdit { text <=> root.site_conn; width: 70px; } LineEdit { text <=> root.site_speed; width: 80px; placeholder-text: "KiB/s"; } }
                             FieldLine { caption: "代理"; LineEdit { text <=> root.site_proxy; horizontal-stretch: 1; } }
+                            FieldLine { caption: "目录"; LineEdit { text <=> root.site_dir; horizontal-stretch: 1; } }
+                            FieldLine { caption: "UA / Referer"; LineEdit { text <=> root.site_ua; horizontal-stretch: 1; } LineEdit { text <=> root.site_referer; horizontal-stretch: 1; } }
                             ChromeBtn { label: "添加这条规则"; clicked => { root.command("add_site_rule"); } }
                             TextEdit { text <=> root.site_rules; min-height: 80px; }
                         }
@@ -863,7 +922,7 @@ export component NewTaskWindow inherits Window {
     default-font-family: Tokens.type-face;
     default-font-size: Tokens.type-body;
     preferred-width: 560px;
-    preferred-height: 560px;
+    preferred-height: 680px;
     background: Tokens.bg;
     in-out property <string> url;
     in-out property <string> filename;
@@ -881,10 +940,14 @@ export component NewTaskWindow inherits Window {
     in-out property <string> concurrency: "12";
     in-out property <string> body_path;
     in-out property <string> extra_headers;
+    in-out property <string> scheduled_start;
+    in-out property <string> scheduled_stop;
+    in-out property <string> completion_action;
+    in-out property <string> speed_limit_kib;
     callback command(string);
     VerticalLayout {
         spacing: 0px;
-        WindowHeader { title: "新建任务"; subtitle: "每行一个链接，或本地 .torrent / .url / .m3u8"; }
+        WindowHeader { title: "新建任务"; subtitle: "分轨：选清晰度与音轨后再开始"; drag => { root.command("drag"); } }
         Rectangle { height: 1px; background: Tokens.line; }
         VerticalLayout {
             padding: Tokens.space-4;
@@ -899,14 +962,23 @@ export component NewTaskWindow inherits Window {
                     ChromeBtn { label: "导入文件"; clicked => { root.command("import_files"); } }
                     Text { text: root.recognize_label; color: Tokens.accent; font-size: Tokens.type-body; font-weight: 600; vertical-alignment: center; }
                 }
-                ComboBox {
-                    model: root.variants;
-                    current-value <=> root.selected_variant;
+                FieldLine {
+                    caption: "画质";
+                    ComboBox {
+                        model: root.variants;
+                        current-value <=> root.selected_variant;
+                        horizontal-stretch: 1;
+                    }
                 }
-                if root.audio_tracks.length > 1 : ComboBox {
-                    model: root.audio_tracks;
-                    current-value <=> root.selected_audio;
+                FieldLine {
+                    caption: "音轨";
+                    ComboBox {
+                        model: root.audio_tracks;
+                        current-value <=> root.selected_audio;
+                        horizontal-stretch: 1;
+                    }
                 }
+                HelpText { label: "画质与音轨来自识别结果。Cookie 只进本机凭证。"; }
             }
             GroupCard {
                 FieldLine { caption: "文件名"; LineEdit { text <=> root.filename; horizontal-stretch: 1; placeholder-text: "可选，仅首条"; } }
@@ -916,6 +988,10 @@ export component NewTaskWindow inherits Window {
                 FieldLine { caption: "镜像"; LineEdit { text <=> root.mirrors; horizontal-stretch: 1; placeholder-text: "每行一个备用 URL"; } }
                 FieldLine { caption: "连接数"; LineEdit { text <=> root.concurrency; width: 80px; } }
                 FieldLine { caption: "额外头"; LineEdit { text <=> root.extra_headers; horizontal-stretch: 1; placeholder-text: "Name: value，每行一个"; } }
+                FieldLine { caption: "计划开始"; LineEdit { text <=> root.scheduled_start; width: 90px; placeholder-text: "HH:MM"; } }
+                FieldLine { caption: "计划停止"; LineEdit { text <=> root.scheduled_stop; width: 90px; placeholder-text: "HH:MM"; } }
+                FieldLine { caption: "完成动作"; LineEdit { text <=> root.completion_action; width: 140px; placeholder-text: "none/shutdown"; } }
+                FieldLine { caption: "任务限速"; LineEdit { text <=> root.speed_limit_kib; width: 80px; placeholder-text: "KiB/s"; } }
                 CheckBox { text: "抓取页面里的下载链接 / Metalink"; checked <=> root.harvest; }
                 CheckBox { text: "允许与已有任务相同链接"; checked <=> root.allow_duplicate; }
             }
@@ -943,7 +1019,7 @@ export component PlayerWindow inherits Window {
     callback command(string);
     VerticalLayout {
         spacing: 0px;
-        WindowHeader { title: "播放器"; subtitle: "同进程 libmpv · 画面嵌在本窗"; }
+        WindowHeader { title: "播放器"; subtitle: "同进程 libmpv · 画面嵌在客户区"; drag => { root.command("drag"); } }
         Rectangle { height: 1px; background: Tokens.line; }
         Rectangle {
             vertical-stretch: 1;
@@ -1066,6 +1142,7 @@ export component MainWindow inherits Window {
     in-out property <[float]> speed_bars;
     callback command(string);
     callback wake();
+    callback drag_window();
 
     VerticalLayout {
         spacing: 0px;
@@ -1076,15 +1153,26 @@ export component MainWindow inherits Window {
                 padding-left: Tokens.space-4;
                 padding-right: Tokens.space-4;
                 spacing: Tokens.space-2;
-                Text {
-                    text: "HLS Downloader";
-                    color: Tokens.ink;
-                    font-size: Tokens.type-row;
-                    font-weight: 700;
-                    letter-spacing: 0.2px;
-                    vertical-alignment: center;
+                TouchArea {
+                    mouse-cursor: move;
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                            root.drag_window();
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Tokens.space-2;
+                        Text {
+                            text: "HLS Downloader";
+                            color: Tokens.ink;
+                            font-size: Tokens.type-row;
+                            font-weight: 700;
+                            letter-spacing: 0.2px;
+                            vertical-alignment: center;
+                        }
+                        Text { text: "v6"; color: Tokens.accent; font-size: Tokens.type-caption; font-weight: 700; vertical-alignment: center; }
+                    }
                 }
-                Text { text: "v6"; color: Tokens.accent; font-size: Tokens.type-caption; font-weight: 700; vertical-alignment: center; }
                 Rectangle { width: 1px; height: 16px; y: 16px; background: Tokens.line; }
                 ChromeBtn { label: "新建"; primary: true; clicked => { root.command("new_task"); } }
                 ChromeBtn { label: "粘贴"; clicked => { root.command("paste_new"); } }
@@ -1094,6 +1182,7 @@ export component MainWindow inherits Window {
                 ChromeBtn { label: "重试"; clicked => { root.command("retry"); } }
                 ChromeBtn { label: "取消"; clicked => { root.command("cancel"); } }
                 ChromeBtn { label: "打开"; clicked => { root.command("open"); } }
+                ChromeBtn { label: "拖出"; clicked => { root.command("drag_file"); } }
                 ChromeBtn { label: "系统打开"; clicked => { root.command("launch"); } }
                 ChromeBtn { label: "投屏"; clicked => { root.command("cast"); } }
                 ChromeBtn { label: "TVBox"; clicked => { root.command("push_tvbox"); } }
@@ -1321,7 +1410,7 @@ export component LogWindow inherits Window {
     callback command(string);
     VerticalLayout {
         spacing: 0px;
-        WindowHeader { title: "任务日志"; subtitle: "最近传输记录"; }
+        WindowHeader { title: "任务日志"; subtitle: "最近传输记录"; drag => { root.command("drag"); } }
         Rectangle { height: 1px; background: Tokens.line; }
         TextEdit { text <=> root.text; vertical-stretch: 1; }
         FooterBar {
@@ -1343,7 +1432,7 @@ export component ExtensionWindow inherits Window {
     callback command(string);
     VerticalLayout {
         spacing: 0px;
-        WindowHeader { title: "浏览器插件"; subtitle: "资源识别、点击接管、请求身份"; }
+        WindowHeader { title: "浏览器插件"; subtitle: "资源识别、点击接管、请求身份"; drag => { root.command("drag"); } }
         Rectangle { height: 1px; background: Tokens.line; }
         VerticalLayout {
             padding: Tokens.space-4;
@@ -1383,7 +1472,7 @@ export component HarvestWindow inherits Window {
     callback command(string);
     VerticalLayout {
         spacing: 0px;
-        WindowHeader { title: "网页抓取"; subtitle: "只读当前页 HTML，不执行脚本"; }
+        WindowHeader { title: "网页抓取"; subtitle: "只读当前页 HTML，不执行脚本；可按体积过滤"; drag => { root.command("drag"); } }
         Rectangle { height: 1px; background: Tokens.line; }
         VerticalLayout {
             padding: Tokens.space-3;

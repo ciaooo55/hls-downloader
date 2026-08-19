@@ -25,6 +25,8 @@ pub fn demo_tasks() -> Vec<TaskRow> {
             accent: slint::Color::from_rgb_u8(37, 99, 235),
             picked: false,
             map_cells: ModelRc::new(VecModel::from(vec![2, 2, 2, 1, 0, 0])),
+            mirror: SharedString::from(""),
+            spark: ModelRc::new(VecModel::from(vec![0.2, 0.5, 0.8, 1.0])),
         },
         TaskRow {
             task_id: SharedString::from("task-2"),
@@ -42,6 +44,8 @@ pub fn demo_tasks() -> Vec<TaskRow> {
             accent: slint::Color::from_rgb_u8(22, 163, 74),
             picked: false,
             map_cells: ModelRc::new(VecModel::from(vec![2, 1, 0, 0])),
+            mirror: SharedString::from(""),
+            spark: ModelRc::new(VecModel::from(vec![0.4, 0.6, 0.5])),
         },
         TaskRow {
             task_id: SharedString::from("task-3"),
@@ -59,6 +63,8 @@ pub fn demo_tasks() -> Vec<TaskRow> {
             accent: slint::Color::from_rgb_u8(100, 116, 139),
             picked: false,
             map_cells: ModelRc::new(VecModel::from(vec![2, 2, 2, 2])),
+            mirror: SharedString::from(""),
+            spark: ModelRc::new(VecModel::from(vec![])),
         },
     ]
 }
@@ -377,7 +383,25 @@ fn task_row(snapshot: &TaskSnapshot) -> TaskRow {
             snapshot.downloaded_bytes,
             32,
         ))),
+        mirror: snapshot.mirror_status.clone().into(),
+        spark: ModelRc::new(VecModel::from(spark_from_history(&snapshot.speed_history))),
     }
+}
+
+fn spark_from_history(history: &[u64]) -> Vec<f32> {
+    if history.is_empty() {
+        return Vec::new();
+    }
+    let peak = history.iter().copied().max().unwrap_or(1).max(1) as f32;
+    history
+        .iter()
+        .rev()
+        .take(16)
+        .map(|value| (*value as f32 / peak).clamp(0.12, 1.0))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 fn kind_label(kind: ResourceKind) -> &'static str {
@@ -474,6 +498,8 @@ mod tests {
                     connection_hint: String::new(),
                     connection_parts: Vec::new(),
                     log_tail: Vec::new(),
+                    speed_history: Vec::new(),
+                    mirror_status: String::new(),
                 },
         });
         let rows = bridge.rows();
@@ -518,6 +544,8 @@ mod tests {
                     connection_hint: String::new(),
                     connection_parts: Vec::new(),
                     log_tail: Vec::new(),
+                    speed_history: Vec::new(),
+                    mirror_status: String::new(),
                 },
             });
         }
@@ -568,6 +596,8 @@ mod tests {
                     connection_hint: String::new(),
                     connection_parts: Vec::new(),
                     log_tail: Vec::new(),
+                    speed_history: Vec::new(),
+                    mirror_status: String::new(),
                 },
             });
         }

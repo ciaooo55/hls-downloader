@@ -104,6 +104,10 @@ impl CoreServer {
 fn bootstrap_store(coordinator: &CoreCoordinator) -> Result<(), String> {
     if std::env::var_os("HLS_V6_SKIP_LEGAL").is_some() {
         coordinator.set_setting("legal_terms_accepted", serde_json::json!(true))?;
+        coordinator.set_setting(
+            "legal_terms_version",
+            serde_json::json!(crate::LEGAL_TERMS_VERSION),
+        )?;
     }
     let core = coordinator.core();
     let mut core = core
@@ -301,6 +305,12 @@ fn settings_response(coordinator: &CoreCoordinator, request_id: u64) -> CorePipe
             http_chunk_size_mb: settings.http_chunk_size_mb,
             completion_power_action: settings.completion_power_action,
             start_on_login: settings.start_on_login,
+            queue_active_days: settings.queue_active_days,
+            proxy_mode: settings.proxy_mode,
+            proxy_bypass: settings.proxy_bypass,
+            legal_terms_version: settings.legal_terms_version,
+            reduce_motion: settings.reduce_motion,
+            harvest_minimum_bytes: settings.harvest_minimum_bytes,
         },
         Err(error) => CorePipeResponse::Error {
             request_id: Some(request_id),

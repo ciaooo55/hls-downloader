@@ -184,6 +184,127 @@ fn in_window_at(start: &str, end: &str, now: u32) -> bool {
     }
 }
 
+pub fn host_bypassed(host: &str, bypass: &str) -> bool {
+    let host = host.trim().trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    if host.is_empty() || bypass.trim().is_empty() {
+        return false;
+    }
+    bypass
+        .split([';', ',', '\n', '\t', ' '])
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .any(|pattern| {
+            let pattern = pattern.trim_start_matches('.').to_ascii_lowercase();
+            if pattern == "<local>" {
+                return !host.contains('.');
+            }
+            host == pattern || host.ends_with(&format!(".{pattern}"))
+        })
+}
+
+pub fn effective_proxy(
+    mode: &str,
+    configured: &str,
+    bypass: &str,
+    url: &str,
+    spec_proxy: &str,
+) -> String {
+    let host = host_key(url);
+    if host_bypassed(&host, bypass) {
+        return String::new();
+    }
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "direct" => String::new(),
+        _ => {
+            if !spec_proxy.trim().is_empty() {
+                spec_proxy.trim().to_string()
+            } else {
+                configured.trim().to_string()
+            }
+        }
+    }
+}
+
+pub fn weekday_allowed(days: &str) -> bool {
+    weekday_allowed_at(days, local_weekday_iso())
+}
+
+pub fn weekday_allowed_at(days: &str, today: u8) -> bool {
+    let spec = days.trim();
+    if spec.is_empty() || spec == "1,2,3,4,5,6,7" {
+        return true;
+    }
+    spec.split(',')
+        .filter_map(|item| item.trim().parse::<u8>().ok())
+        .any(|day| day == today)
+}
+
+pub fn scheduled_start_reached(value: &str) -> bool {
+    let stamp = value.trim();
+    if stamp.is_empty() {
+        return true;
+    }
+    let Some(start) = parse_hhmm(stamp) else {
+        return true;
+    };
+    chrono_minutes_now() >= start
+}
+
+pub fn scheduled_stop_hit(value: &str) -> bool {
+    let stamp = value.trim();
+    if stamp.is_empty() {
+        return false;
+    }
+    let Some(stop) = parse_hhmm(stamp) else {
+        return false;
+    };
+    chrono_minutes_now() >= stop
+}
+
+fn local_weekday_iso() -> u8 {
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct SystemTime {
+            year: u16,
+            month: u16,
+            day_of_week: u16,
+            day: u16,
+            hour: u16,
+            minute: u16,
+            second: u16,
+            milliseconds: u16,
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetLocalTime(time: *mut SystemTime);
+        }
+        let mut now = SystemTime {
+            year: 0,
+            month: 0,
+            day_of_week: 0,
+            day: 0,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            milliseconds: 0,
+        };
+        unsafe { GetLocalTime(&mut now) };
+        match now.day_of_week {
+            0 => 7,
+            other => other as u8,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        (((secs / 86400) + 3) % 7 + 1) as u8
+    }
+}
+
 fn parse_hhmm(value: &str) -> Option<u32> {
     let mut parts = value.trim().split(':');
     let hour = parts.next()?.parse::<u32>().ok()?;
@@ -268,5 +389,34 @@ mod tests {
         let started = Instant::now();
         consume(1024 * 1024);
         assert!(started.elapsed() < Duration::from_millis(50));
+    }
+
+    #[test]
+    fn weekday_and_proxy_bypass() {
+        assert!(weekday_allowed_at("", 3));
+        assert!(weekday_allowed_at("1,2,3,4,5,6,7", 7));
+        assert!(!weekday_allowed_at("1,2,3,4,5", 6));
+        assert!(weekday_allowed_at("6,7", 7));
+        assert!(host_bypassed("intranet", "<local>"));
+        assert!(host_bypassed("cdn.example.test", "example.test"));
+        assert!(!host_bypassed("cdn.example.test", "other.test"));
+        assert_eq!(
+            effective_proxy("direct", "http://127.0.0.1:9", "", "https://cdn.test/a", ""),
+            ""
+        );
+        assert_eq!(
+            effective_proxy(
+                "manual",
+                "http://127.0.0.1:9",
+                "cdn.test",
+                "https://cdn.test/a",
+                ""
+            ),
+            ""
+        );
+        assert_eq!(
+            effective_proxy("manual", "http://127.0.0.1:9", "", "https://cdn.test/a", ""),
+            "http://127.0.0.1:9"
+        );
     }
 }

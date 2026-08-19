@@ -185,6 +185,18 @@ pub enum CorePipeResponse {
         completion_power_action: String,
         #[serde(default)]
         start_on_login: bool,
+        #[serde(default = "default_queue_days")]
+        queue_active_days: String,
+        #[serde(default = "default_proxy_mode")]
+        proxy_mode: String,
+        #[serde(default)]
+        proxy_bypass: String,
+        #[serde(default)]
+        legal_terms_version: String,
+        #[serde(default)]
+        reduce_motion: bool,
+        #[serde(default)]
+        harvest_minimum_bytes: u64,
     },
     Credential {
         request_id: u64,
@@ -231,6 +243,14 @@ fn default_chunk_mb() -> u64 {
 
 fn default_none() -> String {
     "none".into()
+}
+
+fn default_queue_days() -> String {
+    "1,2,3,4,5,6,7".into()
+}
+
+fn default_proxy_mode() -> String {
+    "manual".into()
 }
 
 pub fn encode_message<T: Serialize>(message: &T) -> Result<Vec<u8>, String> {

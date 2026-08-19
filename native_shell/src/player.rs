@@ -142,19 +142,36 @@ impl Player {
             *self.embed_wid.lock().map_err(|_| "player lock")? = Some(1);
             return Ok(());
         }
+        let parent = crate::window_handle_by_title(title).unwrap_or(0);
+        self.attach_embed_hwnd(parent, x, y, w, h)
+    }
+
+    pub fn attach_embed_hwnd(&self, parent: i64, x: i32, y: i32, w: i32, h: i32) -> Result<(), String> {
+        *self.last_embed.lock().map_err(|_| "player lock")? =
+            format!("embed_hwnd:{parent}:{x},{y},{w},{h}");
+        if std::env::var_os("HLS_V6_PLAYER_NULL").is_some() {
+            *self.embed_wid.lock().map_err(|_| "player lock")? = Some(1);
+            return Ok(());
+        }
         #[cfg(windows)]
         {
             if let Ok(mut slot) = self.embed_wid.lock() {
                 if let Some(old) = slot.take() {
-                    destroy_previous_host(old);
+                    destroy_previous_host(old, parent);
                 }
             }
-            if let Ok(wid) = create_child_host(title, x, y, w, h) {
-                *self.embed_wid.lock().map_err(|_| "player lock")? = Some(wid);
-                if let Ok(mut inner) = self.inner.lock() {
-                    *inner = Backend::Idle;
+            if parent > 1 {
+                if let Ok(wid) = create_child_host_parent(parent, x, y, w, h) {
+                    *self.embed_wid.lock().map_err(|_| "player lock")? = Some(wid);
+                    if let Ok(mut inner) = self.inner.lock() {
+                        *inner = Backend::Idle;
+                    }
                 }
             }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (parent, x, y, w, h);
         }
         Ok(())
     }
@@ -225,6 +242,12 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
         }
         if let Ok(explicit) = std::env::var("HLS_V6_LIBMPV") {
             candidates.insert(0, PathBuf::from(explicit));
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            for name in names {
+                candidates.push(cwd.join(name));
+                candidates.push(cwd.join("native_ui").join(name));
+            }
         }
         for name in names {
             candidates.push(PathBuf::from(name));
@@ -299,31 +322,28 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
 }
 
 #[cfg(windows)]
-fn destroy_previous_host(wid: i64) {
-    if wid <= 1 {
+fn destroy_previous_host(wid: i64, parent: i64) {
+    if wid <= 1 || wid == parent {
         return;
     }
     unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(wid as windows_sys::Win32::Foundation::HWND);
+        windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(
+            wid as windows_sys::Win32::Foundation::HWND,
+        );
     }
 }
 
 #[cfg(windows)]
-fn create_child_host(title: &str, x: i32, y: i32, w: i32, h: i32) -> Result<i64, String> {
+fn create_child_host_parent(parent: i64, x: i32, y: i32, w: i32, h: i32) -> Result<i64, String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, FindWindowW, SetWindowPos, HWND_TOP, SWP_NOZORDER, SWP_SHOWWINDOW,
-        WS_CHILD, WS_CLIPSIBLINGS, WS_VISIBLE,
+        CreateWindowExW, SetWindowPos, HWND_TOP, SWP_NOZORDER, SWP_SHOWWINDOW, WS_CHILD,
+        WS_CLIPSIBLINGS, WS_VISIBLE,
     };
-    let wide: Vec<u16> = std::ffi::OsStr::new(title)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let parent = unsafe { FindWindowW(std::ptr::null(), wide.as_ptr()) };
-    if parent.is_null() {
-        return Err("player window not found".into());
+    if parent <= 1 {
+        return Err("player hwnd missing".into());
     }
     let class: Vec<u16> = std::ffi::OsStr::new("STATIC")
         .encode_wide()
@@ -340,7 +360,7 @@ fn create_child_host(title: &str, x: i32, y: i32, w: i32, h: i32) -> Result<i64,
             y,
             w.max(32),
             h.max(32),
-            parent,
+            parent as HWND,
             std::ptr::null_mut(),
             instance,
             std::ptr::null(),
@@ -350,7 +370,15 @@ fn create_child_host(title: &str, x: i32, y: i32, w: i32, h: i32) -> Result<i64,
         return Err("failed to create mpv host window".into());
     }
     unsafe {
-        SetWindowPos(child, HWND_TOP, x, y, w.max(32), h.max(32), SWP_NOZORDER | SWP_SHOWWINDOW);
+        SetWindowPos(
+            child,
+            HWND_TOP,
+            x,
+            y,
+            w.max(32),
+            h.max(32),
+            SWP_NOZORDER | SWP_SHOWWINDOW,
+        );
     }
     Ok(child as i64)
 }
@@ -370,6 +398,10 @@ mod tests {
         player.set_fullscreen(true).unwrap();
         player.set_pip(true).unwrap();
         player.set_pip(false).unwrap();
+        player
+            .attach_embed_hwnd(42, 0, 48, 720, 220)
+            .unwrap();
+        assert!(player.last_embed().contains("embed_hwnd:42"));
         player
             .attach_embed_host(PLAYER_WINDOW_TITLE, 0, 48, 720, 220)
             .unwrap();

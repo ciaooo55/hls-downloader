@@ -77,10 +77,12 @@ impl HostCore {
                 crate::CorePipeResponse::Settings {
                     takeover_minimum_bytes,
                     speed_limit_kib,
+                    harvest_minimum_bytes,
                     ..
                 } => Ok(match key {
                     "browser_takeover_minimum_bytes" => takeover_minimum_bytes,
                     "download_speed_limit_kib" => speed_limit_kib,
+                    "harvest_minimum_bytes" => harvest_minimum_bytes,
                     _ => fallback,
                 }),
                 _ => Ok(fallback),

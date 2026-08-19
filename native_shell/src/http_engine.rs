@@ -25,6 +25,39 @@ pub const EXIT_RANGE_UNSUPPORTED: i32 = 30;
 const WRITE_BATCH: usize = 256 * 1024;
 const DURABLE_CHECKPOINT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RANGE_ATTEMPTS: u32 = 5;
+const CONNECT_POOL_PER_KEY: usize = 8;
+const CONNECT_POOL_TOTAL: usize = 32;
+
+#[derive(Default)]
+struct IdleHandlePool {
+    idle: HashMap<String, Vec<usize>>,
+}
+
+impl IdleHandlePool {
+    fn take(&mut self, key: &str) -> Option<usize> {
+        self.idle.get_mut(key).and_then(Vec::pop)
+    }
+
+    fn put(&mut self, key: String, handle: usize) -> bool {
+        if handle == 0 {
+            return false;
+        }
+        let total: usize = self.idle.values().map(Vec::len).sum();
+        if total >= CONNECT_POOL_TOTAL {
+            return false;
+        }
+        let bucket = self.idle.entry(key).or_default();
+        if bucket.len() >= CONNECT_POOL_PER_KEY || bucket.contains(&handle) {
+            return false;
+        }
+        bucket.push(handle);
+        true
+    }
+}
+
+fn origin_connect_key(proxy: &str, host: &str, port: u16) -> String {
+    format!("{proxy}|{host}|{port}")
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Job {
@@ -2082,6 +2115,8 @@ mod winhttp {
         connect: *mut core::ffi::c_void,
         request: *mut core::ffi::c_void,
         keep_session: bool,
+        recycle_connect: bool,
+        connect_key: String,
     }
 
     unsafe impl Send for WinHttpBody {}
@@ -2091,9 +2126,17 @@ mod winhttp {
             unsafe {
                 if !self.request.is_null() {
                     WinHttpCloseHandle(self.request);
+                    self.request = null_mut();
                 }
                 if !self.connect.is_null() {
-                    WinHttpCloseHandle(self.connect);
+                    if self.recycle_connect
+                        && put_connect(&self.connect_key, self.connect)
+                    {
+                        self.connect = null_mut();
+                    } else {
+                        WinHttpCloseHandle(self.connect);
+                        self.connect = null_mut();
+                    }
                 }
                 if !self.keep_session && !self.session.is_null() {
                     WinHttpCloseHandle(self.session);
@@ -2168,6 +2211,30 @@ mod winhttp {
         }
     }
 
+    fn connect_pool() -> &'static std::sync::Mutex<super::IdleHandlePool> {
+        use std::sync::{Mutex, OnceLock};
+        static POOL: OnceLock<Mutex<super::IdleHandlePool>> = OnceLock::new();
+        POOL.get_or_init(|| Mutex::new(super::IdleHandlePool::default()))
+    }
+
+    fn take_connect(key: &str) -> Option<*mut core::ffi::c_void> {
+        connect_pool()
+            .lock()
+            .ok()
+            .and_then(|mut pool| pool.take(key))
+            .map(|handle| handle as *mut core::ffi::c_void)
+    }
+
+    fn put_connect(key: &str, handle: *mut core::ffi::c_void) -> bool {
+        if handle.is_null() {
+            return false;
+        }
+        connect_pool()
+            .lock()
+            .ok()
+            .is_some_and(|mut pool| pool.put(key.to_string(), handle as usize))
+    }
+
     pub fn get(
         job: &Job,
         url: &str,
@@ -2177,7 +2244,10 @@ mod winhttp {
         unsafe {
             let proxy = job.proxy.trim();
             let session = cached_session(proxy)?;
-            let connect = WinHttpConnect(session, wide(&parsed.host).as_ptr(), parsed.port, 0);
+            let connect_key = super::origin_connect_key(proxy, &parsed.host, parsed.port);
+            let connect = take_connect(&connect_key).unwrap_or_else(|| {
+                WinHttpConnect(session, wide(&parsed.host).as_ptr(), parsed.port, 0)
+            });
             if connect.is_null() {
                 return Err(EngineError::Failed(format!(
                     "WinHttpConnect {}",
@@ -2293,6 +2363,8 @@ mod winhttp {
                     connect,
                     request,
                     keep_session: true,
+                    recycle_connect: true,
+                    connect_key,
                 }),
             })
         }
@@ -2345,6 +2417,23 @@ mod tests {
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     };
+
+    #[test]
+    fn origin_connect_pool_does_not_share_live_handles() {
+        let mut pool = IdleHandlePool::default();
+        assert_eq!(origin_connect_key("p", "cdn.test", 443), "p|cdn.test|443");
+        assert!(pool.take("a").is_none());
+        assert!(pool.put("a".into(), 11));
+        assert!(pool.put("a".into(), 12));
+        assert_eq!(pool.take("a"), Some(12));
+        assert_eq!(pool.take("a"), Some(11));
+        assert!(pool.take("a").is_none());
+        assert!(!pool.put("a".into(), 0));
+        for index in 1..=CONNECT_POOL_PER_KEY {
+            assert!(pool.put("full".into(), index));
+        }
+        assert!(!pool.put("full".into(), 99));
+    }
 
     static NEXT_TEMP_JOB_ID: AtomicUsize = AtomicUsize::new(0);
 

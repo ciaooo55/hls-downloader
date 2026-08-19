@@ -84,6 +84,11 @@ impl PersistentCore {
         self.runtime.task_spec(task_id)
     }
 
+    pub fn replace_spec(&mut self, task_id: &str, spec: TaskSpec) -> Result<(), String> {
+        self.runtime.replace_spec(task_id, spec.clone());
+        self.store.save_spec(task_id, &spec)
+    }
+
     pub fn pending_handoff(&self, handoff_id: &str) -> Option<crate::ResourceOffer> {
         self.runtime.pending_handoff(handoff_id).cloned()
     }

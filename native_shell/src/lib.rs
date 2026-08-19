@@ -29,8 +29,10 @@ mod metalink;
 mod power_action;
 mod migrate;
 mod mirrors;
+mod motw;
 mod native_host;
 mod net_policy;
+mod ole_drag;
 mod output_path;
 mod playback;
 mod player;
@@ -51,6 +53,7 @@ mod tray;
 mod updater;
 mod v6_contract;
 mod v6_store;
+mod window_util;
 
 #[cfg(all(windows, feature = "supervisor"))]
 pub mod win32;
@@ -79,6 +82,8 @@ pub use http_engine::{
 };
 pub use instance::claim_v6_instance;
 pub use player::PLAYER_WINDOW_TITLE;
+pub use window_util::{begin_caption_drag, os_reduce_motion, window_handle_by_title};
+pub use ole_drag::{begin_file_drag, completed_file_drag, hdrop_bytes};
 pub use native_host::run as run_native_host;
 pub use clipboard::{
     all_urls as clipboard_all_urls, first_url as clipboard_first_url, looks_like_download_url,
@@ -103,11 +108,12 @@ pub use surfaces::{OverlayWindow, ResidentShell, Snapshot, Windows};
 pub use task_list::{FileCategory, StatusFilter, TaskList, TaskRow};
 pub use recognize::{classify_url, kind_label, probe_url};
 pub use metalink::{looks_like_metalink, parse_metalink};
-pub use harvest::{harvest_html, HarvestLink};
+pub use harvest::{harvest_html, harvest_html_filtered, HarvestLink};
 pub use updater::{check_for_update, is_newer_version, CURRENT_VERSION};
 pub use migrate::{maybe_migrate_from_5x, migrate_from_5x};
 pub use v6_store::{default_v6_database_path, V6Store, V6_SCHEMA_VERSION};
 pub use v6_contract::{
-    CastDeviceInfo, ConnectionPart, CoreCommand, CoreEvent, HarvestCandidate, ResourceKind,
-    ResourceOffer, StreamVariant, TaskSnapshot, TaskSpec, V6_PROTOCOL_NAME, V6_PROTOCOL_VERSION,
+    CastDeviceInfo, ConnectionPart, CoreCommand, CoreEvent, HarvestCandidate, LEGAL_TERMS_VERSION,
+    ResourceKind, ResourceOffer, StreamVariant, TaskSnapshot, TaskSpec, V6_PROTOCOL_NAME,
+    V6_PROTOCOL_VERSION,
 };

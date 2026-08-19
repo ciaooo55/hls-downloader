@@ -110,6 +110,22 @@ impl V6Store {
         self.apply_events_and_spec(events, None)
     }
 
+    pub fn save_spec(&mut self, task_id: &str, spec: &TaskSpec) -> Result<(), String> {
+        if task_id.trim().is_empty() {
+            return Err("missing task id".into());
+        }
+        let json = serde_json::to_string(spec)
+            .map_err(|error| format!("encode v6 task spec {task_id}: {error}"))?;
+        self.connection
+            .execute(
+                "INSERT INTO task_specs(task_id, spec_json) VALUES (?1, ?2)\
+                 ON CONFLICT(task_id) DO UPDATE SET spec_json = excluded.spec_json",
+                params![task_id, json],
+            )
+            .map_err(|error| format!("persist v6 task spec {task_id}: {error}"))?;
+        Ok(())
+    }
+
     pub fn apply_events_and_spec(
         &mut self,
         events: &[EventEnvelope],

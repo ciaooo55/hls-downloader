@@ -5,11 +5,11 @@ mod ui_model;
 slint::include_modules!();
 
 use hls_native_shell::{
-    claim_v6_instance, classify_url, clipboard_all_urls, clipboard_first_url, completion_sound,
-    parse_curl_command, pick_export_path, pick_import_paths, read_clipboard, show_notification,
-    spawn_tray, write_clipboard, attach_file_drop, sample_cells, CastDeviceInfo, CoreCommand, CoreEvent,
-    CoreIpcClient, CorePipeResponse, CoreServer, HarvestCandidate, ResourceOffer, StreamVariant, TaskSnapshot,
-    TaskSpec, TrayAction,
+    begin_caption_drag, claim_v6_instance, classify_url, clipboard_all_urls, clipboard_first_url, completion_sound,
+    os_reduce_motion, parse_curl_command, pick_export_path, pick_import_paths, read_clipboard, show_notification,
+    spawn_tray, window_handle_by_title, write_clipboard, attach_file_drop, sample_cells, CastDeviceInfo, CoreCommand, CoreEvent,
+    CoreIpcClient, CorePipeResponse, CoreServer, HarvestCandidate, LEGAL_TERMS_VERSION, ResourceOffer, StreamVariant, TaskSnapshot,
+    TaskSpec, TrayAction, PLAYER_WINDOW_TITLE,
 };
 use slint::{CloseRequestResponse, ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::{
@@ -122,6 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         progress_window_enabled: show_progress,
         complete_popup_enabled: show_complete,
         dark_mode,
+        reduce_motion,
         ..
     }) = client.load_settings()
     {
@@ -131,6 +132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         *complete_popup_enabled.borrow_mut() = show_complete;
         ui.set_dark_mode(dark_mode);
         ui.global::<Tokens>().set_dark(dark_mode);
+        ui.global::<Tokens>().set_reduce_motion(reduce_motion || os_reduce_motion());
     }
     let client = Rc::new(RefCell::new(client));
     let (tx, rx) = mpsc::channel::<Vec<hls_native_shell::EventEnvelope>>();
@@ -154,6 +156,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let weak_harvest = harvest.as_weak();
     let weak_legal = legal.as_weak();
     ui.window().on_close_requested(|| CloseRequestResponse::HideWindow);
+    ui.on_drag_window(|| {
+        let _ = begin_caption_drag("HLS Downloader");
+    });
 
     ui.on_wake({
         let bridge = Rc::clone(&bridge);
@@ -861,7 +866,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else if matches!(
                 command.as_str(),
                 "start" | "pause" | "delete" | "retry" | "open" | "delete_files" | "cancel"
-                    | "launch" | "copy_file" | "queue_top" | "queue_bottom" | "resume"
+                    | "launch" | "copy_file" | "drag_file" | "queue_top" | "queue_bottom" | "resume"
             ) {
                 if matches!(command.as_str(), "start" | "resume" | "retry")
                     && legal_blocked(&mut client.borrow_mut(), &legal)
@@ -993,6 +998,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let legal = legal.as_weak();
         let ui_weak = ui.as_weak();
         move |command| {
+            if command == "drag" {
+                let _ = begin_caption_drag("新建下载");
+                return;
+            }
             if command == "probe" || command == "harvest" {
                 if let Some(window) = new_task.upgrade() {
                     let url = window
@@ -1139,6 +1148,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 (!value.trim().is_empty()).then_some(value)
                             },
                             allow_duplicate: window.get_allow_duplicate(),
+                            scheduled_start_at: window.get_scheduled_start().to_string(),
+                            scheduled_stop_at: window.get_scheduled_stop().to_string(),
+                            completion_action: window.get_completion_action().to_string(),
+                            speed_limit_kib: window
+                                .get_speed_limit_kib()
+                                .to_string()
+                                .trim()
+                                .parse()
+                                .unwrap_or(0),
                             mirrors: window
                                 .get_mirrors()
                                 .to_string()
@@ -1184,6 +1202,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let progress_window_enabled = Rc::clone(&progress_window_enabled);
         let complete_popup_enabled = Rc::clone(&complete_popup_enabled);
         move |command| {
+            if command == "drag" {
+                let _ = begin_caption_drag("设置");
+                return;
+            }
             if command == "check_update" {
                 let _ = client.borrow_mut().command(CoreCommand::CheckUpdate);
                 return;
@@ -1206,6 +1228,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             speed_limit_kib: window.get_site_speed().parse().unwrap_or(0),
                             concurrency: window.get_site_conn().parse().unwrap_or(0),
                             proxy: window.get_site_proxy().to_string(),
+                            download_dir: window.get_site_dir().to_string(),
+                            user_agent: window.get_site_ua().to_string(),
+                            referer: window.get_site_referer().to_string(),
                         },
                     );
                     let encoded = hls_native_shell::format_site_rules(&rules);
@@ -1375,6 +1400,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     serde_json::json!(window.get_start_on_login()),
                 );
                 let _ = client.borrow_mut().store_setting(
+                    "reduce_motion",
+                    serde_json::json!(window.get_reduce_motion()),
+                );
+                let _ = client.borrow_mut().store_setting(
+                    "queue_active_days",
+                    serde_json::json!(window.get_queue_active_days().to_string()),
+                );
+                let _ = client.borrow_mut().store_setting(
+                    "proxy_mode",
+                    serde_json::json!(window.get_proxy_mode().to_string()),
+                );
+                let _ = client.borrow_mut().store_setting(
+                    "proxy_bypass",
+                    serde_json::json!(window.get_proxy_bypass().to_string()),
+                );
+                if let Ok(mb) = window.get_takeover_min_mb().parse::<u64>() {
+                    let _ = client.borrow_mut().store_setting(
+                        "browser_takeover_minimum_bytes",
+                        serde_json::json!(mb.saturating_mul(1024 * 1024)),
+                    );
+                }
+                if let Ok(mb) = window.get_harvest_min_mb().parse::<u64>() {
+                    let _ = client.borrow_mut().store_setting(
+                        "harvest_minimum_bytes",
+                        serde_json::json!(mb.saturating_mul(1024 * 1024)),
+                    );
+                }
+                if window.get_legal_accepted() {
+                    let _ = client.borrow_mut().store_setting(
+                        "legal_terms_version",
+                        serde_json::json!(LEGAL_TERMS_VERSION),
+                    );
+                }
+                let _ = client.borrow_mut().store_setting(
                     "allow_duplicate",
                     serde_json::json!(window.get_allow_duplicate()),
                 );
@@ -1409,6 +1468,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cast_devices = Rc::clone(&cast_devices);
         move |command| {
             let command = command.to_string();
+            if command == "drag" {
+                let _ = begin_caption_drag(PLAYER_WINDOW_TITLE);
+                return;
+            }
             if command == "scan_cast" {
                 if let Some(window) = player.upgrade() {
                     window.set_status("正在扫描局域网设备…".into());
@@ -1495,6 +1558,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let bridge = Rc::clone(&bridge);
         let ui_weak = ui.as_weak();
         move |command| {
+            if command == "drag" {
+                let _ = begin_caption_drag("确认下载");
+                return;
+            }
             if command == "accept" {
                 if legal_blocked(&mut client.borrow_mut(), &legal) {
                     return;
@@ -1607,6 +1674,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = client
                 .borrow_mut()
                 .store_setting("legal_terms_accepted", serde_json::json!(true));
+            let _ = client.borrow_mut().store_setting(
+                "legal_terms_version",
+                serde_json::json!(LEGAL_TERMS_VERSION),
+            );
             if let Some(window) = legal.upgrade() {
                 let _ = window.hide();
             }
@@ -1632,6 +1703,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     log_window.on_command({
         let log_window = log_window.as_weak();
         move |command| {
+            if command == "drag" {
+                let _ = begin_caption_drag("任务日志");
+                return;
+            }
             if command == "hide" {
                 let _ = log_window.upgrade().map(|window| window.hide());
             }
@@ -1640,6 +1715,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     extension.on_command({
         let extension = extension.as_weak();
         move |command| {
+            if command == "drag" {
+                let _ = begin_caption_drag("浏览器插件");
+                return;
+            }
             if command == "hide" {
                 let _ = extension.upgrade().map(|window| window.hide());
                 return;
@@ -1676,6 +1755,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let picked = Rc::clone(&picked);
         let speed_samples = Rc::clone(&speed_samples);
         move |command| {
+            if command == "drag" {
+                let _ = begin_caption_drag("网页抓取");
+                return;
+            }
             let refill = || {
                 if let Some(window) = harvest.upgrade() {
                     fill_harvest_window(
@@ -1927,10 +2010,16 @@ fn fill_harvest_window(
                 link.filename.clone()
             };
             let zh = harvest_category_label(&link.category);
-            let detail = if link.extension.is_empty() {
-                zh.to_string()
+            let size = if link.size > 0 {
+                format_bytes(link.size)
             } else {
-                format!("{zh} · .{}", link.extension)
+                String::new()
+            };
+            let detail = match (link.extension.is_empty(), size.is_empty()) {
+                (true, true) => zh.to_string(),
+                (false, true) => format!("{zh} · .{}", link.extension),
+                (true, false) => format!("{zh} · {size}"),
+                (false, false) => format!("{zh} · .{} · {size}", link.extension),
             };
             HarvestRow {
                 url: link.url.clone().into(),
@@ -2099,6 +2188,13 @@ fn fill_settings(client: &mut CoreIpcClient, window: &SettingsWindow) {
         http_chunk_size_mb,
         completion_power_action,
         start_on_login,
+        queue_active_days,
+        proxy_mode,
+        proxy_bypass,
+        legal_terms_version,
+        reduce_motion,
+        harvest_minimum_bytes,
+        takeover_minimum_bytes,
         ..
     }) = client.load_settings()
     else {
@@ -2147,6 +2243,13 @@ fn fill_settings(client: &mut CoreIpcClient, window: &SettingsWindow) {
     window.set_http_chunk_size_mb(http_chunk_size_mb.to_string().into());
     window.set_completion_power_action(completion_power_action.into());
     window.set_start_on_login(start_on_login);
+    window.set_reduce_motion(reduce_motion);
+    window.set_queue_active_days(queue_active_days.into());
+    window.set_proxy_mode(proxy_mode.into());
+    window.set_proxy_bypass(proxy_bypass.into());
+    window.set_legal_terms_version(legal_terms_version.into());
+    window.set_takeover_min_mb((takeover_minimum_bytes / (1024 * 1024)).to_string().into());
+    window.set_harvest_min_mb((harvest_minimum_bytes / (1024 * 1024)).to_string().into());
 }
 
 fn attach_player_embed(client: &mut CoreIpcClient, window: &PlayerWindow) {
@@ -2154,9 +2257,13 @@ fn attach_player_embed(client: &mut CoreIpcClient, window: &PlayerWindow) {
     let width = size.width as i32;
     let height = size.height as i32;
     let host_h = (height - 48 - 176).max(80);
-    let _ = client.command(CoreCommand::PlayerControl {
-        action: format!("embed_host:0,48,{width},{host_h}"),
-    });
+    let hwnd = window_handle_by_title(PLAYER_WINDOW_TITLE).unwrap_or(0);
+    let action = if hwnd > 1 {
+        format!("embed_hwnd:{hwnd}:0,48,{width},{host_h}")
+    } else {
+        format!("embed_host:0,48,{width},{host_h}")
+    };
+    let _ = client.command(CoreCommand::PlayerControl { action });
 }
 
 fn apply_curl_to_window(window: &NewTaskWindow, curl: hls_native_shell::CurlDownload) {
@@ -2220,7 +2327,12 @@ fn show_confirm_offer(confirm: slint::Weak<ConfirmWindow>, offer: &ResourceOffer
     } else {
         String::new().into()
     });
-    window.show().is_ok()
+    window.set_intro(0.0);
+    let shown = window.show().is_ok();
+    if shown {
+        window.set_intro(1.0);
+    }
+    shown
 }
 
 fn report_handoff_presentation(

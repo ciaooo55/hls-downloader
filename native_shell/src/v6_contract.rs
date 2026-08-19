@@ -9,6 +9,7 @@ use serde_json::Value;
 
 pub const V6_PROTOCOL_NAME: &str = "hls-downloader-v6-core";
 pub const V6_PROTOCOL_VERSION: u32 = 1;
+pub const LEGAL_TERMS_VERSION: &str = "2026-08-06-cn-1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -105,6 +106,10 @@ pub struct TaskSnapshot {
     pub connection_parts: Vec<ConnectionPart>,
     #[serde(default)]
     pub log_tail: Vec<String>,
+    #[serde(default)]
+    pub speed_history: Vec<u64>,
+    #[serde(default)]
+    pub mirror_status: String,
 }
 
 impl Default for TaskSnapshot {
@@ -134,6 +139,8 @@ impl Default for TaskSnapshot {
             connection_hint: String::new(),
             connection_parts: Vec::new(),
             log_tail: Vec::new(),
+            speed_history: Vec::new(),
+            mirror_status: String::new(),
         }
     }
 }
@@ -160,6 +167,8 @@ pub struct HarvestCandidate {
     pub extension: String,
     #[serde(default)]
     pub category: String,
+    #[serde(default)]
+    pub size: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -208,6 +217,12 @@ pub struct TaskSpec {
     pub preferred_audio: String,
     #[serde(default)]
     pub allow_duplicate: bool,
+    #[serde(default)]
+    pub scheduled_start_at: String,
+    #[serde(default)]
+    pub scheduled_stop_at: String,
+    #[serde(default)]
+    pub completion_action: String,
 }
 
 impl Default for TaskSpec {
@@ -236,6 +251,9 @@ impl Default for TaskSpec {
             preferred_height: 0,
             preferred_audio: String::new(),
             allow_duplicate: false,
+            scheduled_start_at: String::new(),
+            scheduled_stop_at: String::new(),
+            completion_action: String::new(),
         }
     }
 }
@@ -517,6 +535,8 @@ mod tests {
                 connection_hint: String::new(),
                 connection_parts: Vec::new(),
                 log_tail: Vec::new(),
+                speed_history: Vec::new(),
+                mirror_status: String::new(),
             },
         };
         let payload = event.ui_payload();
@@ -533,6 +553,8 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(spec.request_method, "GET");
+        assert!(spec.scheduled_start_at.is_empty());
+        assert!(spec.completion_action.is_empty());
     }
 
     #[test]
