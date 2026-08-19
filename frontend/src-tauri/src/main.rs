@@ -384,6 +384,41 @@ fn request_scoped_credential(config: &LocalConfig, path: &str) -> Result<String,
         .ok_or_else(|| "Desktop session credential is missing".to_string())
 }
 
+#[cfg(windows)]
+fn start_native_shell(root: &Path, config: &LocalConfig) {
+    let Some(exe) = native_shell_exe(root) else {
+        return;
+    };
+    let mut command = Command::new(&exe);
+    command
+        .arg("--core-url")
+        .arg(format!("http://127.0.0.1:{}/api", config.port))
+        .arg("--token")
+        .arg(&config.token)
+        .arg("--no-tray")
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command.creation_flags(0x00000008 | 0x00000200); // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    let _ = command.spawn();
+}
+
+#[cfg(not(windows))]
+fn start_native_shell(_root: &Path, _config: &LocalConfig) {}
+
+#[cfg(windows)]
+fn native_shell_exe(root: &Path) -> Option<PathBuf> {
+    [
+        root.join("HLSNativeShell.exe"),
+        root.join("hls-native-shell.exe"),
+        root.join("native_shell").join("target").join("release").join("hls-native-shell.exe"),
+        root.join("native_shell").join("target").join("debug").join("hls-native-shell.exe"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+}
+
 fn start_core(root: &Path, config: &mut LocalConfig) -> Result<Option<Child>, String> {
     if core_alive(config) {
         return Ok(None);
@@ -576,12 +611,95 @@ fn import_torrent_path(config: &LocalConfig, path: &str) {
     }
 }
 
+fn post_core_ok(config: &LocalConfig, path: &str) -> bool {
+    if config.token.is_empty() || config.token.contains(['\r', '\n']) {
+        return false;
+    }
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", config.port)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(400)));
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Token: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        config.port, config.token
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+    response.starts_with("HTTP/1.1 200")
+}
+
+fn native_shell_is_resident(config: &LocalConfig) -> bool {
+    if config.token.is_empty() || config.token.contains(['\r', '\n']) {
+        return false;
+    }
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", config.port)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(400)));
+    let request = format!(
+        "GET /api/desktop/native-shell/status HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Token: {}\r\nConnection: close\r\n\r\n",
+        config.port, config.token
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, value)| value)
+        .unwrap_or("");
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("resident").and_then(|flag| flag.as_bool()))
+        .unwrap_or(false)
+}
+
 fn show_main(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = ensure_main_window(app) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+fn ensure_main_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    if let Some(window) = app.get_webview_window("main") {
+        return Some(window);
+    }
+    tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+        .title("HLS Downloader")
+        .inner_size(1440.0, 840.0)
+        .min_inner_size(820.0, 560.0)
+        .center()
+        .decorations(false)
+        .visible(true)
+        .build()
+        .ok()
+}
+
+fn show_task_list(app: &tauri::AppHandle) {
+    let runtime = app.state::<Arc<CoreRuntime>>();
+    let config = runtime_config(runtime.inner());
+    for _ in 0..20 {
+        if post_core_ok(&config, "/api/desktop/native-shell/main/open") {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    show_main(app);
 }
 
 fn background_launch(args: &[String]) -> bool {
@@ -672,6 +790,9 @@ fn main() {
     let exit_runtime = Arc::clone(&runtime);
     let launch_args: Vec<String> = std::env::args().collect();
     let background = background_launch(&launch_args);
+    let settings_launch = launch_args
+        .iter()
+        .any(|arg| arg == "--settings" || arg == "--new-task");
     // Packaging smoke tests run a staged copy alongside a user's installed
     // application. Keep the production single-instance guard intact, but let
     // the staged process use its isolated core/port when explicitly requested.
@@ -683,11 +804,14 @@ fn main() {
             let runtime = app.state::<Arc<CoreRuntime>>();
             let _ = ensure_core(runtime.inner());
             let config = runtime_config(runtime.inner());
+            start_native_shell(&runtime.root, &config);
             for arg in args.iter().skip(1) {
                 import_torrent_path(&config, arg);
             }
-            if !background_launch(&args) {
+            if args.iter().any(|arg| arg == "--settings" || arg == "--new-task") {
                 show_main(app);
+            } else if !background_launch(&args) {
+                show_task_list(app);
             }
         }));
     }
@@ -712,39 +836,45 @@ fn main() {
             if let Err(error) = ensure_core(startup_runtime.inner()) {
                 record_startup_error(&root, &error);
             }
+            start_native_shell(&root, &runtime_config(startup_runtime.inner()));
             supervise_core(Arc::clone(startup_runtime.inner()));
             let config = runtime_config(startup_runtime.inner());
             for arg in std::env::args().skip(1) {
                 import_torrent_path(&config, &arg);
             }
-            let open = MenuItem::with_id(app, "open", "打开下载器", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &quit])?;
-            let mut tray = TrayIconBuilder::with_id("main")
-                .menu(&menu)
-                .show_menu_on_left_click(false);
-            if let Some(icon) = app.default_window_icon() {
-                tray = tray.icon(icon.clone());
-            }
-            tray.on_menu_event(|app, event| match event.id.as_ref() {
-                "open" => show_main(app),
-                "quit" => app.exit(0),
-                _ => {}
-            })
-            .on_tray_icon_event(|tray, event| {
-                if let TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                } = event
-                {
-                    show_main(tray.app_handle());
+            let native_resident = native_shell_is_resident(&config);
+            if !settings_launch || !native_resident {
+                let open = MenuItem::with_id(app, "open", "打开下载器", true, None::<&str>)?;
+                let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&open, &quit])?;
+                let mut tray = TrayIconBuilder::with_id("main")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false);
+                if let Some(icon) = app.default_window_icon() {
+                    tray = tray.icon(icon.clone());
                 }
-            })
-            .build(app)?;
-            watch_clipboard(app.handle().clone());
-            if !background {
+                tray.on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => show_task_list(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_task_list(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+                watch_clipboard(app.handle().clone());
+            }
+            if settings_launch {
                 show_main(app.handle());
+            } else if !background {
+                show_task_list(app.handle());
             }
             Ok(())
         })

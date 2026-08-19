@@ -76,6 +76,9 @@ def test_auto_task_type_recognizes_supported_sources():
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/file.torrent") is TaskType.TORRENT
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/stream?id=1", "application/vnd.apple.mpegurl") is TaskType.HLS
     assert resolve_task_type(TaskType.AUTO, "https://cdn.test/manifest?id=1", "application/dash+xml; charset=utf-8") is TaskType.DASH
+    assert resolve_task_type(TaskType.AUTO, "https://cdn.test/playlist.m3u") is TaskType.HLS
+    assert resolve_task_type(TaskType.AUTO, "https://cdn.test/stream?id=2", "audio/mpegurl") is TaskType.HLS
+    assert resolve_task_type(TaskType.AUTO, "https://cdn.test/manifest?id=3", "application/dash+xml") is TaskType.DASH
 
 
 def test_create_task_uses_captured_manifest_mime_when_url_has_no_extension(monkeypatch):
@@ -660,6 +663,129 @@ def test_http_range_downloader_writes_one_sparse_file_and_validates_ranges(tmp_p
     asyncio.run(run())
 
 
+def test_http_range_preallocates_one_payload_file(tmp_path, monkeypatch):
+    body = b"0123456789abcdef" * 64
+    allocated: list[tuple[Path, int]] = []
+    original = http_file_module.preallocate_payload
+
+    def tracking_preallocate(path, size):
+        allocated.append((Path(path), int(size)))
+        original(path, size)
+
+    monkeypatch.setattr(http_file_module, "preallocate_payload", tracking_preallocate)
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
+    task = Task(id="http-prealloc", url="https://files.test/a.bin", task_type=TaskType.HTTP, concurrency=2)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        value = request.headers.get("range", "")
+        start_text, end_text = value.removeprefix("bytes=").split("-", 1)
+        start, end = int(start_text), int(end_text)
+        return httpx.Response(
+            206,
+            content=body[start : end + 1],
+            headers={"Content-Range": f"bytes {start}-{end}/{len(body)}"},
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_ranges(
+                client,
+                {},
+                tmp_path / "payload.downloading",
+                tmp_path / "resume.json",
+                {"total": len(body), "etag": '"v1"', "last_modified": ""},
+            )
+
+    asyncio.run(run())
+    assert allocated == [(tmp_path / "payload.downloading", len(body))]
+    assert (tmp_path / "payload.downloading").read_bytes() == body
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_http_range_keeps_one_payload_handle_across_capped_206(tmp_path, monkeypatch):
+    body = b"x" * (64 * 1024)
+    cap = 4096
+    ranges: list[str] = []
+    reopen = {"r+b": 0}
+    original_open = Path.open
+
+    def counting_open(self, mode="r", *args, **kwargs):
+        if self.name == "payload.downloading" and "r+b" in str(mode):
+            reopen["r+b"] += 1
+        return original_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    monkeypatch.setattr(settings, "http_chunk_size_mb", 1)
+    task = Task(
+        id="http-one-fd",
+        url="https://files.test/capped.bin",
+        task_type=TaskType.HTTP,
+        concurrency=1,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        value = request.headers.get("range", "")
+        ranges.append(value)
+        start_text, end_text = value.removeprefix("bytes=").split("-", 1)
+        start, end = int(start_text), int(end_text)
+        capped_end = min(end, start + cap - 1)
+        return httpx.Response(
+            206,
+            content=body[start : capped_end + 1],
+            headers={"Content-Range": f"bytes {start}-{capped_end}/{len(body)}"},
+            request=request,
+        )
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_ranges(
+                client,
+                {},
+                tmp_path / "payload.downloading",
+                tmp_path / "resume.json",
+                {"total": len(body), "etag": '"v1"', "last_modified": ""},
+            )
+
+    asyncio.run(run())
+    assert (tmp_path / "payload.downloading").read_bytes() == body
+    assert len(ranges) >= 8
+    assert reopen["r+b"] < len(ranges)
+    assert reopen["r+b"] <= 6
+
+
+def test_identity_body_uses_raw_chunks_when_not_decoded():
+    class FakeResponse:
+        def __init__(self, encoding=""):
+            self.headers = {"content-encoding": encoding}
+
+        def aiter_raw(self):
+            return "raw"
+
+        def aiter_bytes(self):
+            return "bytes"
+
+    assert http_file_module._identity_body(FakeResponse()) == "raw"
+    assert http_file_module._identity_body(FakeResponse("identity")) == "raw"
+    assert http_file_module._identity_body(FakeResponse("gzip")) == "bytes"
+
+    class Buffered:
+        headers = {"content-encoding": ""}
+        _content = b"buffered"
+        is_stream_consumed = True
+        is_closed = True
+
+        def aiter_raw(self):
+            return "raw"
+
+        def aiter_bytes(self):
+            return "bytes"
+
+    assert http_file_module._identity_body(Buffered()) == "bytes"
+
+
 def test_http_range_downloader_uses_twelve_workers_by_default(tmp_path, monkeypatch):
     chunk_size = 1024 * 1024
     total = chunk_size * 13
@@ -1021,7 +1147,7 @@ def test_browser_profile_http_fallback_downloads_after_a_403(tmp_path, monkeypat
     task = Task(id="http-browser-fallback", url="https://files.test/video.mp4", task_type=TaskType.HTTP)
     task.engine_state.update({"browser_originated": True, "output_dir": str(tmp_path / "downloads")})
     task_dir = task_work_dir(task)
-    task_dir.mkdir(parents=True)
+    task_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(hls_module, "CurlAsyncSession", object)
     monkeypatch.setattr(hls_module, "_BrowserHLSClient", BrowserClient)
     monkeypatch.setattr(hls_module, "_close_response", close_response)
@@ -1082,7 +1208,7 @@ def test_browser_profile_http_fallback_resumes_unmarked_prefix(tmp_path, monkeyp
     task.engine_state.update({"browser_originated": True, "output_dir": str(tmp_path / "downloads")})
     task.progress.total_bytes = 7
     task_dir = task_work_dir(task)
-    task_dir.mkdir(parents=True)
+    task_dir.mkdir(parents=True, exist_ok=True)
     part = task_dir / "payload.downloading"
     part.write_bytes(b"brow")
     monkeypatch.setattr(hls_module, "CurlAsyncSession", object)
@@ -1146,7 +1272,7 @@ def test_browser_profile_http_fallback_rejects_mismatched_206(tmp_path, monkeypa
     task.engine_state.update({"browser_originated": True, "output_dir": str(tmp_path / "downloads")})
     task.progress.total_bytes = 7
     task_dir = task_work_dir(task)
-    task_dir.mkdir(parents=True)
+    task_dir.mkdir(parents=True, exist_ok=True)
     part = task_dir / "payload.downloading"
     part.write_bytes(b"brow")
     monkeypatch.setattr(hls_module, "CurlAsyncSession", object)
@@ -1208,7 +1334,7 @@ def test_browser_profile_http_fallback_completes_on_trusted_416(tmp_path, monkey
     task.engine_state["sequential_bytes"] = len(body)
     task.filename = "video.mp4"
     task_dir = task_work_dir(task)
-    task_dir.mkdir(parents=True)
+    task_dir.mkdir(parents=True, exist_ok=True)
     part = task_dir / "payload.downloading"
     part.write_bytes(body)
     monkeypatch.setattr(hls_module, "CurlAsyncSession", object)
@@ -1795,6 +1921,53 @@ def test_http_sequential_resumes_from_partial_file(tmp_path):
     assert task.progress.downloaded_bytes == 10
     assert task.progress.total_bytes == 10
     assert task.engine_state["sequential_bytes"] == 10
+
+
+def test_http_sequential_keeps_small_prefix_after_mid_stream_disconnect(tmp_path, monkeypatch):
+    monkeypatch.setattr(http_file_module, "retry_delay_seconds", lambda *_args: 0)
+    body = b"0123456789"
+    part = tmp_path / "payload.part"
+    task = Task(id="seq-disconnect", url="https://files.test/a.bin", task_type=TaskType.HTTP)
+    requests: list[str | None] = []
+
+    class BrokenStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield body[:4]
+            raise httpx.ReadError("connection dropped")
+
+        async def aclose(self):
+            return None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        value = request.headers.get("range")
+        requests.append(value)
+        if len(requests) == 1:
+            return httpx.Response(
+                200,
+                stream=BrokenStream(),
+                headers={"Content-Length": str(len(body)), "Content-Type": "application/octet-stream"},
+                request=request,
+            )
+        start = 0
+        if value and value.startswith("bytes="):
+            start = int(value.removeprefix("bytes=").split("-", 1)[0] or 0)
+        status = 206 if start else 200
+        headers = {"Content-Type": "application/octet-stream"}
+        if status == 206:
+            headers["Content-Range"] = f"bytes {start}-{len(body) - 1}/{len(body)}"
+        else:
+            headers["Content-Length"] = str(len(body))
+        return httpx.Response(status, content=body[start:], headers=headers, request=request)
+
+    async def run():
+        downloader = HTTPDownloader(task)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await downloader._download_sequential(client, downloader._headers(), part)
+
+    asyncio.run(run())
+    assert requests[0] is None
+    assert requests[1] == "bytes=4-"
+    assert part.read_bytes() == body
 
 
 def test_http_sequential_416_does_not_complete_a_sparse_preallocated_part(tmp_path):

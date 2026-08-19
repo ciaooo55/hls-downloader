@@ -49,7 +49,7 @@ from .errors import (
 )
 from .merge import _local_hls_input_options, _run_ffmpeg, _verify_output, write_local_hls_playlist
 from .postprocess_slot import acquire_postprocess_lease
-from .disk_space import MIN_FREE_RESERVE, ensure_free_space, estimate_paths_size
+from .disk_space import MIN_FREE_RESERVE, ensure_free_space, estimate_paths_size, write_payload
 from .mpd import NativeDashUnsupported, parse_mpd
 from .playback import playback_service, write_playback_plan
 from .progress import ProgressTracker
@@ -1693,6 +1693,7 @@ class NativeDashEngine:
                 kind: float(state[kind]["entries"][0].get("start") or 0)
                 for kind in counts
             },
+            segment_entries={kind: state[kind]["entries"] for kind in counts},
         )
 
     async def _download_one(
@@ -1732,7 +1733,7 @@ class NativeDashEngine:
                             if self._is_canceled() or self._is_pausing():
                                 raise asyncio.CancelledError
                             await throttle_bytes(len(chunk), task)
-                            stream.write(chunk)
+                            await asyncio.to_thread(write_payload, stream, chunk)
                             received += len(chunk)
                 if received <= 0:
                     raise RuntimeError("分片响应为空")

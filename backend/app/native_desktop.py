@@ -31,11 +31,20 @@ class NativeDesktopSession:
         self._started_at = 0.0
         self._sequence = 0
         self._commands: deque[DesktopCommand] = deque(maxlen=history_size)
+        self._pending: list[tuple[str, str]] = []
 
     def start(self) -> dict:
         with self._changed:
             self._active = True
             self._started_at = time.time()
+            pending = self._pending
+            self._pending = []
+            # A new WebView session must not replay activate/handoff/media_push
+            # from the previous UI process.
+            self._commands.clear()
+            for kind, handoff_id in pending:
+                self._sequence += 1
+                self._commands.append(DesktopCommand(self._sequence, kind, handoff_id))
             self._changed.notify_all()
             return self.status()
 
@@ -58,6 +67,17 @@ class NativeDesktopSession:
         with self._changed:
             if not self._active:
                 return False
+            self._sequence += 1
+            self._commands.append(DesktopCommand(self._sequence, kind, handoff_id))
+            self._changed.notify_all()
+            return True
+
+    def queue(self, kind: str, handoff_id: str = "") -> bool:
+        """Deliver now when the WebView session is live; otherwise wait for start()."""
+        with self._changed:
+            if not self._active:
+                self._pending.append((kind, str(handoff_id)))
+                return True
             self._sequence += 1
             self._commands.append(DesktopCommand(self._sequence, kind, handoff_id))
             self._changed.notify_all()

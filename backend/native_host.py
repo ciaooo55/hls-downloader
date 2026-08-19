@@ -15,7 +15,11 @@ def _frozen_install_root(executable: Path) -> Path:
     """Resolve the app root for legacy and versioned Native Host layouts."""
     host_dir = executable.resolve().parent
     for candidate in (host_dir, host_dir.parent, host_dir.parent.parent):
-        if (candidate / "HLSDownloader.exe").is_file() or (candidate / "portable").is_file():
+        if (
+            (candidate / "HLSNativeShell.exe").is_file()
+            or (candidate / "HLSDownloader.exe").is_file()
+            or (candidate / "portable").is_file()
+        ):
             return candidate
     # Keep the legacy behavior when a partial install is being repaired.
     return host_dir
@@ -75,18 +79,53 @@ def _request(method: str, path: str, payload: dict | None = None, timeout: float
         raise RuntimeError(str(detail or f"HTTP {exc.code}")) from exc
 
 
+def _app_launch_executable() -> Path | None:
+    """Cold-start the resident native shell. WebView2 is only the fallback."""
+    shell = ROOT / "HLSNativeShell.exe"
+    if shell.is_file():
+        return shell
+    desktop = ROOT / "HLSDownloader.exe"
+    if desktop.is_file():
+        return desktop
+    return None
+
+
 def _start_app() -> None:
-    executable = ROOT / "HLSDownloader.exe"
-    if executable.exists():
-        subprocess.Popen(
-            [str(executable), "--background"],
-            cwd=ROOT,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-            creationflags=0x08000000,
-        )
+    executable = _app_launch_executable()
+    if executable is None:
+        return
+    args = [str(executable)]
+    native_shell = executable.name.lower() == "hlsnativeshell.exe"
+    if not native_shell:
+        args.append("--background")
+    # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP for the native shell: CREATE_NO_WINDOW
+    # hides the pre-created confirmation / complete HWNDs.
+    creationflags = 0x00000008 | 0x00000200 if native_shell else 0x08000000
+    subprocess.Popen(
+        args,
+        cwd=str(executable.parent),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=not native_shell,
+        creationflags=creationflags,
+    )
+
+
+def _start_desktop_ui() -> None:
+    """Open the on-demand WebView for 投屏 / TVBox device picker."""
+    desktop = ROOT / "HLSDownloader.exe"
+    if not desktop.is_file():
+        return
+    subprocess.Popen(
+        [str(desktop), "--settings"],
+        cwd=str(desktop.parent),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=False,
+        creationflags=0x00000008 | 0x00000200,
+    )
 
 
 def _wait_presenter(timeout: float = 18.0) -> None:
@@ -191,8 +230,13 @@ def dispatch(message: dict) -> dict:
         task = _request("POST", "/browser/downloads", message.get("resource", {}))
         return {"ok": True, "task": task, "activated": False}
     if operation == "push_to_tv":
-        return _request("POST", "/tvbox/push", {"url": str(message.get("resource", {}).get("url", ""))})
+        _start_desktop_ui()
+        return _request("POST", "/browser/media-push", {
+            "kind": "tvbox",
+            "resource": message.get("resource", {}),
+        })
     if operation == "media_push":
+        _start_desktop_ui()
         return _request("POST", "/browser/media-push", {
             "kind": str(message.get("kind", "")),
             "resource": message.get("resource", {}),

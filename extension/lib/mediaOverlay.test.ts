@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clampOverlayPosition, shouldShowMediaOverlay } from './mediaOverlay'
+import { clampOverlayPosition, overlayActionFallback, overlaySendKey, shouldShowMediaOverlay } from './mediaOverlay'
 
 describe('media overlay visibility', () => {
   it('stays absent before playback', () => {
@@ -22,5 +22,16 @@ describe('media overlay position', () => {
   it('uses the requested margin when the overlay is larger than the viewport', () => {
     expect(clampOverlayPosition({ x: 50, y: 50 }, { width: 900, height: 700 }, { width: 800, height: 600 }))
       .toEqual({ x: 10, y: 10 })
+  })
+})
+
+describe('overlay send keys', () => {
+  it('keeps download, TVBox, and cast busy states on separate keys', () => {
+    expect(overlaySendKey('fp-1')).toBe('fp-1')
+    expect(overlaySendKey('fp-1', 'download')).toBe('fp-1')
+    expect(overlaySendKey('fp-1', 'tvbox')).toBe('fp-1:tvbox')
+    expect(overlaySendKey('fp-1', 'cast')).toBe('fp-1:cast')
+    expect(overlayActionFallback('tvbox')).toBe('推送链接')
+    expect(overlayActionFallback('cast')).toBe('投屏链接')
   })
 })

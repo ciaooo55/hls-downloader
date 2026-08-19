@@ -29,6 +29,12 @@ class BrowserHandoffCreate(BaseModel):
     user_agent: str = Field(default="", max_length=2048)
     request_headers: dict[str, str] = Field(default_factory=dict, max_length=64)
     request_contexts: dict[str, dict] = Field(default_factory=dict, max_length=12)
+    # Bounded, non-secret recognition contract.  Cookies and authorization stay
+    # in the scoped request context and are never copied into these diagnostics.
+    evidence: list[str] = Field(default_factory=list, max_length=16)
+    owner: str = Field(default="", max_length=160)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    replay_context: dict[str, str] = Field(default_factory=dict, max_length=12)
     request_method: str = Field(default="GET", max_length=16)
     request_body: str = Field(default="", max_length=175000)
     size: int = Field(default=0, ge=0, le=2**63 - 1)
@@ -318,6 +324,7 @@ class SettingsUpdate(BaseModel):
     completion_sound_enabled: Optional[bool] = None
     download_progress_window_enabled: Optional[bool] = None
     download_complete_popup_enabled: Optional[bool] = None
+    native_http_engine: Optional[bool] = None
     resume_interrupted_on_startup: Optional[bool] = None
     auto_retry_failed_max: Optional[int] = Field(default=None, ge=0, le=10)
     av_scan_enabled: Optional[bool] = None

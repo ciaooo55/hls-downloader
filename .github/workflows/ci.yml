@@ -109,6 +109,20 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
 
+      - name: Check native Core (v6, no 5.x supervisor)
+        working-directory: native_shell
+        run: cargo test --locked --lib --no-default-features
+
+      - name: Check native supervisor (5.x frozen)
+        working-directory: native_shell
+        run: cargo test --locked
+
+      - name: Check native UI
+        working-directory: native_ui
+        run: |
+          cargo test --locked
+          cargo build --locked
+
       - name: Build Tauri desktop shell
         working-directory: frontend
         run: pnpm run tauri:build

@@ -1,4 +1,5 @@
-import { isAuthenticationNavigation } from './clickIntent'
+import { isAuthenticationNavigation, isLikelyDownloadUrl } from './clickIntent'
+import { isCommonMediaStreamUrl } from './manifestSniff'
 import { httpOrigin } from './requestChain'
 import { removeRawQueryParameters } from './urlQuery'
 
@@ -28,6 +29,14 @@ export interface MediaResource {
   statusCode?: number
   method?: string
   requestHeaders?: Record<string, string>
+  /** Explain why this URL is a candidate; values are bounded, non-secret labels. */
+  evidence?: string[]
+  /** Stable local owner bucket (page, media-element, MSE, DownloadItem, etc.). */
+  owner?: string
+  /** 0..1 confidence for diagnostics and candidate ordering. */
+  confidence?: number
+  /** Non-secret replay metadata; credentials stay in request_contexts. */
+  replayContext?: Record<string, string>
   width?: number
   height?: number
   bandwidth?: number
@@ -52,6 +61,12 @@ export interface MediaResource {
   seenAt: number
 }
 
+export function boundedConfidence(value: unknown, fallback = 0): number {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return Math.max(0, Math.min(1, fallback))
+  return Math.max(0, Math.min(1, numeric))
+}
+
 export interface DownloadClickIntent {
   href: string
   pageUrl: string
@@ -68,7 +83,7 @@ export interface DownloadClickIntent {
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|torrent|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
 // Ordinary downloads the desktop already owns. MEDIA_EXT stays narrower so
 // page sniffing does not promote every .docx/.apk request into the media HUD.
-const DOWNLOAD_FILE_EXT = /\.(?:m3u8|mpd|mp4|m4v|webm|mkv|mov|avi|flv|m4a|mp3|flac|wav|ogg|opus|torrent|zip|7z|rar|tar|tgz|gz|bz2|xz|iso|img|exe|msi|msix|appx|apk|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|bin|jar)(?:$|[?#])/i
+const DOWNLOAD_FILE_EXT = /\.(?:m3u8?|mpd|mp4|m4v|webm|mkv|mov|avi|flv|f4v|3gp|m4a|mp3|flac|wav|ogg|opus|aac|torrent|metalink|meta4|zip|7z|rar|tar|tgz|gz|bz2|xz|iso|img|exe|msi|msix|appx|apk|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|csv|vsix|nupkg|cab|bin|jar)(?:$|[?#])/i
 // Keep this narrower than MEDIA_EXT: archive and installer downloads can
 // legitimately use terse `s`/`e` application parameters, while these paths
 // are actual media or adaptive manifests whose signatures are known to rotate.
@@ -103,7 +118,7 @@ function cleanName(value = '', pathValue = false): string {
 }
 
 /** Server MIME types that already name a file, not a page or octet-stream guess. */
-const CONCRETE_DOWNLOAD_MIME = /^(?:application\/(?:(?:x-)?(?:7z-compressed|apple-diskimage|bittorrent|bzip2|debian-package|gzip|iso9660-image|msdownload|msi|rar(?:-compressed)?|tar|zip(?:-compressed)?)|epub\+zip|force-download|gzip|java-archive|pdf|vnd\.(?:android\.package-archive|debian\.binary-package|microsoft\.portable-executable|ms-(?:excel|powerpoint|word)|openxmlformats-officedocument\.[a-z0-9.+-]+)|x-download|zip))\b/i
+const CONCRETE_DOWNLOAD_MIME = /^(?:application\/(?:(?:x-)?(?:7z-compressed|apple-diskimage|bittorrent|bzip2|debian-package|gzip|iso9660-image|msdownload|msi|rar(?:-compressed)?|tar|zip(?:-compressed)?)|epub\+zip|force-download|gzip|java-archive|metalink4?\+xml|pdf|vnd\.(?:android\.package-archive|debian\.binary-package|microsoft\.portable-executable|ms-(?:excel|powerpoint|word)|openxmlformats-officedocument\.[a-z0-9.+-]+)|x-download|x-metalink|zip))\b/i
 
 export function isConcreteDownloadMime(value = ''): boolean {
   return CONCRETE_DOWNLOAD_MIME.test(String(value || '').split(';', 1)[0].trim())
@@ -162,10 +177,15 @@ export function classifyResource(url: string, mimeType = ''): ResourceKind | nul
   if (!url.startsWith('http://') && !url.startsWith('https://')) return null
   if (SEGMENT_EXT.test(url)) return null
   const mime = mimeType.toLowerCase()
-  if (/\.m3u8(?:$|[?#])/i.test(url) || mime.includes('mpegurl')) return 'hls'
+  if (/\.m3u8?(?:$|[?#])/i.test(url) || mime.includes('mpegurl')) return 'hls'
   if (/\.mpd(?:$|[?#])/i.test(url) || mime.includes('dash+xml')) return 'dash'
   if (mime.startsWith('video/') || mime.startsWith('audio/')) return 'media'
+  // Query `mime=video/mp4` is a CDN hint, not a JSON/HTML/JS body. Playurl APIs
+  // must stay out of the overlay even when they copy player query names.
+  if (PASSIVE_WEB_MIME.test(mime) || mime.startsWith('text/html') || mime.startsWith('image/')) return null
+  if (isCommonMediaStreamUrl(url)) return 'media'
   if (/\.torrent(?:$|[?#])/i.test(url) || mime.includes('bittorrent')) return 'file'
+  if (/\.(?:metalink|meta4)(?:$|[?#])/i.test(url) || mime.includes('metalink')) return 'file'
   return MEDIA_EXT.test(url) || mime.includes('octet-stream') ? 'file' : null
 }
 
@@ -189,6 +209,9 @@ export function classifyPlaybackSource(url: string, mimeType = ''): ResourceKind
   // player.  A genuine PHP media endpoint is still retained when its network
   // response supplies a video/audio MIME type above.
   if (DYNAMIC_DOCUMENT_EXT.test(url)) return null
+  // currentSrc can still point at a poster, script, or stylesheet when the
+  // player has not bound a real stream yet.
+  if (IMAGE_EXT.test(url) || PASSIVE_WEB_EXT.test(url)) return null
   return 'media'
 }
 
@@ -264,14 +287,23 @@ function mseCorrelatedResources(
   if (!evidence.length) return []
   const floor = playback.startedAt - 3 * 60_000
   const ranked = compactResources(resources, 40)
-    .filter(item => ['hls', 'dash', 'media'].includes(item.kind) && item.seenAt >= floor)
+    .filter(item => {
+      if (item.seenAt < floor) return false
+      if (['hls', 'dash', 'media'].includes(item.kind)) return true
+      // PerformanceObserver classifies progressive MP4/WebM as `file`. Bind
+      // that file only when SourceBuffer bytes are the same object, never by
+      // sharing a CDN folder with fragments.
+      return item.kind === 'file' && DIRECT_PLAYBACK_EXT.test(item.url)
+    })
     .map(item => ({
       item,
       affinity: Math.max(...evidence.map(url => mseEvidenceAffinity(item, url))),
     }))
     // A same-origin match alone is not evidence: unrelated players and ads
-    // frequently share one CDN host.
-    .filter(entry => entry.affinity > 0)
+    // frequently share one CDN host. File-kind MP4s need an exact/pattern
+    // hit; weak directory affinity would steal a preview sitting next to
+    // the real segments.
+    .filter(entry => entry.item.kind === 'file' ? entry.affinity >= 900 : entry.affinity > 0)
   if (!ranked.length) return []
   const best = Math.max(...ranked.map(entry => entry.affinity))
   return ranked
@@ -388,6 +420,26 @@ export function isShortLivedMediaSignatureUsable(
  * equality, but keep meaningful parameters such as quality in the key so two
  * separate renditions never become one-click equivalents.
  */
+/**
+ * Empty or page-local `video[src]` resolves to the document URL. That HTML
+ * watch page is not a downloadable stream, even when the attribute is present.
+ * A direct media URL opened in the tab (`movie.mp4`) still classifies.
+ */
+export function isSameDocumentPlaybackFallback(sourceUrl: string, pageUrl: string): boolean {
+  if (!sourceUrl || !pageUrl) return false
+  try {
+    const source = new URL(sourceUrl)
+    const page = new URL(pageUrl)
+    if (!['http:', 'https:'].includes(source.protocol) || !['http:', 'https:'].includes(page.protocol)) return false
+    source.hash = ''
+    page.hash = ''
+    if (source.href !== page.href) return false
+  } catch {
+    return false
+  }
+  return classifyResource(sourceUrl) == null
+}
+
 export function resourceMatchesPlaybackSource(resource: Pick<MediaResource, 'url' | 'kind'>, sourceUrl: string): boolean {
   if (!sourceUrl || sourceUrl.startsWith('blob:')) return false
   if (sourceUrl === resource.url) return true
@@ -593,6 +645,10 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
     byKey.set(key, {
       ...older,
       ...newer,
+      evidence: [...new Set([...(older.evidence || []), ...(newer.evidence || [])])].slice(-16),
+      owner: newer.owner || older.owner,
+      confidence: Math.max(boundedConfidence(older.confidence), boundedConfidence(newer.confidence)),
+      replayContext: { ...(older.replayContext || {}), ...(newer.replayContext || {}) },
       variants: newer.variants?.length ? newer.variants : older.variants,
       renditionUrls: [...new Set([...(newer.renditionUrls || []), ...(older.renditionUrls || [])])].slice(-24),
       playbackUrls: [...new Set([...(newer.playbackUrls || []), ...(older.playbackUrls || [])])].slice(-48),
@@ -931,8 +987,11 @@ export function matchesDownloadClick(
       if (exact) return false
       // Many download buttons open a short-lived gateway URL, then the browser
       // reports only the final CDN file. Require same-tab or same-page evidence
-      // so a random background download is never claimed.
-      if (linked && tabCompatible && age <= 2500) return true
+      // so a random background download is never claimed. A watch/play page
+      // href is not a download gateway: pairing it with a later zip would
+      // steal an ordinary click.
+      if (linked && tabCompatible && age <= 2500
+        && (intent.controlHint || isLikelyDownloadUrl(intent.href))) return true
       return false
     }
   }

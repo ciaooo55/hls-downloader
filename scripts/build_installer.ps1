@@ -6,7 +6,7 @@ param(
     [switch]$SkipSmoke,
     [switch]$UseSystemFfmpeg,
     [switch]$IncludeExtensionAssets,
-    [string]$Version = "3.0.39"
+    [string]$Version = "5.0.14"
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,6 +48,7 @@ $declaredAppVersions = [ordered]@{
     "frontend/package.json" = (Get-Content -LiteralPath (Join-Path $Root "frontend\package.json") -Raw -Encoding UTF8 | ConvertFrom-Json).version
     "frontend/src-tauri/tauri.conf.json" = (Get-Content -LiteralPath (Join-Path $Root "frontend\src-tauri\tauri.conf.json") -Raw -Encoding UTF8 | ConvertFrom-Json).version
     "frontend/src-tauri/Cargo.toml" = Get-DeclaredVersion (Join-Path $Root "frontend\src-tauri\Cargo.toml") '(?m)^version\s*=\s*"([^"]+)"'
+    "native_shell/Cargo.toml" = Get-DeclaredVersion (Join-Path $Root "native_shell\Cargo.toml") '(?m)^version\s*=\s*"([^"]+)"'
     "installer/hls-downloader.nsi" = Get-DeclaredVersion (Join-Path $Root "installer\hls-downloader.nsi") '!define APP_VERSION\s+"([^"]+)"'
 }
 foreach ($entry in $declaredAppVersions.GetEnumerator()) {
@@ -437,6 +438,24 @@ Invoke-Step "Stage application files" {
     Copy-Item -LiteralPath $tauriExecutable -Destination (Join-Path $StageDir "HLSDownloader.exe")
     Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloaderCore\*") -Destination $StageDir -Recurse -Force
     Copy-Item -Path (Join-Path $BackendDir "dist\HLSDownloaderNativeHost.exe") -Destination $StageDir
+    Invoke-Step "Build native supervisor" {
+        if (-not (Get-Command cargo.exe -ErrorAction SilentlyContinue)) {
+            throw "Rust/Cargo is required to build HLSNativeShell.exe"
+        }
+        $nativeShellDir = Join-Path $Root "native_shell"
+        Push-Location $nativeShellDir
+        try {
+            cargo build --release --locked
+            if ($LASTEXITCODE -ne 0) { throw "native supervisor build failed with exit code $LASTEXITCODE" }
+        } finally {
+            Pop-Location
+        }
+        $builtShell = Join-Path $nativeShellDir "target\release\hls-native-shell.exe"
+        if (-not (Test-Path -LiteralPath $builtShell)) {
+            throw "native supervisor binary is missing: $builtShell"
+        }
+        Copy-Item -LiteralPath $builtShell -Destination (Join-Path $StageDir "HLSNativeShell.exe")
+    }
     Copy-Item -LiteralPath (Join-Path $Root "config.default.json") -Destination (Join-Path $StageDir "config.json")
     Copy-Item -LiteralPath (Join-Path $Root "LICENSE") -Destination (Join-Path $StageDir "LICENSE.txt")
     Copy-Item -LiteralPath (Join-Path $Root "TERMS.md") -Destination (Join-Path $StageDir "TERMS.md")
@@ -740,8 +759,10 @@ Invoke-Step "Build portable archive" {
     $portableReadme = @(
         'HLS Downloader portable edition',
         '',
-        'Run HLSDownloader.exe. The application uses the Microsoft Edge WebView2',
-        'runtime that is included with supported Windows 10/11 installations.',
+        'Run HLSNativeShell.exe. The tray, download list, and ordinary HTTP GET stay in',
+        'that native process. HLSDownloader.exe is only started for settings / new task /',
+        'the player, which still uses the Microsoft Edge WebView2 runtime included with',
+        'supported Windows 10/11 installations.',
         '',
         'To enable Chrome/Firefox integration, run:',
         'powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1',

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 RESUME_STATUSES = {"paused", "pausing"}
 RETRY_STATUSES = {"failed", "canceled", "unsupported"}
 START_STATUSES = {"queued", "awaiting_selection", "awaiting_confirmation"}
@@ -17,7 +19,7 @@ ACTIVE_STATUSES = {
 
 def suggest_duplicate_action(
     status: object,
-    actions: object = None,
+    actions: Iterable[object] | None = None,
     *,
     output_missing: bool = False,
     output_path: str = "",
@@ -41,7 +43,7 @@ def suggest_duplicate_action(
     return "none"
 
 
-def duplicate_task_entry(task, actions: object = None, *, output_missing: bool | None = None) -> dict:
+def duplicate_task_entry(task, actions: Iterable[object] | None = None, *, output_missing: bool | None = None) -> dict:
     status = getattr(getattr(task, "status", ""), "value", getattr(task, "status", "")) or ""
     output_path = str(getattr(task, "output_path", "") or "")
     missing = bool(getattr(task, "output_missing", False) if output_missing is None else output_missing)

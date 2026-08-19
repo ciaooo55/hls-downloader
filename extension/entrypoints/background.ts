@@ -1,7 +1,8 @@
 import { browser } from 'wxt/browser'
 import { mediaPushRequestId } from '../lib/mediaPush'
+import { isSniffCurrentPageCommand, openMediaPanelMessage } from '../lib/sniffCommand'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
-import { canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isConcreteDownloadMime, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
+import { boundedConfidence, canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isConcreteDownloadMime, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, desktopTaskReadiness, handoffStatusLabel, handoffTerminalStatus, type BrowserHandoffPayload, type DesktopTaskReadiness } from '../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
@@ -12,8 +13,9 @@ import { contentDispositionFilename } from '../lib/contentDisposition'
 import { InspectionCache } from '../lib/inspectionCache'
 import { cookieLookupUrl, cookiePermissionAllows, normalizeCookiePermissionHosts } from '../lib/browserCookies'
 import { detectBrowserFamily, stableBrowserClientId } from '../lib/browserClient'
-import { BrowserDirectBackend } from '../lib/directBackend'
+import { BrowserDirectBackend, shouldAttachLoopbackBridge, shouldClearLoopbackBridge, shouldRouteThroughLoopbackBridge } from '../lib/directBackend'
 import { isEarlyDirectDownloadResponse, type ObservedDownloadResource } from '../lib/directResponse'
+import { clickIntentPollsForKind, earlyTakeoverRequiresClick } from '../lib/fileTakeover'
 import { ClickIntentStore } from '../lib/clickIntentStore'
 import { TakeoverSettingsSync } from '../lib/takeoverSettingsSync'
 import { SessionListStore } from '../lib/sessionListStore'
@@ -117,6 +119,29 @@ function extensionIdentity() {
       Boolean(navigatorWithBrave?.brave),
     ),
   }
+}
+
+const SENSITIVE_REPLAY_KEY = /(?:cookie|authorization|token|password|secret|credential|request[_-]?headers)/i
+
+function replayMetadata(value: Record<string, string> | undefined): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(value || {})
+      .map(([key, raw]) => {
+        const normalizedKey = String(key).trim().slice(0, 64)
+        let normalizedValue = String(raw || '').trim().slice(0, 512)
+        if (/url/i.test(normalizedKey)) {
+          try {
+            const url = new URL(normalizedValue)
+            url.search = ''
+            url.hash = ''
+            normalizedValue = url.toString()
+          } catch {}
+        }
+        return [normalizedKey, normalizedValue] as const
+      })
+      .filter(([key, value]) => Boolean(key && value) && !SENSITIVE_REPLAY_KEY.test(key))
+      .slice(0, 12),
+  )
 }
 
 async function settings() {
@@ -447,7 +472,7 @@ async function native(message: Record<string, unknown>, timeoutMs?: number): Pro
     client_id: await browserClientId(),
     browser: identity.browser,
   }
-  if (directBackend) {
+  if (directBackend && shouldRouteThroughLoopbackBridge(operation, true)) {
     try {
       return await directBackend.request(payload, {
         version: identity.version,
@@ -461,7 +486,9 @@ async function native(message: Record<string, unknown>, timeoutMs?: number): Pro
     }
   }
   const response = await nativeBridge.request(payload, timeoutMs, retryCount)
-  if (response?.bridge_base && response?.bridge_token) {
+  if (shouldClearLoopbackBridge(response)) {
+    directBackend = null
+  } else if (shouldAttachLoopbackBridge(response)) {
     directBackend = new BrowserDirectBackend(String(response.bridge_base), String(response.bridge_token))
   }
   return response
@@ -506,6 +533,10 @@ async function inspectAdaptive(resource: Omit<MediaResource, 'id' | 'seenAt'>, t
       const enriched = {
         ...normalized,
         ...metadata,
+        evidence: [...new Set([...(normalized.evidence || []), 'manifest_inspection'])].slice(-16),
+        owner: normalized.owner || 'manifest',
+        confidence: Math.max(boundedConfidence(normalized.confidence), 0.96),
+        replayContext: { ...(normalized.replayContext || {}), method: 'GET' },
       }
       await saveResource(enriched, tabId)
       await sendCapturedResource(tabId, enriched)
@@ -695,6 +726,10 @@ async function resourcePayload(
     user_agent: sourceIdentity.userAgent || identity.userAgent,
     request_headers: replayableRequestHeaders(pageChain?.requestHeaders || resource.requestHeaders),
     request_contexts: requestContexts,
+    evidence: [...new Set((resource.evidence || []).map(value => String(value).trim()).filter(Boolean))].slice(0, 16),
+    owner: String(resource.owner || '').slice(0, 160),
+    confidence: boundedConfidence(resource.confidence),
+    replay_context: replayMetadata(resource.replayContext),
     ...replay,
     extension_version: extension.version,
     extension_client_id: await browserClientId(),
@@ -813,12 +848,19 @@ async function rememberClickIntent(intent: DownloadClickIntent): Promise<void> {
   console.debug('HLS Downloader received an explicit click intent')
 }
 
-async function waitForClickIntent(url: string, finalUrl = '', referrer = '', chain?: RequestChain): Promise<DownloadClickIntent | undefined> {
+async function waitForClickIntent(
+  url: string,
+  finalUrl = '',
+  referrer = '',
+  chain?: RequestChain,
+  attempts = 12,
+): Promise<DownloadClickIntent | undefined> {
   // The trusted pointerdown message normally precedes the network request.
   // Keep only a short MV3 wake-up grace period: a classified DownloadItem is
   // already strong evidence, so waiting seconds for a missing optional intent
   // merely delays the desktop prompt.
-  for (let attempt = 0; attempt < 12; attempt += 1) {
+  const polls = Math.max(1, Math.min(12, Math.floor(attempts)))
+  for (let attempt = 0; attempt < polls; attempt += 1) {
     const intent = await clickIntentStore.consume({
       url,
       finalUrl,
@@ -827,7 +869,7 @@ async function waitForClickIntent(url: string, finalUrl = '', referrer = '', cha
       tabId: chain?.tabId,
     })
     if (intent) return intent
-    await new Promise(resolve => setTimeout(resolve, 25))
+    if (attempt + 1 < polls) await new Promise(resolve => setTimeout(resolve, 25))
   }
   return undefined
 }
@@ -905,6 +947,22 @@ function observedResponse(details: any, chain?: RequestChain) {
     tabId: details.tabId,
     frameId: details.frameId,
     requestHeaders: chain?.requestHeaders,
+    evidence: [
+      'response_headers',
+      ...(disposition ? ['content_disposition'] : []),
+      ...(chain?.requestId ? ['request_chain'] : []),
+    ],
+    owner: `tab:${Number(details.tabId ?? -1)}:frame:${Number(details.frameId ?? -1)}:${String(chain?.requestId || details.requestId || 'response')}`,
+    confidence: disposition
+      ? 0.99
+      : /^video\//i.test(mimeType) || /^audio\//i.test(mimeType)
+        ? 0.92
+        : 0.84,
+    replayContext: {
+      method: String(details.method || 'GET').toUpperCase(),
+      request_id: String(chain?.requestId || details.requestId || ''),
+      final_url: String(chain?.finalUrl || details.url || ''),
+    },
   }
   void saveResource(resource, details.tabId)
   void inspectAdaptive(resource, details.tabId)
@@ -948,8 +1006,9 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
         resource.url,
         resource.pageUrl || chain.pageUrl || '',
         chain,
+        clickIntentPollsForKind(resource.kind),
       )
-      if (!intent) return null
+      if (!intent && earlyTakeoverRequiresClick(resource.kind)) return null
       if (!shouldTakeover({
         url: resource.url,
         sourcePageUrl: resource.pageUrl,
@@ -957,10 +1016,10 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
         mimeType: resource.mimeType,
         filename: resource.filename,
         ...config,
-        ...intent,
-        explicitClick: true,
+        ...(intent || {}),
+        explicitClick: Boolean(intent),
         strongEvidence: true,
-      }) || (!intent.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) return null
+      }) || (!intent?.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) return null
       const response = await offer(resource, chain)
       // Keep a response with a handoff id even when its presentation was
       // rejected; onCreated must not issue a duplicate desktop task in that
@@ -1052,6 +1111,16 @@ export default defineBackground(() => {
   // Firefox/Chromium can restore an existing service worker without emitting a
   // fresh install event. Ensure an upgrade/restart always reconstructs menus.
   void installContextMenus()
+
+  const commandsApi = (browser as { commands?: { onCommand: { addListener: (listener: (command: string) => void) => void } } }).commands
+  commandsApi?.onCommand.addListener(command => {
+    if (!isSniffCurrentPageCommand(command)) return
+    void browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+      const tab = tabs[0]
+      if (tab?.id === undefined) return
+      void browser.tabs.sendMessage(tab.id, openMediaPanelMessage()).catch(() => undefined)
+    })
+  })
 
   ;(browser.webRequest.onSendHeaders.addListener as any)((details: any) => {
     requestChains.observeRequest(details)
@@ -1145,28 +1214,55 @@ export default defineBackground(() => {
         }
       }
       // Filename determination is useful for generated downloads but can take
-      // hundreds of milliseconds. The response-header path above never waits
-      // for it, which keeps ordinary link takeover prompt latency low.
-      const actualBrowser = await refreshedDownload(item.id, item)
-      if (!canContinueTakeover(actualBrowser.state, paused)) return
-      const actual = downloadRequestItem(actualBrowser, blobSource)
-      provisionalChain = requestChains.find(actual, Date.now(), blobSource?.tabId) || provisionalChain
+      // hundreds of milliseconds. A zip/exe/pdf URL is already a file: skip
+      // that wait so the confirm window can appear as soon as Chrome pauses.
+      const classifyBrowserItem = (
+        browserItem: Browser.downloads.DownloadItem,
+        chain?: RequestChain,
+      ) => {
+        const actual = downloadRequestItem(browserItem, blobSource)
+        const url = chain?.finalUrl || actual.finalUrl || actual.url
+        const contentDisposition = responseHeader(chain, 'content-disposition')
+        const responseName = responseFilename(contentDisposition)
+        const filename = responseName || actual.filename.split(/[\\/]/).pop() || ''
+        const mimeType = actual.mime || responseHeader(chain, 'content-type')
+        return {
+          actual,
+          url,
+          contentDisposition,
+          filename,
+          mimeType,
+          kind: classifyDownload(url, mimeType, filename, contentDisposition),
+        }
+      }
+      let classified = classifyBrowserItem(item, provisionalChain)
+      let actualBrowser = item
+      if (!classified.kind) {
+        actualBrowser = await refreshedDownload(item.id, item)
+        if (!canContinueTakeover(actualBrowser.state, paused)) return
+        provisionalChain = requestChains.find(downloadRequestItem(actualBrowser, blobSource), Date.now(), blobSource?.tabId) || provisionalChain
+        classified = classifyBrowserItem(actualBrowser, provisionalChain)
+      } else {
+        const [current] = await browser.downloads.search({ id: item.id }).catch(() => [])
+        actualBrowser = { ...item, ...(current || {}) }
+        if (!canContinueTakeover(actualBrowser.state, paused)) return
+      }
+      if (!classified.kind) return
       let intent = await waitForClickIntent(
-        actual.url,
-        actual.finalUrl,
-        actual.referrer || provisionalChain?.pageUrl || '',
+        classified.actual.url,
+        classified.actual.finalUrl,
+        classified.actual.referrer || provisionalChain?.pageUrl || '',
         provisionalChain,
+        clickIntentPollsForKind(classified.kind),
       )
       let chain = intent?.tabId === undefined
         ? provisionalChain
-        : requestChains.find(actual, Date.now(), intent.tabId) || provisionalChain
-      const url = chain?.finalUrl || actual.finalUrl || actual.url
-      const contentDisposition = responseHeader(chain, 'content-disposition')
-      const responseName = responseFilename(contentDisposition)
-      const filename = responseName || actual.filename.split(/[\\/]/).pop() || ''
-      const mimeType = actual.mime || responseHeader(chain, 'content-type')
-      const kind = classifyDownload(url, mimeType, filename, contentDisposition)
-      if (!kind) return
+        : requestChains.find(classified.actual, Date.now(), intent.tabId) || provisionalChain
+      if (chain && chain !== provisionalChain) {
+        classified = classifyBrowserItem(actualBrowser, chain)
+        if (!classified.kind) return
+      }
+      const { actual, url, filename, mimeType, kind } = classified
       const size = (actual.fileSize && actual.fileSize > 0 ? actual.fileSize : 0)
         || (actual.totalBytes && actual.totalBytes > 0 ? actual.totalBytes : 0)
         || trackedSize(chain)
@@ -1250,7 +1346,11 @@ export default defineBackground(() => {
       }
       return
     }
-    const resource = { id: resourceId(url), url, kind, pageUrl: tab?.url, title: tab?.title, tabId: tab?.id, seenAt: Date.now() }
+    const resource = {
+      id: resourceId(url), url, kind, pageUrl: tab?.url, title: tab?.title, tabId: tab?.id,
+      seenAt: Date.now(), evidence: ['context_menu'], owner: 'context-menu', confidence: 0.99,
+      replayContext: { method: 'GET', page_url: String(tab?.url || '') },
+    }
     if (info.menuItemId === 'hls-cast-link') {
       void castToDevice(resource).catch(error => console.warn('HLS Downloader context cast failed', error))
       return
@@ -1314,7 +1414,8 @@ export default defineBackground(() => {
         tabId: message.resource.tabId ?? sender.tab?.id,
         frameId: message.resource.frameId ?? sender.frameId,
       }
-      const request = message.type === 'offer' ? offer(resource) : downloadNow(resource)
+      const fromPage = /^https?:\/\//i.test(String(sender.url || ''))
+      const request = fromPage || message.type === 'offer' ? offer(resource) : downloadNow(resource)
       void request
         .then(response => sendResponse(response))
         .catch(error => sendResponse({ ok: false, error: String(error) }))

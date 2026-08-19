@@ -1,0 +1,9 @@
+{
+  "name": "com.ciaooo55.hls_downloader.v6",
+  "description": "HLS Downloader v6 Native Messaging Host",
+  "path": "HLSDownloaderNativeHost.exe",
+  "type": "stdio",
+  "allowed_extensions": [
+    "hls-downloader-store@ciaooo55.com"
+  ]
+}

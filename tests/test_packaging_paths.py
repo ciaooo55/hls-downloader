@@ -268,6 +268,7 @@ def _portable_upgrade_fixture(tmp_path: Path, *, registration_fails: bool = Fals
         (folder / "portable").write_text("", encoding="utf-8")
         (folder / "HLSDownloader.exe").write_text(version, encoding="utf-8")
         (folder / "HLSDownloaderCore.exe").write_text(version, encoding="utf-8")
+    (source / "HLSNativeShell.exe").write_text("new", encoding="utf-8")
     (source / "new-program-file.txt").write_text("new", encoding="utf-8")
     (target / "old-program-file.txt").write_text("old", encoding="utf-8")
     (source / "config.json").write_text('{"version":"new"}', encoding="utf-8")
@@ -462,7 +463,9 @@ def test_windows_package_uses_tauri_tray_and_clean_uninstall():
     assert 'Software\\Classes\\.url" ""' not in nsis_script
     assert 'DeleteRegValue HKCU "Software\\Classes\\.torrent" ""' in nsis_script
     assert 'DeleteRegKey HKCU "Software\\Classes\\.torrent"' not in nsis_script
-    assert "HLSDownloader.exe$\\\" $\\\"%1$\\\"" in nsis_script
+    assert "HLSNativeShell.exe$\\\" $\\\"%1$\\\"" in nsis_script
+    assert 'CreateShortcut "$SMPROGRAMS\\${APP_NAME}\\${APP_NAME}.lnk" "$INSTDIR\\HLSNativeShell.exe"' in nsis_script
+    assert 'MUI_FINISHPAGE_RUN "$INSTDIR\\HLSNativeShell.exe"' in nsis_script
     assert "$smokePortableMarker" in build_script
     assert 'Set-Content -LiteralPath $smokePortableMarker' in build_script
     assert 'Remove-Item -LiteralPath $smokePortableMarker' in build_script
@@ -510,6 +513,11 @@ def test_windows_package_uses_onedir_and_smoke_tests_graceful_shutdown():
     assert '${STAGE_DIR}\\app\\*' not in nsis_script
     assert '${STAGE_DIR}\\runtime\\*' not in nsis_script
     assert 'HLSDownloaderCore.exe' in nsis_script
+    assert 'HLSNativeShell.exe' in nsis_script
+    assert 'HLSNativeEngine.exe' in nsis_script
+    conf = json.loads((root / "frontend" / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
+    assert conf["app"]["windows"] == []
+    assert 'cargo build --release --locked' in build_script
     assert 'RMDir /r "$INSTDIR\\_internal"' in nsis_script
     assert 'RMDir /r "$INSTDIR\\app"' in nsis_script
     assert 'RMDir /r "$INSTDIR\\runtime"' in nsis_script
@@ -724,3 +732,25 @@ def test_frontend_sse_does_not_put_control_token_in_url():
     assert "file?token=${encodeURIComponent(getToken())}" not in api_source
     assert "playback/index.m3u8?session=${encodeURIComponent(session)}&token=${encodeURIComponent(getToken())}" not in api_source
     assert "playback/media?session=${encodeURIComponent(session)}&token=${encodeURIComponent(getToken())}" not in api_source
+
+
+def test_v6_package_pins_the_same_ffmpeg_as_the_5x_spec():
+    root = Path(__file__).resolve().parent.parent
+    v6_build = (root / "scripts" / "build_v6.ps1").read_text(encoding="utf-8")
+    spec_build = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
+    nsis = (root / "installer" / "hls-downloader-v6.nsi").read_text(encoding="utf-8")
+    smoke = (root / "scripts" / "smoke_v6_package.ps1").read_text(encoding="utf-8")
+
+    pin = 'a082da6d5ce0cbb9a8ad0112ab7f654d480c707b8caf9d332f4532d78b65257f'
+    url = "releases/download/autobuild-2026-08-01-13-21/ffmpeg-N-125881-g946272b79a-win64-gpl.zip"
+    assert pin in spec_build
+    assert pin in v6_build
+    assert url in spec_build
+    assert url in v6_build
+    assert 'Copy-MediaTool "ffmpeg.exe"' in v6_build
+    assert 'Copy-MediaTool "ffprobe.exe"' in v6_build
+    assert 'File "${STAGE_DIR}\\ffmpeg.exe"' in nsis
+    assert 'File "${STAGE_DIR}\\ffprobe.exe"' in nsis
+    assert 'File /nonfatal "${STAGE_DIR}\\ffmpeg.exe"' not in nsis
+    assert "ffmpeg.exe" in smoke
+    assert "ffprobe.exe" in smoke

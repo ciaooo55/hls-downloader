@@ -1,7 +1,11 @@
 param(
     [string[]]$Path = @(
         "scripts\build_installer.ps1",
+        "scripts\build_v6.ps1",
         "scripts\register-native-host.ps1",
+        "scripts\run_v6_gates.ps1",
+        "scripts\smoke_v6_package.ps1",
+        "scripts\vcvars.ps1",
         "scripts\shutdown-running.ps1",
         "scripts\smoke-installer-upgrade.ps1",
         "scripts\smoke-portable-upgrade.ps1",

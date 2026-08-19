@@ -1,12 +1,12 @@
 {
   "name": "hls-downloader-extension",
   "private": true,
-  "version": "3.0.39",
+  "version": "5.0.14",
   "type": "module",
   "scripts": {
     "build:chrome": "wxt build -b chrome",
     "build:firefox": "wxt build -b firefox",
-    "build": "pnpm build:chrome && pnpm build:firefox",
+    "build": "wxt build -b chrome && wxt build -b firefox",
     "zip:chrome": "wxt zip -b chrome",
     "zip:firefox": "wxt zip -b firefox",
     "typecheck": "wxt prepare && tsc --noEmit",

@@ -6,6 +6,7 @@ import {
   isConcreteDownloadMime,
   classifyPlaybackSource,
   classifyResource,
+  isSameDocumentPlaybackFallback,
   compactResources,
   isGenericMediaName,
   isUsefulResource,
@@ -27,6 +28,7 @@ import {
   pruneExpiredResources,
   RESOURCE_CACHE_RETENTION_MS,
   resourceBelongsToFrame,
+  boundedConfidence,
   isShortLivedMediaSignatureUsable,
   usesShortLivedMediaSignature,
   type MediaResource,
@@ -43,11 +45,25 @@ function resource(overrides: Partial<MediaResource> = {}): MediaResource {
 }
 
 describe('resource rules', () => {
+  it('bounds non-finite recognition confidence', () => {
+    expect(boundedConfidence(Number.NaN, 0.58)).toBe(0.58)
+    expect(boundedConfidence(Number.POSITIVE_INFINITY)).toBe(0)
+    expect(boundedConfidence(1.7)).toBe(1)
+  })
+
   it('filters HLS segments but retains manifests', () => {
     expect(classifyResource('https://cdn.test/a.m3u8')).toBe('hls')
     expect(classifyResource('https://cdn.test/0001.ts')).toBeNull()
     expect(classifyResource('https://cdn.test/file.torrent?token=1')).toBe('file')
     expect(classifyResource('https://cdn.test/get?id=1', 'application/x-bittorrent')).toBe('file')
+    expect(classifyResource('https://mirror.test/pkg.meta4')).toBe('file')
+    expect(classifyResource('https://mirror.test/pkg.metalink', 'application/metalink4+xml')).toBe('file')
+    expect(classifyResource('https://rr1.googlevideo.test/videoplayback?expire=1&mime=video%2Fmp4&itag=18')).toBe('media')
+    expect(classifyResource('https://rr1.googlevideo.test/videoplayback?id=1', 'application/octet-stream')).toBe('media')
+    expect(classifyResource('https://api.bilibili.test/x/player/playurl?cid=1', 'application/json')).toBeNull()
+    expect(classifyResource('https://api.bilibili.test/x/player/playurl?cid=1&mime=video%2Fmp4', 'application/json')).toBeNull()
+    expect(classifyResource('https://cdn.test/playlist.m3u')).toBe('hls')
+    expect(classifyResource('https://cdn.test/poster.jpg', 'image/jpeg')).toBeNull()
   })
   it('uses an actually playing media element as direct classification evidence', () => {
     expect(classifyPlaybackSource('https://cdn.test/movie.mp4')).toBe('media')
@@ -55,7 +71,10 @@ describe('resource rules', () => {
     expect(classifyPlaybackSource('https://cdn.test/master.m3u8')).toBe('hls')
     expect(classifyPlaybackSource('https://cn.pornhub.com/view_video.php?viewkey=123')).toBeNull()
     expect(classifyPlaybackSource('https://cdn.test/player.php?id=42', 'video/mp4')).toBe('media')
+    expect(classifyPlaybackSource('https://rr1.googlevideo.test/videoplayback?expire=1&mime=video%2Fmp4&itag=18')).toBe('media')
     expect(classifyPlaybackSource('blob:https://site.test/opaque')).toBeNull()
+    expect(classifyPlaybackSource('https://cdn.test/poster.jpg')).toBeNull()
+    expect(classifyPlaybackSource('https://cdn.test/player.js')).toBeNull()
   })
   it('deduplicates resources', () => {
     const item = { id: '1', url: 'https://a.test/v.mp4', kind: 'media' as const, seenAt: Date.now() }
@@ -372,6 +391,18 @@ describe('resource rules', () => {
       startedAt: now,
     }, 2).map(item => item.id)).toEqual(['second'])
   })
+  it('binds YouTube-style videoplayback MSE bytes to the playing video', () => {
+    const now = Date.now()
+    const stream = 'https://rr1.googlevideo.test/videoplayback?expire=1&mime=video%2Fmp4&itag=18'
+    const item = resource({
+      id: 'yt', kind: 'media', url: stream, seenAt: now,
+    })
+    expect(playerPlaybackResources([item], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: [stream],
+      startedAt: now,
+    }, 1).map(entry => entry.id)).toEqual(['yt'])
+  })
   it('does not assign origin-only MSE evidence to either player', () => {
     const now = Date.now()
     const first = resource({
@@ -408,6 +439,34 @@ describe('resource rules', () => {
       mseResourceUrls: ['https://cdn.test/live/shared-202.m4s?token=new'],
       startedAt: now,
     }, 2).map(item => item.id)).toEqual(['second'])
+  })
+  it('binds an exact MSE progressive MP4 even when the network classified it as a file', () => {
+    const now = Date.now()
+    const item = resource({
+      id: 'movie', kind: 'file', url: 'https://cdn.test/movie.mp4?sig=old', seenAt: now,
+    })
+    expect(playerPlaybackResources([item], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: ['https://cdn.test/movie.mp4?sig=new'],
+      startedAt: now,
+    }, 1).map(entry => entry.id)).toEqual(['movie'])
+  })
+  it('does not bind a same-folder file from weak MSE path affinity', () => {
+    const now = Date.now()
+    const preview = resource({
+      id: 'preview', kind: 'file', url: 'https://cdn.test/vod/preview.mp4', seenAt: now,
+    })
+    expect(playerPlaybackResources([preview], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: ['https://cdn.test/vod/segment-1.m4s'],
+      startedAt: now,
+    }, 1)).toEqual([])
+  })
+  it('does not treat a watch page URL as the playing media file', () => {
+    expect(isSameDocumentPlaybackFallback('https://site.test/watch?v=1', 'https://site.test/watch?v=1')).toBe(true)
+    expect(isSameDocumentPlaybackFallback('https://site.test/watch?v=1#player', 'https://site.test/watch?v=1')).toBe(true)
+    expect(isSameDocumentPlaybackFallback('https://site.test/movie.mp4', 'https://site.test/movie.mp4')).toBe(false)
+    expect(isSameDocumentPlaybackFallback('https://cdn.test/play?id=42', 'https://site.test/watch')).toBe(false)
   })
   it('associates a response Blob URL with its exact direct media resource', () => {
     const now = Date.now()
@@ -579,6 +638,7 @@ describe('resource rules', () => {
   })
   it('takes over ordinary files whose URL already has a download extension', () => {
     expect(looksLikeDownloadFile('https://mirror.test/ubuntu-24.04.iso?token=1')).toBe(true)
+    expect(looksLikeDownloadFile('https://site.test/export.csv')).toBe(true)
     expect(looksLikeDownloadFile('https://site.test/export.php?file=ubuntu.iso')).toBe(false)
     expect(classifyDownload('https://cdn.test/ubuntu-24.04.iso', 'application/octet-stream', 'download')).toBe('file')
     expect(classifyDownload('https://cdn.test/ubuntu-24.04.iso', '', '')).toBe('file')
@@ -586,6 +646,12 @@ describe('resource rules', () => {
     expect(classifyDownload('https://cdn.test/archive.tar.gz', 'application/octet-stream', '')).toBe('file')
     expect(classifyDownload('https://cdn.test/Setup.dmg', 'application/octet-stream', 'download')).toBe('file')
     expect(classifyDownload('https://cdn.test/report.docx', 'application/octet-stream', '')).toBe('file')
+    expect(classifyDownload('https://cdn.test/legacy.f4v', '', '')).toBe('file')
+    expect(classifyDownload('https://cdn.test/clip.3gp', '', '')).toBe('file')
+    expect(looksLikeDownloadFile('https://cdn.test/song.aac')).toBe(true)
+    expect(classifyDownload('https://mirror.test/pkg.meta4', 'application/metalink4+xml', 'pkg.meta4')).toBe('file')
+    expect(classifyDownload('https://mirror.test/pkg.metalink', '', 'pkg.metalink')).toBe('file')
+    expect(isConcreteDownloadMime('application/metalink4+xml')).toBe(true)
     expect(classifyDownload('https://site.test/advert.php', 'application/octet-stream')).toBeNull()
     expect(classifyDownload('https://cdn.test/get?id=1', 'application/octet-stream', 'download')).toBeNull()
   })
@@ -763,6 +829,7 @@ describe('resource rules', () => {
       ctrlForce: false,
       at: 1000,
     }
+    const downloadControl = { ...intent, controlHint: true }
     expect(matchesDownloadClick(intent, {
       url: 'https://cdn.test/start',
       finalUrl: 'https://cdn.test/final.zip',
@@ -785,24 +852,33 @@ describe('resource rules', () => {
     // Gateway/JS downloads often report a final CDN URL that differs from the
     // clicked href. Same-tab + same-page (or missing Chrome referrer) still
     // counts as the user's click; cross-tab must stay rejected.
-    expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
+    expect(matchesDownloadClick({ ...downloadControl, tabId: 8 }, {
       url: 'https://cdn.test/generated.zip',
       referrer: 'https://site.test/download',
       tabId: 8,
     }, 2000)).toBe(true)
-    expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
+    expect(matchesDownloadClick({ ...downloadControl, tabId: 8 }, {
       url: 'https://cdn.test/generated.zip',
       referrer: 'https://site.test/download',
       tabId: 9,
     }, 2000)).toBe(false)
-    expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
+    expect(matchesDownloadClick({ ...downloadControl, tabId: 8 }, {
       url: 'https://cdn.test/generated.zip',
       tabId: 8,
     }, 2000)).toBe(true)
-    expect(matchesDownloadClick({ ...intent, tabId: 8 }, {
+    expect(matchesDownloadClick({ ...downloadControl, tabId: 8 }, {
       url: 'https://cdn.test/generated.zip',
       tabId: 8,
     }, 4000)).toBe(false)
+    // A play-page href without a download control must not claim a later zip.
+    expect(matchesDownloadClick({
+      href: 'https://site.test/watch/episode-1?download=0',
+      pageUrl: 'https://site.test/watch/episode-1?download=0',
+      altBypass: false, ctrlForce: false, at: 1000, tabId: 8,
+    }, {
+      url: 'https://cdn.test/generated.zip',
+      tabId: 8,
+    }, 2000)).toBe(false)
     expect(matchesDownloadClick({ ...intent, tabId: 8, opensNewTab: true }, {
       url: 'https://cdn.test/start',
       finalUrl: 'https://cdn.test/file.zip',

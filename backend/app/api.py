@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import os
 import re
 import secrets
 import shutil
@@ -47,7 +48,7 @@ from .schemas import (
     TvboxTaskPush,
     TvboxPush,
 )
-from .config import apply_settings_update, settings, save_settings
+from .config import PROJECT_ROOT, apply_settings_update, settings, save_settings
 from .download_category import resolve_category_output_dir
 from .credentials import SECRET_MASK, mask_site_profiles, restore_masked_site_profiles
 from .downloader.task_manager import (
@@ -66,9 +67,27 @@ from .downloader.playback import (
     PlaybackSessionError,
     playback_service,
 )
-from .desktop_runtime import activate_window, present_browser_handoff, has_browser_handoff_presenter, is_desktop_handoff_session, request_shutdown
+from .desktop_runtime import (
+    activate_window,
+    has_browser_handoff_presenter,
+    has_pending_native_handoffs,
+    is_desktop_handoff_session,
+    native_shell_expected,
+    present_browser_handoff,
+    request_shutdown,
+)
 from .desktop_runtime import register_activation, register_browser_handoff, register_shutdown, set_desktop_handoff_session
 from .native_desktop import native_desktop_session, request_core_shutdown
+from .native_shell import (
+    boot_native_shell,
+    is_native_shell_ready,
+    maybe_spawn_desktop_ui_process,
+    native_shell_status,
+    native_shell_supervisor,
+    shutdown_native_shell,
+    start_native_shell_ipc,
+    stop_native_shell_ipc,
+)
 from .url_recognition import RecognitionError, recognize_url
 from .page_harvest import HarvestError, harvest_page, probe_harvest_links
 from .updater import (
@@ -412,9 +431,12 @@ async def create_browser_handoff(request: Request, x_token: str = Header(default
     url = payload["url"]
     _check_host(url)
     item = browser_handoffs.create(payload)
-    presentation = present_browser_handoff(item.id)
+    presentation = present_browser_handoff(item.id, snapshot=item.public())
     mode = str(presentation.get("mode") or "none")
-    if mode == "desktop-pending":
+    if mode == "native-shell":
+        # Pre-created confirmation window already has the offer snapshot.
+        browser_handoffs.mark_presentation(item.id, "presented")
+    elif mode in {"desktop-pending", "native-shell-pending"}:
         browser_handoffs.mark_presentation(item.id, "queued")
     elif mode == "desktop":
         # Presenter thread will upgrade this to presented; do not overwrite later.
@@ -429,6 +451,9 @@ async def create_browser_handoff(request: Request, x_token: str = Header(default
     body["presentation_mode"] = mode
     body["presentation_ok"] = bool(presentation.get("ok"))
     body["presentation_queued"] = bool(presentation.get("queued"))
+    body["presentable"] = bool(presentation.get("presentable"))
+    if presentation.get("snapshot"):
+        body["snapshot"] = presentation["snapshot"]
     return body
 
 
@@ -481,13 +506,25 @@ async def activate_browser_desktop(x_token: str = Header(default="")):
 async def browser_presenter_status(x_token: str = Header(default="")):
     """Desktop shell readiness for cold-start handoffs."""
     _check_browser_token(x_token)
-    ready = has_browser_handoff_presenter()
-    session = is_desktop_handoff_session()
+    shell_ready = is_native_shell_ready()
+    expected = native_shell_expected() or has_pending_native_handoffs()
+    ready = has_browser_handoff_presenter() or shell_ready
+    session = is_desktop_handoff_session() or shell_ready or expected
+    if shell_ready:
+        mode = "native-shell"
+    elif expected:
+        mode = "native-shell-pending"
+    elif has_browser_handoff_presenter():
+        mode = "desktop"
+    elif is_desktop_handoff_session():
+        mode = "desktop-pending"
+    else:
+        mode = "ui-fallback"
     return {
         "ok": True,
         "ready": ready,
         "session": session,
-        "mode": "desktop" if ready else ("desktop-pending" if session else "ui-fallback"),
+        "mode": mode,
     }
 
 
@@ -603,6 +640,18 @@ async def wait_browser_handoff(handoff_id: str, x_token: str = Header(default=""
         await asyncio.sleep(0.25)
 
 
+def _browser_offer_task_type(item) -> TaskType:
+    """Trust the overlay's HLS/DASH kind; URL-only AUTO misses .m3u / mpegurl variants."""
+    kind = str(getattr(item, "resource_kind", "") or "").lower()
+    if kind == "hls":
+        return TaskType.HLS
+    if kind == "dash":
+        return TaskType.DASH
+    if kind == "magnet":
+        return TaskType.TORRENT
+    return TaskType.AUTO
+
+
 async def _create_browser_task(item, output_dir: str = ""):
     expired = manager.find_expired_request_task(item.url, item.source_page_url)
     if expired is not None:
@@ -624,7 +673,7 @@ async def _create_browser_task(item, output_dir: str = ""):
         )
     task = await manager.create_task(
         url=item.url,
-        task_type=TaskType.AUTO,
+        task_type=_browser_offer_task_type(item),
         source_page_url=item.source_page_url,
         mime_type=item.mime_type,
         referer=item.referer,
@@ -737,6 +786,98 @@ async def poll_native_desktop_commands(
 ):
     _check_token(x_token)
     return await asyncio.to_thread(native_desktop_session.poll, after, timeout)
+
+
+@router.post("/desktop/native-shell/boot")
+async def boot_resident_native_shell(x_token: str = Header(default="")):
+    """Mark the supervisor resident: tray + warm confirm/progress/complete windows."""
+    _check_token(x_token)
+    return boot_native_shell()
+
+
+@router.post("/desktop/native-shell/shutdown")
+async def shutdown_resident_native_shell(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return shutdown_native_shell()
+
+
+@router.get("/desktop/native-shell/status")
+async def get_native_shell_status(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return native_shell_status()
+
+
+@router.get("/desktop/native-shell/events")
+async def poll_native_shell_events(
+    after: int = 0,
+    timeout: float = 1.0,
+    x_token: str = Header(default=""),
+):
+    _check_token(x_token)
+    return await asyncio.to_thread(native_shell_supervisor().wait_event, after, timeout)
+
+
+@router.post("/desktop/native-shell/main/open")
+async def open_native_shell_main(x_token: str = Header(default="")):
+    _check_token(x_token)
+    try:
+        return native_shell_supervisor().open_main()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/desktop/native-shell/main/hide")
+async def hide_native_shell_main(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return native_shell_supervisor().hide_main()
+
+
+@router.post("/desktop/native-shell/settings")
+async def open_native_shell_settings(x_token: str = Header(default="")):
+    """Show settings / new-task / device picker. Idle native-shell has no WebView."""
+    _check_token(x_token)
+    spawned = maybe_spawn_desktop_ui_process(project_root=PROJECT_ROOT)
+    activated = activate_window()
+    return {"ok": bool(activated or spawned)}
+
+
+@router.post("/desktop/native-shell/ipc/start")
+async def start_resident_native_shell_ipc(x_token: str = Header(default="")):
+    _check_token(x_token)
+    return start_native_shell_ipc()
+
+
+@router.post("/desktop/native-shell/ipc/stop")
+async def stop_resident_native_shell_ipc(x_token: str = Header(default="")):
+    _check_token(x_token)
+    stop_native_shell_ipc()
+    return {"ok": True}
+
+
+@router.post("/desktop/native-shell/progress")
+async def present_native_shell_progress(request: Request, x_token: str = Header(default="")):
+    _check_token(x_token)
+    body = await request.json()
+    tasks = body.get("tasks") if isinstance(body, dict) else None
+    if not isinstance(tasks, list):
+        raise HTTPException(status_code=400, detail="progress tasks missing")
+    try:
+        return native_shell_supervisor().progress(tasks)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/desktop/native-shell/complete")
+async def present_native_shell_complete(request: Request, x_token: str = Header(default="")):
+    _check_token(x_token)
+    body = await request.json()
+    item = body.get("item") if isinstance(body, dict) else None
+    if not isinstance(item, dict):
+        raise HTTPException(status_code=400, detail="complete item missing")
+    try:
+        return native_shell_supervisor().complete(item)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/desktop/handoffs/{handoff_id}/presented")
@@ -1402,10 +1543,15 @@ async def create_browser_media_push(request: Request, x_token: str = Header(defa
             )
             _browser_media_pushes.pop(oldest_id, None)
         _browser_media_pushes[request_id] = {"id": request_id, "kind": kind, "resource": resource, "created_at": now, "status": "pending", "message": "等待在桌面端选择设备"}
-    if not native_desktop_session.push("media_push", request_id):
-        with _browser_media_push_lock:
-            _browser_media_pushes.pop(request_id, None)
-        raise HTTPException(status_code=409, detail="桌面界面尚未就绪")
+    native_desktop_session.queue("media_push", request_id)
+    if not native_desktop_session.status().get("active"):
+        spawned = maybe_spawn_desktop_ui_process(project_root=PROJECT_ROOT)
+        if spawned is None and not os.environ.get("PYTEST_CURRENT_TEST"):
+            with _browser_media_push_lock:
+                pending_item = _browser_media_pushes.get(request_id)
+                if pending_item is not None and pending_item.get("status") == "pending":
+                    pending_item["status"] = "failed"
+                    pending_item["message"] = "未能打开桌面设置窗口，请先打开下载器再投屏"
     activate_window()
     return {"ok": True, "id": request_id}
 
@@ -2443,5 +2589,4 @@ def _to_resp(task) -> TaskResponse:
         available_actions=manager.get_available_actions(task),
         queue_position=manager.get_queue_position(task),
     )
-
 

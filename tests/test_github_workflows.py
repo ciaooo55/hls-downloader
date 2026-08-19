@@ -1,9 +1,20 @@
+import re
 from pathlib import Path
 
 from backend.app.version import APP_VERSION
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _v6_version() -> str:
+    match = re.search(
+        r'^version\s*=\s*"([^"]+)"',
+        (ROOT / "native_ui" / "Cargo.toml").read_text(encoding="utf-8"),
+        flags=re.MULTILINE,
+    )
+    assert match, "native_ui version not found"
+    return match.group(1)
 
 
 def _workflow(name: str) -> str:
@@ -36,14 +47,19 @@ def test_ci_runs_windows_python_and_frontend_checks():
     assert "scripts/smoke_extension_browsers.py" in workflow
     assert "scripts/smoke_extension_takeover.py" in workflow
     assert "actions/setup-java@v5" not in workflow
+    assert "working-directory: native_shell" in workflow
+    assert "cargo test --locked --lib --no-default-features" in workflow
+    assert "working-directory: native_ui" in workflow
     assert "permissions:\n  contents: read" in workflow
 
 
 def test_release_builds_only_windows_assets_and_publishes_tags():
     workflow = _workflow("release.yml")
+    v6 = _v6_version()
 
     assert "workflow_dispatch:" in workflow
-    assert f'default: "{APP_VERSION}"' in workflow
+    assert f'default: "{v6}"' in workflow
+    assert f'default: "{APP_VERSION}"' not in workflow
     assert "include_extensions:" in workflow
     assert "Upload browser extension ZIPs for this release" in workflow
     assert "tags:" in workflow and "v*" in workflow
@@ -53,10 +69,12 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "ubuntu-latest" not in workflow
     assert "choco install ffmpeg nsis" not in workflow
     assert "Build Windows packages" in workflow
-    assert "scripts\\build_installer.ps1" in workflow
-    assert '$buildArgs = @{ Version = $version }' in workflow
-    assert "$buildArgs.IncludeExtensionAssets = $true" in workflow
-    assert '$buildArgs = @("-Version", $version)' not in workflow
+    assert "scripts\\build_v6.ps1" in workflow
+    assert "scripts\\build_installer.ps1" not in workflow
+    assert "scripts/smoke_v6_package.ps1" in workflow
+    assert "scripts/smoke_real_download.py --archive $archive" not in workflow
+    assert "scripts/smoke-portable-upgrade.ps1" not in workflow
+    assert "scripts/smoke-installer-upgrade.ps1" not in workflow
     assert "$prefix-Windows-x64-Setup.exe" in workflow
     assert "$prefix-Windows-x64-Portable.zip" in workflow
     assert "m3u8-sniffer.user.js" not in workflow
@@ -72,13 +90,11 @@ def test_release_builds_only_windows_assets_and_publishes_tags():
     assert "--cov-fail-under=60" in workflow
     assert "cargo check --locked --all-targets" in workflow
     assert "cargo clippy --locked --all-targets -- -D warnings" in workflow
+    assert "cargo test --locked --lib --no-default-features" in workflow
     assert "browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd" in workflow
     assert "browser-actions/setup-firefox@0bc507ddf224827e3b1af68e014d5e42ab93e795" in workflow
     assert "scripts/smoke_extension_browsers.py" in workflow
     assert "scripts/smoke_extension_takeover.py" in workflow
-    assert "scripts/smoke_real_download.py --archive $archive" in workflow
-    assert "scripts/smoke-portable-upgrade.ps1" in workflow
-    assert "scripts/smoke-installer-upgrade.ps1" in workflow
     assert "SHA256SUMS.txt" not in workflow
     assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
     assert "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131" in workflow
@@ -121,12 +137,14 @@ def test_readme_documents_windows_release_assets():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "ciaooo55/hls-downloader/actions/workflows/ci.yml" in readme
-    assert f"HLSDownloader-v{APP_VERSION}-Windows-x64-Setup.exe" in readme
-    assert f"HLSDownloader-v{APP_VERSION}-Windows-x64-Portable.zip" in readme
+    assert "HLSDownloader-v6.0.0-Windows-x64-Setup.exe" in readme
+    assert "HLSDownloader-v6.0.0-Windows-x64-Portable.zip" in readme
+    assert "scripts\\build_v6.ps1" in readme or "build_v6.ps1" in readme
     assert "m3u8-sniffer.user.js" not in readme
     assert "https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/" in readme
-    assert f"HLSDownloader-v{APP_VERSION}-Firefox-Unsigned.zip" not in readme
-    assert f"HLSDownloader-v{APP_VERSION}-Firefox-Source.zip" not in readme
+    assert "HLSDownloader-v6.0.0-Firefox-Unsigned.zip" not in readme
+    assert "HLSDownloader-v6.0.0-Firefox-Source.zip" not in readme
+    assert f"HLSDownloader-v{APP_VERSION}-Windows-x64-Setup.exe" not in readme
     assert "SHA256SUMS.txt" not in readme
     assert "Windows 10/11" in readme
     assert "git tag v" in readme

@@ -20,6 +20,13 @@ from urllib.parse import parse_qsl, urlencode, unquote, unquote_to_bytes, urlpar
 import httpx
 
 from ..config import settings
+from ..native_engine import (
+    locate_native_engine_executable,
+    native_job_exit_code,
+    resolved_proxy_url,
+    start_native_job,
+    write_native_job,
+)
 from ..checksum import apply_http_content_checksum, parse_http_content_checksum, prefer_http_content_checksum, verify_task_checksum
 from ..models import Task, TaskStatus
 from ..naming import is_generic_media_name
@@ -27,7 +34,14 @@ from ..request_context import build_task_headers, replay_request_body
 from ..network_proxy import policy_httpx_client
 from ..utils import atomic_write_text, sanitize_filename
 from .engine import SeeklessEngine, publish_path, task_output_dir, task_work_dir
-from .disk_space import MIN_FREE_RESERVE, ensure_download_capacity, ensure_free_space
+from .disk_space import (
+    MIN_FREE_RESERVE,
+    ensure_download_capacity,
+    ensure_free_space,
+    open_payload_for_range,
+    preallocate_payload,
+    write_payload,
+)
 from .errors import (
     MetadataProbeTimeout,
     SharedRetryWindow,
@@ -140,6 +154,24 @@ def _ensure_filename_extension(filename: str, content_type: str) -> str:
 def _response_decodes_content(response: httpx.Response) -> bool:
     encoding = response.headers.get("content-encoding", "").strip().lower()
     return bool(encoding and encoding != "identity")
+
+
+def _identity_body(response: httpx.Response):
+    """Yield payload bytes, preferring an unconsumed raw stream.
+
+    Live Range downloads have already rejected Content-Encoding, so
+    ``aiter_raw()`` skips httpx ByteChunker reassembly. MockTransport and
+    other fully-buffered responses already have ``_content`` and mark the
+    stream consumed; ``aiter_bytes()`` still yields that buffer.
+    """
+    if _response_decodes_content(response) or hasattr(response, "_content"):
+        return response.aiter_bytes()
+    if getattr(response, "is_stream_consumed", False) or getattr(response, "is_closed", False):
+        return response.aiter_bytes()
+    aiter_raw = getattr(response, "aiter_raw", None)
+    if aiter_raw is None:
+        return response.aiter_bytes()
+    return aiter_raw()
 
 
 def _metadata_probe_can_skip_body(
@@ -1240,9 +1272,9 @@ class HTTPDownloader(SeeklessEngine):
             task.filename = sanitize_filename(filename if not requested_name or is_generic_media_name(requested_name) else requested_name)
             output = _reserve_output_path(task_output_dir(task) / task.filename)
             task.engine_state["reserved_output_path"] = str(output)
-            with part_path.open("wb") as stream:
+            with part_path.open("wb", buffering=0) as stream:
                 first_chunk = True
-                async for chunk in response.aiter_bytes():
+                async for chunk in _identity_body(response):
                     if first_chunk:
                         validate_download_response(
                             task,
@@ -1258,7 +1290,7 @@ class HTTPDownloader(SeeklessEngine):
                     if self._is_pausing():
                         return output
                     await throttle_bytes(len(chunk), task)
-                    stream.write(chunk)
+                    write_payload(stream, chunk)
                     task.progress.downloaded_bytes += len(chunk)
                     window.add(len(chunk))
                     self._apply_speed(window)
@@ -1341,43 +1373,55 @@ class HTTPDownloader(SeeklessEngine):
                             operation="下载临时盘",
                         )
 
-                    marked = int(task.engine_state.get("sequential_bytes") or 0)
-                    trusted_sequential = marked > 0 and current_size == marked
-                    if total <= 0 or not metadata["ranges"] or (trusted_sequential and (total <= 0 or current_size < total)):
-                        self._sequential = True
-                        self._discard_untrusted_sequential_part(part_path)
-                        await self._download_sequential(client, headers, part_path)
-                    else:
-                        try:
-                            await self._download_ranges(client, headers, part_path, state_path, metadata)
-                        except _HTTPRangeUnsupported:
-                            # A CDN can advertise 206 during probing and later
-                            # ignore Range or fail If-Range after an object
-                            # rotation. Never stitch its full 200 response into
-                            # sparse offsets: discard the range checkpoint, the
-                            # preallocated sparse part, and restart one verified
-                            # sequential transfer from byte 0.
+                    used_native = False
+                    if self._native_http_engine_eligible(state_path):
+                        used_native = await self._download_with_native_engine(
+                            headers,
+                            part_path,
+                            state_path,
+                            metadata,
+                        )
+                    if not used_native:
+                        marked = int(task.engine_state.get("sequential_bytes") or 0)
+                        current_size = part_path.stat().st_size if part_path.exists() else 0
+                        trusted_sequential = marked > 0 and current_size == marked
+                        if total <= 0 or not metadata["ranges"] or (trusted_sequential and (total <= 0 or current_size < total)):
                             self._sequential = True
-                            self._completed_chunks.clear()
-                            self._claimed_chunks.clear()
-                            state_path.unlink(missing_ok=True)
-                            part_path.unlink(missing_ok=True)
-                            task.engine_state.pop("sequential_bytes", None)
-                            task.progress.completed_segments = 0
-                            task.progress.downloaded_bytes = 0
-                            task.progress.progress_percent = 0.0
-                            self._set_stage(
-                                "downloading",
-                                "服务器已停止支持分段，正在自动切换单连接并从头安全下载",
-                            )
+                            self._discard_untrusted_sequential_part(part_path)
                             await self._download_sequential(client, headers, part_path)
+                        else:
+                            try:
+                                await self._download_ranges(client, headers, part_path, state_path, metadata)
+                            except _HTTPRangeUnsupported:
+                                # A CDN can advertise 206 during probing and later
+                                # ignore Range or fail If-Range after an object
+                                # rotation. Never stitch its full 200 response into
+                                # sparse offsets: discard the range checkpoint, the
+                                # preallocated sparse part, and restart one verified
+                                # sequential transfer from byte 0.
+                                self._sequential = True
+                                self._completed_chunks.clear()
+                                self._claimed_chunks.clear()
+                                state_path.unlink(missing_ok=True)
+                                part_path.unlink(missing_ok=True)
+                                self._unlink_native_ranges_sidecar(part_path)
+                                task.engine_state.pop("sequential_bytes", None)
+                                task.progress.completed_segments = 0
+                                task.progress.downloaded_bytes = 0
+                                task.progress.progress_percent = 0.0
+                                self._set_stage(
+                                    "downloading",
+                                    "服务器已停止支持分段，正在自动切换单连接并从头安全下载",
+                                )
+                                await self._download_sequential(client, headers, part_path)
 
-            if self._is_canceled():
+            native_exit = str(task.engine_state.pop("native_exit", "") or "")
+            if self._is_canceled() or native_exit == "canceled":
                 task.status = TaskStatus.CANCELED
                 task.finished_at = datetime.now().isoformat()
                 self._set_stage("canceled", "已取消")
                 return
-            if self._is_pausing():
+            if self._is_pausing() or native_exit == "paused":
                 task.status = TaskStatus.PAUSED
                 self._set_stage("paused", "已暂停，可继续下载")
                 return
@@ -1462,6 +1506,259 @@ class HTTPDownloader(SeeklessEngine):
                 and output.stat().st_size == 0
             ):
                 output.unlink(missing_ok=True)
+
+    def _native_http_engine_eligible(self, state_path: Path) -> bool:
+        if self._is_replay_post():
+            return False
+        pytest_active = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+        test_native = os.environ.get("HLS_TEST_NATIVE_HTTP", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if pytest_active and not test_native:
+            return False
+        if os.environ.get("HLS_NATIVE_HTTP_ENGINE", "").strip().lower() in {"0", "false", "off"}:
+            return False
+        if not bool(getattr(settings, "native_http_engine", False)):
+            return False
+        from .throttle import effective_download_speed_limit_kib
+
+        if effective_download_speed_limit_kib() > 0:
+            return False
+        if state_path.exists():
+            try:
+                saved = json.loads(state_path.read_text(encoding="utf-8"))
+                if saved.get("ranges") or saved.get("completed"):
+                    return False
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+        return locate_native_engine_executable() is not None
+
+    def _apply_native_progress(self, progress_path: Path) -> None:
+        try:
+            payload = json.loads(progress_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return
+        downloaded = int(payload.get("downloaded") or 0)
+        total = int(payload.get("total") or self.task.progress.total_bytes or 0)
+        speed = float(payload.get("speed") or 0.0)
+        self.task.progress.downloaded_bytes = max(0, downloaded)
+        self.task.progress.speed_bytes_per_sec = max(0.0, speed)
+        if total > 0:
+            self.task.progress.total_bytes = total
+            self.task.progress.progress_percent = min(100.0, downloaded * 100 / total)
+            remaining = max(0, total - downloaded)
+            self.task.progress.eta_seconds = remaining / speed if speed > 0 else 0.0
+        self._publish()
+
+    def _write_native_control(self, control_path: Path, value: str) -> None:
+        atomic_write_text(control_path, value)
+
+    def _native_job_payload(
+        self,
+        *,
+        headers: dict[str, str],
+        part_path: Path,
+        control_path: Path,
+        progress_path: Path,
+        sequential: bool,
+        resume_from: int,
+        total: int,
+        metadata: dict,
+    ) -> dict:
+        source_url = self._download_url or self.task.url
+        strong_etag = _strong_etag(str(metadata.get("etag") or ""))
+        last_modified = str(metadata.get("last_modified") or "").strip()
+        return {
+            "url": source_url,
+            "headers": dict(headers),
+            "output": str(part_path),
+            "connections": max(1, int(self.task.concurrency or 1)),
+            "chunk_bytes": max(64 * 1024, int(self._chunk_size)),
+            "total": 0 if sequential else max(0, int(total)),
+            "sequential": bool(sequential),
+            "resume_from": max(0, int(resume_from)),
+            "proxy": resolved_proxy_url(source_url),
+            "resource_key": _resume_resource_identity(self.task.url),
+            "etag": strong_etag,
+            "last_modified": last_modified,
+            "control": str(control_path),
+            "progress": str(progress_path),
+        }
+
+    async def _await_native_engine(self, process, control_path: Path, progress_path: Path) -> int:
+        try:
+            while True:
+                self._apply_native_progress(progress_path)
+                if self._is_canceled():
+                    self._write_native_control(control_path, "cancel")
+                elif self._is_pausing():
+                    self._write_native_control(control_path, "pause")
+                if process is None:
+                    code = native_job_exit_code(progress_path)
+                    if code is not None:
+                        return int(code)
+                else:
+                    code = process.poll()
+                    if code is not None:
+                        return int(code)
+                await asyncio.sleep(0.2)
+        except asyncio.CancelledError:
+            self._write_native_control(
+                control_path,
+                "cancel" if self._is_canceled() else "pause",
+            )
+            if process is None:
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline:
+                    if native_job_exit_code(progress_path) is not None:
+                        break
+                    await asyncio.sleep(0.1)
+            else:
+                try:
+                    await asyncio.to_thread(process.wait, 8)
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        process.kill()
+            raise
+
+    def _unlink_native_ranges_sidecar(self, part_path: Path) -> None:
+        (part_path.parent / "native-engine.ranges.json").unlink(missing_ok=True)
+
+    def _reset_range_state_for_sequential(self, part_path: Path, state_path: Path) -> None:
+        self._sequential = True
+        self._completed_chunks.clear()
+        self._claimed_chunks.clear()
+        state_path.unlink(missing_ok=True)
+        part_path.unlink(missing_ok=True)
+        self._unlink_native_ranges_sidecar(part_path)
+        self.task.engine_state.pop("sequential_bytes", None)
+        self.task.progress.completed_segments = 0
+        self.task.progress.downloaded_bytes = 0
+        self.task.progress.progress_percent = 0.0
+
+    async def _download_with_native_engine(
+        self,
+        headers: dict[str, str],
+        part_path: Path,
+        state_path: Path,
+        metadata: dict,
+    ) -> bool:
+        executable = locate_native_engine_executable()
+        if executable is None:
+            return False
+        task = self.task
+        task_dir = part_path.parent
+        control_path = task_dir / "native-engine.control"
+        progress_path = task_dir / "native-engine.progress.json"
+        job_path = task_dir / "native-engine.job.json"
+        total = int(metadata.get("total") or task.progress.total_bytes or 0)
+        marked = int(task.engine_state.get("sequential_bytes") or 0)
+        current_size = part_path.stat().st_size if part_path.exists() else 0
+        trusted_sequential = marked > 0 and current_size == marked
+        sequential = (
+            total <= 0
+            or not bool(metadata.get("ranges"))
+            or (trusted_sequential and (total <= 0 or current_size < total))
+        )
+        resume_from = marked if sequential and trusted_sequential else 0
+        if sequential:
+            self._sequential = True
+            self._discard_untrusted_sequential_part(part_path)
+            if not (part_path.exists() and trusted_sequential):
+                resume_from = 0
+        connections = 1 if sequential else max(1, int(task.concurrency or 1))
+        task.progress.total_segments = 1 if sequential else max(1, connections)
+        task.progress.max_workers = connections
+        task.progress.active_workers = connections
+        task.progress.active_slots = connections
+        task.progress.connection_status = "running"
+        task.engine_state["stream_path"] = str(part_path)
+        task.engine_state["http_engine"] = "native-shell"
+        self._set_stage("downloading", "正在下载")
+        self._write_native_control(control_path, "run")
+
+        async def launch(sequential_mode: bool, resume: int) -> int:
+            write_native_job(
+                job_path=job_path,
+                payload=self._native_job_payload(
+                    headers=headers,
+                    part_path=part_path,
+                    control_path=control_path,
+                    progress_path=progress_path,
+                    sequential=sequential_mode,
+                    resume_from=resume,
+                    total=total,
+                    metadata=metadata,
+                ),
+            )
+            process = start_native_job(
+                executable=executable,
+                job_path=job_path,
+                progress_path=progress_path,
+            )
+            return await self._await_native_engine(process, control_path, progress_path)
+
+        try:
+            code = await launch(sequential, resume_from)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.on_log(task.id, f"[downloading] 原生引擎启动失败，已回退到 Python：{type(exc).__name__}")
+            task.engine_state.pop("http_engine", None)
+            return False
+
+        if code == 30 and not sequential:
+            self._reset_range_state_for_sequential(part_path, state_path)
+            self._set_stage(
+                "downloading",
+                "服务器已停止支持分段，正在用原生引擎单连接从头安全下载",
+            )
+            self._write_native_control(control_path, "run")
+            try:
+                code = await launch(True, 0)
+                sequential = True
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.on_log(task.id, f"[downloading] 原生单连接回退失败：{type(exc).__name__}")
+                task.engine_state.pop("http_engine", None)
+                return False
+
+        self._apply_native_progress(progress_path)
+        if code == 0:
+            size = part_path.stat().st_size if part_path.exists() else 0
+            task.progress.downloaded_bytes = size
+            if size and not task.progress.total_bytes:
+                task.progress.total_bytes = size
+            task.progress.completed_segments = max(1, task.progress.total_segments or 1)
+            task.progress.active_workers = 0
+            task.progress.speed_bytes_per_sec = 0.0
+            if sequential and size:
+                task.engine_state["sequential_bytes"] = size
+            return True
+        if code == 20:
+            if sequential and part_path.exists():
+                task.engine_state["sequential_bytes"] = part_path.stat().st_size
+            task.engine_state["native_exit"] = "paused"
+            return True
+        if code == 21:
+            task.engine_state["native_exit"] = "canceled"
+            return True
+        if sequential and part_path.exists() and part_path.stat().st_size > 0:
+            existing = part_path.stat().st_size
+            marked_now = int(task.engine_state.get("sequential_bytes") or 0)
+            if marked_now == 0 or existing == marked_now:
+                task.engine_state["sequential_bytes"] = existing
+        elif not sequential:
+            part_path.unlink(missing_ok=True)
+            state_path.unlink(missing_ok=True)
+            self._unlink_native_ranges_sidecar(part_path)
+        task.engine_state.pop("http_engine", None)
+        self.on_log(task.id, f"[downloading] 原生引擎退出 {code}，已回退到 Python")
+        return False
 
     def _discard_untrusted_sequential_part(self, part_path: Path) -> None:
         """Drop a Range-preallocated sparse file before sequential restart.
@@ -1561,9 +1858,9 @@ class HTTPDownloader(SeeklessEngine):
                     task.progress.downloaded_bytes = existing
                     if reported_total:
                         task.progress.progress_percent = min(100.0, existing * 100 / reported_total)
-                    with part_path.open("ab" if append else "wb") as output:
+                    with part_path.open("ab" if append else "wb", buffering=0) as output:
                         first_chunk = True
-                        async for chunk in response.aiter_bytes():
+                        async for chunk in _identity_body(response):
                             if first_chunk:
                                 validate_download_response(
                                     task,
@@ -1578,7 +1875,7 @@ class HTTPDownloader(SeeklessEngine):
                             if self._is_pausing():
                                 return
                             await throttle_bytes(len(chunk), task)
-                            output.write(chunk)
+                            write_payload(output, chunk)
                             task.progress.downloaded_bytes += len(chunk)
                             task.engine_state["sequential_bytes"] = task.progress.downloaded_bytes
                             window.add(len(chunk))
@@ -1686,8 +1983,7 @@ class HTTPDownloader(SeeklessEngine):
         if not part_path.exists() or part_path.stat().st_size != total:
             completed.clear()
             range_current = {index: start for index, (start, _end) in enumerate(chunks)}
-            with part_path.open("wb") as output:
-                output.truncate(total)
+            await asyncio.to_thread(preallocate_payload, part_path, total)
         self._written_intervals = {
             chunks[index][0]: current
             for index, current in range_current.items()
@@ -1794,6 +2090,8 @@ class HTTPDownloader(SeeklessEngine):
                 snapshot[index] = current
             return snapshot
 
+        durable_file = open_payload_for_range(part_path)
+
         async def save_state() -> int:
             nonlocal last_saved_bytes
             snapshot = snapshot_currents()
@@ -1820,8 +2118,8 @@ class HTTPDownloader(SeeklessEngine):
                 # OS/Python buffers. Flush payload first, then atomically
                 # replace the checkpoint. Keep the Windows durability barrier
                 # off the API event loop because it can block during scanning.
-                with part_path.open("r+b", buffering=0) as durable_file:
-                    os.fsync(durable_file.fileno())
+                durable_file.flush()
+                os.fsync(durable_file.fileno())
                 atomic_write_text(state_path, checkpoint_json)
 
             await asyncio.to_thread(persist_checkpoint)
@@ -1887,92 +2185,93 @@ class HTTPDownloader(SeeklessEngine):
             strong_etag = _strong_etag(source.etag or metadata.get("etag", ""))
             validator = strong_etag
             validator = validator or str(source.last_modified or metadata.get("last_modified", "") or "")
-            for attempt in range(1, MAX_RETRIES + 1):
-                if self._is_canceled():
-                    raise asyncio.CancelledError
-                if not await retry_window.wait(lambda: self._is_canceled() or self._is_pausing()):
-                    return False
-                self._clear_rate_limit_notice()
-                url_generation = self._url_generation
-                try:
-                    while True:
-                        target_end = part_stop.get(part_key, end) if dynamic_stop else end
-                        request_start = start + received
-                        if request_start > target_end:
-                            break
-                        request_headers = {
-                            **headers,
-                            "Range": f"bytes={request_start}-{target_end}",
-                        }
-                        if validator:
-                            request_headers["If-Range"] = validator
-                        async with client.stream(
-                            "GET",
-                            source.final_url or self._download_url,
-                            headers=request_headers,
-                        ) as response:
-                            # 200 after a Range/If-Range request is a legitimate
-                            # capability or object-version change, but its body
-                            # starts at byte zero. Let the caller restart one
-                            # sequential transfer instead of corrupting offsets.
-                            if response.status_code == 200:
-                                raise _HTTPRangeUnsupported(
-                                    "服务器忽略了 Range 或远程文件版本已经变化"
+            # One handle per worker: seek+write is not atomic across tasks on a
+            # shared fd. Keep this file open across retries and CDN-capped 206
+            # loops instead of reopening on every response.
+            output_file = open_payload_for_range(part_path)
+            try:
+                for attempt in range(1, MAX_RETRIES + 1):
+                    if self._is_canceled():
+                        raise asyncio.CancelledError
+                    if not await retry_window.wait(lambda: self._is_canceled() or self._is_pausing()):
+                        return False
+                    self._clear_rate_limit_notice()
+                    url_generation = self._url_generation
+                    try:
+                        while True:
+                            target_end = part_stop.get(part_key, end) if dynamic_stop else end
+                            request_start = start + received
+                            if request_start > target_end:
+                                break
+                            request_headers = {
+                                **headers,
+                                "Range": f"bytes={request_start}-{target_end}",
+                            }
+                            if validator:
+                                request_headers["If-Range"] = validator
+                            async with client.stream(
+                                "GET",
+                                source.final_url or self._download_url,
+                                headers=request_headers,
+                            ) as response:
+                                # 200 after a Range/If-Range request is a legitimate
+                                # capability or object-version change, but its body
+                                # starts at byte zero. Let the caller restart one
+                                # sequential transfer instead of corrupting offsets.
+                                if response.status_code == 200:
+                                    raise _HTTPRangeUnsupported(
+                                        "服务器忽略了 Range 或远程文件版本已经变化"
+                                    )
+                                response.raise_for_status()
+                                content_range = _parse_content_range(
+                                    response.headers.get("content-range", "")
                                 )
-                            response.raise_for_status()
-                            content_range = _parse_content_range(
-                                response.headers.get("content-range", "")
-                            )
-                            if response.status_code != 206 or content_range is None:
-                                raise _HTTPRangeUnsupported(
-                                    "Range 响应缺少有效 Content-Range"
-                                )
-                            response_start, response_end, response_total = content_range
-                            if response_start != request_start:
-                                raise _HTTPRangeValidationError(
-                                    f"Range 起点不匹配，期望 {request_start}，实际 {response_start}"
-                                )
-                            if response_total is not None and response_total != total:
-                                raise _HTTPRangeUnsupported(
-                                    f"远程文件长度已从 {total} 变化为 {response_total}"
-                                )
-                            response_etag = response.headers.get("etag", "")
-                            response_modified = response.headers.get("last-modified", "")
-                            if strong_etag and response_etag and _strong_etag(response_etag) != strong_etag:
-                                raise _HTTPRangeUnsupported("远程文件 ETag 已变化")
-                            if (
-                                not strong_etag
-                                and metadata.get("last_modified")
-                                and response_modified
-                                and response_modified != metadata["last_modified"]
-                            ):
-                                raise _HTTPRangeUnsupported("远程文件修改时间已变化")
-                            if _response_decodes_content(response):
-                                raise _HTTPRangeUnsupported(
-                                    "服务器对 Range 响应启用了内容压缩"
-                                )
+                                if response.status_code != 206 or content_range is None:
+                                    raise _HTTPRangeUnsupported(
+                                        "Range 响应缺少有效 Content-Range"
+                                    )
+                                response_start, response_end, response_total = content_range
+                                if response_start != request_start:
+                                    raise _HTTPRangeValidationError(
+                                        f"Range 起点不匹配，期望 {request_start}，实际 {response_start}"
+                                    )
+                                if response_total is not None and response_total != total:
+                                    raise _HTTPRangeUnsupported(
+                                        f"远程文件长度已从 {total} 变化为 {response_total}"
+                                    )
+                                response_etag = response.headers.get("etag", "")
+                                response_modified = response.headers.get("last-modified", "")
+                                if strong_etag and response_etag and _strong_etag(response_etag) != strong_etag:
+                                    raise _HTTPRangeUnsupported("远程文件 ETag 已变化")
+                                if (
+                                    not strong_etag
+                                    and metadata.get("last_modified")
+                                    and response_modified
+                                    and response_modified != metadata["last_modified"]
+                                ):
+                                    raise _HTTPRangeUnsupported("远程文件修改时间已变化")
+                                if _response_decodes_content(response):
+                                    raise _HTTPRangeUnsupported(
+                                        "服务器对 Range 响应启用了内容压缩"
+                                    )
 
-                            # Some CDNs cap each 206 response to a smaller range;
-                            # others return a wider suffix. Accept both as long
-                            # as the starting offset and object length are safe.
-                            allowed_end = min(response_end, target_end)
-                            expected_this_response = allowed_end - request_start + 1
-                            response_received = 0
-                            with part_path.open("r+b", buffering=0) as output_file:
+                                # Some CDNs cap each 206 response to a smaller range;
+                                # others return a wider suffix. Accept both as long
+                                # as the starting offset and object length are safe.
+                                allowed_end = min(response_end, target_end)
+                                expected_this_response = allowed_end - request_start + 1
+                                response_received = 0
                                 output_file.seek(request_start)
                                 pending = bytearray()
 
-                                def flush_pending() -> None:
+                                async def flush_pending() -> None:
                                     nonlocal pending, response_received, received
                                     if not pending:
                                         return
                                     size = len(pending)
-                                    written = output_file.write(pending)
-                                    if written != size:
-                                        raise OSError(
-                                            f"本地文件写入不完整，期望 {size} 字节，实际 {written} 字节"
-                                        )
-                                    pending.clear()
+                                    chunk = pending
+                                    pending = bytearray()
+                                    await asyncio.to_thread(write_payload, output_file, chunk)
                                     response_received += size
                                     received += size
                                     self._written_intervals[start] = max(
@@ -1985,7 +2284,7 @@ class HTTPDownloader(SeeklessEngine):
                                         refresh_progress()
 
                                 try:
-                                    async for content in response.aiter_bytes():
+                                    async for content in _identity_body(response):
                                         accepted = response_received + len(pending)
                                         if request_start == 0 and accepted == 0:
                                             validate_download_response(
@@ -2005,89 +2304,91 @@ class HTTPDownloader(SeeklessEngine):
                                         await throttle_bytes(len(data), task)
                                         pending.extend(data)
                                         if len(pending) >= RANGE_WRITE_BATCH:
-                                            flush_pending()
+                                            await flush_pending()
                                         if response_received + len(pending) >= live_allowed_end - request_start + 1:
                                             break
                                 except BaseException:
-                                    flush_pending()
+                                    await flush_pending()
                                     raise
-                                flush_pending()
-                            if response_received <= 0:
-                                raise httpx.RemoteProtocolError(
-                                    "Range 响应未返回任何数据"
-                                )
-                            # If the body ended before the range declared in its
-                            # own Content-Range, preserve what arrived and retry
-                            # from the exact next byte.
-                            final_target_end = part_stop.get(part_key, end) if dynamic_stop else end
-                            expected_this_response = min(response_end, final_target_end) - request_start + 1
-                            if response_received < expected_this_response:
-                                raise httpx.RemoteProtocolError(
-                                    "Range 响应在声明的结束位置前中断"
-                                )
-                            # A server-capped response ends before our requested
-                            # target. Loop immediately from the next byte.
-                            continue
-                    expected = (part_stop.get(part_key, end) if dynamic_stop else end) - start + 1
-                    if received < expected:
-                        raise httpx.RemoteProtocolError(
-                            f"Range 长度不足，期望 {expected}，实际 {received}"
+                                await flush_pending()
+                                if response_received <= 0:
+                                    raise httpx.RemoteProtocolError(
+                                        "Range 响应未返回任何数据"
+                                    )
+                                # If the body ended before the range declared in its
+                                # own Content-Range, preserve what arrived and retry
+                                # from the exact next byte.
+                                final_target_end = part_stop.get(part_key, end) if dynamic_stop else end
+                                expected_this_response = min(response_end, final_target_end) - request_start + 1
+                                if response_received < expected_this_response:
+                                    raise httpx.RemoteProtocolError(
+                                        "Range 响应在声明的结束位置前中断"
+                                    )
+                                # A server-capped response ends before our requested
+                                # target. Loop immediately from the next byte.
+                                continue
+                        expected = (part_stop.get(part_key, end) if dynamic_stop else end) - start + 1
+                        if received < expected:
+                            raise httpx.RemoteProtocolError(
+                                f"Range 长度不足，期望 {expected}，实际 {received}"
+                            )
+                        if received > expected:
+                            raise _HTTPRangeValidationError(
+                                f"Range 长度超过安全边界，期望 {expected}，实际 {received}"
+                            )
+                        if not playback_only:
+                            await finish_part(index, part_key, expected)
+                        return True
+                    except Exception as exc:
+                        last_error = exc
+                        if isinstance(exc, _HTTPRangeUnsupported):
+                            if self._has_other_sources(source, require_ranges=True):
+                                self._disable_source(source, str(exc))
+                                source = self._pick_source(require_ranges=True)
+                                strong_etag = _strong_etag(source.etag or metadata.get("etag", ""))
+                                validator = strong_etag or str(source.last_modified or metadata.get("last_modified", "") or "")
+                                continue
+                            break
+                        if isinstance(exc, _HTTPRangeValidationError):
+                            break
+                        status = int(
+                            getattr(getattr(exc, "response", None), "status_code", 0) or 0
                         )
-                    if received > expected:
-                        raise _HTTPRangeValidationError(
-                            f"Range 长度超过安全边界，期望 {expected}，实际 {received}"
-                        )
-                    if not playback_only:
-                        await finish_part(index, part_key, expected)
-                    return True
-                except Exception as exc:
-                    last_error = exc
-                    if isinstance(exc, _HTTPRangeUnsupported):
-                        if self._has_other_sources(source, require_ranges=True):
-                            self._disable_source(source, str(exc))
+                        if status in {401, 403, 404, 410} and self._has_other_sources(source):
+                            self._disable_source(source, f"HTTP {status}")
                             source = self._pick_source(require_ranges=True)
                             strong_etag = _strong_etag(source.etag or metadata.get("etag", ""))
                             validator = strong_etag or str(source.last_modified or metadata.get("last_modified", "") or "")
                             continue
-                        break
-                    if isinstance(exc, _HTTPRangeValidationError):
-                        break
-                    status = int(
-                        getattr(getattr(exc, "response", None), "status_code", 0) or 0
-                    )
-                    if status in {401, 403, 404, 410} and self._has_other_sources(source):
-                        self._disable_source(source, f"HTTP {status}")
-                        source = self._pick_source(require_ranges=True)
-                        strong_etag = _strong_etag(source.etag or metadata.get("etag", ""))
-                        validator = strong_etag or str(source.last_modified or metadata.get("last_modified", "") or "")
-                        continue
-                    if (
-                        status in {401, 403, 404, 410}
-                        and attempt < MAX_RETRIES
-                        and await self._refresh_download_url(
-                            client, headers, generation=url_generation
-                        )
-                    ):
-                        refreshed = next((item for item in self._sources if not item.disabled), None)
-                        if refreshed is not None:
-                            source = refreshed
-                            self._download_url = refreshed.final_url
-                        continue
-                    if not should_retry_download_error(exc):
-                        break
-                    if attempt < MAX_RETRIES:
-                        delay = retry_delay_seconds(exc, min(4, attempt))
-                        if should_share_retry_window(exc):
-                            remaining, extended = await retry_window.extend(delay)
-                            if extended:
-                                self._announce_rate_limit(remaining)
-                        else:
-                            await asyncio.sleep(delay)
-            if last_error is not None:
-                if not playback_only:
-                    self._claimed_chunks.discard(index)
-                raise last_error
-            return True
+                        if (
+                            status in {401, 403, 404, 410}
+                            and attempt < MAX_RETRIES
+                            and await self._refresh_download_url(
+                                client, headers, generation=url_generation
+                            )
+                        ):
+                            refreshed = next((item for item in self._sources if not item.disabled), None)
+                            if refreshed is not None:
+                                source = refreshed
+                                self._download_url = refreshed.final_url
+                            continue
+                        if not should_retry_download_error(exc):
+                            break
+                        if attempt < MAX_RETRIES:
+                            delay = retry_delay_seconds(exc, min(4, attempt))
+                            if should_share_retry_window(exc):
+                                remaining, extended = await retry_window.extend(delay)
+                                if extended:
+                                    self._announce_rate_limit(remaining)
+                            else:
+                                await asyncio.sleep(delay)
+                if last_error is not None:
+                    if not playback_only:
+                        self._claimed_chunks.discard(index)
+                    raise last_error
+                return True
+            finally:
+                output_file.close()
 
         async def fetch_playback_range(start: int, end: int) -> None:
             """Fetch only the bytes a local player needs without changing resume progress."""
@@ -2172,62 +2473,65 @@ class HTTPDownloader(SeeklessEngine):
                         # missing payload is terminal for this checkpoint.
                         return
 
-        checkpoint = asyncio.create_task(checkpoint_loop())
-        workers = [asyncio.create_task(worker()) for _ in range(task.progress.max_workers)]
         try:
-            results = await asyncio.gather(*workers, return_exceptions=True)
+            checkpoint = asyncio.create_task(checkpoint_loop())
+            workers = [asyncio.create_task(worker()) for _ in range(task.progress.max_workers)]
+            try:
+                results = await asyncio.gather(*workers, return_exceptions=True)
+            finally:
+                # Always reap children before the task manager is allowed to
+                # remove the work directory. This also runs when app shutdown or
+                # Delete cancels the parent at the gather() await above.
+                for child in workers:
+                    if not child.done():
+                        child.cancel()
+                if workers:
+                    await asyncio.gather(*workers, return_exceptions=True)
+                checkpoint.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await checkpoint
+                self._playback_fetcher = None
+                playback_fetches = [
+                    item for item in self._playback_fetch_tasks.values() if not item.done()
+                ]
+                for item in playback_fetches:
+                    item.cancel()
+                if playback_fetches:
+                    await asyncio.gather(*playback_fetches, return_exceptions=True)
+                self._playback_fetch_tasks.clear()
+                if part_path.exists():
+                    with contextlib.suppress(FileNotFoundError):
+                        async with state_lock:
+                            await save_state()
+            # Only report bytes covered by the durable checkpoint. An interrupted
+            # request therefore resumes at the exact saved byte instead of the
+            # start of its multi-megabyte chunk.
+            partials.clear()
+            finished_parts.clear()
+            task.progress.downloaded_bytes = last_saved_bytes
+            error = next(
+                (result for result in results if isinstance(result, _HTTPRangeUnsupported)),
+                None,
+            ) or next((result for result in results if isinstance(result, Exception)), None)
+            if error:
+                raise error
+            # Every worker has drained and the checkpoint is durable. Publish an
+            # explicit terminal transfer sample before the potentially slow
+            # cross-volume/antivirus-safe rename so the UI cannot remain at 99.x%
+            # while the download is already complete on disk.
+            if len(completed) == len(chunks) and part_path.exists() and part_path.stat().st_size == total:
+                task.progress.downloaded_bytes = total
+                task.progress.completed_segments = len(chunks)
+                task.progress.active_workers = 0
+                task.progress.active_slots = 0
+                if total:
+                    set_connection_parts(
+                        task,
+                        [{"start": 0, "end": total - 1, "done": total, "state": "done"}],
+                        total=total,
+                    )
+                self._apply_speed(window)
+                self._publish()
+            self._priority_queue = None
         finally:
-            # Always reap children before the task manager is allowed to
-            # remove the work directory. This also runs when app shutdown or
-            # Delete cancels the parent at the gather() await above.
-            for child in workers:
-                if not child.done():
-                    child.cancel()
-            if workers:
-                await asyncio.gather(*workers, return_exceptions=True)
-            checkpoint.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await checkpoint
-            self._playback_fetcher = None
-            playback_fetches = [
-                item for item in self._playback_fetch_tasks.values() if not item.done()
-            ]
-            for item in playback_fetches:
-                item.cancel()
-            if playback_fetches:
-                await asyncio.gather(*playback_fetches, return_exceptions=True)
-            self._playback_fetch_tasks.clear()
-            if part_path.exists():
-                with contextlib.suppress(FileNotFoundError):
-                    async with state_lock:
-                        await save_state()
-        # Only report bytes covered by the durable checkpoint. An interrupted
-        # request therefore resumes at the exact saved byte instead of the
-        # start of its multi-megabyte chunk.
-        partials.clear()
-        finished_parts.clear()
-        task.progress.downloaded_bytes = last_saved_bytes
-        error = next(
-            (result for result in results if isinstance(result, _HTTPRangeUnsupported)),
-            None,
-        ) or next((result for result in results if isinstance(result, Exception)), None)
-        if error:
-            raise error
-        # Every worker has drained and the checkpoint is durable. Publish an
-        # explicit terminal transfer sample before the potentially slow
-        # cross-volume/antivirus-safe rename so the UI cannot remain at 99.x%
-        # while the download is already complete on disk.
-        if len(completed) == len(chunks) and part_path.exists() and part_path.stat().st_size == total:
-            task.progress.downloaded_bytes = total
-            task.progress.completed_segments = len(chunks)
-            task.progress.active_workers = 0
-            task.progress.active_slots = 0
-            if total:
-                set_connection_parts(
-                    task,
-                    [{"start": 0, "end": total - 1, "done": total, "state": "done"}],
-                    total=total,
-                )
-            self._apply_speed(window)
-            self._publish()
-        self._priority_queue = None
+            durable_file.close()

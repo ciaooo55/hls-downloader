@@ -190,11 +190,9 @@ def resolve_task_type(value: TaskType | str, url: str, mime_type: str = "") -> T
     mime = mime_type.lower().split(";", 1)[0].strip()
     if url.lower().startswith("magnet:") or lowered.endswith(".torrent"):
         return TaskType.TORRENT
-    if lowered.endswith(".mpd") or mime == "application/dash+xml":
+    if lowered.endswith(".mpd") or "dash+xml" in mime:
         return TaskType.DASH
-    if ".m3u8" in lowered or mime in {
-        "application/vnd.apple.mpegurl", "application/x-mpegurl", "application/mpegurl",
-    }:
+    if lowered.endswith(".m3u8") or lowered.endswith(".m3u") or "mpegurl" in mime:
         return TaskType.HLS
     return TaskType.HTTP
 
@@ -509,6 +507,40 @@ class TaskManager:
         for queue in dead:
             if queue in self._event_subscribers:
                 self._event_subscribers.remove(queue)
+        event_type = str(event.get("type") or "")
+        if event_type in {"task_progress", "task_created", "task_deleted"}:
+            self._sync_native_shell_overlays(event)
+
+    def _sync_native_shell_overlays(self, event: dict) -> None:
+        try:
+            from ..native_shell import is_native_shell_ready, sync_native_shell_from_event
+        except Exception:
+            return
+        if not is_native_shell_ready() and str(event.get("status") or "") != "done":
+            return
+        running = []
+        for task in self.tasks.values():
+            if task.status not in ACTIVE_STATUSES:
+                continue
+            progress = task.progress
+            running.append(
+                {
+                    "id": task.id,
+                    "filename": task.filename,
+                    "title": task.title,
+                    "status": task.status.value,
+                    "progress_percent": progress.progress_percent,
+                    "downloaded_bytes": progress.downloaded_bytes,
+                    "total_bytes": progress.total_bytes,
+                    "speed_bytes_per_sec": progress.speed_bytes_per_sec,
+                    "eta_seconds": progress.eta_seconds,
+                    "is_live": bool(task.engine_state.get("live")),
+                }
+            )
+        try:
+            sync_native_shell_from_event(event, running)
+        except Exception:
+            logger.exception("native shell overlay sync failed")
 
     async def _broadcast(self, event: dict) -> None:
         self._broadcast_nowait(event)
@@ -2176,16 +2208,23 @@ class TaskManager:
         self._pending_saves[task.id] = asyncio.create_task(delayed_save())
 
     async def shutdown(self) -> None:
+        current_loop = asyncio.get_running_loop()
         retries = [handle for handle in self._auto_retry_handles.values() if not handle.done()]
         self._auto_retry_handles.clear()
         for handle in retries:
             handle.cancel()
         if retries:
             await asyncio.gather(*retries, return_exceptions=True)
-        if self._maintenance_task and not self._maintenance_task.done():
-            self._maintenance_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._maintenance_task
+        maintenance_task = self._maintenance_task
+        self._maintenance_task = None
+        if maintenance_task and not maintenance_task.done():
+            maintenance_task.cancel()
+            # TestClient and embedded callers can tear down an app from a new
+            # event loop. A Task belongs to the loop that created it; awaiting
+            # it from another loop raises instead of completing shutdown.
+            if maintenance_task.get_loop() is current_loop:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await maintenance_task
         handles = [
             task.task_handle
             for task in self.tasks.values()
@@ -2305,8 +2344,12 @@ class TaskManager:
                 logger.exception("scheduled task %s failed to stop", task.id)
 
     def start_maintenance(self) -> None:
+        current_loop = asyncio.get_running_loop()
         if self._maintenance_task and not self._maintenance_task.done():
-            return
+            if self._maintenance_task.get_loop() is current_loop:
+                return
+            self._maintenance_task.cancel()
+            self._maintenance_task = None
 
         async def maintain() -> None:
             while True:

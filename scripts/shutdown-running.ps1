@@ -67,7 +67,7 @@ function Get-TargetProcesses {
     )
 }
 
-$targetProcessNames = @("HLSDownloader", "HLSDownloaderCore")
+$targetProcessNames = @("HLSDownloader", "HLSDownloaderCore", "HLSNativeShell", "hls-native-shell", "HLSNativeEngine", "hls-native-engine")
 if ($IncludeNativeHost) { $targetProcessNames += "HLSDownloaderNativeHost*" }
 $targetRunningAtStart = @(Get-TargetProcesses $targetProcessNames)
 $overallDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(3, $TimeoutSeconds))
@@ -132,7 +132,7 @@ function Test-ApplicationFilesWritable {
     # The Native Messaging host is deliberately excluded.  A browser can keep
     # it alive indefinitely, and the installer now deploys it under a new
     # versioned name rather than replacing that locked executable.
-    foreach ($name in @("HLSDownloader.exe", "HLSDownloaderCore.exe")) {
+    foreach ($name in @("HLSDownloader.exe", "HLSDownloaderCore.exe", "HLSNativeShell.exe", "HLSNativeEngine.exe")) {
         $target = Join-Path $InstallDir $name
         if (-not (Test-Path -LiteralPath $target)) { continue }
         try {

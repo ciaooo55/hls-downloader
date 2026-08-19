@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Iterable, Mapping
 
 ENDGAME_SPLIT_MIN_BYTES = 512 * 1024
 
@@ -9,7 +9,7 @@ def pick_endgame_split(
     *,
     live_parts: Mapping[tuple[int, int], int],
     partials: Mapping[tuple[int, int], int] | None = None,
-    completed: object = None,
+    completed: Iterable[object] | None = None,
     min_bytes: int = ENDGAME_SPLIT_MIN_BYTES,
 ) -> tuple[int, int, int, int] | None:
     """Choose the largest in-flight Range tail that an idle worker can steal.
@@ -21,7 +21,7 @@ def pick_endgame_split(
     done = set()
     for item in completed or []:
         try:
-            done.add(int(item))
+            done.add(int(str(item)))
         except (TypeError, ValueError):
             continue
     received_map = partials or {}

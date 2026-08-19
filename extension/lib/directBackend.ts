@@ -4,6 +4,46 @@ export interface DirectBackendIdentity {
   browser: string
 }
 
+export const V6_CORE_PROTOCOL = 'hls-downloader-v6-core'
+
+export function shouldClearLoopbackBridge(response: {
+  protocol?: unknown
+  bridge_base?: unknown
+  bridge_token?: unknown
+} | null | undefined): boolean {
+  return String(response?.protocol || '') === V6_CORE_PROTOCOL
+}
+
+export function shouldAttachLoopbackBridge(response: {
+  protocol?: unknown
+  bridge_base?: unknown
+  bridge_token?: unknown
+} | null | undefined): boolean {
+  if (shouldClearLoopbackBridge(response)) return false
+  if (!response) return false
+  return Boolean(response.bridge_base && response.bridge_token)
+}
+
+export function shouldRouteThroughLoopbackBridge(op: unknown, hasLoopback: boolean): boolean {
+  if (!hasLoopback) return false
+  const operation = String(op || '')
+  // Takeover and secret-bearing ops must stay on Native Messaging so a stale
+  // 5.x FastAPI pairing cannot receive cookies after v6 Core is running.
+  return !new Set([
+    'ping',
+    'offer',
+    'download',
+    'handoff_status',
+    'wait_handoff',
+    'accept_handoff',
+    'reject_handoff',
+    'set_takeover_settings',
+    'media_push',
+    'push_to_tv',
+    'media_push_status',
+  ]).has(operation)
+}
+
 export class BrowserDirectBackend {
   constructor(private readonly base: string, private readonly token: string) {}
 
@@ -60,7 +100,7 @@ export class BrowserDirectBackend {
         takeover_minimum_bytes: Math.max(0, Number(current.takeover_minimum_bytes || 0)),
       }
     }
-    if (op === 'push_to_tv') return post('/tvbox/push', { url: String(message.resource?.url || '') })
+    if (op === 'push_to_tv') return post('/browser/media-push', { kind: 'tvbox', resource: message.resource || { url: String(message.resource?.url || '') } })
     if (op === 'media_push') return post('/browser/media-push', { kind: String(message.kind || ''), resource: message.resource || {} })
     if (op === 'media_push_status') return get(`/browser/media-push/${encodeURIComponent(message.request_id || '')}/status`)
     throw new Error(`Direct backend does not support ${op}`)

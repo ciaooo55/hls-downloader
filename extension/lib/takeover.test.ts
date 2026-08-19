@@ -32,6 +32,8 @@ describe('browser download takeover helpers', () => {
 
   it('accepts only successful desktop handoff responses that can be presented', () => {
     expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation_mode: 'desktop', presentation_ok: true } })).toBe(true)
+    expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation_mode: 'native-shell', presentation_ok: true, presentable: true } })).toBe(true)
+    expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation_mode: 'native-shell-pending', presentation_ok: true, presentation_queued: true } })).toBe(true)
     expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation_mode: 'ui-fallback', presentation_ok: true } })).toBe(true)
     expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation_mode: 'desktop-pending', presentation_ok: true, presentation_queued: true } })).toBe(true)
     expect(desktopAcceptedHandoff({ ok: false, handoff: { id: 'one' } })).toBe(false)
@@ -70,6 +72,8 @@ describe('browser download takeover helpers', () => {
     expect(desktopTaskReadiness({ status: 'accepted', task_status: 'downloading', task_stage: 'downloading', task_downloaded_bytes: 1 }))
       .toBe('safe-to-remove')
     expect(desktopTaskReadiness({ status: 'accepted', task_status: 'done', task_downloaded_bytes: 0 }))
+      .toBe('safe-to-remove')
+    expect(desktopTaskReadiness({ status: 'accepted', task_status: 'completed', task_downloaded_bytes: 0 }))
       .toBe('safe-to-remove')
     expect(desktopTaskReadiness({ status: 'accepted', task_status: 'failed', task_stage: 'probing', task_error_code: 'HTTP_404' }))
       .toBe('browser-fallback')

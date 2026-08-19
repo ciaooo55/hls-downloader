@@ -283,9 +283,37 @@ async def scan_cast_devices(timeout: float = 4.0) -> list[dict[str, str]]:
     return [device.public() for device in sorted(unique.values(), key=lambda device: (device.label.casefold(), device.host))]
 
 
+def _media_mime(filename: str, media_url: str = "") -> str:
+    """Guess a renderer MIME. stdlib maps `.ts` to a Qt linguist type on some platforms."""
+    name = str(filename or "").strip().lower()
+    url = str(media_url or "").split("?", 1)[0].strip().lower()
+    leaf = name or url.rsplit("/", 1)[-1]
+    if leaf.endswith((".m3u8", ".m3u")) or "/index.m3u8" in url:
+        return "application/vnd.apple.mpegurl"
+    if leaf.endswith((".mpd",)):
+        return "application/dash+xml"
+    if leaf.endswith((".ts", ".m2ts", ".mts")):
+        return "video/mp2t"
+    if leaf.endswith((".mp4", ".m4v")):
+        return "video/mp4"
+    if leaf.endswith((".webm",)):
+        return "video/webm"
+    if leaf.endswith((".mkv",)):
+        return "video/x-matroska"
+    guessed, _ = mimetypes.guess_type(leaf or "video.bin")
+    return guessed or "application/octet-stream"
+
+
+def _chromecast_stream_type(filename: str, media_url: str = "") -> str:
+    mime = _media_mime(filename, media_url)
+    if "mpegurl" in mime or mime == "application/dash+xml":
+        return "LIVE"
+    return "BUFFERED"
+
+
 def _didl_metadata(media_url: str, filename: str) -> str:
-    mime_type, _ = mimetypes.guess_type(filename)
-    protocol = f"http-get:*:{mime_type or 'application/octet-stream'}:*"
+    mime_type = _media_mime(filename, media_url)
+    protocol = f"http-get:*:{mime_type}:*"
     title = html.escape(filename, quote=False)
     url = html.escape(media_url, quote=False)
     return (
@@ -421,11 +449,12 @@ def _with_chromecast(device: dict, operation):
 
 
 def _cast_chromecast_media(device: dict, media_url: str, filename: str) -> None:
-    mime_type, _ = mimetypes.guess_type(filename)
+    mime_type = _media_mime(filename, media_url)
+    stream_type = _chromecast_stream_type(filename, media_url)
 
     def play(chromecast, _selected):
         controller = chromecast.media_controller
-        controller.play_media(media_url, mime_type or "application/octet-stream", title=filename, stream_type="BUFFERED")
+        controller.play_media(media_url, mime_type, title=filename, stream_type=stream_type)
         controller.block_until_active(10)
 
     _with_chromecast(device, play)

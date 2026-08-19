@@ -76,3 +76,79 @@ def estimate_paths_size(paths) -> int:
         except OSError:
             continue
     return total
+
+
+def write_payload(stream, data) -> int:
+    """Write one Range/HLS payload slice and require a full transfer."""
+    size = len(data)
+    if size == 0:
+        return 0
+    written = stream.write(data)
+    if written != size:
+        raise OSError(f"本地文件写入不完整，期望 {size} 字节，实际 {written} 字节")
+    return written
+
+
+def open_payload_for_range(path: Path):
+    """Open one Range payload for seek+write.
+
+    Each worker keeps its own handle. Seek+write is not atomic across tasks
+    on a shared fd. No Windows CreateFile flags here: this process was never
+    executed in Linux CI, and FILE_FLAG_RANDOM_ACCESS is the wrong hint
+    anyway (each handle seeks once, then writes forward).
+    """
+    return Path(path).open("r+b", buffering=0)
+
+
+def preallocate_payload(path: Path, size: int) -> None:
+    """Create one Range payload with the final logical size.
+
+    HTTP workers seek and write into this file. They never concatenate part
+    files. On NTFS the file is marked sparse so a 4 GiB download does not
+    physically zero-fill 4 GiB at start (IDM-style). Other volumes fall back
+    to a normal truncate.
+    """
+    size = max(0, int(size))
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as stream:
+        if os.name == "nt":
+            _mark_sparse_windows(stream.fileno())
+        stream.truncate(size)
+
+
+def _mark_sparse_windows(fd: int) -> None:
+    try:
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+    except ImportError:
+        return
+    try:
+        handle = msvcrt.get_osfhandle(fd)
+        returned = wintypes.DWORD(0)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        FSCTL_SET_SPARSE = 0x000900C4
+        kernel32.DeviceIoControl.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            wintypes.LPVOID,
+        ]
+        kernel32.DeviceIoControl.restype = wintypes.BOOL
+        kernel32.DeviceIoControl(
+            handle,
+            FSCTL_SET_SPARSE,
+            None,
+            0,
+            None,
+            0,
+            ctypes.byref(returned),
+            None,
+        )
+    except OSError:
+        return

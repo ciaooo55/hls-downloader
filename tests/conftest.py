@@ -1,6 +1,7 @@
 import pytest
 
 from backend.app import legal
+from backend.app.native_shell import reset_native_shell
 
 
 @pytest.fixture(autouse=True)
@@ -23,3 +24,19 @@ def accept_current_legal_terms_for_existing_tests():
             current.legal_terms_accepted_digest,
             current.legal_terms_accepted_at,
         ) = previous
+
+
+@pytest.fixture(autouse=True)
+def reset_resident_native_shell():
+    """Native-shell boot is sticky process state; never leak it across tests."""
+    reset_native_shell()
+    yield
+    reset_native_shell()
+
+
+@pytest.fixture(autouse=True)
+def disable_native_http_engine(monkeypatch):
+    """Keep MockTransport HTTP tests on the Python engine unless opted in."""
+    from backend.app.config import settings
+
+    monkeypatch.setattr(settings, "native_http_engine", False)

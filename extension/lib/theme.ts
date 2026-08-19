@@ -1,7 +1,7 @@
 /**
  * Shared design tokens for every extension surface (popup and in-page
  * shadow-DOM panels), aligned with the desktop app's Cockpit-style palette
- * (frontend/src/styles.css) so both products read as one family.
+ * (frontend/src/cockpit-shell.css) so both products read as one family.
  *
  * Theme resolution: the stored preference is 'auto' | 'dark' | 'light'.
  * 'auto' is resolved against prefers-color-scheme in JS and a concrete
@@ -17,21 +17,23 @@ export const THEME_STORAGE_KEY = 'themePreference'
 export const THEME_TOKENS_CSS = `
 [data-hlsd-theme="dark"]{
   color-scheme:dark;
-  --bg:#1a1815;--surface:#24211d;--surface-2:#2b2823;--surface-3:#332f29;
-  --border:#3d3831;--text:#ece9e2;--muted:#a09c93;--faint:#75716a;
-  --primary:#d97757;--primary-hover:#e28a6d;--on-primary:#1a1815;
-  --green:#4fa980;--amber:#d2a04a;--red:#dd6f63;--purple:#a98bc9;
-  --shadow:rgba(0,0,0,.45);
-  --overlay-border:rgba(74,68,60,.9);
+  --bg:#0b1220;--surface:#121a2b;--surface-2:#172033;--surface-3:#243047;
+  --border:rgba(148,163,184,.18);--text:#e8eef8;--muted:#a8b3c7;--faint:#7f8ba3;
+  --primary:#3b82f6;--primary-hover:#60a5fa;--on-primary:#ffffff;
+  --green:#22c55e;--amber:#f59e0b;--red:#ef4444;--purple:#a78bfa;
+  --shadow:rgba(0,0,0,.35);--rail:#0b1220;
+  --overlay-border:rgba(148,163,184,.24);
+  --z-extension-overlay:2147483647;--z-extension-video:2147483646;
 }
 [data-hlsd-theme="light"]{
   color-scheme:light;
-  --bg:#faf9f5;--surface:#fffefb;--surface-2:#f4f1e8;--surface-3:#f0ece1;
-  --border:#ddd8ca;--text:#1f1e1c;--muted:#6b6a63;--faint:#91908a;
-  --primary:#c15f3c;--primary-hover:#a94f2f;--on-primary:#fff;
-  --green:#2f7a5b;--amber:#a1691c;--red:#b8453c;--purple:#7a5c9e;
-  --shadow:rgba(31,30,28,.16);
-  --overlay-border:rgba(221,216,202,.95);
+  --bg:#eef2f6;--surface:#ffffff;--surface-2:#f5f7fa;--surface-3:#e8edf3;
+  --border:rgba(15,23,42,.12);--text:#0f172a;--muted:#475569;--faint:#64748b;
+  --primary:#2563eb;--primary-hover:#1d4ed8;--on-primary:#ffffff;
+  --green:#16a34a;--amber:#d97706;--red:#dc2626;--purple:#7c3aed;
+  --shadow:rgba(15,23,42,.12);--rail:#e8edf3;
+  --overlay-border:rgba(15,23,42,.18);
+  --z-extension-overlay:2147483647;--z-extension-video:2147483646;
 }
 `
 

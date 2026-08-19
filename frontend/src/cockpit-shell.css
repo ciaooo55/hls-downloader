@@ -11,12 +11,22 @@
   --faint: #64748b;
   --primary: #2563eb;
   --primary-hover: #1d4ed8;
+  --on-primary: #ffffff;
   --green: #16a34a;
   --amber: #d97706;
   --red: #dc2626;
   --purple: #7c3aed;
   --shadow: rgba(15, 23, 42, .12);
   --shell-shadow: 0 4px 14px rgba(15, 23, 42, .08);
+  --rail: #e8edf3;
+  --z-toolbar: 10;
+  --z-sticky: 20;
+  --z-dropdown: 100;
+  --z-backdrop: 1000;
+  --z-modal: 1100;
+  --z-toast: 1200;
+  --z-player: 1300;
+  --z-system: 1400;
   color-scheme: light;
 }
 
@@ -31,12 +41,22 @@
   --faint: #7f8ba3;
   --primary: #3b82f6;
   --primary-hover: #60a5fa;
+  --on-primary: #ffffff;
   --green: #22c55e;
   --amber: #f59e0b;
   --red: #ef4444;
   --purple: #a78bfa;
   --shadow: rgba(0, 0, 0, .35);
   --shell-shadow: 0 6px 18px rgba(0, 0, 0, .28);
+  --rail: #0b1220;
+  --z-toolbar: 10;
+  --z-sticky: 20;
+  --z-dropdown: 100;
+  --z-backdrop: 1000;
+  --z-modal: 1100;
+  --z-toast: 1200;
+  --z-player: 1300;
+  --z-system: 1400;
   color-scheme: dark;
 }
 
@@ -49,7 +69,7 @@ body,
 .tauri-drag-region {
   position: fixed;
   inset: 0 0 auto;
-  z-index: 20;
+  z-index: var(--z-sticky);
   height: 34px;
   -webkit-app-region: drag;
   user-select: none;
@@ -66,7 +86,7 @@ body,
 
 .desktop-toolbar {
   position: relative;
-  z-index: 5;
+  z-index: var(--z-toolbar);
   grid-column: 1 / -1;
   gap: 6px;
   min-width: 0;
@@ -124,7 +144,7 @@ body,
 
 .sidebar {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-sticky);
   width: auto;
   min-height: 0;
   max-height: none;

@@ -172,6 +172,17 @@ def test_didl_metadata_is_escaped_once_by_the_soap_envelope():
     assert "&amp;lt;DIDL-Lite" not in body
 
 
+def test_cast_mime_uses_mpegts_and_hls_instead_of_stdlib_guesses():
+    assert dlna._media_mime("movie.ts") == "video/mp2t"
+    assert dlna._media_mime("film.m2ts") == "video/mp2t"
+    assert dlna._media_mime("index.m3u8") == "application/vnd.apple.mpegurl"
+    assert dlna._media_mime("video.mp4") == "video/mp4"
+    assert "mpegurl" in dlna._didl_metadata("http://192.168.1.2/share/index.m3u8", "index.m3u8")
+    assert "video/mp2t" in dlna._didl_metadata("http://192.168.1.2/share/movie.ts", "movie.ts")
+    assert dlna._chromecast_stream_type("index.m3u8") == "LIVE"
+    assert dlna._chromecast_stream_type("movie.mp4") == "BUFFERED"
+
+
 def test_invalid_dlna_duration_is_rejected():
     with pytest.raises(ValueError):
         dlna._parse_duration("00:99:00")
