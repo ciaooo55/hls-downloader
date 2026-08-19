@@ -582,7 +582,9 @@ def test_native_host_registration_honors_explicit_package_version(tmp_path):
     shutil.copy2(root / "scripts" / "register-native-host.ps1", scripts)
 
     registry_root = rf"HKCU:\Software\HLSDownloaderNativeHostUnitTest\{tmp_path.name}"
-    for shell in ("powershell.exe", "pwsh.exe"):
+    shells = [shell for shell in ("powershell.exe", "pwsh.exe") if shutil.which(shell)]
+    assert shells, "need powershell.exe or pwsh.exe to register Native Messaging"
+    for shell in shells:
         selected_host = versions / "HLSDownloaderNativeHost-1.2.3.exe"
         newer_host = versions / "HLSDownloaderNativeHost-9.9.9.exe"
         selected_host.write_bytes(b"selected")
@@ -627,7 +629,7 @@ def test_native_host_registration_honors_explicit_package_version(tmp_path):
             )
             for browser in ("chrome", "firefox"):
                 manifest = json.loads(
-                    (manifests / f"{browser}-1.2.3.json").read_text(encoding="utf-8")
+                    (app / "native-host" / f"{browser}.json").read_text(encoding="utf-8")
                 )
                 assert Path(manifest["path"]).resolve() == selected_host.resolve()
             assert not newer_host.exists()

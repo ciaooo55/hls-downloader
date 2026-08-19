@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "6.0.0-dev",
+    [string]$Version = "6.0.0",
     [string]$OutDir = "",
     [switch]$SkipBuild,
     [switch]$SkipZip,

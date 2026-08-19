@@ -8,8 +8,8 @@ release build. 5.x trees remain a frozen behavioral spec.
 1. `powershell -ExecutionPolicy Bypass -File scripts/run_v6_gates.ps1`
 2. `cargo test --manifest-path native_shell/Cargo.toml --lib --no-default-features`
 3. `cargo test --manifest-path native_ui/Cargo.toml`
-4. `powershell -ExecutionPolicy Bypass -File scripts/build_v6.ps1 -Version 6.0.0-dev`
-5. `powershell -ExecutionPolicy Bypass -File scripts/smoke_v6_package.ps1 -ArchivePath release/HLSDownloader-v6.0.0-dev-Windows-x64-Portable.zip`
+4. `powershell -ExecutionPolicy Bypass -File scripts/build_v6.ps1 -Version 6.0.0`
+5. `powershell -ExecutionPolicy Bypass -File scripts/smoke_v6_package.ps1 -ArchivePath release/HLSDownloader-v6.0.0-Windows-x64-Portable.zip`
 6. Extension: `pnpm test` and `pnpm run build` in `extension/`
 
 ## Behavior matrix

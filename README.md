@@ -200,14 +200,14 @@ pnpm run build
 本地 v6 包装需要 MSVC、NSIS 和联网拉取针定的 FFmpeg 包：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build_v6.ps1 -Version 6.0.0-dev
+powershell -ExecutionPolicy Bypass -File .\scripts\build_v6.ps1 -Version 6.0.0
 ```
 
 输出位于被 Git 忽略的 `release/`：
 
 ```text
-HLSDownloader-v6.0.0-dev-Windows-x64-Setup.exe
-HLSDownloader-v6.0.0-dev-Windows-x64-Portable.zip
+HLSDownloader-v6.0.0-Windows-x64-Setup.exe
+HLSDownloader-v6.0.0-Windows-x64-Portable.zip
 ```
 
 正式标签使用 `v6.0.0`，产物名为 `HLSDownloader-v6.0.0-Windows-x64-{Setup.exe,Portable.zip}`。

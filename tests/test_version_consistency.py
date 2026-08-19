@@ -27,7 +27,7 @@ def test_desktop_release_versions_are_consistent():
     assert _match("scripts/build_installer.ps1", r'\[string\]\$Version\s*=\s*"([^"]+)"') == version
 
 
-def test_v6_crate_versions_stay_on_the_preview_line():
+def test_v6_crate_versions_stay_on_the_release_line():
     version = _match("native_ui/Cargo.toml", r'^version\s*=\s*"([^"]+)"')
     assert version.startswith("6.")
     assert _match("native_shell/Cargo.toml", r'^version\s*=\s*"([^"]+)"') == version

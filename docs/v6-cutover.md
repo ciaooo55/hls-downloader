@@ -16,7 +16,7 @@ GitHub Windows Release 的现网安装包是 v6：`scripts/build_v6.ps1` 产出 
 powershell -ExecutionPolicy Bypass -File scripts\run_v6_gates.ps1
 cargo test --manifest-path native_shell/Cargo.toml --lib --no-default-features
 cargo test --manifest-path native_ui/Cargo.toml
-powershell -ExecutionPolicy Bypass -File scripts\build_v6.ps1 -Version 6.0.0-dev
+powershell -ExecutionPolicy Bypass -File scripts\build_v6.ps1 -Version 6.0.0
 ```
 
 Native Messaging 安装 `HLSDownloaderNativeHost.exe`（同一二进制的副本或硬链接）。文件名含 `NativeHost` 时走 `--native-host` 路径，**不打开 SQLite**，只连 v6 Core。

@@ -52,7 +52,7 @@ Firefox 所有发布包统一使用 `hls-downloader-store@ciaooo55.com` ID。首
 ## 本机构建
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build_v6.ps1 -Version 6.0.0-dev
+powershell -ExecutionPolicy Bypass -File scripts\build_v6.ps1 -Version 6.0.0
 ```
 
 产物在 `release/`。打包会打入针定的 `ffmpeg.exe` / `ffprobe.exe`。有 `libmpv-2.dll`（`HLS_V6_LIBMPV` 或仓库根）时打进 Setup；没有则播放降级。便携包烟雾：`scripts/smoke_v6_package.ps1`。
