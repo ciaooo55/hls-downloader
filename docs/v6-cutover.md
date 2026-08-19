@@ -27,7 +27,7 @@ Setup.exe 安装时执行 `register-native-host.ps1 -Cutover`，把现网 host �
 powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1 -Cutover
 ```
 
-`libmpv-2.dll` 若存在于 `HLS_V6_LIBMPV`、仓库根、`native_ui/` 或 exe 旁，会打进安装包；没有 DLL 时播放降级，NSIS 用 `/nonfatal`。
+`libmpv-2.dll` 若存在于 `HLS_V6_LIBMPV`、仓库根、`native_ui/` 或 exe 旁，会打进安装包；没有 DLL 时播放降级，NSIS 用 `/nonfatal`。`ffmpeg.exe` / `ffprobe.exe` 始终从与 5.x 相同的针定 BtbN 包打入（本地可用 `-UseSystemFfmpeg`）。
 
 ## 5.x 数据迁移
 
@@ -44,4 +44,4 @@ powershell -ExecutionPolicy Bypass -File scripts\register-native-host.ps1 -Cutov
 
 ## 诚实口径
 
-源码与 GitHub Release 现网安装包都是 Core+Slint 的 v6。BT 仍是 `TorrentSession` / `BuiltinTorrentEngine`（swarm 冻结，可换 libtorrent）。播放器把 libmpv `wid` 接到播放器 HWND 客户区子窗；没有 `libmpv-2.dll` 时降级。
+源码与 GitHub Release 现网安装包都是 Core+Slint 的 v6。BT 仍是 `TorrentSession` / `BuiltinTorrentEngine`（swarm 冻结，可换 libtorrent）。播放器把 libmpv `wid` 接到播放器 HWND 客户区子窗；没有 `libmpv-2.dll` 时降级。FFmpeg 随包装入，供 HLS/DASH 合并。

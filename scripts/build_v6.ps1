@@ -3,7 +3,8 @@ param(
     [string]$OutDir = "",
     [switch]$SkipBuild,
     [switch]$SkipZip,
-    [switch]$SkipInstaller
+    [switch]$SkipInstaller,
+    [switch]$UseSystemFfmpeg
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,6 +32,11 @@ $NsisRuntimeRoot = if ($env:LOCALAPPDATA) {
 $NsisToolsDir = Join-Path $NsisRuntimeRoot "nsis-$NsisVersion"
 $NsisUrl = "https://master.dl.sourceforge.net/project/nsis/NSIS%203/$NsisVersion/nsis-$NsisVersion.zip?viasf=1"
 $NsisSha256 = "56581f90db321581c5381193d796fffcf2d24b2f8fed2160a6c6a3baa67f2c4f"
+$FFmpegArchive = Join-Path $ToolsDir "ffmpeg-windows.zip"
+$FFmpegToolsDir = Join-Path $ToolsDir "ffmpeg-windows"
+$FFmpegArchiveUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-01-13-21/ffmpeg-N-125881-g946272b79a-win64-gpl.zip"
+$FFmpegArchiveBuild = "BtbN autobuild 2026-08-01 13:21 (FFmpeg g946272b79a)"
+$FFmpegArchiveSha256 = "a082da6d5ce0cbb9a8ad0112ab7f654d480c707b8caf9d332f4532d78b65257f"
 
 function Assert-FileSha256([string]$Path, [string]$Expected, [string]$Label) {
     if (-not (Test-Path -LiteralPath $Path)) {
@@ -88,6 +94,41 @@ function Get-MakeNsis {
     return $makensis.FullName
 }
 
+function Find-MediaTool($Name) {
+    if ($UseSystemFfmpeg) {
+        $systemTool = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if (-not $systemTool -or -not (Test-Path -LiteralPath $systemTool.Source)) {
+            throw "-UseSystemFfmpeg requires $Name to be available on PATH"
+        }
+        return [IO.Path]::GetFullPath($systemTool.Source)
+    }
+    Get-VerifiedArchive $FFmpegArchiveUrl $FFmpegArchive $FFmpegArchiveSha256 "FFmpeg archive ($FFmpegArchiveBuild)"
+    if (-not (Test-Path -LiteralPath $FFmpegToolsDir)) {
+        Expand-Archive -LiteralPath $FFmpegArchive -DestinationPath $FFmpegToolsDir -Force
+    }
+    $downloaded = Get-ChildItem -LiteralPath $FFmpegToolsDir -Recurse -File -Filter $Name -ErrorAction SilentlyContinue |
+        Sort-Object Length -Descending |
+        Select-Object -First 1
+    if (-not $downloaded) {
+        throw "$Name was not found in the downloaded FFmpeg archive."
+    }
+    return $downloaded.FullName
+}
+
+function Copy-MediaTool($Name) {
+    $destination = Join-Path $StageDir $Name
+    $source = Find-MediaTool $Name
+    Copy-Item -LiteralPath $source -Destination $destination -Force
+    $versionOutput = @(& $destination -version 2>&1)
+    $exitCode = $LASTEXITCODE
+    $toolName = [IO.Path]::GetFileNameWithoutExtension($Name)
+    if ($exitCode -ne 0 -or ($versionOutput -join "`n") -notmatch "(?m)^$toolName version ") {
+        $details = ($versionOutput | Select-Object -First 3) -join " | "
+        throw "Bundled media tool validation failed for $Name (exit $exitCode): $details"
+    }
+}
+
 New-Item -ItemType Directory -Force -Path $StageDir, $PortableDir, $ReleaseDir | Out-Null
 Get-ChildItem -LiteralPath $StageDir -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
 
@@ -114,6 +155,8 @@ if (-not (Test-Path -LiteralPath $exe)) {
 
 Copy-Item -LiteralPath $exe -Destination (Join-Path $StageDir "HLSDownloader.exe") -Force
 Copy-Item -LiteralPath $exe -Destination (Join-Path $StageDir "HLSDownloaderNativeHost.exe") -Force
+Copy-MediaTool "ffmpeg.exe"
+Copy-MediaTool "ffprobe.exe"
 $libmpvCandidates = @()
 if ($env:HLS_V6_LIBMPV) { $libmpvCandidates += $env:HLS_V6_LIBMPV }
 $libmpvCandidates += @(

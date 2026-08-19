@@ -19,7 +19,7 @@ release build. 5.x trees remain a frozen behavioral spec.
 - Global and per-host connection budget; scheduled speed limit; WinHTTP origin connect reuse
 - Site rules (host speed / concurrency / proxy / dir / UA / Referer) applied to new HTTP tasks
 - Successful Range path: extra network bytes after publish = 0
-- HLS TS concat, fMP4 local playlist, AES-128, LL-HLS PART, live stop
+- HLS TS concat, fMP4 local playlist, AES-128, LL-HLS PART, live stop; Setup/Portable bundle pinned ffmpeg/ffprobe
 - DASH native representations; unsupported multi-period fails closed (no yt-dlp)
 - FTP REST resume; FTPS (implicit 990 / AUTH TLS); SFTP TOFU fail-closed on host-key change
 - Torrent/magnet import via `TorrentSession` (web seed; swarm frozen, not libtorrent)

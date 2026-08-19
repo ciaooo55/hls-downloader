@@ -43,6 +43,7 @@ behind `supervisor` for the frozen 5.x `hls-native-shell` binary.
 `backend/`, `frontend/`, and `frontend/src-tauri/` are a behavioral spec and
 test mine. Do not add 5.x features. Do not call Python from v6.
 
-Installer cutover happens only after the behavior matrix in
-[v6-release-gates.md](v6-release-gates.md) passes. Packaging steps are in
-[v6-cutover.md](v6-cutover.md).
+Installer cutover is in GitHub Windows Release: `scripts/build_v6.ps1`
+ships `HLSDownloader.exe` plus pinned `ffmpeg.exe` / `ffprobe.exe`.
+Packaging steps are in [v6-cutover.md](v6-cutover.md). The behavior matrix
+in [v6-release-gates.md](v6-release-gates.md) must stay green.

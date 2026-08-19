@@ -14,26 +14,26 @@ HLS · DASH · HTTP(S) · FTP/FTPS · SFTP · BT / magnet · 边下边播 · 断
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows11&logoColor=white)](https://github.com/ciaooo55/hls-downloader/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
 
-[下载最新版](https://github.com/ciaooo55/hls-downloader/releases/latest) · [Firefox 插件](https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/) · [快速开始](#-快速开始) · [浏览器插件](#-浏览器插件) · [源码开发](#-源码开发) · [发布说明](docs/releases/v5.0.14.md)
+[下载最新版](https://github.com/ciaooo55/hls-downloader/releases/latest) · [Firefox 插件](https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/) · [快速开始](#-快速开始) · [浏览器插件](#-浏览器插件) · [源码开发](#-源码开发) · [发布说明](docs/releases/v6.0.0.md)
 
 </div>
 
 ![HLS Downloader 产品界面展示](docs/images/app-showcase.png)
 
-HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏览器下载接管和本地播放器放在一个简洁界面里。程序默认只监听 `127.0.0.1`；任务、配置、缓存和最终文件均保存在本机。
+HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏览器下载接管和本地播放器放在一个常驻进程里。产品入口是 `HLSDownloader.exe`（Slint 工作台 + Rust Core）；UI 与浏览器扩展只走命名管道 `\\.\pipe\HLSDownloader.v6`。任务、配置、缓存和最终文件均保存在本机。
 
 > [!IMPORTANT]
 > 本项目不会绕过 DRM、EME 或网站访问控制。首次启动必须阅读并明确同意[《用户协议与免责声明（中国大陆版）》](TERMS.md)和[《隐私政策》](PRIVACY.md)；请只处理你拥有合法下载、录制和传播权利的内容。
 
 ## 📦 下载与安装
 
-前往 [GitHub Releases](https://github.com/ciaooo55/hls-downloader/releases/latest) 获取最新版。桌面发布包已经包含下载核心、FFmpeg、ffprobe、播放器资源和 Chromium 插件，不需要另外配置 Python。
+前往 [GitHub Releases](https://github.com/ciaooo55/hls-downloader/releases/latest) 获取最新版。现网安装包是 **v6**：单一 `HLSDownloader.exe`、随包 FFmpeg/ffprobe，以及 Chromium 插件。不需要安装 Python。没有 `libmpv-2.dll` 时播放降级，下载不受影响。
 
 | 获取方式 | 适用场景 |
 | --- | --- |
-| `HLSDownloader-v5.0.14-Windows-x64-Setup.exe` | 推荐；支持开始菜单、卸载入口和应用内更新 |
-| `HLSDownloader-v5.0.14-Windows-x64-Portable.zip` | 免安装；完整解压后运行，数据保存在便携目录 |
-| `HLSDownloader-v5.0.14-Chrome-Edge-Extension.zip` | Chrome、Edge、Brave、Chromium、Vivaldi、Opera 的 MV3 扩展 |
+| `HLSDownloader-v6.0.0-Windows-x64-Setup.exe` | 推荐；开始菜单、卸载入口，并切换 Native Messaging 到 v6 |
+| `HLSDownloader-v6.0.0-Windows-x64-Portable.zip` | 免安装；完整解压后运行，数据保存在便携目录 |
+| `HLSDownloader-v6.0.0-Chrome-Edge-Extension.zip` | Chrome、Edge、Brave、Chromium、Vivaldi、Opera 的 MV3 扩展 |
 | [Firefox Add-ons 插件](https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/) | Firefox 正式版；安装后由 Firefox 自动更新 |
 
 > [!NOTE]
@@ -59,11 +59,12 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 - 默认每任务 12 路并发，最高 64 路；同时受全局连接预算、单站并发和共享退避限制，避免多个任务把网络打满。
 - 支持暂停、恢复、取消、重试、优先级、限速（可分时段）、速度曲线、代理、批量任务（支持从文本/HTML/Metalink 文件导入并导出链接列表）、同名保护和重启恢复；已完成文件被删除后任务会标明“文件已删除”，并可从原地址重新下载。
 - 签名 URL 更新后可依据资源标识安全续传；过程文件使用原子写入，跨磁盘完成时安全复制。
-- BT / magnet 基于 libtorrent，和 HTTP、HLS、DASH 任务使用同一套任务列表与调度；可监视文件夹自动导入新放入的 .torrent，默认关闭。
+- BT / magnet 使用同进程 `TorrentSession`（web seed；完整 BitTorrent swarm 未启用），和 HTTP、HLS、DASH 任务使用同一套任务列表与调度；可监视文件夹自动导入新放入的 .torrent，默认关闭。
 
 ### 🎬 媒体与直播
 
 - 解析点播 HLS、LL-HLS 与非 DRM DASH，支持多层主清单、最高质量选择、BYTERANGE、fMP4 init map、AES-128 和 discontinuity。
+- 非 DRM DASH 走原生解析；复杂多 Period 清单会明确失败，不再回退 yt-dlp。
 - 直播录制按分片持久化检查点；独立音视频轨同步录制，停止后由 FFmpeg 无损合并并校验时间轴。
 - HLS 点播可保存外挂字幕；完成阶段单独展示合并、转封装和验证进度。
 - 达到连续可播放长度后可边下边播；完成后切换到本地 Range 播放，不再读取远端媒体。
@@ -76,18 +77,18 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 - 媒体候选按标签页、页面、frame、播放器和播放时间证据归属；广告、预览流和后台资源会被降权或排除。
 - 下载接管以用户下载意图和浏览器真实 `DownloadItem` 为准，保留重定向后的 URL、文件名、类型、大小与必要请求上下文。
 - 支持页面悬浮按钮、资源面板、右键下载、magnet、复制为 cURL 和短效链接自动刷新。
-- Native Messaging 负责可信配对与冷启动，loopback 通道负责快速通信；核心重启后自动重连，多浏览器和不同插件版本可同时在线。
+- Native Messaging 负责可信配对与冷启动；扩展只连同一条 v6 Core 管道，不打开 SQLite。核心重启后自动重连，多浏览器和不同插件版本可同时在线。
 
 ### 🖥️ Windows 桌面体验
 
-- Tauri 2 原生窗口、系统托盘、单实例唤醒、深浅色主题和剪贴板下载提示。
+- Slint 原生窗、系统托盘、单实例唤醒、深浅色主题和剪贴板下载提示；产品进程不加载 Python、Tauri 或 WebView2。
 - 直播或下载期间阻止系统休眠，任务结束后立即恢复原电源策略。
-- 安装版支持应用内检查更新、SHA-256 digest 校验、可靠关闭旧实例和覆盖升级。
+- 安装版支持应用内检查 GitHub 最新版本（不自动下载）、可靠关闭旧实例和覆盖升级。
 - 设置、任务历史、缓存与最终文件各自有清晰目录；可按媒体/程序/压缩包/其他自动分类保存，任务里指定的目录不会被改走；卸载时可选择是否保留已下载视频。
 
 ### 🔐 本地与安全
 
-- 服务默认仅监听 `127.0.0.1:8765`，浏览器客户端需要配对，网页不能直接调用下载接口。
+- 产品 IPC 默认只开命名管道 `\\.\pipe\HLSDownloader.v6`，仅当前用户可连接；loopback TCP 仅测试或显式环境变量开启。
 - Cookie、Authorization 和可重放请求上下文按任务保存时使用 Windows DPAPI 保护。
 - 浏览器来源请求会限制本机、内网和链路本地目标；手动桌面任务仍可按用户意图访问 LAN / NAS。
 - 日志、请求体、抓取候选和浏览器客户端历史均有容量或生命周期限制。
@@ -99,8 +100,8 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 | HTTP / HTTPS | ✅ | Range 多连接、断点续传、限速、代理、认证请求 |
 | 点播 HLS | ✅ | TS / fMP4、AES-128、BYTERANGE、主清单与外挂字幕 |
 | 直播 / LL-HLS | ✅ | 持续录制、暂停恢复、独立音视频轨和时间轴修复 |
-| 非 DRM DASH | ✅ | 点播与直播；复杂多 Period 清单可使用兼容回退 |
-| `.torrent` / magnet | ✅ | libtorrent 下载、恢复与统一调度 |
+| 非 DRM DASH | ✅ | 点播与直播；复杂多 Period 清单 fail-closed，无 yt-dlp |
+| `.torrent` / magnet | ✅ | 同进程 `TorrentSession`；web seed，swarm 冻结 |
 | 浏览器“复制为 cURL” | ✅ | 导入 URL、请求头、Cookie、Basic Auth 和可安全重放的 POST |
 | SAMPLE-AES / DRM / EME | ❌ | 不尝试绕过内容保护 |
 | 无法重放的 `blob:` / POST | ❌ | 必须取得真实媒体请求或可重放请求上下文 |
@@ -109,7 +110,7 @@ HLS Downloader 将桌面任务管理、媒体协议解析、直播录制、浏�
 
 ### Chromium
 
-1. 下载并解压 `HLSDownloader-v5.0.14-Chrome-Edge-Extension.zip`。
+1. 下载并解压 `HLSDownloader-v6.0.0-Chrome-Edge-Extension.zip`。
 2. 打开浏览器扩展管理页并启用“开发者模式”。
 3. 选择“加载已解压的扩展程序”，指向解压目录。
 4. 启动桌面端；插件会通过 Native Messaging 自动配对，不需要手动复制 Token。
@@ -136,48 +137,39 @@ Cookie 默认不读取，只有用户为具体站点授权后才随该站点媒�
 
 ```mermaid
 flowchart LR
-    A["桌面界面"] --> C["本地 FastAPI 核心"]
-    B["浏览器插件"] -->|"Native Messaging / Loopback"| C
+    A["Slint 工作台"] --> C["Rust Core"]
+    B["浏览器插件"] -->|"Native Messaging / 命名管道"| C
     C --> D{"协议引擎"}
-    D --> E["HTTP(S)"]
+    D --> E["HTTP(S) WinHTTP"]
     D --> F["HLS / DASH"]
-    D --> G["BT / magnet"]
+    D --> G["FTP / SFTP / BT"]
     E --> H["分片、检查点与临时文件"]
     F --> H
     G --> H
     H --> I["FFmpeg 合并与验证"]
-    H --> J["边下边播"]
+    H --> J["边下边播 / libmpv"]
     I --> K["最终文件"]
 ```
 
-桌面端使用 **Tauri 2 + React 19 + TypeScript**，下载核心使用 **Python 3.12 + FastAPI**，浏览器扩展使用 **WXT + Manifest V3**。更多设计细节见 [架构说明](docs/architecture.md)、[设计文档](DESIGN.md) 和 [成熟下载器对照审计](docs/mature-download-manager-audit.md)。
+产品进程是 **Rust `native_shell` Core + Slint `native_ui`**，浏览器扩展仍是 **WXT + Manifest V3**。FFmpeg/ffprobe 只在合并/校验时作为工具进程启动。5.x 的 `backend/`、`frontend/` 冻结为行为规格。细节见 [v6 架构](docs/v6-architecture.md)、[切包清单](docs/v6-cutover.md) 和 [设计文档](DESIGN.md)。
 
 ## 🛠️ 源码开发
 
 ### 环境要求
 
 - Windows 10/11 x64
-- Python 3.12
-- Node.js 24 与 pnpm 11
-- Rust stable（构建 Tauri 桌面端）
-- FFmpeg 与 ffprobe（开发运行时放入 `bin/`）
+- Rust stable 与 MSVC（`scripts/vcvars.ps1`）
+- Node.js 24 与 pnpm 11（扩展）
+- Python 3.12（仅 5.x 规格测试）
 
 ### 安装与运行
 
 ```powershell
-python -m pip install -r requirements-dev.txt
-
-cd frontend
-corepack enable
-corepack prepare pnpm@11.7.0 --activate
-pnpm install --frozen-lockfile
-cd ..
-
-.\build_frontend.ps1
-.\run_backend.ps1
+. .\scripts\vcvars.ps1
+cargo test --manifest-path native_shell/Cargo.toml --lib --no-default-features
+cargo test --manifest-path native_ui/Cargo.toml
+cargo run --manifest-path native_ui/Cargo.toml --bin HLSDownloader
 ```
-
-打开 `http://127.0.0.1:8765/ui`。前端热更新可运行 `.\run_frontend.ps1`。
 
 构建浏览器扩展：
 
@@ -192,60 +184,62 @@ pnpm run build
 ### 测试
 
 ```powershell
+cargo test --manifest-path native_shell/Cargo.toml --lib --no-default-features
+cargo test --manifest-path native_ui/Cargo.toml
 python -m pytest -q
 python -m ruff check backend tests
-python -m mypy backend
-
-cd frontend
+cd extension
 pnpm test
 pnpm run build
-pnpm run tauri:build
 ```
 
-扩展测试在 `extension/` 运行 `pnpm test`。真实下载、浏览器接管、安装升级、系统托盘和休眠抑制还应按 `scripts/smoke_*.py`、`scripts/smoke-*.ps1` 做针对性冒烟。
+5.x 规格测试仍覆盖 Python / Tauri / 扩展。真实下载和浏览器接管还可按 `scripts/smoke_*.py`、`scripts/smoke_v6_package.ps1` 做冒烟。
 
 ## 📦 打包与发布
 
-本地打包需要 PyInstaller、NSIS、FFmpeg 和 ffprobe：
+本地 v6 包装需要 MSVC、NSIS 和联网拉取针定的 FFmpeg 包：
 
 ```powershell
-python -m pip install -r requirements-build.txt
-.\scripts\build_installer.ps1 -Version 5.0.14
+powershell -ExecutionPolicy Bypass -File .\scripts\build_v6.ps1 -Version 6.0.0-dev
 ```
 
 输出位于被 Git 忽略的 `release/`：
 
 ```text
-HLSDownloader-v5.0.14-Windows-x64-Setup.exe
-HLSDownloader-v5.0.14-Windows-x64-Portable.zip
+HLSDownloader-v6.0.0-dev-Windows-x64-Setup.exe
+HLSDownloader-v6.0.0-dev-Windows-x64-Portable.zip
 ```
 
-需要构建浏览器插件时，本地打包追加 `-IncludeExtensionAssets`，或在 GitHub Actions 手动运行时勾选 `include_extensions`。
+正式标签使用 `v6.0.0`，产物名为 `HLSDownloader-v6.0.0-Windows-x64-{Setup.exe,Portable.zip}`。
 
-- 推送到 `main` 或提交 Pull Request：运行后端、前端和扩展测试与构建。
+需要构建浏览器插件时，在 GitHub Actions 手动运行时勾选 `include_extensions`。
+
+- 推送到 `main` 或提交 Pull Request：运行 5.x 规格测试、v6 Core/UI 测试与扩展构建。
 - 手动运行 [Windows Release](https://github.com/ciaooo55/hls-downloader/actions/workflows/release.yml)：生成工作流产物，不创建正式 Release。
 - 推送 `v*` 标签：测试、打包并创建 GitHub Release；只有相对上一标签检测到 `extension/` 变化时才附带插件资产。
 
 ```powershell
-git tag v5.0.14
-git push origin v5.0.14
+git tag v6.0.0
+git push origin v6.0.0
 ```
 
-完整流程和 PowerShell 5.1 / 7 编码要求见 [发布文档](docs/releasing.md)。
+完整流程见 [发布文档](docs/releasing.md)。
 
 ## 🗂️ 项目结构
 
 ```text
-backend/       FastAPI、统一任务调度、下载核心与 Native Host
+native_shell/  v6 Core：SQLite、WinHTTP、媒体/FTP/SFTP/BT、管道、NM
+native_ui/     v6 Slint 工作台，产出 HLSDownloader.exe
 extension/     WXT/React Chromium 与 Firefox MV3 扩展
-frontend/      React/TypeScript + Tauri 桌面界面与播放器
-installer/     NSIS 安装与覆盖升级脚本
-scripts/       构建、发布和真实环境 smoke
-tests/         Python 自动化测试
+installer/     v6 NSIS（hls-downloader-v6.nsi）；5.x 脚本保留作规格
+backend/      冻结的 5.x FastAPI 行为规格
+frontend/      冻结的 5.x Tauri/React 行为规格
+scripts/       构建、发布和 smoke
+tests/         5.x Python 规格测试
 .github/       CI 与 GitHub Release 工作流
 ```
 
-默认配置模板是 [`config.default.json`](config.default.json)。不要提交个人 `config.json`、Cookie、代理凭据、下载记录、数据库、日志或构建产物。
+不要提交个人 `config.json`、Cookie、代理凭据、下载记录、数据库、日志或构建产物。
 
 ## 🔐 安全与隐私
 
@@ -253,7 +247,7 @@ tests/         Python 自动化测试
 
 - 首次启动采用版本化法律确认：阅读完整用户协议与隐私政策并明确同意后，下载与投屏功能才会启用；不同意会直接退出软件。
 - 本机仅记录协议版本、协议/隐私正文 SHA-256 摘要和 UTC 接受时间；正文发生变化会自动要求重新确认。
-- 未确认时，后端同样拒绝创建、恢复、浏览器接管、BT 和投屏请求，不能仅绕过前端弹窗继续传输。
+- 未确认时，Core 同样拒绝创建、恢复、浏览器接管、BT 和投屏请求，不能仅绕过界面弹窗继续传输。
 - BT/magnet 下载期间会向其他 Peer 上传分片；只有同时具有下载和传播权限时才应使用。
 - 不要将本地服务监听地址改为公网地址。
 - 不要共享含 Cookie、Authorization、代理密码或短效签名 URL 的日志与配置。

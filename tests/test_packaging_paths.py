@@ -732,3 +732,25 @@ def test_frontend_sse_does_not_put_control_token_in_url():
     assert "file?token=${encodeURIComponent(getToken())}" not in api_source
     assert "playback/index.m3u8?session=${encodeURIComponent(session)}&token=${encodeURIComponent(getToken())}" not in api_source
     assert "playback/media?session=${encodeURIComponent(session)}&token=${encodeURIComponent(getToken())}" not in api_source
+
+
+def test_v6_package_pins_the_same_ffmpeg_as_the_5x_spec():
+    root = Path(__file__).resolve().parent.parent
+    v6_build = (root / "scripts" / "build_v6.ps1").read_text(encoding="utf-8")
+    spec_build = (root / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
+    nsis = (root / "installer" / "hls-downloader-v6.nsi").read_text(encoding="utf-8")
+    smoke = (root / "scripts" / "smoke_v6_package.ps1").read_text(encoding="utf-8")
+
+    pin = 'a082da6d5ce0cbb9a8ad0112ab7f654d480c707b8caf9d332f4532d78b65257f'
+    url = "releases/download/autobuild-2026-08-01-13-21/ffmpeg-N-125881-g946272b79a-win64-gpl.zip"
+    assert pin in spec_build
+    assert pin in v6_build
+    assert url in spec_build
+    assert url in v6_build
+    assert 'Copy-MediaTool "ffmpeg.exe"' in v6_build
+    assert 'Copy-MediaTool "ffprobe.exe"' in v6_build
+    assert 'File "${STAGE_DIR}\\ffmpeg.exe"' in nsis
+    assert 'File "${STAGE_DIR}\\ffprobe.exe"' in nsis
+    assert 'File /nonfatal "${STAGE_DIR}\\ffmpeg.exe"' not in nsis
+    assert "ffmpeg.exe" in smoke
+    assert "ffprobe.exe" in smoke
