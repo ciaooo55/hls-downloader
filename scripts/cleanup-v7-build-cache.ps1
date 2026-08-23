@@ -61,12 +61,20 @@ if ($NativeHostSmokeOnly) {
         )
     }
     $targets = @($relativeTargets | ForEach-Object { Join-Path $repo $_ }) + @(
+        'D:\HLSDownloaderBuildCache\ab-reference',
         'D:\HLSDownloaderBuildCache\cargo-target',
         'D:\HLSDownloaderBuildCache\compose-build',
-        'E:\HLSDownloaderBuildCache\gradle\caches',
-        'E:\HLSDownloaderBuildCache\gradle\daemon',
-        'E:\HLSDownloaderBuildCache\gradle\native',
-        'E:\HLSDownloaderBuildCache\gradle\notifications'
+        'E:\HLSDownloaderBuildCache\cargo',
+        'E:\HLSDownloaderBuildCache\gradle',
+        'E:\HLSDownloaderBuildCache\gradle-9.7.0',
+        'E:\HLSDownloaderBuildCache\gradle-9.7.0-bin.zip',
+        'E:\HLSDownloaderBuildCache\libmpv-20260814',
+        'E:\HLSDownloaderBuildCache\compose-after-click.png',
+        'E:\HLSDownloaderBuildCache\compose-after-resolution.png',
+        'E:\HLSDownloaderBuildCache\compose-handoff-contrast.png',
+        'E:\HLSDownloaderBuildCache\compose-handoff.png',
+        'E:\HLSDownloaderBuildCache\compose-reconciled.png',
+        'E:\HLSDownloaderBuildCache\compose-workbench.png'
     )
     $targets += @(Get-ChildItem -LiteralPath $repo -Directory -Filter '__pycache__' -Recurse -ErrorAction SilentlyContinue |
         ForEach-Object { $_.FullName })
