@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot\..").Path
 $hostName = 'com.ciaooo55.hls_downloader'
+$legacyHostName = 'com.ciaooo55.hls_downloader.v6'
 $runtimeDir = Join-Path $env:LOCALAPPDATA 'HLSDownloader\v7-native-host'
 
 function Get-RegistryPaths {
@@ -24,6 +25,7 @@ function Get-RegistryPaths {
 }
 
 $registryPaths = Get-RegistryPaths $hostName
+$legacyRegistryPaths = Get-RegistryPaths $legacyHostName
 if ($Unregister) {
     foreach ($path in $registryPaths) {
         Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
@@ -31,6 +33,10 @@ if ($Unregister) {
     Remove-Item -LiteralPath $runtimeDir -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host 'v7 Native Host registration removed.'
     exit 0
+}
+
+foreach ($path in $legacyRegistryPaths) {
+    Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 if (-not $HostExecutable) {

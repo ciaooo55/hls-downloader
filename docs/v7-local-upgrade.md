@@ -47,6 +47,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-installe
 
 Native Messaging 注册表项指向安装目录中的 `HLSDownloaderNativeHost.exe`。Chrome、Edge、Brave、Chromium、Vivaldi、Opera 和 Firefox 共用同一个 v7 Host 身份，不注册 v6 Host。
 
+确认 v7 正常运行后，可执行 `scripts\cleanup-v7-legacy-install.ps1 -Apply` 移除已知 v6 程序目录和失效快捷方式。脚本检测到旧目录包含 `config.json` 或 `data.db` 时会拒绝删除。
+
 ## 回滚
 
 覆盖升级前的程序镜像保存在：

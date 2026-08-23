@@ -5,6 +5,7 @@ param(
         "scripts\bootstrap-v7-toolchain.ps1",
         "scripts\build-v7.ps1",
         "scripts\cleanup-v7-build-cache.ps1",
+        "scripts\cleanup-v7-legacy-install.ps1",
         "scripts\create-v7-portable.ps1",
         "scripts\install-v7-local.ps1",
         "scripts\register-v7-native-host.ps1",
