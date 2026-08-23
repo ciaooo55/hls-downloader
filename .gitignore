@@ -24,6 +24,8 @@ extension/.output/
 
 # Build and packaging output
 bin/
+!native_shell/src/bin/
+!native_shell/src/bin/*.rs
 build/
 release/
 tools/
