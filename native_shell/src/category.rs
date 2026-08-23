@@ -7,17 +7,37 @@ pub fn download_category(filename: &str, url: &str, kind: crate::ResourceKind) -
     ) {
         return "media";
     }
-    let name = if filename.trim().is_empty() { url } else { filename };
+    let name = if filename.trim().is_empty() {
+        url
+    } else {
+        filename
+    };
     let ext = extension(name);
     if matches!(
         ext,
-        "mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" | "ts" | "mp3" | "m4a" | "flac" | "wav"
-            | "jpg" | "png" | "gif" | "webp"
+        "mp4"
+            | "mkv"
+            | "webm"
+            | "mov"
+            | "avi"
+            | "m4v"
+            | "ts"
+            | "mp3"
+            | "m4a"
+            | "flac"
+            | "wav"
+            | "jpg"
+            | "png"
+            | "gif"
+            | "webp"
     ) {
         "media"
     } else if matches!(ext, "exe" | "msi" | "msix" | "appx" | "bat" | "cmd") {
         "program"
-    } else if matches!(ext, "zip" | "7z" | "rar" | "tar" | "gz" | "bz2" | "xz" | "iso") {
+    } else if matches!(
+        ext,
+        "zip" | "7z" | "rar" | "tar" | "gz" | "bz2" | "xz" | "iso"
+    ) {
         "archive"
     } else {
         "other"
@@ -123,9 +143,7 @@ pub fn resolve_category_dir(
 fn extension(path: &str) -> &str {
     let name = path.split(['?', '#']).next().unwrap_or(path);
     let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
-    file.rsplit_once('.')
-        .map(|(_, ext)| ext)
-        .unwrap_or("")
+    file.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("")
 }
 
 #[cfg(test)]
@@ -144,7 +162,10 @@ mod tests {
             &CategoryDirs::default(),
         );
         assert!(dir.ends_with("媒体") || dir.ends_with("媒体\\") || dir.contains("媒体"));
-        assert_eq!(download_category("setup.exe", "", ResourceKind::File), "program");
+        assert_eq!(
+            download_category("setup.exe", "", ResourceKind::File),
+            "program"
+        );
         assert_eq!(
             resolve_category_dir(
                 "D:\\Downloads",

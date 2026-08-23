@@ -1,13 +1,12 @@
 [package]
 name = "hls-native-shell"
-version = "6.0.1"
+version = "7.0.0"
 edition = "2021"
-description = "v6 Core, engines, pipe, and Native Messaging. Optional 5.x Win32 supervisor."
+description = "HLS Downloader 7 Rust Core, download engines, IPC, and Native Messaging"
 publish = false
 
 [features]
-default = ["supervisor"]
-supervisor = []
+default = []
 
 [dependencies]
 rusqlite = { version = "0.37", features = ["bundled"] }
@@ -22,6 +21,9 @@ schannel = "0.1"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
     "Win32_Networking_WinHttp",
     "Win32_Security",
     "Win32_Security_Authorization",
@@ -45,6 +47,11 @@ name = "hls_native_shell"
 path = "src/lib.rs"
 
 [[bin]]
-name = "hls-native-shell"
-path = "src/main.rs"
-required-features = ["supervisor"]
+name = "hls-downloader-engine"
+path = "src/bin/hls_downloader_engine.rs"
+required-features = []
+
+[[bin]]
+name = "HLSDownloaderNativeHost"
+path = "src/bin/hls_downloader_native_host.rs"
+required-features = []

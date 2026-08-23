@@ -26,7 +26,10 @@ impl Conn {
         match self {
             Self::Plain(stream) => stream.peer_addr().map_err(|error| error.to_string()),
             #[cfg(windows)]
-            Self::Tls(stream) => stream.get_ref().peer_addr().map_err(|error| error.to_string()),
+            Self::Tls(stream) => stream
+                .get_ref()
+                .peer_addr()
+                .map_err(|error| error.to_string()),
         }
     }
 }
@@ -100,12 +103,7 @@ fn ftp_wire_ok(value: &str) -> bool {
     !value.chars().any(|ch| matches!(ch, '\r' | '\n' | '\0'))
 }
 
-pub fn download_ftp(
-    url: &str,
-    output: &Path,
-    control: &Path,
-    resume: bool,
-) -> Result<u64, String> {
+pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> Result<u64, String> {
     let target = parse_ftp_url(url)?;
     let implicit = target.tls && target.port == 990;
     let raw = TcpStream::connect((target.host.as_str(), target.port))
@@ -132,7 +130,9 @@ pub fn download_ftp(
         .and_then(|reply| reply.split_whitespace().nth(1)?.parse().ok())
         .unwrap_or(0);
     let resume_from = if resume && output.exists() {
-        std::fs::metadata(output).map(|meta| meta.len()).unwrap_or(0)
+        std::fs::metadata(output)
+            .map(|meta| meta.len())
+            .unwrap_or(0)
     } else {
         0
     };
@@ -174,7 +174,8 @@ pub fn download_ftp(
         if count == 0 {
             break;
         }
-        file.write_all(&buf[..count]).map_err(|error| error.to_string())?;
+        file.write_all(&buf[..count])
+            .map_err(|error| error.to_string())?;
         downloaded += count as u64;
         crate::net_policy::consume(count);
     }
@@ -232,8 +233,13 @@ fn read_reply(stream: &mut Conn) -> Result<String, String> {
 }
 
 fn parse_pasv_port(reply: &str) -> Result<u16, String> {
-    let start = reply.find('(').ok_or_else(|| "PASV missing host".to_string())? + 1;
-    let end = reply.find(')').ok_or_else(|| "PASV missing host".to_string())?;
+    let start = reply
+        .find('(')
+        .ok_or_else(|| "PASV missing host".to_string())?
+        + 1;
+    let end = reply
+        .find(')')
+        .ok_or_else(|| "PASV missing host".to_string())?;
     let nums: Vec<u16> = reply[start..end]
         .split(',')
         .filter_map(|item| item.trim().parse().ok())

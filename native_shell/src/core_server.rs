@@ -1,9 +1,9 @@
-//! Resident v6 Core: unique SQLite owner serving UI and Native Messaging.
+//! Resident v7 Core: unique SQLite owner serving UI and Native Messaging.
 
 use crate::{
-    default_core_bind, default_v6_database_path, serve_tcp_listener, CoreCommand, CoreCoordinator,
+    default_core_bind, default_v7_database_path, serve_tcp_listener, CoreCommand, CoreCoordinator,
     CoreEvent, CorePipeRequest, CorePipeResponse, EventEnvelope, PersistentCore, V6_PROTOCOL_NAME,
-    V6_PROTOCOL_VERSION,
+    V6_PROTOCOL_VERSION, V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION,
 };
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,7 +19,7 @@ pub struct CoreServer {
 
 impl CoreServer {
     pub fn open_default() -> Result<Self, String> {
-        Self::open_path(default_v6_database_path())
+        Self::open_path(default_v7_database_path())
     }
 
     pub fn open_path(path: impl AsRef<std::path::Path>) -> Result<Self, String> {
@@ -58,14 +58,15 @@ impl CoreServer {
         self.notify.1.notify_all();
     }
 
-    pub fn bind_local(&self) -> Result<(std::net::SocketAddr, thread::JoinHandle<Result<(), String>>), String>
-    {
+    pub fn bind_local(
+        &self,
+    ) -> Result<(std::net::SocketAddr, thread::JoinHandle<Result<(), String>>), String> {
         #[cfg(windows)]
         {
             let stop = self.stop_handle();
             let handler = self.handler();
             thread::spawn(move || {
-                let server = crate::NamedPipeServer::new(crate::v6_pipe_name());
+                let server = crate::NamedPipeServer::new(crate::v7_pipe_name());
                 let _ = server.serve_loop(stop, handler);
             });
         }
@@ -81,10 +82,10 @@ impl CoreServer {
         }
         let listener = TcpListener::bind(default_core_bind())
             .or_else(|_| TcpListener::bind("127.0.0.1:0"))
-            .map_err(|error| format!("bind v6 Core: {error}"))?;
+            .map_err(|error| format!("bind v7 Core: {error}"))?;
         let addr = listener
             .local_addr()
-            .map_err(|error| format!("v6 Core local addr: {error}"))?;
+            .map_err(|error| format!("v7 Core local addr: {error}"))?;
         Ok((addr, self.serve(listener)))
     }
 
@@ -110,9 +111,7 @@ fn bootstrap_store(coordinator: &CoreCoordinator) -> Result<(), String> {
         )?;
     }
     let core = coordinator.core();
-    let mut core = core
-        .lock()
-        .map_err(|_| "v6 Core mutex poisoned".to_string())?;
+    let mut core = core.lock().map_err(|_| "Core mutex poisoned".to_string())?;
     if let Ok(config) = std::env::var("HLS_V6_MIGRATE_CONFIG") {
         let db = std::env::var("HLS_V6_MIGRATE_DB").unwrap_or_default();
         let _ = crate::migrate_from_5x(
@@ -134,7 +133,9 @@ fn dispatch(
 ) -> CorePipeResponse {
     match request {
         CorePipeRequest::Hello { protocol, version } => {
-            if protocol == V6_PROTOCOL_NAME && version == V6_PROTOCOL_VERSION {
+            if (protocol == V7_PROTOCOL_NAME && version == V7_PROTOCOL_VERSION)
+                || (protocol == V6_PROTOCOL_NAME && version == V6_PROTOCOL_VERSION)
+            {
                 CorePipeResponse::Hello {
                     protocol,
                     version,
@@ -144,7 +145,7 @@ fn dispatch(
                 CorePipeResponse::Error {
                     request_id: None,
                     code: "protocol_mismatch".into(),
-                    message: "v6 Core protocol mismatch".into(),
+                    message: "v7 Core protocol mismatch".into(),
                 }
             }
         }
@@ -163,12 +164,68 @@ fn dispatch(
             },
         },
         CorePipeRequest::Snapshot { request_id } => match coordinator.tasks() {
-            Ok(tasks) => CorePipeResponse::Snapshot { request_id, tasks },
+            Ok(tasks) => CorePipeResponse::Snapshot {
+                request_id,
+                tasks,
+                latest_sequence: coordinator.latest_sequence().unwrap_or_default(),
+            },
             Err(error) => CorePipeResponse::Error {
                 request_id: Some(request_id),
                 code: "snapshot_failed".into(),
                 message: error,
             },
+        },
+        CorePipeRequest::Capabilities { request_id } => CorePipeResponse::Capabilities {
+            request_id,
+            product_version: "7.0.0".into(),
+            protocol_version: V7_PROTOCOL_VERSION,
+            commands: vec![
+                "create_task",
+                "task_action",
+                "open_main",
+                "hide_main",
+                "shutdown",
+                "set_setting",
+                "accept_handoff",
+                "reject_handoff",
+                "present_handoff",
+                "play_task",
+                "cast_task",
+                "player_control",
+                "reorder_queue",
+                "assign_queue",
+                "check_update",
+                "download_update",
+                "probe_url",
+                "probe_torrent",
+                "select_torrent_files",
+                "discover_cast_devices",
+                "cast_to_device",
+                "share_media",
+                "request_media_push",
+                "resolve_media_push",
+                "open_completed",
+                "confirm_power_action",
+                "cancel_power_action",
+                "clear_completed",
+                "save_site_profile",
+                "import_paths",
+                "export_tasks",
+                "place_queue",
+                "harvest_page",
+                "get_task_log",
+                "browser_hello",
+                "control_cast",
+                "set_default_cookie",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            settings: crate::download_worker::PUBLIC_SETTING_KEYS
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+            max_frame_bytes: crate::core_ipc::V7_PIPE_MAX_FRAME as u64,
         },
         CorePipeRequest::WaitEvents {
             request_id,
@@ -190,7 +247,27 @@ fn dispatch(
                 message: error,
             },
         },
+        CorePipeRequest::StoreSettings { request_id, values } => {
+            match coordinator.set_settings(values) {
+                Ok(()) => settings_response(coordinator, request_id),
+                Err(error) => CorePipeResponse::Error {
+                    request_id: Some(request_id),
+                    code: "settings_failed".into(),
+                    message: error,
+                },
+            }
+        }
         CorePipeRequest::LoadSettings { request_id } => settings_response(coordinator, request_id),
+        CorePipeRequest::SetDefaultCookie { request_id, cookie } => {
+            match coordinator.set_default_cookie(&cookie) {
+                Ok(()) => settings_response(coordinator, request_id),
+                Err(error) => CorePipeResponse::Error {
+                    request_id: Some(request_id),
+                    code: "credential_failed".into(),
+                    message: error,
+                },
+            }
+        }
         CorePipeRequest::StoreCredential {
             request_id,
             credential_ref,
@@ -274,11 +351,14 @@ fn settings_response(coordinator: &CoreCoordinator, request_id: u64) -> CorePipe
             category_dir_archive: settings.category_dirs.archive,
             category_dir_other: settings.category_dirs.other,
             queue_max: settings.queue_max,
+            queue_profiles: settings.queue_profiles,
             site_rules: settings.site_rules,
             av_scan_enabled: settings.av_scan_enabled,
             av_scan_command: settings.av_scan_command,
             torrent_watch: settings.torrent_watch,
+            torrent_watch_enabled: settings.torrent_watch_enabled,
             download_dir: settings.download_dir,
+            temp_dir: settings.temp_dir,
             default_concurrency: settings.default_concurrency,
             proxy_url: settings.proxy_url,
             ffmpeg_path: settings.ffmpeg_path,
@@ -302,6 +382,8 @@ fn settings_response(coordinator: &CoreCoordinator, request_id: u64) -> CorePipe
             queue_auto_stop_enabled: settings.queue_auto_stop_enabled,
             queue_auto_stop_time: settings.queue_auto_stop_time,
             default_referer: settings.default_referer,
+            default_origin: settings.default_origin,
+            allowed_hosts: settings.allowed_hosts,
             http_chunk_size_mb: settings.http_chunk_size_mb,
             completion_power_action: settings.completion_power_action,
             start_on_login: settings.start_on_login,
@@ -311,6 +393,12 @@ fn settings_response(coordinator: &CoreCoordinator, request_id: u64) -> CorePipe
             legal_terms_version: settings.legal_terms_version,
             reduce_motion: settings.reduce_motion,
             harvest_minimum_bytes: settings.harvest_minimum_bytes,
+            av_scan_fail_on_threat: settings.av_scan_fail_on_threat,
+            bt_upload_limit_kib: settings.bt_upload_limit_kib,
+            bt_max_connections: settings.bt_max_connections,
+            bt_enable_dht: settings.bt_enable_dht,
+            preferred_cast_device_id: settings.preferred_cast_device_id,
+            default_cookie_configured: coordinator.default_cookie_configured().unwrap_or(false),
         },
         Err(error) => CorePipeResponse::Error {
             request_id: Some(request_id),
@@ -355,6 +443,11 @@ fn spawn_torrent_watch(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
         let mut watch = crate::torrent_engine::TorrentWatch::default();
         let mut primed_dir = String::new();
         while !stop.load(Ordering::SeqCst) {
+            let enabled = coordinator
+                .lock()
+                .ok()
+                .and_then(|core| core.store().setting_bool("watch_torrents", false).ok())
+                .unwrap_or(false);
             let dir = coordinator
                 .lock()
                 .ok()
@@ -365,7 +458,11 @@ fn spawn_torrent_watch(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
             } else {
                 dir
             };
-            let dir = dir.trim().to_string();
+            let dir = if enabled {
+                dir.trim().to_string()
+            } else {
+                String::new()
+            };
             if dir.is_empty() {
                 watch = crate::torrent_engine::TorrentWatch::default();
                 primed_dir.clear();
@@ -448,6 +545,7 @@ mod tests {
     use super::*;
     use crate::{CoreIpcClient, ResourceKind, ResourceOffer, TaskSpec};
     use serde_json::Value;
+    use std::collections::BTreeMap;
     use std::net::TcpListener;
 
     #[test]
@@ -464,6 +562,133 @@ mod tests {
             !legal,
             "in_memory Core must not import config.json or force the legal gate"
         );
+        server.shutdown();
+    }
+
+    #[test]
+    fn capabilities_publish_the_v7_command_and_setting_contract() {
+        let server = CoreServer::in_memory().unwrap();
+        let response = (server.handler())(CorePipeRequest::Capabilities { request_id: 91 });
+        match response {
+            CorePipeResponse::Capabilities {
+                request_id,
+                product_version,
+                protocol_version,
+                commands,
+                settings,
+                max_frame_bytes,
+            } => {
+                assert_eq!(request_id, 91);
+                assert_eq!(product_version, "7.0.0");
+                assert_eq!(protocol_version, V7_PROTOCOL_VERSION);
+                assert!(commands.contains(&"probe_url".to_string()));
+                assert!(commands.contains(&"discover_cast_devices".to_string()));
+                assert!(commands.contains(&"import_paths".to_string()));
+                assert!(commands.contains(&"set_default_cookie".to_string()));
+                assert!(commands.contains(&"export_tasks".to_string()));
+                assert!(settings.contains(&"browser_takeover_enabled".to_string()));
+                assert!(settings.contains(&"reduce_motion".to_string()));
+                assert!(settings.contains(&"temp_dir".to_string()));
+                assert!(settings.contains(&"bt_enable_dht".to_string()));
+                assert_eq!(max_frame_bytes, crate::core_ipc::V7_PIPE_MAX_FRAME as u64);
+            }
+            other => panic!("unexpected capabilities response: {other:?}"),
+        }
+        server.shutdown();
+    }
+
+    #[test]
+    fn invalid_batch_setting_does_not_partially_commit() {
+        let server = CoreServer::in_memory().unwrap();
+        let response = (server.handler())(CorePipeRequest::StoreSettings {
+            request_id: 92,
+            values: BTreeMap::from([
+                ("dark_mode".to_string(), Value::Bool(true)),
+                ("proxy_mode".to_string(), Value::String("invalid".into())),
+            ]),
+        });
+        assert!(matches!(
+            &response,
+            CorePipeResponse::Error {
+                request_id: Some(92),
+                ref code,
+                ..
+            } if code == "settings_failed"
+        ));
+        let settings = (server.handler())(CorePipeRequest::LoadSettings { request_id: 93 });
+        match settings {
+            CorePipeResponse::Settings {
+                dark_mode,
+                proxy_mode,
+                ..
+            } => {
+                assert!(
+                    !dark_mode,
+                    "the valid first item must roll back with the batch"
+                );
+                assert_eq!(proxy_mode, "system");
+            }
+            other => panic!("unexpected settings response: {other:?}"),
+        }
+        server.shutdown();
+    }
+
+    #[test]
+    fn default_cookie_is_write_only_over_the_ui_protocol() {
+        let server = CoreServer::in_memory().unwrap();
+        let response = (server.handler())(CorePipeRequest::SetDefaultCookie {
+            request_id: 96,
+            cookie: "session=private".into(),
+        });
+        assert!(matches!(
+            &response,
+            CorePipeResponse::Settings {
+                request_id: 96,
+                default_cookie_configured: true,
+                ..
+            }
+        ));
+        let encoded = serde_json::to_string(&response).unwrap();
+        assert!(!encoded.contains("session=private"));
+        assert!(!encoded.contains("dpapi:"));
+        server.shutdown();
+    }
+
+    #[test]
+    fn snapshot_exposes_the_latest_event_sequence() {
+        let server = CoreServer::in_memory().unwrap();
+        server
+            .coordinator()
+            .set_setting("legal_terms_accepted", Value::Bool(true))
+            .unwrap();
+        let create = (server.handler())(CorePipeRequest::Command {
+            request_id: 94,
+            command: CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "https://example.test/sequence.bin".into(),
+                    resource_kind: ResourceKind::File,
+                    filename: "sequence.bin".into(),
+                    ..Default::default()
+                },
+            },
+        });
+        assert!(matches!(
+            create,
+            CorePipeResponse::Events { request_id: 94, .. }
+        ));
+        let snapshot = (server.handler())(CorePipeRequest::Snapshot { request_id: 95 });
+        match snapshot {
+            CorePipeResponse::Snapshot {
+                request_id,
+                tasks,
+                latest_sequence,
+            } => {
+                assert_eq!(request_id, 95);
+                assert_eq!(tasks.len(), 1);
+                assert!(latest_sequence > 0);
+            }
+            other => panic!("unexpected snapshot response: {other:?}"),
+        }
         server.shutdown();
     }
 
@@ -547,8 +772,9 @@ mod tests {
         .unwrap();
         let rows = host.load_handoffs().unwrap();
         assert!(
-            rows.iter().any(|row| row.contains("\"status\":\"accepted\"")
-                && row.contains("\"task_id\":\"task-")),
+            rows.iter()
+                .any(|row| row.contains("\"status\":\"accepted\"")
+                    && row.contains("\"task_id\":\"task-")),
             "native host must observe the UI accept: {rows:?}"
         );
         let tasks = host.snapshot().unwrap();
@@ -650,8 +876,37 @@ mod tests {
             samples.push(started.elapsed());
         }
         assert!(
-            samples.iter().all(|sample| *sample < Duration::from_millis(100)),
+            samples
+                .iter()
+                .all(|sample| *sample < Duration::from_millis(100)),
             "confirm IPC must stay under 100ms when Core is already running; samples={samples:?}"
+        );
+        server.shutdown();
+    }
+
+    #[test]
+    fn warm_core_ipc_command_p95_stays_under_75ms() {
+        let server = CoreServer::in_memory().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _worker = server.serve(listener);
+        let mut client = CoreIpcClient::connect_addr(addr).unwrap();
+        for _ in 0..5 {
+            client.command(CoreCommand::Ping).unwrap();
+        }
+        let mut samples = (0..64)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                client.command(CoreCommand::Ping).unwrap();
+                started.elapsed()
+            })
+            .collect::<Vec<_>>();
+        samples.sort_unstable();
+        let p95 = samples[samples.len() * 95 / 100];
+        println!("warm_core_ipc_p95_ms={:.3}", p95.as_secs_f64() * 1000.0);
+        assert!(
+            p95 <= Duration::from_millis(75),
+            "warm Core IPC P95 exceeded 75ms: {p95:?}; samples={samples:?}"
         );
         server.shutdown();
     }
@@ -665,7 +920,7 @@ mod tests {
             .set_setting("legal_terms_accepted", Value::Bool(true))
             .unwrap();
         let name = format!(
-            r"\\.\pipe\HLSDownloader.v6.t{}",
+            r"\\.\pipe\HLSDownloader.v7.t{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

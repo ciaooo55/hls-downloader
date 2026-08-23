@@ -1,20 +1,20 @@
 //! Durable command boundary shared by the UI and protocol front-ends.
 
-use crate::{CoreCommand, CoreRuntime, EventEnvelope, TaskSnapshot, TaskSpec, V6Store};
+use crate::{CoreCommand, CoreRuntime, CoreStore, EventEnvelope, TaskSnapshot, TaskSpec};
 use std::path::Path;
 
 pub struct PersistentCore {
     runtime: CoreRuntime,
-    store: V6Store,
+    store: CoreStore,
 }
 
 impl PersistentCore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
-        Self::from_store(V6Store::open(path)?)
+        Self::from_store(CoreStore::open(path)?)
     }
 
     pub fn in_memory() -> Result<Self, String> {
-        Self::from_store(V6Store::in_memory()?)
+        Self::from_store(CoreStore::in_memory()?)
     }
 
     pub fn handle(&mut self, command: CoreCommand) -> Result<Vec<EventEnvelope>, String> {
@@ -40,6 +40,10 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        if let Err(error) = self.sync_media_push_rows(&events) {
+            self.runtime = before;
+            return Err(error);
+        }
         Ok(events)
     }
 
@@ -51,6 +55,10 @@ impl PersistentCore {
             return Err(error);
         }
         if let Err(error) = self.sync_handoff_rows(&events) {
+            self.runtime = before;
+            return Err(error);
+        }
+        if let Err(error) = self.sync_media_push_rows(&events) {
             self.runtime = before;
             return Err(error);
         }
@@ -69,6 +77,25 @@ impl PersistentCore {
         let before = self.runtime.clone();
         let sequence = self.runtime.latest_sequence();
         self.runtime.mark_output_missing(task_id, missing);
+        let events = self.runtime.events_after(sequence, 16);
+        if events.is_empty() {
+            return Ok(events);
+        }
+        if let Err(error) = self.store.apply_events_and_spec(&events, None) {
+            self.runtime = before;
+            return Err(error);
+        }
+        Ok(events)
+    }
+
+    pub fn set_output_path(
+        &mut self,
+        task_id: &str,
+        path: String,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        let before = self.runtime.clone();
+        let sequence = self.runtime.latest_sequence();
+        self.runtime.set_output_path(task_id, path);
         let events = self.runtime.events_after(sequence, 16);
         if events.is_empty() {
             return Ok(events);
@@ -105,15 +132,15 @@ impl PersistentCore {
         self.runtime.events_after(sequence, limit)
     }
 
-    pub fn store(&self) -> &V6Store {
+    pub fn store(&self) -> &CoreStore {
         &self.store
     }
 
-    pub fn store_mut(&mut self) -> &mut V6Store {
+    pub fn store_mut(&mut self) -> &mut CoreStore {
         &mut self.store
     }
 
-    fn from_store(store: V6Store) -> Result<Self, String> {
+    fn from_store(store: CoreStore) -> Result<Self, String> {
         let snapshots = store.load_tasks()?;
         let specs = store.load_task_specs()?;
         let sequence = store.latest_sequence()?;
@@ -165,7 +192,8 @@ impl PersistentCore {
                 let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&encoded) else {
                     continue;
                 };
-                if value.get("id").and_then(serde_json::Value::as_str) != Some(handoff_id.as_str()) {
+                if value.get("id").and_then(serde_json::Value::as_str) != Some(handoff_id.as_str())
+                {
                     continue;
                 }
                 if let Some(object) = value.as_object_mut() {
@@ -184,13 +212,8 @@ impl PersistentCore {
                     .get("created_at_ms")
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0);
-                self.store.save_handoff(
-                    handoff_id,
-                    &json,
-                    status,
-                    task_id.as_deref(),
-                    created,
-                )?;
+                self.store
+                    .save_handoff(handoff_id, &json, status, task_id.as_deref(), created)?;
                 patched = true;
                 break;
             }
@@ -203,14 +226,29 @@ impl PersistentCore {
                     "created_at_ms": 0
                 })
                 .to_string();
-                self.store.save_handoff(
-                    handoff_id,
-                    &json,
-                    status,
-                    task_id.as_deref(),
-                    0,
-                )?;
+                self.store
+                    .save_handoff(handoff_id, &json, status, task_id.as_deref(), 0)?;
             }
+        }
+        Ok(())
+    }
+
+    fn sync_media_push_rows(&mut self, events: &[EventEnvelope]) -> Result<(), String> {
+        for envelope in events {
+            let request = match &envelope.event {
+                crate::CoreEvent::MediaPushRequested { request }
+                | crate::CoreEvent::MediaPushResolved { request } => request,
+                _ => continue,
+            };
+            let json = serde_json::to_string(request)
+                .map_err(|error| format!("encode media push {}: {error}", request.id))?;
+            self.store.save_handoff(
+                &request.id,
+                &json,
+                &request.status,
+                None,
+                request.created_at_ms,
+            )?;
         }
         Ok(())
     }
@@ -265,17 +303,27 @@ mod tests {
             let mut core = PersistentCore::open(&path).unwrap();
             core.handle(CoreCommand::CreateTask { spec: test_spec() })
                 .unwrap();
+            core.handle(CoreCommand::AssignQueue {
+                task_ids: vec!["task-1".into()],
+                queue_id: "night-media".into(),
+            })
+            .unwrap();
         }
         let mut reopened = PersistentCore::open(&path).unwrap();
         assert_eq!(reopened.tasks().len(), 1);
         assert_eq!(reopened.tasks()[0].task_id, "task-1");
+        assert_eq!(reopened.tasks()[0].queue_id, "night-media");
         assert_eq!(
             reopened.runtime.task_spec("task-1").unwrap().url,
             "https://example.test/restart.bin"
         );
-        assert_eq!(reopened.store().latest_sequence().unwrap(), 1);
+        assert_eq!(
+            reopened.runtime.task_spec("task-1").unwrap().queue_id,
+            "night-media"
+        );
+        assert_eq!(reopened.store().latest_sequence().unwrap(), 2);
         let events = reopened.handle(CoreCommand::Ping).unwrap();
-        assert_eq!(events[0].sequence, 2);
+        assert_eq!(events[0].sequence, 3);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));

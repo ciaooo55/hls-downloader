@@ -34,7 +34,7 @@ export class NativeBridge {
     timeoutMs = this.timeoutMs,
     retryCount = 0,
   ): Promise<any> {
-    if (this.closed) return Promise.reject(new Error('Native Messaging connection is closed'))
+    if (this.closed) return Promise.reject(new Error('插件连接已关闭'))
     return new Promise((resolve, reject) => {
       const requestId = `${Date.now().toString(36)}-${++this.requestSequence}`
       const request: PendingRequest = {
@@ -88,7 +88,7 @@ export class NativeBridge {
   close(): void {
     if (this.closed) return
     this.closed = true
-    const error = new Error('Native Messaging connection is closed')
+    const error = new Error('插件连接已关闭')
     this.rejectActive(error)
     while (this.queue.length) this.queue.shift()!.reject(error)
     const port = this.port
@@ -113,7 +113,7 @@ export class NativeBridge {
       const port = this.ensurePort()
       request.timer = setTimeout(() => {
         if (this.active !== request) return
-        this.retryOrRejectActive(port, new Error('Native Messaging response timed out'))
+        this.retryOrRejectActive(port, new Error('插件请求超时'))
       }, request.timeoutMs)
       port.postMessage(request.message)
     } catch (error) {
@@ -151,7 +151,7 @@ export class NativeBridge {
   private handleDisconnect(port: NativePortLike): void {
     if (this.port !== port) return
     this.port = null
-    this.retryOrRejectActive(port, new Error('Native Messaging host disconnected'))
+    this.retryOrRejectActive(port, new Error('下载器连接已断开'))
   }
 
   private retryOrRejectActive(port: NativePortLike, error: Error): void {

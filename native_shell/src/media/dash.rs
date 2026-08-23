@@ -35,13 +35,18 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         return Err("not a DASH manifest".into());
     }
     let dynamic = xml.contains("type=\"dynamic\"") || xml.contains("type='dynamic'");
-    let period_count = xml.matches("<Period").count().max(xml.matches("<period").count());
+    let period_count = xml
+        .matches("<Period")
+        .count()
+        .max(xml.matches("<period").count());
     let mut representations = Vec::new();
     let mut rest = xml;
     while let Some(start) = rest.find("<Representation") {
         let absolute = xml.len() - rest.len() + start;
         let after = &rest[start..];
-        let end = after.find("</Representation>").or_else(|| after.find("/>"))
+        let end = after
+            .find("</Representation>")
+            .or_else(|| after.find("/>"))
             .ok_or_else(|| "truncated Representation".to_string())?;
         let block = &after[..end];
         let id = attr(block, "id").unwrap_or_else(|| "0".into());
@@ -68,12 +73,7 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         let template_block = segment_template_block(block).unwrap_or(block);
         let init = attr(template_block, "initialization")
             .or_else(|| attr(block, "initialization"))
-            .map(|value| {
-                resolve(
-                    &base_url,
-                    &apply_template(&value, &id, 0, 0, bandwidth),
-                )
-            });
+            .map(|value| resolve(&base_url, &apply_template(&value, &id, 0, 0, bandwidth)));
         let media_template = attr(template_block, "media");
         let mut media = Vec::new();
         if let Some(template) = media_template {
@@ -93,12 +93,8 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         if media.is_empty() {
             if let Some(set) = enclosing_adaptation_set(xml, absolute) {
                 let set_template = segment_template_block(&set).unwrap_or(set.as_str());
-                let init_from_set = attr(set_template, "initialization").map(|value| {
-                    resolve(
-                        &base_url,
-                        &apply_template(&value, &id, 0, 0, bandwidth),
-                    )
-                });
+                let init_from_set = attr(set_template, "initialization")
+                    .map(|value| resolve(&base_url, &apply_template(&value, &id, 0, 0, bandwidth)));
                 if let Some(template) = attr(set_template, "media") {
                     media.extend(expand_timeline(
                         set_template,
@@ -366,17 +362,11 @@ pub fn download_dash_selected(
         }
         if manifest.dynamic {
             if let Some(audio) = recorded_audio.as_ref() {
-                let _ = pull_dash_audio_segments(audio, task_dir, headers, proxy, control, &mut vod);
+                let _ =
+                    pull_dash_audio_segments(audio, task_dir, headers, proxy, control, &mut vod);
             }
             if download_subtitles {
-                save_dash_subtitles(
-                    task_dir,
-                    &recorded_subs,
-                    headers,
-                    proxy,
-                    control,
-                    &mut vod,
-                );
+                save_dash_subtitles(task_dir, &recorded_subs, headers, proxy, control, &mut vod);
             }
         }
         if !manifest.dynamic {
@@ -442,9 +432,8 @@ fn finish_dash(
         }
     }
     let output = task_dir.join("merged.mp4");
-    merge_with_ffmpeg(task_dir, &output).or_else(|_| {
-        crate::media::merge::concat_files(&files, &output)
-    })?;
+    merge_with_ffmpeg(task_dir, &output)
+        .or_else(|_| crate::media::merge::concat_files(&files, &output))?;
     let published = if let Some(audio) = audio_merged {
         let muxed = task_dir.join("muxed.mp4");
         crate::media::merge::mux_av(&output, Some(&audio), &[], &muxed)?;
@@ -646,7 +635,10 @@ impl DashCheckpoint {
                     .and_then(|item| item.as_str())
                     .unwrap_or("")
                     .to_string();
-                let size = record.get("size").and_then(|item| item.as_u64()).unwrap_or(0);
+                let size = record
+                    .get("size")
+                    .and_then(|item| item.as_u64())
+                    .unwrap_or(0);
                 if !identity.is_empty() && size > 0 {
                     records.insert(slot.clone(), (identity, size));
                 }
@@ -817,10 +809,7 @@ fn write_dash_playlist(task_dir: &Path, files: &[PathBuf]) -> Result<(), String>
         ));
     }
     for file in files.iter().skip(usize::from(skip_init)) {
-        text.push_str(&format!(
-            "#EXTINF:4.000,\n{}\n",
-            playlist_leaf(file)
-        ));
+        text.push_str(&format!("#EXTINF:4.000,\n{}\n", playlist_leaf(file)));
     }
     text.push_str("#EXT-X-ENDLIST\n");
     fs::write(task_dir.join("local.m3u8"), text).map_err(|error| error.to_string())
@@ -831,7 +820,9 @@ fn playlist_leaf(path: &Path) -> String {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("seg.bin");
-    if name.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+    if name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
         && !name.contains("..")
     {
         name.to_string()
@@ -844,7 +835,9 @@ fn enclosing_adaptation_set(xml: &str, at: usize) -> Option<String> {
     let prefix = xml.get(..at.min(xml.len()))?;
     let start = prefix.rfind("<AdaptationSet")?;
     let from = &xml[start..];
-    let end = from.find("</AdaptationSet>").unwrap_or(from.len().min(16_384));
+    let end = from
+        .find("</AdaptationSet>")
+        .unwrap_or(from.len().min(16_384));
     Some(from[..end].to_string())
 }
 
@@ -852,12 +845,18 @@ fn set_meta(block: &str, xml: &str, absolute: usize) -> (String, String, String,
     let set = enclosing_adaptation_set(xml, absolute);
     let from_set = |key: &str| set.as_ref().and_then(|value| attr(value, key));
     (
-        attr(block, "lang").or_else(|| from_set("lang")).unwrap_or_default(),
-        attr(block, "codecs").or_else(|| from_set("codecs")).unwrap_or_default(),
+        attr(block, "lang")
+            .or_else(|| from_set("lang"))
+            .unwrap_or_default(),
+        attr(block, "codecs")
+            .or_else(|| from_set("codecs"))
+            .unwrap_or_default(),
         attr(block, "contentType")
             .or_else(|| from_set("contentType"))
             .unwrap_or_default(),
-        attr(block, "label").or_else(|| from_set("label")).unwrap_or_default(),
+        attr(block, "label")
+            .or_else(|| from_set("label"))
+            .unwrap_or_default(),
     )
 }
 
@@ -914,8 +913,14 @@ fn is_video(item: &Representation) -> bool {
     item.height > 0 || mime.is_empty()
 }
 
-fn select_audio<'a>(representations: &'a [Representation], preferred: &str) -> Option<&'a Representation> {
-    let tracks: Vec<&Representation> = representations.iter().filter(|item| is_audio(item)).collect();
+fn select_audio<'a>(
+    representations: &'a [Representation],
+    preferred: &str,
+) -> Option<&'a Representation> {
+    let tracks: Vec<&Representation> = representations
+        .iter()
+        .filter(|item| is_audio(item))
+        .collect();
     if !preferred.trim().is_empty() {
         if let Some(hit) = tracks.iter().copied().find(|item| {
             item.id.eq_ignore_ascii_case(preferred)
@@ -988,14 +993,7 @@ fn save_dash_subtitles(
     for track in tracks {
         let label = subtitle_label(track, &mut used);
         let _ = download_dash_subtitle_track(
-            track,
-            &subs_dir,
-            &label,
-            headers,
-            proxy,
-            control,
-            task_dir,
-            vod,
+            track, &subs_dir, &label, headers, proxy, control, task_dir, vod,
         );
     }
 }
@@ -1068,13 +1066,12 @@ fn download_dash_subtitle_track(
         let ttml_path = subs_dir.join(format!("{label}.ttml"));
         crate::media::merge::concat_files(&files, &ttml_path)?;
         return Ok(ttml_path);
-    } else if codecs.starts_with("wvtt")
-        || codecs.starts_with("stpp")
-        || mime == "application/mp4"
+    } else if codecs.starts_with("wvtt") || codecs.starts_with("stpp") || mime == "application/mp4"
     {
         let joined = work.join("subtitle.mp4");
         crate::media::merge::concat_files(&files, &joined)?;
-        let ffmpeg = crate::media::merge::locate_ffmpeg().ok_or_else(|| "ffmpeg not found".to_string())?;
+        let ffmpeg =
+            crate::media::merge::locate_ffmpeg().ok_or_else(|| "ffmpeg not found".to_string())?;
         let status = Command::new(ffmpeg)
             .args([
                 "-y",
@@ -1129,7 +1126,10 @@ fn expand_timeline(
     let mut rest = block;
     while let Some(index) = rest.find("<S") {
         let after = &rest[index + 2..];
-        if !(after.starts_with(' ') || after.starts_with('\n') || after.starts_with('\t') || after.starts_with('>'))
+        if !(after.starts_with(' ')
+            || after.starts_with('\n')
+            || after.starts_with('\t')
+            || after.starts_with('>'))
         {
             rest = after;
             continue;
@@ -1230,7 +1230,10 @@ mod tests {
         let parsed = parse_mpd(xml, "https://cdn.test/manifest.mpd").unwrap();
         assert_eq!(parsed.period_count, 1);
         assert!(!parsed.dynamic);
-        assert_eq!(parsed.representations[0].media[0], "https://cdn.test/v/init.mp4");
+        assert_eq!(
+            parsed.representations[0].media[0],
+            "https://cdn.test/v/init.mp4"
+        );
     }
 
     #[test]
@@ -1243,7 +1246,10 @@ mod tests {
 <Representation id="v1" bandwidth="800000"/>
 </AdaptationSet></Period></MPD>"#;
         let parsed = parse_mpd(xml, "https://cdn.test/manifest.mpd").unwrap();
-        assert_eq!(parsed.representations[0].init.as_deref(), Some("https://cdn.test/v1/init.mp4"));
+        assert_eq!(
+            parsed.representations[0].init.as_deref(),
+            Some("https://cdn.test/v1/init.mp4")
+        );
         assert_eq!(parsed.representations[0].mime, "video/mp4");
         assert_eq!(
             parsed.representations[0].media,
@@ -1311,8 +1317,20 @@ mod tests {
         let other = dash_file_identity("video", "1", "v", "https://cdn.test/2.m4s", "video/mp4");
         assert!(!vod.can_reuse("seg-0001.m4s", &other, 3));
         assert_eq!(
-            dash_file_identity("video", "1", "v", "https://cdn.test/1.m4s?token=old", "video/mp4"),
-            dash_file_identity("video", "1", "v", "https://cdn.test/1.m4s?token=new", "video/mp4"),
+            dash_file_identity(
+                "video",
+                "1",
+                "v",
+                "https://cdn.test/1.m4s?token=old",
+                "video/mp4"
+            ),
+            dash_file_identity(
+                "video",
+                "1",
+                "v",
+                "https://cdn.test/1.m4s?token=new",
+                "video/mp4"
+            ),
         );
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1443,6 +1461,9 @@ mod tests {
         let choices = audio_choices(&parsed);
         assert_eq!(choices.len(), 2);
         assert!(choices.iter().all(|item| item.kind == "audio"));
-        assert_eq!(select_audio(&parsed.representations, "ja").unwrap().id, "ja");
+        assert_eq!(
+            select_audio(&parsed.representations, "ja").unwrap().id,
+            "ja"
+        );
     }
 }

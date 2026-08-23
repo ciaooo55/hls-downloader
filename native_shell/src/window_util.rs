@@ -9,7 +9,10 @@ pub fn window_handle_by_title(title: &str) -> Option<i64> {
             .chain(std::iter::once(0))
             .collect();
         let hwnd = unsafe {
-            windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(std::ptr::null(), wide.as_ptr())
+            windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
+                std::ptr::null(),
+                wide.as_ptr(),
+            )
         };
         if hwnd.is_null() {
             None
@@ -51,6 +54,67 @@ pub fn begin_caption_drag(title: &str) -> bool {
     }
 }
 
+pub fn center_window_by_title(title: &str) -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{HWND, RECT};
+        use windows_sys::Win32::Graphics::Gdi::{
+            GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetWindowRect, SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+        };
+
+        let Some(raw_hwnd) = window_handle_by_title(title) else {
+            return false;
+        };
+        let hwnd = raw_hwnd as HWND;
+        let empty_rect = || RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        let mut rect = empty_rect();
+        if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+            return false;
+        }
+        let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+        if monitor.is_null() {
+            return false;
+        }
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            rcMonitor: empty_rect(),
+            rcWork: empty_rect(),
+            dwFlags: 0,
+        };
+        if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+            return false;
+        }
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+        let x = info.rcWork.left + (info.rcWork.right - info.rcWork.left - width) / 2;
+        let y = info.rcWork.top + (info.rcWork.bottom - info.rcWork.top - height) / 2;
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                x,
+                y,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+            ) != 0
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = title;
+        false
+    }
+}
+
 pub fn os_reduce_motion() -> bool {
     #[cfg(windows)]
     {
@@ -80,5 +144,8 @@ mod tests {
     fn missing_title_does_not_drag() {
         assert!(window_handle_by_title("HLSDownloader-no-such-window-title").is_none());
         assert!(!begin_caption_drag("HLSDownloader-no-such-window-title"));
+        assert!(!center_window_by_title(
+            "HLSDownloader-no-such-window-title"
+        ));
     }
 }

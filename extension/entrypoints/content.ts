@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { clampOverlayPosition, overlayActionFallback, overlaySendKey, shouldShowMediaOverlay, type OverlayAction } from '../lib/mediaOverlay'
+import { clampOverlayPosition, overlayActionFallback, overlayResourceDetails, overlaySendKey, safeResourceLocation, shouldShowMediaOverlay, type OverlayAction } from '../lib/mediaOverlay'
 import { boundedConfidence, classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, isSameDocumentPlaybackFallback, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
@@ -230,7 +230,8 @@ export default defineContentScript({
           header{display:flex;align-items:center;justify-content:space-between;padding:7px 8px 7px 9px;border-bottom:1px solid var(--border);background:var(--surface-2);color:var(--text);font:600 12px system-ui;cursor:grab;touch-action:none}.title{display:flex;align-items:center;gap:6px}.title img{width:16px;height:16px;border-radius:4px}.head-actions{display:flex;align-items:center;gap:4px}
           .pin,.close{height:27px;border:0;border-radius:5px;background:var(--surface-3);color:var(--text);cursor:pointer}.pin{padding:0 8px;font:11px system-ui}.pin.active{background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green)}.close{display:grid;place-items:center;width:27px;font:700 18px/1 system-ui}.pin:hover,.close:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{max-height:calc(min(520px,calc(100vh - 20px)) - 78px);overflow-y:auto;overscroll-behavior:contain}
           .item{padding:9px 10px;border-bottom:1px solid var(--border)}.item:last-child{border-bottom:0}.item:hover{background:var(--surface-2)}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12px/1.35 system-ui;overflow-wrap:anywhere;color:var(--text)}.kind{overflow:hidden;color:var(--muted);font:10.5px/1.35 system-ui;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.resource-url{display:block;margin-top:4px;color:var(--faint);font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;user-select:text}.quality-select{width:min(184px,100%);margin-top:6px}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:29px;border:0;border-radius:6px;background:var(--primary);color:var(--on-primary);padding:4px 6px;cursor:pointer;font-weight:600;font-size:11px}.download:hover{background:var(--primary-hover)}.download[disabled]{cursor:default;opacity:.6}.download.push-tv{background:color-mix(in srgb,var(--purple) 75%,var(--surface))}.download.push-tv:hover{background:var(--purple)}.download.cast{background:color-mix(in srgb,var(--green) 78%,var(--surface))}.download.cast:hover{background:var(--green)}.result{padding:7px 10px;background:color-mix(in srgb,var(--green) 14%,var(--surface));color:var(--green);font:11px/1.4 system-ui}.result.error{background:color-mix(in srgb,var(--red) 12%,var(--surface));color:var(--red)}
-          .video-buttons{position:fixed;inset:0;z-index:var(--z-extension-video);pointer-events:none}.video-action-group{position:fixed;display:flex;align-items:center;gap:4px;pointer-events:auto}.video-download{position:relative;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 10px var(--shadow);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font:600 12px system-ui}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download.identifying{border-color:var(--overlay-border);background:color-mix(in srgb,var(--surface) 88%,var(--primary));color:var(--muted)}.video-download.identifying:hover{background:color-mix(in srgb,var(--surface) 88%,var(--primary))}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}.video-more{display:grid;width:34px;height:34px;place-items:center;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--surface);color:var(--primary);box-shadow:0 3px 10px var(--shadow);cursor:pointer;font:700 18px/1 system-ui}.video-more:hover{background:var(--surface-2)}
+          .video-buttons{position:fixed;inset:0;z-index:var(--z-extension-video);pointer-events:none}.video-action-group{position:fixed;display:flex;align-items:center;gap:4px;pointer-events:auto}.video-download{position:relative;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 8px var(--shadow);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font:600 12px system-ui;transition:background-color .16s ease,transform .16s ease}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download.identifying{border-color:var(--overlay-border);background:color-mix(in srgb,var(--surface) 88%,var(--primary));color:var(--muted)}.video-download.identifying:hover{background:color-mix(in srgb,var(--surface) 88%,var(--primary))}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}.video-more{display:grid;width:34px;height:34px;place-items:center;border:1px solid var(--overlay-border);border-radius:7px;background:var(--surface);color:var(--primary);box-shadow:0 3px 8px var(--shadow);cursor:pointer;font:700 18px/1 system-ui}.video-more:hover{background:var(--surface-2)}
+          .video-hover{position:absolute;top:40px;left:0;width:292px;padding:10px;background:var(--surface);color:var(--text);border:1px solid var(--overlay-border);border-radius:8px;box-shadow:0 4px 8px var(--shadow);opacity:0;visibility:hidden;transform:translateY(-3px);pointer-events:auto;transition:opacity .16s ease,transform .16s ease,visibility 0s linear .16s}.video-hover::before{content:'';position:absolute;left:0;right:0;top:-7px;height:7px}.video-hover.above{top:auto;bottom:40px;transform:translateY(3px)}.video-hover.above::before{top:auto;bottom:-7px}.video-action-group:hover .video-hover,.video-action-group:focus-within .video-hover{opacity:1;visibility:visible;transform:translateY(0);transition-delay:.08s, .08s, 0s}.video-action-group.dragging .video-hover{opacity:0;visibility:hidden;transition:none}.hover-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.hover-title{min-width:0;display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--text);font:650 12px/1.35 system-ui;overflow-wrap:anywhere}.hover-state{flex:none;color:var(--green);font:600 10px/1.35 system-ui;white-space:nowrap}.hover-copy{margin-top:4px;color:var(--muted);font:11px/1.4 system-ui}.hover-facts{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}.hover-fact{height:20px;padding:2px 6px;border-radius:5px;background:var(--surface-2);color:var(--muted);font:600 10px/16px system-ui;white-space:nowrap}.hover-source{margin-top:7px;overflow:hidden;color:var(--faint);font:10px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.hover-actions{display:flex;gap:5px;margin-top:9px}.hover-action{min-width:0;flex:1;height:28px;padding:0 6px;border:0;border-radius:6px;background:var(--surface-3);color:var(--text);cursor:pointer;font:600 10.5px/1 system-ui}.hover-action:hover{background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}.hover-action.primary{background:var(--primary);color:var(--on-primary)}.hover-action.primary:hover{background:var(--primary-hover)}.hover-action[disabled]{cursor:default;opacity:.55}
           button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
         `
         const image = () => {
@@ -522,7 +523,7 @@ export default defineContentScript({
         const button = document.createElement('button')
         button.type = 'button'; button.className = `video-download${identifying ? ' identifying' : ''}`
         if (oneClickChoice) button.dataset.resourceId = choices[0].id
-        button.title = identifying ? '正在识别当前播放的视频资源' : oneClickChoice ? '下载当前视频' : '选择当前页面检测到的视频资源'
+        button.setAttribute('aria-label', identifying ? '正在识别当前播放的视频资源' : oneClickChoice ? '下载当前视频' : `选择 ${choices.length} 个视频资源`)
         if (identifying) button.setAttribute('aria-disabled', 'true')
         const besidePlayer = rect.right + 8
         const defaultLeft = besidePlayer + controlsWidth <= innerWidth - 8
@@ -545,6 +546,7 @@ export default defineContentScript({
           button.setPointerCapture(event.pointerId)
           videoDragged = false
           videoControlDragging = true
+          group.classList.add('dragging')
           const startX = event.clientX; const startY = event.clientY
           const startLeft = group.offsetLeft; const startTop = group.offsetTop
           const move = (next: PointerEvent) => {
@@ -564,6 +566,7 @@ export default defineContentScript({
               videoButtonPositions.set(video, { x: group.offsetLeft, y: group.offsetTop })
             }
             videoControlDragging = false
+            group.classList.remove('dragging')
             scheduleVideoButtons()
           }
           const cancel = (next: PointerEvent) => {
@@ -573,6 +576,7 @@ export default defineContentScript({
             window.removeEventListener('pointerup', finish, true)
             window.removeEventListener('pointercancel', cancel, true)
             videoControlDragging = false
+            group.classList.remove('dragging')
             scheduleVideoButtons()
           }
           // Use the window capture phase as a fallback for players that stop
@@ -618,6 +622,66 @@ export default defineContentScript({
           })
           group.append(more)
         }
+        const hover = document.createElement('div')
+        hover.className = 'video-hover'
+        hover.setAttribute('role', 'group')
+        const hoverId = `hlsd-video-hover-${visible}-${choices[0]?.id?.slice(0, 12) || 'identifying'}`
+        hover.id = hoverId
+        button.setAttribute('aria-describedby', hoverId)
+        if (identifying) {
+          const head = document.createElement('div'); head.className = 'hover-head'
+          const hoverTitle = document.createElement('div'); hoverTitle.className = 'hover-title'; hoverTitle.textContent = '当前播放的视频'
+          const state = document.createElement('span'); state.className = 'hover-state'; state.textContent = '识别中'
+          const copy = document.createElement('div'); copy.className = 'hover-copy'; copy.textContent = '正在匹配实际播放资源，确认后即可下载或投屏。'
+          head.append(hoverTitle, state); hover.append(head, copy)
+        } else if (oneClickChoice) {
+          const choice = choices[0]
+          const details = overlayResourceDetails(choice)
+          const head = document.createElement('div'); head.className = 'hover-head'
+          const hoverTitle = document.createElement('div'); hoverTitle.className = 'hover-title'; hoverTitle.textContent = details.title
+          const state = document.createElement('span'); state.className = 'hover-state'; state.textContent = details.state
+          const facts = document.createElement('div'); facts.className = 'hover-facts'
+          details.facts.forEach(value => { const fact = document.createElement('span'); fact.className = 'hover-fact'; fact.textContent = value; facts.append(fact) })
+          const source = document.createElement('div'); source.className = 'hover-source'; source.textContent = details.source; source.title = details.source
+          const actions = document.createElement('div'); actions.className = 'hover-actions'
+          const download = document.createElement('button'); download.type = 'button'; download.className = 'hover-action primary'; download.textContent = '下载'
+          const cast = document.createElement('button'); cast.type = 'button'; cast.className = 'hover-action'; cast.textContent = '投屏'
+          const tvbox = document.createElement('button'); tvbox.type = 'button'; tvbox.className = 'hover-action'; tvbox.textContent = 'TVBox'
+          download.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); sendResource(choice, download) })
+          cast.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); castResource(choice, cast) })
+          tvbox.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); pushToTv(choice, tvbox) })
+          applySendState(choice, download, '下载')
+          applySendState(choice, cast, '投屏', 'cast')
+          applySendState(choice, tvbox, 'TVBox', 'tvbox')
+          actions.append(download, cast, tvbox)
+          head.append(hoverTitle, state); hover.append(head, facts, source, actions)
+        } else {
+          const details = overlayResourceDetails(choices[0])
+          const head = document.createElement('div'); head.className = 'hover-head'
+          const hoverTitle = document.createElement('div'); hoverTitle.className = 'hover-title'; hoverTitle.textContent = `${choices.length} 个可用资源`
+          const state = document.createElement('span'); state.className = 'hover-state'; state.textContent = '需要选择'
+          const copy = document.createElement('div'); copy.className = 'hover-copy'; copy.textContent = `优先候选：${details.title}`
+          const facts = document.createElement('div'); facts.className = 'hover-facts'
+          details.facts.slice(0, 4).forEach(value => { const fact = document.createElement('span'); fact.className = 'hover-fact'; fact.textContent = value; facts.append(fact) })
+          const actions = document.createElement('div'); actions.className = 'hover-actions'
+          const choose = document.createElement('button'); choose.type = 'button'; choose.className = 'hover-action primary'; choose.textContent = '查看并选择'
+          choose.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); openVideoPanel(rect) })
+          actions.append(choose); head.append(hoverTitle, state); hover.append(head, copy, facts, actions)
+        }
+        const positionHover = () => {
+          const groupRect = group.getBoundingClientRect()
+          const hoverWidth = Math.max(220, Math.min(292, innerWidth - 16))
+          hover.style.width = `${hoverWidth}px`
+          const relativeLeft = Math.max(8 - groupRect.left, Math.min(0, innerWidth - 8 - hoverWidth - groupRect.left))
+          hover.style.left = `${relativeLeft}px`
+          requestAnimationFrame(() => {
+            const hoverHeight = hover.offsetHeight || 150
+            hover.classList.toggle('above', groupRect.bottom + 6 + hoverHeight > innerHeight - 8 && groupRect.top >= hoverHeight + 8)
+          })
+        }
+        group.addEventListener('mouseenter', positionHover)
+        group.addEventListener('focusin', positionHover)
+        group.append(hover)
         layer.append(group)
       })
       if (!visible) {
@@ -646,7 +710,8 @@ export default defineContentScript({
         const likelySize = resource.size || resource.estimatedSize || 0
         const sizeLabel = resource.size ? formatSize(resource.size) : likelySize ? `约 ${formatSize(likelySize)}` : '大小未知'
         const kind = document.createElement('div'); kind.className = 'kind'; kind.textContent = [resource.kind.toUpperCase(), streamMode, quality, resource.width && resource.height ? `${resource.width}×${resource.height}` : '', bandwidth, duration, sizeLabel, host].filter(Boolean).join(' · ')
-        const resourceUrl = document.createElement('code'); resourceUrl.className = 'resource-url'; resourceUrl.title = resource.url; resourceUrl.textContent = resource.url
+        const resourceLocation = safeResourceLocation(resource.url)
+        const resourceUrl = document.createElement('code'); resourceUrl.className = 'resource-url'; resourceUrl.title = resourceLocation; resourceUrl.textContent = resourceLocation
         let selected = resource
         if (resource.variants?.length) {
           const select = document.createElement('select')
@@ -675,11 +740,11 @@ export default defineContentScript({
          const button = document.createElement('button'); button.className = 'download'; button.textContent = '下载'
          button.addEventListener('click', () => sendResource(selected, button))
          applySendState(selected, button, '下载')
-        const pushButton = document.createElement('button'); pushButton.className = 'download push-tv'; pushButton.textContent = '推送链接'
+        const pushButton = document.createElement('button'); pushButton.className = 'download push-tv'; pushButton.textContent = 'TVBox'
         pushButton.title = '直接推送当前媒体链接到 TVBox'
         pushButton.addEventListener('click', () => pushToTv(selected, pushButton))
         applySendState(selected, pushButton, overlayActionFallback('tvbox'), 'tvbox')
-        const castButton = document.createElement('button'); castButton.className = 'download cast'; castButton.textContent = '投屏链接'
+        const castButton = document.createElement('button'); castButton.className = 'download cast'; castButton.textContent = '投屏'
         castButton.title = '直接投屏当前媒体链接到 DLNA 或 Chromecast'
         castButton.addEventListener('click', () => castResource(selected, castButton))
         applySendState(selected, castButton, overlayActionFallback('cast'), 'cast')

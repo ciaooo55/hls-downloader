@@ -10,12 +10,8 @@ mod subtitles;
 /// http(s) (file, javascript, data, skd, …) are dropped so fetch/mux never
 /// follow them. Relative paths keep the existing origin/directory join.
 pub(crate) fn resolve_http_uri(base: &str, reference: &str) -> String {
-    let reference = reference.trim();
-    if reference.is_empty()
-        || reference.contains('\r')
-        || reference.contains('\n')
-        || reference.contains('\0')
-    {
+    let reference = reference.trim().trim_start_matches('\u{feff}');
+    if reference.is_empty() || reference.chars().any(|ch| ch.is_control()) {
         return String::new();
     }
     let lower = reference.to_ascii_lowercase();

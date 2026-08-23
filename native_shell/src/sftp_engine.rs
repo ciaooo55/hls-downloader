@@ -34,7 +34,10 @@ impl std::fmt::Debug for SftpTarget {
             .field("host", &self.host)
             .field("port", &self.port)
             .field("user", &self.user)
-            .field("password", &if self.password.is_empty() { "" } else { "***" })
+            .field(
+                "password",
+                &if self.password.is_empty() { "" } else { "***" },
+            )
             .field("path", &self.path)
             .finish()
     }
@@ -73,7 +76,10 @@ pub(crate) fn map_sftp_io(error: impl std::fmt::Display) -> String {
     } else if lowered.contains("auth") || lowered.contains("permission denied") {
         "SFTP 登录失败，请检查用户名、密码或私钥".into()
     } else {
-        format!("SFTP 下载失败：{}", text.chars().take(200).collect::<String>())
+        format!(
+            "SFTP 下载失败：{}",
+            text.chars().take(200).collect::<String>()
+        )
     }
 }
 
@@ -137,7 +143,9 @@ fn ssh_host_ok(host: &str) -> bool {
 fn ssh_user_ok(user: &str) -> bool {
     !user.is_empty()
         && !user.starts_with('-')
-        && !user.contains(['@', ' ', '\t', '\r', '\n', '"', '\'', '\\', ',', '=', '\0', '/'])
+        && !user.contains([
+            '@', ' ', '\t', '\r', '\n', '"', '\'', '\\', ',', '=', '\0', '/',
+        ])
 }
 
 fn ssh_option(name: &str, value: &str) -> String {
@@ -170,7 +178,7 @@ pub fn known_hosts_path() -> PathBuf {
     if let Some(root) = std::env::var_os("HLS_V6_DATA_DIR") {
         return PathBuf::from(root).join("known_hosts");
     }
-    crate::default_v6_database_path()
+    crate::default_v7_database_path()
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join("known_hosts")
@@ -304,19 +312,28 @@ fn load_state(path: &Path) -> ResumeState {
         return ResumeState::default();
     };
     ResumeState {
-        version: value.get("version").and_then(|item| item.as_u64()).unwrap_or(0) as u32,
+        version: value
+            .get("version")
+            .and_then(|item| item.as_u64())
+            .unwrap_or(0) as u32,
         resource_key: value
             .get("resource_key")
             .and_then(|item| item.as_str())
             .unwrap_or("")
             .to_string(),
-        total: value.get("total").and_then(|item| item.as_u64()).unwrap_or(0),
+        total: value
+            .get("total")
+            .and_then(|item| item.as_u64())
+            .unwrap_or(0),
         mtime: value
             .get("mtime")
             .and_then(|item| item.as_str())
             .unwrap_or("")
             .to_string(),
-        offset: value.get("offset").and_then(|item| item.as_u64()).unwrap_or(0),
+        offset: value
+            .get("offset")
+            .and_then(|item| item.as_u64())
+            .unwrap_or(0),
     }
 }
 
@@ -331,7 +348,12 @@ fn save_state(path: &Path, state: &ResumeState) -> Result<(), String> {
     fs::write(path, value.to_string()).map_err(|error| error.to_string())
 }
 
-fn resume_offset(current_size: u64, stat: &SftpStat, resource_key: &str, state: &ResumeState) -> u64 {
+fn resume_offset(
+    current_size: u64,
+    stat: &SftpStat,
+    resource_key: &str,
+    state: &ResumeState,
+) -> u64 {
     if stat.size > 0
         && current_size > 0
         && current_size < stat.size
@@ -477,7 +499,9 @@ fn download_with_session(
     let written = match transfer_from_session(session, target, output, control, offset, stat.size) {
         Ok(bytes) => bytes,
         Err(error) if error == "paused" => {
-            let size = fs::metadata(output).map(|meta| meta.len()).unwrap_or(offset);
+            let size = fs::metadata(output)
+                .map(|meta| meta.len())
+                .unwrap_or(offset);
             save_state(
                 &state_file,
                 &ResumeState {
@@ -702,11 +726,10 @@ mod tests {
         );
         let ssh_path = pin_remote_host("nas.local", 22).unwrap();
         assert!(ssh_path.is_file());
-        let fingerprint = parse_keyscan_line(
-            "nas.local ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureKeyMaterial",
-        )
-        .unwrap()
-        .1;
+        let fingerprint =
+            parse_keyscan_line("nas.local ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureKeyMaterial")
+                .unwrap()
+                .1;
         assert!(tofu_record("nas.local", 22, &fingerprint).is_ok());
         std::env::set_var(
             "HLS_V6_SFTP_KEYSCAN",

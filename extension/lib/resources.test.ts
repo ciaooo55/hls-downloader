@@ -451,6 +451,18 @@ describe('resource rules', () => {
       startedAt: now,
     }, 1).map(entry => entry.id)).toEqual(['movie'])
   })
+  it('collapses file and media observations of the same MSE response', () => {
+    const now = Date.now()
+    const url = 'https://cdn.test/movie.mp4?channel=single'
+    const file = resource({ id: 'network-file', kind: 'file', url, seenAt: now })
+    const media = resource({ id: 'source-buffer-media', kind: 'media', url, seenAt: now + 1 })
+
+    expect(playerPlaybackResources([file, media], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: [url],
+      startedAt: now,
+    }, 1).map(entry => entry.id)).toEqual(['source-buffer-media'])
+  })
   it('does not bind a same-folder file from weak MSE path affinity', () => {
     const now = Date.now()
     const preview = resource({

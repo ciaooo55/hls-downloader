@@ -1,15 +1,21 @@
 param(
     [string[]]$Path = @(
-        "scripts\build_installer.ps1",
-        "scripts\build_v6.ps1",
-        "scripts\register-native-host.ps1",
-        "scripts\run_v6_gates.ps1",
-        "scripts\smoke_v6_package.ps1",
+        "scripts\adversarial-v7.ps1",
+        "scripts\benchmark-v7.ps1",
+        "scripts\bootstrap-v7-toolchain.ps1",
+        "scripts\build-v7.ps1",
+        "scripts\cleanup-v7-build-cache.ps1",
+        "scripts\create-v7-portable.ps1",
+        "scripts\install-v7-local.ps1",
+        "scripts\register-v7-native-host.ps1",
+        "scripts\run-v7-local.ps1",
         "scripts\vcvars.ps1",
         "scripts\shutdown-running.ps1",
-        "scripts\smoke-installer-upgrade.ps1",
-        "scripts\smoke-portable-upgrade.ps1",
-        "scripts\upgrade-portable.ps1"
+        "scripts\upgrade-v7-portable.ps1",
+        "scripts\smoke-v7-portable-upgrade.ps1",
+        "scripts\smoke-installed-v7.ps1",
+        "scripts\verify-v7-feature-parity.ps1",
+        "scripts\validate-powershell.ps1"
     )
 )
 

@@ -2,7 +2,11 @@
 
 use std::sync::mpsc::Sender;
 
-pub fn attach_file_drop(title: &str, tx: Sender<Vec<String>>, wake: impl Fn() + Send + 'static) -> bool {
+pub fn attach_file_drop(
+    title: &str,
+    tx: Sender<Vec<String>>,
+    wake: impl Fn() + Send + 'static,
+) -> bool {
     #[cfg(windows)]
     unsafe {
         return install(title, tx, Box::new(wake));
@@ -78,9 +82,11 @@ unsafe extern "system" fn drop_wnd_proc(
             if len > 0 {
                 use std::os::windows::ffi::OsStringExt;
                 paths.push(
-                    std::path::PathBuf::from(std::ffi::OsString::from_wide(&buffer[..len as usize]))
-                        .to_string_lossy()
-                        .into_owned(),
+                    std::path::PathBuf::from(std::ffi::OsString::from_wide(
+                        &buffer[..len as usize],
+                    ))
+                    .to_string_lossy()
+                    .into_owned(),
                 );
             }
         }
@@ -111,7 +117,9 @@ unsafe extern "system" fn drop_wnd_proc(
         .and_then(|slot| slot.as_ref().map(|item| item.previous))
         .unwrap_or(0);
     CallWindowProcW(
-        std::mem::transmute::<isize, windows_sys::Win32::UI::WindowsAndMessaging::WNDPROC>(previous),
+        std::mem::transmute::<isize, windows_sys::Win32::UI::WindowsAndMessaging::WNDPROC>(
+            previous,
+        ),
         hwnd,
         msg,
         wparam,

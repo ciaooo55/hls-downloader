@@ -1,19 +1,23 @@
-//! Python-free Native Messaging front-end for the v6 Rust core.
+//! Python-free Native Messaging front-end for the v7 Rust Core.
 //!
 //! Chrome and Firefox keep this process alive through a Native Messaging port.
 //! One session therefore owns one durable Core connection plus its short-lived
 //! handoff offers. No HTTP request or Python process is required on this path.
 
 use crate::{
-    CoreCommand, CoreEvent, CoreIpcClient, CredentialVault, ResourceKind, ResourceOffer, TaskSnapshot,
-    TaskSpec, V6_PROTOCOL_NAME, V6_PROTOCOL_VERSION,
+    CoreCommand, CoreEvent, CoreIpcClient, CredentialVault, MediaPushRequest, ResourceKind,
+    ResourceOffer, TaskSnapshot, TaskSpec, V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
-use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    io::{self, Read, Write},
+    thread,
+    time::Duration,
+};
 
 const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 const RECOMMENDED_EXTENSION_VERSION: &str = "5.0.14";
@@ -114,9 +118,10 @@ impl HostCore {
     ) -> Result<(), String> {
         match self {
             #[cfg(test)]
-            Self::Local(core) => core
-                .store_mut()
-                .store_credential(credential_ref, protected_blob, kind),
+            Self::Local(core) => {
+                core.store_mut()
+                    .store_credential(credential_ref, protected_blob, kind)
+            }
             Self::Remote(client) => client.store_credential(credential_ref, protected_blob, kind),
         }
     }
@@ -131,13 +136,10 @@ impl HostCore {
     ) -> Result<(), String> {
         match self {
             #[cfg(test)]
-            Self::Local(core) => core.store_mut().save_handoff(
-                handoff_id,
-                json,
-                status,
-                task_id,
-                created_at_ms,
-            ),
+            Self::Local(core) => {
+                core.store_mut()
+                    .save_handoff(handoff_id, json, status, task_id, created_at_ms)
+            }
             Self::Remote(client) => {
                 client.save_handoff(handoff_id, json, status, task_id, created_at_ms)
             }
@@ -179,7 +181,7 @@ struct Handoff {
 
 impl NativeHostSession {
     fn open_default() -> Result<Self, String> {
-        Self::from_backend(HostCore::Remote(CoreIpcClient::connect()?))
+        Self::from_backend(HostCore::Remote(connect_or_start_core()?))
     }
 
     #[cfg(test)]
@@ -253,13 +255,11 @@ impl NativeHostSession {
             browser: "extension".into(),
         });
         let takeover_enabled = self.core.setting_bool("browser_takeover_enabled", true)?;
-        let minimum_bytes = self
-            .core
-            .setting_u64("browser_takeover_minimum_bytes", 0)?;
+        let minimum_bytes = self.core.setting_u64("browser_takeover_minimum_bytes", 0)?;
         Ok(json!({
             "ok": true,
-            "protocol": V6_PROTOCOL_NAME,
-            "protocol_version": V6_PROTOCOL_VERSION,
+            "protocol": V7_PROTOCOL_NAME,
+            "protocol_version": V7_PROTOCOL_VERSION,
             "version": env!("CARGO_PKG_VERSION"),
             "takeover_enabled": takeover_enabled,
             "takeover_minimum_bytes": minimum_bytes,
@@ -443,9 +443,7 @@ impl NativeHostSession {
                 .set_setting_u64("browser_takeover_minimum_bytes", bytes)?;
         }
         let enabled = self.core.setting_bool("browser_takeover_enabled", true)?;
-        let minimum_bytes = self
-            .core
-            .setting_u64("browser_takeover_minimum_bytes", 0)?;
+        let minimum_bytes = self.core.setting_u64("browser_takeover_minimum_bytes", 0)?;
         Ok(json!({
             "ok": true,
             "takeover_enabled": enabled,
@@ -467,23 +465,59 @@ impl NativeHostSession {
         } else {
             title
         };
-        let push = crate::cast::start_browser_push(kind, &url, &title)?;
+        let lower = url.to_ascii_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://"))
+            || url.chars().any(char::is_control)
+        {
+            return Err("浏览器投送地址无效".into());
+        }
+        let kind = if matches!(kind, "tvbox" | "push_to_tv") {
+            "tvbox"
+        } else {
+            "cast"
+        };
+        let request = MediaPushRequest {
+            id: format!(
+                "media-push-{:x}-{}",
+                unix_time_ms(),
+                NEXT_HANDOFF.fetch_add(1, Ordering::Relaxed)
+            ),
+            push_kind: kind.into(),
+            url,
+            title,
+            status: "pending".into(),
+            message: "等待在桌面下载器中选择接收设备".into(),
+            location: String::new(),
+            created_at_ms: unix_time_ms(),
+        };
+        self.core.handle(CoreCommand::RequestMediaPush {
+            request: request.clone(),
+        })?;
+        if let Some(root) = crate::install_root() {
+            let _ = crate::spawn_desktop_ui(&root);
+        }
         Ok(json!({
             "ok": true,
-            "id": push.id,
-            "kind": push.kind,
-            "status": push.status,
-            "message": push.message,
-            "location": push.location,
+            "id": request.id,
+            "kind": request.push_kind,
+            "status": request.status,
+            "message": request.message,
+            "location": request.location,
         }))
     }
 
-    fn media_push_status(&self, message: &Value) -> Result<Value, String> {
+    fn media_push_status(&mut self, message: &Value) -> Result<Value, String> {
         let id = message
             .get("request_id")
             .and_then(Value::as_str)
             .unwrap_or("");
-        let Some(push) = crate::cast::browser_push_status(id) else {
+        let Some(push) = self
+            .core
+            .load_handoffs()?
+            .into_iter()
+            .filter_map(|encoded| serde_json::from_str::<MediaPushRequest>(&encoded).ok())
+            .find(|item| item.id == id)
+        else {
             return Ok(json!({
                 "ok": false,
                 "error": "投送请求不存在或已过期"
@@ -492,7 +526,7 @@ impl NativeHostSession {
         Ok(json!({
             "ok": true,
             "id": push.id,
-            "kind": push.kind,
+            "kind": push.push_kind,
             "status": push.status,
             "message": push.message,
             "location": push.location,
@@ -548,6 +582,39 @@ impl NativeHostSession {
         self.handoffs = handoffs;
         self.request_ids = request_ids;
         Ok(())
+    }
+}
+
+/// Native Messaging may be the first product process after sign-in. Start the
+/// packaged Core only after the normal pipe connection has failed; the engine's
+/// single-instance lock resolves concurrent browser host launches.
+fn connect_or_start_core() -> Result<CoreIpcClient, String> {
+    match CoreIpcClient::connect_existing(Duration::from_millis(100)) {
+        Ok(client) => Ok(client),
+        Err(first_error) => {
+            let root = crate::install_root()
+                .ok_or_else(|| format!("v7 Core unavailable: {first_error}"))?;
+            crate::spawn_core(&root).map_err(|error| {
+                format!("v7 Core unavailable: {first_error}; start failed: {error}")
+            })?;
+
+            // On a first launch the Core may still be opening its database when
+            // the browser host reconnects. The engine's single-instance lock
+            // makes this retry safe when several browser processes start at once.
+            let mut last_error = None;
+            for _ in 0..3 {
+                match CoreIpcClient::connect() {
+                    Ok(client) => return Ok(client),
+                    Err(error) => last_error = Some(error),
+                }
+                thread::sleep(Duration::from_millis(150));
+            }
+
+            Err(format!(
+                "v7 Core did not become ready: {}",
+                last_error.unwrap_or_else(|| "no connection attempt was made".to_string())
+            ))
+        }
     }
 }
 
@@ -682,10 +749,7 @@ fn parse_offer(payload: &Map<String, Value>) -> Result<ResourceOffer, String> {
         source_page_url: field(payload, "source_page_url"),
         credential_ref: None,
         replay_context_ref: None,
-        request_method: crate::http_engine::sanitize_http_method(&field(
-            payload,
-            "request_method",
-        )),
+        request_method: crate::http_engine::sanitize_http_method(&field(payload, "request_method")),
         handoff_id: String::new(),
         filename: field(payload, "filename"),
         title: field(payload, "title"),
@@ -795,15 +859,7 @@ fn field(payload: &Map<String, Value>, key: &str) -> String {
 }
 
 fn browser_resource_url_allowed(url: &str) -> bool {
-    let lower = url.trim().to_ascii_lowercase();
-    (lower.starts_with("http://")
-        || lower.starts_with("https://")
-        || lower.starts_with("ftp://")
-        || lower.starts_with("ftps://")
-        || lower.starts_with("sftp://")
-        || lower.starts_with("magnet:"))
-        && !lower.contains('\r')
-        && !lower.contains('\n')
+    crate::http_engine::remote_resource_url_allowed(url)
 }
 
 fn next_handoff_id() -> String {
@@ -941,11 +997,11 @@ mod tests {
     }
 
     #[test]
-    fn v6_ping_does_not_advertise_fastapi_loopback() {
+    fn v7_ping_does_not_advertise_fastapi_loopback() {
         let mut session = NativeHostSession::in_memory().unwrap();
         let response = session.dispatch(&json!({"op": "ping"})).unwrap();
         assert_eq!(response["ok"], true);
-        assert_eq!(response["protocol"], "hls-downloader-v6-core");
+        assert_eq!(response["protocol"], "hls-downloader-v7-core");
         assert!(response.get("bridge_base").is_none());
         assert!(response.get("bridge_token").is_none());
         let encoded = response.to_string();
@@ -1004,7 +1060,7 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(status["ok"], true);
-        assert_eq!(status["status"], "ready");
+        assert_eq!(status["status"], "pending");
     }
 
     #[test]
@@ -1040,7 +1096,10 @@ mod tests {
         assert_eq!(status["handoff"]["status"], "accepted");
         assert_eq!(status["handoff"]["filename"], "setup.exe");
         assert_eq!(status["handoff"]["task_status"], "queued");
-        assert!(status["handoff"]["task_id"].as_str().unwrap().starts_with("task-"));
+        assert!(status["handoff"]["task_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("task-"));
     }
 
     #[test]
@@ -1060,5 +1119,26 @@ mod tests {
             }))
             .unwrap_err();
         assert!(file.contains("不受支持"));
+        let bom = session
+            .dispatch(&json!({
+                "op": "offer",
+                "resource": { "url": "\u{feff}javascript:alert(1)" }
+            }))
+            .unwrap_err();
+        assert!(bom.contains("不受支持"));
+        let nul = session
+            .dispatch(&json!({
+                "op": "offer",
+                "resource": { "url": "https://cdn.test/a.bin\u{0000}.gif" }
+            }))
+            .unwrap_err();
+        assert!(nul.contains("不受支持"));
+        let msdt = session
+            .dispatch(&json!({
+                "op": "offer",
+                "resource": { "url": "ms-msdt:foo" }
+            }))
+            .unwrap_err();
+        assert!(msdt.contains("不受支持"));
     }
 }

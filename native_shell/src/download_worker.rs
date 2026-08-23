@@ -1,17 +1,20 @@
-//! v6 task execution adapter for the existing Rust HTTP Range engine.
+//! Task execution adapter for the resident Rust download engine.
 
 use crate::{
     apply_replay_json_for, run_job, with_replay_json, CoreCommand, CoreEvent, CredentialVault,
-    EventEnvelope, PersistentCore, TaskSpec, TorrentSession,
+    EventEnvelope, MediaPushRequest, PersistentCore, QueueProfile, TaskSpec, TorrentSession,
 };
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::ffi::OsString;
+use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
+
+const DEFAULT_COOKIE_CREDENTIAL_REF: &str = "settings:default-cookie";
 
 #[derive(Debug, Clone)]
 pub struct TaskPaths {
@@ -25,16 +28,36 @@ impl TaskPaths {
     pub fn for_task(task_id: &str, spec: &TaskSpec) -> Result<Self, String> {
         let root = if !spec.download_dir.trim().is_empty() {
             PathBuf::from(&spec.download_dir)
+        } else if let Some(root) = std::env::var_os("HLS_V7_DOWNLOAD_DIR") {
+            PathBuf::from(root)
         } else if let Some(root) = std::env::var_os("HLS_V6_DOWNLOAD_DIR") {
+            // Frozen v6 environment compatibility for restored tasks.
             PathBuf::from(root)
         } else {
             PathBuf::from("downloads")
         };
-        let filename = safe_filename(&spec.filename, &spec.url);
-        let task_dir = root.join(".v6-tasks").join(task_id);
+        let work_root = if spec.work_dir.trim().is_empty() {
+            root.clone()
+        } else {
+            PathBuf::from(&spec.work_dir)
+        };
+        let current_task_dir = work_root.join(".hls-tasks").join(task_id);
+        let legacy_task_dir = root.join(".v6-tasks").join(task_id);
+        let task_dir = if !current_task_dir.exists() && legacy_task_dir.exists() {
+            legacy_task_dir
+        } else {
+            current_task_dir
+        };
+        let final_name = if spec.resource_kind == crate::ResourceKind::Torrent
+            && !spec.torrent_selection.is_empty()
+        {
+            format!("{}.files", safe_filename(&spec.filename, &spec.url))
+        } else {
+            safe_filename(&spec.filename, &spec.url)
+        };
         Ok(Self {
             output: task_dir.join("payload.downloading"),
-            final_output: root.join(filename),
+            final_output: root.join(final_name),
             control: task_dir.join("control"),
             progress: task_dir.join("progress.json"),
         })
@@ -73,7 +96,10 @@ impl TaskPaths {
     }
 }
 
-pub fn constrain_untrusted_download_dir(requested: &str, configured: &str) -> Result<String, String> {
+pub fn constrain_untrusted_download_dir(
+    requested: &str,
+    configured: &str,
+) -> Result<String, String> {
     reject_path_escape(requested)?;
     let configured = configured.trim();
     let root = PathBuf::from(if configured.is_empty() {
@@ -135,25 +161,62 @@ fn reject_path_escape(path: &str) -> Result<(), String> {
 
 fn header_value_allowed(key: &str, value: &str) -> bool {
     !key.is_empty()
-        && !key.contains(['\r', '\n', ':'])
-        && !value.contains('\r')
-        && !value.contains('\n')
+        && !key.contains(['\r', '\n', '\0', ':'])
+        && !value.chars().any(|ch| ch.is_control())
 }
 
 fn reject_task_url(url: &str) -> Result<(), String> {
-    let lower = url.trim().to_ascii_lowercase();
-    if lower.starts_with("javascript:")
-        || lower.starts_with("data:")
-        || lower.starts_with("blob:")
-        || lower.starts_with("vbscript:")
-        || lower.starts_with("file:")
+    let url = url.trim().trim_start_matches('\u{feff}');
+    if url.is_empty() {
+        return Err("链接为空".into());
+    }
+    if crate::looks_like_metalink(url) {
+        return Ok(());
+    }
+    if url.chars().any(|ch| ch.is_control()) {
+        return Err("链接不能包含控制字符".into());
+    }
+    if is_importable_local_path(url) {
+        return Ok(());
+    }
+    if crate::http_engine::remote_resource_url_allowed(url) {
+        return Ok(());
+    }
+    Err("链接协议不受支持".into())
+}
+
+fn is_importable_local_path(url: &str) -> bool {
+    let bytes = url.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
     {
-        return Err("链接协议不受支持".into());
+        return true;
     }
-    if url.contains('\r') || url.contains('\n') {
-        return Err("链接不能包含换行".into());
+    if cfg!(unix) && url.starts_with('/') && !url.starts_with("//") {
+        return true;
     }
-    Ok(())
+    if let Some(rest) = url.strip_prefix("\\\\") {
+        let server = rest.split(['\\', '/']).next().unwrap_or("");
+        return !server.is_empty() && server != "." && server != "?";
+    }
+    false
+}
+
+fn proxy_url_allowed(url: &str) -> bool {
+    let url = url.trim();
+    if url.is_empty() {
+        return true;
+    }
+    if url.chars().any(|ch| ch.is_control()) {
+        return false;
+    }
+    let lower = url.to_ascii_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("socks5://")
+        || lower.starts_with("socks5h://")
 }
 
 fn validate_helper_executable(path: &str, names: &[&str]) -> Result<(), String> {
@@ -162,6 +225,12 @@ fn validate_helper_executable(path: &str, names: &[&str]) -> Result<(), String> 
         return Ok(());
     }
     reject_path_escape(path)?;
+    if path
+        .chars()
+        .any(|ch| ch.is_control() || matches!(ch, '&' | '|' | ';' | '<' | '>'))
+    {
+        return Err("外部工具路径无效".into());
+    }
     let name = Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())
@@ -176,20 +245,7 @@ fn validate_helper_executable(path: &str, names: &[&str]) -> Result<(), String> 
 }
 
 fn reject_scan_shell(command: &str) -> Result<(), String> {
-    let command = command.trim();
-    if command.is_empty() {
-        return Ok(());
-    }
-    let lower = command.to_ascii_lowercase();
-    if lower.contains("cmd.exe")
-        || lower.contains("powershell")
-        || lower.contains("pwsh")
-        || lower.contains("wscript")
-        || lower.contains("cscript")
-    {
-        return Err("扫描命令不能调用系统脚本解释器".into());
-    }
-    Ok(())
+    crate::av_scan::validate_custom_command(command)
 }
 
 pub fn build_job(
@@ -223,7 +279,6 @@ pub fn build_job(
         mirrors: spec.mirrors.clone(),
         replay_json: String::new(),
     };
-    crate::net_policy::configure_limit_kib(u64::from(spec.speed_limit_kib));
     Ok((job, paths))
 }
 
@@ -288,11 +343,57 @@ fn safe_filename(filename: &str, url: &str) -> String {
         })
         .collect();
     let cleaned = cleaned.trim_matches([' ', '.']).to_string();
-    if cleaned.is_empty() {
+    let cleaned = if cleaned.is_empty() {
         "download".into()
+    } else if cleaned.chars().count() > 200 {
+        cleaned.chars().take(200).collect()
+    } else {
+        cleaned
+    };
+    if reserved_dos_device_name(&cleaned) {
+        format!("_{cleaned}")
     } else {
         cleaned
     }
+}
+
+fn reserved_dos_device_name(name: &str) -> bool {
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or(name)
+        .trim()
+        .to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "CONIN$"
+            | "CONOUT$"
+            | "CLOCK$"
+            | "COM0"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT0"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 #[derive(Clone)]
@@ -315,11 +416,14 @@ pub struct CoreSettings {
     pub auto_category: bool,
     pub category_dirs: crate::category::CategoryDirs,
     pub queue_max: u64,
+    pub queue_profiles: Vec<QueueProfile>,
     pub site_rules: String,
     pub av_scan_enabled: bool,
     pub av_scan_command: String,
     pub torrent_watch: String,
+    pub torrent_watch_enabled: bool,
     pub download_dir: String,
+    pub temp_dir: String,
     pub default_concurrency: u64,
     pub proxy_url: String,
     pub ffmpeg_path: String,
@@ -343,6 +447,8 @@ pub struct CoreSettings {
     pub queue_auto_stop_enabled: bool,
     pub queue_auto_stop_time: String,
     pub default_referer: String,
+    pub default_origin: String,
+    pub allowed_hosts: String,
     pub http_chunk_size_mb: u64,
     pub completion_power_action: String,
     pub start_on_login: bool,
@@ -352,6 +458,11 @@ pub struct CoreSettings {
     pub legal_terms_version: String,
     pub reduce_motion: bool,
     pub harvest_minimum_bytes: u64,
+    pub av_scan_fail_on_threat: bool,
+    pub bt_upload_limit_kib: u64,
+    pub bt_max_connections: u64,
+    pub bt_enable_dht: bool,
+    pub preferred_cast_device_id: String,
 }
 
 impl CoreCoordinator {
@@ -378,7 +489,9 @@ impl CoreCoordinator {
     pub fn settings(&self) -> Result<CoreSettings, String> {
         let core = self.lock()?;
         Ok(CoreSettings {
-            takeover_enabled: core.store().setting_bool("browser_takeover_enabled", true)?,
+            takeover_enabled: core
+                .store()
+                .setting_bool("browser_takeover_enabled", true)?,
             takeover_minimum_bytes: core
                 .store()
                 .setting_u64("browser_takeover_minimum_bytes", 0)?,
@@ -399,11 +512,14 @@ impl CoreCoordinator {
                 &core.store().setting_string("browser_category_dirs", "")?,
             ),
             queue_max: core.store().setting_u64("queue_max_active", 3)?.max(1),
+            queue_profiles: load_queue_profiles(core.store())?,
             site_rules: core.store().setting_string("site_rules", "")?,
             av_scan_enabled: core.store().setting_bool("av_scan_enabled", false)?,
             av_scan_command: core.store().setting_string("av_scan_command", "")?,
             torrent_watch: core.store().setting_string("torrent_watch_dir", "")?,
+            torrent_watch_enabled: core.store().setting_bool("watch_torrents", false)?,
             download_dir: core.store().setting_string("download_dir", "downloads")?,
+            temp_dir: core.store().setting_string("temp_dir", "")?,
             default_concurrency: core.store().setting_u64("default_concurrency", 12)?.max(1),
             proxy_url: core.store().setting_string("proxy_url", "")?,
             ffmpeg_path: core.store().setting_string("ffmpeg_path", "")?,
@@ -424,9 +540,7 @@ impl CoreCoordinator {
             existing_file_policy: core
                 .store()
                 .setting_string("existing_file_policy", "rename")?,
-            live_record_max_minutes: core
-                .store()
-                .setting_u64("live_record_max_minutes", 0)?,
+            live_record_max_minutes: core.store().setting_u64("live_record_max_minutes", 0)?,
             download_subtitles: core.store().setting_bool("download_subtitles", true)?,
             skip_ad_segments: core.store().setting_bool("skip_ad_segments", true)?,
             keep_temp_files: core.store().setting_bool("keep_temp_files", false)?,
@@ -447,7 +561,12 @@ impl CoreCoordinator {
                 .store()
                 .setting_string("queue_auto_stop_time", "07:30")?,
             default_referer: core.store().setting_string("default_referer", "")?,
-            http_chunk_size_mb: core.store().setting_u64("http_chunk_size_mb", 8)?.clamp(1, 64),
+            default_origin: core.store().setting_string("default_origin", "")?,
+            allowed_hosts: core.store().setting_string("allowed_hosts", "")?,
+            http_chunk_size_mb: core
+                .store()
+                .setting_u64("http_chunk_size_mb", 8)?
+                .clamp(1, 64),
             completion_power_action: core
                 .store()
                 .setting_string("completion_power_action", "none")?,
@@ -455,17 +574,78 @@ impl CoreCoordinator {
             queue_active_days: core
                 .store()
                 .setting_string("queue_active_days", "1,2,3,4,5,6,7")?,
-            proxy_mode: core.store().setting_string("proxy_mode", "manual")?,
+            proxy_mode: core.store().setting_string("proxy_mode", "system")?,
             proxy_bypass: core.store().setting_string("proxy_bypass", "")?,
             legal_terms_version: core.store().setting_string("legal_terms_version", "")?,
             reduce_motion: core.store().setting_bool("reduce_motion", false)?,
-            harvest_minimum_bytes: core
+            harvest_minimum_bytes: core.store().setting_u64("harvest_minimum_bytes", 0)?,
+            av_scan_fail_on_threat: core.store().setting_bool("av_scan_fail_on_threat", true)?,
+            bt_upload_limit_kib: core.store().setting_u64("bt_upload_limit_kib", 1024)?,
+            bt_max_connections: core
                 .store()
-                .setting_u64("harvest_minimum_bytes", 0)?,
+                .setting_u64("bt_max_connections", 200)?
+                .clamp(10, 1000),
+            bt_enable_dht: core.store().setting_bool("bt_enable_dht", true)?,
+            preferred_cast_device_id: core
+                .store()
+                .setting_string("preferred_cast_device_id", "")?,
         })
     }
 
     pub fn set_setting(&self, key: &str, value: Value) -> Result<(), String> {
+        self.set_settings(BTreeMap::from([(key.to_string(), value)]))
+    }
+
+    pub fn set_settings(&self, mut values: BTreeMap<String, Value>) -> Result<(), String> {
+        for (key, value) in &values {
+            Self::validate_setting(key, value)?;
+        }
+        let queue_profiles = if let Some(value) = values.get("queue_profiles") {
+            let profiles: Vec<QueueProfile> = serde_json::from_value(value.clone())
+                .map_err(|error| format!("队列配置格式无效: {error}"))?;
+            let ids: HashSet<_> = profiles.iter().map(|profile| profile.id.as_str()).collect();
+            if let Some(task) = self
+                .tasks()?
+                .into_iter()
+                .find(|task| !ids.contains(task.queue_id.as_str()))
+            {
+                return Err(format!("队列 {} 仍包含任务，需先移动任务", task.queue_id));
+            }
+            Some(profiles)
+        } else {
+            None
+        };
+        if values.get("legal_terms_accepted").and_then(Value::as_bool) == Some(true) {
+            values.insert(
+                "legal_terms_version".into(),
+                Value::String(crate::LEGAL_TERMS_VERSION.into()),
+            );
+        }
+        let start_login = values.get("start_on_login").and_then(Value::as_bool);
+        self.lock()?.store_mut().set_settings(&values)?;
+        if let Some(limit) = values
+            .get("download_speed_limit_kib")
+            .and_then(Value::as_u64)
+        {
+            crate::net_policy::configure_scoped_limit("global", limit);
+        }
+        if let Some(profiles) = queue_profiles {
+            crate::net_policy::sync_queue_limits(
+                profiles
+                    .iter()
+                    .map(|profile| (profile.id.as_str(), profile.speed_limit_kib)),
+            );
+        }
+        if let Some(flag) = start_login {
+            let _ = crate::startup::apply(flag);
+        }
+        Ok(())
+    }
+
+    fn validate_setting(key: &str, value: &Value) -> Result<(), String> {
+        if !PUBLIC_SETTING_KEYS.contains(&key) && key != "legal_terms_version" {
+            return Err(format!("未知设置项: {key}"));
+        }
         if key == "ffmpeg_path" {
             if let Some(path) = value.as_str() {
                 validate_helper_executable(path, &["ffmpeg", "ffmpeg.exe"])?;
@@ -476,9 +656,18 @@ impl CoreCoordinator {
                 reject_scan_shell(command)?;
             }
         }
-        if key == "download_dir" {
+        if key == "download_dir" || key == "temp_dir" || key == "torrent_watch_dir" {
             if let Some(path) = value.as_str() {
-                reject_path_escape(path)?;
+                if !path.trim().is_empty() {
+                    reject_path_escape(path)?;
+                }
+            }
+        }
+        if key == "proxy_url" {
+            if let Some(url) = value.as_str() {
+                if !proxy_url_allowed(url) {
+                    return Err("代理地址无效".into());
+                }
             }
         }
         if key == "browser_category_dirs" {
@@ -490,10 +679,24 @@ impl CoreCoordinator {
                 reject_path_escape(&dirs.other)?;
             }
         }
+        if key == "tvbox_endpoint" {
+            if let Some(url) = value.as_str() {
+                let url = url.trim();
+                if !url.is_empty()
+                    && (!url.to_ascii_lowercase().starts_with("http://")
+                        || url.chars().any(|ch| ch.is_control())
+                        || url.contains('\\'))
+                {
+                    return Err("TVBox 地址必须是局域网 HTTP 地址".into());
+                }
+            }
+        }
         if matches!(
             key,
             "proxy_url"
                 | "default_referer"
+                | "default_origin"
+                | "allowed_hosts"
                 | "default_user_agent"
                 | "tvbox_endpoint"
                 | "proxy_mode"
@@ -502,8 +705,8 @@ impl CoreCoordinator {
                 | "legal_terms_version"
         ) {
             if let Some(text) = value.as_str() {
-                if text.contains('\r') || text.contains('\n') {
-                    return Err("设置值不能包含换行".into());
+                if text.chars().any(|ch| ch.is_control()) {
+                    return Err("设置值不能包含控制字符".into());
                 }
             }
         }
@@ -514,34 +717,45 @@ impl CoreCoordinator {
                 }
             }
         }
-        let start_login = if key == "start_on_login" {
-            value.as_bool()
-        } else {
-            None
-        };
-        let stamp_legal = key == "legal_terms_accepted" && value.as_bool() == Some(true);
-        {
-            let mut core = self.lock()?;
-            match value {
-                Value::Bool(flag) => core.store_mut().set_setting(key, flag),
-                Value::Number(number) => {
-                    if let Some(int) = number.as_u64() {
-                        core.store_mut().set_setting(key, int)
-                    } else {
-                        core.store_mut().set_setting(key, Value::Number(number))
-                    }
+        if key == "bt_max_connections" {
+            let value = value
+                .as_u64()
+                .ok_or_else(|| "BT 最大连接数必须是整数".to_string())?;
+            if !(10..=1000).contains(&value) {
+                return Err("BT 最大连接数必须在 10 到 1000 之间".into());
+            }
+        }
+        if key == "bt_upload_limit_kib" {
+            let value = value
+                .as_u64()
+                .ok_or_else(|| "BT 上传限制必须是整数".to_string())?;
+            if value > 1_048_576 {
+                return Err("BT 上传限制不能超过 1048576 KiB/s".into());
+            }
+        }
+        if key == "queue_profiles" {
+            validate_queue_profiles(value)?;
+        }
+        if key == "default_origin" {
+            if let Some(origin) = value.as_str() {
+                let origin = origin.trim().to_ascii_lowercase();
+                if !origin.is_empty()
+                    && !(origin.starts_with("http://") || origin.starts_with("https://"))
+                {
+                    return Err("默认 Origin 必须是 HTTP(S) 地址".into());
                 }
-                other => core.store_mut().set_setting(key, other),
-            }?;
+            }
         }
-        if let Some(flag) = start_login {
-            let _ = crate::startup::apply(flag);
-        }
-        if stamp_legal {
-            let _ = self.set_setting(
-                "legal_terms_version",
-                Value::String(crate::LEGAL_TERMS_VERSION.into()),
-            );
+        if key == "allowed_hosts" {
+            if let Some(hosts) = value.as_str() {
+                if hosts.chars().any(char::is_control)
+                    || hosts
+                        .split([',', ';'])
+                        .any(|item| item.trim().contains("//"))
+                {
+                    return Err("允许的域名列表无效".into());
+                }
+            }
         }
         Ok(())
     }
@@ -561,6 +775,25 @@ impl CoreCoordinator {
         self.lock()?.store().load_credential(credential_ref)
     }
 
+    pub fn default_cookie_configured(&self) -> Result<bool, String> {
+        Ok(self
+            .load_credential(DEFAULT_COOKIE_CREDENTIAL_REF)?
+            .is_some_and(|value| !value.is_empty()))
+    }
+
+    pub fn set_default_cookie(&self, cookie: &str) -> Result<(), String> {
+        if cookie.len() > 16 * 1024 || cookie.contains(['\r', '\n', '\0']) {
+            return Err("默认 Cookie 格式无效或长度超过 16 KiB".into());
+        }
+        let protected = if cookie.trim().is_empty() {
+            String::new()
+        } else {
+            let replay = serde_json::json!({ "cookie": cookie.trim() }).to_string();
+            CredentialVault.protect(&replay)?
+        };
+        self.store_credential(DEFAULT_COOKIE_CREDENTIAL_REF, &protected, "default_cookie")
+    }
+
     pub fn save_handoff(
         &self,
         handoff_id: &str,
@@ -569,13 +802,73 @@ impl CoreCoordinator {
         task_id: Option<&str>,
         created_at_ms: u64,
     ) -> Result<(), String> {
-        self.lock()?
-            .store_mut()
-            .save_handoff(handoff_id, handoff_json, status, task_id, created_at_ms)
+        self.lock()?.store_mut().save_handoff(
+            handoff_id,
+            handoff_json,
+            status,
+            task_id,
+            created_at_ms,
+        )
     }
 
     pub fn load_handoffs(&self) -> Result<Vec<String>, String> {
         self.lock()?.store().load_handoffs()
+    }
+
+    fn request_media_push(&self, request: MediaPushRequest) -> Result<Vec<EventEnvelope>, String> {
+        if request.id.trim().is_empty() || request.id.len() > 160 {
+            return Err("媒体推送请求编号无效".into());
+        }
+        if !matches!(request.push_kind.as_str(), "cast" | "tvbox") {
+            return Err("媒体推送类型无效".into());
+        }
+        let lower = request.url.to_ascii_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://"))
+            || request.url.chars().any(char::is_control)
+        {
+            return Err("媒体推送地址无效".into());
+        }
+        let json = serde_json::to_string(&request)
+            .map_err(|error| format!("encode media push {}: {error}", request.id))?;
+        self.save_handoff(
+            &request.id,
+            &json,
+            &request.status,
+            None,
+            request.created_at_ms,
+        )?;
+        self.lock()?.emit(CoreEvent::MediaPushRequested { request })
+    }
+
+    fn resolve_media_push(
+        &self,
+        request_id: &str,
+        status: &str,
+        message: &str,
+        location: &str,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        if !matches!(status, "done" | "failed" | "canceled") {
+            return Err("媒体推送结果状态无效".into());
+        }
+        let mut request = self
+            .load_handoffs()?
+            .into_iter()
+            .filter_map(|encoded| serde_json::from_str::<MediaPushRequest>(&encoded).ok())
+            .find(|item| item.id == request_id)
+            .ok_or_else(|| "媒体推送请求不存在或已过期".to_string())?;
+        request.status = status.to_string();
+        request.message = message.trim().chars().take(300).collect();
+        request.location = location.trim().chars().take(2048).collect();
+        let json = serde_json::to_string(&request)
+            .map_err(|error| format!("encode media push {}: {error}", request.id))?;
+        self.save_handoff(
+            &request.id,
+            &json,
+            &request.status,
+            None,
+            request.created_at_ms,
+        )?;
+        self.lock()?.emit(CoreEvent::MediaPushResolved { request })
     }
 
     pub(crate) fn lock(&self) -> Result<std::sync::MutexGuard<'_, PersistentCore>, String> {
@@ -586,10 +879,19 @@ impl CoreCoordinator {
 
     pub fn tasks(&self) -> Result<Vec<crate::TaskSnapshot>, String> {
         self.refresh_output_flags()?;
-        self.core
+        let core = self
+            .core
             .lock()
-            .map_err(|_| "v6 Core mutex poisoned".to_string())
-            .map(|core| core.tasks())
+            .map_err(|_| "v7 Core mutex poisoned".to_string())?;
+        let mut tasks = core.tasks();
+        for task in &mut tasks {
+            if let Some(spec) = core.task_spec(&task.task_id) {
+                if let Ok(paths) = TaskPaths::for_task(&task.task_id, spec) {
+                    task.output_path = resolve_published(&paths).to_string_lossy().into_owned();
+                }
+            }
+        }
+        Ok(tasks)
     }
 
     fn refresh_output_flags(&self) -> Result<(), String> {
@@ -606,7 +908,7 @@ impl CoreCoordinator {
                 .task_spec(&task_id)
                 .cloned()
                 .and_then(|spec| TaskPaths::for_task(&task_id, &spec).ok())
-                .map(|paths| !paths.final_output.exists())
+                .map(|paths| !resolve_published(&paths).exists())
                 .unwrap_or(false);
             self.lock()?.mark_output_missing(&task_id, missing)?;
         }
@@ -635,7 +937,10 @@ impl CoreCoordinator {
         self.set_setting("site_rules", serde_json::json!(encoded))?;
         self.lock()?.emit(CoreEvent::Toast {
             level: "site_profile".into(),
-            message: format!("已保存 {} 的站点规则", crate::site_rules::host_of(&spec.url)),
+            message: format!(
+                "已保存 {} 的站点规则",
+                crate::site_rules::host_of(&spec.url)
+            ),
         })
     }
 
@@ -658,8 +963,23 @@ impl CoreCoordinator {
             }
             return Ok(events);
         }
+        if let CoreCommand::ExportTasks { task_ids, format } = command {
+            let (format, data, task_count) =
+                crate::task_export::export_tasks(&self.tasks()?, &task_ids, &format)?;
+            return self.lock()?.emit(CoreEvent::TaskExport {
+                format,
+                data,
+                task_count,
+            });
+        }
         if let CoreCommand::HarvestPage { url } = command {
             return harvest_page(self, &url);
+        }
+        if let CoreCommand::ProbeTorrent { source } = command {
+            return probe_torrent_command(self, &source);
+        }
+        if let CoreCommand::SelectTorrentFiles { source, selections } = command {
+            return select_torrent_files_command(self, &source, &selections);
         }
         if let CoreCommand::AcceptHandoff {
             handoff_id,
@@ -675,23 +995,70 @@ impl CoreCoordinator {
         if let CoreCommand::PresentHandoff { handoff_id, ok } = command {
             return self.present_handoff_command(handoff_id, ok);
         }
+        if let CoreCommand::RequestMediaPush { request } = command {
+            return self.request_media_push(request);
+        }
+        if let CoreCommand::ResolveMediaPush {
+            request_id,
+            status,
+            message,
+            location,
+        } = command
+        {
+            return self.resolve_media_push(&request_id, &status, &message, &location);
+        }
+        if let CoreCommand::AssignQueue { task_ids, queue_id } = command {
+            let queue_id = queue_id.trim().to_string();
+            if task_ids.is_empty() || task_ids.len() > 10_000 {
+                return Err("请选择要移动的任务".into());
+            }
+            if !self
+                .settings()?
+                .queue_profiles
+                .iter()
+                .any(|profile| profile.id == queue_id)
+            {
+                return Err("目标队列不存在".into());
+            }
+            let events = self.dispatch_inner(CoreCommand::AssignQueue { task_ids, queue_id })?;
+            self.start_next_queued()?;
+            return Ok(events);
+        }
         if let CoreCommand::ControlCast { action } = command {
-            crate::cast::control_session(&action)?;
+            let playback = crate::cast::control_session(&action)?;
+            if action == "stop" {
+                clear_cast_mount();
+            }
             return self.lock()?.emit(CoreEvent::CastSession {
                 active: action != "stop",
                 title: String::new(),
-                device: crate::cast::last_device_label(),
+                device: playback.label,
                 status: match action.as_str() {
                     "pause" => "已暂停投屏".into(),
                     "play" => "继续投屏".into(),
                     "stop" => "已停止投屏".into(),
+                    "status" => playback.state.clone(),
+                    "seek_back" => "已后退 10 秒".into(),
+                    "seek_forward" => "已快进 10 秒".into(),
+                    _ if action.starts_with("seek_to:") => "已跳转".into(),
+                    _ if action.starts_with("seek:") => "已调整播放位置".into(),
                     _ => action,
                 },
+                task_id: String::new(),
+                media_url: String::new(),
+                device_kind: playback.device_kind,
+                supported_actions: playback.supported_actions,
+                playing: playback.playing,
+                paused: playback.paused,
+                position_seconds: playback.position_seconds,
+                duration_seconds: playback.duration_seconds,
+                position_available: playback.position_available,
             });
         }
         if let CoreCommand::CreateTask { spec } = command {
             self.require_legal()?;
             let spec = self.apply_defaults_to_spec(spec)?;
+            let spec = validate_torrent_spec(spec)?;
             let mut events = Vec::new();
             for spec in self.expand_create(spec)? {
                 if !spec.allow_duplicate {
@@ -724,7 +1091,7 @@ impl CoreCoordinator {
                 if reject_task_url(&url).is_err() {
                     continue;
                 }
-                if crate::looks_like_metalink(&url) || url.contains("<metalink") {
+                if crate::looks_like_metalink(&url) {
                     specs.extend(specs_from_metalink(&url, &spec, auto, &dirs)?);
                 } else {
                     specs.push(spec_from_url(&spec, &url, &spec.filename, auto, &dirs));
@@ -736,12 +1103,9 @@ impl CoreCoordinator {
             return Ok(specs);
         }
         if spec.harvest {
-            let (_, body) = crate::fetch_bytes(
-                &spec.url,
-                &std::collections::HashMap::new(),
-                &spec.proxy,
-            )
-            .map_err(|error| error.to_string())?;
+            let (_, body) =
+                crate::fetch_bytes(&spec.url, &std::collections::HashMap::new(), &spec.proxy)
+                    .map_err(|error| error.to_string())?;
             let text = String::from_utf8_lossy(&body);
             if crate::looks_like_metalink(&text) {
                 return specs_from_metalink(&text, &spec, auto, &dirs);
@@ -761,12 +1125,9 @@ impl CoreCoordinator {
         }
         let lower = spec.url.to_ascii_lowercase();
         if lower.ends_with(".meta4") || lower.ends_with(".metalink") {
-            let (_, body) = crate::fetch_bytes(
-                &spec.url,
-                &std::collections::HashMap::new(),
-                &spec.proxy,
-            )
-            .map_err(|error| error.to_string())?;
+            let (_, body) =
+                crate::fetch_bytes(&spec.url, &std::collections::HashMap::new(), &spec.proxy)
+                    .map_err(|error| error.to_string())?;
             return specs_from_metalink(&String::from_utf8_lossy(&body), &spec, auto, &dirs);
         }
         Ok(vec![spec_from_url(
@@ -804,10 +1165,26 @@ impl CoreCoordinator {
                 return set_task_speed(self, task_id, limit.parse().unwrap_or(0));
             }
             if let Some(url) = action.strip_prefix("refresh:") {
-                return refresh_task_url(self, task_id, url);
+                let next_action = self
+                    .tasks()?
+                    .into_iter()
+                    .find(|task| task.task_id == *task_id)
+                    .and_then(|task| {
+                        ["resume", "retry", "start"].into_iter().find(|candidate| {
+                            task.available_actions.iter().any(|item| item == candidate)
+                        })
+                    });
+                let mut events = refresh_task_url(self, task_id, url)?;
+                if let Some(next_action) = next_action {
+                    events.extend(self.dispatch_inner(CoreCommand::TaskAction {
+                        task_id: task_id.clone(),
+                        action: next_action.into(),
+                    })?);
+                }
+                return Ok(events);
             }
             if action == "push_tvbox" {
-                return push_task_tvbox(self, task_id).map(|_| Vec::new());
+                return push_task_tvbox(self, task_id);
             }
             if action == "queue_top" {
                 return self.dispatch_inner(CoreCommand::PlaceQueue {
@@ -846,7 +1223,7 @@ impl CoreCoordinator {
             return Ok(Vec::new());
         }
         if let CoreCommand::PlayTask { task_id } = &command {
-            return play_task(self, task_id).map(|_| Vec::new());
+            return play_task(self, task_id);
         }
         if let CoreCommand::CastTask { task_id } = &command {
             return cast_task(self, task_id);
@@ -854,14 +1231,23 @@ impl CoreCoordinator {
         if let CoreCommand::CastToDevice { task_id, device_id } = &command {
             return cast_to_device(self, task_id, device_id);
         }
+        if let CoreCommand::ShareMedia {
+            path,
+            url,
+            title,
+            device_id,
+        } = &command
+        {
+            return share_media(self, path, url, title, device_id);
+        }
         if let CoreCommand::PlayerControl { action } = &command {
-            return player_control(action).map(|_| Vec::new());
+            return player_control_events(self, action);
         }
         if let CoreCommand::ProbeUrl { url } = &command {
             return probe_command(self, url);
         }
-        if let CoreCommand::DiscoverCastDevices = command {
-            return discover_cast(self);
+        if let CoreCommand::DiscoverCastDevices { mode } = command {
+            return discover_cast(self, &mode);
         }
         if let CoreCommand::DownloadUpdate = command {
             return download_update(self);
@@ -869,14 +1255,22 @@ impl CoreCoordinator {
         if let CoreCommand::OpenCompleted { task_id, folder } = &command {
             return open_completed(self, task_id, *folder).map(|_| Vec::new());
         }
+        if matches!(command, CoreCommand::ConfirmPowerAction) {
+            let confirmed = crate::power_action::confirm()?;
+            return self.lock()?.emit(CoreEvent::Toast {
+                level: if confirmed { "success" } else { "info" }.into(),
+                message: if confirmed {
+                    "已执行完成后电源动作"
+                } else {
+                    "没有待执行的电源动作"
+                }
+                .into(),
+            });
+        }
         if matches!(command, CoreCommand::CancelPowerAction) {
             let canceled = crate::power_action::cancel();
-            return self.lock()?.emit(CoreEvent::Error {
-                code: if canceled {
-                    "power_canceled".into()
-                } else {
-                    "power_idle".into()
-                },
+            return self.lock()?.emit(CoreEvent::Toast {
+                level: "info".into(),
                 message: if canceled {
                     "已取消完成后电源动作".into()
                 } else {
@@ -908,6 +1302,9 @@ impl CoreCoordinator {
                             })?;
                         }
                     }
+                    if matches!(action.as_str(), "delete" | "delete_file") {
+                        crate::net_policy::clear_scoped_limit(&format!("task:{task_id}"));
+                    }
                 }
             }
             core.handle(command)?
@@ -925,32 +1322,43 @@ impl CoreCoordinator {
             return Ok(());
         }
         loop {
-            let max = self
-                .lock()?
-                .store()
-                .setting_u64("queue_max_active", 3)?
-                .max(1) as usize;
             let active_ids = self
                 .active
                 .lock()
                 .map_err(|_| "v6 worker registry poisoned".to_string())?
                 .clone();
-            if active_ids.len() >= max {
-                return Ok(());
-            }
-            if !self.queue_allowed()? {
-                return Ok(());
-            }
-            let mut queued: Vec<_> = self
-                .tasks()?
-                .into_iter()
-                .filter(|task| task.status == "queued" && !active_ids.contains(&task.task_id))
-                .collect();
-            queued.sort_by_key(|task| (task.queue_index, task.task_id.clone()));
-            let Some(next) = queued.into_iter().next() else {
+            let tasks = self.tasks()?;
+            let mut profiles = self.settings()?.queue_profiles;
+            profiles.sort_by_key(|profile| std::cmp::Reverse(profile.priority));
+            let next = profiles.into_iter().find_map(|profile| {
+                if !queue_profile_allowed(&profile) {
+                    return None;
+                }
+                let active_count = tasks
+                    .iter()
+                    .filter(|task| {
+                        task.queue_id == profile.id && active_ids.contains(&task.task_id)
+                    })
+                    .count();
+                if active_count >= profile.max_active.max(1) as usize {
+                    return None;
+                }
+                let mut queued: Vec<_> = tasks
+                    .iter()
+                    .filter(|task| {
+                        task.queue_id == profile.id
+                            && task.status == "queued"
+                            && !active_ids.contains(&task.task_id)
+                            && task_schedule_allowed(task)
+                    })
+                    .collect();
+                queued.sort_by_key(|task| (task.queue_index, task.task_id.clone()));
+                queued.first().map(|task| task.task_id.clone())
+            });
+            let Some(next) = next else {
                 return Ok(());
             };
-            self.spawn(next.task_id)?;
+            self.spawn(next)?;
         }
     }
 
@@ -1002,9 +1410,32 @@ impl CoreCoordinator {
         let client_dir = spec.download_dir.trim().to_string();
         spec = apply_site_rules_to_spec(&self.core(), spec)?;
         let settings = self.settings()?;
+        if spec.queue_id.trim().is_empty() {
+            spec.queue_id = crate::DEFAULT_QUEUE_ID.into();
+        }
+        if !settings
+            .queue_profiles
+            .iter()
+            .any(|profile| profile.id == spec.queue_id)
+        {
+            return Err(format!("任务所属队列不存在: {}", spec.queue_id));
+        }
+        if !crate::net_policy::schedule_value_valid(&spec.scheduled_start_at)
+            || !crate::net_policy::schedule_value_valid(&spec.scheduled_stop_at)
+        {
+            return Err("任务计划时间必须使用 HH:mm 或 RFC 3339 时间".into());
+        }
         if spec.download_dir.trim().is_empty() {
             spec.download_dir = settings.download_dir.clone();
         }
+        if spec.work_dir.trim().is_empty() {
+            spec.work_dir = if settings.temp_dir.trim().is_empty() {
+                spec.download_dir.clone()
+            } else {
+                settings.temp_dir.clone()
+            };
+        }
+        reject_path_escape(&spec.work_dir)?;
         if client_dir.is_empty() {
             reject_path_escape(&spec.download_dir)?;
         } else {
@@ -1020,7 +1451,8 @@ impl CoreCoordinator {
         if spec.proxy.trim().is_empty() {
             spec.proxy = settings.proxy_url.clone();
         }
-        spec.headers.retain(|key, value| header_value_allowed(key, value));
+        spec.headers
+            .retain(|key, value| header_value_allowed(key, value));
         spec.request_method = crate::http_engine::sanitize_http_method(&spec.request_method);
         if !header_value_allowed("ETag", &spec.etag) {
             spec.etag.clear();
@@ -1028,13 +1460,9 @@ impl CoreCoordinator {
         if !header_value_allowed("Last-Modified", &spec.last_modified) {
             spec.last_modified.clear();
         }
-        spec.mirrors.retain(|url| {
-            reject_task_url(url).is_ok()
-                && !url.contains('\r')
-                && !url.contains('\n')
-                && !url.contains('\0')
-        });
-        if spec.proxy.contains('\r') || spec.proxy.contains('\n') {
+        spec.mirrors
+            .retain(|url| crate::http_engine::http_fetch_url_allowed(url));
+        if !proxy_url_allowed(&spec.proxy) {
             return Err("代理地址无效".into());
         }
         spec.proxy = crate::net_policy::effective_proxy(
@@ -1045,6 +1473,9 @@ impl CoreCoordinator {
             &spec.proxy,
         );
         reject_task_url(&spec.url)?;
+        if !crate::net_policy::url_allowed(&spec.url, &settings.allowed_hosts) {
+            return Err("下载地址不在允许的域名范围内".into());
+        }
         if spec.concurrency == 0 {
             spec.concurrency = settings.default_concurrency.max(1) as u32;
         }
@@ -1076,6 +1507,19 @@ impl CoreCoordinator {
         {
             spec.headers
                 .insert("Referer".into(), settings.default_referer);
+        }
+        if !settings.default_origin.trim().is_empty()
+            && header_value_allowed("Origin", &settings.default_origin)
+            && !spec
+                .headers
+                .keys()
+                .any(|key| key.eq_ignore_ascii_case("origin"))
+        {
+            spec.headers
+                .insert("Origin".into(), settings.default_origin);
+        }
+        if spec.credential_ref.is_none() && self.default_cookie_configured()? {
+            spec.credential_ref = Some(DEFAULT_COOKIE_CREDENTIAL_REF.into());
         }
         Ok(spec)
     }
@@ -1147,8 +1591,7 @@ impl CoreCoordinator {
     ) -> Result<Vec<EventEnvelope>, String> {
         self.require_legal()?;
         let settings = self.settings()?;
-        let download_dir =
-            constrain_untrusted_download_dir(&download_dir, &settings.download_dir)?;
+        let download_dir = constrain_untrusted_download_dir(&download_dir, &settings.download_dir)?;
         let Some(offer) = self.lock()?.pending_handoff(&handoff_id) else {
             return Err("接管请求不存在或已过期".into());
         };
@@ -1237,9 +1680,8 @@ impl CoreCoordinator {
                     object.insert("status".into(), Value::String("failed".into()));
                 }
             }
-            let json = serde_json::to_string(&value).map_err(|error| {
-                format!("encode handoff presentation {handoff_id}: {error}")
-            })?;
+            let json = serde_json::to_string(&value)
+                .map_err(|error| format!("encode handoff presentation {handoff_id}: {error}"))?;
             let created = value
                 .get("created_at_ms")
                 .and_then(Value::as_u64)
@@ -1257,21 +1699,6 @@ impl CoreCoordinator {
             let _ = core.take_pending_handoff(&handoff_id);
         }
         Ok(Vec::new())
-    }
-
-    fn queue_allowed(&self) -> Result<bool, String> {
-        let settings = self.settings()?;
-        if !crate::net_policy::weekday_allowed(&settings.queue_active_days) {
-            return Ok(false);
-        }
-        if settings.queue_auto_start_enabled && settings.queue_auto_stop_enabled {
-            Ok(crate::net_policy::schedule_window_active(
-                &settings.queue_auto_start_time,
-                &settings.queue_auto_stop_time,
-            ))
-        } else {
-            Ok(true)
-        }
     }
 
     fn delete_task_files(&self, task_id: &str) -> Result<(), String> {
@@ -1295,17 +1722,32 @@ impl CoreCoordinator {
                 return Ok(());
             }
         }
-        let max = self
-            .lock()?
-            .store()
-            .setting_u64("queue_max_active", 3)?
-            .max(1) as usize;
+        let tasks = self.tasks()?;
+        let queue_id = tasks
+            .iter()
+            .find(|task| task.task_id == task_id)
+            .map(|task| task.queue_id.clone())
+            .unwrap_or_else(|| crate::DEFAULT_QUEUE_ID.into());
+        let profile = self
+            .settings()?
+            .queue_profiles
+            .into_iter()
+            .find(|profile| profile.id == queue_id)
+            .ok_or_else(|| format!("任务所属队列不存在: {queue_id}"))?;
+        if !queue_profile_allowed(&profile) {
+            return Ok(());
+        }
+        let max = profile.max_active.max(1) as usize;
         {
             let mut active = self
                 .active
                 .lock()
                 .map_err(|_| "v6 worker registry poisoned".to_string())?;
-            if active.len() >= max && !active.contains(&task_id) {
+            let active_in_queue = tasks
+                .iter()
+                .filter(|task| task.queue_id == queue_id && active.contains(&task.task_id))
+                .count();
+            if active_in_queue >= max && !active.contains(&task_id) {
                 drop(active);
                 if let Ok(mut core) = self.lock() {
                     let (downloaded, total) = core
@@ -1335,7 +1777,7 @@ impl CoreCoordinator {
         let retries = Arc::clone(&self.retries);
         let coordinator = self.clone();
         thread::spawn(move || {
-        let result = run_task_with_progress(Arc::clone(&core), &task_id);
+            let result = run_task_with_progress(Arc::clone(&core), &task_id);
             if let Err(error) = result {
                 let status = if error == "paused" {
                     "paused"
@@ -1381,14 +1823,7 @@ impl CoreCoordinator {
                         *slot
                     };
                     if u64::from(attempt) <= max && max > 0 {
-                        let _ = mark_progress(
-                            &core,
-                            &task_id,
-                            0,
-                            None,
-                            "waiting",
-                            "queued",
-                        );
+                        let _ = mark_progress(&core, &task_id, 0, None, "waiting", "queued");
                     }
                 } else if status != "paused" {
                     if let Ok(mut map) = retries.lock() {
@@ -1398,6 +1833,7 @@ impl CoreCoordinator {
             } else if let Ok(mut map) = retries.lock() {
                 map.remove(&task_id);
             }
+            crate::net_policy::clear_scoped_limit(&format!("task:{task_id}"));
             if let Ok(mut active) = active.lock() {
                 active.remove(&task_id);
                 crate::sleep_inhibit::set_active(!active.is_empty());
@@ -1406,6 +1842,131 @@ impl CoreCoordinator {
         });
         Ok(())
     }
+}
+
+fn load_queue_profiles(store: &crate::CoreStore) -> Result<Vec<QueueProfile>, String> {
+    let raw = store.setting_string("queue_profiles", "")?;
+    if !raw.trim().is_empty() {
+        if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+            validate_queue_profiles(&value)?;
+            return serde_json::from_value(value)
+                .map_err(|error| format!("读取队列配置失败: {error}"));
+        }
+    }
+    Ok(vec![QueueProfile {
+        max_active: store.setting_u64("queue_max_active", 3)?.clamp(1, 64) as u32,
+        schedule_enabled: store.setting_bool("queue_auto_start_enabled", false)?
+            || store.setting_bool("queue_auto_stop_enabled", false)?,
+        start_time: store.setting_string("queue_auto_start_time", "00:00")?,
+        stop_time: store.setting_string("queue_auto_stop_time", "07:30")?,
+        active_days: store.setting_string("queue_active_days", "1,2,3,4,5,6,7")?,
+        completion_action: store.setting_string("completion_power_action", "none")?,
+        ..QueueProfile::default()
+    }])
+}
+
+fn queue_profile_allowed(profile: &QueueProfile) -> bool {
+    profile.enabled
+        && crate::net_policy::weekday_allowed(&profile.active_days)
+        && (!profile.schedule_enabled
+            || crate::net_policy::schedule_window_active(&profile.start_time, &profile.stop_time))
+}
+
+fn task_schedule_allowed(task: &crate::TaskSnapshot) -> bool {
+    crate::net_policy::scheduled_start_reached(&task.scheduled_start_at)
+        && !crate::net_policy::scheduled_stop_hit(&task.scheduled_stop_at)
+}
+
+fn validate_queue_profiles(value: &Value) -> Result<(), String> {
+    let profiles: Vec<QueueProfile> = serde_json::from_value(value.clone())
+        .map_err(|error| format!("队列配置格式无效: {error}"))?;
+    if profiles.is_empty() || profiles.len() > 32 {
+        return Err("必须保留 1 到 32 个队列".into());
+    }
+    let mut ids = HashSet::new();
+    let mut names = HashSet::new();
+    for profile in &profiles {
+        let id = profile.id.trim();
+        if id.is_empty()
+            || id.len() > 40
+            || !id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            || !ids.insert(id.to_ascii_lowercase())
+        {
+            return Err("队列编号必须唯一，且只能包含字母、数字、连字符和下划线".into());
+        }
+        let name = profile.name.trim();
+        if name.is_empty()
+            || name.chars().count() > 40
+            || name.chars().any(char::is_control)
+            || !names.insert(name.to_lowercase())
+        {
+            return Err("队列名称必须为 1 到 40 个可见字符".into());
+        }
+        if !(-100..=100).contains(&profile.priority) {
+            return Err("队列优先级必须在 -100 到 100 之间".into());
+        }
+        if !(1..=64).contains(&profile.max_active) {
+            return Err("队列并发数必须在 1 到 64 之间".into());
+        }
+        if profile.speed_limit_kib > 1_048_576 {
+            return Err("队列限速不能超过 1048576 KiB/s".into());
+        }
+        if !valid_clock(&profile.start_time) || !valid_clock(&profile.stop_time) {
+            return Err("队列计划时间必须使用 HH:mm".into());
+        }
+        let days: Vec<_> = profile.active_days.split(',').map(str::trim).collect();
+        let unique_days: HashSet<_> = days.iter().copied().collect();
+        if days.is_empty()
+            || unique_days.len() != days.len()
+            || !days.iter().all(|day| {
+                day.parse::<u8>()
+                    .is_ok_and(|value| (1..=7).contains(&value))
+            })
+        {
+            return Err("队列活动星期必须使用 1 到 7".into());
+        }
+        if !matches!(
+            profile.completion_action.as_str(),
+            "" | "none" | "shutdown" | "sleep" | "hibernate"
+        ) {
+            return Err("队列完成动作无效".into());
+        }
+    }
+    if !profiles
+        .iter()
+        .any(|profile| profile.id == crate::DEFAULT_QUEUE_ID)
+    {
+        return Err("默认队列不能删除".into());
+    }
+    Ok(())
+}
+
+fn valid_clock(value: &str) -> bool {
+    let Some((hour, minute)) = value.split_once(':') else {
+        return false;
+    };
+    hour.len() == 2
+        && minute.len() == 2
+        && hour.parse::<u8>().is_ok_and(|value| value < 24)
+        && minute.parse::<u8>().is_ok_and(|value| value < 60)
+}
+
+fn validate_torrent_spec(spec: TaskSpec) -> Result<TaskSpec, String> {
+    if spec.resource_kind != crate::ResourceKind::Torrent || spec.torrent_selection.is_empty() {
+        return Ok(spec);
+    }
+    let headers = spec
+        .headers
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let meta = crate::torrent_engine::probe_torrent_source(&spec.url, &headers, &spec.proxy)?;
+    let mut checked = spec;
+    checked.torrent_selection =
+        crate::torrent_engine::validate_torrent_selection(&meta, &checked.torrent_selection)?;
+    Ok(checked)
 }
 
 fn current_progress(core: &Arc<Mutex<PersistentCore>>, task_id: &str) -> (u64, Option<u64>) {
@@ -1430,7 +1991,19 @@ fn run_task_with_progress(core: Arc<Mutex<PersistentCore>>, task_id: &str) -> Re
         .ok_or_else(|| format!("unknown task {task_id}"))?;
     let (spec, replay_json) = hydrate_replay_headers(&core, spec)?;
     let spec = apply_site_rules_to_spec(&core, spec)?;
-    apply_speed_policy(&core, spec.speed_limit_kib)?;
+    let throttle = task_throttle_context(&core, task_id, &spec)?;
+    crate::net_policy::configure_throttle_context(&throttle);
+    crate::net_policy::with_throttle_context(Some(throttle), || {
+        run_task_with_throttle(core, task_id, spec, replay_json)
+    })
+}
+
+fn run_task_with_throttle(
+    core: Arc<Mutex<PersistentCore>>,
+    task_id: &str,
+    spec: TaskSpec,
+    replay_json: String,
+) -> Result<(), String> {
     let headers: std::collections::HashMap<_, _> = spec
         .headers
         .iter()
@@ -1444,7 +2017,9 @@ fn run_task_with_progress(core: Arc<Mutex<PersistentCore>>, task_id: &str) -> Re
             mark_progress(&core, task_id, downloaded, total, "transfer", "downloading")?;
             let live = matches!(spec.resource_kind, crate::ResourceKind::Live);
             let (skip_ads, download_subtitles, live_max) = {
-                let guard = core.lock().map_err(|_| "v6 Core mutex poisoned".to_string())?;
+                let guard = core
+                    .lock()
+                    .map_err(|_| "v6 Core mutex poisoned".to_string())?;
                 (
                     guard.store().setting_bool("skip_ad_segments", true)?,
                     guard.store().setting_bool("download_subtitles", true)?,
@@ -1539,14 +2114,52 @@ fn run_task_with_progress(core: Arc<Mutex<PersistentCore>>, task_id: &str) -> Re
         crate::ResourceKind::Torrent => {
             let paths = TaskPaths::for_task(task_id, &spec)?;
             paths.prepare()?;
-            crate::torrent_engine::torrent_session().download(
+            let torrent_options = {
+                let guard = core
+                    .lock()
+                    .map_err(|_| "v6 Core mutex poisoned".to_string())?;
+                crate::torrent_engine::TorrentOptions {
+                    upload_limit_kib: guard.store().setting_u64("bt_upload_limit_kib", 1024)?,
+                    max_connections: guard
+                        .store()
+                        .setting_u64("bt_max_connections", 200)?
+                        .clamp(10, 1000) as usize,
+                    enable_dht: guard.store().setting_bool("bt_enable_dht", true)?,
+                }
+            };
+            crate::torrent_engine::torrent_session().download_with_options(
                 &spec.url,
                 &paths.output,
                 &paths.control,
                 &headers,
                 &spec.proxy,
+                torrent_options,
             )?;
-            complete_payload(&core, task_id, &paths, &paths.output, &spec)
+            if !spec.torrent_selection.is_empty() {
+                let meta =
+                    crate::torrent_engine::probe_torrent_source(&spec.url, &headers, &spec.proxy)?;
+                let published = crate::torrent_engine::materialize_selected_files(
+                    &paths.output,
+                    &paths.final_output,
+                    &meta,
+                    &spec.torrent_selection,
+                )?;
+                remember_published(&paths, &paths.final_output);
+                core.lock()
+                    .map_err(|_| "v7 Core mutex poisoned".to_string())?
+                    .set_output_path(task_id, paths.final_output.to_string_lossy().into_owned())?;
+                mark_progress(
+                    &core,
+                    task_id,
+                    published,
+                    Some(published),
+                    "finished",
+                    "completed",
+                )?;
+                maybe_schedule_power(&core, &spec)
+            } else {
+                complete_payload(&core, task_id, &paths, &paths.output, &spec)
+            }
         }
         crate::ResourceKind::File => run_http_file(core, task_id, spec, replay_json),
     }
@@ -1570,8 +2183,9 @@ fn run_http_file(
     }
     let (sender, receiver) = mpsc::channel();
     let worker_job = job.clone();
+    let throttle = crate::net_policy::current_throttle_context();
     thread::spawn(move || {
-        let result = run_job(&worker_job);
+        let result = crate::net_policy::with_throttle_context(throttle, || run_job(&worker_job));
         let _ = sender.send(result);
     });
     loop {
@@ -1671,7 +2285,11 @@ fn complete_payload(
             return Err(format!("size mismatch: expected {expected}, got {actual}"));
         }
     }
-    if let Some(checksum) = spec.checksum.as_deref().filter(|value| !value.trim().is_empty()) {
+    if let Some(checksum) = spec
+        .checksum
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         crate::checksum::verify_file(payload, checksum).map_err(|error| {
             let _ = mark_progress(core, task_id, 0, None, "checksum", "failed");
             error
@@ -1689,7 +2307,17 @@ fn complete_payload(
             .and_then(|guard| guard.store().setting_string("av_scan_command", "").ok())
             .unwrap_or_default();
         let result = crate::av_scan::scan_file(payload, &template);
-        if result.state == "threat" {
+        let fail_on_threat = core
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .store()
+                    .setting_bool("av_scan_fail_on_threat", true)
+                    .ok()
+            })
+            .unwrap_or(true);
+        if result.state == "threat" && fail_on_threat {
             mark_progress(core, task_id, 0, None, "av_scan", "failed")?;
             return Err(format!("av_threat: {}", result.detail));
         }
@@ -1698,6 +2326,9 @@ fn complete_payload(
     let published =
         crate::output_path::publish_file(payload, &paths.final_output, &policy, keep_temp)?;
     remember_published(paths, &published);
+    core.lock()
+        .map_err(|_| "v7 Core mutex poisoned".to_string())?
+        .set_output_path(task_id, published.to_string_lossy().into_owned())?;
     crate::motw::mark_downloaded_file(&published, &spec.url);
     let download_subtitles = core
         .lock()
@@ -1746,7 +2377,9 @@ fn published_path_allowed(candidate: &Path, paths: &TaskPaths) -> bool {
     if let Some(parent) = paths.final_output.parent() {
         roots.push(logical_canonical(parent));
     }
-    roots.iter().any(|root| canon == *root || canon.starts_with(root))
+    roots
+        .iter()
+        .any(|root| canon == *root || canon.starts_with(root))
 }
 
 fn copy_subtitle_sidecars(task_dir: &Path, published: &Path) {
@@ -1786,41 +2419,63 @@ fn copy_subtitle_sidecars(task_dir: &Path, published: &Path) {
     }
 }
 
-fn maybe_schedule_power(
-    core: &Arc<Mutex<PersistentCore>>,
-    spec: &TaskSpec,
-) -> Result<(), String> {
-    let action = if !spec.completion_action.trim().is_empty() {
-        spec.completion_action.clone()
+fn maybe_schedule_power(core: &Arc<Mutex<PersistentCore>>, spec: &TaskSpec) -> Result<(), String> {
+    let (action, title) = if crate::power_action::is_armed(&spec.completion_action) {
+        let title = if spec.filename.trim().is_empty() {
+            spec.url.clone()
+        } else {
+            spec.filename.clone()
+        };
+        (spec.completion_action.clone(), title)
     } else {
-        core.lock()
-            .ok()
-            .and_then(|guard| {
-                guard
-                    .store()
-                    .setting_string("completion_power_action", "none")
-                    .ok()
-            })
-            .unwrap_or_else(|| "none".into())
+        let guard = core
+            .lock()
+            .map_err(|_| "v6 Core mutex poisoned".to_string())?;
+        let profiles = load_queue_profiles(guard.store())?;
+        let Some(decision) = queue_completion_decision(&guard.tasks(), &profiles, spec) else {
+            return Ok(());
+        };
+        decision
     };
-    if !crate::power_action::is_armed(&action) {
+    if crate::power_action::pending().is_some() {
         return Ok(());
     }
     crate::power_action::schedule(&action, 30)?;
-    let title = if spec.filename.trim().is_empty() {
-        spec.url.clone()
-    } else {
-        spec.filename.clone()
-    };
-    let _ = core.lock().map_err(|_| "v6 Core mutex poisoned".to_string())?.emit(CoreEvent::Error {
-        code: "power_pending".into(),
-        message: format!(
-            "30 秒后将{}（{}），可在完成窗口取消",
-            crate::power_action::label(&action),
-            title
-        ),
-    });
+    let _ = core
+        .lock()
+        .map_err(|_| "v6 Core mutex poisoned".to_string())?
+        .emit(CoreEvent::PowerActionPending {
+            action,
+            title,
+            delay_seconds: 30,
+        });
     Ok(())
+}
+
+fn queue_completion_decision(
+    tasks: &[crate::TaskSnapshot],
+    profiles: &[QueueProfile],
+    spec: &TaskSpec,
+) -> Option<(String, String)> {
+    let profile = profiles
+        .iter()
+        .find(|profile| profile.id == spec.queue_id)?;
+    (crate::power_action::is_armed(&profile.completion_action)
+        && queue_is_successfully_drained(tasks, &profile.id))
+    .then(|| {
+        (
+            profile.completion_action.clone(),
+            format!("队列：{}", profile.name),
+        )
+    })
+}
+
+fn queue_is_successfully_drained(tasks: &[crate::TaskSnapshot], queue_id: &str) -> bool {
+    let mut matching = tasks.iter().filter(|task| task.queue_id == queue_id);
+    let Some(first) = matching.next() else {
+        return false;
+    };
+    first.status == "completed" && matching.all(|task| task.status == "completed")
 }
 
 fn poll_media_progress<F>(
@@ -1834,8 +2489,10 @@ where
     F: FnOnce() -> Result<PathBuf, String> + Send + 'static,
 {
     let (sender, receiver) = mpsc::channel();
+    let throttle = crate::net_policy::current_throttle_context();
     thread::spawn(move || {
-        let _ = sender.send(work());
+        let result = crate::net_policy::with_throttle_context(throttle, work);
+        let _ = sender.send(result);
     });
     let status = if live { "recording" } else { "downloading" };
     let mut last = 0u64;
@@ -1880,7 +2537,8 @@ fn apply_site_rules_to_spec(
         .map_err(|_| "v6 Core mutex poisoned".to_string())?
         .store()
         .setting_string("site_rules", "")?;
-    if let Some(rule) = crate::site_rules::matching_rule(&crate::parse_site_rules(&raw), &spec.url) {
+    if let Some(rule) = crate::site_rules::matching_rule(&crate::parse_site_rules(&raw), &spec.url)
+    {
         if rule.speed_limit_kib > 0 {
             spec.speed_limit_kib = rule.speed_limit_kib;
         }
@@ -1914,7 +2572,11 @@ fn apply_site_rules_to_spec(
     Ok(spec)
 }
 
-fn apply_speed_policy(core: &Arc<Mutex<PersistentCore>>, task_limit_kib: u32) -> Result<(), String> {
+fn task_throttle_context(
+    core: &Arc<Mutex<PersistentCore>>,
+    task_id: &str,
+    spec: &TaskSpec,
+) -> Result<crate::net_policy::ThrottleContext, String> {
     let core = core
         .lock()
         .map_err(|_| "v6 Core mutex poisoned".to_string())?;
@@ -1931,18 +2593,17 @@ fn apply_speed_policy(core: &Arc<Mutex<PersistentCore>>, task_limit_kib: u32) ->
             .setting_string("download_speed_schedule_end", "08:00")?,
         core.store().setting_u64("download_speed_schedule_kib", 0)?,
     );
-    let effective = if task_limit_kib > 0 {
-        let task = u64::from(task_limit_kib);
-        if scheduled == 0 {
-            task
-        } else {
-            scheduled.min(task)
-        }
-    } else {
-        scheduled
-    };
-    crate::net_policy::configure_limit_kib(effective);
-    Ok(())
+    let profile = load_queue_profiles(core.store())?
+        .into_iter()
+        .find(|profile| profile.id == spec.queue_id)
+        .ok_or_else(|| format!("任务所属队列不存在: {}", spec.queue_id))?;
+    Ok(crate::net_policy::ThrottleContext {
+        global_limit_kib: scheduled,
+        queue_id: profile.id,
+        queue_limit_kib: profile.speed_limit_kib,
+        task_id: task_id.to_string(),
+        task_limit_kib: u64::from(spec.speed_limit_kib),
+    })
 }
 
 fn specs_from_metalink(
@@ -2038,9 +2699,80 @@ fn simple_hash(value: &str) -> u64 {
     hash
 }
 
-fn play_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<(), String> {
+#[derive(Clone)]
+struct PlayerUiState {
+    active: bool,
+    title: String,
+    task_id: String,
+    status: String,
+    paused: bool,
+    speed: f64,
+}
+
+impl Default for PlayerUiState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            title: String::new(),
+            task_id: String::new(),
+            status: "STOPPED".into(),
+            paused: false,
+            speed: 1.0,
+        }
+    }
+}
+
+fn player_ui_state() -> &'static Mutex<PlayerUiState> {
+    static STATE: OnceLock<Mutex<PlayerUiState>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(PlayerUiState::default()))
+}
+
+fn emit_player_session(
+    coordinator: &CoreCoordinator,
+    state: &PlayerUiState,
+) -> Result<Vec<EventEnvelope>, String> {
+    let metadata = shared_player()
+        .map(|player| player.metadata())
+        .unwrap_or_default();
+    coordinator.lock()?.emit(CoreEvent::PlayerSession {
+        active: state.active,
+        title: state.title.clone(),
+        task_id: state.task_id.clone(),
+        status: state.status.clone(),
+        paused: state.paused,
+        speed: state.speed,
+        position_seconds: metadata.position_seconds,
+        duration_seconds: metadata.duration_seconds,
+        position_available: metadata.position_available,
+        audio_tracks: metadata.audio_tracks,
+        subtitle_tracks: metadata.subtitle_tracks,
+    })
+}
+
+fn play_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEnvelope>, String> {
+    let spec = coordinator
+        .lock()?
+        .task_spec(task_id)
+        .cloned()
+        .ok_or_else(|| format!("unknown task {task_id}"))?;
     let url = mount_task_url(coordinator, task_id)?;
-    shared_player()?.play(&url)
+    shared_player()?.play(&url)?;
+    let state = PlayerUiState {
+        active: true,
+        title: if spec.title.trim().is_empty() {
+            spec.filename
+        } else {
+            spec.title
+        },
+        task_id: task_id.to_string(),
+        status: "PLAYING".into(),
+        paused: false,
+        speed: 1.0,
+    };
+    if let Ok(mut current) = player_ui_state().lock() {
+        *current = state.clone();
+    }
+    emit_player_session(coordinator, &state)
 }
 
 fn mount_task_url(coordinator: &CoreCoordinator, task_id: &str) -> Result<String, String> {
@@ -2072,6 +2804,35 @@ fn media_token_from_url(url: &str) -> Option<String> {
         .filter(|token| !token.is_empty())
 }
 
+fn active_cast_token() -> &'static Mutex<Option<String>> {
+    static TOKEN: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    TOKEN.get_or_init(|| Mutex::new(None))
+}
+
+fn remember_cast_mount(token: &str) {
+    let previous = active_cast_token()
+        .lock()
+        .ok()
+        .and_then(|mut current| current.replace(token.to_string()));
+    if let Some(previous) = previous.filter(|item| item != token) {
+        if let Ok(server) = shared_media() {
+            server.unmount(&previous);
+        }
+    }
+}
+
+fn clear_cast_mount() {
+    let token = active_cast_token()
+        .lock()
+        .ok()
+        .and_then(|mut current| current.take());
+    if let Some(token) = token {
+        if let Ok(server) = shared_media() {
+            server.unmount(&token);
+        }
+    }
+}
+
 fn cast_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEnvelope>, String> {
     let loopback = mount_task_url(coordinator, task_id)?;
     let token = media_token_from_url(&loopback).ok_or_else(|| "播放地址无效".to_string())?;
@@ -2081,12 +2842,33 @@ fn cast_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEn
         .map(|ip| ip.to_string())
         .unwrap_or_else(|| "127.0.0.1".into());
     let location = crate::cast::lan_media_url(server, &token, &host)?;
+    let spec = coordinator
+        .lock()?
+        .task_spec(task_id)
+        .cloned()
+        .ok_or_else(|| format!("unknown task {task_id}"))?;
+    let title = if spec.title.trim().is_empty() {
+        spec.filename
+    } else {
+        spec.title
+    };
     let _ = crate::cast::ssdp_notify(&location);
+    crate::cast::remember_lan_share("局域网播放地址");
+    remember_cast_mount(&token);
     coordinator.lock()?.emit(CoreEvent::CastSession {
         active: true,
-        title: location,
+        title,
         device: "局域网".into(),
         status: "已在局域网发布播放地址".into(),
+        task_id: task_id.to_string(),
+        media_url: location,
+        device_kind: "lan".into(),
+        supported_actions: vec!["stop".into()],
+        playing: false,
+        paused: false,
+        position_seconds: 0,
+        duration_seconds: 0,
+        position_available: false,
     })
 }
 
@@ -2108,26 +2890,164 @@ fn cast_to_device(
         .map(|ip| ip.to_string())
         .unwrap_or_else(|| "127.0.0.1".into());
     let location = crate::cast::lan_media_url(server, &token, &host)?;
-    if device_id.trim().is_empty() {
-        let _ = crate::cast::ssdp_notify(&location);
-        return coordinator.lock()?.emit(CoreEvent::CastSession {
-            active: true,
-            title: location,
-            device: "局域网".into(),
-            status: "已发出局域网投屏通知".into(),
-        });
-    }
     let title = if spec.title.is_empty() {
         spec.filename.clone()
     } else {
         spec.title
     };
-    let device = crate::cast::play_on_device(device_id, &location, &title)?;
+    if device_id.trim().is_empty() {
+        let _ = crate::cast::ssdp_notify(&location);
+        crate::cast::remember_lan_share("局域网播放地址");
+        remember_cast_mount(&token);
+        return coordinator.lock()?.emit(CoreEvent::CastSession {
+            active: true,
+            title,
+            device: "局域网".into(),
+            status: "已发出局域网投屏通知".into(),
+            task_id: task_id.to_string(),
+            media_url: location,
+            device_kind: "lan".into(),
+            supported_actions: vec!["stop".into()],
+            playing: false,
+            paused: false,
+            position_seconds: 0,
+            duration_seconds: 0,
+            position_available: false,
+        });
+    }
+    let device = match crate::cast::play_on_device(device_id, &location, &title) {
+        Ok(device) => device,
+        Err(error) => {
+            server.unmount(&token);
+            return Err(error);
+        }
+    };
+    let playback = crate::cast::last_session_status();
+    remember_cast_mount(&token);
     coordinator.lock()?.emit(CoreEvent::CastSession {
         active: true,
         title,
         device,
         status: "正在投屏".into(),
+        task_id: task_id.to_string(),
+        media_url: location,
+        device_kind: playback.device_kind,
+        supported_actions: playback.supported_actions,
+        playing: playback.playing,
+        paused: playback.paused,
+        position_seconds: playback.position_seconds,
+        duration_seconds: playback.duration_seconds,
+        position_available: playback.position_available,
+    })
+}
+
+fn share_media(
+    coordinator: &CoreCoordinator,
+    path: &str,
+    url: &str,
+    title: &str,
+    device_id: &str,
+) -> Result<Vec<EventEnvelope>, String> {
+    let path = path.trim();
+    let url = url.trim();
+    if path.is_empty() == url.is_empty() {
+        return Err("请选择一个本机媒体文件或媒体链接".into());
+    }
+    let server = shared_media()?;
+    server.enable_lan();
+    let token = crate::playback::random_mount_token();
+    let media_title;
+    let media_url = if !path.is_empty() {
+        let source = PathBuf::from(path);
+        if !source.is_absolute() || !source.is_file() {
+            return Err("本机媒体文件不存在".into());
+        }
+        media_title = if title.trim().is_empty() {
+            source
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("本机媒体")
+                .to_string()
+        } else {
+            title.trim().to_string()
+        };
+        server.mount(&token, source);
+        let host = crate::cast::primary_lan_ipv4()
+            .map(|ip| ip.to_string())
+            .ok_or_else(|| "没有可用于投屏的局域网地址".to_string())?;
+        crate::cast::lan_media_url(server, &token, &host)?
+    } else {
+        let lower = url.to_ascii_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://"))
+            || url.chars().any(char::is_control)
+        {
+            return Err("媒体链接必须是有效的 HTTP(S) 地址".into());
+        }
+        media_title = if title.trim().is_empty() {
+            "网页媒体".into()
+        } else {
+            title.trim().to_string()
+        };
+        url.to_string()
+    };
+    if device_id.trim().is_empty() {
+        let published_url = if url.is_empty() {
+            let _ = crate::cast::ssdp_notify(&media_url);
+            media_url.clone()
+        } else {
+            server.mount_remote(&token, media_url.clone());
+            let host = crate::cast::primary_lan_ipv4()
+                .map(|ip| ip.to_string())
+                .ok_or_else(|| "没有可用于投屏的局域网地址".to_string())?;
+            let redirect = crate::cast::lan_media_url(server, &token, &host)?;
+            let _ = crate::cast::ssdp_notify(&redirect);
+            redirect
+        };
+        crate::cast::remember_lan_share("局域网播放地址");
+        remember_cast_mount(&token);
+        return coordinator.lock()?.emit(CoreEvent::CastSession {
+            active: true,
+            title: media_title,
+            device: "局域网".into(),
+            status: "已发布局域网播放地址".into(),
+            task_id: String::new(),
+            media_url: published_url,
+            device_kind: "lan".into(),
+            supported_actions: vec!["stop".into()],
+            playing: false,
+            paused: false,
+            position_seconds: 0,
+            duration_seconds: 0,
+            position_available: false,
+        });
+    }
+    let device = match crate::cast::play_on_device(device_id, &media_url, &media_title) {
+        Ok(device) => device,
+        Err(error) => {
+            server.unmount(&token);
+            return Err(error);
+        }
+    };
+    let playback = crate::cast::last_session_status();
+    remember_cast_mount(&token);
+    coordinator.lock()?.emit(CoreEvent::CastSession {
+        active: true,
+        title: media_title,
+        device,
+        status: if playback.device_kind == "tvbox" {
+            "已推送到 TVBox".into()
+        } else {
+            "正在投屏".into()
+        },
+        task_id: String::new(),
+        media_url: String::new(),
+        device_kind: playback.device_kind,
+        supported_actions: playback.supported_actions,
+        playing: playback.playing,
+        paused: playback.paused,
+        position_seconds: playback.position_seconds,
+        duration_seconds: playback.duration_seconds,
+        position_available: playback.position_available,
     })
 }
 
@@ -2146,20 +3066,22 @@ fn probe_command(coordinator: &CoreCoordinator, url: &str) -> Result<Vec<EventEn
                     .settings()
                     .map(|item| item.harvest_minimum_bytes)
                     .unwrap_or(0);
-                events.extend(coordinator.lock()?.emit(CoreEvent::HarvestResult {
-                    url: url.to_string(),
-                    links: harvest
-                        .into_iter()
-                        .filter(|link| min == 0 || link.size_hint == 0 || link.size_hint >= min)
-                        .map(|link| crate::HarvestCandidate {
-                            url: link.url,
-                            filename: link.filename,
-                            extension: link.extension,
-                            category: link.category,
-                            size: link.size_hint,
-                        })
-                        .collect(),
-                })?);
+                events.extend(
+                    coordinator.lock()?.emit(CoreEvent::HarvestResult {
+                        url: url.to_string(),
+                        links: harvest
+                            .into_iter()
+                            .filter(|link| min == 0 || link.size_hint == 0 || link.size_hint >= min)
+                            .map(|link| crate::HarvestCandidate {
+                                url: link.url,
+                                filename: link.filename,
+                                extension: link.extension,
+                                category: link.category,
+                                size: link.size_hint,
+                            })
+                            .collect(),
+                    })?,
+                );
             }
             Ok(events)
         }
@@ -2170,12 +3092,62 @@ fn probe_command(coordinator: &CoreCoordinator, url: &str) -> Result<Vec<EventEn
     }
 }
 
+fn probe_torrent_command(
+    coordinator: &CoreCoordinator,
+    source: &str,
+) -> Result<Vec<EventEnvelope>, String> {
+    let meta =
+        crate::torrent_engine::probe_torrent_source(source, &std::collections::HashMap::new(), "")?;
+    coordinator.lock()?.emit(CoreEvent::TorrentProbeResult {
+        source: source.to_string(),
+        name: meta.name,
+        total_size: meta.length,
+        files: meta.files,
+        magnet: meta.magnet,
+    })
+}
+
+fn select_torrent_files_command(
+    coordinator: &CoreCoordinator,
+    source: &str,
+    selections: &[crate::TorrentFileSelection],
+) -> Result<Vec<EventEnvelope>, String> {
+    let meta =
+        crate::torrent_engine::probe_torrent_source(source, &std::collections::HashMap::new(), "")?;
+    let selections = crate::torrent_engine::validate_torrent_selection(&meta, selections)?;
+    let total_size = meta
+        .files
+        .iter()
+        .filter(|file| {
+            selections
+                .iter()
+                .any(|item| item.index == file.index && item.selected)
+        })
+        .map(|file| file.size)
+        .sum();
+    coordinator.lock()?.emit(CoreEvent::TorrentSelectionResult {
+        source: source.to_string(),
+        selections,
+        total_size,
+    })
+}
+
 fn harvest_page(coordinator: &CoreCoordinator, url: &str) -> Result<Vec<EventEnvelope>, String> {
     probe_command(coordinator, url)
 }
 
-fn push_task_tvbox(coordinator: &CoreCoordinator, task_id: &str) -> Result<(), String> {
-    let url = mount_task_url(coordinator, task_id)?;
+fn push_task_tvbox(
+    coordinator: &CoreCoordinator,
+    task_id: &str,
+) -> Result<Vec<EventEnvelope>, String> {
+    let loopback = mount_task_url(coordinator, task_id)?;
+    let token = media_token_from_url(&loopback).ok_or_else(|| "播放地址无效".to_string())?;
+    let server = shared_media()?;
+    server.enable_lan();
+    let host = crate::cast::primary_lan_ipv4()
+        .map(|ip| ip.to_string())
+        .ok_or_else(|| "没有可用于 TVBox 的局域网地址".to_string())?;
+    let url = crate::cast::lan_media_url(server, &token, &host)?;
     let spec = coordinator
         .lock()?
         .task_spec(task_id)
@@ -2193,43 +3165,84 @@ fn push_task_tvbox(coordinator: &CoreCoordinator, task_id: &str) -> Result<(), S
     } else {
         spec.title
     };
-    crate::cast::push_tvbox(&endpoint, &url, &title)
+    if let Err(error) = crate::cast::push_tvbox(&endpoint, &url, &title) {
+        server.unmount(&token);
+        return Err(error);
+    }
+    crate::cast::remember_tvbox(&endpoint);
+    remember_cast_mount(&token);
+    coordinator.lock()?.emit(CoreEvent::CastSession {
+        active: true,
+        title,
+        device: format!("TVBox · {endpoint}"),
+        status: "已推送到 TVBox".into(),
+        task_id: task_id.to_string(),
+        media_url: url,
+        device_kind: "tvbox".into(),
+        supported_actions: vec!["stop".into()],
+        playing: false,
+        paused: false,
+        position_seconds: 0,
+        duration_seconds: 0,
+        position_available: false,
+    })
 }
 
-fn discover_cast(coordinator: &CoreCoordinator) -> Result<Vec<EventEnvelope>, String> {
+fn discover_cast(coordinator: &CoreCoordinator, mode: &str) -> Result<Vec<EventEnvelope>, String> {
     let timeout = if std::env::var_os("HLS_V6_CAST_NULL").is_some() {
         Duration::from_millis(1)
     } else {
         Duration::from_millis(2500)
     };
-    let mut devices = crate::cast::discover_devices(timeout)?;
-    if let Ok(endpoint) = coordinator
-        .lock()
-        .and_then(|core| core.store().setting_string("tvbox_endpoint", ""))
-    {
-        if !endpoint.trim().is_empty() {
-            devices.insert(
-                0,
-                crate::CastDeviceInfo {
-                    id: "tvbox:configured".into(),
-                    label: format!("TVBox · {endpoint}"),
-                    location: endpoint.clone(),
-                    control_url: endpoint,
-                    service_type: "tvbox".into(),
-                },
-            );
+    let normalized_mode = if mode.eq_ignore_ascii_case("tvbox") {
+        "tvbox"
+    } else if mode.eq_ignore_ascii_case("cast") {
+        "cast"
+    } else {
+        ""
+    };
+    let mut devices = crate::cast::discover_devices_for_mode(timeout, normalized_mode)?;
+    if normalized_mode != "cast" {
+        if let Ok(endpoint) = coordinator
+            .lock()
+            .and_then(|core| core.store().setting_string("tvbox_endpoint", ""))
+        {
+            if !endpoint.trim().is_empty() {
+                devices.insert(
+                    0,
+                    crate::CastDeviceInfo {
+                        id: "tvbox:configured".into(),
+                        label: format!("TVBox · {endpoint}"),
+                        location: endpoint.clone(),
+                        control_url: endpoint,
+                        service_type: "tvbox".into(),
+                    },
+                );
+            }
         }
     }
     let message = if devices.is_empty() {
-        "没有发现投屏设备，仍可发局域网通知".to_string()
+        if normalized_mode == "tvbox" {
+            "没有发现 TVBox 接收端，可填写手工地址".to_string()
+        } else {
+            "没有发现 DLNA / Chromecast，仍可发布局域网播放地址".to_string()
+        }
     } else {
-        format!("发现 {} 台投屏设备", devices.len())
+        format!(
+            "发现 {} 个{}",
+            devices.len(),
+            if normalized_mode == "tvbox" {
+                "TVBox 接收端"
+            } else {
+                "投屏设备"
+            }
+        )
     };
     crate::cast::remember_devices(devices.clone());
     let mut core = coordinator.lock()?;
     let mut events = core.emit(CoreEvent::CastDevices { devices })?;
-    events.extend(core.emit(CoreEvent::Error {
-        code: "cast_scan".into(),
+    events.extend(core.emit(CoreEvent::Toast {
+        level: "info".into(),
         message,
     })?);
     Ok(events)
@@ -2325,7 +3338,7 @@ fn set_task_speed(
         .ok_or_else(|| format!("unknown task {task_id}"))?;
     spec.speed_limit_kib = kib;
     coordinator.lock()?.replace_spec(task_id, spec)?;
-    apply_speed_policy(&coordinator.core(), kib)?;
+    crate::net_policy::configure_scoped_limit(&format!("task:{task_id}"), u64::from(kib));
     coordinator.lock()?.emit(CoreEvent::Toast {
         level: "speed".into(),
         message: if kib == 0 {
@@ -2362,7 +3375,11 @@ fn open_path(path: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
-        let file: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let file: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
         let operation: Vec<u16> = "open\0".encode_utf16().collect();
         let result = unsafe {
             windows_sys::Win32::UI::Shell::ShellExecuteW(
@@ -2404,7 +3421,10 @@ fn player_control(action: &str) -> Result<(), String> {
         "seek_fwd" => player.seek_relative(10.0),
         "seek_back" => player.seek_relative(-10.0),
         other if other.starts_with("speed:") => {
-            let speed = other.trim_start_matches("speed:").parse::<f64>().unwrap_or(1.0);
+            let speed = other
+                .trim_start_matches("speed:")
+                .parse::<f64>()
+                .unwrap_or(1.0);
             player.set_speed(speed)
         }
         other if other.starts_with("preview:") => {
@@ -2413,6 +3433,12 @@ fn player_control(action: &str) -> Result<(), String> {
                 .parse::<f64>()
                 .unwrap_or(0.0);
             player.preview_percent(percent)
+        }
+        other if other.starts_with("audio:") => {
+            player.set_audio_track(other.trim_start_matches("audio:"))
+        }
+        other if other.starts_with("subtitle:") => {
+            player.set_subtitle_track(other.trim_start_matches("subtitle:"))
         }
         other if other.starts_with("embed_hwnd:") => {
             let rest = other.trim_start_matches("embed_hwnd:");
@@ -2438,6 +3464,53 @@ fn player_control(action: &str) -> Result<(), String> {
         }
         _ => Err(format!("unknown player action {action}")),
     }
+}
+
+fn player_control_events(
+    coordinator: &CoreCoordinator,
+    action: &str,
+) -> Result<Vec<EventEnvelope>, String> {
+    player_control(action)?;
+    let state = {
+        let mut state = player_ui_state()
+            .lock()
+            .map_err(|_| "player state lock".to_string())?;
+        match action {
+            "pause" => {
+                state.paused = true;
+                state.status = "PAUSED".into();
+            }
+            "resume" | "play" => {
+                state.active = true;
+                state.paused = false;
+                state.status = "PLAYING".into();
+            }
+            "stop" => {
+                state.active = false;
+                state.paused = false;
+                state.status = "STOPPED".into();
+            }
+            "fullscreen" => state.status = "FULLSCREEN".into(),
+            "windowed" => state.status = "PLAYING".into(),
+            "pip" => state.status = "PIP".into(),
+            "unpip" => state.status = "PLAYING".into(),
+            other if other.starts_with("speed:") => {
+                state.speed = other
+                    .trim_start_matches("speed:")
+                    .parse::<f64>()
+                    .unwrap_or(1.0)
+                    .clamp(0.25, 4.0);
+                state.status = if state.paused {
+                    "PAUSED".into()
+                } else {
+                    "PLAYING".into()
+                };
+            }
+            _ => {}
+        }
+        state.clone()
+    };
+    emit_player_session(coordinator, &state)
 }
 
 fn shared_media() -> Result<&'static crate::playback::MediaServer, String> {
@@ -2506,9 +3579,148 @@ mod tests {
         assert!(paths.output.ends_with("payload.downloading"));
         assert!(paths.final_output.ends_with("_bad_name_.bin"));
         assert_ne!(paths.output, paths.final_output);
-        assert_eq!(safe_filename("report&calc.exe", "https://cdn.test/a.bin"), "report_calc.exe");
-        assert_eq!(safe_filename("a%PATH%.txt", "https://cdn.test/a.bin"), "a_PATH_.txt");
+        assert_eq!(
+            safe_filename("report&calc.exe", "https://cdn.test/a.bin"),
+            "report_calc.exe"
+        );
+        assert_eq!(
+            safe_filename("a%PATH%.txt", "https://cdn.test/a.bin"),
+            "a_PATH_.txt"
+        );
         assert!(!safe_filename("evil\nnotepad.exe", "https://cdn.test/a.bin").contains('\n'));
+        assert_eq!(safe_filename("CON", "https://cdn.test/a.bin"), "_CON");
+        assert_eq!(
+            safe_filename("con.txt", "https://cdn.test/a.bin"),
+            "_con.txt"
+        );
+        assert_eq!(
+            safe_filename("COM1.dat", "https://cdn.test/a.bin"),
+            "_COM1.dat"
+        );
+        assert_eq!(safe_filename("NUL", "https://cdn.test/a.bin"), "_NUL");
+    }
+
+    #[test]
+    fn advanced_defaults_are_applied_and_host_scope_is_enforced() {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_settings(BTreeMap::from([
+                ("legal_terms_accepted".into(), serde_json::json!(true)),
+                ("temp_dir".into(), serde_json::json!(r"D:\HLS\Cache")),
+                (
+                    "default_origin".into(),
+                    serde_json::json!("https://player.example.test"),
+                ),
+                ("allowed_hosts".into(), serde_json::json!("*.example.test")),
+            ]))
+            .unwrap();
+        let events = coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "https://cdn.example.test/video.mp4".into(),
+                    filename: "video.mp4".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let task_id = events
+            .iter()
+            .find_map(|event| match &event.event {
+                CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let spec = coordinator
+            .lock()
+            .unwrap()
+            .task_spec(&task_id)
+            .cloned()
+            .unwrap();
+        assert_eq!(spec.work_dir, r"D:\HLS\Cache");
+        assert_eq!(
+            spec.headers.get("Origin").map(String::as_str),
+            Some("https://player.example.test")
+        );
+        let error = coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "https://outside.invalid/video.mp4".into(),
+                    filename: "blocked.mp4".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap_err();
+        assert!(error.contains("允许的域名"));
+    }
+
+    #[test]
+    fn default_cookie_is_protected_and_attached_by_reference_only() {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator.set_default_cookie("session=private").unwrap();
+        assert!(coordinator.default_cookie_configured().unwrap());
+        let spec = coordinator
+            .apply_defaults_to_spec(TaskSpec {
+                url: "https://example.test/file.bin".into(),
+                filename: "file.bin".into(),
+                ..TaskSpec::default()
+            })
+            .unwrap();
+        assert_eq!(
+            spec.credential_ref.as_deref(),
+            Some(DEFAULT_COOKIE_CREDENTIAL_REF)
+        );
+        assert!(!serde_json::to_string(&spec)
+            .unwrap()
+            .contains("session=private"));
+        let blob = coordinator
+            .load_credential(DEFAULT_COOKIE_CREDENTIAL_REF)
+            .unwrap()
+            .unwrap();
+        assert!(blob.starts_with("dpapi:"));
+        assert!(!blob.contains("session=private"));
+        coordinator.set_default_cookie("").unwrap();
+        assert!(!coordinator.default_cookie_configured().unwrap());
+        assert!(coordinator
+            .set_default_cookie("a=b\r\nX-Test: yes")
+            .is_err());
+    }
+
+    #[test]
+    fn new_task_paths_use_the_version_neutral_work_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-task-path-current-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut task = spec();
+        task.download_dir = root.to_string_lossy().into_owned();
+        let paths = TaskPaths::for_task("new-task", &task).unwrap();
+        assert!(paths
+            .task_dir()
+            .ends_with(Path::new(".hls-tasks").join("new-task")));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn existing_legacy_task_directory_is_resumed_in_place() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-task-path-legacy-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let legacy = root.join(".v6-tasks").join("restored-task");
+        fs::create_dir_all(&legacy).unwrap();
+        let mut task = spec();
+        task.download_dir = root.to_string_lossy().into_owned();
+        let paths = TaskPaths::for_task("restored-task", &task).unwrap();
+        assert_eq!(paths.task_dir(), legacy);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2555,6 +3767,8 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
+        fs::create_dir_all(&download_dir).unwrap();
+        fs::write(download_dir.join("fixture.bin"), b"existing").unwrap();
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         coordinator
             .set_setting("legal_terms_accepted", serde_json::json!(true))
@@ -2593,6 +3807,107 @@ mod tests {
             .unwrap();
 
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let published = loop {
+            let task = coordinator
+                .tasks()
+                .unwrap()
+                .into_iter()
+                .find(|task| task.task_id == "task-1")
+                .unwrap();
+            if task.status == "completed" {
+                break PathBuf::from(task.output_path);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "task did not complete: {task:?}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        assert_eq!(
+            fs::read(download_dir.join("fixture.bin")).unwrap(),
+            b"existing"
+        );
+        assert_eq!(published.file_name().unwrap(), "fixture_1.bin");
+        assert_eq!(fs::read(&published).unwrap(), body);
+        let _ = fs::remove_dir_all(download_dir);
+    }
+
+    #[test]
+    fn refreshed_url_resumes_paused_task_and_publishes_new_response() {
+        let body: &'static [u8] = b"refreshed-signed-url";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                reader.read_line(&mut request).unwrap();
+                let mut stream = reader.into_inner();
+                let header = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len() - 1,
+                    body.len(),
+                    body.len()
+                );
+                stream.write_all(header.as_bytes()).unwrap();
+                stream.write_all(body).unwrap();
+            }
+        });
+
+        let download_dir = std::env::temp_dir().join(format!(
+            "hls-v7-refresh-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting(
+                "download_dir",
+                serde_json::json!(download_dir.to_string_lossy()),
+            )
+            .unwrap();
+        coordinator
+            .dispatch_created(TaskSpec {
+                url: "https://expired.test/signed.bin".into(),
+                resource_kind: ResourceKind::File,
+                filename: "refreshed.bin".into(),
+                download_dir: download_dir.to_string_lossy().into_owned(),
+                expected_size: Some(body.len() as u64),
+                concurrency: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        let original = coordinator
+            .lock()
+            .unwrap()
+            .task_spec("task-1")
+            .cloned()
+            .unwrap();
+        TaskPaths::for_task("task-1", &original)
+            .unwrap()
+            .prepare()
+            .unwrap();
+        coordinator
+            .dispatch(CoreCommand::TaskAction {
+                task_id: "task-1".into(),
+                action: "pause".into(),
+            })
+            .unwrap();
+
+        coordinator
+            .dispatch(CoreCommand::TaskAction {
+                task_id: "task-1".into(),
+                action: format!("refresh:http://{address}/signed.bin"),
+            })
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
             let task = coordinator
                 .tasks()
@@ -2605,11 +3920,21 @@ mod tests {
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "task did not complete: {task:?}"
+                "refreshed task did not resume: {}",
+                task.status
             );
-            std::thread::sleep(Duration::from_millis(25));
+            std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(fs::read(download_dir.join("fixture.bin")).unwrap(), body);
+        let refreshed = coordinator
+            .lock()
+            .unwrap()
+            .task_spec("task-1")
+            .cloned()
+            .unwrap();
+        let output = TaskPaths::for_task("task-1", &refreshed)
+            .unwrap()
+            .final_output;
+        assert_eq!(fs::read(output).unwrap(), body);
         let _ = fs::remove_dir_all(download_dir);
     }
 
@@ -2701,9 +4026,7 @@ mod tests {
     fn spec_from_url_drops_cross_origin_cookies() {
         let mut template = spec();
         template.url = "https://site.test/watch".into();
-        template
-            .headers
-            .insert("Cookie".into(), "sid=1".into());
+        template.headers.insert("Cookie".into(), "sid=1".into());
         template
             .headers
             .insert("Authorization".into(), "Bearer x".into());
@@ -2712,10 +4035,22 @@ mod tests {
             .insert("Referer".into(), "https://site.test/watch".into());
         template.credential_ref = Some("cred-page".into());
         let dirs = crate::category::CategoryDirs::default();
-        let same = spec_from_url(&template, "https://site.test/clip.mp4", "clip.mp4", false, &dirs);
+        let same = spec_from_url(
+            &template,
+            "https://site.test/clip.mp4",
+            "clip.mp4",
+            false,
+            &dirs,
+        );
         assert_eq!(same.headers.get("Cookie").unwrap(), "sid=1");
         assert_eq!(same.credential_ref.as_deref(), Some("cred-page"));
-        let other = spec_from_url(&template, "https://cdn.test/clip.mp4", "clip.mp4", false, &dirs);
+        let other = spec_from_url(
+            &template,
+            "https://cdn.test/clip.mp4",
+            "clip.mp4",
+            false,
+            &dirs,
+        );
         assert!(other.headers.get("Cookie").is_none());
         assert!(other.headers.get("Authorization").is_none());
         assert_eq!(
@@ -2743,6 +4078,70 @@ mod tests {
     }
 
     #[test]
+    fn player_session_reports_play_pause_speed_and_stop() {
+        std::env::set_var("HLS_V6_PLAYER_NULL", "1");
+        let dir = std::env::temp_dir().join(format!("hls-player-session-{}", std::process::id()));
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .dispatch_created(TaskSpec {
+                url: "https://cdn.test/video.mp4".into(),
+                resource_kind: ResourceKind::File,
+                title: "测试影片".into(),
+                filename: "video.mp4".into(),
+                download_dir: dir.to_string_lossy().into_owned(),
+                ..Default::default()
+            })
+            .unwrap();
+        let spec = coordinator
+            .lock()
+            .unwrap()
+            .task_spec("task-1")
+            .cloned()
+            .unwrap();
+        let paths = TaskPaths::for_task("task-1", &spec).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&paths.final_output, b"local-media").unwrap();
+
+        let play = coordinator
+            .dispatch(CoreCommand::PlayTask {
+                task_id: "task-1".into(),
+            })
+            .unwrap();
+        assert!(matches!(
+            play.last().map(|item| &item.event),
+            Some(CoreEvent::PlayerSession { active: true, paused: false, title, .. }) if title == "测试影片"
+        ));
+        let pause = coordinator
+            .dispatch(CoreCommand::PlayerControl {
+                action: "pause".into(),
+            })
+            .unwrap();
+        assert!(matches!(
+            pause.last().map(|item| &item.event),
+            Some(CoreEvent::PlayerSession { paused: true, status, .. }) if status == "PAUSED"
+        ));
+        let speed = coordinator
+            .dispatch(CoreCommand::PlayerControl {
+                action: "speed:1.5".into(),
+            })
+            .unwrap();
+        assert!(matches!(
+            speed.last().map(|item| &item.event),
+            Some(CoreEvent::PlayerSession { speed, .. }) if (*speed - 1.5).abs() < f64::EPSILON
+        ));
+        let stop = coordinator
+            .dispatch(CoreCommand::PlayerControl {
+                action: "stop".into(),
+            })
+            .unwrap();
+        assert!(matches!(
+            stop.last().map(|item| &item.event),
+            Some(CoreEvent::PlayerSession { active: false, status, .. }) if status == "STOPPED"
+        ));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn metalink_body_expands_to_http_task_with_mirrors() {
         std::env::set_var("HLS_V6_SKIP_LEGAL", "1");
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
@@ -2759,14 +4158,89 @@ mod tests {
                 },
             })
             .unwrap();
-        let snapshot = events.iter().find_map(|envelope| match &envelope.event {
-            crate::CoreEvent::TaskCreated { snapshot } => Some(snapshot),
-            _ => None,
-        }).unwrap();
+        let snapshot = events
+            .iter()
+            .find_map(|envelope| match &envelope.event {
+                crate::CoreEvent::TaskCreated { snapshot } => Some(snapshot),
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(snapshot.filename, "demo.bin");
-        let spec = coordinator.lock().unwrap().task_spec(&snapshot.task_id).cloned().unwrap();
+        let spec = coordinator
+            .lock()
+            .unwrap()
+            .task_spec(&snapshot.task_id)
+            .cloned()
+            .unwrap();
         assert_eq!(spec.url, "https://cdn.example.test/demo.bin");
         assert_eq!(spec.mirrors, vec!["https://mirror.example.test/demo.bin"]);
+    }
+
+    #[test]
+    fn metalink_query_string_is_not_treated_as_metalink_body() {
+        std::env::set_var("HLS_V6_SKIP_LEGAL", "1");
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting(
+                "legal_terms_version",
+                serde_json::json!(crate::LEGAL_TERMS_VERSION),
+            )
+            .unwrap();
+        let events = coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "https://cdn.example.test/demo.bin?<metalink><file name=\"x.bin\"><url>https://evil.test/malware.exe</url></file></metalink>".into(),
+                    filename: "demo.bin".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let id = events
+            .iter()
+            .find_map(|envelope| match &envelope.event {
+                crate::CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let spec = coordinator.lock().unwrap().task_spec(&id).cloned().unwrap();
+        assert!(spec.url.starts_with("https://cdn.example.test/demo.bin"));
+        assert_ne!(spec.url, "https://evil.test/malware.exe");
+        assert_eq!(spec.filename, "demo.bin");
+        assert!(spec.mirrors.is_empty());
+    }
+
+    #[test]
+    fn multiline_metalink_paste_still_expands() {
+        std::env::set_var("HLS_V6_SKIP_LEGAL", "1");
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting(
+                "legal_terms_version",
+                serde_json::json!(crate::LEGAL_TERMS_VERSION),
+            )
+            .unwrap();
+        let events = coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "<metalink>\n<file name=\"demo.bin\">\n<url>https://cdn.example.test/demo.bin</url>\n</file>\n</metalink>".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let snapshot = events
+            .iter()
+            .find_map(|envelope| match &envelope.event {
+                crate::CoreEvent::TaskCreated { snapshot } => Some(snapshot),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(snapshot.filename, "demo.bin");
     }
 
     #[test]
@@ -2828,13 +4302,24 @@ mod tests {
                 },
             })
             .unwrap();
-        let snapshot = events.iter().find_map(|envelope| match &envelope.event {
-            crate::CoreEvent::TaskCreated { snapshot } => Some(snapshot),
-            _ => None,
-        }).unwrap();
-        let spec = coordinator.lock().unwrap().task_spec(&snapshot.task_id).cloned().unwrap();
+        let snapshot = events
+            .iter()
+            .find_map(|envelope| match &envelope.event {
+                crate::CoreEvent::TaskCreated { snapshot } => Some(snapshot),
+                _ => None,
+            })
+            .unwrap();
+        let spec = coordinator
+            .lock()
+            .unwrap()
+            .task_spec(&snapshot.task_id)
+            .cloned()
+            .unwrap();
         assert!(spec.headers.get("Cookie").is_none());
-        assert_eq!(spec.headers.get("Referer").unwrap(), "https://cdn.test/page");
+        assert_eq!(
+            spec.headers.get("Referer").unwrap(),
+            "https://cdn.test/page"
+        );
         let blob = coordinator
             .load_credential(spec.credential_ref.as_ref().unwrap())
             .unwrap()
@@ -2848,12 +4333,68 @@ mod tests {
         std::env::set_var("HLS_V6_CAST_NULL", "1");
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         let events = coordinator
-            .dispatch(CoreCommand::DiscoverCastDevices)
+            .dispatch(CoreCommand::DiscoverCastDevices {
+                mode: "cast".into(),
+            })
             .unwrap();
         assert!(events.iter().any(|envelope| matches!(
             envelope.event,
             crate::CoreEvent::CastDevices { .. } | crate::CoreEvent::Error { .. }
         )));
+    }
+
+    #[test]
+    fn browser_media_push_is_persisted_and_resolved_through_core() {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        let request = MediaPushRequest {
+            id: "media-push-test".into(),
+            push_kind: "tvbox".into(),
+            url: "https://cdn.test/video.mp4".into(),
+            title: "测试视频".into(),
+            status: "pending".into(),
+            message: "等待选择设备".into(),
+            location: String::new(),
+            created_at_ms: 42,
+        };
+        let events = coordinator
+            .dispatch(CoreCommand::RequestMediaPush {
+                request: request.clone(),
+            })
+            .unwrap();
+        assert!(events.iter().any(|envelope| matches!(
+            &envelope.event,
+            CoreEvent::MediaPushRequested { request } if request.id == "media-push-test"
+        )));
+
+        let resolved = coordinator
+            .dispatch(CoreCommand::ResolveMediaPush {
+                request_id: request.id.clone(),
+                status: "done".into(),
+                message: "已推送到客厅电视".into(),
+                location: "http://192.168.1.8/media/video".into(),
+            })
+            .unwrap();
+        assert!(resolved.iter().any(|envelope| matches!(
+            &envelope.event,
+            CoreEvent::MediaPushResolved { request }
+                if request.status == "done" && request.message.contains("客厅电视")
+        )));
+        let record = coordinator
+            .load_handoffs()
+            .unwrap()
+            .into_iter()
+            .find_map(|encoded| serde_json::from_str::<MediaPushRequest>(&encoded).ok())
+            .unwrap();
+        assert_eq!(record.status, "done");
+        assert!(record.location.starts_with("http://192.168.1.8/"));
+        assert!(coordinator
+            .dispatch(CoreCommand::ResolveMediaPush {
+                request_id: request.id,
+                status: "pending".into(),
+                message: String::new(),
+                location: String::new(),
+            })
+            .is_err());
     }
 
     #[test]
@@ -2898,11 +4439,13 @@ mod tests {
     fn untrusted_download_dir_must_stay_under_configured_root() {
         let root = std::env::temp_dir().join("hls-v6-dl-root");
         let root = root.to_string_lossy().into_owned();
-        assert!(constrain_untrusted_download_dir("", &root)
-            .unwrap()
-            .replace('\\', "/")
-            .ends_with("hls-v6-dl-root")
-            || constrain_untrusted_download_dir("", &root).unwrap() == root);
+        assert!(
+            constrain_untrusted_download_dir("", &root)
+                .unwrap()
+                .replace('\\', "/")
+                .ends_with("hls-v6-dl-root")
+                || constrain_untrusted_download_dir("", &root).unwrap() == root
+        );
         assert!(constrain_untrusted_download_dir("nested", &root)
             .unwrap()
             .contains("nested"));
@@ -2978,10 +4521,9 @@ mod tests {
                 download_dir: String::new(),
             })
             .unwrap();
-        assert!(events.iter().any(|envelope| matches!(
-            envelope.event,
-            crate::CoreEvent::HandoffResolved { .. }
-        )));
+        assert!(events
+            .iter()
+            .any(|envelope| matches!(envelope.event, crate::CoreEvent::HandoffResolved { .. })));
         assert_eq!(coordinator.tasks().unwrap().len(), 1);
     }
 
@@ -3100,10 +4642,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|item| item.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "hls-pub-root-{}-{stamp}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("hls-pub-root-{}-{stamp}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
         let spec = TaskSpec {
             filename: "clip.bin".into(),
@@ -3112,10 +4651,8 @@ mod tests {
         };
         let paths = TaskPaths::for_task("task-pub", &spec).unwrap();
         paths.prepare().unwrap();
-        let outside = std::env::temp_dir().join(format!(
-            "hls-pub-escape-{}-{stamp}",
-            std::process::id()
-        ));
+        let outside =
+            std::env::temp_dir().join(format!("hls-pub-escape-{}-{stamp}", std::process::id()));
         fs::write(&outside, b"secret").unwrap();
         fs::write(
             paths.task_dir().join("published.path"),
@@ -3280,7 +4817,10 @@ mod tests {
             .set_setting("legal_terms_accepted", serde_json::json!(true))
             .unwrap();
         coordinator
-            .set_setting("legal_terms_version", serde_json::json!(crate::LEGAL_TERMS_VERSION))
+            .set_setting(
+                "legal_terms_version",
+                serde_json::json!(crate::LEGAL_TERMS_VERSION),
+            )
             .unwrap();
         for url in [
             "  DATA:text/plain,hi",
@@ -3298,7 +4838,10 @@ mod tests {
                 })
                 .unwrap_err();
             assert!(
-                error.contains("协议") || error.contains("不受支持") || error.contains("换行"),
+                error.contains("协议")
+                    || error.contains("不受支持")
+                    || error.contains("换行")
+                    || error.contains("控制"),
                 "url {url:?} leaked through: {error}"
             );
         }
@@ -3333,14 +4876,151 @@ mod tests {
             )
             .is_err());
         assert!(coordinator
-            .set_setting("ffmpeg_path", serde_json::json!(r"C:\Windows\System32\cmd.exe"))
+            .set_setting("av_scan_command", serde_json::json!("cmd /c calc {file}"))
+            .is_err());
+        assert!(coordinator
+            .set_setting(
+                "av_scan_command",
+                serde_json::json!(r"C:\Windows\System32\mshta.exe {file}")
+            )
+            .is_err());
+        assert!(coordinator
+            .set_setting(
+                "av_scan_command",
+                serde_json::json!(r"C:\Windows\explorer.exe {file}")
+            )
+            .is_err());
+        assert!(coordinator
+            .set_setting(
+                "av_scan_command",
+                serde_json::json!("MpCmdRun.exe -Scan -File {file}")
+            )
+            .is_ok());
+        assert!(coordinator
+            .set_setting(
+                "ffmpeg_path",
+                serde_json::json!(r"C:\Windows\System32\cmd.exe")
+            )
             .is_err());
         assert!(coordinator
             .set_setting("ffmpeg_path", serde_json::json!(r"..\ffmpeg.exe"))
             .is_err());
         assert!(coordinator
+            .set_setting(
+                "ffmpeg_path",
+                serde_json::json!(r"C:\tools\ffmpeg.exe & calc.exe")
+            )
+            .is_err());
+        assert!(coordinator
             .set_setting("default_user_agent", serde_json::json!("UA\r\nCookie: x"))
             .is_err());
+        assert!(coordinator
+            .set_setting("torrent_watch_dir", serde_json::json!(r"..\Windows"))
+            .is_err());
+        assert!(coordinator
+            .set_setting("proxy_url", serde_json::json!("javascript:alert(1)"))
+            .is_err());
+        assert!(coordinator
+            .set_setting("tvbox_endpoint", serde_json::json!("javascript:alert(1)"))
+            .is_err());
+        assert!(coordinator
+            .set_setting(
+                "tvbox_endpoint",
+                serde_json::json!("https://8.8.8.8/action")
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn adversarial_rejects_bom_null_ms_schemes_and_reserved_names() {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting(
+                "legal_terms_version",
+                serde_json::json!(crate::LEGAL_TERMS_VERSION),
+            )
+            .unwrap();
+        for url in [
+            "\u{feff}javascript:alert(1)",
+            "https://cdn.test/a.bin\0.gif",
+            "ms-msdt:foo",
+            "shell:AppsFolder",
+            "search-ms:query=x",
+            "about:blank",
+            "view-source:https://cdn.test/a.bin",
+            "file:C:/Windows/win.ini",
+            "\\\\.\\pipe\\HLSDownloader.v7",
+        ] {
+            let error = coordinator
+                .dispatch(CoreCommand::CreateTask {
+                    spec: TaskSpec {
+                        url: url.into(),
+                        filename: "x.bin".into(),
+                        ..Default::default()
+                    },
+                })
+                .unwrap_err();
+            assert!(
+                error.contains("协议")
+                    || error.contains("不受支持")
+                    || error.contains("控制")
+                    || error.contains("链接"),
+                "url {url:?} leaked through: {error}"
+            );
+        }
+        let events = coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "https://cdn.test/con.bin".into(),
+                    filename: "CON".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let id = events
+            .iter()
+            .find_map(|envelope| match &envelope.event {
+                crate::CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let spec = coordinator.lock().unwrap().task_spec(&id).cloned().unwrap();
+        let paths = TaskPaths::for_task(&id, &spec).unwrap();
+        assert_eq!(
+            paths
+                .final_output
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("_CON")
+        );
+        let events = coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "https://cdn.test/conin.bin".into(),
+                    filename: "CONIN$.txt".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let id = events
+            .iter()
+            .find_map(|envelope| match &envelope.event {
+                crate::CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let spec = coordinator.lock().unwrap().task_spec(&id).cloned().unwrap();
+        let paths = TaskPaths::for_task(&id, &spec).unwrap();
+        assert_eq!(
+            paths
+                .final_output
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("_CONIN$.txt")
+        );
     }
 
     #[test]
@@ -3350,7 +5030,10 @@ mod tests {
             .set_setting("legal_terms_accepted", serde_json::json!(true))
             .unwrap();
         coordinator
-            .set_setting("legal_terms_version", serde_json::json!(crate::LEGAL_TERMS_VERSION))
+            .set_setting(
+                "legal_terms_version",
+                serde_json::json!(crate::LEGAL_TERMS_VERSION),
+            )
             .unwrap();
         let mut headers = std::collections::BTreeMap::new();
         headers.insert("X-Injected\r\nX".into(), "1".into());
@@ -3379,7 +5062,10 @@ mod tests {
             })
             .unwrap();
         let spec = coordinator.lock().unwrap().task_spec(&id).cloned().unwrap();
-        assert!(!spec.headers.keys().any(|key| key.contains('\r') || key.contains('\n')));
+        assert!(!spec
+            .headers
+            .keys()
+            .any(|key| key.contains('\r') || key.contains('\n')));
         assert_eq!(spec.headers.get("X-Ok").map(String::as_str), Some("safe"));
         assert!(!spec.headers.contains_key("X-Bad"));
         let normalized = crate::mirrors::normalize_mirror_urls(&spec.url, &spec.mirrors);
@@ -3394,7 +5080,10 @@ mod tests {
             .set_setting("legal_terms_accepted", serde_json::json!(true))
             .unwrap();
         coordinator
-            .set_setting("legal_terms_version", serde_json::json!(crate::LEGAL_TERMS_VERSION))
+            .set_setting(
+                "legal_terms_version",
+                serde_json::json!(crate::LEGAL_TERMS_VERSION),
+            )
             .unwrap();
         coordinator
             .set_setting("download_dir", serde_json::json!("downloads"))
@@ -3438,4 +5127,253 @@ mod tests {
         let spec = coordinator.lock().unwrap().task_spec(&id).cloned().unwrap();
         assert_eq!(spec.download_dir, "site-cache");
     }
+
+    #[test]
+    fn coordinator_exports_normalized_tasks_through_the_core_event_contract() {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .dispatch_created(TaskSpec {
+                url: "https://cdn.test/archive.zip".into(),
+                resource_kind: ResourceKind::File,
+                title: "Archive".into(),
+                filename: "archive.zip".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let events = coordinator
+            .dispatch(CoreCommand::ExportTasks {
+                task_ids: vec!["task-1".into()],
+                format: "json".into(),
+            })
+            .unwrap();
+        let (data, count) = events
+            .iter()
+            .find_map(|envelope| match &envelope.event {
+                CoreEvent::TaskExport {
+                    format,
+                    data,
+                    task_count,
+                } if format == "json" => Some((data, *task_count)),
+                _ => None,
+            })
+            .expect("task export event");
+        assert_eq!(count, 1);
+        let document: serde_json::Value = serde_json::from_str(data).unwrap();
+        assert_eq!(document["schema"], "hls-downloader.tasks.v1");
+        assert_eq!(document["tasks"][0]["id"], "task-1");
+        assert_eq!(document["tasks"][0]["filename"], "archive.zip");
+    }
+
+    #[test]
+    fn queue_profile_contract_validates_schedule_and_identity() {
+        let valid = serde_json::json!([
+            {
+                "id": "default",
+                "name": "默认队列",
+                "enabled": true,
+                "priority": 0,
+                "max_active": 3,
+                "speed_limit_kib": 0,
+                "schedule_enabled": false,
+                "start_time": "00:00",
+                "stop_time": "23:59",
+                "active_days": "1,2,3,4,5,6,7",
+                "completion_action": "none"
+            },
+            {
+                "id": "night-media",
+                "name": "夜间媒体",
+                "enabled": true,
+                "priority": 20,
+                "max_active": 2,
+                "speed_limit_kib": 4096,
+                "schedule_enabled": true,
+                "start_time": "23:00",
+                "stop_time": "07:00",
+                "active_days": "1,2,3,4,5",
+                "completion_action": "sleep"
+            }
+        ]);
+        assert!(validate_queue_profiles(&valid).is_ok());
+        assert!(validate_queue_profiles(&serde_json::json!([])).is_err());
+        assert!(validate_queue_profiles(&serde_json::json!([{
+            "id": "default", "name": "默认队列", "max_active": 0
+        }]))
+        .is_err());
+        assert!(validate_queue_profiles(&serde_json::json!([{
+            "id": "other", "name": "其他队列"
+        }]))
+        .is_err());
+        assert!(validate_queue_profiles(&serde_json::json!([
+            { "id": "default", "name": "重复" },
+            { "id": "other", "name": "重复" }
+        ]))
+        .is_err());
+        assert!(validate_queue_profiles(&serde_json::json!([{
+            "id": "default", "name": "默认队列", "active_days": "1,1"
+        }]))
+        .is_err());
+        assert!(validate_queue_profiles(&serde_json::json!([{
+            "id": "default", "name": "默认队列", "priority": 101
+        }]))
+        .is_err());
+    }
+
+    #[test]
+    fn task_schedule_and_queue_membership_fail_closed_before_worker_spawn() {
+        let future = crate::TaskSnapshot {
+            scheduled_start_at: "2999-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        assert!(!task_schedule_allowed(&future));
+
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        let error = coordinator
+            .apply_defaults_to_spec(TaskSpec {
+                queue_id: "missing-queue".into(),
+                ..spec()
+            })
+            .unwrap_err();
+        assert!(error.contains("任务所属队列不存在"));
+    }
+
+    #[test]
+    fn queue_completion_action_requires_every_task_to_succeed() {
+        let profile = QueueProfile {
+            id: "night-media".into(),
+            name: "夜间媒体".into(),
+            completion_action: "sleep".into(),
+            ..QueueProfile::default()
+        };
+        let spec = TaskSpec {
+            queue_id: profile.id.clone(),
+            ..spec()
+        };
+        let completed = |id: &str| crate::TaskSnapshot {
+            task_id: id.into(),
+            queue_id: profile.id.clone(),
+            status: "completed".into(),
+            ..Default::default()
+        };
+        let unrelated = crate::TaskSnapshot {
+            task_id: "other".into(),
+            queue_id: "default".into(),
+            status: "queued".into(),
+            ..Default::default()
+        };
+        let tasks = vec![completed("one"), completed("two"), unrelated];
+        assert_eq!(
+            queue_completion_decision(&tasks, std::slice::from_ref(&profile), &spec),
+            Some(("sleep".into(), "队列：夜间媒体".into()))
+        );
+
+        let mut failed = tasks;
+        failed[1].status = "failed".into();
+        assert!(queue_completion_decision(&failed, &[profile], &spec).is_none());
+    }
+}
+pub const PUBLIC_SETTING_KEYS: &[&str] = &[
+    "browser_takeover_enabled",
+    "browser_takeover_minimum_bytes",
+    "legal_terms_accepted",
+    "download_speed_limit_kib",
+    "download_speed_schedule_enabled",
+    "download_speed_schedule_start",
+    "download_speed_schedule_end",
+    "download_speed_schedule_kib",
+    "auto_category_dirs",
+    "browser_category_dirs",
+    "queue_max_active",
+    "queue_profiles",
+    "site_rules",
+    "av_scan_enabled",
+    "av_scan_command",
+    "torrent_watch_dir",
+    "watch_torrents",
+    "download_dir",
+    "temp_dir",
+    "default_concurrency",
+    "proxy_url",
+    "ffmpeg_path",
+    "clipboard_watch",
+    "completion_sound_enabled",
+    "download_progress_window_enabled",
+    "download_complete_popup_enabled",
+    "resume_interrupted_on_startup",
+    "auto_retry_failed_max",
+    "existing_file_policy",
+    "live_record_max_minutes",
+    "download_subtitles",
+    "skip_ad_segments",
+    "keep_temp_files",
+    "default_user_agent",
+    "tvbox_endpoint",
+    "dark_mode",
+    "allow_duplicate",
+    "queue_auto_start_enabled",
+    "queue_auto_start_time",
+    "queue_auto_stop_enabled",
+    "queue_auto_stop_time",
+    "default_referer",
+    "default_origin",
+    "allowed_hosts",
+    "http_chunk_size_mb",
+    "completion_power_action",
+    "start_on_login",
+    "queue_active_days",
+    "proxy_mode",
+    "proxy_bypass",
+    "reduce_motion",
+    "harvest_minimum_bytes",
+    "av_scan_fail_on_threat",
+    "bt_upload_limit_kib",
+    "bt_max_connections",
+    "bt_enable_dht",
+    "preferred_cast_device_id",
+];
+#[test]
+fn share_media_rejects_ambiguous_and_untrusted_sources() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    assert!(share_media(&coordinator, "", "", "", "").is_err());
+    assert!(share_media(&coordinator, "relative-video.mp4", "", "video", "").is_err());
+    assert!(share_media(&coordinator, "", "javascript:alert(1)", "video", "").is_err());
+    assert!(share_media(
+        &coordinator,
+        r"C:\missing.mp4",
+        "https://cdn.test/video.mp4",
+        "video",
+        ""
+    )
+    .is_err());
+}
+
+#[test]
+fn stopping_cast_revokes_the_active_media_mount() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let server = shared_media().unwrap();
+    let token = crate::playback::random_mount_token();
+    let dir = std::env::temp_dir().join(format!("hls-cast-stop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("video.bin");
+    std::fs::write(&file, b"cast-lifecycle").unwrap();
+    server.mount(&token, file);
+    remember_cast_mount(&token);
+
+    let request = |token: &str| {
+        let mut stream = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
+        stream
+            .write_all(
+                format!("GET /media/{token} HTTP/1.1\r\nRange: bytes=0-3\r\n\r\n").as_bytes(),
+            )
+            .unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).unwrap();
+        String::from_utf8_lossy(&response).into_owned()
+    };
+    assert!(request(&token).starts_with("HTTP/1.1 206"));
+    clear_cast_mount();
+    assert!(request(&token).starts_with("HTTP/1.1 404"));
+    let _ = std::fs::remove_dir_all(dir);
 }

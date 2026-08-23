@@ -7,7 +7,11 @@ use std::path::Path;
 
 const PARTS_LIMIT: usize = 64;
 
-pub fn paint_file_map(total: u64, done: &[(u64, u64)], active: &[(u64, u64)]) -> Vec<ConnectionPart> {
+pub fn paint_file_map(
+    total: u64,
+    done: &[(u64, u64)],
+    active: &[(u64, u64)],
+) -> Vec<ConnectionPart> {
     if total == 0 {
         return Vec::new();
     }
@@ -110,14 +114,33 @@ pub fn summarize(parts: &[ConnectionPart]) -> (u32, u64, u64, String) {
                 "active" => "传输中",
                 _ => "排队",
             };
-            format!("{}-{} {}", format_bytes(part.start), format_bytes(part.end + 1), label)
+            format!(
+                "{}-{} {}",
+                format_bytes(part.start),
+                format_bytes(part.end + 1),
+                label
+            )
         })
         .collect::<Vec<_>>()
         .join(" · ");
-    (active.max(if parts.iter().any(|part| part.state == "active") { 1 } else { 0 }), done, parts.len() as u64, hint)
+    (
+        active.max(if parts.iter().any(|part| part.state == "active") {
+            1
+        } else {
+            0
+        }),
+        done,
+        parts.len() as u64,
+        hint,
+    )
 }
 
-pub fn sample_cells(parts: &[ConnectionPart], total: u64, downloaded: u64, cells: usize) -> Vec<i32> {
+pub fn sample_cells(
+    parts: &[ConnectionPart],
+    total: u64,
+    downloaded: u64,
+    cells: usize,
+) -> Vec<i32> {
     let cells = cells.max(1);
     let span = total.max(downloaded).max(1);
     let mut out = vec![0; cells];

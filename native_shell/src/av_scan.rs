@@ -30,10 +30,80 @@ pub fn scan_file(path: &Path, template: &str) -> ScanResult {
     run_command(&engine, &argv)
 }
 
+pub(crate) fn validate_custom_command(command: &str) -> Result<(), String> {
+    let command = command.trim();
+    if command.is_empty() {
+        return Ok(());
+    }
+    if command.len() > 2048 || !command.contains("{file}") {
+        return Err("扫描命令必须包含 {file}".into());
+    }
+    if command.chars().any(|ch| ch.is_control()) || command.contains("..") || command.contains('%')
+    {
+        return Err("扫描命令含有无效字符".into());
+    }
+    let token = first_command_token(command);
+    if token.is_empty() {
+        return Err("扫描命令无效".into());
+    }
+    let name = Path::new(&token)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    const BLOCKED: &[&str] = &[
+        "cmd",
+        "powershell",
+        "pwsh",
+        "wscript",
+        "cscript",
+        "mshta",
+        "rundll32",
+        "regsvr32",
+        "wmic",
+        "bitsadmin",
+        "certutil",
+        "msiexec",
+        "forfiles",
+        "cmstp",
+        "hh",
+        "bash",
+        "sh",
+        "python",
+        "python3",
+        "pythonw",
+        "perl",
+        "node",
+        "wsl",
+        "explorer",
+        "msdt",
+        "control",
+        "mmc",
+        "reg",
+        "schtasks",
+        "ftp",
+        "tftp",
+        "ssh",
+        "start",
+    ];
+    if BLOCKED.iter().any(|item| *item == name.as_str()) {
+        return Err("扫描命令不能调用系统脚本解释器".into());
+    }
+    Ok(())
+}
+
+fn first_command_token(command: &str) -> String {
+    let command = command.trim();
+    if let Some(rest) = command.strip_prefix('"') {
+        return rest.split('"').next().unwrap_or("").to_string();
+    }
+    command.split_whitespace().next().unwrap_or("").to_string()
+}
+
 fn resolve_command(path: &Path, template: &str) -> (String, Vec<String>) {
     let custom = template.trim();
     if !custom.is_empty() {
-        if !custom.contains("{file}") || custom.len() > 2048 {
+        if validate_custom_command(custom).is_err() {
             return ("custom".into(), Vec::new());
         }
         let rendered = split_command(custom)
@@ -74,16 +144,19 @@ fn discover_defender() -> Option<Vec<String>> {
             }
         }
     }
-    candidates.into_iter().find(|path| path.is_file()).map(|path| {
-        vec![
-            path.to_string_lossy().into_owned(),
-            "-Scan".into(),
-            "-ScanType".into(),
-            "3".into(),
-            "-DisableRemediation".into(),
-            "-File".into(),
-        ]
-    })
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .map(|path| {
+            vec![
+                path.to_string_lossy().into_owned(),
+                "-Scan".into(),
+                "-ScanType".into(),
+                "3".into(),
+                "-DisableRemediation".into(),
+                "-File".into(),
+            ]
+        })
 }
 
 fn split_command(line: &str) -> Vec<String> {
@@ -128,7 +201,9 @@ fn run_command(engine: &str, argv: &[String]) -> ScanResult {
         }
     };
     let code = output.status.code().unwrap_or(1);
-    let text = String::from_utf8_lossy(&output.stdout).trim().replace('\n', " ");
+    let text = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .replace('\n', " ");
     interpret(engine, code, &text)
 }
 
@@ -204,6 +279,17 @@ mod tests {
         );
         let path = std::env::temp_dir().join("hls av scan.bin");
         let (_, argv) = resolve_command(&path, r#"C:\scan.exe -f {file}"#);
-        assert_eq!(argv, vec!["C:\\scan.exe".to_string(), "-f".into(), path.to_string_lossy().into_owned()]);
+        assert_eq!(
+            argv,
+            vec![
+                "C:\\scan.exe".to_string(),
+                "-f".into(),
+                path.to_string_lossy().into_owned()
+            ]
+        );
+        assert!(validate_custom_command(r"C:\Windows\explorer.exe {file}").is_err());
+        assert!(validate_custom_command("%COMSPEC% /c calc {file}").is_err());
+        let skipped = scan_file(&path, r"C:\Windows\explorer.exe {file}");
+        assert_eq!(skipped.state, "skipped");
     }
 }

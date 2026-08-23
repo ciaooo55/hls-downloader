@@ -14,12 +14,9 @@ venv/
 
 # Frontend
 node_modules/
-frontend/node_modules/
-frontend/dist/
-frontend/src-tauri/gen/
-frontend/src-tauri/target/
 native_shell/target/
-native_ui/target/
+native_shell/site-cache/
+presenter_ui/target/
 extension/node_modules/
 extension/.wxt/
 extension/.output/
@@ -30,17 +27,11 @@ bin/
 build/
 release/
 tools/
-backend/build/
-backend/dist/
-backend/*.spec
+artifacts/
+desktop_ui/resources/common/
 
 # Runtime state
 downloads/
-backend/downloads/
-backend/data.db
-backend/data.db.backup*
-backend/data.db-shm
-backend/data.db-wal
 data.db
 data.db-shm
 data.db-wal

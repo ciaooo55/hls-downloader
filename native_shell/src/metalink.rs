@@ -10,7 +10,15 @@ pub struct MetalinkFile {
 }
 
 pub fn looks_like_metalink(text: &str) -> bool {
-    let head = text.chars().take(4000).collect::<String>().to_ascii_lowercase();
+    let trimmed = text.trim().trim_start_matches('\u{feff}');
+    if !trimmed.starts_with('<') {
+        return false;
+    }
+    let head = trimmed
+        .chars()
+        .take(4000)
+        .collect::<String>()
+        .to_ascii_lowercase();
     head.contains("<metalink") && (head.contains("<file") || head.contains("<url"))
 }
 
@@ -122,7 +130,10 @@ fn parse_file_block(block: &str, metalink3: bool) -> Option<MetalinkFile> {
 fn pick_urls(ranked: Vec<(i32, String)>) -> Option<(String, Vec<String>)> {
     let mut ordered = Vec::new();
     for (_, url) in ranked {
-        if ordered.iter().any(|item: &String| item.eq_ignore_ascii_case(&url)) {
+        if ordered
+            .iter()
+            .any(|item: &String| item.eq_ignore_ascii_case(&url))
+        {
             continue;
         }
         ordered.push(url);
@@ -151,7 +162,9 @@ fn first_checksum(block: &str) -> String {
         let Some(gt) = after.find('>') else {
             break;
         };
-        let kind = attr(&after[..gt], "type").unwrap_or_default().to_ascii_lowercase();
+        let kind = attr(&after[..gt], "type")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         let Some(close) = after.to_ascii_lowercase().find("</hash>") else {
             break;
         };
@@ -171,30 +184,11 @@ fn first_checksum(block: &str) -> String {
 }
 
 fn safe_url(raw: &str) -> Option<String> {
-    let value = raw.trim();
-    if value.is_empty()
-        || value.len() > 8192
-        || value.contains('\r')
-        || value.contains('\n')
-        || value.contains('\0')
-    {
+    let value = raw.trim().trim_start_matches('\u{feff}');
+    if value.is_empty() || value.len() > 8192 || value.chars().any(|ch| ch.is_control()) {
         return None;
     }
-    let lower = value.to_ascii_lowercase();
-    if lower.starts_with("javascript:")
-        || lower.starts_with("data:")
-        || lower.starts_with("blob:")
-        || lower.starts_with("file:")
-    {
-        return None;
-    }
-    if lower.starts_with("magnet:?")
-        || lower.starts_with("http://")
-        || lower.starts_with("https://")
-        || lower.starts_with("ftp://")
-        || lower.starts_with("ftps://")
-        || lower.starts_with("sftp://")
-    {
+    if crate::http_engine::remote_resource_url_allowed(value) {
         Some(value.to_string())
     } else {
         None
@@ -286,7 +280,10 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "demo.bin");
         assert_eq!(files[0].url, "https://cdn.example.test/demo.bin");
-        assert_eq!(files[0].mirrors, vec!["https://mirror.example.test/demo.bin"]);
+        assert_eq!(
+            files[0].mirrors,
+            vec!["https://mirror.example.test/demo.bin"]
+        );
         assert!(files[0].checksum.starts_with("sha256:"));
         assert_eq!(files[0].size, 4);
     }
@@ -295,7 +292,10 @@ mod tests {
     fn parses_metalink3_preference_and_ftp() {
         let files = parse_metalink(META3).unwrap();
         assert_eq!(
-            files.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(),
+            files
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
             vec!["pkg.zip", "notes.txt"]
         );
         assert_eq!(files[0].url, "https://best.example.test/pkg.zip");
@@ -310,5 +310,11 @@ mod tests {
             "<metalink><file name=\"x\"><url>file:///tmp/a.bin</url></file></metalink>"
         )
         .is_err());
+        assert!(!looks_like_metalink(
+            "https://cdn.test/a.bin?<metalink><file><url>https://evil.test/x.bin</url></file></metalink>"
+        ));
+        assert!(looks_like_metalink(
+            "<metalink>\n<file name=\"x\"><url>https://cdn.test/a.bin</url></file></metalink>"
+        ));
     }
 }

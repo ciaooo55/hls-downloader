@@ -92,7 +92,7 @@ pub fn pick_installer_asset(release: &serde_json::Value) -> (String, String) {
             .and_then(|item| item.as_str())
             .unwrap_or("")
             .to_string();
-        if url.is_empty() || name.is_empty() {
+        if url.is_empty() || name.is_empty() || !installer_url_allowed(&url) {
             continue;
         }
         let lower = name.to_ascii_lowercase();
@@ -119,7 +119,7 @@ pub fn pick_installer_asset(release: &serde_json::Value) -> (String, String) {
 
 pub fn check_for_update(current: &str) -> Result<UpdateInfo, String> {
     let mut headers = std::collections::HashMap::new();
-    headers.insert("User-Agent".into(), "hls-downloader-v6".into());
+    headers.insert("User-Agent".into(), "hls-downloader-v7".into());
     headers.insert("Accept".into(), "application/vnd.github+json".into());
     let (status, body) = crate::http_engine::fetch_bytes(LATEST_API, &headers, "")
         .map_err(|error| error.to_string())?;
@@ -137,7 +137,7 @@ pub fn download_installer(info: &UpdateInfo) -> Result<std::path::PathBuf, Strin
         return Err("安装包地址不是 GitHub 发布资源".into());
     }
     let mut headers = std::collections::HashMap::new();
-    headers.insert("User-Agent".into(), "hls-downloader-v6".into());
+    headers.insert("User-Agent".into(), "hls-downloader-v7".into());
     headers.insert("Accept".into(), "application/octet-stream".into());
     let (status, body) = crate::http_engine::fetch_bytes(&info.installer_url, &headers, "")
         .map_err(|error| error.to_string())?;
@@ -154,15 +154,15 @@ pub fn download_installer(info: &UpdateInfo) -> Result<std::path::PathBuf, Strin
 }
 
 pub(crate) fn installer_url_allowed(url: &str) -> bool {
-    let lower = url.trim().to_ascii_lowercase();
-    [
-        "https://github.com/",
-        "https://objects.githubusercontent.com/",
-        "https://github-releases.githubusercontent.com/",
-        "https://release-assets.githubusercontent.com/",
-    ]
-    .iter()
-    .any(|prefix| lower.starts_with(prefix))
+    let url = url.trim().trim_start_matches('\u{feff}');
+    if !crate::http_engine::http_fetch_url_allowed(url) {
+        return false;
+    }
+    let lower = url.to_ascii_lowercase();
+    lower.starts_with("https://github.com/ciaooo55/hls-downloader/")
+        || lower.starts_with("https://objects.githubusercontent.com/")
+        || lower.starts_with("https://github-releases.githubusercontent.com/")
+        || lower.starts_with("https://release-assets.githubusercontent.com/")
 }
 
 pub(crate) fn sanitize_installer_name(name: &str, latest: &str) -> String {
@@ -170,11 +170,13 @@ pub(crate) fn sanitize_installer_name(name: &str, latest: &str) -> String {
         "HLSDownloader-{}.exe",
         latest
             .chars()
-            .map(|ch| if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' {
-                ch
-            } else {
-                '_'
-            })
+            .map(
+                |ch| if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' {
+                    ch
+                } else {
+                    '_'
+                }
+            )
             .collect::<String>()
     );
     let base = name
@@ -226,18 +228,24 @@ mod tests {
 
     #[test]
     fn parses_github_payload() {
-        let json = r#"{"tag_name":"v6.1.0","html_url":"https://github.com/ciaooo55/hls-downloader/releases/tag/v6.1.0","body":"fixes","assets":[{"name":"notes.txt","browser_download_url":"https://example/notes.txt"},{"name":"HLSDownloader-v6.1.0-Setup.exe","browser_download_url":"https://example/Setup.exe"}]}"#;
+        let json = r#"{"tag_name":"v6.1.0","html_url":"https://github.com/ciaooo55/hls-downloader/releases/tag/v6.1.0","body":"fixes","assets":[{"name":"notes.txt","browser_download_url":"https://example/notes.txt"},{"name":"HLSDownloader-v6.1.0-Setup.exe","browser_download_url":"https://github.com/ciaooo55/hls-downloader/releases/download/v6.1.0/Setup.exe"}]}"#;
         let info = parse_github_release(json, "6.0.0-dev").unwrap();
         assert_eq!(info.latest, "6.1.0");
         assert!(info.newer);
         assert!(info.installer_name.contains("Setup"));
-        assert_eq!(info.installer_url, "https://example/Setup.exe");
+        assert_eq!(
+            info.installer_url,
+            "https://github.com/ciaooo55/hls-downloader/releases/download/v6.1.0/Setup.exe"
+        );
     }
 
     #[test]
     fn installer_assets_stay_in_temp_and_on_github() {
         assert!(installer_url_allowed(
             "https://github.com/ciaooo55/hls-downloader/releases/download/v6.1.0/Setup.exe"
+        ));
+        assert!(!installer_url_allowed(
+            "https://github.com/evil/malware/releases/download/v1/Setup.exe"
         ));
         assert!(!installer_url_allowed("https://evil.example/Setup.exe"));
         assert_eq!(

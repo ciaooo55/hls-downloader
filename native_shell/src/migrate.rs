@@ -1,9 +1,11 @@
-//! One-shot import of 5.x config.json + SQLite task rows into the v6 store.
+//! One-shot import of 5.x config.json and SQLite task rows into the current store.
 //!
 //! Does not start downloads. In-progress HTTP parts are copied into the v6
 //! task directory so Range resume can reuse already-written bytes.
 
-use crate::{apply_replay_json, CredentialVault, PersistentCore, ResourceKind, TaskPaths, TaskSpec};
+use crate::{
+    apply_replay_json, CredentialVault, PersistentCore, ResourceKind, TaskPaths, TaskSpec,
+};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -37,7 +39,12 @@ pub fn resolve_legacy_paths() -> (PathBuf, PathBuf) {
     candidates
         .into_iter()
         .find(|(config, db)| config.exists() || db.exists())
-        .unwrap_or_else(|| (PathBuf::from("config.json"), PathBuf::from("backend/data.db")))
+        .unwrap_or_else(|| {
+            (
+                PathBuf::from("config.json"),
+                PathBuf::from("backend/data.db"),
+            )
+        })
 }
 
 fn legacy_location_candidates() -> Vec<(PathBuf, PathBuf)> {
@@ -59,7 +66,11 @@ fn legacy_location_candidates() -> Vec<(PathBuf, PathBuf)> {
     out
 }
 
-pub fn migrate_from_5x(core: &mut PersistentCore, config_path: &Path, db_path: &Path) -> Result<u32, String> {
+pub fn migrate_from_5x(
+    core: &mut PersistentCore,
+    config_path: &Path,
+    db_path: &Path,
+) -> Result<u32, String> {
     let mut imported = 0u32;
     let mut default_download_dir = String::new();
     if config_path.exists() {
@@ -146,7 +157,8 @@ fn import_settings(core: &mut PersistentCore, value: &Value) -> Result<(), Strin
         .and_then(Value::as_bool)
         .unwrap_or(false)
         || value.as_object().is_some_and(|map| {
-            map.keys().any(|key| key.starts_with("legal_terms_accepted"))
+            map.keys()
+                .any(|key| key.starts_with("legal_terms_accepted"))
                 && map.iter().any(|(key, item)| {
                     key.starts_with("legal_terms_accepted")
                         && match item {
@@ -183,10 +195,7 @@ fn import_settings(core: &mut PersistentCore, value: &Value) -> Result<(), Strin
         "download_speed_schedule_enabled",
         first_bool(
             value,
-            &[
-                "download_speed_schedule_enabled",
-                "speed_schedule_enabled",
-            ],
+            &["download_speed_schedule_enabled", "speed_schedule_enabled"],
         ),
     )?;
     set_string(
@@ -200,17 +209,17 @@ fn import_settings(core: &mut PersistentCore, value: &Value) -> Result<(), Strin
     set_string(
         core,
         "download_speed_schedule_end",
-        first_str(value, &["download_speed_schedule_end", "speed_schedule_end"]),
+        first_str(
+            value,
+            &["download_speed_schedule_end", "speed_schedule_end"],
+        ),
     )?;
     set_u64(
         core,
         "download_speed_schedule_kib",
         first_u64(
             value,
-            &[
-                "download_speed_schedule_kib",
-                "speed_schedule_limit_kib",
-            ],
+            &["download_speed_schedule_kib", "speed_schedule_limit_kib"],
         ),
     )?;
     set_u64(
@@ -229,14 +238,80 @@ fn import_settings(core: &mut PersistentCore, value: &Value) -> Result<(), Strin
             set_string(core, "browser_category_dirs", Some(&dirs.to_string()))?;
         }
     }
-    set_bool(core, "av_scan_enabled", first_bool(value, &["av_scan_enabled"]))?;
-    set_string(core, "av_scan_command", first_str(value, &["av_scan_command"]))?;
+    set_bool(
+        core,
+        "av_scan_enabled",
+        first_bool(value, &["av_scan_enabled"]),
+    )?;
+    set_string(
+        core,
+        "av_scan_command",
+        first_str(value, &["av_scan_command"]),
+    )?;
     set_string(
         core,
         "torrent_watch_dir",
         first_str(value, &["torrent_watch_dir", "watch_dir"]),
     )?;
+    set_bool(
+        core,
+        "watch_torrents",
+        first_bool(value, &["watch_torrents"]),
+    )?;
     set_string(core, "download_dir", first_str(value, &["download_dir"]))?;
+    set_string(core, "temp_dir", first_str(value, &["temp_dir"]))?;
+    set_string(
+        core,
+        "default_origin",
+        first_str(value, &["default_origin"]),
+    )?;
+    if let Some(raw_cookie) =
+        first_str(value, &["default_cookie"]).filter(|value| !value.is_empty())
+    {
+        let cookie = CredentialVault.unprotect(raw_cookie)?;
+        if !cookie.contains(['\r', '\n', '\0']) && cookie.len() <= 16 * 1024 {
+            let replay = serde_json::json!({ "cookie": cookie }).to_string();
+            let protected = if cfg!(windows) {
+                CredentialVault.protect(&replay)?
+            } else {
+                replay
+            };
+            core.store_mut().store_credential(
+                "settings:default-cookie",
+                &protected,
+                "default_cookie",
+            )?;
+        }
+    }
+    if let Some(hosts) = value.get("allowed_hosts") {
+        let encoded = hosts
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .or_else(|| hosts.as_str().map(str::to_string));
+        set_string(core, "allowed_hosts", encoded.as_deref())?;
+    }
+    set_bool(
+        core,
+        "av_scan_fail_on_threat",
+        first_bool(value, &["av_scan_fail_on_threat"]),
+    )?;
+    set_u64(
+        core,
+        "bt_upload_limit_kib",
+        first_u64(value, &["bt_upload_limit_kib"]),
+    )?;
+    set_u64(
+        core,
+        "bt_max_connections",
+        first_u64(value, &["bt_max_connections"]),
+    )?;
+    set_bool(core, "bt_enable_dht", first_bool(value, &["bt_enable_dht"]))?;
     set_string(core, "proxy_url", first_str(value, &["proxy_url"]))?;
     Ok(())
 }
@@ -382,13 +457,15 @@ fn optional_string(row: &rusqlite::Row<'_>, index: usize) -> String {
 }
 
 fn optional_u64(row: &rusqlite::Row<'_>, index: usize) -> Option<u64> {
-    row.get::<_, i64>(index).ok().and_then(|value| {
-        if value > 0 {
-            Some(value as u64)
-        } else {
-            None
-        }
-    })
+    row.get::<_, i64>(index).ok().and_then(
+        |value| {
+            if value > 0 {
+                Some(value as u64)
+            } else {
+                None
+            }
+        },
+    )
 }
 
 fn public_headers(row: &LegacyTask) -> BTreeMap<String, String> {
@@ -416,7 +493,10 @@ fn public_headers(row: &LegacyTask) -> BTreeMap<String, String> {
     headers
 }
 
-fn store_row_credential(core: &mut PersistentCore, row: &LegacyTask) -> Result<Option<String>, String> {
+fn store_row_credential(
+    core: &mut PersistentCore,
+    row: &LegacyTask,
+) -> Result<Option<String>, String> {
     if row.cookie.trim().is_empty()
         && !row.request_headers.to_ascii_lowercase().contains("cookie")
         && !row
@@ -475,8 +555,7 @@ fn mapped_progress(row: &LegacyTask) -> (&'static str, &'static str, u64) {
         "completed" | "done" => (
             "completed",
             "finished",
-            row.downloaded_bytes
-                .max(row.total_bytes.unwrap_or(0)),
+            row.downloaded_bytes.max(row.total_bytes.unwrap_or(0)),
         ),
         "failed" | "error" => ("failed", "finished", row.downloaded_bytes),
         "canceled" | "cancelled" => ("canceled", "finished", row.downloaded_bytes),
@@ -549,7 +628,11 @@ fn import_media_partial(
     ] {
         copy_if_present(&source_dir.join(name), &dest_dir.join(name));
     }
-    for entry in std::fs::read_dir(&source_dir).into_iter().flatten().flatten() {
+    for entry in std::fs::read_dir(&source_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if name.starts_with("seg-") && name.ends_with(".m4s") {
@@ -677,23 +760,51 @@ mod tests {
         let config = dir.join("config.json");
         std::fs::write(
             &config,
-            r#"{"legal_terms_accepted":true,"download_speed_limit_kib":512,"browser_takeover_enabled":false,"max_concurrent_tasks":5,"speed_schedule_enabled":true,"watch_dir":"D:\\torrents","browser_category_dirs":{"media":"E:\\Videos"}}"#,
+            r#"{"legal_terms_accepted":true,"download_speed_limit_kib":512,"browser_takeover_enabled":false,"max_concurrent_tasks":5,"speed_schedule_enabled":true,"watch_dir":"D:\\torrents","browser_category_dirs":{"media":"E:\\Videos"},"default_cookie":"session=legacy"}"#,
         )
         .unwrap();
         let mut core = PersistentCore::in_memory().unwrap();
         let count = migrate_from_5x(&mut core, &config, &dir.join("missing.db")).unwrap();
         assert_eq!(count, 0);
-        assert!(core.store().setting_bool("legal_terms_accepted", false).unwrap());
-        assert_eq!(core.store().setting_u64("download_speed_limit_kib", 0).unwrap(), 512);
-        assert!(!core.store().setting_bool("browser_takeover_enabled", true).unwrap());
+        assert!(core
+            .store()
+            .setting_bool("legal_terms_accepted", false)
+            .unwrap());
+        assert_eq!(
+            core.store()
+                .setting_u64("download_speed_limit_kib", 0)
+                .unwrap(),
+            512
+        );
+        assert!(!core
+            .store()
+            .setting_bool("browser_takeover_enabled", true)
+            .unwrap());
         assert_eq!(core.store().setting_u64("queue_max_active", 3).unwrap(), 5);
-        assert!(core.store().setting_bool("download_speed_schedule_enabled", false).unwrap());
-        assert_eq!(core.store().setting_string("torrent_watch_dir", "").unwrap(), "D:\\torrents");
+        assert!(core
+            .store()
+            .setting_bool("download_speed_schedule_enabled", false)
+            .unwrap());
+        assert_eq!(
+            core.store()
+                .setting_string("torrent_watch_dir", "")
+                .unwrap(),
+            "D:\\torrents"
+        );
         assert!(core
             .store()
             .setting_string("browser_category_dirs", "")
             .unwrap()
             .contains("Videos"));
+        let cookie_blob = core
+            .store()
+            .load_credential("settings:default-cookie")
+            .unwrap()
+            .unwrap();
+        let cookie = CredentialVault
+            .unprotect(&cookie_blob)
+            .unwrap_or(cookie_blob);
+        assert!(cookie.contains("session=legacy"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -748,7 +859,10 @@ mod tests {
         assert_eq!(paused.downloaded_bytes, 40);
         let spec = core.task_spec(&paused.task_id).unwrap();
         assert_eq!(spec.expected_size, Some(100));
-        assert_eq!(spec.headers.get("Referer").unwrap(), "https://cdn.test/page");
+        assert_eq!(
+            spec.headers.get("Referer").unwrap(),
+            "https://cdn.test/page"
+        );
         assert!(spec.credential_ref.as_ref().unwrap().contains("t2"));
         let blob = core
             .store()
@@ -813,7 +927,9 @@ mod tests {
         let spec = core.task_spec(&task.task_id).unwrap();
         let paths = TaskPaths::for_task(&task.task_id, spec).unwrap();
         assert_eq!(std::fs::read(&paths.output).unwrap(), b"hello-partial");
-        let ranges = std::fs::read_to_string(paths.progress.with_file_name("native-engine.ranges.json")).unwrap();
+        let ranges =
+            std::fs::read_to_string(paths.progress.with_file_name("native-engine.ranges.json"))
+                .unwrap();
         assert!(ranges.contains("[0,12]"));
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -831,7 +947,11 @@ mod tests {
         let task_dir = dir.join(".tasks").join("legacy-hls");
         std::fs::create_dir_all(task_dir.join("segments")).unwrap();
         std::fs::write(task_dir.join("segments").join("000000.seg"), b"TS").unwrap();
-        std::fs::write(task_dir.join("vod_segments.json"), r#"{"version":1,"segments":{}}"#).unwrap();
+        std::fs::write(
+            task_dir.join("vod_segments.json"),
+            r#"{"version":1,"segments":{}}"#,
+        )
+        .unwrap();
         let db = dir.join("data.db");
         let output = dir.join("out").join("show.mp4");
         std::fs::create_dir_all(output.parent().unwrap()).unwrap();
@@ -858,7 +978,11 @@ mod tests {
         let mut core = PersistentCore::in_memory().unwrap();
         migrate_from_5x(&mut core, &dir.join("missing.json"), &db).unwrap();
         std::env::remove_var("HLS_V6_MIGRATE_TEMP");
-        let task = core.tasks().into_iter().find(|item| item.filename == "show.mp4").unwrap();
+        let task = core
+            .tasks()
+            .into_iter()
+            .find(|item| item.filename == "show.mp4")
+            .unwrap();
         let spec = core.task_spec(&task.task_id).unwrap();
         let paths = TaskPaths::for_task(&task.task_id, spec).unwrap();
         assert_eq!(

@@ -10,8 +10,8 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc, Mutex,
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    Arc, Condvar, Mutex,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -25,6 +25,7 @@ pub const EXIT_RANGE_UNSUPPORTED: i32 = 30;
 const WRITE_BATCH: usize = 256 * 1024;
 const DURABLE_CHECKPOINT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RANGE_ATTEMPTS: u32 = 5;
+const ADAPTIVE_INITIAL_CONNECTIONS: usize = 2;
 const CONNECT_POOL_PER_KEY: usize = 8;
 const CONNECT_POOL_TOTAL: usize = 32;
 
@@ -513,7 +514,12 @@ pub fn strip_stale_cloudflare_cookies(
     let mut values = Vec::new();
     let mut changed = false;
     for item in original.split(';') {
-        let name = item.split('=').next().unwrap_or("").trim().to_ascii_lowercase();
+        let name = item
+            .split('=')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
         if name == "__cf_bm" || name == "__cflb" {
             changed = true;
             continue;
@@ -589,9 +595,7 @@ pub fn probe_resource(job: &Job) -> Result<ResourceProbe, EngineError> {
         .and_then(|(_, _, total)| total)
         .or(fetched.content_length);
     let accept_ranges = fetched.status == 206
-        && (fetched.accept_ranges
-            || fetched.content_range.is_some()
-            || total.is_some());
+        && (fetched.accept_ranges || fetched.content_range.is_some() || total.is_some());
     Ok(ResourceProbe {
         total,
         accept_ranges,
@@ -602,15 +606,15 @@ pub fn probe_resource(job: &Job) -> Result<ResourceProbe, EngineError> {
 
 pub fn run_job(job: &Job) -> Result<(), EngineError> {
     let mut urls = vec![job.url.clone()];
-    urls.extend(crate::mirrors::normalize_mirror_urls(&job.url, &job.mirrors));
+    urls.extend(crate::mirrors::normalize_mirror_urls(
+        &job.url,
+        &job.mirrors,
+    ));
     let mut last = EngineError::Failed("job url missing".into());
     let post = job.method.eq_ignore_ascii_case("POST");
     let mut identity: Option<(Option<u64>, String)> = None;
     if job.total > 0 || !job.etag.trim().is_empty() {
-        identity = Some((
-            (job.total > 0).then_some(job.total),
-            job.etag.clone(),
-        ));
+        identity = Some(((job.total > 0).then_some(job.total), job.etag.clone()));
     }
     for (index, url) in urls.into_iter().enumerate() {
         let mut attempt = job.clone();
@@ -693,11 +697,8 @@ pub fn fetch_bytes(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "hls-fetch-bytes-{}-{}",
-        std::process::id(),
-        stamp
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("hls-fetch-bytes-{}-{}", std::process::id(), stamp));
     fs::create_dir_all(&dir).map_err(|err| EngineError::Failed(err.to_string()))?;
     let control = dir.join("control");
     fs::write(&control, "run").map_err(|err| EngineError::Failed(err.to_string()))?;
@@ -728,6 +729,7 @@ pub fn fetch_bytes(
     reader
         .read_to_end(&mut body)
         .map_err(|err| EngineError::Failed(err.to_string()))?;
+    crate::net_policy::consume(body.len());
     let _ = fs::remove_dir_all(dir);
     Ok((status, body))
 }
@@ -840,7 +842,13 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     if total == 0 {
         return download_sequential(job);
     }
-    let chunk = job.chunk_bytes.max(64 * 1024);
+    let workers = job.connections.clamp(1, 64);
+    // Keep several unrequested ranges available per worker. Splitting an HTTP
+    // request after it has been sent only shortens the file write; the origin
+    // still transmits the old tail, wasting bandwidth. Queue-level balancing
+    // lets idle workers help without overlapping any network request.
+    let balanced_chunk = total.div_ceil((workers * 4) as u64).max(256 * 1024);
+    let chunk = job.chunk_bytes.max(64 * 1024).min(balanced_chunk);
     let mut ranges = Vec::new();
     let mut start = 0u64;
     while start < total {
@@ -884,33 +892,36 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         write_progress(&job.progress, total, total, 0.0, "done");
         return Ok(());
     }
-    let workers = job.connections.clamp(1, 64);
-    let scheduler = Arc::new(RangeScheduler::new(pending.iter().copied().collect()));
-    let split_floor = job.chunk_bytes.max(256 * 1024) / 4;
+    let scheduler = Arc::new(RangeScheduler::new(
+        pending.iter().copied().collect(),
+        workers,
+    ));
     let downloaded = Arc::new(AtomicU64::new(already));
     let completed = Arc::new(Mutex::new(loaded));
     let failed = Arc::new(Mutex::new(None::<EngineErrorCode>));
     let stop = Arc::new(AtomicBool::new(false));
     let started = Instant::now();
     let mut handles = Vec::new();
-    for _ in 0..workers {
+    for worker_index in 0..workers {
         let job = job.clone();
+        let throttle = crate::net_policy::current_throttle_context();
         let scheduler = Arc::clone(&scheduler);
         let downloaded = Arc::clone(&downloaded);
         let completed = Arc::clone(&completed);
         let failed = Arc::clone(&failed);
         let stop = Arc::clone(&stop);
         handles.push(thread::spawn(move || {
-            range_worker(
-                &job,
-                scheduler,
-                workers,
-                split_floor,
-                downloaded,
-                completed,
-                failed,
-                stop,
-            );
+            crate::net_policy::with_throttle_context(throttle, || {
+                range_worker(
+                    worker_index,
+                    &job,
+                    scheduler,
+                    downloaded,
+                    completed,
+                    failed,
+                    stop,
+                );
+            });
         }));
     }
     let progress_stop = Arc::clone(&stop);
@@ -1000,28 +1011,100 @@ struct ActiveProgress {
 
 struct ActiveRange {
     id: u64,
-    start: u64,
-    end: u64,
     progress: Arc<Mutex<ActiveProgress>>,
+}
+
+struct AdaptiveConnectionController {
+    maximum: usize,
+    desired: AtomicUsize,
+    successful_ranges: AtomicUsize,
+}
+
+impl AdaptiveConnectionController {
+    fn new(maximum: usize) -> Self {
+        let maximum = maximum.max(1);
+        Self {
+            maximum,
+            desired: AtomicUsize::new(maximum.min(ADAPTIVE_INITIAL_CONNECTIONS)),
+            successful_ranges: AtomicUsize::new(0),
+        }
+    }
+
+    fn desired(&self) -> usize {
+        self.desired.load(Ordering::Acquire)
+    }
+
+    fn permits(&self, worker_index: usize) -> bool {
+        worker_index < self.desired()
+    }
+
+    fn note_success(&self) -> bool {
+        let desired = self.desired();
+        if desired >= self.maximum {
+            return false;
+        }
+        let successes = self.successful_ranges.fetch_add(1, Ordering::AcqRel) + 1;
+        if successes < desired {
+            return false;
+        }
+        if self
+            .desired
+            .compare_exchange(desired, desired + 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.successful_ranges.store(0, Ordering::Release);
+            return true;
+        }
+        false
+    }
+
+    fn note_congestion(&self) {
+        let mut current = self.desired();
+        loop {
+            let reduced = current.div_ceil(2).max(1);
+            match self.desired.compare_exchange(
+                current,
+                reduced,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
+        self.successful_ranges.store(0, Ordering::Release);
+    }
 }
 
 struct RangeScheduler {
     pending: Mutex<Vec<WorkRange>>,
     active: Mutex<Vec<ActiveRange>>,
     next_id: AtomicU64,
+    connections: AdaptiveConnectionController,
+    wake_lock: Mutex<()>,
+    wake: Condvar,
 }
 
 impl RangeScheduler {
-    fn new(pending: Vec<WorkRange>) -> Self {
+    fn new(pending: Vec<WorkRange>, maximum_connections: usize) -> Self {
         Self {
             pending: Mutex::new(pending),
             active: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(1),
+            connections: AdaptiveConnectionController::new(maximum_connections),
+            wake_lock: Mutex::new(()),
+            wake: Condvar::new(),
         }
     }
 
-    fn claim(&self) -> Option<ActiveRange> {
+    fn claim(&self, worker_index: usize) -> Option<ActiveRange> {
+        if !self.connections.permits(worker_index) {
+            return None;
+        }
         let mut pending = self.pending.lock().unwrap_or_else(|err| err.into_inner());
+        if !self.connections.permits(worker_index) {
+            return None;
+        }
         let index = pending
             .iter()
             .enumerate()
@@ -1031,8 +1114,6 @@ impl RangeScheduler {
         drop(pending);
         let active = ActiveRange {
             id: self.next_id.fetch_add(1, Ordering::Relaxed),
-            start: range.start,
-            end: range.end,
             progress: Arc::new(Mutex::new(ActiveProgress {
                 cursor: range.start,
                 stop: range.end,
@@ -1043,63 +1124,43 @@ impl RangeScheduler {
             .unwrap_or_else(|err| err.into_inner())
             .push(ActiveRange {
                 id: active.id,
-                start: active.start,
-                end: active.end,
                 progress: Arc::clone(&active.progress),
             });
         Some(active)
     }
 
+    fn note_success(&self) {
+        if self.connections.note_success() {
+            self.wake.notify_all();
+        }
+    }
+
+    fn note_congestion(&self) {
+        self.connections.note_congestion();
+    }
+
     fn complete(&self, id: u64) {
         let mut active = self.active.lock().unwrap_or_else(|err| err.into_inner());
         active.retain(|item| item.id != id);
+        let active_empty = active.is_empty();
+        drop(active);
+        if active_empty
+            && self
+                .pending
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .is_empty()
+        {
+            self.wake.notify_all();
+        }
     }
 
-    /// IDM-style end-game split.  An idle worker takes half of the largest
-    /// still-active tail.  The active worker and this scheduler share the
-    /// progress mutex, so the split boundary can never race a file write.
-    fn split_largest(&self, min_piece: u64, max_active: usize) -> bool {
-        let active = self.active.lock().unwrap_or_else(|err| err.into_inner());
-        if active.len() >= max_active {
-            return false;
-        }
-        let mut best: Option<(usize, u64, u64, u64)> = None;
-        for (index, item) in active.iter().enumerate() {
-            let progress = item.progress.lock().unwrap_or_else(|err| err.into_inner());
-            let cursor = progress.cursor;
-            let stop = progress.stop;
-            let remaining = stop.saturating_sub(cursor).saturating_add(1);
-            if remaining < min_piece.saturating_mul(2) {
-                continue;
-            }
-            if best
-                .as_ref()
-                .map(|(_, current, _, _)| remaining > *current)
-                .unwrap_or(true)
-            {
-                best = Some((index, remaining, cursor, stop));
-            }
-        }
-        let Some((index, remaining, cursor, stop)) = best else {
-            return false;
-        };
-        let split_start = cursor + remaining / 2;
-        let left_end = split_start.saturating_sub(1);
-        let item = &active[index];
-        let mut progress = item.progress.lock().unwrap_or_else(|err| err.into_inner());
-        if progress.cursor != cursor || progress.stop != stop || left_end < cursor {
-            return false;
-        }
-        progress.stop = left_end;
-        drop(progress);
-        self.pending
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .push(WorkRange {
-                start: split_start,
-                end: stop,
-            });
-        true
+    fn wait_for_change(&self) {
+        let guard = self.wake_lock.lock().unwrap_or_else(|err| err.into_inner());
+        let _ = self
+            .wake
+            .wait_timeout(guard, Duration::from_millis(100))
+            .unwrap_or_else(|err| err.into_inner());
     }
 
     fn is_idle(&self) -> bool {
@@ -1118,10 +1179,9 @@ impl RangeScheduler {
 }
 
 fn range_worker(
+    worker_index: usize,
     job: &Job,
     scheduler: Arc<RangeScheduler>,
-    worker_limit: usize,
-    split_floor: u64,
     downloaded: Arc<AtomicU64>,
     completed: Arc<Mutex<Vec<(u64, u64)>>>,
     failed: Arc<Mutex<Option<EngineErrorCode>>>,
@@ -1158,17 +1218,21 @@ fn range_worker(
             }
             Control::Run => {}
         }
-        let Some(active) = scheduler.claim() else {
-            if scheduler.split_largest(split_floor, worker_limit) {
-                continue;
-            }
+        let Some(active) = scheduler.claim(worker_index) else {
             if scheduler.is_idle() {
                 return;
             }
-            thread::sleep(Duration::from_millis(5));
+            scheduler.wait_for_change();
             continue;
         };
-        let result = fetch_range(job, &mut file, &active.progress, &downloaded, &completed);
+        let result = fetch_range(
+            job,
+            &mut file,
+            &active.progress,
+            &downloaded,
+            &completed,
+            &scheduler,
+        );
         scheduler.complete(active.id);
         match result {
             Ok((start, end)) => {
@@ -1180,6 +1244,7 @@ fn range_worker(
                     stop.store(true, Ordering::SeqCst);
                     return;
                 }
+                scheduler.note_success();
             }
             Err(error) => {
                 let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
@@ -1243,6 +1308,7 @@ fn fetch_range(
     progress: &Arc<Mutex<ActiveProgress>>,
     downloaded: &AtomicU64,
     completed: &Mutex<Vec<(u64, u64)>>,
+    scheduler: &RangeScheduler,
 ) -> Result<(u64, u64), EngineErrorCode> {
     let start = progress
         .lock()
@@ -1268,6 +1334,7 @@ fn fetch_range(
             Err(EngineError::Pause) => return Err(EngineErrorCode::Pause),
             Err(EngineError::Cancel) => return Err(EngineErrorCode::Cancel),
             Err(err) => {
+                scheduler.note_congestion();
                 failed_attempts += 1;
                 if failed_attempts >= MAX_RANGE_ATTEMPTS {
                     return Err(EngineErrorCode::Failed(format!(
@@ -1285,6 +1352,7 @@ fn fetch_range(
         }
         if fetched.status != 206 {
             if retryable_http_status(fetched.status) {
+                scheduler.note_congestion();
                 failed_attempts += 1;
                 if failed_attempts >= MAX_RANGE_ATTEMPTS {
                     return Err(EngineErrorCode::Failed(format!(
@@ -1372,11 +1440,13 @@ fn fetch_range(
         durable_cursor = cursor;
         if cursor > request_start {
             failed_attempts = 0;
+            scheduler.note_congestion();
             if read_error.is_some() {
                 wait_before_range_retry(job, 1)?;
             }
             continue;
         }
+        scheduler.note_congestion();
         failed_attempts += 1;
         if failed_attempts >= MAX_RANGE_ATTEMPTS {
             let detail = read_error.unwrap_or_else(|| "range response ended without data".into());
@@ -1526,8 +1596,16 @@ fn fetch_follow(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineErr
                 return Err(EngineError::Failed("https/proxy needs WinHTTP".into()));
             }
         }
-        let (status, location, content_range, content_length, etag, last_modified, accept_ranges, body) =
-            http_get(&hop, &parsed, range)?;
+        let (
+            status,
+            location,
+            content_range,
+            content_length,
+            etag,
+            last_modified,
+            accept_ranges,
+            body,
+        ) = http_get(&hop, &parsed, range)?;
         if matches!(status, 301 | 302 | 303 | 307 | 308) {
             let next =
                 location.ok_or_else(|| EngineError::Failed("redirect without Location".into()))?;
@@ -1725,12 +1803,26 @@ pub(crate) fn sanitize_http_method(raw: &str) -> String {
 }
 
 pub fn http_fetch_url_allowed(url: &str) -> bool {
-    let url = url.trim();
-    if url.contains('\r') || url.contains('\n') || url.contains('\0') {
+    let url = url.trim().trim_start_matches('\u{feff}');
+    if url.is_empty() || url.chars().any(|ch| ch.is_control()) {
         return false;
     }
     let lower = url.to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+pub fn remote_resource_url_allowed(url: &str) -> bool {
+    let url = url.trim().trim_start_matches('\u{feff}');
+    if url.is_empty() || url.chars().any(|ch| ch.is_control()) {
+        return false;
+    }
+    let lower = url.to_ascii_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("ftp://")
+        || lower.starts_with("ftps://")
+        || lower.starts_with("sftp://")
+        || lower.starts_with("magnet:")
 }
 
 fn parse_http_url(raw: &str) -> Result<ParsedUrl, EngineError> {
@@ -1762,9 +1854,9 @@ fn parse_http_url(raw: &str) -> Result<ParsedUrl, EngineError> {
         (hostport.to_string(), if https { 443 } else { 80 })
     };
     if host.is_empty()
-        || host.chars().any(|ch| {
-            ch.is_ascii_whitespace() || matches!(ch, '/' | '\\' | '\0' | '#' | '?' | '@')
-        })
+        || host
+            .chars()
+            .any(|ch| ch.is_ascii_whitespace() || matches!(ch, '/' | '\\' | '\0' | '#' | '?' | '@'))
     {
         return Err(EngineError::Failed("url host missing".into()));
     }
@@ -2102,7 +2194,7 @@ mod winhttp {
     use windows_sys::Win32::Networking::WinHttp::{
         WinHttpAddRequestHeaders, WinHttpCloseHandle, WinHttpConnect, WinHttpOpen,
         WinHttpOpenRequest, WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse,
-        WinHttpSendRequest, WinHttpSetOption, WinHttpSetTimeouts,         WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+        WinHttpSendRequest, WinHttpSetOption, WinHttpSetTimeouts, WINHTTP_ACCESS_TYPE_NAMED_PROXY,
         WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_ADDREQ_FLAG_ADD, WINHTTP_FLAG_SECURE,
         WINHTTP_OPTION_REDIRECT_POLICY, WINHTTP_OPTION_REDIRECT_POLICY_NEVER,
         WINHTTP_QUERY_ACCEPT_RANGES, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_QUERY_CONTENT_RANGE,
@@ -2129,9 +2221,7 @@ mod winhttp {
                     self.request = null_mut();
                 }
                 if !self.connect.is_null() {
-                    if self.recycle_connect
-                        && put_connect(&self.connect_key, self.connect)
-                    {
+                    if self.recycle_connect && put_connect(&self.connect_key, self.connect) {
                         self.connect = null_mut();
                     } else {
                         WinHttpCloseHandle(self.connect);
@@ -2343,13 +2433,12 @@ mod winhttp {
                 query_header_string(request, WINHTTP_QUERY_LAST_MODIFIED).unwrap_or_default();
             let content_length = query_header_string(request, WINHTTP_QUERY_CONTENT_LENGTH)
                 .and_then(|value| value.parse::<u64>().ok());
-            let accept_ranges = query_header_string(request, WINHTTP_QUERY_ACCEPT_RANGES)
-                .is_some_and(|value| {
+            let accept_ranges =
+                query_header_string(request, WINHTTP_QUERY_ACCEPT_RANGES).is_some_and(|value| {
                     value
                         .split(',')
                         .any(|part| part.trim().eq_ignore_ascii_case("bytes"))
-                })
-                || content_range.is_some();
+                }) || content_range.is_some();
             Ok(super::FetchResult {
                 status: status as u16,
                 location,
@@ -2433,6 +2522,87 @@ mod tests {
             assert!(pool.put("full".into(), index));
         }
         assert!(!pool.put("full".into(), 99));
+    }
+
+    #[test]
+    fn adaptive_connections_ramp_gradually_and_back_off_immediately() {
+        let controller = AdaptiveConnectionController::new(8);
+        assert_eq!(controller.desired(), 2);
+
+        controller.note_success();
+        assert_eq!(controller.desired(), 2);
+        controller.note_success();
+        assert_eq!(controller.desired(), 3);
+
+        for _ in 0..3 {
+            controller.note_success();
+        }
+        assert_eq!(controller.desired(), 4);
+
+        controller.note_congestion();
+        assert_eq!(controller.desired(), 2);
+        controller.note_success();
+        assert_eq!(controller.desired(), 2);
+        controller.note_success();
+        assert_eq!(controller.desired(), 3);
+    }
+
+    #[test]
+    fn adaptive_scheduler_parks_excess_workers_without_duplicate_ranges() {
+        let scheduler = RangeScheduler::new(
+            vec![
+                WorkRange { start: 0, end: 9 },
+                WorkRange { start: 10, end: 19 },
+                WorkRange { start: 20, end: 29 },
+                WorkRange { start: 30, end: 39 },
+            ],
+            4,
+        );
+
+        let first = scheduler.claim(0).expect("first worker should run");
+        let second = scheduler.claim(1).expect("second worker should run");
+        assert!(scheduler.claim(2).is_none());
+
+        let first_range = {
+            let state = first.progress.lock().unwrap_or_else(|err| err.into_inner());
+            (state.cursor, state.stop)
+        };
+        let second_range = {
+            let state = second
+                .progress
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            (state.cursor, state.stop)
+        };
+        assert_ne!(first_range, second_range);
+
+        scheduler.complete(first.id);
+        scheduler.note_success();
+        scheduler.complete(second.id);
+        scheduler.note_success();
+        assert_eq!(scheduler.connections.desired(), 3);
+
+        let third = scheduler
+            .claim(2)
+            .expect("third worker should run after successful ramp");
+        let third_range = {
+            let state = third.progress.lock().unwrap_or_else(|err| err.into_inner());
+            (state.cursor, state.stop)
+        };
+        assert_ne!(third_range, first_range);
+        assert_ne!(third_range, second_range);
+        scheduler.complete(third.id);
+    }
+
+    #[test]
+    fn adaptive_connections_respect_single_connection_limit() {
+        let controller = AdaptiveConnectionController::new(1);
+        assert_eq!(controller.desired(), 1);
+        for _ in 0..8 {
+            controller.note_success();
+            controller.note_congestion();
+        }
+        assert_eq!(controller.desired(), 1);
     }
 
     static NEXT_TEMP_JOB_ID: AtomicUsize = AtomicUsize::new(0);
@@ -2593,23 +2763,6 @@ mod tests {
     }
 
     #[test]
-    fn scheduler_splits_largest_active_tail_without_overlap() {
-        let scheduler = RangeScheduler::new(vec![WorkRange { start: 0, end: 999 }]);
-        let first = scheduler.claim().expect("initial range");
-        assert!(scheduler.split_largest(100, 2));
-        let second = scheduler.claim().expect("split tail");
-        let first_stop = first
-            .progress
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .stop;
-        assert_eq!(first.start, 0);
-        assert_eq!(first_stop + 1, second.start);
-        assert_eq!(second.end, 999);
-        assert_eq!(first_stop, 499);
-    }
-
-    #[test]
     fn host_header_omits_default_ports() {
         let http = parse_http_url("http://cdn.test/file.bin").unwrap();
         assert_eq!(host_header(&http), "cdn.test");
@@ -2619,8 +2772,15 @@ mod tests {
         assert_eq!(host_header(&https), "cdn.test");
         assert!(parse_http_url("http://cdn.test/foo\r\nHost: evil").is_err());
         assert!(!http_fetch_url_allowed("javascript:alert(1)"));
+        assert!(!http_fetch_url_allowed("\u{feff}javascript:alert(1)"));
+        assert!(!http_fetch_url_allowed("https://cdn.test/a.bin\0.gif"));
         assert!(!http_fetch_url_allowed("http://cdn.test/x\nHost: evil"));
         assert!(http_fetch_url_allowed("HTTPS://cdn.test/a"));
+        assert!(remote_resource_url_allowed("magnet:?xt=urn:btih:abc"));
+        assert!(remote_resource_url_allowed("ftp://ftp.test/a.bin"));
+        assert!(!remote_resource_url_allowed("javascript:alert(1)"));
+        assert!(!remote_resource_url_allowed("ms-msdt:foo"));
+        assert!(!remote_resource_url_allowed("file:///C:/Windows/win.ini"));
         assert_eq!(
             parse_http_url("HTTP://cdn.test/file.bin").unwrap().host,
             "cdn.test"
@@ -2950,10 +3110,7 @@ mod tests {
         format!("http://127.0.0.1:{}", addr.port())
     }
 
-    fn serve_counting_range_payload(
-        body: &'static [u8],
-        payload_bytes: Arc<AtomicU64>,
-    ) -> String {
+    fn serve_counting_range_payload(body: &'static [u8], payload_bytes: Arc<AtomicU64>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || {
@@ -3138,6 +3295,59 @@ mod tests {
         format!("http://127.0.0.1:{}", addr.port())
     }
 
+    fn serve_transient_429_ranges(
+        body: &'static [u8],
+        attempts: Arc<AtomicUsize>,
+        payload_bytes: Arc<AtomicU64>,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).is_err() {
+                    continue;
+                }
+                let mut requested = None;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("range:") {
+                        let spec = value.trim().strip_prefix("bytes=").unwrap_or("");
+                        requested = spec.split_once('-').and_then(|(start, end)| {
+                            Some((start.parse::<usize>().ok()?, end.parse::<usize>().ok()?))
+                        });
+                    }
+                }
+                let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                let mut stream = reader.into_inner();
+                if attempt < 2 {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    continue;
+                }
+                let Some((start, requested_end)) = requested else {
+                    continue;
+                };
+                let actual_end = requested_end.min(body.len() - 1);
+                let slice = &body[start..=actual_end];
+                payload_bytes.fetch_add(slice.len() as u64, Ordering::SeqCst);
+                let header = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{actual_end}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len(),
+                    slice.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(slice);
+            }
+        });
+        format!("http://127.0.0.1:{}", addr.port())
+    }
+
     #[test]
     fn range_resume_skips_sidecar_covered_chunks() {
         let body: &'static [u8] = Box::leak(
@@ -3272,6 +3482,28 @@ mod tests {
         assert_eq!(err.exit_code(), EXIT_ERROR);
         assert!(err.to_string().contains("made no progress"));
         assert_eq!(attempts.load(Ordering::SeqCst), MAX_RANGE_ATTEMPTS as usize);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn transient_429_backoff_recovers_without_duplicate_payload_bytes() {
+        let body: &'static [u8] = Box::leak(
+            (0..256 * 1024)
+                .map(|index| (index % 251) as u8)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let payload_bytes = Arc::new(AtomicU64::new(0));
+        let url =
+            serve_transient_429_ranges(body, Arc::clone(&attempts), Arc::clone(&payload_bytes));
+        let (job, dir) = temp_job(&url, false, body.len() as u64, 4);
+
+        run_job(&job).unwrap();
+
+        assert_eq!(fs::read(&job.output).unwrap(), body);
+        assert!(attempts.load(Ordering::SeqCst) >= 6);
+        assert_eq!(payload_bytes.load(Ordering::SeqCst), body.len() as u64);
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -3508,7 +3740,9 @@ mod tests {
             "If-Range miss must not replace the reserved payload with a 200 body"
         );
         assert!(
-            !output.windows(b"NEW-PAYLOAD".len()).any(|window| window == b"NEW-PAYLOAD"),
+            !output
+                .windows(b"NEW-PAYLOAD".len())
+                .any(|window| window == b"NEW-PAYLOAD"),
             "If-Range miss stitched the new identity into the reserved file: {output:?}"
         );
         let _ = fs::remove_dir_all(dir);
@@ -3518,7 +3752,12 @@ mod tests {
     fn mirrors_fall_back_when_primary_fails() {
         let body: &'static [u8] = b"mirror-payload";
         let good = serve_body(body);
-        let (mut job, dir) = temp_job("http://127.0.0.1:1/missing.bin", false, body.len() as u64, 1);
+        let (mut job, dir) = temp_job(
+            "http://127.0.0.1:1/missing.bin",
+            false,
+            body.len() as u64,
+            1,
+        );
         job.mirrors = vec![good];
         job.sequential = true;
         job.total = 0;
@@ -3556,7 +3795,12 @@ mod tests {
         let bad: &'static [u8] = b"nope";
         let bad_url = serve_body(bad);
         let good_url = serve_body(good);
-        let (mut job, dir) = temp_job("http://127.0.0.1:1/missing.bin", false, good.len() as u64, 1);
+        let (mut job, dir) = temp_job(
+            "http://127.0.0.1:1/missing.bin",
+            false,
+            good.len() as u64,
+            1,
+        );
         job.mirrors = vec![bad_url, good_url];
         run_job(&job).unwrap();
         assert_eq!(fs::read(&job.output).unwrap(), good);
@@ -3607,7 +3851,9 @@ mod tests {
                     .push((cookie.clone(), ua));
                 let mut stream = reader.into_inner();
                 if cookie.contains("__cf_bm") {
-                    let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
                 } else {
                     let body = b"ok";
                     let header = format!(

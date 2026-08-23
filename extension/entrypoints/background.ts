@@ -460,7 +460,7 @@ async function cookiesFor(url: string, pageUrl = ''): Promise<string> {
 }
 
 async function native(message: Record<string, unknown>, timeoutMs?: number): Promise<any> {
-  if (!nativeBridge) return Promise.reject(new Error('Native Messaging 尚未初始化'))
+  if (!nativeBridge) return Promise.reject(new Error('插件连接尚未初始化'))
   const identity = extensionIdentity()
   const operation = String(message.op || '')
   const retryCount = new Set([

@@ -1,6 +1,8 @@
-//! Win32 tray icon for the resident v6 process. This is not a second UI toolkit.
+//! Win32 tray icon for the resident v7 Core. This is not a second UI toolkit.
 
 use std::sync::mpsc::Sender;
+
+const TRAY_THREAD_NAME: &str = "v7-tray";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
@@ -13,7 +15,7 @@ pub enum TrayAction {
 #[cfg(windows)]
 pub fn spawn_tray(tx: Sender<TrayAction>) {
     std::thread::Builder::new()
-        .name("v6-tray".into())
+        .name(TRAY_THREAD_NAME.into())
         .spawn(move || unsafe { tray_loop(tx) })
         .ok();
 }
@@ -29,15 +31,65 @@ pub fn completion_sound() {
 }
 
 static TRAY_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+#[cfg(windows)]
+static TRAY_ICON: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+#[cfg(windows)]
+unsafe fn load_product_icon() -> windows_sys::Win32::UI::WindowsAndMessaging::HICON {
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::PathBuf;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        LoadIconW, LoadImageW, HICON, IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE,
+    };
+
+    let cached = TRAY_ICON.load(std::sync::atomic::Ordering::Acquire);
+    if cached != 0 {
+        return cached as HICON;
+    }
+    let mut candidates = Vec::<PathBuf>::new();
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            candidates.push(parent.join("app-icon.ico"));
+            candidates.push(parent.join("resources").join("app-icon.ico"));
+        }
+    }
+    if let Ok(directory) = std::env::current_dir() {
+        candidates.push(directory.join("app-icon.ico"));
+        candidates.push(directory.join("assets").join("app-icon.ico"));
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/app-icon.ico"));
+
+    let icon = candidates
+        .into_iter()
+        .find_map(|path| {
+            if !path.is_file() {
+                return None;
+            }
+            let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            let handle = unsafe {
+                LoadImageW(
+                    std::ptr::null_mut(),
+                    wide.as_ptr(),
+                    IMAGE_ICON,
+                    0,
+                    0,
+                    LR_LOADFROMFILE | LR_DEFAULTSIZE,
+                )
+            } as HICON;
+            (!handle.is_null()).then_some(handle)
+        })
+        .unwrap_or_else(|| unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) });
+    TRAY_ICON.store(icon as isize, std::sync::atomic::Ordering::Release);
+    icon
+}
 
 pub fn show_notification(title: &str, body: &str) {
     #[cfg(windows)]
     unsafe {
         use windows_sys::Win32::UI::Shell::{
-            Shell_NotifyIconW, NIF_INFO, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_MODIFY,
+            Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_MODIFY,
             NOTIFYICONDATAW,
         };
-        use windows_sys::Win32::UI::WindowsAndMessaging::{LoadIconW, IDI_APPLICATION};
         let hwnd = TRAY_HWND.load(std::sync::atomic::Ordering::SeqCst);
         if hwnd == 0 {
             return;
@@ -48,7 +100,7 @@ pub fn show_notification(title: &str, body: &str) {
         data.uID = 1;
         data.uFlags = NIF_INFO | NIF_ICON | NIF_MESSAGE | NIF_TIP;
         data.dwInfoFlags = NIIF_INFO;
-        data.hIcon = LoadIconW(std::ptr::null_mut(), IDI_APPLICATION);
+        data.hIcon = load_product_icon();
         copy_utf16(&mut data.szInfoTitle, title);
         copy_utf16(&mut data.szInfo, body);
         copy_utf16(&mut data.szTip, "HLS Downloader");
@@ -81,15 +133,15 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
     use std::mem::size_of;
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::UI::Shell::{
-        Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE,
-        NIM_MODIFY, NOTIFYICONDATAW,
+        Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD,
+        NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow,
-        DispatchMessageW, GetCursorPos, GetMessageW, LoadIconW, PostQuitMessage, RegisterClassW,
+        DispatchMessageW, GetCursorPos, GetMessageW, PostQuitMessage, RegisterClassW,
         SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
-        CW_USEDEFAULT, HWND_MESSAGE, IDI_APPLICATION, MF_STRING, TPM_LEFTALIGN, TPM_RIGHTBUTTON,
-        WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
+        CW_USEDEFAULT, HWND_MESSAGE, MF_STRING, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND,
+        WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
     };
 
     const WM_TRAY: u32 = WM_APP + 32;
@@ -98,14 +150,14 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
     const ID_SETTINGS: usize = 3;
     const ID_QUIT: usize = 4;
 
-    let class_name: Vec<u16> = "HLSDownloader.v6.Tray\0".encode_utf16().collect();
+    let class_name: Vec<u16> = "HLSDownloader.v7.Tray\0".encode_utf16().collect();
     let class = WNDCLASSW {
         style: CS_HREDRAW | CS_VREDRAW,
         lpfnWndProc: Some(tray_wnd_proc),
         cbClsExtra: 0,
         cbWndExtra: 0,
         hInstance: null_mut(),
-        hIcon: null_mut(),
+        hIcon: load_product_icon(),
         hCursor: null_mut(),
         hbrBackground: null_mut(),
         lpszMenuName: null(),
@@ -160,7 +212,7 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
     data.uID = 1;
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     data.uCallbackMessage = WM_TRAY;
-    data.hIcon = LoadIconW(null_mut(), IDI_APPLICATION);
+    data.hIcon = load_product_icon();
     let tip: Vec<u16> = "HLS Downloader\0".encode_utf16().collect();
     for (index, unit) in tip.iter().take(data.szTip.len()).enumerate() {
         data.szTip[index] = *unit;
@@ -173,7 +225,15 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
         DispatchMessageW(&msg);
     }
     Shell_NotifyIconW(NIM_DELETE, &data);
-    let _ = (WM_COMMAND, WM_LBUTTONUP, WM_RBUTTONUP, ID_SHOW, ID_NEW, ID_SETTINGS, ID_QUIT);
+    let _ = (
+        WM_COMMAND,
+        WM_LBUTTONUP,
+        WM_RBUTTONUP,
+        ID_SHOW,
+        ID_NEW,
+        ID_SETTINGS,
+        ID_QUIT,
+    );
     DestroyWindow(hwnd);
 }
 
@@ -256,4 +316,28 @@ fn send_action(sender: *const Sender<TrayAction>, action: TrayAction) {
         return;
     }
     let _ = unsafe { &*sender }.send(action);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TRAY_THREAD_NAME;
+
+    #[test]
+    fn resident_tray_uses_the_v7_identity() {
+        assert_eq!(TRAY_THREAD_NAME, "v7-tray");
+        let source = include_str!("tray.rs");
+        assert!(source.contains("app-icon.ico"));
+        assert!(source.contains("LoadImageW"));
+        assert!(!source.contains("name(\"v6-tray\""));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn product_tray_icon_loads_instead_of_the_windows_default() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{LoadIconW, IDI_APPLICATION};
+        let icon = unsafe { super::load_product_icon() };
+        let fallback = unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) };
+        assert!(!icon.is_null());
+        assert_ne!(icon, fallback);
+    }
 }

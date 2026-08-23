@@ -106,11 +106,8 @@ struct DropSourceVtbl {
     ) -> i32,
     add_ref: unsafe extern "system" fn(this: *mut DropSource) -> u32,
     release: unsafe extern "system" fn(this: *mut DropSource) -> u32,
-    query_continue_drag: unsafe extern "system" fn(
-        this: *mut DropSource,
-        escape: i32,
-        key_state: u32,
-    ) -> i32,
+    query_continue_drag:
+        unsafe extern "system" fn(this: *mut DropSource, escape: i32, key_state: u32) -> i32,
     give_feedback: unsafe extern "system" fn(this: *mut DropSource, effect: u32) -> i32,
 }
 

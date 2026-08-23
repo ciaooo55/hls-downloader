@@ -1,4 +1,4 @@
-//! HKCU Run key so the v6 process starts with Windows. User-scope only.
+//! HKCU Run key so the v7 Core starts with Windows. User-scope only.
 
 pub fn apply(enabled: bool) -> Result<(), String> {
     #[cfg(not(windows))]

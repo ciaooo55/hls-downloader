@@ -79,7 +79,14 @@ pub fn mux_av(
     let ffmpeg = locate_ffmpeg().ok_or_else(|| "ffmpeg not found".to_string())?;
     let mut command = Command::new(ffmpeg);
     command
-        .args(["-y", "-loglevel", "error", "-protocol_whitelist", "file,crypto", "-i"])
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-protocol_whitelist",
+            "file,crypto",
+            "-i",
+        ])
         .arg(video);
     if let Some(audio) = audio {
         command.args(["-i"]).arg(audio);

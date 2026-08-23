@@ -3,10 +3,11 @@
 use crate::playback::MediaServer;
 use crate::CastDeviceInfo;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -16,6 +17,19 @@ pub struct BrowserPush {
     pub status: String,
     pub message: String,
     pub location: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CastPlaybackStatus {
+    pub label: String,
+    pub device_kind: String,
+    pub supported_actions: Vec<String>,
+    pub playing: bool,
+    pub paused: bool,
+    pub position_seconds: u64,
+    pub duration_seconds: u64,
+    pub position_available: bool,
+    pub state: String,
 }
 
 fn media_server() -> Result<&'static MediaServer, String> {
@@ -37,11 +51,12 @@ fn device_cache() -> &'static Mutex<Vec<CastDeviceInfo>> {
 }
 
 pub fn start_browser_push(kind: &str, url: &str, title: &str) -> Result<BrowserPush, String> {
-    let url = url.trim();
-    if !url.starts_with("http://") && !url.starts_with("https://") {
+    let url = url.trim().trim_start_matches('\u{feff}');
+    let lower = url.to_ascii_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
         return Err("浏览器投送请求无效".into());
     }
-    if url.contains('\r') || url.contains('\n') {
+    if url.chars().any(|ch| ch.is_control()) {
         return Err("浏览器投送地址无效".into());
     }
     let kind = if kind == "tvbox" || kind == "push_to_tv" {
@@ -92,7 +107,11 @@ pub fn browser_push_status(id: &str) -> Option<BrowserPush> {
     pushes().lock().ok()?.get(id).cloned()
 }
 
-pub fn lan_media_url(server: &MediaServer, token: &str, advertise_host: &str) -> Result<String, String> {
+pub fn lan_media_url(
+    server: &MediaServer,
+    token: &str,
+    advertise_host: &str,
+) -> Result<String, String> {
     if advertise_host == "127.0.0.1" || advertise_host == "localhost" {
         return Ok(server.url_for(token));
     }
@@ -122,6 +141,124 @@ pub fn primary_lan_ipv4() -> Option<Ipv4Addr> {
     }
 }
 
+#[cfg(windows)]
+fn lan_ipv4_networks() -> Vec<(Ipv4Addr, u8)> {
+    use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
+        GAA_FLAG_SKIP_MULTICAST, IF_TYPE_SOFTWARE_LOOPBACK, IF_TYPE_TUNNEL,
+        IP_ADAPTER_ADDRESSES_LH,
+    };
+    use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
+
+    unsafe fn wide_text(pointer: *const u16) -> String {
+        if pointer.is_null() {
+            return String::new();
+        }
+        let mut len = 0usize;
+        while len < 512 && unsafe { *pointer.add(len) } != 0 {
+            len += 1;
+        }
+        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(pointer, len) })
+    }
+
+    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    let mut bytes = 16 * 1024u32;
+    let mut buffer = vec![0u8; bytes as usize];
+    let mut status = unsafe {
+        GetAdaptersAddresses(
+            AF_INET as u32,
+            flags,
+            std::ptr::null(),
+            buffer.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>(),
+            &mut bytes,
+        )
+    };
+    if status == ERROR_BUFFER_OVERFLOW {
+        buffer.resize(bytes as usize, 0);
+        status = unsafe {
+            GetAdaptersAddresses(
+                AF_INET as u32,
+                flags,
+                std::ptr::null(),
+                buffer.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>(),
+                &mut bytes,
+            )
+        };
+    }
+    if status != NO_ERROR {
+        return primary_lan_ipv4()
+            .map(|address| vec![(address, 24)])
+            .unwrap_or_default();
+    }
+
+    let mut networks = Vec::new();
+    let mut adapter = buffer.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+    while !adapter.is_null() {
+        let item = unsafe { &*adapter };
+        let name = unsafe { wide_text(item.FriendlyName) }.to_ascii_lowercase();
+        let ignored_name = [
+            "virtual", "vpn", "tunnel", "loopback", "mihomo", "wsl", "hyper-v", "虚拟",
+        ]
+        .iter()
+        .any(|marker| name.contains(marker));
+        if item.OperStatus == IfOperStatusUp
+            && item.IfType != IF_TYPE_SOFTWARE_LOOPBACK
+            && item.IfType != IF_TYPE_TUNNEL
+            && !ignored_name
+        {
+            let mut unicast = item.FirstUnicastAddress;
+            while !unicast.is_null() {
+                let address = unsafe { &*unicast };
+                let socket = address.Address.lpSockaddr;
+                if !socket.is_null() && unsafe { (*socket).sa_family } == AF_INET {
+                    let ipv4 = unsafe { &*(socket.cast::<SOCKADDR_IN>()) };
+                    let octets = unsafe { ipv4.sin_addr.S_un.S_un_b };
+                    let value = Ipv4Addr::new(octets.s_b1, octets.s_b2, octets.s_b3, octets.s_b4);
+                    let prefix = address.OnLinkPrefixLength.min(32);
+                    if value.is_private()
+                        && !value.is_loopback()
+                        && !value.is_link_local()
+                        && prefix <= 30
+                        && !networks.contains(&(value, prefix))
+                    {
+                        networks.push((value, prefix));
+                    }
+                }
+                unicast = address.Next;
+            }
+        }
+        adapter = item.Next;
+    }
+    if networks.is_empty() {
+        if let Some(address) = primary_lan_ipv4() {
+            networks.push((address, 24));
+        }
+    }
+    networks
+}
+
+#[cfg(not(windows))]
+fn lan_ipv4_networks() -> Vec<(Ipv4Addr, u8)> {
+    primary_lan_ipv4()
+        .map(|address| vec![(address, 24)])
+        .unwrap_or_default()
+}
+
+fn discovery_interface_addresses() -> Vec<Ipv4Addr> {
+    let mut addresses = lan_ipv4_networks()
+        .into_iter()
+        .map(|(address, _)| address)
+        .collect::<Vec<_>>();
+    addresses.sort_unstable();
+    addresses.dedup();
+    if addresses.is_empty() {
+        addresses.push(Ipv4Addr::UNSPECIFIED);
+    }
+    addresses
+}
+
 pub fn ssdp_notify(location: &str) -> Result<(), String> {
     if location.contains('\r') || location.contains('\n') || !location.starts_with("http://") {
         return Err("投屏通告地址无效".into());
@@ -140,11 +277,17 @@ pub fn ssdp_notify(location: &str) -> Result<(), String> {
 }
 
 pub fn tvbox_payload(location: &str, title: &str) -> String {
-    format!("{{\"url\":\"{location}\",\"title\":\"{}\"}}", title.replace('"', "'"))
+    format!(
+        "{{\"url\":\"{location}\",\"title\":\"{}\"}}",
+        title.replace('"', "'")
+    )
 }
 
 pub fn cached_devices() -> Vec<CastDeviceInfo> {
-    device_cache().lock().map(|items| items.clone()).unwrap_or_default()
+    device_cache()
+        .lock()
+        .map(|items| items.clone())
+        .unwrap_or_default()
 }
 
 pub fn remember_devices(devices: Vec<CastDeviceInfo>) {
@@ -153,24 +296,49 @@ pub fn remember_devices(devices: Vec<CastDeviceInfo>) {
     }
 }
 
-pub fn discover_devices(timeout: Duration) -> Result<Vec<CastDeviceInfo>, String> {
+pub fn discover_devices_for_mode(
+    timeout: Duration,
+    mode: &str,
+) -> Result<Vec<CastDeviceInfo>, String> {
     if std::env::var_os("HLS_V6_CAST_NULL").is_some() {
         return Ok(Vec::new());
     }
-    let locations = ssdp_search(timeout)?;
-    let mut devices = Vec::new();
-    for location in locations {
-        if let Some(device) = describe_device(&location) {
-            devices.push(device);
-        }
-    }
-    devices.extend(discover_chromecasts(timeout));
+    let scan_cast = mode != "tvbox";
+    let scan_tvbox = mode != "cast";
+    let ssdp_worker = scan_cast.then(|| {
+        thread::spawn(move || {
+            ssdp_search(timeout)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|location| describe_device(&location))
+                .collect::<Vec<_>>()
+        })
+    });
+    let chromecast_worker = scan_cast.then(|| thread::spawn(move || discover_chromecasts(timeout)));
+    let tvbox_worker = scan_tvbox.then(|| thread::spawn(move || discover_tvboxes(timeout)));
+    let mut devices = ssdp_worker
+        .and_then(|worker| worker.join().ok())
+        .unwrap_or_default();
+    devices.extend(
+        chromecast_worker
+            .and_then(|worker| worker.join().ok())
+            .unwrap_or_default(),
+    );
+    devices.extend(
+        tvbox_worker
+            .and_then(|worker| worker.join().ok())
+            .unwrap_or_default(),
+    );
     devices.sort_by(|left, right| left.label.cmp(&right.label).then(left.id.cmp(&right.id)));
     devices.dedup_by(|left, right| left.id == right.id || left.control_url == right.control_url);
     if let Ok(mut cache) = device_cache().lock() {
         *cache = devices.clone();
     }
     Ok(devices)
+}
+
+pub fn discover_devices(timeout: Duration) -> Result<Vec<CastDeviceInfo>, String> {
+    discover_devices_for_mode(timeout, "")
 }
 
 fn percent_encode(value: &str) -> String {
@@ -197,30 +365,215 @@ pub fn push_tvbox(endpoint: &str, media_url: &str, _title: &str) -> Result<(), S
     } else {
         format!("{endpoint}/action")
     };
-    let (host, port, path) = split_http_url(&action)?;
+    let body = format!("do=push&url={}", percent_encode(media_url));
+    let mut response = tvbox_http_request("POST", &action, &body, Duration::from_secs(8))?;
+    if response.status == 404 || response.status == 405 {
+        response = tvbox_http_request(
+            "GET",
+            &format!("{action}?{body}"),
+            "",
+            Duration::from_secs(8),
+        )?;
+    }
+    validate_tvbox_response(&response)?;
+    Ok(())
+}
+
+#[derive(Debug)]
+struct TvboxHttpResponse {
+    status: u16,
+    body: String,
+}
+
+fn tvbox_http_request(
+    method: &str,
+    url: &str,
+    body: &str,
+    timeout: Duration,
+) -> Result<TvboxHttpResponse, String> {
+    let (host, port, path) = split_http_url(url)?;
     if !is_lan_host(&host) {
         return Err("TVBox 地址必须是局域网".into());
     }
-    let body = format!("do=push&url={}", percent_encode(media_url));
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    let mut stream = TcpStream::connect(SocketAddr::from((
-        host.parse::<Ipv4Addr>().map_err(|error| error.to_string())?,
+    let address = SocketAddr::from((
+        host.parse::<Ipv4Addr>()
+            .map_err(|error| error.to_string())?,
         port,
-    )))
-    .map_err(|error| format!("连接 TVBox: {error}"))?;
-    stream.set_read_timeout(Some(Duration::from_secs(8))).ok();
+    ));
+    let mut stream = TcpStream::connect_timeout(&address, timeout)
+        .map_err(|error| format!("连接 TVBox: {error}"))?;
+    stream.set_read_timeout(Some(timeout)).ok();
+    stream.set_write_timeout(Some(timeout)).ok();
+    let content_headers = if method == "POST" {
+        format!(
+            "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n",
+            body.len()
+        )
+    } else {
+        String::new()
+    };
+    let request = format!("{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\n{content_headers}Connection: close\r\n\r\n{body}");
     stream
         .write_all(request.as_bytes())
         .map_err(|error| error.to_string())?;
     let mut response = String::new();
-    stream.read_to_string(&mut response).ok();
-    if response.contains("HTTP/1.1 404") || response.contains("HTTP/1.0 404") {
-        return Err("电视拒绝了推送".into());
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| format!("读取 TVBox 响应: {error}"))?;
+    let (headers, body) = response.split_once("\r\n\r\n").unwrap_or((&response, ""));
+    let status = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse::<u16>().ok())
+        .ok_or_else(|| "TVBox 返回了无效响应".to_string())?;
+    Ok(TvboxHttpResponse {
+        status,
+        body: body.trim().to_string(),
+    })
+}
+
+fn validate_tvbox_response(response: &TvboxHttpResponse) -> Result<(), String> {
+    if response.status >= 400 {
+        return Err(format!("电视拒绝了推送（HTTP {}）", response.status));
+    }
+    if response.body.is_empty() {
+        return Ok(());
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&response.body) {
+        let failed_code = value
+            .get("code")
+            .and_then(serde_json::Value::as_i64)
+            .is_some_and(|code| code >= 400);
+        let failed = value.get("ok") == Some(&serde_json::Value::Bool(false))
+            || value.get("success") == Some(&serde_json::Value::Bool(false))
+            || value
+                .get("error")
+                .is_some_and(|item| !item.is_null() && item.as_str() != Some(""))
+            || failed_code;
+        if failed {
+            let message = ["error", "message", "msg"]
+                .into_iter()
+                .find_map(|key| value.get(key).and_then(serde_json::Value::as_str))
+                .filter(|item| !item.trim().is_empty())
+                .unwrap_or("电视拒绝了推送");
+            return Err(message.to_string());
+        }
+    }
+    let lower = response.body.trim().to_ascii_lowercase();
+    if lower.starts_with("error") || lower.starts_with("fail") || lower.starts_with("failed") {
+        return Err(response.body.clone());
     }
     Ok(())
+}
+
+const TVBOX_PORTS: [u16; 4] = [9978, 9979, 9977, 9976];
+
+fn tvbox_scan_targets(networks: &[(Ipv4Addr, u8)], max_hosts: usize) -> VecDeque<SocketAddr> {
+    let mut targets = VecDeque::new();
+    let mut remaining_hosts = max_hosts;
+    for &(local, prefix) in networks {
+        if remaining_hosts == 0 {
+            break;
+        }
+        let local_u32 = u32::from(local);
+        let mask = if prefix == 0 {
+            0
+        } else {
+            u32::MAX << (32 - prefix)
+        };
+        let network = local_u32 & mask;
+        let broadcast = network | !mask;
+        for candidate in network.saturating_add(1)..broadcast {
+            if candidate == local_u32 {
+                continue;
+            }
+            let host = Ipv4Addr::from(candidate);
+            for port in TVBOX_PORTS {
+                targets.push_back(SocketAddr::from((host, port)));
+            }
+            remaining_hosts -= 1;
+            if remaining_hosts == 0 {
+                break;
+            }
+        }
+    }
+    targets
+}
+
+fn discover_tvboxes(timeout: Duration) -> Vec<CastDeviceInfo> {
+    let networks = lan_ipv4_networks();
+    if networks.is_empty() {
+        return Vec::new();
+    }
+    let targets = tvbox_scan_targets(&networks, 512);
+    let queue = Arc::new(Mutex::new(targets));
+    let found = Arc::new(Mutex::new(Vec::new()));
+    let probe_timeout = timeout
+        .min(Duration::from_millis(140))
+        .max(Duration::from_millis(60));
+    let workers = (0..64)
+        .map(|_| {
+            let queue = Arc::clone(&queue);
+            let found = Arc::clone(&found);
+            thread::spawn(move || loop {
+                let address = queue.lock().ok().and_then(|mut items| items.pop_front());
+                let Some(address) = address else { break };
+                if let Some(device) = probe_tvbox(address, probe_timeout) {
+                    if let Ok(mut devices) = found.lock() {
+                        devices.push(device);
+                    }
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    for worker in workers {
+        let _ = worker.join();
+    }
+    Arc::try_unwrap(found)
+        .ok()
+        .and_then(|items| items.into_inner().ok())
+        .unwrap_or_default()
+}
+
+fn probe_tvbox(address: SocketAddr, timeout: Duration) -> Option<CastDeviceInfo> {
+    let mut stream = TcpStream::connect_timeout(&address, timeout).ok()?;
+    stream.set_read_timeout(Some(timeout)).ok()?;
+    stream.set_write_timeout(Some(timeout)).ok()?;
+    let request = format!(
+        "GET / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        address
+    );
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut body = Vec::new();
+    stream.take(8192).read_to_end(&mut body).ok()?;
+    let text = String::from_utf8_lossy(&body);
+    let status = text
+        .lines()
+        .next()?
+        .split_whitespace()
+        .nth(1)?
+        .parse::<u16>()
+        .ok()?;
+    if status >= 500 {
+        return None;
+    }
+    let lower = text.to_ascii_lowercase();
+    let matched = ["tvbox", "vod", "player", "/action", "push"]
+        .into_iter()
+        .any(|marker| lower.contains(marker))
+        || text.contains("影视");
+    if !matched {
+        return None;
+    }
+    let endpoint = format!("http://{address}");
+    Some(CastDeviceInfo {
+        id: format!("tvbox:{endpoint}"),
+        label: "TVBox / 影视盒子".into(),
+        location: endpoint.clone(),
+        control_url: endpoint,
+        service_type: "tvbox".into(),
+    })
 }
 
 pub fn play_on_device(device_id: &str, media_url: &str, title: &str) -> Result<String, String> {
@@ -230,17 +583,23 @@ pub fn play_on_device(device_id: &str, media_url: &str, title: &str) -> Result<S
         .ok_or_else(|| "请先扫描并选择投屏设备".to_string())?;
     if device.service_type == "tvbox" || device.id.starts_with("tvbox:") {
         push_tvbox(&device.control_url, media_url, title)?;
+        remember_last_device(device.clone());
         return Ok(device.label);
     }
     if device.service_type == "chromecast" || device.id.starts_with("chromecast:") {
         chromecast_play(&device.control_url, media_url, title)?;
+        remember_last_device(device.clone());
         return Ok(device.label);
     }
-    av_transport_action(&device, "SetAVTransportURI", &[
-        ("InstanceID", "0"),
-        ("CurrentURI", media_url),
-        ("CurrentURIMetaData", &didl_lite(media_url, title)),
-    ])?;
+    av_transport_action(
+        &device,
+        "SetAVTransportURI",
+        &[
+            ("InstanceID", "0"),
+            ("CurrentURI", media_url),
+            ("CurrentURIMetaData", &didl_lite(media_url, title)),
+        ],
+    )?;
     av_transport_action(&device, "Play", &[("InstanceID", "0"), ("Speed", "1")])?;
     remember_last_device(device.clone());
     Ok(device.label)
@@ -265,18 +624,236 @@ pub fn last_device_label() -> String {
         .unwrap_or_default()
 }
 
-pub fn control_session(action: &str) -> Result<(), String> {
+pub fn remember_tvbox(endpoint: &str) {
+    remember_last_device(CastDeviceInfo {
+        id: "tvbox:configured".into(),
+        label: format!("TVBox · {}", endpoint.trim()),
+        location: endpoint.trim().to_string(),
+        control_url: endpoint.trim().to_string(),
+        service_type: "tvbox".into(),
+    });
+}
+
+pub fn remember_lan_share(label: &str) {
+    remember_last_device(CastDeviceInfo {
+        id: "lan:published".into(),
+        label: label.to_string(),
+        location: String::new(),
+        control_url: String::new(),
+        service_type: "lan".into(),
+    });
+}
+
+pub fn last_session_status() -> CastPlaybackStatus {
+    let device = last_cast().lock().ok().and_then(|guard| guard.clone());
+    device
+        .as_ref()
+        .map(|item| CastPlaybackStatus {
+            label: item.label.clone(),
+            device_kind: device_kind(item).to_string(),
+            supported_actions: supported_actions(item),
+            playing: !matches!(device_kind(item), "tvbox" | "lan"),
+            state: if matches!(device_kind(item), "tvbox" | "lan") {
+                "PUBLISHED"
+            } else {
+                "PLAYING"
+            }
+            .into(),
+            ..Default::default()
+        })
+        .unwrap_or_default()
+}
+
+pub fn control_session(action: &str) -> Result<CastPlaybackStatus, String> {
     let device = last_cast()
         .lock()
         .ok()
         .and_then(|guard| guard.clone())
         .ok_or_else(|| "当前没有投屏会话".to_string())?;
-    match action {
-        "play" => av_transport_action(&device, "Play", &[("InstanceID", "0"), ("Speed", "1")]),
-        "pause" => av_transport_action(&device, "Pause", &[("InstanceID", "0")]),
-        "stop" => av_transport_action(&device, "Stop", &[("InstanceID", "0")]),
-        _ => Err(format!("unknown cast action {action}")),
+    let kind = device_kind(&device);
+    if kind == "tvbox" || kind == "lan" {
+        if action != "stop" && action != "status" {
+            return Err(if kind == "tvbox" {
+                "TVBox 没有统一的远程播放控制协议，请在电视端操作"
+            } else {
+                "局域网播放地址不提供远程播放控制"
+            }
+            .into());
+        }
+        if action == "stop" {
+            clear_last_device();
+        }
+        return Ok(CastPlaybackStatus {
+            label: device.label,
+            device_kind: kind.into(),
+            state: if action == "stop" {
+                "STOPPED"
+            } else {
+                "PUBLISHED"
+            }
+            .into(),
+            ..Default::default()
+        });
     }
+    let result = if kind == "chromecast" {
+        chromecast_control(&device.control_url, action)
+    } else {
+        dlna_control(&device, action)
+    }?;
+    if action == "stop" {
+        clear_last_device();
+    }
+    Ok(result)
+}
+
+fn clear_last_device() {
+    if let Ok(mut guard) = last_cast().lock() {
+        *guard = None;
+    }
+}
+
+fn device_kind(device: &CastDeviceInfo) -> &'static str {
+    if device.service_type == "lan" || device.id.starts_with("lan:") {
+        "lan"
+    } else if device.service_type == "tvbox" || device.id.starts_with("tvbox:") {
+        "tvbox"
+    } else if device.service_type == "chromecast" || device.id.starts_with("chromecast:") {
+        "chromecast"
+    } else {
+        "dlna"
+    }
+}
+
+fn supported_actions(device: &CastDeviceInfo) -> Vec<String> {
+    if matches!(device_kind(device), "tvbox" | "lan") {
+        vec!["stop".into()]
+    } else {
+        [
+            "status",
+            "play",
+            "pause",
+            "seek_back",
+            "seek_forward",
+            "seek_to",
+            "stop",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    }
+}
+
+fn parse_control_action(action: &str) -> (&str, i64) {
+    if let Some(value) = action.strip_prefix("seek_to:") {
+        return ("seek_to", value.parse().unwrap_or(0));
+    }
+    if let Some(value) = action.strip_prefix("seek:") {
+        return ("seek", value.parse().unwrap_or(0));
+    }
+    match action {
+        "seek_back" => ("seek", -10),
+        "seek_forward" => ("seek", 10),
+        other => (other, 0),
+    }
+}
+
+fn format_duration(seconds: u64) -> String {
+    format!(
+        "{:02}:{:02}:{:02}",
+        seconds / 3600,
+        (seconds / 60) % 60,
+        seconds % 60
+    )
+}
+
+fn parse_duration(value: &str) -> Option<u64> {
+    let value = value.trim().split('.').next()?;
+    let parts: Vec<_> = value.split(':').collect();
+    let (hours, minutes, seconds): (u64, u64, u64) = match parts.as_slice() {
+        [minutes, seconds] => (0, minutes.parse().ok()?, seconds.parse().ok()?),
+        [hours, minutes, seconds] => (
+            hours.parse().ok()?,
+            minutes.parse().ok()?,
+            seconds.parse().ok()?,
+        ),
+        _ => return None,
+    };
+    (minutes < 60 && seconds < 60).then_some(hours * 3600 + minutes * 60 + seconds)
+}
+
+fn dlna_status(device: &CastDeviceInfo) -> CastPlaybackStatus {
+    let position_response =
+        av_transport_action_response(device, "GetPositionInfo", &[("InstanceID", "0")]);
+    let transport_response =
+        av_transport_action_response(device, "GetTransportInfo", &[("InstanceID", "0")]);
+    let position_seconds = position_response
+        .as_ref()
+        .ok()
+        .and_then(|body| xml_local(body, "RelTime"))
+        .and_then(|value| parse_duration(&value));
+    let duration_seconds = position_response
+        .as_ref()
+        .ok()
+        .and_then(|body| xml_local(body, "TrackDuration"))
+        .and_then(|value| parse_duration(&value))
+        .unwrap_or(0);
+    let state = transport_response
+        .as_ref()
+        .ok()
+        .and_then(|body| xml_local(body, "CurrentTransportState"))
+        .unwrap_or_else(|| "UNKNOWN".into())
+        .to_ascii_uppercase();
+    CastPlaybackStatus {
+        label: device.label.clone(),
+        device_kind: "dlna".into(),
+        supported_actions: supported_actions(device),
+        playing: matches!(state.as_str(), "PLAYING" | "TRANSITIONING"),
+        paused: state == "PAUSED_PLAYBACK",
+        position_seconds: position_seconds.unwrap_or(0),
+        duration_seconds,
+        position_available: position_seconds.is_some(),
+        state,
+    }
+}
+
+fn dlna_control(device: &CastDeviceInfo, action: &str) -> Result<CastPlaybackStatus, String> {
+    let (action, seconds) = parse_control_action(action);
+    match action {
+        "play" => av_transport_action(device, "Play", &[("InstanceID", "0"), ("Speed", "1")])?,
+        "pause" => av_transport_action(device, "Pause", &[("InstanceID", "0")])?,
+        "stop" => av_transport_action(device, "Stop", &[("InstanceID", "0")])?,
+        "seek" | "seek_to" => {
+            let current = if action == "seek" {
+                dlna_status(device).position_seconds as i64
+            } else {
+                0
+            };
+            let target = if action == "seek" {
+                current.saturating_add(seconds).max(0)
+            } else {
+                seconds.max(0)
+            } as u64;
+            let target = format_duration(target);
+            av_transport_action(
+                device,
+                "Seek",
+                &[
+                    ("InstanceID", "0"),
+                    ("Unit", "REL_TIME"),
+                    ("Target", &target),
+                ],
+            )?;
+        }
+        "status" => {}
+        _ => return Err(format!("不支持的投屏控制操作: {action}")),
+    }
+    let mut status = dlna_status(device);
+    if action == "stop" {
+        status.playing = false;
+        status.paused = false;
+        status.state = "STOPPED".into();
+    }
+    Ok(status)
 }
 
 pub fn parse_ssdp_location(response: &str) -> Option<String> {
@@ -327,19 +904,25 @@ pub fn parse_device_description(xml: &str, location: &str) -> Option<CastDeviceI
     None
 }
 
-fn ssdp_search(timeout: Duration) -> Result<Vec<String>, String> {
-    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|error| error.to_string())?;
-    socket.set_read_timeout(Some(Duration::from_millis(200))).ok();
+fn ssdp_search_on(interface: Ipv4Addr, timeout: Duration) -> Vec<String> {
+    let socket = match UdpSocket::bind((interface, 0)) {
+        Ok(socket) => socket,
+        Err(_) => return Vec::new(),
+    };
+    let _ = socket.set_nonblocking(true);
     let targets = [
         "urn:schemas-upnp-org:device:MediaRenderer:1",
         "urn:schemas-upnp-org:service:AVTransport:1",
         "ssdp:all",
     ];
-    for target in targets {
-        let body = format!(
-            "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: {target}\r\nUSER-AGENT: HLSDownloader/6 UPnP/1.1\r\n\r\n"
-        );
-        let _ = socket.send_to(body.as_bytes(), "239.255.255.250:1900");
+    for _ in 0..2 {
+        for target in targets {
+            let body = format!(
+                "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: {target}\r\nUSER-AGENT: HLSDownloader/7 UPnP/1.1\r\n\r\n"
+            );
+            let _ = socket.send_to(body.as_bytes(), "239.255.255.250:1900");
+        }
+        thread::sleep(Duration::from_millis(25));
     }
     let mut locations = Vec::new();
     let deadline = Instant::now() + timeout;
@@ -347,13 +930,33 @@ fn ssdp_search(timeout: Duration) -> Result<Vec<String>, String> {
     while Instant::now() < deadline {
         match socket.recv_from(&mut buf) {
             Ok((count, _)) => {
-                if let Some(location) = parse_ssdp_location(&String::from_utf8_lossy(&buf[..count])) {
+                if let Some(location) = parse_ssdp_location(&String::from_utf8_lossy(&buf[..count]))
+                {
                     if is_lan_url(&location) && !locations.contains(&location) {
                         locations.push(location);
                     }
                 }
             }
-            Err(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(8));
+            }
+            Err(_) => break,
+        }
+    }
+    locations
+}
+
+fn ssdp_search(timeout: Duration) -> Result<Vec<String>, String> {
+    let workers = discovery_interface_addresses()
+        .into_iter()
+        .map(|interface| thread::spawn(move || ssdp_search_on(interface, timeout)))
+        .collect::<Vec<_>>();
+    let mut locations = Vec::new();
+    for worker in workers {
+        for location in worker.join().unwrap_or_default() {
+            if !locations.contains(&location) {
+                locations.push(location);
+            }
         }
     }
     Ok(locations)
@@ -372,6 +975,14 @@ fn av_transport_action(
     action: &str,
     args: &[(&str, &str)],
 ) -> Result<(), String> {
+    av_transport_action_response(device, action, args).map(|_| ())
+}
+
+fn av_transport_action_response(
+    device: &CastDeviceInfo,
+    action: &str,
+    args: &[(&str, &str)],
+) -> Result<String, String> {
     if !is_lan_url(&device.control_url) {
         return Err("投屏控制地址必须是局域网".into());
     }
@@ -385,10 +996,7 @@ fn av_transport_action(
     }
     let mut inner = String::new();
     for (name, value) in args {
-        inner.push_str(&format!(
-            "<{name}>{}</{name}>",
-            xml_escape(value)
-        ));
+        inner.push_str(&format!("<{name}>{}</{name}>", xml_escape(value)));
     }
     let body = format!(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body><u:{action} xmlns:u=\"{service}\">{inner}</u:{action}></s:Body></s:Envelope>"
@@ -398,7 +1006,7 @@ fn av_transport_action(
     if response.contains("s:Fault") || response.contains("UPnPError") {
         return Err(format!("投屏设备拒绝 {action}"));
     }
-    Ok(())
+    Ok(response)
 }
 
 fn http_post_lan(url: &str, soap_action: &str, body: &str) -> Result<String, String> {
@@ -411,9 +1019,7 @@ fn http_post_lan(url: &str, soap_action: &str, body: &str) -> Result<String, Str
         .map_err(|error| format!("cast address: {error}"))?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(4))
         .map_err(|error| error.to_string())?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(6)))
-        .ok();
+    stream.set_read_timeout(Some(Duration::from_secs(6))).ok();
     let request = format!(
         "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: text/xml; charset=\"utf-8\"\r\nSOAPACTION: {soap_action}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -445,10 +1051,7 @@ fn split_http_url(url: &str) -> Result<(String, u16, String), String> {
         return Err("投屏控制地址无效".into());
     }
     let (host, port) = if let Some((host, port)) = authority.split_once(':') {
-        (
-            host.to_string(),
-            port.parse::<u16>().unwrap_or(80),
-        )
+        (host.to_string(), port.parse::<u16>().unwrap_or(80))
     } else {
         (authority.to_string(), 80)
     };
@@ -492,7 +1095,10 @@ fn xml_local(xml: &str, name: &str) -> Option<String> {
 fn origin_of(url: &str) -> String {
     if let Some(scheme) = url.find("://") {
         let after = &url[scheme + 3..];
-        let host_end = after.find('/').map(|index| scheme + 3 + index).unwrap_or(url.len());
+        let host_end = after
+            .find('/')
+            .map(|index| scheme + 3 + index)
+            .unwrap_or(url.len());
         url[..host_end].to_string()
     } else {
         url.to_string()
@@ -529,7 +1135,9 @@ pub fn mdns_googlecast_query() -> Vec<u8> {
     let mut packet = vec![0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
     packet.extend(dns_labels("_googlecast._tcp.local"));
     packet.extend_from_slice(&12u16.to_be_bytes());
-    packet.extend_from_slice(&1u16.to_be_bytes());
+    // Ask for a unicast reply so discovery can use a per-interface ephemeral port
+    // even when another application already owns the shared mDNS port.
+    packet.extend_from_slice(&0x8001u16.to_be_bytes());
     packet
 }
 
@@ -610,7 +1218,13 @@ pub fn parse_mdns_chromecasts(packet: &[u8]) -> Vec<CastDeviceInfo> {
         let label = attrs
             .and_then(|map| map.get("fn"))
             .cloned()
-            .unwrap_or_else(|| instance.split('.').next().unwrap_or("Chromecast").to_string());
+            .unwrap_or_else(|| {
+                instance
+                    .split('.')
+                    .next()
+                    .unwrap_or("Chromecast")
+                    .to_string()
+            });
         devices.push(CastDeviceInfo {
             id: format!("chromecast:{id}"),
             label: format!("Chromecast · {label}"),
@@ -682,15 +1296,18 @@ fn dns_read_name(packet: &[u8], mut offset: usize) -> Option<(String, usize)> {
     None
 }
 
-fn discover_chromecasts(timeout: Duration) -> Vec<CastDeviceInfo> {
-    let socket = match UdpSocket::bind("0.0.0.0:0") {
+fn discover_chromecasts_on(interface: Ipv4Addr, timeout: Duration) -> Vec<CastDeviceInfo> {
+    let socket = match UdpSocket::bind((interface, 0)) {
         Ok(socket) => socket,
         Err(_) => return Vec::new(),
     };
-    let _ = socket.set_read_timeout(Some(Duration::from_millis(200)));
-    let _ = socket.join_multicast_v4(&Ipv4Addr::new(224, 0, 0, 251), &Ipv4Addr::UNSPECIFIED);
+    let _ = socket.set_nonblocking(true);
+    let _ = socket.join_multicast_v4(&Ipv4Addr::new(224, 0, 0, 251), &interface);
     let query = mdns_googlecast_query();
-    let _ = socket.send_to(&query, "224.0.0.251:5353");
+    for _ in 0..2 {
+        let _ = socket.send_to(&query, "224.0.0.251:5353");
+        thread::sleep(Duration::from_millis(25));
+    }
     let deadline = Instant::now() + timeout;
     let mut devices = Vec::new();
     let mut buf = [0u8; 4096];
@@ -698,12 +1315,37 @@ fn discover_chromecasts(timeout: Duration) -> Vec<CastDeviceInfo> {
         match socket.recv_from(&mut buf) {
             Ok((count, _)) => {
                 for device in parse_mdns_chromecasts(&buf[..count]) {
-                    if !devices.iter().any(|item: &CastDeviceInfo| item.id == device.id) {
+                    if !devices
+                        .iter()
+                        .any(|item: &CastDeviceInfo| item.id == device.id)
+                    {
                         devices.push(device);
                     }
                 }
             }
-            Err(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(8));
+            }
+            Err(_) => break,
+        }
+    }
+    devices
+}
+
+fn discover_chromecasts(timeout: Duration) -> Vec<CastDeviceInfo> {
+    let workers = discovery_interface_addresses()
+        .into_iter()
+        .map(|interface| thread::spawn(move || discover_chromecasts_on(interface, timeout)))
+        .collect::<Vec<_>>();
+    let mut devices = Vec::new();
+    for worker in workers {
+        for device in worker.join().unwrap_or_default() {
+            if !devices
+                .iter()
+                .any(|item: &CastDeviceInfo| item.id == device.id)
+            {
+                devices.push(device);
+            }
         }
     }
     devices
@@ -805,8 +1447,12 @@ fn proto_read_varint(buf: &[u8], mut at: usize) -> Option<(u64, usize)> {
 }
 
 fn chromecast_play(endpoint: &str, media_url: &str, title: &str) -> Result<String, String> {
-    let (host, port) = endpoint.rsplit_once(':').ok_or_else(|| "Chromecast 地址无效".to_string())?;
-    let port: u16 = port.parse().map_err(|_| "Chromecast 端口无效".to_string())?;
+    let (host, port) = endpoint
+        .rsplit_once(':')
+        .ok_or_else(|| "Chromecast 地址无效".to_string())?;
+    let port: u16 = port
+        .parse()
+        .map_err(|_| "Chromecast 端口无效".to_string())?;
     if !is_lan_host(host) {
         return Err("Chromecast 必须在局域网".into());
     }
@@ -821,71 +1467,268 @@ fn chromecast_play(endpoint: &str, media_url: &str, title: &str) -> Result<Strin
     }
 }
 
+fn chromecast_control(endpoint: &str, action: &str) -> Result<CastPlaybackStatus, String> {
+    let (host, port) = endpoint
+        .rsplit_once(':')
+        .ok_or_else(|| "Chromecast 地址无效".to_string())?;
+    let port: u16 = port
+        .parse()
+        .map_err(|_| "Chromecast 端口无效".to_string())?;
+    if !is_lan_host(host) {
+        return Err("Chromecast 必须在局域网".into());
+    }
+    #[cfg(windows)]
+    {
+        chromecast_control_windows(host, port, action)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (port, action);
+        Err("Chromecast 投屏使用 Windows Schannel".into())
+    }
+}
+
 #[cfg(windows)]
-fn chromecast_play_windows(host: &str, port: u16, media_url: &str, title: &str) -> Result<String, String> {
+fn chromecast_connect_windows(
+    host: &str,
+    port: u16,
+) -> Result<schannel::tls_stream::TlsStream<TcpStream>, String> {
     let raw = TcpStream::connect_timeout(
-        &SocketAddr::from((host.parse::<Ipv4Addr>().map_err(|error| error.to_string())?, port)),
+        &SocketAddr::from((
+            host.parse::<Ipv4Addr>()
+                .map_err(|error| error.to_string())?,
+            port,
+        )),
         Duration::from_secs(4),
     )
     .map_err(|error| error.to_string())?;
-    raw.set_read_timeout(Some(Duration::from_secs(5)))
+    raw.set_read_timeout(Some(Duration::from_millis(900)))
         .map_err(|error| error.to_string())?;
     let cred = schannel::schannel_cred::SchannelCred::builder()
         .acquire(schannel::schannel_cred::Direction::Outbound)
         .map_err(|error| error.to_string())?;
-    let mut stream = schannel::tls_stream::Builder::new()
+    schannel::tls_stream::Builder::new()
         .domain(host)
         .verify_callback(|_| Ok(()))
         .connect(cred, raw)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(windows)]
+fn chromecast_transport<W: Read + Write>(stream: &mut W, launch: bool) -> Result<String, String> {
     write_cast(
-        &mut stream,
+        stream,
         CAST_NS_CONNECTION,
         "receiver-0",
         r#"{"type":"CONNECT"}"#,
     )?;
     write_cast(
-        &mut stream,
+        stream,
         CAST_NS_RECEIVER,
         "receiver-0",
         r#"{"type":"GET_STATUS","requestId":1}"#,
     )?;
-    let mut transport = String::new();
     let deadline = Instant::now() + Duration::from_secs(6);
     let mut launched = false;
     while Instant::now() < deadline {
-        let Some((namespace, payload)) = read_cast(&mut stream)? else {
+        let Some((namespace, payload)) = read_cast(stream)? else {
             continue;
         };
         if namespace == CAST_NS_HEARTBEAT && payload.contains("PING") {
-            write_cast(&mut stream, CAST_NS_HEARTBEAT, "receiver-0", r#"{"type":"PONG"}"#)?;
+            write_cast(
+                stream,
+                CAST_NS_HEARTBEAT,
+                "receiver-0",
+                r#"{"type":"PONG"}"#,
+            )?;
             continue;
         }
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) {
-            if value.get("type").and_then(|item| item.as_str()) == Some("RECEIVER_STATUS") {
-                if let Some(app) = value
-                    .pointer("/status/applications/0/transportId")
-                    .and_then(|item| item.as_str())
-                {
-                    transport = app.to_string();
-                    break;
-                }
-                if !launched {
-                    launched = true;
-                    let body = serde_json::json!({
-                        "type": "LAUNCH",
-                        "appId": CAST_APP_DEFAULT_MEDIA,
-                        "requestId": 2
-                    })
-                    .to_string();
-                    write_cast(&mut stream, CAST_NS_RECEIVER, "receiver-0", &body)?;
-                }
-            }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+            continue;
+        };
+        if value.get("type").and_then(|item| item.as_str()) != Some("RECEIVER_STATUS") {
+            continue;
+        }
+        if let Some(transport) = value
+            .pointer("/status/applications/0/transportId")
+            .and_then(|item| item.as_str())
+        {
+            return Ok(transport.to_string());
+        }
+        if launch && !launched {
+            launched = true;
+            let body = serde_json::json!({
+                "type": "LAUNCH",
+                "appId": CAST_APP_DEFAULT_MEDIA,
+                "requestId": 2
+            })
+            .to_string();
+            write_cast(stream, CAST_NS_RECEIVER, "receiver-0", &body)?;
         }
     }
-    if transport.is_empty() {
-        return Err("Chromecast 没有返回会话".into());
+    Err("Chromecast 没有返回会话".into())
+}
+
+fn chromecast_status_from_value(
+    label: &str,
+    value: &serde_json::Value,
+) -> Option<CastPlaybackStatus> {
+    let status = value.pointer("/status/0")?;
+    let state = status
+        .get("playerState")
+        .and_then(|item| item.as_str())
+        .unwrap_or("UNKNOWN")
+        .to_ascii_uppercase();
+    let position = status
+        .get("currentTime")
+        .and_then(|item| item.as_f64())
+        .unwrap_or(0.0)
+        .max(0.0) as u64;
+    let duration = status
+        .pointer("/media/duration")
+        .and_then(|item| item.as_f64())
+        .unwrap_or(0.0)
+        .max(0.0) as u64;
+    Some(CastPlaybackStatus {
+        label: label.to_string(),
+        device_kind: "chromecast".into(),
+        supported_actions: [
+            "status",
+            "play",
+            "pause",
+            "seek_back",
+            "seek_forward",
+            "seek_to",
+            "stop",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        playing: matches!(state.as_str(), "PLAYING" | "BUFFERING"),
+        paused: state == "PAUSED",
+        position_seconds: position,
+        duration_seconds: duration,
+        position_available: true,
+        state,
+    })
+}
+
+#[cfg(windows)]
+fn chromecast_read_status<W: Read + Write>(
+    stream: &mut W,
+    transport: &str,
+    label: &str,
+) -> Result<(CastPlaybackStatus, i64), String> {
+    write_cast(
+        stream,
+        CAST_NS_MEDIA,
+        transport,
+        r#"{"type":"GET_STATUS","requestId":10}"#,
+    )?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let Some((namespace, payload)) = read_cast(stream)? else {
+            continue;
+        };
+        if namespace == CAST_NS_HEARTBEAT && payload.contains("PING") {
+            write_cast(
+                stream,
+                CAST_NS_HEARTBEAT,
+                "receiver-0",
+                r#"{"type":"PONG"}"#,
+            )?;
+            continue;
+        }
+        if namespace != CAST_NS_MEDIA {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+            continue;
+        };
+        if value.get("type").and_then(|item| item.as_str()) != Some("MEDIA_STATUS") {
+            continue;
+        }
+        if let Some(status) = chromecast_status_from_value(label, &value) {
+            let session_id = value
+                .pointer("/status/0/mediaSessionId")
+                .and_then(|item| item.as_i64())
+                .unwrap_or(0);
+            return Ok((status, session_id));
+        }
     }
+    Err("Chromecast 没有返回播放状态".into())
+}
+
+#[cfg(windows)]
+fn chromecast_control_windows(
+    host: &str,
+    port: u16,
+    action: &str,
+) -> Result<CastPlaybackStatus, String> {
+    let mut stream = chromecast_connect_windows(host, port)?;
+    let transport = chromecast_transport(&mut stream, false)?;
+    write_cast(
+        &mut stream,
+        CAST_NS_CONNECTION,
+        &transport,
+        r#"{"type":"CONNECT"}"#,
+    )?;
+    let label = last_device_label();
+    let (mut status, session_id) = chromecast_read_status(&mut stream, &transport, &label)?;
+    let (operation, seconds) = parse_control_action(action);
+    if operation == "status" {
+        return Ok(status);
+    }
+    if !matches!(operation, "play" | "pause" | "stop" | "seek" | "seek_to") {
+        return Err(format!("不支持的投屏控制操作: {operation}"));
+    }
+    let mut body = serde_json::json!({
+        "type": operation.to_ascii_uppercase(),
+        "requestId": 11,
+        "mediaSessionId": session_id,
+    });
+    if operation == "seek" || operation == "seek_to" {
+        let current = if operation == "seek" {
+            status.position_seconds as i64
+        } else {
+            0
+        };
+        body["type"] = serde_json::Value::String("SEEK".into());
+        body["currentTime"] = serde_json::json!((if operation == "seek" {
+            current.saturating_add(seconds)
+        } else {
+            seconds
+        })
+        .max(0));
+        body["resumeState"] = serde_json::Value::String("PLAYBACK_UNCHANGED".into());
+    }
+    write_cast(&mut stream, CAST_NS_MEDIA, &transport, &body.to_string())?;
+    if operation == "stop" {
+        status.playing = false;
+        status.paused = false;
+        status.position_seconds = 0;
+        status.state = "STOPPED".into();
+        return Ok(status);
+    }
+    chromecast_read_status(&mut stream, &transport, &label)
+        .map(|(status, _)| status)
+        .or_else(|_| {
+            status.playing =
+                operation == "play" || (operation.starts_with("seek") && status.playing);
+            status.paused = operation == "pause";
+            Ok(status)
+        })
+}
+
+#[cfg(windows)]
+fn chromecast_play_windows(
+    host: &str,
+    port: u16,
+    media_url: &str,
+    title: &str,
+) -> Result<String, String> {
+    let mut stream = chromecast_connect_windows(host, port)?;
+    let transport = chromecast_transport(&mut stream, true)?;
     write_cast(
         &mut stream,
         CAST_NS_CONNECTION,
@@ -933,7 +1776,12 @@ fn chromecast_mime(media_url: &str, title: &str) -> &'static str {
     }
 }
 
-fn write_cast<W: Write>(stream: &mut W, namespace: &str, destination: &str, payload: &str) -> Result<(), String> {
+fn write_cast<W: Write>(
+    stream: &mut W,
+    namespace: &str,
+    destination: &str,
+    payload: &str,
+) -> Result<(), String> {
     stream
         .write_all(&encode_cast_message(namespace, destination, payload))
         .map_err(|error| error.to_string())
@@ -949,7 +1797,9 @@ fn read_cast<R: Read>(stream: &mut R) -> Result<Option<(String, String)>, String
         return Err("Chromecast 帧过长".into());
     }
     let mut body = vec![0u8; len];
-    stream.read_exact(&mut body).map_err(|error| error.to_string())?;
+    stream
+        .read_exact(&mut body)
+        .map_err(|error| error.to_string())?;
     let mut frame = header.to_vec();
     frame.extend(body);
     Ok(decode_cast_payload(&frame))
@@ -958,12 +1808,16 @@ fn read_cast<R: Read>(stream: &mut R) -> Result<Option<(String, String)>, String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
 
     #[test]
     fn rejects_public_cast_hosts() {
         assert!(is_lan_host("192.168.1.8"));
         assert!(is_lan_host("10.0.0.2"));
         assert!(!is_lan_host("8.8.8.8"));
+        assert!(start_browser_push("cast", "javascript:alert(1)", "x").is_err());
+        assert!(start_browser_push("cast", "https://cdn.test/a.mp4\0", "x").is_err());
+        assert!(start_browser_push("cast", "file:///C:/Windows/video.mp4", "x").is_err());
         let server = MediaServer::start().unwrap();
         assert!(lan_media_url(&server, "t", "8.8.8.8").is_err());
         if let Some(ip) = primary_lan_ipv4() {
@@ -999,7 +1853,10 @@ mod tests {
 </root>"#;
         let device = parse_device_description(xml, "http://192.168.1.20:8008/desc.xml").unwrap();
         assert_eq!(device.label, "客厅电视");
-        assert_eq!(device.control_url, "http://192.168.1.20:8008/upnp/control/AVTransport");
+        assert_eq!(
+            device.control_url,
+            "http://192.168.1.20:8008/upnp/control/AVTransport"
+        );
         assert!(device.service_type.contains("AVTransport"));
     }
 
@@ -1016,6 +1873,9 @@ mod tests {
 
     #[test]
     fn parses_mdns_googlecast_records() {
+        let query = mdns_googlecast_query();
+        assert_eq!(&query[query.len() - 2..], &[0x80, 0x01]);
+
         let mut packet = vec![0, 0, 0x84, 0, 0, 0, 0, 3, 0, 0, 0, 0];
         packet.extend(dns_labels("_googlecast._tcp.local"));
         packet.extend_from_slice(&12u16.to_be_bytes());
@@ -1047,14 +1907,135 @@ mod tests {
 
     #[test]
     fn cast_v2_frame_roundtrips_json_payload() {
-        let frame = encode_cast_message(
-            CAST_NS_MEDIA,
-            "web-1",
-            r#"{"type":"LOAD","requestId":3}"#,
-        );
+        let frame = encode_cast_message(CAST_NS_MEDIA, "web-1", r#"{"type":"LOAD","requestId":3}"#);
         let (namespace, payload) = decode_cast_payload(&frame).unwrap();
         assert_eq!(namespace, CAST_NS_MEDIA);
         assert!(payload.contains("LOAD"));
-        assert_eq!(chromecast_mime("http://10.0.0.2/local.m3u8", "live"), "application/vnd.apple.mpegurl");
+        assert_eq!(
+            chromecast_mime("http://10.0.0.2/local.m3u8", "live"),
+            "application/vnd.apple.mpegurl"
+        );
+    }
+
+    #[test]
+    fn parses_cast_actions_and_playback_durations() {
+        assert_eq!(parse_control_action("seek:-15"), ("seek", -15));
+        assert_eq!(parse_control_action("seek_to:125"), ("seek_to", 125));
+        assert_eq!(parse_control_action("seek_forward"), ("seek", 10));
+        assert_eq!(parse_duration("01:02:03.250"), Some(3723));
+        assert_eq!(parse_duration("02:05"), Some(125));
+        assert_eq!(parse_duration("00:99:00"), None);
+        assert_eq!(format_duration(3723), "01:02:03");
+    }
+
+    #[test]
+    fn rejects_explicit_tvbox_failure_bodies() {
+        assert!(validate_tvbox_response(&TvboxHttpResponse {
+            status: 500,
+            body: String::new()
+        })
+        .is_err());
+        assert!(validate_tvbox_response(&TvboxHttpResponse {
+            status: 200,
+            body: r#"{"ok":false,"message":"busy"}"#.into()
+        })
+        .is_err());
+        assert!(validate_tvbox_response(&TvboxHttpResponse {
+            status: 200,
+            body: r#"{"code":503,"msg":"offline"}"#.into()
+        })
+        .is_err());
+        assert!(validate_tvbox_response(&TvboxHttpResponse {
+            status: 200,
+            body: "FAILED unavailable".into()
+        })
+        .is_err());
+        assert!(validate_tvbox_response(&TvboxHttpResponse {
+            status: 200,
+            body: r#"{"ok":true}"#.into()
+        })
+        .is_ok());
+    }
+
+    #[test]
+    fn tvbox_push_falls_back_from_post_to_get() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for status in ["405 Method Not Allowed", "200 OK"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_millis(300)))
+                    .ok();
+                let mut buffer = [0u8; 4096];
+                let count = stream.read(&mut buffer).unwrap();
+                requests.push(String::from_utf8_lossy(&buffer[..count]).to_string());
+                let body = if status.starts_with("200") {
+                    r#"{"ok":true}"#
+                } else {
+                    ""
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            requests
+        });
+        push_tvbox(&endpoint, "https://cdn.test/video.mp4", "video").unwrap();
+        let requests = server.join().unwrap();
+        assert!(requests[0].starts_with("POST /action HTTP/1.1"));
+        assert!(requests[1]
+            .starts_with("GET /action?do=push&url=https%3A%2F%2Fcdn.test%2Fvideo.mp4 HTTP/1.1"));
+    }
+
+    #[test]
+    fn tvbox_probe_rejects_generic_http_and_accepts_push_service() {
+        fn serve(body: &'static str) -> (SocketAddr, thread::JoinHandle<()>) {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let worker = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0u8; 1024];
+                let _ = stream.read(&mut buffer);
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            });
+            (address, worker)
+        }
+        let (generic, generic_worker) = serve("plain web service");
+        assert!(probe_tvbox(generic, Duration::from_secs(1)).is_none());
+        generic_worker.join().unwrap();
+        let (tvbox, tvbox_worker) = serve("TVBox player /action push");
+        let device = probe_tvbox(tvbox, Duration::from_secs(1)).unwrap();
+        assert_eq!(device.service_type, "tvbox");
+        tvbox_worker.join().unwrap();
+    }
+
+    #[test]
+    fn tvbox_scan_targets_cover_multiple_subnets_without_scanning_self() {
+        let networks = [
+            (Ipv4Addr::new(192, 168, 1, 4), 30),
+            (Ipv4Addr::new(10, 0, 0, 1), 30),
+        ];
+        let targets = tvbox_scan_targets(&networks, 3);
+        assert_eq!(targets.len(), 3 * TVBOX_PORTS.len());
+        assert!(targets.iter().all(|target| target.ip() != networks[0].0));
+        assert!(targets.iter().all(|target| target.ip() != networks[1].0));
+        assert!(targets
+            .iter()
+            .any(|target| target.ip() == Ipv4Addr::new(192, 168, 1, 5)));
+        assert!(targets
+            .iter()
+            .any(|target| target.ip() == Ipv4Addr::new(10, 0, 0, 2)));
     }
 }

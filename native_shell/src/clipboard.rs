@@ -6,13 +6,7 @@ pub fn looks_like_download_url(text: &str) -> bool {
         .map(str::trim)
         .find(|item| !item.is_empty())
         .unwrap_or("");
-    let lower = line.to_ascii_lowercase();
-    lower.starts_with("http://")
-        || lower.starts_with("https://")
-        || lower.starts_with("magnet:")
-        || lower.starts_with("ftp://")
-        || lower.starts_with("ftps://")
-        || lower.starts_with("sftp://")
+    crate::http_engine::remote_resource_url_allowed(line)
 }
 
 pub fn first_url(text: &str) -> Option<String> {
@@ -220,6 +214,8 @@ mod tests {
         assert!(looks_like_download_url("https://cdn.test/a.bin"));
         assert!(looks_like_download_url("magnet:?xt=urn:btih:abc"));
         assert!(!looks_like_download_url("not a url"));
+        assert!(!looks_like_download_url("javascript:alert(1)"));
+        assert!(!looks_like_download_url("file:///C:/Windows/win.ini"));
         assert_eq!(
             first_url("note\nhttps://cdn.test/a.bin\n"),
             Some("https://cdn.test/a.bin".into())

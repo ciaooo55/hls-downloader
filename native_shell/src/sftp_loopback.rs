@@ -236,8 +236,7 @@ fn ok_status(id: u32) -> Status {
 }
 
 pub(super) fn start(root: PathBuf, user: &str, password: &str) -> Result<Loopback, String> {
-    let key = PrivateKey::from_openssh(LOOPBACK_HOST_KEY)
-        .map_err(|error| error.to_string())?;
+    let key = PrivateKey::from_openssh(LOOPBACK_HOST_KEY).map_err(|error| error.to_string())?;
     let config = russh::server::Config {
         auth_rejection_time: Duration::from_millis(20),
         auth_rejection_time_initial: Some(Duration::from_millis(0)),

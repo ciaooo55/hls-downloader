@@ -4,6 +4,7 @@
 //! later libtorrent/librqbit backend can replace [`BuiltinTorrentEngine`].
 
 use crate::http_engine::{run_job, Job};
+use crate::{TorrentFileEntry, TorrentFileSelection};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,6 +20,35 @@ pub trait TorrentSession: Send + Sync {
         headers: &std::collections::HashMap<String, String>,
         proxy: &str,
     ) -> Result<u64, String>;
+
+    fn download_with_options(
+        &self,
+        source: &str,
+        output: &Path,
+        control: &Path,
+        headers: &std::collections::HashMap<String, String>,
+        proxy: &str,
+        options: TorrentOptions,
+    ) -> Result<u64, String>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TorrentOptions {
+    /// The built-in client stops immediately after completion and never seeds,
+    /// so its effective upload rate is always zero and therefore below this cap.
+    pub upload_limit_kib: u64,
+    pub max_connections: usize,
+    pub enable_dht: bool,
+}
+
+impl Default for TorrentOptions {
+    fn default() -> Self {
+        Self {
+            upload_limit_kib: 1024,
+            max_connections: 200,
+            enable_dht: true,
+        }
+    }
 }
 
 /// Built-in engine. Keep this as the default until a native BT library lands.
@@ -35,6 +65,18 @@ impl TorrentSession for BuiltinTorrentEngine {
         proxy: &str,
     ) -> Result<u64, String> {
         download_torrent(source, output, control, headers, proxy)
+    }
+
+    fn download_with_options(
+        &self,
+        source: &str,
+        output: &Path,
+        control: &Path,
+        headers: &std::collections::HashMap<String, String>,
+        proxy: &str,
+        options: TorrentOptions,
+    ) -> Result<u64, String> {
+        download_torrent_with_options(source, output, control, headers, proxy, options)
     }
 }
 
@@ -54,6 +96,7 @@ pub struct TorrentMeta {
     pub piece_length: u64,
     pub pieces: Vec<[u8; 20]>,
     pub length: u64,
+    pub files: Vec<TorrentFileEntry>,
 }
 
 pub fn parse_magnet(uri: &str) -> Result<TorrentMeta, String> {
@@ -93,6 +136,7 @@ pub fn parse_magnet(uri: &str) -> Result<TorrentMeta, String> {
         piece_length: 0,
         pieces: Vec::new(),
         length: 0,
+        files: Vec::new(),
     })
 }
 
@@ -104,7 +148,9 @@ fn push_http_seed(seeds: &mut Vec<String>, url: &str) {
 
 pub fn parse_torrent_file(bytes: &[u8]) -> Result<TorrentMeta, String> {
     let value = bencode::parse(bytes).map_err(|error| error.to_string())?;
-    let dict = value.as_dict().ok_or_else(|| "torrent is not a dict".to_string())?;
+    let dict = value
+        .as_dict()
+        .ok_or_else(|| "torrent is not a dict".to_string())?;
     let info = dict.get(b"info".as_ref()).and_then(BValue::as_dict);
     let name = info
         .and_then(|info| info.get(b"name".as_ref()))
@@ -150,14 +196,21 @@ pub fn parse_torrent_file(bytes: &[u8]) -> Result<TorrentMeta, String> {
         .unwrap_or(0)
         .max(0) as u64;
     let mut pieces = Vec::new();
-    if let Some(raw) = info.and_then(|info| info.get(b"pieces".as_ref())).and_then(BValue::as_bytes) {
+    if let Some(raw) = info
+        .and_then(|info| info.get(b"pieces".as_ref()))
+        .and_then(BValue::as_bytes)
+    {
         for chunk in raw.chunks_exact(20) {
             let mut hash = [0u8; 20];
             hash.copy_from_slice(chunk);
             pieces.push(hash);
         }
     }
-    let length = if let Some(len) = info.and_then(|info| info.get(b"length".as_ref())).and_then(BValue::as_int) {
+    let files = torrent_files(info);
+    let length = if let Some(len) = info
+        .and_then(|info| info.get(b"length".as_ref()))
+        .and_then(BValue::as_int)
+    {
         len.max(0) as u64
     } else if let Some(BValue::List(files)) = info.and_then(|info| info.get(b"files".as_ref())) {
         files
@@ -178,7 +231,174 @@ pub fn parse_torrent_file(bytes: &[u8]) -> Result<TorrentMeta, String> {
         piece_length,
         pieces,
         length,
+        files,
     })
+}
+
+pub fn probe_torrent_source(
+    source: &str,
+    headers: &std::collections::HashMap<String, String>,
+    proxy: &str,
+) -> Result<TorrentMeta, String> {
+    let source = source.trim();
+    if source.starts_with("magnet:") {
+        let magnet = parse_magnet(source)?;
+        return if magnet.pieces.is_empty() {
+            fetch_magnet_metadata(&magnet, headers, proxy).or_else(|_| Ok(magnet))
+        } else {
+            Ok(magnet)
+        };
+    }
+    let bytes = if source.starts_with("http://") || source.starts_with("https://") {
+        crate::http_engine::fetch_bytes(source, headers, proxy)
+            .map_err(|error| error.to_string())?
+            .1
+    } else {
+        fs::read(source).map_err(|error| error.to_string())?
+    };
+    parse_torrent_file(&bytes)
+}
+
+fn torrent_files(
+    info: Option<&std::collections::BTreeMap<Vec<u8>, BValue>>,
+) -> Vec<TorrentFileEntry> {
+    let Some(info) = info else { return Vec::new() };
+    if let Some(length) = info.get(b"length".as_ref()).and_then(BValue::as_int) {
+        let path = info
+            .get(b"name".as_ref())
+            .and_then(BValue::as_str)
+            .unwrap_or("torrent")
+            .to_string();
+        return vec![TorrentFileEntry {
+            index: 0,
+            path,
+            size: length.max(0) as u64,
+            offset: 0,
+        }];
+    }
+    let Some(BValue::List(files)) = info.get(b"files".as_ref()) else {
+        return Vec::new();
+    };
+    let mut offset = 0u64;
+    let mut entries = Vec::with_capacity(files.len());
+    for (index, file) in files.iter().enumerate() {
+        let Some(dict) = file.as_dict() else { continue };
+        let size = dict
+            .get(b"length".as_ref())
+            .and_then(BValue::as_int)
+            .unwrap_or(0)
+            .max(0) as u64;
+        let components = dict
+            .get(b"path".as_ref())
+            .and_then(BValue::as_list)
+            .map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(BValue::as_str)
+                    .filter(|part| !part.is_empty() && *part != "." && *part != "..")
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if components.is_empty() || size == 0 {
+            continue;
+        }
+        entries.push(TorrentFileEntry {
+            index: index as u32,
+            path: components.join("/"),
+            size,
+            offset,
+        });
+        offset = offset.saturating_add(size);
+    }
+    entries
+}
+
+pub fn validate_torrent_selection(
+    meta: &TorrentMeta,
+    selections: &[TorrentFileSelection],
+) -> Result<Vec<TorrentFileSelection>, String> {
+    if selections.is_empty() {
+        return Ok(meta
+            .files
+            .iter()
+            .map(|file| TorrentFileSelection {
+                index: file.index,
+                path: file.path.clone(),
+                selected: true,
+            })
+            .collect());
+    }
+    let mut selected = Vec::with_capacity(selections.len());
+    for item in selections {
+        let Some(file) = meta
+            .files
+            .iter()
+            .find(|file| file.index == item.index && file.path == item.path)
+        else {
+            return Err(format!("种子文件不存在: {}", item.path));
+        };
+        if item.path.contains('\\')
+            || item
+                .path
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == "..")
+        {
+            return Err(format!("种子文件路径无效: {}", item.path));
+        }
+        selected.push(TorrentFileSelection {
+            index: file.index,
+            path: file.path.clone(),
+            selected: item.selected,
+        });
+    }
+    if !selected.iter().any(|item| item.selected) {
+        return Err("至少选择一个种子文件".into());
+    }
+    Ok(selected)
+}
+
+pub fn materialize_selected_files(
+    payload: &Path,
+    destination: &Path,
+    meta: &TorrentMeta,
+    selections: &[TorrentFileSelection],
+) -> Result<u64, String> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let checked = validate_torrent_selection(meta, selections)?;
+    let mut source = fs::File::open(payload).map_err(|error| error.to_string())?;
+    let mut total = 0u64;
+    for selection in checked.iter().filter(|item| item.selected) {
+        let file = meta
+            .files
+            .iter()
+            .find(|file| file.index == selection.index && file.path == selection.path)
+            .ok_or_else(|| format!("种子文件不存在: {}", selection.path))?;
+        let target = destination.join(file.path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        source
+            .seek(SeekFrom::Start(file.offset))
+            .map_err(|error| error.to_string())?;
+        let mut output = fs::File::create(&target).map_err(|error| error.to_string())?;
+        let mut remaining = file.size;
+        let mut buffer = [0u8; 64 * 1024];
+        while remaining > 0 {
+            let chunk = remaining.min(buffer.len() as u64) as usize;
+            let read_size = source
+                .read(&mut buffer[..chunk])
+                .map_err(|error| error.to_string())?;
+            if read_size == 0 {
+                return Err(format!("种子临时数据不完整: {}", selection.path));
+            }
+            output
+                .write_all(&buffer[..read_size])
+                .map_err(|error| error.to_string())?;
+            remaining -= read_size as u64;
+            total = total.saturating_add(read_size as u64);
+        }
+    }
+    Ok(total)
 }
 
 pub fn download_torrent(
@@ -187,6 +407,24 @@ pub fn download_torrent(
     control: &Path,
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
+) -> Result<u64, String> {
+    download_torrent_with_options(
+        spec_url,
+        output,
+        control,
+        headers,
+        proxy,
+        TorrentOptions::default(),
+    )
+}
+
+pub fn download_torrent_with_options(
+    spec_url: &str,
+    output: &Path,
+    control: &Path,
+    headers: &std::collections::HashMap<String, String>,
+    proxy: &str,
+    options: TorrentOptions,
 ) -> Result<u64, String> {
     let meta = if spec_url.starts_with("magnet:") {
         let mut meta = parse_magnet(spec_url)?;
@@ -251,7 +489,7 @@ pub fn download_torrent(
             meta.info_hash
         ));
     }
-    download_swarm(&meta, output, control, headers, proxy)
+    download_swarm(&meta, output, control, headers, proxy, options)
 }
 
 #[derive(Default)]
@@ -296,12 +534,12 @@ fn fetch_magnet_metadata(
     let hash = canonical_info_hash(&magnet.info_hash)
         .ok_or_else(|| format!("magnet info_hash 无效: {}", magnet.info_hash))?;
     let mut last = "未能取得种子元数据".to_string();
-        for url in [
-            format!("https://itorrents.org/torrent/{hash}.torrent"),
-            format!("https://itorrent.ws/torrent/{hash}.torrent"),
-            format!("https://btcache.me/torrent/{hash}"),
-            format!("https://thetorrent.org/torrent/{hash}.torrent"),
-        ] {
+    for url in [
+        format!("https://itorrents.org/torrent/{hash}.torrent"),
+        format!("https://itorrent.ws/torrent/{hash}.torrent"),
+        format!("https://btcache.me/torrent/{hash}"),
+        format!("https://thetorrent.org/torrent/{hash}.torrent"),
+    ] {
         match crate::http_engine::fetch_bytes(&url, headers, proxy) {
             Ok((status, body)) if status == 200 || status == 206 => {
                 if let Ok(mut parsed) = parse_torrent_file(&body) {
@@ -371,11 +609,15 @@ fn decode_base32(value: &str) -> Option<Vec<u8>> {
 
 fn info_hash_from_torrent(bytes: &[u8]) -> Option<String> {
     let needle = b"4:info";
-    let pos = bytes.windows(needle.len()).position(|window| window == needle)?;
+    let pos = bytes
+        .windows(needle.len())
+        .position(|window| window == needle)?;
     let start = pos + needle.len();
     let (_, rest) = bencode::parse_value(&bytes[start..]).ok()?;
     let consumed = bytes[start..].len().checked_sub(rest.len())?;
-    Some(crate::crypto_lite::sha1_hex(&bytes[start..start + consumed]))
+    Some(crate::crypto_lite::sha1_hex(
+        &bytes[start..start + consumed],
+    ))
 }
 
 fn download_swarm(
@@ -384,15 +626,16 @@ fn download_swarm(
     control: &Path,
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
+    options: TorrentOptions,
 ) -> Result<u64, String> {
-    let mut peers = announce_peers(meta, headers, proxy)?;
+    let mut peers = announce_peers(meta, headers, proxy, options.enable_dht)?;
     if peers.is_empty() {
         return Err("tracker returned no peers".into());
     }
     let mut seen = BTreeSet::new();
     let mut last = "all peers failed".to_string();
     let mut index = 0;
-    while index < peers.len() && index < 32 {
+    while index < peers.len() && index < options.max_connections.clamp(10, 1000) {
         let peer = peers[index];
         index += 1;
         if !seen.insert(peer) {
@@ -419,11 +662,15 @@ fn announce_peers(
     meta: &TorrentMeta,
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
+    enable_dht: bool,
 ) -> Result<Vec<std::net::SocketAddr>, String> {
     let info_hash = decode_info_hash(&meta.info_hash)?;
     let mut peers = resolve_hint_peers(&meta.hint_peers);
     let announces: Vec<String> = if meta.announce.is_empty() {
-        DEFAULT_TRACKERS.iter().map(|url| (*url).to_string()).collect()
+        DEFAULT_TRACKERS
+            .iter()
+            .map(|url| (*url).to_string())
+            .collect()
     } else {
         meta.announce.clone()
     };
@@ -448,7 +695,7 @@ fn announce_peers(
             peers.extend(parse_compact_peers(&body));
         }
     }
-    if dht_enabled() {
+    if enable_dht && dht_enabled() {
         if let Ok(found) = dht_get_peers(&info_hash) {
             peers.extend(found);
         }
@@ -492,7 +739,7 @@ fn fetch_metadata_from_swarm(
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
 ) -> Result<TorrentMeta, String> {
-    let peers = announce_peers(magnet, headers, proxy)?;
+    let peers = announce_peers(magnet, headers, proxy, dht_enabled())?;
     if peers.is_empty() {
         return Err("magnet 没有 tracker 返回的节点".into());
     }
@@ -538,7 +785,11 @@ pub fn udp_connect_request(transaction_id: u32) -> [u8; 16] {
     packet
 }
 
-fn announce_udp(url: &str, info_hash: &[u8], left: u64) -> Result<Vec<std::net::SocketAddr>, String> {
+fn announce_udp(
+    url: &str,
+    info_hash: &[u8],
+    left: u64,
+) -> Result<Vec<std::net::SocketAddr>, String> {
     use std::net::UdpSocket;
     let (host, port) = parse_udp_tracker(url).ok_or_else(|| "udp tracker URL 无效".to_string())?;
     let socket = UdpSocket::bind("0.0.0.0:0").map_err(|error| error.to_string())?;
@@ -555,7 +806,9 @@ fn announce_udp(url: &str, info_hash: &[u8], left: u64) -> Result<Vec<std::net::
         .send_to(&udp_connect_request(tx), &target)
         .map_err(|error| error.to_string())?;
     let mut buf = [0u8; 1024];
-    let (count, _) = socket.recv_from(&mut buf).map_err(|error| error.to_string())?;
+    let (count, _) = socket
+        .recv_from(&mut buf)
+        .map_err(|error| error.to_string())?;
     if count < 16 || u32::from_be_bytes(buf[0..4].try_into().unwrap()) != 0 {
         return Err("udp tracker connect 失败".into());
     }
@@ -581,7 +834,9 @@ fn announce_udp(url: &str, info_hash: &[u8], left: u64) -> Result<Vec<std::net::
     socket
         .send_to(&announce, &target)
         .map_err(|error| error.to_string())?;
-    let (count, _) = socket.recv_from(&mut buf).map_err(|error| error.to_string())?;
+    let (count, _) = socket
+        .recv_from(&mut buf)
+        .map_err(|error| error.to_string())?;
     if count < 20 || u32::from_be_bytes(buf[0..4].try_into().unwrap()) != 1 {
         return Err("udp tracker announce 失败".into());
     }
@@ -711,9 +966,13 @@ fn fetch_ut_metadata_from_peer(
     handshake.extend_from_slice(&reserved);
     handshake.extend_from_slice(&info_hash);
     handshake.extend_from_slice(b"-HL0001-0123456789ab");
-    stream.write_all(&handshake).map_err(|error| error.to_string())?;
+    stream
+        .write_all(&handshake)
+        .map_err(|error| error.to_string())?;
     let mut peer_hs = [0u8; 68];
-    stream.read_exact(&mut peer_hs).map_err(|error| error.to_string())?;
+    stream
+        .read_exact(&mut peer_hs)
+        .map_err(|error| error.to_string())?;
     if &peer_hs[28..48] != info_hash.as_slice() {
         return Err("peer info_hash mismatch".into());
     }
@@ -733,7 +992,9 @@ fn fetch_ut_metadata_from_peer(
         }
         if body[0] == 0 {
             let (value, _) = bencode::parse_value(&body[1..])?;
-            let dict = value.as_dict().ok_or_else(|| "extended handshake 不是 dict".to_string())?;
+            let dict = value
+                .as_dict()
+                .ok_or_else(|| "extended handshake 不是 dict".to_string())?;
             if let Some(size) = dict.get(b"metadata_size".as_ref()).and_then(BValue::as_int) {
                 metadata_size = size.max(0) as usize;
             }
@@ -766,14 +1027,20 @@ fn fetch_ut_metadata_from_peer(
             let dict = header
                 .as_dict()
                 .ok_or_else(|| "ut_metadata 不是 dict".to_string())?;
-            let msg_type = dict.get(b"msg_type".as_ref()).and_then(BValue::as_int).unwrap_or(-1);
+            let msg_type = dict
+                .get(b"msg_type".as_ref())
+                .and_then(BValue::as_int)
+                .unwrap_or(-1);
             if msg_type == 2 {
                 return Err("peer 拒绝提供元数据".into());
             }
             if msg_type != 1 {
                 continue;
             }
-            let piece = dict.get(b"piece".as_ref()).and_then(BValue::as_int).unwrap_or(0) as usize;
+            let piece = dict
+                .get(b"piece".as_ref())
+                .and_then(BValue::as_int)
+                .unwrap_or(0) as usize;
             if piece != index {
                 continue;
             }
@@ -809,7 +1076,11 @@ fn fetch_ut_metadata_from_peer(
     Ok(parsed)
 }
 
-fn send_extended(stream: &mut std::net::TcpStream, ext_id: u8, payload: &[u8]) -> Result<(), String> {
+fn send_extended(
+    stream: &mut std::net::TcpStream,
+    ext_id: u8,
+    payload: &[u8],
+) -> Result<(), String> {
     let mut body = Vec::with_capacity(payload.len() + 1);
     body.push(ext_id);
     body.extend_from_slice(payload);
@@ -883,7 +1154,10 @@ fn decode_info_hash(value: &str) -> Result<Vec<u8>, String> {
     if value.len() == 40 && value.chars().all(|ch| ch.is_ascii_hexdigit()) {
         let mut out = Vec::with_capacity(20);
         for index in (0..40).step_by(2) {
-            out.push(u8::from_str_radix(&value[index..index + 2], 16).map_err(|error| error.to_string())?);
+            out.push(
+                u8::from_str_radix(&value[index..index + 2], 16)
+                    .map_err(|error| error.to_string())?,
+            );
         }
         return Ok(out);
     }
@@ -924,7 +1198,8 @@ fn download_from_peer_ex(
         .truncate(false)
         .open(output)
         .map_err(|error| error.to_string())?;
-    file.set_len(meta.length).map_err(|error| error.to_string())?;
+    file.set_len(meta.length)
+        .map_err(|error| error.to_string())?;
     let pending: Vec<usize> = meta
         .pieces
         .iter()
@@ -952,9 +1227,13 @@ fn download_from_peer_ex(
     handshake.extend_from_slice(&reserved);
     handshake.extend_from_slice(&info_hash);
     handshake.extend_from_slice(b"-HL0001-0123456789ab");
-    stream.write_all(&handshake).map_err(|error| error.to_string())?;
+    stream
+        .write_all(&handshake)
+        .map_err(|error| error.to_string())?;
     let mut peer_hs = [0u8; 68];
-    stream.read_exact(&mut peer_hs).map_err(|error| error.to_string())?;
+    stream
+        .read_exact(&mut peer_hs)
+        .map_err(|error| error.to_string())?;
     if &peer_hs[28..48] != info_hash.as_slice() {
         return Err("peer info_hash mismatch".into());
     }
@@ -1015,19 +1294,15 @@ fn download_from_peer_ex(
         if crate::crypto_lite::sha1(&piece) != *hash {
             return Err(format!("piece {index} hash mismatch"));
         }
-        file.seek(SeekFrom::Start(start)).map_err(|error| error.to_string())?;
+        file.seek(SeekFrom::Start(start))
+            .map_err(|error| error.to_string())?;
         file.write_all(&piece).map_err(|error| error.to_string())?;
         crate::net_policy::consume(piece.len());
     }
     Ok(meta.length)
 }
 
-fn piece_is_complete(
-    file: &mut fs::File,
-    start: u64,
-    len: usize,
-    hash: &[u8; 20],
-) -> bool {
+fn piece_is_complete(file: &mut fs::File, start: u64, len: usize, hash: &[u8; 20]) -> bool {
     use std::io::{Read, Seek, SeekFrom};
     let mut buf = vec![0u8; len];
     if file.seek(SeekFrom::Start(start)).is_err() {
@@ -1042,7 +1317,9 @@ fn piece_is_complete(
 fn send_message(stream: &mut std::net::TcpStream, id: u8, payload: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let len = (payload.len() as u32) + 1;
-    stream.write_all(&len.to_be_bytes()).map_err(|error| error.to_string())?;
+    stream
+        .write_all(&len.to_be_bytes())
+        .map_err(|error| error.to_string())?;
     stream.write_all(&[id]).map_err(|error| error.to_string())?;
     stream.write_all(payload).map_err(|error| error.to_string())
 }
@@ -1051,7 +1328,9 @@ fn read_message(stream: &mut std::net::TcpStream) -> Result<(u8, Vec<u8>), Strin
     use std::io::Read;
     loop {
         let mut len_buf = [0u8; 4];
-        stream.read_exact(&mut len_buf).map_err(|error| error.to_string())?;
+        stream
+            .read_exact(&mut len_buf)
+            .map_err(|error| error.to_string())?;
         let len = u32::from_be_bytes(len_buf) as usize;
         if len == 0 {
             continue; // keep-alive
@@ -1060,7 +1339,9 @@ fn read_message(stream: &mut std::net::TcpStream) -> Result<(u8, Vec<u8>), Strin
             return Err("peer message too large".into());
         }
         let mut body = vec![0u8; len];
-        stream.read_exact(&mut body).map_err(|error| error.to_string())?;
+        stream
+            .read_exact(&mut body)
+            .map_err(|error| error.to_string())?;
         return Ok((body[0], body[1..].to_vec()));
     }
 }
@@ -1076,7 +1357,10 @@ fn url_decode(value: &str) -> String {
                 index += 1;
             }
             b'%' if index + 2 < bytes.len() => {
-                if let Ok(byte) = u8::from_str_radix(std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or(""), 16) {
+                if let Ok(byte) = u8::from_str_radix(
+                    std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or(""),
+                    16,
+                ) {
                     out.push(byte as char);
                     index += 3;
                 } else {
@@ -1116,13 +1400,19 @@ mod bencode {
     }
 
     fn parse_int(input: &[u8]) -> Result<(BValue, &[u8]), String> {
-        let end = input.iter().position(|byte| *byte == b'e').ok_or("truncated int")?;
+        let end = input
+            .iter()
+            .position(|byte| *byte == b'e')
+            .ok_or("truncated int")?;
         let number = std::str::from_utf8(&input[1..end]).map_err(|error| error.to_string())?;
         Ok((BValue::Int(number.parse().unwrap_or(0)), &input[end + 1..]))
     }
 
     fn parse_bytes(input: &[u8]) -> Result<(BValue, &[u8]), String> {
-        let colon = input.iter().position(|byte| *byte == b':').ok_or("truncated bytes")?;
+        let colon = input
+            .iter()
+            .position(|byte| *byte == b':')
+            .ok_or("truncated bytes")?;
         let len: usize = std::str::from_utf8(&input[..colon])
             .map_err(|error| error.to_string())?
             .parse()
@@ -1198,6 +1488,13 @@ impl BValue {
             _ => None,
         }
     }
+
+    fn as_list(&self) -> Option<&[BValue]> {
+        match self {
+            Self::List(items) => Some(items),
+            _ => None,
+        }
+    }
 }
 
 pub fn watch_delay() -> Duration {
@@ -1208,7 +1505,9 @@ pub fn is_fresh(path: &Path, now: SystemTime) -> bool {
     path.metadata()
         .and_then(|meta| meta.modified())
         .ok()
-        .map(|stamp| now.duration_since(stamp).unwrap_or_default() < Duration::from_secs(60 * 60 * 24 * 30))
+        .map(|stamp| {
+            now.duration_since(stamp).unwrap_or_default() < Duration::from_secs(60 * 60 * 24 * 30)
+        })
         .unwrap_or(true)
 }
 
@@ -1224,7 +1523,8 @@ mod tests {
 
     #[test]
     fn magnet_extracts_web_seed_and_hash() {
-        let meta = parse_magnet("magnet:?xt=urn:btih:abc123&dn=Demo&ws=http://cdn.test/file.bin").unwrap();
+        let meta =
+            parse_magnet("magnet:?xt=urn:btih:abc123&dn=Demo&ws=http://cdn.test/file.bin").unwrap();
         assert_eq!(meta.name, "Demo");
         assert_eq!(meta.web_seeds, vec!["http://cdn.test/file.bin"]);
         assert_eq!(meta.info_hash, "abc123");
@@ -1233,6 +1533,113 @@ mod tests {
         )
         .unwrap();
         assert_eq!(filtered.web_seeds, vec!["http://cdn.test/ok.bin"]);
+    }
+
+    #[test]
+    fn torrent_selection_rejects_escape_and_requires_one_file() {
+        let meta = TorrentMeta {
+            name: "demo".into(),
+            magnet: false,
+            web_seeds: Vec::new(),
+            info_hash: String::new(),
+            announce: Vec::new(),
+            hint_peers: Vec::new(),
+            piece_length: 16,
+            pieces: Vec::new(),
+            length: 5,
+            files: vec![
+                TorrentFileEntry {
+                    index: 0,
+                    path: "one.bin".into(),
+                    size: 3,
+                    offset: 0,
+                },
+                TorrentFileEntry {
+                    index: 1,
+                    path: "dir/two.bin".into(),
+                    size: 2,
+                    offset: 3,
+                },
+            ],
+        };
+        let all = validate_torrent_selection(&meta, &[]).unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(validate_torrent_selection(
+            &meta,
+            &[TorrentFileSelection {
+                index: 9,
+                path: "missing".into(),
+                selected: true
+            }]
+        )
+        .is_err());
+        assert!(validate_torrent_selection(
+            &meta,
+            &[TorrentFileSelection {
+                index: 0,
+                path: "../escape".into(),
+                selected: true
+            }]
+        )
+        .is_err());
+        assert!(validate_torrent_selection(
+            &meta,
+            &[TorrentFileSelection {
+                index: 0,
+                path: "one.bin".into(),
+                selected: false
+            }]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn selected_files_materialize_without_unselected_paths() {
+        let root = std::env::temp_dir().join(format!("hls-torrent-select-{}", std::process::id()));
+        let payload = root.join("payload");
+        let destination = root.join("published");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&payload, b"abcde").unwrap();
+        let meta = TorrentMeta {
+            name: "demo".into(),
+            magnet: false,
+            web_seeds: Vec::new(),
+            info_hash: String::new(),
+            announce: Vec::new(),
+            hint_peers: Vec::new(),
+            piece_length: 16,
+            pieces: Vec::new(),
+            length: 5,
+            files: vec![
+                TorrentFileEntry {
+                    index: 0,
+                    path: "one.bin".into(),
+                    size: 3,
+                    offset: 0,
+                },
+                TorrentFileEntry {
+                    index: 1,
+                    path: "dir/two.bin".into(),
+                    size: 2,
+                    offset: 3,
+                },
+            ],
+        };
+        let total = materialize_selected_files(
+            &payload,
+            &destination,
+            &meta,
+            &[TorrentFileSelection {
+                index: 1,
+                path: "dir/two.bin".into(),
+                selected: true,
+            }],
+        )
+        .unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(fs::read(destination.join("dir/two.bin")).unwrap(), b"de");
+        assert!(!destination.join("one.bin").exists());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1256,7 +1663,10 @@ mod tests {
         let query = krpc_get_peers_query(b"aa", &node_id, &info_hash);
         let parsed = bencode::parse(&query).unwrap();
         let dict = parsed.as_dict().unwrap();
-        assert_eq!(dict.get(b"q".as_ref()).and_then(BValue::as_str), Some("get_peers"));
+        assert_eq!(
+            dict.get(b"q".as_ref()).and_then(BValue::as_str),
+            Some("get_peers")
+        );
         let compact = vec![10, 0, 0, 1, 0x1A, 0xE1];
         let mut node = vec![0u8; 20];
         node.extend_from_slice(&[192, 168, 1, 9, 0x1A, 0xE9]);
@@ -1367,7 +1777,9 @@ mod tests {
                     body.extend_from_slice(&0u32.to_be_bytes());
                     body.extend_from_slice(&0u32.to_be_bytes());
                     body.extend_from_slice(payload);
-                    stream.write_all(&(body.len() as u32).to_be_bytes()).unwrap();
+                    stream
+                        .write_all(&(body.len() as u32).to_be_bytes())
+                        .unwrap();
                     stream.write_all(&body).unwrap();
                     return;
                 }
@@ -1417,6 +1829,180 @@ mod tests {
         download_from_peer(dummy, &meta, &output, &control).unwrap();
         assert_eq!(fs::read(&output).unwrap(), payload);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn multifile_swarm_resumes_without_refetching_and_materializes_selection() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+
+        fn serve(
+            listener: TcpListener,
+            payload: Vec<u8>,
+            piece_length: usize,
+            stop_before_piece: Option<u32>,
+            requested: mpsc::Sender<Vec<u32>>,
+        ) {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut handshake = [0u8; 68];
+            stream.read_exact(&mut handshake).unwrap();
+            stream.write_all(&handshake).unwrap();
+            stream.write_all(&1u32.to_be_bytes()).unwrap();
+            stream.write_all(&[1u8]).unwrap();
+            let mut indexes = Vec::new();
+            loop {
+                let mut header = [0u8; 4];
+                if stream.read_exact(&mut header).is_err() {
+                    let _ = requested.send(indexes);
+                    return;
+                }
+                let len = u32::from_be_bytes(header) as usize;
+                let mut message = vec![0u8; len];
+                if stream.read_exact(&mut message).is_err() {
+                    let _ = requested.send(indexes);
+                    return;
+                }
+                if message.first() != Some(&6) || message.len() < 13 {
+                    continue;
+                }
+                let index = u32::from_be_bytes(message[1..5].try_into().unwrap());
+                indexes.push(index);
+                if stop_before_piece == Some(index) {
+                    requested.send(indexes).unwrap();
+                    return;
+                }
+                let begin = u32::from_be_bytes(message[5..9].try_into().unwrap()) as usize;
+                let block = u32::from_be_bytes(message[9..13].try_into().unwrap()) as usize;
+                let start = index as usize * piece_length + begin;
+                let end = (start + block).min(payload.len());
+                let mut body = vec![7u8];
+                body.extend_from_slice(&index.to_be_bytes());
+                body.extend_from_slice(&(begin as u32).to_be_bytes());
+                body.extend_from_slice(&payload[start..end]);
+                stream
+                    .write_all(&(body.len() as u32).to_be_bytes())
+                    .unwrap();
+                stream.write_all(&body).unwrap();
+                if end == payload.len() {
+                    requested.send(indexes).unwrap();
+                    return;
+                }
+            }
+        }
+
+        let payload = b"alphaBRAVO-charlie-DELTA".to_vec();
+        let piece_length = 8usize;
+        let pieces = payload
+            .chunks(piece_length)
+            .map(crate::crypto_lite::sha1)
+            .collect::<Vec<_>>();
+        let meta = TorrentMeta {
+            name: "resume-selection".into(),
+            magnet: false,
+            web_seeds: Vec::new(),
+            info_hash: "0123456789abcdef0123456789abcdef01234567".into(),
+            announce: Vec::new(),
+            hint_peers: Vec::new(),
+            piece_length: piece_length as u64,
+            pieces,
+            length: payload.len() as u64,
+            files: vec![
+                TorrentFileEntry {
+                    index: 0,
+                    path: "keep/alpha.bin".into(),
+                    size: 5,
+                    offset: 0,
+                },
+                TorrentFileEntry {
+                    index: 1,
+                    path: "skip/bravo.bin".into(),
+                    size: 6,
+                    offset: 5,
+                },
+                TorrentFileEntry {
+                    index: 2,
+                    path: "keep/charlie-delta.bin".into(),
+                    size: payload.len() as u64 - 11,
+                    offset: 11,
+                },
+            ],
+        };
+        let root = std::env::temp_dir().join(format!(
+            "hls-swarm-multifile-resume-{}-{:?}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let output = root.join("payload.part");
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+
+        let first_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let first_addr = first_listener.local_addr().unwrap();
+        let (first_tx, first_rx) = mpsc::channel();
+        let first_payload = payload.clone();
+        std::thread::spawn(move || {
+            serve(
+                first_listener,
+                first_payload,
+                piece_length,
+                Some(1),
+                first_tx,
+            )
+        });
+        assert!(download_from_peer(first_addr, &meta, &output, &control).is_err());
+        assert_eq!(first_rx.recv().unwrap(), vec![0, 1]);
+        assert_eq!(
+            &fs::read(&output).unwrap()[..piece_length],
+            &payload[..piece_length]
+        );
+
+        let second_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let second_addr = second_listener.local_addr().unwrap();
+        let (second_tx, second_rx) = mpsc::channel();
+        let second_payload = payload.clone();
+        std::thread::spawn(move || {
+            serve(
+                second_listener,
+                second_payload,
+                piece_length,
+                None,
+                second_tx,
+            )
+        });
+        download_from_peer(second_addr, &meta, &output, &control).unwrap();
+        assert_eq!(second_rx.recv().unwrap(), vec![1, 2]);
+        assert_eq!(fs::read(&output).unwrap(), payload);
+
+        let destination = root.join("published");
+        let selected = [
+            TorrentFileSelection {
+                index: 0,
+                path: "keep/alpha.bin".into(),
+                selected: true,
+            },
+            TorrentFileSelection {
+                index: 2,
+                path: "keep/charlie-delta.bin".into(),
+                selected: true,
+            },
+        ];
+        let written = materialize_selected_files(&output, &destination, &meta, &selected).unwrap();
+        assert_eq!(written, meta.files[0].size + meta.files[2].size);
+        assert_eq!(
+            fs::read(destination.join("keep/alpha.bin")).unwrap(),
+            b"alpha"
+        );
+        assert_eq!(
+            fs::read(destination.join("keep/charlie-delta.bin")).unwrap(),
+            &payload[11..]
+        );
+        assert!(!destination.join("skip/bravo.bin").exists());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1480,7 +2066,9 @@ mod tests {
                 let mut reply = vec![20u8, 1];
                 reply.extend_from_slice(b"d8:msg_typei1e5:piecei0ee");
                 reply.extend_from_slice(&served);
-                stream.write_all(&(reply.len() as u32).to_be_bytes()).unwrap();
+                stream
+                    .write_all(&(reply.len() as u32).to_be_bytes())
+                    .unwrap();
                 stream.write_all(&reply).unwrap();
                 return;
             }
@@ -1489,7 +2077,10 @@ mod tests {
         assert_eq!(parsed.name, "demo");
         assert_eq!(parsed.length, payload.len() as u64);
         assert_eq!(parsed.pieces.len(), 1);
-        assert_eq!(parsed.info_hash.to_ascii_uppercase(), info_hash.to_ascii_uppercase());
+        assert_eq!(
+            parsed.info_hash.to_ascii_uppercase(),
+            info_hash.to_ascii_uppercase()
+        );
     }
 
     #[test]
@@ -1514,5 +2105,14 @@ mod tests {
             !err.to_ascii_lowercase().contains("libtorrent"),
             "BT backend must not pretend to be libtorrent: {err}"
         );
+    }
+
+    #[test]
+    fn torrent_options_keep_v3_limits_without_enabling_seeding() {
+        let defaults = TorrentOptions::default();
+        assert_eq!(defaults.upload_limit_kib, 1024);
+        assert_eq!(defaults.max_connections, 200);
+        assert!(defaults.enable_dht);
+        let _: BuiltinTorrentEngine = torrent_session();
     }
 }

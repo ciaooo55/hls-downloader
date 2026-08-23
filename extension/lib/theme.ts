@@ -1,7 +1,7 @@
 /**
  * Shared design tokens for every extension surface (popup and in-page
  * shadow-DOM panels), aligned with the desktop app's Cockpit-style palette
- * (frontend/src/cockpit-shell.css) so both products read as one family.
+ * so the browser surface and Compose workbench read as one product family.
  *
  * Theme resolution: the stored preference is 'auto' | 'dark' | 'light'.
  * 'auto' is resolved against prefers-color-scheme in JS and a concrete
@@ -39,8 +39,9 @@ export const THEME_TOKENS_CSS = `
 
 /** Base primitives shared by popup and in-page panels. */
 export const THEME_BASE_CSS = `
-.hlsd-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:1px solid transparent;border-radius:7px;background:var(--surface-3);color:var(--text);cursor:pointer;font:600 13px/1 system-ui,sans-serif;letter-spacing:0;white-space:nowrap}
+.hlsd-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:1px solid transparent;border-radius:7px;background:var(--surface-3);color:var(--text);cursor:pointer;font:600 13px/1 system-ui,sans-serif;letter-spacing:0;white-space:nowrap;transition:background-color .18s ease,color .18s ease,border-color .18s ease,transform .12s ease}
 .hlsd-button:hover:not(:disabled){background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}
+.hlsd-button:active:not(:disabled){transform:scale(.975)}
 .hlsd-button:disabled{opacity:.45;cursor:default}
 .hlsd-button.primary{background:var(--primary);color:var(--on-primary)}
 .hlsd-button.primary:hover:not(:disabled){background:var(--primary-hover)}
@@ -48,6 +49,11 @@ export const THEME_BASE_CSS = `
 .hlsd-button.subtle:hover:not(:disabled){background:var(--surface-2);color:var(--text)}
 .hlsd-button.active{background:color-mix(in srgb,var(--green) 16%,var(--surface-3));color:var(--green);border-color:color-mix(in srgb,var(--green) 34%,transparent)}
 .hlsd-button:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
+.hlsd-icon{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;flex:none}
+.hlsd-icon svg{display:block;width:100%;height:100%;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.8}
+.hlsd-button.primary .hlsd-icon{width:14px;height:14px}
+.hlsd-button.busy .hlsd-icon{animation:hlsd-spin .8s linear infinite}
+@keyframes hlsd-spin{to{transform:rotate(360deg)}}
 .hlsd-select{height:30px;border:1px solid var(--border);border-radius:7px;background:var(--surface-2);color:var(--text);padding:0 8px;font:12.5px system-ui,sans-serif}
 .hlsd-badge{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:color-mix(in srgb,var(--primary) 20%,var(--surface-2));color:var(--primary);font:700 11.5px system-ui,sans-serif}
 `

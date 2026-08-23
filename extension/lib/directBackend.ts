@@ -4,6 +4,7 @@ export interface DirectBackendIdentity {
   browser: string
 }
 
+export const V7_CORE_PROTOCOL = 'hls-downloader-v7-core'
 export const V6_CORE_PROTOCOL = 'hls-downloader-v6-core'
 
 export function shouldClearLoopbackBridge(response: {
@@ -11,7 +12,8 @@ export function shouldClearLoopbackBridge(response: {
   bridge_base?: unknown
   bridge_token?: unknown
 } | null | undefined): boolean {
-  return String(response?.protocol || '') === V6_CORE_PROTOCOL
+  const protocol = String(response?.protocol || '')
+  return protocol === V7_CORE_PROTOCOL || protocol === V6_CORE_PROTOCOL
 }
 
 export function shouldAttachLoopbackBridge(response: {

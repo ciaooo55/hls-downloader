@@ -92,6 +92,15 @@ impl MediaServer {
         self.store(token, Mount::Remote(url));
     }
 
+    pub fn unmount(&self, token: &str) -> bool {
+        let Ok(mut state) = self.inner.lock() else {
+            return false;
+        };
+        let before = state.mounts.len();
+        state.mounts.retain(|(name, _)| name != token);
+        state.mounts.len() != before
+    }
+
     pub fn enable_lan(&self) {
         self.lan.store(true, Ordering::SeqCst);
     }
@@ -118,6 +127,9 @@ impl MediaServer {
         }
         if let Ok(mut state) = self.inner.lock() {
             state.mounts.retain(|(name, _)| name != token);
+            if state.mounts.len() >= 64 {
+                state.mounts.remove(0);
+            }
             state.mounts.push((token.to_string(), mount));
         }
     }
@@ -156,7 +168,8 @@ fn fill_random_bytes(buf: &mut [u8]) {
         .map(|item| item.as_nanos() as u64)
         .unwrap_or(0);
     static COUNTER: AtomicU64 = AtomicU64::new(0x9e3779b97f4a7c15);
-    let mut seed = COUNTER.fetch_add(tick | 1, Ordering::Relaxed) ^ tick ^ (std::process::id() as u64);
+    let mut seed =
+        COUNTER.fetch_add(tick | 1, Ordering::Relaxed) ^ tick ^ (std::process::id() as u64);
     for byte in buf {
         seed ^= seed << 13;
         seed ^= seed >> 7;
@@ -171,14 +184,23 @@ fn peer_allowed(ip: IpAddr, lan: bool) -> bool {
         IpAddr::V4(addr) if addr.is_loopback() => true,
         IpAddr::V6(addr) if addr.is_loopback() => true,
         IpAddr::V4(addr) if lan && (addr.is_private() || addr.is_link_local()) => true,
-        IpAddr::V6(addr) if lan && addr.to_ipv4_mapped().is_some_and(|mapped| mapped.is_private()) => {
+        IpAddr::V6(addr)
+            if lan
+                && addr
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| mapped.is_private()) =>
+        {
             true
         }
         _ => false,
     }
 }
 
-fn handle_client(mut stream: TcpStream, mounts: &[(String, Mount)], port: u16) -> Result<(), String> {
+fn handle_client(
+    mut stream: TcpStream,
+    mounts: &[(String, Mount)],
+    port: u16,
+) -> Result<(), String> {
     let peer = stream.peer_addr().ok().map(|addr| addr.ip());
     let mut buf = [0u8; 4096];
     let count = stream.read(&mut buf).map_err(|error| error.to_string())?;
@@ -273,10 +295,12 @@ fn write_redirect(stream: &mut TcpStream, location: &str) -> Result<(), String> 
 }
 
 fn media_redirect_allowed(location: &str) -> bool {
-    let trimmed = location.trim();
-    (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
-        && !trimmed.contains('\r')
-        && !trimmed.contains('\n')
+    let trimmed = location.trim().trim_start_matches('\u{feff}');
+    if trimmed.chars().any(|ch| ch.is_control()) {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
 }
 
 fn json_escape(value: &str) -> String {
@@ -296,7 +320,9 @@ fn resolve_mount<'a>(mounts: &'a [(String, Mount)], token: &str) -> Option<&'a M
 
 fn safe_join(dir: &Path, sub: &str) -> Option<PathBuf> {
     if sub.is_empty()
-        || sub.split(['/', '\\']).any(|part| part.is_empty() || part == "." || part == "..")
+        || sub
+            .split(['/', '\\'])
+            .any(|part| part.is_empty() || part == "." || part == "..")
         || Path::new(sub).is_absolute()
     {
         return None;
@@ -308,7 +334,9 @@ fn serve_file(stream: &mut TcpStream, request: &str, file_path: &Path) -> Result
     let mut file = File::open(file_path).map_err(|error| error.to_string())?;
     let total = file.metadata().map_err(|error| error.to_string())?.len();
     let content_type = content_type(file_path);
-    let range = request.lines().find_map(|line| line.strip_prefix("Range: bytes="));
+    let range = request
+        .lines()
+        .find_map(|line| line.strip_prefix("Range: bytes="));
     if let Some(range) = range {
         let Some((start, end)) = parse_range(range, total) else {
             return write_status(stream, 416, b"range not satisfiable");
@@ -317,28 +345,42 @@ fn serve_file(stream: &mut TcpStream, request: &str, file_path: &Path) -> Result
         let header = format!(
             "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{total}\r\nContent-Length: {length}\r\nAccept-Ranges: bytes\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n"
         );
-        stream.write_all(header.as_bytes()).map_err(|error| error.to_string())?;
+        stream
+            .write_all(header.as_bytes())
+            .map_err(|error| error.to_string())?;
         stream_bytes(stream, &mut file, start, length)
     } else {
         let header = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n"
         );
-        stream.write_all(header.as_bytes()).map_err(|error| error.to_string())?;
+        stream
+            .write_all(header.as_bytes())
+            .map_err(|error| error.to_string())?;
         stream_bytes(stream, &mut file, 0, total)
     }
 }
 
-fn stream_bytes(stream: &mut TcpStream, file: &mut File, start: u64, length: u64) -> Result<(), String> {
-    file.seek(SeekFrom::Start(start)).map_err(|error| error.to_string())?;
+fn stream_bytes(
+    stream: &mut TcpStream,
+    file: &mut File,
+    start: u64,
+    length: u64,
+) -> Result<(), String> {
+    file.seek(SeekFrom::Start(start))
+        .map_err(|error| error.to_string())?;
     let mut remaining = length;
     let mut buf = vec![0u8; STREAM_CHUNK];
     while remaining > 0 {
         let want = buf.len().min(remaining as usize);
-        let read = file.read(&mut buf[..want]).map_err(|error| error.to_string())?;
+        let read = file
+            .read(&mut buf[..want])
+            .map_err(|error| error.to_string())?;
         if read == 0 {
             break;
         }
-        stream.write_all(&buf[..read]).map_err(|error| error.to_string())?;
+        stream
+            .write_all(&buf[..read])
+            .map_err(|error| error.to_string())?;
         remaining -= read as u64;
     }
     Ok(())
@@ -400,7 +442,9 @@ fn write_response(
         "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    stream.write_all(header.as_bytes()).map_err(|error| error.to_string())?;
+    stream
+        .write_all(header.as_bytes())
+        .map_err(|error| error.to_string())?;
     stream.write_all(body).map_err(|error| error.to_string())
 }
 
@@ -431,6 +475,26 @@ mod tests {
         let text = String::from_utf8_lossy(&buf);
         assert!(text.contains("206"));
         assert!(text.contains("2345"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unmount_revokes_media_url() {
+        let server = MediaServer::start().unwrap();
+        let dir = std::env::temp_dir().join(format!("hls-play-unmount-{}", std::process::id()));
+        fs_create(&dir);
+        let file = dir.join("a.bin");
+        std::fs::write(&file, b"0123456789").unwrap();
+        server.mount("temporary", file);
+        assert!(server.unmount("temporary"));
+        assert!(!server.unmount("temporary"));
+        let mut stream = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
+        stream
+            .write_all(b"GET /media/temporary HTTP/1.1\r\nRange: bytes=0-1\r\n\r\n")
+            .unwrap();
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).unwrap();
+        assert!(String::from_utf8_lossy(&buf).starts_with("HTTP/1.1 404"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -500,8 +564,13 @@ mod tests {
     #[test]
     fn media_redirects_reject_header_injection() {
         assert!(media_redirect_allowed("http://127.0.0.1:9/media/m1"));
-        assert!(!media_redirect_allowed("http://evil.example/\r\nLocation: http://x"));
+        assert!(media_redirect_allowed("HTTP://127.0.0.1:9/media/m1"));
+        assert!(!media_redirect_allowed(
+            "http://evil.example/\r\nLocation: http://x"
+        ));
         assert!(!media_redirect_allowed("javascript:alert(1)"));
+        assert!(!media_redirect_allowed("\u{feff}javascript:alert(1)"));
+        assert!(!media_redirect_allowed("https://x/\0y"));
         assert_eq!(json_escape("http://x\"y"), "http://x\\\"y");
     }
 
