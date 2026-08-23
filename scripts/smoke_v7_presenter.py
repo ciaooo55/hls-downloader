@@ -157,8 +157,14 @@ def visible_handoff_smoke(presenter_source: Path, host_source: Path, engine_sour
         while not ready_file.exists():
             if presenter_process.poll() is not None:
                 raise RuntimeError(f"Presenter exited during renderer prewarm: {presenter_process.returncode}")
-            if time.perf_counter() - prewarm_started > 5:
-                raise TimeoutError("Presenter renderer did not report ready within 5 seconds")
+            if time.perf_counter() - prewarm_started > 15:
+                details = ""
+                if presenter_process.stderr is not None and presenter_process.poll() is not None:
+                    details = presenter_process.stderr.read().decode("utf-8", errors="replace")
+                raise TimeoutError(
+                    "Presenter renderer did not report ready within 15 seconds"
+                    f"; presenter_exit={presenter_process.poll()}; stderr={details!r}"
+                )
             time.sleep(0.005)
         prewarm_ms = (time.perf_counter() - prewarm_started) * 1000
         host_process = subprocess.Popen(

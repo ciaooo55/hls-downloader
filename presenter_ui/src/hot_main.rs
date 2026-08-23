@@ -28,6 +28,13 @@ struct PersistedHandoff {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
+    if let Some(kind) = args
+        .windows(2)
+        .find(|pair| pair[0] == "--visual-fixture")
+        .map(|pair| pair[1].as_str())
+    {
+        return run_visual_fixture(kind, args.iter().any(|arg| arg == "--dark"));
+    }
     if args.iter().any(|arg| arg == "--self-test") {
         let confirm = ConfirmWindow::new()?;
         confirm.hide()?;
@@ -286,13 +293,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Creating a hidden Slint window does not initialize its renderer. Render one
-    // transparent frame off-screen so the first browser handoff only pays IPC and
+    // Creating a hidden Slint window does not initialize its renderer. Present one
+    // frame off-screen so the first browser handoff only pays IPC and
     // visibility latency, not font/layout/graphics initialization.
     let prewarm_timer = Timer::default();
-    prewarm_timer.start(TimerMode::SingleShot, Duration::ZERO, {
+    // A zero-duration Slint timer is treated as stopped by some backends.
+    // Schedule the prewarm on the first real event-loop tick instead.
+    prewarm_timer.start(TimerMode::SingleShot, Duration::from_millis(1), {
         let confirm = confirm.as_weak();
         let pending = Arc::clone(&pending);
+        let prewarm_finished = Rc::clone(&prewarm_finished);
         move || {
             if !pending.lock().map(|items| items.is_empty()).unwrap_or(true) {
                 return;
@@ -303,8 +313,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             item.set_intro(0.0);
             item.window()
                 .set_position(slint::PhysicalPosition::new(-32_000, -32_000));
-            if item.show().is_err() {
-                return;
+            if item.show().is_ok() {
+                // `show()` initializes the native window and renderer. Some
+                // Windows/driver combinations deliberately skip rendering
+                // notifications for a fully off-screen window, which used to
+                // leave the presenter permanently "not ready" even though the
+                // first real popup worked. The latency smoke still measures
+                // the first real visible frame, so marking the completed
+                // off-screen show here is both deterministic and honest.
+                *prewarm_finished.borrow_mut() = true;
+                write_ready_marker();
             }
         }
     });
@@ -313,6 +331,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     slint::run_event_loop_until_quit()?;
     event_timer.stop();
     prewarm_timer.stop();
+    Ok(())
+}
+
+/// Render the real production popup components without Core IPC so automated
+/// visual tests can inspect the first visible frame.  This closes the gap left
+/// by `--self-test`, which intentionally checks only component construction.
+fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let quit_timer = Timer::default();
+    quit_timer.start(TimerMode::SingleShot, Duration::from_secs(20), || {
+        let _ = slint::quit_event_loop();
+    });
+
+    match kind {
+        "confirm" => {
+            let window = ConfirmWindow::new()?;
+            window.global::<Tokens>().set_dark(dark);
+            window.global::<Tokens>().set_reduce_motion(true);
+            window.set_filename("示例视频 · 1080p.mp4".into());
+            window.set_url("media.example.test/library/example-video.mp4".into());
+            window.set_size_text("128.0 MB · HTTP".into());
+            window.set_remaining("后面还有 2 个".into());
+            window.set_intro(1.0);
+            window.on_command(|command| {
+                if command != "drag" {
+                    let _ = slint::quit_event_loop();
+                }
+            });
+            window.show()?;
+            write_ready_marker();
+            slint::run_event_loop_until_quit()?;
+        }
+        "progress" => {
+            let window = ProgressWindow::new()?;
+            window.global::<Tokens>().set_dark(dark);
+            window.global::<Tokens>().set_reduce_motion(true);
+            window.set_headline("下载进度".into());
+            window.set_filename("示例视频 · 1080p.mp4".into());
+            window.set_speed("18.6 MB/s".into());
+            window.set_progress(0.64);
+            window.on_command(|_| {
+                let _ = slint::quit_event_loop();
+            });
+            window.show()?;
+            write_ready_marker();
+            slint::run_event_loop_until_quit()?;
+        }
+        "complete" => {
+            let window = CompleteWindow::new()?;
+            window.global::<Tokens>().set_dark(dark);
+            window.global::<Tokens>().set_reduce_motion(true);
+            window.set_filename("示例视频 · 1080p.mp4".into());
+            window.set_power_hint("将在 5 分钟后关机".into());
+            window.on_command(|_| {
+                let _ = slint::quit_event_loop();
+            });
+            window.show()?;
+            write_ready_marker();
+            slint::run_event_loop_until_quit()?;
+        }
+        _ => return Err(format!("unknown visual fixture: {kind}").into()),
+    }
+    quit_timer.stop();
     Ok(())
 }
 

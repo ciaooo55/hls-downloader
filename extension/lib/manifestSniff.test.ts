@@ -6,6 +6,8 @@ describe('extensionless manifest sniffing', () => {
     expect(shouldInspectManifestResponse('https://cdn.test/live/playlist?id=1', 'application/octet-stream')).toBe(true)
     expect(shouldInspectManifestResponse('https://cdn.test/assets/movie.mp4', 'video/mp4')).toBe(false)
     expect(shouldInspectManifestResponse('https://cdn.test/get?id=1', 'application/vnd.apple.mpegurl')).toBe(true)
+    expect(shouldInspectManifestResponse('https://api.test/v1/playlist?id=1', 'application/json')).toBe(false)
+    expect(shouldInspectManifestResponse('https://site.test/manifest/login', 'text/html; charset=utf-8')).toBe(false)
   })
 
   it('recognizes HLS and namespaced DASH prefixes', () => {
@@ -32,6 +34,8 @@ describe('extensionless manifest sniffing', () => {
     expect(isCommonMediaStreamUrl('https://rr1.googlevideo.test/videoplayback?expire=1&mime=video%2Fmp4&itag=18')).toBe(true)
     expect(isCommonMediaStreamUrl('https://cdn.test/get?mime=audio%2Fwebm&itag=251')).toBe(true)
     expect(isCommonMediaStreamUrl('https://api.bilibili.test/x/player/playurl?cid=1')).toBe(false)
+    expect(isCommonMediaStreamUrl('https://api.bilibili.test/x/player/playurl?cid=1&mime=video%2Fmp4')).toBe(false)
+    expect(isCommonMediaStreamUrl('https://site.test/api/playurl?mime=video%2Fmp4')).toBe(false)
     expect(isCommonMediaStreamUrl('https://cdn.test/upgcxcode/1/2/3-1-30080.m4s')).toBe(false)
   })
 })

@@ -74,7 +74,10 @@ export component ConfirmWindow inherits Window {
     min-height: 246px;
     preferred-width: 440px;
     preferred-height: 246px;
-    background: transparent;
+    // An opaque window surface is intentional.  The previous transparent
+    // top-level window could be presented by Windows before its child panel
+    // had a backing surface, producing a completely white/blank hot popup.
+    background: Tokens.surface;
     in-out property <string> filename;
     in-out property <string> url;
     in-out property <string> size_text;
@@ -82,6 +85,8 @@ export component ConfirmWindow inherits Window {
     in-out property <float> intro: 1;
     callback command(string);
     Panel {
+        width: parent.width;
+        height: parent.height;
         VerticalLayout {
             padding: 20px;
             spacing: 12px;
@@ -121,7 +126,7 @@ export component ProgressWindow inherits Window {
     min-height: 174px;
     preferred-width: 400px;
     preferred-height: 174px;
-    background: transparent;
+    background: Tokens.surface;
     always-on-top: true;
     no-frame: true;
     in-out property <string> headline: "下载进度";
@@ -130,6 +135,8 @@ export component ProgressWindow inherits Window {
     in-out property <float> progress;
     callback command(string);
     Panel {
+        width: parent.width;
+        height: parent.height;
         VerticalLayout {
             padding: 16px;
             spacing: 11px;
@@ -173,11 +180,13 @@ export component CompleteWindow inherits Window {
     min-height: 188px;
     preferred-width: 440px;
     preferred-height: 188px;
-    background: transparent;
+    background: Tokens.surface;
     in-out property <string> filename;
     in-out property <string> power_hint;
     callback command(string);
     Panel {
+        width: parent.width;
+        height: parent.height;
         VerticalLayout {
             padding: 16px;
             spacing: 12px;

@@ -6,6 +6,8 @@ const URL_HINT = /(?:\.m3u8?(?:$|[?#])|\.mpd(?:$|[?#])|(?:^|[\/_?.=-])(?:hls|das
 const MEDIA_URL = /\.(?:m3u8?|mpd|mp4|m4v|m4a|webm|mkv|mov|avi|flv|mp3|aac|flac|ogg|opus|wav)(?:$|[?#])/i
 const MEDIA_MIME = /^(?:audio|video)\//i
 const DIRECT_STREAM_PATH = /\/videoplayback(?:\/|$)/i
+const API_ROUTE_PATH = /(?:^|\/)(?:api|ajax|graphql|x\/player|player\/playurl|playurl)(?:\/|$)/i
+const PASSIVE_RESPONSE_MIME = /^(?:application\/(?:ecmascript|javascript|json|ld\+json|manifest\+json|wasm)|font\/|image\/|text\/(?:css|html|javascript))(?:;|$)/i
 
 /**
  * Extensionless media CDNs used by current video sites.
@@ -17,6 +19,11 @@ export function isCommonMediaStreamUrl(url: string): boolean {
     const parsed = new URL(url)
     if (!['http:', 'https:'].includes(parsed.protocol)) return false
     if (DIRECT_STREAM_PATH.test(parsed.pathname)) return true
+    // A JSON playurl API often echoes `mime=video/mp4` as a selector, but its
+    // response is metadata rather than downloadable media.  Reject API-shaped
+    // routes even before response headers arrive; concrete CDN endpoints such
+    // as `/get?mime=audio/webm` remain eligible.
+    if (API_ROUTE_PATH.test(parsed.pathname)) return false
     const mime = (parsed.searchParams.get('mime') || parsed.searchParams.get('content_type') || '').toLowerCase()
     return mime.startsWith('video/') || mime.startsWith('audio/')
   } catch {
@@ -27,6 +34,10 @@ export function isCommonMediaStreamUrl(url: string): boolean {
 export function shouldInspectManifestResponse(url: string, mimeType = ''): boolean {
   const mime = String(mimeType || '').toLowerCase()
   if (mime.includes('mpegurl') || mime.includes('dash+xml')) return true
+  // Avoid cloning ordinary JSON/HTML/image responses merely because an API
+  // route contains words such as playlist or manifest.  Unknown, text/plain,
+  // XML and octet-stream responses remain bounded-inspection candidates.
+  if (PASSIVE_RESPONSE_MIME.test(mime)) return false
   // Do not clone arbitrary MP4/octet-stream responses.  URL hints cover the
   // common extensionless CDN endpoints while keeping the extra read bounded.
   return URL_HINT.test(String(url || ''))
