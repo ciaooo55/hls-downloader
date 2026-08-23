@@ -1,11 +1,11 @@
-//! Small, deterministic Rust Core state machine used by the v6 UI and bridge.
+//! Small, deterministic state machine shared by v7 Core clients.
 //!
 //! The protocol workers attach to this state machine instead of inventing
 //! their own task/status model. Persistence and the HTTP runner can be added
 //! behind the same commands without changing the UI or extension contract.
 
-use crate::v6_contract::{
-    CoreCommand, CoreEvent, ResourceKind, ResourceOffer, TaskSnapshot, TaskSpec,
+use crate::contract::{
+    CoreCommand, CoreEvent, MediaPushRequest, ResourceKind, ResourceOffer, TaskSnapshot, TaskSpec,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
@@ -21,6 +21,7 @@ pub struct CoreRuntime {
     tasks: BTreeMap<String, TaskSnapshot>,
     specs: BTreeMap<String, TaskSpec>,
     pending_handoffs: BTreeMap<String, ResourceOffer>,
+    media_push_requests: BTreeMap<String, MediaPushRequest>,
     events: VecDeque<EventEnvelope>,
     next_task: u64,
     next_handoff: u64,
@@ -53,7 +54,12 @@ impl CoreRuntime {
             }
             runtime.tasks.insert(snapshot.task_id.clone(), snapshot);
         }
-        runtime.specs.extend(specs);
+        for (task_id, mut spec) in specs {
+            if let Some(snapshot) = runtime.tasks.get(&task_id) {
+                spec.queue_id = snapshot.queue_id.clone();
+            }
+            runtime.specs.insert(task_id, spec);
+        }
         runtime
     }
 
@@ -62,8 +68,8 @@ impl CoreRuntime {
         match command {
             CoreCommand::Ping => {
                 self.publish(CoreEvent::Ready {
-                    protocol: crate::V6_PROTOCOL_NAME.into(),
-                    version: crate::V6_PROTOCOL_VERSION,
+                    protocol: crate::V7_PROTOCOL_NAME.into(),
+                    version: crate::V7_PROTOCOL_VERSION,
                 });
             }
             CoreCommand::CreateTask { spec } => {
@@ -101,6 +107,30 @@ impl CoreRuntime {
                 download_dir,
             } => self.accept_handoff(&handoff_id, &filename, &download_dir),
             CoreCommand::RejectHandoff { handoff_id } => self.reject_handoff(&handoff_id),
+            CoreCommand::RequestMediaPush { request } => {
+                self.media_push_requests
+                    .insert(request.id.clone(), request.clone());
+                self.publish(CoreEvent::MediaPushRequested { request });
+            }
+            CoreCommand::ResolveMediaPush {
+                request_id,
+                status,
+                message,
+                location,
+            } => {
+                if let Some(request) = self.media_push_requests.get_mut(&request_id) {
+                    request.status = status;
+                    request.message = message;
+                    request.location = location;
+                    let resolved = request.clone();
+                    self.publish(CoreEvent::MediaPushResolved { request: resolved });
+                } else {
+                    self.publish(CoreEvent::Error {
+                        code: "media_push_not_found".into(),
+                        message: "媒体推送请求不存在或已过期".into(),
+                    });
+                }
+            }
             CoreCommand::OpenMain => {
                 self.publish(CoreEvent::UiShow {
                     surface: "main".into(),
@@ -114,6 +144,9 @@ impl CoreRuntime {
             CoreCommand::Shutdown => {}
             CoreCommand::ReorderQueue { task_id, delta } => self.reorder(&task_id, delta),
             CoreCommand::PlaceQueue { task_id, before_id } => self.place(&task_id, &before_id),
+            CoreCommand::AssignQueue { task_ids, queue_id } => {
+                self.assign_queue(&task_ids, &queue_id)
+            }
             CoreCommand::GetTaskLog { task_id } => self.emit_log(&task_id),
             CoreCommand::BrowserHello { version, browser } => {
                 self.publish(CoreEvent::BrowserStatus {
@@ -134,12 +167,17 @@ impl CoreRuntime {
             | CoreCommand::PlayerControl { .. }
             | CoreCommand::DownloadUpdate
             | CoreCommand::ProbeUrl { .. }
-            | CoreCommand::DiscoverCastDevices
+            | CoreCommand::ProbeTorrent { .. }
+            | CoreCommand::SelectTorrentFiles { .. }
+            | CoreCommand::DiscoverCastDevices { .. }
             | CoreCommand::CastToDevice { .. }
+            | CoreCommand::ShareMedia { .. }
             | CoreCommand::OpenCompleted { .. }
+            | CoreCommand::ConfirmPowerAction
             | CoreCommand::CancelPowerAction
             | CoreCommand::SaveSiteProfile { .. }
             | CoreCommand::ImportPaths { .. }
+            | CoreCommand::ExportTasks { .. }
             | CoreCommand::HarvestPage { .. }
             | CoreCommand::ControlCast { .. }
             | CoreCommand::PresentHandoff { .. } => {}
@@ -184,7 +222,8 @@ impl CoreRuntime {
         if offer.handoff_id.trim().is_empty() {
             return;
         }
-        self.pending_handoffs.insert(offer.handoff_id.clone(), offer);
+        self.pending_handoffs
+            .insert(offer.handoff_id.clone(), offer);
     }
 
     pub fn list_tasks(&self) -> Vec<TaskSnapshot> {
@@ -248,7 +287,12 @@ impl CoreRuntime {
             error_code: None,
             error_message: None,
             queue_index: self.next_task as i64,
+            queue_id: spec.queue_id.clone(),
             output_missing: false,
+            output_path: std::path::Path::new(&spec.download_dir)
+                .join(&spec.filename)
+                .to_string_lossy()
+                .into_owned(),
             connection_hint: String::new(),
             connection_parts: Vec::new(),
             log_tail: Vec::new(),
@@ -258,6 +302,14 @@ impl CoreRuntime {
             } else {
                 format!("{} 镜像", spec.mirrors.len())
             },
+            request_method: spec.request_method.clone(),
+            download_dir: spec.download_dir.clone(),
+            speed_limit_kib: spec.speed_limit_kib,
+            expected_checksum: spec.checksum.clone().unwrap_or_default(),
+            max_workers: spec.concurrency,
+            mirrors: spec.mirrors.clone(),
+            scheduled_start_at: spec.scheduled_start_at.clone(),
+            scheduled_stop_at: spec.scheduled_stop_at.clone(),
         };
         self.tasks.insert(task_id, snapshot.clone());
         self.specs.insert(snapshot.task_id.clone(), spec);
@@ -379,8 +431,16 @@ impl CoreRuntime {
     }
 
     fn place(&mut self, task_id: &str, before_id: &str) {
+        let Some(queue_id) = self.tasks.get(task_id).map(|task| task.queue_id.clone()) else {
+            return;
+        };
         let mut ordered: Vec<String> = {
-            let mut tasks: Vec<_> = self.tasks.values().cloned().collect();
+            let mut tasks: Vec<_> = self
+                .tasks
+                .values()
+                .filter(|task| task.queue_id == queue_id)
+                .cloned()
+                .collect();
             tasks.sort_by_key(|item| (item.queue_index, item.task_id.clone()));
             tasks.into_iter().map(|item| item.task_id).collect()
         };
@@ -424,8 +484,16 @@ impl CoreRuntime {
         if delta == 0 {
             return;
         }
+        let Some(queue_id) = self.tasks.get(task_id).map(|task| task.queue_id.clone()) else {
+            return;
+        };
         let mut ordered: Vec<String> = {
-            let mut tasks: Vec<_> = self.tasks.values().cloned().collect();
+            let mut tasks: Vec<_> = self
+                .tasks
+                .values()
+                .filter(|task| task.queue_id == queue_id)
+                .cloned()
+                .collect();
             tasks.sort_by_key(|item| (item.queue_index, item.task_id.clone()));
             tasks.into_iter().map(|item| item.task_id).collect()
         };
@@ -444,12 +512,49 @@ impl CoreRuntime {
         }
     }
 
+    fn assign_queue(&mut self, task_ids: &[String], queue_id: &str) {
+        let queue_id = queue_id.trim();
+        if queue_id.is_empty() {
+            self.publish(CoreEvent::Error {
+                code: "queue_id_missing".into(),
+                message: "队列编号不能为空".into(),
+            });
+            return;
+        }
+        let mut next_index = self
+            .tasks
+            .values()
+            .filter(|task| task.queue_id == queue_id)
+            .map(|task| task.queue_index)
+            .max()
+            .unwrap_or(0);
+        let mut updates = Vec::new();
+        for task_id in task_ids {
+            let Some(snapshot) = self.tasks.get_mut(task_id) else {
+                continue;
+            };
+            next_index += 1;
+            snapshot.queue_id = queue_id.to_string();
+            snapshot.queue_index = next_index;
+            if let Some(spec) = self.specs.get_mut(task_id) {
+                spec.queue_id = queue_id.to_string();
+            }
+            updates.push(snapshot.clone());
+        }
+        for snapshot in updates {
+            self.publish(CoreEvent::TaskUpdated { snapshot });
+        }
+    }
+
     fn check_update(&mut self) {
         match crate::updater::check_for_update(crate::updater::CURRENT_VERSION) {
             Ok(info) if info.newer => self.publish(CoreEvent::Error {
                 code: "update_available".into(),
                 message: if info.installer_url.is_empty() {
-                    format!("发现新版本 {}（当前 {}）\n{}", info.latest, info.current, info.html_url)
+                    format!(
+                        "发现新版本 {}（当前 {}）\n{}",
+                        info.latest, info.current, info.html_url
+                    )
                 } else {
                     format!(
                         "发现新版本 {}（当前 {}）。可在设置里下载安装包。\n{}",
@@ -491,14 +596,14 @@ impl CoreRuntime {
             snapshot.speed_bytes_per_sec = speed_bytes_per_sec;
             if speed_bytes_per_sec > 0 {
                 snapshot.speed_history.push(speed_bytes_per_sec);
-                if snapshot.speed_history.len() > 24 {
+                if snapshot.speed_history.len() > 180 {
                     snapshot.speed_history.remove(0);
                 }
             }
             snapshot.stage = stage.to_string();
             snapshot.status = status.to_string();
-            snapshot.playback_ready = downloaded_bytes > 0
-                || matches!(status, "completed" | "downloading" | "merging");
+            snapshot.playback_ready =
+                downloaded_bytes > 0 || matches!(status, "completed" | "downloading" | "merging");
             snapshot.completed_ranges =
                 if snapshot.total_ranges > 0 && snapshot.total_bytes.unwrap_or(0) > 0 {
                     snapshot
@@ -517,10 +622,11 @@ impl CoreRuntime {
                 } else {
                     std::path::PathBuf::from(&spec.download_dir)
                 };
-                let progress = root
-                    .join(".v6-tasks")
-                    .join(task_id)
-                    .join("progress.json");
+                let progress = crate::TaskPaths::for_task(task_id, spec)
+                    .map(|paths| paths.progress)
+                    .unwrap_or_else(|_| {
+                        root.join(".hls-tasks").join(task_id).join("progress.json")
+                    });
                 let parts = crate::paint_from_progress(
                     &progress,
                     downloaded_bytes,
@@ -572,7 +678,13 @@ impl CoreRuntime {
                     ]
                 }
                 "failed" | "canceled" => vec!["retry".into(), "delete".into()],
-                "paused" => vec!["resume".into(), "cancel".into(), "delete".into(), "queue_up".into(), "queue_down".into()],
+                "paused" => vec![
+                    "resume".into(),
+                    "cancel".into(),
+                    "delete".into(),
+                    "queue_up".into(),
+                    "queue_down".into(),
+                ],
                 "queued" => vec![
                     "start".into(),
                     "delete".into(),
@@ -617,6 +729,16 @@ impl CoreRuntime {
                     snapshot.available_actions =
                         vec!["retry".into(), "open".into(), "delete".into()];
                 }
+                let updated = snapshot.clone();
+                self.publish(CoreEvent::TaskUpdated { snapshot: updated });
+            }
+        }
+    }
+
+    pub fn set_output_path(&mut self, task_id: &str, path: String) {
+        if let Some(snapshot) = self.tasks.get_mut(task_id) {
+            if snapshot.output_path != path {
+                snapshot.output_path = path;
                 let updated = snapshot.clone();
                 self.publish(CoreEvent::TaskUpdated { snapshot: updated });
             }
@@ -730,6 +852,59 @@ mod tests {
     }
 
     #[test]
+    fn assign_queue_updates_snapshot_and_spec_then_reorders_inside_destination() {
+        let mut runtime = CoreRuntime::new();
+        runtime.handle(CoreCommand::CreateTask { spec: task() });
+        runtime.handle(CoreCommand::CreateTask { spec: task() });
+        runtime.handle(CoreCommand::CreateTask { spec: task() });
+
+        let events = runtime.handle(CoreCommand::AssignQueue {
+            task_ids: vec!["task-1".into(), "task-3".into()],
+            queue_id: "night-media".into(),
+        });
+        assert_eq!(runtime.snapshot("task-1").unwrap().queue_id, "night-media");
+        assert_eq!(runtime.task_spec("task-3").unwrap().queue_id, "night-media");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.event, CoreEvent::TaskUpdated { .. }))
+                .count(),
+            2
+        );
+
+        runtime.handle(CoreCommand::ReorderQueue {
+            task_id: "task-3".into(),
+            delta: -1,
+        });
+        assert!(
+            runtime.snapshot("task-3").unwrap().queue_index
+                < runtime.snapshot("task-1").unwrap().queue_index
+        );
+        assert_eq!(
+            runtime.snapshot("task-2").unwrap().queue_id,
+            crate::DEFAULT_QUEUE_ID
+        );
+    }
+
+    #[test]
+    fn blank_queue_assignment_is_rejected_without_mutating_tasks() {
+        let mut runtime = CoreRuntime::new();
+        runtime.handle(CoreCommand::CreateTask { spec: task() });
+        let events = runtime.handle(CoreCommand::AssignQueue {
+            task_ids: vec!["task-1".into()],
+            queue_id: "  ".into(),
+        });
+        assert_eq!(
+            runtime.snapshot("task-1").unwrap().queue_id,
+            crate::DEFAULT_QUEUE_ID
+        );
+        assert!(events.iter().any(|event| matches!(
+            &event.event,
+            CoreEvent::Error { code, .. } if code == "queue_id_missing"
+        )));
+    }
+
+    #[test]
     fn accept_handoff_creates_task_and_reject_drops_offer() {
         let mut runtime = CoreRuntime::new();
         let events = runtime.handle(CoreCommand::OfferResource {
@@ -749,19 +924,13 @@ mod tests {
                 size: 1024,
             },
         });
-        assert!(matches!(
-            events[0].event,
-            CoreEvent::HandoffOffered { .. }
-        ));
+        assert!(matches!(events[0].event, CoreEvent::HandoffOffered { .. }));
         let accepted = runtime.handle(CoreCommand::AcceptHandoff {
             handoff_id: "handoff-ui".into(),
             filename: "installer.exe".into(),
             download_dir: String::new(),
         });
-        assert!(matches!(
-            accepted[0].event,
-            CoreEvent::TaskCreated { .. }
-        ));
+        assert!(matches!(accepted[0].event, CoreEvent::TaskCreated { .. }));
         match &accepted[1].event {
             CoreEvent::HandoffResolved {
                 handoff_id,

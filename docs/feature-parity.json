@@ -1,0 +1,242 @@
+{
+  "schema_version": 1,
+  "product_version": "7.0.0",
+  "generated_at": "2026-08-24",
+  "baselines": {
+    "layout_and_workflow": "v3.0.39",
+    "feature_and_error_behavior": "v5.0.13",
+    "rust_reliability": "v6.0.1"
+  },
+  "summary": {
+    "total": 25,
+    "verified": 25,
+    "percent": 100
+  },
+  "features": [
+    {
+      "id": "workbench-layout",
+      "legacy_entry": "v3 task workbench: title bar, toolbar, sidebar, task table, status bar",
+      "v7_entry": "desktop_ui MainWindow / WorkbenchShell",
+      "core_contract": ["snapshot", "wait_events"],
+      "state_events": ["task_created", "task_updated", "task_progress", "task_deleted"],
+      "tests": ["desktop_ui WorkbenchLayoutTest", "scripts/smoke_v7_ui_api.py"],
+      "status": "verified"
+    },
+    {
+      "id": "task-selection-and-context-menu",
+      "legacy_entry": "v3 task rows and task context menu",
+      "v7_entry": "row-wide click, marquee, Ctrl/Shift selection, pointer-anchored capability menu",
+      "core_contract": ["task_action", "assign_queue", "place_queue"],
+      "state_events": ["task_updated", "task_deleted", "toast", "error"],
+      "tests": ["desktop_ui SelectionControllerTest", "desktop_ui TaskContextActionsTest"],
+      "status": "verified"
+    },
+    {
+      "id": "new-download-and-probe",
+      "legacy_entry": "v3 new task and v5 recognition dialog",
+      "v7_entry": "NewDownloadDialog / RecognitionDialog",
+      "core_contract": ["probe_url", "create_task"],
+      "state_events": ["probe_result", "task_created", "duplicate_offered", "error"],
+      "tests": ["native_shell recognize tests", "native_shell core_service tests", "desktop_ui ProtocolTest"],
+      "status": "verified"
+    },
+    {
+      "id": "browser-request-context",
+      "legacy_entry": "v3/v5 Referer, Origin, Cookie and request-header inheritance",
+      "v7_entry": "new task advanced request fields and browser handoff confirmation",
+      "core_contract": ["offer_resource", "accept_handoff", "create_task"],
+      "state_events": ["handoff_offered", "handoff_resolved", "task_created"],
+      "tests": ["native_shell credentials tests", "native_shell net_policy tests", "extension directBackend tests"],
+      "status": "verified"
+    },
+    {
+      "id": "http-ftp-sftp-transfer",
+      "legacy_entry": "v5 HTTP/HTTPS, FTP/FTPS and SFTP downloads",
+      "v7_entry": "protocol-aware new task and task details",
+      "core_contract": ["create_task", "task_action"],
+      "state_events": ["task_progress", "task_updated", "error"],
+      "tests": ["native_shell http_engine tests", "native_shell ftp_engine tests", "native_shell sftp_engine tests"],
+      "status": "verified"
+    },
+    {
+      "id": "hls-dash-live-media",
+      "legacy_entry": "v3/v5 HLS, DASH, live recording, tracks and subtitles",
+      "v7_entry": "recognition variants, task details and media settings",
+      "core_contract": ["probe_url", "create_task", "task_action"],
+      "state_events": ["probe_result", "task_progress", "task_updated", "error"],
+      "tests": ["native_shell media::hls tests", "native_shell media::dash tests", "scripts/adversarial-v7.ps1 transfer scope"],
+      "status": "verified"
+    },
+    {
+      "id": "torrent-and-magnet-selection",
+      "legacy_entry": "v5 BT, magnet and torrent-watch flow",
+      "v7_entry": "TorrentSelectionDialog and BT settings",
+      "core_contract": ["probe_torrent", "select_torrent_files", "create_task"],
+      "state_events": ["torrent_probe_result", "torrent_selection_result", "task_created", "error"],
+      "tests": ["native_shell torrent_engine tests", "desktop_ui TorrentSelectionTest"],
+      "status": "verified"
+    },
+    {
+      "id": "batch-harvest-and-import",
+      "legacy_entry": "v3 batch add and v5 page harvest/import",
+      "v7_entry": "BatchAddDialog, HarvestDialog, drag/drop and import picker",
+      "core_contract": ["harvest_page", "import_paths", "create_task"],
+      "state_events": ["harvest_result", "task_created", "toast", "error"],
+      "tests": ["native_shell harvest tests", "native_shell link_file tests", "desktop_ui ImportFlowTest"],
+      "status": "verified"
+    },
+    {
+      "id": "queue-and-scheduling",
+      "legacy_entry": "v3 queue order and v5 scheduled queues/speed limits",
+      "v7_entry": "queue sidebar, queue editor and schedule settings",
+      "core_contract": ["reorder_queue", "place_queue", "assign_queue", "store_settings"],
+      "state_events": ["task_updated", "toast", "error"],
+      "tests": ["native_shell core_runtime queue tests", "native_shell core_server atomic settings test", "desktop_ui QueueEditorTest"],
+      "status": "verified"
+    },
+    {
+      "id": "task-and-file-actions",
+      "legacy_entry": "v3 start, pause, retry, cancel, delete, open and clear actions",
+      "v7_entry": "selection action bar and capability-filtered row menu",
+      "core_contract": ["task_action", "open_completed", "clear_completed"],
+      "state_events": ["task_updated", "task_deleted", "toast", "error"],
+      "tests": ["native_shell core_runtime tests", "desktop_ui TaskContextActionsTest"],
+      "status": "verified"
+    },
+    {
+      "id": "details-logs-checksum-export",
+      "legacy_entry": "v3 task details/log and v5 checksum/import/export",
+      "v7_entry": "TaskDetailsDialog, LogDialog and task list import/export",
+      "core_contract": ["get_task_log", "export_tasks", "import_paths", "save_site_profile"],
+      "state_events": ["task_log", "task_export", "toast", "error"],
+      "tests": ["native_shell checksum tests", "native_shell task_export tests", "desktop_ui TaskDetailsTest"],
+      "status": "verified"
+    },
+    {
+      "id": "isolated-player",
+      "legacy_entry": "v3/v5 local playback and track selection",
+      "v7_entry": "PlayerWindow with timeline, speed, audio and subtitle menus",
+      "core_contract": ["play_task", "player_control"],
+      "state_events": ["player_session", "toast", "error"],
+      "tests": ["native_shell player tests", "scripts/smoke_v7_player_process.py"],
+      "status": "verified"
+    },
+    {
+      "id": "cast-session",
+      "legacy_entry": "v3/v5 DLNA and Chromecast device workflow",
+      "v7_entry": "cast device picker and controllable cast session HUD",
+      "core_contract": ["discover_cast_devices", "cast_to_device", "control_cast", "share_media"],
+      "state_events": ["cast_devices", "cast_session", "error"],
+      "tests": ["native_shell cast tests", "scripts/smoke_v7_tvbox_real.py", "scripts/smoke_v7_ui_api.py"],
+      "status": "verified"
+    },
+    {
+      "id": "tvbox-push",
+      "legacy_entry": "v3/v5 TVBox discovery and push",
+      "v7_entry": "separate TVBox push picker, status and settings mode",
+      "core_contract": ["discover_cast_devices mode=tvbox", "share_media", "request_media_push", "resolve_media_push"],
+      "state_events": ["cast_devices", "media_push_requested", "media_push_resolved", "cast_session"],
+      "tests": ["native_shell cast TVBox tests", "scripts/smoke_v7_tvbox_real.py"],
+      "status": "verified"
+    },
+    {
+      "id": "browser-extension-recognition",
+      "legacy_entry": "v5 click, response, DownloadItem, MSE, Blob, iframe and Shadow DOM recognition",
+      "v7_entry": "WXT popup, page overlay and concise resource hover actions",
+      "core_contract": ["browser_hello", "offer_resource", "request_media_push"],
+      "state_events": ["browser_status", "handoff_offered", "media_push_requested"],
+      "tests": ["extension 30-file 190-test Vitest suite", "extension Chromium/Firefox production builds"],
+      "status": "verified"
+    },
+    {
+      "id": "hot-browser-confirmation",
+      "legacy_entry": "v5 browser confirmation, rejection and timeout",
+      "v7_entry": "pre-created native Presenter confirmation window",
+      "core_contract": ["offer_resource", "present_handoff", "accept_handoff", "reject_handoff"],
+      "state_events": ["handoff_offered", "handoff_resolved"],
+      "tests": ["scripts/smoke_v7_presenter.py", "scripts/smoke_v7_native_host.py"],
+      "status": "verified"
+    },
+    {
+      "id": "complete-settings",
+      "legacy_entry": "v3/v5 download, connection, schedule, browser, media, security, appearance and maintenance settings",
+      "v7_entry": "SettingsV7 categorized dialog",
+      "core_contract": ["load_settings", "store_settings", "set_default_cookie"],
+      "state_events": ["toast", "error"],
+      "tests": ["native_shell core_server atomic settings test", "desktop_ui SettingsContractTest", "scripts/smoke_v7_ui_api.py"],
+      "status": "verified"
+    },
+    {
+      "id": "update-and-migration",
+      "legacy_entry": "v3/v5 update and durable task migration",
+      "v7_entry": "update, migration and duplicate-resolution dialogs",
+      "core_contract": ["check_update", "download_update", "task_action"],
+      "state_events": ["duplicate_offered", "toast", "error"],
+      "tests": ["native_shell updater tests", "native_shell migrate tests", "scripts/smoke_v7_portable_upgrade.ps1"],
+      "status": "verified"
+    },
+    {
+      "id": "versioned-ipc-recovery",
+      "legacy_entry": "v6 Core single-owner process contract",
+      "v7_entry": "Compose and Native Host reconnect without SQLite access",
+      "core_contract": ["capabilities", "snapshot", "wait_events"],
+      "state_events": ["ready", "error"],
+      "tests": ["native_shell core_ipc tests", "native_shell core_server sequence tests", "desktop_ui ProtocolTest"],
+      "status": "verified"
+    },
+    {
+      "id": "process-isolation-and-single-instance",
+      "legacy_entry": "v6 resident Core and single-instance UI",
+      "v7_entry": "separate Workbench, Engine, Presenter, Native Host and player processes",
+      "core_contract": ["ping", "open_main", "hide_main", "shutdown"],
+      "state_events": ["ready", "ui_show", "error"],
+      "tests": ["scripts/adversarial-v7.ps1 native scope", "scripts/smoke-installed-v7.ps1"],
+      "status": "verified"
+    },
+    {
+      "id": "performance-and-soak",
+      "legacy_entry": "IDM-style response, segmented transfer and low idle footprint target",
+      "v7_entry": "virtualized task model, coalesced events and resident Rust Core",
+      "core_contract": ["snapshot", "wait_events", "ping"],
+      "state_events": ["task_progress", "ready"],
+      "tests": ["scripts/benchmark-v7.ps1", "scripts/smoke_v7_transfer_performance.py", "scripts/soak_v7_runtime.py"],
+      "status": "verified"
+    },
+    {
+      "id": "security-and-hostile-inputs",
+      "legacy_entry": "v5 credential, path and browser-origin safety behavior",
+      "v7_entry": "structured errors and user-readable failure states",
+      "core_contract": ["create_task", "probe_torrent", "store_settings"],
+      "state_events": ["error", "toast"],
+      "tests": ["native_shell credentials tests", "native_shell output_path tests", "scripts/adversarial-v7.ps1"],
+      "status": "verified"
+    },
+    {
+      "id": "responsive-visual-system",
+      "legacy_entry": "v3 fixed desktop geometry",
+      "v7_entry": "Compose Foundation component system at 1024x600 through 1920x1080 and 100-150 percent DPI",
+      "core_contract": ["snapshot"],
+      "state_events": ["ready"],
+      "tests": ["desktop_ui WorkbenchLayoutTest", "scripts/smoke_v7_compose_frames.ps1", "scripts/smoke_v7_ui_api.py"],
+      "status": "verified"
+    },
+    {
+      "id": "structured-diagnostics",
+      "legacy_entry": "v3/v5 task and application logs",
+      "v7_entry": "UTF-8 JSONL diagnostics with component, event, task and request IDs",
+      "core_contract": ["get_task_log"],
+      "state_events": ["task_log", "error"],
+      "tests": ["native_shell core_service tests", "desktop_ui DiagnosticLogTest"],
+      "status": "verified"
+    },
+    {
+      "id": "local-install-and-rollback",
+      "legacy_entry": "v3/v5 installed and portable distributions",
+      "v7_entry": "atomic per-user install, Start menu, bundled extensions and previous-image rollback",
+      "core_contract": ["capabilities", "ping"],
+      "state_events": ["ready", "browser_status"],
+      "tests": ["scripts/smoke-installed-v7.ps1", "scripts/smoke_v7_portable_upgrade.ps1", "scripts/smoke_v7_native_host.py"],
+      "status": "verified"
+    }
+  ]
+}

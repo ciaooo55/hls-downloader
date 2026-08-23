@@ -22,7 +22,9 @@ pub struct FixtureOrigin {
 }
 
 pub fn serve_files(files: HashMap<String, Vec<u8>>) -> FixtureOrigin {
-    serve_dynamic(Arc::new(move |path: &str, _hit: usize| files.get(path).cloned()))
+    serve_dynamic(Arc::new(move |path: &str, _hit: usize| {
+        files.get(path).cloned()
+    }))
 }
 
 pub fn serve_dynamic(
@@ -93,7 +95,8 @@ pub fn run_hls_vod_fixture() -> Result<Vec<u8>, String> {
         false,
     )?;
     let bytes = std::fs::read(&merged).map_err(|error| error.to_string())?;
-    let playlist = std::fs::read_to_string(dir.join("local.m3u8")).map_err(|error| error.to_string())?;
+    let playlist =
+        std::fs::read_to_string(dir.join("local.m3u8")).map_err(|error| error.to_string())?;
     if !playlist.contains("#EXT-X-ENDLIST") || !playlist.contains("#EXT-X-PLAYLIST-TYPE:VOD") {
         return Err("HLS VOD local playlist missing VOD markers".into());
     }
@@ -138,7 +141,8 @@ pub fn run_hls_live_fixture() -> Result<(Vec<u8>, String), String> {
         },
     )?;
     let bytes = std::fs::read(&merged).map_err(|error| error.to_string())?;
-    let playlist = std::fs::read_to_string(dir.join("local.m3u8")).map_err(|error| error.to_string())?;
+    let playlist =
+        std::fs::read_to_string(dir.join("local.m3u8")).map_err(|error| error.to_string())?;
     let _ = std::fs::remove_dir_all(dir);
     Ok((bytes, playlist))
 }

@@ -15,10 +15,9 @@ pub struct CurlDownload {
 
 pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String> {
     let args = tokenize(command)?;
-    if args
-        .first()
-        .is_none_or(|first| !first.eq_ignore_ascii_case("curl") && !first.eq_ignore_ascii_case("curl.exe"))
-    {
+    if args.first().is_none_or(|first| {
+        !first.eq_ignore_ascii_case("curl") && !first.eq_ignore_ascii_case("curl.exe")
+    }) {
         return Ok(None);
     }
     let mut url = String::new();
@@ -28,11 +27,27 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
     let mut index = 1;
     while index < args.len() {
         let arg = &args[index];
-        if arg == "--url" || arg == "-X" || arg == "--request" || arg == "-H" || arg == "--header"
-            || arg == "-A" || arg == "--user-agent" || arg == "-e" || arg == "--referer"
-            || arg == "-b" || arg == "--cookie" || arg == "-u" || arg == "--user"
-            || arg == "-d" || arg == "--data" || arg == "--data-raw" || arg == "--data-binary"
-            || arg == "--data-urlencode" || arg == "-o" || arg == "--output" || arg == "--proxy"
+        if arg == "--url"
+            || arg == "-X"
+            || arg == "--request"
+            || arg == "-H"
+            || arg == "--header"
+            || arg == "-A"
+            || arg == "--user-agent"
+            || arg == "-e"
+            || arg == "--referer"
+            || arg == "-b"
+            || arg == "--cookie"
+            || arg == "-u"
+            || arg == "--user"
+            || arg == "-d"
+            || arg == "--data"
+            || arg == "--data-raw"
+            || arg == "--data-binary"
+            || arg == "--data-urlencode"
+            || arg == "-o"
+            || arg == "--output"
+            || arg == "--proxy"
         {
             let value = args
                 .get(index + 1)
@@ -84,11 +99,12 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
     if !crate::http_engine::http_fetch_url_allowed(&url) {
         return Err("cURL 命令中没有有效的 HTTP(S) 地址".into());
     }
-    if body.contains('\r') || body.contains('\n') {
-        return Err("cURL 请求体不能包含换行".into());
+    if body.chars().any(|ch| ch.is_control()) {
+        return Err("cURL 请求体不能包含控制字符".into());
     }
     headers.retain(|key, value| {
-        !key.contains(['\r', '\n', ':']) && !value.contains('\r') && !value.contains('\n')
+        !key.chars().any(|ch| ch.is_control() || ch == ':')
+            && !value.chars().any(|ch| ch.is_control())
     });
     if !body.is_empty() && !headers.contains_key("content-type") {
         headers.insert(
@@ -207,6 +223,10 @@ mod tests {
     #[test]
     fn rejects_crlf_in_url() {
         assert!(parse_curl_command("curl \"http://cdn.test/x\r\nHost: evil\"").is_err());
+        let parsed = parse_curl_command("curl -H \"X-A: 1\0Host: evil\" https://cdn.test/x")
+            .unwrap()
+            .unwrap();
+        assert!(parsed.headers.get("x-a").is_none());
     }
 
     #[test]

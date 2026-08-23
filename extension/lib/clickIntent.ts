@@ -167,21 +167,25 @@ export function shouldTrackDownloadIntent(input: {
   return Boolean(isLikelyDownloadUrl(input.directHref) || isLikelyDownloadUrl(input.hintedHref))
 }
 
+const DISALLOWED_DOWNLOAD_SCHEME = /^(?:javascript|data|blob|vbscript|file|ms-msdt|shell|search-ms|about|view-source):/i
+
 /** Resolve only resource schemes that the desktop downloader can own. */
 export function resolveDownloadTarget(value: string, baseUrl: string): string {
-  const raw = String(value || '').trim()
-  if (!raw || raw.startsWith('#') || /^javascript:/i.test(raw)) return ''
+  const raw = String(value || '').trim().replace(/^\uFEFF+/, '')
+  if (!raw || raw.startsWith('#') || DISALLOWED_DOWNLOAD_SCHEME.test(raw)) return ''
   try {
     const target = new URL(raw, baseUrl)
-    return ['http:', 'https:', 'magnet:'].includes(target.protocol) ? target.href : ''
+    return ['http:', 'https:', 'ftp:', 'ftps:', 'sftp:', 'magnet:'].includes(target.protocol)
+      ? target.href
+      : ''
   } catch {
     return ''
   }
 }
 
 function usableHrefAttribute(value = ''): string {
-  const raw = String(value || '').trim()
-  if (!raw || raw.startsWith('#') || /^javascript:/i.test(raw)) return ''
+  const raw = String(value || '').trim().replace(/^\uFEFF+/, '')
+  if (!raw || raw.startsWith('#') || DISALLOWED_DOWNLOAD_SCHEME.test(raw)) return ''
   return raw
 }
 
@@ -196,7 +200,7 @@ export function resolveClickedLinkHref(input: {
 }): string {
   const htmlAttribute = usableHrefAttribute(input.htmlHrefAttribute)
   if (htmlAttribute && input.htmlHref) {
-    return resolveDownloadTarget(input.htmlHref, input.baseUrl) || String(input.htmlHref)
+    return resolveDownloadTarget(input.htmlHref, input.baseUrl)
   }
   return resolveDownloadTarget(
     usableHrefAttribute(input.svgHrefAttribute || input.svgXlinkHref || input.svgBaseVal),

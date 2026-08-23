@@ -42,10 +42,21 @@ pub fn probe_url(url: &str) -> Result<(ResourceKind, String, Vec<StreamVariant>)
 
 pub fn probe_with_harvest(
     url: &str,
-) -> Result<(ResourceKind, String, Vec<StreamVariant>, Vec<crate::HarvestLink>), String> {
+) -> Result<
+    (
+        ResourceKind,
+        String,
+        Vec<StreamVariant>,
+        Vec<crate::HarvestLink>,
+    ),
+    String,
+> {
     let url = url.trim();
     if url.is_empty() {
         return Err("请输入链接".into());
+    }
+    if !crate::http_engine::remote_resource_url_allowed(url) {
+        return Err("链接协议不受支持".into());
     }
     let mut kind = classify_url(url);
     let mut variants = Vec::new();
@@ -71,9 +82,7 @@ pub fn probe_with_harvest(
     } else if kind == ResourceKind::File
         && (url.starts_with("http://") || url.starts_with("https://"))
     {
-        if let Ok((status, body)) =
-            crate::http_engine::fetch_bytes(url, &Default::default(), "")
-        {
+        if let Ok((status, body)) = crate::http_engine::fetch_bytes(url, &Default::default(), "") {
             if status == 200 || status == 206 {
                 let text = String::from_utf8_lossy(&body);
                 if text.contains("#EXTM3U") {
@@ -109,7 +118,10 @@ pub fn probe_with_harvest(
 }
 
 fn looks_html(text: &str) -> bool {
-    let start = text.get(..512.min(text.len())).unwrap_or(text).to_ascii_lowercase();
+    let start = text
+        .get(..512.min(text.len()))
+        .unwrap_or(text)
+        .to_ascii_lowercase();
     start.contains("<html")
         || start.contains("<!doctype")
         || start.contains("href=")
@@ -124,11 +136,19 @@ mod tests {
     fn classifies_common_schemes() {
         assert_eq!(classify_url("https://cdn/a.m3u8"), ResourceKind::Hls);
         assert_eq!(classify_url("https://cdn/a.mpd"), ResourceKind::Dash);
-        assert_eq!(classify_url("magnet:?xt=urn:btih:abc"), ResourceKind::Torrent);
+        assert_eq!(
+            classify_url("magnet:?xt=urn:btih:abc"),
+            ResourceKind::Torrent
+        );
         assert_eq!(classify_url("sftp://nas/a.bin"), ResourceKind::Sftp);
         assert_eq!(classify_url("https://cdn/a.zip"), ResourceKind::File);
         assert_eq!(kind_label(ResourceKind::Hls), "HLS 点播");
-        assert!(looks_html("<!doctype html><a href=\"https://x/a.bin\">x</a>"));
+        assert!(looks_html(
+            "<!doctype html><a href=\"https://x/a.bin\">x</a>"
+        ));
         assert!(!looks_html("PK\u{3}\u{4}binary"));
+        assert!(probe_url("javascript:alert(1)").is_err());
+        assert!(probe_url("file:///C:/Windows/win.ini").is_err());
+        assert!(probe_url("ms-msdt:foo").is_err());
     }
 }

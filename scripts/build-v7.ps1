@@ -1,0 +1,121 @@
+[CmdletBinding()]
+param([ValidateSet('run','test','package','adversarial')][string]$Task='run')
+$ErrorActionPreference = 'Stop'
+$repo=(Resolve-Path "$PSScriptRoot\..").Path
+$protocolSource = Get-Content -LiteralPath (Join-Path $repo 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt') -Raw -Encoding UTF8
+if ($protocolSource -notmatch 'hls-downloader-v7-core' -or $protocolSource -notmatch 'HLSDownloader\.v7') {
+    throw 'v7 build refused: Compose IPC defaults are not v7.'
+}
+$contractSource = Get-Content -LiteralPath (Join-Path $repo 'native_shell\src\contract.rs') -Raw -Encoding UTF8
+if ($contractSource -notmatch 'V7_PROTOCOL_NAME') {
+    throw 'v7 build refused: Rust v7 protocol contract is missing.'
+}
+$env:CARGO_HOME='E:\HLSDownloaderBuildCache\cargo'
+$env:CARGO_TARGET_DIR='D:\HLSDownloaderBuildCache\cargo-target'
+$env:GRADLE_USER_HOME='E:\HLSDownloaderBuildCache\gradle'
+$env:JAVA_HOME='E:\HLSDownloaderBuildCache\jdk-21'
+if(!(Test-Path "$env:JAVA_HOME\bin\java.exe")){ throw "JDK 21 is missing at $env:JAVA_HOME. Run scripts\bootstrap-v7-toolchain.ps1." }
+$libMpvCache = 'E:\HLSDownloaderBuildCache\libmpv-20260814'
+$sevenZipExe = Join-Path $libMpvCache '7zr.exe'
+$libMpvArchive = Join-Path $libMpvCache 'mpv-dev-x86_64.7z'
+$sevenZipUrl = 'https://github.com/ip7z/7zip/releases/download/26.02/7zr.exe'
+$sevenZipSha256 = '56b8cc9f4971cef253644fafe54063ed7fdca551d4dee0f8c6baa81b855acd72'
+$libMpvArchiveUrl = 'https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260814/mpv-dev-x86_64-20260814-git-7b8915bc1d.7z'
+$libMpvArchiveSha256 = '0af22b28e920620036d3ae08fd9283156dc9af0420bf4df84b0e02282094599c'
+
+function Assert-FileSha256([string]$Path, [string]$Expected, [string]$Label) {
+    if (-not (Test-Path -LiteralPath $Path)) { throw "$Label is missing: $Path" }
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $Expected.ToLowerInvariant()) { throw "$Label SHA-256 mismatch: expected $Expected, got $actual" }
+}
+
+function Get-VerifiedFile([string]$Url, [string]$Path, [string]$Expected, [string]$Label) {
+    New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($Path)) | Out-Null
+    if (Test-Path -LiteralPath $Path) {
+        try { Assert-FileSha256 $Path $Expected $Label; return } catch { Remove-Item -LiteralPath $Path -Force }
+    }
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        & $curl.Source --location --fail --retry 3 --retry-delay 2 --max-time 900 --output $Path $Url
+        if ($LASTEXITCODE -ne 0) { throw "$Label download failed with exit $LASTEXITCODE" }
+    } else {
+        Invoke-WebRequest -Uri $Url -OutFile $Path -MaximumRedirection 10
+    }
+    Assert-FileSha256 $Path $Expected $Label
+}
+
+function Copy-LibMpv([string]$Destination) {
+    Get-VerifiedFile $sevenZipUrl $sevenZipExe $sevenZipSha256 '7zr.exe'
+    Get-VerifiedFile $libMpvArchiveUrl $libMpvArchive $libMpvArchiveSha256 'libmpv archive'
+    $extract = Join-Path $libMpvCache 'extract'
+    if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $extract | Out-Null
+    try {
+        & $sevenZipExe e -y "-o$extract" $libMpvArchive 'libmpv-2.dll'
+        if ($LASTEXITCODE -ne 0) { throw "7zr failed to extract libmpv-2.dll (exit $LASTEXITCODE)" }
+        $dll = Get-ChildItem -LiteralPath $extract -Filter 'libmpv-2.dll' -Recurse -File | Select-Object -First 1
+        if (-not $dll) { throw 'libmpv archive did not contain libmpv-2.dll' }
+        Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path $Destination 'libmpv-2.dll') -Force
+        Assert-FileSha256 (Join-Path $Destination 'libmpv-2.dll') ((Get-FileHash -LiteralPath $dll.FullName -Algorithm SHA256).Hash) 'bundled libmpv-2.dll'
+    } finally { Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue }
+}
+$cargo = 'C:\Users\lee\.cargo\bin\cargo.exe'
+$engineTarget = if ($Task -eq 'package') { 'release' } else { 'debug' }
+& $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-engine
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin HLSDownloaderNativeHost
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $cargo build --manifest-path "$repo\presenter_ui\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-presenter
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$engine = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\hls-downloader-engine.exe"
+if (!(Test-Path -LiteralPath $engine)) { throw "Rust engine was not produced: $engine" }
+$nativeHost = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloaderNativeHost.exe"
+if (!(Test-Path -LiteralPath $nativeHost)) { throw "Native Messaging host was not produced: $nativeHost" }
+$presenter = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\hls-downloader-presenter.exe"
+if (!(Test-Path -LiteralPath $presenter)) { throw "v7 presenter was not produced: $presenter" }
+if ($Task -eq 'package') {
+    $resources = Join-Path $repo 'desktop_ui\resources\common'
+    New-Item -ItemType Directory -Force -Path $resources | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repo 'assets\app-icon.ico') -Destination (Join-Path $resources 'app-icon.ico') -Force
+    Copy-Item -LiteralPath $engine -Destination (Join-Path $resources 'HLSDownloaderEngine.exe') -Force
+    # The dedicated bridge has no Compose/Slint dependency and never opens SQLite.
+    Copy-Item -LiteralPath $nativeHost -Destination (Join-Path $resources 'HLSDownloaderNativeHost.exe') -Force
+    Copy-Item -LiteralPath $presenter -Destination (Join-Path $resources 'HLSDownloaderPresenter.exe') -Force
+    # Ship the media tools beside the v7 workbench when the local toolchain
+    # provides them. The Core reads these names from its packaged directory.
+    $ffmpegRoot = 'C:\Users\lee\.conda\envs\test\Library\bin'
+    foreach ($tool in @('ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe')) {
+        $source = Join-Path $ffmpegRoot $tool
+        if (Test-Path -LiteralPath $source) {
+            Copy-Item -LiteralPath $source -Destination (Join-Path $resources $tool) -Force
+        }
+    }
+    Copy-LibMpv $resources
+    # Compose's jlink task rejects a leftover output directory after an interrupted package run.
+    $runtimeImage = 'D:\HLSDownloaderBuildCache\compose-build\compose\tmp\main\runtime'
+    if (Test-Path -LiteralPath $runtimeImage) {
+        Remove-Item -LiteralPath $runtimeImage -Recurse -Force
+    }
+}
+$env:HLS_ENGINE_PATH = $engine
+Push-Location "$repo\desktop_ui"
+try {
+    switch ($Task) {
+        'run' {
+            $engineProcess = Start-Process -FilePath $engine -WorkingDirectory (Split-Path $engine -Parent) -PassThru
+            Start-Sleep -Milliseconds 250
+            $presenterProcess = Start-Process -FilePath $presenter -WorkingDirectory (Split-Path $presenter -Parent) -PassThru
+            try { & .\gradlew.bat run } finally {
+                if ($presenterProcess -and -not $presenterProcess.HasExited) { $presenterProcess.CloseMainWindow() | Out-Null }
+            }
+        }
+        'test' { & .\gradlew.bat test }
+    'package' { & .\gradlew.bat clean createDistributable packageDistributionForCurrentOS }
+        'adversarial' { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\adversarial-v7.ps1" -Scope native }
+    }
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if ($Task -eq 'package') {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\create-v7-portable.ps1" -OutZip "$repo\artifacts\v7-productization\package\HLSDownloader-7.0.0-Windows-x64-Portable.zip"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+} finally { Pop-Location }

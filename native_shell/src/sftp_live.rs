@@ -87,7 +87,10 @@ fn map_ssh_error(error: impl std::fmt::Display) -> String {
     } else if lowered.contains("no such file") || lowered.contains("not found") {
         "SFTP 远程文件不存在".into()
     } else {
-        format!("SFTP 下载失败：{}", text.chars().take(200).collect::<String>())
+        format!(
+            "SFTP 下载失败：{}",
+            text.chars().take(200).collect::<String>()
+        )
     }
 }
 
@@ -247,10 +250,7 @@ async fn authenticate_default_keys(
     Ok(false)
 }
 
-async fn authenticate_agent(
-    session: &mut Handle<TofuHandler>,
-    user: &str,
-) -> Result<bool, String> {
+async fn authenticate_agent(session: &mut Handle<TofuHandler>, user: &str) -> Result<bool, String> {
     #[cfg(windows)]
     {
         use russh::keys::agent::client::AgentClient;

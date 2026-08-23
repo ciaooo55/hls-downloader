@@ -24,7 +24,10 @@ pub fn is_public_download_url(value: &str) -> bool {
         .trim()
         .trim_matches('.')
         .to_ascii_lowercase();
-    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local")
+    if host.is_empty()
+        || host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
     {
         return false;
     }
@@ -55,7 +58,10 @@ pub fn redact_url(value: &str) -> String {
     if path.is_empty() {
         format!("{scheme}://{host}/")
     } else {
-        format!("{scheme}://{host}/{}", path.split('?').next().unwrap_or(path))
+        format!(
+            "{scheme}://{host}/{}",
+            path.split('?').next().unwrap_or(path)
+        )
     }
 }
 

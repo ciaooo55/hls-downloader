@@ -109,7 +109,8 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
             playlist.is_master = true;
             pending_bandwidth = attr_u64(attrs, "BANDWIDTH").unwrap_or(0);
             pending_codecs = attr_str(attrs, "CODECS").unwrap_or_default();
-            pending_resolution = parse_resolution(&attr_str(attrs, "RESOLUTION").unwrap_or_default());
+            pending_resolution =
+                parse_resolution(&attr_str(attrs, "RESOLUTION").unwrap_or_default());
             pending_audio_group = attr_str(attrs, "AUDIO").unwrap_or_default();
         } else if let Some(attrs) = tag_value(line, "#EXT-X-MAP:") {
             playlist.map_uri = attr_str(attrs, "URI")
@@ -244,7 +245,11 @@ pub fn select_variant_for(
             } else {
                 variant.resolution.1.abs_diff(preferred_height)
             };
-            (u8::from(is_audio_only(variant)), height, u64::MAX - variant.bandwidth)
+            (
+                u8::from(is_audio_only(variant)),
+                height,
+                u64::MAX - variant.bandwidth,
+            )
         });
     }
     playlist.variants.iter().max_by_key(|variant| {
@@ -324,7 +329,10 @@ fn variant_label(variant: &Variant) -> String {
         "自适应".into()
     };
     if variant.bandwidth >= 1_000_000 {
-        format!("{height} · {:.1} Mbps", variant.bandwidth as f64 / 1_000_000.0)
+        format!(
+            "{height} · {:.1} Mbps",
+            variant.bandwidth as f64 / 1_000_000.0
+        )
     } else if variant.bandwidth > 0 {
         format!("{height} · {} kbps", variant.bandwidth / 1000)
     } else {
@@ -358,7 +366,10 @@ pub fn select_audio_track<'a>(
     tracks.into_iter().next()
 }
 
-pub fn select_default_audio<'a>(playlist: &'a Playlist, variant: &Variant) -> Option<&'a Rendition> {
+pub fn select_default_audio<'a>(
+    playlist: &'a Playlist,
+    variant: &Variant,
+) -> Option<&'a Rendition> {
     select_audio_track(playlist, variant, "")
 }
 
@@ -483,12 +494,19 @@ pub fn download_hls_with(
     let mut discontinuities = Vec::new();
     let mut vod = VodCheckpoint::load(task_dir);
     if let Some(map) = &playlist.map_uri {
-        files.push(download_one(map, headers, proxy, &seg_dir.join("init.mp4"), control)?);
+        files.push(download_one(
+            map,
+            headers,
+            proxy,
+            &seg_dir.join("init.mp4"),
+            control,
+        )?);
     }
     let mut key_bytes = None;
     if let Some(key) = &playlist.key {
         if key.method.eq_ignore_ascii_case("AES-128") {
-            let (_, bytes) = fetch_bytes(&key.uri, headers, proxy).map_err(|error| error.to_string())?;
+            let (_, bytes) =
+                fetch_bytes(&key.uri, headers, proxy).map_err(|error| error.to_string())?;
             key_bytes = Some(bytes);
         }
     }
@@ -535,11 +553,7 @@ pub fn download_hls_with(
             );
             let slot = files.len();
             let path = match resume_segment_path(&seg_dir, slot, &segment.uri) {
-                Some(existing)
-                    if vod.can_reuse(slot, &identity, file_len(&existing)) =>
-                {
-                    existing
-                }
+                Some(existing) if vod.can_reuse(slot, &identity, file_len(&existing)) => existing,
                 Some(existing) if vod.has_slot(slot) => {
                     let _ = fs::remove_file(&existing);
                     download_segment(
@@ -687,12 +701,7 @@ struct LiveAudioRecorder {
 }
 
 impl LiveAudioRecorder {
-    fn start(
-        uri: &str,
-        headers: &HashMap<String, String>,
-        proxy: &str,
-        task_dir: &Path,
-    ) -> Self {
+    fn start(uri: &str, headers: &HashMap<String, String>, proxy: &str, task_dir: &Path) -> Self {
         let control = task_dir.join("audio.control");
         let _ = fs::write(&control, "run");
         let uri = uri.to_string();
@@ -701,9 +710,12 @@ impl LiveAudioRecorder {
         let audio_dir = task_dir.join("audio");
         let thread_control = control.clone();
         let replay = crate::credentials::scoped_replay_json();
+        let throttle = crate::net_policy::current_throttle_context();
         let handle = std::thread::spawn(move || {
-            crate::with_replay_json(&replay, || {
-                download_hls(&uri, &headers, &proxy, &audio_dir, &thread_control, true)
+            crate::net_policy::with_throttle_context(throttle, || {
+                crate::with_replay_json(&replay, || {
+                    download_hls(&uri, &headers, &proxy, &audio_dir, &thread_control, true)
+                })
             })
         });
         Self {
@@ -714,7 +726,10 @@ impl LiveAudioRecorder {
 
     fn finish(&mut self) -> Option<PathBuf> {
         let _ = fs::write(&self.control, "finish");
-        self.handle.take().and_then(|handle| handle.join().ok()).and_then(Result::ok)
+        self.handle
+            .take()
+            .and_then(|handle| handle.join().ok())
+            .and_then(Result::ok)
     }
 }
 
@@ -768,7 +783,10 @@ impl LiveSubSession {
                     entry.get("uri").and_then(|value| value.as_str()) == Some(uri.as_str())
                         || entry.get("key").and_then(|value| value.as_str()) == Some(key.as_str())
                 }) {
-                    item.count = found.get("count").and_then(|value| value.as_u64()).unwrap_or(0) as usize;
+                    item.count = found
+                        .get("count")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(0) as usize;
                     if let Some(seen) = found.get("seen").and_then(|value| value.as_array()) {
                         item.seen = seen
                             .iter()
@@ -894,7 +912,8 @@ fn capture_live_subtitle_track(
     task_dir: &Path,
     control: &Path,
 ) -> Result<(), String> {
-    let (status, body) = fetch_bytes(&track.uri, headers, proxy).map_err(|error| error.to_string())?;
+    let (status, body) =
+        fetch_bytes(&track.uri, headers, proxy).map_err(|error| error.to_string())?;
     if status != 200 && status != 206 {
         return Ok(());
     }
@@ -920,8 +939,7 @@ fn capture_live_subtitle_track(
             continue;
         }
         let path = cache.join(format!("{:08}.vtt", track.count));
-        if download_one(&segment.uri, headers, proxy, &path, control).is_ok()
-            && file_len(&path) > 0
+        if download_one(&segment.uri, headers, proxy, &path, control).is_ok() && file_len(&path) > 0
         {
             track.count += 1;
         } else {
@@ -958,9 +976,7 @@ fn download_segment(
     download_one(&segment.uri, headers, proxy, path, control)?;
     if let (Some(key), Some(media_key)) = (key_bytes, media_key) {
         if media_key.method.eq_ignore_ascii_case("AES-128") {
-            let iv = media_key
-                .iv
-                .unwrap_or_else(|| sequence_iv(sequence));
+            let iv = media_key.iv.unwrap_or_else(|| sequence_iv(sequence));
             let encrypted = fs::read(path).map_err(|error| error.to_string())?;
             let plain = decrypt_aes128(key, &iv, &encrypted)?;
             fs::write(path, plain).map_err(|error| error.to_string())?;
@@ -1002,7 +1018,10 @@ impl VodCheckpoint {
                     .and_then(|item| item.as_str())
                     .unwrap_or("")
                     .to_string();
-                let size = record.get("size").and_then(|item| item.as_u64()).unwrap_or(0);
+                let size = record
+                    .get("size")
+                    .and_then(|item| item.as_u64())
+                    .unwrap_or(0);
                 if !identity.is_empty() && size > 0 {
                     records.insert(slot.clone(), (identity, size));
                 }
@@ -1225,7 +1244,9 @@ fn playlist_leaf(path: &Path) -> String {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("seg.bin");
-    if name.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+    if name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
         && !name.contains("..")
     {
         name.to_string()
@@ -1245,7 +1266,10 @@ fn sequence_iv(sequence: u64) -> [u8; 16] {
 }
 
 fn parse_iv(value: &str) -> Option<[u8; 16]> {
-    let hex = value.trim().trim_start_matches("0x").trim_start_matches("0X");
+    let hex = value
+        .trim()
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
     if hex.len() != 32 {
         return None;
     }
@@ -1277,20 +1301,39 @@ fn apply_ad_policy(playlist: &mut Playlist, enabled: bool) {
 }
 
 fn url_is_ad(url: &str) -> bool {
-    let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
-    ["ads", "advert", "advertisement", "preroll", "midroll", "postroll", "promo"]
-        .iter()
-        .any(|token| {
-            path.split(|ch: char| !ch.is_ascii_alphanumeric())
-                .any(|part| part == *token)
-        })
+    let path = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .to_ascii_lowercase();
+    [
+        "ads",
+        "advert",
+        "advertisement",
+        "preroll",
+        "midroll",
+        "postroll",
+        "promo",
+    ]
+    .iter()
+    .any(|token| {
+        path.split(|ch: char| !ch.is_ascii_alphanumeric())
+            .any(|part| part == *token)
+    })
 }
 
 fn daterange_is_ad(attrs: &str) -> bool {
     let blob = attrs.to_ascii_lowercase();
-    ["scte35", "splice", "preroll", "midroll", "postroll", "com.apple.hls.interstitial"]
-        .iter()
-        .any(|marker| blob.contains(marker))
+    [
+        "scte35",
+        "splice",
+        "preroll",
+        "midroll",
+        "postroll",
+        "com.apple.hls.interstitial",
+    ]
+    .iter()
+    .any(|marker| blob.contains(marker))
         || blob.contains("class=\"ad")
         || blob.contains("class=ad")
 }
@@ -1332,10 +1375,7 @@ fn parse_resolution(value: &str) -> (u32, u32) {
     let Some((width, height)) = value.split_once('x') else {
         return (0, 0);
     };
-    (
-        width.parse().unwrap_or(0),
-        height.parse().unwrap_or(0),
-    )
+    (width.parse().unwrap_or(0), height.parse().unwrap_or(0))
 }
 
 fn load_seen(path: &Path) -> std::collections::BTreeSet<String> {
@@ -1357,21 +1397,29 @@ fn load_seen(path: &Path) -> std::collections::BTreeSet<String> {
         .map(|items| {
             items
                 .iter()
-                .filter_map(|item| item.get("url").and_then(|url| url.as_str()).map(str::to_string))
+                .filter_map(|item| {
+                    item.get("url")
+                        .and_then(|url| url.as_str())
+                        .map(str::to_string)
+                })
                 .collect()
         })
         .unwrap_or_default()
 }
 
-pub(crate) fn resume_segment_path(seg_dir: &Path, index: usize, uri: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn resume_segment_path(
+    seg_dir: &Path,
+    index: usize,
+    uri: &str,
+) -> Option<std::path::PathBuf> {
     let candidates = [
         seg_dir.join(format!("{:06}.{}", index, extension(uri))),
         seg_dir.join(format!("{:06}.seg", index)),
         seg_dir.join(format!("seg-{index:04}.m4s")),
     ];
-    candidates.into_iter().find(|path| {
-        path.is_file() && path.metadata().map(|meta| meta.len() > 0).unwrap_or(false)
-    })
+    candidates
+        .into_iter()
+        .find(|path| path.is_file() && path.metadata().map(|meta| meta.len() > 0).unwrap_or(false))
 }
 
 fn save_seen(path: &Path, seen: &std::collections::BTreeSet<String>) -> Result<(), String> {
@@ -1402,7 +1450,10 @@ mod tests {
         let text = "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\",DEFAULT=YES,URI=\"audio.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720,CODECS=\"avc1.42e01e\",AUDIO=\"aud\"\nlow.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1920x1080,CODECS=\"avc1.640028\",AUDIO=\"aud\"\nhigh.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS=\"mp4a.40.2\"\naudio.m3u8\n";
         let playlist = parse_playlist(text, "https://cdn.test/master.m3u8").unwrap();
         assert!(playlist.is_master);
-        assert_eq!(select_variant(&playlist).unwrap().uri, "https://cdn.test/high.m3u8");
+        assert_eq!(
+            select_variant(&playlist).unwrap().uri,
+            "https://cdn.test/high.m3u8"
+        );
         assert_eq!(
             select_variant_for(&playlist, 800_000, 0).unwrap().uri,
             "https://cdn.test/low.m3u8"
@@ -1444,6 +1495,17 @@ mod tests {
             ""
         );
         assert_eq!(
+            super::super::resolve_http_uri(
+                "https://cdn.test/a.m3u8",
+                "\u{feff}javascript:alert(1)"
+            ),
+            ""
+        );
+        assert_eq!(
+            super::super::resolve_http_uri("https://cdn.test/a.m3u8", "https://cdn.test/x.ts\0y"),
+            ""
+        );
+        assert_eq!(
             super::super::resolve_http_uri("https://cdn.test/a.m3u8", "//cdn2.test/x.ts"),
             "https://cdn2.test/x.ts"
         );
@@ -1453,7 +1515,10 @@ mod tests {
     fn master_collects_subtitle_renditions() {
         let text = "#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,URI=\"en.vtt\"\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720,SUBTITLES=\"subs\"\nindex.m3u8\n";
         let playlist = parse_playlist(text, "https://cdn.test/master.m3u8").unwrap();
-        assert_eq!(select_subtitles(&playlist)[0].uri.as_deref(), Some("https://cdn.test/en.vtt"));
+        assert_eq!(
+            select_subtitles(&playlist)[0].uri.as_deref(),
+            Some("https://cdn.test/en.vtt")
+        );
     }
 
     #[test]
@@ -1468,7 +1533,9 @@ mod tests {
     fn keyformat_com_apple_is_rejected() {
         let text = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,KEYFORMAT=\"com.apple.streamingkeydelivery\",URI=\"skd://x\"\n#EXTINF:1,\na.ts\n";
         let error = parse_playlist(text, "https://cdn.test/a.m3u8").unwrap_err();
-        assert!(error.contains("SAMPLE-AES") || error.contains("KEYFORMAT") || error.contains("DRM"));
+        assert!(
+            error.contains("SAMPLE-AES") || error.contains("KEYFORMAT") || error.contains("DRM")
+        );
     }
 
     #[test]
@@ -1476,7 +1543,10 @@ mod tests {
         let text = "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXT-X-PART:DURATION=0.333,URI=\"part0.m4s\"\n#EXTINF:4,\nseg.ts\n#EXT-X-ENDLIST\n";
         let playlist = parse_playlist(text, "https://cdn.test/index.m3u8").unwrap();
         assert!(playlist.end_list);
-        assert_eq!(playlist.map_uri.as_deref(), Some("https://cdn.test/init.mp4"));
+        assert_eq!(
+            playlist.map_uri.as_deref(),
+            Some("https://cdn.test/init.mp4")
+        );
         assert_eq!(playlist.segments.len(), 2);
         assert!(playlist.segments[0].is_part);
     }
@@ -1548,16 +1618,7 @@ mod tests {
         std::fs::create_dir_all(&seg_dir).unwrap();
         let file = seg_dir.join("000000.ts");
         std::fs::write(&file, b"seg").unwrap();
-        write_local_playlist(
-            &dir,
-            4.0,
-            false,
-            &[file.clone()],
-            &[1.0],
-            &[false],
-            false,
-        )
-        .unwrap();
+        write_local_playlist(&dir, 4.0, false, &[file.clone()], &[1.0], &[false], false).unwrap();
         let live = std::fs::read_to_string(dir.join("local.m3u8")).unwrap();
         assert!(live.contains("#EXT-X-PLAYLIST-TYPE:EVENT"));
         assert!(!live.contains("#EXT-X-ENDLIST"));
@@ -1715,7 +1776,9 @@ mod tests {
         assert_eq!(session.tracks[0].count, 1);
         let published = session.publish(&dir);
         assert_eq!(published.len(), 1);
-        assert!(std::fs::read_to_string(&published[0]).unwrap().contains("cue"));
+        assert!(std::fs::read_to_string(&published[0])
+            .unwrap()
+            .contains("cue"));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

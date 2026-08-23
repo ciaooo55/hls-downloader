@@ -21,7 +21,10 @@ pub fn canonical_http_url(value: &str) -> String {
     if authority.is_empty() {
         return String::new();
     }
-    format!("{scheme}://{authority}/{}", path_query.trim_start_matches('/'))
+    format!(
+        "{scheme}://{authority}/{}",
+        path_query.trim_start_matches('/')
+    )
 }
 
 pub fn normalize_mirror_urls(primary: &str, mirrors: &[String]) -> Vec<String> {
@@ -126,6 +129,11 @@ mod tests {
             Some(10),
             "\"xyz\""
         ));
-        assert!(mirror_identity_compatible(Some(10), "\"abc\"", Some(10), ""));
+        assert!(mirror_identity_compatible(
+            Some(10),
+            "\"abc\"",
+            Some(10),
+            ""
+        ));
     }
 }

@@ -43,6 +43,21 @@ pub fn cancel() -> bool {
         .unwrap_or(false)
 }
 
+pub fn confirm() -> Result<bool, String> {
+    CANCEL.store(true, Ordering::SeqCst);
+    let action = PENDING
+        .lock()
+        .map_err(|_| "电源动作状态不可用".to_string())?
+        .take();
+    match action {
+        Some(action) => {
+            execute(&action)?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
 pub fn schedule(action: &str, delay_secs: u64) -> Result<(), String> {
     let action = normalize(action)?.to_string();
     let _ = cancel();
@@ -61,9 +76,12 @@ pub fn schedule(action: &str, delay_secs: u64) -> Result<(), String> {
         if CANCEL.load(Ordering::SeqCst) {
             return;
         }
-        let _ = execute(&action);
         if let Ok(mut guard) = PENDING.lock() {
-            *guard = None;
+            if guard.as_deref() == Some(action.as_str()) {
+                guard.take();
+                drop(guard);
+                let _ = execute(&action);
+            }
         }
     });
     Ok(())
@@ -114,6 +132,8 @@ fn execute_os(_action: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn none_is_not_armed() {
         assert!(!is_armed("none"));
@@ -124,9 +144,20 @@ mod tests {
 
     #[test]
     fn cancel_clears_pending() {
+        let _guard = TEST_LOCK.lock().unwrap();
         schedule("shutdown", 30).unwrap();
         assert_eq!(pending().as_deref(), Some("shutdown"));
         assert!(cancel());
         assert!(pending().is_none());
+    }
+
+    #[test]
+    fn confirm_executes_only_one_pending_action() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        schedule("sleep", 30).unwrap();
+        assert_eq!(pending().as_deref(), Some("sleep"));
+        assert!(confirm().unwrap());
+        assert!(pending().is_none());
+        assert!(!confirm().unwrap());
     }
 }

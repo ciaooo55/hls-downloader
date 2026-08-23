@@ -1,11 +1,11 @@
-//! Versioned named-pipe transport for the single resident v6 Core.
+//! Versioned named-pipe transport for the single resident v7 Core.
 //!
-//! Native Messaging and the Slint UI must not open SQLite independently in the
+//! Native Messaging, Compose UI and native presenter must not open SQLite independently in the
 //! final product. They connect to this service using a bounded little-endian
 //! length frame carrying JSON so protocol traces remain inspectable during the
 //! migration. The payload is versioned separately from the legacy shell frame.
 
-use crate::{CoreCommand, EventEnvelope, V6_PROTOCOL_NAME, V6_PROTOCOL_VERSION};
+use crate::{CoreCommand, EventEnvelope, V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{Read, Write};
@@ -15,20 +15,25 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-pub const V6_PIPE_NAME: &str = r"\\.\pipe\HLSDownloader.v6";
-pub const V6_PIPE_MAX_FRAME: usize = 4 * 1024 * 1024;
+pub const V7_PIPE_NAME: &str = r"\\.\pipe\HLSDownloader.v7";
+pub const V7_PIPE_MAX_FRAME: usize = 4 * 1024 * 1024;
 
-pub fn v6_pipe_name() -> String {
-    std::env::var("HLS_V6_PIPE").unwrap_or_else(|_| V6_PIPE_NAME.to_string())
+pub fn v7_pipe_name() -> String {
+    std::env::var("HLS_V7_PIPE")
+        .or_else(|_| std::env::var("HLS_V6_PIPE"))
+        .unwrap_or_else(|_| V7_PIPE_NAME.to_string())
 }
 
 /// Loopback TCP is the test/Linux transport. The Windows product talks on the
-/// named pipe unless `HLS_V6_CORE_BIND` or `HLS_V6_CORE_TCP` opts back in.
+/// named pipe unless the v7 loopback environment opts back in.
 pub fn tcp_loopback_enabled() -> bool {
     if cfg!(not(windows)) {
         return true;
     }
-    std::env::var_os("HLS_V6_CORE_TCP").is_some() || std::env::var_os("HLS_V6_CORE_BIND").is_some()
+    std::env::var_os("HLS_V7_CORE_TCP").is_some()
+        || std::env::var_os("HLS_V7_CORE_BIND").is_some()
+        || std::env::var_os("HLS_V6_CORE_TCP").is_some()
+        || std::env::var_os("HLS_V6_CORE_BIND").is_some()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -45,6 +50,9 @@ pub enum CorePipeRequest {
     Snapshot {
         request_id: u64,
     },
+    Capabilities {
+        request_id: u64,
+    },
     WaitEvents {
         request_id: u64,
         after_sequence: u64,
@@ -55,8 +63,16 @@ pub enum CorePipeRequest {
         key: String,
         value: Value,
     },
+    StoreSettings {
+        request_id: u64,
+        values: std::collections::BTreeMap<String, Value>,
+    },
     LoadSettings {
         request_id: u64,
+    },
+    SetDefaultCookie {
+        request_id: u64,
+        cookie: String,
     },
     StoreCredential {
         request_id: u64,
@@ -96,6 +112,16 @@ pub enum CorePipeResponse {
     Snapshot {
         request_id: u64,
         tasks: Vec<crate::TaskSnapshot>,
+        #[serde(default)]
+        latest_sequence: u64,
+    },
+    Capabilities {
+        request_id: u64,
+        product_version: String,
+        protocol_version: u32,
+        commands: Vec<String>,
+        settings: Vec<String>,
+        max_frame_bytes: u64,
     },
     Settings {
         request_id: u64,
@@ -124,6 +150,8 @@ pub enum CorePipeResponse {
         #[serde(default = "default_queue_max")]
         queue_max: u64,
         #[serde(default)]
+        queue_profiles: Vec<crate::QueueProfile>,
+        #[serde(default)]
         site_rules: String,
         #[serde(default)]
         av_scan_enabled: bool,
@@ -132,7 +160,11 @@ pub enum CorePipeResponse {
         #[serde(default)]
         torrent_watch: String,
         #[serde(default)]
+        torrent_watch_enabled: bool,
+        #[serde(default)]
         download_dir: String,
+        #[serde(default)]
+        temp_dir: String,
         #[serde(default = "default_concurrency")]
         default_concurrency: u64,
         #[serde(default)]
@@ -179,6 +211,10 @@ pub enum CorePipeResponse {
         queue_auto_stop_time: String,
         #[serde(default)]
         default_referer: String,
+        #[serde(default)]
+        default_origin: String,
+        #[serde(default)]
+        allowed_hosts: String,
         #[serde(default = "default_chunk_mb")]
         http_chunk_size_mb: u64,
         #[serde(default = "default_none")]
@@ -197,6 +233,18 @@ pub enum CorePipeResponse {
         reduce_motion: bool,
         #[serde(default)]
         harvest_minimum_bytes: u64,
+        #[serde(default = "default_true")]
+        av_scan_fail_on_threat: bool,
+        #[serde(default = "default_bt_upload_limit")]
+        bt_upload_limit_kib: u64,
+        #[serde(default = "default_bt_connections")]
+        bt_max_connections: u64,
+        #[serde(default = "default_true")]
+        bt_enable_dht: bool,
+        #[serde(default)]
+        preferred_cast_device_id: String,
+        #[serde(default)]
+        default_cookie_configured: bool,
     },
     Credential {
         request_id: u64,
@@ -250,13 +298,21 @@ fn default_queue_days() -> String {
 }
 
 fn default_proxy_mode() -> String {
-    "manual".into()
+    "system".into()
+}
+
+fn default_bt_upload_limit() -> u64 {
+    1024
+}
+
+fn default_bt_connections() -> u64 {
+    200
 }
 
 pub fn encode_message<T: Serialize>(message: &T) -> Result<Vec<u8>, String> {
     let payload = serde_json::to_vec(message).map_err(|error| error.to_string())?;
-    if payload.len() > V6_PIPE_MAX_FRAME {
-        return Err("v6 Core pipe frame too large".into());
+    if payload.len() > V7_PIPE_MAX_FRAME {
+        return Err("v7 Core pipe frame too large".into());
     }
     let mut frame = Vec::with_capacity(payload.len() + 4);
     frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
@@ -266,14 +322,14 @@ pub fn encode_message<T: Serialize>(message: &T) -> Result<Vec<u8>, String> {
 
 pub fn decode_message<T: for<'de> Deserialize<'de>>(frame: &[u8]) -> Result<T, String> {
     if frame.len() < 4 {
-        return Err("v6 Core pipe frame truncated".into());
+        return Err("Core pipe frame truncated".into());
     }
     let length = u32::from_le_bytes(frame[..4].try_into().unwrap()) as usize;
-    if length > V6_PIPE_MAX_FRAME || frame.len() < length + 4 {
-        return Err("v6 Core pipe frame invalid length".into());
+    if length > V7_PIPE_MAX_FRAME || frame.len() < length + 4 {
+        return Err("v7 Core pipe frame invalid length".into());
     }
     serde_json::from_slice(&frame[4..4 + length])
-        .map_err(|error| format!("v6 Core pipe JSON invalid: {error}"))
+        .map_err(|error| format!("v7 Core pipe JSON invalid: {error}"))
 }
 
 fn read_message<T: for<'de> Deserialize<'de>>(reader: &mut impl Read) -> Result<Option<T>, String> {
@@ -282,24 +338,24 @@ fn read_message<T: for<'de> Deserialize<'de>>(reader: &mut impl Read) -> Result<
     while read < header.len() {
         let count = reader
             .read(&mut header[read..])
-            .map_err(|error| format!("v6 Core pipe read header: {error}"))?;
+            .map_err(|error| format!("Core pipe read header: {error}"))?;
         if count == 0 {
             return if read == 0 {
                 Ok(None)
             } else {
-                Err("v6 Core pipe closed in frame header".into())
+                Err("Core pipe closed in frame header".into())
             };
         }
         read += count;
     }
     let length = u32::from_le_bytes(header) as usize;
-    if length > V6_PIPE_MAX_FRAME {
-        return Err("v6 Core pipe frame too large".into());
+    if length > V7_PIPE_MAX_FRAME {
+        return Err("v7 Core pipe frame too large".into());
     }
     let mut payload = vec![0u8; length];
     reader
         .read_exact(&mut payload)
-        .map_err(|error| format!("v6 Core pipe read payload: {error}"))?;
+        .map_err(|error| format!("Core pipe read payload: {error}"))?;
     let mut frame = header.to_vec();
     frame.extend_from_slice(&payload);
     decode_message(&frame).map(Some)
@@ -309,7 +365,7 @@ fn write_message<T: Serialize>(writer: &mut impl Write, message: &T) -> Result<(
     writer
         .write_all(&encode_message(message)?)
         .and_then(|_| writer.flush())
-        .map_err(|error| format!("v6 Core pipe write: {error}"))
+        .map_err(|error| format!("Core pipe write: {error}"))
 }
 
 #[cfg(windows)]
@@ -391,7 +447,7 @@ impl NamedPipeServer {
                     if stop.load(Ordering::SeqCst) {
                         break;
                     }
-                    eprintln!("v6 Core named pipe accept: {error}");
+                    eprintln!("Core named pipe accept: {error}");
                     thread::sleep(Duration::from_millis(40));
                 }
             }
@@ -416,11 +472,11 @@ impl NamedPipeServer {
         };
 
         let name = wide(&self.name);
-        let owner_sd = owner_pipe_sd().ok_or_else(|| {
-            "named pipe owner DACL unavailable".to_string()
-        })?;
+        let owner_sd =
+            owner_pipe_sd().ok_or_else(|| "named pipe owner DACL unavailable".to_string())?;
         let mut attrs = windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
-            nLength: std::mem::size_of::<windows_sys::Win32::Security::SECURITY_ATTRIBUTES>() as u32,
+            nLength: std::mem::size_of::<windows_sys::Win32::Security::SECURITY_ATTRIBUTES>()
+                as u32,
             lpSecurityDescriptor: owner_sd.0,
             bInheritHandle: 0,
         };
@@ -430,8 +486,8 @@ impl NamedPipeServer {
                 PIPE_ACCESS_DUPLEX,
                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
                 PIPE_UNLIMITED_INSTANCES,
-                V6_PIPE_MAX_FRAME as u32,
-                V6_PIPE_MAX_FRAME as u32,
+                V7_PIPE_MAX_FRAME as u32,
+                V7_PIPE_MAX_FRAME as u32,
                 0,
                 &mut attrs,
             )
@@ -506,7 +562,7 @@ impl NamedPipeClient {
 
     pub fn request(&mut self, request: &CorePipeRequest) -> Result<CorePipeResponse, String> {
         write_message(&mut self.stream, request)?;
-        read_message(&mut self.stream)?.ok_or_else(|| "v6 Core pipe closed".into())
+        read_message(&mut self.stream)?.ok_or_else(|| "Core pipe closed".into())
     }
 }
 
@@ -521,20 +577,21 @@ fn wide(value: &str) -> Vec<u16> {
 
 pub fn hello_request() -> CorePipeRequest {
     CorePipeRequest::Hello {
-        protocol: V6_PROTOCOL_NAME.into(),
-        version: V6_PROTOCOL_VERSION,
+        protocol: V7_PROTOCOL_NAME.into(),
+        version: V7_PROTOCOL_VERSION,
     }
 }
 
-pub const V6_TCP_PORT: u16 = 18765;
-
+pub const V7_TCP_PORT: u16 = 18765;
 pub fn default_core_bind() -> std::net::SocketAddr {
-    if let Ok(raw) = std::env::var("HLS_V6_CORE_BIND") {
+    if let Ok(raw) =
+        std::env::var("HLS_V7_CORE_BIND").or_else(|_| std::env::var("HLS_V6_CORE_BIND"))
+    {
         if let Ok(addr) = raw.parse() {
             return addr;
         }
     }
-    std::net::SocketAddr::from(([127, 0, 0, 1], V6_TCP_PORT))
+    std::net::SocketAddr::from(([127, 0, 0, 1], V7_TCP_PORT))
 }
 
 pub fn serve_tcp_listener(
@@ -544,7 +601,7 @@ pub fn serve_tcp_listener(
 ) -> Result<(), String> {
     listener
         .set_nonblocking(true)
-        .map_err(|error| format!("v6 Core listener nonblocking: {error}"))?;
+        .map_err(|error| format!("Core listener nonblocking: {error}"))?;
     while !stop.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _)) => {
@@ -557,7 +614,7 @@ pub fn serve_tcp_listener(
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(20));
             }
-            Err(error) => return Err(format!("v6 Core accept: {error}")),
+            Err(error) => return Err(format!("Core accept: {error}")),
         }
     }
     Ok(())
@@ -589,12 +646,12 @@ impl IpcTransport {
         match self {
             Self::Tcp(stream) => {
                 write_message(stream, request)?;
-                read_message(stream)?.ok_or_else(|| "v6 Core IPC closed".into())
+                read_message(stream)?.ok_or_else(|| "Core IPC closed".into())
             }
             #[cfg(windows)]
             Self::Pipe(stream) => {
                 write_message(stream, request)?;
-                read_message(stream)?.ok_or_else(|| "v6 Core pipe closed".into())
+                read_message(stream)?.ok_or_else(|| "Core pipe closed".into())
             }
         }
     }
@@ -611,19 +668,19 @@ impl CoreIpcClient {
                         transport: IpcTransport::Tcp(stream),
                     };
                     match client.request(&hello_request())? {
-                        CorePipeResponse::Hello { protocol, version, .. }
-                            if protocol == V6_PROTOCOL_NAME && version == V6_PROTOCOL_VERSION =>
-                        {
+                        CorePipeResponse::Hello {
+                            protocol, version, ..
+                        } if protocol == V7_PROTOCOL_NAME && version == V7_PROTOCOL_VERSION => {
                             return Ok(client);
                         }
                         other => {
-                            return Err(format!("v6 Core hello rejected: {other:?}"));
+                            return Err(format!("v7 Core hello rejected: {other:?}"));
                         }
                     }
                 }
                 Err(error) => {
                     if std::time::Instant::now() >= deadline {
-                        return Err(format!("v6 Core connect {addr}: {error}"));
+                        return Err(format!("v7 Core connect {addr}: {error}"));
                     }
                     thread::sleep(Duration::from_millis(40));
                 }
@@ -632,19 +689,34 @@ impl CoreIpcClient {
     }
 
     pub fn connect() -> Result<Self, String> {
+        Self::connect_existing(Duration::from_secs(2))
+    }
+
+    /// Connect to an already-running Core without imposing the full product
+    /// startup wait. Native Messaging uses this short probe before it decides
+    /// whether it needs to launch the single-instance engine.
+    pub fn connect_existing(timeout: Duration) -> Result<Self, String> {
         #[cfg(windows)]
         {
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            let mut last = "v6 Core named pipe unavailable".to_string();
-            while std::time::Instant::now() < deadline {
-                match Self::connect_pipe_timeout(&v6_pipe_name(), 80) {
+            let started = std::time::Instant::now();
+            let deadline = started + timeout;
+            loop {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                let pipe_timeout = remaining.as_millis().clamp(1, 40) as u32;
+                match Self::connect_pipe_timeout(&v7_pipe_name(), pipe_timeout) {
                     Ok(client) => return Ok(client),
-                    Err(error) => last = error,
+                    Err(error) if std::time::Instant::now() >= deadline => {
+                        if !tcp_loopback_enabled() {
+                            return Err(error);
+                        }
+                        break;
+                    }
+                    Err(_) => {}
                 }
-                thread::sleep(Duration::from_millis(20));
-            }
-            if !tcp_loopback_enabled() {
-                return Err(last);
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10).min(remaining));
             }
         }
         Self::connect_addr(default_core_bind())
@@ -662,12 +734,10 @@ impl CoreIpcClient {
             transport: IpcTransport::Pipe(pipe.into_file()),
         };
         match client.request(&hello_request())? {
-            CorePipeResponse::Hello { protocol, version, .. }
-                if protocol == V6_PROTOCOL_NAME && version == V6_PROTOCOL_VERSION =>
-            {
-                Ok(client)
-            }
-            other => Err(format!("v6 Core pipe hello rejected: {other:?}")),
+            CorePipeResponse::Hello {
+                protocol, version, ..
+            } if protocol == V7_PROTOCOL_NAME && version == V7_PROTOCOL_VERSION => Ok(client),
+            other => Err(format!("v7 Core pipe hello rejected: {other:?}")),
         }
     }
 
@@ -682,15 +752,23 @@ impl CoreIpcClient {
         })? {
             CorePipeResponse::Events { events, .. } => Ok(events),
             CorePipeResponse::Error { message, .. } => Err(message),
-            other => Err(format!("unexpected v6 Core command response: {other:?}")),
+            other => Err(format!("unexpected Core command response: {other:?}")),
         }
     }
 
     pub fn snapshot(&mut self) -> Result<Vec<crate::TaskSnapshot>, String> {
+        self.snapshot_state().map(|(tasks, _)| tasks)
+    }
+
+    pub fn snapshot_state(&mut self) -> Result<(Vec<crate::TaskSnapshot>, u64), String> {
         match self.request(&CorePipeRequest::Snapshot { request_id: 1 })? {
-            CorePipeResponse::Snapshot { tasks, .. } => Ok(tasks),
+            CorePipeResponse::Snapshot {
+                tasks,
+                latest_sequence,
+                ..
+            } => Ok((tasks, latest_sequence)),
             CorePipeResponse::Error { message, .. } => Err(message),
-            other => Err(format!("unexpected v6 Core snapshot: {other:?}")),
+            other => Err(format!("unexpected Core snapshot: {other:?}")),
         }
     }
 
@@ -706,7 +784,7 @@ impl CoreIpcClient {
         })? {
             CorePipeResponse::Events { events, .. } => Ok(events),
             CorePipeResponse::Error { message, .. } => Err(message),
-            other => Err(format!("unexpected v6 Core wait: {other:?}")),
+            other => Err(format!("unexpected Core wait: {other:?}")),
         }
     }
 
@@ -817,12 +895,12 @@ mod tests {
     }
 
     #[test]
-    fn hello_uses_the_v6_protocol_identity() {
+    fn hello_uses_the_v7_protocol_identity() {
         assert_eq!(
             hello_request(),
             CorePipeRequest::Hello {
-                protocol: V6_PROTOCOL_NAME.into(),
-                version: V6_PROTOCOL_VERSION,
+                protocol: V7_PROTOCOL_NAME.into(),
+                version: V7_PROTOCOL_VERSION,
             }
         );
     }
@@ -840,7 +918,7 @@ mod tests {
 
     #[test]
     fn adversarial_pipe_frame_rejects_oversize_and_truncated() {
-        let huge = (V6_PIPE_MAX_FRAME as u32 + 1).to_le_bytes();
+        let huge = (V7_PIPE_MAX_FRAME as u32 + 1).to_le_bytes();
         let mut frame = huge.to_vec();
         frame.extend_from_slice(&[0u8; 8]);
         let err = decode_message::<CorePipeRequest>(&frame).unwrap_err();

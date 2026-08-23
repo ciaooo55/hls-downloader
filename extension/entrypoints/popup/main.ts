@@ -5,6 +5,7 @@ import { handoffStatusLabel, handoffTerminalStatus } from '../../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, normalizeHandoffSuppressions, type HandoffSuppression } from '../../lib/handoffSuppression'
 import { normalizeCookiePermissionHosts } from '../../lib/browserCookies'
 import { extensionNeedsUpgrade } from '../../lib/version'
+import { engineConnectionLabel, EXTENSION_PRODUCT_LABEL, extensionVersionLabel } from '../../lib/productCopy'
 import {
   THEME_BASE_CSS,
   THEME_STORAGE_KEY,
@@ -26,7 +27,24 @@ const THEME_LABELS: Record<ThemePreference, string> = {
   light: '主题：浅色',
 }
 const THEME_ORDER: ThemePreference[] = ['auto', 'dark', 'light']
-const THEME_GLYPHS: Record<ThemePreference, string> = { auto: '◐', dark: '●', light: '○' }
+const ICONS: Record<string, string> = {
+  auto: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg>',
+  dark: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 15.4A8.6 8.6 0 0 1 8.6 3.2 8.9 8.9 0 1 0 20.8 15.4Z"/></svg>',
+  light: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>',
+  open: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13m-5-5 5 5-5 5"/></svg>',
+  download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10m0 0 4-4m-4 4-4-4M5 19h14"/></svg>',
+  cast: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18a2 2 0 0 1 2 2M5 13a7 7 0 0 1 7 7M5 8a12 12 0 0 1 12 12M19 5H5v3"/></svg>',
+  tv: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
+  chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>',
+  check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>',
+}
+function icon(name: string, label = '') {
+  const node = el('span', 'hlsd-icon')
+  node.innerHTML = ICONS[name] || ''
+  if (label) node.setAttribute('aria-label', label)
+  return node
+}
 const PENDING_HANDOFF_STORAGE_KEY = 'popup-pending-handoffs-v1'
 
 interface PendingHandoff {
@@ -83,20 +101,23 @@ async function main() {
     (await browser.storage.local.get(THEME_STORAGE_KEY))[THEME_STORAGE_KEY],
   )
   let removeThemeListener = applyTheme(document.documentElement, themePreference)
-  const themeBtn = el('button', 'hlsd-button subtle', THEME_GLYPHS[themePreference])
+  const themeBtn = el('button', 'hlsd-button subtle')
+  themeBtn.append(icon(themePreference, THEME_LABELS[themePreference]))
   themeBtn.title = THEME_LABELS[themePreference]
   themeBtn.addEventListener('click', async () => {
     themePreference = THEME_ORDER[(THEME_ORDER.indexOf(themePreference) + 1) % THEME_ORDER.length]
     removeThemeListener()
     removeThemeListener = applyTheme(document.documentElement, themePreference)
-    themeBtn.textContent = THEME_GLYPHS[themePreference]
+    themeBtn.replaceChildren(icon(themePreference, THEME_LABELS[themePreference]))
     themeBtn.title = THEME_LABELS[themePreference]
     await browser.storage.local.set({ [THEME_STORAGE_KEY]: themePreference })
   })
-  const openBtn = el('button', 'hlsd-button primary', '\u6253\u5f00')
+  const openBtn = el('button', 'hlsd-button primary')
+  openBtn.append(icon('open'), el('span', '', '\u6253\u5f00'))
   openBtn.title = '\u6253\u5f00\u684c\u9762\u7aef'
   openBtn.addEventListener('click', () => void browser.runtime.sendMessage({ type: 'activate' }))
-  const closeBtn = el('button', 'hlsd-button subtle', '\u00d7')
+  const closeBtn = el('button', 'hlsd-button subtle')
+  closeBtn.append(icon('close', '\u5173\u95ed'))
   closeBtn.title = '\u5173\u95ed'
   closeBtn.addEventListener('click', () => window.close())
   actions.append(themeBtn, openBtn, closeBtn)
@@ -134,8 +155,8 @@ async function main() {
   restorePromptsBtn.type = 'button'
   restorePromptsBtn.hidden = true
   footer.append(
-    el('span', '', 'Alt \u7ed5\u8fc7 \u00b7 Ctrl \u5f3a\u5236\u63a5\u7ba1'),
-    el('span', '', `v${browser.runtime.getManifest().version}`),
+    el('span', '', EXTENSION_PRODUCT_LABEL),
+    el('span', '', extensionVersionLabel(browser.runtime.getManifest().version)),
     restorePromptsBtn,
   )
   mainEl.append(header, controls, updateNotice, errorBox, section, footer)
@@ -210,7 +231,7 @@ async function main() {
         const currentLabel = el('em', '', variantLabel(
           item.variants?.find(value => value.url === chosenVariant[item.id]),
         ))
-        trigger.append(currentLabel, el('span', '', '\u25be'))
+        trigger.append(currentLabel, icon('chevron'))
         trigger.addEventListener('click', event => {
           event.stopPropagation()
           const host = trigger.closest('article') as HTMLElement | null
@@ -228,7 +249,9 @@ async function main() {
           for (const choice of choices) {
             const option = el('button') as HTMLButtonElement
             option.type = 'button'
-            option.append(el('i', '', selected.url === choice.url ? '\u2713' : ''), el('span', '', choice.label))
+            const marker = el('i', 'quality-check')
+            if (selected.url === choice.url) marker.append(icon('check'))
+            option.append(marker, el('span', '', choice.label))
             option.addEventListener('click', () => {
               selected = choice.variant ? { ...item, ...choice.variant, url: choice.variant.url, variants: undefined } : item
               if (choice.variant) chosenVariant[item.id] = choice.variant.url
@@ -246,22 +269,25 @@ async function main() {
       }
       body.append(mime)
       const label = sending[item.id] || '\u4e0b\u8f7d'
-      const button = el('button', 'hlsd-button primary', label)
+      const button = el('button', 'hlsd-button primary')
+      button.append(icon('download'), el('span', '', label))
       const locked = ['\u53d1\u9001\u4e2d', '\u7b49\u5f85\u786e\u8ba4', '\u786e\u8ba4\u4e2d', '\u5df2\u52a0\u5165'].includes(sending[item.id] || '')
       button.disabled = locked
       if (sending[item.id]) button.classList.add('busy')
       button.title = '\u53d1\u9001\u5230\u4e0b\u8f7d\u5668'
       button.addEventListener('click', () => void send(selected))
       const pushKey = `${item.id}:tvbox`
-      const pushLabel = pushing[pushKey] || '推送链接'
-      const pushButton = el('button', 'hlsd-button push-button', pushLabel)
+      const pushLabel = pushing[pushKey] || 'TVBox'
+      const pushButton = el('button', 'hlsd-button push-button')
+      pushButton.append(icon('tv'), el('span', '', pushLabel))
       pushButton.disabled = ['推送中', '等待选择', '已发送'].includes(pushing[pushKey] || '')
       if (pushing[pushKey]) pushButton.classList.add('busy')
       pushButton.title = '直接推送当前媒体链接到 TVBox'
       pushButton.addEventListener('click', () => void pushToTv(selected))
       const castKey = `${item.id}:cast`
-      const castLabel = pushing[castKey] || '投屏链接'
-      const castButton = el('button', 'hlsd-button cast-button', castLabel)
+      const castLabel = pushing[castKey] || '投屏'
+      const castButton = el('button', 'hlsd-button cast-button')
+      castButton.append(icon('cast'), el('span', '', castLabel))
       castButton.disabled = ['投屏中', '等待选择', '已发送'].includes(pushing[castKey] || '')
       if (pushing[castKey]) castButton.classList.add('busy')
       castButton.title = '直接投屏当前媒体链接到 DLNA 或 Chromecast'
@@ -452,14 +478,14 @@ async function main() {
   ])
   resources = Array.isArray(listed) ? listed : []
   const online = Boolean(connection?.ok)
-  statusEl.textContent = online ? '\u684c\u9762\u7aef\u5df2\u8fde\u63a5' : connection.reconnecting ? '\u684c\u9762\u7aef\u6b63\u5728\u91cd\u8fde' : '\u684c\u9762\u7aef\u79bb\u7ebf'
+  statusEl.textContent = engineConnectionLabel(online, Boolean(connection.reconnecting))
   statusEl.classList.toggle('online', online)
   const currentExtensionVersion = browser.runtime.getManifest().version
   const recommendedExtensionVersion = String(connection.recommended_extension_version || '')
   const extensionReleaseUrl = String(connection.extension_release_url || '')
   if (extensionNeedsUpgrade(currentExtensionVersion, recommendedExtensionVersion)) {
     updateNotice.hidden = false
-    updateText.textContent = `插件可升级到 v${recommendedExtensionVersion}。商店安装版由浏览器自动更新；开发者模式安装请下载新版后重新加载。`
+    updateText.textContent = `插件可升级到版本 ${recommendedExtensionVersion}。商店安装版由浏览器自动更新；开发者模式安装请下载新版后重新加载。`
     updateButton.hidden = !extensionReleaseUrl
     updateButton.onclick = () => {
       if (extensionReleaseUrl) void browser.tabs.create({ url: extensionReleaseUrl })
@@ -498,7 +524,7 @@ async function main() {
         sending[resourceId] = handoffStatusLabel(status)
         clearPending(resourceId)
         if (status === 'accepted') setError('')
-        if (status === 'connection_lost') setError('桌面端连接中断，请重试')
+        if (status === 'connection_lost') setError('下载引擎连接中断，请重试')
         renderList()
       } catch {
         pendingFailures[resourceId] = (pendingFailures[resourceId] || 0) + 1

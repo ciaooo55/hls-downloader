@@ -25,7 +25,10 @@ pub fn decrypt_aes128_cbc_pkcs7(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Ve
     if pad == 0 || pad > 16 || plain.len() < pad {
         return Err("invalid PKCS7 padding".into());
     }
-    if plain[plain.len() - pad..].iter().any(|byte| *byte as usize != pad) {
+    if plain[plain.len() - pad..]
+        .iter()
+        .any(|byte| *byte as usize != pad)
+    {
         return Err("invalid PKCS7 padding".into());
     }
     plain.truncate(plain.len() - pad);
@@ -174,7 +177,10 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
 }
 
 pub fn sha1_hex(bytes: &[u8]) -> String {
-    sha1(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
+    sha1(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn expand_key(key: &[u8]) -> [u32; 44] {

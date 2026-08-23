@@ -27,22 +27,23 @@ describe('BrowserDirectBackend', () => {
     })
   })
 
-  it('does not attach FastAPI loopback when the host speaks the v6 Core protocol', () => {
+  it('does not attach FastAPI loopback when the host speaks the v7 Core protocol', () => {
     expect(
       shouldAttachLoopbackBridge({
-        protocol: 'hls-downloader-v6-core',
+        protocol: 'hls-downloader-v7-core',
         bridge_base: 'http://127.0.0.1:8765/api',
         bridge_token: 'secret',
       }),
     ).toBe(false)
   })
 
-  it('clears a stale FastAPI pairing once the host speaks v6 Core', () => {
+  it('clears a stale FastAPI pairing once the host speaks v7 Core', () => {
     expect(
       shouldClearLoopbackBridge({
-        protocol: 'hls-downloader-v6-core',
+        protocol: 'hls-downloader-v7-core',
       }),
     ).toBe(true)
+    expect(shouldClearLoopbackBridge({ protocol: 'hls-downloader-v6-core' })).toBe(true)
     expect(
       shouldClearLoopbackBridge({
         protocol: 'hls-downloader-core',
@@ -60,7 +61,7 @@ describe('BrowserDirectBackend', () => {
     ).toBe(true)
   })
 
-  it('keeps heartbeat ping on Native Messaging so a v6 host can drop a stale FastAPI pairing', () => {
+  it('keeps heartbeat ping on Native Messaging so a v7 host can drop a stale FastAPI pairing', () => {
     expect(shouldRouteThroughLoopbackBridge('offer', true)).toBe(false)
     expect(shouldRouteThroughLoopbackBridge('download', true)).toBe(false)
     expect(shouldRouteThroughLoopbackBridge('handoff_status', true)).toBe(false)

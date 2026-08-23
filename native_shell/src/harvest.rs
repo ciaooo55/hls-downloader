@@ -111,35 +111,24 @@ fn size_hint_from_url(url: &str) -> u64 {
 
 fn find_abs(text: &str) -> Option<usize> {
     let lower = text.to_ascii_lowercase();
-    ["https://", "http://", "ftp://", "ftps://", "sftp://", "magnet:?"]
-        .into_iter()
-        .filter_map(|needle| lower.find(needle))
-        .min()
+    [
+        "https://", "http://", "ftp://", "ftps://", "sftp://", "magnet:?",
+    ]
+    .into_iter()
+    .filter_map(|needle| lower.find(needle))
+    .min()
 }
 
 fn resolve(base: &str, reference: &str) -> Option<String> {
-    let value = html_unescape(reference.trim());
-    let lower = value.to_ascii_lowercase();
-    if value.is_empty()
-        || value.starts_with('#')
-        || lower.starts_with("javascript:")
-        || lower.starts_with("data:")
-        || lower.starts_with("blob:")
-        || lower.starts_with("vbscript:")
-        || lower.starts_with("file:")
-        || value.contains('\r')
-        || value.contains('\n')
-    {
+    let value = html_unescape(reference.trim().trim_start_matches('\u{feff}'));
+    if value.is_empty() || value.starts_with('#') || value.chars().any(|ch| ch.is_control()) {
         return None;
     }
-    if lower.starts_with("magnet:?")
-        || lower.starts_with("http://")
-        || lower.starts_with("https://")
-        || lower.starts_with("ftp://")
-        || lower.starts_with("ftps://")
-        || lower.starts_with("sftp://")
-    {
+    if crate::http_engine::remote_resource_url_allowed(&value) {
         return Some(value);
+    }
+    if has_absolute_scheme(&value) {
+        return None;
     }
     if value.starts_with("//") {
         let scheme = base
@@ -155,11 +144,28 @@ fn resolve(base: &str, reference: &str) -> Option<String> {
     if value.starts_with('/') {
         if let Some(scheme) = base.find("://") {
             let after = &base[scheme + 3..];
-            let origin_end = after.find('/').map(|index| scheme + 3 + index).unwrap_or(base.len());
+            let origin_end = after
+                .find('/')
+                .map(|index| scheme + 3 + index)
+                .unwrap_or(base.len());
             return Some(format!("{}{value}", &base[..origin_end]));
         }
     }
     None
+}
+
+fn has_absolute_scheme(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if !bytes.first().is_some_and(u8::is_ascii_alphabetic) {
+        return false;
+    }
+    let mut index = 1;
+    while index < bytes.len()
+        && (bytes[index].is_ascii_alphanumeric() || matches!(bytes[index], b'+' | b'.' | b'-'))
+    {
+        index += 1;
+    }
+    bytes.get(index) == Some(&b':')
 }
 
 fn to_link(url: &str) -> Option<HarvestLink> {
@@ -173,7 +179,10 @@ fn to_link(url: &str) -> Option<HarvestLink> {
         });
     }
     let path = url.split(['?', '#']).next().unwrap_or(url);
-    let filename = path.rsplit('/').find(|part| !part.is_empty()).unwrap_or("download");
+    let filename = path
+        .rsplit('/')
+        .find(|part| !part.is_empty())
+        .unwrap_or("download");
     let extension = filename
         .rsplit_once('.')
         .map(|(_, ext)| ext.to_ascii_lowercase())
@@ -225,15 +234,21 @@ mod tests {
         assert!(links.iter().any(|item| item.category == "video"));
         assert!(links.iter().any(|item| item.category == "archive"));
         assert!(links.iter().any(|item| item.category == "torrent"));
-        assert!(links.iter().all(|item| item.url != "https://site.test/about"));
+        assert!(links
+            .iter()
+            .all(|item| item.url != "https://site.test/about"));
         let sized = harvest_html_filtered(
             r#"<a href="/files/tiny.mp4" data-size="100">t</a><a href="/files/big.mp4" data-size="9000">b</a>"#,
             "https://site.test/page",
             1000,
         );
-        assert!(sized.iter().any(|item| item.url.ends_with("/files/big.mp4")));
-        assert!(sized.iter().all(|item| !item.url.ends_with("/files/tiny.mp4")));
-        let html = r#"<a href="javascript:alert(1)">x</a><a href="JAVASCRIPT:alert(1)">y</a><a href="file:///C:/secret.mp4">z</a>"#;
+        assert!(sized
+            .iter()
+            .any(|item| item.url.ends_with("/files/big.mp4")));
+        assert!(sized
+            .iter()
+            .all(|item| !item.url.ends_with("/files/tiny.mp4")));
+        let html = r#"<a href="javascript:alert(1)">x</a><a href="JAVASCRIPT:alert(1)">y</a><a href="file:///C:/secret.mp4">z</a><a href="&#xFEFF;javascript:alert(1)">b</a><a href="ms-msdt:foo.mp4">m</a>"#;
         let links = harvest_html(html, "https://site.test/page");
         assert!(links.is_empty());
     }

@@ -70,7 +70,7 @@ describe('persistent native bridge', () => {
     const bridge = new NativeBridge(connect, 30_000, disconnected)
     const first = bridge.request({ op: 'offer' })
     firstPort.onDisconnect.emit()
-    await expect(first).rejects.toThrow('disconnected')
+    await expect(first).rejects.toThrow('下载器连接已断开')
     expect(disconnected).toHaveBeenCalledOnce()
     const second = bridge.request({ op: 'ping' })
     secondPort.onMessage.emit({ ok: true })
@@ -133,7 +133,7 @@ describe('persistent native bridge', () => {
       .mockReturnValueOnce(firstPort)
       .mockReturnValueOnce(secondPort), 100)
     const timedOut = bridge.request({ op: 'offer' })
-    const timedOutAssertion = expect(timedOut).rejects.toThrow('timed out')
+    const timedOutAssertion = expect(timedOut).rejects.toThrow('插件请求超时')
     await vi.advanceTimersByTimeAsync(101)
     await timedOutAssertion
     const active = bridge.request({ op: 'ping' })

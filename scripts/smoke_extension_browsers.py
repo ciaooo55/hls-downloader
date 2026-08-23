@@ -9,6 +9,7 @@ profile, cookies, extensions, or native-host registration.
 from __future__ import annotations
 
 import argparse
+import base64
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -38,24 +39,10 @@ OVERLAY_EXPRESSION = """
   if (!video) return false;
   if (!window.__hlsOverlaySmokeStarted) {
     window.__hlsOverlaySmokeStarted = true;
-    // A page-world synthetic Event does not reliably cross Firefox's
-    // extension-world boundary. Exercise a real browser playback transition
-    // with an in-memory PCM WAV. Unlike canvas.captureStream(), this advances
-    // in headless Firefox and needs no network or external codec fixture.
-    const sampleRate = 8000;
-    const sampleCount = sampleRate * 2;
-    const wav = new ArrayBuffer(44 + sampleCount);
-    const view = new DataView(wav);
-    const write = (offset, value) => [...value].forEach((character, index) =>
-      view.setUint8(offset + index, character.charCodeAt(0)));
-    write(0, 'RIFF'); view.setUint32(4, 36 + sampleCount, true); write(8, 'WAVE');
-    write(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate, true); view.setUint16(32, 1, true);
-    view.setUint16(34, 8, true); write(36, 'data'); view.setUint32(40, sampleCount, true);
-    new Uint8Array(wav, 44).fill(128);
-    const mediaUrl = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
-    window.__hlsOverlaySmokeMediaUrl = mediaUrl;
+    // Exercise a real HTTP media source so the overlay must associate the
+    // playing element with one concrete resource rather than stop at its
+    // non-actionable identifying state.
+    const mediaUrl = new URL('/sample.wav', location.href).href;
     video.muted = true;
     video.autoplay = true;
     video.playsInline = true;
@@ -70,12 +57,59 @@ OVERLAY_EXPRESSION = """
 })()
 """.strip()
 
+HOVER_EXPRESSION = r"""
+(() => {
+  const host = [...document.querySelectorAll('*')].find(element =>
+    element.shadowRoot?.querySelector('.video-download'));
+  const root = host?.shadowRoot;
+  const button = root?.querySelector('.video-download');
+  const group = button?.closest('.video-action-group');
+  const hover = group?.querySelector('.video-hover');
+  if (!button || !group || !hover) return null;
+  button.focus();
+  group.dispatchEvent(new MouseEvent('mouseenter'));
+  const rect = hover.getBoundingClientRect();
+  const opacity = Number(getComputedStyle(hover).opacity);
+  const actions = [...hover.querySelectorAll('.hover-action')].map(item => item.textContent?.trim());
+  return {
+    visible: getComputedStyle(hover).visibility === 'visible' && opacity >= 0.99 && rect.width > 0 && rect.height > 0,
+    opacity,
+    insideViewport: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
+    text: hover.textContent?.replace(/\s+/g, ' ').trim() || '',
+    actions,
+  };
+})()
+""".strip()
+
+
+def _wav_payload() -> bytes:
+    sample_rate = 8000
+    samples = bytes([128]) * (sample_rate * 2)
+    return (
+        b"RIFF" + (36 + len(samples)).to_bytes(4, "little") + b"WAVE"
+        + b"fmt " + (16).to_bytes(4, "little") + (1).to_bytes(2, "little")
+        + (1).to_bytes(2, "little") + sample_rate.to_bytes(4, "little")
+        + sample_rate.to_bytes(4, "little") + (1).to_bytes(2, "little")
+        + (8).to_bytes(2, "little") + b"data" + len(samples).to_bytes(4, "little")
+        + samples
+    )
+
+
+WAV_PAYLOAD = _wav_payload()
+
 
 class _PageHandler(BaseHTTPRequestHandler):
     def log_message(self, _format: str, *_args) -> None:
         return
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        if self.path == "/sample.wav":
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Content-Length", str(len(WAV_PAYLOAD)))
+            self.end_headers()
+            self.wfile.write(WAV_PAYLOAD)
+            return
         if self.path != "/page":
             self.send_error(404)
             return
@@ -168,6 +202,22 @@ def _wait_for_media_overlay(driver: webdriver.Remote, browser_name: str) -> None
     )
 
 
+def _assert_hover_surface(driver: webdriver.Remote, browser_name: str) -> None:
+    deadline = time.monotonic() + 5
+    details = None
+    while time.monotonic() < deadline:
+        details = driver.execute_script(f"return {HOVER_EXPRESSION}")
+        if (
+            details
+            and details.get("visible") is True
+            and details.get("insideViewport") is True
+            and details.get("actions") == ["下载", "投屏", "TVBox"]
+        ):
+            return
+        time.sleep(0.05)
+    raise RuntimeError(f"{browser_name} hover details/actions were incomplete or misplaced: {details}")
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -215,7 +265,35 @@ def _evaluate(websocket_url: str, expression: str) -> object:
         connection.close()
 
 
-def _exercise_chrome(extension_dir: Path, page_url: str, binary: str | None, temp_root: Path) -> None:
+def _capture_screenshot(websocket_url: str, destination: Path) -> None:
+    connection = websocket.create_connection(websocket_url, timeout=5, suppress_origin=True)
+    try:
+        connection.send(json.dumps({
+            "id": 2,
+            "method": "Page.captureScreenshot",
+            "params": {"format": "png", "captureBeyondViewport": False},
+        }))
+        while True:
+            message = json.loads(connection.recv())
+            if message.get("id") != 2:
+                continue
+            data = str(message.get("result", {}).get("data", ""))
+            if not data:
+                raise RuntimeError("Chromium returned an empty hover screenshot")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(base64.b64decode(data))
+            return
+    finally:
+        connection.close()
+
+
+def _exercise_chrome(
+    extension_dir: Path,
+    page_url: str,
+    binary: str | None,
+    temp_root: Path,
+    screenshot: Path | None = None,
+) -> None:
     browser = _find_chromium_binary(binary)
     port = _free_port()
     profile = temp_root / "chromium-profile"
@@ -238,6 +316,7 @@ def _exercise_chrome(extension_dir: Path, page_url: str, binary: str | None, tem
         stderr=subprocess.DEVNULL,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
+    diagnostics: dict[str, object] = {}
     try:
         deadline = time.monotonic() + 25
         while time.monotonic() < deadline:
@@ -252,12 +331,33 @@ def _exercise_chrome(extension_dir: Path, page_url: str, binary: str | None, tem
                         websocket_url,
                         f"document.documentElement.getAttribute('{MARKER}')",
                     )
+                    diagnostics = {
+                        "marker": marker,
+                        "playback": _evaluate(
+                            websocket_url,
+                            "({paused:document.querySelector('video')?.paused,readyState:document.querySelector('video')?.readyState,error:window.__hlsOverlaySmokeError||''})",
+                        ),
+                        "labels": _evaluate(
+                            websocket_url,
+                            "[...document.querySelectorAll('*')].flatMap(e=>[...(e.shadowRoot?.querySelectorAll('.video-download')||[])].map(b=>b.textContent))",
+                        ),
+                    }
                     if marker == "1" and _evaluate(websocket_url, OVERLAY_EXPRESSION) is True:
-                        return
+                        details = _evaluate(websocket_url, HOVER_EXPRESSION)
+                        diagnostics["hover"] = details
+                        if (
+                            isinstance(details, dict)
+                            and details.get("visible") is True
+                            and details.get("insideViewport") is True
+                            and details.get("actions") == ["下载", "投屏", "TVBox"]
+                        ):
+                            if screenshot is not None:
+                                _capture_screenshot(websocket_url, screenshot)
+                            return
             except (OSError, ValueError, KeyError, websocket.WebSocketException):
                 pass
             time.sleep(0.15)
-        raise RuntimeError("Chromium content script loaded but the immediate media overlay did not appear")
+        raise RuntimeError(f"Chromium content script loaded but the media hover contract did not pass: {diagnostics}")
     finally:
         if process.poll() is None:
             process.terminate()
@@ -300,6 +400,7 @@ def _exercise_firefox(extension_dir: Path, page_url: str, binary: str | None, te
         driver.find_element("id", "play-smoke").click()
         _wait_for_playback_started(driver, "Firefox")
         _wait_for_media_overlay(driver, "Firefox")
+        _assert_hover_surface(driver, "Firefox")
 
 
 def _require_build(path: Path, browser_name: str) -> Path:
@@ -315,6 +416,7 @@ def main() -> int:
     parser.add_argument("--browser", choices=("both", "chrome", "firefox"), default="both")
     parser.add_argument("--chrome-binary")
     parser.add_argument("--firefox-binary")
+    parser.add_argument("--screenshot", type=Path)
     args = parser.parse_args()
 
     output = args.extension_output.resolve()
@@ -326,7 +428,13 @@ def main() -> int:
             with _loopback_page() as page_url:
                 if args.browser in {"both", "chrome"}:
                     print("Loading the production Chromium extension...", flush=True)
-                    _exercise_chrome(chrome, page_url, args.chrome_binary, temp_root)
+                    _exercise_chrome(
+                        chrome,
+                        page_url,
+                        args.chrome_binary,
+                        temp_root,
+                        args.screenshot.resolve() if args.screenshot else None,
+                    )
                 if args.browser in {"both", "firefox"}:
                     print("Loading the production Firefox extension...", flush=True)
                     _exercise_firefox(firefox, page_url, args.firefox_binary, temp_root)

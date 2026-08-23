@@ -160,6 +160,14 @@ describe('download click intent', () => {
     expect(resolveDownloadTarget('../file.zip', 'https://site.test/watch/page')).toBe('https://site.test/file.zip')
     expect(resolveDownloadTarget('magnet:?xt=urn:btih:abc', 'https://site.test/watch')).toBe('magnet:?xt=urn:btih:abc')
     expect(resolveDownloadTarget('javascript:download()', 'https://site.test/watch')).toBe('')
+    expect(resolveDownloadTarget('\uFEFFjavascript:alert(1)', 'https://site.test/watch')).toBe('')
+    expect(resolveDownloadTarget('ms-msdt:foo', 'https://site.test/watch')).toBe('')
+    expect(resolveDownloadTarget('file:///C:/Windows/notepad.exe', 'https://site.test/watch')).toBe('')
+    expect(resolveClickedLinkHref({
+      htmlHref: 'javascript:alert(1)',
+      htmlHrefAttribute: 'javascript:alert(1)',
+      baseUrl: 'https://site.test/watch',
+    })).toBe('')
     expect(resolveDownloadTarget('data:text/plain,nope', 'https://site.test/watch')).toBe('')
     expect(resolveDownloadTarget('', 'https://site.test/watch')).toBe('')
     expect(resolveDownloadTarget('#', 'https://site.test/watch')).toBe('')

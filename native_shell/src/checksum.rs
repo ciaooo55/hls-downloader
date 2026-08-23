@@ -13,7 +13,11 @@ pub enum Algorithm {
 }
 
 pub fn parse_checksum(value: &str) -> Option<(Algorithm, String)> {
-    let text = value.trim().trim_matches('"').trim_matches('\'').to_ascii_lowercase();
+    let text = value
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_ascii_lowercase();
     if text.is_empty() {
         return None;
     }
@@ -197,10 +201,7 @@ fn md5_compress(state: &mut [u32; 4], chunk: &[u8; 64]) {
             32..=47 => (b ^ c ^ d, (3 * i + 5) % 16),
             _ => (c ^ (b | (!d)), (7 * i) % 16),
         };
-        let f = f
-            .wrapping_add(a)
-            .wrapping_add(K[i])
-            .wrapping_add(m[g]);
+        let f = f.wrapping_add(a).wrapping_add(K[i]).wrapping_add(m[g]);
         a = d;
         d = c;
         c = b;
@@ -220,13 +221,17 @@ mod tests {
     #[test]
     fn parses_prefixed_and_bare_digests() {
         assert_eq!(
-            parse_checksum("sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
-                .unwrap()
-                .0,
+            parse_checksum(
+                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            )
+            .unwrap()
+            .0,
             Algorithm::Sha256
         );
         assert_eq!(
-            parse_checksum("d41d8cd98f00b204e9800998ecf8427e").unwrap().0,
+            parse_checksum("d41d8cd98f00b204e9800998ecf8427e")
+                .unwrap()
+                .0,
             Algorithm::Md5
         );
     }

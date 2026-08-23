@@ -68,7 +68,10 @@ fn windows_save() -> Option<PathBuf> {
     if unsafe { GetSaveFileNameW(&mut ofn) } == 0 {
         return None;
     }
-    let end = buffer.iter().position(|unit| *unit == 0).unwrap_or(buffer.len());
+    let end = buffer
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(buffer.len());
     if end == 0 {
         return None;
     }
@@ -96,8 +99,5 @@ fn parse_multi_select(buffer: &[u16]) -> Vec<PathBuf> {
         return vec![PathBuf::from(&parts[0])];
     }
     let dir = PathBuf::from(&parts[0]);
-    parts[1..]
-        .iter()
-        .map(|name| dir.join(name))
-        .collect()
+    parts[1..].iter().map(|name| dir.join(name)).collect()
 }

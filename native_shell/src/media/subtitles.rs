@@ -168,7 +168,11 @@ fn parse_timestamp(value: &str) -> Option<f64> {
     let millis: f64 = millis.parse().ok()?;
     let parts: Vec<&str> = hms.split(':').collect();
     let (hours, minutes, seconds) = match parts.as_slice() {
-        [minutes, seconds] => (0, minutes.parse::<u32>().ok()?, seconds.parse::<u32>().ok()?),
+        [minutes, seconds] => (
+            0,
+            minutes.parse::<u32>().ok()?,
+            seconds.parse::<u32>().ok()?,
+        ),
         [hours, minutes, seconds] => (
             hours.parse::<u32>().ok()?,
             minutes.parse::<u32>().ok()?,
@@ -234,7 +238,8 @@ mod tests {
 
     #[test]
     fn merge_without_timestamp_map_keeps_original_times() {
-        let merged = merge_webvtt_segments(&["WEBVTT\n\n00:00:01.500 --> 00:00:03.000\nhello\n".into()]);
+        let merged =
+            merge_webvtt_segments(&["WEBVTT\n\n00:00:01.500 --> 00:00:03.000\nhello\n".into()]);
         assert!(merged.contains("00:00:01.500 --> 00:00:03.000"));
     }
 

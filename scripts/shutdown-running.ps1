@@ -67,7 +67,7 @@ function Get-TargetProcesses {
     )
 }
 
-$targetProcessNames = @("HLSDownloader", "HLSDownloaderCore", "HLSNativeShell", "hls-native-shell", "HLSNativeEngine", "hls-native-engine")
+$targetProcessNames = @("HLSDownloader", "HLSDownloaderEngine", "HLSDownloaderPresenter", "HLSDownloaderCore", "HLSNativeShell", "hls-native-shell", "HLSNativeEngine", "hls-native-engine")
 if ($IncludeNativeHost) { $targetProcessNames += "HLSDownloaderNativeHost*" }
 $targetRunningAtStart = @(Get-TargetProcesses $targetProcessNames)
 $overallDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(3, $TimeoutSeconds))
@@ -113,7 +113,7 @@ while ([DateTime]::UtcNow -lt $gracefulDeadline) {
 }
 
 foreach ($desktop in @(Get-TargetProcesses @("HLSDownloader"))) {
-    & "$env:SystemRoot\System32\taskkill.exe" /PID $desktop.Id /T /F | Out-Null
+    & "$env:SystemRoot\System32\taskkill.exe" /PID $desktop.Id /T /F 2>$null | Out-Null
     $desktop | Stop-Process -Force
 }
 Get-TargetProcesses @("HLSDownloaderCore") | Stop-Process -Force

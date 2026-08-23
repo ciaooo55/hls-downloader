@@ -1,19 +1,11 @@
-# Native supervisor (5.x, frozen)
+# HLS Downloader 7 Rust Core
 
-This crate still builds `hls-native-shell` with the **`supervisor` feature**
-(default): Win32 overlays, the FastAPI `CoreClient`, and spawning
-`HLSDownloaderCore.exe`. That binary is the 5.x resident shell. Crash and
-security fixes only.
+This crate is the only task, transfer, database and Native Messaging implementation in the active tree. Its default feature set is the v7 product; the removed Python/Win32 supervisor remains available through historical Git tags.
 
-**v6 product** is `native_ui`'s `HLSDownloader.exe`. It links this crate with
-`default-features = false`, so the product process does **not** compile in the
-Win32 task list, FastAPI loopback client, or Python-core spawners. Only
-`CoreServer` opens SQLite. Slint and Native Messaging use
-`\\.\pipe\HLSDownloader.v6`. Loopback TCP is opt-in for tests
-(`HLS_V6_CORE_TCP` / `HLS_V6_CORE_BIND`).
-
-5.x launch (frozen):
-
+```powershell
+cargo test --manifest-path native_shell/Cargo.toml --lib
+cargo build --manifest-path native_shell/Cargo.toml --bin hls-downloader-engine
+cargo build --manifest-path native_shell/Cargo.toml --bin HLSDownloaderNativeHost
 ```
-HLSNativeShell.exe --core-url http://127.0.0.1:8765/api --token <token>
-```
+
+The Core owns SQLite and serves the Compose workbench, browser host and native presenter over the v7 named-pipe contract. Legacy v6 wire identifiers are accepted only where explicit migration compatibility is required.

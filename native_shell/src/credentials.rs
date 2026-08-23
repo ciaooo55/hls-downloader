@@ -164,10 +164,7 @@ pub(crate) fn scoped_replay_json() -> String {
     REPLAY_JSON.with(|slot| slot.borrow().clone())
 }
 
-pub fn apply_replay_json(
-    headers: &mut std::collections::BTreeMap<String, String>,
-    json: &str,
-) {
+pub fn apply_replay_json(headers: &mut std::collections::BTreeMap<String, String>, json: &str) {
     apply_replay_json_for(headers, json, "");
 }
 
@@ -252,7 +249,10 @@ pub(crate) fn request_origin(url: &str) -> String {
             .unwrap_or(&hostport)
             .to_string()
     } else {
-        hostport.strip_suffix(":80").unwrap_or(&hostport).to_string()
+        hostport
+            .strip_suffix(":80")
+            .unwrap_or(&hostport)
+            .to_string()
     };
     format!("{scheme}://{hostport}")
 }
@@ -409,6 +409,49 @@ mod tests {
     }
 
     #[test]
+    fn browser_page_identity_is_fallback_and_exact_origin_context_wins() {
+        let replay = r#"{
+            "cookie":"page=1",
+            "referer":"https://site.test/watch/42",
+            "origin":"https://site.test",
+            "user_agent":"Browser UA",
+            "request_contexts":{
+                "https://cdn.test":{
+                    "cookie":"cdn=2",
+                    "referer":"https://embed.test/player",
+                    "origin":"https://embed.test",
+                    "user_agent":"Browser UA"
+                }
+            }
+        }"#;
+        let mut page_headers = std::collections::BTreeMap::new();
+        apply_replay_json_for(
+            &mut page_headers,
+            replay,
+            "https://site.test/download/file.mp4",
+        );
+        assert_eq!(
+            page_headers.get("Referer").unwrap(),
+            "https://site.test/watch/42"
+        );
+        assert_eq!(page_headers.get("Origin").unwrap(), "https://site.test");
+        assert_eq!(page_headers.get("Cookie").unwrap(), "page=1");
+
+        let mut cdn_headers = std::collections::BTreeMap::new();
+        apply_replay_json_for(
+            &mut cdn_headers,
+            replay,
+            "https://cdn.test/video/segment-1.m4s",
+        );
+        assert_eq!(
+            cdn_headers.get("Referer").unwrap(),
+            "https://embed.test/player"
+        );
+        assert_eq!(cdn_headers.get("Origin").unwrap(), "https://embed.test");
+        assert_eq!(cdn_headers.get("Cookie").unwrap(), "cdn=2");
+    }
+
+    #[test]
     fn replay_json_drops_crlf_header_names_and_hop_by_hop() {
         let mut headers = std::collections::BTreeMap::new();
         apply_replay_json(
@@ -420,7 +463,9 @@ mod tests {
             .keys()
             .all(|key| !key.eq_ignore_ascii_case("transfer-encoding")));
         assert_eq!(headers.get("X-Trace").unwrap(), "ok");
-        assert!(headers.keys().all(|key| !key.contains('\r') && !key.contains('\n')));
+        assert!(headers
+            .keys()
+            .all(|key| !key.contains('\r') && !key.contains('\n')));
     }
 
     #[test]

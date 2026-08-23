@@ -46,7 +46,10 @@ pub fn choose_output_path(path: &Path, policy: &str) -> Result<PathBuf, String> 
             return Ok(candidate);
         }
     }
-    Err(format!("cannot allocate unique output name: {}", dest.display()))
+    Err(format!(
+        "cannot allocate unique output name: {}",
+        dest.display()
+    ))
 }
 
 pub fn publish_file(

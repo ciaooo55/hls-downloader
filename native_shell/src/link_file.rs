@@ -1,4 +1,4 @@
-//! Local .url / .magnet / playlist / HTML import. Mirrors 5.x `backend/app/link_file.py`.
+//! Local .url / .magnet / playlist / HTML import for the v7 Rust Core.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -143,7 +143,9 @@ pub fn extract_download_urls(text: &str, suffix: &str) -> Result<Vec<String>, St
 }
 
 fn extract_download_url(text: &str) -> Result<String, String> {
-    let lowered = text.trim_start_matches(['\u{feff}', ' ']).to_ascii_lowercase();
+    let lowered = text
+        .trim_start_matches(['\u{feff}', ' '])
+        .to_ascii_lowercase();
     if lowered.starts_with("[internetshortcut]") || lowered.contains("\nurl=") {
         return url_from_internet_shortcut(text);
     }
@@ -203,11 +205,17 @@ fn extract_playlist_urls(text: &str) -> Result<Vec<String>, String> {
     let upper = text.to_ascii_uppercase();
     let playlists: Vec<_> = urls
         .iter()
-        .filter(|url| path_suffix(url) == ".m3u8" || path_suffix(url) == ".m3u" || path_suffix(url) == ".mpd")
+        .filter(|url| {
+            path_suffix(url) == ".m3u8" || path_suffix(url) == ".m3u" || path_suffix(url) == ".mpd"
+        })
         .cloned()
         .collect();
     if upper.contains("#EXT-X-STREAM-INF") {
-        return Ok(if playlists.is_empty() { urls } else { playlists });
+        return Ok(if playlists.is_empty() {
+            urls
+        } else {
+            playlists
+        });
     }
     if upper.contains("#EXTINF") {
         if !playlists.is_empty() {
@@ -272,7 +280,9 @@ fn collect_absolute_urls(text: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut seen = BTreeSet::new();
     let lower = text.to_ascii_lowercase();
-    for prefix in ["https://", "http://", "ftps://", "ftp://", "sftp://", "magnet:?"] {
+    for prefix in [
+        "https://", "http://", "ftps://", "ftp://", "sftp://", "magnet:?",
+    ] {
         let mut start = 0;
         while let Some(rel) = lower[start..].find(prefix) {
             let abs = start + rel;
@@ -302,8 +312,11 @@ fn normalize_download_url(raw: &str) -> Result<String, String> {
         .trim_matches('"')
         .trim_matches('\'')
         .to_string();
-    if url.is_empty() || url.chars().any(|ch| ch.is_control() && ch != '\t') {
+    if url.is_empty() || url.chars().any(|ch| ch.is_control()) {
         return Err("link is empty".into());
+    }
+    if !crate::http_engine::remote_resource_url_allowed(&url) {
+        return Err("unsupported link scheme".into());
     }
     let lower = url.to_ascii_lowercase();
     if lower.starts_with("magnet:") {
@@ -346,7 +359,10 @@ fn path_suffix(url: &str) -> String {
 }
 
 fn is_segment_url(url: &str) -> bool {
-    matches!(path_suffix(url).as_str(), ".ts" | ".m4s" | ".cmfv" | ".cmfa")
+    matches!(
+        path_suffix(url).as_str(),
+        ".ts" | ".m4s" | ".cmfv" | ".cmfa"
+    )
 }
 
 #[cfg(test)]
@@ -360,6 +376,14 @@ mod tests {
             extract_download_urls(text, "url").unwrap(),
             vec!["https://cdn.test/a.bin".to_string()]
         );
+        assert!(
+            extract_download_urls("[InternetShortcut]\nURL=javascript:alert(1)\n", "url").is_err()
+        );
+        assert!(extract_download_urls(
+            "[InternetShortcut]\nURL=https://cdn.test/a.bin\tHost: evil\n",
+            "url"
+        )
+        .is_err());
     }
 
     #[test]
@@ -389,10 +413,7 @@ mod tests {
 
     #[test]
     fn remote_http_is_not_a_local_source() {
-        assert_eq!(
-            expand_source("https://cdn.test/a.bin").unwrap(),
-            None
-        );
+        assert_eq!(expand_source("https://cdn.test/a.bin").unwrap(), None);
     }
 
     #[test]

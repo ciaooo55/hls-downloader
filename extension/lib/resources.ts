@@ -306,12 +306,22 @@ function mseCorrelatedResources(
     .filter(entry => entry.item.kind === 'file' ? entry.affinity >= 900 : entry.affinity > 0)
   if (!ranked.length) return []
   const best = Math.max(...ranked.map(entry => entry.affinity))
-  return ranked
+  const sorted = ranked
     .filter(entry => entry.affinity === best)
     .sort((left, right) => resourceRank(right.item) - resourceRank(left.item)
       || right.item.seenAt - left.item.seenAt)
-    .slice(0, limit)
-    .map(entry => entry.item)
+  // The same progressive response is commonly observed twice: the network
+  // observer initially classifies it as `file`, then SourceBuffer ownership
+  // upgrades it to `media`. Within an exact MSE correlation these are one
+  // playable resource, so collapse only identical stable URLs while retaining
+  // semantic query parameters that distinguish streams.
+  const unique = new Map<string, MediaResource>()
+  for (const entry of sorted) {
+    let key = entry.item.url
+    try { key = stableResourceUrl({ url: entry.item.url, kind: 'media' }).href } catch {}
+    if (!unique.has(key)) unique.set(key, entry.item)
+  }
+  return [...unique.values()].slice(0, limit)
 }
 
 function isNonVideoManifest(resource: Pick<MediaResource, 'url'>): boolean {
