@@ -97,9 +97,11 @@ async function main() {
   brandText.append(el('h1', '', 'HLS Downloader'), el('span', 'status', '\u8fde\u63a5\u4e2d\u2026'))
   brand.append(logo, brandText)
   const actions = el('div', 'header-actions')
-  let themePreference = normalizeThemePreference(
-    (await browser.storage.local.get(THEME_STORAGE_KEY))[THEME_STORAGE_KEY],
-  )
+  // Paint the complete shell before the first browser/storage await. An MV3
+  // popup may become visible while storage or the service worker is waking;
+  // keeping all DOM behind that await left a permanent white page whenever
+  // bootstrap was delayed or rejected.
+  let themePreference: ThemePreference = 'auto'
   let removeThemeListener = applyTheme(document.documentElement, themePreference)
   const themeBtn = el('button', 'hlsd-button subtle')
   themeBtn.append(icon(themePreference, THEME_LABELS[themePreference]))
@@ -161,6 +163,17 @@ async function main() {
   )
   mainEl.append(header, controls, updateNotice, errorBox, section, footer)
   root.append(mainEl)
+  document.documentElement.dataset.popupReady = 'shell'
+
+  const storedTheme = await browser.storage.local.get(THEME_STORAGE_KEY).catch(() => ({} as Record<string, unknown>))
+  const restoredTheme = normalizeThemePreference(storedTheme[THEME_STORAGE_KEY])
+  if (restoredTheme !== themePreference) {
+    themePreference = restoredTheme
+    removeThemeListener()
+    removeThemeListener = applyTheme(document.documentElement, themePreference)
+    themeBtn.replaceChildren(icon(themePreference, THEME_LABELS[themePreference]))
+    themeBtn.title = THEME_LABELS[themePreference]
+  }
 
   let enabled = true
   let host = ''
@@ -504,6 +517,7 @@ async function main() {
   }
   refreshButtons()
   renderList()
+  document.documentElement.dataset.popupReady = 'ready'
 
   window.setInterval(() => {
     const entries = Object.entries(pending)
@@ -538,4 +552,25 @@ async function main() {
   }, 800)
 }
 
-void main()
+function renderStartupError(reason: unknown) {
+  const shell = el('main', 'popup-boot')
+  const header = el('div', 'popup-boot__header')
+  const logo = el('img') as HTMLImageElement
+  logo.src = '/icon-32.png'
+  logo.alt = ''
+  header.append(logo, el('div', 'popup-boot__title', 'HLS Downloader'))
+  const body = el('div', 'popup-boot__body')
+  const message = el('div')
+  message.append(
+    el('strong', '', '插件界面加载失败'),
+    el('span', '', reason instanceof Error && reason.message
+      ? reason.message
+      : '请重新打开插件；问题仍存在时重新加载扩展。'),
+  )
+  body.append(message)
+  shell.append(header, body)
+  root.replaceChildren(shell)
+  document.documentElement.dataset.popupReady = 'error'
+}
+
+void main().catch(renderStartupError)

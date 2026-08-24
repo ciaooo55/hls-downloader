@@ -244,8 +244,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if pending.lock().map(|items| items.is_empty()).unwrap_or(true) {
                         item.window()
                             .set_position(slint::PhysicalPosition::new(-32_000, -32_000));
-                    } else {
-                        item.set_intro(1.0);
                     }
                 }
                 *prewarm_finished.borrow_mut() = true;
@@ -310,7 +308,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let Some(item) = confirm.upgrade() else {
                 return;
             };
-            item.set_intro(0.0);
             item.window()
                 .set_position(slint::PhysicalPosition::new(-32_000, -32_000));
             if item.show().is_ok() {
@@ -352,7 +349,6 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             window.set_url("media.example.test/library/example-video.mp4".into());
             window.set_size_text("128.0 MB · HTTP".into());
             window.set_remaining("后面还有 2 个".into());
-            window.set_intro(1.0);
             window.on_command(|command| {
                 if command != "drag" {
                     let _ = slint::quit_event_loop();
@@ -584,11 +580,9 @@ fn show_next_offer(
     } else {
         "".into()
     });
-    item.set_intro(0.0);
     let shown = item.show().is_ok();
     if shown {
         let _ = center_window_by_title("确认下载");
-        item.set_intro(1.0);
     }
     if let Ok(mut client) = CoreIpcClient::connect() {
         let _ = client.command(CoreCommand::PresentHandoff {

@@ -11,8 +11,10 @@ from __future__ import annotations
 import argparse
 import base64
 from contextlib import contextmanager
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import shutil
 import socket
@@ -20,7 +22,8 @@ import subprocess
 import tempfile
 import threading
 import time
-from urllib.request import urlopen
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 import zipfile
 
 import websocket
@@ -240,10 +243,42 @@ def _find_chromium_binary(configured: str | None) -> Path:
     raise RuntimeError("Chrome/Edge binary not found; pass --chrome-binary")
 
 
+def _stop_process_tree(process: subprocess.Popen[object]) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
 def _read_debug_targets(port: int) -> list[dict]:
     with urlopen(f"http://127.0.0.1:{port}/json/list", timeout=1) as response:
         payload = json.loads(response.read())
     return payload if isinstance(payload, list) else []
+
+
+def _open_debug_target(port: int, url: str) -> None:
+    request = Request(f"http://127.0.0.1:{port}/json/new?{quote(url, safe='')}", method="PUT")
+    with urlopen(request, timeout=2) as response:
+        if response.status != 200:
+            raise RuntimeError(f"Chromium could not open extension popup target: HTTP {response.status}")
 
 
 def _evaluate(websocket_url: str, expression: str) -> object:
@@ -287,6 +322,15 @@ def _capture_screenshot(websocket_url: str, destination: Path) -> None:
         connection.close()
 
 
+def _chromium_extension_id(extension_dir: Path) -> str:
+    manifest = json.loads((extension_dir / "manifest.json").read_text(encoding="utf-8"))
+    key = str(manifest.get("key", ""))
+    if not key:
+        raise RuntimeError("Chromium production manifest has no stable public key")
+    digest = hashlib.sha256(base64.b64decode(key)).hexdigest()[:32]
+    return "".join(chr(ord("a") + int(nibble, 16)) for nibble in digest)
+
+
 def _exercise_chrome(
     extension_dir: Path,
     page_url: str,
@@ -295,6 +339,8 @@ def _exercise_chrome(
     screenshot: Path | None = None,
 ) -> None:
     browser = _find_chromium_binary(binary)
+    extension_id = _chromium_extension_id(extension_dir)
+    popup_url = f"chrome-extension://{extension_id}/popup.html"
     port = _free_port()
     profile = temp_root / "chromium-profile"
     command = [
@@ -317,6 +363,8 @@ def _exercise_chrome(
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     diagnostics: dict[str, object] = {}
+    popup_opened = False
+    content_ready = False
     try:
         deadline = time.monotonic() + 25
         while time.monotonic() < deadline:
@@ -325,47 +373,69 @@ def _exercise_chrome(
             try:
                 targets = _read_debug_targets(port)
                 page = next((item for item in targets if item.get("type") == "page" and item.get("url") == page_url), None)
-                if page:
+                popup = next((item for item in targets if item.get("type") == "page" and item.get("url") == popup_url), None)
+                if page and not content_ready:
                     websocket_url = str(page["webSocketDebuggerUrl"])
                     marker = _evaluate(
                         websocket_url,
                         f"document.documentElement.getAttribute('{MARKER}')",
                     )
-                    diagnostics = {
-                        "marker": marker,
-                        "playback": _evaluate(
-                            websocket_url,
-                            "({paused:document.querySelector('video')?.paused,readyState:document.querySelector('video')?.readyState,error:window.__hlsOverlaySmokeError||''})",
-                        ),
-                        "labels": _evaluate(
-                            websocket_url,
-                            "[...document.querySelectorAll('*')].flatMap(e=>[...(e.shadowRoot?.querySelectorAll('.video-download')||[])].map(b=>b.textContent))",
-                        ),
-                    }
+                    diagnostics["marker"] = marker
+                    diagnostics["playback"] = _evaluate(
+                        websocket_url,
+                        "({paused:document.querySelector('video')?.paused,readyState:document.querySelector('video')?.readyState,error:window.__hlsOverlaySmokeError||''})",
+                    )
+                    diagnostics["labels"] = _evaluate(
+                        websocket_url,
+                        "[...document.querySelectorAll('*')].flatMap(e=>[...(e.shadowRoot?.querySelectorAll('.video-download')||[])].map(b=>b.textContent))",
+                    )
                     if marker == "1" and _evaluate(websocket_url, OVERLAY_EXPRESSION) is True:
                         details = _evaluate(websocket_url, HOVER_EXPRESSION)
                         diagnostics["hover"] = details
-                        if (
+                        content_ready = bool(
                             isinstance(details, dict)
                             and details.get("visible") is True
                             and details.get("insideViewport") is True
                             and details.get("actions") == ["下载", "投屏", "TVBox"]
-                        ):
-                            if screenshot is not None:
-                                _capture_screenshot(websocket_url, screenshot)
-                            return
+                        )
+                if content_ready and not popup and not popup_opened:
+                    _open_debug_target(port, popup_url)
+                    popup_opened = True
+                    time.sleep(0.1)
+                    continue
+                if content_ready and page and popup:
+                    websocket_url = str(page["webSocketDebuggerUrl"])
+                    popup_websocket_url = str(popup["webSocketDebuggerUrl"])
+                    popup_details = _evaluate(
+                        popup_websocket_url,
+                        "({ready:document.documentElement.dataset.popupReady||'bootstrap',"
+                        "text:document.body.innerText.replace(/\\s+/g,' ').trim(),"
+                        "width:document.body.getBoundingClientRect().width,"
+                        "height:document.body.getBoundingClientRect().height,"
+                        "background:getComputedStyle(document.body).backgroundColor})",
+                    )
+                    diagnostics["popup"] = popup_details
+                    if (
+                        isinstance(popup_details, dict)
+                        and popup_details.get("ready") in {"shell", "ready", "error"}
+                        and "HLS Downloader" in str(popup_details.get("text", ""))
+                        and float(popup_details.get("width", 0)) >= 400
+                        and float(popup_details.get("height", 0)) >= 200
+                        and popup_details.get("background") not in {"transparent", "rgba(0, 0, 0, 0)"}
+                    ):
+                        if screenshot is not None:
+                            _capture_screenshot(websocket_url, screenshot)
+                            _capture_screenshot(
+                                popup_websocket_url,
+                                screenshot.with_name(f"{screenshot.stem}-popup{screenshot.suffix}"),
+                            )
+                        return
             except (OSError, ValueError, KeyError, websocket.WebSocketException):
                 pass
             time.sleep(0.15)
-        raise RuntimeError(f"Chromium content script loaded but the media hover contract did not pass: {diagnostics}")
+        raise RuntimeError(f"Chromium content script or popup first-paint contract did not pass: {diagnostics}")
     finally:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+        _stop_process_tree(process)
 
 
 def _zip_firefox_extension(extension_dir: Path, destination: Path) -> None:

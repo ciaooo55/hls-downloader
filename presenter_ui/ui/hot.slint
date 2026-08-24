@@ -82,7 +82,6 @@ export component ConfirmWindow inherits Window {
     in-out property <string> url;
     in-out property <string> size_text;
     in-out property <string> remaining;
-    in-out property <float> intro: 1;
     callback command(string);
     Panel {
         width: parent.width;
@@ -90,8 +89,6 @@ export component ConfirmWindow inherits Window {
         VerticalLayout {
             padding: 20px;
             spacing: 12px;
-            opacity: Tokens.reduce-motion ? 1 : root.intro;
-            animate opacity { duration: Tokens.motion; easing: ease-out; }
             TouchArea {
                 height: 22px;
                 mouse-cursor: move;

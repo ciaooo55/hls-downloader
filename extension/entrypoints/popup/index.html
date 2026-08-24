@@ -1,1 +1,43 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HLS Downloader</title></head><body><div id="root"></div><script type="module" src="./main.ts"></script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>HLS Downloader</title>
+  <style>
+    html { color-scheme: light dark; background: #eef2f6; }
+    body { margin: 0; width: 400px; min-height: 250px; background: #eef2f6; color: #0f172a; font: 12px/1.45 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+    .popup-boot { display: flex; min-height: 250px; flex-direction: column; background: #eef2f6; }
+    .popup-boot__header { display: flex; height: 56px; align-items: center; gap: 9px; padding: 0 12px; border-bottom: 1px solid #d8e0ea; background: #fff; }
+    .popup-boot__header img { width: 26px; height: 26px; }
+    .popup-boot__title { font-size: 14px; font-weight: 650; }
+    .popup-boot__status { margin-top: 2px; color: #475569; font-size: 10px; }
+    .popup-boot__body { display: grid; flex: 1; place-items: center; padding: 24px; text-align: center; }
+    .popup-boot__body strong { display: block; margin-bottom: 5px; font-size: 13px; }
+    .popup-boot__body span { color: #475569; }
+    @media (prefers-color-scheme: dark) {
+      html, body, .popup-boot { background: #1c1f23; color: #f4f5f6; }
+      .popup-boot__header { border-color: #383d43; background: #23272b; }
+      .popup-boot__status, .popup-boot__body span { color: #c5c9cf; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <main class="popup-boot" role="status" aria-live="polite">
+      <div class="popup-boot__header">
+        <img src="/icon-32.png" alt="">
+        <div>
+          <div class="popup-boot__title">HLS Downloader</div>
+          <div class="popup-boot__status">正在载入浏览器插件…</div>
+        </div>
+      </div>
+      <div class="popup-boot__body">
+        <div><strong>正在读取当前页面</strong><span>资源列表和下载操作马上显示</span></div>
+      </div>
+    </main>
+  </div>
+  <noscript>浏览器插件脚本未启用。</noscript>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>
