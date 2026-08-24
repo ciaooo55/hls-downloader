@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import tomllib
 import uuid
 from pathlib import Path
@@ -14,9 +13,6 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON_REQUIREMENT = re.compile(r"^([A-Za-z0-9_.-]+)==([^\s\\]+)")
-
-
 def component(kind: str, ecosystem: str, name: str, version: str) -> dict:
     normalized_name = name.strip()
     normalized_version = version.split("(", 1)[0].strip()
@@ -30,17 +26,8 @@ def component(kind: str, ecosystem: str, name: str, version: str) -> dict:
     }
 
 
-def python_components() -> list[dict]:
-    values = []
-    for line in (ROOT / "requirements-release.lock").read_text(encoding="utf-8").splitlines():
-        matched = PYTHON_REQUIREMENT.match(line.strip())
-        if matched:
-            values.append(component("library", "pypi", matched.group(1).lower(), matched.group(2)))
-    return values
-
-
-def cargo_components() -> list[dict]:
-    lock = tomllib.loads((ROOT / "frontend" / "src-tauri" / "Cargo.lock").read_text(encoding="utf-8"))
+def cargo_components(lock_path: Path) -> list[dict]:
+    lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
     return [
         component("library", "cargo", str(item["name"]), str(item["version"]))
         for item in lock.get("package", [])
@@ -61,13 +48,27 @@ def npm_components(lock_path: Path) -> list[dict]:
     return values
 
 
+def compose_components() -> list[dict]:
+    # Compose Desktop keeps its deliberately small production dependency set in
+    # build.gradle.kts. Record the locked versions without reviving the removed
+    # React/Tauri dependency graph.
+    return [
+        component("framework", "maven", "org.jetbrains.compose.desktop/desktop", "1.11.1"),
+        component("library", "maven", "org.jetbrains.compose.material/material-icons-extended", "1.7.3"),
+        component("library", "maven", "org.jetbrains.kotlinx/kotlinx-coroutines-swing", "1.10.2"),
+        component("library", "maven", "org.jetbrains.kotlinx/kotlinx-serialization-json", "1.9.0"),
+        component("framework", "generic", "Eclipse Temurin JRE", "21"),
+    ]
+
+
 def build_sbom(version: str) -> dict:
     values = [
-        *python_components(),
-        *cargo_components(),
-        *npm_components(ROOT / "frontend" / "pnpm-lock.yaml"),
+        *cargo_components(ROOT / "native_shell" / "Cargo.lock"),
+        *cargo_components(ROOT / "presenter_ui" / "Cargo.lock"),
+        *compose_components(),
         *npm_components(ROOT / "extension" / "pnpm-lock.yaml"),
-        component("application", "generic", "ffmpeg", "N-126217-ge1e325235e"),
+        component("application", "generic", "ffmpeg", "8.1.2"),
+        component("library", "generic", "libmpv", "20260814-git-7b8915bc1d"),
     ]
     unique = {item["bom-ref"]: item for item in values}
     components = [unique[key] for key in sorted(unique)]
