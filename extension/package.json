@@ -9,6 +9,8 @@
     "build": "wxt build -b chrome && wxt build -b firefox",
     "zip:chrome": "wxt zip -b chrome",
     "zip:firefox": "wxt zip -b firefox",
+    "zip:firefox-store": "wxt zip -b firefox --sources",
+    "package:store": "pnpm run build && pnpm run zip:chrome && pnpm run zip:firefox-store",
     "typecheck": "wxt prepare && tsc --noEmit",
     "test": "wxt prepare && tsc --noEmit && vitest run"
   },

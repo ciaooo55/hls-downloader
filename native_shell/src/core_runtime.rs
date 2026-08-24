@@ -105,8 +105,12 @@ impl CoreRuntime {
                 handoff_id,
                 filename,
                 download_dir,
+                trusted_ui: _,
             } => self.accept_handoff(&handoff_id, &filename, &download_dir),
-            CoreCommand::RejectHandoff { handoff_id } => self.reject_handoff(&handoff_id),
+            CoreCommand::RejectHandoff {
+                handoff_id,
+                suppress_site_kind: _,
+            } => self.reject_handoff(&handoff_id),
             CoreCommand::RequestMediaPush { request } => {
                 self.media_push_requests
                     .insert(request.id.clone(), request.clone());
@@ -160,12 +164,13 @@ impl CoreRuntime {
                     },
                 });
             }
-            CoreCommand::CheckUpdate => self.check_update(),
+            CoreCommand::CheckUpdate { silent } => self.check_update(silent),
             CoreCommand::SetSetting { .. }
             | CoreCommand::PlayTask { .. }
             | CoreCommand::CastTask { .. }
             | CoreCommand::PlayerControl { .. }
             | CoreCommand::DownloadUpdate
+            | CoreCommand::InstallUpdate { .. }
             | CoreCommand::ProbeUrl { .. }
             | CoreCommand::ProbeTorrent { .. }
             | CoreCommand::SelectTorrentFiles { .. }
@@ -546,30 +551,26 @@ impl CoreRuntime {
         }
     }
 
-    fn check_update(&mut self) {
+    fn check_update(&mut self, silent: bool) {
         match crate::updater::check_for_update(crate::updater::CURRENT_VERSION) {
-            Ok(info) if info.newer => self.publish(CoreEvent::Error {
-                code: "update_available".into(),
-                message: if info.installer_url.is_empty() {
-                    format!(
-                        "发现新版本 {}（当前 {}）\n{}",
-                        info.latest, info.current, info.html_url
-                    )
-                } else {
-                    format!(
-                        "发现新版本 {}（当前 {}）。可在设置里下载安装包。\n{}",
-                        info.latest, info.current, info.html_url
-                    )
-                },
+            Ok(info) if info.newer => self.publish(CoreEvent::UpdateAvailable {
+                current: info.current,
+                latest: info.latest,
+                notes: info.notes,
+                release_url: info.html_url,
+                installer_name: info.installer_name,
+                installer_size: info.installer_size,
+                sha256_verified: !info.expected_sha256.is_empty(),
             }),
-            Ok(info) => self.publish(CoreEvent::Error {
-                code: "update_current".into(),
-                message: format!("已是最新版本 {}", info.current),
+            Ok(info) if !silent => self.publish(CoreEvent::UpdateCurrent {
+                current: info.current,
             }),
-            Err(error) => self.publish(CoreEvent::Error {
+            Ok(_) => {}
+            Err(error) if !silent => self.publish(CoreEvent::Error {
                 code: "update_failed".into(),
                 message: error,
             }),
+            Err(error) => eprintln!("silent update check failed: {error}"),
         }
     }
 
@@ -591,19 +592,46 @@ impl CoreRuntime {
                 });
                 return;
             };
-            snapshot.downloaded_bytes = downloaded_bytes;
+            let stale_active_progress =
+                matches!(
+                    snapshot.status.as_str(),
+                    "paused" | "canceled" | "failed" | "completed" | "done"
+                ) && matches!(status, "downloading" | "recording" | "merging" | "checking");
+            let effective_status = if stale_active_progress {
+                snapshot.status.clone()
+            } else {
+                status.to_string()
+            };
+            let effective_stage = if stale_active_progress {
+                snapshot.stage.clone()
+            } else {
+                stage.to_string()
+            };
+            let effective_speed = if stale_active_progress {
+                0
+            } else {
+                speed_bytes_per_sec
+            };
+            snapshot.downloaded_bytes = if stale_active_progress {
+                snapshot.downloaded_bytes.max(downloaded_bytes)
+            } else {
+                downloaded_bytes
+            };
             snapshot.total_bytes = total_bytes.or(snapshot.total_bytes);
-            snapshot.speed_bytes_per_sec = speed_bytes_per_sec;
-            if speed_bytes_per_sec > 0 {
-                snapshot.speed_history.push(speed_bytes_per_sec);
+            snapshot.speed_bytes_per_sec = effective_speed;
+            if effective_speed > 0 {
+                snapshot.speed_history.push(effective_speed);
                 if snapshot.speed_history.len() > 180 {
                     snapshot.speed_history.remove(0);
                 }
             }
-            snapshot.stage = stage.to_string();
-            snapshot.status = status.to_string();
-            snapshot.playback_ready =
-                downloaded_bytes > 0 || matches!(status, "completed" | "downloading" | "merging");
+            snapshot.stage = effective_stage.clone();
+            snapshot.status = effective_status.clone();
+            snapshot.playback_ready = snapshot.downloaded_bytes > 0
+                || matches!(
+                    effective_status.as_str(),
+                    "completed" | "downloading" | "merging"
+                );
             snapshot.completed_ranges =
                 if snapshot.total_ranges > 0 && snapshot.total_bytes.unwrap_or(0) > 0 {
                     snapshot
@@ -629,9 +657,9 @@ impl CoreRuntime {
                     });
                 let parts = crate::paint_from_progress(
                     &progress,
-                    downloaded_bytes,
+                    snapshot.downloaded_bytes,
                     snapshot.total_bytes.unwrap_or(0),
-                    matches!(status, "downloading" | "recording"),
+                    matches!(effective_status.as_str(), "downloading" | "recording"),
                 );
                 if !parts.is_empty() {
                     let (workers, completed, total, hint) = crate::summarize_parts(&parts);
@@ -656,9 +684,9 @@ impl CoreRuntime {
             }
             let line = format!(
                 "{} {} {}/{}",
-                status,
-                stage,
-                downloaded_bytes,
+                effective_status,
+                effective_stage,
+                snapshot.downloaded_bytes,
                 snapshot.total_bytes.unwrap_or(0)
             );
             snapshot.log_tail.push(line);
@@ -666,7 +694,7 @@ impl CoreRuntime {
                 let extra = snapshot.log_tail.len() - 16;
                 snapshot.log_tail.drain(0..extra);
             }
-            snapshot.available_actions = match status {
+            snapshot.available_actions = match effective_status.as_str() {
                 "completed" | "done" => {
                     vec![
                         "open".into(),
@@ -695,14 +723,14 @@ impl CoreRuntime {
                 ],
                 _ => vec!["pause".into(), "cancel".into()],
             };
-            snapshot.eta_seconds = match (snapshot.total_bytes, speed_bytes_per_sec) {
-                (Some(total), speed) if speed > 0 && total > downloaded_bytes => {
-                    Some((total - downloaded_bytes) / speed)
+            snapshot.eta_seconds = match (snapshot.total_bytes, effective_speed) {
+                (Some(total), speed) if speed > 0 && total > snapshot.downloaded_bytes => {
+                    Some((total - snapshot.downloaded_bytes) / speed)
                 }
                 _ => None,
             };
-            if status == "failed" && snapshot.error_message.is_none() {
-                snapshot.error_message = Some(stage.to_string());
+            if effective_status == "failed" && snapshot.error_message.is_none() {
+                snapshot.error_message = Some(effective_stage);
             }
             snapshot.clone()
         };
@@ -801,6 +829,65 @@ mod tests {
             action: "pause".into(),
         });
         assert_eq!(runtime.snapshot(&task_id).unwrap().status, "paused");
+    }
+
+    #[test]
+    fn late_active_progress_cannot_overwrite_a_paused_task() {
+        let mut runtime = CoreRuntime::new();
+        runtime.handle(CoreCommand::CreateTask { spec: task() });
+        runtime.handle(CoreCommand::TaskAction {
+            task_id: "task-1".into(),
+            action: "start".into(),
+        });
+        runtime.handle(CoreCommand::UpdateProgress {
+            task_id: "task-1".into(),
+            downloaded_bytes: 100,
+            total_bytes: Some(1_000),
+            speed_bytes_per_sec: 50,
+            stage: "transfer".into(),
+            status: "downloading".into(),
+        });
+        runtime.handle(CoreCommand::TaskAction {
+            task_id: "task-1".into(),
+            action: "pause".into(),
+        });
+
+        runtime.handle(CoreCommand::UpdateProgress {
+            task_id: "task-1".into(),
+            downloaded_bytes: 120,
+            total_bytes: Some(1_000),
+            speed_bytes_per_sec: 50,
+            stage: "transfer".into(),
+            status: "downloading".into(),
+        });
+
+        let paused = runtime.snapshot("task-1").unwrap();
+        assert_eq!(paused.status, "paused");
+        assert_eq!(paused.stage, "waiting");
+        assert_eq!(paused.downloaded_bytes, 120);
+        assert_eq!(paused.speed_bytes_per_sec, 0);
+        assert!(paused
+            .available_actions
+            .iter()
+            .any(|action| action == "resume"));
+        assert!(!paused
+            .available_actions
+            .iter()
+            .any(|action| action == "pause"));
+
+        runtime.handle(CoreCommand::TaskAction {
+            task_id: "task-1".into(),
+            action: "resume".into(),
+        });
+        runtime.handle(CoreCommand::UpdateProgress {
+            task_id: "task-1".into(),
+            downloaded_bytes: 140,
+            total_bytes: Some(1_000),
+            speed_bytes_per_sec: 50,
+            stage: "transfer".into(),
+            status: "downloading".into(),
+        });
+        assert_eq!(runtime.snapshot("task-1").unwrap().status, "downloading");
     }
 
     #[test]
@@ -921,6 +1008,7 @@ mod tests {
                 handoff_id: "handoff-ui".into(),
                 filename: "setup.exe".into(),
                 title: "Setup".into(),
+                mime_type: "application/vnd.microsoft.portable-executable".into(),
                 size: 1024,
             },
         });
@@ -929,6 +1017,7 @@ mod tests {
             handoff_id: "handoff-ui".into(),
             filename: "installer.exe".into(),
             download_dir: String::new(),
+            trusted_ui: false,
         });
         assert!(matches!(accepted[0].event, CoreEvent::TaskCreated { .. }));
         match &accepted[1].event {
@@ -952,6 +1041,7 @@ mod tests {
         });
         let rejected = runtime.handle(CoreCommand::RejectHandoff {
             handoff_id: "handoff-reject".into(),
+            suppress_site_kind: false,
         });
         match &rejected[0].event {
             CoreEvent::HandoffResolved {

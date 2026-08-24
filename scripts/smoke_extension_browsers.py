@@ -22,13 +22,14 @@ import subprocess
 import tempfile
 import threading
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 import zipfile
 
 import websocket
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
+from selenium.webdriver import ActionChains
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 
 
@@ -221,6 +222,48 @@ def _assert_hover_surface(driver: webdriver.Remote, browser_name: str) -> None:
     raise RuntimeError(f"{browser_name} hover details/actions were incomplete or misplaced: {details}")
 
 
+def _assert_pointer_transition(driver: webdriver.Remote, browser_name: str) -> None:
+    """Move from the compact button into the hover card like a real user."""
+    elements = driver.execute_script(
+        """
+        const host=[...document.querySelectorAll('*')].find(element =>
+          element.shadowRoot?.querySelector('.video-download'));
+        const root=host?.shadowRoot;
+        return [root?.querySelector('.video-download'), root?.querySelector('.hover-action')];
+        """
+    )
+    if not elements or len(elements) != 2 or not all(elements):
+        raise RuntimeError(f"{browser_name} hover pointer targets were missing")
+    ActionChains(driver).move_to_element(elements[0]).pause(0.15).move_to_element(elements[1]).pause(0.7).perform()
+    details = driver.execute_script(
+        """
+        const host=[...document.querySelectorAll('*')].find(element =>
+          element.shadowRoot?.querySelector('.video-download'));
+        const root=host?.shadowRoot;
+        const group=root?.querySelector('.video-action-group');
+        const hover=root?.querySelector('.video-hover');
+        const action=root?.querySelector('.hover-action');
+        if (!group || !hover || !action) return null;
+        const style=getComputedStyle(hover); const rect=hover.getBoundingClientRect();
+        return {
+          visible:style.visibility==='visible' && Number(style.opacity)>=0.99,
+          actionable:document.elementFromPoint(
+            action.getBoundingClientRect().left + action.getBoundingClientRect().width / 2,
+            action.getBoundingClientRect().top + action.getBoundingClientRect().height / 2
+          ) === host,
+          width:rect.width,
+          height:rect.height,
+          held:group.matches(':hover') || group.classList.contains('hover-open'),
+        };
+        """
+    )
+    # elementFromPoint sees the shadow host outside the shadow tree. That is
+    # the expected hit-test result; visibility and hover-open prove the inner
+    # action remains reachable after the pointer transition.
+    if not details or not details.get("visible") or not details.get("actionable") or not details.get("held"):
+        raise RuntimeError(f"{browser_name} hover card disappeared during pointer transition: {details}")
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -290,6 +333,7 @@ def _evaluate(websocket_url: str, expression: str) -> object:
             "params": {
                 "expression": expression,
                 "returnByValue": True,
+                "awaitPromise": True,
             },
         }))
         while True:
@@ -298,6 +342,84 @@ def _evaluate(websocket_url: str, expression: str) -> object:
                 return message.get("result", {}).get("result", {}).get("value")
     finally:
         connection.close()
+
+
+def _dispatch_mouse_move(websocket_url: str, x: float, y: float) -> None:
+    connection = websocket.create_connection(websocket_url, timeout=2, suppress_origin=True)
+    try:
+        connection.send(json.dumps({
+            "id": 3,
+            "method": "Input.dispatchMouseEvent",
+            "params": {"type": "mouseMoved", "x": x, "y": y, "button": "none"},
+        }))
+        while True:
+            message = json.loads(connection.recv())
+            if message.get("id") == 3:
+                if message.get("error"):
+                    raise RuntimeError(f"Chromium pointer dispatch failed: {message['error']}")
+                return
+    finally:
+        connection.close()
+
+
+def _pointer_transition_chromium(websocket_url: str) -> object:
+    start = _evaluate(
+        websocket_url,
+        """
+        (() => {
+          const host=[...document.querySelectorAll('*')].find(element =>
+            element.shadowRoot?.querySelector('.video-download'));
+          const root=host?.shadowRoot; const button=root?.querySelector('.video-download');
+          const group=button?.closest('.video-action-group');
+          if (!button || !group) return null;
+          root.activeElement?.blur(); group.classList.remove('hover-open');
+          const rect=button.getBoundingClientRect();
+          return {x:rect.left+rect.width/2,y:rect.top+rect.height/2,bottom:rect.bottom};
+        })()
+        """,
+    )
+    if not isinstance(start, dict):
+        return None
+    _dispatch_mouse_move(websocket_url, float(start["x"]), float(start["y"]))
+    time.sleep(0.12)
+    target = _evaluate(
+        websocket_url,
+        """
+        (() => {
+          const host=[...document.querySelectorAll('*')].find(element =>
+            element.shadowRoot?.querySelector('.video-download'));
+          const root=host?.shadowRoot; const action=root?.querySelector('.hover-action');
+          if (!action) return null; const rect=action.getBoundingClientRect();
+          return {x:rect.left+rect.width/2,y:rect.top+rect.height/2};
+        })()
+        """,
+    )
+    if not isinstance(target, dict):
+        return None
+    # Cross the small visual gap first, then enter the card before the
+    # pointer-intent grace period expires.
+    _dispatch_mouse_move(websocket_url, float(start["x"]), float(start["bottom"]) + 2)
+    time.sleep(0.12)
+    _dispatch_mouse_move(websocket_url, float(target["x"]), float(target["y"]))
+    time.sleep(0.7)
+    return _evaluate(
+        websocket_url,
+        """
+        (() => {
+          const host=[...document.querySelectorAll('*')].find(element =>
+            element.shadowRoot?.querySelector('.video-download'));
+          const root=host?.shadowRoot; const group=root?.querySelector('.video-action-group');
+          const hover=root?.querySelector('.video-hover'); const action=root?.querySelector('.hover-action');
+          if (!group || !hover || !action) return null;
+          const style=getComputedStyle(hover); const point=action.getBoundingClientRect();
+          return {
+            visible:style.visibility==='visible' && Number(style.opacity)>=0.99,
+            actionable:document.elementFromPoint(point.left+point.width/2,point.top+point.height/2)===host,
+            held:group.matches(':hover') || group.classList.contains('hover-open'),
+          };
+        })()
+        """,
+    )
 
 
 def _capture_screenshot(websocket_url: str, destination: Path) -> None:
@@ -365,6 +487,8 @@ def _exercise_chrome(
     diagnostics: dict[str, object] = {}
     popup_opened = False
     content_ready = False
+    selection_checked = False
+    selection_details: object = None
     try:
         deadline = time.monotonic() + 25
         while time.monotonic() < deadline:
@@ -392,11 +516,17 @@ def _exercise_chrome(
                     if marker == "1" and _evaluate(websocket_url, OVERLAY_EXPRESSION) is True:
                         details = _evaluate(websocket_url, HOVER_EXPRESSION)
                         diagnostics["hover"] = details
+                        pointer_transition = _pointer_transition_chromium(websocket_url)
+                        diagnostics["pointerTransition"] = pointer_transition
                         content_ready = bool(
                             isinstance(details, dict)
                             and details.get("visible") is True
                             and details.get("insideViewport") is True
                             and details.get("actions") == ["下载", "投屏", "TVBox"]
+                            and isinstance(pointer_transition, dict)
+                            and pointer_transition.get("visible") is True
+                            and pointer_transition.get("actionable") is True
+                            and pointer_transition.get("held") is True
                         )
                 if content_ready and not popup and not popup_opened:
                     _open_debug_target(port, popup_url)
@@ -406,22 +536,78 @@ def _exercise_chrome(
                 if content_ready and page and popup:
                     websocket_url = str(page["webSocketDebuggerUrl"])
                     popup_websocket_url = str(popup["webSocketDebuggerUrl"])
+                    if not selection_checked:
+                        selection_checked = True
+                        selected = _evaluate(
+                            websocket_url,
+                            "(() => {"
+                            "const anchor=document.querySelector('a[href=\"/sample.mp4\"]');"
+                            "if(!anchor)return false;const range=document.createRange();range.selectNode(anchor);"
+                            "const selection=getSelection();selection.removeAllRanges();selection.addRange(range);return true;"
+                            "})()",
+                        )
+                        triggered = _evaluate(
+                            popup_websocket_url,
+                            f"(async()=>{{const tabs=await chrome.tabs.query({{}});"
+                            f"const tab=tabs.find(item=>item.url==={json.dumps(page_url)});"
+                            "if(!tab?.id)return false;await chrome.tabs.sendMessage(tab.id,{type:'collect-selection'});"
+                            "return true;})()",
+                        )
+                        time.sleep(0.15)
+                        selection_details = _evaluate(
+                            websocket_url,
+                            "(() => {"
+                            "const host=[...document.querySelectorAll('*')].find(e=>e.shadowRoot?.querySelector('.wrap.open'));"
+                            "const root=host?.shadowRoot;const items=[...(root?.querySelectorAll('.list .item')||[])];"
+                            "const sources=items.map(item=>item.querySelector('.resource-url')?.textContent||'');"
+                            "const result=root?.querySelector('.result');const details={selected:true,"
+                            f"triggered:{str(bool(triggered)).lower()},count:items.length,sources,error:result?.classList.contains('error')?result.textContent||'':''}};"
+                            "root?.querySelector('.close')?.click();return details;})()",
+                        )
+                        if isinstance(selection_details, dict):
+                            selection_details["selected"] = bool(selected)
+                        diagnostics["selectedLinks"] = selection_details
+                    _evaluate(
+                        popup_websocket_url,
+                        "(() => {"
+                        "const button=document.querySelector('.scan-button');"
+                        "if(document.documentElement.dataset.popupReady==='ready'&&button&&!window.__hlsRescanSmoke){"
+                        "window.__hlsRescanSmoke=true;button.click();}"
+                        "return Boolean(window.__hlsRescanSmoke);"
+                        "})()",
+                    )
                     popup_details = _evaluate(
                         popup_websocket_url,
                         "({ready:document.documentElement.dataset.popupReady||'bootstrap',"
                         "text:document.body.innerText.replace(/\\s+/g,' ').trim(),"
                         "width:document.body.getBoundingClientRect().width,"
                         "height:document.body.getBoundingClientRect().height,"
-                        "background:getComputedStyle(document.body).backgroundColor})",
+                        "background:getComputedStyle(document.body).backgroundColor,"
+                        "rescanTriggered:Boolean(window.__hlsRescanSmoke),"
+                        "rescanBusy:Boolean(document.querySelector('.scan-button')?.disabled),"
+                        "resourceCount:document.querySelectorAll('article').length,"
+                        "resourceMeta:document.querySelector('.resource-body>span')?.textContent||'',"
+                        "actions:[...document.querySelectorAll('.article-actions button')].map(button=>button.textContent?.trim())})",
                     )
                     diagnostics["popup"] = popup_details
                     if (
                         isinstance(popup_details, dict)
-                        and popup_details.get("ready") in {"shell", "ready", "error"}
+                        and popup_details.get("ready") == "ready"
                         and "HLS Downloader" in str(popup_details.get("text", ""))
                         and float(popup_details.get("width", 0)) >= 400
                         and float(popup_details.get("height", 0)) >= 200
                         and popup_details.get("background") not in {"transparent", "rgba(0, 0, 0, 0)"}
+                        and popup_details.get("rescanTriggered") is True
+                        and popup_details.get("rescanBusy") is False
+                        and int(popup_details.get("resourceCount", 0)) >= 1
+                        and str(popup_details.get("resourceMeta", "")).startswith("音频 · .wav")
+                        and popup_details.get("actions") == ["下载", "投屏", "TVBox"]
+                        and isinstance(selection_details, dict)
+                        and selection_details.get("selected") is True
+                        and selection_details.get("triggered") is True
+                        and selection_details.get("count") == 1
+                        and selection_details.get("sources") == [f"{urlparse(page_url).hostname}/sample.mp4"]
+                        and not selection_details.get("error")
                     ):
                         if screenshot is not None:
                             _capture_screenshot(websocket_url, screenshot)
@@ -429,7 +615,25 @@ def _exercise_chrome(
                                 popup_websocket_url,
                                 screenshot.with_name(f"{screenshot.stem}-popup{screenshot.suffix}"),
                             )
-                        return
+                        dark_details = _evaluate(
+                            popup_websocket_url,
+                            "(() => {document.querySelector('.header-actions .hlsd-button.subtle')?.click();"
+                            "return {theme:document.documentElement.getAttribute('data-hlsd-theme'),"
+                            "background:getComputedStyle(document.body).backgroundColor};})()",
+                        )
+                        diagnostics["popupDark"] = dark_details
+                        if isinstance(dark_details, dict) and dark_details.get("theme") == "dark":
+                            time.sleep(0.2)
+                            if screenshot is not None:
+                                _capture_screenshot(
+                                    websocket_url,
+                                    screenshot.with_name(f"{screenshot.stem}-dark{screenshot.suffix}"),
+                                )
+                                _capture_screenshot(
+                                    popup_websocket_url,
+                                    screenshot.with_name(f"{screenshot.stem}-popup-dark{screenshot.suffix}"),
+                                )
+                            return
             except (OSError, ValueError, KeyError, websocket.WebSocketException):
                 pass
             time.sleep(0.15)
@@ -471,6 +675,7 @@ def _exercise_firefox(extension_dir: Path, page_url: str, binary: str | None, te
         _wait_for_playback_started(driver, "Firefox")
         _wait_for_media_overlay(driver, "Firefox")
         _assert_hover_surface(driver, "Firefox")
+        _assert_pointer_transition(driver, "Firefox")
 
 
 def _require_build(path: Path, browser_name: str) -> Path:

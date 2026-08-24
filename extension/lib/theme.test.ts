@@ -77,6 +77,10 @@ describe('token sheets', () => {
     const light = THEME_TOKENS_CSS.match(/\[data-hlsd-theme="light"\]\{[^}]+\}/)![0]
     expect(names(dark)).toEqual(names(light))
     expect(names(dark)).toContain('--primary')
+    expect(dark).toContain('--bg:#151719')
+    expect(dark).toContain('--surface:#1c1f23')
+    expect(dark).toContain('--primary:#5ea2f3')
+    expect(light).toContain('--border:#d8e0ea')
   })
 
   it('keeps base primitives free of hard-coded palette colors', () => {

@@ -129,6 +129,12 @@ enum class TaskFilter(val label: String) { ALL("全部"), RUNNING("进行中"), 
 enum class TaskCategory(val label: String) { MEDIA("媒体"), PROGRAM("程序"), ARCHIVE("压缩包"), OTHER("其他") }
 data class DownloadTask(val id: String, val filename: String, val status: String, val progress: Float, val speed: String, val speedBytes: Long, val remaining: String, val segments: String, val updated: String, val source: TaskDto)
 data class HarvestCandidateUi(val url: String, val filename: String, val category: String, val size: Long)
+private data class HandoffDecision(
+    val filename: String,
+    val directory: String,
+    val category: TaskCategory,
+    val rememberDirectory: Boolean,
+)
 internal fun droppedFilePaths(payload: Any?): List<String> = (payload as? List<*>)
     .orEmpty().filterIsInstance<File>().map { it.absolutePath }.distinct()
 internal fun selectionAfterClick(taskIds: List<String>, selected: Set<String>, anchorId: String?, targetId: String, shift: Boolean, toggle: Boolean): Set<String> {
@@ -193,7 +199,23 @@ private sealed interface UiSignal {
     data class Harvest(val url: String, val links: List<HarvestCandidateUi>) : UiSignal
     data class Log(val taskId: String, val lines: List<String>) : UiSignal
     data class Duplicate(val taskId: String, val action: String, val message: String) : UiSignal
-    data class Update(val message: String) : UiSignal
+    data class Update(
+        val current: String,
+        val latest: String,
+        val notes: String,
+        val releaseUrl: String,
+        val installerName: String,
+        val installerSize: Long,
+        val sha256Verified: Boolean,
+    ) : UiSignal
+    data class UpdatePrepared(
+        val latest: String,
+        val installerPath: String,
+        val sha256: String,
+        val productName: String,
+        val productVersion: String,
+        val upgradeCode: String,
+    ) : UiSignal
     data class PowerPending(val action: String, val title: String, val delaySeconds: Long) : UiSignal
     data class Cast(
         val active: Boolean,
@@ -235,20 +257,21 @@ internal fun taskColumnsForWidth(width: Dp) = if (width < 930.dp) TaskColumns(22
 private data class WorkbenchPalette(
     val canvas: Color, val rail: Color, val ink: Color, val muted: Color, val faint: Color,
     val blue: Color, val border: Color, val surface2: Color, val surface3: Color,
-    val selected: Color, val dialog: Color,
+    val selected: Color, val dialog: Color, val success: Color, val warning: Color,
 )
 
 private val lightPalette = WorkbenchPalette(
     canvas = Color(0xFFEEF2F6), rail = Color.White, ink = Color(0xFF0F172A), muted = Color(0xFF475569), faint = Color(0xFF64748B),
     blue = Color(0xFF2563EB), border = Color(0xFFD8E0EA), surface2 = Color(0xFFF5F7FA), surface3 = Color(0xFFE8EDF3),
-    selected = Color(0xFFE7F0FF), dialog = Color(0xFFFCFDFE),
+    selected = Color(0xFFE7F0FF), dialog = Color(0xFFFCFDFE), success = Color(0xFF16794B), warning = Color(0xFF9A5B00),
 )
 private val darkPalette = WorkbenchPalette(
     canvas = Color(0xFF151719), rail = Color(0xFF1C1F23), ink = Color(0xFFF4F5F6), muted = Color(0xFFC5C9CF), faint = Color(0xFF969CA4),
     blue = Color(0xFF5EA2F3), border = Color(0xFF383D43), surface2 = Color(0xFF23272B), surface3 = Color(0xFF2B3035),
-    selected = Color(0xFF263A51), dialog = Color(0xFF22262A),
+    selected = Color(0xFF263A51), dialog = Color(0xFF22262A), success = Color(0xFF72D6A5), warning = Color(0xFFFFC46B),
 )
 private val LocalWorkbenchPalette = staticCompositionLocalOf { lightPalette }
+private const val ENGINE_RECONNECTING_NOTICE = "下载引擎暂时无法连接，正在自动重试"
 internal val canvas: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.canvas
 internal val rail: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.rail
 internal val ink: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.ink
@@ -260,6 +283,8 @@ internal val surface2: Color @Composable @ReadOnlyComposable get() = LocalWorkbe
 internal val surface3: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.surface3
 internal val selectedSurface: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.selected
 internal val dialogSurface: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.dialog
+internal val successColor: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.success
+internal val warningColor: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.warning
 
 fun main() {
     System.setProperty("compose.accessibility.enable", "true")
@@ -282,7 +307,12 @@ fun main() {
     ) {
         LaunchedEffect(Unit) {
             window.minimumSize = Dimension(1024, 600)
-            withContext(Dispatchers.IO) { EnginePipeClient.ensurePresenterStarted() }
+            while (true) {
+                withContext(Dispatchers.IO) { EnginePipeClient.ensurePresenterStarted() }
+                delay(5_000)
+            }
+        }
+        LaunchedEffect(auditSurface) {
             if (auditSurface == "tasks_1000") {
                 window.isAlwaysOnTop = true
                 while (true) {
@@ -332,7 +362,20 @@ fun main() {
             externalDropPaths = droppedPaths,
             externalDropActive = dropActive,
             onExternalDropConsumed = { droppedPaths = emptyList() },
-            onAttention = { EventQueue.invokeLater { window.toFront(); window.requestFocus() } },
+            onAttention = {
+                EventQueue.invokeLater {
+                    window.isMinimized = false
+                    val previousAlwaysOnTop = window.isAlwaysOnTop
+                    window.isAlwaysOnTop = true
+                    window.toFront()
+                    window.requestFocus()
+                    javax.swing.Timer(650) { window.isAlwaysOnTop = previousAlwaysOnTop }.apply {
+                        isRepeats = false
+                        start()
+                    }
+                }
+            },
+            onExit = ::exitApplication,
             titleBar = { WindowTitleBar(appIcon, state.placement == WindowPlacement.Maximized, { window.isMinimized = true }, { state.placement = if (state.placement == WindowPlacement.Maximized) WindowPlacement.Floating else WindowPlacement.Maximized }, ::exitApplication) },
         )
     }
@@ -340,7 +383,7 @@ fun main() {
 }
 
 @Composable @Preview
-fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalDropPaths: List<String> = emptyList(), externalDropActive: Boolean = false, onExternalDropConsumed: () -> Unit = {}, onAttention: () -> Unit = {}, titleBar: @Composable () -> Unit = {}) {
+fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalDropPaths: List<String> = emptyList(), externalDropActive: Boolean = false, onExternalDropConsumed: () -> Unit = {}, onAttention: () -> Unit = {}, onExit: () -> Unit = {}, titleBar: @Composable () -> Unit = {}) {
     val visualFixture = remember { System.getenv("HLS_UI_AUDIT_SURFACE").orEmpty().lowercase() }
     val visualTheme = remember { System.getenv("HLS_UI_AUDIT_THEME").orEmpty().lowercase() }
     var filter by remember { mutableStateOf(TaskFilter.ALL) }
@@ -359,7 +402,6 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
     var queueManagerDialog by remember { mutableStateOf(visualFixture == "queues") }
     var queueAssignTaskIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var extensionDialog by remember { mutableStateOf(visualFixture == "extension") }
-    var legalDialog by remember { mutableStateOf(false) }
     var newTaskUrl by remember { mutableStateOf("") }
     var detailTaskId by remember { mutableStateOf<String?>(null) }
     var settings by remember { mutableStateOf(EngineSettingsDto()) }
@@ -392,7 +434,23 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
     }) }
     var playerSession by remember { mutableStateOf<UiSignal.Player?>(if (visualFixture in setOf("player", "media_stack")) UiSignal.Player(true, "示例影片 1080p", "visual-fixture", "PLAYING", speed = 1.25) else null) }
     var duplicateResult by remember { mutableStateOf<UiSignal.Duplicate?>(null) }
-    var updateResult by remember { mutableStateOf<UiSignal.Update?>(if (visualFixture == "update") UiSignal.Update("发现新版本 7.1.0（当前 7.0.0）\n优化 HLS 直播恢复、TVBox 推送和高 DPI 布局。") else null) }
+    var updateResult by remember { mutableStateOf<UiSignal.Update?>(if (visualFixture == "update") UiSignal.Update(
+        current = "7.0.0",
+        latest = "7.1.0",
+        notes = "优化 HLS 直播恢复、TVBox 推送和高 DPI 布局。",
+        releaseUrl = "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.1.0",
+        installerName = "HLSDownloader-7.1.0-Windows-x64.msi",
+        installerSize = 154_453_055,
+        sha256Verified = true,
+    ) else null) }
+    var preparedUpdate by remember { mutableStateOf<UiSignal.UpdatePrepared?>(if (visualFixture == "update_prepared") UiSignal.UpdatePrepared(
+        latest = "7.1.0",
+        installerPath = "C:/Users/lee/AppData/Local/Temp/HLSDownloader/updates/7.1.0/HLSDownloader-7.1.0-Windows-x64.msi",
+        sha256 = "a761c958bffea479f736c987be5e335bce6914ddb0267ef6fdd1a3673ac661b0",
+        productName = "HLSDownloader",
+        productVersion = "7.1.0",
+        upgradeCode = "{1C80D5F7-A1EC-4BAE-A4A6-E010C5A3EE6B}",
+    ) else null) }
     var powerPending by remember { mutableStateOf<UiSignal.PowerPending?>(null) }
     var pendingCastTask by remember { mutableStateOf<String?>(if (visualFixture in setOf("devices", "devices_tvbox")) "visual-fixture" else null) }
     var pendingCastMode by remember { mutableStateOf(when (visualFixture) { "devices" -> "cast"; "devices_tvbox", "media_push_pending" -> "tvbox"; else -> "" }) }
@@ -496,31 +554,32 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
             return@LaunchedEffect
         }
         engineText = Product.engineReconnecting
-        val snapshot = runCatching {
-            withContext(Dispatchers.IO) {
-                runCatching { EnginePipeClient().snapshotState() }.getOrElse {
-                    EnginePipeClient.ensureStarted()
-                    delay(350)
-                    EnginePipeClient().snapshotState()
-                }
+        var attempts = 0
+        while (!snapshotReady) {
+            val snapshot = runCatching { withContext(Dispatchers.IO) { EnginePipeClient().snapshotState() } }
+            val state = snapshot.getOrNull()
+            if (state != null) {
+                tasks.clear()
+                tasks += state.tasks.map(::downloadTask)
+                eventSequence = state.latestSequence
+                snapshotReady = true
+                engineText = Product.engineConnected
+                if (notice?.message == ENGINE_RECONNECTING_NOTICE) notice = null
+                break
             }
-        }
-        snapshot.onSuccess { state ->
-            tasks.clear()
-            tasks += if (visualFixture == "tasks_1000") auditTasks(1_000) else state.tasks.map(::downloadTask)
-            eventSequence = state.latestSequence
-            snapshotReady = true
-            engineText = Product.engineConnected
-        }.onFailure { error ->
-            UiDiagnostics.error("engine.snapshot", error)
-            engineText = Product.engineReconnecting
-            notice = UiSignal.Notice("error", error.message ?: "下载引擎连接失败")
+            val error = snapshot.exceptionOrNull() ?: IllegalStateException("下载引擎连接失败")
+            if (attempts == 0) UiDiagnostics.error("engine.snapshot", error)
+            if (attempts % 4 == 0) {
+                withContext(Dispatchers.IO) { EnginePipeClient.ensureStarted() }
+            }
+            attempts++
+            if (attempts == 12) notice = UiSignal.Notice("error", ENGINE_RECONNECTING_NOTICE)
+            delay((100L + attempts * 40L).coerceAtMost(500L))
         }
         runCatching { withContext(Dispatchers.IO) { EnginePipeClient().loadSettings() } }
             .onSuccess { loaded ->
                 settings = loaded
                 darkMode = when (visualTheme) { "light" -> false; "dark" -> true; else -> loaded.darkMode }
-                legalDialog = !loaded.legalAccepted
             }
         if (visualFixture.isBlank()) {
             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().loadMediaPushRequests().firstOrNull() } }
@@ -552,6 +611,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                     val eventKind = envelope.event["kind"]?.jsonPrimitive?.content.orEmpty()
                     val attentionRequired = when (eventKind) {
                         "handoff_offered", "error" -> true
+                        "update_install_result" -> envelope.event["status"]?.jsonPrimitive?.content != "success"
                         "task_created", "task_updated", "task_progress" -> {
                             val snapshot = envelope.event["snapshot"]?.jsonObject
                             val taskId = snapshot?.get("task_id")?.jsonPrimitive?.content.orEmpty()
@@ -617,6 +677,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                             }
                             is UiSignal.Duplicate -> duplicateResult = signal
                             is UiSignal.Update -> updateResult = signal
+                            is UiSignal.UpdatePrepared -> { updateResult = null; preparedUpdate = signal }
                             is UiSignal.PowerPending -> powerPending = signal
                             is UiSignal.Cast -> {
                                 castPollFailures = 0
@@ -641,6 +702,15 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
             }
         }
     }
+    LaunchedEffect(snapshotReady, visualFixture) {
+        if (!snapshotReady || visualFixture.isNotBlank()) return@LaunchedEffect
+        delay(5_000)
+        while (true) {
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().checkUpdate(silent = true) } }
+                .onFailure { UiDiagnostics.warning("update.check.silent", it.message ?: "静默检查更新失败") }
+            delay(24 * 60 * 60 * 1_000L)
+        }
+    }
     LaunchedEffect(castSession?.active, castSession?.supportedActions) {
         while (visualFixture !in setOf("cast", "cast_tvbox", "cast_lan", "cast_offline", "media_stack") && castSession?.active == true && castSession?.supportedActions?.contains("status") == true) {
             delay(1_000)
@@ -654,8 +724,13 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
         }
     }
     LaunchedEffect(Unit) { shellFocus.requestFocus() }
+    val modalVisible = newTaskDialog || batchDialog || harvestDialog || settingsDialog || queueManagerDialog ||
+        queueAssignTaskIds.isNotEmpty() || detailTaskId != null || extensionDialog || activeHandoff != null ||
+        probeResult != null || torrentProbe != null || harvestResult != null || mediaSourceDialog.isNotEmpty() ||
+        (!settingsDeviceScanActive && deviceResult != null) || duplicateResult != null || updateResult != null ||
+        preparedUpdate != null || powerPending != null || destructiveRequest != null
     CompositionLocalProvider(LocalWorkbenchPalette provides if (darkMode) darkPalette else lightPalette) {
-    Column(Modifier.fillMaxSize().focusRequester(shellFocus).focusable().clip(RoundedCornerShape(if (maximized) 0.dp else 9.dp)).background(canvas).border(1.dp, border, RoundedCornerShape(if (maximized) 0.dp else 9.dp))) {
+    Column(Modifier.fillMaxSize().focusRequester(shellFocus).focusable().clip(RoundedCornerShape(if (maximized) 0.dp else 9.dp)).background(canvas).border(1.dp, border, RoundedCornerShape(if (maximized) 0.dp else 9.dp)).then(if (modalVisible) Modifier.clearAndSetSemantics { } else Modifier)) {
         titleBar()
         DesktopToolbar(query, { query = it }, { newTaskUrl = ""; newTaskDialog = true }, {
             scope.launch {
@@ -684,7 +759,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                     when (action) {
                         "import" -> chooseImportPaths()?.let { paths -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().importPaths(paths) } }.onSuccess { refreshKey++ }.onFailure { notice = UiSignal.Notice("error", it.message ?: "导入失败") } } }
                         "export" -> chooseExportPath()?.let { path -> scope.launch { runCatching { withContext(Dispatchers.IO) { exportTaskList(path, selected.toList()) } }.onSuccess { result -> notice = UiSignal.Notice("success", "已导出 ${result.taskCount} 项任务") }.onFailure { notice = UiSignal.Notice("error", it.message ?: "导出失败") } } }
-                        "update" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().checkUpdate() } }.onFailure { notice = UiSignal.Notice("error", it.message ?: "检查更新失败") } }
+                        "update" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().checkUpdate(silent = false) } }.onFailure { notice = UiSignal.Notice("error", it.message ?: "检查更新失败") } }
                         "cancel_power" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().cancelPowerAction() } }.onFailure { notice = UiSignal.Notice("error", it.message ?: "取消电源动作失败") } }
                     }
                 }) { action ->
@@ -838,13 +913,6 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
     detailTaskId?.let { taskId -> tasks.firstOrNull { it.id == taskId } }?.let { TaskDetailsDialog(it, { detailTaskId = null }) { action ->
         performTaskAction(it.id, action)
     } }
-    if (legalDialog) LegalAgreementDialog {
-        scope.launch {
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().storeSetting("legal_terms_accepted", true) } }
-                .onSuccess { legalDialog = false; refreshKey++ }
-                .onFailure { engineText = Product.engineReconnecting }
-        }
-    }
     if (extensionDialog) ExtensionDialog(extensionText) { extensionDialog = false }
     activeHandoff?.let { offer ->
         LaunchedEffect(offer.handoffId) {
@@ -866,22 +934,37 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
         }
         BrowserHandoffDialog(
             offer = offer,
-            defaultDirectory = settings.downloadDirectory,
+            settings = settings,
+            duplicate = tasks.firstOrNull { canonicalHandoffUrl(it.source.url) == canonicalHandoffUrl(offer.url) },
             pendingCount = handoffQueue.size,
             busy = handoffBusy,
-            onAccept = { filename, directory ->
+            onAccept = { decision ->
                 handoffBusy = true
                 scope.launch {
-                    runCatching { withContext(Dispatchers.IO) { EnginePipeClient().acceptHandoff(offer.handoffId, filename, directory) } }
+                    runCatching {
+                        withContext(Dispatchers.IO) {
+                            val client = EnginePipeClient()
+                            client.acceptHandoff(offer.handoffId, decision.filename, decision.directory)
+                            if (decision.rememberDirectory && decision.directory.isNotBlank()) {
+                                val dirs = buildJsonObject {
+                                    put("media", if (decision.category == TaskCategory.MEDIA) decision.directory else settings.categoryDirMedia)
+                                    put("program", if (decision.category == TaskCategory.PROGRAM) decision.directory else settings.categoryDirProgram)
+                                    put("archive", if (decision.category == TaskCategory.ARCHIVE) decision.directory else settings.categoryDirArchive)
+                                    put("other", if (decision.category == TaskCategory.OTHER) decision.directory else settings.categoryDirOther)
+                                }
+                                client.storeSetting("browser_category_dirs", dirs.toString())
+                            }
+                        }
+                    }
                         .onSuccess { handoffQueue.removeAll { it.handoffId == offer.handoffId }; refreshKey++ }
                         .onFailure { engineText = Product.engineReconnecting }
                     handoffBusy = false
                 }
             },
-            onReject = {
+            onReject = { suppressSiteKind ->
                 handoffBusy = true
                 scope.launch {
-                    runCatching { withContext(Dispatchers.IO) { EnginePipeClient().rejectHandoff(offer.handoffId) } }
+                    runCatching { withContext(Dispatchers.IO) { EnginePipeClient().rejectHandoff(offer.handoffId, suppressSiteKind) } }
                         .onSuccess { handoffQueue.removeAll { it.handoffId == offer.handoffId } }
                         .onFailure { engineText = Product.engineReconnecting }
                     handoffBusy = false
@@ -973,12 +1056,28 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
         duplicateResult = null
         performTaskAction(signal.taskId, signal.action)
     } }
-    updateResult?.let { signal -> UpdateDialog(signal, updateDownloadBusy, { if (!updateDownloadBusy) updateResult = null }) {
+    updateResult?.let { signal -> UpdateDialog(signal, updateDownloadBusy, { if (!updateDownloadBusy) updateResult = null }, onRelease = {
+        runCatching { java.awt.Desktop.getDesktop().browse(URI(signal.releaseUrl)) }
+            .onFailure { notice = UiSignal.Notice("error", "无法打开发布页") }
+    }) {
         if (!updateDownloadBusy) scope.launch {
             updateDownloadBusy = true
             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().downloadUpdate() } }
-                .onSuccess { updateResult = null; notice = UiSignal.Notice("success", "安装包已下载并打开") }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "下载安装包失败") }
+                .onSuccess { notice = UiSignal.Notice("success", "安装包已下载并完成身份校验") }
+                .onFailure { notice = UiSignal.Notice("error", it.message ?: "下载或校验安装包失败") }
+            updateDownloadBusy = false
+        }
+    } }
+    preparedUpdate?.let { signal -> UpdatePreparedDialog(signal, updateDownloadBusy, { if (!updateDownloadBusy) preparedUpdate = null }) {
+        if (!updateDownloadBusy) scope.launch {
+            updateDownloadBusy = true
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().installUpdate(ProcessHandle.current().pid()) } }
+                .onSuccess {
+                    notice = UiSignal.Notice("info", "任务断点已保存，正在关闭工作台并完成升级")
+                    delay(100)
+                    onExit()
+                }
+                .onFailure { notice = UiSignal.Notice("error", it.message ?: "无法开始覆盖升级") }
             updateDownloadBusy = false
         }
     } }
@@ -1126,7 +1225,30 @@ private fun applyEngineEvent(
         "task_log" -> UiSignal.Log(event["task_id"]?.jsonPrimitive?.content.orEmpty(), event["lines"]?.jsonArray.orEmpty().map { it.jsonPrimitive.content })
         "duplicate_offered" -> UiSignal.Duplicate(event["task_id"]?.jsonPrimitive?.content.orEmpty(), event["action"]?.jsonPrimitive?.content.orEmpty(), event["message"]?.jsonPrimitive?.content ?: "发现重复任务")
         "toast" -> UiSignal.Notice(event["level"]?.jsonPrimitive?.content ?: "info", event["message"]?.jsonPrimitive?.content ?: "操作已完成")
-        "error" -> if (event["code"]?.jsonPrimitive?.content == "update_available") UiSignal.Update(event["message"]?.jsonPrimitive?.content ?: "发现新版本") else UiSignal.Notice("error", event["message"]?.jsonPrimitive?.content ?: "操作失败")
+        "update_available" -> UiSignal.Update(
+            current = event["current"]?.jsonPrimitive?.content.orEmpty(),
+            latest = event["latest"]?.jsonPrimitive?.content.orEmpty(),
+            notes = event["notes"]?.jsonPrimitive?.content.orEmpty(),
+            releaseUrl = event["release_url"]?.jsonPrimitive?.content.orEmpty(),
+            installerName = event["installer_name"]?.jsonPrimitive?.content.orEmpty(),
+            installerSize = event["installer_size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
+            sha256Verified = event["sha256_verified"]?.jsonPrimitive?.content == "true",
+        )
+        "update_current" -> UiSignal.Notice("success", "已是最新版本 ${event["current"]?.jsonPrimitive?.content.orEmpty()}")
+        "update_ready" -> UiSignal.UpdatePrepared(
+            latest = event["latest"]?.jsonPrimitive?.content.orEmpty(),
+            installerPath = event["installer_path"]?.jsonPrimitive?.content.orEmpty(),
+            sha256 = event["sha256"]?.jsonPrimitive?.content.orEmpty(),
+            productName = event["product_name"]?.jsonPrimitive?.content.orEmpty(),
+            productVersion = event["product_version"]?.jsonPrimitive?.content.orEmpty(),
+            upgradeCode = event["upgrade_code"]?.jsonPrimitive?.content.orEmpty(),
+        )
+        "update_install_started" -> UiSignal.Notice("info", "任务断点已保存，正在关闭并安装版本 ${event["latest"]?.jsonPrimitive?.content.orEmpty()}")
+        "update_install_result" -> UiSignal.Notice(
+            if (event["status"]?.jsonPrimitive?.content == "success") "success" else "error",
+            event["message"]?.jsonPrimitive?.content ?: "覆盖升级结果未知",
+        )
+        "error" -> UiSignal.Notice("error", event["message"]?.jsonPrimitive?.content ?: "操作失败")
         "cast_session" -> UiSignal.Cast(
             active = event["active"]?.jsonPrimitive?.content == "true",
             title = event["title"]?.jsonPrimitive?.content.orEmpty(),
@@ -2127,7 +2249,6 @@ internal fun safeResourceLocation(value: String): String {
     }.take(180)
 }
 
-@Composable private fun LegalAgreementDialog(onAccept: () -> Unit) { var accepted by remember { mutableStateOf(false) }; WorkbenchDialog({}, "使用前请确认", "下载任务仅在本机执行", 540.dp, dismissible = false, content = { Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(8.dp)) { Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) { Icon(Icons.Outlined.GppGood, null, tint = blue, modifier = Modifier.size(22.dp)); Spacer(Modifier.width(10.dp)); Text("下载前请确认你拥有内容访问、下载及保存所需的权限。下载引擎只在本机保存必要的任务状态。", color = ink, fontSize = 12.sp, lineHeight = 19.sp) } }; Spacer(Modifier.height(12.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(accepted, { accepted = it }, accessibilityLabel = "我已阅读并同意用户协议"); Text("我已阅读并同意用户协议", color = ink, fontSize = 12.sp) } }, actions = { DialogPrimary("同意并继续", accepted, onAccept) }) }
 @Composable private fun ExtensionDialog(status: String, onDismiss: () -> Unit) = WorkbenchDialog(onDismiss, "浏览器插件", "识别网页媒体并交给下载器", 550.dp, content = { Surface(Modifier.fillMaxWidth(), color = if (status.contains("已连接")) Color(0xFFEAF8EF) else surface2, shape = RoundedCornerShape(8.dp)) { Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) { Icon(if (status.contains("已连接")) Icons.Outlined.CheckCircle else Icons.Outlined.Extension, null, tint = if (status.contains("已连接")) Color(0xFF16A34A) else blue); Spacer(Modifier.width(10.dp)); Text(status, color = if (status.contains("已连接")) Color(0xFF15803D) else ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) } }; Spacer(Modifier.height(14.dp)); Text("安装或更新插件后，重新打开浏览器标签页即可建立连接。插件会识别下载点击、媒体清单、音视频轨道和网页播放器，不影响页面的其他功能。", color = muted, fontSize = 12.sp, lineHeight = 19.sp) }, actions = { DialogPrimary("完成", onClick = onDismiss) })
 
 @Composable private fun NoticeToast(signal: UiSignal.Notice, onDismiss: () -> Unit) {
@@ -2349,18 +2470,70 @@ internal fun safeResourceLocation(value: String): String {
     Text("已有任务可以${actionLabel(signal.action)}，继续将对现有任务执行该操作。", color = muted, fontSize = 12.sp)
 }, actions = { DialogSecondary("取消", onDismiss); DialogPrimary(actionLabel(signal.action), onClick = onConfirm) })
 
-@Composable private fun UpdateDialog(signal: UiSignal.Update, busy: Boolean, onDismiss: () -> Unit, onDownload: () -> Unit) = WorkbenchDialog(onDismiss, "发现新版本", "确认后由下载引擎获取 Windows 安装包", 590.dp, dismissible = !busy, content = {
-    Surface(Modifier.fillMaxWidth(), color = selectedSurface, shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, blue.copy(alpha = .45f))) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
-            Icon(Icons.Outlined.SystemUpdateAlt, null, tint = blue, modifier = Modifier.size(22.dp)); Spacer(Modifier.width(10.dp))
-            Text(signal.message, color = ink, fontSize = 12.sp, lineHeight = 19.sp, maxLines = 10, overflow = TextOverflow.Ellipsis)
+@Composable private fun UpdateDialog(signal: UiSignal.Update, busy: Boolean, onDismiss: () -> Unit, onRelease: () -> Unit, onDownload: () -> Unit) = WorkbenchDialog(onDismiss, "发现新版本", "安全覆盖升级", 590.dp, dismissible = !busy, content = {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        UpdateVersionCell("当前版本", signal.current, Modifier.weight(1f))
+        Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, tint = muted, modifier = Modifier.align(Alignment.CenterVertically).size(18.dp))
+        UpdateVersionCell("可用版本", signal.latest, Modifier.weight(1f), emphasized = true)
+    }
+    Spacer(Modifier.height(12.dp))
+    if (signal.notes.isNotBlank()) Text(signal.notes, color = ink, fontSize = 12.sp, lineHeight = 19.sp, maxLines = 7, overflow = TextOverflow.Ellipsis)
+    Spacer(Modifier.height(12.dp))
+    Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(8.dp)) {
+        Column(Modifier.padding(horizontal = 13.dp, vertical = 11.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(signal.installerName.ifBlank { "未找到可自动安装的 Windows x64 MSI" }, color = ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(if (signal.installerSize > 0) "${formatBytes(signal.installerSize)} · SHA-256 ${if (signal.sha256Verified) "发布方摘要已确认" else "摘要缺失"}" else "自动升级已停用，请从发布页人工核验", color = if (signal.sha256Verified) successColor else warningColor, fontSize = 10.sp)
         }
     }
-    Spacer(Modifier.height(12.dp)); Text("下载完成后会打开安装包；现有下载任务继续由下载引擎运行。", color = muted, fontSize = 11.sp, lineHeight = 17.sp)
+    Spacer(Modifier.height(12.dp)); Text("安装程序将覆盖当前版本，配置、任务数据库和下载文件会保留。开始安装前会安全暂停活动任务并保存断点；升级不会自动重启 Windows。", color = muted, fontSize = 11.sp, lineHeight = 17.sp)
 }, actions = {
     DialogSecondary("稍后", onDismiss)
-    DialogPrimary(if (busy) "正在下载…" else "下载安装包", !busy, onDownload)
+    if (signal.releaseUrl.isNotBlank()) DialogSecondary("查看发布页", onRelease)
+    DialogPrimary(if (busy) "下载并校验中…" else "下载更新", !busy && signal.installerSize > 0 && signal.sha256Verified && signal.installerName.endsWith(".msi", true), onDownload)
 })
+
+@Composable private fun UpdatePreparedDialog(signal: UiSignal.UpdatePrepared, busy: Boolean, onDismiss: () -> Unit, onInstall: () -> Unit) = WorkbenchDialog(
+    onDismiss = onDismiss,
+    title = "更新已准备",
+    description = "版本 ${signal.latest} 已完成完整性与产品身份校验",
+    width = 590.dp,
+    dismissible = !busy,
+    content = {
+        Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(8.dp)) {
+            Column(Modifier.padding(horizontal = 13.dp, vertical = 11.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.fillMaxWidth()) {
+                    Text("产品", color = muted, fontSize = 10.sp, modifier = Modifier.width(82.dp))
+                    Text("${signal.productName} ${signal.productVersion}", color = ink, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                }
+                Row(Modifier.fillMaxWidth()) {
+                    Text("安装包", color = muted, fontSize = 10.sp, modifier = Modifier.width(82.dp))
+                    Text(signal.installerPath.substringAfterLast('/').substringAfterLast('\\'), color = ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Row(Modifier.fillMaxWidth()) {
+                    Text("SHA-256", color = muted, fontSize = 10.sp, modifier = Modifier.width(82.dp))
+                    Text(signal.sha256.take(16) + "…" + signal.sha256.takeLast(8), color = successColor, fontSize = 10.sp)
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            Icon(Icons.Outlined.RestartAlt, null, tint = blue, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(9.dp))
+            Text("开始后，下载引擎会暂停活动任务并保存断点，工作台和临时窗口随后关闭。独立更新助手会等待文件释放、执行覆盖安装并重新打开 HLS Downloader。", color = muted, fontSize = 11.sp, lineHeight = 17.sp)
+        }
+    },
+    actions = {
+        DialogSecondary("稍后安装", onDismiss)
+        DialogPrimary(if (busy) "正在保存断点…" else "立即安装并重启", !busy, onInstall)
+    },
+)
+
+@Composable private fun UpdateVersionCell(label: String, value: String, modifier: Modifier = Modifier, emphasized: Boolean = false) {
+    Column(modifier.clip(RoundedCornerShape(8.dp)).background(if (emphasized) selectedSurface else surface2).padding(horizontal = 13.dp, vertical = 11.dp)) {
+        Text(label, color = muted, fontSize = 10.sp)
+        Text(value.ifBlank { "-" }, color = if (emphasized) blue else ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp))
+    }
+}
 
 @Composable private fun DestructiveConfirmDialog(request: DestructiveRequest, onDismiss: () -> Unit, onConfirm: () -> Unit) = WorkbenchDialog(
     onDismiss, if (request.action == "delete_files") "删除任务和文件" else "删除任务", "此操作将影响 ${request.taskIds.size} 个任务", 520.dp,
@@ -2530,49 +2703,145 @@ private fun castStatusLabel(status: String) = when (status.uppercase()) {
 
 @Composable private fun BrowserHandoffDialog(
     offer: HandoffOfferDto,
-    defaultDirectory: String,
+    settings: EngineSettingsDto,
+    duplicate: DownloadTask?,
     pendingCount: Int,
     busy: Boolean,
-    onAccept: (String, String) -> Unit,
-    onReject: () -> Unit,
+    onAccept: (HandoffDecision) -> Unit,
+    onReject: (Boolean) -> Unit,
 ) {
     var filename by remember(offer.handoffId) { mutableStateOf(offer.filename.ifBlank { offer.title.ifBlank { "download" } }) }
-    var directory by remember(offer.handoffId, defaultDirectory) { mutableStateOf(defaultDirectory) }
+    var category by remember(offer.handoffId) { mutableStateOf(handoffCategory(offer)) }
+    fun directoryFor(value: TaskCategory) = when (value) {
+        TaskCategory.MEDIA -> settings.categoryDirMedia
+        TaskCategory.PROGRAM -> settings.categoryDirProgram
+        TaskCategory.ARCHIVE -> settings.categoryDirArchive
+        TaskCategory.OTHER -> settings.categoryDirOther
+    }.ifBlank { settings.downloadDirectory }
+    var directory by remember(offer.handoffId, settings) { mutableStateOf(directoryFor(category)) }
+    var rememberDirectory by remember(offer.handoffId) { mutableStateOf(true) }
+    var suppressSiteKind by remember(offer.handoffId) { mutableStateOf(false) }
     val validFilename = runCatching { EnginePipeClient.normalizeHandoffFilename(filename) }.isSuccess
     val source = offer.sourcePageUrl.ifBlank { offer.url }
+    val sourceHost = runCatching { URI(source).host.orEmpty() }.getOrDefault("")
+    val downloadHost = runCatching { URI(offer.url).host.orEmpty() }.getOrDefault("")
+    val extension = filename.substringAfterLast('.', "").lowercase().takeIf { it.isNotBlank() }?.let { ".$it" } ?: "未知后缀"
+    val accept = {
+        if (validFilename && !busy) onAccept(HandoffDecision(filename.trim(), directory.trim(), category, rememberDirectory))
+    }
     WorkbenchDialog(
-        onDismiss = {},
-        title = "浏览器下载接管",
-        description = if (pendingCount > 1) "当前请求已准备，后面还有 ${pendingCount - 1} 个请求" else "下载引擎已准备好接收此请求",
-        width = 620.dp,
-        dismissible = false,
+        onDismiss = { if (!busy) onReject(false) },
+        title = "浏览器下载",
+        description = if (pendingCount > 1) "确认后加入下载队列 · 后面还有 ${pendingCount - 1} 个请求" else "确认保存位置后加入下载队列",
+        width = 650.dp,
+        dismissible = !busy,
         content = {
-            Surface(Modifier.fillMaxWidth(), color = selectedSurface, shape = RoundedCornerShape(8.dp)) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.Downloading, null, tint = blue, modifier = Modifier.size(24.dp))
-                    Spacer(Modifier.width(11.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(offer.title.ifBlank { offer.filename.ifBlank { "新下载" } }, color = ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text("${resourceKindLabel(offer.resourceKind)}${if (offer.size > 0) " · ${formatBytes(offer.size)}" else " · 大小未知"}", color = muted, fontSize = 11.sp, modifier = Modifier.padding(top = 3.dp))
+            Column(
+                Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown || busy) return@onPreviewKeyEvent false
+                    when (event.key) {
+                        Key.Enter -> { accept(); true }
+                        Key.Escape -> { onReject(false); true }
+                        else -> false
+                    }
+                },
+            ) {
+                Surface(Modifier.fillMaxWidth(), color = selectedSurface, shape = RoundedCornerShape(8.dp)) {
+                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Downloading, "下载文件", tint = blue, modifier = Modifier.size(26.dp))
+                        Spacer(Modifier.width(11.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(filename.ifBlank { offer.title.ifBlank { "新下载" } }, color = ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                listOf(resourceKindLabel(offer.resourceKind), extension, offer.mimeType.takeIf { it.isNotBlank() }, if (offer.size > 0) formatBytes(offer.size) else "大小未知").filterNotNull().joinToString(" · "),
+                                color = muted,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(top = 3.dp),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (downloadHost.isNotBlank()) Text(downloadHost, color = faint, fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
                 }
+                duplicate?.let {
+                    Spacer(Modifier.height(9.dp))
+                    Surface(Modifier.fillMaxWidth(), color = Color(0xFFFFF7E8), shape = RoundedCornerShape(7.dp)) {
+                        Row(Modifier.padding(horizontal = 11.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.WarningAmber, "重复任务", tint = Color(0xFFD97706), modifier = Modifier.size(17.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("已有同一地址的任务：${it.filename}（${it.status}）", color = ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(13.dp))
+                DialogLabel("文件名")
+                OutlinedTextField(filename, { filename = it }, Modifier.fillMaxWidth(), enabled = !busy, singleLine = true, isError = filename.isNotBlank() && !validFilename, shape = RoundedCornerShape(7.dp), supportingText = { if (filename.isNotBlank() && !validFilename) Text("文件名不能包含路径或控制字符", fontSize = 10.sp) })
+                Spacer(Modifier.height(7.dp))
+                DialogLabel("分类")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    TaskCategory.entries.forEach { choice ->
+                        Button(
+                            onClick = { category = choice; directory = directoryFor(choice) },
+                            modifier = Modifier.weight(1f),
+                            enabled = !busy,
+                            border = BorderStroke(1.dp, if (category == choice) blue else border),
+                            colors = ButtonDefaults.buttonColors(if (category == choice) selectedSurface else rail, if (category == choice) blue else ink),
+                        ) { Text(choice.label, fontSize = 11.sp, fontWeight = if (category == choice) FontWeight.SemiBold else FontWeight.Normal) }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                DialogLabel("保存到")
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(directory, { directory = it }, Modifier.weight(1f), enabled = !busy, singleLine = true, shape = RoundedCornerShape(7.dp), placeholder = { Text("使用下载引擎默认目录") })
+                    Spacer(Modifier.width(7.dp))
+                    Button(onClick = { chooseDirectory(directory, "选择下载保存位置")?.let { directory = it } }, enabled = !busy, colors = ButtonDefaults.buttonColors(rail, ink), border = BorderStroke(1.dp, border)) {
+                        Icon(Icons.Outlined.FolderOpen, "选择保存文件夹", modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(6.dp)); Text("选择", fontSize = 11.sp)
+                    }
+                }
+                Row(Modifier.fillMaxWidth().padding(top = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(rememberDirectory, { rememberDirectory = it }, accessibilityLabel = "记住此分类的保存位置")
+                    Spacer(Modifier.width(8.dp)); Text("记住“${category.label}”文件的保存位置", color = ink, fontSize = 11.sp)
+                }
+                Spacer(Modifier.height(11.dp))
+                Surface(Modifier.fillMaxWidth(), color = dialogSurface, shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, border)) {
+                    Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Row(Modifier.fillMaxWidth()) {
+                            Icon(Icons.Outlined.GppGood, "请求上下文已继承", tint = Color(0xFF16A34A), modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(7.dp)); Text("网站请求上下文", color = ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.weight(1f)); Text("由下载引擎安全保管", color = Color(0xFF15803D), fontSize = 10.sp)
+                        }
+                        DetailLine("来源网页", sourceHost.ifBlank { "未捕获" })
+                        DetailLine("来源地址", safeResourceLocation(source))
+                        DetailLine("下载地址", safeResourceLocation(offer.url))
+                        Text("支持沿用 Referer、Origin、User-Agent、Cookie 与 Authorization；敏感值只由下载引擎保管。", color = faint, fontSize = 10.sp, lineHeight = 15.sp)
+                    }
+                }
+                if (sourceHost.isNotBlank()) Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(suppressSiteKind, { suppressSiteKind = it }, accessibilityLabel = "以后不再提示此网站的同类资源")
+                    Spacer(Modifier.width(8.dp)); Text("以后不再自动提示 $sourceHost 的${resourceKindLabel(offer.resourceKind)}", color = ink, fontSize = 11.sp)
+                }
             }
-            Spacer(Modifier.height(14.dp))
-            DialogLabel("文件名")
-            OutlinedTextField(filename, { filename = it }, Modifier.fillMaxWidth(), enabled = !busy, singleLine = true, isError = filename.isNotBlank() && !validFilename, shape = RoundedCornerShape(7.dp), supportingText = { if (filename.isNotBlank() && !validFilename) Text("文件名不能包含路径或控制字符", fontSize = 10.sp) })
-            Spacer(Modifier.height(8.dp))
-            DialogLabel("保存到")
-            OutlinedTextField(directory, { directory = it }, Modifier.fillMaxWidth(), enabled = !busy, singleLine = true, shape = RoundedCornerShape(7.dp), placeholder = { Text("使用下载引擎默认目录") })
-            Spacer(Modifier.height(12.dp))
-            DetailLine("资源链接", safeResourceLocation(offer.url))
-            DetailLine("来源页面", safeResourceLocation(source))
         },
         actions = {
-            DialogSecondary("保留浏览器下载") { if (!busy) onReject() }
-            DialogPrimary("确认下载", enabled = validFilename && !busy) { onAccept(filename, directory) }
+            DialogSecondary("保留浏览器下载") { if (!busy) onReject(suppressSiteKind) }
+            DialogPrimary(if (busy) "处理中…" else "确认下载", enabled = validFilename && !busy, onClick = accept)
         },
     )
 }
+
+private fun handoffCategory(offer: HandoffOfferDto): TaskCategory {
+    if (offer.resourceKind.lowercase() in setOf("hls", "dash", "live", "media")) return TaskCategory.MEDIA
+    return when (offer.filename.substringAfterLast('.', "").lowercase()) {
+        "mp4", "mkv", "webm", "mov", "avi", "m4v", "ts", "mp3", "m4a", "flac", "wav", "jpg", "png", "gif", "webp" -> TaskCategory.MEDIA
+        "exe", "msi", "msix", "appx", "bat", "cmd" -> TaskCategory.PROGRAM
+        "zip", "7z", "rar", "tar", "gz", "bz2", "xz", "iso" -> TaskCategory.ARCHIVE
+        else -> TaskCategory.OTHER
+    }
+}
+
+private fun canonicalHandoffUrl(value: String) = value.substringBefore('#').trimEnd('/')
 
 private fun resourceKindLabel(kind: String) = when (kind.lowercase()) {
     "hls" -> "HLS 媒体"

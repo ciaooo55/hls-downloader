@@ -1,8 +1,10 @@
 import { browser } from 'wxt/browser'
-import { clampOverlayPosition, overlayActionFallback, overlayResourceDetails, overlaySendKey, safeResourceLocation, shouldShowMediaOverlay, type OverlayAction } from '../lib/mediaOverlay'
+import { HOVER_DISMISS_DELAY_MS, clampOverlayPosition, overlayActionFallback, overlayResourceDetails, overlaySendKey, safeResourceLocation, shouldKeepHoverOpen, shouldShowMediaOverlay, type OverlayAction } from '../lib/mediaOverlay'
 import { boundedConfidence, classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, isSameDocumentPlaybackFallback, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
+import { withDeadline } from '../lib/asyncDeadline'
+import { selectedDownloadUrls } from '../lib/selectionLinks'
 
 async function runtimeMessage(message: Record<string, unknown>, retries = 1): Promise<any> {
   let lastError: unknown
@@ -158,6 +160,7 @@ export default defineContentScript({
     let activePlayback: PlaybackContext | null = null
     let activeVideo: HTMLVideoElement | null = null
     let selectionMode = false
+    let selectionResourceIds: Set<string> | null = null
     // A page can contain several players.  Keep playback evidence per element
     // instead of treating the latest network manifest as belonging to every
     // video in the document.
@@ -231,7 +234,7 @@ export default defineContentScript({
           .pin,.close{height:27px;border:0;border-radius:5px;background:var(--surface-3);color:var(--text);cursor:pointer}.pin{padding:0 8px;font:11px system-ui}.pin.active{background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green)}.close{display:grid;place-items:center;width:27px;font:700 18px/1 system-ui}.pin:hover,.close:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{max-height:calc(min(520px,calc(100vh - 20px)) - 78px);overflow-y:auto;overscroll-behavior:contain}
           .item{padding:9px 10px;border-bottom:1px solid var(--border)}.item:last-child{border-bottom:0}.item:hover{background:var(--surface-2)}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12px/1.35 system-ui;overflow-wrap:anywhere;color:var(--text)}.kind{overflow:hidden;color:var(--muted);font:10.5px/1.35 system-ui;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.resource-url{display:block;margin-top:4px;color:var(--faint);font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;user-select:text}.quality-select{width:min(184px,100%);margin-top:6px}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:29px;border:0;border-radius:6px;background:var(--primary);color:var(--on-primary);padding:4px 6px;cursor:pointer;font-weight:600;font-size:11px}.download:hover{background:var(--primary-hover)}.download[disabled]{cursor:default;opacity:.6}.download.push-tv{background:color-mix(in srgb,var(--purple) 75%,var(--surface))}.download.push-tv:hover{background:var(--purple)}.download.cast{background:color-mix(in srgb,var(--green) 78%,var(--surface))}.download.cast:hover{background:var(--green)}.result{padding:7px 10px;background:color-mix(in srgb,var(--green) 14%,var(--surface));color:var(--green);font:11px/1.4 system-ui}.result.error{background:color-mix(in srgb,var(--red) 12%,var(--surface));color:var(--red)}
           .video-buttons{position:fixed;inset:0;z-index:var(--z-extension-video);pointer-events:none}.video-action-group{position:fixed;display:flex;align-items:center;gap:4px;pointer-events:auto}.video-download{position:relative;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,#fff 0%);border-radius:7px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 8px var(--shadow);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font:600 12px system-ui;transition:background-color .16s ease,transform .16s ease}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download.identifying{border-color:var(--overlay-border);background:color-mix(in srgb,var(--surface) 88%,var(--primary));color:var(--muted)}.video-download.identifying:hover{background:color-mix(in srgb,var(--surface) 88%,var(--primary))}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:rgba(255,255,255,.9);color:var(--primary);font:700 10px system-ui}.video-more{display:grid;width:34px;height:34px;place-items:center;border:1px solid var(--overlay-border);border-radius:7px;background:var(--surface);color:var(--primary);box-shadow:0 3px 8px var(--shadow);cursor:pointer;font:700 18px/1 system-ui}.video-more:hover{background:var(--surface-2)}
-          .video-hover{position:absolute;top:40px;left:0;width:292px;padding:10px;background:var(--surface);color:var(--text);border:1px solid var(--overlay-border);border-radius:8px;box-shadow:0 4px 8px var(--shadow);opacity:0;visibility:hidden;transform:translateY(-3px);pointer-events:auto;transition:opacity .16s ease,transform .16s ease,visibility 0s linear .16s}.video-hover::before{content:'';position:absolute;left:0;right:0;top:-7px;height:7px}.video-hover.above{top:auto;bottom:40px;transform:translateY(3px)}.video-hover.above::before{top:auto;bottom:-7px}.video-action-group:hover .video-hover,.video-action-group:focus-within .video-hover{opacity:1;visibility:visible;transform:translateY(0);transition-delay:.08s, .08s, 0s}.video-action-group.dragging .video-hover{opacity:0;visibility:hidden;transition:none}.hover-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.hover-title{min-width:0;display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--text);font:650 12px/1.35 system-ui;overflow-wrap:anywhere}.hover-state{flex:none;color:var(--green);font:600 10px/1.35 system-ui;white-space:nowrap}.hover-copy{margin-top:4px;color:var(--muted);font:11px/1.4 system-ui}.hover-facts{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}.hover-fact{height:20px;padding:2px 6px;border-radius:5px;background:var(--surface-2);color:var(--muted);font:600 10px/16px system-ui;white-space:nowrap}.hover-source{margin-top:7px;overflow:hidden;color:var(--faint);font:10px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.hover-actions{display:flex;gap:5px;margin-top:9px}.hover-action{min-width:0;flex:1;height:28px;padding:0 6px;border:0;border-radius:6px;background:var(--surface-3);color:var(--text);cursor:pointer;font:600 10.5px/1 system-ui}.hover-action:hover{background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}.hover-action.primary{background:var(--primary);color:var(--on-primary)}.hover-action.primary:hover{background:var(--primary-hover)}.hover-action[disabled]{cursor:default;opacity:.55}
+          .video-hover{position:absolute;top:38px;left:0;width:292px;padding:10px;background:var(--surface);color:var(--text);border:1px solid var(--overlay-border);border-radius:8px;box-shadow:0 4px 8px var(--shadow);opacity:0;visibility:hidden;transform:translateY(-3px);pointer-events:auto;transition:opacity .16s ease,transform .16s ease,visibility 0s linear .16s}.video-hover::before{content:'';position:absolute;left:0;right:0;top:-10px;height:10px}.video-hover.above{top:auto;bottom:38px;transform:translateY(3px)}.video-hover.above::before{top:auto;bottom:-10px}.video-action-group:hover .video-hover,.video-action-group:focus-within .video-hover,.video-action-group.hover-open .video-hover{opacity:1;visibility:visible;transform:translateY(0);transition-delay:.05s,.05s,0s}.video-action-group.dragging .video-hover{opacity:0;visibility:hidden;transition:none}.hover-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.hover-title{min-width:0;display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--text);font:650 12px/1.35 system-ui;overflow-wrap:anywhere}.hover-state{flex:none;color:var(--green);font:600 10px/1.35 system-ui;white-space:nowrap}.hover-copy{margin-top:4px;color:var(--muted);font:11px/1.4 system-ui}.hover-facts{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}.hover-fact{height:20px;padding:2px 6px;border-radius:5px;background:var(--surface-2);color:var(--muted);font:600 10px/16px system-ui;white-space:nowrap}.hover-source{margin-top:7px;overflow:hidden;color:var(--faint);font:10px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.hover-actions{display:flex;gap:5px;margin-top:9px}.hover-action{min-width:0;flex:1;height:28px;padding:0 6px;border:0;border-radius:6px;background:var(--surface-3);color:var(--text);cursor:pointer;font:600 10.5px/1 system-ui}.hover-action:hover{background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}.hover-action.primary{background:var(--primary);color:var(--on-primary)}.hover-action.primary:hover{background:var(--primary-hover)}.hover-action[disabled]{cursor:default;opacity:.55}
           button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
         `
         const image = () => {
@@ -288,6 +291,7 @@ export default defineContentScript({
     let panelPosition: { x: number, y: number } | null = null
     let videoButtonPositions = new WeakMap<HTMLVideoElement, { x: number, y: number }>()
     let videoControlDragging = false
+    const videoHoverInteractions = new Set<HTMLElement>()
     let collapseTimer: ReturnType<typeof setTimeout> | null = null
     const fitPanel = () => {
       if (!wrap) return
@@ -373,34 +377,11 @@ export default defineContentScript({
       if (resourceSendStates.get(key)?.disabled) return
       const result = ui.shadow.querySelector<HTMLElement>('.result')
       setSendState(resource, button, '发送中', true)
-      void runtimeMessage({ type: 'offer', resource }).then(async response => {
-        if (!response?.ok || !response?.handoff?.id) throw new Error(response?.error || '桌面端未接受请求')
-        setSendState(resource, button, '等待确认', true)
-        if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `请在桌面下载器确认：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
-        const handoffId = response.handoff.id
-        const deadline = Date.now() + 130_000
-        while (Date.now() < deadline) {
-          await new Promise(resolve => setTimeout(resolve, 1000))
-          const statusResponse = await runtimeMessage({ type: 'handoff-status', handoffId }).catch(() => null)
-          const handoff = statusResponse?.handoff || statusResponse
-          const status = String(handoff?.status || '')
-          if (!status || status === 'pending' || status === 'accepting') continue
-          if (status === 'connection_lost') {
-            if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = '桌面端短暂断开，正在自动恢复确认状态' }
-            continue
-          }
-          if (status === 'accepted') {
-            setSendState(resource, button, '已加入', true)
-            if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `已加入下载队列：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
-            setTimeout(() => resourceSendStates.delete(key), 2_500)
-          } else {
-            setSendState(resource, button, status === 'expired' ? '已过期' : '重试', false)
-            if (result) { result.hidden = false; result.classList.add('error'); result.textContent = status === 'canceled' || status === 'rejected' ? '已取消下载确认' : `确认已${status}` }
-          }
-          return
-        }
-        setSendState(resource, button, '重试', false)
-        if (result) { result.hidden = false; result.classList.add('error'); result.textContent = '桌面端确认超时，请重试' }
+      void withDeadline(runtimeMessage({ type: 'download-now', resource }), 10_000, '下载器响应超时，请重试').then(response => {
+        if (!response?.ok) throw new Error(response?.error || '桌面端未接受请求')
+        setSendState(resource, button, '已加入', true)
+        if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `已加入下载队列：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
+        setTimeout(() => resourceSendStates.delete(key), 2_500)
       }).catch(reason => {
         setSendState(resource, button, '重试', false)
         if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '发送失败' }
@@ -477,7 +458,7 @@ export default defineContentScript({
       if (!layer) return
       // Players emit timeupdate while the pointer is down. Replacing the
       // control in that interval cancels pointer capture before it can move.
-      if (videoControlDragging) return
+      if (videoControlDragging || videoHoverInteractions.size > 0) return
       layer.replaceChildren()
       let visible = 0
       const videos = currentVideos()
@@ -679,8 +660,28 @@ export default defineContentScript({
             hover.classList.toggle('above', groupRect.bottom + 6 + hoverHeight > innerHeight - 8 && groupRect.top >= hoverHeight + 8)
           })
         }
-        group.addEventListener('mouseenter', positionHover)
-        group.addEventListener('focusin', positionHover)
+        let hoverDismissTimer: ReturnType<typeof setTimeout> | null = null
+        const keepHoverOpen = () => {
+          if (hoverDismissTimer) clearTimeout(hoverDismissTimer)
+          hoverDismissTimer = null
+          videoHoverInteractions.add(group)
+          group.classList.add('hover-open')
+          positionHover()
+        }
+        const dismissHover = () => {
+          if (hoverDismissTimer) clearTimeout(hoverDismissTimer)
+          hoverDismissTimer = setTimeout(() => {
+            hoverDismissTimer = null
+            if (shouldKeepHoverOpen(group.matches(':hover'), group.contains(ui.shadow.activeElement))) return
+            group.classList.remove('hover-open')
+            videoHoverInteractions.delete(group)
+            scheduleVideoButtons()
+          }, HOVER_DISMISS_DELAY_MS)
+        }
+        group.addEventListener('pointerenter', keepHoverOpen)
+        group.addEventListener('pointerleave', dismissHover)
+        group.addEventListener('focusin', keepHoverOpen)
+        group.addEventListener('focusout', dismissHover)
         group.append(hover)
         layer.append(group)
       })
@@ -694,10 +695,24 @@ export default defineContentScript({
     const render = () => {
       const list = ui.shadow.querySelector('.list')
       if (!list) return
+      const selectionResources = selectionResourceIds
+        ? [...resources.values()].filter(resource => selectionResourceIds?.has(resourceFingerprint(resource)))
+        : [...resources.values()]
       const entries = selectionMode && !activePlayback
-        ? compactResources([...resources.values()], 40).slice(0, 20)
+        ? compactResources(selectionResources, 40).slice(0, 20)
         : visiblePlaybackResources([...resources.values()], activePlayback, 8)
       list.replaceChildren()
+      const result = ui.shadow.querySelector<HTMLElement>('.result')
+      if (selectionMode && selectionResourceIds?.size === 0 && result) {
+        result.hidden = false
+        result.classList.add('error')
+        result.dataset.source = 'selection'
+        result.textContent = '选中的内容里没有可下载链接'
+      } else if (result?.dataset.source === 'selection') {
+        result.hidden = true
+        result.classList.remove('error')
+        delete result.dataset.source
+      }
       entries.forEach(resource => {
         const row = document.createElement('div'); row.className = 'item'
         const meta = document.createElement('div'); meta.className = 'meta'
@@ -842,6 +857,7 @@ export default defineContentScript({
       if (explicitActivation || !activeVideo || !activeVideo.isConnected || activeVideo.paused || activeVideo.ended) {
         activeVideo = video
         selectionMode = false
+        selectionResourceIds = null
       }
       const directSources = mediaElementSources(video)
       const sourceUrls = [...new Set(directSources.map(source => source.url).filter(Boolean))]
@@ -1058,17 +1074,53 @@ export default defineContentScript({
       if (message?.type === 'collect-selection') {
         const selection = window.getSelection(); if (!selection?.rangeCount) return
         const root = selection.getRangeAt(0).cloneContents()
+        const urls = selectedDownloadUrls(
+          [...root.querySelectorAll<HTMLAnchorElement>('a[href]')].map(anchor => anchor.getAttribute('href') || ''),
+          selection.toString(),
+          location.href,
+        )
         selectionMode = true
+        selectionResourceIds = new Set<string>()
         activePlayback = null
         activeVideo = null
-        root.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => add(anchor.href))
+        urls.forEach(url => {
+          const kind = classifyResource(url) || (/^(?:https?|magnet):/i.test(url) ? 'file' : null)
+          if (!kind) return
+          let filename = ''
+          try { filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch {}
+          const resource: MediaResource = {
+            id: resourceId(url), url, kind, pageUrl: location.href, title: filename || url,
+            filename, seenAt: Date.now(), evidence: ['text_selection'], owner: 'selection', confidence: 0.99,
+          }
+          addResource(resource)
+          selectionResourceIds?.add(resourceFingerprint(resource))
+        })
         setOpen(true)
         render()
+        return
       }
       if (message?.type === 'open-media-panel') {
         if (!activePlayback) selectionMode = true
+        selectionResourceIds = null
         setOpen(true)
         render()
+        return
+      }
+      if (message?.type === 'rescan-media') {
+        // A popup-initiated rescan must collect fresh page evidence without
+        // forcing the larger in-page panel open. Replay early MAIN-world MSE
+        // observations, re-read current media elements, then persist/render.
+        window.dispatchEvent(new Event('__hls_downloader_replay__'))
+        document.querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video,audio').forEach(media => {
+          mediaElementSources(media).forEach(source => add(source.url, source.mimeType, true, ['manual_rescan'], mediaOwner(media), 0.98))
+        })
+        document.querySelectorAll<HTMLSourceElement>('source').forEach(source => {
+          const url = explicitElementSource(source)
+          if (url) add(url, source.type || '', true, ['manual_rescan'])
+        })
+        performance.getEntriesByType('resource').forEach(entry => add(entry.name))
+        syncPlayingVideos()
+        scheduleRender()
       }
     }
     browser.runtime.onMessage.addListener(handleRuntimeMessage)
@@ -1095,6 +1147,7 @@ export default defineContentScript({
       activePlayback = null
       activeVideo = null
       selectionMode = false
+      selectionResourceIds = null
       playbackByVideo = new WeakMap<HTMLVideoElement, PlaybackContext>()
       videoButtonPositions = new WeakMap<HTMLVideoElement, { x: number, y: number }>()
       panelPosition = null

@@ -25,6 +25,7 @@ foreach ($name in @(
     'runtime',
     'app\resources\HLSDownloaderEngine.exe',
     'app\resources\HLSDownloaderNativeHost.exe',
+    'app\resources\HLSDownloaderUpdater.exe',
     'app\resources\HLSDownloaderPresenter.exe',
     'app\resources\ffmpeg.exe',
     'app\resources\ffprobe.exe',

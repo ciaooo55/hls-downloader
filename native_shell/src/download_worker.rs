@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -401,6 +402,7 @@ pub struct CoreCoordinator {
     core: Arc<Mutex<PersistentCore>>,
     active: Arc<Mutex<HashSet<String>>>,
     retries: Arc<Mutex<HashMap<String, u32>>>,
+    update_shutdown: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -471,6 +473,7 @@ impl CoreCoordinator {
             core: Arc::new(Mutex::new(core)),
             active: Arc::new(Mutex::new(HashSet::new())),
             retries: Arc::new(Mutex::new(HashMap::new())),
+            update_shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -985,12 +988,23 @@ impl CoreCoordinator {
             handoff_id,
             filename,
             download_dir,
+            trusted_ui,
         } = command
         {
-            return self.accept_handoff_command(handoff_id, filename, download_dir);
+            return self.accept_handoff_command(handoff_id, filename, download_dir, trusted_ui);
         }
-        if let CoreCommand::RejectHandoff { handoff_id } = command {
-            return self.dispatch_inner(CoreCommand::RejectHandoff { handoff_id });
+        if let CoreCommand::RejectHandoff {
+            handoff_id,
+            suppress_site_kind,
+        } = command
+        {
+            if suppress_site_kind {
+                self.persist_handoff_suppression(&handoff_id)?;
+            }
+            return self.dispatch_inner(CoreCommand::RejectHandoff {
+                handoff_id,
+                suppress_site_kind,
+            });
         }
         if let CoreCommand::PresentHandoff { handoff_id, ok } = command {
             return self.present_handoff_command(handoff_id, ok);
@@ -1252,6 +1266,9 @@ impl CoreCoordinator {
         if let CoreCommand::DownloadUpdate = command {
             return download_update(self);
         }
+        if let CoreCommand::InstallUpdate { workbench_pid } = command {
+            return install_update(self, workbench_pid);
+        }
         if let CoreCommand::OpenCompleted { task_id, folder } = &command {
             return open_completed(self, task_id, *folder).map(|_| Vec::new());
         }
@@ -1318,6 +1335,9 @@ impl CoreCoordinator {
     }
 
     pub(crate) fn start_next_queued(&self) -> Result<(), String> {
+        if self.update_shutdown.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         if self.require_legal().is_err() {
             return Ok(());
         }
@@ -1404,6 +1424,32 @@ impl CoreCoordinator {
             }
         }
         Ok(())
+    }
+
+    pub fn prepare_for_update(&self, timeout: Duration) -> Result<(), String> {
+        self.update_shutdown.store(true, Ordering::SeqCst);
+        if let Err(error) = self.pause_active_tasks() {
+            self.update_shutdown.store(false, Ordering::SeqCst);
+            return Err(error);
+        }
+        let deadline = Instant::now() + timeout;
+        loop {
+            let active = self
+                .active
+                .lock()
+                .map_err(|_| "下载任务注册表已损坏".to_string())?
+                .len();
+            if active == 0 {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                self.update_shutdown.store(false, Ordering::SeqCst);
+                return Err(format!(
+                    "仍有 {active} 个任务未完成断点保存，已取消升级；请稍后重试"
+                ));
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 
     fn apply_defaults_to_spec(&self, mut spec: TaskSpec) -> Result<TaskSpec, String> {
@@ -1588,10 +1634,21 @@ impl CoreCoordinator {
         handoff_id: String,
         filename: String,
         download_dir: String,
+        trusted_ui: bool,
     ) -> Result<Vec<EventEnvelope>, String> {
         self.require_legal()?;
         let settings = self.settings()?;
-        let download_dir = constrain_untrusted_download_dir(&download_dir, &settings.download_dir)?;
+        let download_dir = if trusted_ui {
+            let requested = download_dir.trim();
+            if requested.is_empty() {
+                settings.download_dir.clone()
+            } else {
+                reject_path_escape(requested)?;
+                requested.to_string()
+            }
+        } else {
+            constrain_untrusted_download_dir(&download_dir, &settings.download_dir)?
+        };
         let Some(offer) = self.lock()?.pending_handoff(&handoff_id) else {
             return Err("接管请求不存在或已过期".into());
         };
@@ -1701,6 +1758,66 @@ impl CoreCoordinator {
         Ok(Vec::new())
     }
 
+    fn persist_handoff_suppression(&self, handoff_id: &str) -> Result<(), String> {
+        let offer = self
+            .lock()?
+            .pending_handoff(handoff_id)
+            .ok_or_else(|| "接管请求不存在或已过期".to_string())?;
+        let host = offer
+            .source_page_url
+            .split_once("://")
+            .map(|(_, tail)| tail)
+            .unwrap_or(&offer.source_page_url)
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or("")
+            .rsplit('@')
+            .next()
+            .unwrap_or("")
+            .split(':')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if host.is_empty() {
+            return Err("来源网页地址无效，不能保存站点提示规则".into());
+        }
+        let kind = serde_json::to_value(offer.resource_kind)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| "file".into());
+        let mut core = self.lock()?;
+        for encoded in core.store().load_handoffs()? {
+            let Ok(mut value) = serde_json::from_str::<Value>(&encoded) else {
+                continue;
+            };
+            if value.get("id").and_then(Value::as_str) != Some(handoff_id) {
+                continue;
+            }
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "suppression".into(),
+                    serde_json::json!({ "host": host, "kind": kind }),
+                );
+            }
+            let json = serde_json::to_string(&value)
+                .map_err(|error| format!("encode handoff suppression {handoff_id}: {error}"))?;
+            let created = value
+                .get("created_at_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let status = value
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("pending");
+            let task_id = value.get("task_id").and_then(Value::as_str);
+            core.store_mut()
+                .save_handoff(handoff_id, &json, status, task_id, created)?;
+            return Ok(());
+        }
+        Err("接管请求持久记录不存在".into())
+    }
+
     fn delete_task_files(&self, task_id: &str) -> Result<(), String> {
         let spec = self
             .lock()?
@@ -1715,6 +1832,9 @@ impl CoreCoordinator {
     }
 
     fn spawn(&self, task_id: String) -> Result<(), String> {
+        if self.update_shutdown.load(Ordering::SeqCst) {
+            return Err("下载引擎正在准备覆盖升级，暂不启动新任务".into());
+        }
         if let Some(spec) = self.lock()?.task_spec(&task_id).cloned() {
             if !crate::net_policy::scheduled_start_reached(&spec.scheduled_start_at)
                 || crate::net_policy::scheduled_stop_hit(&spec.scheduled_stop_at)
@@ -3254,16 +3374,45 @@ fn download_update(coordinator: &CoreCoordinator) -> Result<Vec<EventEnvelope>, 
         None => crate::updater::check_for_update(crate::updater::CURRENT_VERSION)?,
     };
     if !info.newer {
-        return coordinator.lock()?.emit(CoreEvent::Error {
-            code: "update_current".into(),
-            message: format!("已是最新版本 {}", info.current),
+        return coordinator.lock()?.emit(CoreEvent::UpdateCurrent {
+            current: info.current,
         });
     }
     let path = crate::updater::download_installer(&info)?;
-    open_path(&path)?;
-    coordinator.lock()?.emit(CoreEvent::Error {
-        code: "update_downloaded".into(),
-        message: format!("已下载安装包 {}", path.display()),
+    let identity = crate::updater::verify_installer_identity(&path, &info.latest)?;
+    coordinator.lock()?.emit(CoreEvent::UpdateReady {
+        latest: info.latest,
+        installer_path: path.display().to_string(),
+        sha256: info.expected_sha256,
+        product_name: identity.product_name,
+        product_version: identity.product_version,
+        upgrade_code: identity.upgrade_code,
+    })
+}
+
+fn install_update(
+    coordinator: &CoreCoordinator,
+    workbench_pid: u32,
+) -> Result<Vec<EventEnvelope>, String> {
+    let info = crate::updater::last_update()
+        .ok_or_else(|| "没有已确认的新版本，请重新检查更新".to_string())?;
+    if !info.newer {
+        return Err("当前已经是最新版本".into());
+    }
+    let path = crate::updater::download_installer(&info)?;
+    crate::updater::verify_installer_identity(&path, &info.latest)?;
+    coordinator.prepare_for_update(Duration::from_secs(15))?;
+    let launch = match crate::updater::launch_update_helper(&path, &info.latest, workbench_pid) {
+        Ok(launch) => launch,
+        Err(error) => {
+            coordinator.update_shutdown.store(false, Ordering::SeqCst);
+            return Err(error);
+        }
+    };
+    coordinator.lock()?.emit(CoreEvent::UpdateInstallStarted {
+        latest: info.latest,
+        install_log: launch.log_path.display().to_string(),
+        result_path: launch.result_path.display().to_string(),
     })
 }
 
@@ -4512,6 +4661,7 @@ mod tests {
                 handoff_id: "handoff-coord".into(),
                 filename: "a.bin".into(),
                 download_dir: "../escape".into(),
+                trusted_ui: false,
             })
             .is_err());
         let events = coordinator
@@ -4519,6 +4669,7 @@ mod tests {
                 handoff_id: "handoff-coord".into(),
                 filename: "a.bin".into(),
                 download_dir: String::new(),
+                trusted_ui: false,
             })
             .unwrap();
         assert!(events
@@ -4634,6 +4785,50 @@ mod tests {
             .unwrap()
             .pending_handoff("handoff-shown")
             .is_some());
+    }
+
+    #[test]
+    fn rejected_handoff_can_persist_source_site_kind_suppression() {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        let offer = crate::ResourceOffer {
+            url: "https://cdn.test/movie.m3u8".into(),
+            resource_kind: ResourceKind::Hls,
+            source_page_url: "https://Video.Example.Test/watch/42".into(),
+            handoff_id: "handoff-suppress".into(),
+            filename: "movie.m3u8".into(),
+            ..Default::default()
+        };
+        let encoded = serde_json::json!({
+            "id": "handoff-suppress",
+            "offer": offer,
+            "filename": "movie.m3u8",
+            "title": "Movie",
+            "mime_type": "application/vnd.apple.mpegurl",
+            "size": 0,
+            "status": "pending",
+            "presentation": "presented",
+            "task_id": null,
+            "created_at_ms": 1,
+            "request_id": ""
+        })
+        .to_string();
+        coordinator
+            .save_handoff("handoff-suppress", &encoded, "pending", None, 1)
+            .unwrap();
+        coordinator
+            .dispatch(CoreCommand::OfferResource { offer })
+            .unwrap();
+        coordinator
+            .dispatch(CoreCommand::RejectHandoff {
+                handoff_id: "handoff-suppress".into(),
+                suppress_site_kind: true,
+            })
+            .unwrap();
+        let rows = coordinator.load_handoffs().unwrap();
+        assert!(rows.iter().any(|row| {
+            row.contains("\"host\":\"video.example.test\"")
+                && row.contains("\"kind\":\"hls\"")
+        }));
     }
 
     #[test]

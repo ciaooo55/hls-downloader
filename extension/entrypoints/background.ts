@@ -20,8 +20,13 @@ import { ClickIntentStore } from '../lib/clickIntentStore'
 import { TakeoverSettingsSync } from '../lib/takeoverSettingsSync'
 import { SessionListStore } from '../lib/sessionListStore'
 import { BlobSourceStore, type BlobSourceRecord } from '../lib/blobSourceStore'
+import { contextMenuCapabilities } from '../lib/contextMenuActions'
 
 const HOST = 'com.ciaooo55.hls_downloader'
+const dynamicContextMenus = browser.contextMenus as typeof browser.contextMenus & {
+  onShown?: { addListener: (listener: (info: { linkUrl?: string, srcUrl?: string, mediaType?: string }) => void) => void }
+  refresh?: () => Promise<void> | void
+}
 const CLICK_INTENT_STORAGE_KEY = 'click-intents'
 const clickIntentStore = new ClickIntentStore(browser.storage.session, CLICK_INTENT_STORAGE_KEY)
 let browserFallbacks: Array<{ url: string, at: number }> = []
@@ -737,8 +742,12 @@ async function resourcePayload(
   }
 }
 
-async function downloadNow(resource: MediaResource, chain?: RequestChain) {
-  const payload = await resourcePayload(resource, chain)
+async function downloadNow(
+  resource: MediaResource,
+  chain?: RequestChain,
+  options: { allowUnverified?: boolean } = {},
+) {
+  const payload = await resourcePayload(resource, chain, options)
   return native({ op: 'download', resource: payload })
 }
 
@@ -890,8 +899,8 @@ async function installContextMenus(attempt = 0): Promise<void> {
     await browser.contextMenus.removeAll()
     await Promise.all([
       browser.contextMenus.create({ id: 'hls-download-link', title: '使用 HLS Downloader 下载', contexts: ['link', 'video', 'audio'] }),
-      browser.contextMenus.create({ id: 'hls-cast-link', title: '使用 HLS Downloader 投屏媒体链接', contexts: ['link', 'video', 'audio'] }),
-      browser.contextMenus.create({ id: 'hls-push-tvbox-link', title: '使用 HLS Downloader 推送媒体链接到 TVBox', contexts: ['link', 'video', 'audio'] }),
+      browser.contextMenus.create({ id: 'hls-cast-link', title: '使用 HLS Downloader 投屏媒体链接', contexts: ['link', 'video', 'audio'], visible: !dynamicContextMenus.onShown }),
+      browser.contextMenus.create({ id: 'hls-push-tvbox-link', title: '使用 HLS Downloader 推送媒体链接到 TVBox', contexts: ['link', 'video', 'audio'], visible: !dynamicContextMenus.onShown }),
       browser.contextMenus.create({ id: 'hls-download-selection', title: '批量发送选中的链接', contexts: ['selection'] }),
     ])
   } catch (error) {
@@ -1328,10 +1337,14 @@ export default defineBackground(() => {
       if (tab?.id !== undefined) void browser.tabs.sendMessage(tab.id, { type: 'collect-selection' }).catch(() => undefined)
       return
     }
-    const url = info.linkUrl || info.srcUrl
+    const capabilities = contextMenuCapabilities(info)
+    const url = capabilities.url
     if (!url) return
+    const mediaAction = info.menuItemId === 'hls-cast-link' || info.menuItemId === 'hls-push-tvbox-link'
+    if (mediaAction && !capabilities.media) return
     const kind = classifyResource(url)
       || ((info.mediaType === 'video' || info.mediaType === 'audio') ? classifyPlaybackSource(url) : null)
+      || (info.menuItemId === 'hls-download-link' && /^(?:https?|magnet):/i.test(url) ? 'file' : null)
     if (!kind || /^blob:/i.test(url)) {
       // MSE players expose only a blob: URL in the browser context menu. It is
       // not a downloadable origin; open the correlated player panel instead
@@ -1359,7 +1372,21 @@ export default defineBackground(() => {
       void pushToTv(resource).catch(error => console.warn('HLS Downloader context TVBox push failed', error))
       return
     }
-    void offer(resource, undefined, { allowUnverified: true })
+    // Choosing the extension's context-menu command is already an explicit
+    // confirmation, just like the popup and in-player Download buttons.
+    void downloadNow(resource, undefined, { allowUnverified: true })
+      .catch(error => console.warn('HLS Downloader context download failed', error))
+  })
+
+  dynamicContextMenus.onShown?.addListener(info => {
+    const capabilities = contextMenuCapabilities(info)
+    void Promise.all([
+      browser.contextMenus.update('hls-download-link', { enabled: capabilities.download }),
+      browser.contextMenus.update('hls-cast-link', { visible: capabilities.media, enabled: capabilities.media }),
+      browser.contextMenus.update('hls-push-tvbox-link', { visible: capabilities.media, enabled: capabilities.media }),
+    ]).then(() => dynamicContextMenus.refresh?.()).catch(error => {
+      console.warn('HLS Downloader context menu refresh failed', error)
+    })
   })
 
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -1406,6 +1433,24 @@ export default defineBackground(() => {
       void saveResource(resource, sender.tab?.id ?? -1)
       void inspectAdaptive(resource, sender.tab?.id ?? -1)
       return
+    }
+    if (message?.type === 'download-now') {
+      const resource = {
+        ...message.resource,
+        pageUrl: message.resource.pageUrl || sender.url || sender.tab?.url || '',
+        tabId: message.resource.tabId ?? sender.tab?.id,
+        frameId: message.resource.frameId ?? sender.frameId,
+      }
+      // A click on our popup/hover action is already an explicit confirmation.
+      // Create the task directly; automatic browser takeover continues to use
+      // the separate desktop confirmation window.
+      const explicitSelection = resource.owner === 'selection'
+        && Array.isArray(resource.evidence)
+        && resource.evidence.includes('text_selection')
+      void downloadNow(resource, undefined, { allowUnverified: explicitSelection })
+        .then(response => sendResponse(response))
+        .catch(error => sendResponse({ ok: false, error: String(error) }))
+      return true
     }
     if (message?.type === 'download' || message?.type === 'offer') {
       const resource = {

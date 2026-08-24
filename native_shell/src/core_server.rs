@@ -19,7 +19,9 @@ pub struct CoreServer {
 
 impl CoreServer {
     pub fn open_default() -> Result<Self, String> {
-        Self::open_path(default_v7_database_path())
+        let server = Self::open_path(default_v7_database_path())?;
+        server.restore_install_result();
+        Ok(server)
     }
 
     pub fn open_path(path: impl AsRef<std::path::Path>) -> Result<Self, String> {
@@ -56,6 +58,20 @@ impl CoreServer {
     pub fn shutdown(&self) {
         self.stop.store(true, Ordering::SeqCst);
         self.notify.1.notify_all();
+    }
+
+    fn restore_install_result(&self) {
+        if let Ok(Some(result)) = crate::updater::take_install_result() {
+            let _ = self.coordinator.lock().and_then(|mut core| {
+                core.emit(CoreEvent::UpdateInstallResult {
+                    latest: result.version,
+                    status: result.status,
+                    exit_code: result.exit_code,
+                    message: result.message,
+                    install_log: result.install_log,
+                })
+            });
+        }
     }
 
     pub fn bind_local(
@@ -98,18 +114,17 @@ impl CoreServer {
     pub fn handler(&self) -> Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> {
         let coordinator = self.coordinator.clone();
         let notify = Arc::clone(&self.notify);
-        Arc::new(move |request| dispatch(&coordinator, &notify, request))
+        let stop = Arc::clone(&self.stop);
+        Arc::new(move |request| dispatch(&coordinator, &notify, &stop, request))
     }
 }
 
 fn bootstrap_store(coordinator: &CoreCoordinator) -> Result<(), String> {
-    if std::env::var_os("HLS_V6_SKIP_LEGAL").is_some() {
-        coordinator.set_setting("legal_terms_accepted", serde_json::json!(true))?;
-        coordinator.set_setting(
-            "legal_terms_version",
-            serde_json::json!(crate::LEGAL_TERMS_VERSION),
-        )?;
-    }
+    coordinator.set_setting("legal_terms_accepted", serde_json::json!(true))?;
+    coordinator.set_setting(
+        "legal_terms_version",
+        serde_json::json!(crate::LEGAL_TERMS_VERSION),
+    )?;
     let core = coordinator.core();
     let mut core = core.lock().map_err(|_| "Core mutex poisoned".to_string())?;
     if let Ok(config) = std::env::var("HLS_V6_MIGRATE_CONFIG") {
@@ -129,6 +144,7 @@ fn bootstrap_store(coordinator: &CoreCoordinator) -> Result<(), String> {
 fn dispatch(
     coordinator: &CoreCoordinator,
     notify: &Arc<(Mutex<u64>, Condvar)>,
+    stop: &Arc<AtomicBool>,
     request: CorePipeRequest,
 ) -> CorePipeResponse {
     match request {
@@ -155,6 +171,16 @@ fn dispatch(
         } => match coordinator.dispatch(command) {
             Ok(events) => {
                 bump_notify(notify, coordinator);
+                if events
+                    .iter()
+                    .any(|item| matches!(item.event, CoreEvent::UpdateInstallStarted { .. }))
+                {
+                    let stop = Arc::clone(stop);
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_millis(500));
+                        stop.store(true, Ordering::SeqCst);
+                    });
+                }
                 CorePipeResponse::Events { request_id, events }
             }
             Err(error) => CorePipeResponse::Error {
@@ -196,6 +222,7 @@ fn dispatch(
                 "assign_queue",
                 "check_update",
                 "download_update",
+                "install_update",
                 "probe_url",
                 "probe_torrent",
                 "select_torrent_files",
@@ -566,6 +593,23 @@ mod tests {
     }
 
     #[test]
+    fn product_bootstrap_removes_the_obsolete_first_run_legal_blocker() {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        bootstrap_store(&coordinator).unwrap();
+        let core = coordinator.core();
+        let core = core.lock().unwrap();
+        assert!(
+            core.store()
+                .setting_bool("legal_terms_accepted", false)
+                .unwrap()
+        );
+        assert_eq!(
+            core.store().setting_string("legal_terms_version", "").unwrap(),
+            crate::LEGAL_TERMS_VERSION
+        );
+    }
+
+    #[test]
     fn capabilities_publish_the_v7_command_and_setting_contract() {
         let server = CoreServer::in_memory().unwrap();
         let response = (server.handler())(CorePipeRequest::Capabilities { request_id: 91 });
@@ -768,6 +812,7 @@ mod tests {
             handoff_id: "handoff-ipc".into(),
             filename: "setup.exe".into(),
             download_dir: String::new(),
+            trusted_ui: true,
         })
         .unwrap();
         let rows = host.load_handoffs().unwrap();

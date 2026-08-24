@@ -1,7 +1,5 @@
 import { defineConfig } from 'wxt'
-// Keep one stable Firefox ID for every build. The web UI is a desktop
-// capability, not a separate Firefox extension identity.
-const firefoxId = 'hls-downloader-store@ciaooo55.com'
+import { CHROMIUM_PUBLIC_KEY, FIREFOX_EXTENSION_ID } from './lib/storeIdentity'
 const extensionVersion = process.env.HLS_EXTENSION_VERSION || '7.0.0'
 
 export default defineConfig({
@@ -16,7 +14,7 @@ export default defineConfig({
       48: 'icon-48.png',
       128: 'icon-128.png',
     },
-    key: browser === 'chrome' ? 'MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDrOsVh5DPI4QgwtSbk3r66RoLAceY4j7bcvB74L8oJizTtjWwbvE31KFOR1c3qTZJUjtFgN2UDVCYThiS79RJosEDwvdeaTZPt4cwNdKINVKTcGGI8T4Pl7cqTl45IDBxUgAayjJ26YEC542os/dfVmRaZO1hDwFFhyM9AousNUwIDAQAB' : undefined,
+    key: browser === 'chrome' ? CHROMIUM_PUBLIC_KEY : undefined,
     permissions: [
       'downloads', 'contextMenus', 'nativeMessaging', 'storage', 'cookies', 'webRequest', 'alarms',
       ...(browser === 'chrome' ? ['downloads.ui', 'downloads.shelf'] : []),
@@ -30,7 +28,7 @@ export default defineConfig({
     },
     browser_specific_settings: browser === 'firefox' ? {
       gecko: {
-        id: firefoxId,
+        id: FIREFOX_EXTENSION_ID,
         strict_min_version: '142.0',
         data_collection_permissions: { required: ['none'] },
       },

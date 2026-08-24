@@ -1,11 +1,11 @@
 import { browser } from 'wxt/browser'
 import { normalizeHost, visibleMediaResources, type MediaResource } from '../../lib/resources'
 import { resourceQuality } from '../../lib/hlsManifest'
-import { handoffStatusLabel, handoffTerminalStatus } from '../../lib/takeover'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, normalizeHandoffSuppressions, type HandoffSuppression } from '../../lib/handoffSuppression'
 import { normalizeCookiePermissionHosts } from '../../lib/browserCookies'
 import { extensionNeedsUpgrade } from '../../lib/version'
 import { engineConnectionLabel, EXTENSION_PRODUCT_LABEL, extensionVersionLabel } from '../../lib/productCopy'
+import { withDeadline } from '../../lib/asyncDeadline'
 import {
   THEME_BASE_CSS,
   THEME_STORAGE_KEY,
@@ -38,6 +38,8 @@ const ICONS: Record<string, string> = {
   tv: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
   chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>',
   check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>',
+  scan: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7"/></svg>',
+  media: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3Z"/></svg>',
 }
 function icon(name: string, label = '') {
   const node = el('span', 'hlsd-icon')
@@ -45,12 +47,7 @@ function icon(name: string, label = '') {
   if (label) node.setAttribute('aria-label', label)
   return node
 }
-const PENDING_HANDOFF_STORAGE_KEY = 'popup-pending-handoffs-v1'
-
-interface PendingHandoff {
-  handoffId: string
-  startedAt: number
-}
+const LEGACY_PENDING_HANDOFF_STORAGE_KEY = 'popup-pending-handoffs-v1'
 
 function formatDuration(seconds?: number) {
   if (!seconds || seconds <= 0) return ''
@@ -74,6 +71,26 @@ function formatSize(size: number) {
   }
   const amount = value >= 100 || index === 0 ? value.toFixed(0) : value.toFixed(1)
   return amount + ' ' + units[index]
+}
+
+function resourceKindLabel(item: MediaResource) {
+  if (item.kind === 'hls') return 'HLS'
+  if (item.kind === 'dash') return 'DASH'
+  if (item.kind === 'magnet') return '\u78c1\u529b'
+  if (item.kind === 'file') return '\u6587\u4ef6'
+  const suffix = resourceSuffix(item)
+  if (item.mimeType?.toLowerCase().startsWith('audio/') || /^\.(?:aac|flac|m4a|mp3|oga|ogg|opus|wav)$/i.test(suffix)) return '\u97f3\u9891'
+  if (item.mimeType?.toLowerCase().startsWith('video/') || /^\.(?:avi|m4v|mkv|mov|mp4|webm)$/i.test(suffix)) return '\u89c6\u9891'
+  return '\u5a92\u4f53'
+}
+
+function resourceSuffix(item: MediaResource) {
+  try {
+    const match = new URL(item.url).pathname.match(/(\.[a-z0-9]{1,10})$/i)
+    return match?.[1]?.toLowerCase() || ''
+  } catch {
+    return ''
+  }
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') {
@@ -147,11 +164,18 @@ async function main() {
   const errorBox = el('div', 'send-error')
   errorBox.hidden = true
   const section = el('section')
-  const title = el('div', 'section-title', '\u5f53\u524d\u9875\u9762\u8d44\u6e90 ')
+  const sectionHeader = el('div', 'section-header')
+  const title = el('div', 'section-title', '\u5df2\u8bc6\u522b\u8d44\u6e90 ')
   const count = el('b', '', '0')
   title.append(count)
+  const scanBtn = el('button', 'scan-button') as HTMLButtonElement
+  scanBtn.type = 'button'
+  scanBtn.disabled = true
+  scanBtn.append(icon('scan'), el('span', '', '\u91cd\u65b0\u8bc6\u522b'))
+  scanBtn.title = '\u91cd\u65b0\u626b\u63cf\u5f53\u524d\u9875\u9762\u7684\u5a92\u4f53\u548c\u4e0b\u8f7d\u8d44\u6e90'
+  sectionHeader.append(title, scanBtn)
   const list = el('div', 'list')
-  section.append(title, list)
+  section.append(sectionHeader, list)
   const footer = el('footer')
   const restorePromptsBtn = el('button', 'restore-site-prompts', '\u6062\u590d\u672c\u7ad9\u81ea\u52a8\u63d0\u793a') as HTMLButtonElement
   restorePromptsBtn.type = 'button'
@@ -181,32 +205,46 @@ async function main() {
   let excluded: string[] = []
   let suppressions: HandoffSuppression[] = []
   const sending: Record<string, string> = {}
-  const pending: Record<string, PendingHandoff> = {}
-  const pendingFailures: Record<string, number> = {}
   const pushing: Record<string, string> = {}
   // Chosen rendition per resource id: the list re-renders on every send or
   // status poll, and the pick must survive those rebuilds.
   const chosenVariant: Record<string, string> = {}
   let resources: MediaResource[] = []
+  let resourceState: 'loading' | 'ready' | 'scanning' | 'error' = 'loading'
+  let rescanPage = async () => {}
 
   const statusEl = brandText.querySelector('.status') as HTMLSpanElement
   const setError = (message = '') => {
     errorBox.hidden = !message
     errorBox.textContent = message
   }
-  const persistPending = () => browser.storage.session.set({ [PENDING_HANDOFF_STORAGE_KEY]: pending }).catch(() => undefined)
-  const clearPending = (resourceId: string) => {
-    delete pending[resourceId]
-    delete pendingFailures[resourceId]
-    void persistPending()
-  }
-
   const renderList = () => {
     const visible = visibleMediaResources(resources)
     count.textContent = String(visible.length)
     list.replaceChildren()
     if (!visible.length) {
-      list.append(el('p', 'empty', '\u64ad\u653e\u5a92\u4f53\u540e\uff0c\u8fd9\u91cc\u4f1a\u663e\u793a\u53ef\u4e0b\u8f7d\u8d44\u6e90\u3002'))
+      const empty = el('div', 'empty')
+      const emptyIcon = el('div', 'empty-icon')
+      emptyIcon.append(icon('media'))
+      const heading = resourceState === 'loading'
+        ? '\u6b63\u5728\u8bfb\u53d6\u5f53\u524d\u9875\u9762'
+        : resourceState === 'scanning'
+          ? '\u6b63\u5728\u91cd\u65b0\u8bc6\u522b'
+          : resourceState === 'error'
+            ? '\u672a\u80fd\u5b8c\u6210\u8bc6\u522b'
+            : '\u5f53\u524d\u9875\u9762\u8fd8\u6ca1\u6709\u53ef\u4e0b\u8f7d\u8d44\u6e90'
+      const description = resourceState === 'loading' || resourceState === 'scanning'
+        ? '\u6b63\u5728\u68c0\u67e5\u89c6\u9891\u3001\u97f3\u9891\u548c\u5a92\u4f53\u6e05\u5355\u3002'
+        : '\u5148\u64ad\u653e\u9875\u9762\u4e2d\u7684\u5a92\u4f53\uff0c\u6216\u70b9\u51fb\u4e0b\u65b9\u91cd\u65b0\u8bc6\u522b\u3002'
+      empty.append(emptyIcon, el('strong', '', heading), el('span', '', description))
+      if (resourceState !== 'loading' && resourceState !== 'scanning') {
+        const retry = el('button', 'empty-retry') as HTMLButtonElement
+        retry.type = 'button'
+        retry.append(icon('scan'), el('span', '', '\u91cd\u65b0\u8bc6\u522b'))
+        retry.addEventListener('click', () => void rescanPage())
+        empty.append(retry)
+      }
+      list.append(empty)
       return
     }
     for (const item of visible) {
@@ -219,9 +257,9 @@ async function main() {
       const bandwidth = item.bandwidth ? ((item.bandwidth / 1_000_000).toFixed(1) + ' Mbps') : ''
       const duration = item.duration ? formatDuration(item.duration) : ''
       const streamMode = item.isLive === true ? '直播' : ''
-      const meta = [item.kind.toUpperCase(), streamMode, quality, resolution, bandwidth, duration, size].filter(Boolean).join(' \u00b7 ')
+      const meta = [resourceKindLabel(item), resourceSuffix(item), streamMode, quality, resolution, bandwidth, duration, size].filter(Boolean).join(' \u00b7 ')
       const article = el('article')
-      const body = el('div')
+      const body = el('div', 'resource-body')
       const name = el('strong', '', item.title || item.filename || item.url.split('/').pop() || item.url)
       name.title = item.filename || item.title || item.url
       const line = el('span', '', meta)
@@ -306,24 +344,24 @@ async function main() {
       castButton.title = '直接投屏当前媒体链接到 DLNA 或 Chromecast'
       castButton.addEventListener('click', () => void castToDevice(selected))
       const actionCol = el('div', 'article-actions')
-      actionCol.append(button, pushButton, castButton)
+      actionCol.append(button, castButton, pushButton)
       article.append(body, actionCol)
       list.append(article)
     }
   }
 
   const refreshButtons = () => {
-    enableBtn.textContent = enabled ? '\u81ea\u52a8\u63a5\u7ba1\u5f00' : '\u81ea\u52a8\u63a5\u7ba1\u5173'
+    enableBtn.textContent = enabled ? '\u63a5\u7ba1\u4e0b\u8f7d\uff1a\u5f00' : '\u63a5\u7ba1\u4e0b\u8f7d\uff1a\u5173'
     enableBtn.classList.toggle('active', enabled)
     const cookieAuthorized = Boolean(host && authorizedCookieHosts.includes(host))
-    cookieBtn.textContent = cookieAuthorized ? '\u672c\u7ad9 Cookie \u5df2\u6388\u6743' : '\u6388\u6743\u672c\u7ad9 Cookie'
+    cookieBtn.textContent = cookieAuthorized ? '\u672c\u7ad9\u767b\u5f55\u72b6\u6001\uff1a\u5f00' : '\u672c\u7ad9\u767b\u5f55\u72b6\u6001\uff1a\u5173'
     cookieBtn.title = cookieAuthorized
       ? '\u53d1\u9001\u672c\u7ad9\u5a92\u4f53\u65f6\uff0c\u53ea\u8bfb\u53d6\u6d4f\u89c8\u5668\u5bf9\u5b9e\u9645\u8d44\u6e90\u5730\u5740\u4f1a\u53d1\u9001\u7684 Cookie\uff1b\u70b9\u51fb\u53ef\u64a4\u9500'
       : '\u9ed8\u8ba4\u4e0d\u8bfb\u53d6 Cookie\uff1b\u4ec5\u6388\u6743\u5f53\u524d\u7ad9\u70b9\u540e\uff0c\u53d1\u9001\u8d44\u6e90\u65f6\u624d\u4f1a\u8bfb\u53d6'
     cookieBtn.classList.toggle('active', cookieAuthorized)
     cookieBtn.disabled = !host
     const siteExcluded = excluded.includes(host)
-    excludeBtn.textContent = siteExcluded ? '\u672c\u7ad9\u5df2\u6392\u9664' : '\u6392\u9664\u672c\u7ad9'
+    excludeBtn.textContent = siteExcluded ? '\u672c\u7ad9\u4e0d\u663e\u793a\uff1a\u5f00' : '\u672c\u7ad9\u4e0d\u663e\u793a\uff1a\u5173'
     excludeBtn.classList.toggle('active', siteExcluded)
     excludeBtn.disabled = !host
     const suppressedKinds = suppressions.filter(rule => rule.host === host).map(rule => rule.kind)
@@ -396,15 +434,17 @@ async function main() {
     sending[item.id] = '\u53d1\u9001\u4e2d'
     renderList()
     try {
-      const response = await browser.runtime.sendMessage({ type: 'offer', resource: item })
-      if (!response?.ok || !response?.handoff?.id) throw new Error(response?.error || '\u684c\u9762\u7aef\u6ca1\u6709\u521b\u5efa\u4e0b\u8f7d\u7a97\u53e3')
-      sending[item.id] = '\u7b49\u5f85\u786e\u8ba4'
-      pending[item.id] = { handoffId: response.handoff.id, startedAt: Date.now() }
-      void persistPending()
+      const response = await withDeadline(
+        browser.runtime.sendMessage({ type: 'download-now', resource: item }),
+        10_000,
+        '下载器响应超时，请重试',
+      )
+      if (!response?.ok) throw new Error(response?.error || '桌面端未接受下载请求')
+      sending[item.id] = '已加入'
       renderList()
+      setTimeout(() => { delete sending[item.id]; renderList() }, 2_500)
     } catch (reason) {
       sending[item.id] = '\u91cd\u8bd5'
-      clearPending(item.id)
       setError(reason instanceof Error ? reason.message : '\u53d1\u9001\u5230\u684c\u9762\u7aef\u5931\u8d25')
       renderList()
     }
@@ -468,9 +508,47 @@ async function main() {
     }
   })
 
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true })
+  const windowTabs = await browser.tabs.query({ currentWindow: true })
+  // A normal toolbar popup leaves the web tab active. Developer tools and
+  // automated browser checks can open popup.html as an extension tab instead;
+  // in that case fall back to the most recently listed web tab rather than
+  // showing a misleading zero-resource state for the extension page itself.
+  const tab = windowTabs.find(candidate => candidate.active && /^https?:\/\//i.test(candidate.url || ''))
+    || [...windowTabs].reverse().find(candidate => /^https?:\/\//i.test(candidate.url || ''))
+    || windowTabs.find(candidate => candidate.active)
   const pageUrl = tab?.url || ''
   host = normalizeHost(pageUrl)
+  const canScanPage = Number.isInteger(tab?.id) && /^https?:\/\//i.test(pageUrl)
+  rescanPage = async () => {
+    if (!canScanPage || tab?.id == null || resourceState === 'scanning') return
+    resourceState = 'scanning'
+    scanBtn.disabled = true
+    setError('')
+    renderList()
+    try {
+      await withDeadline(
+        browser.tabs.sendMessage(tab.id, { type: 'rescan-media' }),
+        1_500,
+        '\u9875\u9762\u8bc6\u522b\u54cd\u5e94\u8d85\u65f6',
+      )
+      await new Promise(resolve => setTimeout(resolve, 180))
+      const listed = await withDeadline(
+        browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab.id }),
+        1_500,
+        '\u8bfb\u53d6\u8bc6\u522b\u7ed3\u679c\u8d85\u65f6',
+      )
+      resources = Array.isArray(listed) ? listed : []
+      resourceState = 'ready'
+    } catch (reason) {
+      resourceState = 'error'
+      setError(reason instanceof Error ? reason.message : '\u91cd\u65b0\u8bc6\u522b\u5931\u8d25')
+    } finally {
+      scanBtn.disabled = !canScanPage
+      renderList()
+    }
+  }
+  scanBtn.disabled = !canScanPage
+  scanBtn.addEventListener('click', () => void rescanPage())
   // Load local settings before any network/native request. The popup is often
   // opened exactly while a page starts a download; controls must be usable even
   // if the desktop ping or resource query is temporarily slow.
@@ -486,10 +564,11 @@ async function main() {
   enableBtn.disabled = false
   refreshButtons()
   const [listed, connection] = await Promise.all([
-    browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab?.id }).catch(() => []),
-    browser.runtime.sendMessage({ type: 'ping' }).catch(() => ({})),
+    withDeadline(browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab?.id }), 1_500).catch(() => []),
+    withDeadline(browser.runtime.sendMessage({ type: 'ping' }), 1_800).catch(() => ({ reconnecting: true })),
   ])
   resources = Array.isArray(listed) ? listed : []
+  resourceState = 'ready'
   const online = Boolean(connection?.ok)
   statusEl.textContent = engineConnectionLabel(online, Boolean(connection.reconnecting))
   statusEl.classList.toggle('online', online)
@@ -504,52 +583,13 @@ async function main() {
       if (extensionReleaseUrl) void browser.tabs.create({ url: extensionReleaseUrl })
     }
   }
-  const session = await browser.storage.session.get(PENDING_HANDOFF_STORAGE_KEY)
-  const restored = session[PENDING_HANDOFF_STORAGE_KEY]
-  if (restored && typeof restored === 'object') {
-    for (const [resourceId, value] of Object.entries(restored as Record<string, Partial<PendingHandoff>>)) {
-      const handoffId = String(value?.handoffId || '')
-      const startedAt = Number(value?.startedAt || 0)
-      if (!handoffId || !Number.isFinite(startedAt) || startedAt <= 0) continue
-      pending[resourceId] = { handoffId, startedAt }
-      sending[resourceId] = '\u7b49\u5f85\u786e\u8ba4'
-    }
-  }
+  // Explicit popup downloads no longer create a second desktop confirmation.
+  // Remove pending UI state left by 3.x/early 7.0 builds so reopening the
+  // popup cannot resurrect a stale “等待确认” button for two minutes.
+  await browser.storage.session.remove(LEGACY_PENDING_HANDOFF_STORAGE_KEY).catch(() => undefined)
   refreshButtons()
   renderList()
   document.documentElement.dataset.popupReady = 'ready'
-
-  window.setInterval(() => {
-    const entries = Object.entries(pending)
-    if (!entries.length) return
-    void Promise.all(entries.map(async ([resourceId, pendingItem]) => {
-      if (Date.now() - pendingItem.startedAt > 130_000) {
-        sending[resourceId] = '\u5df2\u8fc7\u671f'
-        clearPending(resourceId)
-        setError('桌面端确认超时，请重试或打开下载器查看状态')
-        renderList()
-        return
-      }
-      try {
-        const response = await browser.runtime.sendMessage({ type: 'handoff-status', handoffId: pendingItem.handoffId })
-        const handoff = response?.handoff || response
-        const status = String(handoff?.status || '')
-        if (!handoffTerminalStatus(status)) return
-        sending[resourceId] = handoffStatusLabel(status)
-        clearPending(resourceId)
-        if (status === 'accepted') setError('')
-        if (status === 'connection_lost') setError('下载引擎连接中断，请重试')
-        renderList()
-      } catch {
-        pendingFailures[resourceId] = (pendingFailures[resourceId] || 0) + 1
-        if (pendingFailures[resourceId] < 3) return
-        sending[resourceId] = '\u91cd\u8bd5'
-        clearPending(resourceId)
-        setError('无法读取桌面端确认状态，请重试')
-        renderList()
-      }
-    }))
-  }, 800)
 }
 
 function renderStartupError(reason: unknown) {

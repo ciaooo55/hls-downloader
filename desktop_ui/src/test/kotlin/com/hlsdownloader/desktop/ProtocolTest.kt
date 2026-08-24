@@ -29,6 +29,28 @@ class ProtocolTest {
         val task = protocolJson.decodeFromJsonElement(TaskDto.serializer(), envelope.event["snapshot"]!!.jsonObject)
         assertEquals("t-1", task.id)
     }
+    @Test fun updateEventsExposeVerifiedMsiContract() {
+        val envelope = protocolJson.decodeFromString<EventEnvelopeDto>(
+            """{"sequence":47,"event":{"kind":"update_available","current":"7.0.0","latest":"7.1.0","notes":"fixes","release_url":"https://github.com/ciaooo55/hls-downloader/releases/tag/v7.1.0","installer_name":"HLSDownloader-7.1.0-Windows-x64.msi","installer_size":154453055,"sha256_verified":true}}""",
+        )
+        assertEquals("update_available", envelope.event["kind"]?.jsonPrimitive?.content)
+        assertEquals("HLSDownloader-7.1.0-Windows-x64.msi", envelope.event["installer_name"]?.jsonPrimitive?.content)
+        assertEquals(154453055L, envelope.event["installer_size"]?.jsonPrimitive?.long)
+        assertEquals(true, envelope.event["sha256_verified"]?.jsonPrimitive?.content?.toBoolean())
+    }
+    @Test fun preparedAndFinishedUpdateEventsKeepIdentityAndInstallerResult() {
+        val prepared = protocolJson.decodeFromString<EventEnvelopeDto>(
+            """{"sequence":48,"event":{"kind":"update_ready","latest":"7.1.0","installer_path":"C:/Temp/HLSDownloader-7.1.0-Windows-x64.msi","sha256":"abc","product_name":"HLSDownloader","product_version":"7.1.0","upgrade_code":"{1C80D5F7-A1EC-4BAE-A4A6-E010C5A3EE6B}"}}""",
+        )
+        assertEquals("HLSDownloader", prepared.event["product_name"]?.jsonPrimitive?.content)
+        assertEquals("7.1.0", prepared.event["product_version"]?.jsonPrimitive?.content)
+        val finished = protocolJson.decodeFromString<EventEnvelopeDto>(
+            """{"sequence":49,"event":{"kind":"update_install_result","latest":"7.1.0","status":"failed","exit_code":1603,"message":"安装失败","install_log":"C:/Temp/install.log"}}""",
+        )
+        assertEquals("failed", finished.event["status"]?.jsonPrimitive?.content)
+        assertEquals("1603", finished.event["exit_code"]?.jsonPrimitive?.content)
+        assertEquals("C:/Temp/install.log", finished.event["install_log"]?.jsonPrimitive?.content)
+    }
     @Test fun urlNormalizationTrimsAndRejectsUnsafeInput() {
         assertEquals("https://example.test/a.m3u8", EnginePipeClient.normalizeDownloadUrl("  https://example.test/a.m3u8  "))
         assertEquals("https://example.test/page", EnginePipeClient.normalizeHttpUrl("https://example.test/page"))
@@ -49,10 +71,11 @@ class ProtocolTest {
         assertEquals("file", EnginePipeClient.recognizeResourceKind("https://cdn.test/file.zip"))
     }
     @Test fun handoffOfferUsesPublicMetadataAndSafeFilename() {
-        val event = protocolJson.decodeFromString<EventEnvelopeDto>("""{"sequence":43,"event":{"kind":"handoff_offered","offer":{"handoff_id":"offer-1","url":"https://cdn.test/setup.exe","resource_kind":"file","filename":"setup.exe","title":"Setup","size":2048}}}""")
+        val event = protocolJson.decodeFromString<EventEnvelopeDto>("""{"sequence":43,"event":{"kind":"handoff_offered","offer":{"handoff_id":"offer-1","url":"https://cdn.test/setup.exe","resource_kind":"file","filename":"setup.exe","title":"Setup","mime_type":"application/vnd.microsoft.portable-executable","size":2048}}}""")
         val offer = protocolJson.decodeFromJsonElement(HandoffOfferDto.serializer(), event.event["offer"]!!.jsonObject)
         assertEquals("offer-1", offer.handoffId)
         assertEquals(2048, offer.size)
+        assertEquals("application/vnd.microsoft.portable-executable", offer.mimeType)
         assertEquals("setup.exe", EnginePipeClient.normalizeHandoffFilename(" setup.exe "))
         assertFailsWith<IllegalArgumentException> { EnginePipeClient.normalizeHandoffFilename("..\\outside.exe") }
         assertFailsWith<IllegalArgumentException> { EnginePipeClient.normalizeHandoffFilename(" ") }

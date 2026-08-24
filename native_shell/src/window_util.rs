@@ -115,6 +115,55 @@ pub fn center_window_by_title(title: &str) -> bool {
     }
 }
 
+/// Bring a transient window to the foreground without leaving the application
+/// globally always-on-top. Windows may ignore a plain `show()` when another
+/// process owns the foreground; a TOPMOST -> NOTOPMOST pulse makes the user
+/// initiated browser confirmation or completion notice visible, then restores
+/// normal z-order immediately.
+pub fn activate_window_by_title(title: &str) -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            BringWindowToTop, SetForegroundWindow, SetWindowPos, ShowWindow, HWND_NOTOPMOST,
+            HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE,
+        };
+
+        let Some(raw_hwnd) = window_handle_by_title(title) else {
+            return false;
+        };
+        let hwnd = raw_hwnd as windows_sys::Win32::Foundation::HWND;
+        unsafe {
+            ShowWindow(hwnd, SW_RESTORE);
+            let raised = SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            ) != 0;
+            let _ = BringWindowToTop(hwnd);
+            let focused = SetForegroundWindow(hwnd) != 0;
+            let restored = SetWindowPos(
+                hwnd,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            ) != 0;
+            raised && restored && focused
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = title;
+        false
+    }
+}
+
 pub fn os_reduce_motion() -> bool {
     #[cfg(windows)]
     {
@@ -145,6 +194,9 @@ mod tests {
         assert!(window_handle_by_title("HLSDownloader-no-such-window-title").is_none());
         assert!(!begin_caption_drag("HLSDownloader-no-such-window-title"));
         assert!(!center_window_by_title(
+            "HLSDownloader-no-such-window-title"
+        ));
+        assert!(!activate_window_by_title(
             "HLSDownloader-no-such-window-title"
         ));
     }

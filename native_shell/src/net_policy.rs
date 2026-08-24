@@ -778,7 +778,10 @@ mod tests {
 
     #[test]
     fn scoped_queue_bucket_enforces_aggregate_bytes_across_workers() {
-        let scope = "queue:aggregate-fixture";
+        // Queue configuration tests intentionally prune `queue:*` scopes and
+        // run in parallel with this timing test. Use a private fixture scope so
+        // that cleanup cannot turn this bucket into an unlimited one midway.
+        let scope = "fixture:aggregate-workers";
         configure_scoped_limit(scope, 512);
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
         let started = Instant::now();

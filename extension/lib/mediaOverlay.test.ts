@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { clampOverlayPosition, overlayActionFallback, overlayResourceDetails, overlaySendKey, safeResourceLocation, shouldShowMediaOverlay } from './mediaOverlay'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { HOVER_DISMISS_DELAY_MS, clampOverlayPosition, overlayActionFallback, overlayResourceDetails, overlaySendKey, safeResourceLocation, shouldKeepHoverOpen, shouldShowMediaOverlay } from './mediaOverlay'
 
 describe('media overlay visibility', () => {
   it('stays absent before playback', () => {
@@ -10,6 +12,17 @@ describe('media overlay visibility', () => {
   it('shows an identifying state immediately for a played video', () => {
     expect(shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: 0 })).toBe(true)
     expect(shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: 1 })).toBe(true)
+  })
+})
+
+describe('manual page rescan', () => {
+  it('replays MSE evidence and re-reads media elements without opening the panel', () => {
+    const content = readFileSync(fileURLToPath(new URL('../entrypoints/content.ts', import.meta.url)), 'utf8')
+    const branch = content.slice(content.indexOf("message?.type === 'rescan-media'"), content.indexOf("message?.type === 'rescan-media'") + 1_300)
+    expect(branch).toContain('__hls_downloader_replay__')
+    expect(branch).toContain("querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video,audio')")
+    expect(branch).toContain("performance.getEntriesByType('resource')")
+    expect(branch).not.toContain('setOpen(true)')
   })
 })
 
@@ -37,6 +50,13 @@ describe('overlay send keys', () => {
 })
 
 describe('overlay hover details', () => {
+  it('keeps the card open while the pointer or keyboard focus moves into it', () => {
+    expect(HOVER_DISMISS_DELAY_MS).toBeGreaterThanOrEqual(400)
+    expect(shouldKeepHoverOpen(true, false)).toBe(true)
+    expect(shouldKeepHoverOpen(false, true)).toBe(true)
+    expect(shouldKeepHoverOpen(false, false)).toBe(false)
+  })
+
   it('shows concise decision metadata without exposing signed URL parameters', () => {
     const details = overlayResourceDetails({
       id: 'stream',

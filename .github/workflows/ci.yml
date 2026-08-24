@@ -51,6 +51,7 @@ jobs:
         working-directory: native_shell
         run: |
           cargo test --locked --lib
+          cargo build --locked --bin HLSDownloaderUpdater
           cargo clippy --locked --all-targets
 
       - name: Test and build native presenter

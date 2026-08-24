@@ -42,6 +42,9 @@ compose.desktop { application {
         windows {
             menuGroup = "HLS Downloader"
             upgradeUuid = "1c80d5f7-a1ec-4bae-a4a6-e010c5a3ee6b"
+            perUserInstall = true
+            shortcut = true
+            menu = true
             iconFile.set(project.file("../assets/app-icon.ico"))
         }
     }

@@ -17,22 +17,22 @@ export const THEME_STORAGE_KEY = 'themePreference'
 export const THEME_TOKENS_CSS = `
 [data-hlsd-theme="dark"]{
   color-scheme:dark;
-  --bg:#0b1220;--surface:#121a2b;--surface-2:#172033;--surface-3:#243047;
-  --border:rgba(148,163,184,.18);--text:#e8eef8;--muted:#a8b3c7;--faint:#7f8ba3;
-  --primary:#3b82f6;--primary-hover:#60a5fa;--on-primary:#ffffff;
+  --bg:#151719;--surface:#1c1f23;--surface-2:#23272b;--surface-3:#2b3035;
+  --border:#383d43;--text:#f4f5f6;--muted:#c5c9cf;--faint:#969ca4;
+  --primary:#5ea2f3;--primary-hover:#7eb7f6;--on-primary:#ffffff;
   --green:#22c55e;--amber:#f59e0b;--red:#ef4444;--purple:#a78bfa;
-  --shadow:rgba(0,0,0,.35);--rail:#0b1220;
-  --overlay-border:rgba(148,163,184,.24);
+  --shadow:rgba(0,0,0,.35);--rail:#1c1f23;
+  --overlay-border:#464c53;
   --z-extension-overlay:2147483647;--z-extension-video:2147483646;
 }
 [data-hlsd-theme="light"]{
   color-scheme:light;
   --bg:#eef2f6;--surface:#ffffff;--surface-2:#f5f7fa;--surface-3:#e8edf3;
-  --border:rgba(15,23,42,.12);--text:#0f172a;--muted:#475569;--faint:#64748b;
+  --border:#d8e0ea;--text:#0f172a;--muted:#475569;--faint:#64748b;
   --primary:#2563eb;--primary-hover:#1d4ed8;--on-primary:#ffffff;
   --green:#16a34a;--amber:#d97706;--red:#dc2626;--purple:#7c3aed;
   --shadow:rgba(15,23,42,.12);--rail:#e8edf3;
-  --overlay-border:rgba(15,23,42,.18);
+  --overlay-border:#c7d0dc;
   --z-extension-overlay:2147483647;--z-extension-video:2147483646;
 }
 `

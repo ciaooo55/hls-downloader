@@ -177,6 +177,8 @@ struct Handoff {
     created_at_ms: u64,
     #[serde(default)]
     request_id: String,
+    #[serde(default)]
+    suppression: Option<Value>,
 }
 
 impl NativeHostSession {
@@ -304,6 +306,7 @@ impl NativeHostSession {
             task_id: None,
             created_at_ms: unix_time_ms(),
             request_id: request_id.to_string(),
+            suppression: None,
         };
         if !request_id.is_empty() && request_id.len() <= 160 {
             self.request_ids.insert(request_id.to_string(), id.clone());
@@ -402,6 +405,7 @@ impl NativeHostSession {
             handoff_id: id.clone(),
             filename,
             download_dir,
+            trusted_ui: false,
         })?;
         self.reload_handoffs()?;
         self.handoff_status(&json!({"handoff_id": id}))
@@ -416,6 +420,10 @@ impl NativeHostSession {
         let _ = self.reload_handoffs();
         self.core.handle(CoreCommand::RejectHandoff {
             handoff_id: id.clone(),
+            suppress_site_kind: message
+                .get("suppress_site_kind")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         })?;
         self.reload_handoffs()?;
         self.handoff_status(&json!({"handoff_id": id}))
@@ -643,6 +651,9 @@ impl Handoff {
             "presentation_queued": self.presentation == "queued",
             "presentable": true,
         });
+        if let Some(suppression) = &self.suppression {
+            value["suppression"] = suppression.clone();
+        }
         if let Some(task) = task {
             value["task_id"] = json!(task.task_id);
             value["task_status"] = json!(task.status);
@@ -753,6 +764,7 @@ fn parse_offer(payload: &Map<String, Value>) -> Result<ResourceOffer, String> {
         handoff_id: String::new(),
         filename: field(payload, "filename"),
         title: field(payload, "title"),
+        mime_type: field(payload, "mime_type"),
         size: payload.get("size").and_then(Value::as_u64).unwrap_or(0),
     })
 }

@@ -54,6 +54,8 @@ pub struct ResourceOffer {
     #[serde(default)]
     pub title: String,
     #[serde(default)]
+    pub mime_type: String,
+    #[serde(default)]
     pub size: u64,
 }
 
@@ -72,6 +74,7 @@ impl Default for ResourceOffer {
             handoff_id: String::new(),
             filename: String::new(),
             title: String::new(),
+            mime_type: String::new(),
             size: 0,
         }
     }
@@ -426,9 +429,13 @@ pub enum CoreCommand {
         handoff_id: String,
         filename: String,
         download_dir: String,
+        #[serde(default)]
+        trusted_ui: bool,
     },
     RejectHandoff {
         handoff_id: String,
+        #[serde(default)]
+        suppress_site_kind: bool,
     },
     PresentHandoff {
         handoff_id: String,
@@ -447,8 +454,14 @@ pub enum CoreCommand {
         task_id: String,
         delta: i32,
     },
-    CheckUpdate,
+    CheckUpdate {
+        #[serde(default)]
+        silent: bool,
+    },
     DownloadUpdate,
+    InstallUpdate {
+        workbench_pid: u32,
+    },
     ProbeUrl {
         url: String,
     },
@@ -573,6 +586,38 @@ pub enum CoreEvent {
     CastDevices {
         devices: Vec<CastDeviceInfo>,
     },
+    UpdateAvailable {
+        current: String,
+        latest: String,
+        notes: String,
+        release_url: String,
+        installer_name: String,
+        installer_size: u64,
+        sha256_verified: bool,
+    },
+    UpdateCurrent {
+        current: String,
+    },
+    UpdateReady {
+        latest: String,
+        installer_path: String,
+        sha256: String,
+        product_name: String,
+        product_version: String,
+        upgrade_code: String,
+    },
+    UpdateInstallStarted {
+        latest: String,
+        install_log: String,
+        result_path: String,
+    },
+    UpdateInstallResult {
+        latest: String,
+        status: String,
+        exit_code: i32,
+        message: String,
+        install_log: String,
+    },
     Error {
         code: String,
         message: String,
@@ -683,6 +728,11 @@ impl CoreEvent {
             | Self::UiShow { .. }
             | Self::ProbeResult { .. }
             | Self::CastDevices { .. }
+            | Self::UpdateAvailable { .. }
+            | Self::UpdateCurrent { .. }
+            | Self::UpdateReady { .. }
+            | Self::UpdateInstallStarted { .. }
+            | Self::UpdateInstallResult { .. }
             | Self::Toast { .. }
             | Self::HarvestResult { .. }
             | Self::TorrentProbeResult { .. }
@@ -753,6 +803,7 @@ mod tests {
             handoff_id: "handoff-1".into(),
             filename: "video.m3u8".into(),
             title: "Video".into(),
+            mime_type: "application/vnd.apple.mpegurl".into(),
             size: 42,
         };
         let encoded = serde_json::to_vec(&offer).unwrap();
@@ -854,10 +905,30 @@ mod tests {
 
     #[test]
     fn check_update_command_roundtrips() {
-        let encoded = serde_json::to_value(CoreCommand::CheckUpdate).unwrap();
+        let encoded = serde_json::to_value(CoreCommand::CheckUpdate { silent: true }).unwrap();
         assert_eq!(encoded["kind"], "check_update");
+        assert_eq!(encoded["silent"], true);
         let restored: CoreCommand = serde_json::from_value(encoded).unwrap();
-        assert_eq!(restored, CoreCommand::CheckUpdate);
+        assert_eq!(restored, CoreCommand::CheckUpdate { silent: true });
+        let compatible: CoreCommand =
+            serde_json::from_value(serde_json::json!({"kind": "check_update"})).unwrap();
+        assert_eq!(compatible, CoreCommand::CheckUpdate { silent: false });
+    }
+
+    #[test]
+    fn install_update_command_keeps_the_workbench_process_identity() {
+        let encoded = serde_json::to_value(CoreCommand::InstallUpdate {
+            workbench_pid: 4242,
+        })
+        .unwrap();
+        assert_eq!(encoded["kind"], "install_update");
+        assert_eq!(encoded["workbench_pid"], 4242);
+        assert_eq!(
+            serde_json::from_value::<CoreCommand>(encoded).unwrap(),
+            CoreCommand::InstallUpdate {
+                workbench_pid: 4242
+            }
+        );
     }
 
     #[test]

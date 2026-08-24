@@ -26,4 +26,14 @@ describe('popup first paint', () => {
     expect(main).toContain('插件界面加载失败')
     expect(main).toContain('void main().catch(renderStartupError)')
   })
+
+  it('offers a real current-page rescan with distinct loading and empty states', () => {
+    expect(main).toContain("browser.tabs.sendMessage(tab.id, { type: 'rescan-media' })")
+    expect(main).toContain("resourceState: 'loading' | 'ready' | 'scanning' | 'error'")
+    expect(main).toContain('\\u91cd\\u65b0\\u8bc6\\u522b')
+    expect(main).toContain('\\u5f53\\u524d\\u9875\\u9762\\u8fd8\\u6ca1\\u6709\\u53ef\\u4e0b\\u8f7d\\u8d44\\u6e90')
+    expect(main).toContain("candidate.active && /^https?:\\/\\//i.test(candidate.url || '')")
+    expect(main).toContain('actionCol.append(button, castButton, pushButton)')
+    expect(main).toContain('resourceSuffix(item)')
+  })
 })

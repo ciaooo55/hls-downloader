@@ -167,6 +167,11 @@ impl CoreStore {
                 | CoreEvent::TorrentProbeResult { .. }
                 | CoreEvent::TorrentSelectionResult { .. }
                 | CoreEvent::CastDevices { .. }
+                | CoreEvent::UpdateAvailable { .. }
+                | CoreEvent::UpdateCurrent { .. }
+                | CoreEvent::UpdateReady { .. }
+                | CoreEvent::UpdateInstallStarted { .. }
+                | CoreEvent::UpdateInstallResult { .. }
                 | CoreEvent::DuplicateOffered { .. }
                 | CoreEvent::Toast { .. }
                 | CoreEvent::HarvestResult { .. }

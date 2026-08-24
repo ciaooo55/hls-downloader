@@ -65,12 +65,16 @@ $engineTarget = if ($Task -eq 'package') { 'release' } else { 'debug' }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin HLSDownloaderNativeHost
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin HLSDownloaderUpdater
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $cargo build --manifest-path "$repo\presenter_ui\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-presenter
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $engine = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\hls-downloader-engine.exe"
 if (!(Test-Path -LiteralPath $engine)) { throw "Rust engine was not produced: $engine" }
 $nativeHost = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloaderNativeHost.exe"
 if (!(Test-Path -LiteralPath $nativeHost)) { throw "Native Messaging host was not produced: $nativeHost" }
+$updater = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloaderUpdater.exe"
+if (!(Test-Path -LiteralPath $updater)) { throw "Update helper was not produced: $updater" }
 $presenter = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\hls-downloader-presenter.exe"
 if (!(Test-Path -LiteralPath $presenter)) { throw "v7 presenter was not produced: $presenter" }
 if ($Task -eq 'package') {
@@ -80,6 +84,7 @@ if ($Task -eq 'package') {
     Copy-Item -LiteralPath $engine -Destination (Join-Path $resources 'HLSDownloaderEngine.exe') -Force
     # The dedicated bridge has no Compose/Slint dependency and never opens SQLite.
     Copy-Item -LiteralPath $nativeHost -Destination (Join-Path $resources 'HLSDownloaderNativeHost.exe') -Force
+    Copy-Item -LiteralPath $updater -Destination (Join-Path $resources 'HLSDownloaderUpdater.exe') -Force
     Copy-Item -LiteralPath $presenter -Destination (Join-Path $resources 'HLSDownloaderPresenter.exe') -Force
     # Ship the media tools beside the v7 workbench when the local toolchain
     # provides them. The Core reads these names from its packaged directory.
@@ -115,6 +120,10 @@ try {
     }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     if ($Task -eq 'package') {
+        $msi = Get-ChildItem -LiteralPath 'D:\HLSDownloaderBuildCache\compose-build\compose\binaries\main\msi' -Filter 'HLSDownloader-7.0.0.msi' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $msi) { throw 'The v7 MSI was not produced in the isolated build cache.' }
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\set-v7-msi-rollback-order.ps1" -MsiPath $msi.FullName
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\create-v7-portable.ps1" -OutZip "$repo\artifacts\v7-productization\package\HLSDownloader-7.0.0-Windows-x64-Portable.zip"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }

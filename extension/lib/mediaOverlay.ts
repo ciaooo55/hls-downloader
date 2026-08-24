@@ -17,6 +17,13 @@ export interface OverlayViewport {
 
 export type OverlayAction = 'download' | 'tvbox' | 'cast'
 
+/** Pointer-intent grace period for moving from the compact control into its hover card. */
+export const HOVER_DISMISS_DELAY_MS = 500
+
+export function shouldKeepHoverOpen(pointerInside: boolean, focusInside: boolean): boolean {
+  return pointerInside || focusInside
+}
+
 export interface OverlayResourceDetails {
   title: string
   facts: string[]

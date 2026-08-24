@@ -95,6 +95,17 @@ class ResponsiveLayoutTest {
     }
 
     @Test
+    fun startup_retries_without_raw_pipe_text_and_modals_hide_the_workbench_tree() {
+        val source = java.io.File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
+        assertTrue(source.contains("while (!snapshotReady)"))
+        assertTrue(source.contains("ENGINE_RECONNECTING_NOTICE"))
+        assertTrue(source.contains("EnginePipeClient.ensurePresenterStarted()"))
+        assertTrue(source.contains("if (modalVisible) Modifier.clearAndSetSemantics"))
+        assertFalse(source.contains("LegalAgreementDialog"))
+        assertFalse(source.contains("error.message ?: \"下载引擎连接失败\""))
+    }
+
+    @Test
     fun task_accessibility_label_exposes_the_scannable_row_state() {
         val source = TaskDto(
             id = "task-1",

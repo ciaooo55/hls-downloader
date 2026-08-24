@@ -3,9 +3,10 @@
 slint::include_modules!();
 
 use hls_native_shell::{
-    begin_caption_drag, center_window_by_title, claim_v7_presenter_instance, completion_sound,
-    install_root, os_reduce_motion, spawn_core, CoreCommand, CoreEvent, CoreIpcClient,
-    CorePipeResponse, EventEnvelope, ResourceOffer, TaskSnapshot,
+    activate_window_by_title, begin_caption_drag, center_window_by_title,
+    claim_v7_presenter_instance, completion_sound, install_root, os_reduce_motion, spawn_core,
+    spawn_desktop_ui, CoreCommand, CoreEvent, CoreIpcClient, CorePipeResponse, EventEnvelope,
+    ResourceKind, ResourceOffer, TaskSnapshot,
 };
 use serde::Deserialize;
 use slint::{ComponentHandle, RenderingState, Timer, TimerMode};
@@ -24,6 +25,71 @@ struct PersistedHandoff {
     #[serde(default)]
     status: String,
     offer: ResourceOffer,
+}
+
+#[derive(Clone, Default)]
+struct PresenterSettings {
+    download_dir: String,
+    category_media: String,
+    category_program: String,
+    category_archive: String,
+    category_other: String,
+}
+
+impl PresenterSettings {
+    fn from_response(response: Option<&CorePipeResponse>) -> Self {
+        let Some(CorePipeResponse::Settings {
+            download_dir,
+            category_dir_media,
+            category_dir_program,
+            category_dir_archive,
+            category_dir_other,
+            ..
+        }) = response
+        else {
+            return Self::default();
+        };
+        Self {
+            download_dir: download_dir.clone(),
+            category_media: category_dir_media.clone(),
+            category_program: category_dir_program.clone(),
+            category_archive: category_dir_archive.clone(),
+            category_other: category_dir_other.clone(),
+        }
+    }
+
+    fn directory_for(&self, category: &str) -> String {
+        let configured = match category {
+            "media" => &self.category_media,
+            "program" => &self.category_program,
+            "archive" => &self.category_archive,
+            _ => &self.category_other,
+        };
+        if configured.trim().is_empty() {
+            self.download_dir.clone()
+        } else {
+            configured.clone()
+        }
+    }
+
+    fn remember(&mut self, category: &str, directory: String) {
+        match category {
+            "media" => self.category_media = directory,
+            "program" => self.category_program = directory,
+            "archive" => self.category_archive = directory,
+            _ => self.category_other = directory,
+        }
+    }
+
+    fn category_dirs_json(&self) -> String {
+        serde_json::json!({
+            "media": self.category_media,
+            "program": self.category_program,
+            "archive": self.category_archive,
+            "other": self.category_other,
+        })
+        .to_string()
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -57,9 +123,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut initial_client = connect_or_start_core()?;
-    let (_, initial_sequence) = initial_client.snapshot_state()?;
+    let (initial_tasks, initial_sequence) = initial_client.snapshot_state()?;
     let initial_pending = load_pending_offers(&mut initial_client);
     let settings = initial_client.load_settings().ok();
+    let presenter_settings = Arc::new(Mutex::new(PresenterSettings::from_response(
+        settings.as_ref(),
+    )));
+    let known_tasks = Arc::new(Mutex::new(initial_tasks));
     let show_progress = matches!(
         &settings,
         Some(CorePipeResponse::Settings {
@@ -129,8 +199,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     progress.on_command({
         let client = Rc::clone(&client);
         let active_task = Rc::clone(&active_task);
+        let window = progress.as_weak();
         move |command| {
             let action = command.to_string();
+            if action == "hide_progress" {
+                if let Some(item) = window.upgrade() {
+                    let _ = item.hide();
+                }
+                return;
+            }
             if matches!(action.as_str(), "pause" | "cancel") {
                 if let Some(task_id) = active_task.borrow().clone() {
                     let _ = command_with_reconnect(
@@ -144,6 +221,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     confirm.on_command({
         let client = Rc::clone(&client);
         let pending = Arc::clone(&pending);
+        let presenter_settings = Arc::clone(&presenter_settings);
+        let known_tasks = Arc::clone(&known_tasks);
         let window = confirm.as_weak();
         move |command| {
             let command = command.to_string();
@@ -157,22 +236,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     else {
                         return;
                     };
-                    let filename = window
-                        .upgrade()
-                        .map(|item| item.get_filename().to_string())
-                        .unwrap_or_default();
+                    let Some(item) = window.upgrade() else {
+                        return;
+                    };
+                    let filename = item.get_filename().trim().to_string();
+                    let download_dir = item.get_download_dir().trim().to_string();
+                    let category = item.get_category().to_string();
+                    if filename.is_empty() {
+                        item.set_error_text("请输入文件名".into());
+                        return;
+                    }
+                    item.set_busy(true);
+                    item.set_error_text("".into());
                     match command_with_reconnect(
                         &client,
                         CoreCommand::AcceptHandoff {
                             handoff_id: offer.handoff_id.clone(),
                             filename,
-                            download_dir: String::new(),
+                            download_dir: download_dir.clone(),
+                            trusted_ui: true,
                         },
                     ) {
                         Ok(_) => {
+                            if item.get_remember_directory() && !download_dir.is_empty() {
+                                if let Ok(mut settings) = presenter_settings.lock() {
+                                    settings.remember(&category, download_dir);
+                                    let _ = command_with_reconnect(
+                                        &client,
+                                        CoreCommand::SetSetting {
+                                            key: "browser_category_dirs".into(),
+                                            value: serde_json::Value::String(
+                                                settings.category_dirs_json(),
+                                            ),
+                                        },
+                                    );
+                                }
+                            }
                             pending.lock().ok().and_then(|mut items| items.pop_front());
                         }
-                        Err(_) => return,
+                        Err(error) => {
+                            item.set_busy(false);
+                            item.set_error_text(error.into());
+                            return;
+                        }
                     }
                 }
                 "reject" => {
@@ -182,13 +288,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             &client,
                             CoreCommand::RejectHandoff {
                                 handoff_id: offer.handoff_id,
+                                suppress_site_kind: window
+                                    .upgrade()
+                                    .map(|item| item.get_suppress_site_kind())
+                                    .unwrap_or(false),
                             },
                         );
                     }
                 }
+                "browse" => {
+                    let Some(item) = window.upgrade() else {
+                        return;
+                    };
+                    match pick_folder(&item.get_download_dir()) {
+                        Ok(Some(path)) => item.set_download_dir(path.into()),
+                        Ok(None) => {}
+                        Err(error) => item.set_error_text(error.into()),
+                    }
+                    return;
+                }
+                "more" => {
+                    let opened = install_root()
+                        .map(|root| spawn_desktop_ui(&root))
+                        .unwrap_or(false);
+                    let _ = command_with_reconnect(&client, CoreCommand::OpenMain);
+                    if let Some(item) = window.upgrade() {
+                        item.set_error_text(if opened {
+                            "已打开主窗口；当前请求仍可在此确认".into()
+                        } else {
+                            "主窗口已收到显示请求".into()
+                        });
+                    }
+                    return;
+                }
+                _ if command.starts_with("category:") => {
+                    let category = command.trim_start_matches("category:");
+                    if let (Some(item), Ok(settings)) =
+                        (window.upgrade(), presenter_settings.lock())
+                    {
+                        item.set_download_dir(settings.directory_for(category).into());
+                    }
+                    return;
+                }
                 _ => return,
             }
-            show_next_offer(&window, &pending);
+            show_next_offer(&window, &pending, &presenter_settings, &known_tasks);
         }
     });
     complete.on_command({
@@ -222,7 +366,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     thread::spawn({
         let confirm = confirm.as_weak();
         let pending = Arc::clone(&pending);
-        move || event_loop(tx, initial_sequence, confirm, pending)
+        let presenter_settings = Arc::clone(&presenter_settings);
+        let known_tasks = Arc::clone(&known_tasks);
+        move || {
+            event_loop(
+                tx,
+                initial_sequence,
+                confirm,
+                pending,
+                presenter_settings,
+                known_tasks,
+            )
+        }
     });
     let rx = Rc::new(RefCell::new(rx));
     let event_timer = Timer::default();
@@ -281,7 +436,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     )
                                     .into(),
                                 );
-                                let _ = item.show();
+                                if item.show().is_ok() {
+                                    let _ = center_window_by_title("下载完成");
+                                    let _ = activate_window_by_title("下载完成");
+                                }
                             }
                         }
                         _ => {}
@@ -324,7 +482,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    show_next_offer(&confirm.as_weak(), &pending);
+    show_next_offer(
+        &confirm.as_weak(),
+        &pending,
+        &presenter_settings,
+        &known_tasks,
+    );
     slint::run_event_loop_until_quit()?;
     event_timer.stop();
     prewarm_timer.stop();
@@ -346,9 +509,19 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             window.global::<Tokens>().set_dark(dark);
             window.global::<Tokens>().set_reduce_motion(true);
             window.set_filename("示例视频 · 1080p.mp4".into());
+            window.set_download_dir(r"D:\下载\媒体".into());
             window.set_url("media.example.test/library/example-video.mp4".into());
-            window.set_size_text("128.0 MB · HTTP".into());
-            window.set_remaining("后面还有 2 个".into());
+            window.set_source_url("video.example.test/watch/42".into());
+            window.set_source_host("video.example.test".into());
+            window.set_download_host("media.example.test".into());
+            window.set_resource_meta("HTTP · .mp4 · video/mp4 · 128.0 MB".into());
+            window.set_request_context("已安全继承网页凭据".into());
+            window.set_request_details(
+                "GET · 支持 Referer / Origin / User-Agent / Cookie / Authorization".into(),
+            );
+            window.set_category("media".into());
+            window.set_duplicate_text("已有同一地址的任务：示例视频.mp4（已暂停）".into());
+            window.set_remaining("  ·  后面还有 2 个".into());
             window.on_command(|command| {
                 if command != "drag" {
                     let _ = slint::quit_event_loop();
@@ -433,6 +606,8 @@ fn event_loop(
     mut after: u64,
     confirm: slint::Weak<ConfirmWindow>,
     pending: Arc<Mutex<VecDeque<ResourceOffer>>>,
+    presenter_settings: Arc<Mutex<PresenterSettings>>,
+    known_tasks: Arc<Mutex<Vec<TaskSnapshot>>>,
 ) {
     loop {
         let Ok(mut client) = CoreIpcClient::connect() else {
@@ -450,12 +625,14 @@ fn event_loop(
             after = latest_sequence;
             let restored = load_pending_offers(&mut client);
             let pending = Arc::clone(&pending);
+            let resync_settings = Arc::clone(&presenter_settings);
+            let resync_tasks = Arc::clone(&known_tasks);
             if confirm
                 .upgrade_in_event_loop(move |item| {
                     if let Ok(mut items) = pending.lock() {
                         *items = restored;
                     }
-                    show_next_offer(&item.as_weak(), &pending);
+                    show_next_offer(&item.as_weak(), &pending, &resync_settings, &resync_tasks);
                 })
                 .is_err()
             {
@@ -477,6 +654,8 @@ fn event_loop(
                         match envelope.event {
                             CoreEvent::HandoffOffered { offer } => {
                                 let pending = Arc::clone(&pending);
+                                let presenter_settings = Arc::clone(&presenter_settings);
+                                let known_tasks = Arc::clone(&known_tasks);
                                 if confirm
                                     .upgrade_in_event_loop(move |item| {
                                         if let Ok(mut items) = pending.lock() {
@@ -487,7 +666,12 @@ fn event_loop(
                                                 items.push_back(offer);
                                             }
                                         }
-                                        show_next_offer(&item.as_weak(), &pending);
+                                        show_next_offer(
+                                            &item.as_weak(),
+                                            &pending,
+                                            &presenter_settings,
+                                            &known_tasks,
+                                        );
                                     })
                                     .is_err()
                                 {
@@ -496,22 +680,32 @@ fn event_loop(
                             }
                             CoreEvent::HandoffResolved { handoff_id, .. } => {
                                 let pending = Arc::clone(&pending);
+                                let presenter_settings = Arc::clone(&presenter_settings);
+                                let known_tasks = Arc::clone(&known_tasks);
                                 if confirm
                                     .upgrade_in_event_loop(move |item| {
                                         if let Ok(mut items) = pending.lock() {
                                             items.retain(|entry| entry.handoff_id != handoff_id);
                                         }
-                                        show_next_offer(&item.as_weak(), &pending);
+                                        show_next_offer(
+                                            &item.as_weak(),
+                                            &pending,
+                                            &presenter_settings,
+                                            &known_tasks,
+                                        );
                                     })
                                     .is_err()
                                 {
                                     return;
                                 }
                             }
-                            event => batched.push(EventEnvelope {
-                                sequence: envelope.sequence,
-                                event,
-                            }),
+                            event => {
+                                update_known_tasks(&known_tasks, &event);
+                                batched.push(EventEnvelope {
+                                    sequence: envelope.sequence,
+                                    event,
+                                });
+                            }
                         }
                     }
                     if !batched.is_empty() {
@@ -549,6 +743,8 @@ fn load_pending_offers(client: &mut CoreIpcClient) -> VecDeque<ResourceOffer> {
 fn show_next_offer(
     window: &slint::Weak<ConfirmWindow>,
     pending: &Arc<Mutex<VecDeque<ResourceOffer>>>,
+    presenter_settings: &Arc<Mutex<PresenterSettings>>,
+    known_tasks: &Arc<Mutex<Vec<TaskSnapshot>>>,
 ) {
     let Some(item) = window.upgrade() else {
         return;
@@ -564,31 +760,89 @@ fn show_next_offer(
     } else {
         offer.filename.clone()
     };
-    item.set_filename(filename.into());
+    let category = download_category(&filename, offer.resource_kind);
+    let download_dir = presenter_settings
+        .lock()
+        .map(|settings| settings.directory_for(category))
+        .unwrap_or_default();
+    let duplicate_text = known_tasks
+        .lock()
+        .ok()
+        .and_then(|tasks| {
+            tasks
+                .iter()
+                .find(|task| canonical_url(&task.url) == canonical_url(&offer.url))
+                .map(|task| {
+                    format!(
+                        "已有同一地址的任务：{}（{}）",
+                        task.filename,
+                        task_status_label(&task.status)
+                    )
+                })
+        })
+        .unwrap_or_default();
+    item.set_filename(filename.clone().into());
+    item.set_download_dir(download_dir.into());
+    item.set_category(category.into());
     item.set_url(safe_display_url(&offer.url).into());
-    item.set_size_text(if offer.size > 0 {
-        format_bytes(offer.size).into()
-    } else {
-        "浏览器接管".into()
-    });
+    item.set_source_url(safe_display_url(&offer.source_page_url).into());
+    item.set_source_host(url_host(&offer.source_page_url).into());
+    item.set_download_host(url_host(&offer.url).into());
+    item.set_resource_meta(format_resource_meta(&offer, &filename).into());
+    item.set_request_context(
+        if offer.credential_ref.is_some() || offer.replay_context_ref.is_some() {
+            "已安全继承网页凭据".into()
+        } else {
+            "已继承来源页面".into()
+        },
+    );
+    item.set_request_details(format_request_details(&offer).into());
+    item.set_duplicate_text(duplicate_text.into());
+    item.set_remember_directory(true);
+    item.set_suppress_site_kind(false);
+    item.set_busy(false);
+    item.set_error_text("".into());
     let remaining = pending
         .lock()
         .map(|items| items.len().saturating_sub(1))
         .unwrap_or_default();
     item.set_remaining(if remaining > 0 {
-        format!("后面还有 {remaining} 个").into()
+        format!("  ·  还有 {remaining} 个待确认").into()
     } else {
         "".into()
     });
     let shown = item.show().is_ok();
     if shown {
         let _ = center_window_by_title("确认下载");
+        let _ = activate_window_by_title("确认下载");
     }
     if let Ok(mut client) = CoreIpcClient::connect() {
         let _ = client.command(CoreCommand::PresentHandoff {
             handoff_id: offer.handoff_id,
             ok: shown,
         });
+    }
+}
+
+fn update_known_tasks(tasks: &Arc<Mutex<Vec<TaskSnapshot>>>, event: &CoreEvent) {
+    let Ok(mut tasks) = tasks.lock() else {
+        return;
+    };
+    match event {
+        CoreEvent::TaskCreated { snapshot }
+        | CoreEvent::TaskUpdated { snapshot }
+        | CoreEvent::TaskProgress { snapshot } => {
+            if let Some(index) = tasks
+                .iter()
+                .position(|item| item.task_id == snapshot.task_id)
+            {
+                tasks[index] = snapshot.clone();
+            } else {
+                tasks.push(snapshot.clone());
+            }
+        }
+        CoreEvent::TaskDeleted { task_id } => tasks.retain(|item| &item.task_id != task_id),
+        _ => {}
     }
 }
 
@@ -655,7 +909,10 @@ fn update_task_windows(
             if let Some(item) = complete.upgrade() {
                 item.set_filename(snapshot.filename.into());
                 item.set_power_hint("".into());
-                let _ = item.show();
+                if item.show().is_ok() {
+                    let _ = center_window_by_title("下载完成");
+                    let _ = activate_window_by_title("下载完成");
+                }
             }
         }
     }
@@ -694,6 +951,163 @@ fn safe_display_url(value: &str) -> String {
         format!("{host}/{tail}")
     };
     shown.chars().take(180).collect()
+}
+
+fn url_host(value: &str) -> String {
+    let location = value
+        .split_once("://")
+        .map(|(_, tail)| tail)
+        .unwrap_or(value);
+    location
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .rsplit('@')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+fn download_category(filename: &str, kind: ResourceKind) -> &'static str {
+    if matches!(
+        kind,
+        ResourceKind::Hls | ResourceKind::Dash | ResourceKind::Live
+    ) {
+        return "media";
+    }
+    let extension = file_extension(filename);
+    if matches!(
+        extension.as_str(),
+        "mp4"
+            | "mkv"
+            | "webm"
+            | "mov"
+            | "avi"
+            | "m4v"
+            | "ts"
+            | "mp3"
+            | "m4a"
+            | "flac"
+            | "wav"
+            | "jpg"
+            | "png"
+            | "gif"
+            | "webp"
+    ) {
+        "media"
+    } else if matches!(
+        extension.as_str(),
+        "exe" | "msi" | "msix" | "appx" | "bat" | "cmd"
+    ) {
+        "program"
+    } else if matches!(
+        extension.as_str(),
+        "zip" | "7z" | "rar" | "tar" | "gz" | "bz2" | "xz" | "iso"
+    ) {
+        "archive"
+    } else {
+        "other"
+    }
+}
+
+fn file_extension(filename: &str) -> String {
+    filename
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(filename)
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(filename)
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .filter(|extension| !extension.is_empty() && extension.len() <= 12)
+        .unwrap_or_else(|| "未知后缀".into())
+}
+
+fn resource_kind_label(kind: ResourceKind) -> &'static str {
+    match kind {
+        ResourceKind::Hls => "HLS",
+        ResourceKind::Dash => "DASH",
+        ResourceKind::Live => "直播",
+        ResourceKind::Ftp => "FTP",
+        ResourceKind::Sftp => "SFTP",
+        ResourceKind::Torrent => "BT",
+        ResourceKind::File => "HTTP",
+    }
+}
+
+fn format_resource_meta(offer: &ResourceOffer, filename: &str) -> String {
+    let extension = file_extension(filename);
+    let extension = if extension == "未知后缀" {
+        extension
+    } else {
+        format!(".{extension}")
+    };
+    let size = if offer.size > 0 {
+        format_bytes(offer.size)
+    } else {
+        "大小未知".into()
+    };
+    let mime = offer.mime_type.trim();
+    let mut parts = vec![
+        resource_kind_label(offer.resource_kind).to_string(),
+        extension,
+    ];
+    if !mime.is_empty() {
+        parts.push(mime.chars().take(64).collect());
+    }
+    parts.push(size);
+    parts.join(" · ")
+}
+
+fn format_request_details(offer: &ResourceOffer) -> String {
+    let method = offer.request_method.trim().to_ascii_uppercase();
+    format!(
+        "{} · 支持 Referer / Origin / User-Agent / Cookie / Authorization",
+        if method.is_empty() { "GET" } else { &method }
+    )
+}
+
+fn canonical_url(value: &str) -> &str {
+    value
+        .split('#')
+        .next()
+        .unwrap_or(value)
+        .trim_end_matches('/')
+}
+
+fn task_status_label(status: &str) -> &str {
+    match status {
+        "downloading" => "下载中",
+        "paused" => "已暂停",
+        "completed" | "done" => "已完成",
+        "failed" | "error" => "失败",
+        "queued" => "排队中",
+        _ => status,
+    }
+}
+
+#[cfg(windows)]
+fn pick_folder(initial: &str) -> Result<Option<String>, String> {
+    let script = r#"[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.FolderBrowserDialog; $dialog.Description = '选择下载保存位置'; if ($env:HLS_V7_INITIAL_DIR -and (Test-Path -LiteralPath $env:HLS_V7_INITIAL_DIR)) { $dialog.SelectedPath = $env:HLS_V7_INITIAL_DIR }; if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.SelectedPath) }"#;
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoLogo", "-NoProfile", "-STA", "-Command", script])
+        .env("HLS_V7_INITIAL_DIR", initial)
+        .output()
+        .map_err(|error| format!("无法打开文件夹选择器：{error}"))?;
+    if !output.status.success() {
+        return Err("文件夹选择器未能正常打开".into());
+    }
+    let path =
+        String::from_utf8(output.stdout).map_err(|_| "文件夹选择器返回了无效路径".to_string())?;
+    let path = path.trim().to_string();
+    Ok((!path.is_empty()).then_some(path))
+}
+
+#[cfg(not(windows))]
+fn pick_folder(_initial: &str) -> Result<Option<String>, String> {
+    Err("当前系统不支持文件夹选择器".into())
 }
 
 fn task_progress(task: &TaskSnapshot) -> f32 {
@@ -748,7 +1162,11 @@ fn attach_parent_console() {}
 
 #[cfg(test)]
 mod tests {
-    use super::safe_display_url;
+    use super::{
+        download_category, file_extension, format_request_details, format_resource_meta,
+        safe_display_url,
+    };
+    use hls_native_shell::{ResourceKind, ResourceOffer};
 
     #[test]
     fn displayed_handoff_location_hides_credentials_and_signed_query() {
@@ -758,5 +1176,33 @@ mod tests {
         assert_eq!(shown, "cdn.example.test/1080/movie.mp4");
         assert!(!shown.contains("secret"));
         assert!(!shown.contains("token"));
+    }
+
+    #[test]
+    fn browser_handoff_summary_uses_real_kind_suffix_and_category() {
+        let offer = ResourceOffer {
+            resource_kind: ResourceKind::Hls,
+            size: 128 * 1024 * 1024,
+            mime_type: "application/vnd.apple.mpegurl".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            download_category("movie.m3u8", offer.resource_kind),
+            "media"
+        );
+        assert_eq!(file_extension("movie.M3U8?token=secret"), "m3u8");
+        assert_eq!(
+            format_resource_meta(&offer, "movie.m3u8"),
+            "HLS · .m3u8 · application/vnd.apple.mpegurl · 128.0 MB"
+        );
+        assert!(format_request_details(&offer).contains("Referer / Origin / User-Agent"));
+        assert_eq!(
+            download_category("setup.exe", ResourceKind::File),
+            "program"
+        );
+        assert_eq!(
+            download_category("bundle.7z", ResourceKind::File),
+            "archive"
+        );
     }
 }

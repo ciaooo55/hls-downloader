@@ -29,6 +29,12 @@ user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintyp
 user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
 user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+user32.SetWindowPos.argtypes = [
+    wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+    ctypes.c_int, ctypes.c_int, wintypes.UINT,
+]
 
 
 class BitmapInfoHeader(ctypes.Structure):
@@ -141,9 +147,17 @@ def capture(hwnd: int, destination: Path) -> dict[str, object]:
         raise RuntimeError(f"popup geometry is invalid: {width}x{height}")
     # PrintWindow reads the popup's own composited surface and cannot mistake
     # an overlapping app for the popup.  ImageGrab remains a compatibility
-    # fallback for older Windows renderers that reject PW_RENDERFULLCONTENT.
+    # fallback for renderers that reject PW_RENDERFULLCONTENT or report success
+    # while returning an all-black GPU surface.
     image = print_window(hwnd, width, height)
-    if image is None:
+    sampled_colors = image.getcolors(maxcolors=64) if image is not None else None
+    if image is None or (sampled_colors is not None and len(sampled_colors) <= 1):
+        # GPU-backed Slint windows can be absent from PrintWindow and can also
+        # sit behind the test runner when the desktop app steals focus. Raise
+        # this exact HWND immediately before the physical-pixel fallback.
+        user32.SetWindowPos(hwnd, wintypes.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
+        user32.SetForegroundWindow(hwnd)
+        time.sleep(0.08)
         image = ImageGrab.grab(
             bbox=(rect.left, rect.top, rect.right, rect.bottom),
             include_layered_windows=True,
@@ -198,6 +212,10 @@ def render_fixture(presenter: Path, output: Path, fixture: str, dark: bool) -> d
     ready.unlink(missing_ok=True)
     environment = os.environ.copy()
     environment["HLS_V7_PRESENTER_READY_FILE"] = str(ready)
+    # The software renderer is deterministic under PrintWindow. Production can
+    # still use the default GPU backend; this visual fixture validates the same
+    # Slint layout and tokens without capturing the window behind it.
+    environment["SLINT_BACKEND"] = "winit-software"
     command = [str(presenter), "--visual-fixture", fixture]
     if dark:
         command.append("--dark")
@@ -233,6 +251,66 @@ def render_fixture(presenter: Path, output: Path, fixture: str, dark: bool) -> d
         ready.unlink(missing_ok=True)
 
 
+def verify_close_control(presenter: Path, output: Path, fixture: str) -> dict[str, object]:
+    title = {"confirm": "确认下载", "progress": "下载进度", "complete": "下载完成"}[fixture]
+    ready = output / f".{fixture}-close.ready"
+    ready.unlink(missing_ok=True)
+    environment = os.environ.copy()
+    environment["HLS_V7_PRESENTER_READY_FILE"] = str(ready)
+    environment["SLINT_BACKEND"] = "winit-software"
+    process = subprocess.Popen(
+        [str(presenter), "--visual-fixture", fixture],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    started = time.perf_counter()
+    try:
+        hwnd = wait_window(process.pid, title)
+        deadline = time.perf_counter() + 5
+        while not ready.exists() and time.perf_counter() < deadline:
+            if process.poll() is not None:
+                stderr = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
+                raise RuntimeError(f"close fixture exited before interaction ({process.returncode}): {stderr}")
+            time.sleep(0.01)
+        if not ready.exists():
+            raise TimeoutError("close fixture did not write its ready marker")
+
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            raise ctypes.WinError()
+        width = rect.right - rect.left
+        # Exercise the real Slint TouchArea through the HWND message queue. The
+        # close button is a stable 28 px control inset 26 px from the top/right.
+        x, y = width - 40, 38
+        lparam = (y << 16) | (x & 0xFFFF)
+        user32.PostMessageW(hwnd, 0x0200, 0, lparam)  # WM_MOUSEMOVE
+        user32.PostMessageW(hwnd, 0x0201, 0x0001, lparam)  # WM_LBUTTONDOWN
+        user32.PostMessageW(hwnd, 0x0202, 0, lparam)  # WM_LBUTTONUP
+        try:
+            exit_status = process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            exit_status = None
+        passed = exit_status == 0
+        return {
+            "fixture": fixture,
+            "action": "close",
+            "output": "window_closed" if passed else "window_remained_open",
+            "exit_status": exit_status,
+            "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
+            "passed": passed,
+        }
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+        ready.unlink(missing_ok=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Render and reject blank v7 presenter popups")
     parser.add_argument("--presenter", required=True, type=Path)
@@ -246,7 +324,15 @@ def main() -> int:
         for dark in (False, True)
         for fixture in ("confirm", "progress", "complete")
     ]
-    result = {"fixtures": reports, "passed": all(bool(item["passed"]) for item in reports)}
+    close_controls = [
+        verify_close_control(presenter, args.output, fixture)
+        for fixture in ("confirm", "progress", "complete")
+    ]
+    result = {
+        "fixtures": reports,
+        "close_controls": close_controls,
+        "passed": all(bool(item["passed"]) for item in reports + close_controls),
+    }
     args.output.mkdir(parents=True, exist_ok=True)
     report_path = args.output / "report.json"
     report_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

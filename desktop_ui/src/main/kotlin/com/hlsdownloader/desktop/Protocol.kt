@@ -144,6 +144,7 @@ data class HandoffOfferDto(
     @SerialName("resource_kind") val resourceKind: String = "file",
     val filename: String = "",
     val title: String = "",
+    @SerialName("mime_type") val mimeType: String = "",
     val size: Long = 0,
     @SerialName("source_page_url") val sourcePageUrl: String = "",
 )
@@ -371,8 +372,9 @@ class EnginePipeClient(
     fun getTaskLog(taskId: String) = command(commandOf("get_task_log", "task_id" to taskId))
     fun openCompleted(taskId: String, folder: Boolean) = command(commandOf("open_completed", "task_id" to taskId, "folder" to folder))
     fun saveSiteProfile(taskId: String) = command(commandOf("save_site_profile", "task_id" to taskId))
-    fun checkUpdate() = command(commandOf("check_update"))
+    fun checkUpdate(silent: Boolean = false) = command(commandOf("check_update", "silent" to silent))
     fun downloadUpdate() = command(commandOf("download_update"))
+    fun installUpdate(workbenchPid: Long) = command(commandOf("install_update", "workbench_pid" to workbenchPid.coerceAtLeast(0)))
     fun confirmPowerAction() = command(commandOf("confirm_power_action"))
     fun cancelPowerAction() = command(commandOf("cancel_power_action"))
     fun clearCompleted() = command(commandOf("clear_completed"))
@@ -399,9 +401,11 @@ class EnginePipeClient(
 
     fun harvestPage(url: String) = command(commandOf("harvest_page", "url" to normalizeHttpUrl(url)))
     fun presentHandoff(handoffId: String, presented: Boolean = true) = command(commandOf("present_handoff", "handoff_id" to requireId(handoffId), "ok" to presented))
-    fun rejectHandoff(handoffId: String) = command(commandOf("reject_handoff", "handoff_id" to requireId(handoffId)))
+    fun rejectHandoff(handoffId: String, suppressSiteKind: Boolean = false) = command(commandOf(
+        "reject_handoff", "handoff_id" to requireId(handoffId), "suppress_site_kind" to suppressSiteKind,
+    ))
     fun acceptHandoff(handoffId: String, filename: String, downloadDirectory: String) = command(commandOf(
-        "accept_handoff", "handoff_id" to requireId(handoffId), "filename" to normalizeHandoffFilename(filename), "download_dir" to downloadDirectory.trim(),
+        "accept_handoff", "handoff_id" to requireId(handoffId), "filename" to normalizeHandoffFilename(filename), "download_dir" to downloadDirectory.trim(), "trusted_ui" to true,
     ))
 
     fun loadSettings(): EngineSettingsDto = session { connection ->
@@ -505,6 +509,8 @@ class EnginePipeClient(
     private fun filenameFromUrl(url: String) = url.substringBefore('?').substringBefore('#').substringAfterLast('/').ifBlank { "download" }
 
     companion object {
+        @Volatile private var engineProcess: Process? = null
+        @Volatile private var presenterProcess: Process? = null
         const val MAX_FRAME = 4 * 1024 * 1024
         private val requestIds = AtomicLong(100)
         private fun nextRequestId() = requestIds.incrementAndGet()
@@ -551,7 +557,9 @@ class EnginePipeClient(
             return filename
         }
 
+        @Synchronized
         fun ensureStarted(): Boolean {
+            if (engineProcess?.isAlive == true) return true
             val working = File(System.getProperty("user.dir"))
             val configured = System.getenv("HLS_ENGINE_PATH")?.takeIf(String::isNotBlank)?.let(::File)
             val packaged = System.getProperty("compose.application.resources.dir")?.takeIf(String::isNotBlank)?.let { File(it, "HLSDownloaderEngine.exe") }
@@ -559,11 +567,17 @@ class EnginePipeClient(
                 configured, packaged, File(working, "HLSDownloaderEngine.exe"), File(working, "app/resources/HLSDownloaderEngine.exe"),
                 working.parentFile?.let { File(it, "HLSDownloaderEngine.exe") }, working.parentFile?.let { File(it, "app/resources/HLSDownloaderEngine.exe") },
             ).firstOrNull(File::isFile) ?: return false
-            ProcessBuilder(candidate.absolutePath).directory(candidate.parentFile).start()
+            engineProcess = ProcessBuilder(candidate.absolutePath)
+                .directory(candidate.parentFile)
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start()
             return true
         }
 
+        @Synchronized
         fun ensurePresenterStarted(): Boolean {
+            if (presenterProcess?.isAlive == true) return true
             val working = File(System.getProperty("user.dir"))
             val configured = System.getenv("HLS_PRESENTER_PATH")?.takeIf(String::isNotBlank)?.let(::File)
             val packaged = System.getProperty("compose.application.resources.dir")?.takeIf(String::isNotBlank)?.let { File(it, "HLSDownloaderPresenter.exe") }
@@ -571,7 +585,11 @@ class EnginePipeClient(
                 configured, packaged, File(working, "HLSDownloaderPresenter.exe"), File(working, "app/resources/HLSDownloaderPresenter.exe"),
                 working.parentFile?.let { File(it, "HLSDownloaderPresenter.exe") }, working.parentFile?.let { File(it, "app/resources/HLSDownloaderPresenter.exe") },
             ).firstOrNull(File::isFile) ?: return false
-            ProcessBuilder(candidate.absolutePath).directory(candidate.parentFile).start()
+            presenterProcess = ProcessBuilder(candidate.absolutePath)
+                .directory(candidate.parentFile)
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start()
             return true
         }
     }

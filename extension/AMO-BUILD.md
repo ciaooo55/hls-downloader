@@ -6,7 +6,7 @@ No private packages, generated source files, or remote build services are requir
 ## Environment
 
 - Windows 11 x64 (the same commands also work on Linux)
-- Node.js 24
+- Node.js 25
 - Corepack
 - pnpm 11.7.0
 
@@ -24,9 +24,19 @@ pnpm run build:firefox
 The unpacked extension is written to `.output/firefox-mv3`. To create the upload
 ZIP, run `pnpm run zip:firefox`. WXT places the archive in `.output`.
 
-The project uses WXT 0.20.27, TypeScript 5.8.3, React 19.1.0, and pnpm's public
-npm registry. Exact direct and transitive dependency versions are recorded in
+The project uses WXT 0.20.27, TypeScript 5.8.3 and pnpm's public npm registry.
+The popup and in-page controls use browser DOM APIs rather than a remote UI
+runtime. Exact direct and transitive dependency versions are recorded in
 `pnpm-lock.yaml`.
+
+## Store identity continuity
+
+- Chromium extension ID: `bbdfldcjnikaemnimalegbopgaknjhla`
+- Firefox extension ID: `hls-downloader-store@ciaooo55.com`
+
+These are the same identities used by the 3.0.39 packages. The Chromium public
+key and Firefox Gecko ID are defined in `lib/storeIdentity.ts` and covered by
+automated tests so an update cannot accidentally create a second listing.
 
 ## Permission notes
 

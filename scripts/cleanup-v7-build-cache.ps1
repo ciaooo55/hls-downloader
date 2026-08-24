@@ -40,6 +40,7 @@ if ($NativeHostSmokeOnly) {
             'desktop_ui\resources\HLSDownloaderEngine.exe',
             'desktop_ui\resources\common\HLSDownloaderEngine.exe',
             'desktop_ui\resources\common\HLSDownloaderNativeHost.exe',
+            'desktop_ui\resources\common\HLSDownloaderUpdater.exe',
             'desktop_ui\resources\common\HLSDownloaderPresenter.exe',
             'extension\dist',
             'extension\.output',
