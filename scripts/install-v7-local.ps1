@@ -130,6 +130,14 @@ $shortcut.IconLocation = (Join-Path $target 'HLSDownloader.exe') + ',0'
 $shortcut.Description = 'HLS Downloader 7.0.0'
 $shortcut.Save()
 
+$desktopShortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'HLS Downloader 7.0.0.lnk'
+$desktopLink = $shell.CreateShortcut($desktopShortcut)
+$desktopLink.TargetPath = Join-Path $target 'HLSDownloader.exe'
+$desktopLink.WorkingDirectory = $target
+$desktopLink.IconLocation = (Join-Path $target 'HLSDownloader.exe') + ',0'
+$desktopLink.Description = 'HLS Downloader 7.0.0'
+$desktopLink.Save()
+
 [ordered]@{
     installed = $true
     version = '7.0.0'
@@ -139,4 +147,5 @@ $shortcut.Save()
     chromium_extension = Join-Path $target 'extensions\HLSDownloader-7.0.0-Chromium.zip'
     firefox_extension = Join-Path $target 'extensions\HLSDownloader-7.0.0-Firefox.zip'
     start_menu = Join-Path $startMenu 'HLS Downloader 7.0.0.lnk'
+    desktop = $desktopShortcut
 } | ConvertTo-Json -Depth 3

@@ -7,8 +7,6 @@ const TRAY_THREAD_NAME: &str = "v7-tray";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
     ShowMain,
-    NewTask,
-    Settings,
     Quit,
 }
 
@@ -33,6 +31,9 @@ pub fn completion_sound() {
 static TRAY_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 #[cfg(windows)]
 static TRAY_ICON: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+#[cfg(windows)]
+static TASKBAR_CREATED_MESSAGE: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
 
 #[cfg(windows)]
 unsafe fn load_product_icon() -> windows_sys::Win32::UI::WindowsAndMessaging::HICON {
@@ -139,6 +140,7 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow,
         DispatchMessageW, GetCursorPos, GetMessageW, PostQuitMessage, RegisterClassW,
+        RegisterWindowMessageW,
         SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
         CW_USEDEFAULT, HWND_MESSAGE, MF_STRING, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND,
         WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
@@ -146,8 +148,6 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
 
     const WM_TRAY: u32 = WM_APP + 32;
     const ID_SHOW: usize = 1;
-    const ID_NEW: usize = 2;
-    const ID_SETTINGS: usize = 3;
     const ID_QUIT: usize = 4;
 
     let class_name: Vec<u16> = "HLSDownloader.v7.Tray\0".encode_utf16().collect();
@@ -197,6 +197,11 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
     if hwnd.is_null() {
         return;
     }
+    let taskbar_created: Vec<u16> = "TaskbarCreated\0".encode_utf16().collect();
+    TASKBAR_CREATED_MESSAGE.store(
+        RegisterWindowMessageW(taskbar_created.as_ptr()),
+        std::sync::atomic::Ordering::Release,
+    );
     TRAY_HWND.store(hwnd as isize, std::sync::atomic::Ordering::SeqCst);
     let boxed = Box::new(tx);
     windows_sys::Win32::Foundation::SetLastError(0);
@@ -230,8 +235,6 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
         WM_LBUTTONUP,
         WM_RBUTTONUP,
         ID_SHOW,
-        ID_NEW,
-        ID_SETTINGS,
         ID_QUIT,
     );
     DestroyWindow(hwnd);
@@ -247,18 +250,32 @@ unsafe extern "system" fn tray_wnd_proc(
     use windows_sys::Win32::Foundation::POINT;
     #[allow(unused_imports)]
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        AppendMenuW, CreatePopupMenu, DefWindowProcW, GetCursorPos, GetWindowLongPtrW,
-        PostQuitMessage, SetForegroundWindow, TrackPopupMenu, GWLP_USERDATA, MF_STRING,
-        TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP,
+        AppendMenuW, CreatePopupMenu, DefWindowProcW, DestroyMenu, GetCursorPos,
+        GetWindowLongPtrW, PostMessageW, PostQuitMessage, SetForegroundWindow, TrackPopupMenu,
+        GWLP_USERDATA, MF_STRING, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY,
+        WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP,
     };
 
     const WM_TRAY: u32 = WM_APP + 32;
     const ID_SHOW: usize = 1;
-    const ID_NEW: usize = 2;
-    const ID_SETTINGS: usize = 3;
     const ID_QUIT: usize = 4;
 
     let sender = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Sender<TrayAction>;
+    if msg == TASKBAR_CREATED_MESSAGE.load(std::sync::atomic::Ordering::Acquire) {
+        use windows_sys::Win32::UI::Shell::{
+            Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NOTIFYICONDATAW,
+        };
+        let mut data: NOTIFYICONDATAW = std::mem::zeroed();
+        data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+        data.hWnd = hwnd;
+        data.uID = 1;
+        data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+        data.uCallbackMessage = WM_TRAY;
+        data.hIcon = load_product_icon();
+        copy_utf16(&mut data.szTip, "HLS Downloader");
+        Shell_NotifyIconW(NIM_ADD, &data);
+        return 0;
+    }
     if msg == WM_TRAY {
         let event = lparam as u32;
         if event == WM_LBUTTONUP {
@@ -270,12 +287,8 @@ unsafe extern "system" fn tray_wnd_proc(
             GetCursorPos(&mut point);
             let menu = CreatePopupMenu();
             let show: Vec<u16> = "打开工作台\0".encode_utf16().collect();
-            let new_task: Vec<u16> = "新建任务\0".encode_utf16().collect();
-            let settings: Vec<u16> = "设置\0".encode_utf16().collect();
-            let quit: Vec<u16> = "退出\0".encode_utf16().collect();
+            let quit: Vec<u16> = "退出下载引擎\0".encode_utf16().collect();
             AppendMenuW(menu, MF_STRING, ID_SHOW, show.as_ptr());
-            AppendMenuW(menu, MF_STRING, ID_NEW, new_task.as_ptr());
-            AppendMenuW(menu, MF_STRING, ID_SETTINGS, settings.as_ptr());
             AppendMenuW(menu, MF_STRING, ID_QUIT, quit.as_ptr());
             SetForegroundWindow(hwnd);
             TrackPopupMenu(
@@ -287,14 +300,14 @@ unsafe extern "system" fn tray_wnd_proc(
                 hwnd,
                 std::ptr::null(),
             );
+            PostMessageW(hwnd, WM_NULL, 0, 0);
+            DestroyMenu(menu);
             return 0;
         }
     }
     if msg == WM_COMMAND {
         match wparam & 0xffff {
             ID_SHOW => send_action(sender, TrayAction::ShowMain),
-            ID_NEW => send_action(sender, TrayAction::NewTask),
-            ID_SETTINGS => send_action(sender, TrayAction::Settings),
             ID_QUIT => {
                 send_action(sender, TrayAction::Quit);
                 PostQuitMessage(0);
@@ -328,6 +341,8 @@ mod tests {
         let source = include_str!("tray.rs");
         assert!(source.contains("app-icon.ico"));
         assert!(source.contains("LoadImageW"));
+        assert!(source.contains("TaskbarCreated"));
+        assert!(source.contains("RegisterWindowMessageW"));
         assert!(!source.contains("name(\"v6-tray\""));
     }
 
