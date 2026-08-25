@@ -25,6 +25,16 @@ class ResponsiveLayoutTest {
     }
 
     @Test
+    fun task_columns_use_the_product_layout_at_every_width() {
+        val columns = resolveTaskColumns(834.dp)
+        assertEquals(listOf("name", "progress", "status", "speed", "size", "actions"), columns.items.map { it.id })
+        assertEquals(225.dp, columns.items.first().width)
+        assertTrue(columns.compact)
+        assertEquals("name:desc", nextTaskSort("name:asc", "name"))
+        assertEquals("size:asc", nextTaskSort("name:desc", "size"))
+    }
+
+    @Test
     fun task_rows_keep_the_real_file_suffix_visible_in_metadata() {
         assertEquals(".mp4", taskExtensionLabel(TaskDto("video", "movie.mp4", status = "done")))
         assertEquals(".m3u8", taskExtensionLabel(TaskDto("live", "live-stream", status = "进行中", resourceKind = "hls")))
@@ -124,5 +134,15 @@ class ResponsiveLayoutTest {
         assertTrue(source.contains("VerticalScrollbar"))
         assertTrue(source.contains("contentScroll"))
         assertTrue(source.contains("LaunchedEffect(selected) { contentScroll.scrollTo(0) }"))
+    }
+
+    @Test
+    fun settings_visual_fixtures_open_the_requested_page_without_pointer_input() {
+        assertEquals("通用", auditSettingsTab("settings"))
+        assertEquals("下载", auditSettingsTab("settings_download"))
+        assertEquals("网络", auditSettingsTab("settings_network"))
+        assertEquals("投屏与推送", auditSettingsTab("settings_devices"))
+        assertEquals("外观", auditSettingsTab("settings_appearance"))
+        assertEquals(null, auditSettingsTab("tasks_1000"))
     }
 }

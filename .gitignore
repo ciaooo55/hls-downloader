@@ -29,7 +29,12 @@ bin/
 build/
 release/
 tools/
-artifacts/
+# Keep release evidence local, except for the canonical feature contract used
+# by the formal package gate.
+artifacts/*
+!artifacts/v7-productization/
+artifacts/v7-productization/*
+!artifacts/v7-productization/feature-parity.json
 desktop_ui/resources/common/
 
 # Runtime state

@@ -1,11 +1,11 @@
 # HLS Downloader 7.0.0 验证状态
 
-核验时间：2026-08-24
+核验时间：2026-08-26
 
 ## 已通过
 
-- 功能合同：`docs/feature-parity.json` 的 `25/25` 项均绑定旧版入口、v7 入口、Core 合同、状态事件和测试，机器校验为 `100%`。
-- Rust Core：`279/279`，覆盖 IPC、数据库、HTTP/HLS/DASH、FTP/SFTP、BT、播放器、投屏、迁移和恶意输入。
+- 功能合同：唯一权威清单为 `artifacts/v7-productization/feature-parity.json`，当前 `26/28` verified、`2` partial。正式打包要求清单全部 verified、`release_ready=true` 且 Git 工作树干净。
+- Rust Core：`331/331`，覆盖 IPC、数据库、HTTP/HLS/DASH、FTP/SFTP、BT、播放器、投屏、迁移和恶意输入。
 - HTTP 分段专项：`39/39`；96 MiB 实际 Range 下载 `76.82 MiB/s`，32 个分段无重叠，发布后额外网络字节为 `0`。
 - Compose：协议、组件、选择、右键菜单、设置、敌对输入和性能测试通过；1000 任务模型 P95 `14.802ms`。
 - 热确认窗口：可见 P95 `31.03ms`，Native Host 提交 P95 `6.65ms`，提交到可见 P95 `27.95ms`，门槛均为 `100ms`。
@@ -16,7 +16,7 @@
 - 挂机：Core 30 秒工作集 `11.809 -> 11.797 MiB`；1000 次 IPC P95 `0.376ms`，错误和句柄增长均为 `0`。
 - 安装后验证：Compose、Engine、Presenter 均从 `%LOCALAPPDATA%\Programs\HLSDownloader` 运行；窗口 `1280x760`，版本 `7.0.0`，图标和未授权 `401` 门禁通过。
 - 便携升级：配置、数据库和下载目录保留，升级后真实回滚通过。
-- PowerShell：15 个用户/维护脚本在 Windows PowerShell 5.1 与 PowerShell 7.6 中均通过语法解析。
+- PowerShell：18 个用户/维护脚本在 Windows PowerShell 5.1 与 PowerShell 7.6 中均通过语法解析。
 
 ## 本机构建哈希
 

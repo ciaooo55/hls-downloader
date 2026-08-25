@@ -130,41 +130,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         settings.as_ref(),
     )));
     let known_tasks = Arc::new(Mutex::new(initial_tasks));
-    let show_progress = matches!(
-        &settings,
-        Some(CorePipeResponse::Settings {
-            progress_window_enabled: true,
-            ..
-        })
-    );
-    let show_complete = matches!(
-        &settings,
-        Some(CorePipeResponse::Settings {
-            complete_popup_enabled: true,
-            ..
-        })
-    );
-    let sound_enabled = matches!(
-        &settings,
-        Some(CorePipeResponse::Settings {
-            completion_sound_enabled: true,
-            ..
-        })
-    );
-    let dark = matches!(
-        &settings,
-        Some(CorePipeResponse::Settings {
-            dark_mode: true,
-            ..
-        })
-    );
-    let reduce_motion = matches!(
-        &settings,
-        Some(CorePipeResponse::Settings {
-            reduce_motion: true,
-            ..
-        })
-    ) || os_reduce_motion();
+    let runtime_settings = Rc::new(RefCell::new(PresenterRuntimeSettings::from_response(
+        settings.as_ref(),
+    )));
+    let initial_runtime = *runtime_settings.borrow();
 
     let confirm = ConfirmWindow::new()?;
     let progress = ProgressWindow::new()?;
@@ -172,12 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     confirm.hide()?;
     progress.hide()?;
     complete.hide()?;
-    confirm.global::<Tokens>().set_dark(dark);
-    confirm.global::<Tokens>().set_reduce_motion(reduce_motion);
-    progress.global::<Tokens>().set_dark(dark);
-    progress.global::<Tokens>().set_reduce_motion(reduce_motion);
-    complete.global::<Tokens>().set_dark(dark);
-    complete.global::<Tokens>().set_reduce_motion(reduce_motion);
+    apply_runtime_settings(&confirm, &progress, &complete, initial_runtime);
 
     let prewarm_rendered = Arc::new(AtomicBool::new(false));
     confirm.window().set_rendering_notifier({
@@ -387,6 +351,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let active_task = Rc::clone(&active_task);
         let completed_task = Rc::clone(&completed_task);
         let completed_notified = Rc::clone(&completed_notified);
+        let client = Rc::clone(&client);
+        let runtime_settings = Rc::clone(&runtime_settings);
         let confirm = confirm.as_weak();
         let progress = progress.as_weak();
         let complete = complete.as_weak();
@@ -408,13 +374,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for envelope in events {
                     match envelope.event {
                         CoreEvent::HandoffOffered { .. } | CoreEvent::HandoffResolved { .. } => {}
+                        CoreEvent::SettingsChanged { .. } => {
+                            if let Ok(response) = client.borrow_mut().load_settings() {
+                                let next = PresenterRuntimeSettings::from_response(Some(&response));
+                                *runtime_settings.borrow_mut() = next;
+                                if let (Some(confirm), Some(progress), Some(complete)) =
+                                    (confirm.upgrade(), progress.upgrade(), complete.upgrade())
+                                {
+                                    apply_runtime_settings(&confirm, &progress, &complete, next);
+                                    if !next.show_progress {
+                                        let _ = progress.hide();
+                                    }
+                                    if !next.show_complete {
+                                        let _ = complete.hide();
+                                    }
+                                }
+                            }
+                        }
                         CoreEvent::TaskCreated { snapshot }
                         | CoreEvent::TaskUpdated { snapshot }
                         | CoreEvent::TaskProgress { snapshot } => update_task_windows(
                             snapshot,
-                            show_progress,
-                            show_complete,
-                            sound_enabled,
+                            *runtime_settings.borrow(),
                             &progress,
                             &complete,
                             &active_task,
@@ -852,12 +833,64 @@ fn trace(message: &str) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn update_task_windows(
-    snapshot: TaskSnapshot,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PresenterRuntimeSettings {
     show_progress: bool,
     show_complete: bool,
     sound_enabled: bool,
+    dark: bool,
+    reduce_motion: bool,
+}
+
+impl PresenterRuntimeSettings {
+    fn from_response(response: Option<&CorePipeResponse>) -> Self {
+        match response {
+            Some(CorePipeResponse::Settings {
+                progress_window_enabled,
+                complete_popup_enabled,
+                completion_sound_enabled,
+                dark_mode,
+                reduce_motion,
+                ..
+            }) => Self {
+                show_progress: *progress_window_enabled,
+                show_complete: *complete_popup_enabled,
+                sound_enabled: *completion_sound_enabled,
+                dark: *dark_mode,
+                reduce_motion: *reduce_motion || os_reduce_motion(),
+            },
+            _ => Self {
+                reduce_motion: os_reduce_motion(),
+                ..Self::default()
+            },
+        }
+    }
+}
+
+fn apply_runtime_settings(
+    confirm: &ConfirmWindow,
+    progress: &ProgressWindow,
+    complete: &CompleteWindow,
+    settings: PresenterRuntimeSettings,
+) {
+    confirm.global::<Tokens>().set_dark(settings.dark);
+    confirm
+        .global::<Tokens>()
+        .set_reduce_motion(settings.reduce_motion);
+    progress.global::<Tokens>().set_dark(settings.dark);
+    progress
+        .global::<Tokens>()
+        .set_reduce_motion(settings.reduce_motion);
+    complete.global::<Tokens>().set_dark(settings.dark);
+    complete
+        .global::<Tokens>()
+        .set_reduce_motion(settings.reduce_motion);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_task_windows(
+    snapshot: TaskSnapshot,
+    settings: PresenterRuntimeSettings,
     progress: &slint::Weak<ProgressWindow>,
     complete: &slint::Weak<CompleteWindow>,
     active_task: &RefCell<Option<String>>,
@@ -869,7 +902,7 @@ fn update_task_windows(
         "downloading" | "recording" | "merging" | "checking"
     ) {
         *active_task.borrow_mut() = Some(snapshot.task_id.clone());
-        if show_progress {
+        if settings.show_progress {
             if let Some(item) = progress.upgrade() {
                 item.set_headline(
                     if matches!(snapshot.status.as_str(), "merging" | "checking") {
@@ -902,10 +935,10 @@ fn update_task_windows(
             .insert(snapshot.task_id.clone())
     {
         *completed_task.borrow_mut() = Some(snapshot.task_id.clone());
-        if sound_enabled {
+        if settings.sound_enabled {
             completion_sound();
         }
-        if show_complete {
+        if settings.show_complete {
             if let Some(item) = complete.upgrade() {
                 item.set_filename(snapshot.filename.into());
                 item.set_power_hint("".into());

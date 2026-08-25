@@ -10,6 +10,12 @@ $contractSource = Get-Content -LiteralPath (Join-Path $repo 'native_shell\src\co
 if ($contractSource -notmatch 'V7_PROTOCOL_NAME') {
     throw 'v7 build refused: Rust v7 protocol contract is missing.'
 }
+$featureParity = Join-Path $repo 'artifacts\v7-productization\feature-parity.json'
+$provenance = Join-Path $repo 'artifacts\v7-productization\package\BUILD-PROVENANCE.json'
+if ($Task -eq 'package') {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireReleaseReady -RequireCleanWorktree -ProvenancePath $provenance
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 $env:CARGO_HOME='E:\HLSDownloaderBuildCache\cargo'
 $env:CARGO_TARGET_DIR='D:\HLSDownloaderBuildCache\cargo-target'
 $env:GRADLE_USER_HOME='E:\HLSDownloaderBuildCache\gradle'
@@ -22,6 +28,11 @@ $sevenZipUrl = 'https://github.com/ip7z/7zip/releases/download/26.02/7zr.exe'
 $sevenZipSha256 = '56b8cc9f4971cef253644fafe54063ed7fdca551d4dee0f8c6baa81b855acd72'
 $libMpvArchiveUrl = 'https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260814/mpv-dev-x86_64-20260814-git-7b8915bc1d.7z'
 $libMpvArchiveSha256 = '0af22b28e920620036d3ae08fd9283156dc9af0420bf4df84b0e02282094599c'
+$curlImpersonateVersion = 'v2.0.0'
+$curlImpersonateCache = "E:\HLSDownloaderBuildCache\curl-impersonate-$curlImpersonateVersion"
+$curlImpersonateArchive = Join-Path $curlImpersonateCache 'curl-impersonate-v2.0.0.x86_64-win32.tar.gz'
+$curlImpersonateUrl = 'https://github.com/lexiforest/curl-impersonate/releases/download/v2.0.0/curl-impersonate-v2.0.0.x86_64-win32.tar.gz'
+$curlImpersonateSha256 = 'd2e5905f8adf76f042afe78d1758a978253afddf4eb7bdcb8ddfb38c2f0e530c'
 
 function Assert-FileSha256([string]$Path, [string]$Expected, [string]$Label) {
     if (-not (Test-Path -LiteralPath $Path)) { throw "$Label is missing: $Path" }
@@ -59,6 +70,30 @@ function Copy-LibMpv([string]$Destination) {
         Assert-FileSha256 (Join-Path $Destination 'libmpv-2.dll') ((Get-FileHash -LiteralPath $dll.FullName -Algorithm SHA256).Hash) 'bundled libmpv-2.dll'
     } finally { Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue }
 }
+
+function Copy-CurlImpersonate([string]$Destination) {
+    Get-VerifiedFile $curlImpersonateUrl $curlImpersonateArchive $curlImpersonateSha256 "curl-impersonate $curlImpersonateVersion Windows x64 archive"
+    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+    if (-not $tar) { throw 'tar.exe is required to extract curl-impersonate.' }
+    $extract = Join-Path $curlImpersonateCache 'extract'
+    if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $extract | Out-Null
+    try {
+        & $tar.Source -xzf $curlImpersonateArchive -C $extract './curl-impersonate.exe'
+        if ($LASTEXITCODE -ne 0) { throw "tar.exe failed to extract curl-impersonate.exe (exit $LASTEXITCODE)" }
+        $source = Join-Path $extract 'curl-impersonate.exe'
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw 'Verified curl-impersonate archive did not contain curl-impersonate.exe.'
+        }
+        $toolDirectory = Join-Path (Join-Path $Destination 'tools') 'curl-impersonate'
+        New-Item -ItemType Directory -Force -Path $toolDirectory | Out-Null
+        $target = Join-Path $toolDirectory 'curl-impersonate.exe'
+        Copy-Item -LiteralPath $source -Destination $target -Force
+        Assert-FileSha256 $target ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash) 'bundled curl-impersonate.exe'
+    } finally {
+        Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 $cargo = 'C:\Users\lee\.cargo\bin\cargo.exe'
 $engineTarget = if ($Task -eq 'package') { 'release' } else { 'debug' }
 & $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-engine
@@ -86,6 +121,8 @@ if ($Task -eq 'package') {
     Copy-Item -LiteralPath $nativeHost -Destination (Join-Path $resources 'HLSDownloaderNativeHost.exe') -Force
     Copy-Item -LiteralPath $updater -Destination (Join-Path $resources 'HLSDownloaderUpdater.exe') -Force
     Copy-Item -LiteralPath $presenter -Destination (Join-Path $resources 'HLSDownloaderPresenter.exe') -Force
+    Copy-Item -LiteralPath $featureParity -Destination (Join-Path $resources 'FEATURE-PARITY.json') -Force
+    Copy-Item -LiteralPath $provenance -Destination (Join-Path $resources 'BUILD-PROVENANCE.json') -Force
     # Ship the media tools beside the v7 workbench when the local toolchain
     # provides them. The Core reads these names from its packaged directory.
     $ffmpegRoot = 'C:\Users\lee\.conda\envs\test\Library\bin'
@@ -95,6 +132,7 @@ if ($Task -eq 'package') {
             Copy-Item -LiteralPath $source -Destination (Join-Path $resources $tool) -Force
         }
     }
+    Copy-CurlImpersonate $resources
     Copy-LibMpv $resources
     # Compose's jlink task rejects a leftover output directory after an interrupted package run.
     $runtimeImage = 'D:\HLSDownloaderBuildCache\compose-build\compose\tmp\main\runtime'
@@ -126,5 +164,6 @@ try {
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\create-v7-portable.ps1" -OutZip "$repo\artifacts\v7-productization\package\HLSDownloader-7.0.0-Windows-x64-Portable.zip"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        Copy-Item -LiteralPath $featureParity -Destination "$repo\artifacts\v7-productization\package\FEATURE-PARITY.json" -Force
     }
 } finally { Pop-Location }

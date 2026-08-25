@@ -1,11 +1,12 @@
 //! HLS / LL-HLS downloader. Segments use the HTTP engine; mux is local.
 
-use crate::http_engine::{fetch_bytes, run_job, Job};
+use crate::http_engine::{fetch_hls_bytes, fetch_hls_bytes_range};
 use crate::media::merge::{concat_files, merge_with_ffmpeg, mux_av};
 use crate::media::subtitles::{has_cues, merge_webvtt_segments, webvtt_to_srt};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Playlist {
@@ -15,7 +16,10 @@ pub struct Playlist {
     pub target_duration: f64,
     pub part_target: f64,
     pub map_uri: Option<String>,
+    pub map_byterange: Option<(u64, u64)>,
     pub key: Option<MediaKey>,
+    pub can_block_reload: bool,
+    pub skipped_segments: u64,
     pub variants: Vec<Variant>,
     pub segments: Vec<Segment>,
     pub renditions: Vec<Rendition>,
@@ -43,11 +47,23 @@ pub struct Variant {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Segment {
     pub uri: String,
+    pub media_sequence: u64,
+    pub part_index: Option<u64>,
+    pub key: Option<MediaKey>,
+    pub init_map: Option<InitMap>,
+    pub gap: bool,
     pub duration: f64,
     pub discontinuity: bool,
     pub byterange: Option<(u64, u64)>,
     pub is_part: bool,
     pub is_ad: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InitMap {
+    pub uri: String,
+    pub byterange: Option<(u64, u64)>,
+    pub key: Option<MediaKey>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,7 +84,10 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
         target_duration: 6.0,
         part_target: 0.0,
         map_uri: None,
+        map_byterange: None,
         key: None,
+        can_block_reload: false,
+        skipped_segments: 0,
         variants: Vec::new(),
         segments: Vec::new(),
         renditions: Vec::new(),
@@ -78,8 +97,15 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
     let mut pending_resolution = (0u32, 0u32);
     let mut pending_audio_group = String::new();
     let mut pending_duration = 0.0;
-    let mut pending_range: Option<(u64, u64)> = None;
+    let mut pending_range: Option<(Option<u64>, u64)> = None;
+    let mut media_range_ends = HashMap::new();
+    let mut map_range_ends = HashMap::new();
+    let mut current_key: Option<MediaKey> = None;
+    let mut current_map: Option<InitMap> = None;
+    let mut complete_segments = 0u64;
+    let mut part_index = 0u64;
     let mut discontinuity = false;
+    let mut pending_gap = false;
     let mut ad_cue_active = false;
     let mut pending_daterange_ad = false;
     for raw in text.lines() {
@@ -91,12 +117,19 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
             playlist.target_duration = value.parse().unwrap_or(6.0);
         } else if let Some(value) = tag_value(line, "#EXT-X-MEDIA-SEQUENCE:") {
             playlist.media_sequence = value.parse().unwrap_or(0);
+        } else if let Some(attrs) = tag_value(line, "#EXT-X-SERVER-CONTROL:") {
+            playlist.can_block_reload = attr_str(attrs, "CAN-BLOCK-RELOAD")
+                .is_some_and(|value| value.eq_ignore_ascii_case("YES"));
+        } else if let Some(attrs) = tag_value(line, "#EXT-X-SKIP:") {
+            playlist.skipped_segments = attr_u64(attrs, "SKIPPED-SEGMENTS").unwrap_or(0);
         } else if let Some(attrs) = tag_value(line, "#EXT-X-PART-INF:") {
             playlist.part_target = attr_f64(attrs, "PART-TARGET").unwrap_or(0.0);
         } else if line == "#EXT-X-ENDLIST" {
             playlist.end_list = true;
         } else if line == "#EXT-X-DISCONTINUITY" {
             discontinuity = true;
+        } else if line == "#EXT-X-GAP" {
+            pending_gap = true;
         } else if line.starts_with("#EXT-X-CUE-IN") {
             ad_cue_active = false;
         } else if line.starts_with("#EXT-X-CUE-OUT") {
@@ -113,27 +146,54 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                 parse_resolution(&attr_str(attrs, "RESOLUTION").unwrap_or_default());
             pending_audio_group = attr_str(attrs, "AUDIO").unwrap_or_default();
         } else if let Some(attrs) = tag_value(line, "#EXT-X-MAP:") {
-            playlist.map_uri = attr_str(attrs, "URI")
+            let uri = attr_str(attrs, "URI")
                 .map(|uri| resolve(base, &uri))
                 .filter(|uri| !uri.is_empty());
+            let byterange = match (uri.as_deref(), attr_str(attrs, "BYTERANGE")) {
+                (Some(uri), Some(value)) => Some(resolve_byterange(
+                    parse_byterange(&value)?,
+                    uri,
+                    &mut map_range_ends,
+                )?),
+                _ => None,
+            };
+            playlist.map_uri = uri.clone();
+            playlist.map_byterange = byterange;
+            current_map = uri.map(|uri| InitMap {
+                uri,
+                byterange,
+                key: current_key.clone(),
+            });
         } else if let Some(attrs) = tag_value(line, "#EXT-X-KEY:") {
             let method = attr_str(attrs, "METHOD").unwrap_or_default();
-            if method.eq_ignore_ascii_case("SAMPLE-AES") {
-                return Err("SAMPLE-AES / DRM is not supported".into());
+            if method.eq_ignore_ascii_case("NONE") {
+                current_key = None;
+                playlist.key = None;
+                continue;
+            }
+            if !method.eq_ignore_ascii_case("AES-128") {
+                return Err(format!("不支持的 HLS 加密方法: {method}"));
             }
             if let Some(format) = attr_str(attrs, "KEYFORMAT") {
                 if !format.is_empty() && !format.eq_ignore_ascii_case("identity") {
                     return Err(format!("不支持 KEYFORMAT={format} / DRM 加密"));
                 }
             }
-            playlist.key = Some(MediaKey {
+            let key = MediaKey {
                 method,
                 uri: attr_str(attrs, "URI")
                     .map(|uri| resolve(base, &uri))
                     .filter(|uri| !uri.is_empty())
                     .unwrap_or_default(),
-                iv: attr_str(attrs, "IV").and_then(|hex| parse_iv(&hex)),
-            });
+                iv: attr_str(attrs, "IV")
+                    .map(|hex| parse_iv(&hex))
+                    .transpose()?,
+            };
+            if key.uri.is_empty() {
+                return Err("AES-128 KEY 缺少有效 URI".into());
+            }
+            current_key = Some(key.clone());
+            playlist.key = Some(key);
         } else if let Some(value) = tag_value(line, "#EXTINF:") {
             pending_duration = value
                 .split(',')
@@ -141,25 +201,47 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                 .and_then(|item| item.parse().ok())
                 .unwrap_or(0.0);
         } else if let Some(value) = tag_value(line, "#EXT-X-BYTERANGE:") {
-            pending_range = parse_byterange(value);
+            pending_range = Some(parse_byterange(value)?);
         } else if let Some(attrs) = tag_value(line, "#EXT-X-PART:") {
             if let Some(uri) = attr_str(attrs, "URI") {
                 let resolved = resolve(base, &uri);
                 if resolved.is_empty() {
                     pending_daterange_ad = false;
                     discontinuity = false;
+                    pending_gap = false;
+                    pending_range = None;
                     continue;
                 }
                 playlist.segments.push(Segment {
                     uri: resolved.clone(),
+                    media_sequence: playlist
+                        .media_sequence
+                        .saturating_add(playlist.skipped_segments)
+                        .saturating_add(complete_segments),
+                    part_index: Some(part_index),
+                    key: current_key.clone(),
+                    init_map: current_map.clone(),
+                    gap: pending_gap
+                        || attr_str(attrs, "GAP")
+                            .is_some_and(|value| value.eq_ignore_ascii_case("YES")),
                     duration: attr_f64(attrs, "DURATION").unwrap_or(0.0),
                     discontinuity,
-                    byterange: None,
+                    byterange: match attr_str(attrs, "BYTERANGE") {
+                        Some(value) => Some(resolve_byterange(
+                            parse_byterange(&value)?,
+                            &resolved,
+                            &mut media_range_ends,
+                        )?),
+                        None => None,
+                    },
                     is_part: true,
                     is_ad: ad_cue_active || pending_daterange_ad || url_is_ad(&resolved),
                 });
+                part_index = part_index.saturating_add(1);
                 pending_daterange_ad = false;
                 discontinuity = false;
+                pending_gap = false;
+                pending_range = None;
             }
         } else if let Some(attrs) = tag_value(line, "#EXT-X-MEDIA:") {
             playlist.renditions.push(Rendition {
@@ -184,6 +266,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                 pending_duration = 0.0;
                 pending_range = None;
                 discontinuity = false;
+                pending_gap = false;
                 continue;
             }
             if playlist.is_master || pending_bandwidth > 0 {
@@ -200,18 +283,32 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                 pending_resolution = (0, 0);
                 pending_audio_group.clear();
             } else {
+                let byterange = pending_range
+                    .take()
+                    .map(|range| resolve_byterange(range, &uri, &mut media_range_ends))
+                    .transpose()?;
                 playlist.segments.push(Segment {
                     is_ad: ad_cue_active || pending_daterange_ad || url_is_ad(&uri),
                     uri,
+                    media_sequence: playlist
+                        .media_sequence
+                        .saturating_add(playlist.skipped_segments)
+                        .saturating_add(complete_segments),
+                    part_index: None,
+                    key: current_key.clone(),
+                    init_map: current_map.clone(),
+                    gap: pending_gap,
                     duration: pending_duration,
                     discontinuity,
-                    byterange: pending_range,
+                    byterange,
                     is_part: false,
                 });
                 pending_daterange_ad = false;
                 pending_duration = 0.0;
-                pending_range = None;
                 discontinuity = false;
+                pending_gap = false;
+                complete_segments = complete_segments.saturating_add(1);
+                part_index = 0;
             }
         }
     }
@@ -387,6 +484,7 @@ pub fn select_subtitles(playlist: &Playlist) -> Vec<Rendition> {
 #[derive(Debug, Clone)]
 pub struct HlsDownloadOptions {
     pub live: bool,
+    pub concurrency: usize,
     pub preferred_bandwidth: u64,
     pub preferred_height: u32,
     pub preferred_audio: String,
@@ -400,6 +498,7 @@ impl Default for HlsDownloadOptions {
     fn default() -> Self {
         Self {
             live: false,
+            concurrency: 8,
             preferred_bandwidth: 0,
             preferred_height: 0,
             preferred_audio: String::new(),
@@ -409,6 +508,39 @@ impl Default for HlsDownloadOptions {
             progress: None,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct TimelineEntry {
+    identity: String,
+    media_sequence: u64,
+    part_index: Option<u64>,
+    path: PathBuf,
+    duration: f64,
+    discontinuity: bool,
+    init_map_path: Option<PathBuf>,
+}
+
+#[derive(Default)]
+struct LiveTimeline {
+    entries: Vec<TimelineEntry>,
+    next_slot: usize,
+}
+
+struct PreparedSegment {
+    segment: Segment,
+    identity: String,
+    slot: usize,
+    path: PathBuf,
+    init_map_path: Option<PathBuf>,
+    key_bytes: Option<Vec<u8>>,
+    needs_download: bool,
+}
+
+struct SegmentWork {
+    segment: Segment,
+    path: PathBuf,
+    key_bytes: Option<Vec<u8>>,
 }
 
 pub fn download_hls(
@@ -489,30 +621,21 @@ pub fn download_hls_with(
     apply_ad_policy(&mut playlist, options.skip_ads);
     let seg_dir = task_dir.join("segments");
     fs::create_dir_all(&seg_dir).map_err(|error| error.to_string())?;
-    let mut files = Vec::new();
-    let mut durations = Vec::new();
-    let mut discontinuities = Vec::new();
     let mut vod = VodCheckpoint::load(task_dir);
-    if let Some(map) = &playlist.map_uri {
-        files.push(download_one(
-            map,
-            headers,
-            proxy,
-            &seg_dir.join("init.mp4"),
-            control,
-        )?);
-    }
-    let mut key_bytes = None;
-    if let Some(key) = &playlist.key {
-        if key.method.eq_ignore_ascii_case("AES-128") {
-            let (_, bytes) =
-                fetch_bytes(&key.uri, headers, proxy).map_err(|error| error.to_string())?;
-            key_bytes = Some(bytes);
+    let state_path = task_dir.join("live_state.json");
+    let mut timeline = if live {
+        LiveTimeline::load(task_dir)
+    } else {
+        LiveTimeline::default()
+    };
+    let mut key_cache = HashMap::new();
+    let mut map_cache = HashMap::new();
+    for entry in &timeline.entries {
+        if let Some(path) = &entry.init_map_path {
+            map_cache.insert(path.to_string_lossy().to_string(), path.clone());
         }
     }
-    let state_path = task_dir.join("live_state.json");
-    let mut seen = load_seen(&state_path);
-    let mut recorded_duration = 0.0;
+    let mut recorded_duration: f64 = timeline.entries.iter().map(|entry| entry.duration).sum();
     let live_limit = if live && options.live_max_minutes > 0 {
         Some(options.live_max_minutes as f64 * 60.0)
     } else {
@@ -540,78 +663,77 @@ pub fn download_hls_with(
         if live && options.download_subtitles {
             live_subs.capture(headers, proxy, task_dir, control);
         }
-        for (index, segment) in playlist.segments.iter().enumerate() {
-            if !seen.insert(segment.uri.clone()) {
-                continue;
-            }
-            let name = format!("{:06}.{}", files.len(), extension(&segment.uri));
-            let identity = vod_segment_identity(
-                segment,
-                playlist.media_sequence + index as u64,
-                playlist.key.as_ref(),
-                playlist.map_uri.as_deref(),
-            );
-            let slot = files.len();
-            let path = match resume_segment_path(&seg_dir, slot, &segment.uri) {
-                Some(existing) if vod.can_reuse(slot, &identity, file_len(&existing)) => existing,
-                Some(existing) if vod.has_slot(slot) => {
-                    let _ = fs::remove_file(&existing);
-                    download_segment(
-                        segment,
-                        headers,
-                        proxy,
-                        &seg_dir.join(&name),
-                        control,
-                        key_bytes.as_ref(),
-                        playlist.key.as_ref(),
-                        playlist.media_sequence + index as u64,
-                    )?
+        let mut pending = pending_segments(&playlist, &timeline.entries);
+        if let Some(limit) = live_limit {
+            let mut remaining = (limit - recorded_duration).max(0.0);
+            pending.retain(|segment| {
+                if remaining <= 0.0 {
+                    return false;
                 }
-                Some(existing) => existing,
-                None => download_segment(
-                    segment,
-                    headers,
-                    proxy,
-                    &seg_dir.join(&name),
-                    control,
-                    key_bytes.as_ref(),
-                    playlist.key.as_ref(),
-                    playlist.media_sequence + index as u64,
-                )?,
-            };
-            if playlist.end_list || !live {
-                vod.remember(slot, &identity, file_len(&path));
-                vod.save(task_dir)?;
+                remaining -= segment.duration.max(0.0);
+                true
+            });
+        }
+        let prepared = prepare_segments(
+            pending,
+            headers,
+            proxy,
+            task_dir,
+            control,
+            live,
+            &vod,
+            &mut timeline.next_slot,
+            &mut key_cache,
+            &mut map_cache,
+        )?;
+        download_prepared_segments(
+            &prepared,
+            headers,
+            proxy,
+            control,
+            options.concurrency.max(1),
+        )?;
+        for prepared in prepared {
+            if !live {
+                vod.remember(prepared.slot, &prepared.identity, file_len(&prepared.path));
             }
-            recorded_duration += segment.duration.max(0.0);
-            files.push(path);
-            durations.push(segment.duration.max(0.0));
-            discontinuities.push(segment.discontinuity);
-            save_seen(&state_path, &seen)?;
+            let duration = prepared.segment.duration.max(0.0);
+            timeline.insert(TimelineEntry {
+                identity: prepared.identity,
+                media_sequence: prepared.segment.media_sequence,
+                part_index: prepared.segment.part_index,
+                path: prepared.path,
+                duration,
+                discontinuity: prepared.segment.discontinuity,
+                init_map_path: prepared.init_map_path,
+            });
+            recorded_duration = timeline.entries.iter().map(|entry| entry.duration).sum();
             if live {
-                write_local_playlist(
+                timeline.save(&state_path)?;
+                write_timeline_playlist(
                     task_dir,
                     playlist.target_duration,
-                    playlist.map_uri.is_some(),
-                    &files,
-                    &durations,
-                    &discontinuities,
+                    &timeline.entries,
                     false,
                 )?;
             }
-            if let Some(progress) = &options.progress {
-                let downloaded: u64 = files.iter().map(|item| file_len(item)).sum();
-                crate::http_engine::write_progress(
-                    progress,
-                    downloaded,
-                    0,
-                    0.0,
-                    if live { "recording" } else { "downloading" },
-                );
-            }
-            if live_limit.is_some_and(|limit| recorded_duration >= limit) {
-                break;
-            }
+        }
+        if !live {
+            vod.save(task_dir)?;
+        }
+        if let Some(progress) = &options.progress {
+            let downloaded: u64 = timeline
+                .entries
+                .iter()
+                .map(|entry| file_len(&entry.path))
+                .sum();
+            crate::http_engine::write_progress(
+                progress,
+                downloaded,
+                0,
+                0.0,
+                if live { "recording" } else { "downloading" },
+            );
         }
         if live_limit.is_some_and(|limit| recorded_duration >= limit) {
             break;
@@ -619,13 +741,17 @@ pub fn download_hls_with(
         if playlist.end_list || !live {
             break;
         }
-        let wait = if playlist.part_target > 0.0 {
-            playlist.part_target
+        if playlist.can_block_reload {
+            playlist = reload_playlist(&current, headers, proxy, &playlist)?;
         } else {
-            (playlist.target_duration / 2.0).max(0.2)
-        };
-        std::thread::sleep(std::time::Duration::from_secs_f64(wait.min(6.0)));
-        playlist = load_playlist(&current, headers, proxy)?;
+            let wait = if playlist.part_target > 0.0 {
+                playlist.part_target
+            } else {
+                (playlist.target_duration / 2.0).max(0.2)
+            };
+            wait_with_control(control, wait.min(6.0))?;
+            playlist = load_playlist(&current, headers, proxy)?;
+        }
         apply_ad_policy(&mut playlist, options.skip_ads);
         if playlist.end_list {
             continue;
@@ -637,13 +763,10 @@ pub fn download_hls_with(
     if playlist.end_list || !live {
         vod.save(task_dir)?;
     }
-    write_local_playlist(
+    write_timeline_playlist(
         task_dir,
         playlist.target_duration,
-        playlist.map_uri.is_some(),
-        &files,
-        &durations,
-        &discontinuities,
+        &timeline.entries,
         playlist.end_list || !live,
     )?;
     let mut audio_merged = None;
@@ -677,11 +800,16 @@ pub fn download_hls_with(
         }
     }
     let output = task_dir.join("merged.mp4");
-    let can_concat = playlist.map_uri.is_none()
-        && playlist
-            .segments
-            .iter()
-            .all(|segment| !segment.discontinuity && extension(&segment.uri) == "ts");
+    let files: Vec<PathBuf> = timeline
+        .entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
+    let can_concat = timeline.entries.iter().all(|entry| {
+        entry.init_map_path.is_none()
+            && !entry.discontinuity
+            && extension(entry.path.to_string_lossy().as_ref()) == "ts"
+    });
     if can_concat {
         concat_files(&files, &output)?;
     } else {
@@ -693,6 +821,590 @@ pub fn download_hls_with(
         return Ok(muxed);
     }
     Ok(output)
+}
+
+impl LiveTimeline {
+    fn load(task_dir: &Path) -> Self {
+        let path = task_dir.join("live_state.json");
+        let Ok(text) = fs::read_to_string(path) else {
+            return Self::default();
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return Self::default();
+        };
+        if value.get("version").and_then(|item| item.as_u64()) != Some(2) {
+            return Self::default();
+        }
+        let mut entries = Vec::new();
+        let Some(items) = value.get("segments").and_then(|item| item.as_array()) else {
+            return Self::default();
+        };
+        for item in items {
+            let identity = item
+                .get("identity")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string();
+            let Some(media_sequence) = item.get("media_sequence").and_then(|value| value.as_u64())
+            else {
+                continue;
+            };
+            let Some(path) = item
+                .get("path")
+                .and_then(|value| value.as_str())
+                .and_then(|leaf| state_file(task_dir, leaf))
+            else {
+                continue;
+            };
+            if identity.is_empty() || file_len(&path) == 0 {
+                continue;
+            }
+            let init_map_path = item
+                .get("init_map_path")
+                .and_then(|value| value.as_str())
+                .and_then(|leaf| state_file(task_dir, leaf))
+                .filter(|path| file_len(path) > 0);
+            entries.push(TimelineEntry {
+                identity,
+                media_sequence,
+                part_index: item.get("part_index").and_then(|value| value.as_u64()),
+                path,
+                duration: item
+                    .get("duration")
+                    .and_then(|value| value.as_f64())
+                    .unwrap_or(0.0)
+                    .max(0.0),
+                discontinuity: item
+                    .get("discontinuity")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false),
+                init_map_path,
+            });
+        }
+        sort_timeline(&mut entries);
+        let next_slot = entries
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .and_then(|value| value.parse::<usize>().ok())
+            })
+            .max()
+            .map(|slot| slot.saturating_add(1))
+            .unwrap_or(0);
+        Self { entries, next_slot }
+    }
+
+    fn insert(&mut self, entry: TimelineEntry) {
+        if self
+            .entries
+            .iter()
+            .any(|existing| existing.identity == entry.identity)
+        {
+            return;
+        }
+        let mut removed = Vec::new();
+        self.entries.retain(|existing| {
+            let replace = if entry.part_index.is_none() {
+                existing.media_sequence == entry.media_sequence
+            } else {
+                existing.media_sequence == entry.media_sequence
+                    && existing.part_index == entry.part_index
+            };
+            if replace {
+                removed.push(existing.path.clone());
+            }
+            !replace
+        });
+        self.entries.push(entry);
+        sort_timeline(&mut self.entries);
+        for path in removed {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    fn save(&self, path: &Path) -> Result<(), String> {
+        let segments: Vec<serde_json::Value> = self
+            .entries
+            .iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "identity": entry.identity,
+                    "media_sequence": entry.media_sequence,
+                    "part_index": entry.part_index,
+                    "path": playlist_leaf(&entry.path),
+                    "duration": entry.duration,
+                    "discontinuity": entry.discontinuity,
+                    "init_map_path": entry.init_map_path.as_deref().map(playlist_leaf),
+                })
+            })
+            .collect();
+        write_json_atomic(
+            path,
+            &serde_json::json!({ "version": 2, "segments": segments }).to_string(),
+        )
+    }
+}
+
+fn write_timeline_playlist(
+    task_dir: &Path,
+    target_duration: f64,
+    entries: &[TimelineEntry],
+    complete: bool,
+) -> Result<(), String> {
+    let mut text = String::from("#EXTM3U\n#EXT-X-VERSION:9\n");
+    text.push_str(if complete {
+        "#EXT-X-PLAYLIST-TYPE:VOD\n"
+    } else {
+        "#EXT-X-PLAYLIST-TYPE:EVENT\n"
+    });
+    let media_sequence = entries
+        .first()
+        .map(|entry| entry.media_sequence)
+        .unwrap_or(0);
+    text.push_str(&format!(
+        "#EXT-X-TARGETDURATION:{}\n#EXT-X-MEDIA-SEQUENCE:{media_sequence}\n",
+        target_duration.max(1.0).ceil() as u64
+    ));
+    let mut current_map = None;
+    for entry in entries {
+        let map = entry
+            .init_map_path
+            .as_deref()
+            .map(playlist_leaf)
+            .filter(|leaf| !leaf.is_empty());
+        if map != current_map {
+            if let Some(ref map) = map {
+                text.push_str(&format!("#EXT-X-MAP:URI=\"segments/{map}\"\n"));
+            }
+            current_map = map.clone();
+        }
+        if entry.discontinuity {
+            text.push_str("#EXT-X-DISCONTINUITY\n");
+        }
+        text.push_str(&format!(
+            "#EXTINF:{:.3},\nsegments/{}\n",
+            entry.duration.max(0.0),
+            playlist_leaf(&entry.path)
+        ));
+    }
+    if complete {
+        text.push_str("#EXT-X-ENDLIST\n");
+    }
+    write_text_atomic(&task_dir.join("local.m3u8"), &text)
+}
+
+fn reload_playlist(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    previous: &Playlist,
+) -> Result<Playlist, String> {
+    let blocking_url = blocking_reload_url(url, previous);
+    match load_playlist(&blocking_url, headers, proxy) {
+        Ok(playlist) if !playlist.segments.is_empty() || playlist.end_list => Ok(playlist),
+        Ok(_) | Err(_) => load_playlist(url, headers, proxy),
+    }
+}
+
+fn blocking_reload_url(url: &str, previous: &Playlist) -> String {
+    let last = previous.segments.last();
+    let (msn, part) = match last.and_then(|segment| segment.part_index) {
+        Some(part) => (
+            last.map(|segment| segment.media_sequence)
+                .unwrap_or_else(|| {
+                    previous
+                        .media_sequence
+                        .saturating_add(previous.skipped_segments)
+                }),
+            Some(part.saturating_add(1)),
+        ),
+        None => (
+            last.map(|segment| segment.media_sequence.saturating_add(1))
+                .unwrap_or_else(|| {
+                    previous
+                        .media_sequence
+                        .saturating_add(previous.skipped_segments)
+                }),
+            None,
+        ),
+    };
+    let mut query = vec![("_HLS_msn", msn.to_string())];
+    if let Some(part) = part {
+        query.push(("_HLS_part", part.to_string()));
+    }
+    if previous.skipped_segments > 0 {
+        query.push(("_HLS_skip", "YES".to_string()));
+    }
+    append_query(url, &query)
+}
+
+fn append_query(url: &str, params: &[(&str, String)]) -> String {
+    if params.is_empty() {
+        return url.to_string();
+    }
+    let (without_fragment, fragment) = url.split_once('#').unwrap_or((url, ""));
+    let (base, existing) = without_fragment
+        .split_once('?')
+        .unwrap_or((without_fragment, ""));
+    let names: BTreeSet<&str> = params.iter().map(|(key, _)| *key).collect();
+    let mut query = existing
+        .split('&')
+        .filter(|part| {
+            let name = part.split_once('=').map(|(name, _)| name).unwrap_or(part);
+            !names.contains(name)
+        })
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    query.extend(params.iter().map(|(key, value)| format!("{key}={value}")));
+    let suffix = query.join("&");
+    let separator = if suffix.is_empty() { "" } else { "?" };
+    if fragment.is_empty() {
+        format!("{base}{separator}{suffix}")
+    } else {
+        format!("{base}{separator}{suffix}#{fragment}")
+    }
+}
+
+fn wait_with_control(control: &Path, seconds: f64) -> Result<(), String> {
+    let total = seconds.max(0.0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(total);
+    while std::time::Instant::now() < deadline {
+        match read_control(control).as_str() {
+            "cancel" => return Err("canceled".into()),
+            "pause" => return Err("paused".into()),
+            _ => {}
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        std::thread::sleep(remaining.min(std::time::Duration::from_millis(100)));
+    }
+    Ok(())
+}
+
+fn write_json_atomic(path: &Path, text: &str) -> Result<(), String> {
+    write_text_atomic(path, text)
+}
+
+fn write_text_atomic(path: &Path, text: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "HLS 状态路径缺少父目录".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "HLS 状态路径无效".to_string())?;
+    let temporary = parent.join(format!(".{name}.tmp"));
+    let mut file = fs::File::create(&temporary).map_err(|error| error.to_string())?;
+    use std::io::Write;
+    file.write_all(text.as_bytes())
+        .and_then(|_| file.sync_all())
+        .map_err(|error| error.to_string())?;
+    drop(file);
+    replace_file_atomic(&temporary, path).map_err(|error| error.to_string())
+}
+
+#[cfg(windows)]
+fn replace_file_atomic(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    let result = unsafe {
+        windows_sys::Win32::Storage::FileSystem::MoveFileExW(
+            from.as_ptr(),
+            to.as_ptr(),
+            windows_sys::Win32::Storage::FileSystem::MOVEFILE_REPLACE_EXISTING
+                | windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_file_atomic(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::rename(from, to)
+}
+
+fn sort_timeline(entries: &mut [TimelineEntry]) {
+    entries.sort_by_key(|entry| (entry.media_sequence, entry.part_index.unwrap_or(u64::MAX)));
+}
+
+fn state_file(task_dir: &Path, leaf: &str) -> Option<PathBuf> {
+    if playlist_leaf(Path::new(leaf)) != leaf {
+        return None;
+    }
+    Some(task_dir.join("segments").join(leaf))
+}
+
+fn pending_segments(playlist: &Playlist, timeline: &[TimelineEntry]) -> Vec<Segment> {
+    let full_in_playlist: BTreeSet<u64> = playlist
+        .segments
+        .iter()
+        .filter(|segment| segment.part_index.is_none())
+        .map(|segment| segment.media_sequence)
+        .collect();
+    let full_downloaded: BTreeSet<u64> = timeline
+        .iter()
+        .filter(|entry| entry.part_index.is_none())
+        .map(|entry| entry.media_sequence)
+        .collect();
+    let identities: BTreeSet<&str> = timeline
+        .iter()
+        .map(|entry| entry.identity.as_str())
+        .collect();
+    let mut positions = BTreeSet::new();
+    playlist
+        .segments
+        .iter()
+        .filter(|segment| !segment.gap)
+        .filter(|segment| {
+            !segment.is_part
+                || !full_in_playlist.contains(&segment.media_sequence)
+                    && !full_downloaded.contains(&segment.media_sequence)
+        })
+        .filter(|segment| !identities.contains(segment_identity(segment).as_str()))
+        .filter(|segment| positions.insert((segment.media_sequence, segment.part_index)))
+        .cloned()
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_segments(
+    segments: Vec<Segment>,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    task_dir: &Path,
+    control: &Path,
+    live: bool,
+    vod: &VodCheckpoint,
+    next_slot: &mut usize,
+    key_cache: &mut HashMap<String, Vec<u8>>,
+    map_cache: &mut HashMap<String, PathBuf>,
+) -> Result<Vec<PreparedSegment>, String> {
+    let seg_dir = task_dir.join("segments");
+    let mut prepared = Vec::new();
+    for segment in segments {
+        let slot = *next_slot;
+        *next_slot = next_slot.saturating_add(1);
+        let identity = segment_identity(&segment);
+        let init_map_path = match &segment.init_map {
+            Some(init_map) => Some(ensure_init_map(
+                init_map,
+                segment.media_sequence,
+                headers,
+                proxy,
+                &seg_dir,
+                control,
+                key_cache,
+                map_cache,
+            )?),
+            None => None,
+        };
+        let key_bytes = match &segment.key {
+            Some(key) => Some(load_key(key, headers, proxy, key_cache)?),
+            None => None,
+        };
+        let name = format!("{:06}.{}", slot, extension(&segment.uri));
+        let output = seg_dir.join(name);
+        let (path, needs_download) = if live {
+            (output, true)
+        } else {
+            match resume_segment_path(&seg_dir, slot, &segment.uri) {
+                Some(existing) if vod.can_reuse(slot, &identity, file_len(&existing)) => {
+                    (existing, false)
+                }
+                Some(existing) if vod.has_slot(slot) => {
+                    let _ = fs::remove_file(existing);
+                    (output, true)
+                }
+                Some(existing) => (existing, false),
+                None => (output, true),
+            }
+        };
+        prepared.push(PreparedSegment {
+            segment,
+            identity,
+            slot,
+            path,
+            init_map_path,
+            key_bytes,
+            needs_download,
+        });
+    }
+    Ok(prepared)
+}
+
+fn download_prepared_segments(
+    prepared: &[PreparedSegment],
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    control: &Path,
+    concurrency: usize,
+) -> Result<(), String> {
+    let queue: VecDeque<SegmentWork> = prepared
+        .iter()
+        .filter(|item| item.needs_download)
+        .map(|item| SegmentWork {
+            segment: item.segment.clone(),
+            path: item.path.clone(),
+            key_bytes: item.key_bytes.clone(),
+        })
+        .collect();
+    if queue.is_empty() {
+        return Ok(());
+    }
+    let worker_count = concurrency.min(queue.len()).max(1);
+    let queue = Arc::new(Mutex::new(queue));
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let replay = crate::credentials::scoped_replay_json();
+    let throttle = crate::net_policy::current_throttle_context();
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let queue = Arc::clone(&queue);
+            let errors = Arc::clone(&errors);
+            let replay = replay.clone();
+            let throttle = throttle.clone();
+            scope.spawn(move || {
+                crate::net_policy::with_throttle_context(throttle, || {
+                    crate::with_replay_json(&replay, || loop {
+                        let work = queue.lock().ok().and_then(|mut queue| queue.pop_front());
+                        let Some(work) = work else {
+                            break;
+                        };
+                        if let Err(error) = download_segment(
+                            &work.segment,
+                            headers,
+                            proxy,
+                            &work.path,
+                            control,
+                            work.key_bytes.as_ref(),
+                            work.segment.key.as_ref(),
+                            work.segment.media_sequence,
+                        ) {
+                            if let Ok(mut errors) = errors.lock() {
+                                errors.push(error);
+                            }
+                            break;
+                        }
+                    })
+                });
+            });
+        }
+    });
+    let errors = errors.lock().map_err(|_| "HLS worker mutex poisoned")?;
+    if let Some(error) = errors.first() {
+        return Err(error.clone());
+    }
+    if let Some(missing) = prepared.iter().find(|item| file_len(&item.path) == 0) {
+        return Err(format!("HLS 分片下载结果为空: {}", missing.segment.uri));
+    }
+    Ok(())
+}
+
+fn load_key(
+    key: &MediaKey,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    cache: &mut HashMap<String, Vec<u8>>,
+) -> Result<Vec<u8>, String> {
+    let cache_key = format!("{}:{:?}", key.uri, key.iv);
+    if let Some(bytes) = cache.get(&cache_key) {
+        return Ok(bytes.clone());
+    }
+    let (status, bytes) =
+        fetch_hls_bytes(&key.uri, headers, proxy).map_err(|error| error.to_string())?;
+    if status != 200 && status != 206 {
+        return Err(format!("HLS key HTTP {status}"));
+    }
+    if bytes.len() != 16 {
+        return Err(format!(
+            "AES-128 key 长度必须为 16 字节，实际为 {}",
+            bytes.len()
+        ));
+    }
+    cache.insert(cache_key, bytes.clone());
+    Ok(bytes)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ensure_init_map(
+    init_map: &InitMap,
+    sequence: u64,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    seg_dir: &Path,
+    control: &Path,
+    key_cache: &mut HashMap<String, Vec<u8>>,
+    map_cache: &mut HashMap<String, PathBuf>,
+) -> Result<PathBuf, String> {
+    let identity = init_map_identity(init_map);
+    if let Some(path) = map_cache.get(&identity).filter(|path| file_len(path) > 0) {
+        return Ok(path.clone());
+    }
+    let suffix = &identity[..16.min(identity.len())];
+    let path = seg_dir.join(format!("init-{suffix}.{}", extension(&init_map.uri)));
+    if file_len(&path) == 0 {
+        download_one_with_range(
+            &init_map.uri,
+            headers,
+            proxy,
+            &path,
+            control,
+            init_map.byterange,
+        )?;
+        if let Some(key) = &init_map.key {
+            let key_bytes = load_key(key, headers, proxy, key_cache)?;
+            let iv = key.iv.unwrap_or_else(|| sequence_iv(sequence));
+            let encrypted = fs::read(&path).map_err(|error| error.to_string())?;
+            let plain = decrypt_aes128(&key_bytes, &iv, &encrypted)?;
+            fs::write(&path, plain).map_err(|error| error.to_string())?;
+        }
+    }
+    map_cache.insert(identity, path.clone());
+    Ok(path)
+}
+
+fn init_map_identity(init_map: &InitMap) -> String {
+    let payload = serde_json::json!({
+        "url": stable_media_url(&init_map.uri),
+        "range": init_map.byterange,
+        "key": init_map.key.as_ref().map(|key| stable_media_url(&key.uri)),
+        "iv": init_map
+            .key
+            .as_ref()
+            .and_then(|key| key.iv)
+            .map(|iv| bytes_hex(&iv)),
+    });
+    crate::crypto_lite::sha256_hex(payload.to_string().as_bytes())
+}
+
+fn segment_identity(segment: &Segment) -> String {
+    let base = vod_segment_identity(
+        segment,
+        segment.media_sequence,
+        segment.key.as_ref(),
+        segment
+            .init_map
+            .as_ref()
+            .map(|init_map| init_map.uri.as_str()),
+    );
+    let map = segment
+        .init_map
+        .as_ref()
+        .map(init_map_identity)
+        .unwrap_or_default();
+    crate::crypto_lite::sha256_hex(
+        serde_json::json!({ "segment": base, "init_map": map })
+            .to_string()
+            .as_bytes(),
+    )
 }
 
 struct LiveAudioRecorder {
@@ -913,7 +1625,7 @@ fn capture_live_subtitle_track(
     control: &Path,
 ) -> Result<(), String> {
     let (status, body) =
-        fetch_bytes(&track.uri, headers, proxy).map_err(|error| error.to_string())?;
+        fetch_hls_bytes(&track.uri, headers, proxy).map_err(|error| error.to_string())?;
     if status != 200 && status != 206 {
         return Ok(());
     }
@@ -955,7 +1667,7 @@ fn load_playlist(
     headers: &HashMap<String, String>,
     proxy: &str,
 ) -> Result<Playlist, String> {
-    let (status, body) = fetch_bytes(url, headers, proxy).map_err(|error| error.to_string())?;
+    let (status, body) = fetch_hls_bytes(url, headers, proxy).map_err(|error| error.to_string())?;
     if status != 200 && status != 206 {
         return Err(format!("HLS playlist HTTP {status}"));
     }
@@ -973,7 +1685,14 @@ fn download_segment(
     media_key: Option<&MediaKey>,
     sequence: u64,
 ) -> Result<PathBuf, String> {
-    download_one(&segment.uri, headers, proxy, path, control)?;
+    download_one_with_range(
+        &segment.uri,
+        headers,
+        proxy,
+        path,
+        control,
+        segment.byterange,
+    )?;
     if let (Some(key), Some(media_key)) = (key_bytes, media_key) {
         if media_key.method.eq_ignore_ascii_case("AES-128") {
             let iv = media_key.iv.unwrap_or_else(|| sequence_iv(sequence));
@@ -1084,11 +1803,20 @@ pub(crate) fn vod_segment_identity(
         "duration": (segment.duration * 1_000_000.0).round() / 1_000_000.0,
         "init": stable_media_url(map_uri.unwrap_or("")),
         "key": stable_media_url(key.map(|item| item.uri.as_str()).unwrap_or("")),
+        "part_index": segment.part_index,
         "range": range,
         "sequence": sequence,
         "url": stable_media_url(&segment.uri),
     });
     crate::crypto_lite::sha256_hex(payload.to_string().as_bytes())
+}
+
+fn bytes_hex(bytes: &[u8]) -> String {
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        text.push_str(&format!("{byte:02x}"));
+    }
+    text
 }
 
 pub(crate) fn stable_media_url(uri: &str) -> String {
@@ -1174,27 +1902,44 @@ fn download_one(
     output: &Path,
     control: &Path,
 ) -> Result<PathBuf, String> {
-    let job = Job {
-        url: url.to_string(),
-        headers: headers.clone(),
-        output: output.to_path_buf(),
-        connections: 1,
-        chunk_bytes: 64 * 1024,
-        total: 0,
-        sequential: true,
-        resume_from: 0,
-        proxy: proxy.to_string(),
-        resource_key: url.to_string(),
-        etag: String::new(),
-        last_modified: String::new(),
-        control: control.to_path_buf(),
-        progress: output.with_extension("progress.json"),
-        method: "GET".into(),
-        body_path: PathBuf::new(),
-        mirrors: Vec::new(),
-        replay_json: crate::credentials::scoped_replay_json(),
+    match read_control(control).as_str() {
+        "cancel" => return Err("canceled".into()),
+        "pause" => return Err("paused".into()),
+        _ => {}
+    }
+    let (status, body) = fetch_hls_bytes(url, headers, proxy).map_err(|error| error.to_string())?;
+    if status != 200 && status != 206 {
+        return Err(format!("HLS media HTTP {status}"));
+    }
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(output, body).map_err(|error| error.to_string())?;
+    Ok(output.to_path_buf())
+}
+
+fn download_one_with_range(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    output: &Path,
+    control: &Path,
+    byterange: Option<(u64, u64)>,
+) -> Result<PathBuf, String> {
+    let Some((offset, length)) = byterange else {
+        return download_one(url, headers, proxy, output, control);
     };
-    run_job(&job).map_err(|error| error.to_string())?;
+    match read_control(control).as_str() {
+        "cancel" => return Err("canceled".into()),
+        "pause" => return Err("paused".into()),
+        _ => {}
+    }
+    let body = fetch_hls_bytes_range(url, headers, proxy, offset, length)
+        .map_err(|error| error.to_string())?;
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(output, body).map_err(|error| error.to_string())?;
     Ok(output.to_path_buf())
 }
 
@@ -1236,7 +1981,7 @@ fn write_local_playlist(
     if complete {
         text.push_str("#EXT-X-ENDLIST\n");
     }
-    fs::write(task_dir.join("local.m3u8"), text).map_err(|error| error.to_string())
+    write_text_atomic(&task_dir.join("local.m3u8"), &text)
 }
 
 fn playlist_leaf(path: &Path) -> String {
@@ -1265,19 +2010,25 @@ fn sequence_iv(sequence: u64) -> [u8; 16] {
     iv
 }
 
-fn parse_iv(value: &str) -> Option<[u8; 16]> {
-    let hex = value
+fn parse_iv(value: &str) -> Result<[u8; 16], String> {
+    let mut hex = value
         .trim()
         .trim_start_matches("0x")
-        .trim_start_matches("0X");
-    if hex.len() != 32 {
-        return None;
+        .trim_start_matches("0X")
+        .to_string();
+    if hex.is_empty() || hex.len() > 32 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("无效 AES-128 IV: {value}"));
     }
+    if hex.len() % 2 != 0 {
+        hex.insert(0, '0');
+    }
+    let padded = format!("{hex:0>32}");
     let mut iv = [0u8; 16];
-    for (index, chunk) in hex.as_bytes().chunks(2).enumerate() {
-        iv[index] = u8::from_str_radix(std::str::from_utf8(chunk).ok()?, 16).ok()?;
+    for (index, chunk) in padded.as_bytes().chunks(2).enumerate() {
+        let text = std::str::from_utf8(chunk).map_err(|error| error.to_string())?;
+        iv[index] = u8::from_str_radix(text, 16).map_err(|error| error.to_string())?;
     }
-    Some(iv)
+    Ok(iv)
 }
 
 fn apply_ad_policy(playlist: &mut Playlist, enabled: bool) {
@@ -1338,11 +2089,41 @@ fn daterange_is_ad(attrs: &str) -> bool {
         || blob.contains("class=ad")
 }
 
-fn parse_byterange(value: &str) -> Option<(u64, u64)> {
+fn parse_byterange(value: &str) -> Result<(Option<u64>, u64), String> {
     let mut parts = value.split('@');
-    let length = parts.next()?.parse().ok()?;
-    let start = parts.next().and_then(|item| item.parse().ok()).unwrap_or(0);
-    Some((start, length))
+    let length = parts
+        .next()
+        .and_then(|item| item.trim().parse::<u64>().ok())
+        .filter(|length| *length > 0)
+        .ok_or_else(|| format!("无效 BYTERANGE: {value}"))?;
+    let offset = match parts.next() {
+        Some(item) => Some(
+            item.trim()
+                .parse::<u64>()
+                .map_err(|_| format!("无效 BYTERANGE: {value}"))?,
+        ),
+        None => None,
+    };
+    if parts.next().is_some() {
+        return Err(format!("无效 BYTERANGE: {value}"));
+    }
+    Ok((offset, length))
+}
+
+fn resolve_byterange(
+    range: (Option<u64>, u64),
+    uri: &str,
+    previous_ends: &mut HashMap<String, u64>,
+) -> Result<(u64, u64), String> {
+    let (offset, length) = range;
+    let offset = offset
+        .or_else(|| previous_ends.get(uri).copied())
+        .ok_or_else(|| "BYTERANGE 缺少起始偏移".to_string())?;
+    let end = offset
+        .checked_add(length)
+        .ok_or_else(|| "BYTERANGE 超出范围".to_string())?;
+    previous_ends.insert(uri.to_string(), end);
+    Ok((offset, length))
 }
 
 fn tag_value<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
@@ -1350,13 +2131,30 @@ fn tag_value<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
 }
 
 fn attr_str(attrs: &str, key: &str) -> Option<String> {
-    for part in attrs.split(',') {
-        let (name, value) = part.split_once('=')?;
-        if name.trim() == key {
-            return Some(value.trim().trim_matches('"').to_string());
+    let mut start = 0;
+    let mut quoted = false;
+    for (index, ch) in attrs.char_indices() {
+        if ch == '"' {
+            quoted = !quoted;
+        } else if ch == ',' && !quoted {
+            if let Some(value) = attr_part_value(&attrs[start..index], key) {
+                return Some(value);
+            }
+            start = index + ch.len_utf8();
         }
     }
+    if let Some(value) = attr_part_value(&attrs[start..], key) {
+        return Some(value);
+    }
     None
+}
+
+fn attr_part_value(part: &str, key: &str) -> Option<String> {
+    let (name, value) = part.split_once('=')?;
+    if name.trim() != key {
+        return None;
+    }
+    Some(value.trim().trim_matches('"').to_string())
 }
 
 fn attr_u64(attrs: &str, key: &str) -> Option<u64> {
@@ -1512,6 +2310,42 @@ mod tests {
     }
 
     #[test]
+    fn signed_access_query_is_inherited_only_by_same_origin_children() {
+        assert_eq!(
+            super::super::resolve_http_uri(
+                "https://cdn.test/master.m3u8?token=secret&pkey=key&_HLS_msn=9",
+                "variant.m3u8?quality=hd",
+            ),
+            "https://cdn.test/variant.m3u8?quality=hd&token=secret&pkey=key"
+        );
+        assert_eq!(
+            super::super::resolve_http_uri(
+                "https://cdn.test/master.m3u8?token=secret",
+                "https://other.test/segment.ts",
+            ),
+            "https://other.test/segment.ts"
+        );
+    }
+
+    #[test]
+    fn byterange_offsets_continue_per_resource_and_map_ranges_are_preserved() {
+        let playlist = parse_playlist(
+            "#EXTM3U\n#EXT-X-MAP:URI=\"media.mp4\",BYTERANGE=\"100@0\"\n#EXTINF:1,\n#EXT-X-BYTERANGE:4@100\nmedia.mp4\n#EXTINF:1,\n#EXT-X-BYTERANGE:3\nmedia.mp4\n",
+            "https://cdn.test/index.m3u8",
+        )
+        .unwrap();
+        assert_eq!(playlist.map_byterange, Some((0, 100)));
+        assert_eq!(playlist.segments[0].byterange, Some((100, 4)));
+        assert_eq!(playlist.segments[1].byterange, Some((104, 3)));
+        assert!(parse_playlist(
+            "#EXTM3U\n#EXTINF:1,\n#EXT-X-BYTERANGE:3\nmedia.mp4\n",
+            "https://cdn.test/index.m3u8",
+        )
+        .unwrap_err()
+        .contains("缺少起始偏移"));
+    }
+
+    #[test]
     fn master_collects_subtitle_renditions() {
         let text = "#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,URI=\"en.vtt\"\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720,SUBTITLES=\"subs\"\nindex.m3u8\n";
         let playlist = parse_playlist(text, "https://cdn.test/master.m3u8").unwrap();
@@ -1647,6 +2481,11 @@ mod tests {
         std::fs::write(seg_dir.join("000000.ts"), b"AAA").unwrap();
         let segment = Segment {
             uri: "https://cdn.test/a.ts?token=old".into(),
+            media_sequence: 0,
+            part_index: None,
+            key: None,
+            init_map: None,
+            gap: false,
             duration: 1.0,
             discontinuity: false,
             byterange: None,
@@ -1669,6 +2508,11 @@ mod tests {
         let other = vod_segment_identity(
             &Segment {
                 uri: "https://cdn.test/b.ts".into(),
+                media_sequence: 0,
+                part_index: None,
+                key: None,
+                init_map: None,
+                gap: false,
                 duration: 1.0,
                 discontinuity: false,
                 byterange: None,
@@ -1780,5 +2624,134 @@ mod tests {
             .unwrap()
             .contains("cue"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ll_hls_tracks_sequence_parts_keys_maps_and_gaps() {
+        let playlist = parse_playlist(
+            "#EXTM3U\n\
+             #EXT-X-MEDIA-SEQUENCE:40\n\
+             #EXT-X-SKIP:SKIPPED-SEGMENTS=2\n\
+             #EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,HOLD-BACK=3\n\
+             #EXT-X-MAP:URI=\"init.mp4\",BYTERANGE=\"4@0\"\n\
+             #EXT-X-KEY:METHOD=AES-128,URI=\"key-a.bin\",IV=0x1\n\
+             #EXT-X-PART:DURATION=0.5,URI=\"media.mp4\",BYTERANGE=\"3@4\"\n\
+             #EXT-X-PART:DURATION=0.5,URI=\"media.mp4\",BYTERANGE=\"3\"\n\
+             #EXT-X-KEY:METHOD=NONE\n\
+             #EXTINF:1,\n\
+             media.mp4\n\
+             #EXT-X-GAP\n\
+             #EXTINF:1,\n\
+             gap.mp4\n",
+            "https://cdn.test/index.m3u8",
+        )
+        .unwrap();
+        assert!(playlist.can_block_reload);
+        assert_eq!(playlist.skipped_segments, 2);
+        assert_eq!(playlist.map_byterange, Some((0, 4)));
+        assert_eq!(playlist.segments.len(), 4);
+        assert_eq!(playlist.segments[0].media_sequence, 42);
+        assert_eq!(playlist.segments[0].part_index, Some(0));
+        assert_eq!(playlist.segments[0].byterange, Some((4, 3)));
+        assert!(playlist.segments[0].key.is_some());
+        assert_eq!(playlist.segments[1].part_index, Some(1));
+        assert_eq!(playlist.segments[1].byterange, Some((7, 3)));
+        assert_eq!(playlist.segments[2].media_sequence, 42);
+        assert!(playlist.segments[2].part_index.is_none());
+        assert!(playlist.segments[2].key.is_none());
+        assert_eq!(playlist.segments[3].media_sequence, 43);
+        assert!(playlist.segments[3].gap);
+
+        let pending = pending_segments(&playlist, &[]);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].uri, "https://cdn.test/media.mp4");
+        assert!(pending[0].part_index.is_none());
+    }
+
+    #[test]
+    fn segment_identity_includes_sequence_part_range_and_stable_url() {
+        let mut first = Segment {
+            uri: "https://cdn.test/media.mp4?token=old&keep=1".into(),
+            media_sequence: 7,
+            part_index: Some(0),
+            key: None,
+            init_map: None,
+            gap: false,
+            duration: 0.5,
+            discontinuity: false,
+            byterange: Some((4, 3)),
+            is_part: true,
+            is_ad: false,
+        };
+        let second = Segment {
+            part_index: Some(1),
+            ..first.clone()
+        };
+        assert_ne!(segment_identity(&first), segment_identity(&second));
+        first.media_sequence += 1;
+        assert_ne!(segment_identity(&first), segment_identity(&second));
+        first.media_sequence = second.media_sequence;
+        first.byterange = Some((7, 3));
+        assert_ne!(segment_identity(&first), segment_identity(&second));
+        first.byterange = second.byterange;
+        first.part_index = second.part_index;
+        first.uri = second.uri.replace("old", "new");
+        assert_eq!(segment_identity(&first), segment_identity(&second));
+    }
+
+    #[test]
+    fn live_state_v2_is_atomic_and_invalid_state_is_discarded() {
+        let dir = std::env::temp_dir().join(format!("hls-live-state-{}", std::process::id()));
+        let seg_dir = dir.join("segments");
+        std::fs::create_dir_all(&seg_dir).unwrap();
+        let segment_path = seg_dir.join("000000.ts");
+        std::fs::write(&segment_path, b"segment").unwrap();
+        let state_path = dir.join("live_state.json");
+        let timeline = LiveTimeline {
+            entries: vec![TimelineEntry {
+                identity: "identity".into(),
+                media_sequence: 9,
+                part_index: Some(0),
+                path: segment_path,
+                duration: 0.5,
+                discontinuity: false,
+                init_map_path: None,
+            }],
+            next_slot: 1,
+        };
+        timeline.save(&state_path).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+        assert_eq!(
+            value.get("version").and_then(|value| value.as_u64()),
+            Some(2)
+        );
+        assert_eq!(LiveTimeline::load(&dir).entries.len(), 1);
+
+        std::fs::write(&state_path, b"{\"version\":2,\"segments\":").unwrap();
+        assert!(LiveTimeline::load(&dir).entries.is_empty());
+        assert!(!dir.join(".live_state.json.tmp").exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn blocking_reload_requests_next_media_position() {
+        let mut previous = parse_playlist(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n#EXT-X-PART-INF:PART-TARGET=0.5\n#EXT-X-PART:DURATION=0.5,URI=\"10.0.m4s\"\n#EXT-X-PART:DURATION=0.5,URI=\"10.1.m4s\"\n",
+            "https://cdn.test/live.m3u8?token=keep",
+        )
+        .unwrap();
+        assert_eq!(
+            blocking_reload_url(
+                "https://cdn.test/live.m3u8?token=keep&_HLS_msn=old",
+                &previous
+            ),
+            "https://cdn.test/live.m3u8?token=keep&_HLS_msn=10&_HLS_part=2"
+        );
+        previous.segments[1].part_index = None;
+        assert_eq!(
+            blocking_reload_url("https://cdn.test/live.m3u8?token=keep", &previous),
+            "https://cdn.test/live.m3u8?token=keep&_HLS_msn=11"
+        );
     }
 }

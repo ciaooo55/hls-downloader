@@ -48,6 +48,10 @@ data class TaskDto(
     @SerialName("downloaded_bytes") val downloadedBytes: Long = 0,
     @SerialName("total_bytes") val totalBytes: Long? = null,
     @SerialName("speed_bytes_per_sec") val speedBytesPerSecond: Long = 0,
+    @SerialName("peer_count") val peerCount: Int = 0,
+    @SerialName("seed_count") val seedCount: Int = 0,
+    @SerialName("uploaded_bytes") val uploadedBytes: Long = 0,
+    @SerialName("upload_speed_bytes_per_sec") val uploadSpeedBytesPerSecond: Long = 0,
     @SerialName("eta_seconds") val etaSeconds: Long? = null,
     @SerialName("active_workers") val activeWorkers: Int = 0,
     @SerialName("completed_ranges") val completedRanges: Long = 0,
@@ -60,6 +64,11 @@ data class TaskDto(
     @SerialName("available_actions") val availableActions: List<String> = emptyList(),
     @SerialName("error_code") val errorCode: String? = null,
     @SerialName("error_message") val errorMessage: String? = null,
+    @SerialName("error_stage") val errorStage: String = "",
+    @SerialName("error_url") val errorUrl: String = "",
+    @SerialName("error_hint") val errorHint: String = "",
+    @SerialName("http_status") val httpStatus: Int? = null,
+    @SerialName("error_attempt") val errorAttempt: Int = 0,
     @SerialName("queue_index") val queueIndex: Long = 0,
     @SerialName("queue_id") val queueId: String = "default",
     @SerialName("output_missing") val outputMissing: Boolean = false,
@@ -68,11 +77,15 @@ data class TaskDto(
     @SerialName("connection_parts") val connectionParts: List<ConnectionPartDto> = emptyList(),
     @SerialName("log_tail") val logTail: List<String> = emptyList(),
     @SerialName("speed_history") val speedHistory: List<Long> = emptyList(),
-    @SerialName("mirror_status") val mirrorStatus: String = "",
+    @SerialName("mirror_status") val mirrorStatus: List<MirrorStatusDto> = emptyList(),
     @SerialName("request_method") val requestMethod: String = "GET",
     @SerialName("download_dir") val downloadDirectory: String = "",
     @SerialName("speed_limit_kib") val speedLimitKib: Long = 0,
     @SerialName("expected_checksum") val expectedChecksum: String = "",
+    @SerialName("checksum_algorithm") val checksumAlgorithm: String = "",
+    @SerialName("checksum_actual") val checksumActual: String = "",
+    @SerialName("checksum_verified") val checksumVerified: Boolean? = null,
+    @SerialName("av_scan") val avScan: AvScanStatusDto? = null,
     @SerialName("max_workers") val maxWorkers: Int = 0,
     val mirrors: List<String> = emptyList(),
     @SerialName("scheduled_start_at") val scheduledStartAt: String = "",
@@ -85,6 +98,22 @@ data class ConnectionPartDto(
     val end: Long = 0,
     val done: Long = 0,
     val state: String = "queued",
+)
+
+@Serializable
+data class MirrorStatusDto(
+    val url: String,
+    @SerialName("final_url") val finalUrl: String = "",
+    val state: String = "pending",
+    val detail: String = "",
+    val ranges: Boolean = false,
+)
+
+@Serializable
+data class AvScanStatusDto(
+    val state: String,
+    val engine: String = "",
+    val detail: String = "",
 )
 
 @Serializable data class EventEnvelopeDto(val sequence: Long, val event: JsonObject)
@@ -126,6 +155,13 @@ data class TorrentProbeDto(
     @SerialName("total_size") val totalSize: Long = 0,
     val files: List<TorrentFileDto> = emptyList(),
     val magnet: Boolean = false,
+)
+
+data class TaskTorrentFilesDto(
+    val taskId: String,
+    val source: String,
+    val files: List<TorrentFileDto>,
+    val totalSize: Long,
 )
 
 @Serializable
@@ -171,8 +207,14 @@ data class TaskDraft(
     val speedLimitKib: Long = 0,
     val checksum: String = "",
     val proxy: String = "",
+    val mirrors: List<String> = emptyList(),
     val referer: String = "",
+    val origin: String = "",
+    val cookie: String = "",
     val userAgent: String = "",
+    val requestHeaders: Map<String, String> = emptyMap(),
+    val requestMethod: String = "GET",
+    val curlCommand: String = "",
     val preferredBandwidth: Long = 0,
     val preferredHeight: Int = 0,
     val preferredAudio: String = "",
@@ -200,12 +242,28 @@ data class QueueProfileDto(
 )
 
 @Serializable
+data class SiteRuleDto(
+    val host: String = "",
+    val enabled: Boolean = true,
+    @SerialName("speed_limit_kib") val speedLimitKib: Long = 0,
+    val concurrency: Long = 0,
+    val proxy: String = "",
+    @SerialName("proxy_mode") val proxyMode: String = "",
+    @SerialName("download_dir") val downloadDirectory: String = "",
+    @SerialName("user_agent") val userAgent: String = "",
+    val referer: String = "",
+    val origin: String = "",
+    @SerialName("credential_ref") val credentialRef: String = "",
+)
+
+@Serializable
 data class EngineSettingsDto(
     @SerialName("takeover_enabled") val takeoverEnabled: Boolean = true,
     @SerialName("takeover_minimum_bytes") val takeoverMinimumBytes: Long = 0,
     @SerialName("legal_accepted") val legalAccepted: Boolean = false,
     @SerialName("legal_terms_version") val legalTermsVersion: String = "",
     @SerialName("speed_limit_kib") val speedLimitKib: Long = 0,
+    @SerialName("hourly_quota_mib") val hourlyQuotaMib: Long = 0,
     @SerialName("schedule_enabled") val scheduleEnabled: Boolean = false,
     @SerialName("schedule_start") val scheduleStart: String = "22:00",
     @SerialName("schedule_end") val scheduleEnd: String = "08:00",
@@ -262,6 +320,9 @@ data class EngineSettingsDto(
     @SerialName("bt_max_connections") val btMaxConnections: Long = 200,
     @SerialName("bt_enable_dht") val btEnableDht: Boolean = true,
     @SerialName("preferred_cast_device_id") val preferredCastDeviceId: String = "",
+    @SerialName("task_column_layout") val taskColumnLayout: String = "",
+    @SerialName("toolbar_actions") val toolbarActions: String = "",
+    @SerialName("task_sort") val taskSort: String = "queue:asc",
     @SerialName("default_cookie_configured") val defaultCookieConfigured: Boolean = false,
 )
 
@@ -289,43 +350,66 @@ class EnginePipeClient(
 
     fun createTask(draft: TaskDraft): CommandResult {
         val normalized = normalizeDownloadUrl(draft.url)
-        val fallbackName = filenameFromUrl(normalized)
         return command(buildJsonObject {
             put("kind", "create_task")
-            put("spec", buildJsonObject {
-                put("url", normalized)
-                put("resource_kind", draft.kind.ifBlank { recognizeResourceKind(normalized) })
-                put("title", draft.title.ifBlank { fallbackName })
-                put("filename", normalizeHandoffFilename(draft.filename.ifBlank { fallbackName }))
-                put("download_dir", draft.downloadDirectory.trim())
-                put("concurrency", draft.concurrency.coerceIn(0, 128))
-                put("speed_limit_kib", draft.speedLimitKib.coerceAtLeast(0))
-                if (draft.checksum.isNotBlank()) put("checksum", draft.checksum.trim())
-                put("proxy", draft.proxy.trim())
-                put("headers", buildJsonObject {
-                    if (draft.referer.isNotBlank()) put("Referer", draft.referer.trim())
-                    if (draft.userAgent.isNotBlank()) put("User-Agent", draft.userAgent.trim())
-                })
-                put("preferred_bandwidth", draft.preferredBandwidth.coerceAtLeast(0))
-                put("preferred_height", draft.preferredHeight.coerceAtLeast(0))
-                put("preferred_audio", draft.preferredAudio.trim())
-                put("allow_duplicate", draft.allowDuplicate)
-                put("scheduled_start_at", draft.scheduledStartAt.trim())
-                put("scheduled_stop_at", draft.scheduledStopAt.trim())
-                put("completion_action", draft.completionAction.trim())
-                put("queue_id", draft.queueId.trim().ifBlank { "default" })
-                if (draft.torrentSelection.isNotEmpty()) put("torrent_selection", buildJsonArray {
-                    draft.torrentSelection.forEach { item -> add(buildJsonObject {
-                        put("index", item.index)
-                        put("path", item.path)
-                        put("selected", item.selected)
-                    }) }
-                })
-            })
+            put("spec", taskSpecJson(draft, normalized))
+        })
+    }
+
+    fun importCurl(draft: TaskDraft): CommandResult {
+        require(isCurlCommand(draft.curlCommand)) { "输入内容不是 cURL 命令" }
+        return command(buildJsonObject {
+            put("kind", "import_curl")
+            put("command", draft.curlCommand.trim())
+            put("options", taskSpecJson(draft.copy(url = ""), ""))
+        })
+    }
+
+    private fun taskSpecJson(draft: TaskDraft, normalizedUrl: String) = buildJsonObject {
+        val fallbackName = normalizedUrl.takeIf(String::isNotBlank)?.let(::filenameFromUrl).orEmpty()
+        put("url", normalizedUrl)
+        put("resource_kind", draft.kind.ifBlank { normalizedUrl.takeIf(String::isNotBlank)?.let(::recognizeResourceKind) ?: "file" })
+        put("title", draft.title.ifBlank { fallbackName })
+        put("filename", draft.filename.trim().takeIf(String::isNotBlank)?.let(::normalizeHandoffFilename) ?: fallbackName)
+        put("download_dir", draft.downloadDirectory.trim())
+        put("concurrency", draft.concurrency.coerceIn(0, 128))
+        put("speed_limit_kib", draft.speedLimitKib.coerceAtLeast(0))
+        if (draft.checksum.isNotBlank()) put("checksum", draft.checksum.trim())
+        put("proxy", draft.proxy.trim())
+        put("mirrors", buildJsonArray { draft.mirrors.map(String::trim).filter(String::isNotBlank).distinct().forEach { add(JsonPrimitive(it)) } })
+        put("request_method", draft.requestMethod.trim().uppercase())
+        put("headers", buildJsonObject {
+            draft.requestHeaders.forEach { (name, value) -> put(name.trim(), value.trim()) }
+            if (draft.referer.isNotBlank()) put("Referer", draft.referer.trim())
+            if (draft.origin.isNotBlank()) put("Origin", draft.origin.trim())
+            if (draft.cookie.isNotBlank()) put("Cookie", draft.cookie.trim())
+            if (draft.userAgent.isNotBlank()) put("User-Agent", draft.userAgent.trim())
+        })
+        put("preferred_bandwidth", draft.preferredBandwidth.coerceAtLeast(0))
+        put("preferred_height", draft.preferredHeight.coerceAtLeast(0))
+        put("preferred_audio", draft.preferredAudio.trim())
+        put("allow_duplicate", draft.allowDuplicate)
+        put("scheduled_start_at", draft.scheduledStartAt.trim())
+        put("scheduled_stop_at", draft.scheduledStopAt.trim())
+        put("completion_action", draft.completionAction.trim())
+        put("queue_id", draft.queueId.trim().ifBlank { "default" })
+        if (draft.torrentSelection.isNotEmpty()) put("torrent_selection", buildJsonArray {
+            draft.torrentSelection.forEach { item -> add(buildJsonObject {
+                put("index", item.index)
+                put("path", item.path)
+                put("selected", item.selected)
+            }) }
         })
     }
 
     fun taskAction(taskId: String, action: String) = command(commandOf("task_action", "task_id" to taskId, "action" to action))
+    fun refreshTaskRequest(taskId: String, url: String, cookie: String = "", autoResume: Boolean = true) = command(buildJsonObject {
+        put("kind", "refresh_task_request")
+        put("task_id", requireId(taskId))
+        put("url", normalizeDownloadUrl(url))
+        put("cookie", cookie)
+        put("auto_resume", autoResume)
+    })
     fun reorderQueue(taskId: String, delta: Int) = command(commandOf("reorder_queue", "task_id" to taskId, "delta" to delta))
     fun placeQueue(taskId: String, beforeId: String) = command(commandOf("place_queue", "task_id" to taskId, "before_id" to beforeId))
     fun assignQueue(taskIds: Collection<String>, queueId: String) = command(buildJsonObject {
@@ -356,7 +440,16 @@ class EnginePipeClient(
         put("message", message)
         put("location", location)
     })
-    fun probeUrl(url: String) = command(commandOf("probe_url", "url" to normalizeDownloadUrl(url)))
+    fun probeUrl(url: String) = probeUrl(TaskDraft(url = url))
+
+    fun probeUrl(draft: TaskDraft): CommandResult {
+        val normalized = normalizeDownloadUrl(draft.url)
+        return command(buildJsonObject {
+            put("kind", "probe_url")
+            put("url", normalized)
+            put("spec", taskSpecJson(draft, normalized))
+        })
+    }
     fun probeTorrent(source: String) = command(commandOf("probe_torrent", "source" to source.trim()))
     fun selectTorrentFiles(source: String, selections: List<TorrentFileDto>) = command(buildJsonObject {
         put("kind", "select_torrent_files")
@@ -369,6 +462,36 @@ class EnginePipeClient(
             }) }
         })
     })
+    fun getTaskTorrentFiles(taskId: String): TaskTorrentFilesDto = taskTorrentFilesCommand("get_task_torrent_files", taskId, emptyList())
+    fun setTaskTorrentFiles(taskId: String, selections: List<TorrentFileDto>): TaskTorrentFilesDto = taskTorrentFilesCommand("set_task_torrent_files", taskId, selections)
+
+    private fun taskTorrentFilesCommand(kind: String, taskId: String, selections: List<TorrentFileDto>): TaskTorrentFilesDto {
+        val result = command(buildJsonObject {
+            put("kind", kind)
+            put("task_id", requireId(taskId))
+            if (kind == "set_task_torrent_files") put("selections", buildJsonArray {
+                selections.forEach { item -> add(buildJsonObject {
+                    put("index", item.index)
+                    put("path", item.path)
+                    put("selected", item.selected)
+                }) }
+            })
+        })
+        val event = result.events.firstOrNull { it.event["kind"]?.jsonPrimitive?.content == "task_torrent_files" }?.event
+            ?: error("下载引擎未返回 BT 文件清单")
+        val selected = event["selections"]?.jsonArray.orEmpty().mapNotNull { item ->
+            runCatching { protocolJson.decodeFromJsonElement(TorrentFileDto.serializer(), item) }.getOrNull()
+        }.associateBy { it.index to it.path }
+        val files = event["files"]?.jsonArray.orEmpty().mapNotNull { item ->
+            runCatching { protocolJson.decodeFromJsonElement(TorrentFileDto.serializer(), item) }.getOrNull()
+        }.map { file -> file.copy(selected = selected[file.index to file.path]?.selected ?: true) }
+        return TaskTorrentFilesDto(
+            taskId = event["task_id"]?.jsonPrimitive?.content.orEmpty(),
+            source = event["source"]?.jsonPrimitive?.content.orEmpty(),
+            files = files,
+            totalSize = event["total_size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
+        )
+    }
     fun getTaskLog(taskId: String) = command(commandOf("get_task_log", "task_id" to taskId))
     fun openCompleted(taskId: String, folder: Boolean) = command(commandOf("open_completed", "task_id" to taskId, "folder" to folder))
     fun saveSiteProfile(taskId: String) = command(commandOf("save_site_profile", "task_id" to taskId))
@@ -399,7 +522,38 @@ class EnginePipeClient(
         )
     }
 
-    fun harvestPage(url: String) = command(commandOf("harvest_page", "url" to normalizeHttpUrl(url)))
+    fun harvestPage(
+        url: String,
+        referer: String = "",
+        probeUrls: List<String> = emptyList(),
+    ) = command(buildJsonObject {
+        val normalizedUrl = normalizeHttpUrl(url)
+        val normalizedReferer = referer.trim().ifBlank { normalizedUrl }.let(::normalizeHttpUrl)
+        val candidates = probeUrls.map(String::trim).filter(String::isNotBlank).distinct()
+        require(candidates.size <= 100) { "一次最多读取 100 个链接的大小" }
+        put("kind", "harvest_page")
+        put("url", normalizedUrl)
+        put("referer", normalizedReferer)
+        put("probe_urls", buildJsonArray {
+            candidates.forEach { candidate ->
+                require(candidate.length <= 8192 && candidate.none(Char::isISOControl)) { "资源链接无效" }
+                add(JsonPrimitive(candidate))
+            }
+        })
+    })
+
+    fun probeHarvestSizes(url: String, referer: String, probeUrls: List<String>): Map<String, Long> {
+        val result = harvestPage(url, referer, probeUrls)
+        val event = result.events.firstOrNull {
+            it.event["kind"]?.jsonPrimitive?.content == "harvest_probe_result"
+        }?.event ?: error("下载引擎未返回文件大小")
+        return event["links"]?.jsonArray.orEmpty().mapNotNull { item ->
+            val value = item.jsonObject
+            val candidate = value["url"]?.jsonPrimitive?.content.orEmpty()
+            val size = value["size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0
+            (candidate to size).takeIf { candidate.isNotBlank() && size > 0 }
+        }.toMap()
+    }
     fun presentHandoff(handoffId: String, presented: Boolean = true) = command(commandOf("present_handoff", "handoff_id" to requireId(handoffId), "ok" to presented))
     fun rejectHandoff(handoffId: String, suppressSiteKind: Boolean = false) = command(commandOf(
         "reject_handoff", "handoff_id" to requireId(handoffId), "suppress_site_kind" to suppressSiteKind,
@@ -424,6 +578,21 @@ class EnginePipeClient(
             put("type", "set_default_cookie"); put("request_id", nextRequestId()); put("cookie", cookie)
         })
         response.requireType("settings", "默认 Cookie 保存失败")
+        protocolJson.decodeFromJsonElement(EngineSettingsDto.serializer(), response)
+    }
+
+    internal fun saveSiteRuleCredential(edit: SiteRuleCredentialEdit): EngineSettingsDto = session { connection ->
+        val response = connection.request(buildJsonObject {
+            put("type", "set_site_rule_credential")
+            put("request_id", nextRequestId())
+            put("host", edit.host.trim())
+            put("cookie", edit.cookie)
+            put("request_headers", buildJsonObject {
+                edit.requestHeaders.forEach { (name, value) -> put(name, value) }
+            })
+            put("clear", edit.clear)
+        })
+        response.requireType("settings", "站点凭据保存失败")
         protocolJson.decodeFromJsonElement(EngineSettingsDto.serializer(), response)
     }
 
@@ -514,6 +683,10 @@ class EnginePipeClient(
         const val MAX_FRAME = 4 * 1024 * 1024
         private val requestIds = AtomicLong(100)
         private fun nextRequestId() = requestIds.incrementAndGet()
+
+        fun isCurlCommand(value: String): Boolean =
+            value.trimStart().lineSequence().firstOrNull().orEmpty()
+                .trimStart().let { it.startsWith("curl ", true) || it.startsWith("curl.exe ", true) }
 
         fun recognizeResourceKind(url: String): String {
             val path = url.substringBefore('?').substringBefore('#').lowercase()
@@ -620,6 +793,7 @@ fun EngineSettingsDto.toStorageMap(): Map<String, JsonElement> = linkedMapOf(
     "browser_takeover_enabled" to JsonPrimitive(takeoverEnabled),
     "browser_takeover_minimum_bytes" to JsonPrimitive(takeoverMinimumBytes),
     "download_speed_limit_kib" to JsonPrimitive(speedLimitKib),
+    "download_hourly_quota_mib" to JsonPrimitive(hourlyQuotaMib),
     "download_speed_schedule_enabled" to JsonPrimitive(scheduleEnabled),
     "download_speed_schedule_start" to JsonPrimitive(scheduleStart),
     "download_speed_schedule_end" to JsonPrimitive(scheduleEnd),
@@ -651,4 +825,6 @@ fun EngineSettingsDto.toStorageMap(): Map<String, JsonElement> = linkedMapOf(
     "harvest_minimum_bytes" to JsonPrimitive(harvestMinimumBytes), "av_scan_fail_on_threat" to JsonPrimitive(avScanFailOnThreat),
     "bt_upload_limit_kib" to JsonPrimitive(btUploadLimitKib), "bt_max_connections" to JsonPrimitive(btMaxConnections),
     "bt_enable_dht" to JsonPrimitive(btEnableDht), "preferred_cast_device_id" to JsonPrimitive(preferredCastDeviceId),
+    "task_column_layout" to JsonPrimitive(taskColumnLayout), "toolbar_actions" to JsonPrimitive(toolbarActions),
+    "task_sort" to JsonPrimitive(taskSort),
 )

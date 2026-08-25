@@ -78,17 +78,24 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowScope
 import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -128,7 +135,18 @@ import org.jetbrains.skia.Image as SkiaImage
 enum class TaskFilter(val label: String) { ALL("全部"), RUNNING("进行中"), QUEUED("排队中"), PAUSED("已暂停"), COMPLETED("已完成"), FAILED("失败") }
 enum class TaskCategory(val label: String) { MEDIA("媒体"), PROGRAM("程序"), ARCHIVE("压缩包"), OTHER("其他") }
 data class DownloadTask(val id: String, val filename: String, val status: String, val progress: Float, val speed: String, val speedBytes: Long, val remaining: String, val segments: String, val updated: String, val source: TaskDto)
-data class HarvestCandidateUi(val url: String, val filename: String, val category: String, val size: Long)
+data class HarvestCandidateUi(
+    val url: String,
+    val filename: String,
+    val category: String,
+    val size: Long,
+    val extension: String = "",
+)
+private data class HarvestCreateRequest(
+    val urls: List<String>,
+    val referer: String,
+    val concurrency: Long,
+)
 private data class HandoffDecision(
     val filename: String,
     val directory: String,
@@ -157,6 +175,24 @@ internal fun selectionAfterDrag(taskIds: List<String>, firstIndex: Int, lastInde
         taskIds.subList(start, end + 1).forEach(::add)
     }
 }
+internal fun harvestFilterCounts(links: List<HarvestCandidateUi>): Map<String, Int> = buildMap {
+    put("all", links.size)
+    links.forEach { item -> put(item.category, getOrDefault(item.category, 0) + 1) }
+}
+internal fun visibleHarvestLinks(
+    links: List<HarvestCandidateUi>,
+    category: String,
+    minimumBytes: Long,
+): List<HarvestCandidateUi> = links.filter { item ->
+    (category == "all" || item.category == category) &&
+        (minimumBytes <= 0 || item.size >= minimumBytes)
+}
+internal fun mergeHarvestSizes(
+    links: List<HarvestCandidateUi>,
+    sizes: Map<String, Long>,
+): List<HarvestCandidateUi> = links.map { item ->
+    sizes[item.url]?.takeIf { it > 0 }?.let { item.copy(size = it) } ?: item
+}
 private val mediaFileExtensions = setOf(
     "3gp", "aac", "ac3", "avi", "flac", "flv", "m2ts", "m3u8", "m4a", "m4v", "mka",
     "mkv", "mov", "mp3", "mp4", "mpd", "mpeg", "mpg", "ogg", "opus", "ts", "wav", "webm", "wma", "wmv",
@@ -178,7 +214,17 @@ internal fun taskMenuActions(task: TaskDto): List<String> {
         .filterNot { it in setOf("details", "play", "cast", "push_tvbox") && !mediaCapable }
         .filterNot { it in setOf("launch", "run") && taskFileExtension(task) !in executableFileExtensions }
     val media = if (mediaCapable && task.playbackReady) listOf("play", "cast", "push_tvbox") else emptyList()
-    return (base + listOf("move_queue") + media).distinct()
+    val queue = if (task.status.lowercase() in setOf("queued", "paused")) listOf("move_queue") else emptyList()
+    val fileDelete = if ("delete" in base) listOf("delete_files") else emptyList()
+    return (base + queue + fileDelete + media).distinct()
+}
+internal fun batchTaskMenuActions(tasks: List<TaskDto>): List<String> {
+    if (tasks.isEmpty()) return emptyList()
+    if (tasks.size == 1) return taskMenuActions(tasks.first())
+    val allowedBatch = setOf("start", "pause", "resume", "retry", "cancel", "delete", "delete_files", "move_queue")
+    val common = taskMenuActions(tasks.first()).filter { it in allowedBatch }.toMutableList()
+    tasks.drop(1).forEach { task -> common.retainAll(taskMenuActions(task).toSet()) }
+    return common.distinct()
 }
 internal fun workbenchShortcut(ctrl: Boolean, shift: Boolean, keyCode: Int): String? = when {
     ctrl && shift && keyCode == AwtKeyEvent.VK_N -> "batch"
@@ -190,6 +236,7 @@ internal fun workbenchShortcut(ctrl: Boolean, shift: Boolean, keyCode: Int): Str
 }
 private sealed interface UiSignal {
     data class Notice(val level: String, val message: String) : UiSignal
+    data class Clipboard(val urls: List<String>) : UiSignal
     data class Probe(val url: String, val variants: List<StreamVariantDto>) : UiSignal
     data class TorrentProbe(val data: TorrentProbeDto) : UiSignal
     data class TorrentSelection(val source: String, val files: List<TorrentFileDto>, val totalSize: Long) : UiSignal
@@ -253,6 +300,47 @@ internal data class TaskColumns(val name: Dp, val progress: Dp, val status: Dp, 
 }
 internal fun taskColumnsForWidth(width: Dp) = if (width < 930.dp) TaskColumns(225.dp, 185.dp, 100.dp, 75.dp, 70.dp, 55.dp, true)
     else TaskColumns(280.dp, 220.dp, 120.dp, 100.dp, 90.dp, 70.dp, false)
+
+internal data class ResolvedTaskColumn(val id: String, val label: String, val width: Dp)
+internal data class ResolvedTaskColumns(val items: List<ResolvedTaskColumn>, val compact: Boolean) {
+    val requiredWidth: Dp get() = items.fold(30.dp) { total, item -> total + item.width }
+}
+
+internal fun resolveTaskColumns(width: Dp): ResolvedTaskColumns {
+    val compact = width < 930.dp
+    val responsive = taskColumnsForWidth(width)
+    val items = listOf(
+        ResolvedTaskColumn("name", "名称", responsive.name),
+        ResolvedTaskColumn("progress", "进度 / 分段", responsive.progress),
+        ResolvedTaskColumn("status", "状态", responsive.status),
+        ResolvedTaskColumn("speed", "速度", responsive.speed),
+        ResolvedTaskColumn("size", "大小", responsive.size),
+        ResolvedTaskColumn("actions", "操作", responsive.actions),
+    )
+    return ResolvedTaskColumns(items, compact)
+}
+
+internal fun sortTasks(tasks: List<DownloadTask>, raw: String): List<DownloadTask> {
+    val (field, direction) = raw.split(':', limit = 2).let {
+        (it.getOrNull(0)?.takeIf { value -> value in setOf("queue", "name", "progress", "status", "speed", "size") } ?: "queue") to
+            (it.getOrNull(1)?.takeIf { value -> value in setOf("asc", "desc") } ?: "asc")
+    }
+    val comparator = when (field) {
+        "name" -> compareBy<DownloadTask> { it.filename.lowercase() }.thenBy { it.source.queueIndex }
+        "progress" -> compareBy<DownloadTask> { it.progress }.thenBy { it.source.queueIndex }
+        "status" -> compareBy<DownloadTask> { it.status }.thenBy { it.source.queueIndex }
+        "speed" -> compareBy<DownloadTask> { it.speedBytes }.thenBy { it.source.queueIndex }
+        "size" -> compareBy<DownloadTask> { it.source.totalBytes ?: -1 }.thenBy { it.source.queueIndex }
+        else -> compareBy<DownloadTask> { it.source.queueIndex }.thenBy { it.id }
+    }
+    return tasks.sortedWith(if (direction == "desc") comparator.reversed() else comparator)
+}
+
+internal fun nextTaskSort(current: String, field: String): String {
+    val active = current.substringBefore(':').ifBlank { "queue" }
+    val direction = current.substringAfter(':', "asc")
+    return if (active == field) "$field:${if (direction == "asc") "desc" else "asc"}" else "$field:asc"
+}
 
 private data class WorkbenchPalette(
     val canvas: Color, val rail: Color, val ink: Color, val muted: Color, val faint: Color,
@@ -382,6 +470,15 @@ fun main() {
     }
 }
 
+internal fun auditSettingsTab(surface: String): String? = when (surface) {
+    "settings" -> "通用"
+    "settings_download" -> "下载"
+    "settings_network" -> "网络"
+    "settings_devices" -> "投屏与推送"
+    "settings_appearance" -> "外观"
+    else -> null
+}
+
 @Composable @Preview
 fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalDropPaths: List<String> = emptyList(), externalDropActive: Boolean = false, onExternalDropConsumed: () -> Unit = {}, onAttention: () -> Unit = {}, onExit: () -> Unit = {}, titleBar: @Composable () -> Unit = {}) {
     val visualFixture = remember { System.getenv("HLS_UI_AUDIT_SURFACE").orEmpty().lowercase() }
@@ -397,7 +494,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
     var newTaskDialog by remember { mutableStateOf(visualFixture == "new_task") }
     var batchDialog by remember { mutableStateOf(visualFixture == "batch") }
     var harvestDialog by remember { mutableStateOf(visualFixture == "harvest") }
-    var settingsDialog by remember { mutableStateOf(visualFixture in setOf("settings", "settings_devices", "settings_network")) }
+    var settingsDialog by remember { mutableStateOf(auditSettingsTab(visualFixture) != null) }
     var settingsDeviceScanActive by remember { mutableStateOf(visualFixture == "settings_devices") }
     var queueManagerDialog by remember { mutableStateOf(visualFixture == "queues") }
     var queueAssignTaskIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -412,6 +509,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
     var notice by remember { mutableStateOf<UiSignal.Notice?>(null) }
     val shellFocus = remember { FocusRequester() }
     var probeResult by remember { mutableStateOf<UiSignal.Probe?>(null) }
+    var probeDraft by remember { mutableStateOf<TaskDraft?>(null) }
     var torrentProbe by remember { mutableStateOf<UiSignal.TorrentProbe?>(null) }
     var torrentDraft by remember { mutableStateOf<TaskDraft?>(null) }
     var deviceResult by remember { mutableStateOf<UiSignal.Devices?>(when (visualFixture) {
@@ -424,6 +522,8 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
         else -> null
     }) }
     var harvestResult by remember { mutableStateOf<UiSignal.Harvest?>(null) }
+    var harvestReferer by remember { mutableStateOf("") }
+    var harvestProbeBusy by remember { mutableStateOf(false) }
     var castSession by remember { mutableStateOf<UiSignal.Cast?>(when (visualFixture) {
         "cast" -> UiSignal.Cast(true, "示例影片 1080p", "客厅电视", "PLAYING", deviceKind = "dlna", supportedActions = listOf("status", "play", "pause", "seek_to", "stop"), playing = true, positionSeconds = 754, durationSeconds = 5420, positionAvailable = true)
         "cast_tvbox" -> UiSignal.Cast(true, "示例影片 1080p", "TVBox / 影视盒子", "PUBLISHED", mediaUrl = "http://192.168.1.8:49152/media/tvbox-demo", deviceKind = "tvbox", supportedActions = listOf("stop"))
@@ -472,7 +572,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
     }
     val handoffQueue = remember { mutableStateListOf<HandoffOfferDto>() }
     val activeHandoff = handoffQueue.firstOrNull()
-    val visible = visibleTasks(tasks, filter, category, query, selectedQueueId)
+    val visible = sortTasks(visibleTasks(tasks, filter, category, query, selectedQueueId), settings.taskSort)
     SideEffect { UiTestState.updateSelection(selected) }
     fun performTaskAction(taskId: String, action: String) {
         if (action in setOf("delete", "delete_files")) {
@@ -506,6 +606,22 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
             } }.onSuccess { refreshKey++ }.onFailure { error ->
                 UiDiagnostics.error("task_action.$action", error, taskId, requestId)
                 notice = UiSignal.Notice("error", error.message ?: "任务操作失败")
+            }
+        }
+    }
+    fun performTaskActions(taskIds: Set<String>, action: String) {
+        if (taskIds.isEmpty()) return
+        if (taskIds.size == 1) {
+            performTaskAction(taskIds.first(), action)
+            return
+        }
+        when (action) {
+            "delete", "delete_files" -> destructiveRequest = DestructiveRequest(action, taskIds)
+            "move_queue" -> queueAssignTaskIds = taskIds
+            else -> scope.launch {
+                runCatching { withContext(Dispatchers.IO) { taskIds.forEach { EnginePipeClient().taskAction(it, action) } } }
+                    .onSuccess { refreshKey++ }
+                    .onFailure { notice = UiSignal.Notice("error", it.message ?: "批量操作失败") }
             }
         }
     }
@@ -543,7 +659,11 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
         if (externalDropPaths.isNotEmpty()) {
             val paths = externalDropPaths
             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().importPaths(paths) } }
-                .onSuccess { notice = UiSignal.Notice("success", "已导入 ${paths.size} 个文件"); refreshKey++ }
+                .onSuccess { result ->
+                    val count = result.events.count { it.event["kind"]?.jsonPrimitive?.content == "task_created" }
+                    notice = UiSignal.Notice("success", "已导入 $count 项任务")
+                    refreshKey++
+                }
                 .onFailure { notice = UiSignal.Notice("error", it.message ?: "拖入文件失败") }
             onExternalDropConsumed()
         }
@@ -609,6 +729,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                     if (envelope.sequence > eventSequence + 1 && eventSequence > 0) refreshKey++
                     eventSequence = maxOf(eventSequence, envelope.sequence)
                     val eventKind = envelope.event["kind"]?.jsonPrimitive?.content.orEmpty()
+                    if (eventKind == "settings_changed") refreshKey++
                     val attentionRequired = when (eventKind) {
                         "handoff_offered", "error" -> true
                         "update_install_result" -> envelope.event["status"]?.jsonPrimitive?.content != "success"
@@ -638,7 +759,18 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                     ), { signal ->
                         when (signal) {
                             is UiSignal.Notice -> notice = signal
-                            is UiSignal.Probe -> probeResult = signal
+                            is UiSignal.Clipboard -> {
+                                if (signal.urls.size == 1) {
+                                    newTaskUrl = signal.urls.first()
+                                    newTaskDialog = true
+                                } else if (signal.urls.isNotEmpty()) {
+                                    notice = UiSignal.Notice("info", "检测到 ${signal.urls.size} 条可下载链接，请使用批量添加")
+                                }
+                            }
+                            is UiSignal.Probe -> {
+                                newTaskDialog = false
+                                probeResult = signal
+                            }
                             is UiSignal.TorrentProbe -> torrentProbe = signal
                             is UiSignal.TorrentSelection -> notice = UiSignal.Notice("success", "已选择 ${signal.files.count { it.selected }} 个文件，共 ${formatBytes(signal.totalSize)}")
                             is UiSignal.Devices -> { deviceResult = signal; castDiscovering = false }
@@ -675,7 +807,15 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                                 val index = tasks.indexOfFirst { it.id == signal.taskId }
                                 if (index >= 0) tasks[index] = tasks[index].copy(source = tasks[index].source.copy(logTail = signal.lines))
                             }
-                            is UiSignal.Duplicate -> duplicateResult = signal
+                            is UiSignal.Duplicate -> {
+                                if (signal.action == "focus" && tasks.any { it.id == signal.taskId }) {
+                                    selected = setOf(signal.taskId)
+                                    detailTaskId = signal.taskId
+                                    duplicateResult = null
+                                } else {
+                                    duplicateResult = signal
+                                }
+                            }
                             is UiSignal.Update -> updateResult = signal
                             is UiSignal.UpdatePrepared -> { updateResult = null; preparedUpdate = signal }
                             is UiSignal.PowerPending -> powerPending = signal
@@ -737,7 +877,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                 val clipboard = runCatching { withContext(Dispatchers.IO) { Toolkit.getDefaultToolkit().systemClipboard.getData(DataFlavor.stringFlavor) as? String } }.getOrNull().orEmpty()
                 newTaskUrl = clipboard.trim(); newTaskDialog = true
             }
-        }, { batchDialog = true }, { harvestDialog = true }, { tasks.filter { it.status == "排队中" || it.status == "已暂停" }.forEach { task -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().taskAction(task.id, if (task.status == "已暂停") "resume" else "start") } }.onSuccess { refreshKey++ } } } }, { tasks.filter { it.status == "进行中" }.forEach { task -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().taskAction(task.id, "pause") } }.onSuccess { refreshKey++ } } } }, { mediaSourceDialog = "cast" }, { mediaSourceDialog = "tvbox" }, { extensionDialog = true }, { settingsDialog = true }, darkMode, {
+        }, { batchDialog = true }, { harvestDialog = true }, { tasks.forEach { task -> val action = task.source.availableActions.firstOrNull { it in setOf("start", "resume", "retry") }; if (action != null) scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().taskAction(task.id, action) } }.onSuccess { refreshKey++ } } } }, { tasks.filter { "pause" in it.source.availableActions }.forEach { task -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().taskAction(task.id, "pause") } }.onSuccess { refreshKey++ } } } }, { mediaSourceDialog = "cast" }, { mediaSourceDialog = "tvbox" }, { extensionDialog = true }, { settingsDialog = true }, darkMode, {
             darkMode = !darkMode
             scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().storeSetting("dark_mode", darkMode) } } }
         })
@@ -757,7 +897,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                     }
                 }, onMore = { action ->
                     when (action) {
-                        "import" -> chooseImportPaths()?.let { paths -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().importPaths(paths) } }.onSuccess { refreshKey++ }.onFailure { notice = UiSignal.Notice("error", it.message ?: "导入失败") } } }
+                        "import" -> chooseImportPaths()?.let { paths -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().importPaths(paths) } }.onSuccess { result -> notice = UiSignal.Notice("success", "已导入 ${result.events.count { it.event["kind"]?.jsonPrimitive?.content == "task_created" }} 项任务"); refreshKey++ }.onFailure { notice = UiSignal.Notice("error", it.message ?: "导入失败") } } }
                         "export" -> chooseExportPath()?.let { path -> scope.launch { runCatching { withContext(Dispatchers.IO) { exportTaskList(path, selected.toList()) } }.onSuccess { result -> notice = UiSignal.Notice("success", "已导出 ${result.taskCount} 项任务") }.onFailure { notice = UiSignal.Notice("error", it.message ?: "导出失败") } } }
                         "update" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().checkUpdate(silent = false) } }.onFailure { notice = UiSignal.Notice("error", it.message ?: "检查更新失败") } }
                         "cancel_power" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().cancelPowerAction() } }.onFailure { notice = UiSignal.Notice("error", it.message ?: "取消电源动作失败") } }
@@ -775,6 +915,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                     visible,
                     selected,
                     appIcon,
+                    settings.taskSort,
                     { selected = it },
                     { detailTaskId = it.id },
                     onDeleteSelection = { if (selected.isNotEmpty()) destructiveRequest = DestructiveRequest("delete", selected) },
@@ -783,6 +924,12 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                             .onSuccess { refreshKey++ }.onFailure { notice = UiSignal.Notice("error", it.message ?: "队列排序失败") }
                     } },
                     modifier = Modifier.weight(1f),
+                    onBatchAction = ::performTaskActions,
+                    onSort = { field ->
+                        val next = nextTaskSort(settings.taskSort, field)
+                        settings = settings.copy(taskSort = next)
+                        scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().storeSetting("task_sort", next) } } }
+                    },
                 ) { taskId, action -> performTaskAction(taskId, action) }
                 }
         }
@@ -793,13 +940,27 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
             Surface(color = dialogSurface, shape = RoundedCornerShape(9.dp), shadowElevation = 14.dp, border = BorderStroke(2.dp, blue), modifier = Modifier.width(390.dp)) {
                 Row(Modifier.padding(horizontal = 20.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                     Surface(Modifier.size(42.dp), color = selectedSurface, shape = RoundedCornerShape(8.dp)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.FileDownload, null, tint = blue, modifier = Modifier.size(23.dp)) } }
-                    Spacer(Modifier.width(13.dp)); Column { Text("松开以导入", color = ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold); Text("支持种子、Metalink、URL 列表和本机文件", color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp)) }
+                    Spacer(Modifier.width(13.dp)); Column { Text("松开以导入", color = ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold); Text("支持任务 JSON、种子、Metalink 和 URL 列表", color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp)) }
                 }
             }
         }
     }
-    if (newTaskDialog) NewTaskDialog({ newTaskDialog = false }, newTaskUrl, settings, onProbe = { url ->
-        scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().probeUrl(url) } }.onFailure { notice = UiSignal.Notice("error", it.message ?: "资源分析失败") } }
+    if (newTaskDialog) NewTaskDialog({ newTaskDialog = false }, newTaskUrl, settings, onProbe = { draft ->
+        if (taskProbeTarget(draft) == ResourceProbeTarget.Torrent) {
+            torrentDraft = draft.copy(queueId = selectedQueueId ?: "default")
+            scope.launch {
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient().probeTorrent(draft.url) } }
+                    .onSuccess { newTaskDialog = false }
+                    .onFailure { notice = UiSignal.Notice("error", it.message ?: "种子分析失败") }
+            }
+        } else {
+            scope.launch {
+                probeDraft = draft
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient().probeUrl(draft) } }
+                    .onSuccess { newTaskDialog = false }
+                    .onFailure { notice = UiSignal.Notice("error", it.message ?: "资源分析失败") }
+            }
+        }
     }) { draft ->
         if (draft.kind.equals("torrent", true)) {
             torrentDraft = draft.copy(queueId = selectedQueueId ?: "default")
@@ -808,7 +969,10 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
             return@NewTaskDialog
         }
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().createTask(draft.copy(queueId = selectedQueueId ?: "default")) } }
+            runCatching { withContext(Dispatchers.IO) {
+                val queued = draft.copy(queueId = selectedQueueId ?: "default")
+                if (queued.curlCommand.isNotBlank()) EnginePipeClient().importCurl(queued) else EnginePipeClient().createTask(queued)
+            } }
                 .onSuccess { refreshKey++ }
                 .onFailure { notice = UiSignal.Notice("error", it.message ?: "创建下载失败") }
         }
@@ -834,11 +998,13 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
         }
         batchDialog = false
     }
-    if (harvestDialog) HarvestDialog({ harvestDialog = false }) { url ->
+    if (harvestDialog) HarvestDialog({ harvestDialog = false }, settings.defaultReferer) { url, referer ->
+        val effectiveReferer = referer.ifBlank { url }
+        harvestReferer = effectiveReferer
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().harvestPage(url) } }
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().harvestPage(url, effectiveReferer) } }
                 .onSuccess { refreshKey++ }
-                .onFailure { engineText = Product.engineReconnecting }
+                .onFailure { notice = UiSignal.Notice("error", it.message ?: "页面抓取失败") }
         }
         harvestDialog = false
     }
@@ -863,18 +1029,16 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                     }
             }
         },
-        initialTab = when (visualFixture) {
-            "settings_devices" -> "投屏与推送"
-            "settings_network" -> "网络"
-            else -> "通用"
-        },
-    ) { updated, defaultCookie ->
+        initialTab = auditSettingsTab(visualFixture) ?: "通用",
+    ) { updated, defaultCookie, siteRuleCredentialEdits ->
         settings = updated; darkMode = updated.darkMode
         scope.launch {
             runCatching { withContext(Dispatchers.IO) {
                 val client = EnginePipeClient()
-                val saved = client.saveSettings(updated)
-                if (defaultCookie != null) client.saveDefaultCookie(defaultCookie) else saved
+                var saved = client.saveSettings(updated)
+                if (defaultCookie != null) saved = client.saveDefaultCookie(defaultCookie)
+                siteRuleCredentialEdits.forEach { edit -> saved = client.saveSiteRuleCredential(edit) }
+                saved
             } }
                 .onSuccess { saved -> settings = saved; notice = UiSignal.Notice("success", "设置已保存") }
                 .onFailure { error -> notice = UiSignal.Notice("error", error.message ?: "设置保存失败") }
@@ -910,9 +1074,24 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                 .onFailure { notice = UiSignal.Notice("error", it.message ?: "移动任务失败") }
         }
     }
-    detailTaskId?.let { taskId -> tasks.firstOrNull { it.id == taskId } }?.let { TaskDetailsDialog(it, { detailTaskId = null }) { action ->
-        performTaskAction(it.id, action)
-    } }
+    detailTaskId?.let { taskId -> tasks.firstOrNull { it.id == taskId } }?.let { task ->
+        TaskDetailsDialog(
+            task = task,
+            onDismiss = { detailTaskId = null },
+            onRefreshRequest = { url, cookie ->
+                val requestId = UUID.randomUUID().toString()
+                scope.launch {
+                    runCatching { withContext(Dispatchers.IO) { EnginePipeClient().refreshTaskRequest(task.id, url, cookie) } }
+                        .onSuccess { refreshKey++; notice = UiSignal.Notice("success", if (cookie.isBlank()) "下载地址已更新" else "下载地址和凭据已更新") }
+                        .onFailure { error ->
+                            UiDiagnostics.error("task_refresh_request", error, task.id, requestId)
+                            notice = UiSignal.Notice("error", error.message ?: "更新下载请求失败")
+                        }
+                }
+            },
+            onAction = { action -> performTaskAction(task.id, action) },
+        )
+    }
     if (extensionDialog) ExtensionDialog(extensionText) { extensionDialog = false }
     activeHandoff?.let { offer ->
         LaunchedEffect(offer.handoffId) {
@@ -973,16 +1152,54 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
         )
     }
     notice?.let { signal -> NoticeToast(signal) { notice = null } }
-    probeResult?.let { signal -> ProbeResultDialog(signal, { probeResult = null }) { variant ->
+    probeResult?.let { signal -> ProbeResultDialog(signal, { probeResult = null; probeDraft = null }) { variant ->
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().createTask(TaskDraft(url = signal.url, preferredBandwidth = variant?.bandwidth ?: 0, preferredHeight = variant?.height ?: 0, preferredAudio = variant?.name.orEmpty())) } }
-                .onSuccess { probeResult = null; refreshKey++ }
+            runCatching { withContext(Dispatchers.IO) {
+                EnginePipeClient().createTask((probeDraft ?: TaskDraft(url = signal.url)).copy(
+                    preferredBandwidth = variant?.bandwidth ?: 0,
+                    preferredHeight = variant?.height ?: 0,
+                    preferredAudio = variant?.name.orEmpty(),
+                    queueId = selectedQueueId ?: "default",
+                ))
+            } }
+                .onSuccess { probeResult = null; probeDraft = null; refreshKey++ }
                 .onFailure { notice = UiSignal.Notice("error", it.message ?: "创建媒体任务失败") }
         }
     } }
-    harvestResult?.let { signal -> HarvestResultDialog(signal, { harvestResult = null }) { urls ->
+    harvestResult?.let { signal -> HarvestResultDialog(
+        signal = signal,
+        initialReferer = harvestReferer.ifBlank { signal.url },
+        defaultConcurrency = settings.defaultConcurrency,
+        probing = harvestProbeBusy,
+        onDismiss = { harvestResult = null },
+        onProbe = { urls, referer ->
+            harvestProbeBusy = true
+            scope.launch {
+                runCatching {
+                    withContext(Dispatchers.IO) { EnginePipeClient().probeHarvestSizes(signal.url, referer, urls) }
+                }.onSuccess { sizes ->
+                    harvestResult = harvestResult?.let { current ->
+                        current.copy(links = mergeHarvestSizes(current.links, sizes))
+                    }
+                }.onFailure { notice = UiSignal.Notice("error", it.message ?: "读取文件大小失败") }
+                harvestProbeBusy = false
+            }
+        },
+    ) { request ->
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { urls.forEach { EnginePipeClient().createTask(it) } } }
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    request.urls.forEach { url ->
+                        EnginePipeClient().createTask(TaskDraft(
+                            url = url,
+                            referer = request.referer,
+                            concurrency = request.concurrency,
+                            allowDuplicate = true,
+                            queueId = selectedQueueId ?: "default",
+                        ))
+                    }
+                }
+            }
                 .onSuccess { harvestResult = null; refreshKey++ }
                 .onFailure { notice = UiSignal.Notice("error", it.message ?: "创建抓取任务失败") }
         }
@@ -1054,7 +1271,12 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
     } }
     duplicateResult?.let { signal -> DuplicateDialog(signal, { duplicateResult = null }) {
         duplicateResult = null
-        performTaskAction(signal.taskId, signal.action)
+        if (signal.action == "focus") {
+            selected = setOf(signal.taskId)
+            detailTaskId = signal.taskId
+        } else {
+            performTaskAction(signal.taskId, signal.action)
+        }
     } }
     updateResult?.let { signal -> UpdateDialog(signal, updateDownloadBusy, { if (!updateDownloadBusy) updateResult = null }, onRelease = {
         runCatching { java.awt.Desktop.getDesktop().browse(URI(signal.releaseUrl)) }
@@ -1131,7 +1353,9 @@ internal fun downloadTask(task: TaskDto): DownloadTask {
     val progress = task.totalBytes?.takeIf { it > 0 }?.let { task.downloadedBytes.toFloat() / it } ?: 0f
     val status = displayStatus(task.status)
     val completedRanges = if (status == "已完成") task.totalRanges else task.completedRanges
-    val segments = if (task.totalRanges > 0) "${completedRanges}/${task.totalRanges} 段" else "—"
+    val segments = if (task.totalRanges > 0) {
+        "${completedRanges}/${task.totalRanges} ${if (task.resourceKind.equals("torrent", true)) "Piece" else "段"}"
+    } else "—"
     return DownloadTask(task.id, task.filename.ifBlank { task.title }, status, progress, formatRate(task.speedBytesPerSecond), task.speedBytesPerSecond, task.etaSeconds?.let(::formatEta) ?: "—", segments, "刚刚", task)
 }
 internal fun auditTasks(count: Int): List<DownloadTask> = List(count.coerceAtLeast(0)) { index ->
@@ -1185,6 +1409,9 @@ private fun applyEngineEvent(
         }
         "task_deleted" -> event["task_id"]?.toString()?.trim('"')?.let { id -> tasks.removeAll { it.id == id }; null }
         "browser_status" -> { setExtension(if (event["connected"]?.toString() == "true") "浏览器插件 · 已连接" else Product.extensionDisconnected); null }
+        "clipboard_offer" -> UiSignal.Clipboard(
+            event["urls"]?.jsonArray.orEmpty().mapNotNull { item -> runCatching { item.jsonPrimitive.content }.getOrNull() }.filter(String::isNotBlank),
+        )
         "handoff_offered" -> event["offer"]?.jsonObject?.let { offer ->
             runCatching { protocolJson.decodeFromJsonElement(HandoffOfferDto.serializer(), offer) }.getOrNull()?.let(offerHandoff)
             null
@@ -1219,7 +1446,15 @@ private fun applyEngineEvent(
         "harvest_result" -> UiSignal.Harvest(
             event["url"]?.toString()?.trim('"').orEmpty(),
             event["links"]?.jsonArray.orEmpty().mapNotNull { item ->
-                item.jsonObject.let { value -> HarvestCandidateUi(value["url"]?.jsonPrimitive?.content.orEmpty(), value["filename"]?.jsonPrimitive?.content.orEmpty(), value["category"]?.jsonPrimitive?.content.orEmpty(), value["size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0) }.takeIf { it.url.isNotBlank() }
+                item.jsonObject.let { value ->
+                    HarvestCandidateUi(
+                        url = value["url"]?.jsonPrimitive?.content.orEmpty(),
+                        filename = value["filename"]?.jsonPrimitive?.content.orEmpty(),
+                        category = value["category"]?.jsonPrimitive?.content.orEmpty(),
+                        size = value["size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
+                        extension = value["extension"]?.jsonPrimitive?.content.orEmpty(),
+                    )
+                }.takeIf { it.url.isNotBlank() }
             },
         )
         "task_log" -> UiSignal.Log(event["task_id"]?.jsonPrimitive?.content.orEmpty(), event["lines"]?.jsonArray.orEmpty().map { it.jsonPrimitive.content })
@@ -1282,7 +1517,17 @@ private fun applyEngineEvent(
 }
 
 private inline fun handleSignal(signal: UiSignal?, consume: (UiSignal) -> Unit) { if (signal != null) consume(signal) }
-private fun displayStatus(status: String) = when (status.lowercase()) { "completed", "done" -> "已完成"; "running", "downloading" -> "进行中"; "paused" -> "已暂停"; "failed", "error" -> "失败"; else -> "排队中" }
+private fun displayStatus(status: String) = when (status.lowercase()) {
+    "completed", "done" -> "已完成"
+    "running", "downloading" -> "进行中"
+    "recording" -> "录制中"
+    "merging" -> "合并中"
+    "checking" -> "校验中"
+    "paused" -> "已暂停"
+    "canceled", "cancelled" -> "已取消"
+    "failed", "error" -> "失败"
+    else -> "排队中"
+}
 internal fun taskCategory(task: DownloadTask) = when (task.filename.substringAfterLast('.', "").lowercase()) { "m3u8", "mpd", "mp4", "mkv", "webm", "mp3", "flac", "wav", "avi", "mov" -> TaskCategory.MEDIA; "exe", "msi", "appx", "apk", "dmg", "pkg" -> TaskCategory.PROGRAM; "zip", "rar", "7z", "tar", "gz", "bz2", "xz" -> TaskCategory.ARCHIVE; else -> TaskCategory.OTHER }
 internal fun visibleTasks(tasks: List<DownloadTask>, filter: TaskFilter, category: TaskCategory?, query: String, queueId: String? = null): List<DownloadTask> =
     tasks.filter { (filter == TaskFilter.ALL || it.status == filter.label) && (category == null || taskCategory(it) == category) && (queueId == null || it.source.queueId == queueId) && it.filename.contains(query, true) }
@@ -1300,9 +1545,9 @@ internal fun chooseDirectory(initialPath: String = "", title: String = "选择�
 
 private fun chooseImportPaths(): List<String>? {
     val chooser = JFileChooser().apply {
-        dialogTitle = "导入文件、种子、Metalink 或 URL 列表"
+        dialogTitle = "导入任务 JSON、种子、Metalink 或 URL 列表"
         isMultiSelectionEnabled = true
-        fileFilter = FileNameExtensionFilter("支持的导入文件", "torrent", "metalink", "meta4", "txt", "urls")
+        fileFilter = FileNameExtensionFilter("支持的导入文件", "json", "torrent", "metalink", "meta4", "txt", "urls")
     }
     return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFiles.map { it.absolutePath } else null
 }
@@ -1360,20 +1605,29 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
     BoxWithConstraints(Modifier.height(52.dp).fillMaxWidth().background(rail).border(BorderStroke(1.dp, border))) {
         val compact = maxWidth < 1180.dp
         val narrow = maxWidth < 980.dp
-        Row(Modifier.fillMaxSize().padding(horizontal = if (narrow) 8.dp else 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            ToolbarButton(Icons.Outlined.Add, "新建", onNew, true)
-            if (compact) {
-                ToolbarIcon(Icons.Outlined.ContentPaste, "粘贴链接", onPaste); ToolbarIcon(Icons.AutoMirrored.Outlined.PlaylistAdd, "批量添加", onBatch); ToolbarIcon(Icons.Outlined.TravelExplore, "页面抓取", onHarvest)
-            } else {
-                ToolbarButton(Icons.Outlined.ContentPaste, "粘贴链接", onPaste); ToolbarButton(Icons.AutoMirrored.Outlined.PlaylistAdd, "批量添加", onBatch); ToolbarButton(Icons.Outlined.TravelExplore, "页面抓取", onHarvest)
+        @Composable fun Action(id: String) {
+            val (icon, label, action) = when (id) {
+                "new" -> Triple(Icons.Outlined.Add, "新建", onNew)
+                "paste" -> Triple(Icons.Outlined.ContentPaste, "粘贴链接", onPaste)
+                "batch" -> Triple(Icons.AutoMirrored.Outlined.PlaylistAdd, "批量添加", onBatch)
+                "harvest" -> Triple(Icons.Outlined.TravelExplore, "页面抓取", onHarvest)
+                "start_all" -> Triple(Icons.Outlined.PlayArrow, "全部开始", onStartAll)
+                "pause_all" -> Triple(Icons.Outlined.Pause, "全部暂停", onPauseAll)
+                "cast" -> Triple(Icons.Outlined.Cast, "投屏到电视", onCastMedia)
+                "tvbox" -> Triple(Icons.Outlined.Tv, "TVBox 推送", onPushMedia)
+                "extension" -> Triple(Icons.Outlined.Extension, "插件", onExtension)
+                else -> return
             }
-            VerticalDivider(Modifier.padding(horizontal = 7.dp).height(24.dp), color = border)
-            ToolbarIcon(Icons.Outlined.PlayArrow, "全部开始", onStartAll); ToolbarIcon(Icons.Outlined.Pause, "全部暂停", onPauseAll)
-            ToolbarIcon(Icons.Outlined.Cast, "投屏到电视", onCastMedia); ToolbarIcon(Icons.Outlined.Tv, "TVBox 推送", onPushMedia)
+            if (id == "new") ToolbarButton(icon, label, action, true)
+            else if (compact) ToolbarIcon(icon, label, action)
+            else ToolbarButton(icon, label, action)
+        }
+        Row(Modifier.fillMaxSize().padding(horizontal = if (narrow) 8.dp else 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            listOf("new", "paste", "batch", "harvest", "start_all", "pause_all", "cast", "tvbox", "extension").forEach { Action(it) }
             Spacer(Modifier.weight(1f))
             ToolbarSearchField(query, onQuery, narrow)
             Spacer(Modifier.width(5.dp))
-            if (compact) { ToolbarIcon(Icons.Outlined.Extension, "插件", onExtension); ToolbarIcon(Icons.Outlined.Settings, "设置", onSettings) } else { ToolbarButton(Icons.Outlined.Extension, "插件", onExtension); ToolbarButton(Icons.Outlined.Settings, "设置", onSettings) }
+            if (compact) ToolbarIcon(Icons.Outlined.Settings, "设置", onSettings) else ToolbarButton(Icons.Outlined.Settings, "设置", onSettings)
             ToolbarIcon(if (dark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode, if (dark) "浅色模式" else "深色模式", onTheme)
         }
     }
@@ -1455,15 +1709,21 @@ private fun categoryIcon(category: TaskCategory): ImageVector = when (category) 
             } else {
                 TextButton(onClick = onClearCompleted, enabled = hasCompleted, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(Icons.Outlined.DeleteSweep, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("清理已完成", fontSize = 11.sp) }; TextButton(onClick = onRefresh, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(Icons.Outlined.Refresh, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("刷新", fontSize = 11.sp) }
             }
-            Box { ToolbarIcon(Icons.Outlined.MoreHoriz, "更多操作") { menuOpen = true }; DropdownMenu(menuOpen, { menuOpen = false }, shape = RoundedCornerShape(7.dp), containerColor = dialogSurface, shadowElevation = 6.dp) { listOf("import" to "导入文件或种子", "export" to "导出任务列表", "update" to "检查更新", "cancel_power" to "取消完成后电源动作").forEach { (action, label) -> DropdownMenuItem(text = { Text(label, fontSize = 12.sp) }, onClick = { menuOpen = false; onMore(action) }) } } }
+            Box { ToolbarIcon(Icons.Outlined.MoreHoriz, "更多操作") { menuOpen = true }; DropdownMenu(menuOpen, { menuOpen = false }, shape = RoundedCornerShape(7.dp), containerColor = dialogSurface, shadowElevation = 6.dp) { listOf("import" to "导入任务或种子", "export" to "导出任务列表", "update" to "检查更新", "cancel_power" to "取消完成后电源动作").forEach { (action, label) -> DropdownMenuItem(text = { Text(label, fontSize = 12.sp) }, onClick = { menuOpen = false; onMore(action) }) } } }
         }
     }
 }
 @Composable private fun SelectionAction(icon: ImageVector, label: String, onClick: () -> Unit) = ToolbarIcon(icon, label, onClick)
+private data class TaskContextMenuRequest(
+    val task: DownloadTask,
+    val targets: List<DownloadTask>,
+    val position: IntOffset,
+)
 @OptIn(ExperimentalComposeUiApi::class)
-@Composable private fun TaskTable(tasks: List<DownloadTask>, selected: Set<String>, appIcon: ImageBitmap?, onSelection: (Set<String>) -> Unit, onDetails: (DownloadTask) -> Unit, onDeleteSelection: () -> Unit, onQueueMove: (String, Int) -> Unit, modifier: Modifier = Modifier, onAction: (String, String) -> Unit) {
+@Composable private fun TaskTable(tasks: List<DownloadTask>, selected: Set<String>, appIcon: ImageBitmap?, taskSort: String, onSelection: (Set<String>) -> Unit, onDetails: (DownloadTask) -> Unit, onDeleteSelection: () -> Unit, onQueueMove: (String, Int) -> Unit, modifier: Modifier = Modifier, onBatchAction: (Set<String>, String) -> Unit, onSort: (String) -> Unit, onAction: (String, String) -> Unit) {
     var anchorId by remember { mutableStateOf<String?>(null) }
     var tableFocused by remember { mutableStateOf(false) }
+    var contextMenu by remember { mutableStateOf<TaskContextMenuRequest?>(null) }
     val focusRequester = remember { FocusRequester() }
     fun selectTask(id: String, shift: Boolean, toggle: Boolean): Set<String> {
         val next = selectionAfterClick(tasks.map { it.id }, selected, anchorId, id, shift, toggle)
@@ -1475,8 +1735,16 @@ private fun categoryIcon(category: TaskCategory): ImageVector = when (category) 
         UiTestState.installTaskSelector { index, shift, toggle ->
             tasks.getOrNull(index)?.let { selectTask(it.id, shift, toggle) } ?: selected
         }
+        UiTestState.installTaskContextOpener { index, x, y ->
+            val task = tasks.getOrNull(index) ?: return@installTaskContextOpener
+            val targets = if (task.id in selected) tasks.filter { it.id in selected } else listOf(task)
+            val position = IntOffset(x, y)
+            val actions = batchTaskMenuActions(targets.map { it.source })
+            contextMenu = TaskContextMenuRequest(task, targets, position)
+            UiTestState.updateContextMenu(position, targets.mapTo(mutableSetOf()) { it.id }, actions)
+        }
     }
-    DisposableEffect(Unit) { onDispose { UiTestState.installTaskSelector(null) } }
+    DisposableEffect(Unit) { onDispose { UiTestState.installTaskSelector(null); UiTestState.installTaskContextOpener(null) } }
     BoxWithConstraints(
         modifier.fillMaxWidth().background(rail)
             .semantics { contentDescription = "下载任务列表，共 ${tasks.size} 项，已选择 ${selected.size} 项" }
@@ -1498,13 +1766,26 @@ private fun categoryIcon(category: TaskCategory): ImageVector = when (category) 
                 }
             }.border(1.dp, if (tableFocused) blue.copy(alpha = .7f) else Color.Transparent)
     ) {
-        val columns = taskColumnsForWidth(maxWidth)
+        val columns = resolveTaskColumns(maxWidth)
         val tableWidth = maxOf(maxWidth, columns.requiredWidth)
         val horizontalState = rememberScrollState()
         Box(Modifier.fillMaxSize().padding(bottom = if (tableWidth > maxWidth) 9.dp else 0.dp).horizontalScroll(horizontalState)) {
             Column(Modifier.width(tableWidth).fillMaxHeight()) {
                 Row(Modifier.fillMaxWidth().height(36.dp).background(surface3).border(BorderStroke(1.dp, border)).padding(horizontal = 15.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Row(Modifier.width(columns.name), verticalAlignment = Alignment.CenterVertically) { Checkbox(tasks.isNotEmpty() && selected.size == tasks.size, { checked -> onSelection(if (checked) tasks.mapTo(mutableSetOf()) { it.id } else emptySet()) }, Modifier.size(18.dp), accessibilityLabel = "选择全部任务"); Spacer(Modifier.width(8.dp)); Text("名称", color = muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }; Header("进度 / 分段", columns.progress); Header("状态", columns.status); Header("速度", columns.speed); Header("大小", columns.size); Header("操作", columns.actions); Spacer(Modifier.weight(1f))
+                    columns.items.forEach { column ->
+                        key(column.id) {
+                            if (column.id == "name") {
+                                Row(Modifier.width(column.width), verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(tasks.isNotEmpty() && selected.size == tasks.size, { checked -> onSelection(if (checked) tasks.mapTo(mutableSetOf()) { it.id } else emptySet()) }, Modifier.size(18.dp), accessibilityLabel = "选择全部任务")
+                                    Spacer(Modifier.width(8.dp))
+                                    TaskHeader(column.label, Modifier.weight(1f), column.id, taskSort, onSort)
+                                }
+                            } else {
+                                TaskHeader(column.label, Modifier.width(column.width), column.id, taskSort, onSort)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
                 }
                 if (tasks.isEmpty()) {
                     Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
@@ -1636,56 +1917,33 @@ private fun categoryIcon(category: TaskCategory): ImageVector = when (category) 
                                 }
                             },
                     ) {
-                        LazyColumn(Modifier.fillMaxSize().background(rail).padding(end = 7.dp), state = listState) { items(tasks, key = { it.id }, contentType = { it.status }) { task -> TaskRow(task, columns, task.id in selected, { shift, toggle -> if (System.nanoTime() >= suppressRowClickUntilNanos) { focusRequester.requestFocus(); selectTask(task.id, shift, toggle) } }, { onDetails(task) }, { delta -> onQueueMove(task.id, delta) }) { action -> onAction(task.id, action) } } }
+                        LazyColumn(Modifier.fillMaxSize().background(rail).padding(end = 7.dp), state = listState) { items(tasks, key = { it.id }, contentType = { it.status }) { task ->
+                            val contextTargets = if (task.id in selected) tasks.filter { it.id in selected } else listOf(task)
+                            TaskRow(
+                                task,
+                                columns,
+                                taskSort == "queue:asc",
+                                task.id in selected,
+                                { shift, toggle -> if (System.nanoTime() >= suppressRowClickUntilNanos) { focusRequester.requestFocus(); selectTask(task.id, shift, toggle) } },
+                                { onDetails(task) },
+                                { delta -> onQueueMove(task.id, delta) },
+                                { position ->
+                                    val actions = batchTaskMenuActions(contextTargets.map { it.source })
+                                    contextMenu = TaskContextMenuRequest(task, contextTargets, position)
+                                    UiTestState.updateContextMenu(position, contextTargets.mapTo(mutableSetOf()) { it.id }, actions)
+                                },
+                            ) { action -> onAction(task.id, action) }
+                        } }
                         if (tasks.size > 8) VerticalScrollbar(rememberScrollbarAdapter(listState), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(7.dp))
                     }
                 }
             }
         }
         if (tableWidth > maxWidth) HorizontalScrollbar(rememberScrollbarAdapter(horizontalState), Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(9.dp))
-    }
-}
-@Composable private fun RowScope.Header(value: String, width: Dp) =
-    Text(value, Modifier.width(width), color = muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-@OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
-@Composable private fun TaskRow(task: DownloadTask, columns: TaskColumns, isSelected: Boolean, select: (Boolean, Boolean) -> Unit, onDetails: () -> Unit, onQueueMove: (Int) -> Unit, onAction: (String) -> Unit) {
-    var overflowOpen by remember { mutableStateOf(false) }
-    var contextOpen by remember { mutableStateOf(false) }
-    var contextPosition by remember { mutableStateOf(Offset.Zero) }
-    var clickShift by remember { mutableStateOf(false) }
-    var clickCtrl by remember { mutableStateOf(false) }
-    val rowInteraction = remember { MutableInteractionSource() }
-    val hovered by rowInteraction.collectIsHoveredAsState()
-    val rowColor = when {
-        isSelected -> selectedSurface
-        hovered -> surface2
-        else -> rail
-    }
-    val separatorColor = border
-    Row(Modifier.fillMaxWidth().height(52.dp).background(rowColor).drawBehind { drawLine(separatorColor, androidx.compose.ui.geometry.Offset(0f, size.height - 1f), androidx.compose.ui.geometry.Offset(size.width, size.height - 1f), 1f) }.hoverable(rowInteraction).semantics { selected = isSelected; contentDescription = taskAccessibilityLabel(task) }.onPointerEvent(PointerEventType.Press, PointerEventPass.Initial) {
-        clickShift = it.keyboardModifiers.isPointerShiftPressed
-        clickCtrl = it.keyboardModifiers.isPointerCtrlPressed
-        if (it.button == PointerButton.Secondary || it.buttons.isSecondaryPressed) {
-            if (!isSelected) select(false, false)
-            contextPosition = it.changes.firstOrNull()?.position ?: Offset.Zero
-            contextOpen = true
-        }
-    }.combinedClickable(interactionSource = rowInteraction, indication = null, onDoubleClick = { select(false, false); onDetails() }, onClick = { select(clickShift, clickCtrl) }).padding(horizontal = 15.dp), verticalAlignment = Alignment.CenterVertically) {
-        Row(Modifier.width(columns.name), verticalAlignment = Alignment.CenterVertically) { Checkbox(isSelected, { select(false, true) }, Modifier.size(18.dp), accessibilityLabel = "选择 ${task.filename}"); Spacer(Modifier.width(8.dp)); Icon(categoryIcon(taskCategory(task)), null, tint = muted, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); WorkbenchTooltip("${task.filename}\n${safeResourceLocation(task.source.url)}") { Column(Modifier.weight(1f).padding(end = 8.dp)) { Text(task.filename, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, fontWeight = FontWeight.SemiBold); Text(listOf(taskProtocolLabel(task.source), taskExtensionLabel(task.source)).filter { it.isNotBlank() }.joinToString(" · "), color = Color(0xFFC76545), fontSize = 10.sp, fontWeight = FontWeight.SemiBold) } } }
-        Column(Modifier.width(columns.progress).padding(end = 8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) { LinearProgressIndicator(progress = { task.progress }, modifier = Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)), color = if (task.status == "已暂停") Color(0xFFD97706) else blue, trackColor = surface3); Spacer(Modifier.width(8.dp)); Text("${(task.progress * 100).toInt()}%", color = faint, fontSize = 10.sp) }
-            Text(if (task.source.activeWorkers > 0) "${task.segments} · ${task.source.activeWorkers} 连接" else task.segments, color = faint, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
-        }
-        Column(Modifier.width(columns.status)) { StatusBadge(task.status); Text(if (task.status == "进行中") task.remaining else "", color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 1.dp)) }
-        Text(if (task.status == "进行中") task.speed else "—", Modifier.width(columns.speed), color = ink, fontSize = 11.sp)
-        Text(task.source.totalBytes?.let(::formatBytes) ?: "—", Modifier.width(columns.size), color = ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Row(Modifier.width(columns.actions), verticalAlignment = Alignment.CenterVertically) { if (!columns.compact && task.status == "排队中") { var dragY by remember { mutableFloatStateOf(0f) }; Icon(Icons.Outlined.DragHandle, "拖动排序", tint = faint, modifier = Modifier.size(28.dp).padding(5.dp).pointerInput(task.id) { detectDragGestures(onDragStart = { dragY = 0f }, onDragEnd = { val delta = (dragY / 52f).toInt(); if (delta != 0) onQueueMove(delta); dragY = 0f }) { change, amount -> change.consume(); dragY += amount.y } }) } else if (!columns.compact) Spacer(Modifier.width(28.dp)); Box(Modifier.width(42.dp)) { Box(Modifier.size(34.dp).clip(RoundedCornerShape(6.dp)).clickable { if (!isSelected) select(false, false); overflowOpen = true }, contentAlignment = Alignment.Center) { Icon(Icons.Outlined.MoreVert, "更多操作", tint = muted) }; DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }, shape = RoundedCornerShape(8.dp), containerColor = dialogSurface, tonalElevation = 0.dp, shadowElevation = 6.dp) { TaskMenuEntries(task, { overflowOpen = false }, onDetails, onAction) } } }
-        Spacer(Modifier.weight(1f))
-        if (contextOpen) {
+        contextMenu?.let { request ->
             Popup(
-                alignment = Alignment.TopStart,
-                offset = IntOffset(contextPosition.x.roundToInt(), contextPosition.y.roundToInt()),
-                onDismissRequest = { contextOpen = false },
+                popupPositionProvider = ContextMenuPositionProvider(request.position),
+                onDismissRequest = { contextMenu = null },
                 properties = PopupProperties(focusable = true),
             ) {
                 Surface(
@@ -1696,19 +1954,118 @@ private fun categoryIcon(category: TaskCategory): ImageVector = when (category) 
                     modifier = Modifier.width(220.dp),
                 ) {
                     Column(Modifier.padding(vertical = 4.dp)) {
-                        TaskMenuEntries(task, { contextOpen = false }, onDetails, onAction)
+                        TaskMenuEntries(
+                            request.task,
+                            { contextMenu = null },
+                            { onDetails(request.task) },
+                            { action -> onBatchAction(request.targets.mapTo(mutableSetOf()) { it.id }, action) },
+                            actions = batchTaskMenuActions(request.targets.map { it.source }),
+                            includeDetails = request.targets.size == 1,
+                        )
                     }
                 }
             }
         }
     }
 }
-@Composable private fun TaskMenuEntries(task: DownloadTask, dismiss: () -> Unit, onDetails: () -> Unit, onAction: (String) -> Unit) {
-    DropdownMenuItem(text = { Text("详情与日志", fontSize = 12.sp, color = ink) }, onClick = { dismiss(); onDetails() })
-    taskMenuActions(task.source).forEach { action ->
+@Composable
+private fun TaskHeader(value: String, modifier: Modifier, field: String, taskSort: String, onSort: (String) -> Unit) {
+    val sortable = field != "actions"
+    val active = taskSort.substringBefore(':') == field
+    Row(
+        modifier.height(36.dp).then(if (sortable) Modifier.clickable { onSort(field) } else Modifier),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(value, color = muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        if (active) {
+            Spacer(Modifier.width(3.dp))
+            Icon(
+                if (taskSort.endsWith(":desc")) Icons.Outlined.ArrowDownward else Icons.Outlined.ArrowUpward,
+                if (taskSort.endsWith(":desc")) "降序" else "升序",
+                Modifier.size(13.dp),
+                tint = blue,
+            )
+        }
+    }
+}
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
+@Composable private fun TaskRow(task: DownloadTask, columns: ResolvedTaskColumns, queueOrder: Boolean, isSelected: Boolean, select: (Boolean, Boolean) -> Unit, onDetails: () -> Unit, onQueueMove: (Int) -> Unit, onContextMenu: (IntOffset) -> Unit, onAction: (String) -> Unit) {
+    var overflowOpen by remember { mutableStateOf(false) }
+    var rowWindowOrigin by remember { mutableStateOf(Offset.Zero) }
+    var rowSize by remember { mutableStateOf(IntSize.Zero) }
+    var clickShift by remember { mutableStateOf(false) }
+    var clickCtrl by remember { mutableStateOf(false) }
+    val rowInteraction = remember { MutableInteractionSource() }
+    val hovered by rowInteraction.collectIsHoveredAsState()
+    val rowColor = when {
+        isSelected -> selectedSurface
+        hovered -> surface2
+        else -> rail
+    }
+    val separatorColor = border
+    Row(Modifier.fillMaxWidth().height(52.dp).onGloballyPositioned { rowWindowOrigin = it.positionInWindow(); rowSize = it.size }.background(rowColor).drawBehind { drawLine(separatorColor, androidx.compose.ui.geometry.Offset(0f, size.height - 1f), androidx.compose.ui.geometry.Offset(size.width, size.height - 1f), 1f) }.hoverable(rowInteraction).semantics { selected = isSelected; contentDescription = taskAccessibilityLabel(task) }.onPointerEvent(PointerEventType.Press, PointerEventPass.Initial) {
+        clickShift = it.keyboardModifiers.isPointerShiftPressed
+        clickCtrl = it.keyboardModifiers.isPointerCtrlPressed
+        if (it.button == PointerButton.Secondary || it.buttons.isSecondaryPressed) {
+            if (!isSelected) select(false, false)
+            onContextMenu(contextMenuWindowPosition(rowWindowOrigin, rowSize, it.changes.firstOrNull()?.position ?: Offset.Zero))
+        }
+    }.combinedClickable(interactionSource = rowInteraction, indication = null, onDoubleClick = { select(false, false); onDetails() }, onClick = { select(clickShift, clickCtrl) }).padding(horizontal = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+        columns.items.forEach { column ->
+            key(column.id) {
+                when (column.id) {
+                    "name" -> Row(Modifier.width(column.width), verticalAlignment = Alignment.CenterVertically) { Checkbox(isSelected, { select(false, true) }, Modifier.size(18.dp), accessibilityLabel = "选择 ${task.filename}"); Spacer(Modifier.width(8.dp)); Icon(categoryIcon(taskCategory(task)), null, tint = muted, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); WorkbenchTooltip("${task.filename}\n${safeResourceLocation(task.source.url)}") { Column(Modifier.weight(1f).padding(end = 8.dp)) { Text(task.filename, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, fontWeight = FontWeight.SemiBold); Text(listOf(taskProtocolLabel(task.source), taskExtensionLabel(task.source)).filter { it.isNotBlank() }.joinToString(" · "), color = Color(0xFFC76545), fontSize = 10.sp, fontWeight = FontWeight.SemiBold) } } }
+                    "progress" -> Column(Modifier.width(column.width).padding(end = 8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) { LinearProgressIndicator(progress = { task.progress }, modifier = Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)), color = if (task.status == "已暂停") Color(0xFFD97706) else blue, trackColor = surface3); Spacer(Modifier.width(8.dp)); Text("${(task.progress * 100).toInt()}%", color = faint, fontSize = 10.sp) }
+                        Text(
+                            when {
+                                task.source.resourceKind.equals("torrent", true) -> "${task.segments} · ${task.source.peerCount} Peer"
+                                task.source.activeWorkers > 0 -> "${task.segments} · ${task.source.activeWorkers} 连接"
+                                else -> task.segments
+                            },
+                            color = faint, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 3.dp),
+                        )
+                    }
+                    "status" -> Column(Modifier.width(column.width)) { StatusBadge(task.status); Text(if (task.status == "进行中") task.remaining else "", color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 1.dp)) }
+                    "speed" -> Text(if (task.status == "进行中") task.speed else "—", Modifier.width(column.width), color = ink, fontSize = 11.sp)
+                    "size" -> Text(task.source.totalBytes?.let(::formatBytes) ?: "—", Modifier.width(column.width), color = ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    "actions" -> Row(Modifier.width(column.width), verticalAlignment = Alignment.CenterVertically) {
+                        if (!columns.compact && queueOrder && task.status == "排队中") {
+                            var dragY by remember { mutableFloatStateOf(0f) }
+                            Icon(Icons.Outlined.DragHandle, "拖动排序", tint = faint, modifier = Modifier.size(28.dp).padding(5.dp).pointerInput(task.id) { detectDragGestures(onDragStart = { dragY = 0f }, onDragEnd = { val delta = (dragY / 52f).toInt(); if (delta != 0) onQueueMove(delta); dragY = 0f }) { change, amount -> change.consume(); dragY += amount.y } })
+                        } else if (!columns.compact) Spacer(Modifier.width(28.dp))
+                        Box(Modifier.width(42.dp)) { Box(Modifier.size(34.dp).clip(RoundedCornerShape(6.dp)).clickable { if (!isSelected) select(false, false); overflowOpen = true }, contentAlignment = Alignment.Center) { Icon(Icons.Outlined.MoreVert, "更多操作", tint = muted) }; DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }, shape = RoundedCornerShape(8.dp), containerColor = dialogSurface, tonalElevation = 0.dp, shadowElevation = 6.dp) { TaskMenuEntries(task, { overflowOpen = false }, onDetails, onAction) } }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.weight(1f))
+    }
+}
+internal fun contextMenuWindowPosition(rowOrigin: Offset, rowSize: IntSize, pointer: Offset): IntOffset {
+    val isRowLocal = pointer.x in 0f..rowSize.width.toFloat() && pointer.y in 0f..rowSize.height.toFloat()
+    val windowPointer = if (isRowLocal) rowOrigin + pointer else pointer
+    return IntOffset(windowPointer.x.roundToInt(), windowPointer.y.roundToInt())
+}
+
+private class ContextMenuPositionProvider(private val pointer: IntOffset) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset = IntOffset(
+        pointer.x.coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0)),
+        pointer.y.coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0)),
+    )
+}
+@Composable private fun TaskMenuEntries(task: DownloadTask, dismiss: () -> Unit, onDetails: () -> Unit, onAction: (String) -> Unit, actions: List<String> = taskMenuActions(task.source), includeDetails: Boolean = true) {
+    if (includeDetails) DropdownMenuItem(text = { Text("详情与日志", fontSize = 12.sp, color = ink) }, onClick = { dismiss(); onDetails() })
+    actions.forEach { action ->
         DropdownMenuItem(text = { Text(actionLabel(action), fontSize = 12.sp, color = ink) }, onClick = { dismiss(); onAction(action) })
     }
-    if (task.status == "排队中") {
+    if (includeDetails && task.status == "排队中") {
         HorizontalDivider(color = border)
         listOf("queue_up", "queue_down", "queue_top", "queue_bottom").forEach { action ->
             DropdownMenuItem(text = { Text(actionLabel(action), fontSize = 12.sp, color = ink) }, onClick = { dismiss(); onAction(action) })
@@ -2048,7 +2405,14 @@ private fun QueueManagerDialog(
     )
 }
 
-@Composable private fun NewTaskDialog(onDismiss: () -> Unit, initialUrl: String, defaults: EngineSettingsDto, onProbe: (String) -> Unit, onCreate: (TaskDraft) -> Unit) {
+@Composable
+private fun NewTaskDialog(
+    onDismiss: () -> Unit,
+    initialUrl: String,
+    defaults: EngineSettingsDto,
+    onProbe: (TaskDraft) -> Unit,
+    onCreate: (TaskDraft) -> Unit,
+) {
     var tab by remember { mutableStateOf("基本") }
     var url by remember(initialUrl) { mutableStateOf(initialUrl) }
     var filename by remember(initialUrl) { mutableStateOf("") }
@@ -2057,41 +2421,207 @@ private fun QueueManagerDialog(
     var speed by remember(defaults) { mutableStateOf(defaults.speedLimitKib.toString()) }
     var checksum by remember { mutableStateOf("") }
     var proxy by remember(defaults) { mutableStateOf(defaults.proxyUrl) }
+    var mirrors by remember { mutableStateOf("") }
     var referer by remember(defaults) { mutableStateOf(defaults.defaultReferer) }
+    var origin by remember(defaults) { mutableStateOf(defaults.defaultOrigin) }
+    var cookie by remember { mutableStateOf("") }
     var userAgent by remember(defaults) { mutableStateOf(defaults.defaultUserAgent) }
+    var requestHeaders by remember { mutableStateOf("") }
+    var requestMethod by remember { mutableStateOf("GET") }
     var startAt by remember { mutableStateOf("") }
     var stopAt by remember { mutableStateOf("") }
     var completionAction by remember(defaults) { mutableStateOf(defaults.completionPowerAction) }
     var allowDuplicate by remember(defaults) { mutableStateOf(defaults.allowDuplicate) }
     val urlFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { delay(120); urlFocus.requestFocus() }
-    val normalized = runCatching { EnginePipeClient.normalizeDownloadUrl(url) }.getOrNull()
+    val curlMode = EnginePipeClient.isCurlCommand(url)
+    val normalized = if (curlMode) null else runCatching { EnginePipeClient.normalizeDownloadUrl(url) }.getOrNull()
+    val parsedHeaders = runCatching { parseRequestHeaderLines(requestHeaders) }
+    val validInput = curlMode || normalized != null
+    val buildDraft = {
+        TaskDraft(
+            url = normalized.orEmpty(),
+            filename = filename.trim(),
+            downloadDirectory = directory.trim(),
+            concurrency = concurrency.toLongOrNull()?.coerceIn(0, 128) ?: 0,
+            speedLimitKib = speed.toLongOrNull()?.coerceAtLeast(0) ?: 0,
+            checksum = checksum.trim(),
+            proxy = proxy.trim(),
+            mirrors = mirrors.lineSequence().map(String::trim).filter(String::isNotBlank).distinct().toList(),
+            referer = referer.trim(),
+            origin = origin.trim(),
+            cookie = cookie.trim(),
+            userAgent = userAgent.trim(),
+            requestHeaders = parsedHeaders.getOrDefault(emptyMap()),
+            requestMethod = requestMethod,
+            curlCommand = if (curlMode) url.trim() else "",
+            allowDuplicate = allowDuplicate,
+            scheduledStartAt = startAt.trim(),
+            scheduledStopAt = stopAt.trim(),
+            completionAction = completionAction,
+        )
+    }
     WorkbenchDialog(onDismiss, "新建下载", "创建文件、媒体、远程协议或 BT 下载任务", 760.dp, content = {
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2).padding(3.dp)) { listOf("基本", "连接", "请求", "计划").forEach { item -> TextButton(onClick = { tab = item }, Modifier.weight(1f).clip(RoundedCornerShape(5.dp)).background(if (tab == item) rail else Color.Transparent)) { Text(item, color = if (tab == item) blue else muted, fontSize = 11.sp, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal) } } }
         Spacer(Modifier.height(14.dp))
         when (tab) {
             "基本" -> {
-                DialogLabel("下载链接"); OutlinedTextField(url, { url = it }, Modifier.fillMaxWidth(), focusRequester = urlFocus, placeholder = { Text("HTTP、HLS、DASH、FTP、SFTP、磁力或种子链接") }, singleLine = true, isError = url.isNotBlank() && normalized == null, shape = RoundedCornerShape(7.dp), supportingText = { Text(if (url.isNotBlank() && normalized == null) "链接格式无效" else "类型：${normalized?.let(EnginePipeClient::recognizeResourceKind) ?: "等待输入"}", fontSize = 10.sp) })
+                DialogLabel("下载链接或 cURL 命令")
+                OutlinedTextField(
+                    url,
+                    { url = it },
+                    Modifier.fillMaxWidth(),
+                    focusRequester = urlFocus,
+                    placeholder = { Text("粘贴链接、磁力链接或浏览器“复制为 cURL”") },
+                    singleLine = !curlMode,
+                    minLines = if (curlMode) 3 else 1,
+                    maxLines = if (curlMode) 5 else 1,
+                    isError = url.isNotBlank() && !validInput,
+                    shape = RoundedCornerShape(7.dp),
+                    supportingText = {
+                        Text(
+                            when {
+                                url.isNotBlank() && !validInput -> "链接格式无效或 cURL 命令不完整"
+                                curlMode -> "已识别 cURL；请求头、Cookie 与 POST 请求体由下载引擎安全导入"
+                                normalized != null -> "类型：${EnginePipeClient.recognizeResourceKind(normalized)}"
+                                else -> "等待输入"
+                            },
+                            fontSize = 10.sp,
+                        )
+                    },
+                )
                 Spacer(Modifier.height(8.dp)); DialogLabel("文件名（留空自动识别）"); OutlinedTextField(filename, { filename = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(8.dp)); DialogLabel("保存到"); Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { OutlinedTextField(directory, { directory = it }, Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.width(8.dp)); DialogSecondary("选择目录") { chooseDirectory(directory, "选择下载保存目录")?.let { directory = it } } }; SettingRow("允许重复任务", "同一资源已存在时仍创建新任务", allowDuplicate) { allowDuplicate = it }
             }
             "连接" -> {
-                DialogLabel("并发连接数（0 使用默认值）"); OutlinedTextField(concurrency, { concurrency = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("任务限速 KiB/s（0 不限制）"); OutlinedTextField(speed, { speed = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("代理地址（可选）"); OutlinedTextField(proxy, { proxy = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("校验和（算法:值，可选）"); OutlinedTextField(checksum, { checksum = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp), placeholder = { Text("sha256:...") })
+                DialogLabel("并发连接数（0 使用默认值）"); OutlinedTextField(concurrency, { concurrency = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("任务限速 KiB/s（0 不限制）"); OutlinedTextField(speed, { speed = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("代理地址（可选）"); OutlinedTextField(proxy, { proxy = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("校验和（算法:值，可选）"); OutlinedTextField(checksum, { checksum = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp), placeholder = { Text("sha256:...") }); Spacer(Modifier.height(9.dp)); DialogLabel("备用下载地址（每行一个）"); OutlinedTextField(mirrors, { mirrors = it }, Modifier.fillMaxWidth(), minLines = 3, maxLines = 4, shape = RoundedCornerShape(7.dp), placeholder = { Text("https://mirror.example.com/file.bin") }); Text("仅普通 HTTP(S) 文件使用；媒体清单、BT 与远程协议会忽略。", color = faint, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp))
             }
             "请求" -> {
-                DialogLabel("Referer"); OutlinedTextField(referer, { referer = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("User-Agent"); OutlinedTextField(userAgent, { userAgent = it }, Modifier.fillMaxWidth(), minLines = 2, maxLines = 3, shape = RoundedCornerShape(7.dp)); Text("浏览器凭据通过下载引擎中的安全引用使用，不会显示在此窗口。", color = faint, fontSize = 10.sp, modifier = Modifier.padding(top = 8.dp))
+                if (curlMode) {
+                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(selectedSurface).padding(11.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Security, null, tint = blue, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(9.dp)); Text("cURL 中的请求上下文由下载引擎解析并加密保存，下方字段作为显式覆盖值。", color = muted, fontSize = 10.sp)
+                    }
+                    Spacer(Modifier.height(10.dp))
+                }
+                DialogLabel("请求方式")
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2).padding(3.dp)) {
+                    listOf("GET", "POST", "HEAD").forEach { value -> TextButton(onClick = { requestMethod = value }, Modifier.weight(1f).clip(RoundedCornerShape(5.dp)).background(if (requestMethod == value) selectedSurface else Color.Transparent)) { Text(value, color = if (requestMethod == value) blue else muted, fontSize = 11.sp) } }
+                }
+                Spacer(Modifier.height(9.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        DialogLabel("Referer")
+                        OutlinedTextField(referer, { referer = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp))
+                    }
+                    Column(Modifier.weight(1f)) {
+                        DialogLabel("Origin")
+                        OutlinedTextField(origin, { origin = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp))
+                    }
+                }
+                Spacer(Modifier.height(9.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        DialogLabel("User-Agent")
+                        OutlinedTextField(userAgent, { userAgent = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp))
+                    }
+                    Column(Modifier.weight(1f)) {
+                        DialogLabel("Cookie")
+                        OutlinedTextField(cookie, { cookie = it }, Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), shape = RoundedCornerShape(7.dp), placeholder = { Text("下载引擎加密保存") })
+                    }
+                }
+                Spacer(Modifier.height(9.dp)); DialogLabel("其他请求头（每行“名称: 值”）"); OutlinedTextField(requestHeaders, { requestHeaders = it }, Modifier.fillMaxWidth(), minLines = 3, maxLines = 3, isError = parsedHeaders.isFailure, shape = RoundedCornerShape(7.dp), placeholder = { Text("Authorization: Bearer ...\nX-Playback-Token: ...") }); Text(parsedHeaders.exceptionOrNull()?.message ?: "敏感请求头只保存在下载引擎的加密凭据中。", color = if (parsedHeaders.isFailure) Color(0xFFDC2626) else faint, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp))
             }
             else -> {
-                DialogLabel("计划开始（ISO 时间或留空）"); OutlinedTextField(startAt, { startAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("计划停止（ISO 时间或留空）"); OutlinedTextField(stopAt, { stopAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("完成后动作"); Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2).padding(3.dp)) { listOf("none" to "无", "sleep" to "睡眠", "shutdown" to "关机").forEach { (value, label) -> TextButton(onClick = { completionAction = value }, Modifier.weight(1f).clip(RoundedCornerShape(5.dp)).background(if (completionAction == value) selectedSurface else Color.Transparent)) { Text(label, color = if (completionAction == value) blue else muted, fontSize = 11.sp) } } }
+                DialogLabel("计划开始（ISO 时间或留空）"); OutlinedTextField(startAt, { startAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("计划停止（ISO 时间或留空）"); OutlinedTextField(stopAt, { stopAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("完成后动作"); Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2).padding(3.dp)) { listOf("none" to "无", "sleep" to "睡眠", "hibernate" to "休眠", "shutdown" to "关机").forEach { (value, label) -> TextButton(onClick = { completionAction = value }, Modifier.weight(1f).clip(RoundedCornerShape(5.dp)).background(if (completionAction == value) selectedSurface else Color.Transparent), contentPadding = PaddingValues(horizontal = 4.dp)) { Text(label, color = if (completionAction == value) blue else muted, fontSize = 10.sp) } } }
             }
         }
     }, actions = {
         DialogSecondary("取消", onDismiss)
-        DialogSecondary("分析资源") { normalized?.let(onProbe) }
-        DialogPrimary("创建下载", normalized != null) { normalized?.let { onCreate(TaskDraft(url = it, filename = filename.trim(), downloadDirectory = directory.trim(), concurrency = concurrency.toLongOrNull()?.coerceIn(0, 128) ?: 0, speedLimitKib = speed.toLongOrNull()?.coerceAtLeast(0) ?: 0, checksum = checksum.trim(), proxy = proxy.trim(), referer = referer.trim(), userAgent = userAgent.trim(), allowDuplicate = allowDuplicate, scheduledStartAt = startAt.trim(), scheduledStopAt = stopAt.trim(), completionAction = completionAction)) } }
+        TextButton(
+            onClick = { if (normalized != null && parsedHeaders.isSuccess) onProbe(buildDraft()) },
+            enabled = normalized != null && parsedHeaders.isSuccess,
+            contentPadding = PaddingValues(horizontal = 12.dp),
+        ) { Text("分析资源", fontSize = 12.sp, color = if (normalized != null && parsedHeaders.isSuccess) muted else faint) }
+        DialogPrimary("创建下载", validInput && parsedHeaders.isSuccess) {
+            onCreate(buildDraft())
+        }
     })
 }
+
+internal enum class ResourceProbeTarget { Url, Torrent }
+
+internal fun taskProbeTarget(draft: TaskDraft): ResourceProbeTarget =
+    if (draft.kind.equals("torrent", ignoreCase = true)) ResourceProbeTarget.Torrent else ResourceProbeTarget.Url
+
+internal fun parseRequestHeaderLines(value: String): Map<String, String> {
+    val headers = linkedMapOf<String, String>()
+    value.lineSequence().map(String::trim).filter(String::isNotBlank).forEachIndexed { index, line ->
+        val split = line.indexOf(':')
+        require(split > 0) { "第 ${index + 1} 行缺少冒号" }
+        val name = line.substring(0, split).trim()
+        val headerValue = line.substring(split + 1).trim()
+        require(name.matches(Regex("^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$"))) { "第 ${index + 1} 行的请求头名称无效" }
+        require(headerValue.none(Char::isISOControl)) { "第 ${index + 1} 行包含控制字符" }
+        require(!name.equals("Cookie", true)) { "Cookie 请填写在单独字段" }
+        require(name.lowercase() !in setOf("host", "content-length", "connection", "range", "transfer-encoding")) { "请求头 $name 由下载引擎管理" }
+        headers[name] = headerValue
+    }
+    return headers
+}
 @Composable private fun BatchAddDialog(onDismiss: () -> Unit, onCreate: (List<String>) -> Unit) { var urls by remember { mutableStateOf("") }; val inputFocus = remember { FocusRequester() }; LaunchedEffect(Unit) { delay(120); inputFocus.requestFocus() }; val entries = urls.lineSequence().map(String::trim).filter(String::isNotBlank).toList(); val valid = entries.filter { runCatching { EnginePipeClient.normalizeDownloadUrl(it) }.isSuccess }; WorkbenchDialog(onDismiss, "批量添加", "每行一个下载链接，可一次创建多个任务", 620.dp, content = { DialogLabel("链接列表"); OutlinedTextField(urls, { urls = it }, Modifier.fillMaxWidth().heightIn(min = 180.dp), focusRequester = inputFocus, placeholder = { Text("https://example.com/file.zip") }, minLines = 7, maxLines = 10, shape = RoundedCornerShape(7.dp)); Text("有效 ${valid.size} / 输入 ${entries.size} 条链接", color = if (entries.isNotEmpty() && valid.size != entries.size) Color(0xFFB54708) else faint, fontSize = 11.sp, modifier = Modifier.padding(top = 7.dp)) }, actions = { DialogSecondary("取消", onDismiss); DialogPrimary("创建 ${valid.size} 个任务", valid.isNotEmpty()) { onCreate(valid) } }) }
-@Composable private fun HarvestDialog(onDismiss: () -> Unit, onHarvest: (String) -> Unit) { var url by remember { mutableStateOf("") }; val inputFocus = remember { FocusRequester() }; LaunchedEffect(Unit) { delay(120); inputFocus.requestFocus() }; WorkbenchDialog(onDismiss, "页面抓取", "从当前网页解析可下载资源并交给下载引擎", 540.dp, content = { DialogLabel("网页地址"); OutlinedTextField(url, { url = it }, Modifier.fillMaxWidth(), focusRequester = inputFocus, placeholder = { Text("https://example.com/page") }, singleLine = true, shape = RoundedCornerShape(7.dp)); Text("仅解析当前页面可见或可访问的资源链接。", color = faint, fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp)) }, actions = { DialogSecondary("取消", onDismiss); DialogPrimary("开始抓取", url.isNotBlank()) { onHarvest(url.trim()) } }) }
+@Composable
+private fun HarvestDialog(
+    onDismiss: () -> Unit,
+    defaultReferer: String,
+    onHarvest: (String, String) -> Unit,
+) {
+    var url by remember { mutableStateOf("") }
+    var referer by remember(defaultReferer) { mutableStateOf(defaultReferer) }
+    val inputFocus = remember { FocusRequester() }
+    val validUrl = runCatching { EnginePipeClient.normalizeHttpUrl(url) }.isSuccess
+    val validReferer = referer.isBlank() || runCatching { EnginePipeClient.normalizeHttpUrl(referer) }.isSuccess
+    LaunchedEffect(Unit) { delay(120); inputFocus.requestFocus() }
+    WorkbenchDialog(
+        onDismiss,
+        "页面抓取",
+        "只读取当前页面，提取静态文件、媒体清单、FTP 和磁力链接",
+        620.dp,
+        content = {
+            DialogLabel("网页地址")
+            OutlinedTextField(
+                url,
+                { url = it },
+                Modifier.fillMaxWidth(),
+                focusRequester = inputFocus,
+                placeholder = { Text("https://example.com/files/") },
+                singleLine = true,
+                shape = RoundedCornerShape(7.dp),
+                isError = url.isNotBlank() && !validUrl,
+            )
+            Text(
+                "不会执行网页脚本，也不会继续打开子页面；单次最多返回 100 个资源。",
+                color = faint,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(top = 7.dp),
+            )
+            Spacer(Modifier.height(13.dp))
+            DialogLabel("Referer（可选）")
+            OutlinedTextField(
+                referer,
+                { referer = it },
+                Modifier.fillMaxWidth(),
+                placeholder = { Text("留空时使用上面的网页地址") },
+                singleLine = true,
+                shape = RoundedCornerShape(7.dp),
+                isError = !validReferer,
+            )
+            Text("用于需要来源页校验的文件和媒体地址。", color = faint, fontSize = 11.sp, modifier = Modifier.padding(top = 7.dp))
+        },
+        actions = {
+            DialogSecondary("取消", onDismiss)
+            DialogPrimary("抓取本页链接", validUrl && validReferer) { onHarvest(url.trim(), referer.trim()) }
+        },
+    )
+}
 @Composable private fun SettingsDialog(onDismiss: () -> Unit, current: EngineSettingsDto, onSave: (EngineSettingsDto) -> Unit) {
     var tab by remember { mutableStateOf("通用") }
     var dark by remember(current) { mutableStateOf(current.darkMode) }
@@ -2137,22 +2667,51 @@ private fun QueueManagerDialog(
 @Composable internal fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) = Column(Modifier.fillMaxWidth().padding(end = 5.dp, bottom = 14.dp), content = { Text(title, color = ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold); Spacer(Modifier.height(12.dp)); content(); Spacer(Modifier.height(8.dp)) })
 @Composable internal fun SettingRow(label: String, detail: String, checked: Boolean, onChecked: (Boolean) -> Unit) = Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(label, color = ink, fontSize = 12.sp, fontWeight = FontWeight.Medium); Text(detail, color = faint, fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp)) }; Switch(checked, onChecked, accessibilityLabel = label) }
 
-@Composable private fun TaskDetailsDialog(task: DownloadTask, onDismiss: () -> Unit, onAction: (String) -> Unit) {
+@Composable private fun TaskDetailsDialog(
+    task: DownloadTask,
+    onDismiss: () -> Unit,
+    onRefreshRequest: (String, String) -> Unit,
+    onAction: (String) -> Unit,
+) {
     var tab by remember(task.id) { mutableStateOf("概览") }
     var speedLimit by remember(task.id, task.source.speedLimitKib) { mutableStateOf(task.source.speedLimitKib.toString()) }
     var refreshUrl by remember(task.id) { mutableStateOf(task.source.url) }
+    var refreshCookie by remember(task.id) { mutableStateOf("") }
     var showRefresh by remember(task.id) { mutableStateOf(false) }
+    var diagnosticsCopied by remember(task.id) { mutableStateOf(false) }
+    var torrentFiles by remember(task.id) { mutableStateOf<List<TorrentFileDto>>(emptyList()) }
+    var torrentLoading by remember(task.id) { mutableStateOf(false) }
+    var torrentBusy by remember(task.id) { mutableStateOf(false) }
+    var torrentNotice by remember(task.id) { mutableStateOf("") }
+    val detailScope = rememberCoroutineScope()
+    val torrentTask = task.source.resourceKind.equals("torrent", true)
     val canRefresh = task.source.availableActions.any { it in setOf("start", "resume", "retry") }
     val canPreview = task.status == "已完成" && !task.source.outputMissing && isPreviewableImage(task.source.outputPath)
     var preview by remember(task.id, task.source.outputPath) { mutableStateOf<Result<ImageBitmap>?>(null) }
     LaunchedEffect(canPreview, task.source.outputPath) {
         preview = if (canPreview) withContext(Dispatchers.IO) { loadLocalImagePreview(task.source.outputPath) } else null
     }
+    LaunchedEffect(task.id, torrentTask) {
+        if (!torrentTask) return@LaunchedEffect
+        torrentLoading = true
+        runCatching { withContext(Dispatchers.IO) { EnginePipeClient().getTaskTorrentFiles(task.id) } }
+            .onSuccess { torrentFiles = it.files }
+            .onFailure { torrentNotice = it.message ?: "读取 BT 文件清单失败" }
+        torrentLoading = false
+    }
     WorkbenchDialog(onDismiss, "任务详情", "进度、连接、速度和运行日志", 780.dp, content = {
         Text(task.filename, color = ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(12.dp))
         LinearProgressIndicator(progress = { task.progress }, modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(4.dp)), color = blue, trackColor = surface3)
-        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) { StatusBadge(task.status); Spacer(Modifier.width(9.dp)); Text("${(task.progress * 100).toInt()}% · ${task.speed} · ${task.segments} · ${task.source.activeWorkers} 个连接", color = muted, fontSize = 11.sp) }
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            StatusBadge(task.status); Spacer(Modifier.width(9.dp))
+            Text(
+                if (torrentTask) "${(task.progress * 100).toInt()}% · ${task.speed} · ${task.segments}"
+                else "${(task.progress * 100).toInt()}% · ${task.speed} · ${task.segments} · ${task.source.activeWorkers} 个连接",
+                color = muted,
+                fontSize = 11.sp,
+            )
+        }
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2).padding(3.dp)) {
             (listOf("概览", "连接", "速度", "日志") + if (canPreview) listOf("预览") else emptyList()).forEach { item ->
@@ -2162,12 +2721,103 @@ private fun QueueManagerDialog(
         Spacer(Modifier.height(12.dp))
         when (tab) {
             "概览" -> {
-                DetailLine("链接", safeResourceLocation(task.source.url)); DetailLine("类型", resourceKindLabel(task.source.resourceKind)); DetailLine("请求", task.source.requestMethod); DetailLine("保存到", task.source.outputPath.ifBlank { task.source.downloadDirectory.ifBlank { "默认下载目录" } }); DetailLine("阶段", task.source.stage.ifBlank { "—" }); DetailLine("连接", "${task.source.activeWorkers}/${task.source.maxWorkers.takeIf { it > 0 } ?: task.source.activeWorkers.coerceAtLeast(1)}"); DetailLine("镜像", task.source.mirrors.joinToString().ifBlank { task.source.mirrorStatus.ifBlank { "未使用镜像" } }); if (task.source.expectedChecksum.isNotBlank()) DetailLine("校验", task.source.expectedChecksum); if (task.source.scheduledStartAt.isNotBlank()) DetailLine("开始", task.source.scheduledStartAt); if (task.source.scheduledStopAt.isNotBlank()) DetailLine("停止", task.source.scheduledStopAt); if (task.source.outputMissing) DetailLine("输出", "文件已删除，可重新下载", Color(0xFFB42318)); task.source.errorMessage?.let { DetailLine("错误", it, Color(0xFFB42318)) }
+                DetailLine("链接", safeResourceLocation(task.source.url))
+                DetailLine("类型", resourceKindLabel(task.source.resourceKind))
+                DetailLine("请求", task.source.requestMethod)
+                DetailLine("保存到", task.source.outputPath.ifBlank { task.source.downloadDirectory.ifBlank { "默认下载目录" } })
+                DetailLine("阶段", task.source.stage.ifBlank { "—" })
+                if (torrentTask) {
+                    DetailLine("Piece", "${task.source.completedRanges}/${task.source.totalRanges}")
+                    DetailLine("Peer / Seed", "${task.source.peerCount} / ${task.source.seedCount}")
+                    DetailLine("上传速度", formatRate(task.source.uploadSpeedBytesPerSecond))
+                    if (task.source.uploadedBytes > 0) DetailLine("已上传", formatBytes(task.source.uploadedBytes))
+                    DetailLine("已选大小", task.source.totalBytes?.let(::formatBytes) ?: "—")
+                } else {
+                    DetailLine("连接", "${task.source.activeWorkers}/${task.source.maxWorkers.takeIf { it > 0 } ?: task.source.activeWorkers.coerceAtLeast(1)}")
+                }
+                if (task.source.scheduledStartAt.isNotBlank()) DetailLine("开始", task.source.scheduledStartAt)
+                if (task.source.scheduledStopAt.isNotBlank()) DetailLine("停止", task.source.scheduledStopAt)
+                if (task.source.outputMissing) DetailLine("输出", "文件已删除，可重新下载", Color(0xFFB42318))
+                TaskVerificationDetails(task.source)
+                taskFailureDetails(task.source)?.let { failure ->
+                    Spacer(Modifier.height(13.dp))
+                    Surface(
+                        Modifier.fillMaxWidth(),
+                        color = Color(0xFFFFF3F2),
+                        shape = RoundedCornerShape(7.dp),
+                        border = BorderStroke(1.dp, Color(0xFFF2C9C5)),
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.ErrorOutline, null, tint = Color(0xFFB42318), modifier = Modifier.size(17.dp))
+                                Spacer(Modifier.width(7.dp))
+                                Text(failure.title, Modifier.weight(1f), color = Color(0xFF8A1C13), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                TextButton(onClick = {
+                                    runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(taskFailureDiagnostic(task)), null) }
+                                    diagnosticsCopied = true
+                                }, contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp)) { Text(if (diagnosticsCopied) "已复制" else "复制诊断", color = blue, fontSize = 10.sp) }
+                            }
+                            failure.items.forEach { (label, value) -> DetailLine(label, value, Color(0xFF7A2E28)) }
+                            task.source.errorMessage?.takeIf(String::isNotBlank)?.let { message ->
+                                Spacer(Modifier.height(8.dp)); Text("失败原因", color = Color(0xFF8A1C13), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                                Text(redactDiagnosticText(message), color = Color(0xFF7A2E28), fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 3.dp))
+                            }
+                            if (failure.steps.isNotEmpty()) {
+                                Spacer(Modifier.height(8.dp)); Text("建议步骤", color = Color(0xFF8A1C13), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                                failure.steps.forEachIndexed { index, step -> Text("${index + 1}. $step", color = Color(0xFF7A2E28), fontSize = 11.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 2.dp)) }
+                            }
+                        }
+                    }
+                }
+                if (torrentTask) {
+                    Spacer(Modifier.height(13.dp)); HorizontalDivider(color = border); Spacer(Modifier.height(11.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("BT 文件选择", Modifier.weight(1f), color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("已选 ${torrentFiles.count { it.selected }} / ${torrentFiles.size} · ${formatBytes(torrentFiles.filter { it.selected }.sumOf { it.size })}", color = muted, fontSize = 10.sp)
+                    }
+                    Row(Modifier.padding(top = 5.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        TextButton(onClick = { torrentFiles = torrentFiles.map { it.copy(selected = true) } }, enabled = torrentFiles.isNotEmpty(), contentPadding = PaddingValues(horizontal = 7.dp)) { Text("全选", fontSize = 10.sp) }
+                        TextButton(onClick = { torrentFiles = torrentFiles.map { it.copy(selected = !it.selected) } }, enabled = torrentFiles.isNotEmpty(), contentPadding = PaddingValues(horizontal = 7.dp)) { Text("反选", fontSize = 10.sp) }
+                    }
+                    when {
+                        torrentLoading -> Text("正在读取种子元数据…", color = muted, fontSize = 11.sp, modifier = Modifier.padding(vertical = 18.dp))
+                        torrentFiles.isEmpty() -> Text("尚未取得文件清单。磁力任务需要先取得元数据。", color = muted, fontSize = 11.sp, modifier = Modifier.padding(vertical = 14.dp))
+                        else -> Column(Modifier.fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState()).border(BorderStroke(1.dp, border), RoundedCornerShape(7.dp)).padding(horizontal = 9.dp, vertical = 5.dp)) {
+                            torrentFiles.forEachIndexed { index, file ->
+                                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(file.selected, { checked -> torrentFiles = torrentFiles.toMutableList().also { it[index] = file.copy(selected = checked) } }, accessibilityLabel = "选择 ${file.path}")
+                                    Spacer(Modifier.width(6.dp)); Text(file.path, Modifier.weight(1f), color = ink, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Spacer(Modifier.width(8.dp)); Text(formatBytes(file.size), color = muted, fontSize = 10.sp)
+                                }
+                            }
+                        }
+                    }
+                    if (task.status == "进行中") Text("当前内置 BT 引擎需先暂停任务，才能安全调整文件选择。", color = Color(0xFFB54708), fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp))
+                    if (torrentNotice.isNotBlank()) Text(torrentNotice, color = if (torrentNotice.contains("已保存")) Color(0xFF078C46) else Color(0xFFB42318), fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp))
+                    DialogPrimary(if (torrentBusy) "正在保存…" else "保存文件选择", !torrentBusy && task.status != "进行中" && torrentFiles.any { it.selected }) {
+                        torrentBusy = true; torrentNotice = ""
+                        detailScope.launch {
+                            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().setTaskTorrentFiles(task.id, torrentFiles) } }
+                                .onSuccess { torrentFiles = it.files; torrentNotice = "文件选择已保存，将在开始或恢复时生效" }
+                                .onFailure { torrentNotice = it.message ?: "保存文件选择失败" }
+                            torrentBusy = false
+                        }
+                    }
+                }
                 if (task.status != "已完成") {
                     Spacer(Modifier.height(13.dp)); HorizontalDivider(color = border); Spacer(Modifier.height(11.dp)); DialogLabel("任务限速 KiB/s（0 不限制）")
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { OutlinedTextField(speedLimit, { speedLimit = it.filter(Char::isDigit) }, Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.width(8.dp)); DialogSecondary("应用") { onAction("speed:${speedLimit.toLongOrNull()?.coerceIn(0, 1_048_576) ?: 0}") } }
                     if (canRefresh) { Spacer(Modifier.height(8.dp)); TextButton(onClick = { showRefresh = !showRefresh }, contentPadding = PaddingValues(0.dp)) { Text(if (showRefresh) "收起链接更新" else "更新下载链接", color = blue, fontSize = 11.sp) } }
-                    if (showRefresh) { OutlinedTextField(refreshUrl, { refreshUrl = it }, Modifier.fillMaxWidth(), label = { Text("新的资源地址") }, minLines = 2, maxLines = 3, shape = RoundedCornerShape(7.dp)); Text("用于短效签名或地址过期；下载引擎会继续校验文件身份。", color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp)); DialogPrimary("更新并继续", refreshUrl.isNotBlank()) { onAction("refresh:${refreshUrl.trim()}") } }
+                    if (showRefresh) {
+                        OutlinedTextField(refreshUrl, { refreshUrl = it }, Modifier.fillMaxWidth(), label = { Text("新的资源地址") }, minLines = 2, maxLines = 3, shape = RoundedCornerShape(7.dp))
+                        Spacer(Modifier.height(7.dp))
+                        OutlinedTextField(refreshCookie, { refreshCookie = it }, Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("新的 Cookie（可选）") }, shape = RoundedCornerShape(7.dp))
+                        Text("留空保留同站点原凭据；跨站地址会自动丢弃旧凭据。适合 401、403 和短效签名过期。", color = muted, fontSize = 10.sp, lineHeight = 15.sp, modifier = Modifier.padding(top = 5.dp))
+                        DialogPrimary("更新并继续", refreshUrl.isNotBlank()) {
+                            onRefreshRequest(refreshUrl.trim(), refreshCookie)
+                            refreshCookie = ""
+                        }
+                    }
                 }
             }
             "连接" -> ConnectionMap(task.source.connectionParts, task.source.connectionHint)
@@ -2232,7 +2882,60 @@ internal fun loadLocalImagePreview(path: String): Result<ImageBitmap> = runCatch
         }
     }
 }
-@Composable private fun DetailLine(label: String, value: String, color: Color? = null) = Row(Modifier.fillMaxWidth().padding(top = 9.dp)) { Text(label, Modifier.width(62.dp), color = faint, fontSize = 11.sp); Text(value, Modifier.weight(1f), color = color ?: muted, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+@Composable
+private fun TaskVerificationDetails(task: TaskDto) {
+    val mirrorResults = task.mirrorStatus.ifEmpty {
+        task.mirrors.map { MirrorStatusDto(url = it) }
+    }
+    if (task.expectedChecksum.isBlank() && task.avScan == null && mirrorResults.isEmpty()) return
+    Spacer(Modifier.height(13.dp))
+    HorizontalDivider(color = border)
+    Text("完成检查", color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 11.dp))
+    if (task.expectedChecksum.isNotBlank()) {
+        val result = when (task.checksumVerified) {
+            true -> "已通过"
+            false -> "不匹配"
+            null -> "等待下载完成"
+        }
+        val resultColor = when (task.checksumVerified) {
+            true -> Color(0xFF15803D)
+            false -> Color(0xFFB42318)
+            null -> muted
+        }
+        DetailLine("文件校验", result, resultColor)
+        DetailLine("期望", task.expectedChecksum)
+        if (task.checksumAlgorithm.isNotBlank()) DetailLine("算法", task.checksumAlgorithm)
+        if (task.checksumActual.isNotBlank()) DetailLine("实际", task.checksumActual, resultColor)
+    }
+    task.avScan?.let { scan ->
+        val result = when (scan.state) {
+            "clean" -> "未发现威胁"
+            "threat" -> "发现威胁"
+            "running" -> "正在扫描"
+            "skipped" -> "已跳过"
+            else -> "扫描异常"
+        }
+        DetailLine("病毒扫描", result, if (scan.state == "clean") Color(0xFF15803D) else if (scan.state == "threat") Color(0xFFB42318) else muted)
+        if (scan.engine.isNotBlank()) DetailLine("扫描引擎", scan.engine)
+        if (scan.detail.isNotBlank()) DetailLine("扫描详情", scan.detail)
+    }
+    mirrorResults.forEach { mirror ->
+        val label = when (mirror.state) {
+            "active" -> "镜像使用中"
+            "failed" -> "镜像失败"
+            "skipped" -> "镜像已跳过"
+            else -> "镜像待探测"
+        }
+        val detail = buildList {
+            add(safeResourceLocation(mirror.url))
+            if (mirror.ranges) add("支持分段")
+            mirror.detail.takeIf(String::isNotBlank)?.let(::add)
+        }.joinToString(" · ")
+        DetailLine(label, detail, if (mirror.state == "failed") Color(0xFFB42318) else null)
+    }
+}
+
+@Composable private fun DetailLine(label: String, value: String, color: Color? = null) = Row(Modifier.fillMaxWidth().padding(top = 9.dp)) { Text(label, Modifier.width(72.dp), color = faint, fontSize = 11.sp); Text(value, Modifier.weight(1f), color = color ?: muted, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
 
 internal fun safeResourceLocation(value: String): String {
     val raw = value.trim()
@@ -2247,6 +2950,64 @@ internal fun safeResourceLocation(value: String): String {
         append(port)
         if (segments.isNotEmpty()) append('/').append(segments.joinToString("/"))
     }.take(180)
+}
+
+internal data class TaskFailureDetails(
+    val title: String,
+    val items: List<Pair<String, String>>,
+    val steps: List<String>,
+)
+
+internal fun taskFailureDetails(task: TaskDto): TaskFailureDetails? {
+    if (task.errorCode.isNullOrBlank() && task.errorMessage.isNullOrBlank()) return null
+    val items = buildList {
+        task.errorStage.takeIf(String::isNotBlank)?.let { add("发生阶段" to failureStageLabel(it)) }
+        task.httpStatus?.let { add("HTTP 状态" to it.toString()) }
+        task.errorCode?.takeIf(String::isNotBlank)?.let { add("错误代码" to it) }
+        task.errorAttempt.takeIf { it > 0 }?.let { add("尝试次数" to "$it 次") }
+        task.errorUrl.takeIf(String::isNotBlank)?.let { add("资源地址" to safeResourceLocation(it)) }
+    }
+    val steps = when (task.httpStatus) {
+        401 -> listOf("确认已登录原网站", "通过浏览器插件重新发送并授权当前站点凭据")
+        403 -> listOf("回到来源网页刷新并重新打开下载入口", "通过浏览器插件重新发送资源，不要只重复点击重试")
+        404 -> listOf("回到来源网页确认资源仍可访问", "重新识别并创建有效下载地址")
+        408, 425, 429 -> listOf("降低任务并发与同时下载数", "等待片刻后重试")
+        in 500..599 -> listOf("稍后重试", "有备用地址时切换镜像")
+        else -> task.errorHint.takeIf(String::isNotBlank)?.let(::listOf).orEmpty()
+    }
+    return TaskFailureDetails(
+        title = task.errorCode?.takeIf(String::isNotBlank)?.let { "下载失败 · $it" } ?: "下载失败",
+        items = items,
+        steps = steps,
+    )
+}
+
+internal fun taskFailureDiagnostic(task: DownloadTask): String {
+    val failure = taskFailureDetails(task.source)
+    return buildList {
+        add("任务: ${task.filename}")
+        add("链接（已脱敏）: ${safeResourceLocation(task.source.url)}")
+        add("状态: ${task.source.status}")
+        failure?.items?.forEach { (label, value) -> add("$label: $value") }
+        task.source.errorMessage?.takeIf(String::isNotBlank)?.let { add("失败原因: ${redactDiagnosticText(it)}") }
+        add("最近日志: ${task.source.logTail.lastOrNull()?.let(::redactDiagnosticText) ?: "—"}")
+    }.joinToString("\n")
+}
+
+internal fun redactDiagnosticText(value: String): String = Regex("https?://\\S+", RegexOption.IGNORE_CASE)
+    .replace(value) { match -> safeResourceLocation(match.value.trimEnd('.', ',', ';', ')')) }
+    .take(1200)
+
+private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
+    "transfer", "downloading" -> "下载文件"
+    "downloading_m3u8" -> "获取播放清单"
+    "downloading_segments" -> "下载媒体分片"
+    "merging" -> "合并文件"
+    "remuxing" -> "转封装"
+    "checksum" -> "文件校验"
+    "size" -> "大小校验"
+    "av_scan" -> "病毒扫描"
+    else -> stage
 }
 
 @Composable private fun ExtensionDialog(status: String, onDismiss: () -> Unit) = WorkbenchDialog(onDismiss, "浏览器插件", "识别网页媒体并交给下载器", 550.dp, content = { Surface(Modifier.fillMaxWidth(), color = if (status.contains("已连接")) Color(0xFFEAF8EF) else surface2, shape = RoundedCornerShape(8.dp)) { Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) { Icon(if (status.contains("已连接")) Icons.Outlined.CheckCircle else Icons.Outlined.Extension, null, tint = if (status.contains("已连接")) Color(0xFF16A34A) else blue); Spacer(Modifier.width(10.dp)); Text(status, color = if (status.contains("已连接")) Color(0xFF15803D) else ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) } }; Spacer(Modifier.height(14.dp)); Text("安装或更新插件后，重新打开浏览器标签页即可建立连接。插件会识别下载点击、媒体清单、音视频轨道和网页播放器，不影响页面的其他功能。", color = muted, fontSize = 12.sp, lineHeight = 19.sp) }, actions = { DialogPrimary("完成", onClick = onDismiss) })
@@ -2319,19 +3080,143 @@ internal fun safeResourceLocation(value: String): String {
     }, actions = { DialogSecondary("取消", onDismiss); DialogPrimary("创建下载") { onCreate(selected) } })
 }
 
-@Composable private fun HarvestResultDialog(signal: UiSignal.Harvest, onDismiss: () -> Unit, onCreate: (List<String>) -> Unit) {
-    var selected by remember(signal) { mutableStateOf(signal.links.map { it.url }.toSet()) }
-    WorkbenchDialog(onDismiss, "网页抓取结果", "已找到 ${signal.links.size} 个可下载资源", 760.dp, content = {
-        DetailLine("来源页面", safeResourceLocation(signal.url))
-        Spacer(Modifier.height(12.dp))
-        if (signal.links.isEmpty()) Text("当前页面没有返回符合条件的资源。", color = muted, fontSize = 12.sp)
-        else signal.links.forEach { item ->
-            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp).clickable { selected = if (item.url in selected) selected - item.url else selected + item.url }.padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(item.url in selected, { checked -> selected = if (checked) selected + item.url else selected - item.url }, accessibilityLabel = "选择 ${item.filename.ifBlank { item.url }}")
-                Column(Modifier.weight(1f)) { Text(item.filename.ifBlank { item.url.substringAfterLast('/') }, color = ink, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis); Text("${item.category.ifBlank { "文件" }}${if (item.size > 0) " · ${formatBytes(item.size)}" else ""}", color = muted, fontSize = 10.sp) }
-            }
+private val harvestCategories = listOf(
+    "all" to "全部",
+    "video" to "视频",
+    "audio" to "音频",
+    "archive" to "压缩包",
+    "document" to "文档",
+    "program" to "程序",
+    "playlist" to "清单",
+    "torrent" to "种子",
+    "other" to "其他",
+)
+
+@Composable
+private fun HarvestChip(label: String, active: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
+    val foreground = when {
+        !enabled -> faint
+        active -> blue
+        else -> muted
+    }
+    Surface(
+        modifier = Modifier.height(28.dp).clip(RoundedCornerShape(7.dp)).clickable(enabled = enabled, onClick = onClick),
+        color = if (active) selectedSurface else surface2,
+        shape = RoundedCornerShape(7.dp),
+        border = BorderStroke(1.dp, if (active) blue.copy(alpha = .55f) else border),
+    ) {
+        Box(Modifier.padding(horizontal = 9.dp), contentAlignment = Alignment.Center) {
+            Text(label, color = foreground, fontSize = 10.sp, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
         }
-    }, actions = { DialogSecondary("取消", onDismiss); DialogPrimary("创建 ${selected.size} 个下载", selected.isNotEmpty()) { onCreate(selected.toList()) } })
+    }
+}
+
+@Composable
+private fun HarvestResultDialog(
+    signal: UiSignal.Harvest,
+    initialReferer: String,
+    defaultConcurrency: Long,
+    probing: Boolean,
+    onDismiss: () -> Unit,
+    onProbe: (List<String>, String) -> Unit,
+    onCreate: (HarvestCreateRequest) -> Unit,
+) {
+    var selected by remember(signal.url) { mutableStateOf(signal.links.map { it.url }.toSet()) }
+    var category by remember(signal.url) { mutableStateOf("all") }
+    var minimumBytes by remember(signal.url) { mutableLongStateOf(0) }
+    var probeRequested by remember(signal.url) { mutableStateOf(false) }
+    var referer by remember(signal.url) { mutableStateOf(initialReferer) }
+    var concurrency by remember(signal.url) { mutableStateOf(defaultConcurrency.coerceIn(1, 64).toString()) }
+    val counts = harvestFilterCounts(signal.links)
+    val visible = visibleHarvestLinks(signal.links, category, minimumBytes)
+    val selectedVisible = visible.filter { it.url in selected }
+    val effectiveReferer = referer.trim().ifBlank { signal.url }
+    val refererValid = runCatching { EnginePipeClient.normalizeHttpUrl(effectiveReferer) }.isSuccess
+    val parsedConcurrency = concurrency.toLongOrNull()?.coerceIn(1, 64) ?: 0
+    val probed = probeRequested && !probing
+
+    WorkbenchDialog(
+        onDismiss,
+        "网页抓取结果",
+        "从当前页面提取到 ${signal.links.size} 个可下载资源",
+        800.dp,
+        content = {
+            DetailLine("来源页面", safeResourceLocation(signal.url))
+            Spacer(Modifier.height(11.dp))
+            if (signal.links.isEmpty()) {
+                Text("页面未发现可下载的静态文件链接。", color = muted, fontSize = 12.sp)
+                Text("这里只读取当前页面 HTML，不执行脚本，也不继续打开子页面。", color = faint, fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
+            } else {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    harvestCategories.filter { (id, _) -> id == "all" || counts.getOrDefault(id, 0) > 0 }.forEach { (id, label) ->
+                        HarvestChip("$label ${counts.getOrDefault(id, 0)}", category == id) { category = id }
+                    }
+                }
+                Spacer(Modifier.height(9.dp))
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    HarvestChip("全选当前分类", false) { selected = selected + visible.map { it.url } }
+                    HarvestChip("取消当前分类", false) { selected = selected - visible.map { it.url }.toSet() }
+                    HarvestChip(if (probing) "读取大小中…" else "读取文件大小", false, !probing) {
+                        probeRequested = true
+                        onProbe(signal.links.map { it.url }, effectiveReferer)
+                    }
+                    HarvestChip("全部大小", minimumBytes == 0L) { minimumBytes = 0L }
+                    HarvestChip("≥ 1 MB", minimumBytes == 1024L * 1024L, probed) { minimumBytes = 1024L * 1024L }
+                    HarvestChip("≥ 10 MB", minimumBytes == 10L * 1024L * 1024L, probed) { minimumBytes = 10L * 1024L * 1024L }
+                    Text("已选 ${selectedVisible.size} / ${visible.size}", color = muted, fontSize = 10.sp)
+                }
+                Spacer(Modifier.height(9.dp))
+                Column(Modifier.fillMaxWidth().border(1.dp, border, RoundedCornerShape(7.dp)).clip(RoundedCornerShape(7.dp))) {
+                    visible.forEachIndexed { index, item ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable {
+                                selected = if (item.url in selected) selected - item.url else selected + item.url
+                            }.background(if (item.url in selected) selectedSurface.copy(alpha = .55f) else Color.Transparent).padding(horizontal = 9.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                item.url in selected,
+                                { checked -> selected = if (checked) selected + item.url else selected - item.url },
+                                accessibilityLabel = "选择 ${item.filename.ifBlank { item.url }}",
+                            )
+                            Spacer(Modifier.width(7.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(item.filename.ifBlank { item.url.substringAfterLast('/') }, color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                val details = buildList {
+                                    add(harvestCategories.firstOrNull { it.first == item.category }?.second ?: "文件")
+                                    item.extension.trimStart('.').takeIf(String::isNotBlank)?.let { add(".$it") }
+                                    if (item.size > 0) add(formatBytes(item.size)) else if (probed) add("大小未知")
+                                }
+                                Text(details.joinToString(" · "), color = muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            WorkbenchTooltip(item.url) {
+                                Icon(Icons.Outlined.Link, null, tint = faint, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                        if (index < visible.lastIndex) HorizontalDivider(color = border)
+                    }
+                }
+                if (visible.isEmpty()) Text("当前筛选条件下没有资源。", color = muted, fontSize = 11.sp, modifier = Modifier.padding(top = 9.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(Modifier.weight(1f)) {
+                    DialogLabel("Referer（可选）")
+                    OutlinedTextField(referer, { referer = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp), isError = !refererValid)
+                }
+                Column(Modifier.width(120.dp)) {
+                    DialogLabel("并发")
+                    OutlinedTextField(concurrency, { concurrency = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp), isError = parsedConcurrency == 0L)
+                }
+            }
+        },
+        actions = {
+            DialogSecondary("取消", onDismiss)
+            DialogPrimary("创建 ${selectedVisible.size} 个下载", selectedVisible.isNotEmpty() && refererValid && parsedConcurrency > 0L && !probing) {
+                onCreate(HarvestCreateRequest(selectedVisible.map { it.url }, effectiveReferer, parsedConcurrency))
+            }
+        },
+    )
 }
 
 @Composable private fun MediaSourcePickerDialog(mode: String, onDismiss: () -> Unit, onChoose: (MediaSourceSelection) -> Unit) {

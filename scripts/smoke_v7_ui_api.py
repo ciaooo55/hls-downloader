@@ -45,7 +45,9 @@ def inspect_png(data: bytes, path: Path) -> dict:
     image = Image.open(io.BytesIO(data)).convert("RGB")
     colors = image.getcolors(maxcolors=image.width * image.height)
     extrema = image.getextrema()
-    if colors is None or len(colors) < 16 or all(low == high for low, high in extrema):
+    black_pixels = sum(count for count, color in (colors or []) if max(color) <= 3)
+    black_ratio = black_pixels / (image.width * image.height)
+    if colors is None or len(colors) < 16 or all(low == high for low, high in extrema) or black_ratio > 0.98:
         raise RuntimeError("screenshot is blank or visually degenerate")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
@@ -54,6 +56,7 @@ def inspect_png(data: bytes, path: Path) -> dict:
         "width": image.width,
         "height": image.height,
         "color_count": len(colors),
+        "black_ratio": round(black_ratio, 6),
         "sha256": hashlib.sha256(data).hexdigest().upper(),
     }
 

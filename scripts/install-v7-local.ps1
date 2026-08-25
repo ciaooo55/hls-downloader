@@ -83,7 +83,6 @@ Compress-Archive -Path (Join-Path $extensionRoot 'firefox-mv3\*') -DestinationPa
 Copy-Item -LiteralPath $note -Destination (Join-Path $stage 'HLS-Downloader-7.0.0-升级说明.md') -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $stage 'scripts') | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\upgrade-v7-portable.ps1') -Destination (Join-Path $stage 'scripts\upgrade-v7-portable.ps1') -Force
-Copy-Item -LiteralPath (Join-Path $repo 'scripts\register-v7-native-host.ps1') -Destination (Join-Path $stage 'scripts\register-v7-native-host.ps1') -Force
 
 $sourcePortable = Join-Path $repo 'artifacts\v7-productization\package\HLSDownloader-7.0.0-Windows-x64-Portable.zip'
 $portableHash = if (Test-Path -LiteralPath $sourcePortable) {
@@ -115,8 +114,9 @@ try {
     throw
 }
 
+$engineExecutable = Join-Path $target 'app\resources\HLSDownloaderEngine.exe'
 $hostExecutable = Join-Path $target 'app\resources\HLSDownloaderNativeHost.exe'
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'scripts\register-v7-native-host.ps1') -HostExecutable $hostExecutable
+& $engineExecutable --register-native-host
 if ($LASTEXITCODE -ne 0) {
     throw "v7 Native Host registration failed with exit $LASTEXITCODE"
 }

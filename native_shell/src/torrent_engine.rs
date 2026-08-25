@@ -30,15 +30,39 @@ pub trait TorrentSession: Send + Sync {
         proxy: &str,
         options: TorrentOptions,
     ) -> Result<u64, String>;
+
+    fn download_with_telemetry(
+        &self,
+        source: &str,
+        output: &Path,
+        control: &Path,
+        headers: &std::collections::HashMap<String, String>,
+        proxy: &str,
+        options: TorrentOptions,
+        reporter: &mut dyn FnMut(TorrentTelemetry),
+    ) -> Result<u64, String> {
+        let result = self.download_with_options(source, output, control, headers, proxy, options);
+        reporter(TorrentTelemetry::default());
+        result
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TorrentTelemetry {
+    pub peer_count: u32,
+    pub seed_count: u32,
+    pub uploaded_bytes: u64,
+    pub upload_speed_bytes_per_sec: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TorrentOptions {
     /// The built-in client stops immediately after completion and never seeds,
     /// so its effective upload rate is always zero and therefore below this cap.
     pub upload_limit_kib: u64,
     pub max_connections: usize,
     pub enable_dht: bool,
+    pub selection_path: PathBuf,
 }
 
 impl Default for TorrentOptions {
@@ -47,6 +71,7 @@ impl Default for TorrentOptions {
             upload_limit_kib: 1024,
             max_connections: 200,
             enable_dht: true,
+            selection_path: PathBuf::new(),
         }
     }
 }
@@ -77,6 +102,19 @@ impl TorrentSession for BuiltinTorrentEngine {
         options: TorrentOptions,
     ) -> Result<u64, String> {
         download_torrent_with_options(source, output, control, headers, proxy, options)
+    }
+
+    fn download_with_telemetry(
+        &self,
+        source: &str,
+        output: &Path,
+        control: &Path,
+        headers: &std::collections::HashMap<String, String>,
+        proxy: &str,
+        options: TorrentOptions,
+        reporter: &mut dyn FnMut(TorrentTelemetry),
+    ) -> Result<u64, String> {
+        download_torrent_with_telemetry(source, output, control, headers, proxy, options, reporter)
     }
 }
 
@@ -200,6 +238,9 @@ pub fn parse_torrent_file(bytes: &[u8]) -> Result<TorrentMeta, String> {
         .and_then(|info| info.get(b"pieces".as_ref()))
         .and_then(BValue::as_bytes)
     {
+        if raw.len() % 20 != 0 {
+            return Err("torrent piece hash list is malformed".into());
+        }
         for chunk in raw.chunks_exact(20) {
             let mut hash = [0u8; 20];
             hash.copy_from_slice(chunk);
@@ -221,6 +262,18 @@ pub fn parse_torrent_file(bytes: &[u8]) -> Result<TorrentMeta, String> {
     } else {
         0
     };
+    if length > 0 {
+        if piece_length == 0 {
+            return Err("torrent piece length is missing".into());
+        }
+        let expected_pieces = length.div_ceil(piece_length) as usize;
+        if pieces.len() != expected_pieces {
+            return Err(format!(
+                "torrent piece hash count mismatch: expected {expected_pieces}, got {}",
+                pieces.len()
+            ));
+        }
+    }
     Ok(TorrentMeta {
         name,
         magnet: false,
@@ -426,6 +479,26 @@ pub fn download_torrent_with_options(
     proxy: &str,
     options: TorrentOptions,
 ) -> Result<u64, String> {
+    download_torrent_with_telemetry(
+        spec_url,
+        output,
+        control,
+        headers,
+        proxy,
+        options,
+        &mut |_| {},
+    )
+}
+
+fn download_torrent_with_telemetry(
+    spec_url: &str,
+    output: &Path,
+    control: &Path,
+    headers: &std::collections::HashMap<String, String>,
+    proxy: &str,
+    options: TorrentOptions,
+    reporter: &mut dyn FnMut(TorrentTelemetry),
+) -> Result<u64, String> {
     let meta = if spec_url.starts_with("magnet:") {
         let mut meta = parse_magnet(spec_url)?;
         if meta.pieces.is_empty() || meta.piece_length == 0 {
@@ -458,6 +531,7 @@ pub fn download_torrent_with_options(
         .cloned()
         .collect();
     if let Some(seed) = http_seeds.first().cloned() {
+        reporter(TorrentTelemetry::default());
         let job = Job {
             url: seed,
             headers: headers.clone(),
@@ -489,7 +563,7 @@ pub fn download_torrent_with_options(
             meta.info_hash
         ));
     }
-    download_swarm(&meta, output, control, headers, proxy, options)
+    download_swarm(&meta, output, control, headers, proxy, options, reporter)
 }
 
 #[derive(Default)]
@@ -627,11 +701,17 @@ fn download_swarm(
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
     options: TorrentOptions,
+    reporter: &mut dyn FnMut(TorrentTelemetry),
 ) -> Result<u64, String> {
     let mut peers = announce_peers(meta, headers, proxy, options.enable_dht)?;
     if peers.is_empty() {
         return Err("tracker returned no peers".into());
     }
+    let mut telemetry = TorrentTelemetry {
+        peer_count: peers.len().min(u32::MAX as usize) as u32,
+        ..TorrentTelemetry::default()
+    };
+    reporter(telemetry);
     let mut seen = BTreeSet::new();
     let mut last = "all peers failed".to_string();
     let mut index = 0;
@@ -642,7 +722,16 @@ fn download_swarm(
             continue;
         }
         let mut extra = Vec::new();
-        match download_from_peer_ex(peer, meta, output, control, &mut extra) {
+        match download_from_peer_ex_with_telemetry(
+            peer,
+            meta,
+            output,
+            control,
+            &mut extra,
+            &mut telemetry,
+            reporter,
+            &options.selection_path,
+        ) {
             Ok(len) => return Ok(len),
             Err(error) => last = error,
         }
@@ -1185,6 +1274,29 @@ fn download_from_peer_ex(
     control: &Path,
     extra_peers: &mut Vec<std::net::SocketAddr>,
 ) -> Result<u64, String> {
+    let mut telemetry = TorrentTelemetry::default();
+    download_from_peer_ex_with_telemetry(
+        addr,
+        meta,
+        output,
+        control,
+        extra_peers,
+        &mut telemetry,
+        &mut |_| {},
+        Path::new(""),
+    )
+}
+
+fn download_from_peer_ex_with_telemetry(
+    addr: std::net::SocketAddr,
+    meta: &TorrentMeta,
+    output: &Path,
+    control: &Path,
+    extra_peers: &mut Vec<std::net::SocketAddr>,
+    telemetry: &mut TorrentTelemetry,
+    reporter: &mut dyn FnMut(TorrentTelemetry),
+    selection_path: &Path,
+) -> Result<u64, String> {
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::net::TcpStream;
     use std::time::Duration;
@@ -1200,7 +1312,7 @@ fn download_from_peer_ex(
         .map_err(|error| error.to_string())?;
     file.set_len(meta.length)
         .map_err(|error| error.to_string())?;
-    let pending: Vec<usize> = meta
+    let initial_pending: Vec<usize> = meta
         .pieces
         .iter()
         .enumerate()
@@ -1211,7 +1323,7 @@ fn download_from_peer_ex(
         })
         .map(|(index, _)| index)
         .collect();
-    if pending.is_empty() {
+    if initial_pending.is_empty() {
         return Ok(meta.length);
     }
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(8))
@@ -1237,6 +1349,8 @@ fn download_from_peer_ex(
     if &peer_hs[28..48] != info_hash.as_slice() {
         return Err("peer info_hash mismatch".into());
     }
+    telemetry.peer_count = telemetry.peer_count.max(1);
+    reporter(*telemetry);
     let mut pex_id = 0u8;
     if peer_hs[25] & 0x10 != 0 {
         send_extended(
@@ -1246,60 +1360,183 @@ fn download_from_peer_ex(
         )?;
     }
     send_message(&mut stream, 2, &[])?; // interested
+    let reader = PeerMessageReader::start(&stream)?;
     let mut unchoked = false;
-    for index in pending {
-        if fs::read_to_string(control).unwrap_or_default().trim() != "run" {
-            return Err("paused".into());
+    let mut peer_pieces = vec![false; meta.pieces.len()];
+    loop {
+        let pending: Vec<usize> = meta
+            .pieces
+            .iter()
+            .enumerate()
+            .filter(|(index, hash)| {
+                let start = *index as u64 * meta.piece_length;
+                let len = ((meta.length - start).min(meta.piece_length)) as usize;
+                !piece_is_complete(&mut file, start, len, hash)
+                    && piece_is_selected(meta, *index, selection_path)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if pending.is_empty() {
+            break;
         }
-        let hash = &meta.pieces[index];
-        let start = index as u64 * meta.piece_length;
-        let len = ((meta.length - start).min(meta.piece_length)) as usize;
-        let mut piece = vec![0u8; len];
-        let mut filled = 0;
-        while filled < len {
+        'pieces: for index in pending {
             if !unchoked {
-                match read_message(&mut stream)? {
-                    (1, _) => unchoked = true,
-                    (0, _) => unchoked = false,
-                    (id, body) => take_extended(id, &body, &mut pex_id, extra_peers),
-                }
-                continue;
-            }
-            let block = (len - filled).min(16 * 1024);
-            let mut payload = Vec::new();
-            payload.extend_from_slice(&(index as u32).to_be_bytes());
-            payload.extend_from_slice(&(filled as u32).to_be_bytes());
-            payload.extend_from_slice(&(block as u32).to_be_bytes());
-            send_message(&mut stream, 6, &payload)?;
-            loop {
-                let (id, body) = read_message(&mut stream)?;
-                if id == 1 {
-                    unchoked = true;
-                } else if id == 0 {
-                    unchoked = false;
-                    break;
-                } else if id == 7 && body.len() >= 8 {
-                    let begin = u32::from_be_bytes(body[4..8].try_into().unwrap()) as usize;
-                    let data = &body[8..];
-                    if begin + data.len() <= piece.len() {
-                        piece[begin..begin + data.len()].copy_from_slice(data);
-                        filled = filled.max(begin + data.len());
+                while !unchoked {
+                    if !control_is_running(control) {
+                        return Err("paused".into());
                     }
-                    break;
-                } else {
-                    take_extended(id, &body, &mut pex_id, extra_peers);
+                    if !piece_is_selected(meta, index, selection_path) {
+                        continue 'pieces;
+                    }
+                    let Some(message) = reader.recv_timeout(Duration::from_millis(100))? else {
+                        continue;
+                    };
+                    match message {
+                        (1, _) => unchoked = true,
+                        (0, _) => unchoked = false,
+                        (id, body) => {
+                            note_peer_availability(id, &body, &mut peer_pieces);
+                            take_extended(id, &body, &mut pex_id, extra_peers);
+                        }
+                    }
                 }
             }
+            if !control_is_running(control) {
+                return Err("paused".into());
+            }
+            let hash = &meta.pieces[index];
+            let start = index as u64 * meta.piece_length;
+            let len = ((meta.length - start).min(meta.piece_length)) as usize;
+            let mut piece = vec![0u8; len];
+            let mut filled = 0;
+            while filled < len {
+                while !unchoked {
+                    if !control_is_running(control) {
+                        return Err("paused".into());
+                    }
+                    if !piece_is_selected(meta, index, selection_path) {
+                        continue 'pieces;
+                    }
+                    let Some((id, body)) = reader.recv_timeout(Duration::from_millis(100))? else {
+                        continue;
+                    };
+                    match id {
+                        1 => unchoked = true,
+                        0 => unchoked = false,
+                        _ => {
+                            note_peer_availability(id, &body, &mut peer_pieces);
+                            take_extended(id, &body, &mut pex_id, extra_peers);
+                        }
+                    }
+                }
+                if !piece_is_selected(meta, index, selection_path) {
+                    continue 'pieces;
+                }
+                let block = (len - filled).min(16 * 1024);
+                let mut payload = Vec::new();
+                payload.extend_from_slice(&(index as u32).to_be_bytes());
+                payload.extend_from_slice(&(filled as u32).to_be_bytes());
+                payload.extend_from_slice(&(block as u32).to_be_bytes());
+                send_message(&mut stream, 6, &payload)?;
+                loop {
+                    if !control_is_running(control) {
+                        let _ = send_message(&mut stream, 8, &payload);
+                        return Err("paused".into());
+                    }
+                    if !piece_is_selected(meta, index, selection_path) {
+                        let _ = send_message(&mut stream, 8, &payload);
+                        continue 'pieces;
+                    }
+                    let Some((id, body)) = reader.recv_timeout(Duration::from_millis(100))? else {
+                        continue;
+                    };
+                    if id == 1 {
+                        unchoked = true;
+                    } else if id == 0 {
+                        unchoked = false;
+                        let _ = send_message(&mut stream, 8, &payload);
+                        break;
+                    } else if id == 7 {
+                        if body.len() < 8 {
+                            return Err("truncated peer piece message".into());
+                        }
+                        let piece_index =
+                            u32::from_be_bytes(body[..4].try_into().unwrap()) as usize;
+                        let begin = u32::from_be_bytes(body[4..8].try_into().unwrap()) as usize;
+                        let data = &body[8..];
+                        if piece_index != index || begin != filled {
+                            continue; // late response for a canceled or superseded request
+                        }
+                        if data.len() != block || begin + data.len() > piece.len() {
+                            return Err(format!(
+                                "invalid peer piece block: index={piece_index} begin={begin} length={}",
+                                data.len()
+                            ));
+                        }
+                        piece[begin..begin + data.len()].copy_from_slice(data);
+                        filled += data.len();
+                        break;
+                    } else {
+                        note_peer_availability(id, &body, &mut peer_pieces);
+                        take_extended(id, &body, &mut pex_id, extra_peers);
+                    }
+                }
+            }
+            if crate::crypto_lite::sha1(&piece) != *hash {
+                return Err(format!("piece {index} hash mismatch"));
+            }
+            file.seek(SeekFrom::Start(start))
+                .map_err(|error| error.to_string())?;
+            file.write_all(&piece).map_err(|error| error.to_string())?;
+            crate::net_policy::consume(piece.len());
         }
-        if crate::crypto_lite::sha1(&piece) != *hash {
-            return Err(format!("piece {index} hash mismatch"));
-        }
-        file.seek(SeekFrom::Start(start))
-            .map_err(|error| error.to_string())?;
-        file.write_all(&piece).map_err(|error| error.to_string())?;
-        crate::net_policy::consume(piece.len());
     }
+    telemetry.seed_count =
+        u32::from(!peer_pieces.is_empty() && peer_pieces.iter().all(|available| *available));
+    reporter(*telemetry);
     Ok(meta.length)
+}
+
+fn piece_is_selected(meta: &TorrentMeta, piece_index: usize, selection_path: &Path) -> bool {
+    if selection_path.as_os_str().is_empty() || !selection_path.is_file() {
+        return true;
+    }
+    let Ok(encoded) = fs::read(selection_path) else {
+        return false;
+    };
+    let Ok(selections) = serde_json::from_slice::<Vec<TorrentFileSelection>>(&encoded) else {
+        return false;
+    };
+    if selections.is_empty() {
+        return true;
+    }
+    let piece_start = piece_index as u64 * meta.piece_length;
+    let piece_end = (piece_start + meta.piece_length).min(meta.length);
+    meta.files.iter().any(|file| {
+        selections
+            .iter()
+            .any(|selection| selection.index == file.index && selection.selected)
+            && piece_start < file.offset.saturating_add(file.size)
+            && file.offset < piece_end
+    })
+}
+
+fn note_peer_availability(id: u8, body: &[u8], pieces: &mut [bool]) {
+    match id {
+        4 if body.len() >= 4 => {
+            let index = u32::from_be_bytes(body[..4].try_into().unwrap()) as usize;
+            if let Some(available) = pieces.get_mut(index) {
+                *available = true;
+            }
+        }
+        5 => {
+            for (index, available) in pieces.iter_mut().enumerate() {
+                let byte = body.get(index / 8).copied().unwrap_or(0);
+                *available = byte & (0x80 >> (index % 8)) != 0;
+            }
+        }
+        _ => {}
+    }
 }
 
 fn piece_is_complete(file: &mut fs::File, start: u64, len: usize, hash: &[u8; 20]) -> bool {
@@ -1322,6 +1559,58 @@ fn send_message(stream: &mut std::net::TcpStream, id: u8, payload: &[u8]) -> Res
         .map_err(|error| error.to_string())?;
     stream.write_all(&[id]).map_err(|error| error.to_string())?;
     stream.write_all(payload).map_err(|error| error.to_string())
+}
+
+fn control_is_running(control: &Path) -> bool {
+    fs::read_to_string(control).unwrap_or_default().trim() == "run"
+}
+
+struct PeerMessageReader {
+    receiver: std::sync::mpsc::Receiver<Result<(u8, Vec<u8>), String>>,
+    shutdown: std::net::TcpStream,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl PeerMessageReader {
+    fn start(stream: &std::net::TcpStream) -> Result<Self, String> {
+        let mut read_stream = stream.try_clone().map_err(|error| error.to_string())?;
+        read_stream
+            .set_read_timeout(Some(Duration::from_secs(15)))
+            .map_err(|error| error.to_string())?;
+        let shutdown = read_stream.try_clone().map_err(|error| error.to_string())?;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || loop {
+            let message = read_message(&mut read_stream);
+            let failed = message.is_err();
+            if sender.send(message).is_err() || failed {
+                break;
+            }
+        });
+        Ok(Self {
+            receiver,
+            shutdown,
+            handle: Some(handle),
+        })
+    }
+
+    fn recv_timeout(&self, timeout: Duration) -> Result<Option<(u8, Vec<u8>)>, String> {
+        match self.receiver.recv_timeout(timeout) {
+            Ok(message) => message.map(Some),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err("peer reader disconnected".into())
+            }
+        }
+    }
+}
+
+impl Drop for PeerMessageReader {
+    fn drop(&mut self) {
+        let _ = self.shutdown.shutdown(std::net::Shutdown::Both);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 fn read_message(stream: &mut std::net::TcpStream) -> Result<(u8, Vec<u8>), String> {
@@ -2114,5 +2403,228 @@ mod tests {
         assert_eq!(defaults.max_connections, 200);
         assert!(defaults.enable_dht);
         let _: BuiltinTorrentEngine = torrent_session();
+    }
+
+    #[test]
+    fn peer_bitfield_reports_seed_only_when_every_piece_is_available() {
+        let mut pieces = vec![false; 10];
+        note_peer_availability(5, &[0xff, 0xc0], &mut pieces);
+        assert!(pieces.iter().all(|available| *available));
+
+        let mut partial = vec![false; 10];
+        note_peer_availability(5, &[0x80, 0x00], &mut partial);
+        note_peer_availability(4, &3u32.to_be_bytes(), &mut partial);
+        assert!(partial[0]);
+        assert!(partial[3]);
+        assert!(!partial.iter().all(|available| *available));
+    }
+
+    #[test]
+    fn piece_selection_sidecar_skips_unselected_file_ranges() {
+        let meta = TorrentMeta {
+            name: "demo".into(),
+            magnet: false,
+            web_seeds: Vec::new(),
+            info_hash: String::new(),
+            announce: Vec::new(),
+            hint_peers: Vec::new(),
+            piece_length: 4,
+            pieces: vec![[0; 20], [0; 20]],
+            length: 8,
+            files: vec![
+                TorrentFileEntry {
+                    index: 0,
+                    path: "one.bin".into(),
+                    size: 4,
+                    offset: 0,
+                },
+                TorrentFileEntry {
+                    index: 1,
+                    path: "two.bin".into(),
+                    size: 4,
+                    offset: 4,
+                },
+            ],
+        };
+        let path = std::env::temp_dir().join(format!(
+            "hls-v7-piece-selection-{}.json",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            serde_json::to_vec(&vec![
+                TorrentFileSelection {
+                    index: 0,
+                    path: "one.bin".into(),
+                    selected: false,
+                },
+                TorrentFileSelection {
+                    index: 1,
+                    path: "two.bin".into(),
+                    selected: true,
+                },
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(!piece_is_selected(&meta, 0, &path));
+        assert!(piece_is_selected(&meta, 1, &path));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn swarm_cancels_an_inflight_block_when_selection_changes() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+
+        let payload = b"aaaabbbb".to_vec();
+        let meta = TorrentMeta {
+            name: "cancel-selection".into(),
+            magnet: false,
+            web_seeds: Vec::new(),
+            info_hash: "0123456789abcdef0123456789abcdef01234567".into(),
+            announce: Vec::new(),
+            hint_peers: Vec::new(),
+            piece_length: 4,
+            pieces: payload.chunks(4).map(crate::crypto_lite::sha1).collect(),
+            length: payload.len() as u64,
+            files: vec![
+                TorrentFileEntry {
+                    index: 0,
+                    path: "one.bin".into(),
+                    size: 4,
+                    offset: 0,
+                },
+                TorrentFileEntry {
+                    index: 1,
+                    path: "two.bin".into(),
+                    size: 4,
+                    offset: 4,
+                },
+            ],
+        };
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-swarm-cancel-selection-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let output = root.join("payload.bin");
+        let control = root.join("control");
+        let selection = root.join("selection.json");
+        fs::write(&control, "run").unwrap();
+        let write_selection = |first: bool, second: bool| {
+            fs::write(
+                &selection,
+                serde_json::to_vec(&vec![
+                    TorrentFileSelection {
+                        index: 0,
+                        path: "one.bin".into(),
+                        selected: first,
+                    },
+                    TorrentFileSelection {
+                        index: 1,
+                        path: "two.bin".into(),
+                        selected: second,
+                    },
+                ])
+                .unwrap(),
+            )
+            .unwrap();
+        };
+        write_selection(true, false);
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (requested_tx, requested_rx) = mpsc::channel();
+        let (cancel_tx, cancel_rx) = mpsc::channel();
+        let server_payload = payload.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut handshake = [0u8; 68];
+            stream.read_exact(&mut handshake).unwrap();
+            stream.write_all(&handshake).unwrap();
+            stream.write_all(&1u32.to_be_bytes()).unwrap();
+            stream.write_all(&[1u8]).unwrap();
+            loop {
+                let mut header = [0u8; 4];
+                if stream.read_exact(&mut header).is_err() {
+                    break;
+                }
+                let mut message = vec![0u8; u32::from_be_bytes(header) as usize];
+                if stream.read_exact(&mut message).is_err() || message.is_empty() {
+                    break;
+                }
+                if message[0] != 6 && message[0] != 8 {
+                    continue;
+                }
+                let index = u32::from_be_bytes(message[1..5].try_into().unwrap()) as usize;
+                let begin = u32::from_be_bytes(message[5..9].try_into().unwrap()) as usize;
+                let block = u32::from_be_bytes(message[9..13].try_into().unwrap()) as usize;
+                if message[0] == 8 {
+                    cancel_tx.send((index, begin, block)).unwrap();
+                    continue;
+                }
+                if index == 0 {
+                    requested_tx.send(()).unwrap();
+                    continue;
+                }
+                let start = index * 4 + begin;
+                let mut response = vec![7u8];
+                response.extend_from_slice(&(index as u32).to_be_bytes());
+                response.extend_from_slice(&(begin as u32).to_be_bytes());
+                response.extend_from_slice(&server_payload[start..start + block]);
+                stream
+                    .write_all(&(response.len() as u32).to_be_bytes())
+                    .unwrap();
+                stream.write_all(&response).unwrap();
+            }
+        });
+
+        let selection_for_update = selection.clone();
+        let updater = std::thread::spawn(move || {
+            requested_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            fs::write(
+                selection_for_update,
+                serde_json::to_vec(&vec![
+                    TorrentFileSelection {
+                        index: 0,
+                        path: "one.bin".into(),
+                        selected: false,
+                    },
+                    TorrentFileSelection {
+                        index: 1,
+                        path: "two.bin".into(),
+                        selected: true,
+                    },
+                ])
+                .unwrap(),
+            )
+            .unwrap();
+        });
+
+        let mut telemetry = TorrentTelemetry::default();
+        download_from_peer_ex_with_telemetry(
+            addr,
+            &meta,
+            &output,
+            &control,
+            &mut Vec::new(),
+            &mut telemetry,
+            &mut |_| {},
+            &selection,
+        )
+        .unwrap();
+        updater.join().unwrap();
+        assert_eq!(
+            cancel_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            (0, 0, 4)
+        );
+        let written = fs::read(&output).unwrap();
+        assert_eq!(&written[..4], &[0, 0, 0, 0]);
+        assert_eq!(&written[4..], b"bbbb");
+        server.join().unwrap();
+        let _ = fs::remove_dir_all(root);
     }
 }

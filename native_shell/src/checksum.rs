@@ -12,6 +12,24 @@ pub enum Algorithm {
     Sha256,
 }
 
+impl Algorithm {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Md5 => "MD5",
+            Self::Sha1 => "SHA-1",
+            Self::Sha256 => "SHA-256",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerificationResult {
+    pub algorithm: String,
+    pub expected: String,
+    pub actual: String,
+    pub verified: bool,
+}
+
 pub fn parse_checksum(value: &str) -> Option<(Algorithm, String)> {
     let text = value
         .trim()
@@ -91,15 +109,33 @@ pub fn hash_file(path: &Path, algorithm: Algorithm) -> Result<String, String> {
 }
 
 pub fn verify_file(path: &Path, expected: &str) -> Result<(), String> {
-    let Some((algorithm, want)) = parse_checksum(expected) else {
+    let Some(result) = verify_file_result(path, expected)? else {
         return Ok(());
     };
-    let actual = hash_file(path, algorithm)?;
-    if actual == want {
+    if result.verified {
         Ok(())
     } else {
-        Err(format!("checksum mismatch: expected {want}, got {actual}"))
+        Err(format!(
+            "checksum mismatch: expected {}, got {}",
+            result.expected, result.actual
+        ))
     }
+}
+
+pub fn verify_file_result(
+    path: &Path,
+    expected: &str,
+) -> Result<Option<VerificationResult>, String> {
+    let Some((algorithm, want)) = parse_checksum(expected) else {
+        return Ok(None);
+    };
+    let actual = hash_file(path, algorithm)?;
+    Ok(Some(VerificationResult {
+        algorithm: algorithm.label().into(),
+        verified: actual == want,
+        expected: want,
+        actual,
+    }))
 }
 
 fn is_hex(value: &str) -> bool {

@@ -74,6 +74,16 @@ pub enum CorePipeRequest {
         request_id: u64,
         cookie: String,
     },
+    SetSiteRuleCredential {
+        request_id: u64,
+        host: String,
+        #[serde(default)]
+        cookie: String,
+        #[serde(default)]
+        request_headers: std::collections::BTreeMap<String, String>,
+        #[serde(default)]
+        clear: bool,
+    },
     StoreCredential {
         request_id: u64,
         credential_ref: String,
@@ -129,6 +139,8 @@ pub enum CorePipeResponse {
         takeover_minimum_bytes: u64,
         legal_accepted: bool,
         speed_limit_kib: u64,
+        #[serde(default)]
+        hourly_quota_mib: u64,
         #[serde(default)]
         schedule_enabled: bool,
         #[serde(default = "default_schedule_start")]
@@ -244,6 +256,12 @@ pub enum CorePipeResponse {
         #[serde(default)]
         preferred_cast_device_id: String,
         #[serde(default)]
+        task_column_layout: String,
+        #[serde(default)]
+        toolbar_actions: String,
+        #[serde(default = "default_task_sort")]
+        task_sort: String,
+        #[serde(default)]
         default_cookie_configured: bool,
     },
     Credential {
@@ -299,6 +317,10 @@ fn default_queue_days() -> String {
 
 fn default_proxy_mode() -> String {
     "system".into()
+}
+
+fn default_task_sort() -> String {
+    "queue:asc".into()
 }
 
 fn default_bt_upload_limit() -> u64 {

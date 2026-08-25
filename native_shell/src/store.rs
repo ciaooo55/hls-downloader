@@ -159,6 +159,8 @@ impl CoreStore {
                         .map_err(|error| format!("delete Core task spec {task_id}: {error}"))?;
                 }
                 CoreEvent::Ready { .. }
+                | CoreEvent::SettingsChanged { .. }
+                | CoreEvent::ClipboardOffer { .. }
                 | CoreEvent::HandoffOffered { .. }
                 | CoreEvent::HandoffResolved { .. }
                 | CoreEvent::UiShow { .. }
@@ -166,6 +168,7 @@ impl CoreStore {
                 | CoreEvent::ProbeResult { .. }
                 | CoreEvent::TorrentProbeResult { .. }
                 | CoreEvent::TorrentSelectionResult { .. }
+                | CoreEvent::TaskTorrentFiles { .. }
                 | CoreEvent::CastDevices { .. }
                 | CoreEvent::UpdateAvailable { .. }
                 | CoreEvent::UpdateCurrent { .. }
@@ -175,6 +178,7 @@ impl CoreStore {
                 | CoreEvent::DuplicateOffered { .. }
                 | CoreEvent::Toast { .. }
                 | CoreEvent::HarvestResult { .. }
+                | CoreEvent::HarvestProbeResult { .. }
                 | CoreEvent::TaskLog { .. }
                 | CoreEvent::TaskExport { .. }
                 | CoreEvent::BrowserStatus { .. }
@@ -328,6 +332,16 @@ impl CoreStore {
             )
             .optional()
             .map_err(|error| format!("load Core credential {credential_ref}: {error}"))
+    }
+
+    pub fn delete_credential(&mut self, credential_ref: &str) -> Result<(), String> {
+        self.connection
+            .execute(
+                "DELETE FROM credentials WHERE credential_ref = ?1",
+                params![credential_ref],
+            )
+            .map_err(|error| format!("delete Core credential {credential_ref}: {error}"))?;
+        Ok(())
     }
 
     pub fn save_handoff(

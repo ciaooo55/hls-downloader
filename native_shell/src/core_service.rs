@@ -1,6 +1,9 @@
 //! Durable command boundary shared by the UI and protocol front-ends.
 
-use crate::{CoreCommand, CoreRuntime, CoreStore, EventEnvelope, TaskSnapshot, TaskSpec};
+use crate::{
+    AvScanStatus, CoreCommand, CoreRuntime, CoreStore, EventEnvelope, MirrorStatus, TaskFailure,
+    TaskSnapshot, TaskSpec,
+};
 use std::path::Path;
 
 pub struct PersistentCore {
@@ -88,6 +91,25 @@ impl PersistentCore {
         Ok(events)
     }
 
+    pub fn report_failure(
+        &mut self,
+        task_id: &str,
+        failure: TaskFailure,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        let before = self.runtime.clone();
+        let sequence = self.runtime.latest_sequence();
+        self.runtime.report_failure(task_id, failure);
+        let events = self.runtime.events_after(sequence, 16);
+        if events.is_empty() {
+            return Ok(events);
+        }
+        if let Err(error) = self.store.apply_events_and_spec(&events, None) {
+            self.runtime = before;
+            return Err(error);
+        }
+        Ok(events)
+    }
+
     pub fn set_output_path(
         &mut self,
         task_id: &str,
@@ -105,6 +127,62 @@ impl PersistentCore {
             return Err(error);
         }
         Ok(events)
+    }
+
+    pub fn set_checksum_result(
+        &mut self,
+        task_id: &str,
+        algorithm: String,
+        actual: String,
+        verified: bool,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        let before = self.runtime.clone();
+        let sequence = self.runtime.latest_sequence();
+        self.runtime
+            .set_checksum_result(task_id, algorithm, actual, verified);
+        self.persist_runtime_events(before, sequence)
+    }
+
+    pub fn set_av_scan_result(
+        &mut self,
+        task_id: &str,
+        result: AvScanStatus,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        let before = self.runtime.clone();
+        let sequence = self.runtime.latest_sequence();
+        self.runtime.set_av_scan_result(task_id, result);
+        self.persist_runtime_events(before, sequence)
+    }
+
+    pub fn set_mirror_result(
+        &mut self,
+        task_id: &str,
+        statuses: Vec<MirrorStatus>,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        let before = self.runtime.clone();
+        let sequence = self.runtime.latest_sequence();
+        self.runtime.set_mirror_result(task_id, statuses);
+        self.persist_runtime_events(before, sequence)
+    }
+
+    pub fn set_torrent_telemetry(
+        &mut self,
+        task_id: &str,
+        peer_count: u32,
+        seed_count: u32,
+        uploaded_bytes: u64,
+        upload_speed_bytes_per_sec: u64,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        let before = self.runtime.clone();
+        let sequence = self.runtime.latest_sequence();
+        self.runtime.set_torrent_telemetry(
+            task_id,
+            peer_count,
+            seed_count,
+            uploaded_bytes,
+            upload_speed_bytes_per_sec,
+        );
+        self.persist_runtime_events(before, sequence)
     }
 
     pub fn task_spec(&self, task_id: &str) -> Option<&TaskSpec> {
@@ -138,6 +216,22 @@ impl PersistentCore {
 
     pub fn store_mut(&mut self) -> &mut CoreStore {
         &mut self.store
+    }
+
+    fn persist_runtime_events(
+        &mut self,
+        before: CoreRuntime,
+        sequence: u64,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        let events = self.runtime.events_after(sequence, 16);
+        if events.is_empty() {
+            return Ok(events);
+        }
+        if let Err(error) = self.store.apply_events_and_spec(&events, None) {
+            self.runtime = before;
+            return Err(error);
+        }
+        Ok(events)
     }
 
     fn from_store(store: CoreStore) -> Result<Self, String> {
@@ -324,6 +418,64 @@ mod tests {
         assert_eq!(reopened.store().latest_sequence().unwrap(), 2);
         let events = reopened.handle(CoreCommand::Ping).unwrap();
         assert_eq!(events[0].sequence, 3);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
+    fn verification_and_mirror_results_survive_core_restart() {
+        let path = std::env::temp_dir().join(format!(
+            "hls-v7-verification-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        {
+            let mut core = PersistentCore::open(&path).unwrap();
+            let mut spec = test_spec();
+            spec.checksum = Some("sha256:abc".into());
+            spec.mirrors = vec!["https://mirror.example.test/restart.bin".into()];
+            core.handle(CoreCommand::CreateTask { spec }).unwrap();
+            core.set_checksum_result("task-1", "SHA-256".into(), "def".into(), false)
+                .unwrap();
+            core.set_av_scan_result(
+                "task-1",
+                AvScanStatus {
+                    state: "clean".into(),
+                    engine: "Windows Defender".into(),
+                    detail: "scan completed".into(),
+                },
+            )
+            .unwrap();
+            core.set_mirror_result(
+                "task-1",
+                vec![MirrorStatus {
+                    url: "https://mirror.example.test/restart.bin".into(),
+                    final_url: "https://cdn.example.test/restart.bin".into(),
+                    state: "active".into(),
+                    detail: "下载已使用此地址".into(),
+                    ranges: true,
+                }],
+            )
+            .unwrap();
+            core.set_torrent_telemetry("task-1", 18, 4, 0, 0).unwrap();
+        }
+        let reopened = PersistentCore::open(&path).unwrap();
+        let task = &reopened.tasks()[0];
+        assert_eq!(task.checksum_algorithm, "SHA-256");
+        assert_eq!(task.checksum_actual, "def");
+        assert_eq!(task.checksum_verified, Some(false));
+        assert_eq!(task.av_scan.as_ref().unwrap().state, "clean");
+        assert_eq!(task.mirror_status[0].state, "active");
+        assert!(task.mirror_status[0].ranges);
+        assert_eq!((task.peer_count, task.seed_count), (18, 4));
+        assert_eq!(
+            (task.uploaded_bytes, task.upload_speed_bytes_per_sec),
+            (0, 0)
+        );
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));

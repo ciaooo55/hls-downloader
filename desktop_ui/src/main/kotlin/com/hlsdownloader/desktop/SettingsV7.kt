@@ -15,13 +15,85 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.serialization.builtins.ListSerializer
 
 private data class SettingsTab(val label: String, val icon: ImageVector)
+
+internal data class SiteRuleCredentialEdit(
+    val host: String,
+    val cookie: String,
+    val requestHeaders: Map<String, String>,
+    val clear: Boolean,
+)
+
+private data class EditableSiteRule(
+    val rule: SiteRuleDto,
+    val expanded: Boolean = false,
+    val hostTouched: Boolean = false,
+    val cookie: String = "",
+    val requestHeaders: String = "",
+    val clearCredential: Boolean = false,
+)
+
+internal fun parseSiteRulesForEditor(raw: String): List<SiteRuleDto> {
+    val text = raw.trim()
+    if (text.isEmpty()) return emptyList()
+    runCatching {
+        protocolJson.decodeFromString(ListSerializer(SiteRuleDto.serializer()), text)
+    }.getOrNull()?.let { return it.take(100) }
+    return text.lineSequence().mapNotNull { line ->
+        val clean = line.trim()
+        if (clean.isEmpty() || clean.startsWith('#')) return@mapNotNull null
+        val (host, values) = clean.split('=', limit = 2).takeIf { it.size == 2 } ?: return@mapNotNull null
+        val options = values.split(',').mapNotNull { item ->
+            item.split(':', limit = 2).takeIf { it.size == 2 }?.let { it[0].trim() to it[1].trim() }
+        }.toMap()
+        SiteRuleDto(
+            host = host.trim(),
+            speedLimitKib = (options["speed"] ?: options["kib"]).orEmpty().toLongOrNull() ?: 0,
+            concurrency = (options["conn"] ?: options["concurrency"]).orEmpty().toLongOrNull() ?: 0,
+            proxy = options["proxy"].orEmpty(),
+            proxyMode = options["proxy_mode"].orEmpty(),
+            downloadDirectory = (options["dir"] ?: options["download_dir"]).orEmpty(),
+            userAgent = (options["ua"] ?: options["user_agent"]).orEmpty(),
+            referer = options["referer"].orEmpty(),
+            origin = options["origin"].orEmpty(),
+        )
+    }.take(100).toList()
+}
+
+internal fun encodeSiteRules(rules: List<SiteRuleDto>): String =
+    protocolJson.encodeToString(ListSerializer(SiteRuleDto.serializer()), rules)
+
+internal fun parseSiteRuleHeaders(text: String): Map<String, String> = text.lineSequence()
+    .map(String::trim)
+    .filter(String::isNotEmpty)
+    .mapNotNull { line ->
+        val separator = line.indexOf(':')
+        if (separator <= 0) null else line.substring(0, separator).trim().takeIf(String::isNotEmpty)
+            ?.let { it to line.substring(separator + 1).trim() }
+    }
+    .toMap()
+
+internal fun validateSiteRuleDrafts(rules: List<SiteRuleDto>): String? {
+    if (rules.size > 100) return "站点规则不能超过 100 条"
+    val hosts = mutableSetOf<String>()
+    rules.forEach { rule ->
+        val host = rule.host.trim().lowercase()
+        if (host.isEmpty() || host.length > 255 || host.any(Char::isWhitespace) || host.any { it in "/\\:@\u0000" }) return "请输入有效的站点域名"
+        if (!hosts.add(host)) return "站点规则不能包含重复域名"
+        if (rule.concurrency !in 0..128) return "站点并发数必须在 0 到 128 之间"
+        if (rule.proxyMode !in setOf("", "direct", "system", "manual")) return "站点代理模式无效"
+        if (rule.origin.isNotBlank() && !rule.origin.startsWith("http://", true) && !rule.origin.startsWith("https://", true)) return "Origin 必须是 HTTP(S) 地址"
+    }
+    return null
+}
 
 @Composable
 internal fun FullSettingsDialog(
@@ -31,7 +103,7 @@ internal fun FullSettingsDialog(
     discoveringDevices: Boolean = false,
     onDiscoverDevices: (String) -> Unit = {},
     initialTab: String = "通用",
-    onSave: (EngineSettingsDto, String?) -> Unit,
+    onSave: (EngineSettingsDto, String?, List<SiteRuleCredentialEdit>) -> Unit,
 ) {
     val tabs = remember { listOf(
         SettingsTab("通用", Icons.Outlined.Tune), SettingsTab("下载", Icons.Outlined.Downloading),
@@ -44,6 +116,7 @@ internal fun FullSettingsDialog(
     var draft by remember(current) { mutableStateOf(current) }
     var concurrency by remember(current) { mutableStateOf(current.defaultConcurrency.toString()) }
     var speedLimit by remember(current) { mutableStateOf(current.speedLimitKib.toString()) }
+    var hourlyQuota by remember(current) { mutableStateOf(current.hourlyQuotaMib.toString()) }
     var queueMax by remember(current) { mutableStateOf(current.queueMax.toString()) }
     var retryMax by remember(current) { mutableStateOf(current.autoRetryMax.toString()) }
     var chunkMb by remember(current) { mutableStateOf(current.httpChunkSizeMb.toString()) }
@@ -56,6 +129,10 @@ internal fun FullSettingsDialog(
     var defaultCookie by remember(current.defaultCookieConfigured) { mutableStateOf("") }
     var clearDefaultCookie by remember(current.defaultCookieConfigured) { mutableStateOf(false) }
     var deviceMode by remember(initialTab) { mutableStateOf("cast") }
+    var siteRules by remember(current.siteRules) {
+        mutableStateOf(parseSiteRulesForEditor(current.siteRules).map { EditableSiteRule(it) })
+    }
+    val siteRuleError = validateSiteRuleDrafts(siteRules.map(EditableSiteRule::rule))
     val contentScroll = rememberScrollState()
 
     LaunchedEffect(selected) { contentScroll.scrollTo(0) }
@@ -104,6 +181,7 @@ internal fun FullSettingsDialog(
                         V7NumberField("默认并发连接数", concurrency) { concurrency = it }
                         V7NumberField("最大同时任务数", queueMax) { queueMax = it }
                         V7NumberField("全局限速 KiB/s（0 不限制）", speedLimit) { speedLimit = it }
+                        V7NumberField("滚动每小时流量配额 MiB（0 不限制）", hourlyQuota) { hourlyQuota = it }
                         V7NumberField("HTTP 分段大小 MiB", chunkMb) { chunkMb = it }
                         V7NumberField("失败自动重试次数", retryMax) { retryMax = it }
                         V7Choice("同名文件处理", listOf("rename" to "自动重命名", "overwrite" to "覆盖", "skip" to "跳过"), draft.existingFilePolicy) { draft = draft.copy(existingFilePolicy = it) }
@@ -119,8 +197,8 @@ internal fun FullSettingsDialog(
                         V7Field("自动开始时间", draft.queueAutoStartTime) { draft = draft.copy(queueAutoStartTime = it) }
                         SettingRow("队列自动停止", "到达计划时间后暂停活动任务", draft.queueAutoStopEnabled) { draft = draft.copy(queueAutoStopEnabled = it) }
                         V7Field("自动停止时间", draft.queueAutoStopTime) { draft = draft.copy(queueAutoStopTime = it) }
-                        V7Field("活动星期（1-7，以逗号分隔）", draft.queueActiveDays) { draft = draft.copy(queueActiveDays = it) }
-                        V7Choice("全部完成后", listOf("none" to "无", "sleep" to "睡眠", "shutdown" to "关机"), draft.completionPowerAction) { draft = draft.copy(completionPowerAction = it) }
+                        V7WeekdayChoice(draft.queueActiveDays) { draft = draft.copy(queueActiveDays = it) }
+                        V7Choice("全部完成后", listOf("none" to "无", "sleep" to "睡眠", "hibernate" to "休眠", "shutdown" to "关机"), draft.completionPowerAction) { draft = draft.copy(completionPowerAction = it) }
                     }
                     "网络" -> SettingsSection("代理与站点") {
                         Row(
@@ -165,7 +243,7 @@ internal fun FullSettingsDialog(
                         Text("下载引擎会安全保存凭据，界面不会回显内容。", color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp, bottom = 9.dp))
                         V7Field("默认 User-Agent", draft.defaultUserAgent, lines = 2) { draft = draft.copy(defaultUserAgent = it) }
                         V7Field("允许的域名（逗号分隔，留空不限制）", draft.allowedHosts) { draft = draft.copy(allowedHosts = it) }
-                        V7Field("站点规则", draft.siteRules, lines = 5) { draft = draft.copy(siteRules = it) }
+                        V7SiteRulesEditor(siteRules, siteRuleError) { siteRules = it }
                     }
                     "媒体" -> SettingsSection("媒体处理与直播") {
                         V7Field("FFmpeg 路径", draft.ffmpegPath) { draft = draft.copy(ffmpegPath = it) }
@@ -285,10 +363,23 @@ internal fun FullSettingsDialog(
         }
     }, actions = {
         DialogSecondary("取消", onDismiss)
-        DialogPrimary("保存设置") {
+        DialogPrimary("保存设置", enabled = siteRuleError == null) {
+            val encodedSiteRules = encodeSiteRules(siteRules.map { item ->
+                item.rule.copy(
+                    host = item.rule.host.trim().lowercase(),
+                    proxy = if (item.rule.proxyMode == "manual" || item.rule.proxyMode.isBlank()) item.rule.proxy.trim() else "",
+                )
+            })
+            val credentialEdits = siteRules.mapNotNull { item ->
+                val headers = parseSiteRuleHeaders(item.requestHeaders)
+                if (!item.clearCredential && item.cookie.isBlank() && headers.isEmpty()) null
+                else SiteRuleCredentialEdit(item.rule.host.trim(), item.cookie, headers, item.clearCredential)
+            }
             onSave(draft.copy(
+                siteRules = encodedSiteRules,
                 defaultConcurrency = concurrency.toLongOrNull()?.coerceIn(1, 128) ?: current.defaultConcurrency,
                 speedLimitKib = speedLimit.toLongOrNull()?.coerceIn(0, 10_000_000) ?: current.speedLimitKib,
+                hourlyQuotaMib = hourlyQuota.toLongOrNull()?.coerceIn(0, 1_048_576) ?: current.hourlyQuotaMib,
                 queueMax = queueMax.toLongOrNull()?.coerceIn(1, 128) ?: current.queueMax,
                 autoRetryMax = retryMax.toLongOrNull()?.coerceIn(0, 20) ?: current.autoRetryMax,
                 httpChunkSizeMb = chunkMb.toLongOrNull()?.coerceIn(1, 64) ?: current.httpChunkSizeMb,
@@ -302,10 +393,140 @@ internal fun FullSettingsDialog(
                 clearDefaultCookie -> ""
                 defaultCookie.isNotEmpty() -> defaultCookie
                 else -> null
-            })
+            }, credentialEdits)
             onDismiss()
         }
     })
+}
+
+@Composable
+private fun V7SiteRulesEditor(
+    items: List<EditableSiteRule>,
+    error: String?,
+    onChange: (List<EditableSiteRule>) -> Unit,
+) {
+    fun update(index: Int, value: EditableSiteRule) {
+        onChange(items.toMutableList().also { it[index] = value })
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("按站点下载规则", color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text("从上到下第一条匹配规则生效；浏览器任务仍优先沿用实际页面请求。", color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp))
+        }
+        TextButton(
+            onClick = { if (items.size < 100) onChange(items + EditableSiteRule(SiteRuleDto())) },
+            enabled = items.size < 100,
+        ) {
+            Icon(Icons.Outlined.Add, null, Modifier.size(16.dp), tint = blue)
+            Spacer(Modifier.width(5.dp)); Text("添加规则", color = blue, fontSize = 11.sp)
+        }
+    }
+    if (items.isEmpty()) {
+        Box(
+            Modifier.fillMaxWidth().height(68.dp).clip(RoundedCornerShape(7.dp)).background(surface2),
+            contentAlignment = Alignment.Center,
+        ) { Text("没有站点规则，所有任务使用全局设置", color = muted, fontSize = 11.sp) }
+    }
+    items.forEachIndexed { index, item ->
+        val rule = item.rule
+        Spacer(Modifier.height(8.dp))
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2)
+                .padding(horizontal = 10.dp, vertical = 9.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = rule.enabled,
+                    onCheckedChange = { update(index, item.copy(rule = rule.copy(enabled = it))) },
+                    accessibilityLabel = if (rule.enabled) "停用站点规则" else "启用站点规则",
+                )
+                Spacer(Modifier.width(8.dp))
+                OutlinedTextField(
+                    value = rule.host,
+                    onValueChange = { update(index, item.copy(rule = rule.copy(host = it.take(255)), hostTouched = true)) },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    placeholder = { Text("example.com", color = faint, fontSize = 11.sp) },
+                    isError = item.hostTouched && rule.host.isBlank(),
+                )
+                Spacer(Modifier.width(4.dp))
+                IconButton({
+                    if (index > 0) onChange(items.toMutableList().also {
+                        val moving = it.removeAt(index); it.add(index - 1, moving)
+                    })
+                }, enabled = index > 0) { Icon(Icons.Outlined.KeyboardArrowUp, "规则上移", Modifier.size(18.dp), tint = muted) }
+                IconButton({
+                    if (index < items.lastIndex) onChange(items.toMutableList().also {
+                        val moving = it.removeAt(index); it.add(index + 1, moving)
+                    })
+                }, enabled = index < items.lastIndex) { Icon(Icons.Outlined.KeyboardArrowDown, "规则下移", Modifier.size(18.dp), tint = muted) }
+                IconButton({ onChange(items.filterIndexed { itemIndex, _ -> itemIndex != index }) }) {
+                    Icon(Icons.Outlined.DeleteOutline, "删除站点规则", Modifier.size(17.dp), tint = Color(0xFFB42318))
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.weight(1f)) {
+                    DialogLabel("并发连接（0 跟随全局）")
+                    OutlinedTextField(
+                        rule.concurrency.toString(),
+                        { value -> update(index, item.copy(rule = rule.copy(concurrency = value.filter(Char::isDigit).toLongOrNull()?.coerceAtMost(128) ?: 0))) },
+                        singleLine = true,
+                    )
+                }
+                Column(Modifier.weight(1f)) {
+                    DialogLabel("限速 KiB/s（0 不限制）")
+                    OutlinedTextField(
+                        rule.speedLimitKib.toString(),
+                        { value -> update(index, item.copy(rule = rule.copy(speedLimitKib = value.filter(Char::isDigit).toLongOrNull()?.coerceAtMost(1_048_576) ?: 0))) },
+                        singleLine = true,
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            V7Choice(
+                "代理",
+                listOf("" to "跟随全局", "direct" to "直连", "system" to "系统代理", "manual" to "手动代理"),
+                rule.proxyMode,
+            ) { value -> update(index, item.copy(rule = rule.copy(proxyMode = value))) }
+            if (rule.proxyMode == "manual") {
+                V7Field("代理地址", rule.proxy) { value -> update(index, item.copy(rule = rule.copy(proxy = value))) }
+            }
+            TextButton(
+                onClick = { update(index, item.copy(expanded = !item.expanded)) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(if (item.expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null, Modifier.size(17.dp), tint = blue)
+                Spacer(Modifier.width(5.dp)); Text(if (item.expanded) "收起请求与目录" else "请求身份、目录与登录信息", color = blue, fontSize = 11.sp)
+            }
+            if (item.expanded) {
+                V7Field("保存目录（留空跟随分类）", rule.downloadDirectory) { value -> update(index, item.copy(rule = rule.copy(downloadDirectory = value))) }
+                V7Field("Referer", rule.referer) { value -> update(index, item.copy(rule = rule.copy(referer = value))) }
+                V7Field("Origin", rule.origin) { value -> update(index, item.copy(rule = rule.copy(origin = value))) }
+                V7Field("User-Agent", rule.userAgent, lines = 2) { value -> update(index, item.copy(rule = rule.copy(userAgent = value))) }
+                DialogLabel("Cookie（留空保持原值）")
+                OutlinedTextField(
+                    item.cookie,
+                    { value -> update(index, item.copy(cookie = value, clearCredential = false)) },
+                    Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    placeholder = { Text(if (rule.credentialRef.isNotBlank()) "已安全保存" else "可选", color = faint, fontSize = 11.sp) },
+                )
+                Spacer(Modifier.height(8.dp))
+                V7Field("自定义请求头（每行“名称: 值”）", item.requestHeaders, lines = 3) { value -> update(index, item.copy(requestHeaders = value, clearCredential = false)) }
+                if (rule.credentialRef.isNotBlank()) {
+                    SettingRow("清除已保存的登录信息", "保存后移除该站点的 Cookie 与敏感请求头", item.clearCredential) {
+                        update(index, item.copy(clearCredential = it, cookie = if (it) "" else item.cookie, requestHeaders = if (it) "" else item.requestHeaders))
+                    }
+                } else {
+                    Text("Cookie 与敏感请求头只由下载引擎安全保存，设置文本不会记录原值。", color = muted, fontSize = 10.sp, lineHeight = 15.sp)
+                }
+            }
+        }
+    }
+    if (error != null) Text(error, color = Color(0xFFB42318), fontSize = 10.sp, modifier = Modifier.padding(top = 7.dp))
+    Spacer(Modifier.height(10.dp))
 }
 
 @Composable private fun V7Field(label: String, value: String, lines: Int = 1, onValue: (String) -> Unit) {
@@ -315,6 +536,27 @@ internal fun FullSettingsDialog(
 }
 
 @Composable private fun V7NumberField(label: String, value: String, onValue: (String) -> Unit) = V7Field(label, value) { onValue(it.filter(Char::isDigit)) }
+
+@Composable
+private fun V7WeekdayChoice(value: String, onValue: (String) -> Unit) {
+    val active = value.split(',').mapNotNull(String::toIntOrNull).filter { it in 1..7 }.toSet()
+    DialogLabel("活动星期")
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        listOf("一", "二", "三", "四", "五", "六", "日").forEachIndexed { index, label ->
+            val day = index + 1
+            val selected = day in active
+            TextButton(
+                onClick = {
+                    val next = if (selected) active - day else active + day
+                    if (next.isNotEmpty()) onValue(next.sorted().joinToString(","))
+                },
+                modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (selected) selectedSurface else surface2),
+                contentPadding = PaddingValues(0.dp),
+            ) { Text(label, color = if (selected) blue else muted, fontSize = 11.sp) }
+        }
+    }
+    Text("至少保留一天；星期设置同时用于自动开始和自动停止。", color = faint, fontSize = 9.sp, modifier = Modifier.padding(top = 4.dp, bottom = 9.dp))
+}
 
 @Composable private fun V7DirectoryField(label: String, value: String, title: String, onValue: (String) -> Unit) {
     DialogLabel(label)

@@ -38,7 +38,7 @@ pnpm run build
 
 Use `scripts\build-v7.ps1 -Task test` for the integrated local gate and `pwsh -NoProfile -Command "& { .\scripts\adversarial-v7.ps1 -Scope @('native','browser','transfer') }"` for the full fault/transfer matrix. `scripts\build-v7.ps1 -Task package` produces the Windows App Image, EXE, MSI and Portable ZIP. `scripts\install-v7-local.ps1` performs an atomic per-user local upgrade, retains the previous image as rollback, registers the v7 Native Messaging host and creates the Start menu shortcut.
 
-Generated packages, test reports, runtime data and build caches are ignored by Git. `docs/feature-parity.json` is the machine-readable v3/v5/v6-to-v7 feature contract; validate it with `scripts\verify-v7-feature-parity.ps1`. See `docs/v7-verification.md` for the latest measured results and remaining formal release gates.
+Generated packages, test reports, runtime data and build caches are ignored by Git. `artifacts/v7-productization/feature-parity.json` is the sole machine-readable v3/v5/v6-to-v7 feature contract; validate it with `scripts\verify-v7-feature-parity.ps1`. See `docs/v7-verification.md` for measured results and remaining formal release gates.
 
 ## Source History
 

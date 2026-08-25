@@ -28,6 +28,7 @@ mod migrate;
 mod mirrors;
 mod motw;
 mod native_host;
+mod native_host_registration;
 mod net_policy;
 mod ole_drag;
 mod output_path;
@@ -56,10 +57,11 @@ pub use connection_parts::{
     paint_file_map, paint_from_progress, sample_cells, summarize as summarize_parts,
 };
 pub use contract::{
-    CastDeviceInfo, ConnectionPart, CoreCommand, CoreEvent, HarvestCandidate, MediaPushRequest,
-    QueueProfile, ResourceKind, ResourceOffer, StreamVariant, TaskSnapshot, TaskSpec,
-    TorrentFileEntry, TorrentFileSelection, DEFAULT_QUEUE_ID, LEGAL_TERMS_VERSION,
-    V6_PROTOCOL_NAME, V6_PROTOCOL_VERSION, V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION,
+    AvScanStatus, CastDeviceInfo, ConnectionPart, CoreCommand, CoreEvent, HarvestCandidate,
+    MediaPushRequest, MirrorStatus, QueueProfile, ResourceKind, ResourceOffer, StreamVariant,
+    TaskFailure, TaskSnapshot, TaskSpec, TorrentFileEntry, TorrentFileSelection, DEFAULT_QUEUE_ID,
+    LEGAL_TERMS_VERSION, V6_PROTOCOL_NAME, V6_PROTOCOL_VERSION, V7_PROTOCOL_NAME,
+    V7_PROTOCOL_VERSION,
 };
 pub use core_ipc::{
     default_core_bind, hello_request, serve_tcp_listener, tcp_loopback_enabled, v7_pipe_name,
@@ -81,13 +83,17 @@ pub use drop_target::attach_file_drop;
 pub use file_dialog::{pick_export_path, pick_import_paths};
 pub use harvest::{harvest_html, harvest_html_filtered, HarvestLink};
 pub use http_engine::{
-    fetch_bytes, finish_job, load_job, run_job, run_queued_job, EngineError, EXIT_CANCEL,
-    EXIT_ERROR, EXIT_OK, EXIT_PAUSE, EXIT_RANGE_UNSUPPORTED,
+    fetch_bytes, finish_job, load_job, run_job, run_job_report, run_queued_job, EngineError,
+    HttpMirrorReport, HttpRunReport, EXIT_CANCEL, EXIT_ERROR, EXIT_OK, EXIT_PAUSE,
+    EXIT_RANGE_UNSUPPORTED,
 };
 pub use instance::{claim_v7_instance, claim_v7_presenter_instance};
 pub use metalink::{looks_like_metalink, parse_metalink};
 pub use migrate::{maybe_migrate_from_5x, migrate_from_5x};
 pub use native_host::run as run_native_host;
+pub use native_host_registration::{
+    register_packaged_native_host, unregister_packaged_native_host,
+};
 pub use ole_drag::{begin_file_drag, completed_file_drag, hdrop_bytes};
 pub use player::{run_player_process, PLAYER_WINDOW_TITLE};
 pub use recognize::{classify_url, kind_label, probe_url};

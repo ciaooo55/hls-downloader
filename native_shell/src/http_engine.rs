@@ -126,6 +126,21 @@ pub enum EngineError {
     Failed(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpMirrorReport {
+    pub url: String,
+    pub final_url: String,
+    pub state: String,
+    pub detail: String,
+    pub ranges: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpRunReport {
+    pub used_url: String,
+    pub mirrors: Vec<HttpMirrorReport>,
+}
+
 impl EngineError {
     pub fn exit_code(&self) -> i32 {
         match self {
@@ -480,7 +495,7 @@ pub fn run_queued_job(job_path: &Path, progress_path: Option<&Path>) {
     }
 }
 
-const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 
 pub fn apply_browser_profile(headers: &mut HashMap<String, String>) {
     if !headers
@@ -550,28 +565,36 @@ fn request_user_agent(headers: &HashMap<String, String>) -> String {
 }
 
 fn curl_impersonate_exe() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("HLS_V7_CURL_IMPERSONATE") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    // Keep the historical variable as a migration-only fallback.
     if let Ok(path) = std::env::var("HLS_V6_CURL_IMPERSONATE") {
         let path = PathBuf::from(path);
         if path.is_file() {
             return Some(path);
         }
     }
-    let names = [
-        "curl-impersonate.exe",
-        "curl_chrome131.exe",
-        "curl-impersonate-chrome.exe",
-    ];
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            for name in names {
-                let path = dir.join(name);
-                if path.is_file() {
-                    return Some(path);
-                }
-            }
+            return curl_impersonate_near(dir);
         }
     }
     None
+}
+
+fn curl_impersonate_near(dir: &Path) -> Option<PathBuf> {
+    [
+        dir.join("tools")
+            .join("curl-impersonate")
+            .join("curl-impersonate.exe"),
+        dir.join("curl-impersonate.exe"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -605,11 +628,23 @@ pub fn probe_resource(job: &Job) -> Result<ResourceProbe, EngineError> {
 }
 
 pub fn run_job(job: &Job) -> Result<(), EngineError> {
+    run_job_report(job).map(|_| ())
+}
+
+pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
+    let normalized_mirrors = crate::mirrors::normalize_mirror_urls(&job.url, &job.mirrors);
+    let mut reports: Vec<HttpMirrorReport> = normalized_mirrors
+        .iter()
+        .map(|url| HttpMirrorReport {
+            url: url.clone(),
+            final_url: String::new(),
+            state: "pending".into(),
+            detail: String::new(),
+            ranges: false,
+        })
+        .collect();
     let mut urls = vec![job.url.clone()];
-    urls.extend(crate::mirrors::normalize_mirror_urls(
-        &job.url,
-        &job.mirrors,
-    ));
+    urls.extend(normalized_mirrors);
     let mut last = EngineError::Failed("job url missing".into());
     let post = job.method.eq_ignore_ascii_case("POST");
     let mut identity: Option<(Option<u64>, String)> = None;
@@ -630,6 +665,11 @@ pub fn run_job(job: &Job) -> Result<(), EngineError> {
                             &probe.etag,
                         ) {
                             last = EngineError::Failed("mirror identity mismatch".into());
+                            if index > 0 {
+                                let report = &mut reports[index - 1];
+                                report.state = "skipped".into();
+                                report.detail = "资源身份不一致".into();
+                            }
                             continue;
                         }
                     } else {
@@ -651,14 +691,46 @@ pub fn run_job(job: &Job) -> Result<(), EngineError> {
                     }
                 }
                 Err(error) => {
+                    if index > 0 {
+                        let report = &mut reports[index - 1];
+                        report.state = "failed".into();
+                        report.detail = error.to_string();
+                    }
                     last = error;
                     continue;
                 }
             }
         }
         match run_job_once(&attempt) {
-            Ok(()) => return Ok(()),
-            Err(error) => last = error,
+            Ok(()) => {
+                if index > 0 {
+                    let report = &mut reports[index - 1];
+                    report.final_url = attempt.url.clone();
+                    report.state = "active".into();
+                    report.detail = "下载已使用此地址".into();
+                    report.ranges = !attempt.sequential;
+                }
+                reports
+                    .iter_mut()
+                    .filter(|item| item.state == "pending")
+                    .for_each(|item| {
+                        item.state = "skipped".into();
+                        item.detail = "已有可用地址，未请求".into();
+                    });
+                return Ok(HttpRunReport {
+                    used_url: attempt.url,
+                    mirrors: reports,
+                });
+            }
+            Err(error) => {
+                if index > 0 {
+                    let report = &mut reports[index - 1];
+                    report.state = "failed".into();
+                    report.detail = error.to_string();
+                    report.ranges = !attempt.sequential;
+                }
+                last = error;
+            }
         }
     }
     Err(last)
@@ -689,6 +761,23 @@ pub fn fetch_bytes(
     url: &str,
     headers: &HashMap<String, String>,
     proxy: &str,
+) -> Result<(u16, Vec<u8>), EngineError> {
+    fetch_bytes_with_transport(url, headers, proxy, false)
+}
+
+pub fn fetch_hls_bytes(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+) -> Result<(u16, Vec<u8>), EngineError> {
+    fetch_bytes_with_transport(url, headers, proxy, true)
+}
+
+fn fetch_bytes_with_transport(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    browser_first: bool,
 ) -> Result<(u16, Vec<u8>), EngineError> {
     if !http_fetch_url_allowed(url) {
         return Err(EngineError::Failed("url must be http(s)".into()));
@@ -722,16 +811,133 @@ pub fn fetch_bytes(
         mirrors: Vec::new(),
         replay_json: String::new(),
     };
-    let fetched = fetch(&job, None)?;
-    let status = fetched.status;
-    let mut body = Vec::new();
-    let mut reader = fetched.body;
-    reader
-        .read_to_end(&mut body)
-        .map_err(|err| EngineError::Failed(err.to_string()))?;
-    crate::net_policy::consume(body.len());
+    let result = (|| {
+        let fetched = if browser_first {
+            fetch_browser_first(&job, None)?
+        } else {
+            fetch(&job, None)?
+        };
+        let status = fetched.status;
+        let mut body = Vec::new();
+        let mut reader = fetched.body;
+        reader
+            .read_to_end(&mut body)
+            .map_err(|err| EngineError::Failed(err.to_string()))?;
+        crate::net_policy::consume(body.len());
+        Ok((status, body))
+    })();
     let _ = fs::remove_dir_all(dir);
-    Ok((status, body))
+    result
+}
+
+pub fn fetch_bytes_range(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    start: u64,
+    length: u64,
+) -> Result<Vec<u8>, EngineError> {
+    fetch_bytes_range_with_transport(url, headers, proxy, start, length, false)
+}
+
+pub fn fetch_hls_bytes_range(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    start: u64,
+    length: u64,
+) -> Result<Vec<u8>, EngineError> {
+    fetch_bytes_range_with_transport(url, headers, proxy, start, length, true)
+}
+
+fn fetch_bytes_range_with_transport(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    start: u64,
+    length: u64,
+    browser_first: bool,
+) -> Result<Vec<u8>, EngineError> {
+    if !http_fetch_url_allowed(url) {
+        return Err(EngineError::Failed("url must be http(s)".into()));
+    }
+    if length == 0 {
+        return Err(EngineError::RangeUnsupported("byte range is empty".into()));
+    }
+    let end = start
+        .checked_add(length - 1)
+        .ok_or_else(|| EngineError::RangeUnsupported("byte range overflows".into()))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let dir =
+        std::env::temp_dir().join(format!("hls-fetch-range-{}-{}", std::process::id(), stamp));
+    fs::create_dir_all(&dir).map_err(|err| EngineError::Failed(err.to_string()))?;
+    let result = (|| {
+        let control = dir.join("control");
+        fs::write(&control, "run").map_err(|err| EngineError::Failed(err.to_string()))?;
+        let job = Job {
+            url: url.to_string(),
+            headers: headers.clone(),
+            output: dir.join("body"),
+            connections: 1,
+            chunk_bytes: 64 * 1024,
+            total: 0,
+            sequential: true,
+            resume_from: 0,
+            proxy: proxy.to_string(),
+            resource_key: url.to_string(),
+            etag: String::new(),
+            last_modified: String::new(),
+            control,
+            progress: dir.join("progress.json"),
+            method: "GET".into(),
+            body_path: PathBuf::new(),
+            mirrors: Vec::new(),
+            replay_json: String::new(),
+        };
+        let range = format!("bytes={start}-{end}");
+        let fetched = if browser_first {
+            fetch_browser_first(&job, Some(&range))?
+        } else {
+            fetch(&job, Some(&range))?
+        };
+        if fetched.status != 206 {
+            return Err(EngineError::RangeUnsupported(format!(
+                "byte range needs HTTP 206, got {}",
+                fetched.status
+            )));
+        }
+        match parse_content_range(fetched.content_range.as_deref().unwrap_or("")) {
+            Some((actual_start, actual_end, _)) if actual_start == start && actual_end == end => {}
+            Some((actual_start, actual_end, _)) => {
+                return Err(EngineError::RangeUnsupported(format!(
+                    "Content-Range {actual_start}-{actual_end} != {start}-{end}"
+                )))
+            }
+            None => {
+                return Err(EngineError::RangeUnsupported(
+                    "byte range response missing valid Content-Range".into(),
+                ))
+            }
+        }
+        let mut body = Vec::new();
+        let mut reader = fetched.body;
+        reader
+            .read_to_end(&mut body)
+            .map_err(|err| EngineError::Failed(err.to_string()))?;
+        if body.len() as u64 != length {
+            return Err(EngineError::RangeUnsupported(format!(
+                "byte range length {} != {length}",
+                body.len()
+            )));
+        }
+        crate::net_policy::consume(body.len());
+        Ok(body)
+    })();
+    let _ = fs::remove_dir_all(dir);
+    result
 }
 
 fn check_control(path: &Path) -> Result<(), EngineError> {
@@ -1560,6 +1766,57 @@ fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
     Ok(first)
 }
 
+fn fetch_browser_first(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
+    let browser_eligible = job.url.to_ascii_lowercase().starts_with("https://")
+        && job.method.eq_ignore_ascii_case("GET");
+    if browser_eligible {
+        if let Some(result) = fetch_curl_follow(job, range) {
+            match result {
+                Ok(fetched) if (200..400).contains(&fetched.status) => return Ok(fetched),
+                Ok(_) | Err(_) => {}
+            }
+        }
+    }
+    fetch(job, range)
+}
+
+fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResult, EngineError>> {
+    curl_impersonate_exe()?;
+    let replay = job_replay_json(job);
+    let mut url = job.url.clone();
+    let mut headers = headers_for_request(job, &url);
+    apply_browser_profile(&mut headers);
+    for _ in 0..16 {
+        let mut hop = job.clone();
+        hop.url = url.clone();
+        hop.headers = headers.clone();
+        hop.replay_json = replay.clone();
+        let parsed = match parse_http_url(&url) {
+            Ok(parsed) => parsed,
+            Err(error) => return Some(Err(error)),
+        };
+        let fetched = match fetch_via_curl_impersonate(&hop, range)? {
+            Ok(fetched) => fetched,
+            Err(error) => return Some(Err(error)),
+        };
+        if matches!(fetched.status, 301 | 302 | 303 | 307 | 308) {
+            let next = match fetched.location.clone() {
+                Some(location) => resolve_location(&parsed, &location),
+                None => return Some(Err(EngineError::Failed("redirect without Location".into()))),
+            };
+            if !http_fetch_url_allowed(&next) {
+                return Some(Err(EngineError::Failed("redirect is not http(s)".into())));
+            }
+            drop(fetched);
+            drop_cross_origin_secrets(&mut headers, &replay, &url, &next);
+            url = next;
+            continue;
+        }
+        return Some(Ok(fetched));
+    }
+    Some(Err(EngineError::Failed("too many redirects".into())))
+}
+
 fn fetch_follow(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
     let mut url = job.url.clone();
     let replay = job_replay_json(job);
@@ -1664,7 +1921,9 @@ fn drop_cross_origin_secrets(
         return;
     }
     headers.retain(|key, _| {
-        !key.eq_ignore_ascii_case("cookie") && !key.eq_ignore_ascii_case("authorization")
+        !key.eq_ignore_ascii_case("cookie")
+            && !key.eq_ignore_ascii_case("authorization")
+            && !key.eq_ignore_ascii_case("proxy-authorization")
     });
     if replay.trim().is_empty() || to_origin.is_empty() {
         return;
@@ -1697,14 +1956,20 @@ fn fetch_via_curl_impersonate(
     let header_path = dir.join("headers");
     let mut command = std::process::Command::new(exe);
     command
+        .arg("--compressed")
+        .arg("--impersonate")
+        .arg("chrome146")
         .arg("-sS")
+        .arg("--connect-timeout")
+        .arg("15")
+        .arg("--max-time")
+        .arg("60")
         .arg("-D")
         .arg(&header_path)
         .arg("-o")
         .arg(&body_path)
         .arg("-w")
-        .arg("%{http_code}")
-        .arg("--http2");
+        .arg("%{http_code}");
     command.arg("-A").arg(request_user_agent(&job.headers));
     for (key, value) in &job.headers {
         if key.eq_ignore_ascii_case("user-agent") || !header_allowed_on_request(key, value) {
@@ -2522,6 +2787,20 @@ mod tests {
             assert!(pool.put("full".into(), index));
         }
         assert!(!pool.put("full".into(), 99));
+    }
+
+    #[test]
+    fn hls_byte_range_fetch_validates_and_returns_only_the_requested_bytes() {
+        let body = b"0123456789";
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let url = serve_capped_ranges(body, 64, Arc::clone(&seen));
+        let bytes = fetch_bytes_range(&url, &HashMap::new(), "", 3, 4).unwrap();
+        assert_eq!(bytes, b"3456");
+        assert!(seen
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .any(|start| *start == 3));
     }
 
     #[test]
@@ -3811,7 +4090,7 @@ mod tests {
     fn browser_profile_fills_chrome_ua() {
         let mut headers = HashMap::new();
         apply_browser_profile(&mut headers);
-        assert!(headers.get("User-Agent").unwrap().contains("Chrome/131"));
+        assert!(headers.get("User-Agent").unwrap().contains("Chrome/146"));
         assert_eq!(headers.get("Accept").map(String::as_str), Some("*/*"));
         headers.insert("User-Agent".into(), "CustomAgent/1".into());
         apply_browser_profile(&mut headers);
@@ -3876,8 +4155,28 @@ mod tests {
         assert!(seen[0].0.contains("__cf_bm"));
         assert!(!seen[1].0.contains("__cf_bm"));
         assert!(seen[1].0.contains("session=ok"));
-        assert!(seen[0].1.contains("chrome/131") || seen[0].1.contains("Chrome/131"));
+        assert!(seen[0].1.contains("chrome/146") || seen[0].1.contains("Chrome/146"));
         let stripped = strip_stale_cloudflare_cookies(&headers).unwrap();
         assert_eq!(stripped.get("Cookie").unwrap(), "session=ok");
+    }
+
+    #[test]
+    fn curl_impersonate_uses_the_bundled_v7_layout() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-curl-layout-{}-{}",
+            std::process::id(),
+            NEXT_TEMP_JOB_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let tool = root
+            .join("tools")
+            .join("curl-impersonate")
+            .join("curl-impersonate.exe");
+        fs::create_dir_all(tool.parent().unwrap()).unwrap();
+        fs::write(&tool, b"fixture").unwrap();
+        assert_eq!(
+            curl_impersonate_near(&root).as_deref(),
+            Some(tool.as_path())
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }

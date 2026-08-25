@@ -1,7 +1,7 @@
 //! Process-wide HTTP connection budget, shared backoff, and download throttle.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -37,6 +37,7 @@ thread_local! {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ThrottleContext {
     pub global_limit_kib: u64,
+    pub hourly_quota_mib: u64,
     pub queue_id: String,
     pub queue_limit_kib: u64,
     pub task_id: String,
@@ -269,6 +270,76 @@ impl TokenBucket {
 struct ThrottleState {
     legacy: TokenBucket,
     scoped: HashMap<String, TokenBucket>,
+    hourly: RollingQuota,
+}
+
+const HOURLY_QUOTA_WINDOW: Duration = Duration::from_secs(60 * 60);
+
+#[derive(Debug)]
+struct RollingQuota {
+    limit_bytes: u64,
+    used_bytes: u64,
+    samples: VecDeque<(Instant, u64)>,
+}
+
+impl RollingQuota {
+    fn new() -> Self {
+        Self {
+            limit_bytes: 0,
+            used_bytes: 0,
+            samples: VecDeque::new(),
+        }
+    }
+
+    fn set_limit_mib(&mut self, limit_mib: u64) {
+        let next = limit_mib.saturating_mul(1024 * 1024);
+        if self.limit_bytes != next {
+            self.limit_bytes = next;
+            self.used_bytes = 0;
+            self.samples.clear();
+        }
+    }
+
+    fn prune(&mut self, now: Instant, window: Duration) {
+        while self
+            .samples
+            .front()
+            .is_some_and(|(at, _)| now.saturating_duration_since(*at) >= window)
+        {
+            if let Some((_, bytes)) = self.samples.pop_front() {
+                self.used_bytes = self.used_bytes.saturating_sub(bytes);
+            }
+        }
+    }
+
+    fn reserve(&mut self, now: Instant, requested: u64, window: Duration) -> (u64, Duration) {
+        self.prune(now, window);
+        if self.limit_bytes == 0 || requested == 0 {
+            return (requested, Duration::ZERO);
+        }
+        let reserved = requested.min(self.limit_bytes.saturating_sub(self.used_bytes));
+        if reserved > 0 {
+            if let Some((at, bytes)) = self.samples.back_mut() {
+                if now.saturating_duration_since(*at) < Duration::from_secs(1) {
+                    *bytes = bytes.saturating_add(reserved);
+                } else {
+                    self.samples.push_back((now, reserved));
+                }
+            } else {
+                self.samples.push_back((now, reserved));
+            }
+            self.used_bytes = self.used_bytes.saturating_add(reserved);
+        }
+        let wait = if reserved < requested {
+            self.samples
+                .front()
+                .map(|(at, _)| window.saturating_sub(now.saturating_duration_since(*at)))
+                .unwrap_or(Duration::from_millis(1))
+        } else {
+            Duration::ZERO
+        };
+        (reserved, wait)
+    }
 }
 
 fn throttle() -> &'static Mutex<ThrottleState> {
@@ -276,6 +347,7 @@ fn throttle() -> &'static Mutex<ThrottleState> {
         Mutex::new(ThrottleState {
             legacy: TokenBucket::new(),
             scoped: HashMap::new(),
+            hourly: RollingQuota::new(),
         })
     })
 }
@@ -297,6 +369,12 @@ pub fn configure_scoped_limit(scope: &str, limit_kib: u64) {
             .entry(scope.to_string())
             .or_insert_with(TokenBucket::new)
             .set_limit_kib(limit_kib);
+    }
+}
+
+pub fn configure_hourly_quota_mib(limit_mib: u64) {
+    if let Ok(mut state) = throttle().lock() {
+        state.hourly.set_limit_mib(limit_mib);
     }
 }
 
@@ -327,6 +405,7 @@ pub fn sync_queue_limits<'a>(limits: impl IntoIterator<Item = (&'a str, u64)>) {
 
 pub fn configure_throttle_context(context: &ThrottleContext) {
     configure_scoped_limit("global", context.global_limit_kib);
+    configure_hourly_quota_mib(context.hourly_quota_mib);
     configure_scoped_limit(
         &format!("queue:{}", context.queue_id),
         context.queue_limit_kib,
@@ -392,6 +471,27 @@ fn consume_bucket(scope: Option<&str>, nbytes: usize) {
     }
 }
 
+fn consume_hourly_quota(nbytes: usize) {
+    let mut remaining = nbytes as u64;
+    while remaining > 0 {
+        let Ok(mut state) = throttle().lock() else {
+            return;
+        };
+        if state.hourly.limit_bytes == 0 {
+            return;
+        }
+        let (reserved, wait) = state
+            .hourly
+            .reserve(Instant::now(), remaining, HOURLY_QUOTA_WINDOW);
+        remaining = remaining.saturating_sub(reserved);
+        if remaining == 0 {
+            return;
+        }
+        drop(state);
+        std::thread::sleep(wait.max(Duration::from_millis(1)));
+    }
+}
+
 pub fn consume(nbytes: usize) {
     let Some(context) = current_throttle_context() else {
         consume_bucket(None, nbytes);
@@ -400,6 +500,7 @@ pub fn consume(nbytes: usize) {
     consume_bucket(Some("global"), nbytes);
     consume_bucket(Some(&format!("queue:{}", context.queue_id)), nbytes);
     consume_bucket(Some(&format!("task:{}", context.task_id)), nbytes);
+    consume_hourly_quota(nbytes);
 }
 
 pub fn schedule_window_active(start: &str, end: &str) -> bool {
@@ -473,6 +574,9 @@ pub fn effective_proxy(
     url: &str,
     spec_proxy: &str,
 ) -> String {
+    if spec_proxy == DIRECT_PROXY_SENTINEL {
+        return String::new();
+    }
     let host = host_key(url);
     if host_bypassed(&host, bypass) {
         return String::new();
@@ -488,6 +592,8 @@ pub fn effective_proxy(
         }
     }
 }
+
+pub const DIRECT_PROXY_SENTINEL: &str = "hls-downloader://direct-proxy";
 
 pub fn weekday_allowed(days: &str) -> bool {
     weekday_allowed_at(days, local_weekday_iso())
@@ -750,6 +856,7 @@ mod tests {
     fn scoped_throttle_shares_queue_bucket_and_separates_tasks() {
         let first = ThrottleContext {
             global_limit_kib: 4096,
+            hourly_quota_mib: 0,
             queue_id: "media".into(),
             queue_limit_kib: 1024,
             task_id: "one".into(),
@@ -814,6 +921,30 @@ mod tests {
         assert!(state.scoped.contains_key("queue:default"));
         assert!(!state.scoped.contains_key("queue:temporary"));
         assert_eq!(state.scoped["queue:default"].limit_bps, 128.0 * 1024.0);
+    }
+
+    #[test]
+    fn rolling_hourly_quota_releases_only_expired_bytes() {
+        let start = Instant::now();
+        let window = Duration::from_secs(60);
+        let mut quota = RollingQuota::new();
+        quota.limit_bytes = 100;
+
+        assert_eq!(quota.reserve(start, 70, window).0, 70);
+        assert_eq!(
+            quota.reserve(start + Duration::from_secs(30), 50, window).0,
+            30
+        );
+        let (reserved, wait) = quota.reserve(start + Duration::from_secs(59), 1, window);
+        assert_eq!(reserved, 0);
+        assert!(wait <= Duration::from_secs(1));
+
+        assert_eq!(
+            quota.reserve(start + Duration::from_secs(60), 70, window).0,
+            70
+        );
+        assert_eq!(quota.used_bytes, 100);
+        assert!(quota.samples.len() <= 2);
     }
 
     #[test]

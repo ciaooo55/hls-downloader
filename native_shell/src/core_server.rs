@@ -38,6 +38,7 @@ impl CoreServer {
         let sequence = coordinator.latest_sequence()?;
         let stop = Arc::new(AtomicBool::new(false));
         spawn_torrent_watch(coordinator.clone(), Arc::clone(&stop));
+        spawn_clipboard_watch(coordinator.clone(), Arc::clone(&stop));
         let _ = coordinator.recover_startup();
         spawn_queue_scheduler(coordinator.clone(), Arc::clone(&stop));
         Ok(Self {
@@ -207,6 +208,7 @@ fn dispatch(
             protocol_version: V7_PROTOCOL_VERSION,
             commands: vec![
                 "create_task",
+                "import_curl",
                 "task_action",
                 "open_main",
                 "hide_main",
@@ -244,6 +246,7 @@ fn dispatch(
                 "browser_hello",
                 "control_cast",
                 "set_default_cookie",
+                "set_site_rule_credential",
             ]
             .into_iter()
             .map(str::to_string)
@@ -295,6 +298,20 @@ fn dispatch(
                 },
             }
         }
+        CorePipeRequest::SetSiteRuleCredential {
+            request_id,
+            host,
+            cookie,
+            request_headers,
+            clear,
+        } => match coordinator.set_site_rule_credential(&host, &cookie, &request_headers, clear) {
+            Ok(()) => settings_response(coordinator, request_id),
+            Err(error) => CorePipeResponse::Error {
+                request_id: Some(request_id),
+                code: "credential_failed".into(),
+                message: error,
+            },
+        },
         CorePipeRequest::StoreCredential {
             request_id,
             credential_ref,
@@ -368,6 +385,7 @@ fn settings_response(coordinator: &CoreCoordinator, request_id: u64) -> CorePipe
             takeover_minimum_bytes: settings.takeover_minimum_bytes,
             legal_accepted: settings.legal_accepted,
             speed_limit_kib: settings.speed_limit_kib,
+            hourly_quota_mib: settings.hourly_quota_mib,
             schedule_enabled: settings.schedule_enabled,
             schedule_start: settings.schedule_start,
             schedule_end: settings.schedule_end,
@@ -425,6 +443,9 @@ fn settings_response(coordinator: &CoreCoordinator, request_id: u64) -> CorePipe
             bt_max_connections: settings.bt_max_connections,
             bt_enable_dht: settings.bt_enable_dht,
             preferred_cast_device_id: settings.preferred_cast_device_id,
+            task_column_layout: settings.task_column_layout,
+            toolbar_actions: settings.toolbar_actions,
+            task_sort: settings.task_sort,
             default_cookie_configured: coordinator.default_cookie_configured().unwrap_or(false),
         },
         Err(error) => CorePipeResponse::Error {
@@ -537,6 +558,34 @@ fn spawn_torrent_watch(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
     });
 }
 
+fn spawn_clipboard_watch(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
+    thread::spawn(move || {
+        let mut previous = String::new();
+        while !stop.load(Ordering::SeqCst) {
+            let enabled = coordinator
+                .settings()
+                .map(|settings| settings.clipboard_watch && settings.legal_accepted)
+                .unwrap_or(false);
+            if enabled {
+                if let Some(text) = crate::read_clipboard() {
+                    if text != previous {
+                        previous = text.clone();
+                        let urls = crate::clipboard_all_urls(&text);
+                        if !urls.is_empty() {
+                            let _ = coordinator
+                                .lock()
+                                .and_then(|mut core| core.emit(CoreEvent::ClipboardOffer { urls }));
+                        }
+                    }
+                }
+            } else {
+                previous.clear();
+            }
+            thread::sleep(Duration::from_millis(750));
+        }
+    });
+}
+
 fn spawn_queue_scheduler(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
     thread::spawn(move || {
         let mut last_start = String::new();
@@ -598,13 +647,14 @@ mod tests {
         bootstrap_store(&coordinator).unwrap();
         let core = coordinator.core();
         let core = core.lock().unwrap();
-        assert!(
-            core.store()
-                .setting_bool("legal_terms_accepted", false)
-                .unwrap()
-        );
+        assert!(core
+            .store()
+            .setting_bool("legal_terms_accepted", false)
+            .unwrap());
         assert_eq!(
-            core.store().setting_string("legal_terms_version", "").unwrap(),
+            core.store()
+                .setting_string("legal_terms_version", "")
+                .unwrap(),
             crate::LEGAL_TERMS_VERSION
         );
     }

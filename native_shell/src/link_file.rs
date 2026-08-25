@@ -10,9 +10,16 @@ const MAX_LINK_URLS: usize = 100;
 /// If `source` is a local file (or `file://` URL), expand it into download URLs.
 /// Remote http(s)/ftp/sftp/magnet strings return `Ok(None)` so the caller keeps them as-is.
 pub fn expand_source(source: &str) -> Result<Option<Vec<String>>, String> {
+    let Some(path) = local_source_path(source) else {
+        return Ok(None);
+    };
+    Ok(Some(urls_from_path(&path)?))
+}
+
+pub(crate) fn local_source_path(source: &str) -> Option<PathBuf> {
     let trimmed = source.trim().trim_matches('"');
     if trimmed.is_empty() {
-        return Ok(None);
+        return None;
     }
     let lower = trimmed.to_ascii_lowercase();
     if lower.starts_with("http://")
@@ -22,13 +29,13 @@ pub fn expand_source(source: &str) -> Result<Option<Vec<String>>, String> {
         || lower.starts_with("ftps://")
         || lower.starts_with("sftp://")
     {
-        return Ok(None);
+        return None;
     }
     let path = decode_local_path(trimmed);
     if !path.is_file() {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(urls_from_path(&path)?))
+    Some(path)
 }
 
 pub fn urls_from_path(path: &Path) -> Result<Vec<String>, String> {

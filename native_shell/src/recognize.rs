@@ -51,6 +51,22 @@ pub fn probe_with_harvest(
     ),
     String,
 > {
+    probe_with_harvest_context(url, &Default::default(), "")
+}
+
+pub fn probe_with_harvest_context(
+    url: &str,
+    headers: &std::collections::HashMap<String, String>,
+    proxy: &str,
+) -> Result<
+    (
+        ResourceKind,
+        String,
+        Vec<StreamVariant>,
+        Vec<crate::HarvestLink>,
+    ),
+    String,
+> {
     let url = url.trim();
     if url.is_empty() {
         return Err("请输入链接".into());
@@ -62,7 +78,7 @@ pub fn probe_with_harvest(
     let mut variants = Vec::new();
     let mut harvest = Vec::new();
     if matches!(kind, ResourceKind::Hls | ResourceKind::Live) {
-        let (status, body) = crate::http_engine::fetch_bytes(url, &Default::default(), "")
+        let (status, body) = crate::http_engine::fetch_bytes(url, headers, proxy)
             .map_err(|error| error.to_string())?;
         if status != 200 && status != 206 {
             return Err(format!("识别播放列表失败 HTTP {status}"));
@@ -71,7 +87,7 @@ pub fn probe_with_harvest(
         variants = crate::media::variant_choices(&playlist);
         variants.extend(crate::media::audio_choices(&playlist));
     } else if kind == ResourceKind::Dash {
-        let (status, body) = crate::http_engine::fetch_bytes(url, &Default::default(), "")
+        let (status, body) = crate::http_engine::fetch_bytes(url, headers, proxy)
             .map_err(|error| error.to_string())?;
         if status != 200 && status != 206 {
             return Err(format!("识别 DASH 失败 HTTP {status}"));
@@ -82,7 +98,7 @@ pub fn probe_with_harvest(
     } else if kind == ResourceKind::File
         && (url.starts_with("http://") || url.starts_with("https://"))
     {
-        if let Ok((status, body)) = crate::http_engine::fetch_bytes(url, &Default::default(), "") {
+        if let Ok((status, body)) = crate::http_engine::fetch_bytes(url, headers, proxy) {
             if status == 200 || status == 206 {
                 let text = String::from_utf8_lossy(&body);
                 if text.contains("#EXTM3U") {

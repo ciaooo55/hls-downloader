@@ -1,0 +1,283 @@
+{
+  "schema": 1,
+  "product_version": "7.0.0",
+  "generated_from": {
+    "v3": "git:v3.0.39",
+    "v5": "git:v5.0.13",
+    "rust_core": "worktree:native_shell",
+    "compose": "worktree:desktop_ui",
+    "browser_extension": "worktree:extension",
+    "ab_reference": "git:9b09a8906f6af3fda80de243db8a92e06c53fbb9"
+  },
+  "status_contract": {
+    "verified": "入口、Core 命令、状态事件、错误反馈和自动化或实机验证均存在",
+    "partial": "主要路径可用，但未达到 v3 行为或发布门禁",
+    "blocked": "缺少真实实现或发布级验证"
+  },
+  "release_ready": false,
+  "audit_state": "v3_full_flow_compared_with_explicit_hls_gaps",
+  "features": [
+    {
+      "id": "architecture.single_core",
+      "status": "verified",
+      "v3_entry": "backend task manager",
+      "compose_entry": "EnginePipeClient snapshot/events",
+      "core_command": "hello/list_tasks/wait_events",
+      "state_event": "ready/task_created/task_updated/task_progress",
+      "verification": "scripts/adversarial-v7.ps1 architecture boundary"
+    },
+    {
+      "id": "workbench.geometry",
+      "status": "verified",
+      "v3_entry": "frontend/src/App.tsx + DesktopToolbar + Sidebar + TaskTable",
+      "compose_entry": "AppShell/DesktopToolbar/Sidebar/TaskTable/ConnectionStatus",
+      "core_command": "list_tasks",
+      "state_event": "task snapshots",
+      "verification": "ResponsiveLayoutTest; task-row secondary-click menu; explicit protocol/file-suffix metadata; one aggregate progress track; visual/compose-foundation-main-light.png; visual/compose-foundation-cast-dark-1024x600-125-fixed.png"
+    },
+    {
+      "id": "workbench.foundation_component_architecture",
+      "status": "verified",
+      "v3_entry": "custom React desktop controls",
+      "compose_entry": "WorkbenchComponents Text/Icon/Surface/Button/Input/Menu/Dialog/Progress/Slider",
+      "core_command": "none (rendering architecture)",
+      "state_event": "all UI states",
+      "verification": "Material3 direct dependency removed; Compose tests; light/dark 1024x600 125% visual captures"
+    },
+    {
+      "id": "tasks.selection_keyboard_queue",
+      "status": "verified",
+      "v3_entry": "TaskTable selection and queue reorder",
+      "compose_entry": "TaskTable Ctrl/Shift/keyboard/drag handle",
+      "core_command": "task_action/reorder_queue/place_queue",
+      "state_event": "task_updated",
+      "verification": "desktop_ui SelectionTest; row-wide single click and double-click details; physical left-drag selected four contiguous rows in the 1000-task Compose list; Ctrl/Shift semantic UI API selected 1 then 4 then 5 tasks; right-click selects the target and opens at the pointer; .zip excludes launch/play/cast/TVBox while executable and media tasks retain applicable actions; ui-api/selection-audit"
+    },
+    {
+      "id": "tasks.named_queue_profiles",
+      "status": "verified",
+      "v3_entry": "queue scheduler and queue ordering",
+      "compose_entry": "Sidebar queue filters / QueueManagerDialog / QueueAssignDialog / row and batch move actions",
+      "core_command": "assign_queue/get_settings/set_settings_atomic",
+      "state_event": "task_updated/structured command result/error",
+      "verification": "Rust queue assignment, queue-scoped reorder, invalid membership, recurring schedule and file-database restart tests; shared aggregate queue token-bucket and task-isolation tests; queue-drained success-only completion action test; Compose queue storage/validation and speed/action controls; live 1400x820 and 1024x600 main/menu/manager/schedule/assign visual inspection"
+    },
+    {
+      "id": "tasks.details_logs_speed_connections",
+      "status": "partial",
+      "v3_entry": "TaskDetailsModal/LogModal/SpeedChart",
+      "compose_entry": "TaskDetailsDialog live task lookup",
+      "core_command": "get_task_log/task_action speed/refresh_task_request",
+      "state_event": "task_progress/task_log/toast",
+      "verification": "Rust refreshed URL transfer test; structured HTTP/local failure classification, persistent failure snapshot and retry reset tests; Cookie-aware request refresh vault test; Compose failure presentation and redacted diagnostic tests; live 404 retry verified HTTP 404/code/stage/attempt/hint and clipboard output in ui-api/v3-full-audit/task-failure; v7 snapshot now persists checksum algorithm/actual/verified, AV state/engine/detail, per-mirror active/skipped/failed/range state, BT discovered Peer/confirmed Seed telemetry and truthful zero upload telemetry; Compose detail presents all fields; legacy string mirror snapshots remain readable; reader-thread BT control loop checks cancellation and file-selection changes every 100 ms, sends cancel for in-flight deselected blocks, rejects late or malformed Piece messages, and passes the focused swarm cancellation test",
+      "gap": "The immediate in-flight BT cancellation path is implemented and covered by a focused loopback test; final release evidence still needs the installer build and representative real-swarm file-selection gate"
+    },
+    {
+      "id": "tasks.refresh_signed_url",
+      "status": "verified",
+      "v3_entry": "task URL refresh and resume",
+      "compose_entry": "TaskDetailsDialog 更新并继续",
+      "core_command": "refresh_task_request",
+      "state_event": "toast/task_updated/task_progress",
+      "verification": "download_worker::refreshed_url_resumes_paused_task_and_publishes_new_response; structured_request_refresh_vaults_cookie_and_never_puts_it_in_snapshot; Compose URL/Cookie recovery form"
+    },
+    {
+      "id": "create.protocols_and_recognition",
+      "status": "verified",
+      "v3_entry": "RecognizeDialog",
+      "compose_entry": "NewTaskDialog/ProbeResultDialog/BatchAddDialog/HarvestDialog",
+      "core_command": "probe_url/create_task/harvest_page/import_paths",
+      "state_event": "probe_result/harvest_result/task_created/error",
+      "verification": "Rust recognize/media/FTP/SFTP/torrent tests; Compose protocol tests"
+    },
+    {
+      "id": "import.file_picker_and_drop",
+      "status": "verified",
+      "v3_entry": "dropImport/importLinkPath/importTorrentPath",
+      "compose_entry": "ContentHeader import + native desktop drop target",
+      "core_command": "import_paths",
+      "state_event": "task_created/error",
+      "verification": "desktop_ui DropImportTest; visual/compose-drop-import.png"
+    },
+    {
+      "id": "export.normalized_task_list",
+      "status": "verified",
+      "v3_entry": "formatTaskExport/downloadTextFile",
+      "compose_entry": "ContentHeader export",
+      "core_command": "export_tasks",
+      "state_event": "task_export",
+      "verification": "task_export unit tests; coordinator_exports_normalized_tasks_through_the_core_event_contract; Compose test"
+    },
+    {
+      "id": "import.exported_task_json",
+      "status": "verified",
+      "v3_entry": "no versioned task JSON import round trip",
+      "compose_entry": "ContentHeader import / desktop drop target with .json filter",
+      "core_command": "import_paths/create_task",
+      "state_event": "task_created/error",
+      "verification": "task_export exported_json_imports_task_configuration_without_runtime_state; task_import_rejects_foreign_schema_and_unsafe_urls; coordinator_reimports_its_exported_json_as_new_tasks; Compose ProtocolTest"
+    },
+    {
+      "id": "workbench.automatic_responsive_layout",
+      "status": "verified",
+      "v3_entry": "fixed task columns and toolbar",
+      "compose_entry": "width-aware fixed task columns / automatic compact DesktopToolbar / sortable task headers",
+      "core_command": "none; legacy layout fields remain protocol-compatible but are ignored by the workbench",
+      "state_event": "task snapshots",
+      "verification": "ResponsiveLayoutTest product layout at compact and wide widths; SettingsV7Test; targeted Compose compilation"
+    },
+    {
+      "id": "media.hls_transfer_parity",
+      "status": "partial",
+      "v3_entry": "HLSDownloader build_task_headers / concurrent segment workers / per-segment key and map parsing / blocking LL-HLS reload",
+      "compose_entry": "NewTaskDialog and browser media handoff",
+      "core_command": "create_task/task_action/refresh_task_request",
+      "state_event": "task_progress/task_updated/error",
+      "verification": "Rust scoped replay tests; strict HTTP 206/Content-Range BYTERANGE fixture; explicit and implicit BYTERANGE parser tests; signed same-origin access-query inheritance test; 19 focused HLS tests covering per-segment AES key/map state, METHOD=NONE, original media-sequence IVs, parts, GAP, SKIP, SERVER-CONTROL, stable signed identities, same-URI byte ranges, parent-segment replacement, ordered bounded concurrency, atomic v2 live recovery and blocking-cursor fallback; bundled curl-impersonate lookup test",
+      "gap": "The v3-equivalent transfer logic is implemented in source and focused tests pass; final release evidence still needs representative authenticated live/VOD endpoints, the fixed curl-impersonate binary in a candidate build, pause/resume soak, and installer/rollback gates."
+    },
+    {
+      "id": "media.local_player_controls",
+      "status": "verified",
+      "v3_entry": "VideoPlayerModal with timeline, tracks and preview",
+      "compose_entry": "PlayerSessionHud controlling standalone libmpv window",
+      "core_command": "play_task/player_control",
+      "state_event": "player_session",
+    "verification": "player_session_reports_play_pause_speed_and_stop; null backend isolation; real libmpv-2.dll loaded generated MP4 with audio and subtitle; aid/sid switch, 50% seek, pause, stop and forced-process recovery passed"
+    },
+    {
+      "id": "media.cast_dlna_chromecast",
+      "status": "verified",
+      "v3_entry": "castTask/controlCast",
+      "compose_entry": "MediaSourcePickerDialog/DevicePickerDialog/CastSessionHud",
+      "core_command": "discover_cast_devices/cast_to_device/share_media/control_cast",
+      "state_event": "cast_devices/cast_session/error",
+      "verification": "Rust cast tests; mode-specific multi-adapter SSDP and mDNS discovery; real LAN API found Phicomm p230 AVTransport at 192.168.2.11 in 2601.52ms; ui-api/cast-push-split/cast; visual/compose-cast-session.png; visual/compose-cast-offline.png"
+    },
+    {
+      "id": "media.lan_share",
+      "status": "verified",
+      "v3_entry": "cast local file/media URL",
+      "compose_entry": "局域网播放 + 地址复制",
+      "core_command": "cast_task/share_media/control_cast stop",
+      "state_event": "cast_session.media_url",
+      "verification": "stopping_cast_revokes_the_active_media_mount; visual/compose-cast-lan-copy.png"
+    },
+    {
+      "id": "media.tvbox_push",
+      "status": "verified",
+      "v3_entry": "pushTaskToTvbox/pushTvboxUrl",
+      "compose_entry": "TVBox media source, dedicated device picker and Settings > 投屏与推送 > TVBox 推送",
+      "core_command": "discover_cast_devices/cast_to_device/share_media",
+      "state_event": "cast_devices/cast_session/error",
+      "verification": "tvbox POST-to-GET fallback and strict probe tests; mode-specific multi-adapter subnet scan; real LAN API found only TVBox http://192.168.2.11:9978 in tvbox mode in 2497.47ms; physical receiver accepted the push and fetched the 42521-byte MP4 from 192.168.2.9 with GET Range bytes=0- and HTTP 206; separate cast/TVBox screenshots show no clipping; ui-api/cast-push-split/real-tvbox-push.json"
+    },
+    {
+      "id": "media.cast_and_player_concurrency",
+      "status": "verified",
+      "v3_entry": "player and cast activity overlays",
+      "compose_entry": "stacked PlayerSessionHud and CastSessionHud",
+      "core_command": "player_control/control_cast",
+      "state_event": "player_session/cast_session",
+      "verification": "visual/compose-media-stack-1024x600-125.png"
+    },
+    {
+      "id": "torrent.multi_file_selection",
+    "status": "verified",
+      "v3_entry": "torrent metadata and file selection",
+    "compose_entry": "TorrentSelectionDialog with tree-safe file selection",
+    "core_command": "probe_torrent/select_torrent_files/create_task",
+    "state_event": "torrent_probe_result/torrent_selection_result",
+    "verification": "torrent selection path-safety tests; selected_files_materialize_without_unselected_paths; multifile_swarm_resumes_without_refetching_and_materializes_selection reopens the partial payload through a second loopback peer, requests only missing pieces 1/2, publishes selected files 0/2, and excludes file 1; Compose protocol compile"
+    },
+    {
+      "id": "settings.full_migration",
+      "status": "verified",
+      "v3_entry": "SettingsPanel",
+      "compose_entry": "FullSettingsDialog ten sections: 通用/下载/计划/网络/媒体/BT/投屏与推送/安全/浏览器/外观; segmented 投屏/TVBox 推送 modes",
+      "core_command": "get_settings/set_settings_atomic",
+      "state_event": "structured command result/error",
+      "verification": "Typed Core round-trip tests; migration aliases; Core-only DPAPI default Cookie; CIDR allowed-host tests; system-proxy default parity with v3; Compose ten-section UI with native folder pickers, visible independent scrollbar and in-settings LAN scan; SettingsV7Test; ui-api/settings-network-final and ui-api/settings-device-final-complete"
+    },
+    {
+      "id": "updates.confirmed_download",
+      "status": "verified",
+      "v3_entry": "UpdateNotice",
+      "compose_entry": "UpdateDialog/UpdatePreparedDialog",
+      "core_command": "check_update/download_update/install_update",
+      "state_event": "update_available/update_current/update_ready/update_install_started/update_install_result/error:update_failed",
+      "verification": "GitHub API asset size/digest contract; MSI-only streamed .part download and atomic publish; Windows Installer Property-table verification for ProductName/ProductVersion/UpgradeCode/per-user context; independent temp-copied Rust updater helper; active-task pause and durable checkpoint before Core exit; real msiexec wait and 0/3010/1641/1603/1618 handling; UTF-8 result handoff and workbench restart on success/failure; silent startup and 24-hour checks; Rust updater/contract tests; Compose protocol tests; UI test API update-prepared screenshot at 1024x600"
+    },
+    {
+      "id": "browser.request_context_replay",
+      "status": "verified",
+      "v3_entry": "request_context.source_page_identity/build_task_headers",
+      "compose_entry": "Settings > 网络 explains automatic browser identity and manual-only fallback headers",
+      "core_command": "offer_resource/create_task",
+      "state_event": "handoff_offered/task_created/error",
+      "verification": "extension resources/requestChain tests; Native Host DPAPI replay context; browser_page_identity_is_fallback_and_exact_origin_context_wins; replay_json_does_not_send_task_secrets_to_unscoped_cross_origin_child; exact_scoped_context_clears_invented_identity_and_restores_its_authorization; cross_origin_redirect_does_not_forward_cookie; extension 36 files/208 tests"
+    },
+    {
+      "id": "browser.takeover_and_recovery",
+      "status": "verified",
+      "v3_entry": "BrowserExtensionDialog/handoff confirmation",
+      "compose_entry": "ExtensionDialog/HandoffDialog",
+      "core_command": "present_handoff/accept_handoff/reject_handoff",
+      "state_event": "handoff_offered/handoff_resolved/browser_status",
+      "verification": "Rust Core IPC handoff tests; extension 36 files/208 tests; production Edge takeover accept/reject/disconnect fallback smoke with acceptPausedBytes=0 and three 8388608-byte browser recovery paths; production Chromium content-script smoke including hover pointer transition, popup rescan and isolated selected-link panel"
+    },
+    {
+      "id": "browser.media_push_device_selection",
+      "status": "verified",
+      "v3_entry": "browser cast/TVBox push request",
+      "compose_entry": "MediaPushRequested event -> DevicePickerDialog -> CastSessionHud",
+      "core_command": "request_media_push/resolve_media_push/discover_cast_devices/share_media",
+      "state_event": "media_push_requested/media_push_resolved/cast_devices/cast_session/error",
+      "verification": "Native Host request-id test; Core persistence/resolution test; Compose requested/resolved event tests and completion Toast; extension polling contract",
+      "gap": "最终安装包仍需在真实浏览器注册和局域网设备上做实机门禁"
+    },
+    {
+      "id": "browser.hot_confirmation_process",
+      "status": "verified",
+      "v3_entry": "native confirmation window",
+      "compose_entry": "Compose HandoffDialog fallback",
+      "core_command": "present_handoff",
+      "state_event": "handoff_offered",
+      "verification": "production Edge takeover passed; real isolated Engine -> Native Host -> rendered presenter smoke; renderer-ready prewarm; 3 consecutive runs/60 offers had end-to-end maxima 45.35/48.22/42.65 ms; forced Native Host+Core restart recovered without restarting presenter and completed at P95 47.59 ms / max 48.91 ms"
+    },
+    {
+      "id": "accessibility.automation",
+      "status": "verified",
+      "v3_entry": "browser semantic controls",
+      "compose_entry": "keyboard and tooltip support",
+      "core_command": "none",
+      "state_event": "none",
+      "verification": "Compose controls expose standard semantics and the bundled JDK 21 Access Bridge provider is active; scripts/smoke_v7_accessibility.py used WindowsAccessBridge-64.dll directly without Computer Use against a clean isolated Core at 1024x600; initial tree captured 81 nodes, 56 named nodes and 31 actionable nodes with no obsolete 使用前请确认 gate; doAccessibleActions(click) on 新建 produced a 42-node 新建下载 dialog tree containing 创建下载 while forbidding underlying 设置 and 全部任务; accessibility-report.json SHA-256 1A2AB442B62D0190AC4B8C3C21038BB2BD52E00DF904FFE755157A9ED6D28112; dialog screenshot SHA-256 2507842C99DC75554B82DE60D87803284BD6C7F9A307FEC467A28447BE547DC1"
+    },
+    {
+      "id": "performance.release_thresholds",
+      "status": "verified",
+      "v3_entry": "legacy baseline",
+      "compose_entry": "virtualized LazyColumn and coalesced events",
+      "core_command": "all",
+      "state_event": "all",
+      "verification": "real-transfer-latest.json: 96 MiB SHA-correct Range transfer, 93.62 MiB/s, 3.50 MiB working-set growth, zero overlapping/requested extra/post-publish bytes; real 1024x600 Compose LazyColumn with 1000 stable tasks passed the latest 180-frame continuous-scroll run at P95 30.995 ms; current 30-second idle soak ended at 11.797 MiB with -0.012 MiB growth and 0% CPU; 1000 IPC requests passed at P95 0.376 ms with zero errors and no handle growth; Native Host thresholds passed"
+    },
+    {
+      "id": "package.install_upgrade_rollback",
+      "status": "verified",
+      "v3_entry": "shipping installer",
+      "compose_entry": "build-v7 preview packaging",
+      "core_command": "engine/native host startup",
+      "state_event": "ready/browser_status",
+    "verification": "isolated MSI lifecycle on Windows 11: 0.0.1 first install returned 0; active 512 MiB task checkpointed at 184156160 bytes and reopened paused after 7.0.0 cover upgrade; ProductName HLSDownloader, ProductVersion 7.0.0, fixed UpgradeCode, per-user ALLUSERS absent and Updater present; installed Engine SHA-256 matched the packaged Release Engine; real Windows Installer transaction contention returned 1618 and the next install returned 0; injected 7.0.1 Type-19 failure returned 1603 while preserving 7.0.0 ProductCode and Engine SHA-256 after RemoveExistingProducts was moved after InstallFinalize; installed workbench started Release Core and Presenter, Core remained resident after UI exit; uninstall returned 0 and removed registration, install root and shortcuts; both Windows PowerShell 5.1 and PowerShell 7 verified the idempotent MSI sequence gate"
+    }
+  ],
+  "summary": {
+    "verified": 26,
+    "partial": 2,
+    "blocked": 0,
+    "total": 28,
+    "verified_percent": 92.9
+  }
+}

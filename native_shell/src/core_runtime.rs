@@ -5,7 +5,8 @@
 //! behind the same commands without changing the UI or extension contract.
 
 use crate::contract::{
-    CoreCommand, CoreEvent, MediaPushRequest, ResourceKind, ResourceOffer, TaskSnapshot, TaskSpec,
+    AvScanStatus, CoreCommand, CoreEvent, MediaPushRequest, MirrorStatus, ResourceKind,
+    ResourceOffer, TaskFailure, TaskSnapshot, TaskSpec,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
@@ -44,7 +45,7 @@ impl CoreRuntime {
     ) -> Self {
         let mut runtime = Self::new();
         runtime.sequence = sequence;
-        for snapshot in snapshots {
+        for mut snapshot in snapshots {
             if let Some(number) = snapshot
                 .task_id
                 .strip_prefix("task-")
@@ -52,6 +53,18 @@ impl CoreRuntime {
             {
                 runtime.next_task = runtime.next_task.max(number);
             }
+            if snapshot.mirror_status.is_empty() {
+                snapshot.mirror_status = snapshot
+                    .mirrors
+                    .iter()
+                    .map(|url| MirrorStatus {
+                        url: url.clone(),
+                        state: "pending".into(),
+                        ..MirrorStatus::default()
+                    })
+                    .collect();
+            }
+            snapshot.available_actions = legal_actions(&snapshot);
             runtime.tasks.insert(snapshot.task_id.clone(), snapshot);
         }
         for (task_id, mut spec) in specs {
@@ -165,15 +178,21 @@ impl CoreRuntime {
                 });
             }
             CoreCommand::CheckUpdate { silent } => self.check_update(silent),
-            CoreCommand::SetSetting { .. }
+            CoreCommand::SetSetting { key, .. } => {
+                self.publish(CoreEvent::SettingsChanged { keys: vec![key] });
+            }
+            CoreCommand::ImportCurl { .. }
             | CoreCommand::PlayTask { .. }
             | CoreCommand::CastTask { .. }
             | CoreCommand::PlayerControl { .. }
             | CoreCommand::DownloadUpdate
             | CoreCommand::InstallUpdate { .. }
             | CoreCommand::ProbeUrl { .. }
+            | CoreCommand::RefreshTaskRequest { .. }
             | CoreCommand::ProbeTorrent { .. }
             | CoreCommand::SelectTorrentFiles { .. }
+            | CoreCommand::GetTaskTorrentFiles { .. }
+            | CoreCommand::SetTaskTorrentFiles { .. }
             | CoreCommand::DiscoverCastDevices { .. }
             | CoreCommand::CastToDevice { .. }
             | CoreCommand::ShareMedia { .. }
@@ -206,11 +225,7 @@ impl CoreRuntime {
     pub fn replace_spec(&mut self, task_id: &str, spec: TaskSpec) {
         if let Some(snapshot) = self.tasks.get_mut(task_id) {
             snapshot.url = spec.url.clone();
-            snapshot.mirror_status = if spec.mirrors.is_empty() {
-                String::new()
-            } else {
-                format!("{} 镜像", spec.mirrors.len())
-            };
+            snapshot.mirror_status = pending_mirror_status(&spec.mirrors);
         }
         self.specs.insert(task_id.to_string(), spec);
     }
@@ -278,19 +293,31 @@ impl CoreRuntime {
             downloaded_bytes: 0,
             total_bytes: spec.expected_size,
             speed_bytes_per_sec: 0,
+            peer_count: 0,
+            seed_count: 0,
+            uploaded_bytes: 0,
+            upload_speed_bytes_per_sec: 0,
             eta_seconds: None,
             active_workers: 0,
             completed_ranges: 0,
-            total_ranges: spec
-                .expected_size
-                .map(|bytes| bytes.div_ceil(8 * 1024 * 1024))
-                .unwrap_or(0),
+            total_ranges: if spec.resource_kind == ResourceKind::Torrent {
+                spec.torrent_piece_count
+            } else {
+                spec.expected_size
+                    .map(|bytes| bytes.div_ceil(8 * 1024 * 1024))
+                    .unwrap_or(0)
+            },
             playback_ready: false,
             is_live: matches!(spec.resource_kind, ResourceKind::Live),
-            available_actions: vec!["start".into(), "delete".into()],
+            available_actions: Vec::new(),
             url: spec.url.clone(),
             error_code: None,
             error_message: None,
+            error_stage: String::new(),
+            error_url: String::new(),
+            error_hint: String::new(),
+            http_status: None,
+            error_attempt: 0,
             queue_index: self.next_task as i64,
             queue_id: spec.queue_id.clone(),
             output_missing: false,
@@ -302,15 +329,15 @@ impl CoreRuntime {
             connection_parts: Vec::new(),
             log_tail: Vec::new(),
             speed_history: Vec::new(),
-            mirror_status: if spec.mirrors.is_empty() {
-                String::new()
-            } else {
-                format!("{} 镜像", spec.mirrors.len())
-            },
+            mirror_status: pending_mirror_status(&spec.mirrors),
             request_method: spec.request_method.clone(),
             download_dir: spec.download_dir.clone(),
             speed_limit_kib: spec.speed_limit_kib,
             expected_checksum: spec.checksum.clone().unwrap_or_default(),
+            checksum_algorithm: String::new(),
+            checksum_actual: String::new(),
+            checksum_verified: None,
+            av_scan: None,
             max_workers: spec.concurrency,
             mirrors: spec.mirrors.clone(),
             scheduled_start_at: spec.scheduled_start_at.clone(),
@@ -318,6 +345,10 @@ impl CoreRuntime {
         };
         self.tasks.insert(task_id, snapshot.clone());
         self.specs.insert(snapshot.task_id.clone(), spec);
+        let mut snapshot = snapshot;
+        snapshot.available_actions = legal_actions(&snapshot);
+        self.tasks
+            .insert(snapshot.task_id.clone(), snapshot.clone());
         snapshot
     }
 
@@ -387,6 +418,15 @@ impl CoreRuntime {
 
     fn action(&mut self, task_id: &str, action: &str) {
         if action == "delete" {
+            if let Some(snapshot) = self.tasks.get(task_id) {
+                if !legal_actions(snapshot).iter().any(|item| item == "delete") {
+                    self.publish(CoreEvent::Error {
+                        code: "illegal_task_action".into(),
+                        message: format!("任务当前状态不允许操作: {action}"),
+                    });
+                    return;
+                }
+            }
             if self.tasks.remove(task_id).is_some() {
                 self.specs.remove(task_id);
                 self.publish(CoreEvent::TaskDeleted {
@@ -403,23 +443,37 @@ impl CoreRuntime {
                 });
                 return;
             };
+            if !legal_actions(snapshot).iter().any(|item| item == action) {
+                self.publish(CoreEvent::Error {
+                    code: "illegal_task_action".into(),
+                    message: format!("任务当前状态不允许操作: {action}"),
+                });
+                return;
+            }
             match action {
                 "start" | "resume" | "retry" => {
                     snapshot.status = "downloading".into();
                     snapshot.stage = "transfer".into();
-                    snapshot.available_actions = vec!["pause".into(), "cancel".into()];
+                    snapshot.error_code = None;
+                    snapshot.error_message = None;
+                    snapshot.error_stage.clear();
+                    snapshot.error_url.clear();
+                    snapshot.error_hint.clear();
+                    snapshot.http_status = None;
+                    snapshot.error_attempt = 0;
+                    snapshot.available_actions = legal_actions(snapshot);
                     Some(snapshot.clone())
                 }
                 "pause" => {
                     snapshot.status = "paused".into();
                     snapshot.stage = "waiting".into();
-                    snapshot.available_actions = vec!["resume".into(), "cancel".into()];
+                    snapshot.available_actions = legal_actions(snapshot);
                     Some(snapshot.clone())
                 }
                 "cancel" => {
                     snapshot.status = "canceled".into();
                     snapshot.stage = "finished".into();
-                    snapshot.available_actions = vec!["delete".into()];
+                    snapshot.available_actions = legal_actions(snapshot);
                     Some(snapshot.clone())
                 }
                 _ => None,
@@ -694,47 +748,37 @@ impl CoreRuntime {
                 let extra = snapshot.log_tail.len() - 16;
                 snapshot.log_tail.drain(0..extra);
             }
-            snapshot.available_actions = match effective_status.as_str() {
-                "completed" | "done" => {
-                    vec![
-                        "open".into(),
-                        "launch".into(),
-                        "play".into(),
-                        "cast".into(),
-                        "retry".into(),
-                        "delete".into(),
-                    ]
-                }
-                "failed" | "canceled" => vec!["retry".into(), "delete".into()],
-                "paused" => vec![
-                    "resume".into(),
-                    "cancel".into(),
-                    "delete".into(),
-                    "queue_up".into(),
-                    "queue_down".into(),
-                ],
-                "queued" => vec![
-                    "start".into(),
-                    "delete".into(),
-                    "queue_up".into(),
-                    "queue_top".into(),
-                    "queue_down".into(),
-                    "queue_bottom".into(),
-                ],
-                _ => vec!["pause".into(), "cancel".into()],
-            };
+            snapshot.available_actions = legal_actions(snapshot);
             snapshot.eta_seconds = match (snapshot.total_bytes, effective_speed) {
                 (Some(total), speed) if speed > 0 && total > snapshot.downloaded_bytes => {
                     Some((total - snapshot.downloaded_bytes) / speed)
                 }
                 _ => None,
             };
-            if effective_status == "failed" && snapshot.error_message.is_none() {
-                snapshot.error_message = Some(effective_stage);
-            }
             snapshot.clone()
         };
         self.publish(CoreEvent::TaskProgress { snapshot: updated });
+    }
+
+    pub fn report_failure(&mut self, task_id: &str, failure: TaskFailure) {
+        let Some(snapshot) = self.tasks.get_mut(task_id) else {
+            return;
+        };
+        snapshot.status = "failed".into();
+        snapshot.speed_bytes_per_sec = 0;
+        if !failure.stage.trim().is_empty() {
+            snapshot.stage = failure.stage.clone();
+        }
+        snapshot.error_code = (!failure.code.trim().is_empty()).then_some(failure.code);
+        snapshot.error_message = (!failure.message.trim().is_empty()).then_some(failure.message);
+        snapshot.error_stage = failure.stage;
+        snapshot.error_url = failure.url;
+        snapshot.error_hint = failure.hint;
+        snapshot.http_status = failure.http_status;
+        snapshot.error_attempt = failure.attempt;
+        snapshot.available_actions = vec!["retry".into(), "delete".into()];
+        let updated = snapshot.clone();
+        self.publish(CoreEvent::TaskUpdated { snapshot: updated });
     }
 
     fn clear_completed(&mut self) {
@@ -753,10 +797,7 @@ impl CoreRuntime {
         if let Some(snapshot) = self.tasks.get_mut(task_id) {
             if snapshot.output_missing != missing {
                 snapshot.output_missing = missing;
-                if missing && matches!(snapshot.status.as_str(), "completed" | "done") {
-                    snapshot.available_actions =
-                        vec!["retry".into(), "open".into(), "delete".into()];
-                }
+                snapshot.available_actions = legal_actions(snapshot);
                 let updated = snapshot.clone();
                 self.publish(CoreEvent::TaskUpdated { snapshot: updated });
             }
@@ -773,6 +814,56 @@ impl CoreRuntime {
         }
     }
 
+    pub fn set_checksum_result(
+        &mut self,
+        task_id: &str,
+        algorithm: String,
+        actual: String,
+        verified: bool,
+    ) {
+        if let Some(snapshot) = self.tasks.get_mut(task_id) {
+            snapshot.checksum_algorithm = algorithm;
+            snapshot.checksum_actual = actual;
+            snapshot.checksum_verified = Some(verified);
+            let updated = snapshot.clone();
+            self.publish(CoreEvent::TaskUpdated { snapshot: updated });
+        }
+    }
+
+    pub fn set_av_scan_result(&mut self, task_id: &str, result: AvScanStatus) {
+        if let Some(snapshot) = self.tasks.get_mut(task_id) {
+            snapshot.av_scan = Some(result);
+            let updated = snapshot.clone();
+            self.publish(CoreEvent::TaskUpdated { snapshot: updated });
+        }
+    }
+
+    pub fn set_mirror_result(&mut self, task_id: &str, statuses: Vec<MirrorStatus>) {
+        if let Some(snapshot) = self.tasks.get_mut(task_id) {
+            snapshot.mirror_status = statuses;
+            let updated = snapshot.clone();
+            self.publish(CoreEvent::TaskUpdated { snapshot: updated });
+        }
+    }
+
+    pub fn set_torrent_telemetry(
+        &mut self,
+        task_id: &str,
+        peer_count: u32,
+        seed_count: u32,
+        uploaded_bytes: u64,
+        upload_speed_bytes_per_sec: u64,
+    ) {
+        if let Some(snapshot) = self.tasks.get_mut(task_id) {
+            snapshot.peer_count = peer_count;
+            snapshot.seed_count = seed_count;
+            snapshot.uploaded_bytes = uploaded_bytes;
+            snapshot.upload_speed_bytes_per_sec = upload_speed_bytes_per_sec;
+            let updated = snapshot.clone();
+            self.publish(CoreEvent::TaskUpdated { snapshot: updated });
+        }
+    }
+
     fn publish(&mut self, event: CoreEvent) {
         self.sequence += 1;
         self.events.push_back(EventEnvelope {
@@ -785,8 +876,98 @@ impl CoreRuntime {
     }
 }
 
+fn legal_actions(snapshot: &TaskSnapshot) -> Vec<String> {
+    match snapshot.status.to_ascii_lowercase().as_str() {
+        "queued" => vec![
+            "start".into(),
+            "delete".into(),
+            "queue_up".into(),
+            "queue_top".into(),
+            "queue_down".into(),
+            "queue_bottom".into(),
+        ],
+        "downloading" | "recording" | "merging" | "checking" | "parsing" => {
+            vec!["pause".into(), "cancel".into(), "delete".into()]
+        }
+        "paused" => vec![
+            "resume".into(),
+            "cancel".into(),
+            "delete".into(),
+            "queue_up".into(),
+            "queue_down".into(),
+        ],
+        "failed" | "canceled" => vec!["retry".into(), "delete".into()],
+        "completed" | "done" if snapshot.output_missing => vec!["retry".into(), "delete".into()],
+        "completed" | "done" => completed_actions(snapshot),
+        _ => Vec::new(),
+    }
+}
+
+fn completed_actions(snapshot: &TaskSnapshot) -> Vec<String> {
+    let extension = snapshot
+        .filename
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .unwrap_or_default();
+    let mut actions = vec!["open".into(), "open_folder".into()];
+    if matches!(
+        extension.as_str(),
+        "appx" | "bat" | "cmd" | "com" | "exe" | "msi" | "msix" | "ps1"
+    ) {
+        actions.push("launch".into());
+    }
+    let media_kind = matches!(
+        snapshot.resource_kind,
+        ResourceKind::Hls | ResourceKind::Dash | ResourceKind::Live
+    );
+    let media_file = matches!(
+        extension.as_str(),
+        "3gp"
+            | "aac"
+            | "ac3"
+            | "avi"
+            | "flac"
+            | "flv"
+            | "m2ts"
+            | "m4a"
+            | "m4v"
+            | "mka"
+            | "mkv"
+            | "mov"
+            | "mp3"
+            | "mp4"
+            | "mpeg"
+            | "mpg"
+            | "ogg"
+            | "opus"
+            | "ts"
+            | "wav"
+            | "webm"
+            | "wma"
+            | "wmv"
+    );
+    if media_kind || media_file {
+        actions.push("play".into());
+        actions.push("cast".into());
+    }
+    actions.push("retry".into());
+    actions.push("delete".into());
+    actions
+}
+
 #[allow(dead_code)]
 fn _keep_contract_types_visible(_: ResourceOffer) {}
+
+fn pending_mirror_status(mirrors: &[String]) -> Vec<MirrorStatus> {
+    mirrors
+        .iter()
+        .map(|url| MirrorStatus {
+            url: url.clone(),
+            state: "pending".into(),
+            ..MirrorStatus::default()
+        })
+        .collect()
+}
 
 #[cfg(test)]
 mod tests {
@@ -829,6 +1010,69 @@ mod tests {
             action: "pause".into(),
         });
         assert_eq!(runtime.snapshot(&task_id).unwrap().status, "paused");
+    }
+
+    #[test]
+    fn legal_actions_follow_state_and_completed_output_type() {
+        let mut active = TaskSnapshot {
+            status: "recording".into(),
+            ..TaskSnapshot::default()
+        };
+        assert_eq!(legal_actions(&active), vec!["pause", "cancel", "delete"]);
+
+        active.status = "completed".into();
+        active.filename = "movie.mp4".into();
+        let media = legal_actions(&active);
+        assert!(media.iter().any(|action| action == "open_folder"));
+        assert!(media.iter().any(|action| action == "play"));
+        assert!(!media.iter().any(|action| action == "launch"));
+
+        active.filename = "setup.exe".into();
+        let executable = legal_actions(&active);
+        assert!(executable.iter().any(|action| action == "launch"));
+        assert!(!executable.iter().any(|action| action == "play"));
+
+        active.output_missing = true;
+        assert_eq!(legal_actions(&active), vec!["retry", "delete"]);
+    }
+
+    #[test]
+    fn structured_failure_survives_snapshot_and_retry_clears_it() {
+        let mut runtime = CoreRuntime::new();
+        runtime.handle(CoreCommand::CreateTask { spec: task() });
+        runtime.report_failure(
+            "task-1",
+            TaskFailure {
+                code: "HTTP_404".into(),
+                message: "HTTP 404".into(),
+                stage: "transfer".into(),
+                url: "https://example.test/missing.bin?token=secret".into(),
+                hint: "重新识别资源".into(),
+                http_status: Some(404),
+                attempt: 2,
+            },
+        );
+        let failed = runtime.snapshot("task-1").unwrap();
+        assert_eq!(failed.status, "failed");
+        assert_eq!(failed.stage, "transfer");
+        assert_eq!(failed.error_code.as_deref(), Some("HTTP_404"));
+        assert_eq!(failed.error_message.as_deref(), Some("HTTP 404"));
+        assert_eq!(failed.http_status, Some(404));
+        assert_eq!(failed.error_attempt, 2);
+
+        runtime.handle(CoreCommand::TaskAction {
+            task_id: "task-1".into(),
+            action: "retry".into(),
+        });
+        let retrying = runtime.snapshot("task-1").unwrap();
+        assert_eq!(retrying.status, "downloading");
+        assert!(retrying.error_code.is_none());
+        assert!(retrying.error_message.is_none());
+        assert!(retrying.error_stage.is_empty());
+        assert!(retrying.error_url.is_empty());
+        assert!(retrying.error_hint.is_empty());
+        assert!(retrying.http_status.is_none());
+        assert_eq!(retrying.error_attempt, 0);
     }
 
     #[test]

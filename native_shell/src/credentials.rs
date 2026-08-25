@@ -178,7 +178,44 @@ pub fn apply_replay_json_for(
     request_url: &str,
 ) {
     apply_base_replay(headers, json);
+    if replay_targets_other_origin(json, request_url) {
+        remove_header(headers, "Cookie");
+        remove_header(headers, "Authorization");
+        remove_header(headers, "Proxy-Authorization");
+    }
     apply_scoped_request_context(headers, json, request_url);
+}
+
+/// Bind an in-memory replay context to the task URL. Child HLS/DASH requests
+/// then inherit credentials only when they stay on that origin.
+pub(crate) fn bind_replay_source_url(json: &str, source_url: &str) -> String {
+    if request_origin(source_url).is_empty() {
+        return json.to_string();
+    }
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return json.to_string();
+    };
+    let Some(object) = value.as_object_mut() else {
+        return json.to_string();
+    };
+    object.insert(
+        "_task_url".into(),
+        serde_json::Value::String(source_url.into()),
+    );
+    value.to_string()
+}
+
+fn replay_targets_other_origin(json: &str, request_url: &str) -> bool {
+    let target = request_origin(request_url);
+    if target.is_empty() {
+        return false;
+    }
+    let source = serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|value| value.get("_task_url").and_then(value_as_header_text))
+        .map(|url| request_origin(&url))
+        .unwrap_or_default();
+    !source.is_empty() && source != target
 }
 
 fn apply_base_replay(headers: &mut std::collections::BTreeMap<String, String>, json: &str) {
@@ -211,18 +248,21 @@ pub(crate) fn apply_scoped_request_context(
         return;
     };
     merge_header_map(headers, scoped.get("request_headers"));
-    insert_header(headers, "Referer", scoped.get("referer"));
-    insert_header(headers, "Origin", scoped.get("origin"));
+    replace_header(headers, "Referer", scoped.get("referer"));
+    replace_header(headers, "Origin", scoped.get("origin"));
     insert_header(headers, "User-Agent", scoped.get("user_agent"));
     let scoped_cookie = scoped
         .get("cookie")
         .and_then(value_as_header_text)
         .unwrap_or_default();
     if scoped_cookie.trim().is_empty() {
-        headers.remove("Cookie");
-        headers.remove("Authorization");
+        remove_header(headers, "Cookie");
     } else {
-        headers.insert("Cookie".into(), scoped_cookie);
+        replace_header(
+            headers,
+            "Cookie",
+            Some(&serde_json::Value::String(scoped_cookie)),
+        );
     }
 }
 
@@ -269,6 +309,26 @@ fn insert_header(
         return;
     }
     headers.insert(name.to_string(), text);
+}
+
+fn replace_header(
+    headers: &mut std::collections::BTreeMap<String, String>,
+    name: &str,
+    value: Option<&serde_json::Value>,
+) {
+    remove_header(headers, name);
+    insert_header(headers, name, value);
+}
+
+fn remove_header(headers: &mut std::collections::BTreeMap<String, String>, name: &str) {
+    let keys: Vec<String> = headers
+        .keys()
+        .filter(|key| key.eq_ignore_ascii_case(name))
+        .cloned()
+        .collect();
+    for key in keys {
+        headers.remove(&key);
+    }
 }
 
 fn value_as_header_text(value: &serde_json::Value) -> Option<String> {
@@ -406,6 +466,49 @@ mod tests {
             "https://cdn.test/video.bin",
         );
         assert!(headers.get("Cookie").is_none());
+    }
+
+    #[test]
+    fn replay_json_does_not_send_task_secrets_to_unscoped_cross_origin_child() {
+        let replay = bind_replay_source_url(
+            r#"{"cookie":"manifest=1","request_headers":{"authorization":"Bearer manifest","X-Playback":"ok"}}"#,
+            "https://manifest.test/master.m3u8",
+        );
+        let mut headers = std::collections::BTreeMap::new();
+        apply_replay_json_for(&mut headers, &replay, "https://cdn.test/segment.ts");
+        assert!(headers.get("Cookie").is_none());
+        assert!(headers.get("Authorization").is_none());
+        assert_eq!(headers.get("X-Playback").map(String::as_str), Some("ok"));
+    }
+
+    #[test]
+    fn exact_scoped_context_clears_invented_identity_and_restores_its_authorization() {
+        let replay = bind_replay_source_url(
+            r#"{
+                "cookie":"page=1",
+                "referer":"https://page.test/watch",
+                "origin":"https://page.test",
+                "request_headers":{"authorization":"Bearer page"},
+                "request_contexts":{
+                    "https://cdn.test":{
+                        "cookie":"",
+                        "referer":"",
+                        "origin":"",
+                        "request_headers":{"authorization":"Bearer cdn"}
+                    }
+                }
+            }"#,
+            "https://manifest.test/master.m3u8",
+        );
+        let mut headers = std::collections::BTreeMap::new();
+        apply_replay_json_for(&mut headers, &replay, "https://cdn.test/segment.ts");
+        assert!(headers.get("Cookie").is_none());
+        assert!(headers.get("Referer").is_none());
+        assert!(headers.get("Origin").is_none());
+        assert_eq!(
+            headers.get("Authorization").map(String::as_str),
+            Some("Bearer cdn")
+        );
     }
 
     #[test]

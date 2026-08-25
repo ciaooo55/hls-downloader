@@ -29,6 +29,42 @@ pub enum ResourceKind {
     Torrent,
 }
 
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct AvScanStatus {
+    pub state: String,
+    pub engine: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct MirrorStatus {
+    pub url: String,
+    #[serde(default)]
+    pub final_url: String,
+    pub state: String,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub ranges: bool,
+}
+
+fn deserialize_mirror_status<'de, D>(deserializer: D) -> Result<Vec<MirrorStatus>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StoredMirrorStatus {
+        Structured(Vec<MirrorStatus>),
+        Legacy(String),
+    }
+
+    match StoredMirrorStatus::deserialize(deserializer)? {
+        StoredMirrorStatus::Structured(statuses) => Ok(statuses),
+        StoredMirrorStatus::Legacy(_summary) => Ok(Vec::new()),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResourceOffer {
     pub url: String,
@@ -91,6 +127,14 @@ pub struct TaskSnapshot {
     pub downloaded_bytes: u64,
     pub total_bytes: Option<u64>,
     pub speed_bytes_per_sec: u64,
+    #[serde(default)]
+    pub peer_count: u32,
+    #[serde(default)]
+    pub seed_count: u32,
+    #[serde(default)]
+    pub uploaded_bytes: u64,
+    #[serde(default)]
+    pub upload_speed_bytes_per_sec: u64,
     pub eta_seconds: Option<u64>,
     pub active_workers: u32,
     pub completed_ranges: u64,
@@ -104,6 +148,16 @@ pub struct TaskSnapshot {
     pub error_code: Option<String>,
     #[serde(default)]
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub error_stage: String,
+    #[serde(default)]
+    pub error_url: String,
+    #[serde(default)]
+    pub error_hint: String,
+    #[serde(default)]
+    pub http_status: Option<u16>,
+    #[serde(default)]
+    pub error_attempt: u32,
     #[serde(default)]
     pub queue_index: i64,
     #[serde(default = "default_queue_id")]
@@ -120,8 +174,8 @@ pub struct TaskSnapshot {
     pub log_tail: Vec<String>,
     #[serde(default)]
     pub speed_history: Vec<u64>,
-    #[serde(default)]
-    pub mirror_status: String,
+    #[serde(default, deserialize_with = "deserialize_mirror_status")]
+    pub mirror_status: Vec<MirrorStatus>,
     #[serde(default = "default_method")]
     pub request_method: String,
     #[serde(default)]
@@ -130,6 +184,14 @@ pub struct TaskSnapshot {
     pub speed_limit_kib: u32,
     #[serde(default)]
     pub expected_checksum: String,
+    #[serde(default)]
+    pub checksum_algorithm: String,
+    #[serde(default)]
+    pub checksum_actual: String,
+    #[serde(default)]
+    pub checksum_verified: Option<bool>,
+    #[serde(default)]
+    pub av_scan: Option<AvScanStatus>,
     #[serde(default)]
     pub max_workers: u32,
     #[serde(default)]
@@ -152,6 +214,10 @@ impl Default for TaskSnapshot {
             downloaded_bytes: 0,
             total_bytes: None,
             speed_bytes_per_sec: 0,
+            peer_count: 0,
+            seed_count: 0,
+            uploaded_bytes: 0,
+            upload_speed_bytes_per_sec: 0,
             eta_seconds: None,
             active_workers: 0,
             completed_ranges: 0,
@@ -162,6 +228,11 @@ impl Default for TaskSnapshot {
             url: String::new(),
             error_code: None,
             error_message: None,
+            error_stage: String::new(),
+            error_url: String::new(),
+            error_hint: String::new(),
+            http_status: None,
+            error_attempt: 0,
             queue_index: 0,
             queue_id: default_queue_id(),
             output_missing: false,
@@ -170,17 +241,32 @@ impl Default for TaskSnapshot {
             connection_parts: Vec::new(),
             log_tail: Vec::new(),
             speed_history: Vec::new(),
-            mirror_status: String::new(),
+            mirror_status: Vec::new(),
             request_method: default_method(),
             download_dir: String::new(),
             speed_limit_kib: 0,
             expected_checksum: String::new(),
+            checksum_algorithm: String::new(),
+            checksum_actual: String::new(),
+            checksum_verified: None,
+            av_scan: None,
             max_workers: 0,
             mirrors: Vec::new(),
             scheduled_start_at: String::new(),
             scheduled_stop_at: String::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct TaskFailure {
+    pub code: String,
+    pub message: String,
+    pub stage: String,
+    pub url: String,
+    pub hint: String,
+    pub http_status: Option<u16>,
+    pub attempt: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -267,6 +353,8 @@ pub struct TaskSpec {
     pub queue_id: String,
     #[serde(default)]
     pub torrent_selection: Vec<TorrentFileSelection>,
+    #[serde(default)]
+    pub torrent_piece_count: u64,
 }
 
 impl Default for TaskSpec {
@@ -301,6 +389,7 @@ impl Default for TaskSpec {
             completion_action: String::new(),
             queue_id: default_queue_id(),
             torrent_selection: Vec::new(),
+            torrent_piece_count: 0,
         }
     }
 }
@@ -402,6 +491,11 @@ pub enum CoreCommand {
     CreateTask {
         spec: TaskSpec,
     },
+    ImportCurl {
+        command: String,
+        #[serde(default)]
+        options: TaskSpec,
+    },
     TaskAction {
         task_id: String,
         action: String,
@@ -464,12 +558,29 @@ pub enum CoreCommand {
     },
     ProbeUrl {
         url: String,
+        #[serde(default)]
+        spec: Option<TaskSpec>,
+    },
+    RefreshTaskRequest {
+        task_id: String,
+        url: String,
+        #[serde(default)]
+        cookie: String,
+        #[serde(default)]
+        auto_resume: bool,
     },
     ProbeTorrent {
         source: String,
     },
     SelectTorrentFiles {
         source: String,
+        selections: Vec<TorrentFileSelection>,
+    },
+    GetTaskTorrentFiles {
+        task_id: String,
+    },
+    SetTaskTorrentFiles {
+        task_id: String,
         selections: Vec<TorrentFileSelection>,
     },
     DiscoverCastDevices {
@@ -523,6 +634,10 @@ pub enum CoreCommand {
     },
     HarvestPage {
         url: String,
+        #[serde(default)]
+        referer: String,
+        #[serde(default)]
+        probe_urls: Vec<String>,
     },
     GetTaskLog {
         task_id: String,
@@ -542,6 +657,12 @@ pub enum CoreEvent {
     Ready {
         protocol: String,
         version: u32,
+    },
+    SettingsChanged {
+        keys: Vec<String>,
+    },
+    ClipboardOffer {
+        urls: Vec<String>,
     },
     TaskCreated {
         snapshot: TaskSnapshot,
@@ -580,6 +701,13 @@ pub enum CoreEvent {
     },
     TorrentSelectionResult {
         source: String,
+        selections: Vec<TorrentFileSelection>,
+        total_size: u64,
+    },
+    TaskTorrentFiles {
+        task_id: String,
+        source: String,
+        files: Vec<TorrentFileEntry>,
         selections: Vec<TorrentFileSelection>,
         total_size: u64,
     },
@@ -633,6 +761,10 @@ pub enum CoreEvent {
         message: String,
     },
     HarvestResult {
+        url: String,
+        links: Vec<HarvestCandidate>,
+    },
+    HarvestProbeResult {
         url: String,
         links: Vec<HarvestCandidate>,
     },
@@ -715,7 +847,9 @@ impl CoreEvent {
             Self::TaskCreated { snapshot }
             | Self::TaskUpdated { snapshot }
             | Self::TaskProgress { snapshot } => Some(snapshot.task_id.as_str()),
-            Self::TaskDeleted { task_id } => Some(task_id.as_str()),
+            Self::TaskDeleted { task_id } | Self::TaskTorrentFiles { task_id, .. } => {
+                Some(task_id.as_str())
+            }
             Self::HandoffResolved { handoff_id, .. } => Some(handoff_id.as_str()),
             Self::MediaPushRequested { request } | Self::MediaPushResolved { request } => {
                 Some(request.id.as_str())
@@ -724,6 +858,8 @@ impl CoreEvent {
             Self::DuplicateOffered { task_id, .. } => Some(task_id.as_str()),
             Self::TaskLog { task_id, .. } => Some(task_id.as_str()),
             Self::Ready { .. }
+            | Self::SettingsChanged { .. }
+            | Self::ClipboardOffer { .. }
             | Self::Error { .. }
             | Self::UiShow { .. }
             | Self::ProbeResult { .. }
@@ -735,6 +871,7 @@ impl CoreEvent {
             | Self::UpdateInstallResult { .. }
             | Self::Toast { .. }
             | Self::HarvestResult { .. }
+            | Self::HarvestProbeResult { .. }
             | Self::TorrentProbeResult { .. }
             | Self::TorrentSelectionResult { .. }
             | Self::TaskExport { .. }
@@ -824,6 +961,10 @@ mod tests {
                 downloaded_bytes: 4,
                 total_bytes: Some(8),
                 speed_bytes_per_sec: 4,
+                peer_count: 0,
+                seed_count: 0,
+                uploaded_bytes: 0,
+                upload_speed_bytes_per_sec: 0,
                 eta_seconds: Some(1),
                 active_workers: 1,
                 completed_ranges: 1,
@@ -834,6 +975,11 @@ mod tests {
                 url: String::new(),
                 error_code: None,
                 error_message: None,
+                error_stage: String::new(),
+                error_url: String::new(),
+                error_hint: String::new(),
+                http_status: None,
+                error_attempt: 0,
                 queue_index: 0,
                 queue_id: DEFAULT_QUEUE_ID.into(),
                 output_missing: false,
@@ -842,11 +988,15 @@ mod tests {
                 connection_parts: Vec::new(),
                 log_tail: Vec::new(),
                 speed_history: Vec::new(),
-                mirror_status: String::new(),
+                mirror_status: Vec::new(),
                 request_method: "GET".into(),
                 download_dir: String::new(),
                 speed_limit_kib: 0,
                 expected_checksum: String::new(),
+                checksum_algorithm: String::new(),
+                checksum_actual: String::new(),
+                checksum_verified: None,
+                av_scan: None,
                 max_workers: 1,
                 mirrors: Vec::new(),
                 scheduled_start_at: String::new(),
@@ -857,6 +1007,20 @@ mod tests {
         assert!(payload.get("cookie").is_none());
         assert!(payload.get("authorization").is_none());
         assert_eq!(event.sequence_key(), Some("task-1"));
+    }
+
+    #[test]
+    fn legacy_string_mirror_status_remains_readable() {
+        let mut encoded = serde_json::to_value(TaskSnapshot::default()).unwrap();
+        encoded["mirror_status"] = serde_json::Value::String("2 镜像".into());
+        encoded["mirrors"] = serde_json::json!([
+            "https://one.example.test/file.bin",
+            "https://two.example.test/file.bin"
+        ]);
+
+        let snapshot: TaskSnapshot = serde_json::from_value(encoded).unwrap();
+        assert!(snapshot.mirror_status.is_empty());
+        assert_eq!(snapshot.mirrors.len(), 2);
     }
 
     #[test]
@@ -954,6 +1118,7 @@ mod tests {
     fn probe_and_cast_commands_roundtrip() {
         let encoded = serde_json::to_value(CoreCommand::ProbeUrl {
             url: "https://cdn.test/a.m3u8".into(),
+            spec: None,
         })
         .unwrap();
         assert_eq!(encoded["kind"], "probe_url");
@@ -985,6 +1150,30 @@ mod tests {
         })
         .unwrap();
         assert_eq!(devices["kind"], "cast_devices");
+    }
+
+    #[test]
+    fn request_refresh_roundtrips_without_putting_credentials_in_task_events() {
+        let command = CoreCommand::RefreshTaskRequest {
+            task_id: "task-1".into(),
+            url: "https://cdn.test/new.bin".into(),
+            cookie: "session=private".into(),
+            auto_resume: true,
+        };
+        let encoded = serde_json::to_value(&command).unwrap();
+        assert_eq!(encoded["kind"], "refresh_task_request");
+        assert_eq!(
+            serde_json::from_value::<CoreCommand>(encoded).unwrap(),
+            command
+        );
+        let snapshot = TaskSnapshot {
+            task_id: "task-1".into(),
+            url: "https://cdn.test/new.bin".into(),
+            ..TaskSnapshot::default()
+        };
+        let event = serde_json::to_value(CoreEvent::TaskUpdated { snapshot }).unwrap();
+        assert!(event.get("cookie").is_none());
+        assert!(event.to_string().find("session=private").is_none());
     }
 
     #[test]
@@ -1030,5 +1219,15 @@ mod tests {
         let value = serde_json::to_value(event).unwrap();
         assert_eq!(value["kind"], "torrent_probe_result");
         assert_eq!(value["files"][0]["index"], 2);
+        let task_command = CoreCommand::SetTaskTorrentFiles {
+            task_id: "task-7".into(),
+            selections: vec![selection.clone()],
+        };
+        let task_value = serde_json::to_value(&task_command).unwrap();
+        assert_eq!(task_value["kind"], "set_task_torrent_files");
+        assert_eq!(
+            serde_json::from_value::<CoreCommand>(task_value).unwrap(),
+            task_command
+        );
     }
 }

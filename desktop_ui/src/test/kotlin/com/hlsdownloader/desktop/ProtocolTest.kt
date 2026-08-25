@@ -10,8 +10,54 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 
 class ProtocolTest {
+    @Test
+    fun localTorrentUsesTorrentProbeInsteadOfUrlProbe() {
+        val draft = TaskDraft(url = "A:\\downloads\\multi-file.torrent")
+
+        assertEquals(ResourceProbeTarget.Torrent, taskProbeTarget(draft))
+    }
+
+    @Test
+    fun taskContextMenuUsesWindowRelativePointerPosition() {
+        assertEquals(IntOffset(437, 291), contextMenuWindowPosition(Offset(180.4f, 240.6f), IntSize(900, 52), Offset(256.7f, 50.3f)))
+        assertEquals(IntOffset(520, 554), contextMenuWindowPosition(Offset(180.4f, 240.6f), IntSize(900, 52), Offset(520f, 554f)))
+    }
+
+    @Test
+    fun multiSelectionMenuOnlyKeepsCommonBatchActions() {
+        val running = TaskDto(id = "a", filename = "a.bin", status = "running", availableActions = listOf("pause", "cancel", "delete"))
+        val other = TaskDto(id = "b", filename = "b.bin", status = "running", availableActions = listOf("pause", "delete", "open"))
+
+        assertEquals(listOf("pause", "delete", "delete_files"), batchTaskMenuActions(listOf(running, other)))
+    }
+
+    @Test
+    fun taskSnapshotDecodesStructuredVerificationAndMirrorResults() {
+        val task = protocolJson.decodeFromString<TaskDto>(
+            """{"task_id":"t-verify","filename":"file.bin","status":"completed","peer_count":18,"seed_count":4,"uploaded_bytes":0,"upload_speed_bytes_per_sec":0,"expected_checksum":"sha256:abc","checksum_algorithm":"SHA-256","checksum_actual":"abc","checksum_verified":true,"av_scan":{"state":"clean","engine":"Windows Defender","detail":"completed"},"mirror_status":[{"url":"https://mirror.test/file.bin","final_url":"https://cdn.test/file.bin","state":"active","detail":"used","ranges":true}]}""",
+        )
+
+        assertEquals(true, task.checksumVerified)
+        assertEquals("SHA-256", task.checksumAlgorithm)
+        assertEquals("clean", task.avScan?.state)
+        assertEquals("active", task.mirrorStatus.single().state)
+        assertTrue(task.mirrorStatus.single().ranges)
+        assertEquals(18, task.peerCount)
+        assertEquals(4, task.seedCount)
+        assertEquals(0L, task.uploadSpeedBytesPerSecond)
+    }
+
+    @Test
+    fun refreshRequestValidationRejectsUnsafeUrlsBeforeIpc() {
+        assertFailsWith<IllegalArgumentException> {
+            EnginePipeClient.normalizeDownloadUrl("javascript:alert(1)")
+        }
+    }
     @Test fun helloKeepsCoreCompatibility() {
         val encoded = protocolJson.encodeToString(CoreHello())
         assertTrue(encoded.contains("hls-downloader-v7-core"))
@@ -70,6 +116,19 @@ class ProtocolTest {
         assertEquals("ftp", EnginePipeClient.recognizeResourceKind("ftp://host/path/file.bin"))
         assertEquals("file", EnginePipeClient.recognizeResourceKind("https://cdn.test/file.zip"))
     }
+
+    @Test fun curlAndManualHeaderInputAreRecognizedWithoutLeakingIntoUrlParsing() {
+        assertTrue(EnginePipeClient.isCurlCommand("curl 'https://cdn.test/file.mp4' -H 'Origin: https://site.test'"))
+        assertTrue(EnginePipeClient.isCurlCommand("  CURL.EXE https://cdn.test/file.mp4"))
+        assertFalse(EnginePipeClient.isCurlCommand("https://cdn.test/file.mp4"))
+        assertEquals(
+            mapOf("Authorization" to "Bearer abc", "X-Playback-Token" to "secret"),
+            parseRequestHeaderLines("Authorization: Bearer abc\nX-Playback-Token: secret"),
+        )
+        assertFailsWith<IllegalArgumentException> { parseRequestHeaderLines("Missing colon") }
+        assertFailsWith<IllegalArgumentException> { parseRequestHeaderLines("Cookie: sid=1") }
+        assertFailsWith<IllegalArgumentException> { parseRequestHeaderLines("Content-Length: 99") }
+    }
     @Test fun handoffOfferUsesPublicMetadataAndSafeFilename() {
         val event = protocolJson.decodeFromString<EventEnvelopeDto>("""{"sequence":43,"event":{"kind":"handoff_offered","offer":{"handoff_id":"offer-1","url":"https://cdn.test/setup.exe","resource_kind":"file","filename":"setup.exe","title":"Setup","mime_type":"application/vnd.microsoft.portable-executable","size":2048}}}""")
         val offer = protocolJson.decodeFromJsonElement(HandoffOfferDto.serializer(), event.event["offer"]!!.jsonObject)
@@ -123,6 +182,10 @@ class ProtocolTest {
             takeoverEnabled = false,
             takeoverMinimumBytes = 4096,
             speedLimitKib = 512,
+            hourlyQuotaMib = 2048,
+            taskColumnLayout = "name:300:1,progress:220:1,status:100:1,speed:90:1,size:80:1,actions:70:1",
+            toolbarActions = "new:1,paste:1,batch:1,harvest:1,start_all:1,pause_all:1,cast:1,tvbox:1,extension:0",
+            taskSort = "name:desc",
             scheduleEnabled = true,
             categoryDirMedia = "D:/Media",
             categoryDirProgram = "D:/Apps",
@@ -146,6 +209,9 @@ class ProtocolTest {
         assertEquals(JsonPrimitive(false), values["browser_takeover_enabled"])
         assertEquals(JsonPrimitive(4096), values["browser_takeover_minimum_bytes"])
         assertEquals(JsonPrimitive(512), values["download_speed_limit_kib"])
+        assertEquals(JsonPrimitive(2048), values["download_hourly_quota_mib"])
+        assertEquals(JsonPrimitive("name:desc"), values["task_sort"])
+        assertEquals(JsonPrimitive("new:1,paste:1,batch:1,harvest:1,start_all:1,pause_all:1,cast:1,tvbox:1,extension:0"), values["toolbar_actions"])
         assertEquals(JsonPrimitive(true), values["download_speed_schedule_enabled"])
         assertEquals(
             JsonPrimitive("D:/Media|D:/Apps|D:/Archives|D:/Other"),
@@ -180,12 +246,12 @@ class ProtocolTest {
 
     @Test fun taskSnapshotPreservesConnectionsAndPerformanceHistory() {
         val task = protocolJson.decodeFromString<TaskDto>(
-            """{"task_id":"t-9","filename":"very-long-file-name.bin","status":"running","active_workers":12,"connection_parts":[{"start":0,"end":1023,"done":512,"state":"running"}],"speed_history":[10,20,30],"mirror_status":"mirror-2"}""",
+            """{"task_id":"t-9","filename":"very-long-file-name.bin","status":"running","active_workers":12,"connection_parts":[{"start":0,"end":1023,"done":512,"state":"running"}],"speed_history":[10,20,30],"mirror_status":[{"url":"https://mirror-2.test/file.bin","state":"active"}]}""",
         )
         assertEquals(12, task.activeWorkers)
         assertEquals(512, task.connectionParts.single().done)
         assertEquals(listOf(10L, 20L, 30L), task.speedHistory)
-        assertEquals("mirror-2", task.mirrorStatus)
+        assertEquals("active", task.mirrorStatus.single().state)
     }
 
     @Test fun queueProfilesRoundTripThroughSettingsStorageContract() {

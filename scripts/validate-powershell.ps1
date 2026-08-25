@@ -10,6 +10,7 @@ param(
         "scripts\install-v7-local.ps1",
         "scripts\register-v7-native-host.ps1",
         "scripts\run-v7-local.ps1",
+        "scripts\set-v7-msi-rollback-order.ps1",
         "scripts\vcvars.ps1",
         "scripts\shutdown-running.ps1",
         "scripts\upgrade-v7-portable.ps1",

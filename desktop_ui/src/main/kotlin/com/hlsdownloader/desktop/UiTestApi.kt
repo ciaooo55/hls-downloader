@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.awt.EventQueue
 import java.awt.KeyboardFocusManager
+import java.awt.Point
 import java.awt.Rectangle
 import java.awt.Robot
 import java.awt.Component
@@ -13,7 +14,6 @@ import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.StringSelection
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
-import java.awt.event.MouseEvent
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.net.InetAddress
@@ -43,6 +43,7 @@ internal data class UiTestAction(
     val key: String? = null,
     val modifiers: List<String> = emptyList(),
     val text: String? = null,
+    val delta: Int? = null,
 )
 
 internal fun validateUiTestAction(action: UiTestAction, width: Int, height: Int): String? = when (action.type) {
@@ -57,7 +58,19 @@ internal fun validateUiTestAction(action: UiTestAction, width: Int, height: Int)
         action.x !in 0 until width || action.y !in 0 until height || action.toX !in 0 until width || action.toY !in 0 until height -> "coordinates are outside the current window"
         else -> null
     }
+    "scroll" -> when {
+        action.x == null || action.y == null || action.delta == null || action.delta == 0 -> "scroll action requires x, y and a non-zero delta"
+        action.x !in 0 until width || action.y !in 0 until height -> "coordinates are outside the current window"
+        action.delta !in -20..20 -> "scroll delta must be between -20 and 20"
+        else -> null
+    }
     "select_task" -> if (action.index == null || action.index < 0) "select_task requires a non-negative index" else null
+    "open_task_menu" -> when {
+        action.index == null || action.index < 0 -> "open_task_menu requires a non-negative index"
+        action.x == null || action.y == null -> "open_task_menu requires x and y"
+        action.x !in 0 until width || action.y !in 0 until height -> "coordinates are outside the current window"
+        else -> null
+    }
     "key" -> if (action.key.isNullOrBlank()) "key action requires key" else null
     "type" -> when {
         action.text == null -> "type action requires text"
@@ -71,6 +84,10 @@ internal object UiTestState {
     @Volatile private var selectedTaskIds: List<String> = emptyList()
     @Volatile private var inputTarget: String = ""
     @Volatile private var taskSelector: ((Int, Boolean, Boolean) -> Set<String>)? = null
+    @Volatile private var taskContextOpener: ((Int, Int, Int) -> Unit)? = null
+    @Volatile private var contextMenuPosition: List<Int> = emptyList()
+    @Volatile private var contextMenuTaskIds: List<String> = emptyList()
+    @Volatile private var contextMenuActions: List<String> = emptyList()
 
     fun updateSelection(ids: Set<String>) {
         selectedTaskIds = ids.sorted()
@@ -84,6 +101,21 @@ internal object UiTestState {
         taskSelector = selector
     }
 
+    fun installTaskContextOpener(opener: ((Int, Int, Int) -> Unit)?) {
+        taskContextOpener = opener
+    }
+
+    fun openTaskMenu(index: Int, x: Int, y: Int) {
+        taskContextOpener?.invoke(index, x, y)
+            ?: throw IllegalStateException("task table is not available")
+    }
+
+    fun updateContextMenu(position: androidx.compose.ui.unit.IntOffset, taskIds: Set<String>, actions: List<String>) {
+        contextMenuPosition = listOf(position.x, position.y)
+        contextMenuTaskIds = taskIds.sorted()
+        contextMenuActions = actions
+    }
+
     fun selectTask(index: Int, modifiers: List<String>) {
         val normalized = modifiers.map(String::uppercase)
         val next = taskSelector?.invoke(index, "SHIFT" in normalized, normalized.any { it == "CTRL" || it == "CONTROL" })
@@ -91,11 +123,25 @@ internal object UiTestState {
         updateSelection(next)
     }
 
-    fun snapshot(): UiSelectionSnapshot = UiSelectionSnapshot(selectedTaskIds.size, selectedTaskIds, inputTarget)
+    fun snapshot(): UiSelectionSnapshot = UiSelectionSnapshot(
+        selectedTaskIds.size,
+        selectedTaskIds,
+        inputTarget,
+        contextMenuPosition,
+        contextMenuTaskIds,
+        contextMenuActions,
+    )
 }
 
 @Serializable
-internal data class UiSelectionSnapshot(val selectedCount: Int, val selectedTaskIds: List<String>, val inputTarget: String)
+internal data class UiSelectionSnapshot(
+    val selectedCount: Int,
+    val selectedTaskIds: List<String>,
+    val inputTarget: String,
+    val contextMenuPosition: List<Int>,
+    val contextMenuTaskIds: List<String>,
+    val contextMenuActions: List<String>,
+)
 
 internal class UiTestApi private constructor(
     private val server: HttpServer,
@@ -213,7 +259,9 @@ internal class UiTestApi private constructor(
                 "drag" -> {
                     dispatchMouseDrag(action.x!!, action.y!!, action.toX!!, action.toY!!, action.modifiers)
                 }
+                "scroll" -> dispatchMouseWheel(action.x!!, action.y!!, action.delta!!, action.modifiers)
                 "select_task" -> onEventThread { UiTestState.selectTask(action.index!!, action.modifiers) }
+                "open_task_menu" -> onEventThread { UiTestState.openTaskMenu(action.index!!, action.x!!, action.y!!) }
                 "key" -> pressKey(action.key!!, action.modifiers)
                 "type" -> typeText(action.text!!)
             }
@@ -242,47 +290,67 @@ internal class UiTestApi private constructor(
     }
 
     private fun pressKey(name: String, modifiers: List<String>) {
-        val modifierCodes = modifiers.map(::keyCode)
-        val code = keyCode(name)
-        modifierCodes.forEach(robot::keyPress)
-        try {
-            robot.keyPress(code)
-            robot.keyRelease(code)
-        } finally {
-            modifierCodes.asReversed().forEach(robot::keyRelease)
-        }
+        dispatchKeyStroke(keyCode(name), modifiers)
     }
 
     private fun dispatchMouseClick(x: Int, y: Int, secondary: Boolean, modifiers: List<String>) {
-        onEventThread {
-            val target = mouseTarget(x, y)
-            val point = SwingUtilities.convertPoint(window, x, y, target)
-            val button = if (secondary) MouseEvent.BUTTON3 else MouseEvent.BUTTON1
-            val downMask = if (secondary) InputEvent.BUTTON3_DOWN_MASK else InputEvent.BUTTON1_DOWN_MASK
-            val modifierMask = mouseModifierMask(modifiers)
-            val now = System.currentTimeMillis()
-            target.dispatchEvent(MouseEvent(target, MouseEvent.MOUSE_PRESSED, now, modifierMask or downMask, point.x, point.y, 1, secondary, button))
-            target.dispatchEvent(MouseEvent(target, MouseEvent.MOUSE_RELEASED, now + 1, modifierMask, point.x, point.y, 1, secondary, button))
-            target.dispatchEvent(MouseEvent(target, MouseEvent.MOUSE_CLICKED, now + 2, modifierMask, point.x, point.y, 1, secondary, button))
+        val point = onEventThread {
+            mouseTarget(x, y)
+            window.locationOnScreen.let { Point(it.x + x, it.y + y) }
+        }
+        val buttonMask = if (secondary) InputEvent.BUTTON3_DOWN_MASK else InputEvent.BUTTON1_DOWN_MASK
+        withRobotModifiers(modifiers) {
+            robot.mouseMove(point.x, point.y)
+            robot.mousePress(buttonMask)
+            robot.delay(25)
+            robot.mouseRelease(buttonMask)
         }
     }
 
     private fun dispatchMouseDrag(fromX: Int, fromY: Int, toX: Int, toY: Int, modifiers: List<String>) {
-        onEventThread {
-            val target = mouseTarget(fromX, fromY)
-            val modifierMask = mouseModifierMask(modifiers)
-            val start = SwingUtilities.convertPoint(window, fromX, fromY, target)
-            val now = System.currentTimeMillis()
-            target.dispatchEvent(MouseEvent(target, MouseEvent.MOUSE_PRESSED, now, modifierMask or InputEvent.BUTTON1_DOWN_MASK, start.x, start.y, 1, false, MouseEvent.BUTTON1))
+        val origin = onEventThread {
+            mouseTarget(fromX, fromY)
+            window.locationOnScreen
+        }
+        withRobotModifiers(modifiers) {
+            robot.mouseMove(origin.x + fromX, origin.y + fromY)
+            robot.mousePress(InputEvent.BUTTON1_DOWN_MASK)
             repeat(20) { step ->
                 val ratio = (step + 1) / 20.0
                 val x = (fromX + (toX - fromX) * ratio).toInt()
                 val y = (fromY + (toY - fromY) * ratio).toInt()
-                val point = SwingUtilities.convertPoint(window, x, y, target)
-                target.dispatchEvent(MouseEvent(target, MouseEvent.MOUSE_DRAGGED, now + step + 1L, modifierMask or InputEvent.BUTTON1_DOWN_MASK, point.x, point.y, 0, false, MouseEvent.NOBUTTON))
+                robot.mouseMove(origin.x + x, origin.y + y)
+                robot.delay(8)
             }
-            val end = SwingUtilities.convertPoint(window, toX, toY, target)
-            target.dispatchEvent(MouseEvent(target, MouseEvent.MOUSE_RELEASED, now + 22, modifierMask, end.x, end.y, 1, false, MouseEvent.BUTTON1))
+            robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK)
+        }
+    }
+
+    private fun dispatchMouseWheel(x: Int, y: Int, delta: Int, modifiers: List<String>) {
+        val point = onEventThread {
+            mouseTarget(x, y)
+            window.locationOnScreen.let { Point(it.x + x, it.y + y) }
+        }
+        withRobotModifiers(modifiers) {
+            robot.mouseMove(point.x, point.y)
+            robot.mouseWheel(delta)
+        }
+    }
+
+    private fun withRobotModifiers(modifiers: List<String>, action: () -> Unit) {
+        val keys = modifiers.mapNotNull { modifier ->
+            when (modifier.uppercase()) {
+                "CTRL", "CONTROL" -> KeyEvent.VK_CONTROL
+                "SHIFT" -> KeyEvent.VK_SHIFT
+                "ALT" -> KeyEvent.VK_ALT
+                else -> null
+            }
+        }.distinct()
+        keys.forEach(robot::keyPress)
+        try {
+            action()
+        } finally {
+            keys.asReversed().forEach(robot::keyRelease)
         }
     }
 
@@ -303,19 +371,37 @@ internal class UiTestApi private constructor(
     }
 
     private fun typeText(value: String) {
-        val strokes = value.map(::robotKeyForChar)
-        if (strokes.any { it == null }) {
-            pasteText(value)
-            return
-        }
-        strokes.filterNotNull().forEach { stroke ->
-            if (stroke.shift) robot.keyPress(KeyEvent.VK_SHIFT)
-            try {
-                robot.keyPress(stroke.code)
-                robot.keyRelease(stroke.code)
-            } finally {
-                if (stroke.shift) robot.keyRelease(KeyEvent.VK_SHIFT)
+        onEventThread {
+            val target = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+                ?: throw IllegalStateException("no focused input control")
+            value.forEach { char ->
+                target.dispatchEvent(KeyEvent(
+                    target,
+                    KeyEvent.KEY_TYPED,
+                    System.currentTimeMillis(),
+                    0,
+                    KeyEvent.VK_UNDEFINED,
+                    char,
+                ))
             }
+        }
+    }
+
+    private fun dispatchKeyStroke(code: Int, modifiers: List<String>) {
+        onEventThread {
+            val target = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+                ?: throw IllegalStateException("no focused control")
+            val modifierMask = modifiers.fold(0) { mask, modifier ->
+                mask or when (modifier.uppercase()) {
+                    "CTRL", "CONTROL" -> InputEvent.CTRL_DOWN_MASK
+                    "SHIFT" -> InputEvent.SHIFT_DOWN_MASK
+                    "ALT" -> InputEvent.ALT_DOWN_MASK
+                    else -> 0
+                }
+            }
+            val now = System.currentTimeMillis()
+            target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_PRESSED, now, modifierMask, code, KeyEvent.CHAR_UNDEFINED))
+            target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_RELEASED, now + 1, modifierMask, code, KeyEvent.CHAR_UNDEFINED))
         }
     }
 
@@ -324,10 +410,7 @@ internal class UiTestApi private constructor(
         val previous = runCatching { clipboard.getContents(null) }.getOrNull()
         clipboard.setContents(StringSelection(value), null)
         try {
-            robot.keyPress(KeyEvent.VK_CONTROL)
-            robot.keyPress(KeyEvent.VK_V)
-            robot.keyRelease(KeyEvent.VK_V)
-            robot.keyRelease(KeyEvent.VK_CONTROL)
+            dispatchKeyStroke(KeyEvent.VK_V, listOf("CTRL"))
             robot.waitForIdle()
             Thread.sleep(250)
         } finally {

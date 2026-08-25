@@ -57,7 +57,8 @@ fn open_workbench() -> Result<(), String> {
         eprintln!("tray action: restored the running workbench");
         return Ok(());
     }
-    let engine = std::env::current_exe().map_err(|error| format!("resolve engine path: {error}"))?;
+    let engine =
+        std::env::current_exe().map_err(|error| format!("resolve engine path: {error}"))?;
     let launcher = workbench_candidates(&engine)
         .into_iter()
         .find(|candidate| candidate.is_file())
@@ -92,10 +93,17 @@ fn start_resident_tray() {
 }
 
 fn main() -> ExitCode {
-    if std::env::args().any(|arg| arg == "--player-process") {
+    let args = std::env::args().collect::<Vec<_>>();
+    if args.iter().any(|arg| arg == "--player-process") {
         return ExitCode::from(hls_native_shell::run_player_process() as u8);
     }
-    if std::env::args().any(|arg| arg == "--self-test") {
+    if args.iter().any(|arg| arg == "--register-native-host") {
+        return native_host_registration(false);
+    }
+    if args.iter().any(|arg| arg == "--unregister-native-host") {
+        return native_host_registration(true);
+    }
+    if args.iter().any(|arg| arg == "--self-test") {
         match hls_native_shell::CoreServer::in_memory() {
             Ok(server) => match server.coordinator().tasks() {
                 Ok(tasks) if tasks.is_empty() => {
@@ -114,6 +122,11 @@ fn main() -> ExitCode {
             }
         }
     } else {
+        if let Ok(engine) = std::env::current_exe() {
+            if let Err(error) = hls_native_shell::register_packaged_native_host(&engine) {
+                eprintln!("Native Host automatic registration skipped: {error}");
+            }
+        }
         if let Err(error) = hls_native_shell::claim_v7_instance() {
             if error.contains("already running") {
                 return ExitCode::SUCCESS;
@@ -149,6 +162,34 @@ fn main() -> ExitCode {
     }
 }
 
+fn native_host_registration(unregister: bool) -> ExitCode {
+    let engine = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("resolve Engine path for Native Host registration: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let result = if unregister {
+        hls_native_shell::unregister_packaged_native_host(&engine)
+    } else {
+        hls_native_shell::register_packaged_native_host(&engine)
+    };
+    match result {
+        Ok(count) => {
+            println!(
+                "Native Host {} complete: {count} registration(s)",
+                if unregister { "cleanup" } else { "repair" }
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Native Host registration failed: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::workbench_candidates;
@@ -159,9 +200,10 @@ mod tests {
         let candidates = workbench_candidates(Path::new(
             r"C:\Users\tester\AppData\Local\Programs\HLSDownloader\app\resources\HLSDownloaderEngine.exe",
         ));
-        assert!(candidates.contains(&Path::new(
-            r"C:\Users\tester\AppData\Local\Programs\HLSDownloader\HLSDownloader.exe"
-        ).to_path_buf()));
+        assert!(candidates.contains(
+            &Path::new(r"C:\Users\tester\AppData\Local\Programs\HLSDownloader\HLSDownloader.exe")
+                .to_path_buf()
+        ));
     }
 
     #[test]
@@ -171,5 +213,7 @@ mod tests {
         assert!(source.contains("hls_native_shell::spawn_tray(sender)"));
         assert!(source.contains("focus_existing_workbench()"));
         assert!(source.contains("SunAwtFrame"));
+        assert!(source.contains("register_packaged_native_host"));
+        assert!(source.contains("--unregister-native-host"));
     }
 }

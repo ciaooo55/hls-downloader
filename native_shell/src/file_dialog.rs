@@ -32,7 +32,7 @@ fn windows_open() -> Vec<PathBuf> {
     };
 
     let mut buffer = vec![0u16; 32_768];
-    let mut filter: Vec<u16> = "Download sources\0*.torrent;*.url;*.magnet;*.m3u;*.m3u8;*.mpd;*.html;*.htm;*.meta4;*.metalink;*.txt\0All files\0*.*\0\0"
+    let mut filter: Vec<u16> = "Download sources\0*.torrent;*.url;*.magnet;*.m3u;*.m3u8;*.mpd;*.html;*.htm;*.meta4;*.metalink;*.txt;*.json\0All files\0*.*\0\0"
         .encode_utf16()
         .collect();
     let mut ofn = unsafe { std::mem::zeroed::<OPENFILENAMEW>() };

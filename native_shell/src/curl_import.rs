@@ -8,6 +8,7 @@ pub struct CurlDownload {
     pub method: String,
     pub body: String,
     pub referer: String,
+    pub origin: String,
     pub cookie: String,
     pub user_agent: String,
     pub headers: BTreeMap<String, String>,
@@ -113,9 +114,9 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
         );
     }
     let referer = headers.remove("referer").unwrap_or_default();
+    let origin = headers.remove("origin").unwrap_or_default();
     let cookie = headers.remove("cookie").unwrap_or_default();
     let user_agent = headers.remove("user-agent").unwrap_or_default();
-    headers.remove("origin");
     headers.remove("content-length");
     headers.remove("range");
     Ok(Some(CurlDownload {
@@ -123,6 +124,7 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
         method,
         body,
         referer,
+        origin,
         cookie,
         user_agent,
         headers,
@@ -133,7 +135,7 @@ fn basic_auth(value: &str) -> String {
     format!("Basic {}", base64_encode(value.as_bytes()))
 }
 
-fn base64_encode(bytes: &[u8]) -> String {
+pub(crate) fn base64_encode(bytes: &[u8]) -> String {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for chunk in bytes.chunks(3) {

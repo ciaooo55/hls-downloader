@@ -32,8 +32,7 @@ static TRAY_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsiz
 #[cfg(windows)]
 static TRAY_ICON: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 #[cfg(windows)]
-static TASKBAR_CREATED_MESSAGE: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(0);
+static TASKBAR_CREATED_MESSAGE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 #[cfg(windows)]
 unsafe fn load_product_icon() -> windows_sys::Win32::UI::WindowsAndMessaging::HICON {
@@ -140,10 +139,9 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow,
         DispatchMessageW, GetCursorPos, GetMessageW, PostQuitMessage, RegisterClassW,
-        RegisterWindowMessageW,
-        SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
-        CW_USEDEFAULT, HWND_MESSAGE, MF_STRING, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND,
-        WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
+        RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
+        CS_VREDRAW, CW_USEDEFAULT, HWND_MESSAGE, MF_STRING, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_APP,
+        WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
     };
 
     const WM_TRAY: u32 = WM_APP + 32;
@@ -230,13 +228,7 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
         DispatchMessageW(&msg);
     }
     Shell_NotifyIconW(NIM_DELETE, &data);
-    let _ = (
-        WM_COMMAND,
-        WM_LBUTTONUP,
-        WM_RBUTTONUP,
-        ID_SHOW,
-        ID_QUIT,
-    );
+    let _ = (WM_COMMAND, WM_LBUTTONUP, WM_RBUTTONUP, ID_SHOW, ID_QUIT);
     DestroyWindow(hwnd);
 }
 
@@ -250,10 +242,10 @@ unsafe extern "system" fn tray_wnd_proc(
     use windows_sys::Win32::Foundation::POINT;
     #[allow(unused_imports)]
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        AppendMenuW, CreatePopupMenu, DefWindowProcW, DestroyMenu, GetCursorPos,
-        GetWindowLongPtrW, PostMessageW, PostQuitMessage, SetForegroundWindow, TrackPopupMenu,
-        GWLP_USERDATA, MF_STRING, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY,
-        WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP,
+        AppendMenuW, CreatePopupMenu, DefWindowProcW, DestroyMenu, GetCursorPos, GetWindowLongPtrW,
+        PostMessageW, PostQuitMessage, SetForegroundWindow, TrackPopupMenu, GWLP_USERDATA,
+        MF_STRING, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
+        WM_NULL, WM_RBUTTONUP,
     };
 
     const WM_TRAY: u32 = WM_APP + 32;

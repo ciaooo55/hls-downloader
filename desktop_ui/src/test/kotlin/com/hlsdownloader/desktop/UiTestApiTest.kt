@@ -16,13 +16,18 @@ class UiTestApiTest {
         assertNull(validateUiTestAction(UiTestAction("click", 100, 200), 1024, 600))
         assertNull(validateUiTestAction(UiTestAction("right_click", 1023, 599), 1024, 600))
         assertNull(validateUiTestAction(UiTestAction("drag", 10, 20, 300, 400), 1024, 600))
+        assertNull(validateUiTestAction(UiTestAction("scroll", x = 500, y = 300, delta = 4), 1024, 600))
         assertNull(validateUiTestAction(UiTestAction(type = "select_task", index = 4, modifiers = listOf("CTRL")), 1024, 600))
+        assertNull(validateUiTestAction(UiTestAction(type = "open_task_menu", index = 4, x = 500, y = 300), 1024, 600))
         assertNull(validateUiTestAction(UiTestAction("key", key = "F5"), 1024, 600))
         assertNull(validateUiTestAction(UiTestAction("type", text = "测试 text"), 1024, 600))
         assertEquals("coordinates are outside the current window", validateUiTestAction(UiTestAction("click", 1024, 20), 1024, 600))
         assertEquals("click actions require x and y", validateUiTestAction(UiTestAction("click"), 1024, 600))
         assertEquals("drag actions require x, y, to_x and to_y", validateUiTestAction(UiTestAction("drag", 10, 20), 1024, 600))
+        assertEquals("scroll action requires x, y and a non-zero delta", validateUiTestAction(UiTestAction("scroll", x = 10, y = 20), 1024, 600))
+        assertEquals("scroll delta must be between -20 and 20", validateUiTestAction(UiTestAction("scroll", x = 10, y = 20, delta = 21), 1024, 600))
         assertEquals("select_task requires a non-negative index", validateUiTestAction(UiTestAction(type = "select_task"), 1024, 600))
+        assertEquals("open_task_menu requires x and y", validateUiTestAction(UiTestAction(type = "open_task_menu", index = 0), 1024, 600))
         assertEquals("key action requires key", validateUiTestAction(UiTestAction("key"), 1024, 600))
         assertEquals("text exceeds 8192 characters", validateUiTestAction(UiTestAction("type", text = "x".repeat(8193)), 1024, 600))
         assertEquals("unsupported action type", validateUiTestAction(UiTestAction("shell"), 1024, 600))
@@ -51,6 +56,20 @@ class UiTestApiTest {
         UiTestState.updateSelection(setOf("task-c", "task-a", "task-b"))
         assertEquals(3, UiTestState.snapshot().selectedCount)
         assertEquals(listOf("task-a", "task-b", "task-c"), UiTestState.snapshot().selectedTaskIds)
+    }
+
+    @Test
+    fun context_menu_state_exposes_pointer_targets_and_actions() {
+        UiTestState.updateContextMenu(
+            androidx.compose.ui.unit.IntOffset(440, 292),
+            setOf("task-c", "task-a"),
+            listOf("pause", "delete"),
+        )
+
+        val snapshot = UiTestState.snapshot()
+        assertEquals(listOf(440, 292), snapshot.contextMenuPosition)
+        assertEquals(listOf("task-a", "task-c"), snapshot.contextMenuTaskIds)
+        assertEquals(listOf("pause", "delete"), snapshot.contextMenuActions)
     }
 
     @Test
