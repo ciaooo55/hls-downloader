@@ -56,6 +56,7 @@ track switching and process-kill recovery remain promotion gates.
 `scripts/build-v7.ps1 -Task candidate` creates a machine-validation package in
 `artifacts/v7-productization/candidate` with the Rust engine, versioned Native
 Messaging host, warm presenter, bundled FFmpeg tools and pinned `libmpv-2.dll`.
+The candidate artifact set includes installer EXE, MSI and Portable ZIP outputs.
 It requires the canonical matrix, no blocked features and a clean Git worktree.
 Partial features remain eligible because the candidate is the evidence vehicle
 for closing those gaps; `release_ready` remains available for the external

@@ -200,11 +200,14 @@ $env:HLS_ENGINE_PATH = $engine
     }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     if ($isPackage) {
+        $exe = Get-ChildItem -LiteralPath 'D:\HLSDownloaderBuildCache\compose-build\compose\binaries\main\exe' -Filter 'HLSDownloader-7.0.0.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $exe) { throw 'The v7 installer EXE was not produced in the isolated build cache.' }
         $msi = Get-ChildItem -LiteralPath 'D:\HLSDownloaderBuildCache\compose-build\compose\binaries\main\msi' -Filter 'HLSDownloader-7.0.0.msi' -File -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $msi) { throw 'The v7 MSI was not produced in the isolated build cache.' }
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\set-v7-msi-rollback-order.ps1" -MsiPath $msi.FullName
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+        Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64$artifactSuffix.exe")) -Force
         Copy-Item -LiteralPath $msi.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64$artifactSuffix.msi")) -Force
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\create-v7-portable.ps1" -OutZip (Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64-Portable$artifactSuffix.zip"))
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -243,7 +246,6 @@ $env:HLS_ENGINE_PATH = $engine
     if ($null -ne $candidateStagingRoot -and (Test-Path -LiteralPath $candidateStagingRoot)) {
         Remove-Item -LiteralPath $candidateStagingRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
-    if ($null -ne $candidateSwapBackupRoot -and (Test-Path -LiteralPath $candidateSwapBackupRoot)) {
-        Remove-Item -LiteralPath $candidateSwapBackupRoot -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    # A swap failure may leave the last usable candidate at the backup path.
+    # Preserve it for manual recovery when the in-place restoration also fails.
 }

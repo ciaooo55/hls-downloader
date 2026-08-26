@@ -36,7 +36,7 @@
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-v7.ps1 -Task candidate
 ```
 
-候选产物写入 `artifacts/v7-productization/candidate`，并在
+候选 EXE、MSI 和 Portable ZIP 写入 `artifacts/v7-productization/candidate`，并在
 `BUILD-PROVENANCE.json` 中标记 `package_tier=candidate`。候选门禁接受
 canonical feature parity、`blocked=0` 和 clean Git worktree，允许当前
 `partial` 项，因此可以在 `release_ready=false` 时生成用于实机验证的包。
