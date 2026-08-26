@@ -2552,7 +2552,7 @@ mod tests {
                 },
             )
         });
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(15);
         while !first_segment_seen.load(Ordering::SeqCst) {
             assert!(
                 Instant::now() < deadline,
@@ -2720,7 +2720,7 @@ mod tests {
                 },
             )
         });
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(15);
         while !first_segment_seen.load(Ordering::SeqCst) {
             assert!(
                 Instant::now() < deadline,

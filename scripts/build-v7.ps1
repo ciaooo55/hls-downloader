@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidateSet('run','test','package','adversarial')][string]$Task='run')
+param([ValidateSet('run','test','candidate','package','adversarial')][string]$Task='run')
 $ErrorActionPreference = 'Stop'
 $repo=(Resolve-Path "$PSScriptRoot\..").Path
 $protocolSource = Get-Content -LiteralPath (Join-Path $repo 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt') -Raw -Encoding UTF8
@@ -11,10 +11,45 @@ if ($contractSource -notmatch 'V7_PROTOCOL_NAME') {
     throw 'v7 build refused: Rust v7 protocol contract is missing.'
 }
 $featureParity = Join-Path $repo 'artifacts\v7-productization\feature-parity.json'
-$provenance = Join-Path $repo 'artifacts\v7-productization\package\BUILD-PROVENANCE.json'
+$isPackage = @('candidate', 'package') -contains $Task
+$packageTier = if ($Task -eq 'candidate') { 'candidate' } else { 'formal' }
+$packageRoot = if ($Task -eq 'candidate') {
+    Join-Path $repo 'artifacts\v7-productization\candidate'
+} else {
+    Join-Path $repo 'artifacts\v7-productization\package'
+}
+$provenance = Join-Path $packageRoot 'BUILD-PROVENANCE.json'
+$artifactSuffix = if ($Task -eq 'candidate') { '-candidate' } else { '' }
+$provenanceForBuild = $provenance
+$candidateProvenanceTemp = $null
+$candidateStagingRoot = $null
+$candidateSwapBackupRoot = $null
+if ($Task -eq 'candidate') {
+    # Candidate packages are for external machine validation. They require the
+    # canonical matrix, no blocked features and a clean tree, but not
+    # release_ready or complete verification yet.
+    # Write provenance outside the replaceable candidate directory first, so a
+    # Failed gates never destroy the last candidate that passed validation.
+    $candidateProvenanceTemp = Join-Path (Split-Path $packageRoot -Parent) ('.BUILD-PROVENANCE.candidate.' + [guid]::NewGuid().ToString('n') + '.tmp')
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireNoBlocked -RequireCleanWorktree -PackageTier candidate -ProvenancePath $candidateProvenanceTemp
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item -LiteralPath $candidateProvenanceTemp -Force -ErrorAction SilentlyContinue
+        exit $LASTEXITCODE
+    }
+}
 if ($Task -eq 'package') {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireReleaseReady -RequireCleanWorktree -ProvenancePath $provenance
+    # Formal packages add the release_ready decision after candidate validation.
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireCanonicalComplete -RequireReleaseReady -RequireCleanWorktree -PackageTier formal -ProvenancePath $provenance
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+try {
+$artifactRoot = $packageRoot
+if ($Task -eq 'candidate') {
+    $candidateStagingRoot = Join-Path (Split-Path $packageRoot -Parent) ('.candidate-staging.' + [guid]::NewGuid().ToString('n'))
+    New-Item -ItemType Directory -Force -Path $candidateStagingRoot | Out-Null
+    $provenanceForBuild = Join-Path $candidateStagingRoot 'BUILD-PROVENANCE.json'
+    Move-Item -LiteralPath $candidateProvenanceTemp -Destination $provenanceForBuild -Force
+    $artifactRoot = $candidateStagingRoot
 }
 $env:CARGO_HOME='E:\HLSDownloaderBuildCache\cargo'
 $env:CARGO_TARGET_DIR='D:\HLSDownloaderBuildCache\cargo-target'
@@ -95,7 +130,7 @@ function Copy-CurlImpersonate([string]$Destination) {
     }
 }
 $cargo = 'C:\Users\lee\.cargo\bin\cargo.exe'
-$engineTarget = if ($Task -eq 'package') { 'release' } else { 'debug' }
+$engineTarget = if ($isPackage) { 'release' } else { 'debug' }
 & $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-engine
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin HLSDownloaderNativeHost
@@ -112,7 +147,9 @@ $updater = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloaderUpdater.e
 if (!(Test-Path -LiteralPath $updater)) { throw "Update helper was not produced: $updater" }
 $presenter = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\hls-downloader-presenter.exe"
 if (!(Test-Path -LiteralPath $presenter)) { throw "v7 presenter was not produced: $presenter" }
-if ($Task -eq 'package') {
+Push-Location "$repo\desktop_ui"
+try {
+if ($isPackage) {
     $resources = Join-Path $repo 'desktop_ui\resources\common'
     New-Item -ItemType Directory -Force -Path $resources | Out-Null
     Copy-Item -LiteralPath (Join-Path $repo 'assets\app-icon.ico') -Destination (Join-Path $resources 'app-icon.ico') -Force
@@ -122,7 +159,7 @@ if ($Task -eq 'package') {
     Copy-Item -LiteralPath $updater -Destination (Join-Path $resources 'HLSDownloaderUpdater.exe') -Force
     Copy-Item -LiteralPath $presenter -Destination (Join-Path $resources 'HLSDownloaderPresenter.exe') -Force
     Copy-Item -LiteralPath $featureParity -Destination (Join-Path $resources 'FEATURE-PARITY.json') -Force
-    Copy-Item -LiteralPath $provenance -Destination (Join-Path $resources 'BUILD-PROVENANCE.json') -Force
+    Copy-Item -LiteralPath $provenanceForBuild -Destination (Join-Path $resources 'BUILD-PROVENANCE.json') -Force
     # Ship the media tools beside the v7 workbench when the local toolchain
     # provides them. The Core reads these names from its packaged directory.
     $ffmpegRoot = 'C:\Users\lee\.conda\envs\test\Library\bin'
@@ -141,8 +178,6 @@ if ($Task -eq 'package') {
     }
 }
 $env:HLS_ENGINE_PATH = $engine
-Push-Location "$repo\desktop_ui"
-try {
     switch ($Task) {
         'run' {
             $engineProcess = Start-Process -FilePath $engine -WorkingDirectory (Split-Path $engine -Parent) -PassThru
@@ -153,17 +188,57 @@ try {
             }
         }
         'test' { & .\gradlew.bat test }
-    'package' { & .\gradlew.bat clean createDistributable packageDistributionForCurrentOS }
+    'candidate' { & .\gradlew.bat clean createDistributable packageDistributionForCurrentOS }
+        'package' { & .\gradlew.bat clean createDistributable packageDistributionForCurrentOS }
         'adversarial' { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\adversarial-v7.ps1" -Scope native }
     }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    if ($Task -eq 'package') {
+    if ($isPackage) {
         $msi = Get-ChildItem -LiteralPath 'D:\HLSDownloaderBuildCache\compose-build\compose\binaries\main\msi' -Filter 'HLSDownloader-7.0.0.msi' -File -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $msi) { throw 'The v7 MSI was not produced in the isolated build cache.' }
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\set-v7-msi-rollback-order.ps1" -MsiPath $msi.FullName
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\create-v7-portable.ps1" -OutZip "$repo\artifacts\v7-productization\package\HLSDownloader-7.0.0-Windows-x64-Portable.zip"
+        New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+        Copy-Item -LiteralPath $msi.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64$artifactSuffix.msi")) -Force
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\create-v7-portable.ps1" -OutZip (Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64-Portable$artifactSuffix.zip"))
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        Copy-Item -LiteralPath $featureParity -Destination "$repo\artifacts\v7-productization\package\FEATURE-PARITY.json" -Force
+        Copy-Item -LiteralPath $featureParity -Destination (Join-Path $artifactRoot 'FEATURE-PARITY.json') -Force
+        Copy-Item -LiteralPath $provenanceForBuild -Destination (Join-Path $artifactRoot 'BUILD-PROVENANCE.json') -Force
+        if ($Task -eq 'candidate') {
+            # Swap the complete staging directory only after every artifact is ready.
+            $candidateSwapBackupRoot = Join-Path (Split-Path $packageRoot -Parent) ('.candidate-backup.' + [guid]::NewGuid().ToString('n'))
+            try {
+                if (Test-Path -LiteralPath $packageRoot) {
+                    Move-Item -LiteralPath $packageRoot -Destination $candidateSwapBackupRoot
+                }
+                Move-Item -LiteralPath $candidateStagingRoot -Destination $packageRoot
+                if (Test-Path -LiteralPath $candidateSwapBackupRoot) {
+                    Remove-Item -LiteralPath $candidateSwapBackupRoot -Recurse -Force -ErrorAction Stop
+                }
+                $candidateStagingRoot = $null
+                $candidateSwapBackupRoot = $null
+            } catch {
+                if (Test-Path -LiteralPath $packageRoot) {
+                    Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                if (Test-Path -LiteralPath $candidateSwapBackupRoot) {
+                    Move-Item -LiteralPath $candidateSwapBackupRoot -Destination $packageRoot -Force
+                }
+                throw
+            }
+        }
     }
-} finally { Pop-Location }
+} finally {
+    Pop-Location
+}
+} finally {
+    if ($null -ne $candidateProvenanceTemp -and (Test-Path -LiteralPath $candidateProvenanceTemp)) {
+        Remove-Item -LiteralPath $candidateProvenanceTemp -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $candidateStagingRoot -and (Test-Path -LiteralPath $candidateStagingRoot)) {
+        Remove-Item -LiteralPath $candidateStagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $candidateSwapBackupRoot -and (Test-Path -LiteralPath $candidateSwapBackupRoot)) {
+        Remove-Item -LiteralPath $candidateSwapBackupRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}

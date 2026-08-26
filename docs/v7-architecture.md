@@ -53,13 +53,19 @@ now launches `--player-process` for player commands; only that child loads
 libmpv, while Core keeps a bounded JSON control channel. Real Windows libmpv
 track switching and process-kill recovery remain promotion gates.
 
-`scripts/build-v7.ps1 -Task package` creates the v7 Compose distribution with
-the Rust engine, versioned Native Messaging host, warm presenter, bundled
-FFmpeg tools and pinned `libmpv-2.dll`. The Portable artifact also carries the
-v7 Native Messaging manifests and atomic upgrade/rollback script. The resulting
-EXE/MSI/Portable artifacts are usable local deliverables. v6 remains the
-rollback path until the independent MSI install, upgrade, uninstall and
-registration gate is completed.
+`scripts/build-v7.ps1 -Task candidate` creates a machine-validation package in
+`artifacts/v7-productization/candidate` with the Rust engine, versioned Native
+Messaging host, warm presenter, bundled FFmpeg tools and pinned `libmpv-2.dll`.
+It requires the canonical matrix, no blocked features and a clean Git worktree.
+Partial features remain eligible because the candidate is the evidence vehicle
+for closing those gaps; `release_ready` remains available for the external
+validation decision.
+`scripts/build-v7.ps1 -Task package` creates the formal package in the existing
+`artifacts/v7-productization/package` directory and adds the `release_ready=true`
+gate after all 28 features are verified. Both package tiers carry the v7 Native
+Messaging manifests and atomic upgrade/rollback script. v6 remains the rollback
+path until the independent MSI install, upgrade, uninstall and registration gate
+is completed.
 
 ## Promotion gates
 

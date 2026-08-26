@@ -4,8 +4,10 @@
 
 ## 已通过
 
-- 功能合同：唯一权威清单为 `artifacts/v7-productization/feature-parity.json`，当前 `26/28` verified、`2` partial。正式打包要求清单全部 verified、`release_ready=true` 且 Git 工作树干净。
-- Rust Core：`331/331`，覆盖 IPC、数据库、HTTP/HLS/DASH、FTP/SFTP、BT、播放器、投屏、迁移和恶意输入。
+- 功能合同：唯一权威清单为 `artifacts/v7-productization/feature-parity.json`，当前 `26/28` verified、`2` partial。候选打包要求 canonical 清单、无 blocked 项且 Git 工作树干净，允许 partial 以便通过实机证据关闭；正式打包要求全部 `28/28` verified，并额外要求 `release_ready=true`。
+- Rust Core：`334/334`，覆盖 IPC、数据库、HTTP/HLS/DASH、FTP/SFTP、BT、播放器、投屏、迁移和恶意输入。
+- HLS 候选证据：认证 VOD/Live 均覆盖未授权 `401`、Authorization 传递、暂停、checkpoint 和不重复分片恢复；Windows PowerShell 5.1 放大复跑 `10/10` VOD 与 `10/10` Live 通过。
+- BT 候选证据：Core 经过本地 tracker/peer 完成传输中文件切换、in-flight Cancel、保留文件完成和选中输出物化；PS7 连续 3 次、PS5.1 1 次通过。
 - HTTP 分段专项：`39/39`；96 MiB 实际 Range 下载 `76.82 MiB/s`，32 个分段无重叠，发布后额外网络字节为 `0`。
 - Compose：协议、组件、选择、右键菜单、设置、敌对输入和性能测试通过；1000 任务模型 P95 `14.802ms`。
 - 热确认窗口：可见 P95 `31.03ms`，Native Host 提交 P95 `6.65ms`，提交到可见 P95 `27.95ms`，门槛均为 `100ms`。
@@ -25,6 +27,27 @@
 - Portable ZIP：`0F9485BB60EBC10051C66B51321E3EE9A73A9D363205B4EEF07F93667409B406`
 
 这些哈希描述 2026-08-24 的本机受测构建，不作为后续不同提交产物的固定哈希。
+
+## 候选包与正式包
+
+候选包用于外部 Windows 实机验收，不代表正式发布决定：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-v7.ps1 -Task candidate
+```
+
+候选产物写入 `artifacts/v7-productization/candidate`，并在
+`BUILD-PROVENANCE.json` 中标记 `package_tier=candidate`。候选门禁接受
+canonical feature parity、`blocked=0` 和 clean Git worktree，允许当前
+`partial` 项，因此可以在 `release_ready=false` 时生成用于实机验证的包。
+实机/端点证据用于关闭 partial；全部 28 项 verified 后，正式包使用：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-v7.ps1 -Task package
+```
+
+正式产物继续写入既有的 `artifacts/v7-productization/package` 目录，并额外
+要求 `release_ready=true`。
 
 ## 正式标签前门槛
 

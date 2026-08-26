@@ -1,8 +1,12 @@
 [CmdletBinding()]
 param(
     [string]$FeatureParityPath = '',
+    [switch]$RequireCanonicalComplete,
+    [switch]$RequireNoBlocked,
     [switch]$RequireReleaseReady,
     [switch]$RequireCleanWorktree,
+    [ValidateSet('candidate', 'formal')]
+    [string]$PackageTier = '',
     [string]$ProvenancePath = ''
 )
 
@@ -81,6 +85,19 @@ if (
 ) {
     $errors.Add('Feature parity summary does not match the feature records.')
 }
+$requiresCanonical = $RequireCanonicalComplete -or $RequireReleaseReady -or $RequireCleanWorktree
+if ($requiresCanonical -and -not $path.Equals($canonicalPath, [StringComparison]::OrdinalIgnoreCase)) {
+    $errors.Add("Package validation must use the canonical feature parity matrix: $canonicalPath")
+}
+if ($RequireCanonicalComplete) {
+    if ($features.Count -ne 28 -or $verified.Count -ne 28) {
+        $errors.Add("Canonical feature parity must be complete: expected 28/28 verified, got $($verified.Count)/$($features.Count).")
+    }
+}
+if ($RequireNoBlocked -and $blocked.Count -ne 0) {
+    $incomplete = @($features | Where-Object status -eq 'blocked' | ForEach-Object { "$($_.id)=$($_.status)" })
+    $errors.Add("Blocked features are not allowed for candidate packaging: $($incomplete -join ', ')")
+}
 if ($RequireReleaseReady) {
     if ($json.release_ready -ne $true) {
         $errors.Add('release_ready must be true before formal packaging.')
@@ -97,19 +114,16 @@ $branch = Invoke-Git @('branch', '--show-current')
 $tag = Invoke-Git @('describe', '--exact-match', '--tags', 'HEAD') -AllowFailure
 $worktreeStatus = Invoke-Git @('status', '--porcelain=v1', '--untracked-files=all')
 if ($RequireCleanWorktree) {
-    if (-not $path.Equals($canonicalPath, [StringComparison]::OrdinalIgnoreCase)) {
-        $errors.Add("Formal packaging must use the canonical feature parity matrix: $canonicalPath")
-    }
     $trackedAudit = Invoke-Git @(
         'ls-files', '--error-unmatch', '--', 'artifacts/v7-productization/feature-parity.json'
     ) -AllowFailure
     if ([String]::IsNullOrWhiteSpace($trackedAudit)) {
-        $errors.Add('Canonical feature parity matrix must be tracked by Git before formal packaging.')
+        $errors.Add('Canonical feature parity matrix must be tracked by Git before package validation.')
     }
 }
 if ($RequireCleanWorktree -and -not [String]::IsNullOrWhiteSpace($worktreeStatus)) {
     $dirtyCount = @($worktreeStatus -split "`n" | Where-Object { -not [String]::IsNullOrWhiteSpace($_) }).Count
-    $errors.Add("Formal packaging requires a clean Git worktree; found $dirtyCount changed path(s).")
+    $errors.Add("Package validation requires a clean Git worktree; found $dirtyCount changed path(s).")
 }
 
 if ($errors.Count -gt 0) {
@@ -135,6 +149,8 @@ if (-not [String]::IsNullOrWhiteSpace($ProvenancePath)) {
         source_branch = $branch
         source_tag = $tag
         git_worktree_clean = [String]::IsNullOrWhiteSpace($worktreeStatus)
+        package_tier = if ([String]::IsNullOrWhiteSpace($PackageTier)) { 'validation' } else { $PackageTier }
+        release_ready = ($json.release_ready -eq $true)
         feature_parity_path = $relativeFeaturePath
         feature_parity_sha256 = $featureHash
         feature_summary = [ordered]@{

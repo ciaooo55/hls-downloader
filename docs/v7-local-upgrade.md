@@ -12,11 +12,19 @@
 
 ## 升级命令
 
-先运行测试和生产构建：
+先运行测试和候选构建：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-v7.ps1 -Task test
 pwsh -NoProfile -Command "& { .\scripts\adversarial-v7.ps1 -Scope @('native','browser','transfer') }"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-v7.ps1 -Task candidate
+```
+
+候选包用于外部 Windows 实机验证，要求 canonical feature parity、无
+blocked 项且 Git 工作树干净，允许 partial 以便用验收证据关闭它们，不要求
+`release_ready=true`。全部 28 项 verified 且满足正式发布门禁后，再构建正式包：
+
+```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-v7.ps1 -Task package
 ```
 
