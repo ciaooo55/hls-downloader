@@ -2242,6 +2242,9 @@ fn read_control(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Condvar;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn master_prefers_resolution_over_audio_only() {
@@ -2442,6 +2445,338 @@ mod tests {
         let playlist = std::fs::read_to_string(dir.join("local.m3u8")).unwrap();
         assert!(playlist.contains("#EXT-X-ENDLIST"));
         assert!(playlist.contains("#EXT-X-PLAYLIST-TYPE:VOD"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn authenticated_vod_pause_resume_reuses_completed_segments() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let first_segment_seen = Arc::new(AtomicBool::new(false));
+        let release_first_segment = Arc::new((Mutex::new(false), Condvar::new()));
+        let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        let server_stop = Arc::clone(&stop);
+        let server_seen = Arc::clone(&first_segment_seen);
+        let server_release = Arc::clone(&release_first_segment);
+        let server_requests = Arc::clone(&requests);
+        let server = thread::spawn(move || {
+            while !server_stop.load(Ordering::SeqCst) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                };
+                let mut buf = [0u8; 4096];
+                let count = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..count]);
+                let target = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/");
+                let path = target.split('?').next().unwrap_or(target);
+                let authorized = request.lines().any(|line| {
+                    line.split_once(':').is_some_and(|(name, value)| {
+                        name.eq_ignore_ascii_case("authorization")
+                            && value.trim() == "Bearer hls-v7-test"
+                    })
+                });
+                if let Ok(mut log) = server_requests.lock() {
+                    log.push(format!("{path}|{authorized}"));
+                }
+                let (status, body): (u16, &[u8]) = if !authorized {
+                    (401, b"unauthorized")
+                } else if path == "/vod.m3u8" {
+                    (
+                        200,
+                        b"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nvod/a.ts\n#EXTINF:1,\nvod/b.ts\n#EXT-X-ENDLIST\n",
+                    )
+                } else if path == "/vod/a.ts" {
+                    if !server_seen.swap(true, Ordering::SeqCst) {
+                        let (lock, wake) = &*server_release;
+                        let mut released = lock.lock().unwrap();
+                        while !*released {
+                            released = wake.wait(released).unwrap();
+                        }
+                    }
+                    (200, b"AAA")
+                } else if path == "/vod/b.ts" {
+                    (200, b"BBB")
+                } else {
+                    (404, b"not found")
+                };
+                let header = format!(
+                    "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+
+        let dir = std::env::temp_dir().join(format!(
+            "hls-auth-vod-resume-{}-{}",
+            std::process::id(),
+            port
+        ));
+        let control = dir.join("control");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&control, "run").unwrap();
+        let url = format!("http://127.0.0.1:{port}/vod.m3u8");
+        let empty_headers = HashMap::new();
+        let (status, _) = fetch_hls_bytes(&url, &empty_headers, "").unwrap();
+        assert_eq!(status, 401, "the fixture must reject missing credentials");
+
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".into(), "Bearer hls-v7-test".into());
+        let first_headers = headers.clone();
+        let first_dir = dir.clone();
+        let first_control = control.clone();
+        let first_url = url.clone();
+        let first = thread::spawn(move || {
+            download_hls_with(
+                &first_url,
+                &first_headers,
+                "",
+                &first_dir,
+                &first_control,
+                HlsDownloadOptions {
+                    concurrency: 1,
+                    ..HlsDownloadOptions::default()
+                },
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !first_segment_seen.load(Ordering::SeqCst) {
+            assert!(
+                Instant::now() < deadline,
+                "server did not receive the first segment"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        std::fs::write(&control, "pause").unwrap();
+        let (lock, wake) = &*release_first_segment;
+        *lock.lock().unwrap() = true;
+        wake.notify_all();
+        assert_eq!(first.join().unwrap().unwrap_err(), "paused");
+
+        std::fs::write(&control, "run").unwrap();
+        let merged = download_hls_with(
+            &url,
+            &headers,
+            "",
+            &dir,
+            &control,
+            HlsDownloadOptions {
+                concurrency: 1,
+                ..HlsDownloadOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&merged).unwrap(), b"AAABBB");
+        let log = requests.lock().unwrap().clone();
+        assert_eq!(
+            log.iter()
+                .filter(|entry| entry.as_str() == "/vod/a.ts|true")
+                .count(),
+            1,
+            "resume must reuse the completed first segment"
+        );
+        assert_eq!(
+            log.iter()
+                .filter(|entry| entry.as_str() == "/vod/b.ts|true")
+                .count(),
+            1
+        );
+        assert_eq!(
+            log.iter().filter(|entry| entry.ends_with("|false")).count(),
+            1,
+            "only the explicit unauthenticated probe may be rejected"
+        );
+        stop.store(true, Ordering::SeqCst);
+        server.join().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn authenticated_live_pause_resume_restores_atomic_timeline() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let playlist_requests = Arc::new(AtomicUsize::new(0));
+        let first_segment_seen = Arc::new(AtomicBool::new(false));
+        let release_first_segment = Arc::new((Mutex::new(false), Condvar::new()));
+        let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        let server_stop = Arc::clone(&stop);
+        let server_playlists = Arc::clone(&playlist_requests);
+        let server_seen = Arc::clone(&first_segment_seen);
+        let server_release = Arc::clone(&release_first_segment);
+        let server_requests = Arc::clone(&requests);
+        let server = thread::spawn(move || {
+            while !server_stop.load(Ordering::SeqCst) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                };
+                let mut buf = [0u8; 4096];
+                let count = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..count]);
+                let target = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/");
+                let path = target.split('?').next().unwrap_or(target);
+                let authorized = request.lines().any(|line| {
+                    line.split_once(':').is_some_and(|(name, value)| {
+                        name.eq_ignore_ascii_case("authorization")
+                            && value.trim() == "Bearer hls-v7-test"
+                    })
+                });
+                if let Ok(mut log) = server_requests.lock() {
+                    log.push(format!("{path}|{authorized}"));
+                }
+                let (status, body): (u16, &[u8]) = if !authorized {
+                    (401, b"unauthorized")
+                } else if path == "/live.m3u8" {
+                    let number = server_playlists.fetch_add(1, Ordering::SeqCst);
+                    if number == 0 {
+                        (
+                            200,
+                            b"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:1,\nlive/0.ts\n",
+                        )
+                    } else {
+                        (
+                            200,
+                            b"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:1,\nlive/1.ts\n#EXT-X-ENDLIST\n",
+                        )
+                    }
+                } else if path == "/live/0.ts" {
+                    if !server_seen.swap(true, Ordering::SeqCst) {
+                        let (lock, wake) = &*server_release;
+                        let mut released = lock.lock().unwrap();
+                        while !*released {
+                            released = wake.wait(released).unwrap();
+                        }
+                    }
+                    (200, b"LIVE0")
+                } else if path == "/live/1.ts" {
+                    (200, b"LIVE1")
+                } else {
+                    (404, b"not found")
+                };
+                let header = format!(
+                    "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+
+        let dir = std::env::temp_dir().join(format!(
+            "hls-auth-live-resume-{}-{}",
+            std::process::id(),
+            port
+        ));
+        let control = dir.join("control");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&control, "run").unwrap();
+        let url = format!("http://127.0.0.1:{port}/live.m3u8");
+        let empty_headers = HashMap::new();
+        let (status, _) = fetch_hls_bytes(&url, &empty_headers, "").unwrap();
+        assert_eq!(status, 401, "the fixture must reject missing credentials");
+
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".into(), "Bearer hls-v7-test".into());
+        let first_headers = headers.clone();
+        let first_dir = dir.clone();
+        let first_control = control.clone();
+        let first_url = url.clone();
+        let first = thread::spawn(move || {
+            download_hls_with(
+                &first_url,
+                &first_headers,
+                "",
+                &first_dir,
+                &first_control,
+                HlsDownloadOptions {
+                    live: true,
+                    concurrency: 1,
+                    download_subtitles: false,
+                    ..HlsDownloadOptions::default()
+                },
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !first_segment_seen.load(Ordering::SeqCst) {
+            assert!(
+                Instant::now() < deadline,
+                "server did not receive the first live segment"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        std::fs::write(&control, "pause").unwrap();
+        let (lock, wake) = &*release_first_segment;
+        *lock.lock().unwrap() = true;
+        wake.notify_all();
+        assert_eq!(first.join().unwrap().unwrap_err(), "paused");
+
+        let checkpoint: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("live_state.json")).unwrap())
+                .unwrap();
+        assert_eq!(checkpoint["version"].as_u64(), Some(2));
+        assert_eq!(checkpoint["segments"].as_array().map(Vec::len), Some(1));
+
+        std::fs::write(&control, "run").unwrap();
+        let merged = download_hls_with(
+            &url,
+            &headers,
+            "",
+            &dir,
+            &control,
+            HlsDownloadOptions {
+                live: true,
+                concurrency: 1,
+                download_subtitles: false,
+                ..HlsDownloadOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&merged).unwrap(), b"LIVE0LIVE1");
+        let log = requests.lock().unwrap().clone();
+        assert_eq!(
+            log.iter()
+                .filter(|entry| entry.as_str() == "/live/0.ts|true")
+                .count(),
+            1,
+            "restored live timeline must not refetch segment zero"
+        );
+        assert_eq!(
+            log.iter()
+                .filter(|entry| entry.as_str() == "/live/1.ts|true")
+                .count(),
+            1
+        );
+        assert_eq!(
+            log.iter().filter(|entry| entry.ends_with("|false")).count(),
+            1,
+            "only the explicit unauthenticated probe may be rejected"
+        );
+        stop.store(true, Ordering::SeqCst);
+        server.join().unwrap();
         let _ = std::fs::remove_dir_all(dir);
     }
 

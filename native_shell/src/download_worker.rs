@@ -5320,6 +5320,273 @@ mod tests {
     }
 
     #[test]
+    fn live_torrent_selection_update_cancels_requested_file_and_publishes_remaining_file() {
+        use std::io::Read;
+        use std::net::TcpStream;
+        use std::sync::mpsc;
+
+        let payload = b"aaaabbbb".to_vec();
+        let pieces: Vec<[u8; 20]> = payload.chunks(4).map(crate::crypto_lite::sha1).collect();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-live-torrent-selection-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+
+        let peer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let peer_addr = peer_listener.local_addr().unwrap();
+        let tracker_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let tracker_addr = tracker_listener.local_addr().unwrap();
+        let announce = format!("http://{tracker_addr}/announce");
+
+        let mut info = format!(
+            "d5:filesld6:lengthi4e4:pathl7:one.bineed6:lengthi4e4:pathl7:two.bineee4:name4:demo12:piece lengthi4e6:pieces40:"
+        )
+        .into_bytes();
+        for piece in &pieces {
+            info.extend_from_slice(piece);
+        }
+        info.push(b'e');
+        let mut torrent = format!("d8:announce{}:{}4:info", announce.len(), announce).into_bytes();
+        torrent.extend_from_slice(&info);
+        torrent.push(b'e');
+        let source = root.join("demo.torrent");
+        fs::write(&source, &torrent).unwrap();
+        let parsed = crate::torrent_engine::parse_torrent_file(&torrent).unwrap();
+        assert_eq!(parsed.files.len(), 2);
+        assert_eq!(parsed.length, payload.len() as u64);
+
+        let tracker = std::thread::spawn(move || {
+            let (stream, _) = tracker_listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                request.push_str(&line);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            assert!(request.starts_with("GET /announce?"));
+            let mut stream = reader.into_inner();
+            let mut body = b"d5:peers6:".to_vec();
+            body.extend_from_slice(&[
+                127,
+                0,
+                0,
+                1,
+                (peer_addr.port() >> 8) as u8,
+                peer_addr.port() as u8,
+            ]);
+            body.push(b'e');
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(header.as_bytes()).unwrap();
+            stream.write_all(&body).unwrap();
+        });
+
+        let (requested_tx, requested_rx) = mpsc::channel();
+        let (cancel_tx, cancel_rx) = mpsc::channel();
+        let peer_payload = payload.clone();
+        let peer = std::thread::spawn(move || {
+            let (mut stream, _) = peer_listener.accept().unwrap();
+            let mut handshake = [0u8; 68];
+            stream.read_exact(&mut handshake).unwrap();
+            stream.write_all(&handshake).unwrap();
+            stream.write_all(&1u32.to_be_bytes()).unwrap();
+            stream.write_all(&[1u8]).unwrap();
+
+            let read_message = |stream: &mut TcpStream| -> Option<Vec<u8>> {
+                let mut header = [0u8; 4];
+                stream.read_exact(&mut header).ok()?;
+                let length = u32::from_be_bytes(header) as usize;
+                let mut message = vec![0u8; length];
+                stream.read_exact(&mut message).ok()?;
+                Some(message)
+            };
+            loop {
+                let Some(message) = read_message(&mut stream) else {
+                    return;
+                };
+                if message.len() < 13 || message[0] != 6 {
+                    continue;
+                }
+                let index = u32::from_be_bytes(message[1..5].try_into().unwrap()) as usize;
+                if index != 0 {
+                    continue;
+                }
+                requested_tx.send(()).unwrap();
+                loop {
+                    let Some(message) = read_message(&mut stream) else {
+                        return;
+                    };
+                    if message.first() == Some(&8) {
+                        let canceled = (
+                            u32::from_be_bytes(message[1..5].try_into().unwrap()),
+                            u32::from_be_bytes(message[5..9].try_into().unwrap()),
+                            u32::from_be_bytes(message[9..13].try_into().unwrap()),
+                        );
+                        cancel_tx.send(canceled).unwrap();
+                        break;
+                    }
+                }
+                loop {
+                    let Some(message) = read_message(&mut stream) else {
+                        return;
+                    };
+                    if message.len() < 13 || message[0] != 6 {
+                        continue;
+                    }
+                    let index = u32::from_be_bytes(message[1..5].try_into().unwrap()) as usize;
+                    let begin = u32::from_be_bytes(message[5..9].try_into().unwrap()) as usize;
+                    let block = u32::from_be_bytes(message[9..13].try_into().unwrap()) as usize;
+                    if index != 1 {
+                        continue;
+                    }
+                    let start = index * 4 + begin;
+                    let mut response = vec![7u8];
+                    response.extend_from_slice(&(index as u32).to_be_bytes());
+                    response.extend_from_slice(&(begin as u32).to_be_bytes());
+                    response.extend_from_slice(&peer_payload[start..start + block]);
+                    stream
+                        .write_all(&(response.len() as u32).to_be_bytes())
+                        .unwrap();
+                    stream.write_all(&response).unwrap();
+                    return;
+                }
+            }
+        });
+
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting("download_dir", serde_json::json!(root.to_string_lossy()))
+            .unwrap();
+        coordinator
+            .set_setting("bt_enable_dht", serde_json::json!(false))
+            .unwrap();
+        coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: source.to_string_lossy().into_owned(),
+                    resource_kind: ResourceKind::Torrent,
+                    filename: String::new(),
+                    download_dir: root.to_string_lossy().into_owned(),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let initial = vec![
+            crate::TorrentFileSelection {
+                index: 0,
+                path: "one.bin".into(),
+                selected: true,
+            },
+            crate::TorrentFileSelection {
+                index: 1,
+                path: "two.bin".into(),
+                selected: false,
+            },
+        ];
+        coordinator
+            .dispatch(CoreCommand::SetTaskTorrentFiles {
+                task_id: "task-1".into(),
+                selections: initial,
+            })
+            .unwrap();
+        coordinator
+            .dispatch(CoreCommand::TaskAction {
+                task_id: "task-1".into(),
+                action: "start".into(),
+            })
+            .unwrap();
+
+        requested_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let in_flight = coordinator
+            .tasks()
+            .unwrap()
+            .into_iter()
+            .find(|task| task.task_id == "task-1")
+            .unwrap();
+        assert_eq!(in_flight.status, "downloading");
+        let updated = vec![
+            crate::TorrentFileSelection {
+                index: 0,
+                path: "one.bin".into(),
+                selected: false,
+            },
+            crate::TorrentFileSelection {
+                index: 1,
+                path: "two.bin".into(),
+                selected: true,
+            },
+        ];
+        let events = coordinator
+            .dispatch(CoreCommand::SetTaskTorrentFiles {
+                task_id: "task-1".into(),
+                selections: updated.clone(),
+            })
+            .unwrap();
+        assert!(events.iter().any(|event| matches!(
+            &event.event,
+            CoreEvent::Toast { message, .. } if message.contains("BT 文件选择已更新")
+        )));
+        assert_eq!(
+            cancel_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            (0, 0, 4)
+        );
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let completed = loop {
+            let task = coordinator
+                .tasks()
+                .unwrap()
+                .into_iter()
+                .find(|task| task.task_id == "task-1")
+                .unwrap();
+            if task.status == "completed" {
+                break task;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "live torrent task did not complete: {task:?}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        assert_eq!(completed.downloaded_bytes, 4);
+        assert_eq!(completed.total_bytes, Some(4));
+        let stored_spec = coordinator
+            .lock()
+            .unwrap()
+            .task_spec("task-1")
+            .cloned()
+            .unwrap();
+        assert_eq!(stored_spec.torrent_selection, updated);
+        let paths = TaskPaths::for_task("task-1", &stored_spec).unwrap();
+        let sidecar: Vec<crate::TorrentFileSelection> =
+            serde_json::from_slice(&fs::read(&paths.torrent_selection).unwrap()).unwrap();
+        assert_eq!(sidecar, updated);
+        assert_eq!(fs::read(&paths.output).unwrap(), b"\0\0\0\0bbbb");
+        let published_dir = PathBuf::from(&completed.output_path);
+        assert!(published_dir.starts_with(&root));
+        assert_eq!(fs::read(published_dir.join("two.bin")).unwrap(), b"bbbb");
+        assert!(!published_dir.join("one.bin").exists());
+
+        peer.join().unwrap();
+        tracker.join().unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn concurrent_torrent_selection_update_wins_over_task_initialization() {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
