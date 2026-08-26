@@ -108,7 +108,12 @@ function Copy-LibMpv([string]$Destination) {
 
 function Copy-CurlImpersonate([string]$Destination) {
     Get-VerifiedFile $curlImpersonateUrl $curlImpersonateArchive $curlImpersonateSha256 "curl-impersonate $curlImpersonateVersion Windows x64 archive"
-    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+    $systemTar = Join-Path $env:SystemRoot 'System32\tar.exe'
+    $tar = if (Test-Path -LiteralPath $systemTar -PathType Leaf) {
+        Get-Item -LiteralPath $systemTar
+    } else {
+        Get-Command tar.exe -ErrorAction SilentlyContinue
+    }
     if (-not $tar) { throw 'tar.exe is required to extract curl-impersonate.' }
     $extract = Join-Path $curlImpersonateCache 'extract'
     if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
