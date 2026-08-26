@@ -215,22 +215,32 @@ $env:HLS_ENGINE_PATH = $engine
         if ($Task -eq 'candidate') {
             # Swap the complete staging directory only after every artifact is ready.
             $candidateSwapBackupRoot = Join-Path (Split-Path $packageRoot -Parent) ('.candidate-backup.' + [guid]::NewGuid().ToString('n'))
+            $oldCandidateMoved = $false
             try {
                 if (Test-Path -LiteralPath $packageRoot) {
                     Move-Item -LiteralPath $packageRoot -Destination $candidateSwapBackupRoot
+                    $oldCandidateMoved = $true
                 }
                 Move-Item -LiteralPath $candidateStagingRoot -Destination $packageRoot
-                if (Test-Path -LiteralPath $candidateSwapBackupRoot) {
-                    Remove-Item -LiteralPath $candidateSwapBackupRoot -Recurse -Force -ErrorAction Stop
-                }
                 $candidateStagingRoot = $null
-                $candidateSwapBackupRoot = $null
+
+                if ($oldCandidateMoved -and (Test-Path -LiteralPath $candidateSwapBackupRoot)) {
+                    try {
+                        Remove-Item -LiteralPath $candidateSwapBackupRoot -Recurse -Force -ErrorAction Stop
+                        $candidateSwapBackupRoot = $null
+                    } catch {
+                        Write-Warning "The new candidate is installed, but the previous candidate backup could not be removed: $candidateSwapBackupRoot"
+                        # The new candidate is already committed. Preserve both directories.
+                        $candidateSwapBackupRoot = $null
+                    }
+                }
             } catch {
-                if (Test-Path -LiteralPath $packageRoot) {
+                if ($oldCandidateMoved -and (Test-Path -LiteralPath $packageRoot)) {
                     Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
                 }
-                if (Test-Path -LiteralPath $candidateSwapBackupRoot) {
+                if ($oldCandidateMoved -and (Test-Path -LiteralPath $candidateSwapBackupRoot)) {
                     Move-Item -LiteralPath $candidateSwapBackupRoot -Destination $packageRoot -Force
+                    $candidateSwapBackupRoot = $null
                 }
                 throw
             }
