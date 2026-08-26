@@ -109,17 +109,18 @@ function Copy-LibMpv([string]$Destination) {
 function Copy-CurlImpersonate([string]$Destination) {
     Get-VerifiedFile $curlImpersonateUrl $curlImpersonateArchive $curlImpersonateSha256 "curl-impersonate $curlImpersonateVersion Windows x64 archive"
     $systemTar = Join-Path $env:SystemRoot 'System32\tar.exe'
-    $tar = if (Test-Path -LiteralPath $systemTar -PathType Leaf) {
-        Get-Item -LiteralPath $systemTar
+    $tarExe = if (Test-Path -LiteralPath $systemTar -PathType Leaf) {
+        $systemTar
     } else {
-        Get-Command tar.exe -ErrorAction SilentlyContinue
+        $tarCommand = Get-Command tar.exe -ErrorAction SilentlyContinue
+        if ($tarCommand) { $tarCommand.Source }
     }
-    if (-not $tar) { throw 'tar.exe is required to extract curl-impersonate.' }
+    if ([String]::IsNullOrWhiteSpace($tarExe)) { throw 'tar.exe is required to extract curl-impersonate.' }
     $extract = Join-Path $curlImpersonateCache 'extract'
     if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $extract | Out-Null
     try {
-        & $tar.Source -xzf $curlImpersonateArchive -C $extract './curl-impersonate.exe'
+        & $tarExe -xzf $curlImpersonateArchive -C $extract './curl-impersonate.exe'
         if ($LASTEXITCODE -ne 0) { throw "tar.exe failed to extract curl-impersonate.exe (exit $LASTEXITCODE)" }
         $source = Join-Path $extract 'curl-impersonate.exe'
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
