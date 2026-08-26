@@ -209,7 +209,6 @@ $env:HLS_ENGINE_PATH = $engine
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\create-v7-portable.ps1" -OutZip (Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64-Portable$artifactSuffix.zip"))
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         Copy-Item -LiteralPath $featureParity -Destination (Join-Path $artifactRoot 'FEATURE-PARITY.json') -Force
-        Copy-Item -LiteralPath $provenanceForBuild -Destination (Join-Path $artifactRoot 'BUILD-PROVENANCE.json') -Force
         if ($Task -eq 'candidate') {
             # Swap the complete staging directory only after every artifact is ready.
             $candidateSwapBackupRoot = Join-Path (Split-Path $packageRoot -Parent) ('.candidate-backup.' + [guid]::NewGuid().ToString('n'))
