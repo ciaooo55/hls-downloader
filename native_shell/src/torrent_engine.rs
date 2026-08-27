@@ -1345,7 +1345,7 @@ fn download_from_peer_ex_with_telemetry(
     let mut peer_hs = [0u8; 68];
     stream
         .read_exact(&mut peer_hs)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("peer handshake read from {addr}: {error}"))?;
     if &peer_hs[28..48] != info_hash.as_slice() {
         return Err("peer info_hash mismatch".into());
     }
@@ -1360,9 +1360,12 @@ fn download_from_peer_ex_with_telemetry(
         )?;
     }
     send_message(&mut stream, 2, &[])?; // interested
-    let reader = PeerMessageReader::start(&stream)?;
+    let reader = PeerMessageReader::start(&stream, addr)?;
     let mut unchoked = false;
     let mut peer_pieces = vec![false; meta.pieces.len()];
+    // A complete bitfield lets us avoid requests the peer must ignore. HAVE
+    // messages only add availability and therefore do not establish absence.
+    let mut peer_availability_known = false;
     loop {
         let pending: Vec<usize> = meta
             .pieces
@@ -1378,6 +1381,17 @@ fn download_from_peer_ex_with_telemetry(
             .collect();
         if pending.is_empty() {
             break;
+        }
+        let pending = if peer_availability_known {
+            pending
+                .into_iter()
+                .filter(|index| peer_pieces[*index])
+                .collect::<Vec<_>>()
+        } else {
+            pending
+        };
+        if pending.is_empty() {
+            return Err("peer has no available pending pieces".into());
         }
         'pieces: for index in pending {
             if !unchoked {
@@ -1395,7 +1409,8 @@ fn download_from_peer_ex_with_telemetry(
                         (1, _) => unchoked = true,
                         (0, _) => unchoked = false,
                         (id, body) => {
-                            note_peer_availability(id, &body, &mut peer_pieces);
+                            peer_availability_known |=
+                                note_peer_availability(id, &body, &mut peer_pieces);
                             take_extended(id, &body, &mut pex_id, extra_peers);
                         }
                     }
@@ -1403,6 +1418,9 @@ fn download_from_peer_ex_with_telemetry(
             }
             if !control_is_running(control) {
                 return Err("paused".into());
+            }
+            if peer_availability_known && !peer_pieces[index] {
+                continue 'pieces;
             }
             let hash = &meta.pieces[index];
             let start = index as u64 * meta.piece_length;
@@ -1424,7 +1442,8 @@ fn download_from_peer_ex_with_telemetry(
                         1 => unchoked = true,
                         0 => unchoked = false,
                         _ => {
-                            note_peer_availability(id, &body, &mut peer_pieces);
+                            peer_availability_known |=
+                                note_peer_availability(id, &body, &mut peer_pieces);
                             take_extended(id, &body, &mut pex_id, extra_peers);
                         }
                     }
@@ -1477,7 +1496,8 @@ fn download_from_peer_ex_with_telemetry(
                         filled += data.len();
                         break;
                     } else {
-                        note_peer_availability(id, &body, &mut peer_pieces);
+                        peer_availability_known |=
+                            note_peer_availability(id, &body, &mut peer_pieces);
                         take_extended(id, &body, &mut pex_id, extra_peers);
                     }
                 }
@@ -1521,21 +1541,23 @@ fn piece_is_selected(meta: &TorrentMeta, piece_index: usize, selection_path: &Pa
     })
 }
 
-fn note_peer_availability(id: u8, body: &[u8], pieces: &mut [bool]) {
+fn note_peer_availability(id: u8, body: &[u8], pieces: &mut [bool]) -> bool {
     match id {
         4 if body.len() >= 4 => {
             let index = u32::from_be_bytes(body[..4].try_into().unwrap()) as usize;
             if let Some(available) = pieces.get_mut(index) {
                 *available = true;
             }
+            false
         }
-        5 => {
+        5 if body.len() >= pieces.len().div_ceil(8) && !pieces.is_empty() => {
             for (index, available) in pieces.iter_mut().enumerate() {
                 let byte = body.get(index / 8).copied().unwrap_or(0);
                 *available = byte & (0x80 >> (index % 8)) != 0;
             }
+            true
         }
-        _ => {}
+        _ => false,
     }
 }
 
@@ -1572,7 +1594,7 @@ struct PeerMessageReader {
 }
 
 impl PeerMessageReader {
-    fn start(stream: &std::net::TcpStream) -> Result<Self, String> {
+    fn start(stream: &std::net::TcpStream, peer: std::net::SocketAddr) -> Result<Self, String> {
         let mut read_stream = stream.try_clone().map_err(|error| error.to_string())?;
         read_stream
             .set_read_timeout(Some(Duration::from_secs(15)))
@@ -1580,7 +1602,8 @@ impl PeerMessageReader {
         let shutdown = read_stream.try_clone().map_err(|error| error.to_string())?;
         let (sender, receiver) = std::sync::mpsc::channel();
         let handle = std::thread::spawn(move || loop {
-            let message = read_message(&mut read_stream);
+            let message = read_message(&mut read_stream)
+                .map_err(|error| format!("peer {peer} message read: {error}"));
             let failed = message.is_err();
             if sender.send(message).is_err() || failed {
                 break;
@@ -2079,6 +2102,94 @@ mod tests {
         let output = dir.join("demo.bin");
         let control = dir.join("control");
         fs::write(&control, "run").unwrap();
+        download_from_peer(addr, &meta, &output, &control).unwrap();
+        assert_eq!(fs::read(&output).unwrap(), payload);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn swarm_uses_peer_bitfield_to_skip_unavailable_piece() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let payload = b"piece-zero-piece-one";
+        let piece_length = 16usize;
+        let pieces = payload
+            .chunks(piece_length)
+            .map(crate::crypto_lite::sha1)
+            .collect::<Vec<_>>();
+        let meta = TorrentMeta {
+            name: "bitfield-selection".into(),
+            magnet: false,
+            web_seeds: Vec::new(),
+            info_hash: "0123456789abcdef0123456789abcdef01234567".into(),
+            announce: Vec::new(),
+            hint_peers: Vec::new(),
+            piece_length: piece_length as u64,
+            pieces,
+            length: payload.len() as u64,
+            files: vec![TorrentFileEntry {
+                index: 0,
+                path: "payload.bin".into(),
+                size: payload.len() as u64,
+                offset: 0,
+            }],
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_payload = payload.to_vec();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut handshake = [0u8; 68];
+            stream.read_exact(&mut handshake).unwrap();
+            stream.write_all(&handshake).unwrap();
+            // This peer owns only piece 1 (bit 1 in the bitfield).
+            stream.write_all(&2u32.to_be_bytes()).unwrap();
+            stream.write_all(&[5u8, 0x40]).unwrap();
+            stream.write_all(&1u32.to_be_bytes()).unwrap();
+            stream.write_all(&[1u8]).unwrap();
+            loop {
+                let mut header = [0u8; 4];
+                if stream.read_exact(&mut header).is_err() {
+                    return;
+                }
+                let len = u32::from_be_bytes(header) as usize;
+                let mut message = vec![0u8; len];
+                if stream.read_exact(&mut message).is_err() || message.is_empty() {
+                    return;
+                }
+                if message[0] != 6 {
+                    continue;
+                }
+                let index = u32::from_be_bytes(message[1..5].try_into().unwrap()) as usize;
+                assert_eq!(
+                    index, 1,
+                    "client requested a piece absent from the bitfield"
+                );
+                let begin = u32::from_be_bytes(message[5..9].try_into().unwrap()) as usize;
+                let block = u32::from_be_bytes(message[9..13].try_into().unwrap()) as usize;
+                let start = index * piece_length + begin;
+                let mut response = vec![7u8];
+                response.extend_from_slice(&(index as u32).to_be_bytes());
+                response.extend_from_slice(&(begin as u32).to_be_bytes());
+                response.extend_from_slice(&server_payload[start..start + block]);
+                stream
+                    .write_all(&(response.len() as u32).to_be_bytes())
+                    .unwrap();
+                stream.write_all(&response).unwrap();
+                return;
+            }
+        });
+        let dir = std::env::temp_dir().join(format!(
+            "hls-swarm-bitfield-selection-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let output = dir.join("payload.bin");
+        let control = dir.join("control");
+        fs::write(&control, "run").unwrap();
+        // Piece 0 is already present; the transfer must request only piece 1.
+        fs::write(&output, &payload[..piece_length]).unwrap();
         download_from_peer(addr, &meta, &output, &control).unwrap();
         assert_eq!(fs::read(&output).unwrap(), payload);
         let _ = fs::remove_dir_all(dir);
