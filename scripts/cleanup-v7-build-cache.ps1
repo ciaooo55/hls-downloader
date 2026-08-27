@@ -4,6 +4,9 @@ param(
     [switch]$LegacyCargoTargetOnly,
     [switch]$NativeHostSmokeOnly,
     [switch]$ExtensionAdversarialOnly,
+    [switch]$ProductizationJunkOnly,
+    [switch]$BuildOutputsOnly,
+    [switch]$StaleSmokeOnly,
     [switch]$ConsolidateArchives,
     [string]$ArchiveRoot = 'D:\HLSDownloader-archives',
     [string]$KeepArchiveName = 'v7.0.0-verified-20260824',
@@ -24,6 +27,44 @@ if ($NativeHostSmokeOnly) {
         (Join-Path $repo 'extension\node_modules'),
         'D:\HLSDownloaderBuildCache\pnpm-adversarial-store'
     )
+} elseif ($ProductizationJunkOnly) {
+    # Superseded local binaries and one-off audit copies. Keep the current
+    # candidate, transaction evidence, source-controlled matrix and user data.
+    $targets = @(
+        (Join-Path $repo 'artifacts\v7-productization\release'),
+        (Join-Path $repo 'artifacts\v7-productization\package'),
+        (Join-Path $repo 'artifacts\v7-productization\tar-smoke-53b72cb0c8384cc1866906b77e2cabec'),
+        (Join-Path $repo 'artifacts\v7-productization\popup-white-fix'),
+        (Join-Path $repo 'artifacts\v7-productization\tray-shortcut-residency')
+    )
+} elseif ($BuildOutputsOnly) {
+    # Delete compiled outputs and one-off audit workspaces. Keep downloaded
+    # toolchains/dependency caches and all productization evidence.
+    $targets = @(
+        (Join-Path $repo 'presenter_ui\target'),
+        (Join-Path $repo 'native_shell\target'),
+        (Join-Path $repo 'target'),
+        (Join-Path $repo 'build'),
+        (Join-Path $repo 'desktop_ui\build'),
+        (Join-Path $repo 'desktop_ui\.gradle'),
+        (Join-Path $repo 'desktop_ui\.kotlin'),
+        (Join-Path $repo 'extension\dist'),
+        (Join-Path $repo 'extension\.output'),
+        (Join-Path $repo 'extension\.wxt'),
+        (Join-Path $repo 'extension\node_modules'),
+        'D:\HLSDownloaderBuildCache\cargo-target',
+        'D:\HLSDownloaderBuildCache\target-native',
+        'D:\HLSDownloaderBuildCache\compose-build',
+        'D:\HLSDownloaderBuildCache\gradle-home',
+        'D:\HLSDownloaderBuildCache\v3-source-audit',
+        'D:\HLSDownloaderBuildCache\pnpm-store-v3-audit',
+        'D:\HLSDownloaderBuildCache\v3-full-audit-data'
+    )
+} elseif ($StaleSmokeOnly) {
+    $cutoff = (Get-Date).Date
+    $targets = @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Directory -Filter 'hls-v7-*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -lt $cutoff } |
+        ForEach-Object { $_.FullName })
 } else {
     $relativeTargets = if ($LegacyCargoTargetOnly) {
         @('native_shell\target')
@@ -80,14 +121,19 @@ if ($NativeHostSmokeOnly) {
     $targets += @(Get-ChildItem -LiteralPath $repo -Directory -Filter '__pycache__' -Recurse -ErrorAction SilentlyContinue |
         ForEach-Object { $_.FullName })
 }
-$release = Join-Path $repo 'release'
+$scopedCleanup = $NativeHostSmokeOnly -or $ExtensionAdversarialOnly -or $ProductizationJunkOnly -or $BuildOutputsOnly -or $StaleSmokeOnly
+$release = if ($scopedCleanup) {
+    $null
+} else {
+    Join-Path $repo 'release'
+}
 $records = @(foreach($path in $targets) {
     if(Test-Path -LiteralPath $path) {
         $bytes = (Get-ChildItem -LiteralPath $path -Force -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
         [pscustomobject]@{ path=$path; bytes=[int64]$bytes; action='delete-rebuildable'; sha256=$null }
     }
 })
-if(Test-Path -LiteralPath $release) {
+if($null -ne $release -and (Test-Path -LiteralPath $release)) {
     Get-ChildItem -LiteralPath $release -File -Recurse | ForEach-Object {
         $sha=[System.Security.Cryptography.SHA256]::Create(); $stream=[IO.File]::OpenRead($_.FullName)
         try { $hash=([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','') } finally { $stream.Dispose(); $sha.Dispose() }
@@ -128,5 +174,6 @@ foreach($file in @($records | Where-Object action -eq 'archive-release')) {
 foreach($entry in @($records | Where-Object action -eq 'delete-rebuildable')) { if(Test-Path -LiteralPath $entry.path) { Remove-Item -LiteralPath $entry.path -Recurse -Force } }
 $after = foreach($record in $records) { [pscustomobject]@{ path=$record.path; action=$record.action; exists=(Test-Path -LiteralPath $record.path); bytes=$record.bytes; sha256=$record.sha256 } }
 $diff = Join-Path $reportRootPath 'cleanup-diff.txt'
-[IO.File]::WriteAllText($diff, (($after | Format-Table -AutoSize | Out-String) + "`nArchive: $archive`n"), [Text.UTF8Encoding]::new($false))
-Write-Output "CLEANED: $($records.Count) entries; archived release files in $archive; report: $diff"
+$archivedCount = @($records | Where-Object action -eq 'archive-release').Count
+[IO.File]::WriteAllText($diff, (($after | Format-Table -AutoSize | Out-String) + "`nArchived release files: $archivedCount`nArchive: $archive`n"), [Text.UTF8Encoding]::new($false))
+Write-Output "CLEANED: $($records.Count) entries; archived release files: $archivedCount; report: $diff"
