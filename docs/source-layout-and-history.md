@@ -33,8 +33,9 @@ git archive v3.0.39 | tar -xf - -C D:\HLSDownloader-archives\source-check\v3.0.3
 git archive v5.0.13 | tar -xf - -C D:\HLSDownloader-archives\source-check\v5.0.13
 ```
 
-当前 v7 源码位于 `main` 分支，正式 `v7.0.0` Git tag 已创建；后续修复继续
-通过 `main` 分支提交，发布门禁和验证记录见 `docs/v7-verification.md`。
+当前 v7 源码位于 `main` 分支；正式 `v7.0.0` Git tag 和 GitHub Release
+仍等待 `docs/v7-verification.md` 中列出的外部 UI Automation 与干净 Windows
+虚拟机门禁。后续修复继续通过 `main` 分支提交。
 
 ## 当前与历史的边界
 

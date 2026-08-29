@@ -385,6 +385,7 @@ fun main() {
     val appIcon = remember { loadDesktopIcon() }
     var droppedPaths by remember { mutableStateOf<List<String>>(emptyList()) }
     var dropActive by remember { mutableStateOf(false) }
+    var presenterAvailable by remember { mutableStateOf(false) }
     Window(
         onCloseRequest = ::exitApplication,
         title = "HLS Downloader",
@@ -396,7 +397,7 @@ fun main() {
         LaunchedEffect(Unit) {
             window.minimumSize = Dimension(1024, 600)
             while (true) {
-                withContext(Dispatchers.IO) { EnginePipeClient.ensurePresenterStarted() }
+                presenterAvailable = withContext(Dispatchers.IO) { EnginePipeClient.ensurePresenterStarted() }
                 delay(5_000)
             }
         }
@@ -447,6 +448,7 @@ fun main() {
         AppShell(
             maximized = state.placement == WindowPlacement.Maximized,
             appIcon = appIcon,
+            presenterAvailable = presenterAvailable,
             externalDropPaths = droppedPaths,
             externalDropActive = dropActive,
             onExternalDropConsumed = { droppedPaths = emptyList() },
@@ -480,7 +482,7 @@ internal fun auditSettingsTab(surface: String): String? = when (surface) {
 }
 
 @Composable @Preview
-fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalDropPaths: List<String> = emptyList(), externalDropActive: Boolean = false, onExternalDropConsumed: () -> Unit = {}, onAttention: () -> Unit = {}, onExit: () -> Unit = {}, titleBar: @Composable () -> Unit = {}) {
+fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenterAvailable: Boolean = false, externalDropPaths: List<String> = emptyList(), externalDropActive: Boolean = false, onExternalDropConsumed: () -> Unit = {}, onAttention: () -> Unit = {}, onExit: () -> Unit = {}, titleBar: @Composable () -> Unit = {}) {
     val visualFixture = remember { System.getenv("HLS_UI_AUDIT_SURFACE").orEmpty().lowercase() }
     val visualTheme = remember { System.getenv("HLS_UI_AUDIT_THEME").orEmpty().lowercase() }
     var filter by remember { mutableStateOf(TaskFilter.ALL) }
@@ -509,6 +511,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
     var eventSequence by remember { mutableLongStateOf(0) }
     var notice by remember { mutableStateOf<UiSignal.Notice?>(null) }
     val shellFocus = remember { FocusRequester() }
+    val presenterOwner = rememberUpdatedState(presenterAvailable)
     var probeResult by remember { mutableStateOf<UiSignal.Probe?>(null) }
     var probeDraft by remember { mutableStateOf<TaskDraft?>(null) }
     var torrentProbe by remember { mutableStateOf<UiSignal.TorrentProbe?>(null) }
@@ -767,7 +770,11 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                         tasks,
                         envelope.event,
                         setExtension = { connected -> extensionText = connected },
-                        offerHandoff = { offer -> if (handoffQueue.none { it.handoffId == offer.handoffId }) handoffQueue += offer },
+                        offerHandoff = { offer ->
+                            if (!presenterOwner.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
+                                handoffQueue += offer
+                            }
+                        },
                         resolveHandoff = { handoffId -> handoffQueue.removeAll { it.handoffId == handoffId } },
                     ), { signal ->
                         when (signal) {

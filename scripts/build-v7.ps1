@@ -239,8 +239,44 @@ $env:HLS_ENGINE_PATH = $engine
         New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
         Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64$artifactSuffix.exe")) -Force
         Copy-Item -LiteralPath $msi.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64$artifactSuffix.msi")) -Force
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\create-v7-portable.ps1" -OutZip (Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64-Portable$artifactSuffix.zip"))
+        $portablePath = Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64-Portable$artifactSuffix.zip")
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\create-v7-portable.ps1" -OutZip $portablePath
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $portableCheck = Join-Path $artifactRoot ('.portable-verify-' + [guid]::NewGuid().ToString('n'))
+        try {
+            Expand-Archive -LiteralPath $portablePath -DestinationPath $portableCheck -Force
+            $portableRoot = Join-Path $portableCheck 'HLSDownloader'
+            $provenanceInPackage = Join-Path $portableRoot 'app\resources\BUILD-PROVENANCE.json'
+            if (-not (Test-Path -LiteralPath $provenanceInPackage -PathType Leaf)) {
+                throw 'Portable package is missing app/resources/BUILD-PROVENANCE.json.'
+            }
+            $provenanceJson = Get-Content -LiteralPath $provenanceInPackage -Raw -Encoding UTF8 | ConvertFrom-Json
+            $sourceCommit = (& git -C $repo rev-parse HEAD).Trim()
+            if ($provenanceJson.source_commit -ne $sourceCommit) {
+                throw "Portable provenance source_commit does not match HEAD: $($provenanceJson.source_commit) != $sourceCommit"
+            }
+            if ($provenanceJson.product_version -ne '7.0.0') {
+                throw "Portable provenance product_version is not 7.0.0: $($provenanceJson.product_version)"
+            }
+            foreach ($extension in @('Chromium', 'Firefox')) {
+                $archive = Join-Path $portableRoot ("extensions\HLSDownloader-7.0.0-$extension.zip")
+                if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+                    throw "Portable package is missing the $extension extension archive."
+                }
+                $extensionCheck = Join-Path $portableCheck ("extension-$extension")
+                Expand-Archive -LiteralPath $archive -DestinationPath $extensionCheck -Force
+                $manifestPath = Join-Path $extensionCheck 'manifest.json'
+                if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+                    throw "$extension extension archive is missing manifest.json."
+                }
+                $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ($manifest.version -ne '7.0.0') {
+                    throw "$extension extension manifest version is not 7.0.0: $($manifest.version)"
+                }
+            }
+        } finally {
+            Remove-Item -LiteralPath $portableCheck -Recurse -Force -ErrorAction SilentlyContinue
+        }
         Copy-Item -LiteralPath $featureParity -Destination (Join-Path $artifactRoot 'FEATURE-PARITY.json') -Force
         if ($Task -eq 'candidate') {
             # Swap the complete staging directory only after every artifact is ready.
