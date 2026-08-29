@@ -518,6 +518,8 @@ pub struct CoreCoordinator {
     active: Arc<Mutex<HashSet<String>>>,
     retries: Arc<Mutex<HashMap<String, u32>>>,
     update_shutdown: Arc<AtomicBool>,
+    #[cfg(test)]
+    worker_wait_started: Arc<Mutex<Option<mpsc::Sender<()>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -593,6 +595,8 @@ impl CoreCoordinator {
             active: Arc::new(Mutex::new(HashSet::new())),
             retries: Arc::new(Mutex::new(HashMap::new())),
             update_shutdown: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            worker_wait_started: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -1540,8 +1544,18 @@ impl CoreCoordinator {
             task_id: task_id.to_string(),
             action: "cancel".into(),
         })?;
+        self.wait_for_worker_stop(task_id)
+    }
+
+    fn wait_for_worker_stop(&self, task_id: &str) -> Result<(), String> {
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while self.worker_is_active(task_id)? {
+            #[cfg(test)]
+            if let Ok(mut sender) = self.worker_wait_started.lock() {
+                if let Some(sender) = sender.take() {
+                    let _ = sender.send(());
+                }
+            }
             if std::time::Instant::now() >= deadline {
                 return Err("等待下载 worker 停止超时".into());
             }
@@ -1694,20 +1708,44 @@ impl CoreCoordinator {
                 },
             });
         }
-        let (task_id, should_start) = match &command {
-            CoreCommand::TaskAction { task_id, action } => (
-                Some(task_id.clone()),
-                matches!(action.as_str(), "start" | "resume" | "retry"),
-            ),
-            _ => (None, false),
+        let (task_id, start_action) = match &command {
+            CoreCommand::TaskAction { task_id, action } => {
+                let start_action =
+                    matches!(action.as_str(), "start" | "resume" | "retry").then(|| action.clone());
+                (Some(task_id.clone()), start_action)
+            }
+            _ => (None, None),
         };
+        if let (Some(task_id), Some(action @ ("resume" | "retry"))) =
+            (task_id.as_deref(), start_action.as_deref())
+        {
+            let action_allowed = self
+                .lock()?
+                .tasks()
+                .iter()
+                .find(|task| task.task_id == task_id)
+                .is_some_and(|task| task.available_actions.iter().any(|item| item == action));
+            if action_allowed && matches!(action, "resume" | "retry") {
+                self.wait_for_worker_stop(task_id)?;
+            }
+        }
+        let mut start_accepted = false;
         let events = {
             let mut core = self
                 .core
                 .lock()
                 .map_err(|_| "v7 Core mutex poisoned".to_string())?;
             if let Some(task_id) = task_id.as_deref() {
-                if should_start {
+                if let Some(action) = start_action.as_deref() {
+                    start_accepted = core
+                        .tasks()
+                        .iter()
+                        .find(|task| task.task_id == task_id)
+                        .is_some_and(|task| {
+                            task.available_actions.iter().any(|item| item == action)
+                        });
+                }
+                if start_accepted {
                     if let Some(spec) = core.task_spec(task_id).cloned() {
                         let paths = TaskPaths::for_task(task_id, &spec)?;
                         paths.prepare()?;
@@ -1732,7 +1770,7 @@ impl CoreCoordinator {
             }
             core.handle(command)?
         };
-        if should_start {
+        if start_accepted {
             if let Some(task_id) = task_id {
                 self.spawn(task_id)?;
             }
@@ -4881,6 +4919,210 @@ mod tests {
             paths.prepare().unwrap();
             assert_eq!(fs::read_to_string(&paths.control).unwrap(), control);
         }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn start_like_actions_wait_for_the_previous_worker_to_finish() {
+        for (terminal_status, action, old_control) in [
+            ("paused", "resume", "pause"),
+            ("canceled", "retry", "cancel"),
+        ] {
+            let root = std::env::temp_dir().join(format!(
+                "hls-v7-worker-restart-{}-{}-{action}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+            coordinator
+                .set_setting("legal_terms_accepted", serde_json::json!(true))
+                .unwrap();
+            coordinator
+                .set_setting(
+                    "download_dir",
+                    serde_json::json!(root.to_string_lossy().into_owned()),
+                )
+                .unwrap();
+            coordinator
+                .dispatch(CoreCommand::CreateTask {
+                    spec: TaskSpec {
+                        url: "https://cdn.test/restart.bin".into(),
+                        filename: "restart.bin".into(),
+                        scheduled_start_at: "2999-01-01T00:00:00Z".into(),
+                        ..Default::default()
+                    },
+                })
+                .unwrap();
+            coordinator
+                .lock()
+                .unwrap()
+                .handle(CoreCommand::UpdateProgress {
+                    task_id: "task-1".into(),
+                    downloaded_bytes: 7,
+                    total_bytes: Some(10),
+                    speed_bytes_per_sec: 0,
+                    stage: "waiting".into(),
+                    status: terminal_status.into(),
+                })
+                .unwrap();
+            let paths = TaskPaths::for_task(
+                "task-1",
+                coordinator.lock().unwrap().task_spec("task-1").unwrap(),
+            )
+            .unwrap();
+            paths.prepare().unwrap();
+            paths.set_control(old_control).unwrap();
+            coordinator.active.lock().unwrap().insert("task-1".into());
+
+            let (wait_tx, wait_rx) = mpsc::channel();
+            *coordinator.worker_wait_started.lock().unwrap() = Some(wait_tx);
+            let runner = coordinator.clone();
+            let action = action.to_string();
+            let dispatch = thread::spawn(move || {
+                runner.dispatch(CoreCommand::TaskAction {
+                    task_id: "task-1".into(),
+                    action,
+                })
+            });
+            wait_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+            assert_eq!(fs::read_to_string(&paths.control).unwrap(), old_control);
+            assert_eq!(coordinator.tasks().unwrap()[0].status, terminal_status);
+
+            coordinator
+                .lock()
+                .unwrap()
+                .handle(CoreCommand::UpdateProgress {
+                    task_id: "task-1".into(),
+                    downloaded_bytes: 7,
+                    total_bytes: Some(10),
+                    speed_bytes_per_sec: 0,
+                    stage: "waiting".into(),
+                    status: terminal_status.into(),
+                })
+                .unwrap();
+            coordinator.active.lock().unwrap().remove("task-1");
+            dispatch.join().unwrap().unwrap();
+
+            assert_eq!(coordinator.tasks().unwrap()[0].status, "downloading");
+            assert_eq!(fs::read_to_string(&paths.control).unwrap(), "run");
+            assert!(!coordinator.worker_is_active("task-1").unwrap());
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn illegal_start_like_action_does_not_reset_worker_control() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-illegal-worker-start-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting(
+                "download_dir",
+                serde_json::json!(root.to_string_lossy().into_owned()),
+            )
+            .unwrap();
+        coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "https://cdn.test/queued.bin".into(),
+                    filename: "queued.bin".into(),
+                    scheduled_start_at: "2999-01-01T00:00:00Z".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let paths = TaskPaths::for_task(
+            "task-1",
+            coordinator.lock().unwrap().task_spec("task-1").unwrap(),
+        )
+        .unwrap();
+        paths.prepare().unwrap();
+        paths.set_control("pause").unwrap();
+
+        let events = coordinator
+            .dispatch(CoreCommand::TaskAction {
+                task_id: "task-1".into(),
+                action: "resume".into(),
+            })
+            .unwrap();
+
+        assert!(events.iter().any(|event| matches!(
+            &event.event,
+            CoreEvent::Error { code, .. } if code == "illegal_task_action"
+        )));
+        assert_eq!(coordinator.tasks().unwrap()[0].status, "queued");
+        assert_eq!(fs::read_to_string(&paths.control).unwrap(), "pause");
+        assert!(!coordinator.worker_is_active("task-1").unwrap());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn start_reuses_an_active_worker_without_waiting_for_it() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-active-start-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting(
+                "download_dir",
+                serde_json::json!(root.to_string_lossy().into_owned()),
+            )
+            .unwrap();
+        coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "https://cdn.test/active-start.bin".into(),
+                    filename: "active-start.bin".into(),
+                    scheduled_start_at: "2999-01-01T00:00:00Z".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        coordinator.active.lock().unwrap().insert("task-1".into());
+
+        let (result_tx, result_rx) = mpsc::channel();
+        let runner = coordinator.clone();
+        let dispatch = thread::spawn(move || {
+            let _ = result_tx.send(runner.dispatch(CoreCommand::TaskAction {
+                task_id: "task-1".into(),
+                action: "start".into(),
+            }));
+        });
+        let result = match result_rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(result) => result,
+            Err(error) => {
+                coordinator.active.lock().unwrap().remove("task-1");
+                dispatch.join().unwrap();
+                panic!("start waited for the existing worker: {error}");
+            }
+        };
+        result.unwrap();
+        dispatch.join().unwrap();
+
+        assert_eq!(coordinator.tasks().unwrap()[0].status, "downloading");
+        assert!(coordinator.worker_is_active("task-1").unwrap());
+        coordinator.active.lock().unwrap().remove("task-1");
         let _ = fs::remove_dir_all(root);
     }
 

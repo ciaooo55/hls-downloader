@@ -2105,13 +2105,12 @@ fn parse_http_url(raw: &str) -> Result<ParsedUrl, EngineError> {
         .split_once('#')
         .map(|(head, _)| head)
         .unwrap_or(&raw[prefix_len..]);
-    let (hostport, path) = if let Some(index) = rest.find('/') {
-        (&rest[..index], &rest[index + 1..])
-    } else if let Some(index) = rest.find('?') {
-        (&rest[..index], &rest[index..])
-    } else {
-        (rest, "")
-    };
+    let authority_end = [rest.find('/'), rest.find('?')]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(rest.len());
+    let (hostport, request_target) = rest.split_at(authority_end);
     let (host, port) = if let Some((host, port)) = hostport.rsplit_once(':') {
         if host.starts_with('[') {
             return Err(EngineError::Failed("ipv6 url unsupported".into()));
@@ -2131,14 +2130,23 @@ fn parse_http_url(raw: &str) -> Result<ParsedUrl, EngineError> {
     {
         return Err(EngineError::Failed("url host missing".into()));
     }
-    if path.chars().any(|ch| ch.is_ascii_control() || ch == ' ') {
+    if request_target
+        .chars()
+        .any(|ch| ch.is_ascii_control() || ch == ' ')
+    {
         return Err(EngineError::Failed("url path invalid".into()));
     }
     Ok(ParsedUrl {
         https,
         host,
         port,
-        path: format!("/{path}"),
+        path: if request_target.starts_with('?') {
+            format!("/{request_target}")
+        } else if request_target.is_empty() {
+            "/".into()
+        } else {
+            request_target.into()
+        },
     })
 }
 
@@ -3054,6 +3062,12 @@ mod tests {
         let query_only = parse_http_url("http://cdn.test?token=abc").unwrap();
         assert_eq!(query_only.host, "cdn.test");
         assert_eq!(query_only.path, "/?token=abc");
+        let query_with_url =
+            parse_http_url("http://cdn.test?next=https://a.test/file#ignored/path").unwrap();
+        assert_eq!(query_with_url.host, "cdn.test");
+        assert_eq!(query_with_url.path, "/?next=https://a.test/file");
+        let path_with_fragment = parse_http_url("http://cdn.test/file.bin#ignored").unwrap();
+        assert_eq!(path_with_fragment.path, "/file.bin");
         let custom = parse_http_url("http://127.0.0.1:8765/api").unwrap();
         assert_eq!(host_header(&custom), "127.0.0.1:8765");
         let https = parse_http_url("https://cdn.test/a").unwrap();

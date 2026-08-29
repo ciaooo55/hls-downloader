@@ -115,10 +115,9 @@ function Set-MsiExecutableAction(
     $escapedCondition = $Condition.Replace("'", "''")
     Invoke-MsiNonQuery "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='$Action'"
     Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$Action'"
-    # Type 18 launches an installed executable in the installing user's
-    # context. Native Host registration writes HKCU, so NoImpersonate (64)
-    # would incorrectly register it under the elevated service account.
-    Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('$Action',18,'$SourceFile','$escapedArguments')"
+    # Type 1042 is an installed-file EXE (18) deferred in the execution script
+    # (1024). It remains impersonated so Native Host registration writes HKCU.
+    Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('$Action',1042,'$SourceFile','$escapedArguments')"
     Invoke-MsiNonQuery "INSERT INTO ``InstallExecuteSequence`` (``Action``,``Condition``,``Sequence``) VALUES ('$Action','$escapedCondition',$Sequence)"
 }
 
@@ -186,6 +185,8 @@ try {
     $verified = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveExistingProducts'"
     $verifiedRegisterSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='V7RegisterNativeHost'"
     $verifiedUnregisterSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='V7UnregisterNativeHost'"
+    $verifiedRegisterType = Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='V7RegisterNativeHost'"
+    $verifiedUnregisterType = Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='V7UnregisterNativeHost'"
     $verifiedRegisterTarget = Invoke-MsiStringQuery "SELECT ``Target`` FROM ``CustomAction`` WHERE ``Action``='V7RegisterNativeHost'"
     $verifiedUnregisterTarget = Invoke-MsiStringQuery "SELECT ``Target`` FROM ``CustomAction`` WHERE ``Action``='V7UnregisterNativeHost'"
     if ([int]$verified -ne $target) {
@@ -194,6 +195,8 @@ try {
     if (
         [int]$verifiedRegisterSequence -ne $registerSequence -or
         [int]$verifiedUnregisterSequence -ne $unregisterSequence -or
+        [int]$verifiedRegisterType -ne 1042 -or
+        [int]$verifiedUnregisterType -ne 1042 -or
         $verifiedRegisterTarget -ne '--register-native-host' -or
         $verifiedUnregisterTarget -ne '--unregister-native-host'
     ) {
@@ -216,6 +219,8 @@ try {
     install_files_sequence = [int]$installFiles
     install_finalize_sequence = [int]$finalize
     native_host_engine_file = $engineFile
+    native_host_register_type = [int]$verifiedRegisterType
+    native_host_unregister_type = [int]$verifiedUnregisterType
     native_host_register_sequence = [int]$verifiedRegisterSequence
     native_host_unregister_sequence = [int]$verifiedUnregisterSequence
     sha256_before = $beforeHash
