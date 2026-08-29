@@ -2936,7 +2936,7 @@ fn task_failure_from_error(
     let http_status = extract_http_status(error);
     let (code, hint) = if let Some(status) = http_status {
         let hint = match status {
-            401 => "请确认已经登录原网站，并通过浏览器插件重新发送有效凭据",
+            401 => "服务器要求登录：手工任务请在“请求”页填写 Cookie 或 Authorization；浏览器接管请从已登录页面重新发送",
             403 => "访问凭据或短效签名可能已过期，请回到原网页刷新后重新发送资源",
             404 => "资源地址已失效或文件已被移动，请回到来源页面重新识别",
             408 | 425 | 429 => "服务器暂时限制请求，请降低并发并稍后重试",

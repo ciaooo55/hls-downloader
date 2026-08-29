@@ -673,7 +673,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
             engineText = Product.engineConnected
             return@LaunchedEffect
         }
-        engineText = Product.engineReconnecting
+        if (!snapshotReady) engineText = Product.engineReconnecting
         var attempts = 0
         while (!snapshotReady) {
             val snapshot = runCatching { withContext(Dispatchers.IO) { EnginePipeClient().snapshotState() } }
