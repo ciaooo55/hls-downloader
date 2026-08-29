@@ -7,7 +7,7 @@
 - 唯一活动主线：`main`
 - 产品版本：`7.0.0`
 - 活动架构：Compose Desktop + resident Rust Core + native Presenter + WXT MV3
-- 本机安装：`%LOCALAPPDATA%\Programs\HLSDownloader`
+- 本机安装：`E:\h`
 - 历史发布基线：`v3.0.39`、`v5.0.13`、`v6.0.1`
 
 v7 活动树不再包含 Python/FastAPI、React/Tauri 或 Slint 主工作台。旧实现保留在同一个 Git 历史和标签中，不复制成多套源码目录。

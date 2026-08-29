@@ -26,10 +26,10 @@
 
 ## 本机位置
 
-- 程序：`%LOCALAPPDATA%\Programs\HLSDownloader`
+- 程序：`E:\h`
 - Chromium 扩展：`extensions\HLSDownloader-7.0.0-Chromium.zip`
 - Firefox 扩展：`extensions\HLSDownloader-7.0.0-Firefox.zip`
 - 开始菜单：`HLS Downloader 7.0.0`
-- 回滚镜像：`%LOCALAPPDATA%\Programs\HLSDownloader.v7-backup`
+- 回滚镜像：`E:\h.v7-backup`（仅在事务失败恢复期间短暂存在）
 
 验证数据和正式标签前门槛见 `docs/v7-verification.md`。

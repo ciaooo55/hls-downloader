@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$InstallDir = '',
+    [string]$InstallDir = 'E:\h',
     [int]$Port = 19744,
     [string]$Token = 'v7-installed-ui-api-20260824',
     [string]$ReportPath = ''
@@ -8,14 +8,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$programsRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs')).TrimEnd('\', '/')
-$root = if ([String]::IsNullOrWhiteSpace($InstallDir)) {
-    Join-Path $programsRoot 'HLSDownloader'
-} else {
-    [IO.Path]::GetFullPath($InstallDir).TrimEnd('\', '/')
-}
-if (-not $root.StartsWith(($programsRoot + [IO.Path]::DirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Installed v7 smoke target must stay under ${programsRoot}: $root"
+$installRoot = [IO.Path]::GetFullPath('E:\h').TrimEnd('\', '/')
+$root = [IO.Path]::GetFullPath($InstallDir).TrimEnd('\', '/')
+if (-not [String]::Equals($root, $installRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Installed v7 smoke target must be exactly ${installRoot}: $root"
 }
 $executable = Join-Path $root 'HLSDownloader.exe'
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {

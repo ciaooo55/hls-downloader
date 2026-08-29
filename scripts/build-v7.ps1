@@ -135,6 +135,36 @@ function Copy-CurlImpersonate([string]$Destination) {
         Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+
+function Build-Extension([string]$Resources) {
+    $pnpm = Get-Command pnpm.cmd -ErrorAction SilentlyContinue
+    if (-not $pnpm) { throw 'pnpm.cmd is required to build the production browser extension.' }
+    $package = Get-Content -LiteralPath (Join-Path $repo 'extension\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($package.version -ne '7.0.0') { throw "Browser extension package version must be 7.0.0: $($package.version)" }
+    Push-Location (Join-Path $repo 'extension')
+    try {
+        & $pnpm.Source install --frozen-lockfile
+        if ($LASTEXITCODE -ne 0) { throw "pnpm install failed with exit $LASTEXITCODE" }
+        & $pnpm.Source run build
+        if ($LASTEXITCODE -ne 0) { throw "pnpm run build failed with exit $LASTEXITCODE" }
+    } finally { Pop-Location }
+    New-Item -ItemType Directory -Force -Path (Join-Path $Resources 'extensions') | Out-Null
+    foreach ($item in @(
+        @{ Source = 'chrome-mv3'; Name = 'HLSDownloader-7.0.0-Chromium.zip' },
+        @{ Source = 'firefox-mv3'; Name = 'HLSDownloader-7.0.0-Firefox.zip' }
+    )) {
+        $source = Join-Path (Join-Path $repo 'extension\.output') $item.Source
+        if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Production extension output is missing: $source" }
+        $manifest = Get-Content -LiteralPath (Join-Path $source 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($manifest.version -ne '7.0.0') { throw "Built $($item.Source) manifest version is not 7.0.0: $($manifest.version)" }
+        Compress-Archive -Path (Join-Path $source '*') -DestinationPath (Join-Path (Join-Path $Resources 'extensions') $item.Name) -CompressionLevel Optimal -Force
+    }
+}
+
+if ($isPackage) {
+    Build-Extension (Join-Path $repo 'desktop_ui\resources\common')
+}
+
 $cargo = 'C:\Users\lee\.cargo\bin\cargo.exe'
 $engineTarget = if ($isPackage) { 'release' } else { 'debug' }
 & $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-engine

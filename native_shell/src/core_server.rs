@@ -169,27 +169,34 @@ fn dispatch(
         CorePipeRequest::Command {
             request_id,
             command,
-        } => match coordinator.dispatch(command) {
-            Ok(events) => {
-                bump_notify(notify, coordinator);
-                if events
-                    .iter()
-                    .any(|item| matches!(item.event, CoreEvent::UpdateInstallStarted { .. }))
-                {
-                    let stop = Arc::clone(stop);
-                    thread::spawn(move || {
-                        thread::sleep(Duration::from_millis(500));
+        } => {
+            let should_shutdown = matches!(&command, CoreCommand::Shutdown);
+            match coordinator.dispatch(command) {
+                Ok(events) => {
+                    bump_notify(notify, coordinator);
+                    if should_shutdown {
                         stop.store(true, Ordering::SeqCst);
-                    });
+                        notify.1.notify_all();
+                    }
+                    if events
+                        .iter()
+                        .any(|item| matches!(item.event, CoreEvent::UpdateInstallStarted { .. }))
+                    {
+                        let stop = Arc::clone(stop);
+                        thread::spawn(move || {
+                            thread::sleep(Duration::from_millis(500));
+                            stop.store(true, Ordering::SeqCst);
+                        });
+                    }
+                    CorePipeResponse::Events { request_id, events }
                 }
-                CorePipeResponse::Events { request_id, events }
+                Err(error) => CorePipeResponse::Error {
+                    request_id: Some(request_id),
+                    code: "core_command_failed".into(),
+                    message: error,
+                },
             }
-            Err(error) => CorePipeResponse::Error {
-                request_id: Some(request_id),
-                code: "core_command_failed".into(),
-                message: error,
-            },
-        },
+        }
         CorePipeRequest::Snapshot { request_id } => match coordinator.tasks() {
             Ok(tasks) => CorePipeResponse::Snapshot {
                 request_id,
@@ -657,6 +664,20 @@ mod tests {
                 .unwrap(),
             crate::LEGAL_TERMS_VERSION
         );
+    }
+
+    #[test]
+    fn shutdown_command_stops_the_core_after_acknowledging() {
+        let server = CoreServer::in_memory().unwrap();
+        let response = (server.handler())(CorePipeRequest::Command {
+            request_id: 7,
+            command: CoreCommand::Shutdown,
+        });
+        assert!(matches!(
+            response,
+            CorePipeResponse::Events { request_id: 7, .. }
+        ));
+        assert!(server.stop_handle().load(Ordering::SeqCst));
     }
 
     #[test]

@@ -62,7 +62,6 @@ pub fn spawn_desktop_ui(root: &Path) -> bool {
         return false;
     };
     let mut command = Command::new(&executable);
-    command.arg("--settings");
     command.current_dir(root);
     command.stdin(std::process::Stdio::null());
     command.stdout(std::process::Stdio::null());
