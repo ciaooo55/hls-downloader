@@ -116,9 +116,9 @@ try {
 
 $engineExecutable = Join-Path $target 'app\resources\HLSDownloaderEngine.exe'
 $hostExecutable = Join-Path $target 'app\resources\HLSDownloaderNativeHost.exe'
-& $engineExecutable --register-native-host
-if ($LASTEXITCODE -ne 0) {
-    throw "v7 Native Host registration failed with exit $LASTEXITCODE"
+$registration = Start-Process -FilePath $engineExecutable -ArgumentList '--register-native-host' -NoNewWindow -Wait -PassThru
+if ($registration.ExitCode -ne 0) {
+    throw "v7 Native Host registration failed with exit $($registration.ExitCode)"
 }
 
 $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\HLS Downloader'
