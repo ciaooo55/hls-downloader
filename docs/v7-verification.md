@@ -6,6 +6,7 @@
 
 - 功能合同：唯一权威清单为 `artifacts/v7-productization/feature-parity.json`，当前 `26/28` verified、`2` partial。候选打包要求 canonical 清单、无 blocked 项且 Git 工作树干净，允许 partial 以便通过实机证据关闭；正式打包要求全部 `28/28` verified，并额外要求 `release_ready=true`。
 - Rust Core：`334/334`，覆盖 IPC、数据库、HTTP/HLS/DASH、FTP/SFTP、BT、播放器、投屏、迁移和恶意输入。
+- Core 恢复：pending media push 重启后可继续 resolve；named pipe 创建失败会在 Engine ready 前返回错误。
 - HLS 候选证据：认证 VOD/Live 均覆盖未授权 `401`、Authorization 传递、暂停、checkpoint 和不重复分片恢复；Windows PowerShell 5.1 放大复跑 `10/10` VOD 与 `10/10` Live 通过。
 - BT 候选证据：Core 经过本地 tracker/peer 完成传输中文件切换、in-flight Cancel、保留文件完成和选中输出物化；PS7 连续 3 次、PS5.1 1 次通过。
 - HTTP 分段专项：`39/39`；96 MiB 实际 Range 下载 `76.82 MiB/s`，32 个分段无重叠，发布后额外网络字节为 `0`。

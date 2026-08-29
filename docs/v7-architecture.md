@@ -22,6 +22,11 @@ never carry browser credentials, and exchange only length-prefixed JSON on
 explicit frozen-client compatibility path; the v7 UI and extension never
 select it.
 
+On Windows, Core startup reports named-pipe readiness immediately after the
+pipe instance is created, before waiting for the first client. DACL or
+`CreateNamedPipeW` failures return from `bind_local` instead of being reported
+as a listening Core.
+
 ## Runtime roles
 
 | Role | Owner | Requirement |

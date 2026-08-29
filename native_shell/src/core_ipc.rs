@@ -439,7 +439,7 @@ impl NamedPipeServer {
     where
         F: FnMut(CorePipeRequest) -> CorePipeResponse,
     {
-        let mut stream = self.serve_once_inner()?;
+        let mut stream = self.serve_once_inner(None)?;
         while let Some(request) = read_message::<CorePipeRequest>(&mut stream)? {
             let response = handler(request);
             write_message(&mut stream, &response)?;
@@ -477,11 +477,64 @@ impl NamedPipeServer {
         Ok(())
     }
 
-    fn accept(&self) -> Result<std::fs::File, String> {
-        self.serve_once_inner()
+    pub fn serve_loop_with_ready(
+        &self,
+        stop: Arc<AtomicBool>,
+        handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync>,
+        ready: std::sync::mpsc::SyncSender<Result<(), String>>,
+    ) -> Result<(), String> {
+        if stop.load(Ordering::SeqCst) {
+            let error = "named pipe startup canceled before ready".to_string();
+            let _ = ready.send(Err(error.clone()));
+            return Err(error);
+        }
+        let first = match self.serve_once_inner(Some(&ready)) {
+            Ok(stream) => stream,
+            Err(error) => return Err(error),
+        };
+        let handler_for_first = Arc::clone(&handler);
+        thread::spawn(move || {
+            let mut stream = first;
+            while let Ok(Some(request)) = read_message::<CorePipeRequest>(&mut stream) {
+                let response = handler_for_first(request);
+                if write_message(&mut stream, &response).is_err() {
+                    break;
+                }
+            }
+        });
+        while !stop.load(Ordering::SeqCst) {
+            match self.accept() {
+                Ok(mut stream) => {
+                    let handler = Arc::clone(&handler);
+                    thread::spawn(move || {
+                        while let Ok(Some(request)) = read_message::<CorePipeRequest>(&mut stream) {
+                            let response = handler(request);
+                            if write_message(&mut stream, &response).is_err() {
+                                break;
+                            }
+                        }
+                    });
+                }
+                Err(error) => {
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    eprintln!("Core named pipe accept: {error}");
+                    thread::sleep(Duration::from_millis(40));
+                }
+            }
+        }
+        Ok(())
     }
 
-    fn serve_once_inner(&self) -> Result<std::fs::File, String> {
+    fn accept(&self) -> Result<std::fs::File, String> {
+        self.serve_once_inner(None)
+    }
+
+    fn serve_once_inner(
+        &self,
+        ready: Option<&std::sync::mpsc::SyncSender<Result<(), String>>>,
+    ) -> Result<std::fs::File, String> {
         use std::fs::File;
         use std::os::windows::io::FromRawHandle;
         use std::os::windows::raw::HANDLE;
@@ -494,8 +547,16 @@ impl NamedPipeServer {
         };
 
         let name = wide(&self.name);
-        let owner_sd =
-            owner_pipe_sd().ok_or_else(|| "named pipe owner DACL unavailable".to_string())?;
+        let owner_sd = match owner_pipe_sd() {
+            Some(value) => value,
+            None => {
+                let error = "named pipe owner DACL unavailable".to_string();
+                if let Some(ready) = ready {
+                    let _ = ready.send(Err(error.clone()));
+                }
+                return Err(error);
+            }
+        };
         let mut attrs = windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<windows_sys::Win32::Security::SECURITY_ATTRIBUTES>()
                 as u32,
@@ -515,9 +576,14 @@ impl NamedPipeServer {
             )
         };
         if handle == INVALID_HANDLE_VALUE {
-            return Err(format!("CreateNamedPipeW failed: {}", unsafe {
-                GetLastError()
-            }));
+            let error = format!("CreateNamedPipeW failed: {}", unsafe { GetLastError() });
+            if let Some(ready) = ready {
+                let _ = ready.send(Err(error.clone()));
+            }
+            return Err(error);
+        }
+        if let Some(ready) = ready {
+            let _ = ready.send(Ok(()));
         }
         let connected = unsafe { ConnectNamedPipe(handle, null_mut()) } != 0;
         if !connected {

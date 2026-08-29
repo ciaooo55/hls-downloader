@@ -241,6 +241,12 @@ impl PersistentCore {
         let mut runtime = CoreRuntime::from_state(snapshots, specs, sequence);
         for encoded in store.load_handoffs()? {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&encoded) {
+                if let Ok(request) =
+                    serde_json::from_value::<crate::MediaPushRequest>(value.clone())
+                {
+                    runtime.restore_pending_media_push(request);
+                    continue;
+                }
                 let status = value
                     .get("status")
                     .and_then(serde_json::Value::as_str)
@@ -418,6 +424,51 @@ mod tests {
         assert_eq!(reopened.store().latest_sequence().unwrap(), 2);
         let events = reopened.handle(CoreCommand::Ping).unwrap();
         assert_eq!(events[0].sequence, 3);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
+    fn file_store_restores_pending_media_push_after_core_restart() {
+        let path = std::env::temp_dir().join(format!(
+            "hls-v7-media-push-restart-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let request = crate::MediaPushRequest {
+            id: "push-restart".into(),
+            push_kind: "tvbox".into(),
+            url: "https://example.test/media.mp4".into(),
+            title: "Restart media".into(),
+            status: "pending".into(),
+            message: String::new(),
+            location: String::new(),
+            created_at_ms: 1,
+        };
+        {
+            let mut core = PersistentCore::open(&path).unwrap();
+            core.handle(CoreCommand::RequestMediaPush {
+                request: request.clone(),
+            })
+            .unwrap();
+        }
+        let mut reopened = PersistentCore::open(&path).unwrap();
+        let events = reopened
+            .handle(CoreCommand::ResolveMediaPush {
+                request_id: request.id.clone(),
+                status: "done".into(),
+                message: "ok".into(),
+                location: "http://127.0.0.1:9978".into(),
+            })
+            .unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event.event,
+            crate::CoreEvent::MediaPushResolved { ref request } if request.id == "push-restart" && request.status == "done"
+        )));
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));

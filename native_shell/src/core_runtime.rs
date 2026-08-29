@@ -246,6 +246,13 @@ impl CoreRuntime {
             .insert(offer.handoff_id.clone(), offer);
     }
 
+    pub fn restore_pending_media_push(&mut self, request: MediaPushRequest) {
+        if request.id.trim().is_empty() || request.status != "pending" {
+            return;
+        }
+        self.media_push_requests.insert(request.id.clone(), request);
+    }
+
     pub fn list_tasks(&self) -> Vec<TaskSnapshot> {
         let mut tasks: Vec<_> = self.tasks.values().cloned().collect();
         tasks.sort_by_key(|item| (item.queue_index, item.task_id.clone()));

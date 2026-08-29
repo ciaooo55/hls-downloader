@@ -82,10 +82,26 @@ impl CoreServer {
         {
             let stop = self.stop_handle();
             let handler = self.handler();
-            thread::spawn(move || {
+            let stop_on_startup_failure = self.stop_handle();
+            let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+            let worker = thread::spawn(move || {
                 let server = crate::NamedPipeServer::new(crate::v7_pipe_name());
-                let _ = server.serve_loop(stop, handler);
+                server.serve_loop_with_ready(stop, handler, ready_tx)
             });
+            match ready_rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    let _ = worker.join();
+                    return Err(format!("bind v7 Core named pipe: {error}"));
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    stop_on_startup_failure.store(true, Ordering::SeqCst);
+                    return Err("v7 Core named pipe startup timed out".into());
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("v7 Core named pipe startup thread exited before ready".into());
+                }
+            }
         }
         if !crate::tcp_loopback_enabled() {
             let stop = self.stop_handle();
