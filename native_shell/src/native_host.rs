@@ -670,7 +670,7 @@ pub fn run() -> i32 {
     let mut session = match NativeHostSession::open_default() {
         Ok(session) => session,
         Err(error) => {
-            eprintln!("v6 core startup failed: {error}");
+            eprintln!("v7 Core startup failed: {error}");
             return 1;
         }
     };

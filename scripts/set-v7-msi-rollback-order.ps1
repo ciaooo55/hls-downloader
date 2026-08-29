@@ -115,9 +115,10 @@ function Set-MsiExecutableAction(
     $escapedCondition = $Condition.Replace("'", "''")
     Invoke-MsiNonQuery "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='$Action'"
     Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$Action'"
-    # Type 18 launches an installed executable. Type 64 keeps registration repair
-    # from invalidating an otherwise usable per-user install, so the total is 82.
-    Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('$Action',82,'$SourceFile','$escapedArguments')"
+    # Type 18 launches an installed executable in the installing user's
+    # context. Native Host registration writes HKCU, so NoImpersonate (64)
+    # would incorrectly register it under the elevated service account.
+    Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('$Action',18,'$SourceFile','$escapedArguments')"
     Invoke-MsiNonQuery "INSERT INTO ``InstallExecuteSequence`` (``Action``,``Condition``,``Sequence``) VALUES ('$Action','$escapedCondition',$Sequence)"
 }
 

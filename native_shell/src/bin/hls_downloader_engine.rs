@@ -92,6 +92,22 @@ fn start_resident_tray() {
         .ok();
 }
 
+fn automatic_native_host_repair_enabled() -> bool {
+    // Isolated verification and portable-candidate runs use an explicit IPC
+    // endpoint. They must not overwrite the user's browser registration with
+    // a manifest inside a temporary test directory.
+    ![
+        "HLS_V7_PIPE",
+        "HLS_V6_PIPE",
+        "HLS_V7_CORE_TCP",
+        "HLS_V6_CORE_TCP",
+        "HLS_V7_CORE_BIND",
+        "HLS_V6_CORE_BIND",
+    ]
+    .iter()
+    .any(|key| std::env::var_os(key).is_some())
+}
+
 fn main() -> ExitCode {
     let args = std::env::args().collect::<Vec<_>>();
     if args.iter().any(|arg| arg == "--player-process") {
@@ -122,9 +138,11 @@ fn main() -> ExitCode {
             }
         }
     } else {
-        if let Ok(engine) = std::env::current_exe() {
-            if let Err(error) = hls_native_shell::register_packaged_native_host(&engine) {
-                eprintln!("Native Host automatic registration skipped: {error}");
+        if automatic_native_host_repair_enabled() {
+            if let Ok(engine) = std::env::current_exe() {
+                if let Err(error) = hls_native_shell::register_packaged_native_host(&engine) {
+                    eprintln!("Native Host automatic registration skipped: {error}");
+                }
             }
         }
         if let Err(error) = hls_native_shell::claim_v7_instance() {

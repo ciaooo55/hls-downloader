@@ -88,7 +88,10 @@ impl TaskPaths {
             fs::create_dir_all(parent)
                 .map_err(|error| format!("create output directory: {error}"))?;
         }
-        fs::write(&self.control, "run").map_err(|error| format!("write task control: {error}"))?;
+        if !self.control.exists() {
+            fs::write(&self.control, "run")
+                .map_err(|error| format!("write task control: {error}"))?;
+        }
         Ok(())
     }
 
@@ -1704,6 +1707,13 @@ impl CoreCoordinator {
                 .lock()
                 .map_err(|_| "v7 Core mutex poisoned".to_string())?;
             if let Some(task_id) = task_id.as_deref() {
+                if should_start {
+                    if let Some(spec) = core.task_spec(task_id).cloned() {
+                        let paths = TaskPaths::for_task(task_id, &spec)?;
+                        paths.prepare()?;
+                        paths.set_control("run")?;
+                    }
+                }
                 if let CoreCommand::TaskAction { action, .. } = &command {
                     if matches!(action.as_str(), "pause" | "cancel") {
                         if let Some(spec) = core.task_spec(task_id).cloned() {
@@ -4850,6 +4860,28 @@ mod tests {
             "_COM1.dat"
         );
         assert_eq!(safe_filename("NUL", "https://cdn.test/a.bin"), "_NUL");
+    }
+
+    #[test]
+    fn task_paths_prepare_preserves_an_active_pause_or_cancel_request() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-control-race-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut task = spec();
+        task.download_dir = root.to_string_lossy().into_owned();
+        let paths = TaskPaths::for_task("task-1", &task).unwrap();
+        paths.prepare().unwrap();
+        for control in ["pause", "cancel"] {
+            paths.set_control(control).unwrap();
+            paths.prepare().unwrap();
+            assert_eq!(fs::read_to_string(&paths.control).unwrap(), control);
+        }
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

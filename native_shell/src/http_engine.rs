@@ -2105,7 +2105,13 @@ fn parse_http_url(raw: &str) -> Result<ParsedUrl, EngineError> {
         .split_once('#')
         .map(|(head, _)| head)
         .unwrap_or(&raw[prefix_len..]);
-    let (hostport, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let (hostport, path) = if let Some(index) = rest.find('/') {
+        (&rest[..index], &rest[index + 1..])
+    } else if let Some(index) = rest.find('?') {
+        (&rest[..index], &rest[index..])
+    } else {
+        (rest, "")
+    };
     let (host, port) = if let Some((host, port)) = hostport.rsplit_once(':') {
         if host.starts_with('[') {
             return Err(EngineError::Failed("ipv6 url unsupported".into()));
@@ -2365,7 +2371,7 @@ fn http_get(
         .set_write_timeout(Some(Duration::from_secs(30)))
         .map_err(|err| EngineError::Failed(err.to_string()))?;
     let mut header = format!(
-        "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: keep-alive\r\nAccept-Encoding: identity\r\nUser-Agent: {}\r\n",
+        "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept-Encoding: identity\r\nUser-Agent: {}\r\n",
         request_method(job),
         parsed.path,
         host_header(parsed),
@@ -3045,6 +3051,9 @@ mod tests {
     fn host_header_omits_default_ports() {
         let http = parse_http_url("http://cdn.test/file.bin").unwrap();
         assert_eq!(host_header(&http), "cdn.test");
+        let query_only = parse_http_url("http://cdn.test?token=abc").unwrap();
+        assert_eq!(query_only.host, "cdn.test");
+        assert_eq!(query_only.path, "/?token=abc");
         let custom = parse_http_url("http://127.0.0.1:8765/api").unwrap();
         assert_eq!(host_header(&custom), "127.0.0.1:8765");
         let https = parse_http_url("https://cdn.test/a").unwrap();
@@ -3064,6 +3073,21 @@ mod tests {
             parse_http_url("HTTP://cdn.test/file.bin").unwrap().host,
             "cdn.test"
         );
+    }
+
+    #[test]
+    fn raw_http_requests_close_connection_for_body_end_detection() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let url = serve_recording_headers(b"body", Arc::clone(&seen));
+        assert_eq!(
+            fetch_bytes_range(&url, &HashMap::new(), "", 0, 4).unwrap(),
+            b"body"
+        );
+        assert!(seen
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .any(|line| line == "connection: close"));
     }
 
     #[test]
