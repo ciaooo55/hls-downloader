@@ -246,18 +246,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 "reject" => {
-                    if let Some(offer) = pending.lock().ok().and_then(|mut items| items.pop_front())
+                    if let Some(offer) =
+                        pending.lock().ok().and_then(|items| items.front().cloned())
                     {
-                        let _ = command_with_reconnect(
+                        let result = command_with_reconnect(
                             &client,
                             CoreCommand::RejectHandoff {
-                                handoff_id: offer.handoff_id,
+                                handoff_id: offer.handoff_id.clone(),
                                 suppress_site_kind: window
                                     .upgrade()
                                     .map(|item| item.get_suppress_site_kind())
                                     .unwrap_or(false),
                             },
                         );
+                        match result {
+                            Ok(_) => {
+                                pending.lock().ok().and_then(|mut items| items.pop_front());
+                            }
+                            Err(error) => {
+                                if let Some(item) = window.upgrade() {
+                                    item.set_error_text(error.into());
+                                }
+                            }
+                        }
                     }
                 }
                 "browse" => {
