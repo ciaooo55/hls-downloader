@@ -27,6 +27,7 @@ private const val CORE_PIPE = "\\\\.\\pipe\\HLSDownloader.v7"
 
 object Product {
     const val version = "7.0.0"
+    const val engineStarting = "下载引擎 · 启动中"
     const val engineConnected = "下载引擎 · 已连接"
     const val engineReconnecting = "下载引擎 · 重连中"
     const val extensionDisconnected = "浏览器插件 · 未连接"

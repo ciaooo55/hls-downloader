@@ -2384,13 +2384,13 @@ impl CoreCoordinator {
                         status: status.into(),
                     });
                     if status == "failed" {
-                        let url = core
+                        let (url, has_credential_ref) = core
                             .task_spec(&task_id)
-                            .map(|spec| spec.url.clone())
+                            .map(|spec| (spec.url.clone(), spec.credential_ref.is_some()))
                             .unwrap_or_default();
                         let _ = core.report_failure(
                             &task_id,
-                            task_failure_from_error(&error, &stage, &url, attempt),
+                            task_failure_from_error(&error, &stage, &url, attempt, has_credential_ref),
                         );
                     }
                     eprintln!("v7 task {task_id} {status}: {error}");
@@ -2931,12 +2931,14 @@ fn task_failure_from_error(
     stage: &str,
     url: &str,
     attempt: u32,
+    has_credential_ref: bool,
 ) -> crate::TaskFailure {
     let lower = error.to_ascii_lowercase();
     let http_status = extract_http_status(error);
     let (code, hint) = if let Some(status) = http_status {
         let hint = match status {
-            401 => "服务器要求登录：手工任务请在“请求”页填写 Cookie 或 Authorization；浏览器接管请从已登录页面重新发送",
+            401 if !has_credential_ref => "服务器要求登录：手工新建任务请在“请求”页填写 Cookie 或 Authorization 请求头；也可从已登录页面通过浏览器插件重新发送",
+            401 => "服务器拒绝了当前凭据，请回到原网页刷新登录状态后重新发送，或更新任务的请求头/Cookie",
             403 => "访问凭据或短效签名可能已过期，请回到原网页刷新后重新发送资源",
             404 => "资源地址已失效或文件已被移动，请回到来源页面重新识别",
             408 | 425 | 429 => "服务器暂时限制请求，请降低并发并稍后重试",
@@ -7660,6 +7662,7 @@ fn failure_diagnostics_preserve_http_status_stage_and_actionable_hint() {
         "transfer",
         "https://cdn.test/missing.mp4?token=secret",
         3,
+        false,
     );
     assert_eq!(failure.code, "HTTP_404");
     assert_eq!(failure.http_status, Some(404));
@@ -7680,6 +7683,7 @@ fn failure_diagnostics_classify_local_output_failures_without_false_http_codes()
         "transfer",
         r"C:\downloads\movie.mp4",
         1,
+        false,
     );
     assert_eq!(failure.code, "DISK_FULL");
     assert_eq!(failure.http_status, None);

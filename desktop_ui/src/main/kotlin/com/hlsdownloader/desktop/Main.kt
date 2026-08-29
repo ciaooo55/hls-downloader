@@ -487,7 +487,8 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
     var category by remember { mutableStateOf<TaskCategory?>(null) }
     var selectedQueueId by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
-    var engineText by remember { mutableStateOf(Product.engineConnected) }
+    var engineHasConnected by remember { mutableStateOf(visualFixture == "tasks_1000") }
+    var engineText by remember { mutableStateOf(if (visualFixture == "tasks_1000") Product.engineConnected else Product.engineStarting) }
     var extensionText by remember { mutableStateOf(Product.extensionDisconnected) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var darkMode by remember { mutableStateOf(visualTheme == "dark") }
@@ -673,7 +674,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
             engineText = Product.engineConnected
             return@LaunchedEffect
         }
-        if (!snapshotReady) engineText = Product.engineReconnecting
+        if (!snapshotReady) engineText = if (engineHasConnected) Product.engineReconnecting else Product.engineStarting
         var attempts = 0
         while (!snapshotReady) {
             val snapshot = runCatching { withContext(Dispatchers.IO) { EnginePipeClient().snapshotState() } }
@@ -683,6 +684,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                 tasks += state.tasks.map(::downloadTask)
                 eventSequence = state.latestSequence
                 snapshotReady = true
+                engineHasConnected = true
                 engineText = Product.engineConnected
                 if (notice?.message == ENGINE_RECONNECTING_NOTICE) notice = null
                 break
@@ -749,6 +751,17 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                             envelope.event["task_id"]?.jsonPrimitive?.content.orEmpty(),
                             envelope.event["request_id"]?.jsonPrimitive?.content.orEmpty(),
                         )
+                    }
+                    if (eventKind in setOf("task_created", "task_updated", "task_progress")) {
+                        val snapshot = envelope.event["snapshot"]?.jsonObject
+                        val status = snapshot?.get("status")?.jsonPrimitive?.content.orEmpty().lowercase()
+                        if (status in setOf("failed", "error")) {
+                            val hint = snapshot["error_hint"]?.jsonPrimitive?.content.orEmpty()
+                            val message = snapshot["error_message"]?.jsonPrimitive?.content.orEmpty()
+                            if (hint.isNotBlank() || message.isNotBlank()) {
+                                notice = UiSignal.Notice("error", hint.ifBlank { message })
+                            }
+                        }
                     }
                     handleSignal(applyEngineEvent(
                         tasks,
@@ -832,10 +845,11 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                     })
                     if (attentionRequired) onAttention()
                 }
+                engineHasConnected = true
                 engineText = Product.engineConnected
             }.onFailure { error ->
                 UiDiagnostics.error("engine.wait_events", error)
-                engineText = Product.engineReconnecting
+                engineText = if (engineHasConnected) Product.engineReconnecting else Product.engineStarting
                 snapshotReady = false
                 delay(500)
                 refreshKey++
@@ -893,7 +907,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                 ContentHeader(filter, visible.size, selected.isNotEmpty(), tasks.any { it.status == "已完成" }, { refreshKey++ }, {
                     scope.launch {
                         runCatching { withContext(Dispatchers.IO) { EnginePipeClient().clearCompleted() } }
-                            .onSuccess { refreshKey++ }.onFailure { engineText = Product.engineReconnecting }
+                            .onSuccess { refreshKey++ }.onFailure { notice = UiSignal.Notice("error", it.message ?: "清理已完成任务失败") }
                     }
                 }, onMore = { action ->
                     when (action) {
@@ -994,7 +1008,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { urls.forEach { EnginePipeClient().createTask(TaskDraft(url = it, queueId = selectedQueueId ?: "default")) } } }
                 .onSuccess { refreshKey++ }
-                .onFailure { engineText = Product.engineReconnecting }
+                .onFailure { notice = UiSignal.Notice("error", it.message ?: "批量创建任务失败") }
         }
         batchDialog = false
     }
