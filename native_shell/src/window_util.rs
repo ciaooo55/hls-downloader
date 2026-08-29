@@ -164,6 +164,47 @@ pub fn activate_window_by_title(title: &str) -> bool {
     }
 }
 
+/// Keep the transient presenter window out of the taskbar while retaining
+/// normal foreground activation when a real handoff is shown.
+pub fn hide_window_from_taskbar_by_title(title: &str) -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_NOTOPMOST,
+            SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+            WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+        };
+
+        let Some(raw_hwnd) = window_handle_by_title(title) else {
+            return false;
+        };
+        let hwnd = raw_hwnd as windows_sys::Win32::Foundation::HWND;
+        unsafe {
+            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            let next = (style & !(WS_EX_APPWINDOW as isize)) | WS_EX_TOOLWINDOW as isize;
+            if next != style {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
+                SetWindowPos(
+                    hwnd,
+                    HWND_NOTOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                ) != 0
+            } else {
+                true
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = title;
+        false
+    }
+}
+
 pub fn os_reduce_motion() -> bool {
     #[cfg(windows)]
     {
@@ -197,6 +238,9 @@ mod tests {
             "HLSDownloader-no-such-window-title"
         ));
         assert!(!activate_window_by_title(
+            "HLSDownloader-no-such-window-title"
+        ));
+        assert!(!hide_window_from_taskbar_by_title(
             "HLSDownloader-no-such-window-title"
         ));
     }

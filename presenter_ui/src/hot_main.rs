@@ -4,9 +4,9 @@ slint::include_modules!();
 
 use hls_native_shell::{
     activate_window_by_title, begin_caption_drag, center_window_by_title,
-    claim_v7_presenter_instance, completion_sound, install_root, os_reduce_motion, spawn_core,
-    spawn_desktop_ui, CoreCommand, CoreEvent, CoreIpcClient, CorePipeResponse, EventEnvelope,
-    ResourceKind, ResourceOffer, TaskSnapshot,
+    claim_v7_presenter_instance, completion_sound, hide_window_from_taskbar_by_title, install_root,
+    os_reduce_motion, spawn_core, spawn_desktop_ui, CoreCommand, CoreEvent, CoreIpcClient,
+    CorePipeResponse, EventEnvelope, ResourceKind, ResourceOffer, TaskSnapshot,
 };
 use serde::Deserialize;
 use slint::{ComponentHandle, RenderingState, Timer, TimerMode};
@@ -360,11 +360,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let prewarm_finished = Rc::clone(&prewarm_finished);
         move || {
             if prewarm_rendered.load(Ordering::Acquire) && !*prewarm_finished.borrow() {
+                let _ = hide_window_from_taskbar_by_title("确认下载");
                 let _ = center_window_by_title("确认下载");
                 if let Some(item) = confirm.upgrade() {
                     if pending.lock().map(|items| items.is_empty()).unwrap_or(true) {
-                        item.window()
-                            .set_position(slint::PhysicalPosition::new(-32_000, -32_000));
+                        let _ = item.hide();
                     }
                 }
                 *prewarm_finished.borrow_mut() = true;
@@ -450,6 +450,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             item.window()
                 .set_position(slint::PhysicalPosition::new(-32_000, -32_000));
             if item.show().is_ok() {
+                let _ = hide_window_from_taskbar_by_title("确认下载");
                 // `show()` initializes the native window and renderer. Some
                 // Windows/driver combinations deliberately skip rendering
                 // notifications for a fully off-screen window, which used to
@@ -459,6 +460,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // off-screen show here is both deterministic and honest.
                 *prewarm_finished.borrow_mut() = true;
                 write_ready_marker();
+                let _ = item.hide();
             }
         }
     });
@@ -731,8 +733,7 @@ fn show_next_offer(
         return;
     };
     let Some(offer) = pending.lock().ok().and_then(|items| items.front().cloned()) else {
-        item.window()
-            .set_position(slint::PhysicalPosition::new(-32_000, -32_000));
+        let _ = item.hide();
         return;
     };
     trace(&format!("showing handoff {}", offer.handoff_id));
@@ -794,6 +795,7 @@ fn show_next_offer(
     });
     let shown = item.show().is_ok();
     if shown {
+        let _ = hide_window_from_taskbar_by_title("确认下载");
         let _ = center_window_by_title("确认下载");
         let _ = activate_window_by_title("确认下载");
     }

@@ -104,6 +104,6 @@ pub use torrent_engine::{torrent_session, BuiltinTorrentEngine, TorrentSession};
 pub use tray::{completion_sound, show_notification, spawn_tray, TrayAction};
 pub use updater::{check_for_update, is_newer_version, run_update_helper, CURRENT_VERSION};
 pub use window_util::{
-    activate_window_by_title, begin_caption_drag, center_window_by_title, os_reduce_motion,
-    window_handle_by_title,
+    activate_window_by_title, begin_caption_drag, center_window_by_title,
+    hide_window_from_taskbar_by_title, os_reduce_motion, window_handle_by_title,
 };
