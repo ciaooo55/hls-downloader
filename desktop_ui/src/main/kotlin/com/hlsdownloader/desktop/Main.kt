@@ -756,8 +756,8 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, externalD
                         val snapshot = envelope.event["snapshot"]?.jsonObject
                         val status = snapshot?.get("status")?.jsonPrimitive?.content.orEmpty().lowercase()
                         if (status in setOf("failed", "error")) {
-                            val hint = snapshot["error_hint"]?.jsonPrimitive?.content.orEmpty()
-                            val message = snapshot["error_message"]?.jsonPrimitive?.content.orEmpty()
+                            val hint = snapshot?.get("error_hint")?.jsonPrimitive?.content.orEmpty()
+                            val message = snapshot?.get("error_message")?.jsonPrimitive?.content.orEmpty()
                             if (hint.isNotBlank() || message.isNotBlank()) {
                                 notice = UiSignal.Notice("error", hint.ifBlank { message })
                             }
