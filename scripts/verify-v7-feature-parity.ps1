@@ -240,7 +240,7 @@ if ($RequireReleaseReady) {
                     $errors.Add('Candidate artifact manifest must contain exactly Chromium and Firefox extension evidence.')
                 }
                 if (-not [String]::IsNullOrWhiteSpace($candidatePortablePath)) {
-                    $portableCheck = Join-Path ([IO.Path]::GetTempPath()) ('hls-v7-release-' + [guid]::NewGuid().ToString('n'))
+                    $portableCheck = Join-Path $repo ('artifacts\v7-productization\.release-verify-' + [guid]::NewGuid().ToString('n'))
                     try {
                         Expand-Archive -LiteralPath $candidatePortablePath -DestinationPath $portableCheck -Force
                         $portableRoot = Join-Path $portableCheck 'HLSDownloader'
@@ -285,8 +285,11 @@ if ($RequireReleaseReady) {
         }
         foreach ($gate in $gates) {
             $gateId = [string]$gate.id
-            foreach ($field in @('command', 'input', 'output', 'result')) {
+            foreach ($field in @('command', 'input', 'result')) {
                 if ([String]::IsNullOrWhiteSpace([string]$gate.$field)) { $errors.Add("Release gate '$gateId' is missing '$field'.") }
+            }
+            if ($gate.PSObject.Properties.Name -notcontains 'output' -or $gate.output -isnot [string]) {
+                $errors.Add("Release gate '$gateId' output must be present as a string.")
             }
             if ($gate.PSObject.Properties.Name -notcontains 'exit_status') {
                 $errors.Add("Release gate '$gateId' is missing 'exit_status'.")
@@ -323,6 +326,9 @@ if ($RequireReleaseReady) {
                     if ([string]$report.candidate_artifact_manifest_sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
                         ([string]$report.candidate_artifact_manifest_sha256).ToLowerInvariant() -ne $candidateManifestHash.ToLowerInvariant()) {
                         $errors.Add("Release gate '$gateId' report is not bound to the candidate artifact manifest.")
+                    }
+                    if ($report.PSObject.Properties.Name -notcontains 'output' -or $report.output -isnot [string]) {
+                        $errors.Add("Release gate '$gateId' report output must be present as a string.")
                     }
                     foreach ($field in @('command', 'input', 'output', 'result')) {
                         if ([string]$report.$field -ne [string]$gate.$field) {

@@ -2,9 +2,12 @@
 
 核验时间：2026-08-26
 
-## 已通过
+## 历史已通过
 
-- 功能合同：唯一权威清单为 `artifacts/v7-productization/feature-parity.json`，当前 `26/28` verified、`2` partial。候选打包要求 canonical 清单、无 blocked 项且 Git 工作树干净，允许 partial 以便通过实机证据关闭；正式打包要求全部 `28/28` verified，并额外要求 `release_ready=true`。
+以下数字是核验日期对应提交的历史基线，不代表当前提交已经重新执行。当前源码状态以
+`feature-parity.json`、当前 candidate provenance 和本轮门禁报告为准。
+
+- 功能合同：唯一权威清单为 `artifacts/v7-productization/feature-parity.json`，当前 `24/28` verified、`4` partial。候选打包要求 canonical 清单、无 blocked 项且 Git 工作树干净，允许 partial 以便通过实机证据关闭；正式打包要求全部 `28/28` verified，并额外要求 `release_ready=true`。
 - Rust Core：`334/334`，覆盖 IPC、数据库、HTTP/HLS/DASH、FTP/SFTP、BT、播放器、投屏、迁移和恶意输入。
 - Core 恢复：pending media push 重启后可继续 resolve；named pipe 创建失败会在 Engine ready 前返回错误。
 - HLS 候选证据：认证 VOD/Live 均覆盖未授权 `401`、Authorization 传递、暂停、checkpoint 和不重复分片恢复；Windows PowerShell 5.1 放大复跑 `10/10` VOD 与 `10/10` Live 通过。
@@ -59,7 +62,20 @@ commit/tree 和 candidate `ARTIFACT-MANIFEST.json` 的 SHA-256，并且只包含
 退出码、candidate manifest 哈希及报告路径/哈希。正式门禁会重算 candidate EXE/MSI/Portable
 与所有报告哈希，并从 Portable 重新提取两种扩展，核对 ZIP digest 和 `manifest.version=7.0.0`，
 因此只修改 parity 状态不会通过。
-每份报告本身必须是 schema 1 JSON 结果封套，且其 `gate_id`、`product_version`、
+使用记录器实际运行每项门禁，避免手工拼接报告。`-Command` 是在新的 Windows PowerShell
+进程中执行的精确命令文本，`-Input` 描述该命令实际使用的 candidate 路径、浏览器或机器：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\record-v7-release-gate.ps1 `
+  -GateId browser `
+  -Input 'candidate Portable 解压目录和 Chrome/Edge/Firefox' `
+  -Command '<实际浏览器生产冒烟命令>'
+```
+
+同样记录 `performance`、`installer`、`rollback`。脚本直接捕获输出和退出码，生成
+`artifacts/v7-productization/release-evidence/<gate>.json` 并原子更新
+`release-evidence.json`；命令失败时仍记录 `failed`，正式门禁不会放行。无输出命令以空字符串
+如实记录。每份报告本身必须是 schema 1 JSON 结果封套，且其 `gate_id`、`product_version`、
 `source_commit`、`source_tree`、`candidate_artifact_manifest_sha256`、`command`、`input`、
 `output`、`result`、`exit_status` 必须与 release evidence 一致。
 

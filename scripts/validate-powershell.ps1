@@ -9,6 +9,7 @@ param(
         "scripts\create-v7-portable.ps1",
         "scripts\install-v7-local.ps1",
         "scripts\register-v7-native-host.ps1",
+        "scripts\record-v7-release-gate.ps1",
         "scripts\run-v7-local.ps1",
         "scripts\set-v7-msi-rollback-order.ps1",
         "scripts\vcvars.ps1",
