@@ -3,11 +3,12 @@ param([ValidateSet('run','test','candidate','package','adversarial')][string]$Ta
 $ErrorActionPreference = 'Stop'
 $repo=(Resolve-Path "$PSScriptRoot\..").Path
 $protocolSource = Get-Content -LiteralPath (Join-Path $repo 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt') -Raw -Encoding UTF8
-if ($protocolSource -notmatch 'hls-downloader-v7-core' -or $protocolSource -notmatch 'HLSDownloader\.v7') {
+if ($protocolSource -notmatch 'CORE_PROTOCOL\s*=\s*"hls-downloader-v7-core"' -or
+    $protocolSource -notmatch 'CORE_PIPE\s*=\s*"\\\\\\\\\.\\\\pipe\\\\HLSDownloader\.v7"') {
     throw 'v7 build refused: Compose IPC defaults are not v7.'
 }
 $contractSource = Get-Content -LiteralPath (Join-Path $repo 'native_shell\src\contract.rs') -Raw -Encoding UTF8
-if ($contractSource -notmatch 'V7_PROTOCOL_NAME') {
+if ($contractSource -notmatch 'V7_PROTOCOL_NAME\s*:\s*&str\s*=\s*"hls-downloader-v7-core"') {
     throw 'v7 build refused: Rust v7 protocol contract is missing.'
 }
 $featureParity = Join-Path $repo 'artifacts\v7-productization\feature-parity.json'
