@@ -136,7 +136,7 @@ import org.jetbrains.skia.Image as SkiaImage
 
 enum class TaskFilter(val label: String) { ALL("全部"), RUNNING("进行中"), QUEUED("排队中"), PAUSED("已暂停"), COMPLETED("已完成"), FAILED("失败") }
 enum class TaskCategory(val label: String) { MEDIA("媒体"), PROGRAM("程序"), ARCHIVE("压缩包"), OTHER("其他") }
-private val activeTaskStatuses = setOf("进行中", "录制中", "合并中", "校验中")
+private val activeTaskStatuses = setOf("进行中", "录制中", "合并中", "校验中", "解析中", "探测中")
 internal fun isActiveTaskStatus(status: String): Boolean = status in activeTaskStatuses
 internal fun connectionStateOf(label: String): Boolean = label.contains("已连接")
 data class DownloadTask(val id: String, val filename: String, val status: String, val progress: Float, val speed: String, val speedBytes: Long, val remaining: String, val segments: String, val updated: String, val source: TaskDto)
@@ -158,6 +158,7 @@ private data class HandoffDecision(
     val category: TaskCategory,
     val rememberDirectory: Boolean,
 )
+private data class NoticeHistoryEntry(val at: Long, val level: String, val message: String)
 internal fun droppedFilePaths(payload: Any?): List<String> = (payload as? List<*>)
     .orEmpty().filterIsInstance<File>().map { it.absolutePath }.distinct()
 internal fun selectionAfterClick(taskIds: List<String>, selected: Set<String>, anchorId: String?, targetId: String, shift: Boolean, toggle: Boolean): Set<String> {
@@ -399,12 +400,13 @@ fun main() {
     val auditHeight = System.getenv("HLS_UI_AUDIT_HEIGHT")?.toIntOrNull()?.coerceAtLeast(600) ?: 820
     val state = rememberWindowState(width = auditWidth.dp, height = auditHeight.dp)
     val appIcon = remember { loadDesktopIcon() }
+    val requestExit = { exitApplication() }
     var droppedPaths by remember { mutableStateOf<List<String>>(emptyList()) }
     var dropActive by remember { mutableStateOf(false) }
     var presenterAvailable by remember { mutableStateOf(false) }
     var presenterProbeComplete by remember { mutableStateOf(false) }
     Window(
-        onCloseRequest = ::exitApplication,
+        onCloseRequest = { if (WorkbenchWindow.trayResident) WorkbenchWindow.hideToTray() else exitApplication() },
         title = "HLS Downloader",
         icon = appIcon?.let(::BitmapPainter),
         state = state,
@@ -413,10 +415,13 @@ fun main() {
     ) {
         LaunchedEffect(Unit) {
             window.minimumSize = Dimension(1024, 600)
+            var probeDelayMs = 5_000L
             while (true) {
                 presenterAvailable = withContext(Dispatchers.IO) { EnginePipeClient.ensurePresenterStarted() }
                 presenterProbeComplete = true
-                delay(5_000)
+                // presenter 缺失时指数退避（5s 翻倍至 60s 上限），避免永久空转探测
+                delay(probeDelayMs)
+                probeDelayMs = if (presenterAvailable) 5_000L else (probeDelayMs * 2).coerceAtMost(60_000L)
             }
         }
         LaunchedEffect(auditSurface) {
@@ -461,6 +466,18 @@ fun main() {
                 uiTestApi?.close()
                 target.component = null
                 window.dropTarget = previous
+            }
+        }
+        DisposableEffect(window) {
+            WorkbenchWindow.awtWindow = window
+            WorkbenchWindow.trayResident = TrayHost.install(
+                onShow = { window.isVisible = true; window.toFront() },
+                onExit = requestExit,
+            )
+            onDispose {
+                TrayHost.remove()
+                WorkbenchWindow.trayResident = false
+                WorkbenchWindow.awtWindow = null
             }
         }
         AppShell(
@@ -524,6 +541,8 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     var newTaskUrl by remember { mutableStateOf("") }
     var detailTaskId by remember { mutableStateOf<String?>(null) }
     var settings by remember { mutableStateOf(EngineSettingsDto()) }
+    // 本地先行修改（深色模式/排序）的代数：异步加载返回时若代数已前进则丢弃结果，避免旧值回跳
+    var settingsEpoch by remember { mutableIntStateOf(0) }
     var settingsSaveBusy by remember { mutableStateOf(false) }
     var handoffBusy by remember { mutableStateOf(false) }
     var refreshKey by remember { mutableIntStateOf(0) }
@@ -587,6 +606,15 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     var updateDownloadBusy by remember { mutableStateOf(false) }
     var castPollFailures by remember { mutableIntStateOf(0) }
     var destructiveRequest by remember { mutableStateOf<DestructiveRequest?>(null) }
+    var aboutDialog by remember { mutableStateOf(false) }
+    var noticesDialog by remember { mutableStateOf(false) }
+    val noticeHistory = remember { mutableStateListOf<NoticeHistoryEntry>() }
+    fun recordNotice(level: String, message: String) {
+        val last = noticeHistory.lastOrNull()
+        if (last != null && last.level == level && last.message == message) return
+        noticeHistory.add(NoticeHistoryEntry(System.currentTimeMillis(), level, message))
+        while (noticeHistory.size > 100) noticeHistory.removeAt(0)
+    }
     val scope = rememberCoroutineScope()
     val tasks = remember(visualFixture) {
         mutableStateListOf<DownloadTask>().apply {
@@ -694,6 +722,11 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             }
         }
     }
+    DisposableEffect(Unit) {
+        TrayActions.resumeAll = { launchTaskActions(tasks.mapNotNull { task -> task.source.availableActions.firstOrNull { it in setOf("start", "resume", "retry") }?.let { task.id to it } }) }
+        TrayActions.pauseAll = { launchTaskActions(tasks.filter { "pause" in it.source.availableActions }.map { it.id to "pause" }) }
+        onDispose { TrayActions.resumeAll = null; TrayActions.pauseAll = null }
+    }
     fun applyWorkbenchShortcut(action: String?): Boolean = when (action) {
         "new" -> { newTaskUrl = ""; newTaskDialog = true; true }
         "batch" -> { batchDialog = true; true }
@@ -789,10 +822,13 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 UiDiagnostics.error("handoff.restore", error)
                 notice = UiSignal.Notice("error", error.message ?: "读取浏览器接管请求失败")
             }
+        val settingsEpochAtLoad = settingsEpoch
         runCatching { withContext(Dispatchers.IO) { EnginePipeClient().loadSettings() } }
             .onSuccess { loaded ->
-                settings = loaded
-                darkMode = when (visualTheme) { "light" -> false; "dark" -> true; else -> loaded.darkMode }
+                if (settingsEpochAtLoad == settingsEpoch) {
+                    settings = loaded
+                    darkMode = when (visualTheme) { "light" -> false; "dark" -> true; else -> loaded.darkMode }
+                }
             }
         if (visualFixture.isBlank()) {
             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().loadMediaPushRequests().firstOrNull() } }
@@ -845,12 +881,14 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         else -> false
                     }
                     if (eventKind == "error") {
+                        val engineMessage = envelope.event["message"]?.jsonPrimitive?.content ?: "下载引擎报告错误"
                         UiDiagnostics.warning(
                             "engine.event.error",
-                            envelope.event["message"]?.jsonPrimitive?.content ?: "下载引擎报告错误",
+                            engineMessage,
                             envelope.event["task_id"]?.jsonPrimitive?.content.orEmpty(),
                             envelope.event["request_id"]?.jsonPrimitive?.content.orEmpty(),
                         )
+                        recordNotice("error", engineMessage)
                     }
                     if (eventKind in setOf("task_created", "task_updated", "task_progress")) {
                         val snapshot = envelope.event["snapshot"]?.jsonObject
@@ -992,7 +1030,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         queueAssignTaskIds.isNotEmpty() || detailTaskId != null || extensionDialog || activeHandoff != null ||
         probeResult != null || torrentProbe != null || harvestResult != null || mediaSourceDialog.isNotEmpty() ||
         (!settingsDeviceScanActive && deviceResult != null) || duplicateResult != null || updateResult != null ||
-        preparedUpdate != null || powerPending != null || destructiveRequest != null
+        preparedUpdate != null || powerPending != null || destructiveRequest != null || aboutDialog || noticesDialog
     CompositionLocalProvider(LocalWorkbenchPalette provides if (darkMode) darkPalette else lightPalette) {
     Column(Modifier.fillMaxSize().focusRequester(shellFocus).focusable().clip(RoundedCornerShape(if (maximized) 0.dp else 9.dp)).background(canvas).border(1.dp, border, RoundedCornerShape(if (maximized) 0.dp else 9.dp)).then(if (modalVisible) Modifier.clearAndSetSemantics { } else Modifier)) {
         titleBar()
@@ -1002,6 +1040,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 newTaskUrl = clipboard.trim(); newTaskDialog = true
             }
         }, { batchDialog = true }, { harvestDialog = true }, { launchTaskActions(tasks.mapNotNull { task -> task.source.availableActions.firstOrNull { it in setOf("start", "resume", "retry") }?.let { task.id to it } }) }, { launchTaskActions(tasks.filter { "pause" in it.source.availableActions }.map { it.id to "pause" }) }, { mediaSourceDialog = "cast" }, { mediaSourceDialog = "tvbox" }, { extensionDialog = true }, { settingsDialog = true }, darkMode, {
+            settingsEpoch++
             darkMode = !darkMode
             scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().storeSetting("dark_mode", darkMode) } } }
         })
@@ -1025,6 +1064,9 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         "export" -> chooseExportPath()?.let { path -> scope.launch { runCatching { withContext(Dispatchers.IO) { exportTaskList(path, selected.toList()) } }.onSuccess { result -> notice = UiSignal.Notice("success", "已导出 ${result.taskCount} 项任务") }.onFailure { notice = UiSignal.Notice("error", it.message ?: "导出失败") } } }
                         "update" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().checkUpdate(silent = false) } }.onFailure { notice = UiSignal.Notice("error", it.message ?: "检查更新失败") } }
                         "cancel_power" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().cancelPowerAction() } }.onFailure { notice = UiSignal.Notice("error", it.message ?: "取消电源动作失败") } }
+                        "notices" -> noticesDialog = true
+                        "about" -> aboutDialog = true
+                        "exit" -> onExit()
                     }
                 }) { action ->
                     if (action in setOf("delete", "delete_files")) destructiveRequest = DestructiveRequest(action, selected)
@@ -1051,6 +1093,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     onBatchAction = ::performTaskActions,
                     onSort = { field ->
                         val next = nextTaskSort(settings.taskSort, field)
+                        settingsEpoch++
                         settings = settings.copy(taskSort = next)
                         scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().storeSetting("task_sort", next) } } }
                     },
@@ -1228,6 +1271,29 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         )
     }
     if (extensionDialog) ExtensionDialog(extensionText) { extensionDialog = false }
+    if (noticesDialog) NoticesDialog(noticeHistory.toList(), onClear = { noticeHistory.clear() }, onDismiss = { noticesDialog = false })
+    if (aboutDialog) AboutDialog(
+        engineText,
+        extensionText,
+        onOpenLogs = {
+            scope.launch {
+                val opened = withContext(Dispatchers.IO) {
+                    runCatching { java.awt.Desktop.getDesktop().open(UiDiagnostics.logsDirectory().toFile()) }.isSuccess
+                }
+                if (!opened) notice = UiSignal.Notice("error", "打开日志文件夹失败")
+            }
+        },
+        onOpenHomepage = {
+            scope.launch {
+                val opened = withContext(Dispatchers.IO) {
+                    runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI("https://github.com/ciaooo55/hls-downloader")) }.isSuccess
+                }
+                if (!opened) notice = UiSignal.Notice("error", "打开项目主页失败")
+            }
+        },
+        onDismiss = { aboutDialog = false },
+    )
+    LaunchedEffect(notice) { notice?.let { recordNotice(it.level, it.message) } }
     LaunchedEffect(fallbackCandidate?.handoffId, fallbackCandidate?.presentation) {
         val offer = fallbackCandidate ?: return@LaunchedEffect
         var failureReported = false
@@ -1704,10 +1770,14 @@ private fun displayStatus(status: String) = when (status.lowercase()) {
     "recording" -> "录制中"
     "merging" -> "合并中"
     "checking" -> "校验中"
+    "parsing" -> "解析中"
+    "probing" -> "探测中"
+    "queued", "" -> "排队中"
     "paused" -> "已暂停"
     "canceled", "cancelled" -> "已取消"
     "failed", "error" -> "失败"
-    else -> "排队中"
+    // 未知状态显式展示为"其他"，避免被静默归入"排队中"导致过滤计数失真
+    else -> "其他"
 }
 internal fun taskCategory(task: DownloadTask) = when (task.filename.substringAfterLast('.', "").lowercase()) { "m3u8", "mpd", "mp4", "mkv", "webm", "mp3", "flac", "wav", "avi", "mov" -> TaskCategory.MEDIA; "exe", "msi", "appx", "apk", "dmg", "pkg" -> TaskCategory.PROGRAM; "zip", "rar", "7z", "tar", "gz", "bz2", "xz" -> TaskCategory.ARCHIVE; else -> TaskCategory.OTHER }
 internal fun visibleTasks(tasks: List<DownloadTask>, filter: TaskFilter, category: TaskCategory?, query: String, queueId: String? = null): List<DownloadTask> =
@@ -1890,7 +1960,7 @@ private fun categoryIcon(category: TaskCategory): ImageVector = when (category) 
             } else {
                 TextButton(onClick = onClearCompleted, enabled = hasCompleted, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(Icons.Outlined.DeleteSweep, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("清理已完成", fontSize = 11.sp) }; TextButton(onClick = onRefresh, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(Icons.Outlined.Refresh, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("刷新", fontSize = 11.sp) }
             }
-            Box { ToolbarIcon(Icons.Outlined.MoreHoriz, "更多操作") { menuOpen = true }; DropdownMenu(menuOpen, { menuOpen = false }, shape = RoundedCornerShape(7.dp), containerColor = dialogSurface, shadowElevation = 6.dp) { listOf("import" to "导入任务或种子", "export" to "导出任务列表", "update" to "检查更新", "cancel_power" to "取消完成后电源动作").forEach { (action, label) -> DropdownMenuItem(text = { Text(label, fontSize = 12.sp) }, onClick = { menuOpen = false; onMore(action) }) } } }
+            Box { ToolbarIcon(Icons.Outlined.MoreHoriz, "更多操作") { menuOpen = true }; DropdownMenu(menuOpen, { menuOpen = false }, shape = RoundedCornerShape(7.dp), containerColor = dialogSurface, shadowElevation = 6.dp) { listOf("import" to "导入任务或种子", "export" to "导出任务列表", "update" to "检查更新", "cancel_power" to "取消完成后电源动作", "notices" to "通知中心", "about" to "关于 HLS Downloader", "exit" to "退出程序").forEach { (action, label) -> DropdownMenuItem(text = { Text(label, fontSize = 12.sp) }, onClick = { menuOpen = false; onMore(action) }) } } }
         }
     }
 }
@@ -2803,48 +2873,6 @@ private fun HarvestDialog(
         },
     )
 }
-@Composable private fun SettingsDialog(onDismiss: () -> Unit, current: EngineSettingsDto, onSave: (EngineSettingsDto) -> Unit) {
-    var tab by remember { mutableStateOf("通用") }
-    var dark by remember(current) { mutableStateOf(current.darkMode) }
-    var downloadDirectory by remember(current) { mutableStateOf(current.downloadDirectory) }
-    var concurrency by remember(current) { mutableStateOf(current.defaultConcurrency.toString()) }
-    var limit by remember(current) { mutableStateOf(current.speedLimitKib.toString()) }
-    var queueMax by remember(current) { mutableStateOf(current.queueMax.toString()) }
-    var retryMax by remember(current) { mutableStateOf(current.autoRetryMax.toString()) }
-    var clipboardWatch by remember(current) { mutableStateOf(current.clipboardWatch) }
-    var resume by remember(current) { mutableStateOf(current.resumeInterrupted) }
-    var sound by remember(current) { mutableStateOf(current.completionSoundEnabled) }
-    var progressWindow by remember(current) { mutableStateOf(current.progressWindowEnabled) }
-    var completePopup by remember(current) { mutableStateOf(current.completePopupEnabled) }
-    var takeoverEnabled by remember(current) { mutableStateOf(current.takeoverEnabled) }
-    var takeoverMinimum by remember(current) { mutableStateOf(current.takeoverMinimumBytes.toString()) }
-    var subtitles by remember(current) { mutableStateOf(current.downloadSubtitles) }
-    var skipAds by remember(current) { mutableStateOf(current.skipAdSegments) }
-    var keepTemp by remember(current) { mutableStateOf(current.keepTempFiles) }
-    var filePolicy by remember(current) { mutableStateOf(current.existingFilePolicy) }
-    var chunkSize by remember(current) { mutableStateOf(current.httpChunkSizeMb.toString()) }
-    var liveMax by remember(current) { mutableStateOf(current.liveRecordMaxMinutes.toString()) }
-    var referer by remember(current) { mutableStateOf(current.defaultReferer) }
-    var userAgent by remember(current) { mutableStateOf(current.defaultUserAgent) }
-    WorkbenchDialog(onDismiss, "设置", "界面、下载行为与运行环境", 760.dp, content = {
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(surface2).padding(4.dp)) { listOf("通用", "下载", "浏览器", "外观").forEach { item -> TextButton(onClick = { tab = item }, Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (tab == item) rail else Color.Transparent)) { Text(item, color = if (tab == item) blue else muted, fontSize = 12.sp, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Medium) } } }
-        Spacer(Modifier.height(16.dp))
-        when (tab) {
-            "通用" -> SettingsSection("运行行为") { DialogLabel("默认下载目录"); OutlinedTextField(downloadDirectory, { downloadDirectory = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp), placeholder = { Text("使用下载引擎默认目录") }); Spacer(Modifier.height(10.dp)); SettingRow("监视剪贴板", "检测到下载链接后在界面中提示", clipboardWatch) { clipboardWatch = it }; SettingRow("启动时恢复任务", "恢复上次未完成的下载任务", resume) { resume = it }; SettingRow("下载完成提示音", "任务完成时播放系统提示音", sound) { sound = it }; SettingRow("下载中窗口", "显示当前活动任务的紧凑进度", progressWindow) { progressWindow = it }; SettingRow("完成通知", "下载完成后显示本机完成提示", completePopup) { completePopup = it } }
-            "下载" -> SettingsSection("下载引擎") {
-                DialogLabel("默认并发连接数"); OutlinedTextField(concurrency, { concurrency = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(10.dp))
-                DialogLabel("最大同时任务数"); OutlinedTextField(queueMax, { queueMax = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(10.dp))
-                DialogLabel("全局限速 KiB/s（0 为不限速）"); OutlinedTextField(limit, { limit = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(10.dp))
-                DialogLabel("失败自动重试次数"); OutlinedTextField(retryMax, { retryMax = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(10.dp))
-                DialogLabel("同名文件处理"); Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(rail).border(BorderStroke(1.dp, border), RoundedCornerShape(7.dp)).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) { listOf("rename" to "自动重命名", "overwrite" to "覆盖", "skip" to "跳过").forEach { (value, label) -> TextButton(onClick = { filePolicy = value }, Modifier.weight(1f).clip(RoundedCornerShape(5.dp)).background(if (filePolicy == value) selectedSurface else Color.Transparent)) { Text(label, color = if (filePolicy == value) blue else muted, fontSize = 11.sp) } } }
-                Spacer(Modifier.height(10.dp)); DialogLabel("HTTP 分段大小 MiB"); OutlinedTextField(chunkSize, { chunkSize = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(8.dp)); DialogLabel("直播录制时长上限（分钟，0 为不限）"); OutlinedTextField(liveMax, { liveMax = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); SettingRow("下载外挂字幕", "HLS 有字幕时额外保存字幕文件", subtitles) { subtitles = it }; SettingRow("跳过广告分片", "跳过清单明确标记的广告片段", skipAds) { skipAds = it }; SettingRow("保留过程文件", "暂停或失败后保留分片和调试日志", keepTemp) { keepTemp = it }
-                DialogLabel("默认 Referer（可选）"); OutlinedTextField(referer, { referer = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp), placeholder = { Text("留空则按任务来源") }); Spacer(Modifier.height(8.dp)); DialogLabel("默认 User-Agent（可选）"); OutlinedTextField(userAgent, { userAgent = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp), placeholder = { Text("留空则使用下载引擎默认值") })
-            }
-            "浏览器" -> SettingsSection("浏览器下载接管") { SettingRow("接管浏览器下载", "浏览器插件识别到资源时显示下载确认", takeoverEnabled) { takeoverEnabled = it }; DialogLabel("最小接管大小（字节，0 为不限制）"); OutlinedTextField(takeoverMinimum, { takeoverMinimum = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Text("低于此大小的浏览器请求仍由浏览器处理。", color = faint, fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp)) }
-            else -> SettingsSection("显示") { SettingRow("深色模式", "切换下载工作台的深色外观", dark) { dark = it } }
-        }
-    }, actions = { DialogSecondary("取消", onDismiss); DialogPrimary("保存设置") { onSave(current.copy(darkMode = dark, downloadDirectory = downloadDirectory.trim(), defaultConcurrency = concurrency.toLongOrNull()?.coerceIn(1, 128) ?: current.defaultConcurrency, speedLimitKib = limit.toLongOrNull()?.coerceAtMost(10_000_000) ?: current.speedLimitKib, queueMax = queueMax.toLongOrNull()?.coerceIn(1, 128) ?: current.queueMax, autoRetryMax = retryMax.toLongOrNull()?.coerceIn(0, 10) ?: current.autoRetryMax, clipboardWatch = clipboardWatch, resumeInterrupted = resume, completionSoundEnabled = sound, progressWindowEnabled = progressWindow, completePopupEnabled = completePopup, takeoverEnabled = takeoverEnabled, takeoverMinimumBytes = takeoverMinimum.toLongOrNull()?.coerceAtLeast(0) ?: current.takeoverMinimumBytes, downloadSubtitles = subtitles, skipAdSegments = skipAds, keepTempFiles = keepTemp, existingFilePolicy = filePolicy, httpChunkSizeMb = chunkSize.toLongOrNull()?.coerceIn(1, 64) ?: current.httpChunkSizeMb, liveRecordMaxMinutes = liveMax.toLongOrNull()?.coerceIn(0, 2880) ?: current.liveRecordMaxMinutes, defaultReferer = referer.trim(), defaultUserAgent = userAgent.trim())); onDismiss() } })
-}
 @Composable internal fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) = Column(Modifier.fillMaxWidth().padding(end = 5.dp, bottom = 14.dp), content = { Text(title, color = ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold); Spacer(Modifier.height(12.dp)); content(); Spacer(Modifier.height(8.dp)) })
 @Composable internal fun SettingRow(label: String, detail: String, checked: Boolean, onChecked: (Boolean) -> Unit) = Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(label, color = ink, fontSize = 12.sp, fontWeight = FontWeight.Medium); Text(detail, color = faint, fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp)) }; Switch(checked, onChecked, accessibilityLabel = label) }
 
@@ -3193,6 +3221,46 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
 }
 
 @Composable private fun ExtensionDialog(status: String, onDismiss: () -> Unit) = WorkbenchDialog(onDismiss, "浏览器插件", "识别网页媒体并交给下载器", 550.dp, content = { Surface(Modifier.fillMaxWidth(), color = if (connectionStateOf(status)) Color(0xFFEAF8EF) else surface2, shape = RoundedCornerShape(8.dp)) { Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) { Icon(if (connectionStateOf(status)) Icons.Outlined.CheckCircle else Icons.Outlined.Extension, null, tint = if (connectionStateOf(status)) Color(0xFF16A34A) else blue); Spacer(Modifier.width(10.dp)); Text(status, color = if (connectionStateOf(status)) Color(0xFF15803D) else ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) } }; Spacer(Modifier.height(14.dp)); Text("安装或更新插件后，重新打开浏览器标签页即可建立连接。插件会识别下载点击、媒体清单、音视频轨道和网页播放器，不影响页面的其他功能。", color = muted, fontSize = 12.sp, lineHeight = 19.sp) }, actions = { DialogPrimary("完成", onClick = onDismiss) })
+
+@Composable private fun AboutDialog(engine: String, extension: String, onOpenLogs: () -> Unit, onOpenHomepage: () -> Unit, onDismiss: () -> Unit) = WorkbenchDialog(onDismiss, "关于", "HLS Downloader", 470.dp, content = {
+    Text("HLS Downloader ${Product.version}", color = ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(6.dp))
+    Text("Windows 桌面下载管理器：HLS/DASH 直播与点播、BT 磁力、HTTP、FTP/SFTP 与浏览器下载接管。", color = muted, fontSize = 12.sp, lineHeight = 19.sp)
+    Spacer(Modifier.height(14.dp))
+    AboutRow("核心协议", "hls-downloader-v7-core · v1")
+    AboutRow("下载引擎", engine.substringAfter("·").trim())
+    AboutRow("浏览器插件", extension.substringAfter("·").trim())
+    Spacer(Modifier.height(6.dp))
+    Text("日志与诊断数据仅保存在本机。", color = faint, fontSize = 11.sp)
+}, actions = {
+    DialogSecondary("打开日志文件夹", onOpenLogs)
+    DialogSecondary("项目主页", onOpenHomepage)
+    DialogPrimary("关闭", onClick = onDismiss)
+})
+
+@Composable private fun AboutRow(label: String, value: String) = Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    Text(label, color = muted, fontSize = 12.sp, modifier = Modifier.width(96.dp))
+    Text(value, color = ink, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+}
+
+@Composable private fun NoticesDialog(entries: List<NoticeHistoryEntry>, onClear: () -> Unit, onDismiss: () -> Unit) = WorkbenchDialog(onDismiss, "通知中心", "最近的提示与错误记录（最多保留 100 条）", 560.dp, content = {
+    if (entries.isEmpty()) {
+        Text("暂无通知。任务失败、引擎警告等记录会出现在这里。", color = muted, fontSize = 12.sp, modifier = Modifier.padding(vertical = 18.dp))
+    } else {
+        Column(Modifier.fillMaxWidth().heightIn(max = 380.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            entries.asReversed().forEach { entry ->
+                val tone = if (entry.level == "error") Color(0xFFB42318) else if (entry.level == "success") Color(0xFF078C46) else blue
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                    Box(Modifier.padding(top = 5.dp).size(6.dp).clip(RoundedCornerShape(50)).background(tone))
+                    Spacer(Modifier.width(9.dp))
+                    Text(java.time.Instant.ofEpochMilli(entry.at).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")), color = faint, fontSize = 11.sp)
+                    Spacer(Modifier.width(9.dp))
+                    Text(entry.message, color = ink, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}, actions = { if (entries.isNotEmpty()) DialogSecondary("清空记录", onClear); DialogPrimary("关闭", onClick = onDismiss) })
 
 @Composable private fun NoticeToast(signal: UiSignal.Notice, onDismiss: () -> Unit) {
     LaunchedEffect(signal) { delay(3_600); onDismiss() }

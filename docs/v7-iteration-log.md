@@ -53,3 +53,49 @@
   credentials 文档与实现对齐。
 - 验证:cargo lib 354/354、presenter 2/2、gradle BUILD SUCCESSFUL、
   扩展 208/208 + 双目标构建;均已推送 `origin/main`。
+
+## 第二轮精进批次记录(2026-08-31,分支 `v7-refinement`)
+
+本轮以 `docs/v7-refinement-plan.md` 为总纲:先多子代理并行摸底四个活跃模块,
+汇总 20 项问题登记(D1-D7/E1-E4/N1-N5/P1-P3/G1),再按十轮逐项落地。
+分支 `v7-refinement` 逐轮提交,收敛后合回 `main` 并推送。
+
+| 轮 | 内容 | 提交/证据 |
+| --- | --- | --- |
+| 1 | 摸底整合:模块×功能分类、问题登记表、十轮计划 | `f0ba7fb` |
+| 2 | desktop_ui 连接层:按管道路径共享的空闲连接池,批量操作/事件长轮询复用连接,失败即弃不再入池 | `8baa840`,`compileKotlin` 通过 |
+| 3 | desktop_ui 治理:诊断日志改有界后台队列;深色/排序本地先行改动加代数守卫防回跳;parsing/probing 显式状态+未知状态显示"其他";presenter 探测指数退避;删除死代码旧 SettingsDialog | `d25a1dd` |
+| 4 | desktop_ui 体验:系统托盘驻留(关窗最小化、托盘菜单暂停/继续全部任务与退出)、关于页、100 条通知中心;托盘安装失败自动回退真实退出 | `58d0567`,`compileKotlin` 通过 |
+| 5 | extension:nativeBridge 抢占显式出队防重复入队;popup 状态机改稳定 token+文案映射;content.ts 按钮构造先于清晰度选择器;directBackend 原生专用 op 集合具名化 | `e946789`,`tsc --noEmit` + nativeBridge/directBackend 13 测试通过 |
+| 6 | native_shell:VOD 分片 3 次重试+退避(pause/canceled 控制信号原样上抛);v6 遗留文案中性化;torrent_engine 15 处大端读取收敛为 `be32` 助手 | `bb44253`,`cargo check --lib` 通过 |
+| 7 | native_shell 并发:管道/TCP 三条服务路径统一 64 连接上限,Drop 守卫防 panic 泄漏计数;慢探测经桌面连接池+上限已受控,异步任务化决策另立轮次 | `c6f7ebe` |
+| 8 | presenter_ui:窗口标题常量单一来源;单实例判定改用 `is_already_running_error`;panic 崩溃报告落盘临时目录 | `8875b2a`,`cargo check` 通过 |
+| 9 | 文档与门禁同步:本记录与 refinement-plan 登记;feature-parity.json 不动(4 个 partial 均需实机门禁,本轮未新增合同项);本轮未改任何脚本 | `本轮提交` |
+| 10 | 四套回归一轮、扩展构建并发布桌面单副本(先删旧)、合并 `v7-refinement` → `main`、推送 GitHub | 见下一条记录 |
+
+约束执行情况:项目内容均在工作目录内;`E:\h` 当前不存在,parity 未全绿未生成
+正式包;构建缓存继续使用仓库内 `.tool-cache\build-cache`(JDK 位于既有
+`E:\HLSDownloaderBuildCache\jdk-21`,属工具链非项目内容)。
+
+### 第二轮 · 迭代 10 记录(2026-08-31)
+
+四套回归各跑一轮,全部绿:
+
+- `cargo test --manifest-path native_shell/Cargo.toml --lib`:354 passed / 0 failed
+- `cargo test --manifest-path presenter_ui/Cargo.toml`:3 passed / 0 failed
+- `desktop_ui`: `gradlew.bat test --no-daemon`:BUILD SUCCESSFUL(66 用例,
+  thousand-task p95=13.6ms)
+- `extension`: `pnpm test`:wxt prepare + tsc --noEmit + vitest 222/222(37 文件)
+
+构建与桌面发布:
+
+- `pnpm run zip:chrome` / `zip:firefox` 产出 7.0.0 双端包;
+  `scripts/publish-desktop-extension-oneoff.ps1`(PS 5.1+7 双解析通过)按
+  install-v7-local 约定把桌面扩展包规范为恰好
+  `HLSDownloader-Chromium.zip` + `HLSDownloader-Firefox.zip` 各一份,
+  执行前已删除桌面上的全部旧扩展包副本。
+- parity 仍为 24/28 verified + 4 partial(需实机门禁),`release_ready=false`,
+  按约束本轮未生成正式安装包;`E:\h` 不存在,本机零安装,符合唯一安装位规则。
+
+git 收尾:`v7-refinement` 以 --no-ff 合回 `main` 并推送 `origin/main`,
+本轮全部 11 个提交(含文档)可通过合并提交回溯。

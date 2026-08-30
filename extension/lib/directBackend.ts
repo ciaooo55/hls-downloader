@@ -26,24 +26,30 @@ export function shouldAttachLoopbackBridge(response: {
   return Boolean(response.bridge_base && response.bridge_token)
 }
 
+// Ops that must never route through the loopback bridge: takeover decisions and
+// secret-bearing calls. BrowserDirectBackend.request deliberately has no branch
+// for accept_handoff/reject_handoff — removing an op here without adding an
+// HTTP branch is not safe.
+const NATIVE_ONLY_OPS: ReadonlySet<string> = new Set([
+  'ping',
+  'offer',
+  'download',
+  'handoff_status',
+  'wait_handoff',
+  'accept_handoff',
+  'reject_handoff',
+  'set_takeover_settings',
+  'media_push',
+  'push_to_tv',
+  'media_push_status',
+])
+
 export function shouldRouteThroughLoopbackBridge(op: unknown, hasLoopback: boolean): boolean {
   if (!hasLoopback) return false
   const operation = String(op || '')
   // Takeover and secret-bearing ops must stay on Native Messaging so a stale
   // 5.x FastAPI pairing cannot receive cookies after v6 Core is running.
-  return !new Set([
-    'ping',
-    'offer',
-    'download',
-    'handoff_status',
-    'wait_handoff',
-    'accept_handoff',
-    'reject_handoff',
-    'set_takeover_settings',
-    'media_push',
-    'push_to_tv',
-    'media_push_status',
-  ]).has(operation)
+  return !NATIVE_ONLY_OPS.has(operation)
 }
 
 export class BrowserDirectBackend {
