@@ -55,12 +55,13 @@
     },
     {
       "id": "tasks.named_queue_profiles",
-      "status": "verified",
+      "status": "partial",
       "v3_entry": "queue scheduler and queue ordering",
       "compose_entry": "Sidebar queue filters / QueueManagerDialog / QueueAssignDialog / row and batch move actions",
       "core_command": "assign_queue/get_settings/set_settings_atomic",
       "state_event": "task_updated/structured command result/error",
-      "verification": "Rust queue assignment, queue-scoped reorder, invalid membership, recurring schedule and file-database restart tests; shared aggregate queue token-bucket and task-isolation tests; queue-drained success-only completion action test; Compose queue storage/validation and speed/action controls; live 1400x820 and 1024x600 main/menu/manager/schedule/assign visual inspection"
+      "verification": "Rust queue assignment, queue-scoped reorder, invalid membership, recurring schedule and file-database restart tests; shared aggregate queue token-bucket and task-isolation tests; queue-drained success-only completion action test; Compose queue storage/validation and speed/action controls; live 1400x820 and 1024x600 main/menu/manager/schedule/assign visual inspection; current source keeps start/resume/retry queued when the task schedule is not open and resets the old pause/cancel control only when the scheduler actually claims that queued task; the focused check has not been run in this turn",
+      "gap": "The future-schedule state fix awaits authorized execution of its focused Rust regression."
     },
     {
       "id": "tasks.details_logs_speed_connections",
@@ -133,8 +134,8 @@
       "compose_entry": "NewTaskDialog and browser media handoff",
       "core_command": "create_task/task_action/refresh_task_request",
       "state_event": "task_progress/task_updated/error",
-      "verification": "Rust scoped replay tests; strict HTTP 206/Content-Range BYTERANGE fixture; explicit and implicit BYTERANGE parser tests; signed same-origin access-query inheritance test; focused HLS tests covering per-segment AES key/map state, METHOD=NONE, original media-sequence IVs, parts, GAP, SKIP, SERVER-CONTROL, stable signed identities, same-URI byte ranges, parent-segment replacement, ordered bounded concurrency, atomic v2 live recovery and blocking-cursor fallback; bundled curl-impersonate lookup test; authenticated_vod_pause_resume_reuses_completed_segments and authenticated_live_pause_resume_restores_atomic_timeline require Authorization on every playlist/media request, prove unauthenticated 401, persist VOD/live checkpoints and resume without refetching completed segments; scripts/verify-hls-auth-resume.ps1 passed PS7 and Windows PowerShell 5.1, including a 10-run-per-test PS5.1 soak; current source makes curl-impersonate consume scoped replay headers and preserves ordinary browser request headers/context for Native Messaging, with focused regression coverage added but not run in this turn; historical candidate provenance at a prior source commit records 26/28 and its Portable ZIP contains curl-impersonate with a recorded SHA-256; rerun candidate packaging at the current commit before installation",
-      "gap": "The v3-equivalent transfer and browser-context logic is implemented in source but the new focused checks await authorized execution; final release evidence still needs representative authenticated external live/VOD endpoints, candidate-package transfer validation and MSI install/upgrade/uninstall/rollback gates on a clean Windows machine."
+      "verification": "Rust scoped replay tests; strict HTTP 206/Content-Range BYTERANGE fixture; explicit and implicit BYTERANGE parser tests; signed same-origin access-query inheritance test; focused HLS tests covering per-segment AES key/map state, METHOD=NONE, original media-sequence IVs, parts, GAP, SKIP, SERVER-CONTROL, stable signed identities, same-URI byte ranges, parent-segment replacement, ordered bounded concurrency, atomic v2 live recovery and blocking-cursor fallback; bundled curl-impersonate lookup test; authenticated_vod_pause_resume_reuses_completed_segments and authenticated_live_pause_resume_restores_atomic_timeline require Authorization on every playlist/media request, prove unauthenticated 401, persist VOD/live checkpoints and resume without refetching completed segments; scripts/verify-hls-auth-resume.ps1 passed PS7 and Windows PowerShell 5.1, including a 10-run-per-test PS5.1 soak; current source makes curl-impersonate consume scoped replay headers, preserves ordinary browser request headers/context for Native Messaging, and serializes the final control check, publication and completed-state commit under the same Core mutex used by pause/cancel; focused regression coverage is present but not run in this turn; historical candidate provenance at a prior source commit records 26/28 and its Portable ZIP contains curl-impersonate with a recorded SHA-256; rerun candidate packaging at the current commit before installation",
+      "gap": "The v3-equivalent transfer, browser-context and publication-control logic is implemented in source but the new focused checks await authorized execution; final release evidence still needs representative authenticated external live/VOD endpoints, candidate-package transfer validation and MSI install/upgrade/uninstall/rollback gates on a clean Windows machine."
     },
     {
       "id": "media.local_player_controls",
@@ -219,12 +220,13 @@
     },
     {
       "id": "browser.takeover_and_recovery",
-      "status": "verified",
+      "status": "partial",
       "v3_entry": "BrowserExtensionDialog/handoff confirmation",
       "compose_entry": "ExtensionDialog/HandoffDialog",
       "core_command": "present_handoff/accept_handoff/reject_handoff",
       "state_event": "handoff_offered/handoff_resolved/browser_status",
-      "verification": "Rust Core IPC handoff tests; extension 36 files/208 tests; production Edge takeover accept/reject/disconnect fallback smoke with acceptPausedBytes=0 and three 8388608-byte browser recovery paths; production Chromium content-script smoke including hover pointer transition, popup rescan and isolated selected-link panel"
+      "verification": "Rust Core IPC handoff tests; extension 36 files/208 tests; production Edge takeover accept/reject/disconnect fallback smoke with acceptPausedBytes=0 and three 8388608-byte browser recovery paths; production Chromium content-script smoke including hover pointer transition, popup rescan and isolated selected-link panel",
+      "gap": "Compose does not yet restore pending handoff offers on startup/reconnect, and a Presenter show failure still resolves the pending row as failed instead of handing it back to the Compose fallback."
     },
     {
       "id": "browser.media_push_device_selection",
@@ -274,10 +276,10 @@
     }
   ],
   "summary": {
-    "verified": 26,
-    "partial": 2,
+    "verified": 24,
+    "partial": 4,
     "blocked": 0,
     "total": 28,
-    "verified_percent": 92.9
+    "verified_percent": 85.7
   }
 }

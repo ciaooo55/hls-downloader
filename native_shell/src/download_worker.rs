@@ -1729,6 +1729,26 @@ impl CoreCoordinator {
                 self.wait_for_worker_stop(task_id)?;
             }
         }
+        if let (Some(task_id), Some(action)) = (task_id.as_deref(), start_action.as_deref()) {
+            let mut core = self.lock()?;
+            let deferred = core
+                .tasks()
+                .iter()
+                .find(|task| task.task_id == task_id)
+                .filter(|task| task.available_actions.iter().any(|item| item == action))
+                .filter(|task| !task_schedule_allowed(task))
+                .map(|task| (task.downloaded_bytes, task.total_bytes));
+            if let Some((downloaded_bytes, total_bytes)) = deferred {
+                return core.handle(CoreCommand::UpdateProgress {
+                    task_id: task_id.into(),
+                    downloaded_bytes,
+                    total_bytes,
+                    speed_bytes_per_sec: 0,
+                    stage: "waiting".into(),
+                    status: "queued".into(),
+                });
+            }
+        }
         let mut start_accepted = false;
         let events = {
             let mut core = self
@@ -2280,7 +2300,8 @@ impl CoreCoordinator {
         if self.update_shutdown.load(Ordering::SeqCst) {
             return Err("下载引擎正在准备覆盖升级，暂不启动新任务".into());
         }
-        if let Some(spec) = self.lock()?.task_spec(&task_id).cloned() {
+        let spec = self.lock()?.task_spec(&task_id).cloned();
+        if let Some(spec) = spec.as_ref() {
             if !crate::net_policy::scheduled_start_reached(&spec.scheduled_start_at)
                 || crate::net_policy::scheduled_stop_hit(&spec.scheduled_stop_at)
             {
@@ -2302,6 +2323,24 @@ impl CoreCoordinator {
         if !queue_profile_allowed(&profile) {
             return Ok(());
         }
+        {
+            let core = self.lock()?;
+            let status = core
+                .tasks()
+                .iter()
+                .find(|task| task.task_id == task_id)
+                .map(|task| task.status.clone());
+            if !matches!(status.as_deref(), Some("queued" | "downloading")) {
+                return Ok(());
+            }
+            if status.as_deref() == Some("queued") {
+                if let Some(spec) = spec.as_ref() {
+                    let paths = TaskPaths::for_task(&task_id, spec)?;
+                    paths.prepare()?;
+                    paths.set_control("run")?;
+                }
+            }
+        }
         let max = profile.max_active.max(1) as usize;
         {
             let mut active = self
@@ -2315,20 +2354,22 @@ impl CoreCoordinator {
             if active_in_queue >= max && !active.contains(&task_id) {
                 drop(active);
                 if let Ok(mut core) = self.lock() {
-                    let (downloaded, total) = core
+                    let progress = core
                         .tasks()
                         .iter()
                         .find(|task| task.task_id == task_id)
-                        .map(|task| (task.downloaded_bytes, task.total_bytes))
-                        .unwrap_or((0, None));
-                    let _ = core.handle(CoreCommand::UpdateProgress {
-                        task_id: task_id.clone(),
-                        downloaded_bytes: downloaded,
-                        total_bytes: total,
-                        speed_bytes_per_sec: 0,
-                        stage: "waiting".into(),
-                        status: "queued".into(),
-                    });
+                        .filter(|task| task.status == "downloading")
+                        .map(|task| (task.downloaded_bytes, task.total_bytes));
+                    if let Some((downloaded_bytes, total_bytes)) = progress {
+                        let _ = core.handle(CoreCommand::UpdateProgress {
+                            task_id: task_id.clone(),
+                            downloaded_bytes,
+                            total_bytes,
+                            speed_bytes_per_sec: 0,
+                            stage: "waiting".into(),
+                            status: "queued".into(),
+                        });
+                    }
                 }
                 return Ok(());
             }
@@ -2390,7 +2431,13 @@ impl CoreCoordinator {
                             .unwrap_or_default();
                         let _ = core.report_failure(
                             &task_id,
-                            task_failure_from_error(&error, &stage, &url, attempt, has_credential_ref),
+                            task_failure_from_error(
+                                &error,
+                                &stage,
+                                &url,
+                                attempt,
+                                has_credential_ref,
+                            ),
                         );
                     }
                     eprintln!("v7 task {task_id} {status}: {error}");
@@ -3123,6 +3170,7 @@ fn complete_payload(
     payload: &Path,
     spec: &TaskSpec,
 ) -> Result<(), String> {
+    ensure_publish_allowed(&paths.control)?;
     mark_progress(
         core,
         task_id,
@@ -3206,31 +3254,47 @@ fn complete_payload(
         }
     }
     let (policy, keep_temp) = output_policy(core);
-    let published =
-        crate::output_path::publish_file(payload, &paths.final_output, &policy, keep_temp)?;
-    remember_published(paths, &published);
-    core.lock()
-        .map_err(|_| "v7 Core mutex poisoned".to_string())?
-        .set_output_path(task_id, published.to_string_lossy().into_owned())?;
-    crate::motw::mark_downloaded_file(&published, &spec.url);
     let download_subtitles = core
         .lock()
         .ok()
         .and_then(|guard| guard.store().setting_bool("download_subtitles", true).ok())
         .unwrap_or(true);
+    let mut core_guard = core
+        .lock()
+        .map_err(|_| "v7 Core mutex poisoned".to_string())?;
+    ensure_publish_allowed(&paths.control)?;
+    let published =
+        crate::output_path::publish_file(payload, &paths.final_output, &policy, keep_temp)?;
+    remember_published(paths, &published);
+    core_guard.set_output_path(task_id, published.to_string_lossy().into_owned())?;
+    crate::motw::mark_downloaded_file(&published, &spec.url);
     if download_subtitles {
         copy_subtitle_sidecars(&paths.task_dir(), &published);
     }
     let total = fs::metadata(&published).ok().map(|meta| meta.len());
-    mark_progress(
-        core,
-        task_id,
-        total.unwrap_or(0),
-        total,
-        "finished",
-        "completed",
-    )?;
+    core_guard.handle(CoreCommand::UpdateProgress {
+        task_id: task_id.into(),
+        downloaded_bytes: total.unwrap_or(0),
+        total_bytes: total,
+        speed_bytes_per_sec: 0,
+        stage: "finished".into(),
+        status: "completed".into(),
+    })?;
+    drop(core_guard);
     maybe_schedule_power(core, spec)
+}
+
+fn ensure_publish_allowed(control: &Path) -> Result<(), String> {
+    match fs::read_to_string(control)
+        .unwrap_or_else(|_| "run".into())
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "pause" => Err("paused".into()),
+        "cancel" => Err("canceled".into()),
+        _ => Ok(()),
+    }
 }
 
 fn remember_published(paths: &TaskPaths, published: &Path) {
@@ -4948,7 +5012,7 @@ mod tests {
     }
 
     #[test]
-    fn start_like_actions_wait_for_the_previous_worker_to_finish() {
+    fn start_like_actions_wait_then_keep_future_tasks_queued() {
         for (terminal_status, action, old_control) in [
             ("paused", "resume", "pause"),
             ("canceled", "retry", "cancel"),
@@ -5032,11 +5096,22 @@ mod tests {
             coordinator.active.lock().unwrap().remove("task-1");
             dispatch.join().unwrap().unwrap();
 
-            assert_eq!(coordinator.tasks().unwrap()[0].status, "downloading");
-            assert_eq!(fs::read_to_string(&paths.control).unwrap(), "run");
+            assert_eq!(coordinator.tasks().unwrap()[0].status, "queued");
+            assert_eq!(fs::read_to_string(&paths.control).unwrap(), old_control);
             assert!(!coordinator.worker_is_active("task-1").unwrap());
             let _ = fs::remove_dir_all(root);
         }
+    }
+
+    #[test]
+    fn paused_or_canceled_control_blocks_publish() {
+        let control =
+            std::env::temp_dir().join(format!("hls-v7-publish-control-{}", std::process::id()));
+        for (value, expected) in [("pause", "paused"), ("cancel", "canceled")] {
+            fs::write(&control, value).unwrap();
+            assert_eq!(ensure_publish_allowed(&control).unwrap_err(), expected);
+        }
+        let _ = fs::remove_file(control);
     }
 
     #[test]

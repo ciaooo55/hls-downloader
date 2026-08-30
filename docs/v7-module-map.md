@@ -38,7 +38,7 @@ Rust Core + SQLite (唯一状态/凭据/传输所有者)
 
 ## 当前收敛点
 
-- 功能矩阵为 `26/28 verified`、`2 partial`；已修复本轮审查发现的源码缺口，新回归检查尚未执行，后续仍需外部端点与干净 Windows MSI 证据。
+- 功能矩阵为 `24/28 verified`、`4 partial`；计划任务由调度器认领时统一重置 control，最终发布与完成状态在 Core 同一互斥区提交，但新回归尚未执行；浏览器 pending handoff 恢复/Presenter 失败回退仍待闭合，后续还需外部端点与干净 Windows MSI 证据。
 - Core 已在启动阶段报告 named pipe ready，失败会返回明确错误；pending media push 会从 SQLite 恢复到运行时，可跨重启 resolve。
 - 本轮修复安装文档与脚本的路径/回滚语义，使交付约束与运行时架构一致。
 - 设置保存先完成 Core 持久化，失败时保留对话框草稿；Presenter 探测完成前暂存接管事件，避免启动竞态。
