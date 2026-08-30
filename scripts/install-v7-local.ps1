@@ -46,6 +46,26 @@ if ([string]$provenance.feature_parity_sha256 -ne $featureHash) {
     throw "v7 local image feature parity hash does not match provenance: $($provenance.feature_parity_sha256) != $featureHash"
 }
 
+function Assert-ExtensionArchive([string]$Archive, [string]$Browser) {
+    if (-not (Test-Path -LiteralPath $Archive -PathType Leaf)) {
+        throw "Packaged $Browser extension archive is missing: $Archive"
+    }
+    $check = Join-Path ([IO.Path]::GetTempPath()) ("hls-v7-extension-" + [guid]::NewGuid().ToString('n'))
+    try {
+        Expand-Archive -LiteralPath $Archive -DestinationPath $check -Force
+        $manifestPath = Join-Path $check 'manifest.json'
+        if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+            throw "Packaged $Browser extension archive is missing manifest.json."
+        }
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($manifest.version -ne '7.0.0') {
+            throw "Packaged $Browser extension version is not 7.0.0: $($manifest.version)"
+        }
+    } finally {
+        Remove-Item -LiteralPath $check -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $extensionRoot = if ([String]::IsNullOrWhiteSpace($ExtensionOutput)) { Join-Path $repo 'extension\.output' } else { [IO.Path]::GetFullPath($ExtensionOutput) }
 $packagedExtensionRoot = Join-Path $source 'app\resources\extensions'
 $packagedExtensionsReady = @(
@@ -65,6 +85,9 @@ if ($packagedExtensionsReady -gt 0) {
         $manifest = Get-Content -LiteralPath (Join-Path (Join-Path $extensionRoot $browser) 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($manifest.version -ne '7.0.0') { throw "Built $browser extension version is not 7.0.0: $($manifest.version)" }
     }
+} else {
+    Assert-ExtensionArchive (Join-Path $packagedExtensionRoot 'HLSDownloader-7.0.0-Chromium.zip') 'Chromium'
+    Assert-ExtensionArchive (Join-Path $packagedExtensionRoot 'HLSDownloader-7.0.0-Firefox.zip') 'Firefox'
 }
 if (-not (Test-Path -LiteralPath $note -PathType Leaf)) {
     throw "Upgrade note is missing: $note"
