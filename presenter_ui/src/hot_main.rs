@@ -16,7 +16,7 @@ use std::env;
 use std::io::Write;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -36,6 +36,17 @@ struct PresenterSettings {
     category_program: String,
     category_archive: String,
     category_other: String,
+}
+
+fn presenter_id() -> &'static str {
+    static ID: OnceLock<String> = OnceLock::new();
+    ID.get_or_init(|| {
+        let started = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default();
+        format!("presenter-{}-{started}", std::process::id())
+    })
 }
 
 impl PresenterSettings {
@@ -157,6 +168,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = Rc::new(RefCell::new(initial_client));
     let pending = Arc::new(Mutex::new(initial_pending));
+    let active_handoff = Arc::new(Mutex::new(None::<String>));
     let active_task = Rc::new(RefCell::new(None::<String>));
     let completed_task = Rc::new(RefCell::new(None::<String>));
     let completed_notified = Rc::new(RefCell::new(HashSet::<String>::new()));
@@ -187,6 +199,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     confirm.on_command({
         let client = Rc::clone(&client);
         let pending = Arc::clone(&pending);
+        let active_handoff = Arc::clone(&active_handoff);
         let presenter_settings = Arc::clone(&presenter_settings);
         let known_tasks = Arc::clone(&known_tasks);
         let window = confirm.as_weak();
@@ -309,7 +322,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 _ => return,
             }
-            show_next_offer(&window, &pending, &presenter_settings, &known_tasks);
+            show_next_offer(
+                &window,
+                &pending,
+                &active_handoff,
+                &presenter_settings,
+                &known_tasks,
+            );
         }
     });
     complete.on_command({
@@ -343,6 +362,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     thread::spawn({
         let confirm = confirm.as_weak();
         let pending = Arc::clone(&pending);
+        let active_handoff = Arc::clone(&active_handoff);
         let presenter_settings = Arc::clone(&presenter_settings);
         let known_tasks = Arc::clone(&known_tasks);
         move || {
@@ -351,6 +371,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 initial_sequence,
                 confirm,
                 pending,
+                active_handoff,
                 presenter_settings,
                 known_tasks,
             )
@@ -481,6 +502,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     show_next_offer(
         &confirm.as_weak(),
         &pending,
+        &active_handoff,
         &presenter_settings,
         &known_tasks,
     );
@@ -602,6 +624,7 @@ fn event_loop(
     mut after: u64,
     confirm: slint::Weak<ConfirmWindow>,
     pending: Arc<Mutex<VecDeque<ResourceOffer>>>,
+    active_handoff: Arc<Mutex<Option<String>>>,
     presenter_settings: Arc<Mutex<PresenterSettings>>,
     known_tasks: Arc<Mutex<Vec<TaskSnapshot>>>,
 ) {
@@ -618,15 +641,22 @@ fn event_loop(
             *known_tasks = tasks;
         }
         let restored = load_pending_offers(&mut client);
-        let pending = Arc::clone(&pending);
+        let resync_pending = Arc::clone(&pending);
+        let resync_active_handoff = Arc::clone(&active_handoff);
         let resync_settings = Arc::clone(&presenter_settings);
         let resync_tasks = Arc::clone(&known_tasks);
         if confirm
             .upgrade_in_event_loop(move |item| {
-                if let Ok(mut items) = pending.lock() {
+                if let Ok(mut items) = resync_pending.lock() {
                     *items = restored;
                 }
-                show_next_offer(&item.as_weak(), &pending, &resync_settings, &resync_tasks);
+                show_next_offer(
+                    &item.as_weak(),
+                    &resync_pending,
+                    &resync_active_handoff,
+                    &resync_settings,
+                    &resync_tasks,
+                );
             })
             .is_err()
         {
@@ -639,6 +669,7 @@ fn event_loop(
             after = latest_sequence;
         }
         trace(&format!("event client connected after={after}"));
+        let mut last_lease_renewal = std::time::Instant::now();
         loop {
             match client.wait_events(after, 5_000) {
                 Ok(events) => {
@@ -653,6 +684,7 @@ fn event_loop(
                         match envelope.event {
                             CoreEvent::HandoffOffered { offer } => {
                                 let pending = Arc::clone(&pending);
+                                let active_handoff = Arc::clone(&active_handoff);
                                 let presenter_settings = Arc::clone(&presenter_settings);
                                 let known_tasks = Arc::clone(&known_tasks);
                                 if confirm
@@ -668,6 +700,7 @@ fn event_loop(
                                         show_next_offer(
                                             &item.as_weak(),
                                             &pending,
+                                            &active_handoff,
                                             &presenter_settings,
                                             &known_tasks,
                                         );
@@ -679,6 +712,7 @@ fn event_loop(
                             }
                             CoreEvent::HandoffResolved { handoff_id, .. } => {
                                 let pending = Arc::clone(&pending);
+                                let active_handoff = Arc::clone(&active_handoff);
                                 let presenter_settings = Arc::clone(&presenter_settings);
                                 let known_tasks = Arc::clone(&known_tasks);
                                 if confirm
@@ -689,6 +723,7 @@ fn event_loop(
                                         show_next_offer(
                                             &item.as_weak(),
                                             &pending,
+                                            &active_handoff,
                                             &presenter_settings,
                                             &known_tasks,
                                         );
@@ -712,6 +747,46 @@ fn event_loop(
                             return;
                         }
                         let _ = slint::invoke_from_event_loop(|| {});
+                    }
+                    if last_lease_renewal.elapsed() >= Duration::from_secs(5) {
+                        let active = active_handoff.lock().ok().and_then(|value| value.clone());
+                        if let Some(handoff_id) = active {
+                            if client
+                                .command(CoreCommand::PresentHandoff {
+                                    handoff_id,
+                                    ok: true,
+                                    presenter_id: presenter_id().into(),
+                                })
+                                .is_err()
+                            {
+                                if let Ok(mut value) = active_handoff.lock() {
+                                    *value = None;
+                                }
+                                let _ = confirm.upgrade_in_event_loop(|item| {
+                                    let _ = item.hide();
+                                });
+                                break;
+                            }
+                        } else if pending
+                            .lock()
+                            .map(|items| !items.is_empty())
+                            .unwrap_or(false)
+                        {
+                            let pending = Arc::clone(&pending);
+                            let active_handoff = Arc::clone(&active_handoff);
+                            let presenter_settings = Arc::clone(&presenter_settings);
+                            let known_tasks = Arc::clone(&known_tasks);
+                            let _ = confirm.upgrade_in_event_loop(move |item| {
+                                show_next_offer(
+                                    &item.as_weak(),
+                                    &pending,
+                                    &active_handoff,
+                                    &presenter_settings,
+                                    &known_tasks,
+                                );
+                            });
+                        }
+                        last_lease_renewal = std::time::Instant::now();
                     }
                 }
                 Err(_) => break,
@@ -742,6 +817,7 @@ fn load_pending_offers(client: &mut CoreIpcClient) -> VecDeque<ResourceOffer> {
 fn show_next_offer(
     window: &slint::Weak<ConfirmWindow>,
     pending: &Arc<Mutex<VecDeque<ResourceOffer>>>,
+    active_handoff: &Arc<Mutex<Option<String>>>,
     presenter_settings: &Arc<Mutex<PresenterSettings>>,
     known_tasks: &Arc<Mutex<Vec<TaskSnapshot>>>,
 ) {
@@ -749,9 +825,19 @@ fn show_next_offer(
         return;
     };
     let Some(offer) = pending.lock().ok().and_then(|items| items.front().cloned()) else {
+        if let Ok(mut active) = active_handoff.lock() {
+            *active = None;
+        }
         let _ = item.hide();
         return;
     };
+    if active_handoff
+        .lock()
+        .map(|active| active.as_deref() == Some(offer.handoff_id.as_str()))
+        .unwrap_or(false)
+    {
+        return;
+    }
     trace(&format!("showing handoff {}", offer.handoff_id));
     let filename = if offer.filename.trim().is_empty() {
         filename_from_url(&offer.url)
@@ -809,17 +895,43 @@ fn show_next_offer(
     } else {
         "".into()
     });
+    let claimed = CoreIpcClient::connect().and_then(|mut client| {
+        client.command(CoreCommand::PresentHandoff {
+            handoff_id: offer.handoff_id.clone(),
+            ok: true,
+            presenter_id: presenter_id().into(),
+        })
+    });
+    if claimed.is_err() {
+        if let Ok(mut client) = CoreIpcClient::connect() {
+            let restored = load_pending_offers(&mut client);
+            if let Ok(mut items) = pending.lock() {
+                *items = restored;
+            }
+        }
+        if let Ok(mut active) = active_handoff.lock() {
+            *active = None;
+        }
+        let _ = item.hide();
+        return;
+    }
     let shown = item.show().is_ok();
     if shown {
+        if let Ok(mut active) = active_handoff.lock() {
+            *active = Some(offer.handoff_id.clone());
+        }
         let _ = hide_window_from_taskbar_by_title("确认下载");
         let _ = center_window_by_title("确认下载");
         let _ = activate_window_by_title("确认下载");
+    } else if let Ok(mut active) = active_handoff.lock() {
+        *active = None;
     }
     let reported = CoreIpcClient::connect()
         .and_then(|mut client| {
             client.command(CoreCommand::PresentHandoff {
                 handoff_id: offer.handoff_id.clone(),
                 ok: shown,
+                presenter_id: presenter_id().into(),
             })
         })
         .is_ok();

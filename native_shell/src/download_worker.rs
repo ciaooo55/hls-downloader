@@ -19,6 +19,14 @@ use std::time::{Duration, Instant};
 
 const DEFAULT_COOKIE_CREDENTIAL_REF: &str = "settings:default-cookie";
 const MAX_REPLAY_BODY_BYTES: usize = 128 * 1024;
+const HANDOFF_PRESENTER_LEASE_MS: u64 = 15_000;
+
+fn handoff_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
+}
 
 struct TemporaryRequestBody(Option<PathBuf>);
 
@@ -1296,8 +1304,13 @@ impl CoreCoordinator {
                 suppress_site_kind,
             });
         }
-        if let CoreCommand::PresentHandoff { handoff_id, ok } = command {
-            return self.present_handoff_command(handoff_id, ok);
+        if let CoreCommand::PresentHandoff {
+            handoff_id,
+            ok,
+            presenter_id,
+        } = command
+        {
+            return self.present_handoff_command(handoff_id, ok, presenter_id);
         }
         if let CoreCommand::RequestMediaPush { request } = command {
             return self.request_media_push(request);
@@ -2170,6 +2183,7 @@ impl CoreCoordinator {
         &self,
         handoff_id: String,
         ok: bool,
+        presenter_id: String,
     ) -> Result<Vec<EventEnvelope>, String> {
         if handoff_id.trim().is_empty() {
             return Err("接管请求缺少编号".into());
@@ -2187,19 +2201,66 @@ impl CoreCoordinator {
                 .get("status")
                 .and_then(Value::as_str)
                 .unwrap_or("pending");
-            if matches!(current, "accepted" | "rejected" | "failed") {
-                return Ok(Vec::new());
+            if matches!(
+                current,
+                "accepted" | "rejected" | "canceled" | "expired" | "failed"
+            ) {
+                return Err("接管请求已结束".into());
+            }
+            let now = handoff_now_ms();
+            let presentation = value
+                .get("presentation")
+                .and_then(Value::as_str)
+                .unwrap_or("queued")
+                .to_string();
+            let owner = value
+                .get("presentation_owner")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let lease_until = value
+                .get("presentation_lease_until_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let presenter_id = presenter_id.trim();
+            let claimant = if presenter_id.is_empty() {
+                "legacy-presenter"
+            } else {
+                presenter_id
+            };
+            if ok && presentation == "fallback" {
+                return Err("接管请求已由主窗口处理".into());
+            }
+            if ok && !owner.is_empty() && owner != claimant && lease_until > now {
+                return Err("接管请求已由另一个确认窗口处理".into());
+            }
+            if !ok && presenter_id.is_empty() && lease_until > now {
+                return Err("下载确认窗口仍在处理该请求".into());
+            }
+            if !ok && !presenter_id.is_empty() && owner != presenter_id {
+                return Err("接管请求不属于当前确认窗口".into());
             }
             if let Some(object) = value.as_object_mut() {
-                object.insert(
-                    "presentation".into(),
-                    Value::String(if ok {
-                        "presented".into()
+                if ok {
+                    let next = if owner == claimant && presentation == "presenting" {
+                        "presented"
+                    } else if presenter_id.is_empty() {
+                        "presented"
+                    } else if owner == claimant {
+                        presentation.as_str()
                     } else {
-                        "fallback".into()
-                    }),
-                );
-                if !ok {
+                        "presenting"
+                    };
+                    object.insert("presentation".into(), Value::String(next.into()));
+                    object.insert("presentation_owner".into(), Value::String(claimant.into()));
+                    object.insert(
+                        "presentation_lease_until_ms".into(),
+                        Value::from(now.saturating_add(HANDOFF_PRESENTER_LEASE_MS)),
+                    );
+                } else {
+                    object.insert("presentation".into(), Value::String("fallback".into()));
+                    object.insert("presentation_owner".into(), Value::String("compose".into()));
+                    object.insert("presentation_lease_until_ms".into(), Value::from(0));
                     object.insert("status".into(), Value::String("pending".into()));
                 }
             }
@@ -2218,6 +2279,9 @@ impl CoreCoordinator {
                 .save_handoff(&handoff_id, &json, status, task_id, created)?;
             updated = true;
             break;
+        }
+        if !updated {
+            return Err("接管请求不存在或已过期".into());
         }
         if !ok && updated {
             return core.emit(CoreEvent::UiShow {
@@ -6681,7 +6745,7 @@ mod tests {
     }
 
     #[test]
-    fn present_handoff_failure_keeps_pending_row_for_fallback() {
+    fn expired_presenter_lease_transfers_pending_row_to_fallback() {
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         coordinator
             .lock()
@@ -6692,7 +6756,9 @@ mod tests {
                 &serde_json::json!({
                     "id": "handoff-ui",
                     "status": "pending",
-                    "presentation": "queued",
+                    "presentation": "presented",
+                    "presentation_owner": "crashed-presenter",
+                    "presentation_lease_until_ms": 1,
                     "created_at_ms": 1
                 })
                 .to_string(),
@@ -6719,6 +6785,7 @@ mod tests {
             .dispatch(CoreCommand::PresentHandoff {
                 handoff_id: "handoff-ui".into(),
                 ok: false,
+                presenter_id: String::new(),
             })
             .unwrap();
         assert!(events.iter().any(|event| matches!(
@@ -6742,7 +6809,7 @@ mod tests {
     }
 
     #[test]
-    fn present_handoff_success_keeps_pending_row() {
+    fn presenter_lease_blocks_compose_and_owner_can_release() {
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         coordinator
             .lock()
@@ -6775,6 +6842,37 @@ mod tests {
             .dispatch(CoreCommand::PresentHandoff {
                 handoff_id: "handoff-shown".into(),
                 ok: true,
+                presenter_id: "presenter-test".into(),
+            })
+            .unwrap();
+        let claimed = coordinator
+            .lock()
+            .unwrap()
+            .store()
+            .load_handoffs()
+            .unwrap()
+            .join("\n");
+        assert!(claimed.contains("\"presentation\":\"presenting\""));
+        assert!(claimed.contains("\"presentation_owner\":\"presenter-test\""));
+        assert!(coordinator
+            .dispatch(CoreCommand::PresentHandoff {
+                handoff_id: "handoff-shown".into(),
+                ok: true,
+                presenter_id: "presenter-other".into(),
+            })
+            .is_err());
+        assert!(coordinator
+            .dispatch(CoreCommand::PresentHandoff {
+                handoff_id: "handoff-shown".into(),
+                ok: false,
+                presenter_id: String::new(),
+            })
+            .is_err());
+        coordinator
+            .dispatch(CoreCommand::PresentHandoff {
+                handoff_id: "handoff-shown".into(),
+                ok: true,
+                presenter_id: "presenter-test".into(),
             })
             .unwrap();
         let json = coordinator
@@ -6792,6 +6890,21 @@ mod tests {
             .unwrap()
             .pending_handoff("handoff-shown")
             .is_some());
+        coordinator
+            .dispatch(CoreCommand::PresentHandoff {
+                handoff_id: "handoff-shown".into(),
+                ok: false,
+                presenter_id: "presenter-test".into(),
+            })
+            .unwrap();
+        let released = coordinator
+            .lock()
+            .unwrap()
+            .store()
+            .load_handoffs()
+            .unwrap()
+            .join("\n");
+        assert!(released.contains("\"presentation\":\"fallback\""));
     }
 
     #[test]

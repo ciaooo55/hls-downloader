@@ -38,7 +38,7 @@ Rust Core + SQLite (唯一状态/凭据/传输所有者)
 
 ## 当前收敛点
 
-- 功能矩阵为 `24/28 verified`、`4 partial`；计划任务由调度器认领时统一重置 control，最终发布与完成状态在 Core 同一互斥区提交，但新回归尚未执行；浏览器 pending handoff 已可跨重连恢复，Compose 会先持久认领 `presentation=fallback` 再显示，Presenter 展示失败也按同一路径单向转交且扩展继续等待；成功展示后的进程崩溃仍需实例 lease 关闭重启竞争，后续还需生产浏览器、外部端点与干净 Windows MSI 证据。
+- 功能矩阵为 `24/28 verified`、`4 partial`；计划任务由调度器认领时统一重置 control，最终发布与完成状态在 Core 同一互斥区提交，但新回归尚未执行；浏览器 pending handoff 已可跨重连恢复，Presenter 在显示前原子认领 15 秒持久 lease 并每 5 秒续租，Compose 只在 lease 到期后通过同一 Core 互斥区取得 `presentation=fallback`，扩展在整个展示阶段继续等待；后续还需 focused regression、生产浏览器、外部端点与干净 Windows MSI 证据。
 - Core 已在启动阶段报告 named pipe ready，失败会返回明确错误；pending media push 会从 SQLite 恢复到运行时，可跨重启 resolve。
 - 本轮修复安装文档与脚本的路径/回滚语义，使交付约束与运行时架构一致。
 - 设置保存先完成 Core 持久化，失败时保留对话框草稿；Presenter 探测完成前暂存接管事件，避免启动竞态。
