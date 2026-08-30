@@ -53,6 +53,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-v7.ps1 -
 正式产物继续写入既有的 `artifacts/v7-productization/package` 目录，并额外
 要求 `release_ready=true`。
 
+浏览器生产冒烟（media、takeover、browsers）必须显式传入候选或正式产物解压后的
+扩展目录；脚本不再默认读取工作树 `extension/.output`，避免把开发输出误当成交付证据。
+
 ## 正式标签前门槛
 
 本地源码、运行、升级和浏览器桥接已经可用。创建公开 `v7.0.0` 标签前仍保留两项发布工程门槛：

@@ -41,5 +41,7 @@ Rust Core + SQLite (唯一状态/凭据/传输所有者)
 - Core 已在启动阶段报告 named pipe ready，失败会返回明确错误；pending media push 会从 SQLite 恢复到运行时，可跨重启 resolve。
 - 本轮修复安装文档与脚本的路径/回滚语义，使交付约束与运行时架构一致。
 - 设置保存先完成 Core 持久化，失败时保留对话框草稿；Presenter 探测完成前暂存接管事件，避免启动竞态。
+- 工作台在事件序列断档时重新读取快照；Presenter 每次重连都恢复任务快照和待处理交接，托盘/Presenter 唤起优先激活已有工作台。
 - candidate/formal 产物目录写入 `ARTIFACT-MANIFEST.json`，统一记录 EXE、MSI、Portable 和扩展摘要。
+- 构建与安装同时校验扩展 MV3、Chromium 公钥和 Firefox Gecko ID。
 - 新增功能时先扩展 `contract.rs` 的命令/事件，再接 Core handler，最后接 Compose/Presenter/extension 的单一路径；不要新增第二个状态所有者。
