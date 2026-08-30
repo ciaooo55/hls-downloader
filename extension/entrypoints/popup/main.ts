@@ -27,6 +27,15 @@ const THEME_LABELS: Record<ThemePreference, string> = {
   light: '主题：浅色',
 }
 const THEME_ORDER: ThemePreference[] = ['auto', 'dark', 'light']
+
+// 按钮状态机使用稳定的状态 token，展示文案单独映射；改文案不能破坏状态判断。
+type SendState = 'sending' | 'queued' | 'retry'
+type PushState = 'working' | 'awaiting' | 'sent' | 'retry'
+const SEND_LABELS: Record<SendState, string> = { sending: '发送中', queued: '已加入', retry: '重试' }
+const SEND_BUSY: ReadonlySet<SendState> = new Set(['sending', 'queued'])
+const TVBOX_PUSH_LABELS: Record<PushState, string> = { working: '推送中', awaiting: '等待选择', sent: '已发送', retry: '重试' }
+const CAST_PUSH_LABELS: Record<PushState, string> = { working: '投屏中', awaiting: '等待选择', sent: '已发送', retry: '重试' }
+const PUSH_BUSY: ReadonlySet<PushState> = new Set(['working', 'awaiting', 'sent'])
 const ICONS: Record<string, string> = {
   auto: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg>',
   dark: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 15.4A8.6 8.6 0 0 1 8.6 3.2 8.9 8.9 0 1 0 20.8 15.4Z"/></svg>',
@@ -204,8 +213,8 @@ async function main() {
   let authorizedCookieHosts: string[] = []
   let excluded: string[] = []
   let suppressions: HandoffSuppression[] = []
-  const sending: Record<string, string> = {}
-  const pushing: Record<string, string> = {}
+  const sending: Record<string, SendState> = {}
+  const pushing: Record<string, PushState> = {}
   // Chosen rendition per resource id: the list re-renders on every send or
   // status poll, and the pick must survive those rebuilds.
   const chosenVariant: Record<string, string> = {}
@@ -319,28 +328,31 @@ async function main() {
         body.append(trigger)
       }
       body.append(mime)
-      const label = sending[item.id] || '\u4e0b\u8f7d'
+      const sendState = sending[item.id]
+      const label = sendState ? SEND_LABELS[sendState] : '下载'
       const button = el('button', 'hlsd-button primary')
       button.append(icon('download'), el('span', '', label))
-      const locked = ['\u53d1\u9001\u4e2d', '\u7b49\u5f85\u786e\u8ba4', '\u786e\u8ba4\u4e2d', '\u5df2\u52a0\u5165'].includes(sending[item.id] || '')
+      const locked = sendState ? SEND_BUSY.has(sendState) : false
       button.disabled = locked
-      if (sending[item.id]) button.classList.add('busy')
-      button.title = '\u53d1\u9001\u5230\u4e0b\u8f7d\u5668'
+      if (sendState) button.classList.add('busy')
+      button.title = '发送到下载器'
       button.addEventListener('click', () => void send(selected))
       const pushKey = `${item.id}:tvbox`
-      const pushLabel = pushing[pushKey] || 'TVBox'
+      const pushState = pushing[pushKey]
+      const pushLabel = pushState ? TVBOX_PUSH_LABELS[pushState] : 'TVBox'
       const pushButton = el('button', 'hlsd-button push-button')
       pushButton.append(icon('tv'), el('span', '', pushLabel))
-      pushButton.disabled = ['推送中', '等待选择', '已发送'].includes(pushing[pushKey] || '')
-      if (pushing[pushKey]) pushButton.classList.add('busy')
+      pushButton.disabled = pushState ? PUSH_BUSY.has(pushState) : false
+      if (pushState) pushButton.classList.add('busy')
       pushButton.title = '直接推送当前媒体链接到 TVBox'
       pushButton.addEventListener('click', () => void pushToTv(selected))
       const castKey = `${item.id}:cast`
-      const castLabel = pushing[castKey] || '投屏'
+      const castState = pushing[castKey]
+      const castLabel = castState ? CAST_PUSH_LABELS[castState] : '投屏'
       const castButton = el('button', 'hlsd-button cast-button')
       castButton.append(icon('cast'), el('span', '', castLabel))
-      castButton.disabled = ['投屏中', '等待选择', '已发送'].includes(pushing[castKey] || '')
-      if (pushing[castKey]) castButton.classList.add('busy')
+      castButton.disabled = castState ? PUSH_BUSY.has(castState) : false
+      if (castState) castButton.classList.add('busy')
       castButton.title = '直接投屏当前媒体链接到 DLNA 或 Chromecast'
       castButton.addEventListener('click', () => void castToDevice(selected))
       const actionCol = el('div', 'article-actions')
@@ -383,22 +395,23 @@ async function main() {
 
   const pushToTv = async (item: MediaResource) => {
     const key = `${item.id}:tvbox`
-    if (['推送中', '等待选择', '已发送'].includes(pushing[key] || '')) return
+    const current = pushing[key]
+    if (current && PUSH_BUSY.has(current)) return
     setError('')
-    pushing[key] = '推送中'
+    pushing[key] = 'working'
     renderList()
     try {
       const response = await browser.runtime.sendMessage({ type: 'push-to-tv', resource: item })
       if (!response?.ok) throw new Error(response?.error || '电视推送失败')
-      pushing[key] = '等待选择'
+      pushing[key] = 'awaiting'
       renderList()
       const status = await waitForPushResult(String(response.id || ''))
       if (status.status !== 'done') throw new Error(status.message || '电视推送未完成')
-      pushing[key] = '已发送'
+      pushing[key] = 'sent'
       setError('')
       setTimeout(() => { delete pushing[key]; renderList() }, 2_000)
     } catch (reason) {
-      pushing[key] = '重试'
+      pushing[key] = 'retry'
       setError(reason instanceof Error ? reason.message : '推送到电视失败')
     } finally {
       renderList()
@@ -407,22 +420,23 @@ async function main() {
 
   const castToDevice = async (item: MediaResource) => {
     const key = `${item.id}:cast`
-    if (['投屏中', '等待选择', '已发送'].includes(pushing[key] || '')) return
+    const current = pushing[key]
+    if (current && PUSH_BUSY.has(current)) return
     setError('')
-    pushing[key] = '投屏中'
+    pushing[key] = 'working'
     renderList()
     try {
       const response = await browser.runtime.sendMessage({ type: 'cast-to-device', resource: item })
       if (!response?.ok) throw new Error(response?.error || '投屏请求失败')
-      pushing[key] = '等待选择'
+      pushing[key] = 'awaiting'
       renderList()
       const status = await waitForPushResult(String(response.id || ''))
       if (status.status !== 'done') throw new Error(status.message || '投屏未完成')
-      pushing[key] = '已发送'
+      pushing[key] = 'sent'
       setError('')
       setTimeout(() => { delete pushing[key]; renderList() }, 2_000)
     } catch (reason) {
-      pushing[key] = '重试'
+      pushing[key] = 'retry'
       setError(reason instanceof Error ? reason.message : '投屏到电视失败')
     } finally {
       renderList()
@@ -431,7 +445,7 @@ async function main() {
 
   const send = async (item: MediaResource) => {
     setError('')
-    sending[item.id] = '\u53d1\u9001\u4e2d'
+    sending[item.id] = 'sending'
     renderList()
     try {
       const response = await withDeadline(
@@ -440,11 +454,11 @@ async function main() {
         '下载器响应超时，请重试',
       )
       if (!response?.ok) throw new Error(response?.error || '桌面端未接受下载请求')
-      sending[item.id] = '已加入'
+      sending[item.id] = 'queued'
       renderList()
       setTimeout(() => { delete sending[item.id]; renderList() }, 2_500)
     } catch (reason) {
-      sending[item.id] = '\u91cd\u8bd5'
+      sending[item.id] = 'retry'
       setError(reason instanceof Error ? reason.message : '\u53d1\u9001\u5230\u684c\u9762\u7aef\u5931\u8d25')
       renderList()
     }

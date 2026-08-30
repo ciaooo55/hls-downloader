@@ -46,18 +46,23 @@ export class NativeBridge {
         resolve,
         reject,
       }
-      // A user click must not wait behind a hung heartbeat/status request. A
-      // Native Messaging port cannot cancel one message in isolation, so move
-      // the interrupted low-priority request back into the queue, replace the
-      // port, and send the interactive request immediately. The old port is
-      // detached before disconnect() so its final event cannot reject or
-      // complete work on the replacement connection.
+      // A user click must not wait behind a hung heartbeat/status poll. A
+      // Native Messaging port cannot cancel one in-flight message, so the
+      // interactive request is sent on a fresh port and the interrupted
+      // request — always an idempotent read or long poll — is re-issued right
+      // after it. The old port is detached before disconnect() so its final
+      // event cannot reject or complete work on the replacement connection.
       if (this.active && request.priority > this.active.priority) {
         const interrupted = this.active
         if (interrupted.timer) clearTimeout(interrupted.timer)
         interrupted.timer = undefined
         this.active = null
+        // pump() keeps the active request at queue[0] until its response
+        // arrives; take it out before requeueing so it cannot end up queued
+        // twice (or not at all) on either side of the preempting request.
+        if (this.queue[0] === interrupted) this.queue.shift()
         this.queue.unshift(request)
+        this.queue.splice(1, 0, interrupted)
         const port = this.port
         this.port = null
         try { port?.disconnect() } catch {}

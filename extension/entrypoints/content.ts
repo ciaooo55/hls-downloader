@@ -728,6 +728,10 @@ export default defineContentScript({
         const resourceLocation = safeResourceLocation(resource.url)
         const resourceUrl = document.createElement('code'); resourceUrl.className = 'resource-url'; resourceUrl.title = resourceLocation; resourceUrl.textContent = resourceLocation
         let selected = resource
+        const actions = document.createElement('div'); actions.className = 'item-actions'
+        const button = document.createElement('button'); button.className = 'download'; button.textContent = '下载'
+        button.addEventListener('click', () => sendResource(selected, button))
+        applySendState(selected, button, '下载')
         if (resource.variants?.length) {
           const select = document.createElement('select')
           select.className = 'quality-select'
@@ -742,7 +746,7 @@ export default defineContentScript({
             option.textContent = [variant.quality || (variant.height ? `${variant.height}p` : '线路'), variant.bandwidth ? `${(variant.bandwidth / 1_000_000).toFixed(1)} Mbps` : ''].filter(Boolean).join(' · ')
             select.append(option)
           })
-           select.addEventListener('change', () => {
+          select.addEventListener('change', () => {
             const variant = resource.variants?.find(item => item.url === select.value)
             selected = variant ? { ...resource, ...variant, url: variant.url, variants: undefined } : resource
             applySendState(selected, button, '下载')
@@ -751,10 +755,6 @@ export default defineContentScript({
         } else {
           meta.append(name, kind, resourceUrl)
         }
-        const actions = document.createElement('div'); actions.className = 'item-actions'
-         const button = document.createElement('button'); button.className = 'download'; button.textContent = '下载'
-         button.addEventListener('click', () => sendResource(selected, button))
-         applySendState(selected, button, '下载')
         const pushButton = document.createElement('button'); pushButton.className = 'download push-tv'; pushButton.textContent = 'TVBox'
         pushButton.title = '直接推送当前媒体链接到 TVBox'
         pushButton.addEventListener('click', () => pushToTv(selected, pushButton))
