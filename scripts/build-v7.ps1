@@ -246,6 +246,7 @@ $env:HLS_ENGINE_PATH = $engine
         $portablePath = Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64-Portable$artifactSuffix.zip")
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\create-v7-portable.ps1" -OutZip $portablePath
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $extensionEvidence = [ordered]@{}
         $portableCheck = Join-Path $artifactRoot ('.portable-verify-' + [guid]::NewGuid().ToString('n'))
         try {
             Expand-Archive -LiteralPath $portablePath -DestinationPath $portableCheck -Force
@@ -292,11 +293,34 @@ $env:HLS_ENGINE_PATH = $engine
                 if ($manifest.version -ne '7.0.0') {
                     throw "$extension extension manifest version is not 7.0.0: $($manifest.version)"
                 }
+                $extensionEvidence[$extension] = [ordered]@{
+                    version = [string]$manifest.version
+                    sha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
             }
         } finally {
             Remove-Item -LiteralPath $portableCheck -Recurse -Force -ErrorAction SilentlyContinue
         }
         Copy-Item -LiteralPath $featureParity -Destination (Join-Path $artifactRoot 'FEATURE-PARITY.json') -Force
+        $exePath = Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64$artifactSuffix.exe")
+        $msiPath = Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64$artifactSuffix.msi")
+        $artifactManifest = [ordered]@{
+            schema = 1
+            product_version = '7.0.0'
+            package_tier = $packageTier
+            source_commit = $sourceCommit
+            source_tree = $sourceTree
+            feature_parity_path = 'FEATURE-PARITY.json'
+            feature_parity_sha256 = (Get-FileHash -LiteralPath (Join-Path $artifactRoot 'FEATURE-PARITY.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+            artifacts = [ordered]@{
+                exe = [ordered]@{ path = [IO.Path]::GetFileName($exePath); sha256 = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash.ToLowerInvariant() }
+                msi = [ordered]@{ path = [IO.Path]::GetFileName($msiPath); sha256 = (Get-FileHash -LiteralPath $msiPath -Algorithm SHA256).Hash.ToLowerInvariant() }
+                portable = [ordered]@{ path = [IO.Path]::GetFileName($portablePath); sha256 = (Get-FileHash -LiteralPath $portablePath -Algorithm SHA256).Hash.ToLowerInvariant() }
+            }
+            extensions = $extensionEvidence
+            generated_at_utc = [DateTime]::UtcNow.ToString('o')
+        }
+        [IO.File]::WriteAllText((Join-Path $artifactRoot 'ARTIFACT-MANIFEST.json'), ($artifactManifest | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
         if ($Task -eq 'candidate') {
             # Swap the complete staging directory only after every artifact is ready.
             $candidateSwapBackupRoot = Join-Path (Split-Path $packageRoot -Parent) ('.candidate-backup.' + [guid]::NewGuid().ToString('n'))
