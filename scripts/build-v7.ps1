@@ -178,6 +178,12 @@ function Build-Extension([string]$Resources) {
         $pnpmPath = if ($pnpmCommand) { $pnpmCommand.Source } else { Join-Path $repo '.tool-cache\node-v22.14.0-win-x64\pnpm.cmd' }
     }
     if (-not (Test-Path -LiteralPath $pnpmPath)) { throw 'pnpm.cmd is required to build the production browser extension.' }
+    # npm scripts spawn node/wxt directly, so the repository-local Node tools
+    # must be on PATH when they exist.
+    $nodeTools = Get-ChildItem -LiteralPath (Join-Path $repo '.tool-cache') -Directory -Filter 'node-v*' -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'node.exe') -PathType Leaf } |
+        Select-Object -First 1
+    if ($nodeTools) { $env:PATH = "$($nodeTools.FullName);$env:PATH" }
     $package = Get-Content -LiteralPath (Join-Path $repo 'extension\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($package.version -ne '7.0.0') { throw "Browser extension package version must be 7.0.0: $($package.version)" }
     Push-Location (Join-Path $repo 'extension')
