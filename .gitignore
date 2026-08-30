@@ -22,6 +22,7 @@ extension/node_modules/
 extension/.wxt/
 extension/.output/
 **/.gradle/
+desktop_ui/.kotlin/
 
 # Build and packaging output
 bin/
