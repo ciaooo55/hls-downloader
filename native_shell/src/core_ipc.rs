@@ -10,13 +10,35 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 pub const V7_PIPE_NAME: &str = r"\\.\pipe\HLSDownloader.v7";
 pub const V7_PIPE_MAX_FRAME: usize = 4 * 1024 * 1024;
+
+// 每连接一线程模型下的并发连接上限。超限的新连接直接关闭，客户端按连接失败
+// 自行重试。桌面 UI、原生宿主与 presenter 的常驻连接总量远小于该值。
+pub const MAX_IPC_CONNECTIONS: usize = 64;
+
+// 声明一个连接线程槽位；Drop 保证 panic 路径也不泄漏计数。
+struct ConnectionSlot(Arc<AtomicUsize>);
+impl ConnectionSlot {
+    fn claim(current: &Arc<AtomicUsize>) -> Option<Self> {
+        current
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                (count < MAX_IPC_CONNECTIONS).then_some(count + 1)
+            })
+            .ok()
+            .map(|_| Self(Arc::clone(current)))
+    }
+}
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 pub fn v7_pipe_name() -> String {
     std::env::var("HLS_V7_PIPE").unwrap_or_else(|_| V7_PIPE_NAME.to_string())
@@ -447,11 +469,16 @@ impl NamedPipeServer {
         stop: Arc<AtomicBool>,
         handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync>,
     ) -> Result<(), String> {
+        let active = Arc::new(AtomicUsize::new(0));
         while !stop.load(Ordering::SeqCst) {
             match self.accept() {
                 Ok(mut stream) => {
+                    let Some(slot) = ConnectionSlot::claim(&active) else {
+                        continue;
+                    };
                     let handler = Arc::clone(&handler);
                     thread::spawn(move || {
+                        let _slot = slot;
                         while let Ok(Some(request)) = read_message::<CorePipeRequest>(&mut stream) {
                             let response = handler(request);
                             if write_message(&mut stream, &response).is_err() {
@@ -487,8 +514,14 @@ impl NamedPipeServer {
             Ok(stream) => stream,
             Err(error) => return Err(error),
         };
+        let active = Arc::new(AtomicUsize::new(0));
+        let Some(first_slot) = ConnectionSlot::claim(&active) else {
+            // 槽位耗尽时丢弃首连接：ready 已通知，客户端会重连重试
+            return Ok(());
+        };
         let handler_for_first = Arc::clone(&handler);
         thread::spawn(move || {
+            let _slot = first_slot;
             let mut stream = first;
             while let Ok(Some(request)) = read_message::<CorePipeRequest>(&mut stream) {
                 let response = handler_for_first(request);
@@ -500,8 +533,12 @@ impl NamedPipeServer {
         while !stop.load(Ordering::SeqCst) {
             match self.accept() {
                 Ok(mut stream) => {
+                    let Some(slot) = ConnectionSlot::claim(&active) else {
+                        continue;
+                    };
                     let handler = Arc::clone(&handler);
                     thread::spawn(move || {
+                        let _slot = slot;
                         while let Ok(Some(request)) = read_message::<CorePipeRequest>(&mut stream) {
                             let response = handler(request);
                             if write_message(&mut stream, &response).is_err() {
@@ -683,11 +720,16 @@ pub fn serve_tcp_listener(
     listener
         .set_nonblocking(true)
         .map_err(|error| format!("Core listener nonblocking: {error}"))?;
+    let active = Arc::new(AtomicUsize::new(0));
     while !stop.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _)) => {
+                let Some(slot) = ConnectionSlot::claim(&active) else {
+                    continue;
+                };
                 let handler = Arc::clone(&handler);
                 thread::spawn(move || {
+                    let _slot = slot;
                     let _ = stream.set_nonblocking(false);
                     let _ = handle_stream(stream, handler.as_ref());
                 });
