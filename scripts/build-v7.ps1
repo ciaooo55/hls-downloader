@@ -60,7 +60,7 @@ $env:GRADLE_USER_HOME=Join-Path $cacheRoot 'gradle'
 $env:HLS_COMPOSE_BUILD_DIR=Join-Path $cacheRoot 'compose-build'
 # Corepack state stays in the repository so the pinned pnpm@11.7.0 default
 # applies regardless of the user-level corepack home.
-$env:COREPACK_HOME=Join-Path $cacheRoot 'corepack-home'
+$env:COREPACK_HOME=Join-Path $repo '.tool-cache\corepack-home'
 $env:COREPACK_ENABLE_DOWNLOAD_PROMPT='0'
 $jdkRoot = $env:HLS_V7_JAVA_HOME
 if(-not $jdkRoot -and (Test-Path (Join-Path $cacheRoot 'jdk-21\bin\java.exe'))){ $jdkRoot = Join-Path $cacheRoot 'jdk-21' }
@@ -178,14 +178,16 @@ function Build-Extension([string]$Resources) {
         $pnpmPath = if ($pnpmCommand) { $pnpmCommand.Source } else { Join-Path $repo '.tool-cache\node-v22.14.0-win-x64\pnpm.cmd' }
     }
     if (-not (Test-Path -LiteralPath $pnpmPath)) { throw 'pnpm.cmd is required to build the production browser extension.' }
-    $pnpmVersion = (& $pnpmPath --version).Trim()
-    if ($LASTEXITCODE -ne 0 -or $pnpmVersion -ne '11.7.0') {
-        throw "Production extension build requires pnpm 11.7.0; found $pnpmVersion"
-    }
     $package = Get-Content -LiteralPath (Join-Path $repo 'extension\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($package.version -ne '7.0.0') { throw "Browser extension package version must be 7.0.0: $($package.version)" }
     Push-Location (Join-Path $repo 'extension')
     try {
+        # Probe inside the extension directory so corepack resolves the pnpm
+        # version pinned by extension/package.json instead of its global default.
+        $pnpmVersion = (& $pnpmPath --version).Trim()
+        if ($LASTEXITCODE -ne 0 -or $pnpmVersion -ne '11.7.0') {
+            throw "Production extension build requires pnpm 11.7.0; found $pnpmVersion"
+        }
         & $pnpmPath install --frozen-lockfile
         if ($LASTEXITCODE -ne 0) { throw "pnpm install failed with exit $LASTEXITCODE" }
         & $pnpmPath run build
