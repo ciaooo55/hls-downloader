@@ -20,7 +20,7 @@ use std::{
 };
 
 const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
-const RECOMMENDED_EXTENSION_VERSION: &str = "5.0.14";
+const RECOMMENDED_EXTENSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MINIMUM_EXTENSION_VERSION: &str = "2.0.11";
 const EXTENSION_RELEASE_URL: &str = "https://github.com/ciaooo55/hls-downloader/releases/latest";
 static NEXT_HANDOFF: AtomicU64 = AtomicU64::new(1);

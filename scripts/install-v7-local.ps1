@@ -158,7 +158,8 @@ $note = if ([String]::IsNullOrWhiteSpace($UpgradeNote)) {
 } else {
     [IO.Path]::GetFullPath($UpgradeNote)
 }
-if (-not (Test-Path -LiteralPath $note -PathType Leaf)) {
+if (-not $note.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+    -not (Test-Path -LiteralPath $note -PathType Leaf)) {
     throw "Upgrade note is missing: $note"
 }
 
@@ -217,16 +218,25 @@ $installInfo = @(
 [IO.File]::WriteAllText((Join-Path $stage 'INSTALLATION.txt'), $installInfo, [Text.UTF8Encoding]::new($false))
 
 $hadPrevious = Test-Path -LiteralPath $target
+$targetMovedToBackup = $false
+$stageMovedToTarget = $false
 try {
     if ($hadPrevious) {
+        $shutdownScript = Join-Path $repo 'scripts\shutdown-running.ps1'
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $shutdownScript -InstallDir $target
+        if ($LASTEXITCODE -ne 0) {
+            throw "v7 running installation did not shut down cleanly (exit $LASTEXITCODE)"
+        }
         Move-Item -LiteralPath $target -Destination $backup
+        $targetMovedToBackup = $true
     }
     Move-Item -LiteralPath $stage -Destination $target
+    $stageMovedToTarget = $true
 } catch {
-    if (Test-Path -LiteralPath $target) {
+    if ($stageMovedToTarget -and (Test-Path -LiteralPath $target)) {
         Remove-Item -LiteralPath $target -Recurse -Force
     }
-    if ($hadPrevious -and (Test-Path -LiteralPath $backup)) {
+    if ($targetMovedToBackup -and (Test-Path -LiteralPath $backup) -and -not (Test-Path -LiteralPath $target)) {
         Move-Item -LiteralPath $backup -Destination $target
     }
     throw
@@ -274,8 +284,8 @@ try {
     Get-ChildItem -LiteralPath $desktop -Filter 'HLS Downloader*浏览器插件*' -Directory -ErrorAction SilentlyContinue |
         Move-Item -Destination $desktopExtensionBackup -Force
     foreach ($browser in @('Chromium', 'Firefox')) {
-        Get-ChildItem -LiteralPath $desktop -Filter 'HLSDownloader-*.zip' -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match ("^HLSDownloader-.*" + [regex]::Escape($browser) + ".*\.zip$") } |
+        Get-ChildItem -LiteralPath $desktop -Filter '*.zip' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match ("^HLS ?Downloader(?:[- _].*)?" + [regex]::Escape($browser) + "(?:[- _].*)?\.zip$") } |
             Move-Item -Destination $desktopExtensionBackup -Force
         Move-Item -LiteralPath (Join-Path $desktopExtensionStage "$browser.zip") `
             -Destination $desktopExtensionPaths[$browser] -Force

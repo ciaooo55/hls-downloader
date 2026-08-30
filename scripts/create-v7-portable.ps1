@@ -21,6 +21,7 @@ $canonicalFeatureHash = (Get-FileHash -LiteralPath $canonicalFeatureParity -Algo
 $embeddedFeatureHash = (Get-FileHash -LiteralPath $featureParityPath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ([int]$provenance.schema -ne 1 -or
     [string]$provenance.product_version -ne '7.0.0' -or
+    @('candidate', 'formal') -notcontains [string]$provenance.package_tier -or
     [string]$provenance.source_commit -ne $currentCommit -or
     [string]$provenance.source_tree -ne $currentTree -or
     [string]$provenance.feature_parity_path -ne 'artifacts/v7-productization/feature-parity.json' -or

@@ -19,9 +19,7 @@ pub const V7_PIPE_NAME: &str = r"\\.\pipe\HLSDownloader.v7";
 pub const V7_PIPE_MAX_FRAME: usize = 4 * 1024 * 1024;
 
 pub fn v7_pipe_name() -> String {
-    std::env::var("HLS_V7_PIPE")
-        .or_else(|_| std::env::var("HLS_V6_PIPE"))
-        .unwrap_or_else(|_| V7_PIPE_NAME.to_string())
+    std::env::var("HLS_V7_PIPE").unwrap_or_else(|_| V7_PIPE_NAME.to_string())
 }
 
 /// Loopback TCP is the test/Linux transport. The Windows product talks on the
@@ -30,10 +28,7 @@ pub fn tcp_loopback_enabled() -> bool {
     if cfg!(not(windows)) {
         return true;
     }
-    std::env::var_os("HLS_V7_CORE_TCP").is_some()
-        || std::env::var_os("HLS_V7_CORE_BIND").is_some()
-        || std::env::var_os("HLS_V6_CORE_TCP").is_some()
-        || std::env::var_os("HLS_V6_CORE_BIND").is_some()
+    std::env::var_os("HLS_V7_CORE_TCP").is_some() || std::env::var_os("HLS_V7_CORE_BIND").is_some()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -672,9 +667,7 @@ pub fn hello_request() -> CorePipeRequest {
 
 pub const V7_TCP_PORT: u16 = 18765;
 pub fn default_core_bind() -> std::net::SocketAddr {
-    if let Ok(raw) =
-        std::env::var("HLS_V7_CORE_BIND").or_else(|_| std::env::var("HLS_V6_CORE_BIND"))
-    {
+    if let Ok(raw) = std::env::var("HLS_V7_CORE_BIND") {
         if let Ok(addr) = raw.parse() {
             return addr;
         }
@@ -996,11 +989,6 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_tcp_loopback_is_opt_in() {
-        if std::env::var_os("HLS_V6_CORE_TCP").is_some()
-            || std::env::var_os("HLS_V6_CORE_BIND").is_some()
-        {
-            return;
-        }
         assert!(!tcp_loopback_enabled());
     }
 

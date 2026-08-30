@@ -175,6 +175,9 @@ fn percent_decode(value: &str) -> String {
 }
 
 pub fn known_hosts_path() -> PathBuf {
+    if let Some(root) = std::env::var_os("HLS_V7_DATA_DIR") {
+        return PathBuf::from(root).join("known_hosts");
+    }
     if let Some(root) = std::env::var_os("HLS_V6_DATA_DIR") {
         return PathBuf::from(root).join("known_hosts");
     }
