@@ -2754,15 +2754,25 @@ fn run_task_with_throttle(
                         telemetry.upload_speed_bytes_per_sec,
                     );
                 };
-            crate::torrent_engine::torrent_session().download_with_telemetry(
-                &spec.url,
-                &paths.output,
-                &paths.control,
-                &headers,
-                &spec.proxy,
-                torrent_options,
-                &mut telemetry_reporter,
-            )?;
+            let torrent_url = spec.url.clone();
+            let torrent_output = paths.output.clone();
+            let torrent_control = paths.control.clone();
+            let torrent_headers = headers.clone();
+            let torrent_proxy = spec.proxy.clone();
+            let torrent_progress = paths.progress.clone();
+            let _ = poll_media_progress(&core, task_id, &torrent_progress, false, move || {
+                crate::torrent_engine::torrent_session()
+                    .download_with_telemetry(
+                        &torrent_url,
+                        &torrent_output,
+                        &torrent_control,
+                        &torrent_headers,
+                        &torrent_proxy,
+                        torrent_options,
+                        &mut telemetry_reporter,
+                    )
+                    .map(|_| torrent_output.clone())
+            })?;
             let latest_spec = core
                 .lock()
                 .map_err(|_| "v7 Core mutex poisoned".to_string())?

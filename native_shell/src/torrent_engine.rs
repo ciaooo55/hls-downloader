@@ -1323,6 +1323,14 @@ fn download_from_peer_ex_with_telemetry(
         })
         .map(|(index, _)| index)
         .collect();
+    let progress = output.with_extension("progress.json");
+    let mut downloaded = meta.length.saturating_sub(
+        initial_pending
+            .iter()
+            .map(|index| (meta.length - *index as u64 * meta.piece_length).min(meta.piece_length))
+            .sum(),
+    );
+    crate::http_engine::write_progress(&progress, downloaded, meta.length, 0.0, "downloading");
     if initial_pending.is_empty() {
         return Ok(meta.length);
     }
@@ -1508,6 +1516,16 @@ fn download_from_peer_ex_with_telemetry(
             file.seek(SeekFrom::Start(start))
                 .map_err(|error| error.to_string())?;
             file.write_all(&piece).map_err(|error| error.to_string())?;
+            downloaded = downloaded
+                .saturating_add(piece.len() as u64)
+                .min(meta.length);
+            crate::http_engine::write_progress(
+                &progress,
+                downloaded,
+                meta.length,
+                0.0,
+                "downloading",
+            );
             crate::net_policy::consume(piece.len());
         }
     }
