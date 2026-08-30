@@ -24,11 +24,26 @@ foreach ($name in @(
     'app\resources\HLSDownloaderPresenter.exe',
     'app\resources\ffmpeg.exe',
     'app\resources\ffprobe.exe',
-    'app\resources\libmpv-2.dll'
+    'app\resources\libmpv-2.dll',
+    'app\resources\BUILD-PROVENANCE.json',
+    'app\resources\FEATURE-PARITY.json'
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $source $name))) {
         throw "v7 local image is incomplete; missing ${name}: $source"
     }
+}
+$provenancePath = Join-Path $source 'app\resources\BUILD-PROVENANCE.json'
+$featureParityPath = Join-Path $source 'app\resources\FEATURE-PARITY.json'
+$provenance = Get-Content -LiteralPath $provenancePath -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($provenance.product_version -ne '7.0.0') {
+    throw "v7 local image provenance product_version is not 7.0.0: $($provenance.product_version)"
+}
+if (@('candidate', 'formal') -notcontains [string]$provenance.package_tier) {
+    throw "v7 local image provenance package_tier is invalid: $($provenance.package_tier)"
+}
+$featureHash = (Get-FileHash -LiteralPath $featureParityPath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ([string]$provenance.feature_parity_sha256 -ne $featureHash) {
+    throw "v7 local image feature parity hash does not match provenance: $($provenance.feature_parity_sha256) != $featureHash"
 }
 
 $extensionRoot = if ([String]::IsNullOrWhiteSpace($ExtensionOutput)) { Join-Path $repo 'extension\.output' } else { [IO.Path]::GetFullPath($ExtensionOutput) }
