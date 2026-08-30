@@ -103,6 +103,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -136,6 +138,7 @@ enum class TaskFilter(val label: String) { ALL("全部"), RUNNING("进行中"), 
 enum class TaskCategory(val label: String) { MEDIA("媒体"), PROGRAM("程序"), ARCHIVE("压缩包"), OTHER("其他") }
 private val activeTaskStatuses = setOf("进行中", "录制中", "合并中", "校验中")
 internal fun isActiveTaskStatus(status: String): Boolean = status in activeTaskStatuses
+internal fun connectionStateOf(label: String): Boolean = label.contains("已连接")
 data class DownloadTask(val id: String, val filename: String, val status: String, val progress: Float, val speed: String, val speedBytes: Long, val remaining: String, val segments: String, val updated: String, val source: TaskDto)
 data class HarvestCandidateUi(
     val url: String,
@@ -348,17 +351,23 @@ private data class WorkbenchPalette(
     val canvas: Color, val rail: Color, val ink: Color, val muted: Color, val faint: Color,
     val blue: Color, val border: Color, val surface2: Color, val surface3: Color,
     val selected: Color, val dialog: Color, val success: Color, val warning: Color,
+    val errorSurface: Color, val errorBorder: Color, val errorStrong: Color, val errorBody: Color,
+    val warnSurface: Color,
 )
 
 private val lightPalette = WorkbenchPalette(
     canvas = Color(0xFFEEF2F6), rail = Color.White, ink = Color(0xFF0F172A), muted = Color(0xFF475569), faint = Color(0xFF64748B),
     blue = Color(0xFF2563EB), border = Color(0xFFD8E0EA), surface2 = Color(0xFFF5F7FA), surface3 = Color(0xFFE8EDF3),
     selected = Color(0xFFE7F0FF), dialog = Color(0xFFFCFDFE), success = Color(0xFF16794B), warning = Color(0xFF9A5B00),
+    errorSurface = Color(0xFFFFF3F2), errorBorder = Color(0xFFF2C9C5), errorStrong = Color(0xFF8A1C13), errorBody = Color(0xFF7A2E28),
+    warnSurface = Color(0xFFFFF7E8),
 )
 private val darkPalette = WorkbenchPalette(
     canvas = Color(0xFF151719), rail = Color(0xFF1C1F23), ink = Color(0xFFF4F5F6), muted = Color(0xFFC5C9CF), faint = Color(0xFF969CA4),
     blue = Color(0xFF5EA2F3), border = Color(0xFF383D43), surface2 = Color(0xFF23272B), surface3 = Color(0xFF2B3035),
     selected = Color(0xFF263A51), dialog = Color(0xFF22262A), success = Color(0xFF72D6A5), warning = Color(0xFFFFC46B),
+    errorSurface = Color(0xFF3B2422), errorBorder = Color(0xFF61302B), errorStrong = Color(0xFFFFB3A7), errorBody = Color(0xFFF2BEB7),
+    warnSurface = Color(0xFF39301C),
 )
 private val LocalWorkbenchPalette = staticCompositionLocalOf { lightPalette }
 private const val ENGINE_RECONNECTING_NOTICE = "下载引擎暂时无法连接，正在自动重试"
@@ -375,6 +384,11 @@ internal val selectedSurface: Color @Composable @ReadOnlyComposable get() = Loca
 internal val dialogSurface: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.dialog
 internal val successColor: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.success
 internal val warningColor: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.warning
+internal val errorSurface: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.errorSurface
+internal val errorBorder: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.errorBorder
+internal val errorStrong: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.errorStrong
+internal val errorBody: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.errorBody
+internal val warnSurface: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.warnSurface
 
 fun main() {
     System.setProperty("compose.accessibility.enable", "true")
@@ -580,6 +594,20 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         }
     }
     val taskLogs = remember { mutableStateMapOf<String, List<String>>() }
+    val taskLogOrder = remember { ArrayDeque<String>() }
+    fun recordTaskLog(taskId: String, lines: List<String>) {
+        if (taskId !in taskLogs) {
+            taskLogOrder.addLast(taskId)
+            while (taskLogOrder.size > 512) {
+                taskLogs.remove(taskLogOrder.removeFirst())
+            }
+        }
+        taskLogs[taskId] = lines
+    }
+    fun forgetTaskLog(taskId: String) {
+        taskLogs.remove(taskId)
+        taskLogOrder.remove(taskId)
+    }
     val handoffQueue = remember { mutableStateListOf<HandoffOfferDto>() }
     LaunchedEffect(presenterAvailable, presenterProbeComplete) {
         if (presenterAvailable) {
@@ -631,7 +659,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     else -> EnginePipeClient().taskAction(taskId, action)
                 }
             } }.onSuccess { result ->
-                if (action == "log") taskLogs[taskId] = result.taskLogLines()
+                if (action == "log") recordTaskLog(taskId, result.taskLogLines())
                 refreshKey++
             }.onFailure { error ->
                 UiDiagnostics.error("task_action.$action", error, taskId, requestId)
@@ -652,6 +680,17 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 runCatching { withContext(Dispatchers.IO) { taskIds.forEach { EnginePipeClient().taskAction(it, action) } } }
                     .onSuccess { refreshKey++ }
                     .onFailure { notice = UiSignal.Notice("error", it.message ?: "批量操作失败") }
+            }
+        }
+    }
+    val taskActionLimiter = remember { Semaphore(8) }
+    fun launchTaskActions(entries: List<Pair<String, String>>) {
+        entries.forEach { (taskId, action) ->
+            scope.launch {
+                taskActionLimiter.withPermit {
+                    runCatching { withContext(Dispatchers.IO) { EnginePipeClient().taskAction(taskId, action) } }
+                        .onSuccess { refreshKey++ }
+                }
             }
         }
     }
@@ -705,6 +744,8 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         }
         if (!snapshotReady) engineText = if (engineHasConnected) Product.engineReconnecting else Product.engineStarting
         var attempts = 0
+        var lastSpawnAt = 0L
+        var spawnDelayMs = 2_000L
         while (!snapshotReady) {
             val snapshot = runCatching { withContext(Dispatchers.IO) { EnginePipeClient().snapshotState() } }
             val state = snapshot.getOrNull()
@@ -715,16 +756,22 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 snapshotReady = true
                 engineHasConnected = true
                 engineText = Product.engineConnected
+                spawnDelayMs = 2_000L
                 if (notice?.message == ENGINE_RECONNECTING_NOTICE) notice = null
                 break
             }
             val error = snapshot.exceptionOrNull() ?: IllegalStateException("下载引擎连接失败")
             if (attempts == 0) UiDiagnostics.error("engine.snapshot", error)
-            if (attempts % 4 == 0) {
-                withContext(Dispatchers.IO) { EnginePipeClient.ensureStarted() }
-            }
             attempts++
+            engineText = if (engineHasConnected) Product.engineReconnecting else Product.engineStarting
             if (attempts == 12) notice = UiSignal.Notice("error", ENGINE_RECONNECTING_NOTICE)
+            // 引擎进程拉起采用指数退避（2s 翻倍至 32s 上限），避免引擎损坏时无限重启进程
+            val now = System.currentTimeMillis()
+            if (now - lastSpawnAt >= spawnDelayMs) {
+                withContext(Dispatchers.IO) { EnginePipeClient.ensureStarted() }
+                lastSpawnAt = now
+                spawnDelayMs = (spawnDelayMs * 2).coerceAtMost(32_000L)
+            }
             delay((100L + attempts * 40L).coerceAtMost(500L))
         }
         runCatching { withContext(Dispatchers.IO) { EnginePipeClient().loadHandoffs() } }
@@ -772,7 +819,9 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             val received = runCatching { withContext(Dispatchers.IO) { EnginePipeClient().waitEvents(eventSequence) } }
             received.onSuccess { events ->
                 events.forEach { envelope ->
-                    if (envelope.sequence > eventSequence + 1 && eventSequence > 0) {
+                    // Core 的事件序号单调且随快照下发基线；快照后的下一个事件应为 eventSequence + 1，
+                    // 无论基线是否为 0（Core 重新启动时基线来自持久化检查点）
+                    if (envelope.sequence > eventSequence + 1) {
                         snapshotReady = false
                         refreshKey++
                     }
@@ -824,6 +873,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                             }
                         },
                         resolveHandoff = { handoffId -> handoffQueue.removeAll { it.handoffId == handoffId } },
+                        taskDeleted = { taskId -> forgetTaskLog(taskId) },
                     ), { signal ->
                         when (signal) {
                             is UiSignal.Notice -> notice = signal
@@ -872,7 +922,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                             }
                             is UiSignal.Harvest -> harvestResult = signal
                             is UiSignal.Log -> {
-                                taskLogs[signal.taskId] = signal.lines.takeLast(500)
+                                recordTaskLog(signal.taskId, signal.lines.takeLast(500))
                                 val index = tasks.indexOfFirst { it.id == signal.taskId }
                                 if (index >= 0) tasks[index] = tasks[index].copy(source = tasks[index].source.copy(logTail = signal.lines.takeLast(500)))
                             }
@@ -922,13 +972,17 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         }
     }
     LaunchedEffect(castSession?.active, castSession?.supportedActions) {
+        var castPollReachable = true
         while (visualFixture !in setOf("cast", "cast_tvbox", "cast_lan", "cast_offline", "media_stack") && castSession?.active == true && castSession?.supportedActions?.contains("status") == true) {
             delay(1_000)
             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().controlCast("status") } }
+                .onSuccess { castPollReachable = true }
                 .onFailure { error ->
                     castPollFailures++
                     if (castPollFailures >= 2) castSession = castSession?.copy(status = "OFFLINE", playing = false, paused = true)
-                    notice = UiSignal.Notice("error", error.message ?: "无法读取投屏设备状态")
+                    // 只在设备从可达变为不可达时提示一次，避免每秒轮询失败都弹出错误通知
+                    if (castPollReachable) notice = UiSignal.Notice("error", error.message ?: "无法读取投屏设备状态")
+                    castPollReachable = false
                     delay(2_000)
                 }
         }
@@ -947,7 +1001,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 val clipboard = runCatching { withContext(Dispatchers.IO) { Toolkit.getDefaultToolkit().systemClipboard.getData(DataFlavor.stringFlavor) as? String } }.getOrNull().orEmpty()
                 newTaskUrl = clipboard.trim(); newTaskDialog = true
             }
-        }, { batchDialog = true }, { harvestDialog = true }, { tasks.forEach { task -> val action = task.source.availableActions.firstOrNull { it in setOf("start", "resume", "retry") }; if (action != null) scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().taskAction(task.id, action) } }.onSuccess { refreshKey++ } } } }, { tasks.filter { "pause" in it.source.availableActions }.forEach { task -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().taskAction(task.id, "pause") } }.onSuccess { refreshKey++ } } } }, { mediaSourceDialog = "cast" }, { mediaSourceDialog = "tvbox" }, { extensionDialog = true }, { settingsDialog = true }, darkMode, {
+        }, { batchDialog = true }, { harvestDialog = true }, { launchTaskActions(tasks.mapNotNull { task -> task.source.availableActions.firstOrNull { it in setOf("start", "resume", "retry") }?.let { task.id to it } }) }, { launchTaskActions(tasks.filter { "pause" in it.source.availableActions }.map { it.id to "pause" }) }, { mediaSourceDialog = "cast" }, { mediaSourceDialog = "tvbox" }, { extensionDialog = true }, { settingsDialog = true }, darkMode, {
             darkMode = !darkMode
             scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().storeSetting("dark_mode", darkMode) } } }
         })
@@ -1525,6 +1579,7 @@ private fun applyEngineEvent(
     setExtension: (String) -> Unit,
     offerHandoff: (HandoffOfferDto) -> Unit,
     resolveHandoff: (String) -> Unit,
+    taskDeleted: (String) -> Unit,
 ): UiSignal? {
     return when (event["kind"]?.toString()?.trim('"')) {
         "task_created", "task_updated", "task_progress" -> event["snapshot"]?.jsonObject?.let { snapshot ->
@@ -1533,7 +1588,7 @@ private fun applyEngineEvent(
             if (index >= 0) tasks[index] = task else tasks += task
             null
         }
-        "task_deleted" -> event["task_id"]?.toString()?.trim('"')?.let { id -> tasks.removeAll { it.id == id }; null }
+        "task_deleted" -> event["task_id"]?.toString()?.trim('"')?.let { id -> tasks.removeAll { it.id == id }; taskDeleted(id); null }
         "browser_status" -> { setExtension(if (event["connected"]?.toString() == "true") "浏览器插件 · 已连接" else Product.extensionDisconnected); null }
         "clipboard_offer" -> UiSignal.Clipboard(
             event["urls"]?.jsonArray.orEmpty().mapNotNull { item -> runCatching { item.jsonPrimitive.content }.getOrNull() }.filter(String::isNotBlank),
@@ -1657,7 +1712,7 @@ private fun displayStatus(status: String) = when (status.lowercase()) {
 internal fun taskCategory(task: DownloadTask) = when (task.filename.substringAfterLast('.', "").lowercase()) { "m3u8", "mpd", "mp4", "mkv", "webm", "mp3", "flac", "wav", "avi", "mov" -> TaskCategory.MEDIA; "exe", "msi", "appx", "apk", "dmg", "pkg" -> TaskCategory.PROGRAM; "zip", "rar", "7z", "tar", "gz", "bz2", "xz" -> TaskCategory.ARCHIVE; else -> TaskCategory.OTHER }
 internal fun visibleTasks(tasks: List<DownloadTask>, filter: TaskFilter, category: TaskCategory?, query: String, queueId: String? = null): List<DownloadTask> =
     tasks.filter { (filter == TaskFilter.ALL || (filter == TaskFilter.RUNNING && isActiveTaskStatus(it.status)) || it.status == filter.label) && (category == null || taskCategory(it) == category) && (queueId == null || it.source.queueId == queueId) && it.filename.contains(query, true) }
-private fun formatRate(bytes: Long): String = when { bytes <= 0 -> "—"; bytes >= 1024L * 1024L -> "%.1f MB/s".format(bytes / 1024.0 / 1024.0); else -> "%.0f KB/s".format(bytes / 1024.0) }
+private fun formatRate(bytes: Long): String = when { bytes <= 0 -> "—"; bytes >= 1024L * 1024L -> "%.1f MB/s".format(java.util.Locale.ROOT, bytes / 1024.0 / 1024.0); else -> "%.0f KB/s".format(java.util.Locale.ROOT, bytes / 1024.0) }
 private fun formatEta(seconds: Long): String = when { seconds < 60 -> "${seconds}s"; seconds < 3600 -> "${seconds / 60} 分钟"; else -> "${seconds / 3600} 小时" }
 internal fun chooseDirectory(initialPath: String = "", title: String = "选择目录"): String? {
     val chooser = JFileChooser().apply {
@@ -1809,7 +1864,7 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
         }
         VerticalScrollbar(rememberScrollbarAdapter(scrollState), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp))
         }
-        HorizontalDivider(color = border); Spacer(Modifier.height(10.dp)); Text(engine, color = if (engine == Product.engineConnected) Color(0xFF159447) else Color(0xFFD97706), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp)); Text(extension, color = if (extension.contains("已连接")) Color(0xFF159447) else muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp))
+        HorizontalDivider(color = border); Spacer(Modifier.height(10.dp)); Text(engine, color = if (connectionStateOf(engine)) Color(0xFF159447) else Color(0xFFD97706), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp)); Text(extension, color = if (connectionStateOf(extension)) Color(0xFF159447) else muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp))
     }
 }
 private fun categoryIcon(filter: TaskFilter): ImageVector = when (filter) { TaskFilter.RUNNING -> Icons.Outlined.Downloading; TaskFilter.QUEUED -> Icons.Outlined.Schedule; TaskFilter.PAUSED -> Icons.Outlined.PauseCircle; TaskFilter.COMPLETED -> Icons.Outlined.CheckCircle; TaskFilter.FAILED -> Icons.Outlined.ErrorOutline; else -> Icons.Outlined.Folder }
@@ -2227,7 +2282,7 @@ internal fun taskExtensionLabel(task: TaskDto): String {
         else -> ""
     }
 }
-private fun formatBytes(bytes: Long) = when { bytes >= 1024L * 1024L * 1024L -> "%.2f GB".format(bytes / 1024.0 / 1024.0 / 1024.0); bytes >= 1024L * 1024L -> "%.2f MB".format(bytes / 1024.0 / 1024.0); bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0); else -> "$bytes B" }
+private fun formatBytes(bytes: Long) = when { bytes >= 1024L * 1024L * 1024L -> "%.2f GB".format(java.util.Locale.ROOT, bytes / 1024.0 / 1024.0 / 1024.0); bytes >= 1024L * 1024L -> "%.2f MB".format(java.util.Locale.ROOT, bytes / 1024.0 / 1024.0); bytes >= 1024L -> "%.1f KB".format(java.util.Locale.ROOT, bytes / 1024.0); else -> "$bytes B" }
 private fun actionLabel(action: String) = mapOf("details" to "详情与日志", "start" to "开始", "pause" to "暂停", "resume" to "继续", "retry" to "重试", "cancel" to "取消", "open" to "打开文件", "open_folder" to "打开所在位置", "launch" to "运行文件", "copy_file" to "复制文件", "drag_file" to "拖出文件", "delete" to "删除任务", "delete_files" to "删除任务和文件", "play" to "播放", "cast" to "投屏", "push_tvbox" to "TVBox 推送", "move_queue" to "移动到队列", "queue_up" to "上移", "queue_down" to "下移", "queue_top" to "置顶", "queue_bottom" to "置底")[action] ?: action
 @Composable private fun StatusBadge(status: String, modifier: Modifier = Modifier) {
     val color = when(status) { "已完成" -> Color(0xFF078C46); "失败" -> Color(0xFFDC2626); "已暂停" -> Color(0xFFD97706); else -> blue }
@@ -2870,28 +2925,28 @@ private fun HarvestDialog(
                     Spacer(Modifier.height(13.dp))
                     Surface(
                         Modifier.fillMaxWidth(),
-                        color = Color(0xFFFFF3F2),
+                        color = errorSurface,
                         shape = RoundedCornerShape(7.dp),
-                        border = BorderStroke(1.dp, Color(0xFFF2C9C5)),
+                        border = BorderStroke(1.dp, errorBorder),
                     ) {
                         Column(Modifier.padding(12.dp)) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Outlined.ErrorOutline, null, tint = Color(0xFFB42318), modifier = Modifier.size(17.dp))
+                                Icon(Icons.Outlined.ErrorOutline, null, tint = errorStrong, modifier = Modifier.size(17.dp))
                                 Spacer(Modifier.width(7.dp))
-                                Text(failure.title, Modifier.weight(1f), color = Color(0xFF8A1C13), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Text(failure.title, Modifier.weight(1f), color = errorStrong, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                 TextButton(onClick = {
                                     runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(taskFailureDiagnostic(task)), null) }
                                     diagnosticsCopied = true
                                 }, contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp)) { Text(if (diagnosticsCopied) "已复制" else "复制诊断", color = blue, fontSize = 10.sp) }
                             }
-                            failure.items.forEach { (label, value) -> DetailLine(label, value, Color(0xFF7A2E28)) }
+                            failure.items.forEach { (label, value) -> DetailLine(label, value, errorBody) }
                             task.source.errorMessage?.takeIf(String::isNotBlank)?.let { message ->
-                                Spacer(Modifier.height(8.dp)); Text("失败原因", color = Color(0xFF8A1C13), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-                                Text(redactDiagnosticText(message), color = Color(0xFF7A2E28), fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 3.dp))
+                                Spacer(Modifier.height(8.dp)); Text("失败原因", color = errorStrong, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                                Text(redactDiagnosticText(message), color = errorBody, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 3.dp))
                             }
                             if (failure.steps.isNotEmpty()) {
-                                Spacer(Modifier.height(8.dp)); Text("建议步骤", color = Color(0xFF8A1C13), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-                                failure.steps.forEachIndexed { index, step -> Text("${index + 1}. $step", color = Color(0xFF7A2E28), fontSize = 11.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 2.dp)) }
+                                Spacer(Modifier.height(8.dp)); Text("建议步骤", color = errorStrong, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                                failure.steps.forEachIndexed { index, step -> Text("${index + 1}. $step", color = errorBody, fontSize = 11.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 2.dp)) }
                             }
                         }
                     }
@@ -3137,7 +3192,7 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
     else -> stage
 }
 
-@Composable private fun ExtensionDialog(status: String, onDismiss: () -> Unit) = WorkbenchDialog(onDismiss, "浏览器插件", "识别网页媒体并交给下载器", 550.dp, content = { Surface(Modifier.fillMaxWidth(), color = if (status.contains("已连接")) Color(0xFFEAF8EF) else surface2, shape = RoundedCornerShape(8.dp)) { Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) { Icon(if (status.contains("已连接")) Icons.Outlined.CheckCircle else Icons.Outlined.Extension, null, tint = if (status.contains("已连接")) Color(0xFF16A34A) else blue); Spacer(Modifier.width(10.dp)); Text(status, color = if (status.contains("已连接")) Color(0xFF15803D) else ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) } }; Spacer(Modifier.height(14.dp)); Text("安装或更新插件后，重新打开浏览器标签页即可建立连接。插件会识别下载点击、媒体清单、音视频轨道和网页播放器，不影响页面的其他功能。", color = muted, fontSize = 12.sp, lineHeight = 19.sp) }, actions = { DialogPrimary("完成", onClick = onDismiss) })
+@Composable private fun ExtensionDialog(status: String, onDismiss: () -> Unit) = WorkbenchDialog(onDismiss, "浏览器插件", "识别网页媒体并交给下载器", 550.dp, content = { Surface(Modifier.fillMaxWidth(), color = if (connectionStateOf(status)) Color(0xFFEAF8EF) else surface2, shape = RoundedCornerShape(8.dp)) { Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) { Icon(if (connectionStateOf(status)) Icons.Outlined.CheckCircle else Icons.Outlined.Extension, null, tint = if (connectionStateOf(status)) Color(0xFF16A34A) else blue); Spacer(Modifier.width(10.dp)); Text(status, color = if (connectionStateOf(status)) Color(0xFF15803D) else ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) } }; Spacer(Modifier.height(14.dp)); Text("安装或更新插件后，重新打开浏览器标签页即可建立连接。插件会识别下载点击、媒体清单、音视频轨道和网页播放器，不影响页面的其他功能。", color = muted, fontSize = 12.sp, lineHeight = 19.sp) }, actions = { DialogPrimary("完成", onClick = onDismiss) })
 
 @Composable private fun NoticeToast(signal: UiSignal.Notice, onDismiss: () -> Unit) {
     LaunchedEffect(signal) { delay(3_600); onDismiss() }
@@ -3550,8 +3605,8 @@ private fun HarvestResultDialog(
 @Composable private fun DestructiveConfirmDialog(request: DestructiveRequest, onDismiss: () -> Unit, onConfirm: () -> Unit) = WorkbenchDialog(
     onDismiss, if (request.action == "delete_files") "删除任务和文件" else "删除任务", "此操作将影响 ${request.taskIds.size} 个任务", 520.dp,
     content = {
-        Surface(color = Color(0xFFFFF1F0), shape = RoundedCornerShape(7.dp), modifier = Modifier.fillMaxWidth()) {
-            Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) { Icon(Icons.Outlined.WarningAmber, null, tint = Color(0xFFB42318)); Spacer(Modifier.width(10.dp)); Text(if (request.action == "delete_files") "任务记录、已下载文件和过程文件都会删除。" else "只删除任务记录，已完成文件将保留。", color = Color(0xFF7A271A), fontSize = 12.sp, lineHeight = 18.sp) }
+        Surface(color = errorSurface, shape = RoundedCornerShape(7.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) { Icon(Icons.Outlined.WarningAmber, null, tint = errorStrong); Spacer(Modifier.width(10.dp)); Text(if (request.action == "delete_files") "任务记录、已下载文件和过程文件都会删除。" else "只删除任务记录，已完成文件将保留。", color = errorBody, fontSize = 12.sp, lineHeight = 18.sp) }
         }
     }, actions = { DialogSecondary("取消", onDismiss); Button(onClick = onConfirm, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB42318), contentColor = Color.White), shape = RoundedCornerShape(7.dp)) { Text("确认删除", fontSize = 12.sp, fontWeight = FontWeight.SemiBold) } },
 )
@@ -3638,7 +3693,7 @@ private fun HarvestResultDialog(
     }
 }
 
-private fun formatPlayerSpeed(speed: Double) = if (kotlin.math.abs(speed - speed.toInt()) < 0.01) "${speed.toInt()}x" else "${"%.2f".format(speed).trimEnd('0')}x"
+private fun formatPlayerSpeed(speed: Double) = if (kotlin.math.abs(speed - speed.toInt()) < 0.01) "${speed.toInt()}x" else "${"%.2f".format(java.util.Locale.ROOT, speed).trimEnd('0')}x"
 private fun playerStatusLabel(status: String) = when (status.uppercase()) { "PAUSED" -> "已暂停"; "FULLSCREEN" -> "全屏播放"; "PIP" -> "画中画"; "STOPPED" -> "已停止"; else -> "正在播放" }
 
 @Composable private fun CastSessionHud(signal: UiSignal.Cast, task: DownloadTask?, busy: Boolean, raised: Boolean, onCopy: (String) -> Unit, onAction: (String, Long) -> Unit) {
@@ -3730,7 +3785,8 @@ private fun castStatusLabel(status: String) = when (status.uppercase()) {
         TaskCategory.ARCHIVE -> settings.categoryDirArchive
         TaskCategory.OTHER -> settings.categoryDirOther
     }.ifBlank { settings.downloadDirectory }
-    var directory by remember(offer.handoffId, settings) { mutableStateOf(directoryFor(category)) }
+    // 目录初值只在接管请求首次出现时读取一次设置，避免设置对象更新时重置用户输入
+    var directory by remember(offer.handoffId) { mutableStateOf(directoryFor(category)) }
     var rememberDirectory by remember(offer.handoffId) { mutableStateOf(true) }
     var suppressSiteKind by remember(offer.handoffId) { mutableStateOf(false) }
     val validFilename = runCatching { EnginePipeClient.normalizeHandoffFilename(filename) }.isSuccess
@@ -3778,9 +3834,9 @@ private fun castStatusLabel(status: String) = when (status.uppercase()) {
                 }
                 duplicate?.let {
                     Spacer(Modifier.height(9.dp))
-                    Surface(Modifier.fillMaxWidth(), color = Color(0xFFFFF7E8), shape = RoundedCornerShape(7.dp)) {
+                    Surface(Modifier.fillMaxWidth(), color = warnSurface, shape = RoundedCornerShape(7.dp)) {
                         Row(Modifier.padding(horizontal = 11.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Outlined.WarningAmber, "重复任务", tint = Color(0xFFD97706), modifier = Modifier.size(17.dp))
+                            Icon(Icons.Outlined.WarningAmber, "重复任务", tint = warningColor, modifier = Modifier.size(17.dp))
                             Spacer(Modifier.width(8.dp))
                             Text("已有同一地址的任务：${it.filename}（${it.status}）", color = ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }

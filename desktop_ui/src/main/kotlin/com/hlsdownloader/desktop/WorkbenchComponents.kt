@@ -1,7 +1,12 @@
 package com.hlsdownloader.desktop
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -330,7 +335,13 @@ internal fun CircularProgressIndicator(
     strokeWidth: Dp = 2.dp,
     color: Color = blue,
 ) {
-    androidx.compose.foundation.Canvas(modifier) {
+    val rotation = rememberInfiniteTransition(label = "spinner").animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1_100, easing = LinearEasing)),
+        label = "spinner-rotation",
+    )
+    androidx.compose.foundation.Canvas(modifier.graphicsLayer { rotationZ = rotation.value }) {
         drawArc(color, -90f, 270f, false, style = Stroke(strokeWidth.toPx()))
     }
 }
