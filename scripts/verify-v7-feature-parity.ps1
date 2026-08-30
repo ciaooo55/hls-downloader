@@ -48,6 +48,9 @@ if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
 $json = [IO.File]::ReadAllText($path, $utf8NoBom) | ConvertFrom-Json
 $errors = New-Object 'System.Collections.Generic.List[string]'
 
+if ([int]$json.schema -ne 1) {
+    $errors.Add("Unsupported feature parity schema: $($json.schema)")
+}
 if ($json.product_version -ne '7.0.0') {
     $errors.Add("Unexpected product version: $($json.product_version)")
 }
@@ -70,6 +73,40 @@ foreach ($feature in $features) {
 }
 if (@($features.id | Sort-Object -Unique).Count -ne $features.Count) {
     $errors.Add('Feature IDs must be unique.')
+}
+$canonicalFeatureIds = @(
+    'architecture.single_core',
+    'workbench.geometry',
+    'workbench.foundation_component_architecture',
+    'tasks.selection_keyboard_queue',
+    'tasks.named_queue_profiles',
+    'tasks.details_logs_speed_connections',
+    'tasks.refresh_signed_url',
+    'create.protocols_and_recognition',
+    'import.file_picker_and_drop',
+    'export.normalized_task_list',
+    'import.exported_task_json',
+    'workbench.automatic_responsive_layout',
+    'media.hls_transfer_parity',
+    'media.local_player_controls',
+    'media.cast_dlna_chromecast',
+    'media.lan_share',
+    'media.tvbox_push',
+    'media.cast_and_player_concurrency',
+    'torrent.multi_file_selection',
+    'settings.full_migration',
+    'updates.confirmed_download',
+    'browser.request_context_replay',
+    'browser.takeover_and_recovery',
+    'browser.media_push_device_selection',
+    'browser.hot_confirmation_process',
+    'accessibility.automation',
+    'performance.release_thresholds',
+    'package.install_upgrade_rollback'
+)
+$actualFeatureIds = @($features | ForEach-Object { [string]$_.id } | Sort-Object)
+if (($actualFeatureIds -join "`n") -ne (($canonicalFeatureIds | Sort-Object) -join "`n")) {
+    $errors.Add('Feature IDs do not match the canonical v7 feature set.')
 }
 
 $verified = @($features | Where-Object status -eq 'verified')

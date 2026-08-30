@@ -35,15 +35,32 @@ foreach ($name in @(
 $provenancePath = Join-Path $source 'app\resources\BUILD-PROVENANCE.json'
 $featureParityPath = Join-Path $source 'app\resources\FEATURE-PARITY.json'
 $provenance = Get-Content -LiteralPath $provenancePath -Raw -Encoding UTF8 | ConvertFrom-Json
+if ([int]$provenance.schema -ne 1) {
+    throw "v7 local image provenance schema is unsupported: $($provenance.schema)"
+}
 if ($provenance.product_version -ne '7.0.0') {
     throw "v7 local image provenance product_version is not 7.0.0: $($provenance.product_version)"
 }
 if (@('candidate', 'formal') -notcontains [string]$provenance.package_tier) {
     throw "v7 local image provenance package_tier is invalid: $($provenance.package_tier)"
 }
+$currentCommit = (& git -C $repo rev-parse HEAD).Trim()
+$currentTree = (& git -C $repo rev-parse HEAD^{tree}).Trim()
+if ($provenance.source_commit -ne $currentCommit -or $provenance.source_tree -ne $currentTree) {
+    throw "v7 local image provenance does not match this checkout: $($provenance.source_commit)/$($provenance.source_tree) != $currentCommit/$currentTree"
+}
+if ([string]$provenance.feature_parity_path -ne 'artifacts/v7-productization/feature-parity.json') {
+    throw "v7 local image feature parity path is not canonical: $($provenance.feature_parity_path)"
+}
 $featureHash = (Get-FileHash -LiteralPath $featureParityPath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ([string]$provenance.feature_parity_sha256 -ne $featureHash) {
     throw "v7 local image feature parity hash does not match provenance: $($provenance.feature_parity_sha256) != $featureHash"
+}
+$featureJson = Get-Content -LiteralPath $featureParityPath -Raw -Encoding UTF8 | ConvertFrom-Json
+foreach ($field in @('total', 'verified', 'partial', 'blocked')) {
+    if ([int]$provenance.feature_summary.$field -ne [int]$featureJson.summary.$field) {
+        throw "v7 local image feature summary does not match the canonical matrix: $field"
+    }
 }
 
 function Assert-ExtensionArchive([string]$Archive, [string]$Browser) {
