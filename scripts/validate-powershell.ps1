@@ -20,6 +20,8 @@ param(
         "scripts\verify-v7-feature-parity.ps1",
         "scripts\verify-hls-auth-resume.ps1",
         "scripts\verify-v7-bt-selection.ps1",
+        "scripts\smoke-v7-compose-frames.ps1",
+        "scripts\verify-hls-candidate-auth-resume.ps1",
         "scripts\validate-powershell.ps1"
     )
 )

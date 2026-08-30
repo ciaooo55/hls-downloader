@@ -3,7 +3,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$appImage = 'D:\HLSDownloaderBuildCache\compose-build\compose\binaries\main\app\HLSDownloader'
+$composeBuild = if ($env:HLS_COMPOSE_BUILD_DIR) { $env:HLS_COMPOSE_BUILD_DIR } else { Join-Path $repo '.tool-cache\build-cache\compose-build' }
+$appImage = Join-Path $composeBuild 'compose\binaries\main\app\HLSDownloader'
 if (-not (Test-Path -LiteralPath (Join-Path $appImage 'HLSDownloader.exe'))) {
     throw "Compose App-Image is missing: $appImage. Run gradlew.bat createDistributable first."
 }

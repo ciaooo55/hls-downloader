@@ -6,10 +6,19 @@ $repo = (Resolve-Path "$PSScriptRoot\..").Path
 $reportDir = Join-Path $repo 'artifacts\v7-productization\performance'
 $reportPath = Join-Path $reportDir 'v7-performance-latest.json'
 New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
-$env:CARGO_HOME = 'E:\HLSDownloaderBuildCache\cargo'
-$env:CARGO_TARGET_DIR = 'D:\HLSDownloaderBuildCache\cargo-target'
-$env:GRADLE_USER_HOME = 'E:\HLSDownloaderBuildCache\gradle'
-$env:JAVA_HOME = 'E:\HLSDownloaderBuildCache\jdk-21'
+# Build caches default inside the repository; HLS_V7_BUILD_CACHE relocates them.
+$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { $env:HLS_V7_BUILD_CACHE } else { Join-Path $repo '.tool-cache\build-cache' }
+$env:CARGO_HOME = Join-Path $cacheRoot 'cargo'
+$env:CARGO_TARGET_DIR = Join-Path $cacheRoot 'cargo-target'
+$env:GRADLE_USER_HOME = Join-Path $cacheRoot 'gradle'
+$jdkRoot = $env:HLS_V7_JAVA_HOME
+if(-not $jdkRoot -and (Test-Path (Join-Path $cacheRoot 'jdk-21\bin\java.exe'))){ $jdkRoot = Join-Path $cacheRoot 'jdk-21' }
+# Legacy read-only tool location from earlier installs; tools are not project content.
+if(-not $jdkRoot -and (Test-Path 'E:\HLSDownloaderBuildCache\jdk-21\bin\java.exe')){ $jdkRoot = 'E:\HLSDownloaderBuildCache\jdk-21' }
+if(-not $jdkRoot){ throw 'JDK 21 was not found. Set HLS_V7_JAVA_HOME or run scripts\bootstrap-v7-toolchain.ps1.' }
+$env:JAVA_HOME = $jdkRoot
+$pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+$pythonExe = if ($env:HLS_V7_PYTHON) { $env:HLS_V7_PYTHON } elseif ($pythonCommand) { $pythonCommand.Source } else { 'C:\Users\lee\.conda\envs\test\python.exe' }
 
 function Invoke-Captured {
     param([string]$File, [string[]]$Arguments, [string]$WorkingDirectory)
@@ -66,14 +75,14 @@ $engine = Join-Path $env:CARGO_TARGET_DIR 'debug\hls-downloader-engine.exe'
 if (-not (Test-Path $nativeHostExe) -or -not (Test-Path $engine)) {
     throw 'Build v7 debug engine and Native Host before running the benchmark.'
 }
-Invoke-Captured 'C:\Users\lee\.conda\envs\test\python.exe' @('scripts\smoke_v7_native_host.py','--host',$nativeHostExe,'--engine',$engine,'--report',$hostReport) $repo | Out-Null
+Invoke-Captured $pythonExe @('scripts\smoke_v7_native_host.py','--host',$nativeHostExe,'--engine',$engine,'--report',$hostReport) $repo | Out-Null
 $hostData = Get-Content -LiteralPath $hostReport -Raw -Encoding UTF8 | ConvertFrom-Json
 $transferReport = Join-Path $reportDir 'real-transfer-latest.json'
 Invoke-Captured $cargoExe @(
     'build','--release','--manifest-path','native_shell\Cargo.toml','--bin','hls-downloader-engine'
 ) $repo | Out-Null
 $releaseEngine = Join-Path $env:CARGO_TARGET_DIR 'release\hls-downloader-engine.exe'
-Invoke-Captured 'C:\Users\lee\.conda\envs\test\python.exe' @(
+Invoke-Captured $pythonExe @(
     'scripts\smoke_v7_transfer_performance.py','--engine',$releaseEngine,'--report',$transferReport
 ) $repo | Out-Null
 $transferData = Get-Content -LiteralPath $transferReport -Raw -Encoding UTF8 | ConvertFrom-Json

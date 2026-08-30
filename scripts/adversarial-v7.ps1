@@ -18,11 +18,21 @@ if ($presenterManifest -notmatch 'autobins\s*=\s*false' -or
     ([regex]::Matches($presenterUi, 'export component\s+\w+Window')).Count -ne 3) {
     throw 'v7 presenter architecture gate failed: only the dedicated hot-window entry may be active.'
 }
-$cargo = 'C:\Users\lee\.cargo\bin\cargo.exe'
-$env:CARGO_HOME = 'E:\HLSDownloaderBuildCache\cargo'
-$env:CARGO_TARGET_DIR = 'D:\HLSDownloaderBuildCache\cargo-target'
-$env:GRADLE_USER_HOME = 'E:\HLSDownloaderBuildCache\gradle'
-$env:JAVA_HOME = 'E:\HLSDownloaderBuildCache\jdk-21'
+# Build caches default inside the repository; HLS_V7_BUILD_CACHE relocates them.
+$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { $env:HLS_V7_BUILD_CACHE } else { Join-Path $repo '.tool-cache\build-cache' }
+$cargoCommand = Get-Command cargo.exe -ErrorAction SilentlyContinue
+$cargo = if ($cargoCommand) { $cargoCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
+$env:CARGO_HOME = Join-Path $cacheRoot 'cargo'
+$env:CARGO_TARGET_DIR = Join-Path $cacheRoot 'cargo-target'
+$env:GRADLE_USER_HOME = Join-Path $cacheRoot 'gradle'
+$jdkRoot = $env:HLS_V7_JAVA_HOME
+if(-not $jdkRoot -and (Test-Path (Join-Path $cacheRoot 'jdk-21\bin\java.exe'))){ $jdkRoot = Join-Path $cacheRoot 'jdk-21' }
+# Legacy read-only tool location from earlier installs; tools are not project content.
+if(-not $jdkRoot -and (Test-Path 'E:\HLSDownloaderBuildCache\jdk-21\bin\java.exe')){ $jdkRoot = 'E:\HLSDownloaderBuildCache\jdk-21' }
+if(-not $jdkRoot){ throw 'JDK 21 was not found. Set HLS_V7_JAVA_HOME or run scripts\bootstrap-v7-toolchain.ps1.' }
+$env:JAVA_HOME = $jdkRoot
+$pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+$pythonExe = if ($env:HLS_V7_PYTHON) { $env:HLS_V7_PYTHON } elseif ($pythonCommand) { $pythonCommand.Source } else { 'C:\Users\lee\.conda\envs\test\python.exe' }
 $reportDirectory = Join-Path $repo 'artifacts\v7-implementation\adversarial'
 $reportPath = Join-Path $reportDirectory 'latest.json'
 $completedGates = [System.Collections.Generic.List[string]]::new()
@@ -87,17 +97,17 @@ try {
             if ($LASTEXITCODE -ne 0) { throw "v7 Native Host build failed (exit $LASTEXITCODE)" }
         }
         if (-not (Test-Path -LiteralPath $nativeHost)) { throw "v7 Native Host missing after build: $nativeHost" }
-        & 'C:\Users\lee\.conda\envs\test\python.exe' scripts\smoke_v7_presenter.py `
+        & $pythonExe scripts\smoke_v7_presenter.py `
             --presenter $presenter --host $nativeHost --engine $engine
         if ($LASTEXITCODE -ne 0) { throw "v7 hot presenter smoke failed (exit $LASTEXITCODE)" }
-        & 'C:\Users\lee\.conda\envs\test\python.exe' scripts\smoke_v7_player_process.py --engine $engine
+        & $pythonExe scripts\smoke_v7_player_process.py --engine $engine
         if ($LASTEXITCODE -ne 0) { throw "v7 player process smoke failed (exit $LASTEXITCODE)" }
     }
     Invoke-Gate 'Compose protocol and hostile-input invariants' {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\build-v7.ps1 -Task test
     }
     Invoke-Gate 'Native Host cold-start and framed-message boundary' {
-        & 'C:\Users\lee\.conda\envs\test\python.exe' scripts\smoke_v7_native_host.py `
+        & $pythonExe scripts\smoke_v7_native_host.py `
             --host "$env:CARGO_TARGET_DIR\debug\HLSDownloaderNativeHost.exe" `
             --engine "$env:CARGO_TARGET_DIR\debug\hls-downloader-engine.exe" `
             --report "$repo\artifacts\v7-productization\performance\native-host-cold-start.json"
@@ -106,7 +116,7 @@ try {
     Invoke-Gate 'Real Engine Range throughput, memory and publication boundary' {
         & $cargo build --release --manifest-path native_shell\Cargo.toml --bin hls-downloader-engine --quiet
         if ($LASTEXITCODE -ne 0) { throw "v7 release Engine build failed (exit $LASTEXITCODE)" }
-        & 'C:\Users\lee\.conda\envs\test\python.exe' scripts\smoke_v7_transfer_performance.py `
+        & $pythonExe scripts\smoke_v7_transfer_performance.py `
             --engine "$env:CARGO_TARGET_DIR\release\hls-downloader-engine.exe" `
             --report "$repo\artifacts\v7-productization\performance\real-transfer-latest.json"
     }

@@ -8,12 +8,39 @@ param(
     [switch]$BuildOutputsOnly,
     [switch]$StaleSmokeOnly,
     [switch]$ConsolidateArchives,
-    [string]$ArchiveRoot = 'D:\HLSDownloader-archives',
+    # Legacy D:/E: cache locations from earlier installs are only touched when
+    # this switch is set; the default cleanup stays inside the repository.
+    [switch]$IncludeLegacyPaths,
+    [string]$ArchiveRoot = '',
     [string]$KeepArchiveName = 'v7.0.0-verified-20260824',
     [string]$ReportRoot = ''
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot\..").Path
+$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { $env:HLS_V7_BUILD_CACHE } else { Join-Path $repo '.tool-cache\build-cache' }
+if([String]::IsNullOrWhiteSpace($ArchiveRoot)) { $ArchiveRoot = Join-Path $repo 'artifacts\v7-archives' }
+$legacyPaths = @(
+    'D:\HLSDownloaderBuildCache\ab-reference',
+    'D:\HLSDownloaderBuildCache\cargo-target',
+    'D:\HLSDownloaderBuildCache\target-native',
+    'D:\HLSDownloaderBuildCache\compose-build',
+    'D:\HLSDownloaderBuildCache\gradle-home',
+    'D:\HLSDownloaderBuildCache\v3-source-audit',
+    'D:\HLSDownloaderBuildCache\pnpm-store-v3-audit',
+    'D:\HLSDownloaderBuildCache\v3-full-audit-data',
+    'D:\HLSDownloaderBuildCache\pnpm-adversarial-store',
+    'E:\HLSDownloaderBuildCache\cargo',
+    'E:\HLSDownloaderBuildCache\gradle',
+    'E:\HLSDownloaderBuildCache\gradle-9.7.0',
+    'E:\HLSDownloaderBuildCache\gradle-9.7.0-bin.zip',
+    'E:\HLSDownloaderBuildCache\libmpv-20260814',
+    'E:\HLSDownloaderBuildCache\compose-after-click.png',
+    'E:\HLSDownloaderBuildCache\compose-after-resolution.png',
+    'E:\HLSDownloaderBuildCache\compose-handoff-contrast.png',
+    'E:\HLSDownloaderBuildCache\compose-handoff.png',
+    'E:\HLSDownloaderBuildCache\compose-reconciled.png',
+    'E:\HLSDownloaderBuildCache\compose-workbench.png'
+)
 $reportRootPath = if([String]::IsNullOrWhiteSpace($ReportRoot)) { Join-Path $repo 'artifacts\v7-implementation' } else { $ReportRoot }
 $reportRootPath = [IO.Path]::GetFullPath($reportRootPath)
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -25,8 +52,9 @@ if ($NativeHostSmokeOnly) {
 } elseif ($ExtensionAdversarialOnly) {
     $targets = @(
         (Join-Path $repo 'extension\node_modules'),
-        'D:\HLSDownloaderBuildCache\pnpm-adversarial-store'
+        (Join-Path $cacheRoot 'pnpm-adversarial-store')
     )
+    if ($IncludeLegacyPaths) { $targets += 'D:\HLSDownloaderBuildCache\pnpm-adversarial-store' }
 } elseif ($ProductizationJunkOnly) {
     # Superseded local binaries and one-off audit copies. Keep the current
     # candidate, transaction evidence, source-controlled matrix and user data.
@@ -52,6 +80,11 @@ if ($NativeHostSmokeOnly) {
         (Join-Path $repo 'extension\.output'),
         (Join-Path $repo 'extension\.wxt'),
         (Join-Path $repo 'extension\node_modules'),
+        (Join-Path $cacheRoot 'cargo-target'),
+        (Join-Path $cacheRoot 'compose-build'),
+        (Join-Path $cacheRoot 'gradle')
+    )
+    if ($IncludeLegacyPaths) { $targets += @(
         'D:\HLSDownloaderBuildCache\cargo-target',
         'D:\HLSDownloaderBuildCache\target-native',
         'D:\HLSDownloaderBuildCache\compose-build',
@@ -59,7 +92,7 @@ if ($NativeHostSmokeOnly) {
         'D:\HLSDownloaderBuildCache\v3-source-audit',
         'D:\HLSDownloaderBuildCache\pnpm-store-v3-audit',
         'D:\HLSDownloaderBuildCache\v3-full-audit-data'
-    )
+    ) }
 } elseif ($StaleSmokeOnly) {
     $cutoff = (Get-Date).Date
     $targets = @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Directory -Filter 'hls-v7-*' -ErrorAction SilentlyContinue |
@@ -103,21 +136,11 @@ if ($NativeHostSmokeOnly) {
         )
     }
     $targets = @($relativeTargets | ForEach-Object { Join-Path $repo $_ }) + @(
-        'D:\HLSDownloaderBuildCache\ab-reference',
-        'D:\HLSDownloaderBuildCache\cargo-target',
-        'D:\HLSDownloaderBuildCache\compose-build',
-        'E:\HLSDownloaderBuildCache\cargo',
-        'E:\HLSDownloaderBuildCache\gradle',
-        'E:\HLSDownloaderBuildCache\gradle-9.7.0',
-        'E:\HLSDownloaderBuildCache\gradle-9.7.0-bin.zip',
-        'E:\HLSDownloaderBuildCache\libmpv-20260814',
-        'E:\HLSDownloaderBuildCache\compose-after-click.png',
-        'E:\HLSDownloaderBuildCache\compose-after-resolution.png',
-        'E:\HLSDownloaderBuildCache\compose-handoff-contrast.png',
-        'E:\HLSDownloaderBuildCache\compose-handoff.png',
-        'E:\HLSDownloaderBuildCache\compose-reconciled.png',
-        'E:\HLSDownloaderBuildCache\compose-workbench.png'
+        (Join-Path $cacheRoot 'cargo-target'),
+        (Join-Path $cacheRoot 'compose-build'),
+        (Join-Path $cacheRoot 'gradle')
     )
+    if ($IncludeLegacyPaths) { $targets += $legacyPaths }
     $targets += @(Get-ChildItem -LiteralPath $repo -Directory -Filter '__pycache__' -Recurse -ErrorAction SilentlyContinue |
         ForEach-Object { $_.FullName })
 }

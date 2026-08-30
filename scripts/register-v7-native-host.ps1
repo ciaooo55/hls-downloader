@@ -14,7 +14,7 @@ if ([String]::IsNullOrWhiteSpace($EngineExecutable) -and -not [String]::IsNullOr
     $EngineExecutable = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($HostExecutable))) 'HLSDownloaderEngine.exe'
 }
 if ([String]::IsNullOrWhiteSpace($EngineExecutable)) {
-    $target = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'D:\HLSDownloaderBuildCache\cargo-target' }
+    $target = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $root '.tool-cache\build-cache\cargo-target' }
     foreach ($candidate in @(
         (Join-Path $target 'release\hls-downloader-engine.exe'),
         (Join-Path $target 'debug\hls-downloader-engine.exe'),

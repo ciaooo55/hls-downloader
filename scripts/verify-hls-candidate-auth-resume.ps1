@@ -23,9 +23,14 @@ if (-not (Test-Path -LiteralPath $CandidateZip -PathType Leaf)) {
     throw "Candidate Portable ZIP was not found: $CandidateZip"
 }
 if ([String]::IsNullOrWhiteSpace($PythonPath)) {
-    $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
-    if ($null -ne $pythonCommand) { $PythonPath = $pythonCommand.Source }
-    else { $PythonPath = 'C:\Users\lee\.conda\envs\test\python.exe' }
+    $envPython = $env:HLS_V7_PYTHON
+    if ([String]::IsNullOrWhiteSpace($envPython)) {
+        $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+        if ($null -ne $pythonCommand) { $PythonPath = $pythonCommand.Source }
+        else { $PythonPath = 'C:\Users\lee\.conda\envs\test\python.exe' }
+    } else {
+        $PythonPath = $envPython
+    }
 }
 $PythonPath = [IO.Path]::GetFullPath($PythonPath)
 if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) {

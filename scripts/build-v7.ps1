@@ -52,12 +52,20 @@ if ($Task -eq 'candidate') {
     Move-Item -LiteralPath $candidateProvenanceTemp -Destination $provenanceForBuild -Force
     $artifactRoot = $candidateStagingRoot
 }
-$env:CARGO_HOME='E:\HLSDownloaderBuildCache\cargo'
-$env:CARGO_TARGET_DIR='D:\HLSDownloaderBuildCache\cargo-target'
-$env:GRADLE_USER_HOME='E:\HLSDownloaderBuildCache\gradle'
-$env:JAVA_HOME='E:\HLSDownloaderBuildCache\jdk-21'
+# Build caches default inside the repository; HLS_V7_BUILD_CACHE relocates them.
+$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { $env:HLS_V7_BUILD_CACHE } else { Join-Path $repo '.tool-cache\build-cache' }
+$env:CARGO_HOME=Join-Path $cacheRoot 'cargo'
+$env:CARGO_TARGET_DIR=Join-Path $cacheRoot 'cargo-target'
+$env:GRADLE_USER_HOME=Join-Path $cacheRoot 'gradle'
+$env:HLS_COMPOSE_BUILD_DIR=Join-Path $cacheRoot 'compose-build'
+$jdkRoot = $env:HLS_V7_JAVA_HOME
+if(-not $jdkRoot -and (Test-Path (Join-Path $cacheRoot 'jdk-21\bin\java.exe'))){ $jdkRoot = Join-Path $cacheRoot 'jdk-21' }
+# Legacy read-only tool location from earlier installs; tools are not project content.
+if(-not $jdkRoot -and (Test-Path 'E:\HLSDownloaderBuildCache\jdk-21\bin\java.exe')){ $jdkRoot = 'E:\HLSDownloaderBuildCache\jdk-21' }
+if(-not $jdkRoot){ throw 'JDK 21 was not found. Set HLS_V7_JAVA_HOME or run scripts\bootstrap-v7-toolchain.ps1.' }
+$env:JAVA_HOME=$jdkRoot
 if(!(Test-Path "$env:JAVA_HOME\bin\java.exe")){ throw "JDK 21 is missing at $env:JAVA_HOME. Run scripts\bootstrap-v7-toolchain.ps1." }
-$libMpvCache = 'E:\HLSDownloaderBuildCache\libmpv-20260814'
+$libMpvCache = Join-Path $cacheRoot 'libmpv-20260814'
 $sevenZipExe = Join-Path $libMpvCache '7zr.exe'
 $libMpvArchive = Join-Path $libMpvCache 'mpv-dev-x86_64.7z'
 $sevenZipUrl = 'https://github.com/ip7z/7zip/releases/download/26.02/7zr.exe'
@@ -65,7 +73,7 @@ $sevenZipSha256 = '56b8cc9f4971cef253644fafe54063ed7fdca551d4dee0f8c6baa81b855ac
 $libMpvArchiveUrl = 'https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260814/mpv-dev-x86_64-20260814-git-7b8915bc1d.7z'
 $libMpvArchiveSha256 = '0af22b28e920620036d3ae08fd9283156dc9af0420bf4df84b0e02282094599c'
 $curlImpersonateVersion = 'v2.0.0'
-$curlImpersonateCache = "E:\HLSDownloaderBuildCache\curl-impersonate-$curlImpersonateVersion"
+$curlImpersonateCache = Join-Path $cacheRoot "curl-impersonate-$curlImpersonateVersion"
 $curlImpersonateArchive = Join-Path $curlImpersonateCache 'curl-impersonate-v2.0.0.x86_64-win32.tar.gz'
 $curlImpersonateUrl = 'https://github.com/lexiforest/curl-impersonate/releases/download/v2.0.0/curl-impersonate-v2.0.0.x86_64-win32.tar.gz'
 $curlImpersonateSha256 = 'd2e5905f8adf76f042afe78d1758a978253afddf4eb7bdcb8ddfb38c2f0e530c'
@@ -192,7 +200,8 @@ if ($isPackage) {
     Build-Extension (Join-Path $repo 'desktop_ui\resources\common')
 }
 
-$cargo = 'C:\Users\lee\.cargo\bin\cargo.exe'
+$cargoCommand = Get-Command cargo.exe -ErrorAction SilentlyContinue
+$cargo = if ($cargoCommand) { $cargoCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
 $engineTarget = if ($isPackage) { 'release' } else { 'debug' }
 & $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-engine
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -225,7 +234,7 @@ if ($isPackage) {
     Copy-Item -LiteralPath $provenanceForBuild -Destination (Join-Path $resources 'BUILD-PROVENANCE.json') -Force
     # Ship the media tools beside the v7 workbench when the local toolchain
     # provides them. The Core reads these names from its packaged directory.
-    $ffmpegRoot = 'C:\Users\lee\.conda\envs\test\Library\bin'
+    $ffmpegRoot = if ($env:HLS_V7_FFMPEG_DIR) { $env:HLS_V7_FFMPEG_DIR } else { 'C:\Users\lee\.conda\envs\test\Library\bin' }
     foreach ($tool in @('ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe')) {
         $source = Join-Path $ffmpegRoot $tool
         if (Test-Path -LiteralPath $source) {
@@ -235,7 +244,7 @@ if ($isPackage) {
     Copy-CurlImpersonate $resources
     Copy-LibMpv $resources
     # Compose's jlink task rejects a leftover output directory after an interrupted package run.
-    $runtimeImage = 'D:\HLSDownloaderBuildCache\compose-build\compose\tmp\main\runtime'
+    $runtimeImage = Join-Path $env:HLS_COMPOSE_BUILD_DIR 'compose\tmp\main\runtime'
     if (Test-Path -LiteralPath $runtimeImage) {
         Remove-Item -LiteralPath $runtimeImage -Recurse -Force
     }
@@ -257,9 +266,9 @@ $env:HLS_ENGINE_PATH = $engine
     }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     if ($isPackage) {
-        $exe = Get-ChildItem -LiteralPath 'D:\HLSDownloaderBuildCache\compose-build\compose\binaries\main\exe' -Filter 'HLSDownloader-7.0.0.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        $exe = Get-ChildItem -LiteralPath (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'compose\binaries\main\exe') -Filter 'HLSDownloader-7.0.0.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $exe) { throw 'The v7 installer EXE was not produced in the isolated build cache.' }
-        $msi = Get-ChildItem -LiteralPath 'D:\HLSDownloaderBuildCache\compose-build\compose\binaries\main\msi' -Filter 'HLSDownloader-7.0.0.msi' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        $msi = Get-ChildItem -LiteralPath (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'compose\binaries\main\msi') -Filter 'HLSDownloader-7.0.0.msi' -File -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $msi) { throw 'The v7 MSI was not produced in the isolated build cache.' }
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\set-v7-msi-rollback-order.ps1" -MsiPath $msi.FullName
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
