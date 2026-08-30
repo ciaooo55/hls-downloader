@@ -647,7 +647,7 @@ def run(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--extension", type=Path, default=Path("extension/.output/chrome-mv3"))
+    parser.add_argument("--extension", type=Path, required=True, help="已打包候选/正式产物解压后的扩展目录")
     parser.add_argument("--browser", choices=("chrome", "edge"), default="edge")
     parser.add_argument("--browser-binary", type=Path, required=True)
     parser.add_argument("--driver", type=Path)

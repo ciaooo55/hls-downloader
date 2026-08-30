@@ -480,7 +480,7 @@ def run(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser", choices=("edge", "firefox"), default="edge")
-    parser.add_argument("--extension", type=Path, default=Path("extension/.output/chrome-mv3"))
+    parser.add_argument("--extension", type=Path, required=True, help="已打包候选/正式产物解压后的扩展目录")
     parser.add_argument("--addon", type=Path, help="Firefox 使用的 WXT zip/xpi")
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--ffmpeg", default=shutil.which("ffmpeg") or "ffmpeg")
