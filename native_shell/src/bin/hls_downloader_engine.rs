@@ -215,13 +215,9 @@ mod tests {
 
     #[test]
     fn installed_engine_resolves_the_compose_launcher() {
-        let candidates = workbench_candidates(Path::new(
-            r"C:\Users\tester\AppData\Local\Programs\HLSDownloader\app\resources\HLSDownloaderEngine.exe",
-        ));
-        assert!(candidates.contains(
-            &Path::new(r"C:\Users\tester\AppData\Local\Programs\HLSDownloader\HLSDownloader.exe")
-                .to_path_buf()
-        ));
+        let candidates =
+            workbench_candidates(Path::new(r"E:\h\app\resources\HLSDownloaderEngine.exe"));
+        assert!(candidates.contains(&Path::new(r"E:\h\HLSDownloader.exe").to_path_buf()));
     }
 
     #[test]
