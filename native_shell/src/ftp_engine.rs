@@ -105,6 +105,7 @@ fn ftp_wire_ok(value: &str) -> bool {
 
 pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> Result<u64, String> {
     let target = parse_ftp_url(url)?;
+    let progress = output.with_extension("progress.json");
     let implicit = target.tls && target.port == 990;
     let raw = TcpStream::connect((target.host.as_str(), target.port))
         .map_err(|error| error.to_string())?;
@@ -162,6 +163,7 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     };
     let mut buf = [0u8; 64 * 1024];
     let mut downloaded = resume_from;
+    crate::http_engine::write_progress(&progress, downloaded, size, 0.0, "downloading");
     loop {
         let flag = std::fs::read_to_string(control).unwrap_or_else(|_| "run".into());
         if flag.trim() == "pause" {
@@ -177,6 +179,7 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
         file.write_all(&buf[..count])
             .map_err(|error| error.to_string())?;
         downloaded += count as u64;
+        crate::http_engine::write_progress(&progress, downloaded, size, 0.0, "downloading");
         crate::net_policy::consume(count);
     }
     let _ = size;

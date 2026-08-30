@@ -2699,7 +2699,14 @@ fn run_task_with_throttle(
         crate::ResourceKind::Ftp => {
             let paths = TaskPaths::for_task(task_id, &spec)?;
             paths.prepare()?;
-            crate::ftp_engine::download_ftp(&spec.url, &paths.output, &paths.control, true)?;
+            let url = spec.url.clone();
+            let output = paths.output.clone();
+            let control = paths.control.clone();
+            let progress = paths.output.with_extension("progress.json");
+            let _ = poll_media_progress(&core, task_id, &progress, false, move || {
+                crate::ftp_engine::download_ftp(&url, &output, &control, true)
+                    .map(|_| output.clone())
+            })?;
             complete_payload(&core, task_id, &paths, &paths.output, &spec)
         }
         crate::ResourceKind::Sftp => {
