@@ -579,6 +579,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             if (visualFixture == "tasks_1000") addAll(auditTasks(1_000))
         }
     }
+    val taskLogs = remember { mutableStateMapOf<String, List<String>>() }
     val handoffQueue = remember { mutableStateListOf<HandoffOfferDto>() }
     LaunchedEffect(presenterAvailable, presenterProbeComplete) {
         if (presenterAvailable) {
@@ -629,7 +630,10 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     "save_site_profile" -> EnginePipeClient().saveSiteProfile(taskId)
                     else -> EnginePipeClient().taskAction(taskId, action)
                 }
-            } }.onSuccess { refreshKey++ }.onFailure { error ->
+            } }.onSuccess { result ->
+                if (action == "log") taskLogs[taskId] = result.taskLogLines()
+                refreshKey++
+            }.onFailure { error ->
                 UiDiagnostics.error("task_action.$action", error, taskId, requestId)
                 notice = UiSignal.Notice("error", error.message ?: "任务操作失败")
             }
@@ -868,8 +872,9 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                             }
                             is UiSignal.Harvest -> harvestResult = signal
                             is UiSignal.Log -> {
+                                taskLogs[signal.taskId] = signal.lines.takeLast(500)
                                 val index = tasks.indexOfFirst { it.id == signal.taskId }
-                                if (index >= 0) tasks[index] = tasks[index].copy(source = tasks[index].source.copy(logTail = signal.lines))
+                                if (index >= 0) tasks[index] = tasks[index].copy(source = tasks[index].source.copy(logTail = signal.lines.takeLast(500)))
                             }
                             is UiSignal.Duplicate -> {
                                 if (signal.action == "focus" && tasks.any { it.id == signal.taskId }) {
@@ -1152,6 +1157,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     detailTaskId?.let { taskId -> tasks.firstOrNull { it.id == taskId } }?.let { task ->
         TaskDetailsDialog(
             task = task,
+            logLines = taskLogs[task.id],
             onDismiss = { detailTaskId = null },
             onRefreshRequest = { url, cookie ->
                 val requestId = UUID.randomUUID().toString()
@@ -2789,6 +2795,7 @@ private fun HarvestDialog(
 
 @Composable private fun TaskDetailsDialog(
     task: DownloadTask,
+    logLines: List<String>?,
     onDismiss: () -> Unit,
     onRefreshRequest: (String, String) -> Unit,
     onAction: (String) -> Unit,
@@ -2943,7 +2950,7 @@ private fun HarvestDialog(
             "连接" -> ConnectionMap(task.source.connectionParts, task.source.connectionHint)
             "速度" -> SpeedHistory(task.source.speedHistory)
             "预览" -> ImagePreview(preview)
-            else -> Surface(Modifier.fillMaxWidth().heightIn(min = 210.dp, max = 320.dp), color = surface2, shape = RoundedCornerShape(7.dp), border = BorderStroke(1.dp, border)) { Text(task.source.logTail.ifEmpty { listOf("暂无日志记录") }.joinToString("\n"), Modifier.padding(12.dp), color = muted, fontSize = 11.sp, lineHeight = 17.sp) }
+            else -> Surface(Modifier.fillMaxWidth().heightIn(min = 210.dp, max = 320.dp), color = surface2, shape = RoundedCornerShape(7.dp), border = BorderStroke(1.dp, border)) { Text((logLines ?: task.source.logTail).ifEmpty { listOf("暂无日志记录") }.joinToString("\n"), Modifier.padding(12.dp), color = muted, fontSize = 11.sp, lineHeight = 17.sp) }
         }
     }, actions = {
         val mediaCapable = taskSupportsMediaActions(task.source)

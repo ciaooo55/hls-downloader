@@ -41,9 +41,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-v7-loc
 脚本只允许安装到 `E:\h`，并只从 manifest 记录且哈希匹配的 candidate/formal Portable
 解包安装；不会读取构建缓存或工作树 `extension/.output`。它先构建完整暂存镜像，保留原安装为临时
 `E:\h.v7-backup`，再原子切换、注册 Native Messaging 并刷新开始菜单、桌面
-快捷方式和浏览器扩展包，同时移除已知旧插件目录和版本化 ZIP。后置步骤失败时会自动恢复旧镜像及桌面插件；成功后删除临时备份，
+快捷方式和浏览器扩展包，同时移除已知旧插件目录及浏览器名后的所有 ZIP 副本后缀。后置步骤失败时会自动恢复旧镜像及桌面插件；成功后删除临时备份，
 因此本机始终只保留一个安装。`config.json`、`data.db` 和下载目录由 Core 的
 v7 数据目录管理，不从安装镜像中删除。
+
+Portable helper 还会校验 App-Image 内 provenance 的当前 commit/tree 和 feature parity SHA-256，旧的或未绑定当前源码的 App-Image 不会被打包。
 
 ## 安装后验证
 

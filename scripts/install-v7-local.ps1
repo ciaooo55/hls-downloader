@@ -274,7 +274,8 @@ try {
     Get-ChildItem -LiteralPath $desktop -Filter 'HLS Downloader*浏览器插件*' -Directory -ErrorAction SilentlyContinue |
         Move-Item -Destination $desktopExtensionBackup -Force
     foreach ($browser in @('Chromium', 'Firefox')) {
-        Get-ChildItem -LiteralPath $desktop -Filter "HLSDownloader-*${browser}.zip" -File -ErrorAction SilentlyContinue |
+        Get-ChildItem -LiteralPath $desktop -Filter 'HLSDownloader-*.zip' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match ("^HLSDownloader-.*" + [regex]::Escape($browser) + ".*\.zip$") } |
             Move-Item -Destination $desktopExtensionBackup -Force
         Move-Item -LiteralPath (Join-Path $desktopExtensionStage "$browser.zip") `
             -Destination $desktopExtensionPaths[$browser] -Force

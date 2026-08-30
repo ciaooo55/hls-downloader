@@ -631,12 +631,19 @@ fn spawn_queue_scheduler(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
                     last_stop = stamp.clone();
                     let _ = coordinator.pause_active_tasks();
                 }
-                if settings.queue_auto_start_enabled
+                let global_start_due = settings.queue_auto_start_enabled
                     && !settings.queue_auto_start_time.is_empty()
                     && stamp == settings.queue_auto_start_time
-                    && last_start != stamp
-                {
+                    && last_start != stamp;
+                if global_start_due {
                     last_start = stamp.clone();
+                }
+                if global_start_due
+                    || settings
+                        .queue_profiles
+                        .iter()
+                        .any(|profile| profile.schedule_enabled)
+                {
                     let _ = coordinator.start_next_queued();
                 }
             }

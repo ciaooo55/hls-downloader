@@ -7,6 +7,27 @@ $appImage = 'D:\HLSDownloaderBuildCache\compose-build\compose\binaries\main\app\
 if (-not (Test-Path -LiteralPath (Join-Path $appImage 'HLSDownloader.exe'))) {
     throw "Compose App-Image is missing: $appImage. Run gradlew.bat createDistributable first."
 }
+$provenancePath = Join-Path $appImage 'app\resources\BUILD-PROVENANCE.json'
+$featureParityPath = Join-Path $appImage 'app\resources\FEATURE-PARITY.json'
+if (-not (Test-Path -LiteralPath $provenancePath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $featureParityPath -PathType Leaf)) {
+    throw 'Compose App-Image is missing the v7 provenance or feature parity files.'
+}
+$provenance = Get-Content -LiteralPath $provenancePath -Raw -Encoding UTF8 | ConvertFrom-Json
+$currentCommit = (& git -C $repo rev-parse HEAD).Trim()
+$currentTree = (& git -C $repo rev-parse HEAD^{tree}).Trim()
+$canonicalFeatureParity = Join-Path $repo 'artifacts\v7-productization\feature-parity.json'
+$canonicalFeatureHash = (Get-FileHash -LiteralPath $canonicalFeatureParity -Algorithm SHA256).Hash.ToLowerInvariant()
+$embeddedFeatureHash = (Get-FileHash -LiteralPath $featureParityPath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ([int]$provenance.schema -ne 1 -or
+    [string]$provenance.product_version -ne '7.0.0' -or
+    [string]$provenance.source_commit -ne $currentCommit -or
+    [string]$provenance.source_tree -ne $currentTree -or
+    [string]$provenance.feature_parity_path -ne 'artifacts/v7-productization/feature-parity.json' -or
+    [string]$provenance.feature_parity_sha256 -ne $canonicalFeatureHash -or
+    $embeddedFeatureHash -ne $canonicalFeatureHash) {
+    throw 'Compose App-Image provenance is not bound to the current v7 source and feature parity.'
+}
 $out = if ($OutZip) { [IO.Path]::GetFullPath($OutZip) } else { Join-Path $repo 'artifacts\v7-productization\package\HLSDownloader-7.0.0-Windows-x64-Portable.zip' }
 $repoPrefix = $repo.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 if (-not $out.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {

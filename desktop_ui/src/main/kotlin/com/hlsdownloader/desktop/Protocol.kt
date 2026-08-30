@@ -24,6 +24,7 @@ val protocolJson: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true 
 
 private const val CORE_PROTOCOL = "hls-downloader-v7-core"
 private const val CORE_PIPE = "\\\\.\\pipe\\HLSDownloader.v7"
+private const val MAX_TASK_LOG_LINES = 500
 
 object Product {
     const val version = "7.0.0"
@@ -119,7 +120,14 @@ data class AvScanStatusDto(
 
 @Serializable data class EventEnvelopeDto(val sequence: Long, val event: JsonObject)
 data class EngineSnapshot(val tasks: List<TaskDto>, val latestSequence: Long)
-data class CommandResult(val requestId: Long, val events: List<EventEnvelopeDto>)
+data class CommandResult(val requestId: Long, val events: List<EventEnvelopeDto>) {
+    fun taskLogLines(): List<String> {
+        val event = events.firstOrNull { it.event["kind"]?.jsonPrimitive?.content == "task_log" }?.event
+        return event?.get("lines")?.jsonArray.orEmpty()
+            .mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull() }
+            .takeLast(MAX_TASK_LOG_LINES)
+    }
+}
 data class TaskExportResult(val format: String, val data: String, val taskCount: Int)
 
 @Serializable
@@ -495,7 +503,7 @@ class EnginePipeClient(
             totalSize = event["total_size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
         )
     }
-    fun getTaskLog(taskId: String) = command(commandOf("get_task_log", "task_id" to taskId))
+    fun getTaskLog(taskId: String): CommandResult = command(commandOf("get_task_log", "task_id" to taskId))
     fun openCompleted(taskId: String, folder: Boolean) = command(commandOf("open_completed", "task_id" to taskId, "folder" to folder))
     fun saveSiteProfile(taskId: String) = command(commandOf("save_site_profile", "task_id" to taskId))
     fun checkUpdate(silent: Boolean = false) = command(commandOf("check_update", "silent" to silent))
