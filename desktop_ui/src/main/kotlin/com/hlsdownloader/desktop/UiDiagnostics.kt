@@ -67,6 +67,8 @@ internal object UiDiagnostics {
         )
     }
 
+    fun logsDirectory(): Path = logPath().parent
+
     private fun logPath(): Path {
         val configured = System.getenv("HLS_V7_DATA_DIR")?.takeIf(String::isNotBlank)
         val root = configured?.let(Path::of) ?: Path.of(
