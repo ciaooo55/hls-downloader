@@ -27,7 +27,7 @@ def main() -> int:
     env = dict(os.environ)
     if args.libmpv:
         env.pop("HLS_V7_PLAYER_NULL", None)
-        env["HLS_V6_LIBMPV"] = str(Path(args.libmpv).resolve())
+        env["HLS_V7_LIBMPV"] = str(Path(args.libmpv).resolve())
     else:
         env["HLS_V7_PLAYER_NULL"] = "1"
     process = subprocess.Popen(

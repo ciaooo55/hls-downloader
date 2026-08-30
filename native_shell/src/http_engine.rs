@@ -586,13 +586,6 @@ fn curl_impersonate_exe() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    // Keep the historical variable as a migration-only fallback.
-    if let Ok(path) = std::env::var("HLS_V6_CURL_IMPERSONATE") {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             return curl_impersonate_near(dir);

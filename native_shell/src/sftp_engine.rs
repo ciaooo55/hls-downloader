@@ -259,36 +259,41 @@ pub fn parse_keyscan_line(output: &str) -> Result<(String, String), String> {
 }
 
 fn pin_remote_host(host: &str, port: u16) -> Result<PathBuf, String> {
-    let output = if let Ok(fixture) = std::env::var("HLS_V6_SFTP_KEYSCAN") {
-        fixture
-    } else {
-        let scanner = which("ssh-keyscan").ok_or_else(|| {
-            "OpenSSH ssh-keyscan not found; cannot TOFU the SFTP host key".to_string()
-        })?;
-        let scanned = Command::new(scanner)
-            .args([
-                "-p",
-                &port.to_string(),
-                "-T",
-                "8",
-                "-t",
-                "rsa,ecdsa,ed25519",
-                host,
-            ])
-            .output()
-            .map_err(|error| error.to_string())?;
-        let stdout = String::from_utf8_lossy(&scanned.stdout);
-        let stderr = String::from_utf8_lossy(&scanned.stderr);
-        if stdout.trim().is_empty() {
-            return Err(format!("ssh-keyscan failed: {stderr}"));
-        }
-        stdout.into_owned()
-    };
+    let output = keyscan_output(host, port)?;
     let (openssh_line, fingerprint) = parse_keyscan_line(&output)?;
     tofu_record(host, port, &fingerprint)?;
     let ssh_path = openssh_known_hosts_path();
     upsert_openssh_known_host(&ssh_path, &openssh_line)?;
     Ok(ssh_path)
+}
+
+fn keyscan_output(host: &str, port: u16) -> Result<String, String> {
+    #[cfg(test)]
+    if let Ok(fixture) = std::env::var("HLS_V7_SFTP_KEYSCAN") {
+        return Ok(fixture);
+    }
+
+    let scanner = which("ssh-keyscan").ok_or_else(|| {
+        "OpenSSH ssh-keyscan not found; cannot TOFU the SFTP host key".to_string()
+    })?;
+    let scanned = Command::new(scanner)
+        .args([
+            "-p",
+            &port.to_string(),
+            "-T",
+            "8",
+            "-t",
+            "rsa,ecdsa,ed25519",
+            host,
+        ])
+        .output()
+        .map_err(|error| error.to_string())?;
+    let stdout = String::from_utf8_lossy(&scanned.stdout);
+    let stderr = String::from_utf8_lossy(&scanned.stderr);
+    if stdout.trim().is_empty() {
+        return Err(format!("ssh-keyscan failed: {stderr}"));
+    }
+    Ok(stdout.into_owned())
 }
 
 fn upsert_openssh_known_host(path: &Path, line: &str) -> Result<(), String> {
@@ -534,7 +539,8 @@ pub fn download_sftp(url: &str, output: &Path, control: &Path) -> Result<u64, St
         return Err("canceled".into());
     }
     let target = parse_sftp_url(url)?;
-    if let Ok(root) = std::env::var("HLS_V6_SFTP_FIXTURE") {
+    #[cfg(test)]
+    if let Ok(root) = std::env::var("HLS_V7_SFTP_FIXTURE") {
         let session = FixtureSession {
             root: PathBuf::from(root),
         };
@@ -665,7 +671,7 @@ mod tests {
         assert!(parse_sftp_url("sftp://-oProxyCommand=notepad@nas.local/a.bin").is_err());
         assert!(parse_sftp_url("sftp://lee@-oleak.example/a.bin").is_err());
         let dir = std::env::temp_dir().join(format!("hls-sftp-{}", std::process::id()));
-        std::env::set_var("HLS_V6_DATA_DIR", &dir);
+        std::env::set_var("HLS_V7_DATA_DIR", &dir);
         tofu_record("nas.local", 2222, "abc").unwrap();
         let error = tofu_record("nas.local", 2222, "xyz").unwrap_err();
         assert!(error.contains("密钥") || error.contains("changed"));
@@ -673,7 +679,7 @@ mod tests {
             .unwrap_err()
             .contains("missing"));
         let _ = fs::remove_dir_all(dir);
-        std::env::remove_var("HLS_V6_DATA_DIR");
+        std::env::remove_var("HLS_V7_DATA_DIR");
     }
 
     #[test]
@@ -722,9 +728,9 @@ mod tests {
     fn keyscan_pins_fingerprint_and_openssh_file() {
         let _guard = env_lock();
         let dir = std::env::temp_dir().join(format!("hls-sftp-scan-{}", std::process::id()));
-        std::env::set_var("HLS_V6_DATA_DIR", &dir);
+        std::env::set_var("HLS_V7_DATA_DIR", &dir);
         std::env::set_var(
-            "HLS_V6_SFTP_KEYSCAN",
+            "HLS_V7_SFTP_KEYSCAN",
             "nas.local ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureKeyMaterial\n",
         );
         let ssh_path = pin_remote_host("nas.local", 22).unwrap();
@@ -735,15 +741,15 @@ mod tests {
                 .1;
         assert!(tofu_record("nas.local", 22, &fingerprint).is_ok());
         std::env::set_var(
-            "HLS_V6_SFTP_KEYSCAN",
+            "HLS_V7_SFTP_KEYSCAN",
             "other.local ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOtherKeyMaterial\n",
         );
         pin_remote_host("other.local", 22).unwrap();
         let stored = fs::read_to_string(ssh_path).unwrap();
         assert!(stored.contains("nas.local"));
         assert!(stored.contains("other.local"));
-        std::env::remove_var("HLS_V6_SFTP_KEYSCAN");
-        std::env::remove_var("HLS_V6_DATA_DIR");
+        std::env::remove_var("HLS_V7_SFTP_KEYSCAN");
+        std::env::remove_var("HLS_V7_DATA_DIR");
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -754,16 +760,16 @@ mod tests {
         let src_dir = root.join("video");
         fs::create_dir_all(&src_dir).unwrap();
         fs::write(src_dir.join("a.mp4"), b"sftp-bytes").unwrap();
-        std::env::set_var("HLS_V6_SFTP_FIXTURE", &root);
-        std::env::set_var("HLS_V6_DATA_DIR", root.join("data"));
+        std::env::set_var("HLS_V7_SFTP_FIXTURE", &root);
+        std::env::set_var("HLS_V7_DATA_DIR", root.join("data"));
         let dest = root.join("out").join("a.mp4");
         let control = root.join("control");
         fs::write(&control, "run").unwrap();
         let size = download_sftp("sftp://lee@nas.local/video/a.mp4", &dest, &control).unwrap();
         assert_eq!(size, 10);
         assert_eq!(fs::read(&dest).unwrap(), b"sftp-bytes");
-        std::env::remove_var("HLS_V6_SFTP_FIXTURE");
-        std::env::remove_var("HLS_V6_DATA_DIR");
+        std::env::remove_var("HLS_V7_SFTP_FIXTURE");
+        std::env::remove_var("HLS_V7_DATA_DIR");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -775,8 +781,8 @@ mod tests {
         fs::create_dir_all(&src_dir).unwrap();
         let payload = (0u8..80).collect::<Vec<_>>();
         fs::write(src_dir.join("a.bin"), &payload).unwrap();
-        std::env::set_var("HLS_V6_SFTP_FIXTURE", &root);
-        std::env::set_var("HLS_V6_DATA_DIR", root.join("data"));
+        std::env::set_var("HLS_V7_SFTP_FIXTURE", &root);
+        std::env::set_var("HLS_V7_DATA_DIR", root.join("data"));
         let dest = root.join("out").join("payload.downloading");
         fs::create_dir_all(dest.parent().unwrap()).unwrap();
         fs::write(&dest, &payload[..30]).unwrap();
@@ -799,8 +805,8 @@ mod tests {
         assert_eq!(size, 80);
         assert_eq!(fs::read(&dest).unwrap(), payload);
         assert!(!state_path(&dest).exists());
-        std::env::remove_var("HLS_V6_SFTP_FIXTURE");
-        std::env::remove_var("HLS_V6_DATA_DIR");
+        std::env::remove_var("HLS_V7_SFTP_FIXTURE");
+        std::env::remove_var("HLS_V7_DATA_DIR");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -811,8 +817,8 @@ mod tests {
         let src_dir = root.join("pub");
         fs::create_dir_all(&src_dir).unwrap();
         fs::write(src_dir.join("a.bin"), b"abcdefghij").unwrap();
-        std::env::set_var("HLS_V6_SFTP_FIXTURE", &root);
-        std::env::set_var("HLS_V6_DATA_DIR", root.join("data"));
+        std::env::set_var("HLS_V7_SFTP_FIXTURE", &root);
+        std::env::set_var("HLS_V7_DATA_DIR", root.join("data"));
         let dest = root.join("out").join("payload.downloading");
         fs::create_dir_all(dest.parent().unwrap()).unwrap();
         fs::write(&dest, b"XXXX").unwrap();
@@ -832,8 +838,8 @@ mod tests {
         let size = download_sftp("sftp://lee@nas.local/pub/a.bin", &dest, &control).unwrap();
         assert_eq!(size, 10);
         assert_eq!(fs::read(&dest).unwrap(), b"abcdefghij");
-        std::env::remove_var("HLS_V6_SFTP_FIXTURE");
-        std::env::remove_var("HLS_V6_DATA_DIR");
+        std::env::remove_var("HLS_V7_SFTP_FIXTURE");
+        std::env::remove_var("HLS_V7_DATA_DIR");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -845,8 +851,8 @@ mod tests {
         fs::create_dir_all(&src_dir).unwrap();
         let payload = (0u8..90).collect::<Vec<_>>();
         fs::write(src_dir.join("a.bin"), &payload).unwrap();
-        std::env::remove_var("HLS_V6_SFTP_FIXTURE");
-        std::env::set_var("HLS_V6_DATA_DIR", root.join("data"));
+        std::env::remove_var("HLS_V7_SFTP_FIXTURE");
+        std::env::set_var("HLS_V7_DATA_DIR", root.join("data"));
         let server = sftp_loopback::start(root.clone(), "lee", "s3cret").expect("loopback");
         let url = format!("sftp://lee:s3cret@127.0.0.1:{}/pub/a.bin", server.port);
         let dest = root.join("out").join("a.bin");
@@ -889,7 +895,7 @@ mod tests {
         );
 
         drop(server);
-        std::env::remove_var("HLS_V6_DATA_DIR");
+        std::env::remove_var("HLS_V7_DATA_DIR");
         let _ = fs::remove_dir_all(root);
     }
 }

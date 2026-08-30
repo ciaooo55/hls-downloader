@@ -196,11 +196,9 @@ def main() -> int:
     environment.update(
         {
             "HLS_V7_DATA_DIR": str(root / "data"),
-            "HLS_V6_DATA_DIR": str(root / "data"),
             "HLS_V7_DOWNLOAD_DIR": str(root / "downloads"),
             "HLS_V7_CORE_TCP": "1",
             "HLS_V7_CORE_BIND": f"127.0.0.1:{port}",
-            "HLS_V6_SKIP_LEGAL": "1",
             "HLS_V6_SKIP_MIGRATE": "1",
         }
     )

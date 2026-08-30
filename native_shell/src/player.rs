@@ -22,7 +22,6 @@ pub struct PlayerMetadata {
 
 fn null_backend_enabled() -> bool {
     std::env::var_os("HLS_V7_PLAYER_NULL").is_some()
-        || std::env::var_os("HLS_V6_PLAYER_NULL").is_some()
 }
 
 #[derive(Default)]
@@ -484,7 +483,7 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                 }
             }
         }
-        if let Ok(explicit) = std::env::var("HLS_V6_LIBMPV") {
+        if let Ok(explicit) = std::env::var("HLS_V7_LIBMPV") {
             candidates.insert(0, PathBuf::from(explicit));
         }
         if let Ok(cwd) = std::env::current_dir() {
@@ -670,7 +669,7 @@ mod tests {
 
     #[test]
     fn null_backend_records_url_embed_and_preview() {
-        std::env::set_var("HLS_V6_PLAYER_NULL", "1");
+        std::env::set_var("HLS_V7_PLAYER_NULL", "1");
         let player = Player::default();
         player.play("http://127.0.0.1:9/media/task-1").unwrap();
         assert!(player.last_url().contains("task-1"));

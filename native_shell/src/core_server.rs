@@ -2,8 +2,8 @@
 
 use crate::{
     default_core_bind, default_v7_database_path, serve_tcp_listener, CoreCommand, CoreCoordinator,
-    CoreEvent, CorePipeRequest, CorePipeResponse, EventEnvelope, PersistentCore, V6_PROTOCOL_NAME,
-    V6_PROTOCOL_VERSION, V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION,
+    CoreEvent, CorePipeRequest, CorePipeResponse, EventEnvelope, PersistentCore, V7_PROTOCOL_NAME,
+    V7_PROTOCOL_VERSION,
 };
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -166,9 +166,7 @@ fn dispatch(
 ) -> CorePipeResponse {
     match request {
         CorePipeRequest::Hello { protocol, version } => {
-            if (protocol == V7_PROTOCOL_NAME && version == V7_PROTOCOL_VERSION)
-                || (protocol == V6_PROTOCOL_NAME && version == V6_PROTOCOL_VERSION)
-            {
+            if protocol == V7_PROTOCOL_NAME && version == V7_PROTOCOL_VERSION {
                 CorePipeResponse::Hello {
                     protocol,
                     version,
@@ -531,7 +529,7 @@ fn spawn_torrent_watch(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
                 .and_then(|core| core.store().setting_string("torrent_watch_dir", "").ok())
                 .unwrap_or_default();
             let dir = if dir.trim().is_empty() {
-                std::env::var("HLS_V6_TORRENT_WATCH").unwrap_or_default()
+                std::env::var("HLS_V7_TORRENT_WATCH").unwrap_or_default()
             } else {
                 dir
             };

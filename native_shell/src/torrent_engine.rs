@@ -292,12 +292,13 @@ pub fn probe_torrent_source(
     source: &str,
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
+    enable_dht: bool,
 ) -> Result<TorrentMeta, String> {
     let source = source.trim();
     if source.starts_with("magnet:") {
         let magnet = parse_magnet(source)?;
         return if magnet.pieces.is_empty() {
-            fetch_magnet_metadata(&magnet, headers, proxy).or_else(|_| Ok(magnet))
+            fetch_magnet_metadata(&magnet, headers, proxy, enable_dht).or_else(|_| Ok(magnet))
         } else {
             Ok(magnet)
         };
@@ -502,7 +503,7 @@ fn download_torrent_with_telemetry(
     let meta = if spec_url.starts_with("magnet:") {
         let mut meta = parse_magnet(spec_url)?;
         if meta.pieces.is_empty() || meta.piece_length == 0 {
-            match fetch_magnet_metadata(&meta, headers, proxy) {
+            match fetch_magnet_metadata(&meta, headers, proxy, options.enable_dht) {
                 Ok(fetched) => meta = fetched,
                 Err(error) => {
                     if meta.web_seeds.is_empty() {
@@ -604,6 +605,7 @@ fn fetch_magnet_metadata(
     magnet: &TorrentMeta,
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
+    enable_dht: bool,
 ) -> Result<TorrentMeta, String> {
     let hash = canonical_info_hash(&magnet.info_hash)
         .ok_or_else(|| format!("magnet info_hash 无效: {}", magnet.info_hash))?;
@@ -642,7 +644,7 @@ fn fetch_magnet_metadata(
             Err(error) => last = error.to_string(),
         }
     }
-    if let Ok(from_swarm) = fetch_metadata_from_swarm(magnet, headers, proxy) {
+    if let Ok(from_swarm) = fetch_metadata_from_swarm(magnet, headers, proxy, enable_dht) {
         return Ok(from_swarm);
     }
     Err(last)
@@ -784,7 +786,7 @@ fn announce_peers(
             peers.extend(parse_compact_peers(&body));
         }
     }
-    if enable_dht && dht_enabled() {
+    if enable_dht {
         if let Ok(found) = dht_get_peers(&info_hash) {
             peers.extend(found);
         }
@@ -801,13 +803,6 @@ const DEFAULT_TRACKERS: &[&str] = &[
     "udp://exodus.desync.com:6969/announce",
     "http://tracker.openbittorrent.com:80/announce",
 ];
-
-fn dht_enabled() -> bool {
-    !matches!(
-        std::env::var("HLS_V6_DHT").ok().as_deref(),
-        Some("0") | Some("off") | Some("false")
-    )
-}
 
 fn resolve_hint_peers(hints: &[String]) -> Vec<std::net::SocketAddr> {
     let mut peers = Vec::new();
@@ -827,8 +822,9 @@ fn fetch_metadata_from_swarm(
     magnet: &TorrentMeta,
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
+    enable_dht: bool,
 ) -> Result<TorrentMeta, String> {
-    let peers = announce_peers(magnet, headers, proxy, dht_enabled())?;
+    let peers = announce_peers(magnet, headers, proxy, enable_dht)?;
     if peers.is_empty() {
         return Err("magnet 没有 tracker 返回的节点".into());
     }

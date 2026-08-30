@@ -121,10 +121,6 @@ def main() -> int:
         shutil.copy2(args.engine, engine)
         environment = os.environ.copy()
         environment["HLS_V7_DATA_DIR"] = str(root / "data")
-        # The persistence module is shared with the frozen schema module while
-        # its public runtime identity is v7; set the legacy storage alias only
-        # for this isolated smoke fixture so the test does not touch user data.
-        environment["HLS_V6_DATA_DIR"] = str(root / "data")
         environment["HLS_V7_PIPE"] = rf"\\.\pipe\HLSDownloader.v7-smoke-{uuid.uuid4().hex}"
         received, first_response_ms, two_response_ms = responses(host, environment)
         if len(received) != 2 or any(item.get("ok") is not True for item in received):

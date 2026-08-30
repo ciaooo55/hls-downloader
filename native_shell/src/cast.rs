@@ -300,7 +300,8 @@ pub fn discover_devices_for_mode(
     timeout: Duration,
     mode: &str,
 ) -> Result<Vec<CastDeviceInfo>, String> {
-    if std::env::var_os("HLS_V6_CAST_NULL").is_some() {
+    #[cfg(test)]
+    if std::env::var_os("HLS_V7_CAST_NULL").is_some() {
         return Ok(Vec::new());
     }
     let scan_cast = mode != "tvbox";

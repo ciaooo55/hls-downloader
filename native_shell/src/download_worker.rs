@@ -1375,7 +1375,7 @@ impl CoreCoordinator {
         if let CoreCommand::CreateTask { spec } = command {
             self.require_legal()?;
             let spec = self.apply_defaults_to_spec(spec)?;
-            let spec = validate_torrent_spec(spec)?;
+            let spec = validate_torrent_spec(spec, self.settings()?.bt_enable_dht)?;
             let mut events = Vec::new();
             for spec in self.expand_create(spec)? {
                 if !spec.allow_duplicate {
@@ -2649,7 +2649,7 @@ fn valid_clock(value: &str) -> bool {
         && minute.parse::<u8>().is_ok_and(|value| value < 60)
 }
 
-fn validate_torrent_spec(spec: TaskSpec) -> Result<TaskSpec, String> {
+fn validate_torrent_spec(spec: TaskSpec, enable_dht: bool) -> Result<TaskSpec, String> {
     if spec.resource_kind != crate::ResourceKind::Torrent {
         return Ok(spec);
     }
@@ -2658,7 +2658,8 @@ fn validate_torrent_spec(spec: TaskSpec) -> Result<TaskSpec, String> {
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    let meta = crate::torrent_engine::probe_torrent_source(&spec.url, &headers, &spec.proxy)?;
+    let meta =
+        crate::torrent_engine::probe_torrent_source(&spec.url, &headers, &spec.proxy, enable_dht)?;
     let mut checked = spec;
     if checked.filename.trim().is_empty() {
         checked.filename = safe_filename(&meta.name, &checked.url);
@@ -2888,17 +2889,24 @@ fn run_task_with_throttle(
                     )
                     .map(|_| torrent_output.clone())
             })?;
-            let latest_spec = core
-                .lock()
-                .map_err(|_| "v7 Core mutex poisoned".to_string())?
-                .task_spec(task_id)
-                .cloned()
-                .unwrap_or_else(|| spec.clone());
+            let (latest_spec, enable_dht) = {
+                let guard = core
+                    .lock()
+                    .map_err(|_| "v7 Core mutex poisoned".to_string())?;
+                (
+                    guard
+                        .task_spec(task_id)
+                        .cloned()
+                        .unwrap_or_else(|| spec.clone()),
+                    guard.store().setting_bool("bt_enable_dht", true)?,
+                )
+            };
             if !latest_spec.torrent_selection.is_empty() {
                 let meta = crate::torrent_engine::probe_torrent_source(
                     &latest_spec.url,
                     &headers,
                     &latest_spec.proxy,
+                    enable_dht,
                 )?;
                 let published = crate::torrent_engine::materialize_selected_files(
                     &paths.output,
@@ -4169,8 +4177,12 @@ fn probe_torrent_command(
     coordinator: &CoreCoordinator,
     source: &str,
 ) -> Result<Vec<EventEnvelope>, String> {
-    let meta =
-        crate::torrent_engine::probe_torrent_source(source, &std::collections::HashMap::new(), "")?;
+    let meta = crate::torrent_engine::probe_torrent_source(
+        source,
+        &std::collections::HashMap::new(),
+        "",
+        coordinator.settings()?.bt_enable_dht,
+    )?;
     coordinator.lock()?.emit(CoreEvent::TorrentProbeResult {
         source: source.to_string(),
         name: meta.name,
@@ -4185,8 +4197,12 @@ fn select_torrent_files_command(
     source: &str,
     selections: &[crate::TorrentFileSelection],
 ) -> Result<Vec<EventEnvelope>, String> {
-    let meta =
-        crate::torrent_engine::probe_torrent_source(source, &std::collections::HashMap::new(), "")?;
+    let meta = crate::torrent_engine::probe_torrent_source(
+        source,
+        &std::collections::HashMap::new(),
+        "",
+        coordinator.settings()?.bt_enable_dht,
+    )?;
     let selections = crate::torrent_engine::validate_torrent_selection(&meta, selections)?;
     let total_size = meta
         .files
@@ -4223,8 +4239,12 @@ fn task_torrent_files(
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    let meta =
-        crate::torrent_engine::probe_torrent_source(&hydrated.url, &headers, &hydrated.proxy)?;
+    let meta = crate::torrent_engine::probe_torrent_source(
+        &hydrated.url,
+        &headers,
+        &hydrated.proxy,
+        coordinator.settings()?.bt_enable_dht,
+    )?;
     let selections =
         crate::torrent_engine::validate_torrent_selection(&meta, &hydrated.torrent_selection)?;
     let total_size = selected_torrent_bytes(&meta.files, &selections);
@@ -4261,8 +4281,12 @@ fn set_task_torrent_files(
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    let meta =
-        crate::torrent_engine::probe_torrent_source(&hydrated.url, &headers, &hydrated.proxy)?;
+    let meta = crate::torrent_engine::probe_torrent_source(
+        &hydrated.url,
+        &headers,
+        &hydrated.proxy,
+        coordinator.settings()?.bt_enable_dht,
+    )?;
     spec.torrent_selection = crate::torrent_engine::validate_torrent_selection(&meta, selections)?;
     if !spec
         .torrent_selection
@@ -4451,10 +4475,12 @@ fn push_task_tvbox(
 }
 
 fn discover_cast(coordinator: &CoreCoordinator, mode: &str) -> Result<Vec<EventEnvelope>, String> {
-    let timeout = if std::env::var_os("HLS_V6_CAST_NULL").is_some() {
+    let timeout = Duration::from_millis(2500);
+    #[cfg(test)]
+    let timeout = if std::env::var_os("HLS_V7_CAST_NULL").is_some() {
         Duration::from_millis(1)
     } else {
-        Duration::from_millis(2500)
+        timeout
     };
     let normalized_mode = if mode.eq_ignore_ascii_case("tvbox") {
         "tvbox"
@@ -6203,7 +6229,7 @@ mod tests {
 
     #[test]
     fn player_control_accepts_speed_and_pause_on_null_backend() {
-        std::env::set_var("HLS_V6_PLAYER_NULL", "1");
+        std::env::set_var("HLS_V7_PLAYER_NULL", "1");
         player_control("pause").unwrap();
         player_control("resume").unwrap();
         player_control("speed:1.5").unwrap();
@@ -6220,7 +6246,7 @@ mod tests {
 
     #[test]
     fn player_session_reports_play_pause_speed_and_stop() {
-        std::env::set_var("HLS_V6_PLAYER_NULL", "1");
+        std::env::set_var("HLS_V7_PLAYER_NULL", "1");
         let dir = std::env::temp_dir().join(format!("hls-player-session-{}", std::process::id()));
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         coordinator
@@ -6284,7 +6310,6 @@ mod tests {
 
     #[test]
     fn metalink_body_expands_to_http_task_with_mirrors() {
-        std::env::set_var("HLS_V6_SKIP_LEGAL", "1");
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         coordinator
             .set_setting("legal_terms_accepted", serde_json::json!(true))
@@ -6319,7 +6344,6 @@ mod tests {
 
     #[test]
     fn metalink_query_string_is_not_treated_as_metalink_body() {
-        std::env::set_var("HLS_V6_SKIP_LEGAL", "1");
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         coordinator
             .set_setting("legal_terms_accepted", serde_json::json!(true))
@@ -6355,7 +6379,6 @@ mod tests {
 
     #[test]
     fn multiline_metalink_paste_still_expands() {
-        std::env::set_var("HLS_V6_SKIP_LEGAL", "1");
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         coordinator
             .set_setting("legal_terms_accepted", serde_json::json!(true))
@@ -6545,7 +6568,7 @@ mod tests {
 
     #[test]
     fn discover_cast_with_null_timeout_emits_devices_event() {
-        std::env::set_var("HLS_V6_CAST_NULL", "1");
+        std::env::set_var("HLS_V7_CAST_NULL", "1");
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         let events = coordinator
             .dispatch(CoreCommand::DiscoverCastDevices {
@@ -6614,7 +6637,6 @@ mod tests {
 
     #[test]
     fn local_url_shortcut_expands_to_http_task() {
-        std::env::set_var("HLS_V6_SKIP_LEGAL", "1");
         let dir = std::env::temp_dir().join(format!("v6-url-{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("clip.url");

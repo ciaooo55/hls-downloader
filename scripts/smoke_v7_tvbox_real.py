@@ -200,7 +200,6 @@ def main() -> int:
             "HLS_V7_DOWNLOAD_DIR": str(root / "downloads"),
             "HLS_V7_CORE_TCP": "1",
             "HLS_V7_CORE_BIND": f"127.0.0.1:{core_port}",
-            "HLS_V6_SKIP_LEGAL": "1",
             "HLS_V6_SKIP_MIGRATE": "1",
         }
     )

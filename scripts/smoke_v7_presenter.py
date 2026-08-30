@@ -139,7 +139,6 @@ def visible_handoff_smoke(presenter_source: Path, host_source: Path, engine_sour
     host_process: subprocess.Popen[bytes] | None = None
     environment = os.environ.copy()
     environment["HLS_V7_DATA_DIR"] = str(root / "data")
-    environment["HLS_V6_DATA_DIR"] = environment["HLS_V7_DATA_DIR"]
     environment["HLS_V7_PIPE"] = rf"\\.\pipe\HLSDownloader.v7-presenter-{uuid.uuid4().hex}"
     environment["HLS_V7_PRESENTER_TRACE"] = "1"
     ready_file = root / "presenter.ready"
