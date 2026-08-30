@@ -134,6 +134,8 @@ import org.jetbrains.skia.Image as SkiaImage
 
 enum class TaskFilter(val label: String) { ALL("全部"), RUNNING("进行中"), QUEUED("排队中"), PAUSED("已暂停"), COMPLETED("已完成"), FAILED("失败") }
 enum class TaskCategory(val label: String) { MEDIA("媒体"), PROGRAM("程序"), ARCHIVE("压缩包"), OTHER("其他") }
+private val activeTaskStatuses = setOf("进行中", "录制中", "合并中", "校验中")
+internal fun isActiveTaskStatus(status: String): Boolean = status in activeTaskStatuses
 data class DownloadTask(val id: String, val filename: String, val status: String, val progress: Float, val speed: String, val speedBytes: Long, val remaining: String, val segments: String, val updated: String, val source: TaskDto)
 data class HarvestCandidateUi(
     val url: String,
@@ -1571,7 +1573,7 @@ private fun displayStatus(status: String) = when (status.lowercase()) {
 }
 internal fun taskCategory(task: DownloadTask) = when (task.filename.substringAfterLast('.', "").lowercase()) { "m3u8", "mpd", "mp4", "mkv", "webm", "mp3", "flac", "wav", "avi", "mov" -> TaskCategory.MEDIA; "exe", "msi", "appx", "apk", "dmg", "pkg" -> TaskCategory.PROGRAM; "zip", "rar", "7z", "tar", "gz", "bz2", "xz" -> TaskCategory.ARCHIVE; else -> TaskCategory.OTHER }
 internal fun visibleTasks(tasks: List<DownloadTask>, filter: TaskFilter, category: TaskCategory?, query: String, queueId: String? = null): List<DownloadTask> =
-    tasks.filter { (filter == TaskFilter.ALL || it.status == filter.label) && (category == null || taskCategory(it) == category) && (queueId == null || it.source.queueId == queueId) && it.filename.contains(query, true) }
+    tasks.filter { (filter == TaskFilter.ALL || (filter == TaskFilter.RUNNING && isActiveTaskStatus(it.status)) || it.status == filter.label) && (category == null || taskCategory(it) == category) && (queueId == null || it.source.queueId == queueId) && it.filename.contains(query, true) }
 private fun formatRate(bytes: Long): String = when { bytes <= 0 -> "—"; bytes >= 1024L * 1024L -> "%.1f MB/s".format(bytes / 1024.0 / 1024.0); else -> "%.0f KB/s".format(bytes / 1024.0) }
 private fun formatEta(seconds: Long): String = when { seconds < 60 -> "${seconds}s"; seconds < 3600 -> "${seconds / 60} 分钟"; else -> "${seconds / 3600} 小时" }
 internal fun chooseDirectory(initialPath: String = "", title: String = "选择目录"): String? {
@@ -2068,8 +2070,8 @@ private fun TaskHeader(value: String, modifier: Modifier, field: String, taskSor
                             modifier = Modifier.padding(top = 3.dp),
                         )
                     }
-                    "status" -> Column(Modifier.width(column.width)) { StatusBadge(task.status); Text(if (task.status == "进行中") task.remaining else "", color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 1.dp)) }
-                    "speed" -> Text(if (task.status == "进行中") task.speed else "—", Modifier.width(column.width), color = ink, fontSize = 11.sp)
+                    "status" -> Column(Modifier.width(column.width)) { StatusBadge(task.status); Text(if (isActiveTaskStatus(task.status)) task.remaining else "", color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 1.dp)) }
+                    "speed" -> Text(if (isActiveTaskStatus(task.status)) task.speed else "—", Modifier.width(column.width), color = ink, fontSize = 11.sp)
                     "size" -> Text(task.source.totalBytes?.let(::formatBytes) ?: "—", Modifier.width(column.width), color = ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     "actions" -> Row(Modifier.width(column.width), verticalAlignment = Alignment.CenterVertically) {
                         if (!columns.compact && queueOrder && task.status == "排队中") {
@@ -2129,7 +2131,7 @@ internal fun taskAccessibilityLabel(task: DownloadTask): String = listOf(
     listOf(taskProtocolLabel(task.source), taskExtensionLabel(task.source)).filter(String::isNotBlank).joinToString(" "),
     task.status,
     "进度 ${(task.progress.coerceIn(0f, 1f) * 100).toInt()}%",
-    if (task.status == "进行中") "速度 ${task.speed}" else null,
+    if (isActiveTaskStatus(task.status)) "速度 ${task.speed}" else null,
     task.source.totalBytes?.let { "大小 ${formatBytes(it)}" },
 ).filterNotNull().filter(String::isNotBlank).joinToString("，")
 internal fun taskExtensionLabel(task: TaskDto): String {
@@ -2146,7 +2148,7 @@ private fun formatBytes(bytes: Long) = when { bytes >= 1024L * 1024L * 1024L -> 
 private fun actionLabel(action: String) = mapOf("details" to "详情与日志", "start" to "开始", "pause" to "暂停", "resume" to "继续", "retry" to "重试", "cancel" to "取消", "open" to "打开文件", "open_folder" to "打开所在位置", "launch" to "运行文件", "copy_file" to "复制文件", "drag_file" to "拖出文件", "delete" to "删除任务", "delete_files" to "删除任务和文件", "play" to "播放", "cast" to "投屏", "push_tvbox" to "TVBox 推送", "move_queue" to "移动到队列", "queue_up" to "上移", "queue_down" to "下移", "queue_top" to "置顶", "queue_bottom" to "置底")[action] ?: action
 @Composable private fun StatusBadge(status: String, modifier: Modifier = Modifier) {
     val color = when(status) { "已完成" -> Color(0xFF078C46); "失败" -> Color(0xFFDC2626); "已暂停" -> Color(0xFFD97706); else -> blue }
-    val live = status == "进行中" || status == "排队中"
+    val live = isActiveTaskStatus(status) || status == "排队中"
     Surface(modifier, color = color.copy(alpha = .10f), shape = RoundedCornerShape(12.dp)) {
         Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(6.dp).clip(RoundedCornerShape(50)).background(color.copy(alpha = if (live) .95f else .7f)))
@@ -2155,8 +2157,8 @@ private fun actionLabel(action: String) = mapOf("details" to "详情与日志", 
         }
     }
 }
-private fun taskCount(tasks: List<DownloadTask>, filter: TaskFilter) = when (filter) { TaskFilter.ALL -> tasks.size; else -> tasks.count { it.status == filter.label } }
-@Composable private fun ConnectionStatus(tasks: List<DownloadTask>, engine: String, extension: String, modifier: Modifier = Modifier) { val active = tasks.count { it.status == "进行中" }; val bytes = tasks.filter { it.status == "进行中" }.sumOf { it.speedBytes }; Row(modifier.height(28.dp).fillMaxWidth().background(rail).border(BorderStroke(1.dp, border)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) { Text("活动任务 $active", color = muted, fontSize = 11.sp); Spacer(Modifier.width(14.dp)); Text("队列 ${tasks.count { it.status == "排队中" }}", color = muted, fontSize = 11.sp); Spacer(Modifier.width(14.dp)); Text("总速度 ${formatRate(bytes)}", color = blue, fontSize = 11.sp, fontWeight = FontWeight.SemiBold); Spacer(Modifier.weight(1f)); Text(engine, color = if (engine == Product.engineConnected) Color(0xFF16A34A) else Color(0xFFD97706), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Spacer(Modifier.width(14.dp)); Text(extension, color = faint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
+private fun taskCount(tasks: List<DownloadTask>, filter: TaskFilter) = when (filter) { TaskFilter.ALL -> tasks.size; TaskFilter.RUNNING -> tasks.count { isActiveTaskStatus(it.status) }; else -> tasks.count { it.status == filter.label } }
+@Composable private fun ConnectionStatus(tasks: List<DownloadTask>, engine: String, extension: String, modifier: Modifier = Modifier) { val activeTasks = tasks.filter { isActiveTaskStatus(it.status) }; val active = activeTasks.size; val bytes = activeTasks.sumOf { it.speedBytes }; Row(modifier.height(28.dp).fillMaxWidth().background(rail).border(BorderStroke(1.dp, border)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) { Text("活动任务 $active", color = muted, fontSize = 11.sp); Spacer(Modifier.width(14.dp)); Text("队列 ${tasks.count { it.status == "排队中" }}", color = muted, fontSize = 11.sp); Spacer(Modifier.width(14.dp)); Text("总速度 ${formatRate(bytes)}", color = blue, fontSize = 11.sp, fontWeight = FontWeight.SemiBold); Spacer(Modifier.weight(1f)); Text(engine, color = if (engine == Product.engineConnected) Color(0xFF16A34A) else Color(0xFFD97706), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Spacer(Modifier.width(14.dp)); Text(extension, color = faint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
 
 internal data class DialogBounds(val width: Dp, val maxHeight: Dp)
 
