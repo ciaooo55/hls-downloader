@@ -23,7 +23,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-v7.ps1 -
 候选包用于外部 Windows 实机验证，要求 canonical feature parity、无
 blocked 项且 Git 工作树干净，允许 partial 以便用验收证据关闭它们，不要求
 `release_ready=true`。全部 28 项 verified 且满足正式发布门禁后，再构建正式包：
-`candidate` 和 `package` 会先执行 `pnpm install --frozen-lockfile` 与 WXT 生产构建，
+`candidate` 和 `package` 会先校验 pnpm `11.7.0`，再执行 `pnpm install --frozen-lockfile` 与 WXT 生产构建，
 并把版本为 `7.0.0` 的 Chromium/Firefox ZIP 一起写入 Portable 和安装镜像。
 
 ```powershell

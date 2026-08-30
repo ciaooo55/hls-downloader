@@ -103,8 +103,10 @@ internal fun FullSettingsDialog(
     discoveringDevices: Boolean = false,
     onDiscoverDevices: (String) -> Unit = {},
     initialTab: String = "通用",
+    saving: Boolean = false,
     onSave: (EngineSettingsDto, String?, List<SiteRuleCredentialEdit>) -> Unit,
 ) {
+    val dismiss = { if (!saving) onDismiss() }
     val tabs = remember { listOf(
         SettingsTab("通用", Icons.Outlined.Tune), SettingsTab("下载", Icons.Outlined.Downloading),
         SettingsTab("计划", Icons.Outlined.Schedule), SettingsTab("网络", Icons.Outlined.Language),
@@ -137,7 +139,7 @@ internal fun FullSettingsDialog(
 
     LaunchedEffect(selected) { contentScroll.scrollTo(0) }
 
-    WorkbenchDialog(onDismiss, "设置", "HLS Downloader ${Product.version}", 880.dp, scrollable = false, content = {
+    WorkbenchDialog(dismiss, "设置", "HLS Downloader ${Product.version}", 880.dp, scrollable = false, content = {
         Row(Modifier.fillMaxWidth().height(420.dp), verticalAlignment = Alignment.Top) {
             Column(Modifier.width(138.dp).fillMaxHeight().padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 tabs.forEach { tab ->
@@ -362,8 +364,8 @@ internal fun FullSettingsDialog(
             }
         }
     }, actions = {
-        DialogSecondary("取消", onDismiss)
-        DialogPrimary("保存设置", enabled = siteRuleError == null) {
+        DialogSecondary("取消", dismiss)
+        DialogPrimary("保存设置", enabled = siteRuleError == null && !saving) {
             val encodedSiteRules = encodeSiteRules(siteRules.map { item ->
                 item.rule.copy(
                     host = item.rule.host.trim().lowercase(),
@@ -394,7 +396,6 @@ internal fun FullSettingsDialog(
                 defaultCookie.isNotEmpty() -> defaultCookie
                 else -> null
             }, credentialEdits)
-            onDismiss()
         }
     })
 }

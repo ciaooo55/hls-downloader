@@ -11,6 +11,22 @@ if (-not (Test-Path -LiteralPath (Join-Path $appImage 'HLSDownloader.exe'))) {
 $out = if ($OutZip) { [IO.Path]::GetFullPath($OutZip) } else { Join-Path $repo 'artifacts\v7-productization\package\HLSDownloader-7.0.0-Windows-x64-Portable.zip' }
 $stage = Join-Path ([IO.Path]::GetTempPath()) ('hls-v7-portable-stage-' + [guid]::NewGuid().ToString('n'))
 $portable = Join-Path $stage 'HLSDownloader'
+function Assert-ExtensionArchive([string]$Archive, [string]$Browser) {
+    $check = Join-Path $stage ('.extension-check-' + $Browser)
+    try {
+        Expand-Archive -LiteralPath $Archive -DestinationPath $check -Force
+        $manifestPath = Join-Path $check 'manifest.json'
+        if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+            throw "$Browser extension archive is missing manifest.json."
+        }
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($manifest.version -ne '7.0.0') {
+            throw "$Browser extension manifest version is not 7.0.0: $($manifest.version)"
+        }
+    } finally {
+        Remove-Item -LiteralPath $check -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 try {
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
     Copy-Item -LiteralPath $appImage -Destination $stage -Recurse -Force
@@ -26,6 +42,7 @@ try {
     )) {
         $archive = Join-Path $packagedExtensions $item.Name
         if (Test-Path -LiteralPath $archive -PathType Leaf) {
+            Assert-ExtensionArchive $archive $item.Browser
             Copy-Item -LiteralPath $archive -Destination (Join-Path $portableExtensions $item.Name) -Force
             continue
         }
@@ -36,7 +53,9 @@ try {
         }
         $manifest = Get-Content -LiteralPath (Join-Path $source 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($manifest.version -ne '7.0.0') { throw "Built $($item.Browser) extension version is not 7.0.0: $($manifest.version)" }
-        Compress-Archive -Path (Join-Path $source '*') -DestinationPath (Join-Path $portableExtensions $item.Name) -CompressionLevel Optimal -Force
+        $archive = Join-Path $portableExtensions $item.Name
+        Compress-Archive -Path (Join-Path $source '*') -DestinationPath $archive -CompressionLevel Optimal -Force
+        Assert-ExtensionArchive $archive $item.Browser
     }
     $readme = "HLS Downloader 7.0.0 Portable`r`n`r`nRun HLSDownloader.exe. Browser Native Messaging registration is repaired automatically on startup. The extensions folder contains the matching Chromium and Firefox MV3 packages. Use scripts\upgrade-v7-portable.ps1 to atomically upgrade another v7 portable folder. The script preserves config.json, data.db and downloads; use -Rollback to restore the previous program image.`r`n"
     [IO.File]::WriteAllText((Join-Path $portable 'README-PORTABLE.txt'), $readme, [Text.UTF8Encoding]::new($false))

@@ -89,6 +89,19 @@ $requiresCanonical = $RequireCanonicalComplete -or $RequireReleaseReady -or $Req
 if ($requiresCanonical -and -not $path.Equals($canonicalPath, [StringComparison]::OrdinalIgnoreCase)) {
     $errors.Add("Package validation must use the canonical feature parity matrix: $canonicalPath")
 }
+if ($PackageTier -eq 'candidate') {
+    if (-not $RequireNoBlocked -or -not $RequireCleanWorktree) {
+        $errors.Add('Candidate validation must require no blocked features and a clean Git worktree.')
+    }
+    if ($RequireCanonicalComplete -or $RequireReleaseReady) {
+        $errors.Add('Candidate validation cannot use formal-only release gates.')
+    }
+}
+if ($PackageTier -eq 'formal') {
+    if (-not $RequireCanonicalComplete -or -not $RequireReleaseReady -or -not $RequireCleanWorktree) {
+        $errors.Add('Formal validation must require canonical complete, release_ready, and a clean Git worktree.')
+    }
+}
 if ($RequireCanonicalComplete) {
     if ($features.Count -ne 28 -or $verified.Count -ne 28) {
         $errors.Add("Canonical feature parity must be complete: expected 28/28 verified, got $($verified.Count)/$($features.Count).")

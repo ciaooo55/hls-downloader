@@ -139,6 +139,10 @@ function Copy-CurlImpersonate([string]$Destination) {
 function Build-Extension([string]$Resources) {
     $pnpm = Get-Command pnpm.cmd -ErrorAction SilentlyContinue
     if (-not $pnpm) { throw 'pnpm.cmd is required to build the production browser extension.' }
+    $pnpmVersion = (& $pnpm.Source --version).Trim()
+    if ($LASTEXITCODE -ne 0 -or $pnpmVersion -ne '11.7.0') {
+        throw "Production extension build requires pnpm 11.7.0; found $pnpmVersion"
+    }
     $package = Get-Content -LiteralPath (Join-Path $repo 'extension\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($package.version -ne '7.0.0') { throw "Browser extension package version must be 7.0.0: $($package.version)" }
     Push-Location (Join-Path $repo 'extension')
@@ -252,11 +256,26 @@ $env:HLS_ENGINE_PATH = $engine
             }
             $provenanceJson = Get-Content -LiteralPath $provenanceInPackage -Raw -Encoding UTF8 | ConvertFrom-Json
             $sourceCommit = (& git -C $repo rev-parse HEAD).Trim()
+            $sourceTree = (& git -C $repo rev-parse HEAD^{tree}).Trim()
             if ($provenanceJson.source_commit -ne $sourceCommit) {
                 throw "Portable provenance source_commit does not match HEAD: $($provenanceJson.source_commit) != $sourceCommit"
             }
+            if ($provenanceJson.source_tree -ne $sourceTree) {
+                throw "Portable provenance source_tree does not match HEAD: $($provenanceJson.source_tree) != $sourceTree"
+            }
+            if ($provenanceJson.package_tier -ne $packageTier) {
+                throw "Portable provenance package_tier does not match the build tier: $($provenanceJson.package_tier) != $packageTier"
+            }
             if ($provenanceJson.product_version -ne '7.0.0') {
                 throw "Portable provenance product_version is not 7.0.0: $($provenanceJson.product_version)"
+            }
+            $featureInPackage = Join-Path $portableRoot 'app\resources\FEATURE-PARITY.json'
+            if (-not (Test-Path -LiteralPath $featureInPackage -PathType Leaf)) {
+                throw 'Portable package is missing app/resources/FEATURE-PARITY.json.'
+            }
+            $featureHashInPackage = (Get-FileHash -LiteralPath $featureInPackage -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($provenanceJson.feature_parity_sha256 -ne $featureHashInPackage) {
+                throw "Portable feature parity hash does not match provenance: $($provenanceJson.feature_parity_sha256) != $featureHashInPackage"
             }
             foreach ($extension in @('Chromium', 'Firefox')) {
                 $archive = Join-Path $portableRoot ("extensions\HLSDownloader-7.0.0-$extension.zip")

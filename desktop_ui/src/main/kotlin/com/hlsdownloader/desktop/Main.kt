@@ -386,6 +386,7 @@ fun main() {
     var droppedPaths by remember { mutableStateOf<List<String>>(emptyList()) }
     var dropActive by remember { mutableStateOf(false) }
     var presenterAvailable by remember { mutableStateOf(false) }
+    var presenterProbeComplete by remember { mutableStateOf(false) }
     Window(
         onCloseRequest = ::exitApplication,
         title = "HLS Downloader",
@@ -398,6 +399,7 @@ fun main() {
             window.minimumSize = Dimension(1024, 600)
             while (true) {
                 presenterAvailable = withContext(Dispatchers.IO) { EnginePipeClient.ensurePresenterStarted() }
+                presenterProbeComplete = true
                 delay(5_000)
             }
         }
@@ -449,6 +451,7 @@ fun main() {
             maximized = state.placement == WindowPlacement.Maximized,
             appIcon = appIcon,
             presenterAvailable = presenterAvailable,
+            presenterProbeComplete = presenterProbeComplete,
             externalDropPaths = droppedPaths,
             externalDropActive = dropActive,
             onExternalDropConsumed = { droppedPaths = emptyList() },
@@ -482,7 +485,7 @@ internal fun auditSettingsTab(surface: String): String? = when (surface) {
 }
 
 @Composable @Preview
-fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenterAvailable: Boolean = false, externalDropPaths: List<String> = emptyList(), externalDropActive: Boolean = false, onExternalDropConsumed: () -> Unit = {}, onAttention: () -> Unit = {}, onExit: () -> Unit = {}, titleBar: @Composable () -> Unit = {}) {
+fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenterAvailable: Boolean = false, presenterProbeComplete: Boolean = false, externalDropPaths: List<String> = emptyList(), externalDropActive: Boolean = false, onExternalDropConsumed: () -> Unit = {}, onAttention: () -> Unit = {}, onExit: () -> Unit = {}, titleBar: @Composable () -> Unit = {}) {
     val visualFixture = remember { System.getenv("HLS_UI_AUDIT_SURFACE").orEmpty().lowercase() }
     val visualTheme = remember { System.getenv("HLS_UI_AUDIT_THEME").orEmpty().lowercase() }
     var filter by remember { mutableStateOf(TaskFilter.ALL) }
@@ -505,13 +508,13 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     var newTaskUrl by remember { mutableStateOf("") }
     var detailTaskId by remember { mutableStateOf<String?>(null) }
     var settings by remember { mutableStateOf(EngineSettingsDto()) }
+    var settingsSaveBusy by remember { mutableStateOf(false) }
     var handoffBusy by remember { mutableStateOf(false) }
     var refreshKey by remember { mutableIntStateOf(0) }
     var snapshotReady by remember { mutableStateOf(visualFixture == "tasks_1000") }
     var eventSequence by remember { mutableLongStateOf(0) }
     var notice by remember { mutableStateOf<UiSignal.Notice?>(null) }
     val shellFocus = remember { FocusRequester() }
-    val presenterOwner = rememberUpdatedState(presenterAvailable)
     var probeResult by remember { mutableStateOf<UiSignal.Probe?>(null) }
     var probeDraft by remember { mutableStateOf<TaskDraft?>(null) }
     var torrentProbe by remember { mutableStateOf<UiSignal.TorrentProbe?>(null) }
@@ -575,7 +578,11 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         }
     }
     val handoffQueue = remember { mutableStateListOf<HandoffOfferDto>() }
-    val activeHandoff = handoffQueue.firstOrNull()
+    LaunchedEffect(presenterAvailable) {
+        if (presenterAvailable) handoffQueue.clear()
+    }
+    val presenterReady = rememberUpdatedState(presenterProbeComplete && presenterAvailable)
+    val activeHandoff = if (presenterProbeComplete && !presenterAvailable) handoffQueue.firstOrNull() else null
     val visible = sortTasks(visibleTasks(tasks, filter, category, query, selectedQueueId), settings.taskSort)
     SideEffect { UiTestState.updateSelection(selected) }
     fun performTaskAction(taskId: String, action: String) {
@@ -771,7 +778,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         envelope.event,
                         setExtension = { connected -> extensionText = connected },
                         offerHandoff = { offer ->
-                            if (!presenterOwner.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
+                            if (!presenterReady.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
                                 handoffQueue += offer
                             }
                         },
@@ -1032,6 +1039,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     if (settingsDialog) FullSettingsDialog(
         onDismiss = {
             settingsDialog = false
+            settingsSaveBusy = false
             settingsDeviceScanActive = false
             if (pendingCastTask == null && pendingMediaSource == null) deviceResult = null
         },
@@ -1051,8 +1059,9 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             }
         },
         initialTab = auditSettingsTab(visualFixture) ?: "通用",
+        saving = settingsSaveBusy,
     ) { updated, defaultCookie, siteRuleCredentialEdits ->
-        settings = updated; darkMode = updated.darkMode
+        settingsSaveBusy = true
         scope.launch {
             runCatching { withContext(Dispatchers.IO) {
                 val client = EnginePipeClient()
@@ -1061,8 +1070,16 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 siteRuleCredentialEdits.forEach { edit -> saved = client.saveSiteRuleCredential(edit) }
                 saved
             } }
-                .onSuccess { saved -> settings = saved; notice = UiSignal.Notice("success", "设置已保存") }
+                .onSuccess { saved ->
+                    settings = saved
+                    darkMode = saved.darkMode
+                    settingsDialog = false
+                    settingsDeviceScanActive = false
+                    if (pendingCastTask == null && pendingMediaSource == null) deviceResult = null
+                    notice = UiSignal.Notice("success", "设置已保存")
+                }
                 .onFailure { error -> notice = UiSignal.Notice("error", error.message ?: "设置保存失败") }
+            settingsSaveBusy = false
         }
     }
     if (queueManagerDialog) QueueManagerDialog(settings.queueProfiles, { queueManagerDialog = false }) { profiles ->
