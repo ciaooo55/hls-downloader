@@ -959,8 +959,11 @@ mod tests {
         .unwrap();
         let rows = host.load_handoffs().unwrap();
         assert!(
-            rows.iter().any(|row| row.contains("\"status\":\"failed\"")),
-            "native host must observe a failed confirm presentation: {rows:?}"
+            rows.iter().any(|row| {
+                row.contains("\"presentation\":\"fallback\"")
+                    && row.contains("\"status\":\"pending\"")
+            }),
+            "native host must observe a fallback presentation that remains recoverable: {rows:?}"
         );
         server.shutdown();
     }

@@ -580,11 +580,24 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         }
     }
     val handoffQueue = remember { mutableStateListOf<HandoffOfferDto>() }
-    LaunchedEffect(presenterAvailable) {
-        if (presenterAvailable) handoffQueue.clear()
+    LaunchedEffect(presenterAvailable, presenterProbeComplete) {
+        if (presenterAvailable) {
+            handoffQueue.removeAll { it.presentation != "fallback" }
+        } else if (presenterProbeComplete) {
+            refreshKey++
+        }
     }
     val presenterReady = rememberUpdatedState(presenterProbeComplete && presenterAvailable)
-    val activeHandoff = if (presenterProbeComplete && !presenterAvailable) handoffQueue.firstOrNull() else null
+    val fallbackCandidate = if (presenterProbeComplete && !presenterAvailable) {
+        handoffQueue.firstOrNull { it.presentation != "fallback" }
+    } else {
+        null
+    }
+    val activeHandoff = if (presenterProbeComplete) {
+        handoffQueue.firstOrNull { it.presentation == "fallback" }
+    } else {
+        null
+    }
     val visible = sortTasks(visibleTasks(tasks, filter, category, query, selectedQueueId), settings.taskSort)
     SideEffect { UiTestState.updateSelection(selected) }
     fun performTaskAction(taskId: String, action: String) {
@@ -710,6 +723,21 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             if (attempts == 12) notice = UiSignal.Notice("error", ENGINE_RECONNECTING_NOTICE)
             delay((100L + attempts * 40L).coerceAtMost(500L))
         }
+        runCatching { withContext(Dispatchers.IO) { EnginePipeClient().loadHandoffs() } }
+            .onSuccess { offers ->
+                offers.forEach { offer ->
+                    val index = handoffQueue.indexOfFirst { it.handoffId == offer.handoffId }
+                    if (index < 0) {
+                        if (!presenterAvailable || offer.presentation == "fallback") handoffQueue += offer
+                    } else if (offer.presentation == "fallback") {
+                        handoffQueue[index] = offer
+                    }
+                }
+            }
+            .onFailure { error ->
+                UiDiagnostics.error("handoff.restore", error)
+                notice = UiSignal.Notice("error", error.message ?: "读取浏览器接管请求失败")
+            }
         runCatching { withContext(Dispatchers.IO) { EnginePipeClient().loadSettings() } }
             .onSuccess { loaded ->
                 settings = loaded
@@ -746,7 +774,10 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     }
                     eventSequence = maxOf(eventSequence, envelope.sequence)
                     val eventKind = envelope.event["kind"]?.jsonPrimitive?.content.orEmpty()
-                    if (eventKind == "settings_changed") refreshKey++
+                    if (eventKind == "settings_changed" ||
+                        (eventKind == "ui_show" && envelope.event["surface"]?.jsonPrimitive?.content == "main")) {
+                        refreshKey++
+                    }
                     val attentionRequired = when (eventKind) {
                         "handoff_offered", "error", "open_main" -> true
                         "ui_show" -> envelope.event["surface"]?.jsonPrimitive?.content == "main"
@@ -1137,29 +1168,50 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         )
     }
     if (extensionDialog) ExtensionDialog(extensionText) { extensionDialog = false }
+    LaunchedEffect(fallbackCandidate?.handoffId, fallbackCandidate?.presentation) {
+        val offer = fallbackCandidate ?: return@LaunchedEffect
+        runCatching { withContext(Dispatchers.IO) { EnginePipeClient().presentHandoff(offer.handoffId, presented = false) } }
+            .onSuccess {
+                val index = handoffQueue.indexOfFirst { it.handoffId == offer.handoffId }
+                if (index >= 0) handoffQueue[index] = offer.copy(presentation = "fallback")
+            }
+            .onFailure { error ->
+                UiDiagnostics.error("handoff.claim_fallback", error, offer.handoffId)
+                notice = UiSignal.Notice("error", error.message ?: "接管浏览器下载确认请求失败")
+            }
+    }
     activeHandoff?.let { offer ->
-        LaunchedEffect(offer.handoffId) {
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().presentHandoff(offer.handoffId) } }
-                .onFailure { engineText = Product.engineReconnecting }
-        }
         LaunchedEffect(offer.handoffId, handoffBusy) {
             if (handoffBusy) return@LaunchedEffect
+            var statusReadFailed = false
             while (handoffQueue.any { it.handoffId == offer.handoffId }) {
                 delay(1_500)
-                val status = runCatching { withContext(Dispatchers.IO) { EnginePipeClient().loadHandoffStatuses() } }
-                    .getOrNull()
-                    ?.firstOrNull { it.id == offer.handoffId }
-                    ?.status
-                if (status != null && status != "pending") {
-                    handoffQueue.removeAll { it.handoffId == offer.handoffId }
-                }
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient().loadHandoffStatuses() } }
+                    .onSuccess { statuses ->
+                        statusReadFailed = false
+                        val status = statuses.firstOrNull { it.id == offer.handoffId }?.status
+                        if (status != null && status != "pending") {
+                            handoffQueue.removeAll { it.handoffId == offer.handoffId }
+                        }
+                    }
+                    .onFailure { error ->
+                        if (!statusReadFailed) {
+                            UiDiagnostics.error("handoff.status", error, offer.handoffId)
+                            notice = UiSignal.Notice("error", error.message ?: "读取浏览器接管状态失败")
+                        }
+                        statusReadFailed = true
+                    }
             }
         }
         BrowserHandoffDialog(
             offer = offer,
             settings = settings,
             duplicate = tasks.firstOrNull { canonicalHandoffUrl(it.source.url) == canonicalHandoffUrl(offer.url) },
-            pendingCount = handoffQueue.size,
+            pendingCount = if (presenterAvailable) {
+                handoffQueue.count { it.presentation == "fallback" }
+            } else {
+                handoffQueue.size
+            },
             busy = handoffBusy,
             onAccept = { decision ->
                 handoffBusy = true
@@ -1180,7 +1232,10 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         }
                     }
                         .onSuccess { handoffQueue.removeAll { it.handoffId == offer.handoffId }; refreshKey++ }
-                        .onFailure { engineText = Product.engineReconnecting }
+                        .onFailure { error ->
+                            UiDiagnostics.error("handoff.accept", error, offer.handoffId)
+                            notice = UiSignal.Notice("error", error.message ?: "接受浏览器接管请求失败")
+                        }
                     handoffBusy = false
                 }
             },
@@ -1189,7 +1244,10 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 scope.launch {
                     runCatching { withContext(Dispatchers.IO) { EnginePipeClient().rejectHandoff(offer.handoffId, suppressSiteKind) } }
                         .onSuccess { handoffQueue.removeAll { it.handoffId == offer.handoffId } }
-                        .onFailure { engineText = Product.engineReconnecting }
+                        .onFailure { error ->
+                            UiDiagnostics.error("handoff.reject", error, offer.handoffId)
+                            notice = UiSignal.Notice("error", error.message ?: "拒绝浏览器接管请求失败")
+                        }
                     handoffBusy = false
                 }
             },

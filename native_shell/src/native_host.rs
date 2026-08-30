@@ -646,9 +646,9 @@ impl Handoff {
             "created_at_ms": self.created_at_ms,
             "presented": self.presentation == "presented",
             "presentation": self.presentation,
-            "presentation_mode": "native-rust",
+            "presentation_mode": if self.presentation == "fallback" { "ui-fallback" } else { "native-rust" },
             "presentation_ok": self.presentation != "failed" && self.status != "failed",
-            "presentation_queued": self.presentation == "queued",
+            "presentation_queued": matches!(self.presentation.as_str(), "queued" | "fallback"),
             "presentable": true,
         });
         if let Some(suppression) = &self.suppression {

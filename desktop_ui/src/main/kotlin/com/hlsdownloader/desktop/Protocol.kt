@@ -184,6 +184,8 @@ data class HandoffOfferDto(
     @SerialName("mime_type") val mimeType: String = "",
     val size: Long = 0,
     @SerialName("source_page_url") val sourcePageUrl: String = "",
+    val status: String = "pending",
+    val presentation: String = "queued",
 )
 
 @Serializable data class HandoffStatusDto(val id: String, val status: String = "pending")
@@ -623,6 +625,30 @@ class EnginePipeClient(
         response.requireType("handoffs", "读取浏览器接管状态失败")
         response["items"]?.jsonArray.orEmpty().mapNotNull { item ->
             runCatching { protocolJson.decodeFromString(HandoffStatusDto.serializer(), item.jsonPrimitive.content) }.getOrNull()
+        }
+    }
+
+    fun loadHandoffs(): List<HandoffOfferDto> = session { connection ->
+        val response = connection.request(request("load_handoffs"))
+        response.requireType("handoffs", "读取浏览器接管请求失败")
+        response["items"]?.jsonArray.orEmpty().mapNotNull { item ->
+            runCatching {
+                val handoff = protocolJson.parseToJsonElement(item.jsonPrimitive.content).jsonObject
+                if (handoff["status"]?.jsonPrimitive?.content != "pending") return@runCatching null
+                val offer = protocolJson.decodeFromJsonElement(
+                    HandoffOfferDto.serializer(),
+                    handoff["offer"]?.jsonObject ?: return@runCatching null,
+                )
+                offer.copy(
+                    handoffId = handoff["id"]?.jsonPrimitive?.content ?: offer.handoffId,
+                    filename = handoff["filename"]?.jsonPrimitive?.content ?: offer.filename,
+                    title = handoff["title"]?.jsonPrimitive?.content ?: offer.title,
+                    mimeType = handoff["mime_type"]?.jsonPrimitive?.content ?: offer.mimeType,
+                    size = handoff["size"]?.jsonPrimitive?.content?.toLongOrNull() ?: offer.size,
+                    status = "pending",
+                    presentation = handoff["presentation"]?.jsonPrimitive?.content ?: offer.presentation,
+                )
+            }.getOrNull()
         }
     }
 

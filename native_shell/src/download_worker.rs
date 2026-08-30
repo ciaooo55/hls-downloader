@@ -2175,6 +2175,7 @@ impl CoreCoordinator {
             return Err("接管请求缺少编号".into());
         }
         let mut core = self.lock()?;
+        let mut updated = false;
         for encoded in core.store().load_handoffs()? {
             let Ok(mut value) = serde_json::from_str::<Value>(&encoded) else {
                 continue;
@@ -2195,11 +2196,11 @@ impl CoreCoordinator {
                     Value::String(if ok {
                         "presented".into()
                     } else {
-                        "failed".into()
+                        "fallback".into()
                     }),
                 );
                 if !ok {
-                    object.insert("status".into(), Value::String("failed".into()));
+                    object.insert("status".into(), Value::String("pending".into()));
                 }
             }
             let json = serde_json::to_string(&value)
@@ -2215,10 +2216,13 @@ impl CoreCoordinator {
             let task_id = value.get("task_id").and_then(Value::as_str);
             core.store_mut()
                 .save_handoff(&handoff_id, &json, status, task_id, created)?;
+            updated = true;
             break;
         }
-        if !ok {
-            let _ = core.take_pending_handoff(&handoff_id);
+        if !ok && updated {
+            return core.emit(CoreEvent::UiShow {
+                surface: "main".into(),
+            });
         }
         Ok(Vec::new())
     }
@@ -6677,7 +6681,7 @@ mod tests {
     }
 
     #[test]
-    fn present_handoff_failure_fails_pending_row() {
+    fn present_handoff_failure_keeps_pending_row_for_fallback() {
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         coordinator
             .lock()
@@ -6711,12 +6715,16 @@ mod tests {
             .unwrap()
             .pending_handoff("handoff-ui")
             .is_some());
-        coordinator
+        let events = coordinator
             .dispatch(CoreCommand::PresentHandoff {
                 handoff_id: "handoff-ui".into(),
                 ok: false,
             })
             .unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event.event,
+            crate::CoreEvent::UiShow { ref surface } if surface == "main"
+        )));
         let json = coordinator
             .lock()
             .unwrap()
@@ -6724,12 +6732,13 @@ mod tests {
             .load_handoffs()
             .unwrap()
             .join("\n");
-        assert!(json.contains("failed"));
+        assert!(json.contains("\"presentation\":\"fallback\""));
+        assert!(json.contains("\"status\":\"pending\""));
         assert!(coordinator
             .lock()
             .unwrap()
             .pending_handoff("handoff-ui")
-            .is_none());
+            .is_some());
     }
 
     #[test]

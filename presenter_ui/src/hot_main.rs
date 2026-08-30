@@ -24,6 +24,8 @@ use std::time::Duration;
 struct PersistedHandoff {
     #[serde(default)]
     status: String,
+    #[serde(default)]
+    presentation: String,
     offer: ResourceOffer,
 }
 
@@ -724,7 +726,7 @@ fn load_pending_offers(client: &mut CoreIpcClient) -> VecDeque<ResourceOffer> {
         .unwrap_or_default()
         .into_iter()
         .filter_map(|encoded| serde_json::from_str::<PersistedHandoff>(&encoded).ok())
-        .filter(|handoff| handoff.status == "pending")
+        .filter(|handoff| handoff.status == "pending" && handoff.presentation != "fallback")
         .map(|handoff| handoff.offer)
         .fold(VecDeque::new(), |mut pending, offer| {
             if !pending
@@ -813,11 +815,21 @@ fn show_next_offer(
         let _ = center_window_by_title("确认下载");
         let _ = activate_window_by_title("确认下载");
     }
-    if let Ok(mut client) = CoreIpcClient::connect() {
-        let _ = client.command(CoreCommand::PresentHandoff {
-            handoff_id: offer.handoff_id,
-            ok: shown,
-        });
+    let reported = CoreIpcClient::connect()
+        .and_then(|mut client| {
+            client.command(CoreCommand::PresentHandoff {
+                handoff_id: offer.handoff_id.clone(),
+                ok: shown,
+            })
+        })
+        .is_ok();
+    if !shown && reported {
+        if let Ok(mut items) = pending.lock() {
+            items.retain(|item| item.handoff_id != offer.handoff_id);
+        }
+        if let Some(root) = install_root() {
+            let _ = spawn_desktop_ui(&root);
+        }
     }
 }
 
