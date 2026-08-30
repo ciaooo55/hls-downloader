@@ -166,9 +166,15 @@ function Assert-ExtensionManifest($Manifest, [string]$Browser, [string]$Path) {
 }
 
 function Build-Extension([string]$Resources) {
-    $pnpm = Get-Command pnpm.cmd -ErrorAction SilentlyContinue
-    if (-not $pnpm) { throw 'pnpm.cmd is required to build the production browser extension.' }
-    $pnpmVersion = (& $pnpm.Source --version).Trim()
+    # HLS_V7_PNPM overrides; otherwise PATH, then the repository-local Node
+    # tools directory that bootstrap provisions.
+    $pnpmPath = $env:HLS_V7_PNPM
+    if (-not $pnpmPath) {
+        $pnpmCommand = Get-Command pnpm.cmd -ErrorAction SilentlyContinue
+        $pnpmPath = if ($pnpmCommand) { $pnpmCommand.Source } else { Join-Path $repo '.tool-cache\node-v22.14.0-win-x64\pnpm.cmd' }
+    }
+    if (-not (Test-Path -LiteralPath $pnpmPath)) { throw 'pnpm.cmd is required to build the production browser extension.' }
+    $pnpmVersion = (& $pnpmPath --version).Trim()
     if ($LASTEXITCODE -ne 0 -or $pnpmVersion -ne '11.7.0') {
         throw "Production extension build requires pnpm 11.7.0; found $pnpmVersion"
     }
@@ -176,9 +182,9 @@ function Build-Extension([string]$Resources) {
     if ($package.version -ne '7.0.0') { throw "Browser extension package version must be 7.0.0: $($package.version)" }
     Push-Location (Join-Path $repo 'extension')
     try {
-        & $pnpm.Source install --frozen-lockfile
+        & $pnpmPath install --frozen-lockfile
         if ($LASTEXITCODE -ne 0) { throw "pnpm install failed with exit $LASTEXITCODE" }
-        & $pnpm.Source run build
+        & $pnpmPath run build
         if ($LASTEXITCODE -ne 0) { throw "pnpm run build failed with exit $LASTEXITCODE" }
     } finally { Pop-Location }
     New-Item -ItemType Directory -Force -Path (Join-Path $Resources 'extensions') | Out-Null
