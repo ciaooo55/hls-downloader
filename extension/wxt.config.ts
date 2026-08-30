@@ -1,6 +1,14 @@
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'wxt'
 import { CHROMIUM_PUBLIC_KEY, FIREFOX_EXTENSION_ID } from './lib/storeIdentity'
-const extensionVersion = process.env.HLS_EXTENSION_VERSION || '7.0.0'
+
+// package.json is the single source of the extension version; the environment
+// variable stays available as a local release override.
+const { version: packageVersion } = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+) as { version?: string }
+const extensionVersion = process.env.HLS_EXTENSION_VERSION || String(packageVersion || '')
+if (!extensionVersion) throw new Error('扩展版本缺失：package.json 未提供 version 字段')
 
 export default defineConfig({
   manifestVersion: 3,
@@ -18,7 +26,6 @@ export default defineConfig({
     permissions: [
       'downloads', 'contextMenus', 'nativeMessaging', 'storage', 'cookies', 'webRequest', 'alarms',
       ...(browser === 'chrome' ? ['downloads.ui', 'downloads.shelf'] : []),
-      ...(browser === 'firefox' ? ['webRequestBlocking'] : []),
     ],
     host_permissions: ['<all_urls>'],
     web_accessible_resources: [{ resources: ['icon-16.png', 'icon-32.png', 'icon-48.png', 'icon-128.png'], matches: ['<all_urls>'] }],

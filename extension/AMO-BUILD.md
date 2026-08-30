@@ -61,5 +61,7 @@ authorized cookies are sent only to the Native Messaging application on the same
 Windows computer.
 
 The content script builds its Shadow DOM with DOM APIs and renders resource names,
-URLs, MIME values, and native-host errors through `textContent`. No captured page
-value is assigned to HTML parsing APIs.
+URLs, MIME values, and native-host errors through `textContent`. The popup
+assigns only static, extension-owned SVG icon constants to `innerHTML`; no
+string derived from the page or the desktop app is ever parsed as HTML. No
+captured page value is assigned to HTML parsing APIs.

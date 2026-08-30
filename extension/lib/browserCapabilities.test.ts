@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from './browserCapabilities'
+import { createRecurringAlarm, filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from './browserCapabilities'
 
 describe('browser capability guards', () => {
   it('does not access Chromium-only filename events in Firefox', () => {
@@ -20,5 +20,28 @@ describe('browser capability guards', () => {
     const wait = vi.fn(async () => ({ href: 'https://example.test/file.zip' }))
     await expect(resolveFirefoxClickIntent(undefined, wait)).resolves.toEqual({ href: 'https://example.test/file.zip' })
     expect(wait).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the requested sub-minute alarm period on Chromium', () => {
+    const create = vi.fn()
+    createRecurringAlarm({ create }, 'worker-heartbeat', 0.5, false)
+    expect(create).toHaveBeenCalledOnce()
+    expect(create).toHaveBeenCalledWith('worker-heartbeat', { periodInMinutes: 0.5 })
+  })
+
+  it('creates Firefox recurring alarms with the portable one-minute period', () => {
+    const create = vi.fn()
+    createRecurringAlarm({ create }, 'worker-heartbeat', 0.5, true)
+    expect(create).toHaveBeenCalledOnce()
+    expect(create).toHaveBeenCalledWith('worker-heartbeat', { periodInMinutes: 1 })
+  })
+
+  it('falls back to the portable period when alarm creation throws', () => {
+    const create = vi.fn(() => {
+      throw new Error('periodInMinutes must be at least 1')
+    })
+    expect(() => createRecurringAlarm({ create }, 'worker-heartbeat', 0.5, false)).not.toThrow()
+    expect(create).toHaveBeenCalledTimes(2)
+    expect(create).toHaveBeenLastCalledWith('worker-heartbeat', { periodInMinutes: 1 })
   })
 })

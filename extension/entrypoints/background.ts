@@ -5,8 +5,15 @@ import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
 import { boundedConfidence, canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isConcreteDownloadMime, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, desktopTaskReadiness, handoffStatusLabel, handoffTerminalStatus, type BrowserHandoffPayload, type DesktopTaskReadiness } from '../lib/takeover'
+import {
+  PAUSED_FOLLOW_UP_RECHECK_MS,
+  PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY,
+  PAUSED_HANDOFF_RESOLUTION_MS,
+  PausedHandoffFollowUpStore,
+  stepPausedHandoffFollowUp,
+} from '../lib/pausedHandoffFollowups'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
-import { filenameDeterminationEvent, requestHeaderExtraInfo } from '../lib/browserCapabilities'
+import { createRecurringAlarm, filenameDeterminationEvent, requestHeaderExtraInfo } from '../lib/browserCapabilities'
 import { inspectHlsResource } from '../lib/hlsInspection'
 import { inspectDashResource } from '../lib/dashInspection'
 import { contentDispositionFilename } from '../lib/contentDisposition'
@@ -105,6 +112,18 @@ let handoffTrackerHydrated = false
 let handoffTrackerPolling = false
 let handoffTrackerTimer: ReturnType<typeof setTimeout> | null = null
 let lastDesktopPingAt = 0
+
+// Paused-download follow-ups are the suspension-safe carrier for the takeover
+// cleanup flow: only browser.alarms reliably wake a suspended MV3 worker, so
+// the deadlines live in storage.session next to the tracked handoffs.
+const pausedFollowUpStore = new PausedHandoffFollowUpStore(browser.storage.session, PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY)
+const pausedFollowUpsInFlight = new Set<string>()
+let pausedFollowUpPass = false
+let pausedFollowUpAccelerator: ReturnType<typeof setTimeout> | null = null
+const WORKER_ALARM_NAME = 'desktop-heartbeat'
+const WORKER_ALARM_PERIOD_MINUTES = 0.5
+const BADGE_REFRESH_MINIMUM_MS = 5 * 60_000
+let lastBadgeRefreshAt = 0
 
 function browserClientId(): Promise<string> {
   browserClientIdPromise ||= stableBrowserClientId(
@@ -363,9 +382,113 @@ async function waitForDesktopTaskReadiness(
   return 'keep-paused'
 }
 
-function followUpPausedHandoffCleanup(item: Browser.downloads.DownloadItem, handoffId: string): void {
-  void waitForDesktopTaskReadiness(handoffId, 180_000).then(async later => {
+function schedulePausedFollowUpAccelerator(delay: number): void {
+  if (pausedFollowUpAccelerator) return
+  pausedFollowUpAccelerator = setTimeout(() => {
+    pausedFollowUpAccelerator = null
+    void continuePausedHandoffFollowups()
+  }, Math.max(0, delay))
+}
+
+async function rememberPausedHandoffFollowUp(downloadId: number, handoffId: string): Promise<void> {
+  // Persist the deadline BEFORE the first long wait: a suspended worker drops
+  // every setTimeout, so the stored record plus the worker alarm are the only
+  // carriers that survive. The takeover-flow awaits are just accelerators.
+  await pausedFollowUpStore.remember({
+    downloadId,
+    handoffId,
+    phase: 'resolution',
+    deadline: Date.now() + PAUSED_HANDOFF_RESOLUTION_MS,
+  })
+  schedulePausedFollowUpAccelerator(PAUSED_HANDOFF_RESOLUTION_MS)
+}
+
+async function resumeFollowUpDownload(downloadId: number): Promise<void> {
+  const [current] = await browser.downloads.search({ id: downloadId }).catch(() => [])
+  if (!current) return
+  await resumeBrowserDownload(current, true)
+}
+
+async function removeFollowUpDownload(downloadId: number): Promise<void> {
+  const [current] = await browser.downloads.search({ id: downloadId }).catch(() => [])
+  if (!current) return
+  await removeBrowserDownload(current)
+}
+
+/**
+ * Continue the lifecycle of paused browser downloads left behind by a takeover.
+ * storage.session plus this pass are the reliable carriers across service-worker
+ * suspension; bare setTimeout only accelerates the alive-worker case. A record
+ * stays until the desktop proves success (remove the browser copy) or failure
+ * (resume it) — uncertainty keeps the item visibly paused for the user.
+ */
+async function continuePausedHandoffFollowups(): Promise<void> {
+  if (pausedFollowUpPass) return
+  pausedFollowUpPass = true
+  try {
+    await pausedFollowUpStore.hydrate()
+    for (const record of pausedFollowUpStore.list()) {
+      if (pausedFollowUpsInFlight.has(record.handoffId)) continue
+      pausedFollowUpsInFlight.add(record.handoffId)
+      try {
+        let handoff: BrowserHandoffPayload = {}
+        try {
+          const response = await native({ op: 'handoff_status', handoff_id: record.handoffId }, 2_500)
+          handoff = (response?.handoff || response || {}) as BrowserHandoffPayload
+        } catch {
+          // An unreachable desktop must not resume or remove anything.
+        }
+        const step = stepPausedHandoffFollowUp(record, handoff, Date.now(), PAUSED_FOLLOW_UP_RECHECK_MS)
+        if (step.kind === 'keep-paused') {
+          await pausedFollowUpStore.remember(step.followUp)
+          continue
+        }
+        await pausedFollowUpStore.drop(record.handoffId)
+        if (step.kind === 'resume-download') {
+          await resumeFollowUpDownload(record.downloadId)
+          revealBrowserDownload()
+          continue
+        }
+        concealBrowserDownload()
+        try {
+          await removeFollowUpDownload(record.downloadId)
+        } finally {
+          revealBrowserDownload()
+        }
+      } finally {
+        pausedFollowUpsInFlight.delete(record.handoffId)
+      }
+    }
+  } finally {
+    pausedFollowUpPass = false
+  }
+  // Readiness records parked for a later re-check are pulled forward by the
+  // accelerator when the worker stays alive; the alarm covers suspension.
+  const parked = pausedFollowUpStore.list()
+    .find(record => record.phase === 'readiness' && record.deadline > Date.now())
+  if (parked) schedulePausedFollowUpAccelerator(parked.deadline - Date.now())
+}
+
+/**
+ * Ownership of a paused download after the desktop accepted its handoff. The
+ * persisted follow-up is the reliable carrier: only browser.alarms reliably
+ * wake a suspended worker, so the shared alarm handler rehydrates and finishes
+ * this cleanup. The in-process wait below only accelerates resolution while
+ * this worker happens to stay alive.
+ */
+async function followUpPausedHandoffCleanup(item: Browser.downloads.DownloadItem, handoffId: string): Promise<void> {
+  pausedFollowUpsInFlight.add(handoffId)
+  try {
+    await pausedFollowUpStore.remember({
+      downloadId: item.id,
+      handoffId,
+      phase: 'readiness',
+      deadline: Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS,
+    })
+    schedulePausedFollowUpAccelerator(PAUSED_FOLLOW_UP_RECHECK_MS)
+    const later = await waitForDesktopTaskReadiness(handoffId, 180_000)
     if (later === 'safe-to-remove') {
+      await pausedFollowUpStore.drop(handoffId)
       concealBrowserDownload()
       try {
         await removeBrowserDownload(item)
@@ -375,12 +498,14 @@ function followUpPausedHandoffCleanup(item: Browser.downloads.DownloadItem, hand
       return
     }
     if (later === 'browser-fallback') {
+      await pausedFollowUpStore.drop(handoffId)
       await resumeBrowserDownload(item, true)
       revealBrowserDownload()
-      return
     }
-    followUpPausedHandoffCleanup(item, handoffId)
-  }).catch(() => undefined)
+  } finally {
+    pausedFollowUpsInFlight.delete(handoffId)
+  }
+  // keep-paused: the persisted follow-up keeps polling through the worker alarm.
 }
 
 async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1) {
@@ -439,6 +564,15 @@ async function refreshOpenTabBadges(): Promise<void> {
     .map(tab => Number(tab.id))
     .filter(tabId => Number.isInteger(tabId) && tabId >= 0)
     .map(tabId => refreshTabBadge(tabId)))
+}
+
+function refreshOpenTabBadgesWhenDue(): void {
+  // Badge expiry stays on the slow cadence the dedicated alarm used to run
+  // with; the shared worker alarm only checks the clock here.
+  const now = Date.now()
+  if (now - lastBadgeRefreshAt < BADGE_REFRESH_MINIMUM_MS) return
+  lastBadgeRefreshAt = now
+  void refreshOpenTabBadges()
 }
 
 async function sendCapturedResource(tabId: number, resource: Omit<MediaResource, 'id' | 'seenAt'>): Promise<void> {
@@ -1097,22 +1231,29 @@ export default defineBackground(() => {
     message => native(message),
   )
   void hydrateHandoffTracker().then(() => pollTrackedHandoffs()).catch(() => undefined)
+  // A suspended worker may have left paused downloads waiting on a handoff;
+  // storage.session survives the suspension, so finish that work right away.
+  void continuePausedHandoffFollowups().catch(() => undefined)
   void setBrowserDownloadUi(true)
   void pingDesktop().catch(() => undefined)
-  browser.alarms.create('desktop-heartbeat', { periodInMinutes: 0.5 })
-  browser.alarms.create('handoff-tracker', { periodInMinutes: 0.5 })
-  // Reconcile inactive tabs without waking the worker on every heartbeat.
-  // Activation remains immediate; this only expires a badge on a tab that
-  // has not been selected for a long time.
-  browser.alarms.create('resource-badge-refresh', { periodInMinutes: 5 })
+  // One recurring alarm drives everything that must survive service-worker
+  // suspension: the desktop heartbeat, handoff tracking, paused-download
+  // follow-ups and the inactive-tab badge expiry. Only browser.alarms reliably
+  // wake a suspended worker, so no deadline may ride on setTimeout alone.
+  // Firefox clamps sub-minute periods and older Chromium builds reject them.
+  createRecurringAlarm(browser.alarms, WORKER_ALARM_NAME, WORKER_ALARM_PERIOD_MINUTES, import.meta.env.FIREFOX)
+  // Retired per-feature alarms from earlier builds would keep waking this
+  // worker for listeners that no longer exist.
+  void browser.alarms.clear('handoff-tracker').catch(() => undefined)
+  void browser.alarms.clear('resource-badge-refresh').catch(() => undefined)
   browser.alarms.onAlarm.addListener(alarm => {
-    if (alarm.name === 'desktop-heartbeat') {
-      requestChains.cleanup()
-      blobSources.cleanup()
-      void pingDesktop().catch(() => undefined)
-    }
-    if (alarm.name === 'handoff-tracker') void pollTrackedHandoffs()
-    if (alarm.name === 'resource-badge-refresh') void refreshOpenTabBadges()
+    if (alarm.name !== WORKER_ALARM_NAME) return
+    requestChains.cleanup()
+    blobSources.cleanup()
+    void pingDesktop().catch(() => undefined)
+    void pollTrackedHandoffs()
+    void continuePausedHandoffFollowups().catch(() => undefined)
+    void refreshOpenTabBadgesWhenDue()
   })
   browser.runtime.onInstalled.addListener(() => {
     void installContextMenus()
@@ -1183,6 +1324,7 @@ export default defineBackground(() => {
     console.debug('HLS Downloader observed a browser download candidate')
     let paused = false
     let accepted = false
+    let followUpHandoffId = ''
     try {
       // IDM pauses the browser item immediately in onCreated and resolves
       // ownership afterwards. Do the same before any storage/native await so a
@@ -1205,20 +1347,26 @@ export default defineBackground(() => {
           // The early response already created the desktop handoff.  If the
           // desktop rejected presentation, leave the original browser item
           // untouched; otherwise wait for the user's final decision and clean
-          // up the browser item only after acceptance.
+          // up the browser item only after acceptance. The follow-up deadline
+          // is persisted before waiting so a suspended worker continues this
+          // flow from the shared alarm.
           if (!desktopAcceptedHandoff(earlyResult.response)) return
-          const handoff = await waitForHandoffResolution(String(earlyResult.response.handoff.id))
+          const handoffId = String(earlyResult.response.handoff.id)
+          followUpHandoffId = handoffId
+          await rememberPausedHandoffFollowUp(item.id, handoffId)
+          const handoff = await waitForHandoffResolution(handoffId)
           if (handoff?.status !== 'accepted') return
-          const readiness = await waitForDesktopTaskReadiness(String(earlyResult.response.handoff.id))
+          const readiness = await waitForDesktopTaskReadiness(handoffId)
           if (readiness === 'browser-fallback') return
           if (readiness === 'keep-paused') {
             accepted = true
-            followUpPausedHandoffCleanup(item, String(earlyResult.response.handoff.id))
+            void followUpPausedHandoffCleanup(item, handoffId)
             return
           }
           concealBrowserDownload()
           await removeBrowserDownload(item)
           accepted = true
+          await pausedFollowUpStore.drop(handoffId)
           return
         }
       }
@@ -1307,14 +1455,19 @@ export default defineBackground(() => {
       if (!desktopAcceptedHandoff(response)) throw new Error(response?.error || 'desktop rejected')
       // Do not discard the browser download just because the confirmation
       // window opened. The user owns the final decision; cancel/reject keeps
-      // this original download in the browser.
-      const handoff = await waitForHandoffResolution(String(response.handoff.id))
+      // this original download in the browser. The follow-up deadline is
+      // persisted before waiting so a suspended worker continues this flow
+      // from the shared alarm.
+      const handoffId = String(response.handoff.id)
+      followUpHandoffId = handoffId
+      await rememberPausedHandoffFollowUp(item.id, handoffId)
+      const handoff = await waitForHandoffResolution(handoffId)
       if (handoff?.status !== 'accepted') return
-      const readiness = await waitForDesktopTaskReadiness(String(response.handoff.id))
+      const readiness = await waitForDesktopTaskReadiness(handoffId)
       if (readiness === 'browser-fallback') return
       if (readiness === 'keep-paused') {
         accepted = true
-        followUpPausedHandoffCleanup(actualBrowser, String(response.handoff.id))
+        void followUpPausedHandoffCleanup(actualBrowser, handoffId)
         return
       }
       // Do not hide Chrome's downloads UI merely because a browser download was
@@ -1322,11 +1475,15 @@ export default defineBackground(() => {
       concealBrowserDownload()
       await removeBrowserDownload(actualBrowser)
       accepted = true
+      await pausedFollowUpStore.drop(handoffId)
     } catch (error) {
       console.warn('HLS Downloader takeover failed; browser download remains untouched', error)
     } finally {
       determinedDownloads.delete(item.id)
       determinationWaiters.delete(item.id)
+      // The follow-up record must not outlive a lifecycle this worker already
+      // resolved; the keep-paused path keeps it and owns the paused item.
+      if (followUpHandoffId && !accepted) await pausedFollowUpStore.drop(followUpHandoffId)
       await resumeBrowserDownload(item, paused && !accepted)
       revealBrowserDownload()
     }
