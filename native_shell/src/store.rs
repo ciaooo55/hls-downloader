@@ -28,6 +28,17 @@ impl CoreStore {
         }
         let connection = Connection::open(path)
             .map_err(|error| format!("open Core database {}: {error}", path.display()))?;
+        // initialize() would silently re-stamp user_version, so an unexpected
+        // existing version must be refused before the schema batch runs.
+        let existing: u32 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(|error| format!("read Core database {}: {error}", path.display()))?;
+        if existing != 0 && existing != CURRENT_SCHEMA_VERSION {
+            return Err(format!(
+                "Core database {} has unsupported schema version {existing}, expected {CURRENT_SCHEMA_VERSION}",
+                path.display()
+            ));
+        }
         let mut store = Self {
             connection,
             path: Some(path.to_path_buf()),
@@ -598,6 +609,28 @@ mod tests {
         store.set_setting("minimum_bytes", 42_u64).unwrap();
         assert!(!store.setting_bool("takeover_enabled", true).unwrap());
         assert_eq!(store.setting_u64("minimum_bytes", 0).unwrap(), 42);
+    }
+
+    #[test]
+    fn open_rejects_unexpected_existing_schema_version() {
+        let path = std::env::temp_dir().join(format!(
+            "hls-v7-schema-guard-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("PRAGMA user_version = 99;").unwrap();
+        drop(connection);
+
+        let error = match CoreStore::open(&path) {
+            Ok(_) => panic!("expected open to refuse unexpected schema version"),
+            Err(error) => error,
+        };
+        assert!(error.contains("unsupported schema version"), "{error}");
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

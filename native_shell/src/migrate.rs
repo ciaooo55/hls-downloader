@@ -80,7 +80,6 @@ fn legacy_location_candidates() -> Vec<(PathBuf, PathBuf)> {
         roots.push(local.join("Programs").join("HLS Downloader"));
         roots.push(local.join("Programs").join("HLS Downloader v6"));
     }
-    roots.push(PathBuf::from(r"E:\HLS Downloader"));
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             roots.push(dir.to_path_buf());

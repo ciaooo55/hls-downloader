@@ -5295,7 +5295,9 @@ mod tests {
                 spec: TaskSpec {
                     url: "https://cdn.test/active-start.bin".into(),
                     filename: "active-start.bin".into(),
-                    scheduled_start_at: "2999-01-01T00:00:00Z".into(),
+                    // A future schedule would defer this start to queued (covered by
+                    // start_like_actions_wait_then_keep_future_tasks_queued); this
+                    // test needs an open schedule to exercise active-worker reuse.
                     ..Default::default()
                 },
             })

@@ -1,4 +1,7 @@
 //! Atomic first-run migration from the Rust v6 Core database.
+//!
+//! Like the 5.x importer, `HLS_V6_SKIP_MIGRATE` skips the adoption entirely and
+//! lets v7 start with a fresh database; the v6 database stays untouched on disk.
 
 use crate::{default_v7_download_dir, MediaPushRequest, ResourceOffer, TaskSnapshot, TaskSpec};
 use rusqlite::{backup::Backup, params, Connection, OpenFlags, OptionalExtension};
@@ -12,6 +15,9 @@ const MIGRATED_FLAG: &str = "migrated_from_v6";
 
 pub(crate) fn migrate_installed_v6_database(target: &Path) -> Result<(), String> {
     if target.exists() {
+        return Ok(());
+    }
+    if std::env::var_os("HLS_V6_SKIP_MIGRATE").is_some() {
         return Ok(());
     }
     if std::env::var_os("HLS_V7_DATA_DIR").is_some() {
@@ -34,6 +40,23 @@ pub(crate) fn migrate_installed_v6_database(target: &Path) -> Result<(), String>
     if !source.is_file() {
         return Ok(());
     }
+    migrate_v6_database_from(&source, target, &local_app_data)
+}
+
+/// Migrate one explicit v6 database into `target`. Split from the installed-path
+/// discovery in [`migrate_installed_v6_database`] so tests can drive real
+/// migrations with temporary directories.
+pub(crate) fn migrate_v6_database_from(
+    source: &Path,
+    target: &Path,
+    local_app_data: &Path,
+) -> Result<(), String> {
+    if !source.is_file() {
+        return Ok(());
+    }
+    if target.exists() {
+        return Ok(());
+    }
     ensure_v6_not_running()?;
 
     let parent = target
@@ -50,7 +73,7 @@ pub(crate) fn migrate_installed_v6_database(target: &Path) -> Result<(), String>
         std::process::id()
     ));
 
-    let result = migrate_to_temp(&source, &temp, &local_app_data).and_then(|()| {
+    let result = migrate_to_temp(source, &temp, local_app_data).and_then(|()| {
         if target.exists() {
             return Err(format!(
                 "v7 database appeared during migration: {}",
@@ -244,11 +267,19 @@ fn normalize_download_dirs(
     let roots = legacy_roots(local_app_data, source);
     let default = default_v7_download_dir();
     let mut statement = connection
-        .prepare("SELECT task_id, spec_json FROM task_specs ORDER BY task_id")
+        .prepare(
+            "SELECT s.task_id, s.spec_json, t.snapshot_json \
+             FROM task_specs AS s JOIN tasks AS t ON t.task_id = s.task_id \
+             ORDER BY s.task_id",
+        )
         .map_err(|error| format!("prepare v6 task path migration: {error}"))?;
     let rows = statement
         .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })
         .map_err(|error| format!("query v6 task paths: {error}"))?
         .collect::<Result<Vec<_>, _>>()
@@ -258,17 +289,19 @@ fn normalize_download_dirs(
     let transaction = connection
         .transaction()
         .map_err(|error| format!("begin v6 path migration: {error}"))?;
-    for (task_id, encoded) in rows {
+    for (task_id, encoded, snapshot_json) in rows {
         let mut spec: TaskSpec = serde_json::from_str(&encoded)
             .map_err(|error| format!("decode v6 task spec {task_id}: {error}"))?;
         let original = PathBuf::from(spec.download_dir.trim());
-        if !original.is_absolute() {
-            let relative = if original.as_os_str().is_empty() {
-                Path::new("downloads")
-            } else {
-                original.as_path()
-            };
-            let resolved = locate_legacy_download_dir(&roots, relative, &task_id, &spec.filename)
+        let relative_dir = if original.as_os_str().is_empty() {
+            PathBuf::from("downloads")
+        } else {
+            original.clone()
+        };
+        let resolved_dir = if original.is_absolute() {
+            original
+        } else {
+            let resolved = locate_legacy_download_dir(&roots, &relative_dir, &task_id, &spec.filename)
                 .unwrap_or_else(|| default.clone());
             spec.download_dir = resolved.to_string_lossy().into_owned();
             let updated = serde_json::to_string(&spec)
@@ -279,6 +312,20 @@ fn normalize_download_dirs(
                     params![updated, task_id],
                 )
                 .map_err(|error| format!("write migrated v6 task spec: {error}"))?;
+            resolved
+        };
+
+        let mut snapshot: TaskSnapshot = serde_json::from_str(&snapshot_json)
+            .map_err(|error| format!("decode v6 task snapshot {task_id}: {error}"))?;
+        if sync_snapshot(&mut snapshot, &resolved_dir, &relative_dir) {
+            let updated = serde_json::to_string(&snapshot)
+                .map_err(|error| format!("encode migrated v6 task snapshot {task_id}: {error}"))?;
+            transaction
+                .execute(
+                    "UPDATE tasks SET snapshot_json = ?1 WHERE task_id = ?2",
+                    params![updated, task_id],
+                )
+                .map_err(|error| format!("write migrated v6 task snapshot: {error}"))?;
         }
     }
 
@@ -328,11 +375,30 @@ fn normalize_download_dirs(
         .map_err(|error| format!("commit v6 path migration: {error}"))
 }
 
+/// Rebase relative snapshot paths onto the resolved download directory so the
+/// persisted snapshot agrees with the migrated spec. Returns true when changed.
+fn sync_snapshot(snapshot: &mut TaskSnapshot, resolved_dir: &Path, relative_dir: &Path) -> bool {
+    let mut dirty = false;
+    if !Path::new(snapshot.download_dir.trim()).is_absolute() {
+        snapshot.download_dir = resolved_dir.to_string_lossy().into_owned();
+        dirty = true;
+    }
+    let output = snapshot.output_path.trim();
+    if !output.is_empty() && !Path::new(output).is_absolute() {
+        let remainder = Path::new(output)
+            .strip_prefix(relative_dir)
+            .ok()
+            .map(Path::to_path_buf)
+            .or_else(|| Path::new(output).file_name().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from(output));
+        snapshot.output_path = resolved_dir.join(remainder).to_string_lossy().into_owned();
+        dirty = true;
+    }
+    dirty
+}
+
 fn legacy_roots(local_app_data: &Path, source: &Path) -> Vec<PathBuf> {
-    let mut roots = vec![
-        local_app_data.join("Programs").join("HLS Downloader v6"),
-        PathBuf::from(r"E:\HLS Downloader"),
-    ];
+    let mut roots = vec![local_app_data.join("Programs").join("HLS Downloader v6")];
     if let Some(parent) = source.parent() {
         roots.push(parent.to_path_buf());
     }
@@ -361,4 +427,332 @@ fn locate_legacy_download_dir(
                 .flatten()
         })
         .or_else(|| candidates.into_iter().find(|candidate| candidate.is_dir()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn test_dir(label: &str) -> PathBuf {
+        let seq = TEST_SEQ.fetch_add(1, Ordering::SeqCst);
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap().join("target"));
+        let dir = base
+            .join("v6-migrate-tests")
+            .join(format!("{label}-{}-{seq}-{nonce}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn seed_database(path: &Path, user_version: u32) -> Connection {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let connection = Connection::open(path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE tasks (\
+                   task_id TEXT PRIMARY KEY,\
+                   snapshot_json TEXT NOT NULL\
+                 );\
+                 CREATE TABLE task_specs (\
+                   task_id TEXT PRIMARY KEY,\
+                   spec_json TEXT NOT NULL\
+                 );\
+                 CREATE TABLE media_tracks (\
+                   task_id TEXT NOT NULL,\
+                   track_id INTEGER NOT NULL,\
+                   track_json TEXT NOT NULL\
+                 );\
+                 CREATE TABLE settings (\
+                   key TEXT PRIMARY KEY,\
+                   value_json TEXT NOT NULL\
+                 );\
+                 CREATE TABLE handoffs (\
+                   handoff_id TEXT PRIMARY KEY,\
+                   public_json TEXT NOT NULL,\
+                   status TEXT NOT NULL\
+                 );",
+            )
+            .unwrap();
+        connection
+            .execute_batch(&format!("PRAGMA user_version = {user_version};"))
+            .unwrap();
+        connection
+    }
+
+    fn sample_spec(download_dir: &str) -> TaskSpec {
+        TaskSpec {
+            url: "https://cdn.test/movie.mp4".into(),
+            filename: "movie.mp4".into(),
+            download_dir: download_dir.into(),
+            concurrency: 1,
+            ..Default::default()
+        }
+    }
+
+    fn sample_snapshot(task_id: &str, download_dir: &str, output_path: &str) -> TaskSnapshot {
+        TaskSnapshot {
+            task_id: task_id.into(),
+            filename: "movie.mp4".into(),
+            download_dir: download_dir.into(),
+            output_path: output_path.into(),
+            ..Default::default()
+        }
+    }
+
+    fn insert_task(
+        connection: &Connection,
+        task_id: &str,
+        snapshot: &TaskSnapshot,
+        spec: &TaskSpec,
+    ) {
+        connection
+            .execute(
+                "INSERT INTO tasks(task_id, snapshot_json) VALUES (?1, ?2)",
+                params![task_id, serde_json::to_string(snapshot).unwrap()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO task_specs(task_id, spec_json) VALUES (?1, ?2)",
+                params![task_id, serde_json::to_string(spec).unwrap()],
+            )
+            .unwrap();
+    }
+
+    fn read_setting(connection: &Connection, key: &str) -> Option<String> {
+        connection
+            .query_row(
+                "SELECT value_json FROM settings WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap()
+    }
+
+    fn leftover_temp_files(parent: &Path) -> Vec<String> {
+        let mut names = Vec::new();
+        if let Ok(entries) = fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with(".data.db.v6-import-") {
+                    names.push(name);
+                }
+            }
+        }
+        names
+    }
+
+    #[test]
+    fn relative_dirs_rebase_onto_discovered_legacy_root() {
+        let base = test_dir("rebase");
+        let source = base.join("v6").join("data.db");
+        let target = base.join("v7").join("data.db");
+        let local_app_data = base.join("local");
+
+        let connection = seed_database(&source, crate::CURRENT_SCHEMA_VERSION);
+        let spec = sample_spec("downloads");
+        let snapshot = sample_snapshot("task-1", "downloads", "downloads/movie.mp4");
+        insert_task(&connection, "task-1", &snapshot, &spec);
+        drop(connection);
+
+        let resume_root = source.parent().unwrap().join("downloads");
+        fs::create_dir_all(resume_root.join(".v6-tasks").join("task-1")).unwrap();
+
+        migrate_v6_database_from(&source, &target, &local_app_data).unwrap();
+        assert!(target.is_file());
+
+        let connection =
+            Connection::open_with_flags(&target, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let (spec_json, snapshot_json): (String, String) = connection
+            .query_row(
+                "SELECT s.spec_json, t.snapshot_json \
+                 FROM task_specs AS s JOIN tasks AS t ON t.task_id = s.task_id",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let spec: TaskSpec = serde_json::from_str(&spec_json).unwrap();
+        let snapshot: TaskSnapshot = serde_json::from_str(&snapshot_json).unwrap();
+        let expected = resume_root.to_string_lossy().into_owned();
+        assert_eq!(spec.download_dir, expected);
+        assert_eq!(snapshot.download_dir, expected);
+        assert_eq!(
+            snapshot.output_path,
+            resume_root.join("movie.mp4").to_string_lossy()
+        );
+        assert_eq!(read_setting(&connection, MIGRATED_FLAG).as_deref(), Some("true"));
+    }
+
+    #[test]
+    fn absolute_dirs_are_left_untouched() {
+        let base = test_dir("absolute");
+        let source = base.join("v6").join("data.db");
+        let target = base.join("v7").join("data.db");
+        let local_app_data = base.join("local");
+        let absolute = base.join("v6").join("keep");
+        fs::create_dir_all(&absolute).unwrap();
+
+        let connection = seed_database(&source, crate::CURRENT_SCHEMA_VERSION);
+        let spec = sample_spec(&absolute.to_string_lossy());
+        let snapshot = sample_snapshot(
+            "task-1",
+            &absolute.to_string_lossy(),
+            &absolute.join("movie.mp4").to_string_lossy(),
+        );
+        insert_task(&connection, "task-1", &snapshot, &spec);
+        drop(connection);
+
+        migrate_v6_database_from(&source, &target, &local_app_data).unwrap();
+
+        let connection =
+            Connection::open_with_flags(&target, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let (spec_json, snapshot_json): (String, String) = connection
+            .query_row(
+                "SELECT s.spec_json, t.snapshot_json \
+                 FROM task_specs AS s JOIN tasks AS t ON t.task_id = s.task_id",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let spec: TaskSpec = serde_json::from_str(&spec_json).unwrap();
+        let snapshot: TaskSnapshot = serde_json::from_str(&snapshot_json).unwrap();
+        assert_eq!(spec.download_dir, absolute.to_string_lossy());
+        assert_eq!(snapshot.download_dir, absolute.to_string_lossy());
+        assert_eq!(
+            snapshot.output_path,
+            absolute.join("movie.mp4").to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn relative_default_download_dir_setting_is_resolved() {
+        let base = test_dir("setting");
+        let source = base.join("v6").join("data.db");
+        let target = base.join("v7").join("data.db");
+        let local_app_data = base.join("local");
+
+        let connection = seed_database(&source, crate::CURRENT_SCHEMA_VERSION);
+        connection
+            .execute(
+                "INSERT INTO settings(key, value_json) VALUES ('download_dir', '\"downloads\"')",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+        fs::create_dir_all(source.parent().unwrap().join("downloads")).unwrap();
+
+        migrate_v6_database_from(&source, &target, &local_app_data).unwrap();
+
+        let connection =
+            Connection::open_with_flags(&target, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let resolved: String =
+            serde_json::from_str(&read_setting(&connection, "download_dir").unwrap()).unwrap();
+        assert_eq!(
+            Path::new(&resolved),
+            &source.parent().unwrap().join("downloads")
+        );
+        assert_eq!(read_setting(&connection, MIGRATED_FLAG).as_deref(), Some("true"));
+    }
+
+    #[test]
+    fn unsupported_schema_version_fails_without_target() {
+        let base = test_dir("version");
+        let source = base.join("v6").join("data.db");
+        let target = base.join("v7").join("data.db");
+        let local_app_data = base.join("local");
+        seed_database(&source, 5);
+
+        let error = migrate_v6_database_from(&source, &target, &local_app_data).unwrap_err();
+        assert!(error.contains("unsupported v6 schema version"), "{error}");
+        assert!(!target.exists());
+        assert!(leftover_temp_files(target.parent().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn undecodable_snapshot_fails_validation() {
+        let base = test_dir("snapshot");
+        let source = base.join("v6").join("data.db");
+        let target = base.join("v7").join("data.db");
+        let local_app_data = base.join("local");
+
+        let connection = seed_database(&source, crate::CURRENT_SCHEMA_VERSION);
+        let spec = sample_spec("downloads");
+        connection
+            .execute(
+                "INSERT INTO tasks(task_id, snapshot_json) VALUES ('task-1', '{not json')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO task_specs(task_id, spec_json) VALUES ('task-1', ?1)",
+                params![serde_json::to_string(&spec).unwrap()],
+            )
+            .unwrap();
+        drop(connection);
+
+        let error = migrate_v6_database_from(&source, &target, &local_app_data).unwrap_err();
+        assert!(error.contains("decode v6 task snapshot"), "{error}");
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn mismatched_task_and_spec_ids_fail() {
+        let base = test_dir("ids");
+        let source = base.join("v6").join("data.db");
+        let target = base.join("v7").join("data.db");
+        let local_app_data = base.join("local");
+
+        let connection = seed_database(&source, crate::CURRENT_SCHEMA_VERSION);
+        let spec = sample_spec("downloads");
+        let snapshot = sample_snapshot("task-1", "downloads", "");
+        connection
+            .execute(
+                "INSERT INTO tasks(task_id, snapshot_json) VALUES ('task-1', ?1)",
+                params![serde_json::to_string(&snapshot).unwrap()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO task_specs(task_id, spec_json) VALUES ('task-2', ?1)",
+                params![serde_json::to_string(&spec).unwrap()],
+            )
+            .unwrap();
+        drop(connection);
+
+        let error = migrate_v6_database_from(&source, &target, &local_app_data).unwrap_err();
+        assert!(error.contains("same task ids"), "{error}");
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn existing_target_is_untouched() {
+        let base = test_dir("existing");
+        let source = base.join("v6").join("data.db");
+        let target = base.join("v7").join("data.db");
+        let local_app_data = base.join("local");
+
+        let connection = seed_database(&source, crate::CURRENT_SCHEMA_VERSION);
+        let spec = sample_spec("downloads");
+        let snapshot = sample_snapshot("task-1", "downloads", "");
+        insert_task(&connection, "task-1", &snapshot, &spec);
+        drop(connection);
+
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, b"keep").unwrap();
+
+        migrate_v6_database_from(&source, &target, &local_app_data).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"keep");
+    }
 }
