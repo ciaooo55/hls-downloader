@@ -5,8 +5,9 @@ slint::include_modules!();
 use hls_native_shell::{
     activate_window_by_title, begin_caption_drag, center_window_by_title,
     claim_v7_presenter_instance, completion_sound, hide_window_from_taskbar_by_title, install_root,
-    os_reduce_motion, spawn_core, spawn_desktop_ui, CoreCommand, CoreEvent, CoreIpcClient,
-    CorePipeResponse, EventEnvelope, ResourceKind, ResourceOffer, TaskSnapshot,
+    is_already_running_error, os_reduce_motion, spawn_core, spawn_desktop_ui, CoreCommand,
+    CoreEvent, CoreIpcClient, CorePipeResponse, EventEnvelope, ResourceKind, ResourceOffer,
+    TaskSnapshot,
 };
 use serde::Deserialize;
 use slint::{ComponentHandle, RenderingState, Timer, TimerMode};
@@ -19,6 +20,35 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
+
+// Win32 辅助函数按窗口标题查找窗口，hot.slint 中 ConfirmWindow/CompleteWindow 的
+// title 与 ProgressWindow 的 headline 默认值必须与这里的常量保持一致；改文案需
+// 三处同步（常量、hot.slint、依赖标题的操作）。
+mod window_titles {
+    pub const CONFIRM: &str = "确认下载";
+    pub const COMPLETE: &str = "下载完成";
+    pub const PROGRESS_HEADLINE: &str = "下载进度";
+    pub const LOCAL_PROCESSING: &str = "本地处理中";
+}
+
+use window_titles::{COMPLETE, CONFIRM, LOCAL_PROCESSING, PROGRESS_HEADLINE};
+
+// release 构建使用 panic=abort：默认 hook 的输出会随进程消失，先落盘崩溃现场。
+fn install_panic_log() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let seconds = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_secs())
+            .unwrap_or(0);
+        let text = format!("hls-v7-presenter panic (unix {}):\n{info}\n", seconds);
+        let path = env::temp_dir().join("hls-downloader-presenter-crash.log");
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = file.write_all(text.as_bytes());
+        }
+        previous(info);
+    }));
+}
 
 #[derive(Deserialize)]
 struct PersistedHandoff {
@@ -106,6 +136,7 @@ impl PresenterSettings {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    install_panic_log();
     let args: Vec<String> = env::args().collect();
     if let Some(kind) = args
         .windows(2)
@@ -125,7 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let lock_test = args.iter().any(|arg| arg == "--lock-test");
     if let Err(error) = claim_v7_presenter_instance() {
-        if error.contains("already running") && !lock_test {
+        if is_already_running_error(&error) && !lock_test {
             return Ok(());
         }
         return Err(error.into());
@@ -207,7 +238,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let command = command.to_string();
             match command.as_str() {
                 "drag" => {
-                    let _ = begin_caption_drag("确认下载");
+                    let _ = begin_caption_drag(CONFIRM);
                     return;
                 }
                 "accept" => {
@@ -388,8 +419,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let prewarm_finished = Rc::clone(&prewarm_finished);
         move || {
             if prewarm_rendered.load(Ordering::Acquire) && !*prewarm_finished.borrow() {
-                let _ = hide_window_from_taskbar_by_title("确认下载");
-                let _ = center_window_by_title("确认下载");
+                let _ = hide_window_from_taskbar_by_title(CONFIRM);
+                let _ = center_window_by_title(CONFIRM);
                 if let Some(item) = confirm.upgrade() {
                     if pending.lock().map(|items| items.is_empty()).unwrap_or(true) {
                         let _ = item.hide();
@@ -461,8 +492,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .into(),
                                 );
                                 if item.show().is_ok() {
-                                    let _ = center_window_by_title("下载完成");
-                                    let _ = activate_window_by_title("下载完成");
+                                    let _ = center_window_by_title(COMPLETE);
+                                    let _ = activate_window_by_title(COMPLETE);
                                 }
                             }
                         }
@@ -493,7 +524,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             item.window()
                 .set_position(slint::PhysicalPosition::new(-32_000, -32_000));
             if item.show().is_ok() {
-                let _ = hide_window_from_taskbar_by_title("确认下载");
+                let _ = hide_window_from_taskbar_by_title(CONFIRM);
                 // `show()` initializes the native window and renderer. Some
                 // Windows/driver combinations deliberately skip rendering
                 // notifications for a fully off-screen window, which used to
@@ -562,7 +593,7 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             let window = ProgressWindow::new()?;
             window.global::<Tokens>().set_dark(dark);
             window.global::<Tokens>().set_reduce_motion(true);
-            window.set_headline("下载进度".into());
+            window.set_headline(PROGRESS_HEADLINE.into());
             window.set_filename("示例视频 · 1080p.mp4".into());
             window.set_speed("18.6 MB/s".into());
             window.set_progress(0.64);
@@ -962,9 +993,9 @@ fn show_next_offer(
         if let Ok(mut active) = active_handoff.lock() {
             *active = Some(offer.handoff_id.clone());
         }
-        let _ = hide_window_from_taskbar_by_title("确认下载");
-        let _ = center_window_by_title("确认下载");
-        let _ = activate_window_by_title("确认下载");
+        let _ = hide_window_from_taskbar_by_title(CONFIRM);
+        let _ = center_window_by_title(CONFIRM);
+        let _ = activate_window_by_title(CONFIRM);
     } else if let Ok(mut active) = active_handoff.lock() {
         *active = None;
     }
@@ -1169,8 +1200,8 @@ fn update_task_windows(
                 item.set_filename(snapshot.filename.into());
                 item.set_power_hint("".into());
                 if item.show().is_ok() {
-                    let _ = center_window_by_title("下载完成");
-                    let _ = activate_window_by_title("下载完成");
+                    let _ = center_window_by_title(COMPLETE);
+                    let _ = activate_window_by_title(COMPLETE);
                 }
             }
         }
@@ -1190,9 +1221,9 @@ fn render_progress_hud(
     };
     item.set_headline(
         if matches!(snapshot.status.as_str(), "merging" | "checking") {
-            "本地处理中".into()
+            LOCAL_PROCESSING.into()
         } else {
-            "下载进度".into()
+            PROGRESS_HEADLINE.into()
         },
     );
     item.set_filename(snapshot.filename.clone().into());
