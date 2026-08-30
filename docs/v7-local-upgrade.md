@@ -66,7 +66,9 @@ E:\h\extensions\HLSDownloader-7.0.0-Firefox.zip
 
 Native Messaging 注册表项指向安装目录中的 `HLSDownloaderNativeHost.exe`。Chrome、Edge、Brave、Chromium、Vivaldi、Opera 和 Firefox 共用同一个 v7 Host 身份，不注册 v6 Host。
 
-确认 v7 正常运行后，可执行 `scripts\cleanup-v7-legacy-install.ps1 -Apply` 移除已知 v6 程序目录和失效快捷方式。脚本检测到旧目录包含 `config.json` 或 `data.db` 时会拒绝删除。
+退出 V6 后，本机 V7 首次创建数据库时，如果精确检测到 `%LOCALAPPDATA%\HLS Downloader\v6\data.db`，Core 会先通过 SQLite Online Backup 建立一致快照，在临时库中校验 schema、任务/spec、handoff 和 JSON，并把可定位的相对下载目录固定为绝对路径；全部成功后才原子发布为 V7 数据库。已有 V7 数据库、Portable 或显式 `HLS_V7_DATA_DIR` 不会触发自动整库迁移，也不会覆盖现有数据。V6 仍在运行或迁移失败时，Core 会保留 V6 源库、删除本次临时库并停止首次启动。
+
+确认 v7 正常运行后，可执行 `scripts\cleanup-v7-legacy-install.ps1 -Apply` 移除已知 v6 程序目录和失效快捷方式。脚本检测到旧目录包含数据库、配置、`downloads` 文件或 `.v6-tasks` 断点时会拒绝删除。
 
 ## 回滚
 

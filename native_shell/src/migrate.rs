@@ -17,6 +17,9 @@ pub fn maybe_migrate_from_5x(core: &mut PersistentCore) -> Result<u32, String> {
     if std::env::var_os("HLS_V6_SKIP_MIGRATE").is_some() {
         return Ok(0);
     }
+    if core.store().setting_bool("migrated_from_v6", false)? {
+        return Ok(0);
+    }
     let force = std::env::var_os("HLS_V6_MIGRATE_FORCE").is_some();
     if !force && core.store().setting_bool(MIGRATED_FLAG, false)? {
         return Ok(0);

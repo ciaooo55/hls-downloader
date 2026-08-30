@@ -46,6 +46,7 @@ mod task_export;
 mod torrent_engine;
 mod tray;
 mod updater;
+mod v6_migrate;
 mod window_util;
 
 pub use clipboard::{

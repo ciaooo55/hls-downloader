@@ -19,7 +19,9 @@ pub struct CoreServer {
 
 impl CoreServer {
     pub fn open_default() -> Result<Self, String> {
-        let server = Self::open_path(default_v7_database_path())?;
+        let database_path = default_v7_database_path();
+        crate::v6_migrate::migrate_installed_v6_database(&database_path)?;
+        let server = Self::open_path(database_path)?;
         server.restore_install_result();
         Ok(server)
     }

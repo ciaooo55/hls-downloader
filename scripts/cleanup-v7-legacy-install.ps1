@@ -29,7 +29,9 @@ foreach ($shortcut in $namedShortcutPaths) {
 $installTargets = @($legacyPrograms, $legacyStandalone) | Where-Object { Test-Path -LiteralPath $_ -PathType Container }
 foreach ($target in $installTargets) {
     $userData = @(Get-ChildItem -LiteralPath $target -File -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {
-        $_.Name -in @('config.json', 'data.db', 'data.db-shm', 'data.db-wal')
+        $_.Name -in @('config.json', 'data.db', 'data.db-shm', 'data.db-wal') -or
+        $_.FullName.IndexOf([IO.Path]::DirectorySeparatorChar + 'downloads' + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        $_.FullName.IndexOf([IO.Path]::DirectorySeparatorChar + '.v6-tasks' + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -ge 0
     })
     if ($userData.Count -gt 0) {
         throw "Legacy install contains user data and was not removed: $target"
