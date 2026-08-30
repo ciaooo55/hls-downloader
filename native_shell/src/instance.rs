@@ -15,6 +15,18 @@ static KEEP_PRESENTER_MUTEX: OnceLock<isize> = OnceLock::new();
 static KEEP_LOCK: OnceLock<File> = OnceLock::new();
 static KEEP_PRESENTER_LOCK: OnceLock<File> = OnceLock::new();
 
+/// Produces the duplicate-instance error text. The engine binary treats this
+/// marker as a normal exit, so every duplicate-instance path must go through
+/// this constructor instead of hand-writing the message.
+pub(crate) fn already_running_error(target: &str) -> String {
+    format!("{target} already running")
+}
+
+/// Matches only errors produced by [`already_running_error`].
+pub fn is_already_running_error(message: &str) -> bool {
+    message.ends_with(" already running")
+}
+
 pub fn claim_v7_instance() -> Result<(), String> {
     #[cfg(windows)]
     claim_session_mutex()?;
@@ -61,7 +73,7 @@ fn claim_session_mutex() -> Result<(), String> {
         }));
     }
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        return Err("native shell already running".into());
+        return Err(already_running_error("native shell"));
     }
     let _ = KEEP_MUTEX.set(handle as isize);
     Ok(())
@@ -82,7 +94,7 @@ fn claim_presenter_session_mutex() -> Result<(), String> {
         }));
     }
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        return Err("v7 presenter already running".into());
+        return Err(already_running_error("v7 presenter"));
     }
     let _ = KEEP_PRESENTER_MUTEX.set(handle as isize);
     Ok(())
@@ -130,7 +142,7 @@ fn try_exclusive_lock(file: &File) -> Result<(), String> {
     };
     if ok == 0 {
         let _ = unsafe { GetLastError() };
-        return Err("native shell already running".into());
+        return Err(already_running_error("native shell"));
     }
     Ok(())
 }

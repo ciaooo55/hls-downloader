@@ -89,7 +89,9 @@ pub use http_engine::{
     HttpMirrorReport, HttpRunReport, EXIT_CANCEL, EXIT_ERROR, EXIT_OK, EXIT_PAUSE,
     EXIT_RANGE_UNSUPPORTED,
 };
-pub use instance::{claim_v7_instance, claim_v7_presenter_instance};
+pub use instance::{
+    claim_v7_instance, claim_v7_presenter_instance, is_already_running_error,
+};
 pub use metalink::{looks_like_metalink, parse_metalink};
 pub use migrate::{maybe_migrate_from_5x, migrate_from_5x};
 pub use native_host::run as run_native_host;

@@ -12,6 +12,10 @@ use std::path::{Path, PathBuf};
 
 const MIGRATED_FLAG: &str = "migrated_from_5x";
 
+/// Rows imported per startup so a huge legacy table cannot stall the first
+/// launch. The next startup continues the import because it dedupes by URL.
+const LEGACY_IMPORT_BATCH: usize = 2000;
+
 /// Import once from discovered 5.x paths. Never deletes 5.x files.
 pub fn maybe_migrate_from_5x(core: &mut PersistentCore) -> Result<u32, String> {
     if std::env::var_os("HLS_V6_SKIP_MIGRATE").is_some() {
@@ -28,8 +32,12 @@ pub fn maybe_migrate_from_5x(core: &mut PersistentCore) -> Result<u32, String> {
     if !config.exists() && !db.exists() {
         return Ok(0);
     }
-    let imported = migrate_from_5x(core, &config, &db)?;
-    core.store_mut().set_setting(MIGRATED_FLAG, true)?;
+    let (imported, complete) = migrate_from_5x(core, &config, &db)?;
+    // An incomplete batch retries on the next startup; partial imports are
+    // skipped by the URL dedupe, so continuation never duplicates tasks.
+    if complete {
+        core.store_mut().set_setting(MIGRATED_FLAG, true)?;
+    }
     Ok(imported)
 }
 
@@ -103,7 +111,7 @@ pub fn migrate_from_5x(
     core: &mut PersistentCore,
     config_path: &Path,
     db_path: &Path,
-) -> Result<u32, String> {
+) -> Result<(u32, bool), String> {
     let mut imported = 0u32;
     let mut default_download_dir = String::new();
     if config_path.exists() {
@@ -126,15 +134,26 @@ pub fn migrate_from_5x(
             .unwrap_or_default();
     }
     if !db_path.exists() {
-        return Ok(imported);
+        return Ok((imported, true));
     }
-    let connection = rusqlite::Connection::open(db_path).map_err(|error| error.to_string())?;
+    let connection =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|error| error.to_string())?;
     let mut existing_urls: std::collections::BTreeSet<String> = core
         .tasks()
         .into_iter()
         .filter_map(|task| core.task_spec(&task.task_id).map(|spec| spec.url.clone()))
         .collect();
-    for row in load_legacy_tasks(&connection)? {
+    let loaded = load_legacy_tasks(&connection, LEGACY_IMPORT_BATCH + 1)?;
+    // One extra row beyond the batch proves more rows remain for the next
+    // startup, which then continues because imports dedupe by URL.
+    let truncated = loaded.len() > LEGACY_IMPORT_BATCH;
+    let rows = if truncated {
+        &loaded[..LEGACY_IMPORT_BATCH]
+    } else {
+        &loaded[..]
+    };
+    for row in rows {
         if row.url.trim().is_empty() || existing_urls.contains(&row.url) {
             continue;
         }
@@ -161,10 +180,10 @@ pub fn migrate_from_5x(
             speed_limit_kib: row.speed_limit_kib.unwrap_or(0).max(0) as u32,
             checksum: row.checksum.clone(),
             concurrency: row.concurrency.unwrap_or(8).max(1) as u32,
-            headers: public_headers(&row),
+            headers: public_headers(row),
             ..Default::default()
         };
-        if let Some(credential_ref) = store_row_credential(core, &row)? {
+        if let Some(credential_ref) = store_row_credential(core, row)? {
             spec.credential_ref = Some(credential_ref);
         }
         let events = core.handle(crate::CoreCommand::CreateTask { spec: spec.clone() })?;
@@ -175,7 +194,7 @@ pub fn migrate_from_5x(
             continue;
         };
         existing_urls.insert(row.url.clone());
-        let (status, stage, downloaded) = mapped_progress(&row);
+        let (status, stage, downloaded) = mapped_progress(row);
         let _ = core.handle(crate::CoreCommand::UpdateProgress {
             task_id: task_id.clone(),
             downloaded_bytes: downloaded,
@@ -185,12 +204,17 @@ pub fn migrate_from_5x(
             status: status.into(),
         });
         if status != "completed" {
-            import_http_partial(config_path, db_path, &row, &task_id, &spec);
-            import_media_partial(config_path, db_path, &row, &task_id, &spec);
+            import_http_partial(config_path, db_path, row, &task_id, &spec);
+            import_media_partial(config_path, db_path, row, &task_id, &spec);
         }
         imported += 1;
     }
-    Ok(imported)
+    if truncated {
+        eprintln!(
+            "legacy 5.x import paused after {LEGACY_IMPORT_BATCH} rows; restart HLS Downloader to continue"
+        );
+    }
+    Ok((imported, !truncated))
 }
 
 fn import_settings(core: &mut PersistentCore, value: &Value) -> Result<(), String> {
@@ -416,7 +440,10 @@ struct LegacyTask {
     concurrency: Option<i64>,
 }
 
-fn load_legacy_tasks(connection: &rusqlite::Connection) -> Result<Vec<LegacyTask>, String> {
+fn load_legacy_tasks(
+    connection: &rusqlite::Connection,
+    limit: usize,
+) -> Result<Vec<LegacyTask>, String> {
     let columns: std::collections::BTreeSet<String> = {
         let mut statement = connection
             .prepare("PRAGMA table_info(tasks)")
@@ -459,12 +486,12 @@ fn load_legacy_tasks(connection: &rusqlite::Connection) -> Result<Vec<LegacyTask
             sql.push_str("NULL");
         }
     }
-    sql.push_str(" FROM tasks ORDER BY rowid");
+    sql.push_str(" FROM tasks ORDER BY rowid LIMIT ?");
     let mut statement = connection
         .prepare(&sql)
         .map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map(rusqlite::params![limit as i64], |row| {
             Ok(LegacyTask {
                 url: row.get::<_, String>(0).unwrap_or_default(),
                 id: optional_string(row, 1),
@@ -819,7 +846,7 @@ mod tests {
         )
         .unwrap();
         let mut core = PersistentCore::in_memory().unwrap();
-        let count = migrate_from_5x(&mut core, &config, &dir.join("missing.db")).unwrap();
+        let count = migrate_from_5x(&mut core, &config, &dir.join("missing.db")).unwrap().0;
         assert_eq!(count, 0);
         assert!(core
             .store()
@@ -901,7 +928,7 @@ mod tests {
                 .unwrap();
         }
         let mut core = PersistentCore::in_memory().unwrap();
-        let count = migrate_from_5x(&mut core, &dir.join("missing.json"), &db).unwrap();
+        let count = migrate_from_5x(&mut core, &dir.join("missing.json"), &db).unwrap().0;
         assert_eq!(count, 2);
         assert!(db.exists());
         let tasks = core.tasks();

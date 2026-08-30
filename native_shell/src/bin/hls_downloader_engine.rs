@@ -142,7 +142,7 @@ fn main() -> ExitCode {
             }
         }
         if let Err(error) = hls_native_shell::claim_v7_instance() {
-            if error.contains("already running") {
+            if hls_native_shell::is_already_running_error(&error) {
                 return ExitCode::SUCCESS;
             }
             eprintln!("download engine instance startup failed: {error}");

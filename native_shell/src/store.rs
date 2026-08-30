@@ -246,6 +246,11 @@ impl CoreStore {
             .map_err(|error| format!("commit Core event transaction: {error}"))
     }
 
+    fn logged_fallback<T>(key: &str, error: serde_json::Error, fallback: T) -> T {
+        eprintln!("Core setting {key} is unreadable, using fallback: {error}");
+        fallback
+    }
+
     pub fn setting_bool(&self, key: &str, fallback: bool) -> Result<bool, String> {
         let raw: Option<String> = self
             .connection
@@ -256,8 +261,11 @@ impl CoreStore {
             )
             .optional()
             .map_err(|error| format!("read Core setting {key}: {error}"))?;
-        raw.map(|value| serde_json::from_str(&value).unwrap_or(fallback))
-            .map_or(Ok(fallback), Ok)
+        raw.map(|value| match serde_json::from_str(&value) {
+            Ok(decoded) => decoded,
+            Err(error) => Self::logged_fallback(key, error, fallback),
+        })
+        .map_or(Ok(fallback), Ok)
     }
 
     pub fn setting_u64(&self, key: &str, fallback: u64) -> Result<u64, String> {
@@ -270,8 +278,11 @@ impl CoreStore {
             )
             .optional()
             .map_err(|error| format!("read Core setting {key}: {error}"))?;
-        raw.map(|value| serde_json::from_str(&value).unwrap_or(fallback))
-            .map_or(Ok(fallback), Ok)
+        raw.map(|value| match serde_json::from_str(&value) {
+            Ok(decoded) => decoded,
+            Err(error) => Self::logged_fallback(key, error, fallback),
+        })
+        .map_or(Ok(fallback), Ok)
     }
 
     pub fn setting_string(&self, key: &str, fallback: &str) -> Result<String, String> {
@@ -286,7 +297,13 @@ impl CoreStore {
             .map_err(|error| format!("read Core setting {key}: {error}"))?;
         match raw {
             None => Ok(fallback.to_string()),
-            Some(value) => Ok(serde_json::from_str(&value).unwrap_or(value)),
+            Some(value) => Ok(match serde_json::from_str(&value) {
+                Ok(decoded) => decoded,
+                Err(error) => {
+                    eprintln!("Core setting {key} is unreadable, using raw value: {error}");
+                    value
+                }
+            }),
         }
     }
 
