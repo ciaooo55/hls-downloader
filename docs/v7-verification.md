@@ -31,6 +31,9 @@
 
 ## 候选包与正式包
 
+仓库中可能保留上一轮 Windows 验收的 candidate 压缩包和 provenance；它们只作历史证据，
+必须以当前提交重新运行 candidate 构建后才能用于安装或冒烟，不能通过文件名推断其对应当前源码。
+
 候选包用于外部 Windows 实机验收，不代表正式发布决定：
 
 ```powershell
