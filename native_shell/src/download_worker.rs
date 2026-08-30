@@ -1829,7 +1829,7 @@ impl CoreCoordinator {
             let active_ids = self
                 .active
                 .lock()
-                .map_err(|_| "v6 worker registry poisoned".to_string())?
+                .map_err(|_| "download worker registry poisoned".to_string())?
                 .clone();
             let tasks = self.tasks()?;
             let mut profiles = self.settings()?.queue_profiles;
@@ -2421,7 +2421,7 @@ impl CoreCoordinator {
             let mut active = self
                 .active
                 .lock()
-                .map_err(|_| "v6 worker registry poisoned".to_string())?;
+                .map_err(|_| "download worker registry poisoned".to_string())?;
             let active_in_queue = tasks
                 .iter()
                 .filter(|task| task.queue_id == queue_id && active.contains(&task.task_id))
@@ -3008,7 +3008,7 @@ fn run_http_file(
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err("v6 HTTP worker disconnected".into())
+                return Err("download HTTP worker disconnected".into())
             }
         }
     }

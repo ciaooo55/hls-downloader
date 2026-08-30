@@ -894,10 +894,10 @@ fn announce_udp(
     let (count, _) = socket
         .recv_from(&mut buf)
         .map_err(|error| error.to_string())?;
-    if count < 16 || u32::from_be_bytes(buf[0..4].try_into().unwrap()) != 0 {
+    if count < 16 || be32(&buf[0..4]) != 0 {
         return Err("udp tracker connect 失败".into());
     }
-    if u32::from_be_bytes(buf[4..8].try_into().unwrap()) != tx {
+    if be32(&buf[4..8]) != tx {
         return Err("udp tracker transaction mismatch".into());
     }
     let connection_id = &buf[8..16];
@@ -922,7 +922,7 @@ fn announce_udp(
     let (count, _) = socket
         .recv_from(&mut buf)
         .map_err(|error| error.to_string())?;
-    if count < 20 || u32::from_be_bytes(buf[0..4].try_into().unwrap()) != 1 {
+    if count < 20 || be32(&buf[0..4]) != 1 {
         return Err("udp tracker announce 失败".into());
     }
     Ok(decode_compact(&buf[20..count]))
@@ -1235,6 +1235,12 @@ fn decode_compact(raw: &[u8]) -> Vec<std::net::SocketAddr> {
         .collect()
 }
 
+// 解析大端 u32。所有调用点都必须位于对应消息的长度守卫之内；长度不足说明
+// 解析逻辑与守卫脱节，宁可显式 panic 也不能静默用错数据。
+fn be32(bytes: &[u8]) -> u32 {
+    u32::from_be_bytes(bytes.try_into().expect("be32 slice shorter than 4 bytes"))
+}
+
 fn decode_info_hash(value: &str) -> Result<Vec<u8>, String> {
     if value.len() == 40 && value.chars().all(|ch| ch.is_ascii_hexdigit()) {
         let mut out = Vec::with_capacity(20);
@@ -1484,8 +1490,8 @@ fn download_from_peer_ex_with_telemetry(
                             return Err("truncated peer piece message".into());
                         }
                         let piece_index =
-                            u32::from_be_bytes(body[..4].try_into().unwrap()) as usize;
-                        let begin = u32::from_be_bytes(body[4..8].try_into().unwrap()) as usize;
+                            be32(&body[..4]) as usize;
+                        let begin = be32(&body[4..8]) as usize;
                         let data = &body[8..];
                         if piece_index != index || begin != filled {
                             continue; // late response for a canceled or superseded request
@@ -1558,7 +1564,7 @@ fn piece_is_selected(meta: &TorrentMeta, piece_index: usize, selection_path: &Pa
 fn note_peer_availability(id: u8, body: &[u8], pieces: &mut [bool]) -> bool {
     match id {
         4 if body.len() >= 4 => {
-            let index = u32::from_be_bytes(body[..4].try_into().unwrap()) as usize;
+            let index = be32(&body[..4]) as usize;
             if let Some(available) = pieces.get_mut(index) {
                 *available = true;
             }
@@ -2175,13 +2181,13 @@ mod tests {
                 if message[0] != 6 {
                     continue;
                 }
-                let index = u32::from_be_bytes(message[1..5].try_into().unwrap()) as usize;
+                let index = be32(&message[1..5]) as usize;
                 assert_eq!(
                     index, 1,
                     "client requested a piece absent from the bitfield"
                 );
-                let begin = u32::from_be_bytes(message[5..9].try_into().unwrap()) as usize;
-                let block = u32::from_be_bytes(message[9..13].try_into().unwrap()) as usize;
+                let begin = be32(&message[5..9]) as usize;
+                let block = be32(&message[9..13]) as usize;
                 let start = index * piece_length + begin;
                 let mut response = vec![7u8];
                 response.extend_from_slice(&(index as u32).to_be_bytes());
@@ -2280,14 +2286,14 @@ mod tests {
                 if message.first() != Some(&6) || message.len() < 13 {
                     continue;
                 }
-                let index = u32::from_be_bytes(message[1..5].try_into().unwrap());
+                let index = be32(&message[1..5]);
                 indexes.push(index);
                 if stop_before_piece == Some(index) {
                     requested.send(indexes).unwrap();
                     return;
                 }
-                let begin = u32::from_be_bytes(message[5..9].try_into().unwrap()) as usize;
-                let block = u32::from_be_bytes(message[9..13].try_into().unwrap()) as usize;
+                let begin = be32(&message[5..9]) as usize;
+                let block = be32(&message[9..13]) as usize;
                 let start = index as usize * piece_length + begin;
                 let end = (start + block).min(payload.len());
                 let mut body = vec![7u8];
@@ -2684,9 +2690,9 @@ mod tests {
                 if message[0] != 6 && message[0] != 8 {
                     continue;
                 }
-                let index = u32::from_be_bytes(message[1..5].try_into().unwrap()) as usize;
-                let begin = u32::from_be_bytes(message[5..9].try_into().unwrap()) as usize;
-                let block = u32::from_be_bytes(message[9..13].try_into().unwrap()) as usize;
+                let index = be32(&message[1..5]) as usize;
+                let begin = be32(&message[5..9]) as usize;
+                let block = be32(&message[9..13]) as usize;
                 if message[0] == 8 {
                     cancel_tx.send((index, begin, block)).unwrap();
                     continue;

@@ -1675,7 +1675,44 @@ fn load_playlist(
     parse_playlist(&text, url)
 }
 
+// 与 HTTP 文件引擎的 MAX_RANGE_ATTEMPTS 对齐：单个分片弱网下至少尝试 3 次，
+// 避免一次瞬时失败即中止整批、被迫整任务重跑（checkpoint 只能兜底已完成的分片）。
+const MAX_SEGMENT_ATTEMPTS: u32 = 3;
+const SEGMENT_RETRY_DELAY_MS: u64 = 250;
+
 fn download_segment(
+    segment: &Segment,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    path: &Path,
+    control: &Path,
+    key_bytes: Option<&Vec<u8>>,
+    media_key: Option<&MediaKey>,
+    sequence: u64,
+) -> Result<PathBuf, String> {
+    let mut last_error = String::new();
+    for attempt in 1..=MAX_SEGMENT_ATTEMPTS {
+        let result = download_segment_once(segment, headers, proxy, path, control, key_bytes, media_key, sequence);
+        match result {
+            Ok(path) => return Ok(path),
+            Err(error) => {
+                // 暂停/取消是控制信号且调用方按精确字符串判定，必须原样立即上抛
+                if error == "paused" || error == "canceled" {
+                    return Err(error);
+                }
+                last_error = error;
+                if attempt < MAX_SEGMENT_ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        SEGMENT_RETRY_DELAY_MS * attempt as u64,
+                    ));
+                }
+            }
+        }
+    }
+    Err(format!("{last_error}（已重试 {} 次）", MAX_SEGMENT_ATTEMPTS - 1))
+}
+
+fn download_segment_once(
     segment: &Segment,
     headers: &HashMap<String, String>,
     proxy: &str,
