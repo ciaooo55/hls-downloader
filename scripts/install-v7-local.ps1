@@ -112,10 +112,18 @@ if (-not (Test-Path -LiteralPath $note -PathType Leaf)) {
 
 $stage = "$target.v7-stage"
 $backup = "$target.v7-backup"
+$desktopExtensionStage = "$target.v7-desktop-stage"
+$desktopExtensionBackup = "$target.v7-desktop-backup"
 foreach ($candidate in @($stage, $backup)) {
     $full = [IO.Path]::GetFullPath($candidate)
-    if (-not $full.StartsWith($installRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $full.StartsWith($installRoot + '.v7-', [StringComparison]::OrdinalIgnoreCase)) {
         throw "Local install working path escaped ${installRoot}: $full"
+    }
+}
+foreach ($candidate in @($desktopExtensionStage, $desktopExtensionBackup)) {
+    $full = [IO.Path]::GetFullPath($candidate)
+    if (-not $full.StartsWith($installRoot + '.v7-', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Desktop extension working path escaped ${installRoot}: $full"
     }
 }
 if (Test-Path -LiteralPath $stage) {
@@ -123,6 +131,12 @@ if (Test-Path -LiteralPath $stage) {
 }
 if (Test-Path -LiteralPath $backup) {
     throw "Previous local rollback image still exists: $backup"
+}
+if (Test-Path -LiteralPath $desktopExtensionStage) {
+    Remove-Item -LiteralPath $desktopExtensionStage -Recurse -Force
+}
+if (Test-Path -LiteralPath $desktopExtensionBackup) {
+    throw "Previous desktop extension rollback image still exists: $desktopExtensionBackup"
 }
 
 New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
@@ -205,14 +219,32 @@ try {
     $desktopLink.Description = 'HLS Downloader 7.0.0'
     $desktopLink.Save()
 
+    New-Item -ItemType Directory -Force -Path $desktopExtensionStage | Out-Null
+    foreach ($browser in @('Chromium', 'Firefox')) {
+        Copy-Item -LiteralPath (Join-Path $target "extensions\HLSDownloader-7.0.0-$browser.zip") `
+            -Destination (Join-Path $desktopExtensionStage "$browser.zip") -Force
+    }
+    New-Item -ItemType Directory -Force -Path $desktopExtensionBackup | Out-Null
     # Keep exactly one current extension package per browser on the desktop.
     foreach ($browser in @('Chromium', 'Firefox')) {
         Get-ChildItem -LiteralPath $desktop -Filter "HLSDownloader-*${browser}.zip" -File -ErrorAction SilentlyContinue |
-            Remove-Item -Force -ErrorAction SilentlyContinue
-        Copy-Item -LiteralPath (Join-Path $target "extensions\HLSDownloader-7.0.0-$browser.zip") `
+            Move-Item -Destination $desktopExtensionBackup -Force
+        Move-Item -LiteralPath (Join-Path $desktopExtensionStage "$browser.zip") `
             -Destination $desktopExtensionPaths[$browser] -Force
     }
 } catch {
+    if (Test-Path -LiteralPath $desktopExtensionBackup) {
+        Get-ChildItem -LiteralPath $desktop -Filter 'HLSDownloader-*.zip' -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -LiteralPath $desktopExtensionBackup -File -ErrorAction SilentlyContinue |
+            Move-Item -Destination $desktop -Force
+    }
+    if (Test-Path -LiteralPath $desktopExtensionStage) {
+        Remove-Item -LiteralPath $desktopExtensionStage -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $desktopExtensionBackup) {
+        Remove-Item -LiteralPath $desktopExtensionBackup -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if (Test-Path -LiteralPath $target) {
         Remove-Item -LiteralPath $target -Recurse -Force
     }
@@ -223,6 +255,12 @@ try {
 }
 if ($hadPrevious -and (Test-Path -LiteralPath $backup)) {
     Remove-Item -LiteralPath $backup -Recurse -Force
+}
+if (Test-Path -LiteralPath $desktopExtensionStage) {
+    Remove-Item -LiteralPath $desktopExtensionStage -Recurse -Force
+}
+if (Test-Path -LiteralPath $desktopExtensionBackup) {
+    Remove-Item -LiteralPath $desktopExtensionBackup -Recurse -Force
 }
 
 [ordered]@{
