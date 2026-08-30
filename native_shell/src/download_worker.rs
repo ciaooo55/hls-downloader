@@ -619,6 +619,16 @@ impl CoreCoordinator {
 
     pub fn settings(&self) -> Result<CoreSettings, String> {
         let core = self.lock()?;
+        let configured_download_dir = core.store().setting_string("download_dir", "")?;
+        let download_dir = if configured_download_dir.trim().is_empty()
+            || Path::new(&configured_download_dir).is_relative()
+        {
+            crate::default_v7_download_dir()
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            configured_download_dir
+        };
         Ok(CoreSettings {
             takeover_enabled: core
                 .store()
@@ -650,7 +660,7 @@ impl CoreCoordinator {
             av_scan_command: core.store().setting_string("av_scan_command", "")?,
             torrent_watch: core.store().setting_string("torrent_watch_dir", "")?,
             torrent_watch_enabled: core.store().setting_bool("watch_torrents", false)?,
-            download_dir: core.store().setting_string("download_dir", "downloads")?,
+            download_dir,
             temp_dir: core.store().setting_string("temp_dir", "")?,
             default_concurrency: core.store().setting_u64("default_concurrency", 12)?.max(1),
             proxy_url: core.store().setting_string("proxy_url", "")?,

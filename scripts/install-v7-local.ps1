@@ -194,6 +194,7 @@ if (Test-Path -LiteralPath $desktopExtensionBackup) {
 
 New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
 Copy-Item -LiteralPath $source -Destination $stage -Recurse -Force
+Remove-Item -LiteralPath (Join-Path $stage 'portable') -Force -ErrorAction SilentlyContinue
 # jpackage marks launchers and runtime files read-only. Normalize the staged
 # image so a later transactional upgrade can test and replace it normally.
 Get-ChildItem -LiteralPath $stage -Recurse -File -Force | ForEach-Object {

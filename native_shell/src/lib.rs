@@ -99,7 +99,9 @@ pub use ole_drag::{begin_file_drag, completed_file_drag, hdrop_bytes};
 pub use player::{run_player_process, PLAYER_WINDOW_TITLE};
 pub use recognize::{classify_url, kind_label, probe_url};
 pub use site_rules::{format_site_rules, parse_site_rules, upsert_site_rule, SiteRule};
-pub use store::{default_v7_database_path, CoreStore, CURRENT_SCHEMA_VERSION};
+pub use store::{
+    default_v7_database_path, default_v7_download_dir, CoreStore, CURRENT_SCHEMA_VERSION,
+};
 pub use task_export::export_tasks;
 pub use torrent_engine::{torrent_session, BuiltinTorrentEngine, TorrentSession};
 pub use tray::{completion_sound, show_notification, spawn_tray, TrayAction};

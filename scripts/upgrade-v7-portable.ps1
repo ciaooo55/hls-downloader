@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$preserved = @('config.json','data.db','data.db-shm','data.db-wal','downloads','.tasks')
+$preserved = @('data','downloads')
 
 function Full([string]$Path) { [IO.Path]::GetFullPath($Path).TrimEnd('\','/') }
 function Stop-V7Processes([string]$Root) {

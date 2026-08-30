@@ -42,8 +42,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-v7-loc
 解包安装；不会读取构建缓存或工作树 `extension/.output`。它先构建完整暂存镜像，保留原安装为临时
 `E:\h.v7-backup`，再原子切换、注册 Native Messaging 并刷新开始菜单、桌面
 快捷方式和浏览器扩展包，同时移除已知旧插件目录及浏览器名后的所有 ZIP 副本后缀。后置步骤失败时会自动恢复旧镜像及桌面插件；成功后删除临时备份，
-因此本机始终只保留一个安装。`config.json`、`data.db` 和下载目录由 Core 的
-v7 数据目录管理，不从安装镜像中删除。覆盖前脚本会先请求现有 v7 工作台优雅退出并保留可恢复任务；若退出或目录移动失败，不会删除原 `E:\h`。
+因此本机始终只保留一个安装。本机数据库、默认下载文件和可恢复任务状态位于
+`%LOCALAPPDATA%\HLS Downloader\v7`，不随 `E:\h` 程序镜像替换。覆盖前脚本会先请求现有 v7 工作台优雅退出；若退出或目录移动失败，不会删除原 `E:\h`。
 
 Portable helper 还会校验 App-Image 内 provenance 的 v7.0.0 版本、candidate/formal tier、当前 commit/tree 和 feature parity SHA-256；旧的或未绑定当前源码的 App-Image 不会被打包。包内升级脚本同样拒绝缺少这些 provenance 字段或任一浏览器扩展包的镜像。
 
@@ -76,7 +76,7 @@ Native Messaging 注册表项指向安装目录中的 `HLSDownloaderNativeHost.e
 E:\h.v7-backup（仅在事务失败恢复期间短暂存在）
 ```
 
-Portable 升级可使用包内 `scripts\upgrade-v7-portable.ps1 -Rollback -RollbackDir <目录>` 回滚。升级和回滚会先复制而不是移动配置、数据库、下载目录等保留状态；事务失败时会恢复两侧镜像。正式清理前必须保留一个已验证 Portable ZIP 或上述本机备份。
+Portable 使用包根的 `data` 保存数据库，使用 `downloads` 保存下载文件及 `.hls-tasks` 断点；不会与本机安装或另一份 Portable 共享状态。升级可使用包内 `scripts\upgrade-v7-portable.ps1 -Rollback -RollbackDir <目录>` 回滚。升级和回滚会先复制这两个状态目录；事务失败时会恢复两侧镜像。正式清理前必须保留一个已验证 Portable ZIP 或上述本机备份。
 
 ## 与旧版本的关系
 

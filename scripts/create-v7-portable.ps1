@@ -87,7 +87,7 @@ try {
         Assert-ExtensionArchive $archive $item.Browser
         Copy-Item -LiteralPath $archive -Destination (Join-Path $portableExtensions $item.Name) -Force
     }
-    $readme = "HLS Downloader 7.0.0 Portable`r`n`r`nRun HLSDownloader.exe. Browser Native Messaging registration is repaired automatically on startup. The extensions folder contains the matching Chromium and Firefox MV3 packages. Use scripts\upgrade-v7-portable.ps1 to atomically upgrade another v7 portable folder. The script preserves config.json, data.db and downloads; use -Rollback to restore the previous program image.`r`n"
+    $readme = "HLS Downloader 7.0.0 Portable`r`n`r`nRun HLSDownloader.exe. Runtime data stays in data; completed files and resumable task state stay in downloads. Browser Native Messaging registration is repaired automatically on startup. The extensions folder contains the matching Chromium and Firefox MV3 packages. Use scripts\upgrade-v7-portable.ps1 to atomically upgrade another v7 portable folder while preserving data and downloads; use -Rollback to restore the previous program image.`r`n"
     [IO.File]::WriteAllText((Join-Path $portable 'README-PORTABLE.txt'), $readme, [Text.UTF8Encoding]::new($false))
     New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($out)) | Out-Null
     Compress-Archive -Path $portable -DestinationPath $out -CompressionLevel Optimal -Force
