@@ -40,4 +40,6 @@ Rust Core + SQLite (唯一状态/凭据/传输所有者)
 - 功能矩阵为 `26/28 verified`、`2 partial`；partial 只剩外部真实端点和干净 Windows MSI 安装/升级/卸载/回滚证据。
 - Core 已在启动阶段报告 named pipe ready，失败会返回明确错误；pending media push 会从 SQLite 恢复到运行时，可跨重启 resolve。
 - 本轮修复安装文档与脚本的路径/回滚语义，使交付约束与运行时架构一致。
+- 设置保存先完成 Core 持久化，失败时保留对话框草稿；Presenter 探测完成前暂存接管事件，避免启动竞态。
+- candidate/formal 产物目录写入 `ARTIFACT-MANIFEST.json`，统一记录 EXE、MSI、Portable 和扩展摘要。
 - 新增功能时先扩展 `contract.rs` 的命令/事件，再接 Core handler，最后接 Compose/Presenter/extension 的单一路径；不要新增第二个状态所有者。
