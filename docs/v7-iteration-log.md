@@ -76,3 +76,26 @@
 约束执行情况:项目内容均在工作目录内;`E:\h` 当前不存在,parity 未全绿未生成
 正式包;构建缓存继续使用仓库内 `.tool-cache\build-cache`(JDK 位于既有
 `E:\HLSDownloaderBuildCache\jdk-21`,属工具链非项目内容)。
+
+### 第二轮 · 迭代 10 记录(2026-08-31)
+
+四套回归各跑一轮,全部绿:
+
+- `cargo test --manifest-path native_shell/Cargo.toml --lib`:354 passed / 0 failed
+- `cargo test --manifest-path presenter_ui/Cargo.toml`:3 passed / 0 failed
+- `desktop_ui`: `gradlew.bat test --no-daemon`:BUILD SUCCESSFUL(66 用例,
+  thousand-task p95=13.6ms)
+- `extension`: `pnpm test`:wxt prepare + tsc --noEmit + vitest 222/222(37 文件)
+
+构建与桌面发布:
+
+- `pnpm run zip:chrome` / `zip:firefox` 产出 7.0.0 双端包;
+  `scripts/publish-desktop-extension-oneoff.ps1`(PS 5.1+7 双解析通过)按
+  install-v7-local 约定把桌面扩展包规范为恰好
+  `HLSDownloader-Chromium.zip` + `HLSDownloader-Firefox.zip` 各一份,
+  执行前已删除桌面上的全部旧扩展包副本。
+- parity 仍为 24/28 verified + 4 partial(需实机门禁),`release_ready=false`,
+  按约束本轮未生成正式安装包;`E:\h` 不存在,本机零安装,符合唯一安装位规则。
+
+git 收尾:`v7-refinement` 以 --no-ff 合回 `main` 并推送 `origin/main`,
+本轮全部 11 个提交(含文档)可通过合并提交回溯。
