@@ -126,7 +126,6 @@ def main() -> int:
         # for this isolated smoke fixture so the test does not touch user data.
         environment["HLS_V6_DATA_DIR"] = str(root / "data")
         environment["HLS_V7_PIPE"] = rf"\\.\pipe\HLSDownloader.v7-smoke-{uuid.uuid4().hex}"
-        environment["HLS_V6_PIPE"] = environment["HLS_V7_PIPE"]
         received, first_response_ms, two_response_ms = responses(host, environment)
         if len(received) != 2 or any(item.get("ok") is not True for item in received):
             raise RuntimeError(f"Native Host ping contract failed: {received}")

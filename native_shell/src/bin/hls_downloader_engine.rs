@@ -96,16 +96,9 @@ fn automatic_native_host_repair_enabled() -> bool {
     // Isolated verification and portable-candidate runs use an explicit IPC
     // endpoint. They must not overwrite the user's browser registration with
     // a manifest inside a temporary test directory.
-    ![
-        "HLS_V7_PIPE",
-        "HLS_V6_PIPE",
-        "HLS_V7_CORE_TCP",
-        "HLS_V6_CORE_TCP",
-        "HLS_V7_CORE_BIND",
-        "HLS_V6_CORE_BIND",
-    ]
-    .iter()
-    .any(|key| std::env::var_os(key).is_some())
+    !["HLS_V7_PIPE", "HLS_V7_CORE_TCP", "HLS_V7_CORE_BIND"]
+        .iter()
+        .any(|key| std::env::var_os(key).is_some())
 }
 
 fn main() -> ExitCode {
