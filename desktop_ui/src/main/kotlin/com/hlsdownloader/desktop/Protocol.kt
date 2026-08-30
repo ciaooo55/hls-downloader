@@ -18,6 +18,7 @@ import java.io.RandomAccessFile
 import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 val protocolJson: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -679,11 +680,52 @@ class EnginePipeClient(
         CommandResult(requestId, response["events"]?.jsonArray.orEmpty().map { protocolJson.decodeFromJsonElement(EventEnvelopeDto.serializer(), it) })
     }
 
-    private fun <T> session(block: (PipeConnection) -> T): T = connect().use { connection -> connection.hello(); block(connection) }
+    private fun <T> session(block: (PipeConnection) -> T): T =
+        poolFor(pipePath).withConnection(connect = { PipeConnection(RandomAccessFile(pipePath, "rw")) }, block = block)
     private fun request(type: String) = buildJsonObject { put("type", type); put("request_id", nextRequestId()) }
-    private fun connect() = PipeConnection(RandomAccessFile(pipePath, "rw"))
+
+    // Reuses warm pipe connections instead of connect+hello per command: batch actions used
+    // to open dozens of pipe instances per click. A failed request leaves the frame stream in
+    // an unknown state, so the connection is always discarded on error, never returned to the pool.
+    private class ConnectionPool {
+        private val idle = ArrayDeque<PipeConnection>()
+        private val lock = Any()
+
+        fun <T> withConnection(connect: () -> PipeConnection, block: (PipeConnection) -> T): T {
+            val recycled = synchronized(lock) { idle.removeFirstOrNull() }
+            val connection = if (recycled != null && recycled.idleMillis() <= MAX_IDLE_MILLIS) recycled else {
+                recycled?.close()
+                freshConnection(connect)
+            }
+            val outcome = runCatching { block(connection) }
+            if (outcome.isSuccess) {
+                val kept = synchronized(lock) {
+                    if (idle.size < MAX_IDLE_CONNECTIONS) { connection.markIdle(); idle.addLast(connection); true } else false
+                }
+                if (!kept) connection.close()
+            } else {
+                runCatching(connection::close)
+            }
+            return outcome.getOrThrow()
+        }
+
+        private fun freshConnection(connect: () -> PipeConnection): PipeConnection {
+            val connection = connect()
+            try {
+                connection.hello()
+            } catch (error: Throwable) {
+                runCatching(connection::close)
+                throw error
+            }
+            return connection
+        }
+    }
 
     private class PipeConnection(private val pipe: RandomAccessFile) : AutoCloseable {
+        private var idleAtMillis = 0L
+        fun markIdle() { idleAtMillis = System.currentTimeMillis() }
+        fun idleMillis(): Long = if (idleAtMillis == 0L) Long.MAX_VALUE else System.currentTimeMillis() - idleAtMillis
+
         fun hello() {
             request(buildJsonObject { put("type", "hello"); put("protocol", CORE_PROTOCOL); put("version", 1) })
                 .requireType("hello", "下载引擎握手失败")
@@ -718,8 +760,12 @@ class EnginePipeClient(
         @Volatile private var engineProcess: Process? = null
         @Volatile private var presenterProcess: Process? = null
         const val MAX_FRAME = 4 * 1024 * 1024
+        private const val MAX_IDLE_CONNECTIONS = 4
+        private const val MAX_IDLE_MILLIS = 60_000L
         private val requestIds = AtomicLong(100)
+        private val pools = ConcurrentHashMap<String, ConnectionPool>()
         private fun nextRequestId() = requestIds.incrementAndGet()
+        private fun poolFor(pipePath: String): ConnectionPool = pools.computeIfAbsent(pipePath) { ConnectionPool() }
 
         fun isCurlCommand(value: String): Boolean =
             value.trimStart().lineSequence().firstOrNull().orEmpty()
