@@ -169,14 +169,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Rc::new(RefCell::new(initial_client));
     let pending = Arc::new(Mutex::new(initial_pending));
     let active_handoff = Arc::new(Mutex::new(None::<String>));
-    let active_task = Rc::new(RefCell::new(None::<String>));
+    let active_hud = Rc::new(RefCell::new(ActiveTaskHud::default()));
     let completed_task = Rc::new(RefCell::new(None::<String>));
     let completed_notified = Rc::new(RefCell::new(HashSet::<String>::new()));
     let prewarm_finished = Rc::new(RefCell::new(false));
 
     progress.on_command({
         let client = Rc::clone(&client);
-        let active_task = Rc::clone(&active_task);
+        let active_hud = Rc::clone(&active_hud);
         let window = progress.as_weak();
         move |command| {
             let action = command.to_string();
@@ -187,7 +187,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
             if matches!(action.as_str(), "pause" | "cancel") {
-                if let Some(task_id) = active_task.borrow().clone() {
+                if let Some(task_id) = active_hud.borrow().primary_task_id() {
                     let _ = command_with_reconnect(
                         &client,
                         CoreCommand::TaskAction { task_id, action },
@@ -238,18 +238,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ) {
                         Ok(_) => {
                             if item.get_remember_directory() && !download_dir.is_empty() {
-                                if let Ok(mut settings) = presenter_settings.lock() {
-                                    settings.remember(&category, download_dir);
-                                    let _ = command_with_reconnect(
-                                        &client,
-                                        CoreCommand::SetSetting {
-                                            key: "browser_category_dirs".into(),
-                                            value: serde_json::Value::String(
-                                                settings.category_dirs_json(),
-                                            ),
-                                        },
-                                    );
-                                }
+                                remember_category_directory(
+                                    &client,
+                                    &presenter_settings,
+                                    &category,
+                                    download_dir.clone(),
+                                );
                             }
                             pending.lock().ok().and_then(|mut items| items.pop_front());
                         }
@@ -382,7 +376,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     event_timer.start(TimerMode::Repeated, Duration::from_millis(4), {
         let rx = Rc::clone(&rx);
         let pending = Arc::clone(&pending);
-        let active_task = Rc::clone(&active_task);
+        let active_hud = Rc::clone(&active_hud);
         let completed_task = Rc::clone(&completed_task);
         let completed_notified = Rc::clone(&completed_notified);
         let client = Rc::clone(&client);
@@ -432,10 +426,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             *runtime_settings.borrow(),
                             &progress,
                             &complete,
-                            &active_task,
+                            &active_hud,
                             &completed_task,
                             &completed_notified,
                         ),
+                        CoreEvent::TaskDeleted { task_id } => {
+                            let primary = active_hud.borrow_mut().remove(&task_id);
+                            match primary {
+                                Some(primary) => render_progress_hud(
+                                    &progress,
+                                    *runtime_settings.borrow(),
+                                    &primary,
+                                ),
+                                None => {
+                                    if let Some(item) = progress.upgrade() {
+                                        let _ = item.hide();
+                                    }
+                                }
+                            }
+                        }
                         CoreEvent::PowerActionPending {
                             action,
                             title,
@@ -596,11 +605,14 @@ fn connect_or_start_core() -> Result<CoreIpcClient, String> {
     }
     let root = install_root().ok_or_else(|| "找不到应用安装目录".to_string())?;
     spawn_core(&root)?;
-    for _ in 0..40 {
+    // A cold start may spend seconds opening the database, migrating legacy
+    // data or being scanned by antivirus software, so wait up to 10 s before
+    // failing the presenter outright.
+    for _ in 0..100 {
         if let Ok(client) = CoreIpcClient::connect() {
             return Ok(client);
         }
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(100));
     }
     Err("下载引擎启动超时".into())
 }
@@ -617,6 +629,36 @@ fn command_with_reconnect(
     let result = replacement.command(command);
     *client.borrow_mut() = replacement;
     result
+}
+
+/// Persist a remembered category directory without clobbering concurrent
+/// workbench edits: fetch fresh settings from the Core, merge only the single
+/// category being remembered into the fresh map, then write the whole setting
+/// back. The presenter-local cache always records the user's choice so the
+/// rest of this session offers the same directory.
+fn remember_category_directory(
+    client: &Rc<RefCell<CoreIpcClient>>,
+    presenter_settings: &Arc<Mutex<PresenterSettings>>,
+    category: &str,
+    directory: String,
+) {
+    if let Ok(mut settings) = presenter_settings.lock() {
+        settings.remember(category, directory.clone());
+    }
+    let Ok(response) = client.borrow_mut().load_settings() else {
+        return;
+    };
+    // Never write back a derived default: a non-Settings response must not
+    // blank the other three categories in the stored map.
+    let CorePipeResponse::Settings { .. } = &response else {
+        return;
+    };
+    let mut fresh = PresenterSettings::from_response(Some(&response));
+    fresh.remember(category, directory);
+    let _ = client.borrow_mut().command(CoreCommand::SetSetting {
+        key: "browser_category_dirs".into(),
+        value: serde_json::Value::String(fresh.category_dirs_json()),
+    });
 }
 
 fn event_loop(
@@ -1027,46 +1069,90 @@ fn apply_runtime_settings(
         .set_reduce_motion(settings.reduce_motion);
 }
 
+fn task_is_active(status: &str) -> bool {
+    matches!(status, "downloading" | "recording" | "merging" | "checking")
+}
+
+/// Ordered view of the tasks currently shown by the progress HUD. Entries are
+/// kept sorted by (activation, task_id): the primary is the task activated
+/// earliest, with simultaneous activations broken by lowest task_id. The
+/// primary only changes when it actually stops, so concurrent downloads never
+/// flip the HUD between filenames, and the HUD hides only once no task is
+/// active anymore.
+#[derive(Default)]
+struct ActiveTaskHud {
+    entries: Vec<ActiveTaskEntry>,
+    next_activation: u64,
+}
+
+struct ActiveTaskEntry {
+    task_id: String,
+    activation: u64,
+    snapshot: TaskSnapshot,
+}
+
+impl ActiveTaskHud {
+    /// Fold a task snapshot into the view and return the snapshot the HUD
+    /// should display afterwards (None when no task is active anymore).
+    fn observe(&mut self, snapshot: TaskSnapshot) -> Option<TaskSnapshot> {
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| entry.task_id == snapshot.task_id);
+        if task_is_active(&snapshot.status) {
+            match index {
+                Some(index) => self.entries[index].snapshot = snapshot,
+                None => {
+                    let activation = self.next_activation;
+                    self.next_activation += 1;
+                    let entry = ActiveTaskEntry {
+                        task_id: snapshot.task_id.clone(),
+                        activation,
+                        snapshot,
+                    };
+                    let insert_at = self.entries.partition_point(|existing| {
+                        existing.activation < entry.activation
+                            || (existing.activation == entry.activation
+                                && existing.task_id < entry.task_id)
+                    });
+                    self.entries.insert(insert_at, entry);
+                }
+            }
+        } else if let Some(index) = index {
+            self.entries.remove(index);
+        }
+        self.entries.first().map(|entry| entry.snapshot.clone())
+    }
+
+    /// Drop a task deleted while active and return the snapshot the HUD should
+    /// display afterwards.
+    fn remove(&mut self, task_id: &str) -> Option<TaskSnapshot> {
+        self.entries.retain(|entry| entry.task_id != task_id);
+        self.entries.first().map(|entry| entry.snapshot.clone())
+    }
+
+    fn primary_task_id(&self) -> Option<String> {
+        self.entries.first().map(|entry| entry.task_id.clone())
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn update_task_windows(
     snapshot: TaskSnapshot,
     settings: PresenterRuntimeSettings,
     progress: &slint::Weak<ProgressWindow>,
     complete: &slint::Weak<CompleteWindow>,
-    active_task: &RefCell<Option<String>>,
+    active_hud: &RefCell<ActiveTaskHud>,
     completed_task: &RefCell<Option<String>>,
     completed_notified: &RefCell<HashSet<String>>,
 ) {
-    if matches!(
-        snapshot.status.as_str(),
-        "downloading" | "recording" | "merging" | "checking"
-    ) {
-        *active_task.borrow_mut() = Some(snapshot.task_id.clone());
-        if settings.show_progress {
+    let primary = active_hud.borrow_mut().observe(snapshot.clone());
+    match primary {
+        Some(primary) => render_progress_hud(progress, settings, &primary),
+        None => {
             if let Some(item) = progress.upgrade() {
-                item.set_headline(
-                    if matches!(snapshot.status.as_str(), "merging" | "checking") {
-                        "本地处理中".into()
-                    } else {
-                        "下载进度".into()
-                    },
-                );
-                item.set_filename(snapshot.filename.clone().into());
-                item.set_speed(if snapshot.speed_bytes_per_sec > 0 {
-                    format_speed(snapshot.speed_bytes_per_sec).into()
-                } else {
-                    snapshot.stage.clone().into()
-                });
-                item.set_progress(task_progress(&snapshot));
-                let _ = item.show();
+                let _ = item.hide();
             }
-        }
-        return;
-    }
-    if active_task.borrow().as_deref() == Some(snapshot.task_id.as_str()) {
-        *active_task.borrow_mut() = None;
-        if let Some(item) = progress.upgrade() {
-            let _ = item.hide();
         }
     }
     if matches!(snapshot.status.as_str(), "completed" | "done")
@@ -1089,6 +1175,34 @@ fn update_task_windows(
             }
         }
     }
+}
+
+fn render_progress_hud(
+    progress: &slint::Weak<ProgressWindow>,
+    settings: PresenterRuntimeSettings,
+    snapshot: &TaskSnapshot,
+) {
+    if !settings.show_progress {
+        return;
+    }
+    let Some(item) = progress.upgrade() else {
+        return;
+    };
+    item.set_headline(
+        if matches!(snapshot.status.as_str(), "merging" | "checking") {
+            "本地处理中".into()
+        } else {
+            "下载进度".into()
+        },
+    );
+    item.set_filename(snapshot.filename.clone().into());
+    item.set_speed(if snapshot.speed_bytes_per_sec > 0 {
+        format_speed(snapshot.speed_bytes_per_sec).into()
+    } else {
+        snapshot.stage.clone().into()
+    });
+    item.set_progress(task_progress(snapshot));
+    let _ = item.show();
 }
 
 fn filename_from_url(url: &str) -> String {
@@ -1337,9 +1451,29 @@ fn attach_parent_console() {}
 mod tests {
     use super::{
         download_category, file_extension, format_request_details, format_resource_meta,
-        safe_display_url,
+        safe_display_url, ActiveTaskHud,
     };
-    use hls_native_shell::{ResourceKind, ResourceOffer};
+    use hls_native_shell::{ResourceKind, ResourceOffer, TaskSnapshot};
+
+    fn hud_snapshot(task_id: &str, status: &str) -> TaskSnapshot {
+        TaskSnapshot {
+            task_id: task_id.into(),
+            status: status.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn progress_hud_primary_is_earliest_activated_and_stable_until_it_stops() {
+        let mut hud = ActiveTaskHud::default();
+        hud.observe(hud_snapshot("b-2", "downloading"));
+        hud.observe(hud_snapshot("a-1", "downloading"));
+        assert_eq!(hud.primary_task_id().as_deref(), Some("b-2"));
+        hud.observe(hud_snapshot("a-1", "completed"));
+        assert_eq!(hud.primary_task_id().as_deref(), Some("b-2"));
+        hud.remove("b-2");
+        assert_eq!(hud.primary_task_id().as_deref(), None);
+    }
 
     #[test]
     fn displayed_handoff_location_hides_credentials_and_signed_query() {
