@@ -31,14 +31,24 @@ pub fn maybe_migrate_from_5x(core: &mut PersistentCore) -> Result<u32, String> {
 }
 
 pub fn resolve_legacy_paths() -> (PathBuf, PathBuf) {
-    if let Ok(config) = std::env::var("HLS_V6_MIGRATE_CONFIG") {
-        let db = std::env::var("HLS_V6_MIGRATE_DB").unwrap_or_default();
-        return (PathBuf::from(config), PathBuf::from(db));
+    let explicit_config = env_path("HLS_V6_MIGRATE_CONFIG");
+    let explicit_db = env_path("HLS_V6_MIGRATE_DB");
+    if explicit_config.is_some() || explicit_db.is_some() {
+        return (
+            explicit_config.unwrap_or_default(),
+            explicit_db.unwrap_or_default(),
+        );
     }
     let candidates = legacy_location_candidates();
     candidates
-        .into_iter()
-        .find(|(config, db)| config.exists() || db.exists())
+        .iter()
+        .find(|(config, db)| config.is_file() && db.is_file())
+        .cloned()
+        .or_else(|| {
+            candidates
+                .into_iter()
+                .find(|(config, db)| config.is_file() || db.is_file())
+        })
         .unwrap_or_else(|| {
             (
                 PathBuf::from("config.json"),
@@ -47,21 +57,42 @@ pub fn resolve_legacy_paths() -> (PathBuf, PathBuf) {
         })
 }
 
+pub(crate) fn migration_requested_explicitly() -> bool {
+    env_path("HLS_V6_MIGRATE_CONFIG").is_some()
+        || env_path("HLS_V6_MIGRATE_DB").is_some()
+        || env_path("HLS_V6_MIGRATE_FORCE").is_some()
+}
+
+fn env_path(key: &str) -> Option<PathBuf> {
+    std::env::var_os(key)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
 fn legacy_location_candidates() -> Vec<(PathBuf, PathBuf)> {
-    let mut out = Vec::new();
+    let mut roots = Vec::new();
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        let root = PathBuf::from(local).join("HLS Downloader");
-        out.push((root.join("config.json"), root.join("data.db")));
+        let local = PathBuf::from(local);
+        roots.push(local.join("HLS Downloader"));
+        roots.push(local.join("Programs").join("HLS Downloader"));
+        roots.push(local.join("Programs").join("HLS Downloader v6"));
     }
+    roots.push(PathBuf::from(r"E:\HLS Downloader"));
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            out.push((dir.join("config.json"), dir.join("data.db")));
-            out.push((dir.join("config.json"), dir.join("backend").join("data.db")));
+            roots.push(dir.to_path_buf());
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
-        out.push((cwd.join("config.json"), cwd.join("backend").join("data.db")));
-        out.push((cwd.join("config.json"), cwd.join("data.db")));
+        roots.push(cwd);
+    }
+    let mut out = Vec::new();
+    for root in roots {
+        out.push((root.join("config.json"), root.join("data.db")));
+        out.push((
+            root.join("config.json"),
+            root.join("backend").join("data.db"),
+        ));
     }
     out
 }
@@ -75,14 +106,22 @@ pub fn migrate_from_5x(
     let mut default_download_dir = String::new();
     if config_path.exists() {
         let text = std::fs::read_to_string(config_path).map_err(|error| error.to_string())?;
-        if let Ok(value) = serde_json::from_str::<Value>(&text) {
-            import_settings(core, &value)?;
-            default_download_dir = value
-                .get("download_dir")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
+        let value: Value = serde_json::from_str(&text)
+            .map_err(|error| format!("parse legacy config {}: {error}", config_path.display()))?;
+        if !value.is_object() {
+            return Err(format!(
+                "legacy config is not an object: {}",
+                config_path.display()
+            ));
         }
+        import_settings(core, &value)?;
+        default_download_dir = value
+            .get("download_dir")
+            .and_then(Value::as_str)
+            .filter(|path| !path.trim().is_empty())
+            .map(|path| resolve_legacy_path(config_path, path))
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
     }
     if !db_path.exists() {
         return Ok(imported);
@@ -100,7 +139,8 @@ pub fn migrate_from_5x(
         let download_dir = row
             .output_path
             .as_ref()
-            .and_then(|path| Path::new(path).parent())
+            .map(|path| resolve_legacy_path(db_path, path))
+            .and_then(|path| path.parent().map(Path::to_path_buf))
             .map(|parent| parent.to_string_lossy().into_owned())
             .filter(|dir| !dir.is_empty())
             .unwrap_or_else(|| default_download_dir.clone());
@@ -376,19 +416,18 @@ struct LegacyTask {
 
 fn load_legacy_tasks(connection: &rusqlite::Connection) -> Result<Vec<LegacyTask>, String> {
     let columns: std::collections::BTreeSet<String> = {
-        let mut statement = match connection.prepare("PRAGMA table_info(tasks)") {
-            Ok(statement) => statement,
-            Err(_) => return Ok(Vec::new()),
-        };
+        let mut statement = connection
+            .prepare("PRAGMA table_info(tasks)")
+            .map_err(|error| error.to_string())?;
         let names = statement
             .query_map([], |row| row.get::<_, String>(1))
             .map_err(|error| error.to_string())?
-            .flatten()
-            .collect();
+            .collect::<rusqlite::Result<std::collections::BTreeSet<_>>>()
+            .map_err(|error| error.to_string())?;
         names
     };
     if !columns.contains("url") {
-        return Ok(Vec::new());
+        return Err("legacy tasks table does not contain url".into());
     }
     let mut sql = String::from("SELECT url");
     let extras = [
@@ -418,7 +457,7 @@ fn load_legacy_tasks(connection: &rusqlite::Connection) -> Result<Vec<LegacyTask
             sql.push_str("NULL");
         }
     }
-    sql.push_str(" FROM tasks ORDER BY rowid LIMIT 2000");
+    sql.push_str(" FROM tasks ORDER BY rowid");
     let mut statement = connection
         .prepare(&sql)
         .map_err(|error| error.to_string())?;
@@ -449,7 +488,8 @@ fn load_legacy_tasks(connection: &rusqlite::Connection) -> Result<Vec<LegacyTask
             })
         })
         .map_err(|error| error.to_string())?;
-    Ok(rows.flatten().collect())
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| error.to_string())
 }
 
 fn optional_string(row: &rusqlite::Row<'_>, index: usize) -> String {
@@ -656,6 +696,7 @@ fn find_legacy_task_dir(
     }
     if let Some(parent) = config_path.parent() {
         roots.push(parent.to_path_buf());
+        roots.push(parent.join("Cache"));
     }
     if !spec.download_dir.trim().is_empty() {
         roots.push(PathBuf::from(&spec.download_dir));
@@ -677,6 +718,18 @@ fn find_legacy_task_dir(
         }
     }
     None
+}
+
+fn resolve_legacy_path(source_file: &Path, value: &str) -> PathBuf {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        path
+    } else {
+        source_file
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(path)
+    }
 }
 
 fn copy_if_present(source: &Path, dest: &Path) -> bool {

@@ -144,7 +144,12 @@ fn bootstrap_store(coordinator: &CoreCoordinator) -> Result<(), String> {
     )?;
     let core = coordinator.core();
     let mut core = core.lock().map_err(|_| "Core mutex poisoned".to_string())?;
-    crate::maybe_migrate_from_5x(&mut core)?;
+    if let Err(error) = crate::maybe_migrate_from_5x(&mut core) {
+        if crate::migrate::migration_requested_explicitly() {
+            return Err(error);
+        }
+        eprintln!("legacy migration skipped: {error}");
+    }
     Ok(())
 }
 
