@@ -116,7 +116,10 @@ fn main() -> ExitCode {
         match hls_native_shell::CoreServer::in_memory() {
             Ok(server) => match server.coordinator().tasks() {
                 Ok(tasks) if tasks.is_empty() => {
-                    println!("HLSDownloaderEngine 7.0.0 self-test ok");
+                    println!(
+                        "HLSDownloaderEngine {} self-test ok",
+                        env!("CARGO_PKG_VERSION")
+                    );
                     ExitCode::SUCCESS
                 }
                 Ok(_) => ExitCode::from(1),

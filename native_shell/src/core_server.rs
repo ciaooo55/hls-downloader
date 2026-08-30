@@ -222,7 +222,7 @@ fn dispatch(
         },
         CorePipeRequest::Capabilities { request_id } => CorePipeResponse::Capabilities {
             request_id,
-            product_version: "7.0.0".into(),
+            product_version: env!("CARGO_PKG_VERSION").into(),
             protocol_version: V7_PROTOCOL_VERSION,
             commands: vec![
                 "create_task",

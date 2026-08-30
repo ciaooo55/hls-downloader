@@ -6,7 +6,8 @@ const PREFIX: &str = "dpapi:";
 pub struct CredentialVault;
 
 impl CredentialVault {
-    /// DPAPI on Windows; elsewhere keep the plaintext so tests and Linux CI can import.
+    /// DPAPI on Windows; other platforms refuse so credential-bearing flows
+    /// fail closed instead of storing plaintext.
     pub fn protect(&self, value: &str) -> Result<String, String> {
         if value.is_empty() {
             return Ok(String::new());

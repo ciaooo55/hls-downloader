@@ -88,7 +88,6 @@ fn claim_presenter_session_mutex() -> Result<(), String> {
     Ok(())
 }
 
-#[allow(dead_code)]
 fn claim_profile_lock() -> Result<(), String> {
     let path = lock_path();
     if let Some(parent) = path.parent() {
