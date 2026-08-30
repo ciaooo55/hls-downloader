@@ -534,6 +534,8 @@ pub enum CoreCommand {
     PresentHandoff {
         handoff_id: String,
         ok: bool,
+        #[serde(default)]
+        presenter_id: String,
     },
     PlayTask {
         task_id: String,
@@ -1100,16 +1102,19 @@ mod tests {
         let encoded = serde_json::to_value(CoreCommand::PresentHandoff {
             handoff_id: "handoff-1".into(),
             ok: false,
+            presenter_id: "presenter-1".into(),
         })
         .unwrap();
         assert_eq!(encoded["kind"], "present_handoff");
         assert_eq!(encoded["ok"], false);
+        assert_eq!(encoded["presenter_id"], "presenter-1");
         let restored: CoreCommand = serde_json::from_value(encoded).unwrap();
         assert_eq!(
             restored,
             CoreCommand::PresentHandoff {
                 handoff_id: "handoff-1".into(),
                 ok: false,
+                presenter_id: "presenter-1".into(),
             }
         );
     }

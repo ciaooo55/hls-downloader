@@ -955,6 +955,7 @@ mod tests {
         ui.command(CoreCommand::PresentHandoff {
             handoff_id: "handoff-present".into(),
             ok: false,
+            presenter_id: String::new(),
         })
         .unwrap();
         let rows = host.load_handoffs().unwrap();
@@ -1003,6 +1004,7 @@ mod tests {
             ui.command(CoreCommand::PresentHandoff {
                 handoff_id: "handoff-p95".into(),
                 ok: true,
+                presenter_id: "presenter-p95".into(),
             })
             .unwrap();
         }
@@ -1012,6 +1014,7 @@ mod tests {
             ui.command(CoreCommand::PresentHandoff {
                 handoff_id: "handoff-p95".into(),
                 ok: true,
+                presenter_id: "presenter-p95".into(),
             })
             .unwrap();
             samples.push(started.elapsed());

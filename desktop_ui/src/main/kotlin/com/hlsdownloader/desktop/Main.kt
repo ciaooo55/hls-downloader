@@ -1170,15 +1170,33 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     if (extensionDialog) ExtensionDialog(extensionText) { extensionDialog = false }
     LaunchedEffect(fallbackCandidate?.handoffId, fallbackCandidate?.presentation) {
         val offer = fallbackCandidate ?: return@LaunchedEffect
-        runCatching { withContext(Dispatchers.IO) { EnginePipeClient().presentHandoff(offer.handoffId, presented = false) } }
-            .onSuccess {
+        var failureReported = false
+        while (!presenterReady.value && handoffQueue.any { it.handoffId == offer.handoffId && it.presentation != "fallback" }) {
+            val claimed = runCatching {
+                withContext(Dispatchers.IO) { EnginePipeClient().presentHandoff(offer.handoffId, presented = false) }
+            }
+            if (claimed.isSuccess) {
                 val index = handoffQueue.indexOfFirst { it.handoffId == offer.handoffId }
                 if (index >= 0) handoffQueue[index] = offer.copy(presentation = "fallback")
+                return@LaunchedEffect
             }
-            .onFailure { error ->
-                UiDiagnostics.error("handoff.claim_fallback", error, offer.handoffId)
-                notice = UiSignal.Notice("error", error.message ?: "接管浏览器下载确认请求失败")
+            if (!failureReported) {
+                UiDiagnostics.warning(
+                    "handoff.claim_fallback",
+                    claimed.exceptionOrNull()?.message ?: "等待下载确认窗口释放请求",
+                    offer.handoffId,
+                )
+                failureReported = true
             }
+            val status = runCatching {
+                withContext(Dispatchers.IO) { EnginePipeClient().loadHandoffStatuses() }
+            }.getOrNull()?.firstOrNull { it.id == offer.handoffId }?.status
+            if (status != null && status != "pending") {
+                handoffQueue.removeAll { it.handoffId == offer.handoffId }
+                return@LaunchedEffect
+            }
+            delay(5_000)
+        }
     }
     activeHandoff?.let { offer ->
         LaunchedEffect(offer.handoffId, handoffBusy) {
