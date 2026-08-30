@@ -21,6 +21,20 @@ impl PersistentCore {
     }
 
     pub fn handle(&mut self, command: CoreCommand) -> Result<Vec<EventEnvelope>, String> {
+        if let CoreCommand::GetTaskLog { task_id } = &command {
+            let mut lines = self.store.load_task_log(task_id, 500)?;
+            if lines.is_empty() {
+                lines = self
+                    .runtime
+                    .snapshot(task_id)
+                    .map(|snapshot| snapshot.log_tail.clone())
+                    .unwrap_or_default();
+            }
+            return self.emit(crate::CoreEvent::TaskLog {
+                task_id: task_id.clone(),
+                lines,
+            });
+        }
         let before = self.runtime.clone();
         let created_spec = match &command {
             CoreCommand::CreateTask { spec } => Some(spec.clone()),
@@ -191,8 +205,10 @@ impl PersistentCore {
 
     pub fn replace_spec(&mut self, task_id: &str, spec: TaskSpec) -> Result<(), String> {
         let before = self.runtime.clone();
+        let sequence = self.runtime.latest_sequence();
         self.runtime.replace_spec(task_id, spec.clone());
-        if let Err(error) = self.store.save_spec(task_id, &spec) {
+        let events = self.runtime.events_after(sequence, 16);
+        if let Err(error) = self.store.apply_events_and_spec(&events, Some(&spec)) {
             self.runtime = before;
             return Err(error);
         }
@@ -392,6 +408,38 @@ mod tests {
             core.store().load_task_specs().unwrap()[0].1.url,
             "https://example.test/file.bin"
         );
+    }
+
+    #[test]
+    fn spec_updates_refresh_snapshot_and_task_log() {
+        let mut core = PersistentCore::in_memory().unwrap();
+        core.handle(CoreCommand::CreateTask { spec: test_spec() })
+            .unwrap();
+        let mut spec = core.task_spec("task-1").unwrap().clone();
+        spec.speed_limit_kib = 256;
+        core.replace_spec("task-1", spec).unwrap();
+        assert_eq!(core.tasks()[0].speed_limit_kib, 256);
+        assert_eq!(core.store().load_tasks().unwrap()[0].speed_limit_kib, 256);
+
+        core.handle(CoreCommand::UpdateProgress {
+            task_id: "task-1".into(),
+            downloaded_bytes: 1024,
+            total_bytes: Some(4096),
+            speed_bytes_per_sec: 512,
+            stage: "transfer".into(),
+            status: "downloading".into(),
+        })
+        .unwrap();
+        let events = core
+            .handle(CoreCommand::GetTaskLog {
+                task_id: "task-1".into(),
+            })
+            .unwrap();
+        assert!(matches!(
+            &events[0].event,
+            crate::CoreEvent::TaskLog { lines, .. }
+                if lines.last().is_some_and(|line| line.contains("1024/4096"))
+        ));
     }
 
     #[test]

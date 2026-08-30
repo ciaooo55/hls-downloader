@@ -96,6 +96,23 @@ impl CoreStore {
         Ok(specs)
     }
 
+    pub fn load_task_log(&self, task_id: &str, limit: usize) -> Result<Vec<String>, String> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT message FROM logs WHERE task_id = ?1 ORDER BY id DESC LIMIT ?2")
+            .map_err(|error| format!("prepare Core task log {task_id}: {error}"))?;
+        let rows = statement
+            .query_map(params![task_id, limit.max(1).min(500) as i64], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|error| format!("query Core task log {task_id}: {error}"))?;
+        let mut lines = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("read Core task log {task_id}: {error}"))?;
+        lines.reverse();
+        Ok(lines)
+    }
+
     pub fn latest_sequence(&self) -> Result<u64, String> {
         self.connection
             .query_row(
@@ -112,28 +129,12 @@ impl CoreStore {
         self.apply_events_and_spec(events, None)
     }
 
-    pub fn save_spec(&mut self, task_id: &str, spec: &TaskSpec) -> Result<(), String> {
-        if task_id.trim().is_empty() {
-            return Err("missing task id".into());
-        }
-        let json = serde_json::to_string(spec)
-            .map_err(|error| format!("encode Core task spec {task_id}: {error}"))?;
-        self.connection
-            .execute(
-                "INSERT INTO task_specs(task_id, spec_json) VALUES (?1, ?2)\
-                 ON CONFLICT(task_id) DO UPDATE SET spec_json = excluded.spec_json",
-                params![task_id, json],
-            )
-            .map_err(|error| format!("persist Core task spec {task_id}: {error}"))?;
-        Ok(())
-    }
-
     pub fn apply_events_and_spec(
         &mut self,
         events: &[EventEnvelope],
-        created_spec: Option<&TaskSpec>,
+        spec: Option<&TaskSpec>,
     ) -> Result<(), String> {
-        if events.is_empty() && created_spec.is_none() {
+        if events.is_empty() && spec.is_none() {
             return Ok(());
         }
         let transaction = self
@@ -142,10 +143,19 @@ impl CoreStore {
             .map_err(|error| format!("begin Core event transaction: {error}"))?;
         for envelope in events {
             match &envelope.event {
-                CoreEvent::TaskCreated { snapshot }
-                | CoreEvent::TaskUpdated { snapshot }
-                | CoreEvent::TaskProgress { snapshot } => {
+                CoreEvent::TaskCreated { snapshot } | CoreEvent::TaskUpdated { snapshot } => {
                     upsert_task(&transaction, snapshot, envelope.sequence)?;
+                    if snapshot.status == "failed" {
+                        if let Some(line) = snapshot.log_tail.last() {
+                            append_task_log(&transaction, snapshot, "error", line)?;
+                        }
+                    }
+                }
+                CoreEvent::TaskProgress { snapshot } => {
+                    upsert_task(&transaction, snapshot, envelope.sequence)?;
+                    if let Some(line) = snapshot.log_tail.last() {
+                        append_task_log(&transaction, snapshot, "progress", line)?;
+                    }
                 }
                 CoreEvent::TaskDeleted { task_id } => {
                     transaction
@@ -157,6 +167,9 @@ impl CoreStore {
                             params![task_id],
                         )
                         .map_err(|error| format!("delete Core task spec {task_id}: {error}"))?;
+                    transaction
+                        .execute("DELETE FROM logs WHERE task_id = ?1", params![task_id])
+                        .map_err(|error| format!("delete Core task log {task_id}: {error}"))?;
                 }
                 CoreEvent::Ready { .. }
                 | CoreEvent::SettingsChanged { .. }
@@ -189,9 +202,11 @@ impl CoreStore {
                 | CoreEvent::PlayerSession { .. } => {}
             }
         }
-        if let Some(spec) = created_spec {
+        if let Some(spec) = spec {
             let task_id = events.iter().find_map(|event| match &event.event {
-                CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.as_str()),
+                CoreEvent::TaskCreated { snapshot }
+                | CoreEvent::TaskUpdated { snapshot }
+                | CoreEvent::TaskProgress { snapshot } => Some(snapshot.task_id.as_str()),
                 _ => None,
             });
             if let Some(task_id) = task_id {
@@ -438,6 +453,7 @@ impl CoreStore {
                  );\
                  CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at_ms DESC);\
                  CREATE INDEX IF NOT EXISTS idx_task_ranges_task ON task_ranges(task_id);\
+                 CREATE INDEX IF NOT EXISTS idx_logs_task ON logs(task_id, id);\
                  PRAGMA user_version = {CURRENT_SCHEMA_VERSION};"
             ))
             .map_err(|error| format!("initialize Core schema: {error}"))
@@ -467,6 +483,34 @@ fn upsert_task(
             params![snapshot.task_id, json, now, sequence],
         )
         .map_err(|error| format!("persist Core task {}: {error}", snapshot.task_id))?;
+    Ok(())
+}
+
+fn append_task_log(
+    transaction: &Transaction<'_>,
+    snapshot: &TaskSnapshot,
+    level: &str,
+    message: &str,
+) -> Result<(), String> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(i64::MAX as u128) as i64;
+    transaction
+        .execute(
+            "INSERT INTO logs(task_id, level, code, message, created_at_ms)\
+             SELECT ?1, ?2, ?3, ?4, ?5\
+             WHERE COALESCE((SELECT message FROM logs WHERE task_id = ?1 ORDER BY id DESC LIMIT 1), '') <> ?4",
+            params![snapshot.task_id, level, snapshot.stage, message, now],
+        )
+        .map_err(|error| format!("append Core task log {}: {error}", snapshot.task_id))?;
+    transaction
+        .execute(
+            "DELETE FROM logs WHERE task_id = ?1 AND id NOT IN (SELECT id FROM logs WHERE task_id = ?1 ORDER BY id DESC LIMIT 500)",
+            params![snapshot.task_id],
+        )
+        .map_err(|error| format!("trim Core task log {}: {error}", snapshot.task_id))?;
     Ok(())
 }
 

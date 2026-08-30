@@ -54,7 +54,8 @@ pub use clipboard::{
     write_text as write_clipboard,
 };
 pub use connection_parts::{
-    paint_file_map, paint_from_progress, sample_cells, summarize as summarize_parts,
+    active_worker_count, paint_file_map, paint_from_progress, sample_cells,
+    summarize as summarize_parts,
 };
 pub use contract::{
     AvScanStatus, CastDeviceInfo, ConnectionPart, CoreCommand, CoreEvent, HarvestCandidate,

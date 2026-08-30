@@ -65,8 +65,12 @@ pub fn paint_from_progress(
 ) -> Vec<ConnectionPart> {
     let ranges = load_completed_ranges(progress_path).unwrap_or_default();
     let total = total.max(downloaded);
-    let mut active = Vec::new();
-    if downloading {
+    let mut active = if downloading {
+        load_active_ranges(progress_path).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    if downloading && active.is_empty() {
         if let Some((_, end)) = ranges.last() {
             if *end + 1 < total {
                 let frontier = (*end + 1).min(total.saturating_sub(1));
@@ -93,6 +97,12 @@ pub fn paint_from_progress(
         }];
     }
     parts
+}
+
+pub fn active_worker_count(progress_path: &Path) -> u32 {
+    load_active_ranges(progress_path)
+        .map(|ranges| ranges.len().min(u32::MAX as usize) as u32)
+        .unwrap_or(0)
 }
 
 pub fn summarize(parts: &[ConnectionPart]) -> (u32, u64, u64, String) {
@@ -178,7 +188,26 @@ pub fn sample_cells(
 }
 
 fn load_completed_ranges(progress_path: &Path) -> Option<Vec<(u64, u64)>> {
-    let path = progress_path.with_file_name("native-engine.ranges.json");
+    load_ranges(&progress_path.with_file_name("native-engine.ranges.json"))
+        .map(|ranges| {
+            ranges
+                .into_iter()
+                .map(|(start, end)| (start, end.saturating_add(1)))
+                .collect::<Vec<_>>()
+        })
+        .map(|ranges| merge(&ranges))
+}
+
+fn load_active_ranges(progress_path: &Path) -> Option<Vec<(u64, u64)>> {
+    load_ranges(&progress_path.with_file_name("native-engine.active.json")).map(|ranges| {
+        ranges
+            .into_iter()
+            .filter(|(start, end)| end > start)
+            .collect()
+    })
+}
+
+fn load_ranges(path: &Path) -> Option<Vec<(u64, u64)>> {
     let text = std::fs::read_to_string(path).ok()?;
     let value: Value = serde_json::from_str(&text).ok()?;
     let items = value.get("ranges")?.as_array()?;
@@ -190,7 +219,7 @@ fn load_completed_ranges(progress_path: &Path) -> Option<Vec<(u64, u64)>> {
         })
         .filter(|(start, end)| end >= start)
         .collect();
-    Some(merge(&ranges))
+    Some(ranges)
 }
 
 fn merge(intervals: &[(u64, u64)]) -> Vec<(u64, u64)> {
@@ -299,5 +328,21 @@ mod tests {
         assert_eq!(cells[0], 2);
         assert!(cells.contains(&1));
         assert!(cells.contains(&0));
+    }
+
+    #[test]
+    fn counts_adjacent_active_worker_ranges_before_painting() {
+        let root =
+            std::env::temp_dir().join(format!("hls-v7-active-ranges-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let progress = root.join("progress.json");
+        std::fs::write(
+            progress.with_file_name("native-engine.active.json"),
+            r#"{"ranges":[[0,4],[4,8]]}"#,
+        )
+        .unwrap();
+        assert_eq!(active_worker_count(&progress), 2);
+        assert_eq!(paint_from_progress(&progress, 0, 8, true).len(), 1);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

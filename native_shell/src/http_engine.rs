@@ -231,6 +231,21 @@ fn completed_ranges_path(job: &Job) -> PathBuf {
     job.progress.with_file_name("native-engine.ranges.json")
 }
 
+fn active_ranges_path(progress: &Path) -> PathBuf {
+    progress.with_file_name("native-engine.active.json")
+}
+
+fn write_active_ranges(progress: &Path, ranges: &[(u64, u64)]) {
+    let path = active_ranges_path(progress);
+    let tmp = path.with_extension("json.tmp");
+    let payload = serde_json::json!({
+        "ranges": ranges.iter().map(|(start, end)| serde_json::json!([start, end])).collect::<Vec<_>>(),
+    });
+    if fs::write(&tmp, payload.to_string()).is_ok() {
+        let _ = replace_checkpoint_file(&tmp, &path);
+    }
+}
+
 #[cfg(windows)]
 fn replace_checkpoint_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
@@ -751,6 +766,7 @@ fn run_job_once(job: &Job) -> Result<(), EngineError> {
     let _slot = crate::net_policy::acquire(&job.url).map_err(EngineError::Failed)?;
     if job.method.eq_ignore_ascii_case("POST") || job.sequential || job.total == 0 {
         let _ = fs::remove_file(completed_ranges_path(job));
+        let _ = fs::remove_file(active_ranges_path(&job.progress));
         download_sequential(job)
     } else {
         download_ranges(job)
@@ -1044,6 +1060,7 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
 }
 
 fn download_ranges(job: &Job) -> Result<(), EngineError> {
+    let _ = fs::remove_file(active_ranges_path(&job.progress));
     let total = job.total;
     if total == 0 {
         return download_sequential(job);
@@ -1134,6 +1151,7 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     let progress_downloaded = Arc::clone(&downloaded);
     let progress_path = job.progress.clone();
     let progress_control = job.control.clone();
+    let progress_scheduler = Arc::clone(&scheduler);
     let progress = thread::spawn(move || {
         while !progress_stop.load(Ordering::SeqCst) {
             if matches!(
@@ -1152,6 +1170,7 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
                 bytes as f64 / elapsed,
                 "downloading",
             );
+            write_active_ranges(&progress_path, &progress_scheduler.active_ranges());
             thread::sleep(Duration::from_millis(200));
         }
     });
@@ -1160,6 +1179,7 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     }
     stop.store(true, Ordering::SeqCst);
     let _ = progress.join();
+    let _ = fs::remove_file(active_ranges_path(&job.progress));
     if let Some(code) = failed.lock().unwrap_or_else(|err| err.into_inner()).take() {
         return Err(code.into_error());
     }
@@ -1381,6 +1401,19 @@ impl RangeScheduler {
             .unwrap_or_else(|err| err.into_inner())
             .is_empty();
         pending_empty && active_empty
+    }
+
+    fn active_ranges(&self) -> Vec<(u64, u64)> {
+        self.active
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .iter()
+            .filter_map(|item| {
+                let progress = item.progress.lock().unwrap_or_else(|err| err.into_inner());
+                (progress.cursor <= progress.stop)
+                    .then_some((progress.cursor, progress.stop.saturating_add(1)))
+            })
+            .collect()
     }
 }
 
@@ -1941,6 +1974,10 @@ fn fetch_via_curl_impersonate(
     range: Option<&str>,
 ) -> Option<Result<FetchResult, EngineError>> {
     let exe = curl_impersonate_exe()?;
+    let mut headers = headers_for_request(job, &job.url);
+    if let Some(stripped) = strip_stale_cloudflare_cookies(&headers) {
+        headers = stripped;
+    }
     let dir = std::env::temp_dir().join(format!(
         "hls-curl-impersonate-{}-{}",
         std::process::id(),
@@ -1970,8 +2007,8 @@ fn fetch_via_curl_impersonate(
         .arg(&body_path)
         .arg("-w")
         .arg("%{http_code}");
-    command.arg("-A").arg(request_user_agent(&job.headers));
-    for (key, value) in &job.headers {
+    command.arg("-A").arg(request_user_agent(&headers));
+    for (key, value) in &headers {
         if key.eq_ignore_ascii_case("user-agent") || !header_allowed_on_request(key, value) {
             continue;
         }

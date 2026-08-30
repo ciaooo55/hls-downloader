@@ -40,7 +40,7 @@ if ($Task -eq 'candidate') {
 }
 if ($Task -eq 'package') {
     # Formal packages add the release_ready decision after candidate validation.
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireCanonicalComplete -RequireReleaseReady -RequireCleanWorktree -PackageTier formal -ProvenancePath $provenance
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireCanonicalComplete -RequireReleaseReady -RequireCleanWorktree -PackageTier formal -ReleaseEvidencePath "$repo\artifacts\v7-productization\release-evidence.json" -ProvenancePath $provenance
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 try {
@@ -319,6 +319,7 @@ $env:HLS_ENGINE_PATH = $engine
                 Assert-ExtensionManifest $manifest $extension $manifestPath
                 $extensionEvidence[$extension] = [ordered]@{
                     version = [string]$manifest.version
+                    path = "extensions/HLSDownloader-7.0.0-$extension.zip"
                     sha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
                 }
             }

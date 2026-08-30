@@ -68,8 +68,9 @@ impl CoreRuntime {
             runtime.tasks.insert(snapshot.task_id.clone(), snapshot);
         }
         for (task_id, mut spec) in specs {
-            if let Some(snapshot) = runtime.tasks.get(&task_id) {
+            if let Some(snapshot) = runtime.tasks.get_mut(&task_id) {
                 spec.queue_id = snapshot.queue_id.clone();
+                snapshot.speed_limit_kib = spec.speed_limit_kib;
             }
             runtime.specs.insert(task_id, spec);
         }
@@ -223,11 +224,16 @@ impl CoreRuntime {
     }
 
     pub fn replace_spec(&mut self, task_id: &str, spec: TaskSpec) {
-        if let Some(snapshot) = self.tasks.get_mut(task_id) {
+        let updated = self.tasks.get_mut(task_id).map(|snapshot| {
             snapshot.url = spec.url.clone();
+            snapshot.speed_limit_kib = spec.speed_limit_kib;
             snapshot.mirror_status = pending_mirror_status(&spec.mirrors);
-        }
+            snapshot.clone()
+        });
         self.specs.insert(task_id.to_string(), spec);
+        if let Some(snapshot) = updated {
+            self.publish(CoreEvent::TaskUpdated { snapshot });
+        }
     }
 
     pub fn pending_handoff(&self, handoff_id: &str) -> Option<&ResourceOffer> {
@@ -716,15 +722,20 @@ impl CoreRuntime {
                     .unwrap_or_else(|_| {
                         root.join(".hls-tasks").join(task_id).join("progress.json")
                     });
+                let downloading = matches!(effective_status.as_str(), "downloading" | "recording");
                 let parts = crate::paint_from_progress(
                     &progress,
                     snapshot.downloaded_bytes,
                     snapshot.total_bytes.unwrap_or(0),
-                    matches!(effective_status.as_str(), "downloading" | "recording"),
+                    downloading,
                 );
                 if !parts.is_empty() {
                     let (workers, completed, total, hint) = crate::summarize_parts(&parts);
-                    snapshot.active_workers = workers;
+                    snapshot.active_workers = if downloading {
+                        crate::active_worker_count(&progress).max(workers)
+                    } else {
+                        workers
+                    };
                     snapshot.completed_ranges = completed;
                     snapshot.total_ranges = total.max(1);
                     snapshot.connection_hint = hint;
@@ -750,11 +761,7 @@ impl CoreRuntime {
                 snapshot.downloaded_bytes,
                 snapshot.total_bytes.unwrap_or(0)
             );
-            snapshot.log_tail.push(line);
-            if snapshot.log_tail.len() > 16 {
-                let extra = snapshot.log_tail.len() - 16;
-                snapshot.log_tail.drain(0..extra);
-            }
+            append_snapshot_log(snapshot, line);
             snapshot.available_actions = legal_actions(snapshot);
             snapshot.eta_seconds = match (snapshot.total_bytes, effective_speed) {
                 (Some(total), speed) if speed > 0 && total > snapshot.downloaded_bytes => {
@@ -771,6 +778,10 @@ impl CoreRuntime {
         let Some(snapshot) = self.tasks.get_mut(task_id) else {
             return;
         };
+        let failure_line = format!(
+            "failed {} {} {}",
+            failure.stage, failure.code, failure.message
+        );
         snapshot.status = "failed".into();
         snapshot.speed_bytes_per_sec = 0;
         if !failure.stage.trim().is_empty() {
@@ -783,6 +794,7 @@ impl CoreRuntime {
         snapshot.error_hint = failure.hint;
         snapshot.http_status = failure.http_status;
         snapshot.error_attempt = failure.attempt;
+        append_snapshot_log(snapshot, failure_line);
         snapshot.available_actions = vec!["retry".into(), "delete".into()];
         let updated = snapshot.clone();
         self.publish(CoreEvent::TaskUpdated { snapshot: updated });
@@ -880,6 +892,16 @@ impl CoreRuntime {
         while self.events.len() > 4096 {
             self.events.pop_front();
         }
+    }
+}
+
+fn append_snapshot_log(snapshot: &mut TaskSnapshot, line: String) {
+    if snapshot.log_tail.last() != Some(&line) {
+        snapshot.log_tail.push(line);
+    }
+    if snapshot.log_tail.len() > 128 {
+        let extra = snapshot.log_tail.len() - 128;
+        snapshot.log_tail.drain(0..extra);
     }
 }
 

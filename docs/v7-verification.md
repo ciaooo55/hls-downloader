@@ -53,6 +53,38 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-v7.ps1 -
 正式产物继续写入既有的 `artifacts/v7-productization/package` 目录，并额外
 要求 `release_ready=true`。
 
+正式打包还必须提供本机 `artifacts/v7-productization/release-evidence.json`。该文件绑定当前
+commit/tree 和 candidate `ARTIFACT-MANIFEST.json` 的 SHA-256，并且只包含 `browser`、
+`performance`、`installer`、`rollback` 四项门禁。每项记录精确命令、输入、原样输出、
+退出码、candidate manifest 哈希及报告路径/哈希。正式门禁会重算 candidate EXE/MSI/Portable
+与所有报告哈希，并从 Portable 重新提取两种扩展，核对 ZIP digest 和 `manifest.version=7.0.0`，
+因此只修改 parity 状态不会通过。
+每份报告本身必须是 schema 1 JSON 结果封套，且其 `gate_id`、`product_version`、
+`source_commit`、`source_tree`、`candidate_artifact_manifest_sha256`、`command`、`input`、
+`output`、`result`、`exit_status` 必须与 release evidence 一致。
+
+```json
+{
+  "schema": 1,
+  "product_version": "7.0.0",
+  "source_commit": "<git rev-parse HEAD>",
+  "source_tree": "<git rev-parse HEAD^{tree}>",
+  "candidate_artifact_manifest": { "path": "artifacts/v7-productization/candidate/ARTIFACT-MANIFEST.json", "sha256": "<sha256>" },
+  "gates": [{
+    "id": "browser",
+    "command": "<exact command>",
+    "input": "<exact input>",
+    "output": "<literal output>",
+    "result": "passed",
+    "exit_status": 0,
+    "candidate_artifact_manifest_sha256": "<same sha256>",
+    "report": { "path": "<repository-relative JSON report>", "sha256": "<sha256>" }
+  }]
+}
+```
+
+`gates` 数组须同样包含其余三个固定 ID；每份 report 重用同一组结果字段。
+
 浏览器生产冒烟（media、takeover、browsers）必须显式传入候选或正式产物解压后的
 扩展目录；脚本不再默认读取工作树 `extension/.output`，避免把开发输出误当成交付证据。
 

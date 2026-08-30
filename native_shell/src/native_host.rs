@@ -545,7 +545,7 @@ impl NativeHostSession {
         &mut self,
         payload: &Map<String, Value>,
     ) -> Result<Option<String>, String> {
-        if !contains_browser_secrets(payload) {
+        if !contains_browser_context(payload) {
             return Ok(None);
         }
         let mut context = Map::new();
@@ -769,7 +769,7 @@ fn parse_offer(payload: &Map<String, Value>) -> Result<ResourceOffer, String> {
     })
 }
 
-fn contains_browser_secrets(payload: &Map<String, Value>) -> bool {
+fn contains_browser_context(payload: &Map<String, Value>) -> bool {
     if payload
         .get("cookie")
         .and_then(Value::as_str)
@@ -804,6 +804,16 @@ fn contains_browser_secrets(payload: &Map<String, Value>) -> bool {
     for key in ["request_headers", "request_contexts", "replay_context"] {
         if let Some(value) = payload.get(key) {
             if let Some(object) = value.as_object() {
+                if (key == "request_headers" && !object.is_empty())
+                    || (key == "request_contexts"
+                        && object.values().any(|context| {
+                            context
+                                .as_object()
+                                .is_some_and(|context| !context.is_empty())
+                        }))
+                {
+                    return true;
+                }
                 if object.keys().any(|name| secret_key(name)) {
                     return true;
                 }
@@ -1006,6 +1016,14 @@ mod tests {
         assert!(!encoded.contains("cookie"));
         #[cfg(not(windows))]
         assert!(encoded.contains("dpapi"));
+    }
+
+    #[test]
+    fn ordinary_browser_headers_are_replay_context() {
+        let payload = json!({
+            "request_headers": { "X-Playback-Session": "session-1" }
+        });
+        assert!(contains_browser_context(payload.as_object().unwrap()));
     }
 
     #[test]
