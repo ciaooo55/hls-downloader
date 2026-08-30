@@ -58,6 +58,9 @@ pub fn spawn_core(root: &Path) -> Result<PathBuf, String> {
 }
 
 pub fn spawn_desktop_ui(root: &Path) -> bool {
+    if crate::window_handle_by_title("HLS Downloader").is_some() {
+        return crate::activate_window_by_title("HLS Downloader");
+    }
     let Some(executable) = locate_desktop_executable(root) else {
         return false;
     };
