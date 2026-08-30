@@ -748,7 +748,8 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     val eventKind = envelope.event["kind"]?.jsonPrimitive?.content.orEmpty()
                     if (eventKind == "settings_changed") refreshKey++
                     val attentionRequired = when (eventKind) {
-                        "handoff_offered", "error" -> true
+                        "handoff_offered", "error", "open_main" -> true
+                        "ui_show" -> envelope.event["surface"]?.jsonPrimitive?.content == "main"
                         "update_install_result" -> envelope.event["status"]?.jsonPrimitive?.content != "success"
                         "task_created", "task_updated", "task_progress" -> {
                             val snapshot = envelope.event["snapshot"]?.jsonObject
