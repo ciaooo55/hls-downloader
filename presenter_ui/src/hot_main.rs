@@ -608,30 +608,33 @@ fn event_loop(
             thread::sleep(Duration::from_millis(200));
             continue;
         };
-        let Ok((_, latest_sequence)) = client.snapshot_state() else {
+        let Ok((tasks, latest_sequence)) = client.snapshot_state() else {
             thread::sleep(Duration::from_millis(50));
             continue;
         };
+        if let Ok(mut known_tasks) = known_tasks.lock() {
+            *known_tasks = tasks;
+        }
+        let restored = load_pending_offers(&mut client);
+        let pending = Arc::clone(&pending);
+        let resync_settings = Arc::clone(&presenter_settings);
+        let resync_tasks = Arc::clone(&known_tasks);
+        if confirm
+            .upgrade_in_event_loop(move |item| {
+                if let Ok(mut items) = pending.lock() {
+                    *items = restored;
+                }
+                show_next_offer(&item.as_weak(), &pending, &resync_settings, &resync_tasks);
+            })
+            .is_err()
+        {
+            return;
+        }
         if latest_sequence < after {
             trace(&format!(
-                "core sequence reset from {after} to {latest_sequence}; resynchronizing pending handoffs"
+                "core sequence reset from {after} to {latest_sequence}; resynchronizing event cursor"
             ));
             after = latest_sequence;
-            let restored = load_pending_offers(&mut client);
-            let pending = Arc::clone(&pending);
-            let resync_settings = Arc::clone(&presenter_settings);
-            let resync_tasks = Arc::clone(&known_tasks);
-            if confirm
-                .upgrade_in_event_loop(move |item| {
-                    if let Ok(mut items) = pending.lock() {
-                        *items = restored;
-                    }
-                    show_next_offer(&item.as_weak(), &pending, &resync_settings, &resync_tasks);
-                })
-                .is_err()
-            {
-                return;
-            }
         }
         trace(&format!("event client connected after={after}"));
         loop {

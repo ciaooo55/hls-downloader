@@ -738,7 +738,10 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             val received = runCatching { withContext(Dispatchers.IO) { EnginePipeClient().waitEvents(eventSequence) } }
             received.onSuccess { events ->
                 events.forEach { envelope ->
-                    if (envelope.sequence > eventSequence + 1 && eventSequence > 0) refreshKey++
+                    if (envelope.sequence > eventSequence + 1 && eventSequence > 0) {
+                        snapshotReady = false
+                        refreshKey++
+                    }
                     eventSequence = maxOf(eventSequence, envelope.sequence)
                     val eventKind = envelope.event["kind"]?.jsonPrimitive?.content.orEmpty()
                     if (eventKind == "settings_changed") refreshKey++
