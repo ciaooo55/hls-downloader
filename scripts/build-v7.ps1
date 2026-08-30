@@ -136,6 +136,26 @@ function Copy-CurlImpersonate([string]$Destination) {
     }
 }
 
+$identitySource = Get-Content -LiteralPath (Join-Path $repo 'extension\lib\storeIdentity.ts') -Raw -Encoding UTF8
+$expectedChromiumKey = ([regex]::Match($identitySource, "CHROMIUM_PUBLIC_KEY = '([^']+)'" )).Groups[1].Value
+$expectedFirefoxId = ([regex]::Match($identitySource, "FIREFOX_EXTENSION_ID = '([^']+)'" )).Groups[1].Value
+if ([String]::IsNullOrWhiteSpace($expectedChromiumKey) -or [String]::IsNullOrWhiteSpace($expectedFirefoxId)) {
+    throw 'Extension store identity constants are missing.'
+}
+
+function Assert-ExtensionManifest($Manifest, [string]$Browser, [string]$Path) {
+    if ([int]$Manifest.manifest_version -ne 3) {
+        throw "$Browser extension manifest is not Manifest V3: $Path"
+    }
+    if ($Browser -eq 'Chromium') {
+        if ([string]$Manifest.key -ne $expectedChromiumKey) {
+            throw "Chromium extension key does not match store identity: $Path"
+        }
+    } elseif ([string]$Manifest.browser_specific_settings.gecko.id -ne $expectedFirefoxId) {
+        throw "Firefox extension id does not match store identity: $Path"
+    }
+}
+
 function Build-Extension([string]$Resources) {
     $pnpm = Get-Command pnpm.cmd -ErrorAction SilentlyContinue
     if (-not $pnpm) { throw 'pnpm.cmd is required to build the production browser extension.' }
@@ -159,8 +179,10 @@ function Build-Extension([string]$Resources) {
     )) {
         $source = Join-Path (Join-Path $repo 'extension\.output') $item.Source
         if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Production extension output is missing: $source" }
-        $manifest = Get-Content -LiteralPath (Join-Path $source 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $manifestPath = Join-Path $source 'manifest.json'
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($manifest.version -ne '7.0.0') { throw "Built $($item.Source) manifest version is not 7.0.0: $($manifest.version)" }
+        Assert-ExtensionManifest $manifest $(if ($item.Source -eq 'chrome-mv3') { 'Chromium' } else { 'Firefox' }) $manifestPath
         Compress-Archive -Path (Join-Path $source '*') -DestinationPath (Join-Path (Join-Path $Resources 'extensions') $item.Name) -CompressionLevel Optimal -Force
     }
 }
@@ -293,6 +315,7 @@ $env:HLS_ENGINE_PATH = $engine
                 if ($manifest.version -ne '7.0.0') {
                     throw "$extension extension manifest version is not 7.0.0: $($manifest.version)"
                 }
+                Assert-ExtensionManifest $manifest $extension $manifestPath
                 $extensionEvidence[$extension] = [ordered]@{
                     version = [string]$manifest.version
                     sha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -320,7 +343,28 @@ $env:HLS_ENGINE_PATH = $engine
             extensions = $extensionEvidence
             generated_at_utc = [DateTime]::UtcNow.ToString('o')
         }
-        [IO.File]::WriteAllText((Join-Path $artifactRoot 'ARTIFACT-MANIFEST.json'), ($artifactManifest | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+        $artifactManifestPath = Join-Path $artifactRoot 'ARTIFACT-MANIFEST.json'
+        [IO.File]::WriteAllText($artifactManifestPath, ($artifactManifest | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+        $manifestCheck = Get-Content -LiteralPath $artifactManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ([int]$manifestCheck.schema -ne 1 -or
+            $manifestCheck.product_version -ne '7.0.0' -or
+            $manifestCheck.package_tier -ne $packageTier -or
+            $manifestCheck.source_commit -ne $sourceCommit -or
+            $manifestCheck.source_tree -ne $sourceTree) {
+            throw 'Generated ARTIFACT-MANIFEST.json does not match the current build identity.'
+        }
+        $artifactRootFull = [IO.Path]::GetFullPath($artifactRoot).TrimEnd('\\', '/')
+        foreach ($name in @('exe', 'msi', 'portable')) {
+            $entry = $manifestCheck.artifacts.$name
+            if ($null -eq $entry -or [String]::IsNullOrWhiteSpace([string]$entry.path)) {
+                throw "Generated ARTIFACT-MANIFEST.json is missing the $name artifact entry."
+            }
+            $entryPath = [IO.Path]::GetFullPath((Join-Path $artifactRootFull ([string]$entry.path)))
+            if (-not $entryPath.StartsWith($artifactRootFull + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "ARTIFACT-MANIFEST.json path escaped the artifact directory: $($entry.path)"
+            }
+            Assert-FileSha256 $entryPath ([string]$entry.sha256) "$name artifact manifest entry"
+        }
         if ($Task -eq 'candidate') {
             # Swap the complete staging directory only after every artifact is ready.
             $candidateSwapBackupRoot = Join-Path (Split-Path $packageRoot -Parent) ('.candidate-backup.' + [guid]::NewGuid().ToString('n'))

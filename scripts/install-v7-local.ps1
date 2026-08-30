@@ -62,6 +62,12 @@ foreach ($field in @('total', 'verified', 'partial', 'blocked')) {
         throw "v7 local image feature summary does not match the canonical matrix: $field"
     }
 }
+$identitySource = Get-Content -LiteralPath (Join-Path $repo 'extension\lib\storeIdentity.ts') -Raw -Encoding UTF8
+$expectedChromiumKey = ([regex]::Match($identitySource, "CHROMIUM_PUBLIC_KEY = '([^']+)'" )).Groups[1].Value
+$expectedFirefoxId = ([regex]::Match($identitySource, "FIREFOX_EXTENSION_ID = '([^']+)'" )).Groups[1].Value
+if ([String]::IsNullOrWhiteSpace($expectedChromiumKey) -or [String]::IsNullOrWhiteSpace($expectedFirefoxId)) {
+    throw 'Extension store identity constants are missing.'
+}
 
 function Assert-ExtensionArchive([string]$Archive, [string]$Browser) {
     if (-not (Test-Path -LiteralPath $Archive -PathType Leaf)) {
@@ -77,6 +83,15 @@ function Assert-ExtensionArchive([string]$Archive, [string]$Browser) {
         $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($manifest.version -ne '7.0.0') {
             throw "Packaged $Browser extension version is not 7.0.0: $($manifest.version)"
+        }
+        if ([int]$manifest.manifest_version -ne 3) {
+            throw "Packaged $Browser extension is not Manifest V3."
+        }
+        if ($Browser -eq 'Chromium' -and [string]$manifest.key -ne $expectedChromiumKey) {
+            throw 'Packaged Chromium extension key does not match store identity.'
+        }
+        if ($Browser -eq 'Firefox' -and [string]$manifest.browser_specific_settings.gecko.id -ne $expectedFirefoxId) {
+            throw 'Packaged Firefox extension id does not match store identity.'
         }
     } finally {
         Remove-Item -LiteralPath $check -Recurse -Force -ErrorAction SilentlyContinue
@@ -101,6 +116,9 @@ if ($packagedExtensionsReady -gt 0) {
         }
         $manifest = Get-Content -LiteralPath (Join-Path (Join-Path $extensionRoot $browser) 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($manifest.version -ne '7.0.0') { throw "Built $browser extension version is not 7.0.0: $($manifest.version)" }
+        if ([int]$manifest.manifest_version -ne 3) { throw "Built $browser extension is not Manifest V3." }
+        if ($browser -eq 'chrome-mv3' -and [string]$manifest.key -ne $expectedChromiumKey) { throw 'Built Chromium extension key does not match store identity.' }
+        if ($browser -eq 'firefox-mv3' -and [string]$manifest.browser_specific_settings.gecko.id -ne $expectedFirefoxId) { throw 'Built Firefox extension id does not match store identity.' }
     }
 } else {
     Assert-ExtensionArchive (Join-Path $packagedExtensionRoot 'HLSDownloader-7.0.0-Chromium.zip') 'Chromium'
