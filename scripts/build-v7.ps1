@@ -58,6 +58,10 @@ $env:CARGO_HOME=Join-Path $cacheRoot 'cargo'
 $env:CARGO_TARGET_DIR=Join-Path $cacheRoot 'cargo-target'
 $env:GRADLE_USER_HOME=Join-Path $cacheRoot 'gradle'
 $env:HLS_COMPOSE_BUILD_DIR=Join-Path $cacheRoot 'compose-build'
+# Corepack state stays in the repository so the pinned pnpm@11.7.0 default
+# applies regardless of the user-level corepack home.
+$env:COREPACK_HOME=Join-Path $cacheRoot 'corepack-home'
+$env:COREPACK_ENABLE_DOWNLOAD_PROMPT='0'
 $jdkRoot = $env:HLS_V7_JAVA_HOME
 if(-not $jdkRoot -and (Test-Path (Join-Path $cacheRoot 'jdk-21\bin\java.exe'))){ $jdkRoot = Join-Path $cacheRoot 'jdk-21' }
 # Legacy read-only tool location from earlier installs; tools are not project content.
