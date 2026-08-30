@@ -518,11 +518,6 @@ pub fn default_v7_database_path() -> PathBuf {
     if let Some(root) = env::var_os("HLS_V7_DATA_DIR") {
         return PathBuf::from(root).join("data.db");
     }
-    // Explicit legacy environment is accepted for migration and isolated
-    // compatibility fixtures only; it is never selected by the v7 launcher.
-    if let Some(root) = env::var_os("HLS_V6_DATA_DIR") {
-        return PathBuf::from(root).join("data.db");
-    }
     if let Some(root) = env::var_os("LOCALAPPDATA") {
         return PathBuf::from(root)
             .join("HLS Downloader")

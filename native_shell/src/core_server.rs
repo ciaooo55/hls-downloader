@@ -144,17 +144,7 @@ fn bootstrap_store(coordinator: &CoreCoordinator) -> Result<(), String> {
     )?;
     let core = coordinator.core();
     let mut core = core.lock().map_err(|_| "Core mutex poisoned".to_string())?;
-    if let Ok(config) = std::env::var("HLS_V6_MIGRATE_CONFIG") {
-        let db = std::env::var("HLS_V6_MIGRATE_DB").unwrap_or_default();
-        let _ = crate::migrate_from_5x(
-            &mut core,
-            std::path::Path::new(&config),
-            std::path::Path::new(&db),
-        );
-        let _ = core.store_mut().set_setting("migrated_from_5x", true);
-    } else {
-        let _ = crate::maybe_migrate_from_5x(&mut core);
-    }
+    crate::maybe_migrate_from_5x(&mut core)?;
     Ok(())
 }
 

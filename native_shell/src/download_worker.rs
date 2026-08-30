@@ -53,9 +53,6 @@ impl TaskPaths {
             PathBuf::from(&spec.download_dir)
         } else if let Some(root) = std::env::var_os("HLS_V7_DOWNLOAD_DIR") {
             PathBuf::from(root)
-        } else if let Some(root) = std::env::var_os("HLS_V6_DOWNLOAD_DIR") {
-            // Frozen v6 environment compatibility for restored tasks.
-            PathBuf::from(root)
         } else {
             PathBuf::from("downloads")
         };
