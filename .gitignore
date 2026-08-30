@@ -14,6 +14,7 @@ venv/
 
 # Frontend
 node_modules/
+/target/
 native_shell/target/
 native_shell/site-cache/
 presenter_ui/target/
@@ -29,6 +30,7 @@ bin/
 build/
 release/
 tools/
+.tool-cache/
 # Keep release evidence local, except for the canonical feature contract used
 # by the formal package gate.
 artifacts/*
