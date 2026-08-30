@@ -293,7 +293,10 @@ fn dispatch(
             key,
             value,
         } => match coordinator.set_setting(&key, value) {
-            Ok(()) => settings_response(coordinator, request_id),
+            Ok(()) => {
+                bump_notify(notify, coordinator);
+                settings_response(coordinator, request_id)
+            }
             Err(error) => CorePipeResponse::Error {
                 request_id: Some(request_id),
                 code: "setting_failed".into(),
@@ -302,7 +305,10 @@ fn dispatch(
         },
         CorePipeRequest::StoreSettings { request_id, values } => {
             match coordinator.set_settings(values) {
-                Ok(()) => settings_response(coordinator, request_id),
+                Ok(()) => {
+                    bump_notify(notify, coordinator);
+                    settings_response(coordinator, request_id)
+                }
                 Err(error) => CorePipeResponse::Error {
                     request_id: Some(request_id),
                     code: "settings_failed".into(),
