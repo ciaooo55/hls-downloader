@@ -101,6 +101,15 @@ fn automatic_native_host_repair_enabled() -> bool {
         .any(|key| std::env::var_os(key).is_some())
 }
 
+fn shutdown_core() -> Result<(), String> {
+    let mut client = hls_native_shell::CoreIpcClient::connect_existing(
+        std::time::Duration::from_secs(2),
+    )?;
+    client
+        .command(hls_native_shell::CoreCommand::Shutdown)
+        .map(|_| ())
+}
+
 fn main() -> ExitCode {
     let args = std::env::args().collect::<Vec<_>>();
     if args.iter().any(|arg| arg == "--player-process") {
@@ -111,6 +120,15 @@ fn main() -> ExitCode {
     }
     if args.iter().any(|arg| arg == "--unregister-native-host") {
         return native_host_registration(true);
+    }
+    if args.iter().any(|arg| arg == "--shutdown") {
+        return match shutdown_core() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("download engine shutdown failed: {error}");
+                ExitCode::from(1)
+            }
+        };
     }
     if args.iter().any(|arg| arg == "--self-test") {
         match hls_native_shell::CoreServer::in_memory() {

@@ -599,10 +599,14 @@ impl NamedPipeServer {
         stop: Arc<AtomicBool>,
         handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync>,
     ) -> Result<(), String> {
+        wake_named_pipe_accept_on_stop(self.name.clone(), Arc::clone(&stop));
         let active = Arc::new(AtomicUsize::new(0));
         while !stop.load(Ordering::SeqCst) {
             match self.accept() {
                 Ok(mut stream) => {
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
                     let Some(slot) = ConnectionSlot::claim(&active) else {
                         continue;
                     };
@@ -642,6 +646,7 @@ impl NamedPipeServer {
             let _ = ready.send(Err(error.clone()));
             return Err(error);
         }
+        wake_named_pipe_accept_on_stop(self.name.clone(), Arc::clone(&stop));
         let first = match self.serve_once_inner(Some(&ready)) {
             Ok(stream) => stream,
             Err(error) => return Err(error),
@@ -665,6 +670,9 @@ impl NamedPipeServer {
         while !stop.load(Ordering::SeqCst) {
             match self.accept() {
                 Ok(mut stream) => {
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
                     let Some(slot) = ConnectionSlot::claim(&active) else {
                         continue;
                     };
@@ -763,6 +771,23 @@ impl NamedPipeServer {
         }
         Ok(unsafe { File::from_raw_handle(handle as HANDLE) })
     }
+}
+
+#[cfg(windows)]
+fn wake_named_pipe_accept_on_stop(name: String, stop: Arc<AtomicBool>) {
+    thread::spawn(move || {
+        while !stop.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(10));
+        }
+        // Connect without sending a frame. The accept loop observes `stop` and
+        // drops this stream instead of dispatching it as a normal client.
+        for _ in 0..20 {
+            if NamedPipeClient::connect(&name, 100).is_ok() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    });
 }
 
 #[cfg(windows)]
