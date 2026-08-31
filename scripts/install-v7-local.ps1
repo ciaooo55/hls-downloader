@@ -167,6 +167,76 @@ $stage = "$target.v7-stage"
 $backup = "$target.v7-backup"
 $desktopExtensionStage = "$target.v7-desktop-stage"
 $desktopExtensionBackup = "$target.v7-desktop-backup"
+$finalizeMarker = "$target.v7-finalize.json"
+$ownerMarkerName = '.v7-install-owner.json'
+$transactionNonce = [guid]::NewGuid().ToString('n')
+function Test-OwnerMarker([string]$Path, [string]$ExpectedTarget, [string]$ExpectedNonce) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    try {
+        $owner = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+        return ([int]$owner.schema -eq 1 -and
+            [string]$owner.target -eq $ExpectedTarget -and
+            [string]$owner.nonce -eq $ExpectedNonce)
+    } catch { return $false }
+}
+function Test-FinalizeMarker([string]$Path, [string]$ExpectedTarget) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $ExpectedTarget -PathType Container)) { return $null }
+    try {
+        $marker = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+        $installationPath = Join-Path $ExpectedTarget 'INSTALLATION.txt'
+        $provenancePath = Join-Path $ExpectedTarget 'app\resources\BUILD-PROVENANCE.json'
+        if ([int]$marker.schema -ne 1 -or
+            [string]$marker.version -ne '7.0.0' -or
+            -not [String]::Equals([string]$marker.target, $ExpectedTarget, [StringComparison]::OrdinalIgnoreCase) -or
+            [string]$marker.nonce -notmatch '^[0-9a-f]{32}$' -or
+            -not (Test-Path -LiteralPath $installationPath -PathType Leaf) -or
+            [string]$marker.installation_sha256 -ne (Get-FileHash -LiteralPath $installationPath -Algorithm SHA256).Hash.ToLowerInvariant() -or
+            -not (Test-Path -LiteralPath $provenancePath -PathType Leaf) -or
+            [string]$marker.provenance_sha256 -ne (Get-FileHash -LiteralPath $provenancePath -Algorithm SHA256).Hash.ToLowerInvariant()) {
+            return $null
+        }
+        return $marker
+    } catch { return $null }
+}
+function Remove-OwnedDirectory([string]$Path, [string]$ExpectedTarget, [string]$ExpectedNonce) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $ownerPath = Join-Path $Path $ownerMarkerName
+    if (-not (Test-OwnerMarker $ownerPath $ExpectedTarget $ExpectedNonce)) {
+        throw "v7 finalize path is not owned by this install transaction: $Path"
+    }
+    Get-ChildItem -LiteralPath $Path -Force | Where-Object { $_.Name -ne $ownerMarkerName } |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
+    Remove-Item -LiteralPath $ownerPath -Force
+    Remove-Item -LiteralPath $Path -Force
+}
+$priorFinalize = Test-FinalizeMarker $finalizeMarker $target
+if (Test-Path -LiteralPath $finalizeMarker) {
+    if ($null -eq $priorFinalize) {
+        throw "v7 finalize marker is invalid or does not match the current E:\\h installation: $finalizeMarker"
+    }
+    $cleanup = @(
+        @{ Path = $backup; Expected = ([bool]$priorFinalize.root_backup_expected) },
+        @{ Path = $desktopExtensionBackup; Expected = ([bool]$priorFinalize.desktop_backup_expected) }
+    )
+    foreach ($item in $cleanup) {
+        if (Test-Path -LiteralPath $item.Path) {
+            $owner = Join-Path $item.Path $ownerMarkerName
+            if (-not $item.Expected -or -not (Test-OwnerMarker $owner $target ([string]$priorFinalize.nonce))) {
+                throw "v7 finalize path is not owned by this install transaction: $($item.Path)"
+            }
+        }
+    }
+    foreach ($item in $cleanup) {
+        if (Test-Path -LiteralPath $item.Path) {
+            Remove-OwnedDirectory $item.Path $target ([string]$priorFinalize.nonce)
+        }
+    }
+    if ((Test-Path -LiteralPath $backup) -or (Test-Path -LiteralPath $desktopExtensionBackup)) {
+        throw 'v7 previous install finalize cleanup is incomplete; retry after the locked path is released.'
+    }
+    Remove-Item -LiteralPath $finalizeMarker -Force
+}
 foreach ($candidate in @($stage, $backup)) {
     $full = [IO.Path]::GetFullPath($candidate)
     if (-not $full.StartsWith($installRoot + '.v7-', [StringComparison]::OrdinalIgnoreCase)) {
@@ -221,6 +291,7 @@ $installInfo = @(
 $hadPrevious = Test-Path -LiteralPath $target
 $targetMovedToBackup = $false
 $stageMovedToTarget = $false
+$backupOwnerWritten = $false
 try {
     if ($hadPrevious) {
         $shutdownScript = Join-Path $repo 'scripts\shutdown-running.ps1'
@@ -230,6 +301,10 @@ try {
         }
         Move-Item -LiteralPath $target -Destination $backup
         $targetMovedToBackup = $true
+        $backupOwnerWritten = $true
+        [IO.File]::WriteAllText((Join-Path $backup $ownerMarkerName),
+            ([ordered]@{ schema = 1; target = $target; nonce = $transactionNonce } | ConvertTo-Json -Compress),
+            [Text.UTF8Encoding]::new($false))
     }
     Move-Item -LiteralPath $stage -Destination $target
     $stageMovedToTarget = $true
@@ -239,6 +314,9 @@ try {
     }
     if ($targetMovedToBackup -and (Test-Path -LiteralPath $backup) -and -not (Test-Path -LiteralPath $target)) {
         Move-Item -LiteralPath $backup -Destination $target
+        if ($backupOwnerWritten) {
+            Remove-Item -LiteralPath (Join-Path $target $ownerMarkerName) -Force -ErrorAction SilentlyContinue
+        }
     }
     throw
 }
@@ -288,6 +366,9 @@ try {
             -Destination (Join-Path $desktopExtensionStage "$browser.zip") -Force
     }
     New-Item -ItemType Directory -Force -Path $desktopExtensionBackup | Out-Null
+    [IO.File]::WriteAllText((Join-Path $desktopExtensionBackup $ownerMarkerName),
+        ([ordered]@{ schema = 1; target = $target; nonce = $transactionNonce } | ConvertTo-Json -Compress),
+        [Text.UTF8Encoding]::new($false))
     # Keep exactly one current extension package per browser on the desktop.
     Get-ChildItem -LiteralPath $desktop -Filter 'HLS Downloader*浏览器插件*' -Directory -ErrorAction SilentlyContinue |
         Move-Item -Destination $desktopExtensionBackup -Force
@@ -307,13 +388,28 @@ try {
             throw "Desktop $browser extension archive does not match the installed package."
         }
     }
+    $installationPath = Join-Path $target 'INSTALLATION.txt'
+    [IO.File]::WriteAllText($finalizeMarker,
+        ([ordered]@{
+            schema = 1
+            version = '7.0.0'
+            target = $target
+            nonce = $transactionNonce
+            root_backup_expected = $hadPrevious
+            desktop_backup_expected = $true
+            installation_sha256 = (Get-FileHash -LiteralPath $installationPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            provenance_sha256 = (Get-FileHash -LiteralPath (Join-Path $target 'app\resources\BUILD-PROVENANCE.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+        } | ConvertTo-Json -Depth 3),
+        [Text.UTF8Encoding]::new($false))
 } catch {
     $installError = $_
     $rollbackErrors = New-Object System.Collections.Generic.List[string]
+    Remove-Item -LiteralPath $finalizeMarker -Force -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $desktopExtensionBackup) {
         $installedDesktopExtensions | ForEach-Object {
             Remove-Item -LiteralPath $_ -Force -ErrorAction SilentlyContinue
         }
+        Remove-Item -LiteralPath (Join-Path $desktopExtensionBackup $ownerMarkerName) -Force -ErrorAction SilentlyContinue
         Get-ChildItem -LiteralPath $desktopExtensionBackup -Force -ErrorAction SilentlyContinue |
             Move-Item -Destination $desktop -Force
     }
@@ -334,6 +430,7 @@ try {
     }
     if ($hadPrevious -and (Test-Path -LiteralPath $backup)) {
         Move-Item -LiteralPath $backup -Destination $target
+        Remove-Item -LiteralPath (Join-Path $target $ownerMarkerName) -Force -ErrorAction SilentlyContinue
         try {
             $restoredEngine = Join-Path $target 'app\resources\HLSDownloaderEngine.exe'
             $restoreRegistration = Start-Process -FilePath $restoredEngine -ArgumentList '--register-native-host' -NoNewWindow -Wait -PassThru
@@ -351,13 +448,16 @@ try {
     throw $installError
 }
 if ($hadPrevious -and (Test-Path -LiteralPath $backup)) {
-    Remove-Item -LiteralPath $backup -Recurse -Force
+    Remove-OwnedDirectory $backup $target $transactionNonce
 }
 if (Test-Path -LiteralPath $desktopExtensionStage) {
     Remove-Item -LiteralPath $desktopExtensionStage -Recurse -Force
 }
 if (Test-Path -LiteralPath $desktopExtensionBackup) {
-    Remove-Item -LiteralPath $desktopExtensionBackup -Recurse -Force
+    Remove-OwnedDirectory $desktopExtensionBackup $target $transactionNonce
+}
+if (Test-Path -LiteralPath $finalizeMarker) {
+    Remove-Item -LiteralPath $finalizeMarker -Force
 }
 
 [ordered]@{
