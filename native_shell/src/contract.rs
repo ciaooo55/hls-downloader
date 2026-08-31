@@ -10,9 +10,6 @@ use serde_json::Value;
 /// Active v7 product contract.
 pub const V7_PROTOCOL_NAME: &str = "hls-downloader-v7-core";
 pub const V7_PROTOCOL_VERSION: u32 = 1;
-/// Frozen v6 wire identity accepted only for an explicit legacy client.
-pub const V6_PROTOCOL_NAME: &str = "hls-downloader-v6-core";
-pub const V6_PROTOCOL_VERSION: u32 = 1;
 pub const LEGAL_TERMS_VERSION: &str = "2026-08-06-cn-1";
 pub const DEFAULT_QUEUE_ID: &str = "default";
 
