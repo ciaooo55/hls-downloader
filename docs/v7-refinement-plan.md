@@ -94,6 +94,9 @@ presenter_ui --pipe--> core_server
 | X2 | 已关闭 | 构建门禁核对三端 v7 协议；本机安装覆盖前验证 `E:\h` 所有权；Portable 升级/回滚要求扩展身份连续。 |
 | X3 | 已关闭 | handoff/media-push 旁路行与事件、任务快照、checkpoint 在同一 SQLite 事务提交；handoff 仅在 resolved 持久化成功后从内存移除。 |
 | X4 | 已关闭 | 浏览器本地等待超时不再伪造 Core 终态；不确定所有权保持暂停并由持久 alarm 复核，用户已恢复/取消/完成的项目停止跟进，查询失败保留记录重试。 |
+| X5 | 已关闭 | 工作台系统关闭与自绘标题栏关闭共用托盘驻留语义；显式“退出”仍结束应用。 |
+| X6 | 已关闭 | NativeBridge 严格匹配 v7 request id；首个 postMessage 同步失败会断开已创建端口再重试。 |
+| X7 | 已关闭 | 启动恢复写失败会阻止 Core 带错误状态启动；安装停服改走 v7 pipe Shutdown，先暂停并等待 worker/checkpoint，再唤醒阻塞的命名管道 accept 有序退出。 |
 | G1 | 部分关闭 | `.gitignore` 已覆盖 `desktop_ui/.kotlin/`；已存在的 `v7.0.0` tag 与当前 `release_ready=false` 属发布治理项，未经明确授权不改写标签。 |
 
 ## 四、十轮迭代计划

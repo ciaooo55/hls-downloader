@@ -38,11 +38,11 @@ impl CoreServer {
     }
 
     pub fn from_coordinator(coordinator: CoreCoordinator) -> Result<Self, String> {
+        coordinator.recover_startup()?;
         let sequence = coordinator.latest_sequence()?;
         let stop = Arc::new(AtomicBool::new(false));
         spawn_torrent_watch(coordinator.clone(), Arc::clone(&stop));
         spawn_clipboard_watch(coordinator.clone(), Arc::clone(&stop));
-        let _ = coordinator.recover_startup();
         spawn_queue_scheduler(coordinator.clone(), Arc::clone(&stop));
         Ok(Self {
             coordinator,

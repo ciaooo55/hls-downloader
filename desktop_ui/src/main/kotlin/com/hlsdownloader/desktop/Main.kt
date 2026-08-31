@@ -407,12 +407,13 @@ fun main() {
     val state = rememberWindowState(width = auditWidth.dp, height = auditHeight.dp)
     val appIcon = remember { loadDesktopIcon() }
     val requestExit = { exitApplication() }
+    val requestClose = { if (WorkbenchWindow.trayResident) WorkbenchWindow.hideToTray() else exitApplication() }
     var droppedPaths by remember { mutableStateOf<List<String>>(emptyList()) }
     var dropActive by remember { mutableStateOf(false) }
     var presenterAvailable by remember { mutableStateOf(false) }
     var presenterProbeComplete by remember { mutableStateOf(false) }
     Window(
-        onCloseRequest = { if (WorkbenchWindow.trayResident) WorkbenchWindow.hideToTray() else exitApplication() },
+        onCloseRequest = requestClose,
         title = "HLS Downloader",
         icon = appIcon?.let(::BitmapPainter),
         state = state,
@@ -508,7 +509,7 @@ fun main() {
                 }
             },
             onExit = ::exitApplication,
-            titleBar = { WindowTitleBar(appIcon, state.placement == WindowPlacement.Maximized, { window.isMinimized = true }, { state.placement = if (state.placement == WindowPlacement.Maximized) WindowPlacement.Floating else WindowPlacement.Maximized }, ::exitApplication) },
+            titleBar = { WindowTitleBar(appIcon, state.placement == WindowPlacement.Maximized, { window.isMinimized = true }, { state.placement = if (state.placement == WindowPlacement.Maximized) WindowPlacement.Floating else WindowPlacement.Maximized }, requestClose) },
         )
         }
     }

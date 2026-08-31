@@ -118,3 +118,19 @@ git 收尾:`v7-refinement` 以 --no-ff 合回 `main` 并推送 `origin/main`,
 最新要求是不在本机执行编译、测试、构建、打包或安装。本轮仅做静态差异、
 脚本解析、文本编码、清单 JSON 与模块衔接检查，然后按模块提交、合并 `main`
 并同步 GitHub；`feature-parity.json` 保持原门禁状态。
+
+## 第八轮精进批次记录（2026-08-31，分支 `v7-refinement-r8`）
+
+本轮继续使用三个 `gpt-5.6-sol` 低延迟子代理分离文件所有权，主代理复核
+跨模块停服链。改动仅覆盖可由当前调用关系确认的用户级故障：
+
+| 模块 | 已收敛内容 |
+| --- | --- |
+| `desktop_ui` | 系统关闭与自绘标题栏关闭共用托盘驻留回调，避免标题栏按钮绕过后台驻留并直接退出。 |
+| `extension` | NativeBridge 严格匹配 `__request_id`；首个 `postMessage` 同步失败时断开已创建端口再重试，避免错配响应和残留 Host 连接。 |
+| `native_shell` 启动 | 恢复任务状态的 SQLite 写失败不再被忽略；恢复成功后才创建 watcher，防止启动失败遗留后台线程。 |
+| `native_shell` 停服 | Engine 新增 `--shutdown`，活动 worker 先暂停并等待断点状态收敛；stop watcher 唤醒阻塞的 `ConnectNamedPipe`，唤醒连接不进入 handler。 |
+| `scripts` | `shutdown-running.ps1` 删除 v6 HTTP supervisor 调用，改由当前安装的 Engine 通过 v7 pipe 有序停服，超时诊断记录 Core 命令退出码。 |
+
+本轮仍不执行本地测试、编译、构建、打包、安装或 UI 自动化；只进行一次
+最终静态一致性检查。`feature-parity.json` 的 4 个 partial 仍由其既有实机门禁决定。

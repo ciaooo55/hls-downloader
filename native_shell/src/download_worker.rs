@@ -1226,6 +1226,12 @@ impl CoreCoordinator {
     }
 
     pub fn dispatch(&self, command: CoreCommand) -> Result<Vec<EventEnvelope>, String> {
+        if matches!(&command, CoreCommand::Shutdown) {
+            // A process exit is also an update boundary: stop workers and wait
+            // for their latest resume/checkpoint state before closing IPC.
+            self.prepare_for_update(Duration::from_secs(8))?;
+            return self.dispatch_inner(command);
+        }
         if let CoreCommand::ClearCompleted = command {
             return self.dispatch_inner(command);
         }
@@ -1885,14 +1891,14 @@ impl CoreCoordinator {
                 "downloading" | "recording" | "merging" | "checking"
             ) {
                 let status = if resume { "queued" } else { "paused" };
-                let _ = mark_progress(
+                mark_progress(
                     &self.core,
                     &task.task_id,
                     task.downloaded_bytes,
                     task.total_bytes,
                     "waiting",
                     status,
-                );
+                )?;
             }
         }
         if resume {
@@ -1908,10 +1914,10 @@ impl CoreCoordinator {
                 task.status.as_str(),
                 "downloading" | "recording" | "merging" | "checking"
             ) {
-                let _ = self.dispatch_inner(CoreCommand::TaskAction {
+                self.dispatch_inner(CoreCommand::TaskAction {
                     task_id: task.task_id,
                     action: "pause".into(),
-                });
+                })?;
             }
         }
         Ok(())
