@@ -10,6 +10,7 @@ import {
   PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY,
   PAUSED_HANDOFF_RESOLUTION_MS,
   PausedHandoffFollowUpStore,
+  type PausedHandoffFollowUp,
   stepPausedHandoffFollowUp,
 } from '../lib/pausedHandoffFollowups'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
@@ -432,16 +433,36 @@ async function rememberPausedHandoffFollowUp(downloadId: number, handoffId: stri
   schedulePausedFollowUpAccelerator(PAUSED_HANDOFF_RESOLUTION_MS)
 }
 
-async function resumeFollowUpDownload(downloadId: number): Promise<void> {
-  const [current] = await browser.downloads.search({ id: downloadId }).catch(() => [])
-  if (!current) return
-  await resumeBrowserDownload(current, true)
+async function resumeFollowUpDownload(downloadId: number): Promise<boolean> {
+  let current: Browser.downloads.DownloadItem | undefined
+  try {
+    const [found] = await browser.downloads.search({ id: downloadId })
+    current = found
+  } catch {
+    return false
+  }
+  if (!current) return true
+  return resumeBrowserDownload(current, true)
 }
 
-async function removeFollowUpDownload(downloadId: number): Promise<void> {
-  const [current] = await browser.downloads.search({ id: downloadId }).catch(() => [])
-  if (!current) return
-  await removeBrowserDownload(current)
+async function removeFollowUpDownload(downloadId: number): Promise<boolean> {
+  let current: Browser.downloads.DownloadItem | undefined
+  try {
+    const [found] = await browser.downloads.search({ id: downloadId })
+    current = found
+  } catch {
+    return false
+  }
+  if (!current) return true
+  return removeBrowserDownload(current)
+}
+
+async function retryPausedFollowUp(record: PausedHandoffFollowUp): Promise<void> {
+  await pausedFollowUpStore.remember({
+    ...record,
+    deadline: Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS,
+  })
+  schedulePausedFollowUpAccelerator(PAUSED_FOLLOW_UP_RECHECK_MS)
 }
 
 /**
@@ -472,15 +493,18 @@ async function continuePausedHandoffFollowups(): Promise<void> {
           await pausedFollowUpStore.remember(step.followUp)
           continue
         }
-        await pausedFollowUpStore.drop(record.handoffId)
         if (step.kind === 'resume-download') {
-          await resumeFollowUpDownload(record.downloadId)
+          const resumed = await resumeFollowUpDownload(record.downloadId)
+          if (resumed) await pausedFollowUpStore.drop(record.handoffId)
+          else await retryPausedFollowUp(record)
           revealBrowserDownload()
           continue
         }
         concealBrowserDownload()
         try {
-          await removeFollowUpDownload(record.downloadId)
+          const removed = await removeFollowUpDownload(record.downloadId)
+          if (removed) await pausedFollowUpStore.drop(record.handoffId)
+          else await retryPausedFollowUp(record)
         } finally {
           revealBrowserDownload()
         }
@@ -517,18 +541,30 @@ async function followUpPausedHandoffCleanup(item: Browser.downloads.DownloadItem
     schedulePausedFollowUpAccelerator(PAUSED_FOLLOW_UP_RECHECK_MS)
     const later = await waitForDesktopTaskReadiness(handoffId, 180_000)
     if (later === 'safe-to-remove') {
-      await pausedFollowUpStore.drop(handoffId)
       concealBrowserDownload()
       try {
-        await removeBrowserDownload(item)
+        const removed = await removeBrowserDownload(item)
+        if (removed) await pausedFollowUpStore.drop(handoffId)
+        else await retryPausedFollowUp({
+          downloadId: item.id,
+          handoffId,
+          phase: 'readiness',
+          deadline: Date.now(),
+        })
       } finally {
         revealBrowserDownload()
       }
       return
     }
     if (later === 'browser-fallback') {
-      await pausedFollowUpStore.drop(handoffId)
-      await resumeBrowserDownload(item, true)
+      const resumed = await resumeBrowserDownload(item, true)
+      if (resumed) await pausedFollowUpStore.drop(handoffId)
+      else await retryPausedFollowUp({
+        downloadId: item.id,
+        handoffId,
+        phase: 'readiness',
+        deadline: Date.now(),
+      })
       revealBrowserDownload()
     }
   } finally {
@@ -971,15 +1007,27 @@ async function refreshedDownload(downloadId: number, original: Browser.downloads
   return { ...original, ...(current || {}), ...(determined || {}) }
 }
 
-async function removeBrowserDownload(item: Browser.downloads.DownloadItem): Promise<void> {
-  const [current] = await browser.downloads.search({ id: item.id })
+async function removeBrowserDownload(item: Browser.downloads.DownloadItem): Promise<boolean> {
+  let current: Browser.downloads.DownloadItem | undefined
+  try {
+    const [found] = await browser.downloads.search({ id: item.id })
+    current = found
+  } catch {
+    return false
+  }
+  if (!current) return true
   const state = current?.state || item.state
-  if (browserCleanupAction(state) === 'remove-file') {
-    await browser.downloads.removeFile(item.id).catch(() => undefined)
-  } else {
-    await browser.downloads.cancel(item.id).catch(() => undefined)
+  try {
+    if (browserCleanupAction(state) === 'remove-file') {
+      await browser.downloads.removeFile(item.id)
+    } else {
+      await browser.downloads.cancel(item.id)
+    }
+  } catch {
+    return false
   }
   await browser.downloads.erase({ id: item.id }).catch(() => undefined)
+  return true
 }
 
 function downloadRequestItem(
@@ -1005,14 +1053,27 @@ async function pauseBrowserDownload(item: Browser.downloads.DownloadItem): Promi
   }
 }
 
-async function resumeBrowserDownload(item: Browser.downloads.DownloadItem, paused: boolean): Promise<void> {
-  if (!paused) return
-  const [current] = await browser.downloads.search({ id: item.id }).catch(() => [])
+async function resumeBrowserDownload(item: Browser.downloads.DownloadItem, paused: boolean): Promise<boolean> {
+  if (!paused) return true
+  let current: Browser.downloads.DownloadItem | undefined
+  try {
+    const [found] = await browser.downloads.search({ id: item.id })
+    current = found
+  } catch {
+    return false
+  }
+  if (!current) return true
+  if (current.state === 'complete' || (current.state === 'in_progress' && current.paused === false)) return true
   // Edge/Chrome may report a just-paused response as `interrupted` while it is
   // still resumable. Refusing that state left excluded downloads and failed or
   // rejected handoffs stuck forever at 0 B.
-  if (!current || !canResumeBrowserDownload(current.state)) return
-  try { await browser.downloads.resume(item.id) } catch {}
+  if (!canResumeBrowserDownload(current.state)) return false
+  try {
+    await browser.downloads.resume(item.id)
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function rememberClickIntent(intent: DownloadClickIntent): Promise<void> {
@@ -1403,9 +1464,9 @@ export default defineBackground(() => {
             return
           }
           concealBrowserDownload()
-          await removeBrowserDownload(item)
+          const removed = await removeBrowserDownload(item)
           accepted = true
-          await pausedFollowUpStore.drop(handoffId)
+          if (removed) await pausedFollowUpStore.drop(handoffId)
           return
         }
       }
@@ -1512,18 +1573,27 @@ export default defineBackground(() => {
       // Do not hide Chrome's downloads UI merely because a browser download was
       // observed. Suppress it only after the desktop accepted the handoff.
       concealBrowserDownload()
-      await removeBrowserDownload(actualBrowser)
+      const removed = await removeBrowserDownload(actualBrowser)
       accepted = true
-      await pausedFollowUpStore.drop(handoffId)
+      if (removed) await pausedFollowUpStore.drop(handoffId)
     } catch (error) {
       console.warn('HLS Downloader takeover failed; browser download remains untouched', error)
     } finally {
       determinedDownloads.delete(item.id)
       determinationWaiters.delete(item.id)
-      // The follow-up record must not outlive a lifecycle this worker already
-      // resolved; the keep-paused path keeps it and owns the paused item.
-      if (followUpHandoffId && !accepted) await pausedFollowUpStore.drop(followUpHandoffId)
-      await resumeBrowserDownload(item, paused && !accepted)
+      // A failed browser recovery keeps its record so the alarm can retry it.
+      if (followUpHandoffId && !accepted) {
+        const resumed = await resumeBrowserDownload(item, paused)
+        if (resumed) await pausedFollowUpStore.drop(followUpHandoffId)
+        else await retryPausedFollowUp({
+          downloadId: item.id,
+          handoffId: followUpHandoffId,
+          phase: 'resolution',
+          deadline: Date.now(),
+        })
+      } else {
+        await resumeBrowserDownload(item, paused && !accepted)
+      }
       revealBrowserDownload()
     }
   })
