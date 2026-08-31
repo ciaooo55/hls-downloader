@@ -2178,7 +2178,6 @@ impl CoreCoordinator {
             ..Default::default()
         })?;
         let mut events = self.dispatch(CoreCommand::CreateTask { spec })?;
-        let _ = self.lock()?.take_pending_handoff(&handoff_id);
         let task_id = events.iter().find_map(|envelope| match &envelope.event {
             CoreEvent::TaskCreated { snapshot } | CoreEvent::TaskUpdated { snapshot } => {
                 Some(snapshot.task_id.clone())
@@ -2186,10 +2185,14 @@ impl CoreCoordinator {
             CoreEvent::DuplicateOffered { task_id, .. } => Some(task_id.clone()),
             _ => None,
         });
-        events.extend(self.lock()?.emit(CoreEvent::HandoffResolved {
-            handoff_id,
+        let mut core = self.lock()?;
+        events.extend(core.emit(CoreEvent::HandoffResolved {
+            handoff_id: handoff_id.clone(),
             task_id,
         })?);
+        // Only remove the live offer after its resolved row and event checkpoint commit.
+        // A persistence failure must leave the offer retryable in this process.
+        let _ = core.take_pending_handoff(&handoff_id);
         Ok(events)
     }
 
