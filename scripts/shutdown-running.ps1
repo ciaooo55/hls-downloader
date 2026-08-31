@@ -67,42 +67,26 @@ function Get-TargetProcesses {
     )
 }
 
-$targetProcessNames = @("HLSDownloader", "HLSDownloaderEngine", "HLSDownloaderPresenter", "HLSDownloaderCore", "HLSNativeShell", "hls-native-shell", "HLSNativeEngine", "hls-native-engine")
+$targetProcessNames = @("HLSDownloader", "HLSDownloaderEngine", "hls-downloader-engine", "HLSDownloaderPresenter", "HLSDownloaderCore", "HLSNativeShell", "hls-native-shell", "HLSNativeEngine", "hls-native-engine")
 if ($IncludeNativeHost) { $targetProcessNames += "HLSDownloaderNativeHost*" }
 $targetRunningAtStart = @(Get-TargetProcesses $targetProcessNames)
 $overallDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(3, $TimeoutSeconds))
-$configPaths = @()
-if ($InstallDir) { $configPaths += Join-Path $InstallDir "config.json" }
-# An installed build stores its IPC credential under LocalAppData. Only read it
-# when the requested install is actually the one that is running; otherwise a
-# portable/temporary upgrade could accidentally shut down another installation.
-if ((-not $InstallDir -or $targetRunningAtStart.Count) -and $env:LOCALAPPDATA) {
-    $configPaths += Join-Path $env:LOCALAPPDATA "HLS Downloader\config.json"
-}
-$token = ""
-$port = 8765
-foreach ($configPath in $configPaths) {
-    if (-not (Test-Path -LiteralPath $configPath)) { continue }
-    try {
-        $configured = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($configured.token) { $token = [string]$configured.token }
-        if ($configured.port) { $port = [int]$configured.port }
-        break
-    } catch {
+$shutdownEngine = ""
+$runningEngine = $targetRunningAtStart |
+    Where-Object { $_.ProcessName -in @("HLSDownloaderEngine", "hls-downloader-engine") } |
+    Select-Object -First 1
+$gracefulCoreExit = "not-running"
+if ($runningEngine) {
+    $shutdownEngine = Get-ProcessExecutablePath $runningEngine
+    if (-not $shutdownEngine -and $InstallDir) {
+        $shutdownEngine = Join-Path $InstallDir "app\resources\HLSDownloaderEngine.exe"
     }
 }
-
-if ($token) {
-    try {
-        Invoke-RestMethod `
-            -Method Post `
-            -Uri "http://127.0.0.1:$port/api/app/shutdown?resume_tasks=true" `
-            -Headers @{ "X-Token" = $token } `
-            -ContentType "application/json" `
-            -Body "{}" `
-            -TimeoutSec 3 | Out-Null
-    } catch {
-    }
+if ($shutdownEngine -and (Test-Path -LiteralPath $shutdownEngine -PathType Leaf)) {
+    # v7 has no HTTP supervisor. Ask the resident Core to checkpoint and stop
+    # through its versioned named-pipe contract before the bounded kill fallback.
+    & $shutdownEngine --shutdown
+    $gracefulCoreExit = [string]$LASTEXITCODE
 }
 
 $gracefulDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Min(4, [Math]::Max(1, $TimeoutSeconds)))
@@ -173,5 +157,5 @@ $namedDiagnostics = @(Get-Process -Name $targetProcessNames -ErrorAction Silentl
     "$($_.ProcessName):$($_.Id):$pathBase64"
 }) -join "; "
 $lockedFileBase64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes([string]$lastLockedFile))
-Write-Output "Shutdown timeout; install_dir=$InstallDir; install_dir_utf16=$installDirBase64; remaining=$remainingSummary; named=$namedDiagnostics; files_writable=$writable; locked_file_utf16=$lockedFileBase64; lock_error=$lastLockError"
+Write-Output "Shutdown timeout; install_dir=$InstallDir; install_dir_utf16=$installDirBase64; graceful_core_exit=$gracefulCoreExit; remaining=$remainingSummary; named=$namedDiagnostics; files_writable=$writable; locked_file_utf16=$lockedFileBase64; lock_error=$lastLockError"
 exit 1
