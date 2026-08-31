@@ -25,6 +25,23 @@ $provenanceForBuild = $provenance
 $candidateProvenanceTemp = $null
 $candidateStagingRoot = $null
 $candidateSwapBackupRoot = $null
+$composeSubstDrive = $null
+$previousComposeBuildDir = $env:HLS_COMPOSE_BUILD_DIR
+
+function Mount-ComposeBuildCache([string]$Path) {
+    New-Item -ItemType Directory -Force -Path $Path | Out-Null
+    $resolved = (Resolve-Path -LiteralPath $Path).Path
+    foreach ($letter in @('Z','Y','X','W','V','U','T','S','R','Q','P')) {
+        $drive = "${letter}:"
+        if (Test-Path -LiteralPath "$drive\") { continue }
+        & subst.exe $drive $resolved | Out-Null
+        if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath "$drive\")) {
+            return $drive
+        }
+    }
+    throw 'No free drive letter is available for the repository-local ASCII Compose build path.'
+}
+
 if ($Task -eq 'candidate') {
     # Candidate packages are for external machine validation. They require the
     # canonical matrix, no blocked features and a clean tree, but not
@@ -52,19 +69,15 @@ if ($Task -eq 'candidate') {
     Move-Item -LiteralPath $candidateProvenanceTemp -Destination $provenanceForBuild -Force
     $artifactRoot = $candidateStagingRoot
 }
-# Build caches default inside the repository; HLS_V7_BUILD_CACHE relocates them.
-$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { $env:HLS_V7_BUILD_CACHE } else { Join-Path $repo '.tool-cache\build-cache' }
+# Project build outputs stay inside the repository.
+$cacheRoot = Join-Path $repo '.tool-cache\build-cache'
 $env:CARGO_HOME=Join-Path $cacheRoot 'cargo'
 $env:CARGO_TARGET_DIR=Join-Path $cacheRoot 'cargo-target'
 $env:GRADLE_USER_HOME=Join-Path $cacheRoot 'gradle'
-# jlink reads its @args file in the system codepage, so the Compose build
-# directory must stay ASCII: E:\h is this project's sanctioned location on E:.
-# HLS_COMPOSE_BUILD_DIR still overrides for other environments.
-$env:HLS_COMPOSE_BUILD_DIR = if ($env:HLS_COMPOSE_BUILD_DIR) {
-    $env:HLS_COMPOSE_BUILD_DIR
-} else {
-    'E:\h\.build-cache\compose-build'
-}
+# jlink reads its @args file in the system codepage. A temporary drive alias
+# gives it an ASCII path while every generated file remains in this repository.
+$composeSubstDrive = Mount-ComposeBuildCache $cacheRoot
+$env:HLS_COMPOSE_BUILD_DIR = "$composeSubstDrive\compose-build"
 # Corepack state stays in the repository so the pinned pnpm@11.7.0 default
 # applies regardless of the user-level corepack home.
 $env:COREPACK_HOME=Join-Path $repo '.tool-cache\corepack-home'
@@ -444,6 +457,17 @@ $env:HLS_ENGINE_PATH = $engine
     }
     if ($null -ne $candidateStagingRoot -and (Test-Path -LiteralPath $candidateStagingRoot)) {
         Remove-Item -LiteralPath $candidateStagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $composeSubstDrive) {
+        & subst.exe $composeSubstDrive /d | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Could not remove temporary Compose build mapping $composeSubstDrive"
+        }
+    }
+    if ([String]::IsNullOrEmpty($previousComposeBuildDir)) {
+        Remove-Item Env:HLS_COMPOSE_BUILD_DIR -ErrorAction SilentlyContinue
+    } else {
+        $env:HLS_COMPOSE_BUILD_DIR = $previousComposeBuildDir
     }
     # A swap failure may leave the last usable candidate at the backup path.
     # Preserve it for manual recovery when the in-place restoration also fails.

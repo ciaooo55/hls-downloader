@@ -21,8 +21,8 @@ New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
 [IO.File]::Delete($stdoutPath)
 [IO.File]::Delete($stderrPath)
 
-# Build caches default inside the repository; HLS_V7_BUILD_CACHE relocates them.
-$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { $env:HLS_V7_BUILD_CACHE } else { Join-Path $repo '.tool-cache\build-cache' }
+# Project build outputs stay inside the repository.
+$cacheRoot = Join-Path $repo '.tool-cache\build-cache'
 $jdkRoot = $env:HLS_V7_JAVA_HOME
 if(-not $jdkRoot -and (Test-Path (Join-Path $cacheRoot 'jdk-21\bin\java.exe'))){ $jdkRoot = Join-Path $cacheRoot 'jdk-21' }
 # Legacy read-only tool location from earlier installs; tools are not project content.

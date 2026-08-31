@@ -8,11 +8,9 @@ plugins {
 group = "com.hlsdownloader"
 version = "7.0.0"
 // jlink consumes an argument file; keep generated paths ASCII-safe on zh-CN Windows.
-// Build output defaults inside the repository; an external ASCII-safe cache can be
-// restored per machine via the HLS_COMPOSE_BUILD_DIR environment variable or the
-// hls.buildDir Gradle property.
+// Build output defaults inside the repository. The canonical build script injects
+// an ASCII drive alias through HLS_COMPOSE_BUILD_DIR without relocating the files.
 val hlsBuildDir = providers.environmentVariable("HLS_COMPOSE_BUILD_DIR")
-    .orElse(providers.gradleProperty("hls.buildDir"))
     .orElse("build")
 layout.buildDirectory.set(file(hlsBuildDir))
 dependencies {

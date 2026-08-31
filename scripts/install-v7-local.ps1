@@ -252,6 +252,13 @@ $desktopExtensionPaths = @{
     Chromium = Join-Path $desktop 'HLSDownloader-Chromium.zip'
     Firefox = Join-Path $desktop 'HLSDownloader-Firefox.zip'
 }
+function Get-DesktopExtensionArchives([string]$Browser) {
+    $browserPattern = if ($Browser -eq 'Chromium') { 'chromium|chrome' } else { 'firefox' }
+    return @(Get-ChildItem -LiteralPath $desktop -Filter '*.zip' -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -match ("^(?:HLS(?:[- _]?)Downloader|hls-downloader-extension)(?:[- _].*)?(?:" + $browserPattern + ")(?:[- _].*)?\.zip$")
+        })
+}
 $installedDesktopExtensions = New-Object System.Collections.Generic.List[string]
 try {
     $registration = Start-Process -FilePath $engineExecutable -ArgumentList '--register-native-host' -NoNewWindow -Wait -PassThru
@@ -285,14 +292,24 @@ try {
     Get-ChildItem -LiteralPath $desktop -Filter 'HLS Downloader*浏览器插件*' -Directory -ErrorAction SilentlyContinue |
         Move-Item -Destination $desktopExtensionBackup -Force
     foreach ($browser in @('Chromium', 'Firefox')) {
-        Get-ChildItem -LiteralPath $desktop -Filter '*.zip' -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match ("^HLS ?Downloader(?:[- _].*)?" + [regex]::Escape($browser) + "(?:[- _].*)?\.zip$") } |
-            Move-Item -Destination $desktopExtensionBackup -Force
+        Get-DesktopExtensionArchives $browser | Move-Item -Destination $desktopExtensionBackup -Force
         Move-Item -LiteralPath (Join-Path $desktopExtensionStage "$browser.zip") `
             -Destination $desktopExtensionPaths[$browser] -Force
         [void]$installedDesktopExtensions.Add($desktopExtensionPaths[$browser])
+        $published = @(Get-DesktopExtensionArchives $browser)
+        if ($published.Count -ne 1 -or
+            -not [String]::Equals($published[0].FullName, $desktopExtensionPaths[$browser], [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Desktop must contain exactly one current $browser extension archive."
+        }
+        $installedArchive = Join-Path $target "extensions\HLSDownloader-7.0.0-$browser.zip"
+        if ((Get-FileHash -LiteralPath $published[0].FullName -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath $installedArchive -Algorithm SHA256).Hash) {
+            throw "Desktop $browser extension archive does not match the installed package."
+        }
     }
 } catch {
+    $installError = $_
+    $rollbackErrors = New-Object System.Collections.Generic.List[string]
     if (Test-Path -LiteralPath $desktopExtensionBackup) {
         $installedDesktopExtensions | ForEach-Object {
             Remove-Item -LiteralPath $_ -Force -ErrorAction SilentlyContinue
@@ -307,12 +324,31 @@ try {
         Remove-Item -LiteralPath $desktopExtensionBackup -Recurse -Force -ErrorAction SilentlyContinue
     }
     if (Test-Path -LiteralPath $target) {
+        try {
+            $unregister = Start-Process -FilePath $engineExecutable -ArgumentList '--unregister-native-host' -NoNewWindow -Wait -PassThru
+            if ($unregister.ExitCode -ne 0) { throw "exit $($unregister.ExitCode)" }
+        } catch {
+            [void]$rollbackErrors.Add("unregister new Native Host: $($_.Exception.Message)")
+        }
         Remove-Item -LiteralPath $target -Recurse -Force
     }
     if ($hadPrevious -and (Test-Path -LiteralPath $backup)) {
         Move-Item -LiteralPath $backup -Destination $target
+        try {
+            $restoredEngine = Join-Path $target 'app\resources\HLSDownloaderEngine.exe'
+            $restoreRegistration = Start-Process -FilePath $restoredEngine -ArgumentList '--register-native-host' -NoNewWindow -Wait -PassThru
+            if ($restoreRegistration.ExitCode -ne 0) { throw "exit $($restoreRegistration.ExitCode)" }
+        } catch {
+            [void]$rollbackErrors.Add("restore previous Native Host: $($_.Exception.Message)")
+        }
+    } elseif (-not $hadPrevious) {
+        Remove-Item -LiteralPath (Join-Path $startMenu 'HLS Downloader 7.0.0.lnk') -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $desktopShortcut -Force -ErrorAction SilentlyContinue
     }
-    throw
+    if ($rollbackErrors.Count -gt 0) {
+        throw "$($installError.Exception.Message) Rollback errors: $($rollbackErrors -join '; ')"
+    }
+    throw $installError
 }
 if ($hadPrevious -and (Test-Path -LiteralPath $backup)) {
     Remove-Item -LiteralPath $backup -Recurse -Force
@@ -332,6 +368,9 @@ if (Test-Path -LiteralPath $desktopExtensionBackup) {
     native_host = $hostExecutable
     chromium_extension = Join-Path $target 'extensions\HLSDownloader-7.0.0-Chromium.zip'
     firefox_extension = Join-Path $target 'extensions\HLSDownloader-7.0.0-Firefox.zip'
+    desktop_chromium_extension = $desktopExtensionPaths.Chromium
+    desktop_firefox_extension = $desktopExtensionPaths.Firefox
+    desktop_extension_count = 2
     start_menu = Join-Path $startMenu 'HLS Downloader 7.0.0.lnk'
     desktop = $desktopShortcut
 } | ConvertTo-Json -Depth 3

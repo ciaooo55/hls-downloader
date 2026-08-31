@@ -90,12 +90,13 @@
 构建与桌面发布:
 
 - `pnpm run zip:chrome` / `zip:firefox` 产出 7.0.0 双端包;
-  `scripts/publish-desktop-extension-oneoff.ps1`(PS 5.1+7 双解析通过)按
-  install-v7-local 约定把桌面扩展包规范为恰好
+  当轮使用的历史一次性桌面发布入口按 install-v7-local 约定把桌面扩展包规范为恰好
   `HLSDownloader-Chromium.zip` + `HLSDownloader-Firefox.zip` 各一份,
-  执行前已删除桌面上的全部旧扩展包副本。
+  执行前已删除桌面上的全部旧扩展包副本。该一次性入口现已移除,
+  后续只能由 `scripts/install-v7-local.ps1` 从当前候选/正式产物事务发布。
 - parity 仍为 24/28 verified + 4 partial(需实机门禁),`release_ready=false`,
-  按约束本轮未生成正式安装包;`E:\h` 不存在,本机零安装,符合唯一安装位规则。
+  按约束本轮未生成正式安装包。误写入 `E:\h` 的 Compose 构建缓存已迁回工作区,
+  当前本机仍为零有效安装;`E:\h` 只保留给后续通过门禁的唯一安装。
 
 git 收尾:`v7-refinement` 以 --no-ff 合回 `main` 并推送 `origin/main`,
 本轮全部 11 个提交(含文档)可通过合并提交回溯。

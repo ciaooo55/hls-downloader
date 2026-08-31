@@ -6,8 +6,8 @@ $repo = (Resolve-Path "$PSScriptRoot\..").Path
 $reportDir = Join-Path $repo 'artifacts\v7-productization\performance'
 $reportPath = Join-Path $reportDir 'v7-performance-latest.json'
 New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
-# Build caches default inside the repository; HLS_V7_BUILD_CACHE relocates them.
-$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { $env:HLS_V7_BUILD_CACHE } else { Join-Path $repo '.tool-cache\build-cache' }
+# Project build outputs stay inside the repository.
+$cacheRoot = Join-Path $repo '.tool-cache\build-cache'
 $env:CARGO_HOME = Join-Path $cacheRoot 'cargo'
 $env:CARGO_TARGET_DIR = Join-Path $cacheRoot 'cargo-target'
 $env:GRADLE_USER_HOME = Join-Path $cacheRoot 'gradle'
