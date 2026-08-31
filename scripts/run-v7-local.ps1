@@ -3,18 +3,11 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot\..").Path
-# Build caches default inside the repository; HLS_V7_BUILD_CACHE relocates them.
-$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { $env:HLS_V7_BUILD_CACHE } else { Join-Path $repo '.tool-cache\build-cache' }
+# Project build outputs stay inside the repository.
+$cacheRoot = Join-Path $repo '.tool-cache\build-cache'
 $env:CARGO_HOME = Join-Path $cacheRoot 'cargo'
 $env:CARGO_TARGET_DIR = Join-Path $cacheRoot 'cargo-target'
 $env:GRADLE_USER_HOME = Join-Path $cacheRoot 'gradle'
-# jlink needs an ASCII build path (system-codepage @args decoding); E:\h is
-# this project's sanctioned location on E:.
-$env:HLS_COMPOSE_BUILD_DIR = if ($env:HLS_COMPOSE_BUILD_DIR) {
-    $env:HLS_COMPOSE_BUILD_DIR
-} else {
-    'E:\h\.build-cache\compose-build'
-}
 $jdkRoot = $env:HLS_V7_JAVA_HOME
 if(-not $jdkRoot -and (Test-Path (Join-Path $cacheRoot 'jdk-21\bin\java.exe'))){ $jdkRoot = Join-Path $cacheRoot 'jdk-21' }
 # Legacy read-only tool location from earlier installs; tools are not project content.

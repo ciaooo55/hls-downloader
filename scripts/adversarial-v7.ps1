@@ -18,8 +18,8 @@ if ($presenterManifest -notmatch 'autobins\s*=\s*false' -or
     ([regex]::Matches($presenterUi, 'export component\s+\w+Window')).Count -ne 3) {
     throw 'v7 presenter architecture gate failed: only the dedicated hot-window entry may be active.'
 }
-# Build caches default inside the repository; HLS_V7_BUILD_CACHE relocates them.
-$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { $env:HLS_V7_BUILD_CACHE } else { Join-Path $repo '.tool-cache\build-cache' }
+# Project build outputs stay inside the repository.
+$cacheRoot = Join-Path $repo '.tool-cache\build-cache'
 $cargoCommand = Get-Command cargo.exe -ErrorAction SilentlyContinue
 $cargo = if ($cargoCommand) { $cargoCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
 $env:CARGO_HOME = Join-Path $cacheRoot 'cargo'
