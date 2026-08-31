@@ -41,7 +41,11 @@ fn install_panic_log() {
             .unwrap_or(0);
         let text = format!("hls-v7-presenter panic (unix {}):\n{info}\n", seconds);
         let path = env::temp_dir().join("hls-downloader-presenter-crash.log");
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
             let _ = file.write_all(text.as_bytes());
         }
         previous(info);
@@ -203,13 +207,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pending = Arc::new(Mutex::new(initial_pending));
     let active_handoff = Arc::new(Mutex::new(None::<String>));
     let active_hud = Rc::new(RefCell::new(ActiveTaskHud::default()));
+    let rendered_hud_task = Arc::new(Mutex::new(None::<String>));
     let completed_task = Rc::new(RefCell::new(None::<String>));
     let completed_notified = Rc::new(RefCell::new(HashSet::<String>::new()));
     let prewarm_finished = Rc::new(RefCell::new(false));
 
     progress.on_command({
-        let client = Rc::clone(&client);
         let active_hud = Rc::clone(&active_hud);
+        let rendered_hud_task = Arc::clone(&rendered_hud_task);
         let window = progress.as_weak();
         move |command| {
             let action = command.to_string();
@@ -221,10 +226,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if matches!(action.as_str(), "pause" | "cancel") {
                 if let Some(task_id) = active_hud.borrow().primary_task_id() {
-                    let _ = command_with_reconnect(
-                        &client,
-                        CoreCommand::TaskAction { task_id, action },
-                    );
+                    if let Some(item) = window.upgrade() {
+                        item.set_action_busy(true);
+                        item.set_action_error(false);
+                        item.set_action_text(
+                            if action == "pause" {
+                                "正在暂停…"
+                            } else {
+                                "正在取消…"
+                            }
+                            .into(),
+                        );
+                    }
+                    let result_window = window.clone();
+                    let result_task_id = task_id.clone();
+                    let result_hud_task = Arc::clone(&rendered_hud_task);
+                    thread::spawn(move || {
+                        let result = CoreIpcClient::connect().and_then(|mut client| {
+                            client
+                                .command(CoreCommand::TaskAction { task_id, action })
+                                .map(|_| ())
+                        });
+                        let _ = result_window.upgrade_in_event_loop(move |item| {
+                            if result_hud_task.lock().ok().and_then(|task| task.clone())
+                                != Some(result_task_id)
+                            {
+                                return;
+                            }
+                            item.set_action_busy(false);
+                            item.set_action_error(result.is_err());
+                            item.set_action_text(match result {
+                                Ok(()) => "指令已发送".into(),
+                                Err(error) => format!("操作失败：{error}").into(),
+                            });
+                        });
+                    });
+                } else if let Some(item) = window.upgrade() {
+                    item.set_action_error(true);
+                    item.set_action_text("当前没有可操作的下载任务".into());
                 }
             }
         }
@@ -325,17 +364,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 }
                 "more" => {
-                    let opened = install_root()
-                        .map(|root| spawn_desktop_ui(&root))
-                        .unwrap_or(false);
-                    let _ = command_with_reconnect(&client, CoreCommand::OpenMain);
                     if let Some(item) = window.upgrade() {
-                        item.set_error_text(if opened {
-                            "已打开主窗口；当前请求仍可在此确认".into()
-                        } else {
-                            "主窗口已收到显示请求".into()
-                        });
+                        item.set_busy(true);
+                        item.set_error_text("正在打开主窗口…".into());
                     }
+                    let result_window = window.clone();
+                    thread::spawn(move || {
+                        let started = install_root()
+                            .map(|root| spawn_desktop_ui(&root))
+                            .unwrap_or(false);
+                        let signalled = CoreIpcClient::connect()
+                            .and_then(|mut client| client.command(CoreCommand::OpenMain))
+                            .is_ok();
+                        let _ = result_window.upgrade_in_event_loop(move |item| {
+                            item.set_busy(false);
+                            item.set_error_text(match (started, signalled) {
+                                (true, _) => "主窗口启动请求已发送；当前请求仍可在此确认".into(),
+                                (false, true) => {
+                                    "主窗口已收到显示请求；当前请求仍可在此确认".into()
+                                }
+                                (false, false) => "无法打开主窗口，请稍后重试".into(),
+                            });
+                        });
+                    });
                     return;
                 }
                 _ if command.starts_with("category:") => {
@@ -410,6 +461,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let rx = Rc::clone(&rx);
         let pending = Arc::clone(&pending);
         let active_hud = Rc::clone(&active_hud);
+        let rendered_hud_task = Arc::clone(&rendered_hud_task);
         let completed_task = Rc::clone(&completed_task);
         let completed_notified = Rc::clone(&completed_notified);
         let client = Rc::clone(&client);
@@ -460,19 +512,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             &progress,
                             &complete,
                             &active_hud,
+                            &rendered_hud_task,
                             &completed_task,
                             &completed_notified,
                         ),
                         CoreEvent::TaskDeleted { task_id } => {
                             let primary = active_hud.borrow_mut().remove(&task_id);
                             match primary {
-                                Some(primary) => render_progress_hud(
-                                    &progress,
-                                    *runtime_settings.borrow(),
-                                    &primary,
-                                ),
+                                Some(primary) => {
+                                    reset_progress_action_for_new_task(
+                                        &progress,
+                                        &rendered_hud_task,
+                                        &primary.task_id,
+                                    );
+                                    render_progress_hud(
+                                        &progress,
+                                        *runtime_settings.borrow(),
+                                        &primary,
+                                    )
+                                }
                                 None => {
+                                    if let Ok(mut rendered) = rendered_hud_task.lock() {
+                                        *rendered = None;
+                                    }
                                     if let Some(item) = progress.upgrade() {
+                                        item.set_action_busy(false);
+                                        item.set_action_error(false);
+                                        item.set_action_text("".into());
                                         let _ = item.hide();
                                     }
                                 }
@@ -1178,14 +1244,24 @@ fn update_task_windows(
     progress: &slint::Weak<ProgressWindow>,
     complete: &slint::Weak<CompleteWindow>,
     active_hud: &RefCell<ActiveTaskHud>,
+    rendered_hud_task: &Mutex<Option<String>>,
     completed_task: &RefCell<Option<String>>,
     completed_notified: &RefCell<HashSet<String>>,
 ) {
     let primary = active_hud.borrow_mut().observe(snapshot.clone());
     match primary {
-        Some(primary) => render_progress_hud(progress, settings, &primary),
+        Some(primary) => {
+            reset_progress_action_for_new_task(progress, rendered_hud_task, &primary.task_id);
+            render_progress_hud(progress, settings, &primary)
+        }
         None => {
+            if let Ok(mut rendered) = rendered_hud_task.lock() {
+                *rendered = None;
+            }
             if let Some(item) = progress.upgrade() {
+                item.set_action_busy(false);
+                item.set_action_error(false);
+                item.set_action_text("".into());
                 let _ = item.hide();
             }
         }
@@ -1209,6 +1285,25 @@ fn update_task_windows(
                 }
             }
         }
+    }
+}
+
+fn reset_progress_action_for_new_task(
+    progress: &slint::Weak<ProgressWindow>,
+    rendered_hud_task: &Mutex<Option<String>>,
+    task_id: &str,
+) {
+    let Ok(mut rendered) = rendered_hud_task.lock() else {
+        return;
+    };
+    if rendered.as_deref() == Some(task_id) {
+        return;
+    }
+    *rendered = Some(task_id.to_string());
+    if let Some(item) = progress.upgrade() {
+        item.set_action_busy(false);
+        item.set_action_error(false);
+        item.set_action_text("".into());
     }
 }
 

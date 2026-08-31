@@ -415,6 +415,7 @@ class EnginePipeClient(
     }
 
     fun taskAction(taskId: String, action: String) = command(commandOf("task_action", "task_id" to taskId, "action" to action))
+    fun openMain() = command(commandOf("open_main"))
     fun refreshTaskRequest(taskId: String, url: String, cookie: String = "", autoResume: Boolean = true) = command(buildJsonObject {
         put("kind", "refresh_task_request")
         put("task_id", requireId(taskId))

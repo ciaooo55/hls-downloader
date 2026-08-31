@@ -362,9 +362,9 @@ export component ProgressWindow inherits Window {
     default-font-family: Tokens.type-face;
     default-font-size: 12px;
     min-width: 400px;
-    min-height: 174px;
+    min-height: 204px;
     preferred-width: 400px;
-    preferred-height: 174px;
+    preferred-height: 204px;
     background: Tokens.surface;
     always-on-top: false;
     no-frame: true;
@@ -372,6 +372,9 @@ export component ProgressWindow inherits Window {
     in-out property <string> filename;
     in-out property <string> speed;
     in-out property <float> progress;
+    in-out property <bool> action_busy: false;
+    in-out property <bool> action_error: false;
+    in-out property <string> action_text;
     callback command(string);
     Panel {
         width: parent.width;
@@ -406,11 +409,18 @@ export component ProgressWindow inherits Window {
                     animate width { duration: Tokens.motion; easing: ease-out; }
                 }
             }
+            Text {
+                text: root.action_text;
+                color: root.action_error ? Tokens.fail : Tokens.muted;
+                font-size: 11px;
+                visible: root.action_text != "";
+                overflow: elide;
+            }
             HorizontalLayout {
                 spacing: 8px;
                 Rectangle { horizontal-stretch: 1; }
-                HotButton { label: "暂停"; clicked => { root.command("pause"); } }
-                HotButton { label: "取消"; danger: true; clicked => { root.command("cancel"); } }
+                HotButton { label: root.action_busy ? "处理中…" : "暂停"; enabled: !root.action_busy; clicked => { root.command("pause"); } }
+                HotButton { label: "取消"; danger: true; enabled: !root.action_busy; clicked => { root.command("cancel"); } }
             }
         }
     }
