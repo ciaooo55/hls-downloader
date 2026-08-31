@@ -514,6 +514,7 @@ fun main() {
         }
     }
 }
+}
 
 internal fun auditSettingsTab(surface: String): String? = when (surface) {
     "settings" -> "通用"
