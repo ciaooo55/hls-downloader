@@ -16,7 +16,7 @@ if (-not (Test-Path -LiteralPath $provenancePath -PathType Leaf) -or
 }
 $provenance = Get-Content -LiteralPath $provenancePath -Raw -Encoding UTF8 | ConvertFrom-Json
 $currentCommit = (& git -C $repo rev-parse HEAD).Trim()
-$currentTree = (& git -C $repo rev-parse HEAD^{tree}).Trim()
+$currentTree = (& git -C $repo rev-parse 'HEAD^{tree}').Trim()
 $canonicalFeatureParity = Join-Path $repo 'artifacts\v7-productization\feature-parity.json'
 $canonicalFeatureHash = (Get-FileHash -LiteralPath $canonicalFeatureParity -Algorithm SHA256).Hash.ToLowerInvariant()
 $embeddedFeatureHash = (Get-FileHash -LiteralPath $featureParityPath -Algorithm SHA256).Hash.ToLowerInvariant()

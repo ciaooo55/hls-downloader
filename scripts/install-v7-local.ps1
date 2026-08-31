@@ -24,7 +24,7 @@ if (-not $artifactManifest.StartsWith($repoPrefix, [StringComparison]::OrdinalIg
 }
 $artifact = Get-Content -LiteralPath $artifactManifest -Raw -Encoding UTF8 | ConvertFrom-Json
 $currentCommit = (& git -C $repo rev-parse HEAD).Trim()
-$currentTree = (& git -C $repo rev-parse HEAD^{tree}).Trim()
+$currentTree = (& git -C $repo rev-parse 'HEAD^{tree}').Trim()
 if ([int]$artifact.schema -ne 1 -or
     [string]$artifact.product_version -ne '7.0.0' -or
     @('candidate', 'formal') -notcontains [string]$artifact.package_tier -or

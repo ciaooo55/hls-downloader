@@ -1751,12 +1751,19 @@ impl CoreCoordinator {
         }
         if let (Some(task_id), Some(action)) = (task_id.as_deref(), start_action.as_deref()) {
             let mut core = self.lock()?;
+            let queue_profiles = load_queue_profiles(core.store())?;
             let deferred = core
                 .tasks()
                 .iter()
                 .find(|task| task.task_id == task_id)
                 .filter(|task| task.available_actions.iter().any(|item| item == action))
-                .filter(|task| !task_schedule_allowed(task))
+                .filter(|task| {
+                    !task_schedule_allowed(task)
+                        || !queue_profiles
+                            .iter()
+                            .find(|profile| profile.id == task.queue_id)
+                            .is_some_and(queue_profile_allowed)
+                })
                 .map(|task| (task.downloaded_bytes, task.total_bytes));
             if let Some((downloaded_bytes, total_bytes)) = deferred {
                 return core.handle(CoreCommand::UpdateProgress {
@@ -5264,6 +5271,76 @@ mod tests {
             &event.event,
             CoreEvent::Error { code, .. } if code == "illegal_task_action"
         )));
+        assert_eq!(coordinator.tasks().unwrap()[0].status, "queued");
+        assert_eq!(fs::read_to_string(&paths.control).unwrap(), "pause");
+        assert!(!coordinator.worker_is_active("task-1").unwrap());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn start_in_a_disabled_queue_stays_queued_without_resetting_control() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-disabled-queue-start-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting(
+                "download_dir",
+                serde_json::json!(root.to_string_lossy().into_owned()),
+            )
+            .unwrap();
+        coordinator
+            .set_setting(
+                "queue_profiles",
+                serde_json::json!([{
+                    "id": "default",
+                    "name": "默认队列",
+                    "enabled": false,
+                    "priority": 0,
+                    "max_active": 3,
+                    "speed_limit_kib": 0,
+                    "schedule_enabled": false,
+                    "start_time": "00:00",
+                    "stop_time": "23:59",
+                    "active_days": "1,2,3,4,5,6,7",
+                    "completion_action": "none"
+                }]),
+            )
+            .unwrap();
+        coordinator
+            .lock()
+            .unwrap()
+            .handle(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "https://cdn.test/disabled.bin".into(),
+                    filename: "disabled.bin".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let paths = TaskPaths::for_task(
+            "task-1",
+            coordinator.lock().unwrap().task_spec("task-1").unwrap(),
+        )
+        .unwrap();
+        paths.prepare().unwrap();
+        paths.set_control("pause").unwrap();
+
+        coordinator
+            .dispatch(CoreCommand::TaskAction {
+                task_id: "task-1".into(),
+                action: "start".into(),
+            })
+            .unwrap();
+
         assert_eq!(coordinator.tasks().unwrap()[0].status, "queued");
         assert_eq!(fs::read_to_string(&paths.control).unwrap(), "pause");
         assert!(!coordinator.worker_is_active("task-1").unwrap());
