@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  MAX_PAUSED_HANDOFF_FOLLOWUPS,
   PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY,
   PausedHandoffFollowUpStore,
   normalizePausedHandoffFollowUps,
@@ -48,7 +47,7 @@ describe('paused handoff follow-up store', () => {
     ])
   })
 
-  it('upserts one record per handoff and caps the stored queue', async () => {
+  it('upserts one record per handoff without discarding unresolved browser ownership', async () => {
     const storage = new MemoryStorage()
     const store = new PausedHandoffFollowUpStore(storage, PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY, () => 1_000)
     await store.remember({ downloadId: 1, handoffId: 'handoff-1', phase: 'resolution', deadline: 61_000 })
@@ -56,11 +55,11 @@ describe('paused handoff follow-up store', () => {
     expect(store.list()).toEqual([
       { downloadId: 1, handoffId: 'handoff-1', phase: 'readiness', deadline: 62_000, createdAt: 1_000 },
     ])
-    for (let index = 0; index < MAX_PAUSED_HANDOFF_FOLLOWUPS + 5; index += 1) {
+    for (let index = 0; index < 29; index += 1) {
       await store.remember({ downloadId: index, handoffId: `handoff-${index}`, phase: 'resolution', deadline: 63_000 })
     }
-    expect(store.list().length).toBe(MAX_PAUSED_HANDOFF_FOLLOWUPS)
-    expect(storage.values[PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY]).toHaveLength(MAX_PAUSED_HANDOFF_FOLLOWUPS)
+    expect(store.list().length).toBe(29)
+    expect(storage.values[PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY]).toHaveLength(29)
   })
 
   it('drops a finished follow-up without writing again for unknown ids', async () => {
@@ -81,11 +80,11 @@ describe('paused handoff follow-up steps', () => {
     expect(step).toEqual({ kind: 'keep-paused', followUp: followUp() })
   })
 
-  it('resumes the paused download when the confirmation window elapses', () => {
-    expect(stepPausedHandoffFollowUp(followUp(), { status: 'pending' }, 130_000, 60_000))
-      .toEqual({ kind: 'resume-download' })
-    expect(stepPausedHandoffFollowUp(followUp(), {}, 130_000, 60_000))
-      .toEqual({ kind: 'resume-download' })
+  it('keeps the paused download when the local confirmation window elapses', () => {
+    for (const handoff of [{ status: 'pending' }, {}]) {
+      expect(stepPausedHandoffFollowUp(followUp(), handoff, 130_000, 60_000))
+        .toEqual({ kind: 'keep-paused', followUp: followUp({ deadline: 190_000 }) })
+    }
   })
 
   it('resumes the paused download when the user rejects or the handoff fails', () => {

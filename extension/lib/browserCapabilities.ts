@@ -23,7 +23,7 @@ export async function resolveFirefoxClickIntent<T>(
 }
 
 export interface RecurringAlarmScheduler {
-  create(name: string, info: { periodInMinutes?: number }): unknown
+  create(name: string, info: { periodInMinutes?: number }): unknown | Promise<unknown>
 }
 
 /** Firefox clamps recurring alarms to one minute; older Chromium builds throw on sub-minute periods. */
@@ -35,12 +35,12 @@ export const PORTABLE_RECURRING_ALARM_MINUTES = 1
  * rejects the creation outright. Never throws: losing the alarm silently is
  * worse than running it on a slower cadence.
  */
-export function createRecurringAlarm(
+export async function createRecurringAlarm(
   alarms: RecurringAlarmScheduler,
   name: string,
   periodInMinutes: number,
   isFirefox = false,
-): void {
+): Promise<void> {
   const requested = { periodInMinutes }
   const portable = { periodInMinutes: Math.max(PORTABLE_RECURRING_ALARM_MINUTES, periodInMinutes) }
   const attempts = isFirefox && periodInMinutes < PORTABLE_RECURRING_ALARM_MINUTES
@@ -48,7 +48,7 @@ export function createRecurringAlarm(
     : [requested, portable]
   for (const attempt of attempts) {
     try {
-      alarms.create(name, attempt)
+      await alarms.create(name, attempt)
       return
     } catch {
       // Retry with the portable period before giving up entirely.

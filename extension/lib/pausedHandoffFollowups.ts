@@ -3,15 +3,12 @@ import { desktopTaskReadiness, handoffTerminalStatus, type BrowserHandoffPayload
 export const PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY = 'paused-handoff-followups-v1'
 
 /**
- * Wall-clock window a desktop confirmation gets before a paused browser
- * download is handed back to the user. Mirrors the in-process resolution wait
- * in the background worker so both carriers expire together.
+ * Initial wall-clock window before an unresolved desktop confirmation is
+ * rechecked by the suspension-safe follow-up carrier.
  */
 export const PAUSED_HANDOFF_RESOLUTION_MS = 125_000
 /** Cadence for re-checking an accepted handoff whose desktop task is still unconfirmed. */
 export const PAUSED_FOLLOW_UP_RECHECK_MS = 60_000
-export const MAX_PAUSED_HANDOFF_FOLLOWUPS = 24
-
 export type PausedHandoffFollowUpPhase = 'resolution' | 'readiness'
 
 export interface PausedHandoffFollowUp {
@@ -55,7 +52,6 @@ export function normalizePausedHandoffFollowUps(value: unknown, now: number): Pa
       return true
     })
     .sort((left, right) => left.deadline - right.deadline || left.createdAt - right.createdAt)
-    .slice(0, MAX_PAUSED_HANDOFF_FOLLOWUPS)
 }
 
 export type PausedFollowUpStep =
@@ -79,10 +75,16 @@ export function stepPausedHandoffFollowUp(
   if (followUp.phase === 'resolution') {
     const status = String(handoff.status || '')
     if (!handoffTerminalStatus(status)) {
-      // The confirmation window elapsed without a decision, so give the
-      // download back to the user instead of pausing it forever.
-      if (now >= followUp.deadline) return { kind: 'resume-download' }
-      return { kind: 'keep-paused', followUp }
+      // A local deadline cannot prove that the desktop rejected the handoff:
+      // the Core may have accepted it while Native Messaging was reconnecting.
+      // Resuming here could start a second transfer, so keep ownership parked
+      // until Core reports an actual terminal decision.
+      return {
+        kind: 'keep-paused',
+        followUp: now >= followUp.deadline
+          ? { ...followUp, deadline: now + recheckMs }
+          : followUp,
+      }
     }
     if (status !== 'accepted') return { kind: 'resume-download' }
     followUp = { ...followUp, phase: 'readiness', deadline: now + recheckMs }
@@ -131,7 +133,6 @@ export class PausedHandoffFollowUpStore {
     const record: PausedHandoffFollowUp = { ...input, createdAt: input.createdAt || this.now() }
     this.followUps = [record, ...this.followUps.filter(item => item.handoffId !== record.handoffId)]
       .sort((left, right) => right.createdAt - left.createdAt)
-      .slice(0, MAX_PAUSED_HANDOFF_FOLLOWUPS)
     await this.persist()
     return record
   }

@@ -22,25 +22,25 @@ describe('browser capability guards', () => {
     expect(wait).toHaveBeenCalledOnce()
   })
 
-  it('keeps the requested sub-minute alarm period on Chromium', () => {
+  it('keeps the requested sub-minute alarm period on Chromium', async () => {
     const create = vi.fn()
-    createRecurringAlarm({ create }, 'worker-heartbeat', 0.5, false)
+    await createRecurringAlarm({ create }, 'worker-heartbeat', 0.5, false)
     expect(create).toHaveBeenCalledOnce()
     expect(create).toHaveBeenCalledWith('worker-heartbeat', { periodInMinutes: 0.5 })
   })
 
-  it('creates Firefox recurring alarms with the portable one-minute period', () => {
+  it('creates Firefox recurring alarms with the portable one-minute period', async () => {
     const create = vi.fn()
-    createRecurringAlarm({ create }, 'worker-heartbeat', 0.5, true)
+    await createRecurringAlarm({ create }, 'worker-heartbeat', 0.5, true)
     expect(create).toHaveBeenCalledOnce()
     expect(create).toHaveBeenCalledWith('worker-heartbeat', { periodInMinutes: 1 })
   })
 
-  it('falls back to the portable period when alarm creation throws', () => {
+  it('falls back to the portable period when alarm creation rejects', async () => {
     const create = vi.fn(() => {
-      throw new Error('periodInMinutes must be at least 1')
+      return Promise.reject(new Error('periodInMinutes must be at least 1'))
     })
-    expect(() => createRecurringAlarm({ create }, 'worker-heartbeat', 0.5, false)).not.toThrow()
+    await expect(createRecurringAlarm({ create }, 'worker-heartbeat', 0.5, false)).resolves.toBeUndefined()
     expect(create).toHaveBeenCalledTimes(2)
     expect(create).toHaveBeenLastCalledWith('worker-heartbeat', { periodInMinutes: 1 })
   })
