@@ -212,6 +212,7 @@ impl CoreStore {
                 | CoreEvent::CastSession { .. }
                 | CoreEvent::PlayerSession { .. } => {}
             }
+            sync_event_side_rows(&transaction, &envelope.event)?;
         }
         if let Some(spec) = spec {
             let task_id = events.iter().find_map(|event| match &event.event {
@@ -486,6 +487,90 @@ impl CoreStore {
             ))
             .map_err(|error| format!("initialize Core schema: {error}"))
     }
+}
+
+fn sync_event_side_rows(transaction: &Transaction<'_>, event: &CoreEvent) -> Result<(), String> {
+    match event {
+        CoreEvent::HandoffResolved {
+            handoff_id,
+            task_id,
+        } => {
+            let status = if task_id.is_some() { "accepted" } else { "rejected" };
+            let existing: Option<String> = transaction
+                .query_row(
+                    "SELECT public_json FROM handoffs WHERE handoff_id = ?1",
+                    params![handoff_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| format!("load resolved handoff {handoff_id}: {error}"))?;
+            let mut value = existing
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+                .unwrap_or_else(|| {
+                    serde_json::json!({
+                        "id": handoff_id,
+                        "created_at_ms": 0
+                    })
+                });
+            if let Some(object) = value.as_object_mut() {
+                object.insert("status".into(), serde_json::Value::String(status.into()));
+                object.insert(
+                    "task_id".into(),
+                    task_id
+                        .clone()
+                        .map(serde_json::Value::String)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+            }
+            let created_at_ms = value
+                .get("created_at_ms")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let json = serde_json::to_string(&value)
+                .map_err(|error| format!("encode resolved handoff {handoff_id}: {error}"))?;
+            upsert_handoff_row(
+                transaction,
+                handoff_id,
+                &json,
+                status,
+                task_id.as_deref(),
+                created_at_ms,
+            )?;
+        }
+        CoreEvent::MediaPushRequested { request } | CoreEvent::MediaPushResolved { request } => {
+            let json = serde_json::to_string(request)
+                .map_err(|error| format!("encode media push {}: {error}", request.id))?;
+            upsert_handoff_row(
+                transaction,
+                &request.id,
+                &json,
+                &request.status,
+                None,
+                request.created_at_ms,
+            )?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn upsert_handoff_row(
+    transaction: &Transaction<'_>,
+    handoff_id: &str,
+    public_json: &str,
+    status: &str,
+    task_id: Option<&str>,
+    created_at_ms: u64,
+) -> Result<(), String> {
+    transaction
+        .execute(
+            "INSERT INTO handoffs(handoff_id, public_json, status, task_id, created_at_ms)\
+             VALUES (?1, ?2, ?3, ?4, ?5)\
+             ON CONFLICT(handoff_id) DO UPDATE SET public_json = excluded.public_json, status = excluded.status, task_id = excluded.task_id",
+            params![handoff_id, public_json, status, task_id, created_at_ms as i64],
+        )
+        .map_err(|error| format!("save Core handoff {handoff_id}: {error}"))?;
+    Ok(())
 }
 
 fn upsert_task(

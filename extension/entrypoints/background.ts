@@ -375,7 +375,9 @@ async function waitForHandoffResolution(handoffId: string): Promise<TrackedHando
     if (handoffTerminalStatus(current.handoff.status)) return current.handoff
     await new Promise(resolve => setTimeout(resolve, 450))
   }
-  return { id: handoffId, resourceId: '', status: 'expired', checkedAt: Date.now(), failures: 0 }
+  // This is only a local polling timeout, not a Core-confirmed expiry. Keep it
+  // non-terminal so browser recovery cannot race an accepted desktop task.
+  return { id: handoffId, resourceId: '', status: 'connection_lost', checkedAt: Date.now(), failures: 0 }
 }
 
 type BrowserFallbackDecision = DesktopTaskReadiness | 'keep-paused'
@@ -481,6 +483,21 @@ async function continuePausedHandoffFollowups(): Promise<void> {
       if (pausedFollowUpsInFlight.has(record.handoffId)) continue
       pausedFollowUpsInFlight.add(record.handoffId)
       try {
+        // The user may resume, cancel, finish or erase the browser item while
+        // Core is unreachable. That is an explicit browser-side ownership
+        // decision; never resume it again or remove its file on a later alarm.
+        let browserItems: Browser.downloads.DownloadItem[]
+        try {
+          browserItems = await browser.downloads.search({ id: record.downloadId })
+        } catch {
+          await retryPausedFollowUp(record)
+          continue
+        }
+        const [browserItem] = browserItems
+        if (!browserItem || browserItem.paused !== true) {
+          await pausedFollowUpStore.drop(record.handoffId)
+          continue
+        }
         let handoff: BrowserHandoffPayload = {}
         try {
           const response = await native({ op: 'handoff_status', handoff_id: record.handoffId }, 2_500)
@@ -1338,7 +1355,12 @@ export default defineBackground(() => {
   // follow-ups and the inactive-tab badge expiry. Only browser.alarms reliably
   // wake a suspended worker, so no deadline may ride on setTimeout alone.
   // Firefox clamps sub-minute periods and older Chromium builds reject them.
-  createRecurringAlarm(browser.alarms, WORKER_ALARM_NAME, WORKER_ALARM_PERIOD_MINUTES, import.meta.env.FIREFOX)
+  void createRecurringAlarm(
+    browser.alarms,
+    WORKER_ALARM_NAME,
+    WORKER_ALARM_PERIOD_MINUTES,
+    import.meta.env.FIREFOX,
+  )
   // Retired per-feature alarms from earlier builds would keep waking this
   // worker for listeners that no longer exist.
   void browser.alarms.clear('handoff-tracker').catch(() => undefined)
@@ -1420,7 +1442,10 @@ export default defineBackground(() => {
     }
     console.debug('HLS Downloader observed a browser download candidate')
     let paused = false
-    let accepted = false
+    // Once a handoff may own the transfer, finally must leave the durable
+    // paused browser fallback alone. This also covers transient status loss;
+    // it does not mean Core acceptance was observed.
+    let browserOwnedByHandoff = false
     let followUpHandoffId = ''
     try {
       // IDM pauses the browser item immediately in onCreated and resolves
@@ -1455,17 +1480,20 @@ export default defineBackground(() => {
           followUpHandoffId = handoffId
           await rememberPausedHandoffFollowUp(item.id, handoffId)
           const handoff = await waitForHandoffResolution(handoffId)
-          if (handoff?.status !== 'accepted') return
+          if (handoff?.status !== 'accepted') {
+            if (!handoffTerminalStatus(handoff?.status)) browserOwnedByHandoff = true
+            return
+          }
           const readiness = await waitForDesktopTaskReadiness(handoffId)
           if (readiness === 'browser-fallback') return
           if (readiness === 'keep-paused') {
-            accepted = true
+            browserOwnedByHandoff = true
             void followUpPausedHandoffCleanup(item, handoffId)
             return
           }
           concealBrowserDownload()
           const removed = await removeBrowserDownload(item)
-          accepted = true
+          browserOwnedByHandoff = true
           if (removed) await pausedFollowUpStore.drop(handoffId)
           return
         }
@@ -1562,11 +1590,14 @@ export default defineBackground(() => {
       followUpHandoffId = handoffId
       await rememberPausedHandoffFollowUp(item.id, handoffId)
       const handoff = await waitForHandoffResolution(handoffId)
-      if (handoff?.status !== 'accepted') return
+      if (handoff?.status !== 'accepted') {
+        if (!handoffTerminalStatus(handoff?.status)) browserOwnedByHandoff = true
+        return
+      }
       const readiness = await waitForDesktopTaskReadiness(handoffId)
       if (readiness === 'browser-fallback') return
       if (readiness === 'keep-paused') {
-        accepted = true
+        browserOwnedByHandoff = true
         void followUpPausedHandoffCleanup(actualBrowser, handoffId)
         return
       }
@@ -1574,7 +1605,7 @@ export default defineBackground(() => {
       // observed. Suppress it only after the desktop accepted the handoff.
       concealBrowserDownload()
       const removed = await removeBrowserDownload(actualBrowser)
-      accepted = true
+      browserOwnedByHandoff = true
       if (removed) await pausedFollowUpStore.drop(handoffId)
     } catch (error) {
       console.warn('HLS Downloader takeover failed; browser download remains untouched', error)
@@ -1582,7 +1613,7 @@ export default defineBackground(() => {
       determinedDownloads.delete(item.id)
       determinationWaiters.delete(item.id)
       // A failed browser recovery keeps its record so the alarm can retry it.
-      if (followUpHandoffId && !accepted) {
+      if (followUpHandoffId && !browserOwnedByHandoff) {
         const resumed = await resumeBrowserDownload(item, paused)
         if (resumed) await pausedFollowUpStore.drop(followUpHandoffId)
         else await retryPausedFollowUp({
@@ -1592,7 +1623,7 @@ export default defineBackground(() => {
           deadline: Date.now(),
         })
       } else {
-        await resumeBrowserDownload(item, paused && !accepted)
+        await resumeBrowserDownload(item, paused && !browserOwnedByHandoff)
       }
       revealBrowserDownload()
     }

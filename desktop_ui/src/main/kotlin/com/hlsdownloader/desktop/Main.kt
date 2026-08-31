@@ -392,9 +392,15 @@ internal val errorBody: Color @Composable @ReadOnlyComposable get() = LocalWorkb
 internal val warnSurface: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.warnSurface
 
 fun main() {
-    System.setProperty("compose.accessibility.enable", "true")
-    System.setProperty("javax.accessibility.assistive_technologies", "com.sun.java.accessibility.AccessBridge")
-    application {
+    val instanceLock = WorkbenchInstanceLock.acquire()
+    if (instanceLock == null) {
+        wakeRunningWorkbench()
+        return
+    }
+    instanceLock.use {
+        System.setProperty("compose.accessibility.enable", "true")
+        System.setProperty("javax.accessibility.assistive_technologies", "com.sun.java.accessibility.AccessBridge")
+        application {
     val auditSurface = System.getenv("HLS_UI_AUDIT_SURFACE").orEmpty().lowercase()
     val auditWidth = System.getenv("HLS_UI_AUDIT_WIDTH")?.toIntOrNull()?.coerceAtLeast(1024) ?: 1400
     val auditHeight = System.getenv("HLS_UI_AUDIT_HEIGHT")?.toIntOrNull()?.coerceAtLeast(600) ?: 820
@@ -504,7 +510,7 @@ fun main() {
             onExit = ::exitApplication,
             titleBar = { WindowTitleBar(appIcon, state.placement == WindowPlacement.Maximized, { window.isMinimized = true }, { state.placement = if (state.placement == WindowPlacement.Maximized) WindowPlacement.Floating else WindowPlacement.Maximized }, ::exitApplication) },
         )
-    }
+        }
     }
 }
 

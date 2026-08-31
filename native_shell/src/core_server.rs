@@ -15,6 +15,7 @@ pub struct CoreServer {
     coordinator: CoreCoordinator,
     notify: Arc<(Mutex<u64>, Condvar)>,
     stop: Arc<AtomicBool>,
+    torrent_probe_active: Arc<AtomicBool>,
 }
 
 impl CoreServer {
@@ -47,6 +48,7 @@ impl CoreServer {
             coordinator,
             notify: Arc::new((Mutex::new(sequence), Condvar::new())),
             stop,
+            torrent_probe_active: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -134,7 +136,27 @@ impl CoreServer {
         let coordinator = self.coordinator.clone();
         let notify = Arc::clone(&self.notify);
         let stop = Arc::clone(&self.stop);
-        Arc::new(move |request| dispatch(&coordinator, &notify, &stop, request))
+        let torrent_probe_active = Arc::clone(&self.torrent_probe_active);
+        Arc::new(move |request| {
+            dispatch(&coordinator, &notify, &stop, &torrent_probe_active, request)
+        })
+    }
+}
+
+struct TorrentProbeSlot(Arc<AtomicBool>);
+
+impl TorrentProbeSlot {
+    fn acquire(active: &Arc<AtomicBool>) -> Option<Self> {
+        active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self(Arc::clone(active)))
+    }
+}
+
+impl Drop for TorrentProbeSlot {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
     }
 }
 
@@ -159,6 +181,7 @@ fn dispatch(
     coordinator: &CoreCoordinator,
     notify: &Arc<(Mutex<u64>, Condvar)>,
     stop: &Arc<AtomicBool>,
+    torrent_probe_active: &Arc<AtomicBool>,
     request: CorePipeRequest,
 ) -> CorePipeResponse {
     match request {
@@ -181,6 +204,35 @@ fn dispatch(
             request_id,
             command,
         } => {
+            if matches!(&command, CoreCommand::ProbeTorrent { .. }) {
+                let Some(slot) = TorrentProbeSlot::acquire(torrent_probe_active) else {
+                    return CorePipeResponse::Error {
+                        request_id: Some(request_id),
+                        code: "torrent_probe_busy".into(),
+                        message: "已有种子探测正在执行".into(),
+                    };
+                };
+                let coordinator = coordinator.clone();
+                let notify = Arc::clone(notify);
+                thread::spawn(move || {
+                    let _slot = slot;
+                    if let Err(error) = coordinator.dispatch(command) {
+                        let _ = coordinator.lock().and_then(|mut core| {
+                            core.emit(CoreEvent::Error {
+                                code: "torrent_probe_failed".into(),
+                                message: error,
+                            })
+                        });
+                    }
+                    bump_notify(&notify, &coordinator);
+                });
+                // Probe completion is delivered through the normal event stream. Returning
+                // immediately keeps slow tracker/DHT/metadata I/O off the IPC request thread.
+                return CorePipeResponse::Events {
+                    request_id,
+                    events: Vec::new(),
+                };
+            }
             let should_shutdown = matches!(&command, CoreCommand::Shutdown);
             match coordinator.dispatch(command) {
                 Ok(events) => {
@@ -654,6 +706,15 @@ mod tests {
     use serde_json::Value;
     use std::collections::BTreeMap;
     use std::net::TcpListener;
+
+    #[test]
+    fn torrent_probe_slot_allows_only_one_active_probe() {
+        let active = Arc::new(AtomicBool::new(false));
+        let first = TorrentProbeSlot::acquire(&active).unwrap();
+        assert!(TorrentProbeSlot::acquire(&active).is_none());
+        drop(first);
+        assert!(TorrentProbeSlot::acquire(&active).is_some());
+    }
 
     #[test]
     fn in_memory_core_does_not_bootstrap_from_disk() {

@@ -249,6 +249,32 @@ foreach ($candidate in @($desktopExtensionStage, $desktopExtensionBackup)) {
         throw "Desktop extension working path escaped ${installRoot}: $full"
     }
 }
+$hadPrevious = Test-Path -LiteralPath $target
+if ($hadPrevious) {
+    if (-not (Test-Path -LiteralPath $target -PathType Container)) {
+        throw "Existing E:\h path is not a v7 installation directory: $target"
+    }
+    $existingProvenancePath = Join-Path $target 'app\resources\BUILD-PROVENANCE.json'
+    $existingInstallationPath = Join-Path $target 'INSTALLATION.txt'
+    if (-not (Test-Path -LiteralPath $existingProvenancePath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $existingInstallationPath -PathType Leaf)) {
+        throw "Existing E:\h directory is not an owned v7 installation: $target"
+    }
+    try {
+        $existingProvenance = Get-Content -LiteralPath $existingProvenancePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        throw "Existing E:\h installation provenance is invalid: $existingProvenancePath"
+    }
+    $existingInstallHeader = Get-Content -LiteralPath $existingInstallationPath -TotalCount 1 -Encoding UTF8
+    if ([int]$existingProvenance.schema -ne 1 -or
+        [string]$existingProvenance.product_version -ne '7.0.0' -or
+        @('candidate', 'formal') -notcontains [string]$existingProvenance.package_tier -or
+        [string]$existingProvenance.source_commit -notmatch '^[0-9a-fA-F]{40}$' -or
+        [string]$existingProvenance.source_tree -notmatch '^[0-9a-fA-F]{40}$' -or
+        $existingInstallHeader -ne 'HLS Downloader 7.0.0') {
+        throw "Existing E:\h directory is not an owned v7.0.0 installation: $target"
+    }
+}
 if (Test-Path -LiteralPath $stage) {
     Remove-Item -LiteralPath $stage -Recurse -Force
 }
@@ -288,7 +314,6 @@ $installInfo = @(
 ) -join "`r`n"
 [IO.File]::WriteAllText((Join-Path $stage 'INSTALLATION.txt'), $installInfo, [Text.UTF8Encoding]::new($false))
 
-$hadPrevious = Test-Path -LiteralPath $target
 $targetMovedToBackup = $false
 $stageMovedToTarget = $false
 $backupOwnerWritten = $false

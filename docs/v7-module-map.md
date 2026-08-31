@@ -38,9 +38,12 @@ Rust Core + SQLite (唯一状态/凭据/传输所有者)
 
 ## 当前收敛点
 
-- 功能矩阵为 `24/28 verified`、`4 partial`；计划任务由调度器认领时统一重置 control，最终发布与完成状态在 Core 同一互斥区提交，但新回归尚未执行；浏览器 pending handoff 已可跨重连恢复，Presenter 在显示前原子认领 15 秒持久 lease 并每 5 秒续租，Compose 只在 lease 到期后通过同一 Core 互斥区取得 `presentation=fallback`，扩展在整个展示阶段继续等待；后续还需 focused regression、生产浏览器、外部端点与干净 Windows MSI 证据。
+- 功能矩阵仍为 `24/28 verified`、`4 partial`；本轮没有改写发布门禁。计划任务由调度器认领时统一重置 control，最终发布与完成状态在 Core 同一互斥区提交；handoff/media-push 旁路行现在与事件 checkpoint 同事务提交，交接解析失败时仍保留内存 offer 供重试。
+- 浏览器 pending handoff 可跨重连恢复；扩展不会再把本地轮询超时伪装成 Core 终态，不确定所有权保持浏览器任务暂停并由持久 alarm 复核，用户已自行处理的任务会终止跟进。
 - Core 已在启动阶段报告 named pipe ready，失败会返回明确错误；pending media push 会从 SQLite 恢复到运行时，可跨重启 resolve。
-- 本轮修复安装文档与脚本的路径/回滚语义，使交付约束与运行时架构一致。
+- Core IPC 对完全空闲帧头设置 120 秒上限，对完整帧头后的帧体设置不可续期的 15 秒预算；BT/磁力探测使用单后台槽，避免阻塞请求线程或无界并发。
+- Compose 主工作台通过跨进程文件锁保持单实例，重复启动仅发送 `open_main`；Presenter 的暂停/取消与打开主窗口操作不再阻塞 UI 线程，并按当前任务隔离反馈。
+- 构建门禁核对扩展协议常量；安装覆盖前验证 `E:\h` 所有权；Portable 升级与回滚验证 Chromium/Firefox 扩展身份连续。本轮只修改脚本，不执行安装或打包。
 - 设置保存先完成 Core 持久化，失败时保留对话框草稿；Presenter 探测完成前暂存接管事件，避免启动竞态。
 - 工作台在事件序列断档时重新读取快照；Presenter 每次重连都恢复任务快照和待处理交接，托盘/Presenter 唤起优先激活已有工作台。
 - candidate/formal 产物目录写入 `ARTIFACT-MANIFEST.json`，统一记录 EXE、MSI、Portable 和扩展摘要。

@@ -53,14 +53,6 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
-        if let Err(error) = self.sync_handoff_rows(&events) {
-            self.runtime = before;
-            return Err(error);
-        }
-        if let Err(error) = self.sync_media_push_rows(&events) {
-            self.runtime = before;
-            return Err(error);
-        }
         Ok(events)
     }
 
@@ -68,14 +60,6 @@ impl PersistentCore {
         let before = self.runtime.clone();
         let events = self.runtime.emit(event);
         if let Err(error) = self.store.apply_events_and_spec(&events, None) {
-            self.runtime = before;
-            return Err(error);
-        }
-        if let Err(error) = self.sync_handoff_rows(&events) {
-            self.runtime = before;
-            return Err(error);
-        }
-        if let Err(error) = self.sync_media_push_rows(&events) {
             self.runtime = before;
             return Err(error);
         }
@@ -294,85 +278,6 @@ impl PersistentCore {
         Ok(Self { runtime, store })
     }
 
-    fn sync_handoff_rows(&mut self, events: &[EventEnvelope]) -> Result<(), String> {
-        for envelope in events {
-            let crate::CoreEvent::HandoffResolved {
-                handoff_id,
-                task_id,
-            } = &envelope.event
-            else {
-                continue;
-            };
-            let status = if task_id.is_some() {
-                "accepted"
-            } else {
-                "rejected"
-            };
-            let mut patched = false;
-            for encoded in self.store.load_handoffs()? {
-                let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&encoded) else {
-                    continue;
-                };
-                if value.get("id").and_then(serde_json::Value::as_str) != Some(handoff_id.as_str())
-                {
-                    continue;
-                }
-                if let Some(object) = value.as_object_mut() {
-                    object.insert("status".into(), serde_json::Value::String(status.into()));
-                    object.insert(
-                        "task_id".into(),
-                        task_id
-                            .clone()
-                            .map(serde_json::Value::String)
-                            .unwrap_or(serde_json::Value::Null),
-                    );
-                }
-                let json = serde_json::to_string(&value)
-                    .map_err(|error| format!("encode resolved handoff {handoff_id}: {error}"))?;
-                let created = value
-                    .get("created_at_ms")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
-                self.store
-                    .save_handoff(handoff_id, &json, status, task_id.as_deref(), created)?;
-                patched = true;
-                break;
-            }
-            let _ = patched;
-            if !patched {
-                let json = serde_json::json!({
-                    "id": handoff_id,
-                    "status": status,
-                    "task_id": task_id,
-                    "created_at_ms": 0
-                })
-                .to_string();
-                self.store
-                    .save_handoff(handoff_id, &json, status, task_id.as_deref(), 0)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn sync_media_push_rows(&mut self, events: &[EventEnvelope]) -> Result<(), String> {
-        for envelope in events {
-            let request = match &envelope.event {
-                crate::CoreEvent::MediaPushRequested { request }
-                | crate::CoreEvent::MediaPushResolved { request } => request,
-                _ => continue,
-            };
-            let json = serde_json::to_string(request)
-                .map_err(|error| format!("encode media push {}: {error}", request.id))?;
-            self.store.save_handoff(
-                &request.id,
-                &json,
-                &request.status,
-                None,
-                request.created_at_ms,
-            )?;
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -522,6 +427,78 @@ mod tests {
             event.event,
             crate::CoreEvent::MediaPushResolved { ref request } if request.id == "push-restart" && request.status == "done"
         )));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
+    fn side_rows_and_checkpoint_commit_and_restore_together() {
+        let path = std::env::temp_dir().join(format!(
+            "hls-v7-side-row-transaction-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let handoff_id = "handoff-transaction";
+        let push = crate::MediaPushRequest {
+            id: "push-transaction".into(),
+            push_kind: "tvbox".into(),
+            url: "https://example.test/media.mp4".into(),
+            title: "Media".into(),
+            status: "pending".into(),
+            message: String::new(),
+            location: String::new(),
+            created_at_ms: 2,
+        };
+        {
+            let mut core = PersistentCore::open(&path).unwrap();
+            core.store_mut()
+                .save_handoff(
+                    handoff_id,
+                    &serde_json::json!({
+                        "id": handoff_id,
+                        "status": "pending",
+                        "created_at_ms": 1
+                    })
+                    .to_string(),
+                    "pending",
+                    None,
+                    1,
+                )
+                .unwrap();
+            core.emit(crate::CoreEvent::HandoffResolved {
+                handoff_id: handoff_id.into(),
+                task_id: None,
+            })
+            .unwrap();
+            core.emit(crate::CoreEvent::MediaPushRequested {
+                request: push.clone(),
+            })
+            .unwrap();
+            assert_eq!(core.store().latest_sequence().unwrap(), 2);
+        }
+
+        let reopened = PersistentCore::open(&path).unwrap();
+        assert_eq!(reopened.latest_sequence(), 2);
+        assert!(reopened.pending_handoff(handoff_id).is_none());
+        let rows: Vec<serde_json::Value> = reopened
+            .store()
+            .load_handoffs()
+            .unwrap()
+            .into_iter()
+            .map(|row| serde_json::from_str(&row).unwrap())
+            .collect();
+        assert!(rows.iter().any(|row| {
+            row.get("id").and_then(serde_json::Value::as_str) == Some(handoff_id)
+                && row.get("status").and_then(serde_json::Value::as_str) == Some("rejected")
+        }));
+        assert!(rows.iter().any(|row| {
+            row.get("id").and_then(serde_json::Value::as_str) == Some(push.id.as_str())
+                && row.get("status").and_then(serde_json::Value::as_str) == Some("pending")
+        }));
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));

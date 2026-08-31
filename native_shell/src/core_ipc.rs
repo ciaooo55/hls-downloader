@@ -17,6 +17,10 @@ use std::time::Duration;
 
 pub const V7_PIPE_NAME: &str = r"\\.\pipe\HLSDownloader.v7";
 pub const V7_PIPE_MAX_FRAME: usize = 4 * 1024 * 1024;
+// Compose keeps pooled connections idle for at most 60 seconds. Keep the server
+// bound finite without invalidating a connection that the client may still reuse.
+const V7_IDLE_READ_TIMEOUT: Duration = Duration::from_secs(120);
+const V7_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(15);
 
 // 每连接一线程模型下的并发连接上限。超限的新连接直接关闭，客户端按连接失败
 // 自行重试。桌面 UI、原生宿主与 presenter 的常驻连接总量远小于该值。
@@ -400,6 +404,132 @@ fn read_message<T: for<'de> Deserialize<'de>>(reader: &mut impl Read) -> Result<
     decode_message(&frame).map(Some)
 }
 
+#[cfg(windows)]
+fn read_server_pipe_message<T: for<'de> Deserialize<'de>>(
+    pipe: &mut std::fs::File,
+) -> Result<Option<T>, String> {
+    fn wait_available(
+        pipe: &std::fs::File,
+        needed: usize,
+        deadline: std::time::Instant,
+        timeout: Duration,
+    ) -> Result<usize, String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+
+        loop {
+            let mut available = 0u32;
+            let ok = unsafe {
+                PeekNamedPipe(
+                    pipe.as_raw_handle() as _,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut available,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                return Err(format!(
+                    "Core pipe peek: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            if available as usize >= needed {
+                return Ok(available as usize);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "Core pipe frame read timed out after {} ms",
+                    timeout.as_millis()
+                ));
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    // 先等完整字段可读，再进入同步 ReadFile，避免半帧永久占用连接槽位。
+    let header_deadline = std::time::Instant::now() + V7_IDLE_READ_TIMEOUT;
+    wait_available(pipe, 4, header_deadline, V7_IDLE_READ_TIMEOUT)?;
+    let mut header = [0u8; 4];
+    pipe.read_exact(&mut header)
+        .map_err(|error| format!("Core pipe read header: {error}"))?;
+    let length = u32::from_le_bytes(header) as usize;
+    if length > V7_PIPE_MAX_FRAME {
+        return Err("v7 Core pipe frame too large".into());
+    }
+    // A complete header starts one absolute body budget; progress cannot renew it.
+    let body_deadline = std::time::Instant::now() + V7_FRAME_READ_TIMEOUT;
+    let mut payload = vec![0u8; length];
+    let mut offset = 0;
+    while offset < length {
+        let available = wait_available(pipe, 1, body_deadline, V7_FRAME_READ_TIMEOUT)?;
+        let end = offset + available.min(length - offset);
+        pipe.read_exact(&mut payload[offset..end])
+            .map_err(|error| format!("Core pipe read payload: {error}"))?;
+        offset = end;
+    }
+    let mut frame = header.to_vec();
+    frame.extend_from_slice(&payload);
+    decode_message(&frame).map(Some)
+}
+
+fn read_server_tcp_message<T: for<'de> Deserialize<'de>>(
+    stream: &mut TcpStream,
+) -> Result<Option<T>, String> {
+    let mut header = [0u8; 4];
+    let header_deadline = std::time::Instant::now() + V7_IDLE_READ_TIMEOUT;
+    let mut header_offset = 0;
+    while header_offset < header.len() {
+        let remaining = header_deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(format!(
+                "Core stream header read timed out after {} ms",
+                V7_IDLE_READ_TIMEOUT.as_millis()
+            ));
+        }
+        stream
+            .set_read_timeout(Some(remaining))
+            .map_err(|error| format!("Core stream idle timeout: {error}"))?;
+        match stream.read(&mut header[header_offset..]) {
+            Ok(0) if header_offset == 0 => return Ok(None),
+            Ok(0) => return Err("Core stream closed during frame header".into()),
+            Ok(read) => header_offset += read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(format!("Core stream read header: {error}")),
+        }
+    }
+    let length = u32::from_le_bytes(header) as usize;
+    if length > V7_PIPE_MAX_FRAME {
+        return Err("v7 Core pipe frame too large".into());
+    }
+
+    let deadline = std::time::Instant::now() + V7_FRAME_READ_TIMEOUT;
+    let mut payload = vec![0u8; length];
+    let mut offset = 0;
+    while offset < length {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(format!(
+                "Core stream frame read timed out after {} ms",
+                V7_FRAME_READ_TIMEOUT.as_millis()
+            ));
+        }
+        stream
+            .set_read_timeout(Some(remaining))
+            .map_err(|error| format!("Core stream frame timeout: {error}"))?;
+        match stream.read(&mut payload[offset..]) {
+            Ok(0) => return Err("Core stream closed during frame payload".into()),
+            Ok(read) => offset += read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(format!("Core stream read payload: {error}")),
+        }
+    }
+    let mut frame = header.to_vec();
+    frame.extend_from_slice(&payload);
+    decode_message(&frame).map(Some)
+}
+
 fn write_message<T: Serialize>(writer: &mut impl Write, message: &T) -> Result<(), String> {
     writer
         .write_all(&encode_message(message)?)
@@ -457,7 +587,7 @@ impl NamedPipeServer {
         F: FnMut(CorePipeRequest) -> CorePipeResponse,
     {
         let mut stream = self.serve_once_inner(None)?;
-        while let Some(request) = read_message::<CorePipeRequest>(&mut stream)? {
+        while let Some(request) = read_server_pipe_message::<CorePipeRequest>(&mut stream)? {
             let response = handler(request);
             write_message(&mut stream, &response)?;
         }
@@ -479,7 +609,9 @@ impl NamedPipeServer {
                     let handler = Arc::clone(&handler);
                     thread::spawn(move || {
                         let _slot = slot;
-                        while let Ok(Some(request)) = read_message::<CorePipeRequest>(&mut stream) {
+                        while let Ok(Some(request)) =
+                            read_server_pipe_message::<CorePipeRequest>(&mut stream)
+                        {
                             let response = handler(request);
                             if write_message(&mut stream, &response).is_err() {
                                 break;
@@ -523,7 +655,7 @@ impl NamedPipeServer {
         thread::spawn(move || {
             let _slot = first_slot;
             let mut stream = first;
-            while let Ok(Some(request)) = read_message::<CorePipeRequest>(&mut stream) {
+            while let Ok(Some(request)) = read_server_pipe_message::<CorePipeRequest>(&mut stream) {
                 let response = handler_for_first(request);
                 if write_message(&mut stream, &response).is_err() {
                     break;
@@ -539,7 +671,9 @@ impl NamedPipeServer {
                     let handler = Arc::clone(&handler);
                     thread::spawn(move || {
                         let _slot = slot;
-                        while let Ok(Some(request)) = read_message::<CorePipeRequest>(&mut stream) {
+                        while let Ok(Some(request)) =
+                            read_server_pipe_message::<CorePipeRequest>(&mut stream)
+                        {
                             let response = handler(request);
                             if write_message(&mut stream, &response).is_err() {
                                 break;
@@ -748,7 +882,7 @@ fn handle_stream(
     handler: &dyn Fn(CorePipeRequest) -> CorePipeResponse,
 ) -> Result<(), String> {
     let _ = stream.set_nodelay(true);
-    while let Some(request) = read_message::<CorePipeRequest>(&mut stream)? {
+    while let Some(request) = read_server_tcp_message::<CorePipeRequest>(&mut stream)? {
         write_message(&mut stream, &handler(request))?;
     }
     Ok(())
