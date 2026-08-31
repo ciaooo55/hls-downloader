@@ -135,13 +135,17 @@ internal fun FullSettingsDialog(
         mutableStateOf(parseSiteRulesForEditor(current.siteRules).map { EditableSiteRule(it) })
     }
     val siteRuleError = validateSiteRuleDrafts(siteRules.map(EditableSiteRule::rule))
+    val tabsScroll = rememberScrollState()
     val contentScroll = rememberScrollState()
 
     LaunchedEffect(selected) { contentScroll.scrollTo(0) }
 
     WorkbenchDialog(dismiss, "设置", "HLS Downloader ${Product.version}", 880.dp, scrollable = false, content = {
-        Row(Modifier.fillMaxWidth().height(420.dp), verticalAlignment = Alignment.Top) {
-            Column(Modifier.width(138.dp).fillMaxHeight().padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Row(Modifier.fillMaxWidth().fillMaxHeight(), verticalAlignment = Alignment.Top) {
+            Column(
+                Modifier.width(138.dp).fillMaxHeight().verticalScroll(tabsScroll).padding(end = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
                 tabs.forEach { tab ->
                     val active = tab.label == selected
                     Row(
