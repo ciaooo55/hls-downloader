@@ -57,7 +57,14 @@ $cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { $env:HLS_V7_BUILD_CACHE } else { Joi
 $env:CARGO_HOME=Join-Path $cacheRoot 'cargo'
 $env:CARGO_TARGET_DIR=Join-Path $cacheRoot 'cargo-target'
 $env:GRADLE_USER_HOME=Join-Path $cacheRoot 'gradle'
-$env:HLS_COMPOSE_BUILD_DIR=Join-Path $cacheRoot 'compose-build'
+# jlink reads its @args file in the system codepage, so the Compose build
+# directory must stay ASCII: E:\h is this project's sanctioned location on E:.
+# HLS_COMPOSE_BUILD_DIR still overrides for other environments.
+$env:HLS_COMPOSE_BUILD_DIR = if ($env:HLS_COMPOSE_BUILD_DIR) {
+    $env:HLS_COMPOSE_BUILD_DIR
+} else {
+    'E:\h\.build-cache\compose-build'
+}
 # Corepack state stays in the repository so the pinned pnpm@11.7.0 default
 # applies regardless of the user-level corepack home.
 $env:COREPACK_HOME=Join-Path $repo '.tool-cache\corepack-home'
