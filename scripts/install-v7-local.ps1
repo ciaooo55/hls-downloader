@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$ArtifactManifestPath = '',
     [string]$TargetDir = 'E:\h',
