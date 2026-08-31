@@ -1,4 +1,16 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { findEarlyBrowserTakeoverByUrl, type EarlyBrowserTakeover } from '../entrypoints/background'
+
+vi.hoisted(() => {
+  ;(globalThis as Record<string, unknown>).defineBackground = (main: unknown) => ({ main })
+})
+
+vi.mock('wxt/browser', () => ({
+  browser: {
+    contextMenus: {},
+    storage: { session: { get: vi.fn().mockResolvedValue({}), set: vi.fn().mockResolvedValue(undefined) } },
+  },
+}))
 import {
   browserCleanupAction,
   canContinueTakeover,
@@ -11,6 +23,47 @@ import {
 } from './takeover'
 
 describe('browser download takeover helpers', () => {
+  it('matches same-URL early takeovers only to the DownloadItem tab after chain loss', () => {
+    const entry = (requestId: string, tabId: number): EarlyBrowserTakeover => ({
+      requestId,
+      startedAt: 1,
+      urls: ['https://cdn.test/shared.zip'],
+      tabId,
+      frameId: 0,
+      promise: Promise.resolve(null),
+    })
+    const fromTabOne = entry('request-one', 1)
+    const fromTabTwo = entry('request-two', 2)
+    fromTabTwo.frameId = 4
+    const entries = [fromTabOne, fromTabTwo]
+
+    expect(findEarlyBrowserTakeoverByUrl(
+      ['https://cdn.test/shared.zip'],
+      { tabId: 2, frameId: 4 },
+      entries,
+    )).toBe(fromTabTwo)
+    expect(findEarlyBrowserTakeoverByUrl(
+      ['https://cdn.test/shared.zip'],
+      { tabId: 2, frameId: 5 },
+      entries,
+    )).toBeUndefined()
+    expect(findEarlyBrowserTakeoverByUrl(
+      ['https://cdn.test/shared.zip'],
+      { tabId: 3 },
+      entries,
+    )).toBeUndefined()
+    expect(findEarlyBrowserTakeoverByUrl(
+      ['https://cdn.test/shared.zip'],
+      {},
+      entries,
+    )).toBeUndefined()
+    expect(findEarlyBrowserTakeoverByUrl(
+      ['https://cdn.test/shared.zip'],
+      { tabId: 2, frameId: 4 },
+      [fromTabTwo, { ...entry('request-three', 2), frameId: 4 }],
+    )).toBeUndefined()
+  })
+
   it('cleans completed browser downloads by removing the file copy', () => {
     expect(browserCleanupAction('complete')).toBe('remove-file')
     expect(browserCleanupAction('in_progress')).toBe('cancel')

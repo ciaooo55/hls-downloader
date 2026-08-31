@@ -56,10 +56,12 @@ const determinationWaiters = new Map<number, (item: Browser.downloads.DownloadIt
  * instead of waiting for a second offer round.  Firefox does not use this
  * path because its blocking listener can cancel the response directly.
  */
-interface EarlyBrowserTakeover {
+export interface EarlyBrowserTakeover {
   requestId: string
   startedAt: number
   urls: string[]
+  tabId: number
+  frameId: number
   promise: Promise<{ resource: MediaResource, response: any } | null>
 }
 const earlyBrowserTakeovers = new Map<string, EarlyBrowserTakeover>()
@@ -67,16 +69,43 @@ const earlyBrowserTakeovers = new Map<string, EarlyBrowserTakeover>()
 /**
  * Locate an early takeover when the request chain is no longer available.
  * Tab navigation events routinely clear the chain between onHeadersReceived
- * and downloads.onCreated; matching by URL prevents offering the same
- * download to the desktop twice (duplicate confirmation/task).
+ * and downloads.onCreated. Some browsers expose the originating tab on the
+ * DownloadItem; only a unique URL-and-identity match is safe to reuse.
  */
-function findEarlyBrowserTakeoverByUrl(candidates: Array<string | undefined>): EarlyBrowserTakeover | undefined {
+function validIdentity(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 0
+}
+
+export function findEarlyBrowserTakeoverByUrl(
+  candidates: Array<string | undefined>,
+  downloadIdentity: { tabId?: unknown, frameId?: unknown },
+  entries: Iterable<EarlyBrowserTakeover> = earlyBrowserTakeovers.values(),
+): EarlyBrowserTakeover | undefined {
   const wanted = candidates.filter((value): value is string => Boolean(value))
-  if (!wanted.length) return undefined
-  for (const entry of earlyBrowserTakeovers.values()) {
-    if (entry.urls.some(url => wanted.includes(url))) return entry
+  const tabId = Number(downloadIdentity.tabId)
+  if (!wanted.length || !validIdentity(tabId)) return undefined
+  const frameId = Number(downloadIdentity.frameId)
+  let match: EarlyBrowserTakeover | undefined
+  for (const entry of entries) {
+    if (entry.tabId !== tabId) continue
+    if (validIdentity(frameId) && validIdentity(entry.frameId) && entry.frameId !== frameId) continue
+    if (!entry.urls.some(url => wanted.includes(url))) continue
+    if (match) return undefined
+    match = entry
   }
-  return undefined
+  return match
+}
+
+function downloadIdentity(item: Browser.downloads.DownloadItem): { tabId?: number, frameId?: number } {
+  // Chrome's DownloadItem type has no tab/frame fields, but some browsers expose
+  // them at runtime. URL-only fallback is disabled when tabId is absent.
+  const runtimeItem = item as Browser.downloads.DownloadItem & { tabId?: unknown, frameId?: unknown }
+  const tabId = Number(runtimeItem.tabId)
+  const frameId = Number(runtimeItem.frameId)
+  return {
+    ...(validIdentity(tabId) ? { tabId } : {}),
+    ...(validIdentity(frameId) ? { frameId } : {}),
+  }
 }
 const requestChains = new RequestChainStore()
 const blobSources = new BlobSourceStore()
@@ -1175,7 +1204,14 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
     }
   })()
   const urls = [...new Set([observedResource.url, String(details.url || '')].filter(Boolean))]
-  earlyBrowserTakeovers.set(requestId, { requestId, startedAt: Date.now(), urls, promise })
+  earlyBrowserTakeovers.set(requestId, {
+    requestId,
+    startedAt: Date.now(),
+    urls,
+    tabId: Number(details.tabId),
+    frameId: Number(details.frameId),
+    promise,
+  })
   void promise.finally(() => {
     setTimeout(() => {
       const current = earlyBrowserTakeovers.get(requestId)
@@ -1339,7 +1375,10 @@ export default defineBackground(() => {
       const earlyTakeover = (provisionalChain
         ? earlyBrowserTakeovers.get(provisionalChain.requestId)
         : undefined)
-        ?? findEarlyBrowserTakeoverByUrl([(item as any).finalUrl, item.url, originalRequest.url])
+        ?? findEarlyBrowserTakeoverByUrl(
+          [(item as any).finalUrl, item.url, originalRequest.url],
+          downloadIdentity(item),
+        )
       if (earlyTakeover) {
         const earlyResult = await earlyTakeover.promise
         earlyBrowserTakeovers.delete(earlyTakeover.requestId)
