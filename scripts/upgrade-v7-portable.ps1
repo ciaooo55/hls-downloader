@@ -17,6 +17,7 @@ function Stop-V7Processes([string]$Root) {
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 function Assert-AppImage([string]$Root) {
+    $identities = @{}
     foreach ($name in @('HLSDownloader.exe','app','runtime')) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $name))) { throw "v7 portable image is missing ${name}: $Root" }
     }
@@ -56,10 +57,20 @@ function Assert-AppImage([string]$Root) {
             if ([string]$manifest.version -ne '7.0.0' -or [int]$manifest.manifest_version -ne 3) {
                 throw "v7 $browser extension manifest is not version 7.0.0 Manifest V3: $archive"
             }
+            $identity = if ($browser -eq 'Chromium') {
+                [string]$manifest.key
+            } else {
+                [string]$manifest.browser_specific_settings.gecko.id
+            }
+            if ([String]::IsNullOrWhiteSpace($identity)) {
+                throw "v7 $browser extension manifest has no store identity: $archive"
+            }
+            $identities[$browser] = $identity
         } finally {
             Remove-Item -LiteralPath $check -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
+    return $identities
 }
 function Copy-Preserved([string]$From, [string]$To) {
     foreach ($name in $preserved) {
@@ -77,6 +88,13 @@ if ($PSCmdlet.ParameterSetName -eq 'Rollback') {
     $current = "$target.v7-rollback-current"
     if (-not (Test-Path -LiteralPath $backup -PathType Container)) { throw "v7 rollback backup is missing: $backup" }
     if (Test-Path -LiteralPath $current) { throw "v7 rollback recovery path already exists; inspect before retrying: $current" }
+    $currentIdentities = Assert-AppImage $target
+    $backupIdentities = Assert-AppImage $backup
+    foreach ($browser in @('Chromium', 'Firefox')) {
+        if (-not [String]::Equals([string]$currentIdentities[$browser], [string]$backupIdentities[$browser], [StringComparison]::Ordinal)) {
+            throw "v7 $browser extension identity differs between the current and rollback images; rollback refused."
+        }
+    }
     Stop-V7Processes $target
     $targetMoved = $false
     $backupMoved = $false
@@ -102,8 +120,13 @@ if ($PSCmdlet.ParameterSetName -eq 'Rollback') {
 
 $source = Full $SourceDir
 $target = Full $TargetDir
-Assert-AppImage $source
-Assert-AppImage $target
+$sourceIdentities = Assert-AppImage $source
+$targetIdentities = Assert-AppImage $target
+foreach ($browser in @('Chromium', 'Firefox')) {
+    if (-not [String]::Equals([string]$sourceIdentities[$browser], [string]$targetIdentities[$browser], [StringComparison]::Ordinal)) {
+        throw "v7 $browser extension identity differs from the installed image; upgrade refused."
+    }
+}
 if ([String]::Equals($source, $target, [StringComparison]::OrdinalIgnoreCase)) { throw 'v7 source and target must be different directories' }
 $backup = "$target.v7-backup"
 if (Test-Path -LiteralPath $backup) { throw "v7 upgrade backup already exists; finalize or rollback first: $backup" }
