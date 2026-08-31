@@ -122,7 +122,12 @@ export class NativeBridge {
       }, request.timeoutMs)
       port.postMessage(request.message)
     } catch (error) {
+      const failedPort = this.port
       this.port = null
+      // connectNative() may succeed even though the first postMessage throws
+      // (for example while the host is exiting). Detach that unusable port;
+      // otherwise every retry leaves another native host connection alive.
+      try { failedPort?.disconnect() } catch {}
       const reason = error instanceof Error ? error : new Error(String(error))
       if (request.retriesRemaining > 0 && !this.closed) {
         request.retriesRemaining -= 1
@@ -142,10 +147,12 @@ export class NativeBridge {
     if (this.port !== port) return
     const request = this.active
     if (!request) return
-    if (message && typeof message === 'object') {
-      const responseId = String((message as Record<string, unknown>).__request_id || '')
-      if (responseId && responseId !== request.requestId) return
-    }
+    // v7 Core echoes the request id on every response. A missing id is not a
+    // response to the active request: accepting it would shift the serialized
+    // queue and hand an unsolicited/malformed result to the wrong caller.
+    if (!message || typeof message !== 'object') return
+    const responseId = String((message as Record<string, unknown>).__request_id || '')
+    if (responseId !== request.requestId) return
     if (request.timer) clearTimeout(request.timer)
     this.active = null
     this.queue.shift()
