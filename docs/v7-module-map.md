@@ -42,7 +42,9 @@ Rust Core + SQLite (唯一状态/凭据/传输所有者)
 - 浏览器 pending handoff 可跨重连恢复；扩展不会再把本地轮询超时伪装成 Core 终态，不确定所有权保持浏览器任务暂停并由持久 alarm 复核，用户已自行处理的任务会终止跟进。
 - Core 已在启动阶段报告 named pipe ready，失败会返回明确错误；pending media push 会从 SQLite 恢复到运行时，可跨重启 resolve。
 - Core IPC 对完全空闲帧头设置 120 秒上限，对完整帧头后的帧体设置不可续期的 15 秒预算；BT/磁力探测使用单后台槽，避免阻塞请求线程或无界并发。
-- Compose 主工作台通过跨进程文件锁保持单实例，重复启动仅发送 `open_main`；Presenter 的暂停/取消与打开主窗口操作不再阻塞 UI 线程，并按当前任务隔离反馈。
+- Core 启动恢复的 SQLite 写失败会向启动方传播，watcher 只在恢复成功后创建；v7 `Shutdown` 会先暂停活动 worker、等待断点状态收敛，再唤醒命名管道 accept 有序停服。
+- Compose 主工作台通过跨进程文件锁保持单实例，重复启动仅发送 `open_main`；系统关闭按钮和自绘标题栏关闭按钮共用托盘驻留规则；Presenter 的暂停/取消与打开主窗口操作不再阻塞 UI 线程，并按当前任务隔离反馈。
+- NativeBridge 只接受与当前请求严格匹配的 v7 response id；首次发送同步失败时主动断开无效端口，避免队列错配和 Native Host 连接泄漏。
 - 构建门禁核对扩展协议常量；安装覆盖前验证 `E:\h` 所有权；Portable 升级与回滚验证 Chromium/Firefox 扩展身份连续。本轮只修改脚本，不执行安装或打包。
 - 设置保存先完成 Core 持久化，失败时保留对话框草稿；Presenter 探测完成前暂存接管事件，避免启动竞态。
 - 工作台在事件序列断档时重新读取快照；Presenter 每次重连都恢复任务快照和待处理交接，托盘/Presenter 唤起优先激活已有工作台。
