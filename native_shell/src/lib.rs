@@ -62,8 +62,7 @@ pub use contract::{
     AvScanStatus, CastDeviceInfo, ConnectionPart, CoreCommand, CoreEvent, HarvestCandidate,
     MediaPushRequest, MirrorStatus, QueueProfile, ResourceKind, ResourceOffer, StreamVariant,
     TaskFailure, TaskSnapshot, TaskSpec, TorrentFileEntry, TorrentFileSelection, DEFAULT_QUEUE_ID,
-    LEGAL_TERMS_VERSION, V6_PROTOCOL_NAME, V6_PROTOCOL_VERSION, V7_PROTOCOL_NAME,
-    V7_PROTOCOL_VERSION,
+    LEGAL_TERMS_VERSION, V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION,
 };
 pub use core_ipc::{
     default_core_bind, hello_request, serve_tcp_listener, tcp_loopback_enabled, v7_pipe_name,

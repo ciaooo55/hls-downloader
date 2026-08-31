@@ -8,4 +8,4 @@ cargo build --manifest-path native_shell/Cargo.toml --bin hls-downloader-engine
 cargo build --manifest-path native_shell/Cargo.toml --bin HLSDownloaderNativeHost
 ```
 
-The Core owns SQLite and serves the Compose workbench, browser host and native presenter over the v7 named-pipe contract. Legacy v6 wire identifiers are accepted only where explicit migration compatibility is required.
+The Core owns SQLite and serves the Compose workbench, browser host and native presenter only over the v7 named-pipe contract. Legacy data migration is handled by the dedicated migration modules, not by accepting the v6 wire protocol.

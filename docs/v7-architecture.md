@@ -18,9 +18,9 @@ WXT extension -- Native Messaging -- Rust Core + SQLite -- named pipe -- Compose
 
 `CoreServer` remains the only SQLite owner. UI clients never read a database,
 never carry browser credentials, and exchange only length-prefixed JSON on
-`\\.\pipe\HLSDownloader.v7`. The Core accepts a v6 hello only for an
-explicit frozen-client compatibility path; the v7 UI and extension never
-select it.
+`\\.\pipe\HLSDownloader.v7`. The Core accepts only the v7 hello. The browser
+extension recognizes a v6 Native Messaging ping solely to clear a stale
+loopback pairing; it never attaches to a v6 Core or selects a v6 launch path.
 
 On Windows, Core startup reports named-pipe readiness immediately after the
 pipe instance is created, before waiting for the first client. DACL or
