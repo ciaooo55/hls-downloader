@@ -236,6 +236,11 @@ impl NativeHostSession {
             "ping" => self.ping(),
             "activate" => {
                 self.core.handle(CoreCommand::OpenMain)?;
+                if let Some(root) = crate::install_root() {
+                    if !crate::spawn_desktop_ui(&root) {
+                        return Err("无法启动桌面工作台".into());
+                    }
+                }
                 Ok(json!({"ok": true, "activated": true}))
             }
             "offer" => self.offer(message),
