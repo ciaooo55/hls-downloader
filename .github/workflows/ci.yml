@@ -36,12 +36,16 @@ jobs:
       - name: Enable pnpm
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           corepack enable
           corepack prepare pnpm@11.7.0 --activate
 
       - name: Validate PowerShell 5.1 and 7
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validate-powershell.ps1
           pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validate-powershell.ps1
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-v7-feature-parity.ps1
@@ -50,6 +54,8 @@ jobs:
       - name: Test and lint Rust Core
         working-directory: native_shell
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           cargo test --locked --lib
           cargo build --locked --bin HLSDownloaderUpdater
           cargo clippy --locked --all-targets
@@ -57,6 +63,8 @@ jobs:
       - name: Test and build native presenter
         working-directory: presenter_ui
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           cargo test --locked
           cargo build --locked --bin hls-downloader-presenter
 
@@ -71,5 +79,7 @@ jobs:
       - name: Test and build browser extensions
         working-directory: extension
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           pnpm test
           pnpm run build

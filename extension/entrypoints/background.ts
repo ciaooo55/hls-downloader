@@ -422,17 +422,18 @@ function schedulePausedFollowUpAccelerator(delay: number): void {
   }, Math.max(0, delay))
 }
 
-async function rememberPausedHandoffFollowUp(downloadId: number, handoffId: string): Promise<void> {
+async function rememberPausedHandoffFollowUp(downloadId: number, handoffId: string): Promise<PausedHandoffFollowUp> {
   // Persist the deadline BEFORE the first long wait: a suspended worker drops
   // every setTimeout, so the stored record plus the worker alarm are the only
   // carriers that survive. The takeover-flow awaits are just accelerators.
-  await pausedFollowUpStore.remember({
+  const record = await pausedFollowUpStore.remember({
     downloadId,
     handoffId,
     phase: 'resolution',
     deadline: Date.now() + PAUSED_HANDOFF_RESOLUTION_MS,
   })
   schedulePausedFollowUpAccelerator(PAUSED_HANDOFF_RESOLUTION_MS)
+  return record
 }
 
 async function resumeFollowUpDownload(downloadId: number): Promise<boolean> {
@@ -549,7 +550,7 @@ async function continuePausedHandoffFollowups(): Promise<void> {
 async function followUpPausedHandoffCleanup(item: Browser.downloads.DownloadItem, handoffId: string): Promise<void> {
   pausedFollowUpsInFlight.add(handoffId)
   try {
-    await pausedFollowUpStore.remember({
+    const followUp = await pausedFollowUpStore.remember({
       downloadId: item.id,
       handoffId,
       phase: 'readiness',
@@ -563,8 +564,7 @@ async function followUpPausedHandoffCleanup(item: Browser.downloads.DownloadItem
         const removed = await removeBrowserDownload(item)
         if (removed) await pausedFollowUpStore.drop(handoffId)
         else await retryPausedFollowUp({
-          downloadId: item.id,
-          handoffId,
+          ...followUp,
           phase: 'readiness',
           deadline: Date.now(),
         })
@@ -577,8 +577,7 @@ async function followUpPausedHandoffCleanup(item: Browser.downloads.DownloadItem
       const resumed = await resumeBrowserDownload(item, true)
       if (resumed) await pausedFollowUpStore.drop(handoffId)
       else await retryPausedFollowUp({
-        downloadId: item.id,
-        handoffId,
+        ...followUp,
         phase: 'readiness',
         deadline: Date.now(),
       })
@@ -1447,6 +1446,7 @@ export default defineBackground(() => {
     // it does not mean Core acceptance was observed.
     let browserOwnedByHandoff = false
     let followUpHandoffId = ''
+    let followUpCreatedAt = 0
     try {
       // IDM pauses the browser item immediately in onCreated and resolves
       // ownership afterwards. Do the same before any storage/native await so a
@@ -1478,7 +1478,7 @@ export default defineBackground(() => {
           if (!desktopAcceptedHandoff(earlyResult.response)) return
           const handoffId = String(earlyResult.response.handoff.id)
           followUpHandoffId = handoffId
-          await rememberPausedHandoffFollowUp(item.id, handoffId)
+          followUpCreatedAt = (await rememberPausedHandoffFollowUp(item.id, handoffId)).createdAt
           const handoff = await waitForHandoffResolution(handoffId)
           if (handoff?.status !== 'accepted') {
             if (!handoffTerminalStatus(handoff?.status)) browserOwnedByHandoff = true
@@ -1588,7 +1588,7 @@ export default defineBackground(() => {
       // from the shared alarm.
       const handoffId = String(response.handoff.id)
       followUpHandoffId = handoffId
-      await rememberPausedHandoffFollowUp(item.id, handoffId)
+      followUpCreatedAt = (await rememberPausedHandoffFollowUp(item.id, handoffId)).createdAt
       const handoff = await waitForHandoffResolution(handoffId)
       if (handoff?.status !== 'accepted') {
         if (!handoffTerminalStatus(handoff?.status)) browserOwnedByHandoff = true
@@ -1621,6 +1621,7 @@ export default defineBackground(() => {
           handoffId: followUpHandoffId,
           phase: 'resolution',
           deadline: Date.now(),
+          createdAt: followUpCreatedAt,
         })
       } else {
         await resumeBrowserDownload(item, paused && !browserOwnedByHandoff)
