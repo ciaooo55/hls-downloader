@@ -327,7 +327,7 @@ $env:HLS_ENGINE_PATH = $engine
             }
             $provenanceJson = Get-Content -LiteralPath $provenanceInPackage -Raw -Encoding UTF8 | ConvertFrom-Json
             $sourceCommit = (& git -C $repo rev-parse HEAD).Trim()
-            $sourceTree = (& git -C $repo rev-parse HEAD^{tree}).Trim()
+            $sourceTree = (& git -C $repo rev-parse 'HEAD^{tree}').Trim()
             if ($provenanceJson.source_commit -ne $sourceCommit) {
                 throw "Portable provenance source_commit does not match HEAD: $($provenanceJson.source_commit) != $sourceCommit"
             }
