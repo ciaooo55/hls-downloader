@@ -22,9 +22,9 @@ $packageRoot = if ($Task -eq 'candidate') {
 $provenance = Join-Path $packageRoot 'BUILD-PROVENANCE.json'
 $artifactSuffix = if ($Task -eq 'candidate') { '-candidate' } else { '' }
 $provenanceForBuild = $provenance
-$candidateProvenanceTemp = $null
-$candidateStagingRoot = $null
-$candidateSwapBackupRoot = $null
+$packageProvenanceTemp = $null
+$packageStagingRoot = $null
+$packageSwapBackupRoot = $null
 $composeSubstDrive = $null
 $previousComposeBuildDir = $env:HLS_COMPOSE_BUILD_DIR
 
@@ -48,26 +48,30 @@ if ($Task -eq 'candidate') {
     # release_ready or complete verification yet.
     # Write provenance outside the replaceable candidate directory first, so a
     # Failed gates never destroy the last candidate that passed validation.
-    $candidateProvenanceTemp = Join-Path (Split-Path $packageRoot -Parent) ('.BUILD-PROVENANCE.candidate.' + [guid]::NewGuid().ToString('n') + '.tmp')
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireNoBlocked -RequireCleanWorktree -PackageTier candidate -ProvenancePath $candidateProvenanceTemp
+    $packageProvenanceTemp = Join-Path (Split-Path $packageRoot -Parent) ('.BUILD-PROVENANCE.candidate.' + [guid]::NewGuid().ToString('n') + '.tmp')
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireNoBlocked -RequireCleanWorktree -PackageTier candidate -ProvenancePath $packageProvenanceTemp
     if ($LASTEXITCODE -ne 0) {
-        Remove-Item -LiteralPath $candidateProvenanceTemp -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $packageProvenanceTemp -Force -ErrorAction SilentlyContinue
         exit $LASTEXITCODE
     }
 }
 if ($Task -eq 'package') {
     # Formal packages add the release_ready decision after candidate validation.
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireCanonicalComplete -RequireReleaseReady -RequireCleanWorktree -PackageTier formal -ReleaseEvidencePath "$repo\artifacts\v7-productization\release-evidence.json" -ProvenancePath $provenance
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $packageProvenanceTemp = Join-Path (Split-Path $packageRoot -Parent) ('.BUILD-PROVENANCE.formal.' + [guid]::NewGuid().ToString('n') + '.tmp')
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireCanonicalComplete -RequireReleaseReady -RequireCleanWorktree -PackageTier formal -ReleaseEvidencePath "$repo\artifacts\v7-productization\release-evidence.json" -ProvenancePath $packageProvenanceTemp
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item -LiteralPath $packageProvenanceTemp -Force -ErrorAction SilentlyContinue
+        exit $LASTEXITCODE
+    }
 }
 try {
 $artifactRoot = $packageRoot
-if ($Task -eq 'candidate') {
-    $candidateStagingRoot = Join-Path (Split-Path $packageRoot -Parent) ('.candidate-staging.' + [guid]::NewGuid().ToString('n'))
-    New-Item -ItemType Directory -Force -Path $candidateStagingRoot | Out-Null
-    $provenanceForBuild = Join-Path $candidateStagingRoot 'BUILD-PROVENANCE.json'
-    Move-Item -LiteralPath $candidateProvenanceTemp -Destination $provenanceForBuild -Force
-    $artifactRoot = $candidateStagingRoot
+if ($isPackage) {
+    $packageStagingRoot = Join-Path (Split-Path $packageRoot -Parent) ('.' + $packageTier + '-staging.' + [guid]::NewGuid().ToString('n'))
+    New-Item -ItemType Directory -Force -Path $packageStagingRoot | Out-Null
+    $provenanceForBuild = Join-Path $packageStagingRoot 'BUILD-PROVENANCE.json'
+    Move-Item -LiteralPath $packageProvenanceTemp -Destination $provenanceForBuild -Force
+    $artifactRoot = $packageStagingRoot
 }
 # Project build outputs stay inside the repository.
 $cacheRoot = Join-Path $repo '.tool-cache\build-cache'
@@ -414,35 +418,35 @@ $env:HLS_ENGINE_PATH = $engine
             }
             Assert-FileSha256 $entryPath ([string]$entry.sha256) "$name artifact manifest entry"
         }
-        if ($Task -eq 'candidate') {
+        if ($isPackage) {
             # Swap the complete staging directory only after every artifact is ready.
-            $candidateSwapBackupRoot = Join-Path (Split-Path $packageRoot -Parent) ('.candidate-backup.' + [guid]::NewGuid().ToString('n'))
-            $oldCandidateMoved = $false
+            $packageSwapBackupRoot = Join-Path (Split-Path $packageRoot -Parent) ('.' + $packageTier + '-backup.' + [guid]::NewGuid().ToString('n'))
+            $oldPackageMoved = $false
             try {
                 if (Test-Path -LiteralPath $packageRoot) {
-                    Move-Item -LiteralPath $packageRoot -Destination $candidateSwapBackupRoot
-                    $oldCandidateMoved = $true
+                    Move-Item -LiteralPath $packageRoot -Destination $packageSwapBackupRoot
+                    $oldPackageMoved = $true
                 }
-                Move-Item -LiteralPath $candidateStagingRoot -Destination $packageRoot
-                $candidateStagingRoot = $null
+                Move-Item -LiteralPath $packageStagingRoot -Destination $packageRoot
+                $packageStagingRoot = $null
 
-                if ($oldCandidateMoved -and (Test-Path -LiteralPath $candidateSwapBackupRoot)) {
+                if ($oldPackageMoved -and (Test-Path -LiteralPath $packageSwapBackupRoot)) {
                     try {
-                        Remove-Item -LiteralPath $candidateSwapBackupRoot -Recurse -Force -ErrorAction Stop
-                        $candidateSwapBackupRoot = $null
+                        Remove-Item -LiteralPath $packageSwapBackupRoot -Recurse -Force -ErrorAction Stop
+                        $packageSwapBackupRoot = $null
                     } catch {
-                        Write-Warning "The new candidate is installed, but the previous candidate backup could not be removed: $candidateSwapBackupRoot"
-                        # The new candidate is already committed. Preserve both directories.
-                        $candidateSwapBackupRoot = $null
+                        Write-Warning "The new $packageTier package is committed, but the previous package backup could not be removed: $packageSwapBackupRoot"
+                        # The new package is already committed. Preserve both directories.
+                        $packageSwapBackupRoot = $null
                     }
                 }
             } catch {
-                if ($oldCandidateMoved -and (Test-Path -LiteralPath $packageRoot)) {
+                if ($oldPackageMoved -and (Test-Path -LiteralPath $packageRoot)) {
                     Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
                 }
-                if ($oldCandidateMoved -and (Test-Path -LiteralPath $candidateSwapBackupRoot)) {
-                    Move-Item -LiteralPath $candidateSwapBackupRoot -Destination $packageRoot -Force
-                    $candidateSwapBackupRoot = $null
+                if ($oldPackageMoved -and (Test-Path -LiteralPath $packageSwapBackupRoot)) {
+                    Move-Item -LiteralPath $packageSwapBackupRoot -Destination $packageRoot -Force
+                    $packageSwapBackupRoot = $null
                 }
                 throw
             }
@@ -452,11 +456,11 @@ $env:HLS_ENGINE_PATH = $engine
     Pop-Location
 }
 } finally {
-    if ($null -ne $candidateProvenanceTemp -and (Test-Path -LiteralPath $candidateProvenanceTemp)) {
-        Remove-Item -LiteralPath $candidateProvenanceTemp -Force -ErrorAction SilentlyContinue
+    if ($null -ne $packageProvenanceTemp -and (Test-Path -LiteralPath $packageProvenanceTemp)) {
+        Remove-Item -LiteralPath $packageProvenanceTemp -Force -ErrorAction SilentlyContinue
     }
-    if ($null -ne $candidateStagingRoot -and (Test-Path -LiteralPath $candidateStagingRoot)) {
-        Remove-Item -LiteralPath $candidateStagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if ($null -ne $packageStagingRoot -and (Test-Path -LiteralPath $packageStagingRoot)) {
+        Remove-Item -LiteralPath $packageStagingRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
     if ($null -ne $composeSubstDrive) {
         & subst.exe $composeSubstDrive /d | Out-Null
