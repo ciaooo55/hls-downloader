@@ -21,9 +21,7 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-// Win32 辅助函数按窗口标题查找窗口，hot.slint 中 ConfirmWindow/CompleteWindow 的
-// title 与 ProgressWindow 的 headline 默认值必须与这里的常量保持一致；改文案需
-// 三处同步（常量、hot.slint、依赖标题的操作）。
+// Win32 辅助函数按窗口标题查找窗口；所有顶层窗口由这些常量设置实际标题。
 mod window_titles {
     pub const CONFIRM: &str = "确认下载";
     pub const COMPLETE: &str = "下载完成";
@@ -147,6 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.iter().any(|arg| arg == "--self-test") {
         let confirm = ConfirmWindow::new()?;
+        confirm.set_window_title(CONFIRM.into());
         confirm.hide()?;
         attach_parent_console();
         let mut stdout = std::io::stdout();
@@ -182,6 +181,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let confirm = ConfirmWindow::new()?;
     let progress = ProgressWindow::new()?;
     let complete = CompleteWindow::new()?;
+    confirm.set_window_title(CONFIRM.into());
+    progress.set_headline(PROGRESS_HEADLINE.into());
+    complete.set_window_title(COMPLETE.into());
     confirm.hide()?;
     progress.hide()?;
     complete.hide()?;
@@ -564,6 +566,7 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
     match kind {
         "confirm" => {
             let window = ConfirmWindow::new()?;
+            window.set_window_title(CONFIRM.into());
             window.global::<Tokens>().set_dark(dark);
             window.global::<Tokens>().set_reduce_motion(true);
             window.set_filename("示例视频 · 1080p.mp4".into());
@@ -606,6 +609,7 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
         }
         "complete" => {
             let window = CompleteWindow::new()?;
+            window.set_window_title(COMPLETE.into());
             window.global::<Tokens>().set_dark(dark);
             window.global::<Tokens>().set_reduce_motion(true);
             window.set_filename("示例视频 · 1080p.mp4".into());

@@ -187,7 +187,7 @@ component Panel inherits Rectangle {
 }
 
 export component ConfirmWindow inherits Window {
-    title: "确认下载";
+    title: root.window_title;
     default-font-family: Tokens.type-face;
     default-font-size: 12px;
     always-on-top: true;
@@ -200,6 +200,7 @@ export component ConfirmWindow inherits Window {
     // top-level window could be presented by Windows before its child panel
     // had a backing surface, producing a completely white/blank hot popup.
     background: Tokens.surface;
+    in property <string> window_title;
     in-out property <string> filename;
     in-out property <string> download_dir;
     in-out property <string> url;
@@ -416,7 +417,7 @@ export component ProgressWindow inherits Window {
 }
 
 export component CompleteWindow inherits Window {
-    title: "下载完成";
+    title: root.window_title;
     default-font-family: Tokens.type-face;
     default-font-size: 12px;
     always-on-top: true;
@@ -426,6 +427,7 @@ export component CompleteWindow inherits Window {
     preferred-width: 440px;
     preferred-height: 188px;
     background: Tokens.surface;
+    in property <string> window_title;
     in-out property <string> filename;
     in-out property <string> power_hint;
     callback command(string);
