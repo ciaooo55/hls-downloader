@@ -410,7 +410,7 @@ $env:HLS_ENGINE_PATH = $engine
             $manifestCheck.source_tree -ne $sourceTree) {
             throw 'Generated ARTIFACT-MANIFEST.json does not match the current build identity.'
         }
-        $artifactRootFull = [IO.Path]::GetFullPath($artifactRoot).TrimEnd('\\', '/')
+        $artifactRootFull = [IO.Path]::GetFullPath($artifactRoot).TrimEnd([char[]]@('\', '/'))
         foreach ($name in @('exe', 'msi', 'portable')) {
             $entry = $manifestCheck.artifacts.$name
             if ($null -eq $entry -or [String]::IsNullOrWhiteSpace([string]$entry.path)) {
