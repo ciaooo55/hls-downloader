@@ -531,6 +531,7 @@ def _exercise_chrome(
                 if content_ready and not popup and not popup_opened:
                     _open_debug_target(port, popup_url)
                     popup_opened = True
+                    deadline = max(deadline, time.monotonic() + 10)
                     time.sleep(0.1)
                     continue
                 if content_ready and page and popup:
