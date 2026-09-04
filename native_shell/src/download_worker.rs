@@ -5380,18 +5380,14 @@ mod tests {
                 serde_json::json!(root.to_string_lossy().into_owned()),
             )
             .unwrap();
-        coordinator
-            .dispatch(CoreCommand::CreateTask {
-                spec: TaskSpec {
-                    url: "https://cdn.test/active-start.bin".into(),
-                    filename: "active-start.bin".into(),
-                    // A future schedule would defer this start to queued (covered by
-                    // start_like_actions_wait_then_keep_future_tasks_queued); this
-                    // test needs an open schedule to exercise active-worker reuse.
-                    ..Default::default()
-                },
+        let spec = coordinator
+            .apply_defaults_to_spec(TaskSpec {
+                url: "https://cdn.test/active-start.bin".into(),
+                filename: "active-start.bin".into(),
+                ..Default::default()
             })
             .unwrap();
+        coordinator.dispatch_created(spec).unwrap();
         coordinator.active.lock().unwrap().insert("task-1".into());
 
         let (result_tx, result_rx) = mpsc::channel();
