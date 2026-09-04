@@ -78,7 +78,7 @@ try {
     Write-Host ($result | ConvertTo-Json -Compress)
 } finally {
     if ($runner -and -not $runner.HasExited) {
-        Stop-Process -Id $runner.Id -Force -ErrorAction SilentlyContinue
+        & taskkill.exe /PID $runner.Id /T /F 2>$null | Out-Null
         Wait-Process -Id $runner.Id -Timeout 5 -ErrorAction SilentlyContinue
     }
     $newApps = @(Get-CimInstance Win32_Process | Where-Object {
