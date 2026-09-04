@@ -474,6 +474,7 @@ def _exercise_chrome(
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-background-networking",
+        "--disable-features=DisableLoadExtensionCommandLineSwitch",
         f"--disable-extensions-except={extension_dir}",
         f"--load-extension={extension_dir}",
         page_url,
