@@ -1,6 +1,6 @@
 # v7.0.0 快速落地发布路径
 
-核验基准：2026-09-04，`main` 当前提交 `70944e02b59c134c20fb8e86f89909426ae784b4`。
+核验基准：2026-09-04；候选产物必须绑定执行时的 `git rev-parse HEAD`。
 
 ## 结论
 
@@ -8,8 +8,8 @@
 
 - 功能矩阵：`24/28 verified`、`4 partial`、`0 blocked`、`release_ready=false`。
 - 候选门禁静态校验已通过：`FEATURE_PARITY=85.7% (24/28 verified, 4 partial, 0 blocked)`。
-- 现有 `artifacts/v7-productization/candidate` 产物来自 `50964bc`，不是当前 `70944e0`，不能直接作为当前版本发布。
-- 功能提交 `96b5e7e` 的远端 CI `33857375535` 已全绿（10m27s）；当前文档同步提交 `70944e0` 已推送，新的 CI 仅用于确认同步状态。
+- 现有 `artifacts/v7-productization/candidate` 产物来自 `50964bc`，不是执行时的 `HEAD`，不能直接作为当前版本发布。
+- 功能提交 `96b5e7e` 的远端 CI `33857375535` 已全绿（10m27s）；后续文档同步提交只改变发布说明，不改变运行时代码。
 
 ## 最短动作链
 
