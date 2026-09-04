@@ -85,10 +85,12 @@ try {
     foreach ($app in $newApps) {
         Stop-Process -Id $app.ProcessId -Force -ErrorAction SilentlyContinue
     }
-    Get-CimInstance Win32_Process | Where-Object {
+    $newProductProcesses = @(Get-CimInstance Win32_Process | Where-Object {
         $_.Name -in $productProcessNames -and $_.ProcessId -notin $existingProductIds
-    } | ForEach-Object {
+    })
+    foreach ($process in $newProductProcesses) {
         Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        Wait-Process -Id $_.ProcessId -Timeout 5 -ErrorAction SilentlyContinue
     }
     if ($runner -and -not $runner.HasExited) {
         Stop-Process -Id $runner.Id -Force -ErrorAction SilentlyContinue
