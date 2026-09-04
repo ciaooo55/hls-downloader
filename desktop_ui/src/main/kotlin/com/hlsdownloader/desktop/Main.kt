@@ -217,7 +217,7 @@ internal fun taskSupportsMediaActions(task: TaskDto): Boolean {
 internal fun taskMenuActions(task: TaskDto): List<String> {
     val mediaCapable = taskSupportsMediaActions(task)
     val base = task.availableActions.ifEmpty { listOf("start", "pause", "resume", "retry", "open", "delete") }
-        .filterNot { it in setOf("details", "play", "cast", "push_tvbox") && !mediaCapable }
+        .filterNot { it == "details" || (!mediaCapable && it in setOf("play", "cast", "push_tvbox")) }
         .filterNot { it in setOf("launch", "run") && taskFileExtension(task) !in executableFileExtensions }
     val media = if (mediaCapable && task.playbackReady) listOf("play", "cast", "push_tvbox") else emptyList()
     val queue = if (task.status.lowercase() in setOf("queued", "paused")) listOf("move_queue") else emptyList()
@@ -3082,7 +3082,7 @@ internal fun loadLocalImagePreview(path: String): Result<ImageBitmap> = runCatch
         Text(hint.ifBlank { if (parts.isEmpty()) "当前任务没有活动分段" else "${parts.size} 个连接分段" }, color = muted, fontSize = 11.sp)
         Spacer(Modifier.height(10.dp))
         if (parts.isEmpty()) Surface(Modifier.fillMaxWidth().height(84.dp), color = surface2, shape = RoundedCornerShape(7.dp)) { Box(contentAlignment = Alignment.Center) { Text("下载开始后显示各连接覆盖范围", color = faint, fontSize = 11.sp) } }
-        else Column(verticalArrangement = Arrangement.spacedBy(6.dp)) { parts.take(24).chunked(8).forEach { row -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) { row.forEach { part -> val length = (part.end - part.start + 1).coerceAtLeast(1); val progress = (part.done.toFloat() / length).coerceIn(0f, 1f); Column(Modifier.weight(1f)) { LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(3.dp)), color = if (part.state == "failed") Color(0xFFDC2626) else blue, trackColor = surface3); Text("${(progress * 100).toInt()}%", color = faint, fontSize = 9.sp) } }; repeat(8 - row.size) { Spacer(Modifier.weight(1f)) } } } }
+        else Column(verticalArrangement = Arrangement.spacedBy(6.dp)) { parts.chunked(8).forEach { row -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) { row.forEach { part -> val length = (part.end - part.start + 1).coerceAtLeast(1); val progress = (part.done.toFloat() / length).coerceIn(0f, 1f); Column(Modifier.weight(1f)) { LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(3.dp)), color = if (part.state == "failed") Color(0xFFDC2626) else blue, trackColor = surface3); Text("${(progress * 100).toInt()}%", color = faint, fontSize = 9.sp) } }; repeat(8 - row.size) { Spacer(Modifier.weight(1f)) } } } }
     }
 }
 

@@ -143,10 +143,18 @@ let handoffTrackerPolling = false
 let handoffTrackerTimer: ReturnType<typeof setTimeout> | null = null
 let lastDesktopPingAt = 0
 
-// Paused-download follow-ups are the suspension-safe carrier for the takeover
-// cleanup flow: only browser.alarms reliably wake a suspended MV3 worker, so
-// the deadlines live in storage.session next to the tracked handoffs.
-const pausedFollowUpStore = new PausedHandoffFollowUpStore(browser.storage.session, PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY)
+// Paused downloads survive browser restarts, so their Core ownership records
+// must outlive storage.session as well. The alarm rehydrates this local queue.
+const pausedFollowUpStore = new PausedHandoffFollowUpStore({
+  async get(key) {
+    const local = await browser.storage.local.get(key)
+    if (local[key] !== undefined) return local
+    const legacy = await browser.storage.session.get(key)
+    if (legacy[key] !== undefined) await browser.storage.local.set({ [key]: legacy[key] })
+    return legacy
+  },
+  set: items => browser.storage.local.set(items),
+}, PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY)
 const pausedFollowUpsInFlight = new Set<string>()
 let pausedFollowUpPass = false
 let pausedFollowUpAccelerator: ReturnType<typeof setTimeout> | null = null
@@ -470,8 +478,8 @@ async function retryPausedFollowUp(record: PausedHandoffFollowUp): Promise<void>
 
 /**
  * Continue the lifecycle of paused browser downloads left behind by a takeover.
- * storage.session plus this pass are the reliable carriers across service-worker
- * suspension; bare setTimeout only accelerates the alive-worker case. A record
+ * storage.local plus this pass are the reliable carriers across service-worker
+ * suspension and browser restart; bare setTimeout only accelerates the alive-worker case. A record
  * stays until the desktop proves success (remove the browser copy) or failure
  * (resume it) — uncertainty keeps the item visibly paused for the user.
  */
@@ -1345,7 +1353,7 @@ export default defineBackground(() => {
   )
   void hydrateHandoffTracker().then(() => pollTrackedHandoffs()).catch(() => undefined)
   // A suspended worker may have left paused downloads waiting on a handoff;
-  // storage.session survives the suspension, so finish that work right away.
+  // storage.local survives suspension and browser restart, so finish that work right away.
   void continuePausedHandoffFollowups().catch(() => undefined)
   void setBrowserDownloadUi(true)
   void pingDesktop().catch(() => undefined)

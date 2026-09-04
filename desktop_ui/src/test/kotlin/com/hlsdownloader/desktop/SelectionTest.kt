@@ -42,8 +42,10 @@ class SelectionTest {
     }
 
     @Test fun playableMediaActionsRemainAvailable() {
-        val media = TaskDto(id = "media", filename = "movie.mp4", status = "completed", playbackReady = true, availableActions = listOf("open"))
-        assertTrue(taskMenuActions(media).containsAll(listOf("play", "cast", "push_tvbox")))
+        val media = TaskDto(id = "media", filename = "movie.mp4", status = "completed", playbackReady = true, availableActions = listOf("details", "open"))
+        val actions = taskMenuActions(media)
+        assertTrue(actions.containsAll(listOf("play", "cast", "push_tvbox")))
+        assertFalse("details" in actions)
     }
 
     @Test fun executableFilesKeepLaunchAction() {

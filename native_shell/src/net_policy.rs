@@ -37,6 +37,10 @@ thread_local! {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ThrottleContext {
     pub global_limit_kib: u64,
+    pub schedule_enabled: bool,
+    pub schedule_start: String,
+    pub schedule_end: String,
+    pub schedule_limit_kib: u64,
     pub hourly_quota_mib: u64,
     pub queue_id: String,
     pub queue_limit_kib: u64,
@@ -271,6 +275,16 @@ struct ThrottleState {
     legacy: TokenBucket,
     scoped: HashMap<String, TokenBucket>,
     hourly: RollingQuota,
+    global_schedule: GlobalSchedule,
+}
+
+#[derive(Default)]
+struct GlobalSchedule {
+    global_limit_kib: u64,
+    enabled: bool,
+    start: String,
+    end: String,
+    schedule_limit_kib: u64,
 }
 
 const HOURLY_QUOTA_WINDOW: Duration = Duration::from_secs(60 * 60);
@@ -348,6 +362,7 @@ fn throttle() -> &'static Mutex<ThrottleState> {
             legacy: TokenBucket::new(),
             scoped: HashMap::new(),
             hourly: RollingQuota::new(),
+            global_schedule: GlobalSchedule::default(),
         })
     })
 }
@@ -369,6 +384,25 @@ pub fn configure_scoped_limit(scope: &str, limit_kib: u64) {
             .entry(scope.to_string())
             .or_insert_with(TokenBucket::new)
             .set_limit_kib(limit_kib);
+    }
+}
+
+pub fn configure_global_schedule(
+    global_limit_kib: u64,
+    enabled: bool,
+    start: &str,
+    end: &str,
+    schedule_limit_kib: u64,
+) {
+    if let Ok(mut state) = throttle().lock() {
+        state.global_schedule = GlobalSchedule {
+            global_limit_kib,
+            enabled,
+            start: start.to_string(),
+            end: end.to_string(),
+            schedule_limit_kib,
+        };
+        refresh_global_limit_at(&mut state, chrono_minutes_now());
     }
 }
 
@@ -404,7 +438,13 @@ pub fn sync_queue_limits<'a>(limits: impl IntoIterator<Item = (&'a str, u64)>) {
 }
 
 pub fn configure_throttle_context(context: &ThrottleContext) {
-    configure_scoped_limit("global", context.global_limit_kib);
+    configure_global_schedule(
+        context.global_limit_kib,
+        context.schedule_enabled,
+        &context.schedule_start,
+        &context.schedule_end,
+        context.schedule_limit_kib,
+    );
     configure_hourly_quota_mib(context.hourly_quota_mib);
     configure_scoped_limit(
         &format!("queue:{}", context.queue_id),
@@ -441,6 +481,9 @@ fn consume_bucket(scope: Option<&str>, nbytes: usize) {
         let Ok(mut state) = throttle().lock() else {
             return;
         };
+        if scope == Some("global") {
+            refresh_global_limit_at(&mut state, chrono_minutes_now());
+        }
         let bucket = match scope {
             Some(scope) => state
                 .scoped
@@ -514,14 +557,49 @@ pub fn effective_limit_kib(
     schedule_end: &str,
     schedule_kib: u64,
 ) -> u64 {
+    effective_limit_kib_at(
+        global_kib,
+        schedule_enabled,
+        schedule_start,
+        schedule_end,
+        schedule_kib,
+        chrono_minutes_now(),
+    )
+}
+
+fn effective_limit_kib_at(
+    global_kib: u64,
+    schedule_enabled: bool,
+    schedule_start: &str,
+    schedule_end: &str,
+    schedule_kib: u64,
+    now: u32,
+) -> u64 {
     if !schedule_enabled {
         return global_kib;
     }
-    if in_window(schedule_start, schedule_end) {
+    if in_window_at(schedule_start, schedule_end, now) {
         schedule_kib
     } else {
         global_kib
     }
+}
+
+fn refresh_global_limit_at(state: &mut ThrottleState, now: u32) {
+    let schedule = &state.global_schedule;
+    let limit = effective_limit_kib_at(
+        schedule.global_limit_kib,
+        schedule.enabled,
+        &schedule.start,
+        &schedule.end,
+        schedule.schedule_limit_kib,
+        now,
+    );
+    state
+        .scoped
+        .entry("global".into())
+        .or_insert_with(TokenBucket::new)
+        .set_limit_kib(limit);
 }
 
 fn in_window(start: &str, end: &str) -> bool {
@@ -820,6 +898,30 @@ mod tests {
     }
 
     #[test]
+    fn running_workers_switch_the_shared_global_bucket_at_schedule_boundaries() {
+        let mut state = ThrottleState {
+            legacy: TokenBucket::new(),
+            scoped: HashMap::new(),
+            hourly: RollingQuota::new(),
+            global_schedule: GlobalSchedule {
+                global_limit_kib: 2048,
+                enabled: true,
+                start: "22:00".into(),
+                end: "06:00".into(),
+                schedule_limit_kib: 128,
+            },
+        };
+
+        refresh_global_limit_at(&mut state, 21 * 60 + 59);
+        assert_eq!(state.scoped["global"].limit_bps, 2048.0 * 1024.0);
+        refresh_global_limit_at(&mut state, 22 * 60);
+        assert_eq!(state.scoped["global"].limit_bps, 128.0 * 1024.0);
+        refresh_global_limit_at(&mut state, 6 * 60);
+        assert_eq!(state.scoped["global"].limit_bps, 2048.0 * 1024.0);
+        assert_eq!(state.scoped.len(), 1);
+    }
+
+    #[test]
     fn local_clock_stays_in_day() {
         assert!(chrono_minutes_now() < 24 * 60);
         let stamp = local_hhmm();
@@ -856,6 +958,10 @@ mod tests {
     fn scoped_throttle_shares_queue_bucket_and_separates_tasks() {
         let first = ThrottleContext {
             global_limit_kib: 4096,
+            schedule_enabled: false,
+            schedule_start: String::new(),
+            schedule_end: String::new(),
+            schedule_limit_kib: 0,
             hourly_quota_mib: 0,
             queue_id: "media".into(),
             queue_limit_kib: 1024,

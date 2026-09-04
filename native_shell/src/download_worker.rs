@@ -778,11 +778,27 @@ impl CoreCoordinator {
                 keys: values.keys().cloned().collect(),
             })?;
         }
-        if let Some(limit) = values
-            .get("download_speed_limit_kib")
-            .and_then(Value::as_u64)
-        {
-            crate::net_policy::configure_scoped_limit("global", limit);
+        if values.keys().any(|key| {
+            matches!(
+                key.as_str(),
+                "download_speed_limit_kib"
+                    | "download_speed_schedule_enabled"
+                    | "download_speed_schedule_start"
+                    | "download_speed_schedule_end"
+                    | "download_speed_schedule_kib"
+            )
+        }) {
+            let core = self.lock()?;
+            crate::net_policy::configure_global_schedule(
+                core.store().setting_u64("download_speed_limit_kib", 0)?,
+                core.store()
+                    .setting_bool("download_speed_schedule_enabled", false)?,
+                &core.store()
+                    .setting_string("download_speed_schedule_start", "22:00")?,
+                &core.store()
+                    .setting_string("download_speed_schedule_end", "08:00")?,
+                core.store().setting_u64("download_speed_schedule_kib", 0)?,
+            );
         }
         if let Some(limit) = values
             .get("download_hourly_quota_mib")
@@ -3647,24 +3663,26 @@ fn task_throttle_context(
         .lock()
         .map_err(|_| "v7 Core mutex poisoned".to_string())?;
     let global = core.store().setting_u64("download_speed_limit_kib", 0)?;
-    let scheduled = crate::net_policy::effective_limit_kib(
-        global,
-        core.store()
-            .setting_bool("download_speed_schedule_enabled", false)?,
-        &core
-            .store()
-            .setting_string("download_speed_schedule_start", "22:00")?,
-        &core
-            .store()
-            .setting_string("download_speed_schedule_end", "08:00")?,
-        core.store().setting_u64("download_speed_schedule_kib", 0)?,
-    );
+    let schedule_enabled = core
+        .store()
+        .setting_bool("download_speed_schedule_enabled", false)?;
+    let schedule_start = core
+        .store()
+        .setting_string("download_speed_schedule_start", "22:00")?;
+    let schedule_end = core
+        .store()
+        .setting_string("download_speed_schedule_end", "08:00")?;
+    let schedule_limit_kib = core.store().setting_u64("download_speed_schedule_kib", 0)?;
     let profile = load_queue_profiles(core.store())?
         .into_iter()
         .find(|profile| profile.id == spec.queue_id)
         .ok_or_else(|| format!("任务所属队列不存在: {}", spec.queue_id))?;
     Ok(crate::net_policy::ThrottleContext {
-        global_limit_kib: scheduled,
+        global_limit_kib: global,
+        schedule_enabled,
+        schedule_start,
+        schedule_end,
+        schedule_limit_kib,
         hourly_quota_mib: core.store().setting_u64("download_hourly_quota_mib", 0)?,
         queue_id: profile.id,
         queue_limit_kib: profile.speed_limit_kib,
