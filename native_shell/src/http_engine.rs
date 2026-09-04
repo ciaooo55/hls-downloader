@@ -1671,7 +1671,9 @@ fn fetch_range(
         }
         let current_stop = progress.lock().unwrap_or_else(|err| err.into_inner()).stop;
         if cursor > current_stop {
-            persist_range_progress(job, file, completed, start, cursor)?;
+            if durable_cursor != cursor {
+                persist_range_progress(job, file, completed, start, cursor)?;
+            }
             return Ok((start, cursor.saturating_sub(1)));
         }
         persist_range_progress(job, file, completed, start, cursor)?;
