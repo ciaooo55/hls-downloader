@@ -19,6 +19,7 @@ import time
 
 PAYLOAD_SIZE = 96 * 1024 * 1024
 PATTERN = bytes(range(256)) * 4096
+PAYLOAD = PATTERN * (PAYLOAD_SIZE // len(PATTERN))
 
 
 class FixtureState:
@@ -61,21 +62,13 @@ class RangeHandler(BaseHTTPRequestHandler):
             with self.state.lock:
                 self.state.full_requests += 1
         self._headers(status, start, end, PAYLOAD_SIZE)
-        remaining = end - start + 1
-        offset = start
-        while remaining:
-            block = min(remaining, len(PATTERN))
-            chunk = bytes(PATTERN[(offset % len(PATTERN)) : (offset % len(PATTERN)) + block])
-            if len(chunk) < block:
-                chunk += PATTERN[: block - len(chunk)]
-            try:
-                self.wfile.write(chunk)
-            except (BrokenPipeError, ConnectionResetError):
-                return
-            with self.state.lock:
-                self.state.bytes_sent += len(chunk)
-            remaining -= len(chunk)
-            offset += len(chunk)
+        chunk = PAYLOAD[start : end + 1]
+        try:
+            self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        with self.state.lock:
+            self.state.bytes_sent += len(chunk)
 
     def _headers(self, status: int, start: int, end: int, total: int) -> None:
         self.send_response(status)
@@ -138,13 +131,7 @@ def working_set_bytes(pid: int) -> int:
 
 
 def expected_sha256() -> str:
-    digest = hashlib.sha256()
-    remaining = PAYLOAD_SIZE
-    while remaining:
-        block = PATTERN[: min(remaining, len(PATTERN))]
-        digest.update(block)
-        remaining -= len(block)
-    return digest.hexdigest()
+    return hashlib.sha256(PAYLOAD).hexdigest()
 
 
 def free_port() -> int:
