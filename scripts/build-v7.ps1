@@ -227,8 +227,10 @@ function Build-Extension([string]$Resources) {
     if ($nodeTools) { $env:PATH = "$($nodeTools.FullName);$env:PATH" }
     $package = Get-Content -LiteralPath (Join-Path $repo 'extension\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($package.version -ne $productVersion) { throw "Browser extension package version must be ${productVersion}: $($package.version)" }
+    $previousCi = $env:CI
     Push-Location (Join-Path $repo 'extension')
     try {
+        $env:CI = 'true'
         # Probe inside the extension directory so corepack resolves the pnpm
         # version pinned by extension/package.json instead of its global default.
         $pnpmVersion = (& $pnpmPath --version).Trim()
@@ -239,7 +241,10 @@ function Build-Extension([string]$Resources) {
         if ($LASTEXITCODE -ne 0) { throw "pnpm install failed with exit $LASTEXITCODE" }
         & $pnpmPath run build
         if ($LASTEXITCODE -ne 0) { throw "pnpm run build failed with exit $LASTEXITCODE" }
-    } finally { Pop-Location }
+    } finally {
+        $env:CI = $previousCi
+        Pop-Location
+    }
     New-Item -ItemType Directory -Force -Path (Join-Path $Resources 'extensions') | Out-Null
     foreach ($item in @(
         @{ Source = 'chrome-mv3'; Name = "HLSDownloader-$productVersion-Chromium.zip" },
