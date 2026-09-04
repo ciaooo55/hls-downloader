@@ -263,18 +263,24 @@ fn replace_checkpoint_file(source: &Path, destination: &Path) -> std::io::Result
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    let moved = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if moved == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
+    for attempt in 0..20 {
+        let moved = unsafe {
+            MoveFileExW(
+                source.as_ptr(),
+                destination.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if moved != 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if !matches!(error.raw_os_error(), Some(5 | 32)) || attempt == 19 {
+            return Err(error);
+        }
+        thread::sleep(Duration::from_millis(10));
     }
+    unreachable!()
 }
 
 #[cfg(not(windows))]
