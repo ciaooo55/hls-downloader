@@ -1139,8 +1139,11 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     }) { draft ->
         if (draft.kind.equals("torrent", true)) {
             torrentDraft = draft.copy(queueId = selectedQueueId ?: "default")
-            scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().probeTorrent(draft.url) } }.onFailure { notice = UiSignal.Notice("error", it.message ?: "种子分析失败") } }
-            newTaskDialog = false
+            scope.launch {
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient().probeTorrent(draft.url) } }
+                    .onSuccess { newTaskDialog = false }
+                    .onFailure { notice = UiSignal.Notice("error", it.message ?: "种子分析失败") }
+            }
             return@NewTaskDialog
         }
         scope.launch {
@@ -1148,10 +1151,9 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 val queued = draft.copy(queueId = selectedQueueId ?: "default")
                 if (queued.curlCommand.isNotBlank()) EnginePipeClient().importCurl(queued) else EnginePipeClient().createTask(queued)
             } }
-                .onSuccess { refreshKey++ }
+                .onSuccess { newTaskDialog = false; refreshKey++ }
                 .onFailure { notice = UiSignal.Notice("error", it.message ?: "创建下载失败") }
         }
-        newTaskDialog = false
     }
     torrentProbe?.let { signal -> TorrentSelectionDialog(signal.data, { torrentProbe = null; torrentDraft = null }) { files ->
         val draft = torrentDraft ?: return@TorrentSelectionDialog
@@ -1232,11 +1234,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     if (queueManagerDialog) QueueManagerDialog(settings.queueProfiles, { queueManagerDialog = false }) { profiles ->
         scope.launch {
             runCatching { withContext(Dispatchers.IO) {
-                val client = EnginePipeClient()
-                val validIds = profiles.mapTo(mutableSetOf()) { it.id }
-                val orphaned = tasks.filter { it.source.queueId !in validIds }.map { it.id }
-                if (orphaned.isNotEmpty()) client.assignQueue(orphaned, "default")
-                client.saveSettings(settings.copy(queueProfiles = profiles))
+                EnginePipeClient().saveSettings(settings.copy(queueProfiles = profiles))
             } }.onSuccess { saved ->
                 settings = saved
                 if (selectedQueueId !in profiles.map { it.id }) selectedQueueId = null

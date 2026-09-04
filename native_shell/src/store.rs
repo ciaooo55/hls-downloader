@@ -145,7 +145,24 @@ impl CoreStore {
         events: &[EventEnvelope],
         spec: Option<&TaskSpec>,
     ) -> Result<(), String> {
-        if events.is_empty() && spec.is_none() {
+        self.apply_events_spec_and_settings(events, spec, None)
+    }
+
+    pub fn apply_events_and_settings(
+        &mut self,
+        events: &[EventEnvelope],
+        settings: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<(), String> {
+        self.apply_events_spec_and_settings(events, None, Some(settings))
+    }
+
+    fn apply_events_spec_and_settings(
+        &mut self,
+        events: &[EventEnvelope],
+        spec: Option<&TaskSpec>,
+        settings: Option<&BTreeMap<String, serde_json::Value>>,
+    ) -> Result<(), String> {
+        if events.is_empty() && spec.is_none() && settings.map_or(true, BTreeMap::is_empty) {
             return Ok(());
         }
         let transaction = self
@@ -241,6 +258,19 @@ impl CoreStore {
                     params![sequence as i64],
                 )
                 .map_err(|error| format!("persist Core event checkpoint: {error}"))?;
+        }
+        if let Some(settings) = settings {
+            for (key, value) in settings {
+                let encoded = serde_json::to_string(value)
+                    .map_err(|error| format!("encode Core setting {key}: {error}"))?;
+                transaction
+                    .execute(
+                        r#"INSERT INTO settings(key, value_json) VALUES (?1, ?2)
+                           ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json"#,
+                        params![key, encoded],
+                    )
+                    .map_err(|error| format!("write Core setting {key}: {error}"))?;
+            }
         }
         transaction
             .commit()

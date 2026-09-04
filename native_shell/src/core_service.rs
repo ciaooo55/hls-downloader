@@ -4,6 +4,7 @@ use crate::{
     AvScanStatus, CoreCommand, CoreRuntime, CoreStore, EventEnvelope, MirrorStatus, TaskFailure,
     TaskSnapshot, TaskSpec,
 };
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub struct PersistentCore {
@@ -50,6 +51,24 @@ impl PersistentCore {
             })
         });
         if let Err(error) = self.store.apply_events_and_spec(&events, spec.as_ref()) {
+            self.runtime = before;
+            return Err(error);
+        }
+        Ok(events)
+    }
+
+    pub fn assign_queue_and_set_settings(
+        &mut self,
+        task_ids: Vec<String>,
+        queue_id: String,
+        values: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        let before = self.runtime.clone();
+        let mut events = self.runtime.handle(CoreCommand::AssignQueue { task_ids, queue_id });
+        events.extend(self.runtime.emit(crate::CoreEvent::SettingsChanged {
+            keys: values.keys().cloned().collect(),
+        }));
+        if let Err(error) = self.store.apply_events_and_settings(&events, values) {
             self.runtime = before;
             return Err(error);
         }
@@ -385,6 +404,36 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
+    fn queue_profile_removal_migrates_tasks_and_settings_together() {
+        let mut core = PersistentCore::in_memory().unwrap();
+        core.handle(CoreCommand::CreateTask { spec: test_spec() })
+            .unwrap();
+        core.handle(CoreCommand::AssignQueue {
+            task_ids: vec!["task-1".into()],
+            queue_id: "removed".into(),
+        })
+        .unwrap();
+        let profiles = serde_json::json!([{
+            "id": "default",
+            "name": "默认队列"
+        }]);
+        let values = BTreeMap::from([("queue_profiles".into(), profiles.clone())]);
+
+        core.assign_queue_and_set_settings(
+            vec!["task-1".into()],
+            crate::DEFAULT_QUEUE_ID.into(),
+            &values,
+        )
+        .unwrap();
+
+        assert_eq!(core.tasks()[0].queue_id, crate::DEFAULT_QUEUE_ID);
+        assert_eq!(
+            core.store().setting_string("queue_profiles", "").unwrap(),
+            profiles.to_string()
+        );
     }
 
     #[test]
