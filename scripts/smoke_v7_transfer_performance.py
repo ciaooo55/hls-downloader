@@ -64,7 +64,7 @@ class RangeHandler(BaseHTTPRequestHandler):
         remaining = end - start + 1
         offset = start
         while remaining:
-            block = min(remaining, 256 * 1024)
+            block = min(remaining, len(PATTERN))
             chunk = bytes(PATTERN[(offset % len(PATTERN)) : (offset % len(PATTERN)) + block])
             if len(chunk) < block:
                 chunk += PATTERN[: block - len(chunk)]
