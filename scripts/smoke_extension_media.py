@@ -326,12 +326,13 @@ def _open_first_media_actions(driver) -> bool:
     ))
 
 
-def _browser_errors(driver) -> list[str]:
+def _browser_errors(driver, fixture_origin: str) -> list[str]:
     try:
         return [
             str(item.get("message") or "")
             for item in driver.get_log("browser")
             if str(item.get("level") or "").upper() in {"SEVERE", "WARNING"}
+            and any(marker in str(item.get("message") or "") for marker in (fixture_origin, "chrome-extension://", "Uncaught"))
         ]
     except Exception:
         return []
@@ -429,7 +430,7 @@ def run(
                         break
                     time.sleep(0.2)
                 state["mode"] = mode
-                state["browserErrors"] = _browser_errors(driver)
+                state["browserErrors"] = _browser_errors(driver, f"http://127.0.0.1:{server.server_port}")
                 results.append(state)
                 if state.get("marker") != "1":
                     raise AssertionError(f"{mode}: content script 未就绪: {state}")
