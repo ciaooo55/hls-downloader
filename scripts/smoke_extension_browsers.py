@@ -31,6 +31,7 @@ from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver import ActionChains
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.firefox.service import Service as FirefoxService
 
 
 MARKER = "data-hls-downloader-extension"
@@ -651,7 +652,13 @@ def _zip_firefox_extension(extension_dir: Path, destination: Path) -> None:
                 archive.write(path, path.relative_to(extension_dir).as_posix())
 
 
-def _exercise_firefox(extension_dir: Path, page_url: str, binary: str | None, temp_root: Path) -> None:
+def _exercise_firefox(
+    extension_dir: Path,
+    page_url: str,
+    binary: str | None,
+    driver_path: str | None,
+    temp_root: Path,
+) -> None:
     addon = temp_root / "hls-downloader-smoke.xpi"
     _zip_firefox_extension(extension_dir, addon)
     options = FirefoxOptions()
@@ -664,7 +671,8 @@ def _exercise_firefox(extension_dir: Path, page_url: str, binary: str | None, te
     options.set_preference("media.autoplay.allow-muted", True)
     if binary:
         options.binary_location = binary
-    with webdriver.Firefox(options=options) as driver:
+    service = FirefoxService(executable_path=driver_path) if driver_path else FirefoxService()
+    with webdriver.Firefox(service=service, options=options) as driver:
         driver.install_addon(str(addon), temporary=True)
         driver.set_page_load_timeout(20)
         driver.get(page_url)
@@ -693,6 +701,7 @@ def main() -> int:
     parser.add_argument("--browser", choices=("both", "chrome", "firefox"), default="both")
     parser.add_argument("--chrome-binary")
     parser.add_argument("--firefox-binary")
+    parser.add_argument("--firefox-driver")
     parser.add_argument("--screenshot", type=Path)
     args = parser.parse_args()
 
@@ -714,7 +723,13 @@ def main() -> int:
                     )
                 if args.browser in {"both", "firefox"}:
                     print("Loading the production Firefox extension...", flush=True)
-                    _exercise_firefox(firefox, page_url, args.firefox_binary, temp_root)
+                    _exercise_firefox(
+                        firefox,
+                        page_url,
+                        args.firefox_binary,
+                        args.firefox_driver,
+                        temp_root,
+                    )
         finally:
             # Selenium normally removes profiles itself. This also handles a
             # driver crash without ever targeting a real browser profile.
