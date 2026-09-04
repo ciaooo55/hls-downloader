@@ -1,6 +1,6 @@
 # v7.0.0 快速落地发布路径
 
-核验基准：2026-09-04，`main` 当前提交 `b03c34b3c9c90498e597793f3922ce6fadd064be`。
+核验基准：2026-09-04，`main` 当前提交 `96b5e7e0a99c141a42818cbfcd9484ebbad961d5`。
 
 ## 结论
 
@@ -8,8 +8,8 @@
 
 - 功能矩阵：`24/28 verified`、`4 partial`、`0 blocked`、`release_ready=false`。
 - 候选门禁静态校验已通过：`FEATURE_PARITY=85.7% (24/28 verified, 4 partial, 0 blocked)`。
-- 现有 `artifacts/v7-productization/candidate` 产物来自 `50964bc`，不是当前 `b03c34b`，不能直接作为当前版本发布。
-- 当前提交已推送 GitHub；远端 CI 运行 `33856414359`（`e42f7b3`）全绿。`b03c34b` 的新 CI `33856845174` 正在运行，必须等其结束后再生成候选产物。
+- 现有 `artifacts/v7-productization/candidate` 产物来自 `50964bc`，不是当前 `96b5e7e`，不能直接作为当前版本发布。
+- 当前提交已推送 GitHub；远端 CI `33857375535` 已全绿（10m27s）。下一步只需在干净 `main` 上生成绑定 `96b5e7e` 的候选产物。
 
 ## 最短动作链
 
