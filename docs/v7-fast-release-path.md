@@ -1,6 +1,6 @@
 # v7.0.0 快速落地发布路径
 
-核验基准：2026-09-04，`main` 当前提交 `96b5e7e0a99c141a42818cbfcd9484ebbad961d5`。
+核验基准：2026-09-04，`main` 当前提交 `70944e02b59c134c20fb8e86f89909426ae784b4`。
 
 ## 结论
 
@@ -8,19 +8,19 @@
 
 - 功能矩阵：`24/28 verified`、`4 partial`、`0 blocked`、`release_ready=false`。
 - 候选门禁静态校验已通过：`FEATURE_PARITY=85.7% (24/28 verified, 4 partial, 0 blocked)`。
-- 现有 `artifacts/v7-productization/candidate` 产物来自 `50964bc`，不是当前 `96b5e7e`，不能直接作为当前版本发布。
-- 当前提交已推送 GitHub；远端 CI `33857375535` 已全绿（10m27s）。下一步只需在干净 `main` 上生成绑定 `96b5e7e` 的候选产物。
+- 现有 `artifacts/v7-productization/candidate` 产物来自 `50964bc`，不是当前 `70944e0`，不能直接作为当前版本发布。
+- 功能提交 `96b5e7e` 的远端 CI `33857375535` 已全绿（10m27s）；当前文档同步提交 `70944e0` 已推送，新的 CI 仅用于确认同步状态。
 
 ## 最短动作链
 
-1. 等待 `3a6b158` 对应 GitHub Actions 的 v7 CI 变为 success。
+1. 等待当前 `main` 提交对应 GitHub Actions 的 v7 CI 变为 success。
 2. 在干净 `main` 上执行：
 
    ```powershell
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-v7.ps1 -Task candidate
    ```
 
-3. 只把当前提交生成的 `candidate` 目录交给 Windows 验收；不要复用旧 ZIP/MSI/EXE。
+3. 只把当前 `HEAD` 生成的 `candidate` 目录交给 Windows 验收；不要复用旧 ZIP/MSI/EXE。
 4. 候选验收通过后，再决定是否执行本机 `E:\h` 安装和桌面扩展发布；每次更新先删除旧副本，只保留一个版本。
 
 ## 正式发布阻塞项
