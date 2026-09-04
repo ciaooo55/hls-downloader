@@ -4,7 +4,7 @@ param(
     [ValidateSet('browser', 'performance', 'installer', 'rollback')]
     [string]$GateId,
     [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$Command,
-    [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$Input,
+    [Parameter(Mandatory=$true)][Alias('Input')][ValidateNotNullOrEmpty()][string]$GateInput,
     [string]$CandidateManifestPath = '',
     [string]$EvidencePath = ''
 )
@@ -77,7 +77,7 @@ $report = [ordered]@{
     source_tree = $tree
     candidate_artifact_manifest_sha256 = $manifestHash
     command = $Command
-    input = $Input
+    input = $GateInput
     output = $output
     result = $result
     exit_status = [int]$exitStatus
@@ -102,7 +102,7 @@ if (Test-Path -LiteralPath $evidenceFullPath -PathType Leaf) {
 $gate = [ordered]@{
     id = $GateId
     command = $Command
-    input = $Input
+    input = $GateInput
     output = $output
     result = $result
     exit_status = [int]$exitStatus
