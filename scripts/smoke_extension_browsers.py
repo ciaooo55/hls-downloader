@@ -478,7 +478,7 @@ def _exercise_chrome(
         "--disable-features=DisableLoadExtensionCommandLineSwitch",
         f"--disable-extensions-except={extension_dir}",
         f"--load-extension={extension_dir}",
-        page_url,
+        "about:blank",
     ]
     process = subprocess.Popen(
         command,
@@ -487,6 +487,7 @@ def _exercise_chrome(
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     diagnostics: dict[str, object] = {}
+    page_opened = False
     popup_opened = False
     content_ready = False
     selection_checked = False
@@ -498,6 +499,16 @@ def _exercise_chrome(
                 raise RuntimeError(f"Chromium exited before extension verification ({process.returncode})")
             try:
                 targets = _read_debug_targets(port)
+                extension_ready = any(
+                    str(item.get("url", "")).startswith(f"chrome-extension://{extension_id}/")
+                    for item in targets
+                )
+                if extension_ready and not page_opened:
+                    _open_debug_target(port, page_url)
+                    page_opened = True
+                    deadline = max(deadline, time.monotonic() + 25)
+                    time.sleep(0.1)
+                    continue
                 page = next((item for item in targets if item.get("type") == "page" and item.get("url") == page_url), None)
                 popup = next((item for item in targets if item.get("type") == "page" and item.get("url") == popup_url), None)
                 if page and not content_ready:
