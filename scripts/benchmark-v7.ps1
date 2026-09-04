@@ -23,7 +23,7 @@ Invoke-Checked 'powershell.exe' @('-NoProfile','-ExecutionPolicy','Bypass','-Fil
 $frame = Get-Content $frameReport -Raw -Encoding UTF8 | ConvertFrom-Json
 $hostReport = Join-Path $reportDir 'native-host-cold-start.json'
 Invoke-Checked $python @((Join-Path $PSScriptRoot 'smoke_v7_native_host.py'),'--host',(Join-Path $resources 'HLSDownloaderNativeHost.exe'),'--engine',(Join-Path $resources 'HLSDownloaderEngine.exe'),'--report',$hostReport)
-$host = Get-Content $hostReport -Raw -Encoding UTF8 | ConvertFrom-Json
+$nativeHostResult = Get-Content $hostReport -Raw -Encoding UTF8 | ConvertFrom-Json
 $soakReport = Join-Path $reportDir 'candidate-runtime-soak.json'
 Invoke-Checked $python @((Join-Path $PSScriptRoot 'soak_v7_runtime.py'),'--engine',(Join-Path $resources 'HLSDownloaderEngine.exe'),'--report',$soakReport,'--idle-seconds','30','--stress-requests','1000')
 $soak = Get-Content $soakReport -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -32,10 +32,10 @@ Invoke-Checked $python @((Join-Path $PSScriptRoot 'smoke_v7_transfer_performance
 $transfer = Get-Content $transferReport -Raw -Encoding UTF8 | ConvertFrom-Json
 $result = [ordered]@{
  schema=1; product_version=[string]$manifest.product_version; candidate_manifest=$manifestPath; measured_at=[DateTime]::UtcNow.ToString('o')
- thousand_task_frame_p95_ms=$frame.frame_p95_ms; ipc_command_p95_ms=$soak.stress.ipc_p95_ms; native_host_cold_start_ms=$host.cold_first_response_ms
+ thousand_task_frame_p95_ms=$frame.frame_p95_ms; ipc_command_p95_ms=$soak.stress.ipc_p95_ms; native_host_cold_start_ms=$nativeHostResult.cold_first_response_ms
  real_transfer_throughput_mib_s=$transfer.throughput_mib_s; real_transfer_working_set_growth_mib=$transfer.working_set_growth_mib; post_publish_extra_network_bytes=$transfer.post_publish_extra_network_bytes
  thresholds=[ordered]@{ thousand_task_frame_p95_ms=33; ipc_command_p95_ms=75; native_host_cold_start_ms=1500; minimum_local_throughput_mib_s=20; maximum_working_set_growth_mib=256; post_publish_extra_network_bytes=0 }
- passed=($frame.passed -and [double]$soak.stress.ipc_p95_ms -le 75 -and $host.cold_first_response_ms -le 1500 -and $transfer.passed)
+ passed=($frame.passed -and [double]$soak.stress.ipc_p95_ms -le 75 -and $nativeHostResult.cold_first_response_ms -le 1500 -and $transfer.passed)
 }
 $reportPath = Join-Path $reportDir 'v7-performance-latest.json'
 [IO.File]::WriteAllText($reportPath, ($result | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
