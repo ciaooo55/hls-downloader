@@ -748,14 +748,6 @@ impl CoreCoordinator {
         let queue_profiles = if let Some(value) = values.get("queue_profiles") {
             let profiles: Vec<QueueProfile> = serde_json::from_value(value.clone())
                 .map_err(|error| format!("队列配置格式无效: {error}"))?;
-            let ids: HashSet<_> = profiles.iter().map(|profile| profile.id.as_str()).collect();
-            if let Some(task) = self
-                .tasks()?
-                .into_iter()
-                .find(|task| !ids.contains(task.queue_id.as_str()))
-            {
-                return Err(format!("队列 {} 仍包含任务，需先移动任务", task.queue_id));
-            }
             Some(profiles)
         } else {
             None
@@ -770,7 +762,22 @@ impl CoreCoordinator {
         if let Some(flag) = start_login {
             crate::startup::apply(flag)?;
         }
-        self.lock()?.store_mut().set_settings(&values)?;
+        if let Some(profiles) = &queue_profiles {
+            let ids: HashSet<_> = profiles.iter().map(|profile| profile.id.as_str()).collect();
+            let mut core = self.lock()?;
+            let orphaned = core
+                .tasks()
+                .into_iter()
+                .filter(|task| !ids.contains(task.queue_id.as_str()))
+                .map(|task| task.task_id)
+                .collect();
+            core.assign_queue_and_set_settings(orphaned, crate::DEFAULT_QUEUE_ID.into(), &values)?;
+        } else {
+            self.lock()?.store_mut().set_settings(&values)?;
+            self.lock()?.emit(CoreEvent::SettingsChanged {
+                keys: values.keys().cloned().collect(),
+            })?;
+        }
         if let Some(limit) = values
             .get("download_speed_limit_kib")
             .and_then(Value::as_u64)
@@ -790,9 +797,6 @@ impl CoreCoordinator {
                     .map(|profile| (profile.id.as_str(), profile.speed_limit_kib)),
             );
         }
-        self.lock()?.emit(CoreEvent::SettingsChanged {
-            keys: values.keys().cloned().collect(),
-        })?;
         Ok(())
     }
 
