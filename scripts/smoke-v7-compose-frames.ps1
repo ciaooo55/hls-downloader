@@ -40,7 +40,7 @@ $env:HLS_V6_SKIP_MIGRATE = '1'
 $existingAppIds = @(Get-CimInstance Win32_Process | Where-Object {
     $_.Name -eq 'java.exe' -and $_.CommandLine -like '*com.hlsdownloader.desktop.MainKt*'
 } | ForEach-Object { $_.ProcessId })
-$productProcessNames = @('HLSDownloaderEngine.exe', 'HLSDownloaderPresenter.exe', 'HLSDownloaderNativeHost.exe')
+$productProcessNames = @('HLSDownloader.exe', 'HLSDownloaderEngine.exe', 'HLSDownloaderPresenter.exe', 'HLSDownloaderNativeHost.exe')
 $existingProductIds = @(Get-CimInstance Win32_Process | Where-Object {
     $_.Name -in $productProcessNames
 } | ForEach-Object { $_.ProcessId })
@@ -77,6 +77,10 @@ try {
     }
     Write-Host ($result | ConvertTo-Json -Compress)
 } finally {
+    if ($runner -and -not $runner.HasExited) {
+        Stop-Process -Id $runner.Id -Force -ErrorAction SilentlyContinue
+        Wait-Process -Id $runner.Id -Timeout 5 -ErrorAction SilentlyContinue
+    }
     $newApps = @(Get-CimInstance Win32_Process | Where-Object {
         $_.Name -eq 'java.exe' -and
         $_.CommandLine -like '*com.hlsdownloader.desktop.MainKt*' -and
@@ -87,12 +91,9 @@ try {
     }
     $newProductProcesses = @(Get-CimInstance Win32_Process | Where-Object {
         $_.Name -in $productProcessNames -and $_.ProcessId -notin $existingProductIds
-    })
+    } | Sort-Object { if ($_.Name -eq 'HLSDownloader.exe') { 0 } else { 1 } })
     foreach ($process in $newProductProcesses) {
         Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
         Wait-Process -Id $_.ProcessId -Timeout 5 -ErrorAction SilentlyContinue
-    }
-    if ($runner -and -not $runner.HasExited) {
-        Stop-Process -Id $runner.Id -Force -ErrorAction SilentlyContinue
     }
 }
