@@ -1448,12 +1448,12 @@ export default defineBackground(() => {
     let followUpHandoffId = ''
     let followUpCreatedAt = 0
     try {
-      // IDM pauses the browser item immediately in onCreated and resolves
-      // ownership afterwards. Do the same before any storage/native await so a
-      // fast local/CDN file cannot visibly advance behind the desktop prompt.
-      paused = await pauseBrowserDownload(item)
       const config = await settings()
       if (!config.enabled) return
+      // IDM pauses the browser item immediately in onCreated and resolves
+      // ownership afterwards. Do the same before any native await so a
+      // fast local/CDN file cannot visibly advance behind the desktop prompt.
+      paused = await pauseBrowserDownload(item)
       // Prefer the request chain first so click matching can use tabId even when
       // Chrome leaves DownloadItem.referrer empty. After a click is known, re-bind
       // the chain to that tab so we never replay another page's auth headers.
