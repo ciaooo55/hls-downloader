@@ -506,14 +506,14 @@ def run(
                     lambda: _cdp_evaluate(
                         str(site_popup_target["webSocketDebuggerUrl"]),
                         "[...document.querySelectorAll('button')].some(button => "
-                        "button.textContent.includes('排除本站') && !button.disabled)",
+                        "button.textContent.includes('本站不显示：关') && !button.disabled)",
                     ),
                     "排除本站按钮绑定顶层页面",
                 )
                 _cdp_evaluate(
                     str(site_popup_target["webSocketDebuggerUrl"]),
                     "[...document.querySelectorAll('button')].find(button => "
-                    "button.textContent.includes('排除本站')).click()"
+                    "button.textContent.includes('本站不显示：关')).click()"
                 )
                 _wait_until(
                     lambda: _cdp_evaluate(
@@ -536,7 +536,7 @@ def run(
                 _cdp_evaluate(
                     str(site_popup_target["webSocketDebuggerUrl"]),
                     "[...document.querySelectorAll('button')].find(button => "
-                    "button.textContent.includes('本站已排除')).click()"
+                    "button.textContent.includes('本站不显示：开')).click()"
                 )
                 _wait_until(
                     lambda: not _cdp_evaluate(
@@ -553,7 +553,7 @@ def run(
                 driver.switch_to.window(inspector)
                 def auto_button():
                     return driver.find_element(
-                        By.XPATH, "//button[starts-with(normalize-space(.), '自动接管')]"
+                        By.XPATH, "//button[starts-with(normalize-space(.), '接管下载')]"
                     )
                 _wait_until(lambda: not auto_button().get_attribute("disabled"), "自动接管按钮就绪")
                 auto_button().click()

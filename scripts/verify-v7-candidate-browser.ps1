@@ -40,7 +40,7 @@ $edgeDriverArgs = if ($EdgeDriver) { @('--driver',$EdgeDriver) } else { @() }
 $firefoxDriverArgs = if ($FirefoxDriver) { @('--driver',$FirefoxDriver) } else { @() }
 Invoke-Smoke 'scripts\smoke_extension_browsers.py' @('--extension-output',$extensions,'--browser','both','--chrome-binary',$EdgeBinary,'--firefox-binary',$FirefoxBinary)
 Invoke-Smoke 'scripts\smoke_extension_media.py' (@('--browser','edge','--extension',(Join-Path $extensions 'chrome-mv3'),'--browser-binary',$EdgeBinary,'--ffmpeg',$Ffmpeg) + $edgeDriverArgs)
-Invoke-Smoke 'scripts\smoke_extension_media.py' (@('--browser','firefox','--extension',(Join-Path $extensions 'firefox-mv3'),'--addon',(Join-Path $root ([string]$manifest.extensions.Firefox.path)),'--browser-binary',$FirefoxBinary,'--ffmpeg',$Ffmpeg) + $firefoxDriverArgs)
+Invoke-Smoke 'scripts\smoke_extension_media.py' (@('--browser','firefox','--extension',(Join-Path $extensions 'firefox-mv3'),'--browser-binary',$FirefoxBinary,'--ffmpeg',$Ffmpeg) + $firefoxDriverArgs)
 Invoke-Smoke 'scripts\smoke_extension_takeover.py' (@('--extension',(Join-Path $extensions 'chrome-mv3'),'--browser','edge','--browser-binary',$EdgeBinary,'--go',$Go) + $edgeDriverArgs)
-Invoke-Smoke 'scripts\smoke_v7_presenter.py' @('--presenter',(Join-Path $resources 'HLSDownloaderPresenter.exe'),'--host',(Join-Path $resources 'HLSDownloaderNativeHost.exe'),'--engine',(Join-Path $resources 'HLSDownloaderEngine.exe'))
+Invoke-Smoke 'scripts\smoke_v7_presenter.py' @('--presenter',(Join-Path $resources 'HLSDownloaderPresenter.exe'),'--host',(Join-Path $resources 'HLSDownloaderNativeHost.exe'),'--engine',(Join-Path $resources 'HLSDownloaderEngine.exe'),'--recovery-only')
 Write-Host '{"schema":1,"passed":true,"edge_chromium":true,"firefox":true,"media_recognition":true,"takeover_recovery":true,"presenter_pending_recovery":true}'

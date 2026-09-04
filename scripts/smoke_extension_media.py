@@ -450,10 +450,10 @@ def run(
                     action_deadline = time.monotonic() + 5
                     while time.monotonic() < action_deadline:
                         state = _overlay_state(driver)
-                        if {"投屏链接", "推送链接"}.issubset(set(state.get("panelActions", []))):
+                        if {"投屏", "TVBox"}.issubset(set(state.get("panelActions", []))):
                             break
                         time.sleep(0.1)
-                    if not {"投屏链接", "推送链接"}.issubset(set(state.get("panelActions", []))):
+                    if not {"投屏", "TVBox"}.issubset(set(state.get("panelActions", []))):
                         raise AssertionError(f"{mode}: 投屏/推送链接操作没有出现在资源面板: {state}")
                 if mode == "ad-direct":
                     main_url = next((item["src"] for item in state["videos"] if "player=main" in item.get("src", "")), "")

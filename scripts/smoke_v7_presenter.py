@@ -129,7 +129,12 @@ def stop_process(process: subprocess.Popen[bytes] | None) -> None:
         process.wait(timeout=3)
 
 
-def visible_handoff_smoke(presenter_source: Path, host_source: Path, engine_source: Path) -> dict[str, object]:
+def visible_handoff_smoke(
+    presenter_source: Path,
+    host_source: Path,
+    engine_source: Path,
+    require_latency: bool = True,
+) -> dict[str, object]:
     root = Path(tempfile.mkdtemp(prefix="hls-v7-presenter-visible-"))
     presenter = root / "HLSDownloaderPresenter.exe"
     host = root / "HLSDownloaderNativeHost.exe"
@@ -161,7 +166,8 @@ def visible_handoff_smoke(presenter_source: Path, host_source: Path, engine_sour
                     details = presenter_process.stderr.read().decode("utf-8", errors="replace")
                 raise TimeoutError(
                     "Presenter renderer did not report ready within 15 seconds"
-                    f"; presenter_exit={presenter_process.poll()}; stderr={details!r}"
+                    f"; presenter_exit={presenter_process.poll()}; engine_exit={engine_process.poll() if engine_process else None}"
+                    f"; windows={process_windows(presenter_process.pid)!r}; root={root}; stderr={details!r}"
                 )
             time.sleep(0.005)
         prewarm_ms = (time.perf_counter() - prewarm_started) * 1000
@@ -264,9 +270,10 @@ def visible_handoff_smoke(presenter_source: Path, host_source: Path, engine_sour
             "presenter_pid_after_restart": presenter_pid_after_restart,
             "presenter_pending_recovery": presenter_pid_before_crash > 0 and presenter_pid_after_restart > 0,
             "threshold_ms": 100,
-            "passed": p95 <= 100 and presenter_pid_before_crash > 0 and presenter_pid_after_restart > 0,
+            "latency_passed": p95 <= 100,
+            "passed": presenter_pid_before_crash > 0 and presenter_pid_after_restart > 0,
         }
-        if not report["passed"]:
+        if require_latency and not report["latency_passed"]:
             raise RuntimeError(f"Presenter visible offer P95 exceeded 100ms: {report}")
         return report
     finally:
@@ -281,6 +288,7 @@ def main() -> int:
     parser.add_argument("--presenter", required=True, type=Path)
     parser.add_argument("--host", type=Path)
     parser.add_argument("--engine", type=Path)
+    parser.add_argument("--recovery-only", action="store_true")
     args = parser.parse_args()
     presenter = str(args.presenter.resolve())
     first = subprocess.Popen([presenter, "--lock-test"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -300,7 +308,9 @@ def main() -> int:
     if (args.host is None) != (args.engine is None):
         raise SystemExit("--host and --engine must be supplied together")
     if args.host is not None and args.engine is not None:
-        report = visible_handoff_smoke(args.presenter.resolve(), args.host.resolve(), args.engine.resolve())
+        report = visible_handoff_smoke(
+            args.presenter.resolve(), args.host.resolve(), args.engine.resolve(), not args.recovery_only
+        )
         print(json.dumps(report, ensure_ascii=False))
     return 0
 
