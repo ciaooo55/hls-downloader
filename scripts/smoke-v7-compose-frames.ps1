@@ -40,6 +40,10 @@ $env:HLS_V6_SKIP_MIGRATE = '1'
 $existingAppIds = @(Get-CimInstance Win32_Process | Where-Object {
     $_.Name -eq 'java.exe' -and $_.CommandLine -like '*com.hlsdownloader.desktop.MainKt*'
 } | ForEach-Object { $_.ProcessId })
+$productProcessNames = @('HLSDownloaderEngine.exe', 'HLSDownloaderPresenter.exe', 'HLSDownloaderNativeHost.exe')
+$existingProductIds = @(Get-CimInstance Win32_Process | Where-Object {
+    $_.Name -in $productProcessNames
+} | ForEach-Object { $_.ProcessId })
 $runner = $null
 try {
     if ([string]::IsNullOrWhiteSpace($AppPath)) {
@@ -80,6 +84,11 @@ try {
     })
     foreach ($app in $newApps) {
         Stop-Process -Id $app.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    Get-CimInstance Win32_Process | Where-Object {
+        $_.Name -in $productProcessNames -and $_.ProcessId -notin $existingProductIds
+    } | ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
     }
     if ($runner -and -not $runner.HasExited) {
         Stop-Process -Id $runner.Id -Force -ErrorAction SilentlyContinue
