@@ -128,22 +128,23 @@ try {
         'OpenDatabase', 'InvokeMethod', $null, $installer, @($resolved, 1)
     )
     $current = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveExistingProducts'"
+    $initialize = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='InstallInitialize'"
     $installFiles = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='InstallFiles'"
     $removeFiles = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveFiles'"
     $finalize = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='InstallFinalize'"
     $engineFile = Find-MsiFileKey 'HLSDownloaderEngine.exe'
-    if ($null -eq $current -or $null -eq $installFiles -or $null -eq $removeFiles -or $null -eq $finalize) {
+    if ($null -eq $current -or $null -eq $initialize -or $null -eq $installFiles -or $null -eq $removeFiles -or $null -eq $finalize) {
         throw 'MSI is missing the install/upgrade actions required for rollback and Native Host registration.'
     }
     if ([String]::IsNullOrWhiteSpace($engineFile)) {
         throw 'MSI does not contain HLSDownloaderEngine.exe for Native Host registration actions.'
     }
 
-    # jpackage does not emit InstallExecute. The rollback-safe legal slot for
-    # RemoveExistingProducts is immediately after InstallFinalize.
-    $target = [int]$finalize + 10
-    if ($target -le [int]$finalize) {
-        throw 'MSI does not provide a rollback-safe sequence slot after InstallFinalize.'
+    # Keep the old uninstall inside the new product transaction and before file
+    # installation. A later Type-19 failure then restores the old product.
+    $target = [int]$initialize + 10
+    if ($target -le [int]$initialize -or $target -ge [int]$installFiles) {
+        throw 'MSI does not provide a rollback-safe upgrade slot before InstallFiles.'
     }
     if ([int]$current -ne $target) {
         Invoke-MsiNonQuery "UPDATE ``InstallExecuteSequence`` SET ``Sequence``=$target WHERE ``Action``='RemoveExistingProducts'"
@@ -216,6 +217,7 @@ try {
     msi = $resolved
     original_sequence = [int]$current
     verified_sequence = [int]$verified
+    install_initialize_sequence = [int]$initialize
     install_files_sequence = [int]$installFiles
     install_finalize_sequence = [int]$finalize
     native_host_engine_file = $engineFile
