@@ -93,7 +93,7 @@ try {
         $_.Name -in $productProcessNames -and $_.ProcessId -notin $existingProductIds
     } | Sort-Object { if ($_.Name -eq 'HLSDownloader.exe') { 0 } else { 1 } })
     foreach ($process in $newProductProcesses) {
-        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-        Wait-Process -Id $_.ProcessId -Timeout 5 -ErrorAction SilentlyContinue
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        Wait-Process -Id $process.ProcessId -Timeout 5 -ErrorAction SilentlyContinue
     }
 }
