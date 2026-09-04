@@ -198,15 +198,17 @@ async function main() {
   root.append(mainEl)
   document.documentElement.dataset.popupReady = 'shell'
 
-  const storedTheme = await browser.storage.local.get(THEME_STORAGE_KEY).catch(() => ({} as Record<string, unknown>))
-  const restoredTheme = normalizeThemePreference(storedTheme[THEME_STORAGE_KEY])
-  if (restoredTheme !== themePreference) {
-    themePreference = restoredTheme
-    removeThemeListener()
-    removeThemeListener = applyTheme(document.documentElement, themePreference)
-    themeBtn.replaceChildren(icon(themePreference, THEME_LABELS[themePreference]))
-    themeBtn.title = THEME_LABELS[themePreference]
-  }
+  void withDeadline(browser.storage.local.get(THEME_STORAGE_KEY), 1_000)
+    .then(storedTheme => {
+      const restoredTheme = normalizeThemePreference(storedTheme[THEME_STORAGE_KEY])
+      if (restoredTheme === themePreference) return
+      themePreference = restoredTheme
+      removeThemeListener()
+      removeThemeListener = applyTheme(document.documentElement, themePreference)
+      themeBtn.replaceChildren(icon(themePreference, THEME_LABELS[themePreference]))
+      themeBtn.title = THEME_LABELS[themePreference]
+    })
+    .catch(() => undefined)
 
   let enabled = true
   let host = ''
@@ -522,7 +524,7 @@ async function main() {
     }
   })
 
-  const windowTabs = await browser.tabs.query({ currentWindow: true })
+  const windowTabs = await withDeadline(browser.tabs.query({ currentWindow: true }), 1_000).catch(() => [])
   // A normal toolbar popup leaves the web tab active. Developer tools and
   // automated browser checks can open popup.html as an extension tab instead;
   // in that case fall back to the most recently listed web tab rather than
@@ -566,9 +568,9 @@ async function main() {
   // Load local settings before any network/native request. The popup is often
   // opened exactly while a page starts a download; controls must be usable even
   // if the desktop ping or resource query is temporarily slow.
-  const stored = await browser.storage.local.get([
+  const stored = await withDeadline(browser.storage.local.get([
     'enabled', 'excludedHosts', 'authorizedCookieHosts', HANDOFF_SUPPRESSION_STORAGE_KEY,
-  ]).catch(() => ({} as Record<string, unknown>))
+  ]), 1_000).catch(() => ({} as Record<string, unknown>))
   enabled = stored.enabled !== false
   authorizedCookieHosts = normalizeCookiePermissionHosts(stored.authorizedCookieHosts)
   excluded = Array.isArray(stored.excludedHosts)
@@ -600,7 +602,7 @@ async function main() {
   // Explicit popup downloads no longer create a second desktop confirmation.
   // Remove pending UI state left by 3.x/early 7.0 builds so reopening the
   // popup cannot resurrect a stale “等待确认” button for two minutes.
-  await browser.storage.session.remove(LEGACY_PENDING_HANDOFF_STORAGE_KEY).catch(() => undefined)
+  void browser.storage.session.remove(LEGACY_PENDING_HANDOFF_STORAGE_KEY).catch(() => undefined)
   refreshButtons()
   renderList()
   document.documentElement.dataset.popupReady = 'ready'

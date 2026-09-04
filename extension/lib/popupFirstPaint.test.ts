@@ -13,12 +13,13 @@ describe('popup first paint', () => {
     expect(html).not.toContain('<div id="root"></div>')
   })
 
-  it('commits the interactive shell before awaiting stored theme state', () => {
+  it('commits the interactive shell before restoring optional theme state', () => {
     const shell = main.indexOf('root.append(mainEl)')
-    const storage = main.indexOf('const storedTheme = await')
+    const storage = main.indexOf('void withDeadline(browser.storage.local.get(THEME_STORAGE_KEY)')
     expect(shell).toBeGreaterThan(0)
     expect(storage).toBeGreaterThan(shell)
     expect(main).toContain("dataset.popupReady = 'shell'")
+    expect(main).not.toContain('const storedTheme = await')
   })
 
   it('renders a readable error state when asynchronous bootstrap fails', () => {
