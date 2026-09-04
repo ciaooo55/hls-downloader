@@ -17,7 +17,7 @@ import threading
 import time
 
 
-PAYLOAD_SIZE = 96 * 1024 * 1024
+PAYLOAD_SIZE = 256 * 1024 * 1024
 PATTERN = bytes(range(256)) * 4096
 PAYLOAD = PATTERN * (PAYLOAD_SIZE // len(PATTERN))
 
