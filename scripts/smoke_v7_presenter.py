@@ -177,6 +177,8 @@ def visible_handoff_smoke(presenter_source: Path, host_source: Path, engine_sour
         latencies: list[float] = []
         submit_latencies: list[float] = []
         visibility_latencies: list[float] = []
+        presenter_pid_before_crash = 0
+        presenter_pid_after_restart = 0
         for index in range(20):
             if index == 10:
                 stop_process(host_process)
@@ -224,6 +226,22 @@ def visible_handoff_smoke(presenter_source: Path, host_source: Path, engine_sour
             submit_latencies.append((submitted - started) * 1000)
             visibility_latencies.append((visible - submitted) * 1000)
             handoff_id = handoff.get("id")
+            if index == 5:
+                presenter_pid_before_crash = presenter_process.pid
+                stop_process(presenter_process)
+                ready_file.unlink(missing_ok=True)
+                presenter_process = subprocess.Popen(
+                    [str(presenter)], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+                )
+                presenter_pid_after_restart = presenter_process.pid
+                restart_deadline = time.monotonic() + 30
+                while not ready_file.exists():
+                    if presenter_process.poll() is not None:
+                        raise RuntimeError(f"Presenter exited during recovery: {presenter_process.returncode}")
+                    if time.monotonic() >= restart_deadline:
+                        raise TimeoutError("restarted Presenter did not report ready within 30 seconds")
+                    time.sleep(0.01)
+                wait_window(presenter_process.pid, "确认下载", True, 30)
             rejected = native_message(host_process, {"op": "reject_handoff", "handoff_id": handoff_id})
             if rejected.get("ok") is not True:
                 raise RuntimeError(f"Native Host reject failed: {rejected}")
@@ -242,8 +260,11 @@ def visible_handoff_smoke(presenter_source: Path, host_source: Path, engine_sour
             "post_submit_visible_samples_ms": [round(value, 2) for value in visibility_latencies],
             "renderer_prewarm_ms": round(prewarm_ms, 2),
             "native_host_core_restart": True,
+            "presenter_pid_before_crash": presenter_pid_before_crash,
+            "presenter_pid_after_restart": presenter_pid_after_restart,
+            "presenter_pending_recovery": presenter_pid_before_crash > 0 and presenter_pid_after_restart > 0,
             "threshold_ms": 100,
-            "passed": p95 <= 100,
+            "passed": p95 <= 100 and presenter_pid_before_crash > 0 and presenter_pid_after_restart > 0,
         }
         if not report["passed"]:
             raise RuntimeError(f"Presenter visible offer P95 exceeded 100ms: {report}")

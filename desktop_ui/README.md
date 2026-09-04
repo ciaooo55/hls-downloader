@@ -1,4 +1,4 @@
-# HLS Downloader Desktop 7.0.0
+# HLS Downloader Desktop 7.0.1
 
 Compose Desktop workbench for HLS Downloader. This module is the 7.x desktop interface; `HLSDownloaderEngine.exe` owns all download state and SQLite through the existing framed IPC protocol.
 

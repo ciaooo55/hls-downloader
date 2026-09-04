@@ -28,8 +28,9 @@ function Assert-AppImage([string]$Root) {
         throw "v7 portable image is missing provenance or feature parity: $Root"
     }
     $provenance = Get-Content -LiteralPath $provenancePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $productVersion = [string](Get-Content -LiteralPath $featureParityPath -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
     if ([int]$provenance.schema -ne 1 -or
-        [string]$provenance.product_version -ne '7.0.0' -or
+        [string]$provenance.product_version -ne $productVersion -or
         @('candidate', 'formal') -notcontains [string]$provenance.package_tier -or
         [string]$provenance.feature_parity_path -ne 'artifacts/v7-productization/feature-parity.json' -or
         [string]$provenance.source_commit -notmatch '^[0-9a-fA-F]{40}$' -or
@@ -42,7 +43,7 @@ function Assert-AppImage([string]$Root) {
         throw "v7 portable image feature parity is not bound to its provenance: $Root"
     }
     foreach ($browser in @('Chromium', 'Firefox')) {
-        $archive = Join-Path $Root "extensions\HLSDownloader-7.0.0-$browser.zip"
+        $archive = Join-Path $Root "extensions\HLSDownloader-$productVersion-$browser.zip"
         if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
             throw "v7 portable image is missing the $browser extension archive: $archive"
         }
@@ -54,8 +55,8 @@ function Assert-AppImage([string]$Root) {
                 throw "v7 $browser extension archive is missing manifest.json: $archive"
             }
             $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ([string]$manifest.version -ne '7.0.0' -or [int]$manifest.manifest_version -ne 3) {
-                throw "v7 $browser extension manifest is not version 7.0.0 Manifest V3: $archive"
+            if ([string]$manifest.version -ne $productVersion -or [int]$manifest.manifest_version -ne 3) {
+                throw "v7 $browser extension manifest is not version $productVersion Manifest V3: $archive"
             }
             $identity = if ($browser -eq 'Chromium') {
                 [string]$manifest.key

@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ReportPath = '',
+    [string]$AppPath = '',
     [int]$Width = 1024,
     [int]$Height = 600,
     [int]$TimeoutSeconds = 180
@@ -41,9 +42,15 @@ $existingAppIds = @(Get-CimInstance Win32_Process | Where-Object {
 } | ForEach-Object { $_.ProcessId })
 $runner = $null
 try {
-    $runner = Start-Process -FilePath $env:ComSpec -ArgumentList @(
-        '/d', '/c', 'gradlew.bat run --console=plain --no-daemon'
-    ) -WorkingDirectory $desktop -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    if ([string]::IsNullOrWhiteSpace($AppPath)) {
+        $runner = Start-Process -FilePath $env:ComSpec -ArgumentList @(
+            '/d', '/c', 'gradlew.bat run --console=plain --no-daemon'
+        ) -WorkingDirectory $desktop -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    } else {
+        $AppPath = [IO.Path]::GetFullPath($AppPath)
+        if (-not (Test-Path -LiteralPath $AppPath -PathType Leaf)) { throw "Compose candidate is missing: $AppPath" }
+        $runner = Start-Process -FilePath $AppPath -WorkingDirectory ([IO.Path]::GetDirectoryName($AppPath)) -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    }
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while (-not (Test-Path -LiteralPath $ReportPath) -and [DateTime]::UtcNow -lt $deadline) {
         if ($runner.HasExited) {

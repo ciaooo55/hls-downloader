@@ -1,4 +1,4 @@
-# HLS Downloader 7.0.0 模块与功能衔接
+# HLS Downloader 7.0.1 模块与功能衔接
 
 ## 运行时边界
 
@@ -38,7 +38,7 @@ Rust Core + SQLite (唯一状态/凭据/传输所有者)
 
 ## 当前收敛点
 
-- 功能矩阵仍为 `24/28 verified`、`4 partial`；本轮没有改写发布门禁。计划任务由调度器认领时统一重置 control，最终发布与完成状态在 Core 同一互斥区提交；handoff/media-push 旁路行现在与事件 checkpoint 同事务提交，交接解析失败时仍保留内存 offer 供重试。
+- 功能矩阵为 `28/28 verified`、`0 partial`、`release_ready=true`；正式包仍由同一 candidate manifest 绑定的 browser、performance、installer、rollback evidence 强制阻断。计划任务由调度器认领时统一重置 control，最终发布与完成状态在 Core 同一互斥区提交；handoff/media-push 旁路行与事件 checkpoint 同事务提交，交接解析失败时仍保留内存 offer 供重试。
 - 浏览器 pending handoff 可跨重连恢复；扩展不会再把本地轮询超时伪装成 Core 终态，不确定所有权保持浏览器任务暂停并由持久 alarm 复核，用户已自行处理的任务会终止跟进。
 - Core 已在启动阶段报告 named pipe ready，失败会返回明确错误；pending media push 会从 SQLite 恢复到运行时，可跨重启 resolve。
 - Core IPC 对完全空闲帧头设置 120 秒上限，对完整帧头后的帧体设置不可续期的 15 秒预算；BT/磁力探测使用单后台槽，避免阻塞请求线程或无界并发。

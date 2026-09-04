@@ -8,6 +8,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$productVersion = [string](Get-Content -LiteralPath (Join-Path $repo 'artifacts\v7-productization\feature-parity.json') -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
 $installRoot = [IO.Path]::GetFullPath('E:\h').TrimEnd('\', '/')
 $root = [IO.Path]::GetFullPath($InstallDir).TrimEnd('\', '/')
 if (-not [String]::Equals($root, $installRoot, [StringComparison]::OrdinalIgnoreCase)) {
@@ -49,7 +50,7 @@ do {
 if (-not $health) {
     throw 'Installed v7 UI API did not become ready.'
 }
-if ($health.version -ne '7.0.0' -or -not $health.ok) {
+if ($health.version -ne $productVersion -or -not $health.ok) {
     throw "Installed v7 health response is invalid: $($health | ConvertTo-Json -Compress)"
 }
 $windowDeadline = (Get-Date).AddSeconds(30)

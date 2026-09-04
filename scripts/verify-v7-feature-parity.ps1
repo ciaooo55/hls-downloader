@@ -52,8 +52,18 @@ $errors = New-Object 'System.Collections.Generic.List[string]'
 if ([int]$json.schema -ne 1) {
     $errors.Add("Unsupported feature parity schema: $($json.schema)")
 }
-if ($json.product_version -ne '7.0.0') {
-    $errors.Add("Unexpected product version: $($json.product_version)")
+$productVersion = [string]$json.product_version
+$composeBuildSource = [IO.File]::ReadAllText((Join-Path $repo 'desktop_ui\build.gradle.kts'), $utf8NoBom)
+$moduleVersions = @(
+    ([regex]::Match([IO.File]::ReadAllText((Join-Path $repo 'native_shell\Cargo.toml'), $utf8NoBom), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    ([regex]::Match([IO.File]::ReadAllText((Join-Path $repo 'presenter_ui\Cargo.toml'), $utf8NoBom), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    [string]([IO.File]::ReadAllText((Join-Path $repo 'extension\package.json'), $utf8NoBom) | ConvertFrom-Json).version,
+    ([regex]::Match([IO.File]::ReadAllText((Join-Path $repo 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt'), $utf8NoBom), 'const val version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    ([regex]::Match($composeBuildSource, '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    ([regex]::Match($composeBuildSource, 'packageVersion\s*=\s*"([^"]+)"')).Groups[1].Value
+)
+if ([String]::IsNullOrWhiteSpace($productVersion) -or @($moduleVersions | Where-Object { $_ -ne $productVersion }).Count -ne 0) {
+    $errors.Add("Product version mismatch: feature parity=$productVersion; modules=$($moduleVersions -join ', ')")
 }
 $features = @($json.features)
 if ($features.Count -eq 0) {
@@ -183,7 +193,7 @@ if ($RequireReleaseReady) {
     }
     if ($null -ne $releaseEvidence) {
         if ([int]$releaseEvidence.schema -ne 1) { $errors.Add("Unsupported release evidence schema: $($releaseEvidence.schema)") }
-        if ([string]$releaseEvidence.product_version -ne '7.0.0') { $errors.Add("Release evidence product version is not 7.0.0: $($releaseEvidence.product_version)") }
+        if ([string]$releaseEvidence.product_version -ne $productVersion) { $errors.Add("Release evidence product version is not ${productVersion}: $($releaseEvidence.product_version)") }
         if ([string]$releaseEvidence.source_commit -ne $commit) { $errors.Add("Release evidence source commit does not match HEAD: $($releaseEvidence.source_commit) != $commit") }
         if ([string]$releaseEvidence.source_tree -ne $tree) { $errors.Add("Release evidence source tree does not match HEAD: $($releaseEvidence.source_tree) != $tree") }
 
@@ -201,8 +211,8 @@ if ($RequireReleaseReady) {
             }
             try {
                 $candidateManifest = [IO.File]::ReadAllText($candidateManifestFullPath, $utf8NoBom) | ConvertFrom-Json
-                if ([int]$candidateManifest.schema -ne 1 -or [string]$candidateManifest.product_version -ne '7.0.0' -or [string]$candidateManifest.package_tier -ne 'candidate') {
-                    $errors.Add('Candidate artifact manifest identity is not v7.0.0 candidate.')
+                if ([int]$candidateManifest.schema -ne 1 -or [string]$candidateManifest.product_version -ne $productVersion -or [string]$candidateManifest.package_tier -ne 'candidate') {
+                    $errors.Add("Candidate artifact manifest identity is not v$productVersion candidate.")
                 }
                 if ([string]$candidateManifest.source_commit -ne $commit -or [string]$candidateManifest.source_tree -ne $tree) {
                     $errors.Add('Candidate artifact manifest is not from the current source commit and tree.')
@@ -247,10 +257,10 @@ if ($RequireReleaseReady) {
                         foreach ($extensionName in @('Chromium', 'Firefox')) {
                             $extension = $candidateManifest.extensions.$extensionName
                             $extensionRelativePath = [string]$extension.path
-                            if ([string]$extension.version -ne '7.0.0' -or
+                            if ([string]$extension.version -ne $productVersion -or
                                 [String]::IsNullOrWhiteSpace($extensionRelativePath) -or
                                 [string]$extension.sha256 -notmatch '^[0-9a-fA-F]{64}$') {
-                                $errors.Add("Candidate $extensionName extension evidence is missing its path, v7.0.0 identity, or SHA-256.")
+                                $errors.Add("Candidate $extensionName extension evidence is missing its path, v$productVersion identity, or SHA-256.")
                                 continue
                             }
                             $extensionPath = [IO.Path]::GetFullPath((Join-Path $portableRoot $extensionRelativePath))
@@ -265,8 +275,8 @@ if ($RequireReleaseReady) {
                             $extensionCheck = Join-Path $portableCheck ("extension-$extensionName")
                             Expand-Archive -LiteralPath $extensionPath -DestinationPath $extensionCheck -Force
                             $extensionManifest = Get-Content -LiteralPath (Join-Path $extensionCheck 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-                            if ([string]$extensionManifest.version -ne '7.0.0') {
-                                $errors.Add("Candidate $extensionName extension manifest version is not 7.0.0.")
+                            if ([string]$extensionManifest.version -ne $productVersion) {
+                                $errors.Add("Candidate $extensionName extension manifest version is not $productVersion.")
                             }
                         }
                     } finally {
@@ -320,8 +330,8 @@ if ($RequireReleaseReady) {
                     if ([int]$report.schema -ne 1 -or [string]$report.gate_id -ne $gateId) {
                         $errors.Add("Release gate '$gateId' report identity is invalid.")
                     }
-                    if ([string]$report.product_version -ne '7.0.0' -or [string]$report.source_commit -ne $commit -or [string]$report.source_tree -ne $tree) {
-                        $errors.Add("Release gate '$gateId' report is not from the current v7.0.0 source.")
+                    if ([string]$report.product_version -ne $productVersion -or [string]$report.source_commit -ne $commit -or [string]$report.source_tree -ne $tree) {
+                        $errors.Add("Release gate '$gateId' report is not from the current v$productVersion source.")
                     }
                     if ([string]$report.candidate_artifact_manifest_sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
                         ([string]$report.candidate_artifact_manifest_sha256).ToLowerInvariant() -ne $candidateManifestHash.ToLowerInvariant()) {

@@ -11,6 +11,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$productVersion = [string](Get-Content -LiteralPath (Join-Path $repo 'artifacts\v7-productization\feature-parity.json') -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
 $repoPrefix = $repo.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
@@ -48,11 +49,11 @@ $manifest = [IO.File]::ReadAllText($manifestPath, $utf8NoBom) | ConvertFrom-Json
 $commit = Invoke-Git @('rev-parse', 'HEAD')
 $tree = Invoke-Git @('rev-parse', 'HEAD^{tree}')
 if ([int]$manifest.schema -ne 1 -or
-    [string]$manifest.product_version -ne '7.0.0' -or
+    [string]$manifest.product_version -ne $productVersion -or
     [string]$manifest.package_tier -ne 'candidate' -or
     [string]$manifest.source_commit -ne $commit -or
     [string]$manifest.source_tree -ne $tree) {
-    throw 'Candidate artifact manifest is not a v7.0.0 candidate from the current source commit and tree.'
+    throw "Candidate artifact manifest is not a v$productVersion candidate from the current source commit and tree."
 }
 $manifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $manifestRelativePath = $manifestPath.Substring($repoPrefix.Length).Replace('\', '/')
@@ -71,7 +72,7 @@ $result = if ($exitStatus -eq 0) { 'passed' } else { 'failed' }
 $report = [ordered]@{
     schema = 1
     gate_id = $GateId
-    product_version = '7.0.0'
+    product_version = $productVersion
     source_commit = $commit
     source_tree = $tree
     candidate_artifact_manifest_sha256 = $manifestHash
@@ -110,7 +111,7 @@ $gate = [ordered]@{
 }
 $evidence = [ordered]@{
     schema = 1
-    product_version = '7.0.0'
+    product_version = $productVersion
     source_commit = $commit
     source_tree = $tree
     candidate_artifact_manifest = [ordered]@{ path = $manifestRelativePath; sha256 = $manifestHash }

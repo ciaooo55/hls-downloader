@@ -779,7 +779,7 @@ mod tests {
                 max_frame_bytes,
             } => {
                 assert_eq!(request_id, 91);
-                assert_eq!(product_version, "7.0.0");
+                assert_eq!(product_version, env!("CARGO_PKG_VERSION"));
                 assert_eq!(protocol_version, V7_PROTOCOL_VERSION);
                 assert!(commands.contains(&"probe_url".to_string()));
                 assert!(commands.contains(&"discover_cast_devices".to_string()));

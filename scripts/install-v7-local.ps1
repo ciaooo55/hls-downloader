@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$productVersion = [string](Get-Content -LiteralPath (Join-Path $repo 'artifacts\v7-productization\feature-parity.json') -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
 $repoPrefix = $repo.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 $installRoot = [IO.Path]::GetFullPath('E:\h').TrimEnd('\', '/')
 $target = [IO.Path]::GetFullPath($TargetDir).TrimEnd('\', '/')
@@ -26,11 +27,11 @@ $artifact = Get-Content -LiteralPath $artifactManifest -Raw -Encoding UTF8 | Con
 $currentCommit = (& git -C $repo rev-parse HEAD).Trim()
 $currentTree = (& git -C $repo rev-parse 'HEAD^{tree}').Trim()
 if ([int]$artifact.schema -ne 1 -or
-    [string]$artifact.product_version -ne '7.0.0' -or
+    [string]$artifact.product_version -ne $productVersion -or
     @('candidate', 'formal') -notcontains [string]$artifact.package_tier -or
     [string]$artifact.source_commit -ne $currentCommit -or
     [string]$artifact.source_tree -ne $currentTree) {
-    throw 'v7 artifact manifest is not a current v7.0.0 candidate/formal package.'
+    throw "v7 artifact manifest is not a current v$productVersion candidate/formal package."
 }
 $artifactRoot = [IO.Path]::GetDirectoryName($artifactManifest).TrimEnd('\', '/')
 $portableEntry = $artifact.artifacts.portable
@@ -72,8 +73,8 @@ $provenance = Get-Content -LiteralPath $provenancePath -Raw -Encoding UTF8 | Con
 if ([int]$provenance.schema -ne 1) {
     throw "v7 local image provenance schema is unsupported: $($provenance.schema)"
 }
-if ($provenance.product_version -ne '7.0.0') {
-    throw "v7 local image provenance product_version is not 7.0.0: $($provenance.product_version)"
+if ($provenance.product_version -ne $productVersion) {
+    throw "v7 local image provenance product_version is not ${productVersion}: $($provenance.product_version)"
 }
 if (@('candidate', 'formal') -notcontains [string]$provenance.package_tier) {
     throw "v7 local image provenance package_tier is invalid: $($provenance.package_tier)"
@@ -116,8 +117,8 @@ function Assert-ExtensionArchive([string]$Archive, [string]$Browser) {
             throw "Packaged $Browser extension archive is missing manifest.json."
         }
         $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($manifest.version -ne '7.0.0') {
-            throw "Packaged $Browser extension version is not 7.0.0: $($manifest.version)"
+        if ($manifest.version -ne $productVersion) {
+            throw "Packaged $Browser extension version is not ${productVersion}: $($manifest.version)"
         }
         if ([int]$manifest.manifest_version -ne 3) {
             throw "Packaged $Browser extension is not Manifest V3."
@@ -137,7 +138,7 @@ $sourceRoot = [IO.Path]::GetFullPath($source).TrimEnd('\', '/')
 $extensionArchivePaths = @{}
 foreach ($browser in @('Chromium', 'Firefox')) {
     $entry = $artifact.extensions.$browser
-    if ([string]$entry.version -ne '7.0.0' -or
+    if ([string]$entry.version -ne $productVersion -or
         [String]::IsNullOrWhiteSpace([string]$entry.path) -or
         [string]$entry.sha256 -notmatch '^[0-9a-fA-F]{64}$') {
         throw "v7 $browser extension entry is incomplete in ARTIFACT-MANIFEST.json."
@@ -187,7 +188,7 @@ function Test-FinalizeMarker([string]$Path, [string]$ExpectedTarget) {
         $installationPath = Join-Path $ExpectedTarget 'INSTALLATION.txt'
         $provenancePath = Join-Path $ExpectedTarget 'app\resources\BUILD-PROVENANCE.json'
         if ([int]$marker.schema -ne 1 -or
-            [string]$marker.version -ne '7.0.0' -or
+            [string]$marker.version -ne $productVersion -or
             -not [String]::Equals([string]$marker.target, $ExpectedTarget, [StringComparison]::OrdinalIgnoreCase) -or
             [string]$marker.nonce -notmatch '^[0-9a-f]{32}$' -or
             -not (Test-Path -LiteralPath $installationPath -PathType Leaf) -or
@@ -267,12 +268,12 @@ if ($hadPrevious) {
     }
     $existingInstallHeader = Get-Content -LiteralPath $existingInstallationPath -TotalCount 1 -Encoding UTF8
     if ([int]$existingProvenance.schema -ne 1 -or
-        [string]$existingProvenance.product_version -ne '7.0.0' -or
+        @('7.0.0', $productVersion) -notcontains [string]$existingProvenance.product_version -or
         @('candidate', 'formal') -notcontains [string]$existingProvenance.package_tier -or
         [string]$existingProvenance.source_commit -notmatch '^[0-9a-fA-F]{40}$' -or
         [string]$existingProvenance.source_tree -notmatch '^[0-9a-fA-F]{40}$' -or
-        $existingInstallHeader -ne 'HLS Downloader 7.0.0') {
-        throw "Existing E:\h directory is not an owned v7.0.0 installation: $target"
+        @('HLS Downloader 7.0.0', "HLS Downloader $productVersion") -notcontains $existingInstallHeader) {
+        throw "Existing E:\h directory is not an owned v7.0.0/v$productVersion installation: $target"
     }
 }
 if (Test-Path -LiteralPath $stage) {
@@ -299,14 +300,14 @@ Get-ChildItem -LiteralPath $stage -Recurse -File -Force | ForEach-Object {
 New-Item -ItemType Directory -Force -Path (Join-Path $stage 'extensions') | Out-Null
 foreach ($browser in @('Chromium', 'Firefox')) {
     Copy-Item -LiteralPath $extensionArchivePaths[$browser] `
-        -Destination (Join-Path $stage "extensions\HLSDownloader-7.0.0-$browser.zip") -Force
+        -Destination (Join-Path $stage "extensions\HLSDownloader-$productVersion-$browser.zip") -Force
 }
-Copy-Item -LiteralPath $note -Destination (Join-Path $stage 'HLS-Downloader-7.0.0-升级说明.md') -Force
+Copy-Item -LiteralPath $note -Destination (Join-Path $stage "HLS-Downloader-$productVersion-升级说明.md") -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $stage 'scripts') | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\upgrade-v7-portable.ps1') -Destination (Join-Path $stage 'scripts\upgrade-v7-portable.ps1') -Force
 
 $installInfo = @(
-    'HLS Downloader 7.0.0',
+    "HLS Downloader $productVersion",
     "InstalledAt=$([DateTimeOffset]::Now.ToString('o'))",
     "SourcePortableSHA256=$($portableHash.ToUpperInvariant())",
     "ArtifactManifestSHA256=$((Get-FileHash -LiteralPath $artifactManifest -Algorithm SHA256).Hash)",
@@ -350,7 +351,7 @@ $engineExecutable = Join-Path $target 'app\resources\HLSDownloaderEngine.exe'
 $hostExecutable = Join-Path $target 'app\resources\HLSDownloaderNativeHost.exe'
 $desktop = [Environment]::GetFolderPath('Desktop')
 $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\HLS Downloader'
-$desktopShortcut = Join-Path $desktop 'HLS Downloader 7.0.0.lnk'
+$desktopShortcut = Join-Path $desktop "HLS Downloader $productVersion.lnk"
 $desktopExtensionPaths = @{
     Chromium = Join-Path $desktop 'HLSDownloader-Chromium.zip'
     Firefox = Join-Path $desktop 'HLSDownloader-Firefox.zip'
@@ -371,23 +372,23 @@ try {
 
     $shell = New-Object -ComObject WScript.Shell
     New-Item -ItemType Directory -Force -Path $startMenu | Out-Null
-    $shortcut = $shell.CreateShortcut((Join-Path $startMenu 'HLS Downloader 7.0.0.lnk'))
+    $shortcut = $shell.CreateShortcut((Join-Path $startMenu "HLS Downloader $productVersion.lnk"))
     $shortcut.TargetPath = Join-Path $target 'HLSDownloader.exe'
     $shortcut.WorkingDirectory = $target
     $shortcut.IconLocation = (Join-Path $target 'HLSDownloader.exe') + ',0'
-    $shortcut.Description = 'HLS Downloader 7.0.0'
+    $shortcut.Description = "HLS Downloader $productVersion"
     $shortcut.Save()
 
     $desktopLink = $shell.CreateShortcut($desktopShortcut)
     $desktopLink.TargetPath = Join-Path $target 'HLSDownloader.exe'
     $desktopLink.WorkingDirectory = $target
     $desktopLink.IconLocation = (Join-Path $target 'HLSDownloader.exe') + ',0'
-    $desktopLink.Description = 'HLS Downloader 7.0.0'
+    $desktopLink.Description = "HLS Downloader $productVersion"
     $desktopLink.Save()
 
     New-Item -ItemType Directory -Force -Path $desktopExtensionStage | Out-Null
     foreach ($browser in @('Chromium', 'Firefox')) {
-        Copy-Item -LiteralPath (Join-Path $target "extensions\HLSDownloader-7.0.0-$browser.zip") `
+        Copy-Item -LiteralPath (Join-Path $target "extensions\HLSDownloader-$productVersion-$browser.zip") `
             -Destination (Join-Path $desktopExtensionStage "$browser.zip") -Force
     }
     New-Item -ItemType Directory -Force -Path $desktopExtensionBackup | Out-Null
@@ -407,7 +408,7 @@ try {
             -not [String]::Equals($published[0].FullName, $desktopExtensionPaths[$browser], [StringComparison]::OrdinalIgnoreCase)) {
             throw "Desktop must contain exactly one current $browser extension archive."
         }
-        $installedArchive = Join-Path $target "extensions\HLSDownloader-7.0.0-$browser.zip"
+        $installedArchive = Join-Path $target "extensions\HLSDownloader-$productVersion-$browser.zip"
         if ((Get-FileHash -LiteralPath $published[0].FullName -Algorithm SHA256).Hash -ne
             (Get-FileHash -LiteralPath $installedArchive -Algorithm SHA256).Hash) {
             throw "Desktop $browser extension archive does not match the installed package."
@@ -417,7 +418,7 @@ try {
     [IO.File]::WriteAllText($finalizeMarker,
         ([ordered]@{
             schema = 1
-            version = '7.0.0'
+            version = $productVersion
             target = $target
             nonce = $transactionNonce
             root_backup_expected = $hadPrevious
@@ -464,7 +465,7 @@ try {
             [void]$rollbackErrors.Add("restore previous Native Host: $($_.Exception.Message)")
         }
     } elseif (-not $hadPrevious) {
-        Remove-Item -LiteralPath (Join-Path $startMenu 'HLS Downloader 7.0.0.lnk') -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Join-Path $startMenu "HLS Downloader $productVersion.lnk") -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $desktopShortcut -Force -ErrorAction SilentlyContinue
     }
     if ($rollbackErrors.Count -gt 0) {
@@ -487,16 +488,16 @@ if (Test-Path -LiteralPath $finalizeMarker) {
 
 [ordered]@{
     installed = $true
-    version = '7.0.0'
+    version = $productVersion
     target = $target
     rollback = ''
     native_host = $hostExecutable
-    chromium_extension = Join-Path $target 'extensions\HLSDownloader-7.0.0-Chromium.zip'
-    firefox_extension = Join-Path $target 'extensions\HLSDownloader-7.0.0-Firefox.zip'
+    chromium_extension = Join-Path $target "extensions\HLSDownloader-$productVersion-Chromium.zip"
+    firefox_extension = Join-Path $target "extensions\HLSDownloader-$productVersion-Firefox.zip"
     desktop_chromium_extension = $desktopExtensionPaths.Chromium
     desktop_firefox_extension = $desktopExtensionPaths.Firefox
     desktop_extension_count = 2
-    start_menu = Join-Path $startMenu 'HLS Downloader 7.0.0.lnk'
+    start_menu = Join-Path $startMenu "HLS Downloader $productVersion.lnk"
     desktop = $desktopShortcut
 } | ConvertTo-Json -Depth 3
 } finally {

@@ -1,6 +1,6 @@
 # HLS Downloader repository instructions
 
-HLS Downloader is a Windows-first desktop download manager. The only active product version is `7.0.0`.
+HLS Downloader is a Windows-first desktop download manager. The only active product version is `7.0.1`.
 
 ## Active architecture
 

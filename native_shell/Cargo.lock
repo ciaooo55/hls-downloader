@@ -763,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "hls-native-shell"
-version = "7.0.0"
+version = "7.0.1"
 dependencies = [
  "rusqlite",
  "russh",

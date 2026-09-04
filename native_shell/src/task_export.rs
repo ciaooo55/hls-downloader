@@ -188,7 +188,7 @@ pub fn export_tasks(
     let data = match format {
         "json" => serde_json::to_string_pretty(&ExportDocument {
             schema: "hls-downloader.tasks.v1".into(),
-            product_version: "7.0.0".into(),
+            product_version: env!("CARGO_PKG_VERSION").into(),
             tasks: tasks.into_iter().map(ExportTask::from).collect(),
         })
         .map_err(|error| format!("任务序列化失败: {error}"))?,

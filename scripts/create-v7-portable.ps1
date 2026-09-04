@@ -18,10 +18,11 @@ $provenance = Get-Content -LiteralPath $provenancePath -Raw -Encoding UTF8 | Con
 $currentCommit = (& git -C $repo rev-parse HEAD).Trim()
 $currentTree = (& git -C $repo rev-parse 'HEAD^{tree}').Trim()
 $canonicalFeatureParity = Join-Path $repo 'artifacts\v7-productization\feature-parity.json'
+$productVersion = [string](Get-Content -LiteralPath $canonicalFeatureParity -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
 $canonicalFeatureHash = (Get-FileHash -LiteralPath $canonicalFeatureParity -Algorithm SHA256).Hash.ToLowerInvariant()
 $embeddedFeatureHash = (Get-FileHash -LiteralPath $featureParityPath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ([int]$provenance.schema -ne 1 -or
-    [string]$provenance.product_version -ne '7.0.0' -or
+    [string]$provenance.product_version -ne $productVersion -or
     @('candidate', 'formal') -notcontains [string]$provenance.package_tier -or
     [string]$provenance.source_commit -ne $currentCommit -or
     [string]$provenance.source_tree -ne $currentTree -or
@@ -30,7 +31,7 @@ if ([int]$provenance.schema -ne 1 -or
     $embeddedFeatureHash -ne $canonicalFeatureHash) {
     throw 'Compose App-Image provenance is not bound to the current v7 source and feature parity.'
 }
-$out = if ($OutZip) { [IO.Path]::GetFullPath($OutZip) } else { Join-Path $repo 'artifacts\v7-productization\package\HLSDownloader-7.0.0-Windows-x64-Portable.zip' }
+$out = if ($OutZip) { [IO.Path]::GetFullPath($OutZip) } else { Join-Path $repo "artifacts\v7-productization\package\HLSDownloader-$productVersion-Windows-x64-Portable.zip" }
 $repoPrefix = $repo.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 if (-not $out.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Portable output must stay inside this repository: $out"
@@ -52,8 +53,8 @@ function Assert-ExtensionArchive([string]$Archive, [string]$Browser) {
             throw "$Browser extension archive is missing manifest.json."
         }
         $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($manifest.version -ne '7.0.0') {
-            throw "$Browser extension manifest version is not 7.0.0: $($manifest.version)"
+        if ($manifest.version -ne $productVersion) {
+            throw "$Browser extension manifest version is not ${productVersion}: $($manifest.version)"
         }
         if ([int]$manifest.manifest_version -ne 3) {
             throw "$Browser extension is not Manifest V3."
@@ -78,8 +79,8 @@ try {
     New-Item -ItemType Directory -Force -Path $portableExtensions | Out-Null
     $packagedExtensions = Join-Path $appImage 'app\resources\extensions'
     foreach ($item in @(
-        @{ Browser = 'Chromium'; Name = 'HLSDownloader-7.0.0-Chromium.zip' },
-        @{ Browser = 'Firefox'; Name = 'HLSDownloader-7.0.0-Firefox.zip' }
+        @{ Browser = 'Chromium'; Name = "HLSDownloader-$productVersion-Chromium.zip" },
+        @{ Browser = 'Firefox'; Name = "HLSDownloader-$productVersion-Firefox.zip" }
     )) {
         $archive = Join-Path $packagedExtensions $item.Name
         if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
@@ -88,7 +89,7 @@ try {
         Assert-ExtensionArchive $archive $item.Browser
         Copy-Item -LiteralPath $archive -Destination (Join-Path $portableExtensions $item.Name) -Force
     }
-    $readme = "HLS Downloader 7.0.0 Portable`r`n`r`nRun HLSDownloader.exe. Runtime data stays in data; completed files and resumable task state stay in downloads. Browser Native Messaging registration is repaired automatically on startup. The extensions folder contains the matching Chromium and Firefox MV3 packages. Use scripts\upgrade-v7-portable.ps1 to atomically upgrade another v7 portable folder while preserving data and downloads; use -Rollback to restore the previous program image.`r`n"
+    $readme = "HLS Downloader $productVersion Portable`r`n`r`nRun HLSDownloader.exe. Runtime data stays in data; completed files and resumable task state stay in downloads. Browser Native Messaging registration is repaired automatically on startup. The extensions folder contains the matching Chromium and Firefox MV3 packages. Use scripts\upgrade-v7-portable.ps1 to atomically upgrade another v7 portable folder while preserving data and downloads; use -Rollback to restore the previous program image.`r`n"
     [IO.File]::WriteAllText((Join-Path $portable 'README-PORTABLE.txt'), $readme, [Text.UTF8Encoding]::new($false))
     New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($out)) | Out-Null
     Compress-Archive -Path $portable -DestinationPath $out -CompressionLevel Optimal -Force

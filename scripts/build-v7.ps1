@@ -16,6 +16,19 @@ if ($extensionProtocolSource -notmatch "V7_CORE_PROTOCOL\s*=\s*'hls-downloader-v
     throw 'v7 build refused: browser extension v7 Core protocol contract is missing.'
 }
 $featureParity = Join-Path $repo 'artifacts\v7-productization\feature-parity.json'
+$productVersion = [string](Get-Content -LiteralPath $featureParity -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
+$composeBuildSource = Get-Content -LiteralPath (Join-Path $repo 'desktop_ui\build.gradle.kts') -Raw -Encoding UTF8
+$moduleVersions = @(
+    ([regex]::Match((Get-Content -LiteralPath (Join-Path $repo 'native_shell\Cargo.toml') -Raw -Encoding UTF8), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    ([regex]::Match((Get-Content -LiteralPath (Join-Path $repo 'presenter_ui\Cargo.toml') -Raw -Encoding UTF8), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    [string](Get-Content -LiteralPath (Join-Path $repo 'extension\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version,
+    ([regex]::Match($protocolSource, 'const val version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    ([regex]::Match($composeBuildSource, '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    ([regex]::Match($composeBuildSource, 'packageVersion\s*=\s*"([^"]+)"')).Groups[1].Value
+)
+if ([String]::IsNullOrWhiteSpace($productVersion) -or @($moduleVersions | Where-Object { $_ -ne $productVersion }).Count -ne 0) {
+    throw "Product version mismatch: feature parity=$productVersion; modules=$($moduleVersions -join ', ')"
+}
 $isPackage = @('candidate', 'package') -contains $Task
 $packageTier = if ($Task -eq 'candidate') { 'candidate' } else { 'formal' }
 $packageRoot = if ($Task -eq 'candidate') {
@@ -213,7 +226,7 @@ function Build-Extension([string]$Resources) {
         Select-Object -First 1
     if ($nodeTools) { $env:PATH = "$($nodeTools.FullName);$env:PATH" }
     $package = Get-Content -LiteralPath (Join-Path $repo 'extension\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($package.version -ne '7.0.0') { throw "Browser extension package version must be 7.0.0: $($package.version)" }
+    if ($package.version -ne $productVersion) { throw "Browser extension package version must be ${productVersion}: $($package.version)" }
     Push-Location (Join-Path $repo 'extension')
     try {
         # Probe inside the extension directory so corepack resolves the pnpm
@@ -229,14 +242,14 @@ function Build-Extension([string]$Resources) {
     } finally { Pop-Location }
     New-Item -ItemType Directory -Force -Path (Join-Path $Resources 'extensions') | Out-Null
     foreach ($item in @(
-        @{ Source = 'chrome-mv3'; Name = 'HLSDownloader-7.0.0-Chromium.zip' },
-        @{ Source = 'firefox-mv3'; Name = 'HLSDownloader-7.0.0-Firefox.zip' }
+        @{ Source = 'chrome-mv3'; Name = "HLSDownloader-$productVersion-Chromium.zip" },
+        @{ Source = 'firefox-mv3'; Name = "HLSDownloader-$productVersion-Firefox.zip" }
     )) {
         $source = Join-Path (Join-Path $repo 'extension\.output') $item.Source
         if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Production extension output is missing: $source" }
         $manifestPath = Join-Path $source 'manifest.json'
         $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($manifest.version -ne '7.0.0') { throw "Built $($item.Source) manifest version is not 7.0.0: $($manifest.version)" }
+        if ($manifest.version -ne $productVersion) { throw "Built $($item.Source) manifest version is not ${productVersion}: $($manifest.version)" }
         Assert-ExtensionManifest $manifest $(if ($item.Source -eq 'chrome-mv3') { 'Chromium' } else { 'Firefox' }) $manifestPath
         Compress-Archive -Path (Join-Path $source '*') -DestinationPath (Join-Path (Join-Path $Resources 'extensions') $item.Name) -CompressionLevel Optimal -Force
     }
@@ -312,16 +325,16 @@ $env:HLS_ENGINE_PATH = $engine
     }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     if ($isPackage) {
-        $exe = Get-ChildItem -LiteralPath (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'compose\binaries\main\exe') -Filter 'HLSDownloader-7.0.0.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        $exe = Get-ChildItem -LiteralPath (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'compose\binaries\main\exe') -Filter "HLSDownloader-$productVersion.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $exe) { throw 'The v7 installer EXE was not produced in the isolated build cache.' }
-        $msi = Get-ChildItem -LiteralPath (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'compose\binaries\main\msi') -Filter 'HLSDownloader-7.0.0.msi' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        $msi = Get-ChildItem -LiteralPath (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'compose\binaries\main\msi') -Filter "HLSDownloader-$productVersion.msi" -File -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $msi) { throw 'The v7 MSI was not produced in the isolated build cache.' }
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\set-v7-msi-rollback-order.ps1" -MsiPath $msi.FullName
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
-        Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64$artifactSuffix.exe")) -Force
-        Copy-Item -LiteralPath $msi.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64$artifactSuffix.msi")) -Force
-        $portablePath = Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64-Portable$artifactSuffix.zip")
+        Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.exe")) -Force
+        Copy-Item -LiteralPath $msi.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.msi")) -Force
+        $portablePath = Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64-Portable$artifactSuffix.zip")
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\create-v7-portable.ps1" -OutZip $portablePath
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $extensionEvidence = [ordered]@{}
@@ -345,8 +358,8 @@ $env:HLS_ENGINE_PATH = $engine
             if ($provenanceJson.package_tier -ne $packageTier) {
                 throw "Portable provenance package_tier does not match the build tier: $($provenanceJson.package_tier) != $packageTier"
             }
-            if ($provenanceJson.product_version -ne '7.0.0') {
-                throw "Portable provenance product_version is not 7.0.0: $($provenanceJson.product_version)"
+            if ($provenanceJson.product_version -ne $productVersion) {
+                throw "Portable provenance product_version is not ${productVersion}: $($provenanceJson.product_version)"
             }
             $featureInPackage = Join-Path $portableRoot 'app\resources\FEATURE-PARITY.json'
             if (-not (Test-Path -LiteralPath $featureInPackage -PathType Leaf)) {
@@ -357,7 +370,7 @@ $env:HLS_ENGINE_PATH = $engine
                 throw "Portable feature parity hash does not match provenance: $($provenanceJson.feature_parity_sha256) != $featureHashInPackage"
             }
             foreach ($extension in @('Chromium', 'Firefox')) {
-                $archive = Join-Path $portableRoot ("extensions\HLSDownloader-7.0.0-$extension.zip")
+                $archive = Join-Path $portableRoot ("extensions\HLSDownloader-$productVersion-$extension.zip")
                 if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
                     throw "Portable package is missing the $extension extension archive."
                 }
@@ -368,13 +381,13 @@ $env:HLS_ENGINE_PATH = $engine
                     throw "$extension extension archive is missing manifest.json."
                 }
                 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-                if ($manifest.version -ne '7.0.0') {
-                    throw "$extension extension manifest version is not 7.0.0: $($manifest.version)"
+                if ($manifest.version -ne $productVersion) {
+                    throw "$extension extension manifest version is not ${productVersion}: $($manifest.version)"
                 }
                 Assert-ExtensionManifest $manifest $extension $manifestPath
                 $extensionEvidence[$extension] = [ordered]@{
                     version = [string]$manifest.version
-                    path = "extensions/HLSDownloader-7.0.0-$extension.zip"
+                    path = "extensions/HLSDownloader-$productVersion-$extension.zip"
                     sha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
                 }
             }
@@ -382,11 +395,11 @@ $env:HLS_ENGINE_PATH = $engine
             Remove-Item -LiteralPath $portableCheck -Recurse -Force -ErrorAction SilentlyContinue
         }
         Copy-Item -LiteralPath $featureParity -Destination (Join-Path $artifactRoot 'FEATURE-PARITY.json') -Force
-        $exePath = Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64$artifactSuffix.exe")
-        $msiPath = Join-Path $artifactRoot ("HLSDownloader-7.0.0-Windows-x64$artifactSuffix.msi")
+        $exePath = Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.exe")
+        $msiPath = Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.msi")
         $artifactManifest = [ordered]@{
             schema = 1
-            product_version = '7.0.0'
+            product_version = $productVersion
             package_tier = $packageTier
             source_commit = $sourceCommit
             source_tree = $sourceTree
@@ -404,7 +417,7 @@ $env:HLS_ENGINE_PATH = $engine
         [IO.File]::WriteAllText($artifactManifestPath, ($artifactManifest | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
         $manifestCheck = Get-Content -LiteralPath $artifactManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ([int]$manifestCheck.schema -ne 1 -or
-            $manifestCheck.product_version -ne '7.0.0' -or
+            $manifestCheck.product_version -ne $productVersion -or
             $manifestCheck.package_tier -ne $packageTier -or
             $manifestCheck.source_commit -ne $sourceCommit -or
             $manifestCheck.source_tree -ne $sourceTree) {

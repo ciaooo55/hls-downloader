@@ -1,4 +1,4 @@
-# HLS Downloader 7.0.0 workbench architecture
+# HLS Downloader 7.0.1 workbench architecture
 
 ## Decision
 

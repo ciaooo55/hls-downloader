@@ -1,4 +1,4 @@
-# HLS Downloader 7.0.0
+# HLS Downloader 7.0.1
 
 Windows-first desktop download manager with one active product architecture:
 
@@ -13,7 +13,7 @@ Python, React, Tauri, WebView2 and the v6 Win32 supervisor are not part of the a
 
 `HLSDownloader.exe` never opens SQLite. It sends versioned commands to the single Rust Core over `\\.\pipe\HLSDownloader.v7`. The Native Messaging host and native presenter connect to the same Core. Closing Compose, the browser or the player does not stop active downloads.
 
-The product version is `7.0.0`. `main` contains the complete active v7 source while historical implementations remain in Git tags. A final `v7.0.0` release tag is created only after the clean-machine release gates pass.
+The product version is `7.0.1`. `main` contains the complete active v7 source while historical implementations remain in Git tags. The existing `v7.0.0` release remains immutable; new release evidence and artifacts bind to `v7.0.1`.
 
 ## Build And Test
 

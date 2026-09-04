@@ -1,34 +1,29 @@
-# v7.0.0 快速落地发布路径
+# v7.0.1 正式发布路径
 
-核验基准：2026-09-04；候选产物必须绑定执行时的 `git rev-parse HEAD`。
+核验基准：2026-09-04；candidate、四份 evidence、formal package 和标签必须绑定同一 commit/tree。
 
-## 结论
+## 当前状态
 
-最快可交付形态是 **candidate 候选版**，用于当前 Windows 机器或小范围验收；正式 GitHub Release 不是当前最快路径。
+- 功能矩阵：`28/28 verified`、`0 partial`、`0 blocked`、`release_ready=true`。
+- 未来计划队列、动态全局限速、真实 BT 文件选择、认证 HLS VOD/Live 专项均在冻结前各运行一次并通过。
+- `v7.0.0` 的标签、Release 和 10 项资产保持不变。
 
-- 功能矩阵：`24/28 verified`、`4 partial`、`0 blocked`、`release_ready=false`。
-- 候选门禁静态校验已通过：`FEATURE_PARITY=85.7% (24/28 verified, 4 partial, 0 blocked)`。
-- 现有 `artifacts/v7-productization/candidate` 产物来自 `50964bc`，不是执行时的 `HEAD`，不能直接作为当前版本发布。
-- 功能提交 `96b5e7e` 的远端 CI `33857375535` 已全绿（10m27s）；后续文档同步提交只改变发布说明，不改变运行时代码。
+## 发布顺序
 
-## 最短动作链
-
-1. 等待当前 `main` 提交对应 GitHub Actions 的 v7 CI 变为 success。
-2. 在干净 `main` 上执行：
+1. 在干净冻结提交上构建一次 candidate：
 
    ```powershell
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-v7.ps1 -Task candidate
    ```
 
-3. 只把当前 `HEAD` 生成的 `candidate` 目录交给 Windows 验收；不要复用旧 ZIP/MSI/EXE。
-4. 候选验收通过后，再决定是否执行本机 `E:\h` 安装和桌面扩展发布；每次更新先删除旧副本，只保留一个版本。
+2. 用 `record-v7-release-gate.ps1` 依次记录 browser、performance、installer、rollback；所有输入只来自 candidate manifest。
+3. 快进合入并推送 `main`，等待该提交的唯一一次完整 GitHub CI 全绿。
+4. 运行 `build-v7.ps1 -Task package` 生成 formal package，安装到 `E:\h` 并做安装后下载/恢复验证。
+5. 桌面只保留 `7.0.1` Chromium 和 Firefox 包各一份。
+6. 创建 annotated `v7.0.1` 标签和 Draft Release，核对 10 项资产后发布 Latest，并重新下载核验 SHA-256。
 
-## 正式发布阻塞项
+## 失败处理
 
-正式 `v7.0.0` 需要全部 `28/28 verified`、`release_ready=true`，以及当前提交绑定的 candidate manifest 和四项 release evidence：`browser`、`performance`、`installer`、`rollback`。因此不能通过只改状态字段或复用历史产物提前发布。
+任一门禁失败后修复并重新冻结；失败提交生成的 candidate、evidence 和 formal package 全部作废。MSI 生命周期只验证应用进程重启，不执行 Windows 系统重启，报告明确记录 `system_reboot=false`。
 
-剩余 partial 的真实工作集中在：队列/详情专项验证、认证 HLS 与浏览器接管的当前提交复验，以及干净 Windows 机器的 Presenter 崩溃恢复和 MSI 生命周期门禁。
-
-## 本轮约束
-
-本轮未在本机编译、打包或安装；只完成源码静态检查、候选门禁静态校验和 GitHub 同步。候选命令保留为下一步唯一必要构建动作。
+所有构建、测试、临时文件和门禁报告留在仓库目录；正式安装只位于 `E:\h`。

@@ -8,15 +8,17 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$productVersion = [string](Get-Content -LiteralPath (Join-Path $repo 'artifacts\v7-productization\feature-parity.json') -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
+$root = $repo
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $report = New-Object System.Collections.Generic.List[string]
 $overall = 0
-$runRoot = Join-Path ([IO.Path]::GetTempPath()) ('hls-candidate-auth-' + [guid]::NewGuid().ToString('n'))
+$runRoot = Join-Path $root ('artifacts\v7-productization\candidate-hls-runtime\' + [guid]::NewGuid().ToString('n'))
 $extractRoot = Join-Path $runRoot 'portable'
 $candidateRoot = Join-Path $root 'artifacts\v7-productization\candidate'
 if ([String]::IsNullOrWhiteSpace($CandidateZip)) {
-    $CandidateZip = Join-Path $candidateRoot 'HLSDownloader-7.0.0-Windows-x64-Portable-candidate.zip'
+    $CandidateZip = Join-Path $candidateRoot "HLSDownloader-$productVersion-Windows-x64-Portable-candidate.zip"
 }
 $CandidateZip = [IO.Path]::GetFullPath($CandidateZip)
 if (-not (Test-Path -LiteralPath $CandidateZip -PathType Leaf)) {

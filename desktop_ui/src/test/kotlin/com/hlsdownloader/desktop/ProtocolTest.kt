@@ -64,7 +64,7 @@ class ProtocolTest {
         assertEquals(1, protocolJson.decodeFromString<CoreHello>(encoded).version)
     }
     @Test fun productCopyDoesNotExposeInternalNames() {
-        assertEquals("7.0.0", Product.version)
+        assertEquals("7.0.1", Product.version)
         assertEquals("下载引擎 · 已连接", Product.engineConnected)
         assertEquals("浏览器插件 · 未连接", Product.extensionDisconnected)
     }
