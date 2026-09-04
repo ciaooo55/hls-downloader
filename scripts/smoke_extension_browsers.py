@@ -538,7 +538,6 @@ def _exercise_chrome(
                     websocket_url = str(page["webSocketDebuggerUrl"])
                     popup_websocket_url = str(popup["webSocketDebuggerUrl"])
                     if not selection_checked:
-                        selection_checked = True
                         selected = _evaluate(
                             websocket_url,
                             "(() => {"
@@ -568,6 +567,7 @@ def _exercise_chrome(
                         if isinstance(selection_details, dict):
                             selection_details["selected"] = bool(selected)
                         diagnostics["selectedLinks"] = selection_details
+                        selection_checked = True
                     _evaluate(
                         popup_websocket_url,
                         "(() => {"
