@@ -377,6 +377,7 @@ def run(
                 options = EdgeOptions()
                 options.binary_location = str(binary_path or _find_edge())
                 options.add_argument(f"--user-data-dir={profile}")
+                options.add_argument("--disable-features=DisableLoadExtensionCommandLineSwitch")
                 options.add_argument(f"--disable-extensions-except={extension}")
                 options.add_argument(f"--load-extension={extension}")
                 options.add_argument("--autoplay-policy=no-user-gesture-required")

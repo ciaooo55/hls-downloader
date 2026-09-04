@@ -367,6 +367,7 @@ def _create_driver(
 ):
     common = [
         f"--user-data-dir={profile}",
+        "--disable-features=DisableLoadExtensionCommandLineSwitch",
         f"--disable-extensions-except={extension}",
         f"--load-extension={extension}",
         "--headless=new",
