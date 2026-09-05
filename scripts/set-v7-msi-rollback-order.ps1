@@ -145,6 +145,19 @@ try {
     }
     Invoke-MsiNonQuery "UPDATE ``Property`` SET ``Value``='$ProductCode' WHERE ``Property``='ProductCode'"
 
+    # jpackage restores the saved directory for RemoveFoldersEx only. Standard
+    # ARP uninstall also needs it for installed-file custom actions.
+    $installDirValue = Invoke-MsiStringQuery "SELECT ``Name`` FROM ``Registry`` WHERE ``Value``='[INSTALLDIR]'"
+    if ([String]::IsNullOrWhiteSpace($installDirValue)) {
+        throw 'MSI does not persist INSTALLDIR for maintenance operations.'
+    }
+    $installDirSearch = Invoke-MsiStringQuery "SELECT ``Signature_`` FROM ``RegLocator`` WHERE ``Name``='$($installDirValue.Replace("'", "''"))'"
+    if ([String]::IsNullOrWhiteSpace($installDirSearch)) {
+        throw 'MSI is missing the persisted install-directory registry search.'
+    }
+    Invoke-MsiNonQuery "DELETE FROM ``AppSearch`` WHERE ``Property``='INSTALLDIR'"
+    Invoke-MsiNonQuery "INSERT INTO ``AppSearch`` (``Property``,``Signature_``) VALUES ('INSTALLDIR','$installDirSearch')"
+
     # Keep the old uninstall inside the new product transaction and before file
     # installation. A later Type-19 failure then restores the old product.
     $target = [int]$initialize + 10
@@ -196,6 +209,10 @@ try {
     $verifiedUnregisterType = Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='V7UnregisterNativeHost'"
     $verifiedRegisterTarget = Invoke-MsiStringQuery "SELECT ``Target`` FROM ``CustomAction`` WHERE ``Action``='V7RegisterNativeHost'"
     $verifiedUnregisterTarget = Invoke-MsiStringQuery "SELECT ``Target`` FROM ``CustomAction`` WHERE ``Action``='V7UnregisterNativeHost'"
+    $verifiedInstallDirSearch = Invoke-MsiStringQuery "SELECT ``Signature_`` FROM ``AppSearch`` WHERE ``Property``='INSTALLDIR'"
+    if ($verifiedInstallDirSearch -ne $installDirSearch) {
+        throw 'MSI maintenance install-directory search verification failed.'
+    }
     if ([int]$verified -ne $target) {
         throw "MSI rollback sequence verification failed: expected $target, got $verified."
     }
