@@ -334,7 +334,9 @@ $env:HLS_ENGINE_PATH = $engine
         if (-not $exe) { throw 'The v7 installer EXE was not produced in the isolated build cache.' }
         $msi = Get-ChildItem -LiteralPath (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'compose\binaries\main\msi') -Filter "HLSDownloader-$productVersion.msi" -File -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $msi) { throw 'The v7 MSI was not produced in the isolated build cache.' }
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\set-v7-msi-rollback-order.ps1" -MsiPath $msi.FullName
+        $sourceCommit = (& git -C $repo rev-parse HEAD).Trim()
+        $productCode = '{' + $sourceCommit.Substring(0, 8) + '-' + $sourceCommit.Substring(8, 4) + '-' + $sourceCommit.Substring(12, 4) + '-' + $sourceCommit.Substring(16, 4) + '-' + $sourceCommit.Substring(20, 12) + '}'
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\set-v7-msi-rollback-order.ps1" -MsiPath $msi.FullName -ProductCode $productCode
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
         Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.exe")) -Force

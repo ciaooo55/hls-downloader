@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$MsiPath
+    [string]$MsiPath,
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^\{[0-9A-Fa-f-]{36}\}$')]
+    [string]$ProductCode
 )
 
 $ErrorActionPreference = 'Stop'
@@ -128,6 +131,7 @@ try {
         'OpenDatabase', 'InvokeMethod', $null, $installer, @($resolved, 1)
     )
     $current = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveExistingProducts'"
+    $originalProductCode = Invoke-MsiStringQuery "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductCode'"
     $initialize = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='InstallInitialize'"
     $installFiles = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='InstallFiles'"
     $removeFiles = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveFiles'"
@@ -139,6 +143,7 @@ try {
     if ([String]::IsNullOrWhiteSpace($engineFile)) {
         throw 'MSI does not contain HLSDownloaderEngine.exe for Native Host registration actions.'
     }
+    Invoke-MsiNonQuery "UPDATE ``Property`` SET ``Value``='$ProductCode' WHERE ``Property``='ProductCode'"
 
     # Keep the old uninstall inside the new product transaction and before file
     # installation. A later Type-19 failure then restores the old product.
@@ -184,6 +189,7 @@ try {
     )
     $database = $verifyDatabase
     $verified = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveExistingProducts'"
+    $verifiedProductCode = Invoke-MsiStringQuery "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductCode'"
     $verifiedRegisterSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='V7RegisterNativeHost'"
     $verifiedUnregisterSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='V7UnregisterNativeHost'"
     $verifiedRegisterType = Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='V7RegisterNativeHost'"
@@ -192,6 +198,9 @@ try {
     $verifiedUnregisterTarget = Invoke-MsiStringQuery "SELECT ``Target`` FROM ``CustomAction`` WHERE ``Action``='V7UnregisterNativeHost'"
     if ([int]$verified -ne $target) {
         throw "MSI rollback sequence verification failed: expected $target, got $verified."
+    }
+    if ($verifiedProductCode -ne $ProductCode) {
+        throw "MSI ProductCode verification failed: expected $ProductCode, got $verifiedProductCode."
     }
     if (
         [int]$verifiedRegisterSequence -ne $registerSequence -or
@@ -215,6 +224,8 @@ try {
 
 [ordered]@{
     msi = $resolved
+    original_product_code = $originalProductCode
+    verified_product_code = $verifiedProductCode
     original_sequence = [int]$current
     verified_sequence = [int]$verified
     install_initialize_sequence = [int]$initialize
