@@ -210,7 +210,7 @@ function Assert-ExtensionManifest($Manifest, [string]$Browser, [string]$Path) {
     }
 }
 
-function Build-Extension([string]$Resources) {
+function Build-Extension([string]$Resources, [switch]$TestOnly) {
     # HLS_V7_PNPM overrides; otherwise PATH, then the repository-local Node
     # tools directory that bootstrap provisions.
     $pnpmPath = $env:HLS_V7_PNPM
@@ -239,12 +239,17 @@ function Build-Extension([string]$Resources) {
         }
         & $pnpmPath install --frozen-lockfile
         if ($LASTEXITCODE -ne 0) { throw "pnpm install failed with exit $LASTEXITCODE" }
+        if ($TestOnly) {
+            & $pnpmPath test
+            if ($LASTEXITCODE -ne 0) { throw "pnpm test failed with exit $LASTEXITCODE" }
+        }
         & $pnpmPath run build
         if ($LASTEXITCODE -ne 0) { throw "pnpm run build failed with exit $LASTEXITCODE" }
     } finally {
         $env:CI = $previousCi
         Pop-Location
     }
+    if ($TestOnly) { return }
     New-Item -ItemType Directory -Force -Path (Join-Path $Resources 'extensions') | Out-Null
     foreach ($item in @(
         @{ Source = 'chrome-mv3'; Name = "HLSDownloader-$productVersion-Chromium.zip" },
@@ -266,6 +271,13 @@ if ($isPackage) {
 
 $cargoCommand = Get-Command cargo.exe -ErrorAction SilentlyContinue
 $cargo = if ($cargoCommand) { $cargoCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
+if ($Task -eq 'test') {
+    & $cargo test --manifest-path "$repo\native_shell\Cargo.toml" --lib
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & $cargo test --manifest-path "$repo\presenter_ui\Cargo.toml"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Build-Extension -TestOnly
+}
 $engineTarget = if ($isPackage) { 'release' } else { 'debug' }
 & $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-engine
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -323,7 +335,7 @@ $env:HLS_ENGINE_PATH = $engine
                 if ($presenterProcess -and -not $presenterProcess.HasExited) { $presenterProcess.CloseMainWindow() | Out-Null }
             }
         }
-        'test' { & .\gradlew.bat test }
+        'test' { & .\gradlew.bat test --no-daemon }
     'candidate' { & .\gradlew.bat clean createDistributable packageDistributionForCurrentOS }
         'package' { & .\gradlew.bat clean createDistributable packageDistributionForCurrentOS }
         'adversarial' { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\adversarial-v7.ps1" -Scope native }

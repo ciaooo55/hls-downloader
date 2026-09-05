@@ -2487,7 +2487,7 @@ mod tests {
 
     #[test]
     fn authenticated_vod_pause_resume_reuses_completed_segments() {
-        use std::io::{Read, Write};
+        use std::io::{BufRead, BufReader, Write};
         use std::net::TcpListener;
         use std::thread;
 
@@ -2505,13 +2505,28 @@ mod tests {
         let server_requests = Arc::clone(&requests);
         let server = thread::spawn(move || {
             while !server_stop.load(Ordering::SeqCst) {
-                let Ok((mut stream, _)) = listener.accept() else {
+                let Ok((stream, _)) = listener.accept() else {
                     thread::sleep(Duration::from_millis(5));
                     continue;
                 };
-                let mut buf = [0u8; 4096];
-                let count = stream.read(&mut buf).unwrap_or(0);
-                let request = String::from_utf8_lossy(&buf[..count]);
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            let end_of_headers = line == "\r\n" || line == "\n";
+                            request.push_str(&line);
+                            if end_of_headers {
+                                break;
+                            }
+                        }
+                    }
+                }
                 let target = request
                     .lines()
                     .next()
@@ -2552,8 +2567,8 @@ mod tests {
                     "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     body.len()
                 );
-                let _ = stream.write_all(header.as_bytes());
-                let _ = stream.write_all(body);
+                let _ = reader.get_mut().write_all(header.as_bytes());
+                let _ = reader.get_mut().write_all(body);
             }
         });
 
@@ -2643,7 +2658,7 @@ mod tests {
 
     #[test]
     fn authenticated_live_pause_resume_restores_atomic_timeline() {
-        use std::io::{Read, Write};
+        use std::io::{BufRead, BufReader, Write};
         use std::net::TcpListener;
         use std::thread;
 
@@ -2663,13 +2678,28 @@ mod tests {
         let server_requests = Arc::clone(&requests);
         let server = thread::spawn(move || {
             while !server_stop.load(Ordering::SeqCst) {
-                let Ok((mut stream, _)) = listener.accept() else {
+                let Ok((stream, _)) = listener.accept() else {
                     thread::sleep(Duration::from_millis(5));
                     continue;
                 };
-                let mut buf = [0u8; 4096];
-                let count = stream.read(&mut buf).unwrap_or(0);
-                let request = String::from_utf8_lossy(&buf[..count]);
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            let end_of_headers = line == "\r\n" || line == "\n";
+                            request.push_str(&line);
+                            if end_of_headers {
+                                break;
+                            }
+                        }
+                    }
+                }
                 let target = request
                     .lines()
                     .next()
@@ -2718,8 +2748,8 @@ mod tests {
                     "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     body.len()
                 );
-                let _ = stream.write_all(header.as_bytes());
-                let _ = stream.write_all(body);
+                let _ = reader.get_mut().write_all(header.as_bytes());
+                let _ = reader.get_mut().write_all(body);
             }
         });
 
