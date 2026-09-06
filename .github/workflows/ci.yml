@@ -27,6 +27,10 @@ jobs:
           if (Test-Path -LiteralPath 'config.default.json') {
             throw 'Legacy config.default.json must not return: Rust Core and the versioned protocol own active v7 settings/defaults.'
           }
+          $buildScript = Get-Content -LiteralPath 'scripts\build-v7.ps1' -Raw -Encoding UTF8
+          if ($buildScript -match '(?i)[A-Z]:\\Users\\[^\\]+\\') {
+            throw 'Release build scripts must not depend on a developer-specific Windows user profile path.'
+          }
 
       - name: Validate PowerShell 5.1 and 7
         shell: pwsh

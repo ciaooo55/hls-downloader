@@ -42,6 +42,7 @@ $provenanceForBuild = $provenance
 $packageProvenanceTemp = $null
 $packageStagingRoot = $null
 $packageSwapBackupRoot = $null
+$packageResources = $null
 $composeSubstDrive = $null
 $previousComposeBuildDir = $env:HLS_COMPOSE_BUILD_DIR
 
@@ -266,7 +267,12 @@ function Build-Extension([string]$Resources, [switch]$TestOnly) {
 }
 
 if ($isPackage) {
-    Build-Extension (Join-Path $repo 'desktop_ui\resources\common')
+    $packageResources = Join-Path $repo 'desktop_ui\resources\common'
+    if (Test-Path -LiteralPath $packageResources) {
+        Remove-Item -LiteralPath $packageResources -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $packageResources | Out-Null
+    Build-Extension $packageResources
 }
 
 $cargoCommand = Get-Command cargo.exe -ErrorAction SilentlyContinue
@@ -298,8 +304,10 @@ if (!(Test-Path -LiteralPath $presenter)) { throw "v7 presenter was not produced
 Push-Location "$repo\desktop_ui"
 try {
 if ($isPackage) {
-    $resources = Join-Path $repo 'desktop_ui\resources\common'
-    New-Item -ItemType Directory -Force -Path $resources | Out-Null
+    $resources = $packageResources
+    if ([String]::IsNullOrWhiteSpace($resources) -or -not (Test-Path -LiteralPath $resources -PathType Container)) {
+        throw 'The isolated package resource directory was not prepared.'
+    }
     Copy-Item -LiteralPath (Join-Path $repo 'assets\app-icon.ico') -Destination (Join-Path $resources 'app-icon.ico') -Force
     Copy-Item -LiteralPath $engine -Destination (Join-Path $resources 'HLSDownloaderEngine.exe') -Force
     # The dedicated bridge has no Compose/Slint dependency and never opens SQLite.
@@ -308,14 +316,24 @@ if ($isPackage) {
     Copy-Item -LiteralPath $presenter -Destination (Join-Path $resources 'HLSDownloaderPresenter.exe') -Force
     Copy-Item -LiteralPath $featureParity -Destination (Join-Path $resources 'FEATURE-PARITY.json') -Force
     Copy-Item -LiteralPath $provenanceForBuild -Destination (Join-Path $resources 'BUILD-PROVENANCE.json') -Force
-    # Ship the media tools beside the v7 workbench when the local toolchain
-    # provides them. The Core reads these names from its packaged directory.
-    $ffmpegRoot = if ($env:HLS_V7_FFMPEG_DIR) { $env:HLS_V7_FFMPEG_DIR } else { 'C:\Users\lee\.conda\envs\test\Library\bin' }
-    foreach ($tool in @('ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe')) {
-        $source = Join-Path $ffmpegRoot $tool
-        if (Test-Path -LiteralPath $source) {
-            Copy-Item -LiteralPath $source -Destination (Join-Path $resources $tool) -Force
-        }
+    # Formal and candidate packages must never inherit media binaries from a
+    # previous ignored resources/common directory or a developer-specific path.
+    $requiredMediaTools = @('ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe')
+    $ffmpegRoot = $env:HLS_V7_FFMPEG_DIR
+    if ([String]::IsNullOrWhiteSpace($ffmpegRoot)) {
+        $ffmpegCommand = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
+        if ($ffmpegCommand) { $ffmpegRoot = Split-Path $ffmpegCommand.Source -Parent }
+    }
+    if ([String]::IsNullOrWhiteSpace($ffmpegRoot)) {
+        throw 'Candidate/formal packaging requires HLS_V7_FFMPEG_DIR or ffmpeg.exe on PATH; ffmpeg, ffprobe and ffplay must come from the same directory.'
+    }
+    $ffmpegRoot = [IO.Path]::GetFullPath($ffmpegRoot)
+    $missingMediaTools = @($requiredMediaTools | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ffmpegRoot $_) -PathType Leaf) })
+    if ($missingMediaTools.Count -ne 0) {
+        throw "Candidate/formal packaging requires ffmpeg.exe, ffprobe.exe and ffplay.exe in one directory. Missing from ${ffmpegRoot}: $($missingMediaTools -join ', ')"
+    }
+    foreach ($tool in $requiredMediaTools) {
+        Copy-Item -LiteralPath (Join-Path $ffmpegRoot $tool) -Destination (Join-Path $resources $tool) -Force
     }
     Copy-CurlImpersonate $resources
     Copy-LibMpv $resources
@@ -336,7 +354,7 @@ $env:HLS_ENGINE_PATH = $engine
             }
         }
         'test' { & .\gradlew.bat test --no-daemon }
-    'candidate' { & .\gradlew.bat clean createDistributable packageDistributionForCurrentOS }
+        'candidate' { & .\gradlew.bat clean createDistributable packageDistributionForCurrentOS }
         'package' { & .\gradlew.bat clean createDistributable packageDistributionForCurrentOS }
         'adversarial' { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\adversarial-v7.ps1" -Scope native }
     }
@@ -387,6 +405,12 @@ $env:HLS_ENGINE_PATH = $engine
             $featureHashInPackage = (Get-FileHash -LiteralPath $featureInPackage -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($provenanceJson.feature_parity_sha256 -ne $featureHashInPackage) {
                 throw "Portable feature parity hash does not match provenance: $($provenanceJson.feature_parity_sha256) != $featureHashInPackage"
+            }
+            foreach ($tool in $requiredMediaTools) {
+                $packagedTool = Join-Path $portableRoot ("app\resources\$tool")
+                if (-not (Test-Path -LiteralPath $packagedTool -PathType Leaf)) {
+                    throw "Portable package is missing required media tool: $tool"
+                }
             }
             foreach ($extension in @('Chromium', 'Firefox')) {
                 $archive = Join-Path $portableRoot ("extensions\HLSDownloader-$productVersion-$extension.zip")
@@ -505,6 +529,9 @@ $env:HLS_ENGINE_PATH = $engine
     }
     if ($null -ne $packageStagingRoot -and (Test-Path -LiteralPath $packageStagingRoot)) {
         Remove-Item -LiteralPath $packageStagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $packageResources -and (Test-Path -LiteralPath $packageResources)) {
+        Remove-Item -LiteralPath $packageResources -Recurse -Force -ErrorAction SilentlyContinue
     }
     if ($null -ne $composeSubstDrive) {
         & subst.exe $composeSubstDrive /d | Out-Null
