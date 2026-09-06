@@ -72,6 +72,10 @@ jobs:
         working-directory: desktop_ui
         run: .\gradlew.bat test --no-daemon
 
+      - name: Build Compose distribution image
+        working-directory: desktop_ui
+        run: .\gradlew.bat createDistributable --no-daemon
+
       - name: Install extension dependencies
         working-directory: extension
         run: pnpm install --frozen-lockfile
