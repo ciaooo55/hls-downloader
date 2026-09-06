@@ -86,7 +86,7 @@ pub(crate) fn validate_custom_command(command: &str) -> Result<(), String> {
         "ssh",
         "start",
     ];
-    if BLOCKED.iter().any(|item| *item == name.as_str()) {
+    if BLOCKED.contains(&name.as_str()) {
         return Err("扫描命令不能调用系统脚本解释器".into());
     }
     Ok(())
