@@ -158,11 +158,11 @@ try {
     Invoke-MsiNonQuery "DELETE FROM ``AppSearch`` WHERE ``Property``='INSTALLDIR'"
     Invoke-MsiNonQuery "INSERT INTO ``AppSearch`` (``Property``,``Signature_``) VALUES ('INSTALLDIR','$installDirSearch')"
 
-    # Keep the old uninstall inside the new product transaction and before file
-    # installation. A later Type-19 failure then restores the old product.
-    $target = [int]$initialize + 10
-    if ($target -le [int]$initialize -or $target -ge [int]$installFiles) {
-        throw 'MSI does not provide a rollback-safe upgrade slot before InstallFiles.'
+    # Commit the new product before removing the old one. A failed new install
+    # then leaves the old product registered and its files intact.
+    $target = [int]$finalize + 10
+    if ($target -le [int]$finalize) {
+        throw 'MSI does not provide a rollback-safe sequence slot after InstallFinalize.'
     }
     if ([int]$current -ne $target) {
         Invoke-MsiNonQuery "UPDATE ``InstallExecuteSequence`` SET ``Sequence``=$target WHERE ``Action``='RemoveExistingProducts'"
