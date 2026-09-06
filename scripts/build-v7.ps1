@@ -162,10 +162,6 @@ function Copy-LibMpv([string]$Destination) {
 }
 
 function Copy-CurlImpersonate([string]$Destination) {
-    Get-VerifiedFile $curlImpersonateUrl $curlImpersonateExe $curlImpersonateSha256 "curl-impersonate $curlImpersonateVersion Windows x64 archive"
-}
-
-function Copy-CurlImpersonate([string]$Destination) {
     Get-VerifiedFile $curlImpersonateUrl $curlImpersonateArchive $curlImpersonateSha256 "curl-impersonate $curlImpersonateVersion Windows x64 archive"
     $systemTar = Join-Path $env:SystemRoot 'System32\tar.exe'
     $tarExe = if (Test-Path -LiteralPath $systemTar -PathType Leaf) {
