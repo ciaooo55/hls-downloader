@@ -31,6 +31,15 @@ jobs:
           if ($buildScript -match '(?i)[A-Z]:\\Users\\[^\\]+\\') {
             throw 'Release build scripts must not depend on a developer-specific Windows user profile path.'
           }
+          if ($buildScript -match '(?i)[A-Z]:\\HLSDownloaderBuildCache\\') {
+            throw 'The active v7 build must not fall back to a legacy fixed-drive build cache.'
+          }
+          foreach ($path in @('scripts\bootstrap-v7-toolchain.ps1', 'scripts\build-v7.ps1', 'scripts\cleanup-v7-build-cache.ps1')) {
+            $source = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+            if ($source -notmatch '\$env:HLS_V7_BUILD_CACHE') {
+              throw "$path must honor the shared HLS_V7_BUILD_CACHE override."
+            }
+          }
 
       - name: Validate PowerShell 5.1 and 7
         shell: pwsh

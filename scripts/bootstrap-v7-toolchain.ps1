@@ -2,8 +2,9 @@
 param([string]$JdkRoot='',[string]$GradleHome='')
 $ErrorActionPreference='Stop'
 $repo=(Resolve-Path "$PSScriptRoot\..").Path
-# Toolchain downloads default inside the repository; HLS_V7_BUILD_CACHE relocates them.
-$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { $env:HLS_V7_BUILD_CACHE } else { Join-Path $repo '.tool-cache\build-cache' }
+# Toolchain downloads default inside the repository; HLS_V7_BUILD_CACHE relocates bootstrap/build/cleanup together.
+if ($env:HLS_V7_BUILD_CACHE -and -not [IO.Path]::IsPathRooted($env:HLS_V7_BUILD_CACHE)) { throw 'HLS_V7_BUILD_CACHE must be an absolute path.' }
+$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { [IO.Path]::GetFullPath($env:HLS_V7_BUILD_CACHE) } else { Join-Path $repo '.tool-cache\build-cache' }
 if(-not $JdkRoot){ $JdkRoot = Join-Path $cacheRoot 'jdk-21' }
 if(-not $GradleHome){ $GradleHome = Join-Path $cacheRoot 'gradle' }
 if(Test-Path "$JdkRoot\bin\java.exe"){ Write-Output "JDK already ready: $JdkRoot"; exit 0 }

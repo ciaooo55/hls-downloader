@@ -57,7 +57,7 @@ function Mount-ComposeBuildCache([string]$Path) {
             return $drive
         }
     }
-    throw 'No free drive letter is available for the repository-local ASCII Compose build path.'
+    throw 'No free drive letter is available for the ASCII Compose build path.'
 }
 
 if ($Task -eq 'candidate') {
@@ -91,23 +91,23 @@ if ($isPackage) {
     Move-Item -LiteralPath $packageProvenanceTemp -Destination $provenanceForBuild -Force
     $artifactRoot = $packageStagingRoot
 }
-# Project build outputs stay inside the repository.
-$cacheRoot = Join-Path $repo '.tool-cache\build-cache'
+# Bootstrap, build and cleanup share one cache root. It is repository-local by
+# default, while HLS_V7_BUILD_CACHE intentionally relocates all three together.
+if ($env:HLS_V7_BUILD_CACHE -and -not [IO.Path]::IsPathRooted($env:HLS_V7_BUILD_CACHE)) { throw 'HLS_V7_BUILD_CACHE must be an absolute path.' }
+$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { [IO.Path]::GetFullPath($env:HLS_V7_BUILD_CACHE) } else { Join-Path $repo '.tool-cache\build-cache' }
 $env:CARGO_HOME=Join-Path $cacheRoot 'cargo'
 $env:CARGO_TARGET_DIR=Join-Path $cacheRoot 'cargo-target'
 $env:GRADLE_USER_HOME=Join-Path $cacheRoot 'gradle'
 # jlink reads its @args file in the system codepage. A temporary drive alias
-# gives it an ASCII path while every generated file remains in this repository.
+# gives it an ASCII path while generated files remain under the selected cache.
 $composeSubstDrive = Mount-ComposeBuildCache $cacheRoot
 $env:HLS_COMPOSE_BUILD_DIR = "$composeSubstDrive\compose-build"
-# Corepack state stays in the repository so the pinned pnpm@11.7.0 default
-# applies regardless of the user-level corepack home.
-$env:COREPACK_HOME=Join-Path $repo '.tool-cache\corepack-home'
+# Keep Corepack state under the same selected cache so relocation/cleanup do
+# not leave a second hidden tool state behind in the repository.
+$env:COREPACK_HOME=Join-Path $cacheRoot 'corepack-home'
 $env:COREPACK_ENABLE_DOWNLOAD_PROMPT='0'
 $jdkRoot = $env:HLS_V7_JAVA_HOME
 if(-not $jdkRoot -and (Test-Path (Join-Path $cacheRoot 'jdk-21\bin\java.exe'))){ $jdkRoot = Join-Path $cacheRoot 'jdk-21' }
-# Legacy read-only tool location from earlier installs; tools are not project content.
-if(-not $jdkRoot -and (Test-Path 'E:\HLSDownloaderBuildCache\jdk-21\bin\java.exe')){ $jdkRoot = 'E:\HLSDownloaderBuildCache\jdk-21' }
 if(-not $jdkRoot){ throw 'JDK 21 was not found. Set HLS_V7_JAVA_HOME or run scripts\bootstrap-v7-toolchain.ps1.' }
 $env:JAVA_HOME=$jdkRoot
 if(!(Test-Path "$env:JAVA_HOME\bin\java.exe")){ throw "JDK 21 is missing at $env:JAVA_HOME. Run scripts\bootstrap-v7-toolchain.ps1." }
