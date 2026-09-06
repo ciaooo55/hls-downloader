@@ -10,8 +10,11 @@ mod checksum;
 mod clipboard;
 #[cfg(feature = "full-core")]
 mod connection_parts;
+#[cfg(not(feature = "full-core"))]
+mod client_event;
 mod contract;
 mod core_ipc;
+#[cfg(feature = "full-core")]
 mod core_runtime;
 #[cfg(feature = "full-core")]
 mod core_server;
@@ -116,7 +119,10 @@ pub use core_ipc::{
 };
 #[cfg(windows)]
 pub use core_ipc::{NamedPipeClient, NamedPipeServer};
+#[cfg(feature = "full-core")]
 pub use core_runtime::{CoreRuntime, EventEnvelope};
+#[cfg(not(feature = "full-core"))]
+pub use client_event::EventEnvelope;
 #[cfg(feature = "full-core")]
 pub use core_server::CoreServer;
 #[cfg(feature = "full-core")]
