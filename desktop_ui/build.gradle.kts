@@ -34,6 +34,7 @@ compose.desktop { application {
     jvmArgs += listOf(
         "-Dcompose.accessibility.enable=true",
         "-Djavax.accessibility.assistive_technologies=com.sun.java.accessibility.AccessBridge",
+        "-Dskiko.renderApi=SOFTWARE",
     )
     nativeDistributions {
         modules("jdk.accessibility", "jdk.httpserver")
