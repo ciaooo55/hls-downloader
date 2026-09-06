@@ -9,6 +9,7 @@ param(
 
     [string]$OldMsiPath = '',
     [string]$OldMsiUrl = 'https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.0/HLSDownloader-7.0.0-Windows-x64.msi',
+    [string]$OldMsiSha256 = 'ec5d26ea9fbb698ebdccb0b1bdfb9058c386883698e925f2fa2a7de74007d9d9',
     [string]$InstallDir = 'E:\h',
     [string]$CheckpointPath = '',
     [string]$ReportPath = ''
@@ -205,6 +206,9 @@ try {
 
     $old = if ($OldMsiPath) { (Resolve-Path -LiteralPath $OldMsiPath).Path } else { Join-Path $artifacts 'HLSDownloader-7.0.0-Windows-x64.msi' }
     if (-not (Test-Path -LiteralPath $old -PathType Leaf)) { Invoke-WebRequest -Uri $OldMsiUrl -OutFile $old -UseBasicParsing }
+    if ($OldMsiSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "Old MSI SHA-256 is invalid: $OldMsiSha256" }
+    $oldHash = (Get-FileHash -LiteralPath $old -Algorithm SHA256).Hash.ToLowerInvariant()
+    Add-Step 'old-msi-sha256' ($oldHash -eq $OldMsiSha256.ToLowerInvariant()) $oldHash
     Add-Step 'old-msi-version' ((Get-MsiProperty $old 'ProductVersion') -eq '7.0.0') (Get-MsiProperty $old 'ProductVersion')
 
     $candidateVersion = Get-MsiProperty $candidate 'ProductVersion'
@@ -286,7 +290,7 @@ try {
     Add-Step 'uninstall-exit' ($uninstallExit -in @(0, 3010, 1641)) $uninstallExit
     Add-Step 'product-unregistered' ($null -eq (Get-InstalledProduct $upgradeCode)) $installedProductCode
     $installedProductCode = $null
-    $result = [ordered]@{ schema = 1; scenario = $Scenario; status = 'passed'; restart_scope = 'application-process-only'; system_reboot = $false; install_dir = $InstallDir; candidate_manifest = $manifestPath; candidate_msi = $candidate; old_msi = $old; started_at = $started; finished_at = (Get-Date).ToUniversalTime().ToString('o'); steps = $steps }
+    $result = [ordered]@{ schema = 1; scenario = $Scenario; status = 'passed'; restart_scope = 'application-process-only'; system_reboot = $false; install_dir = $InstallDir; candidate_manifest = $manifestPath; candidate_msi = $candidate; old_msi = $old; old_msi_sha256 = $oldHash; started_at = $started; finished_at = (Get-Date).ToUniversalTime().ToString('o'); steps = $steps }
 } catch {
     $result = [ordered]@{ schema = 1; scenario = $Scenario; status = 'failed'; restart_scope = 'application-process-only'; system_reboot = $false; install_dir = $InstallDir; started_at = $started; finished_at = (Get-Date).ToUniversalTime().ToString('o'); error = $_.Exception.Message; steps = $steps }
 } finally {
