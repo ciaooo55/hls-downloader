@@ -11,6 +11,9 @@ $env:JAVA_HOME = 'E:\HLSDownloaderBuildCache\jdk-21'
 The packaged product defaults to Skiko software rendering for broad Windows compatibility. For diagnostics or performance comparison, opt into a different backend without editing source:
 
 ```powershell
+$env:HLS_UI_RENDER_API = 'ANGLE'
+.\gradlew.bat run
+
 $env:HLS_UI_RENDER_API = 'DIRECT3D'
 .\gradlew.bat run
 
@@ -18,4 +21,4 @@ $env:HLS_UI_RENDER_API = 'DIRECT3D'
 .\gradlew.bat run -PhlsRenderApi=OPENGL
 ```
 
-Accepted values are `SOFTWARE`, `DIRECT3D`, and `OPENGL`. Release builds should keep the default unless a renderer-specific validation run is intentional.
+Accepted values are `SOFTWARE`, `ANGLE`, `DIRECT3D`, and `OPENGL`. Release builds should keep the default unless a renderer-specific validation run is intentional. `OPENGL` is a diagnostic option for supported Windows architectures; on Windows ARM64 prefer `ANGLE` or `DIRECT3D`.
