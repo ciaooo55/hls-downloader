@@ -2,7 +2,7 @@ name: v7 Candidate Package
 
 on:
   workflow_dispatch:
-  pull_request:
+  push:
     paths:
       - '.github/workflows/package-v7-candidate.yml'
       - 'scripts/bootstrap-v7-media-tools.ps1'
@@ -23,10 +23,12 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 70
     env:
-      HLS_V7_BUILD_CACHE: ${{ runner.temp }}\hls-v7-build-cache
+      HLS_V7_BUILD_CACHE: ${{ runner.temp }}\\hls-v7-build-cache
     steps:
       - name: Check out source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
 
       - name: Set up Rust 1.98.1
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
@@ -52,9 +54,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & .\scripts\bootstrap-v7-toolchain.ps1
+          & .\\scripts\\bootstrap-v7-toolchain.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $mediaDir = & .\scripts\bootstrap-v7-media-tools.ps1
+          $mediaDir = & .\\scripts\\bootstrap-v7-media-tools.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ([String]::IsNullOrWhiteSpace($mediaDir)) { throw 'FFmpeg bootstrap did not return a media directory.' }
           "media_dir=$mediaDir" >> $env:GITHUB_OUTPUT
@@ -62,15 +64,15 @@ jobs:
       - name: Build v7 candidate package
         shell: pwsh
         env:
-          HLS_V7_JAVA_HOME: ${{ runner.temp }}\hls-v7-build-cache\jdk-21
+          HLS_V7_JAVA_HOME: ${{ runner.temp }}\\hls-v7-build-cache\\jdk-21
           HLS_V7_FFMPEG_DIR: ${{ steps.toolchain.outputs.media_dir }}
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           $env:HLS_V7_PNPM = (Get-Command pnpm.cmd -ErrorAction Stop).Source
-          & .\scripts\build-v7.ps1 -Task candidate
+          & .\\scripts\\build-v7.ps1 -Task candidate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $manifest = 'artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json'
+          $manifest = 'artifacts\\v7-productization\\candidate\\ARTIFACT-MANIFEST.json'
           if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw "Candidate manifest is missing: $manifest" }
           Get-Content -LiteralPath $manifest -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
 
