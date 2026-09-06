@@ -93,6 +93,7 @@ if ($isPackage) {
 }
 # Bootstrap, build and cleanup share one cache root. It is repository-local by
 # default, while HLS_V7_BUILD_CACHE intentionally relocates all three together.
+if ($env:HLS_V7_BUILD_CACHE -and -not [IO.Path]::IsPathRooted($env:HLS_V7_BUILD_CACHE)) { throw 'HLS_V7_BUILD_CACHE must be an absolute path.' }
 $cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { [IO.Path]::GetFullPath($env:HLS_V7_BUILD_CACHE) } else { Join-Path $repo '.tool-cache\build-cache' }
 $env:CARGO_HOME=Join-Path $cacheRoot 'cargo'
 $env:CARGO_TARGET_DIR=Join-Path $cacheRoot 'cargo-target'
