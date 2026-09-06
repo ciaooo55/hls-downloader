@@ -7,3 +7,15 @@ $env:GRADLE_USER_HOME = 'E:\HLSDownloaderBuildCache\gradle'
 $env:JAVA_HOME = 'E:\HLSDownloaderBuildCache\jdk-21'
 .\gradlew.bat run
 ```
+
+The packaged product defaults to Skiko software rendering for broad Windows compatibility. For diagnostics or performance comparison, opt into a different backend without editing source:
+
+```powershell
+$env:HLS_UI_RENDER_API = 'DIRECT3D'
+.\gradlew.bat run
+
+# Equivalent Gradle property form
+.\gradlew.bat run -PhlsRenderApi=OPENGL
+```
+
+Accepted values are `SOFTWARE`, `DIRECT3D`, and `OPENGL`. Release builds should keep the default unless a renderer-specific validation run is intentional.
