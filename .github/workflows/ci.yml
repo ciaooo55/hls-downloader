@@ -52,7 +52,7 @@ jobs:
           components: clippy
 
       - name: Cache Rust Core dependencies and target
-        uses: actions/cache@a102210dd13b6f687ffa4262c9f08b3c00d3c459
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
         with:
           path: |
             ~/.cargo/registry
@@ -83,7 +83,7 @@ jobs:
           toolchain: stable
 
       - name: Cache presenter dependencies and target
-        uses: actions/cache@a102210dd13b6f687ffa4262c9f08b3c00d3c459
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
         with:
           path: |
             ~/.cargo/registry
