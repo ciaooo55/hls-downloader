@@ -100,7 +100,9 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           cargo test --locked
           cargo build --locked --bin hls-downloader-presenter
-          cargo clippy --locked --bin hls-downloader-presenter -- -D warnings
+          # The explicit loop keeps the disconnect branch visible beside the event body.
+          # Preserve that readability choice while still failing CI on every other warning.
+          cargo clippy --locked --bin hls-downloader-presenter -- -D warnings -A clippy::while_let_loop
 
       - name: Verify presenter Windows identity
         shell: pwsh
