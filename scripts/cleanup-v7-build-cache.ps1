@@ -18,6 +18,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot\..").Path
 # Match bootstrap/build exactly so an explicitly relocated cache is cleaned at the same resolved path.
+if ($env:HLS_V7_BUILD_CACHE -and -not [IO.Path]::IsPathRooted($env:HLS_V7_BUILD_CACHE)) { throw 'HLS_V7_BUILD_CACHE must be an absolute path.' }
 $cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { [IO.Path]::GetFullPath($env:HLS_V7_BUILD_CACHE) } else { Join-Path $repo '.tool-cache\build-cache' }
 if([String]::IsNullOrWhiteSpace($ArchiveRoot)) { $ArchiveRoot = Join-Path $repo 'artifacts\v7-archives' }
 $legacyPaths = @(
