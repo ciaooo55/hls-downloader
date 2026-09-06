@@ -53,6 +53,7 @@ pub fn claim_v7_presenter_instance() -> Result<(), String> {
         .create(true)
         .read(true)
         .write(true)
+        .truncate(false)
         .open(&path)
         .map_err(|error| format!("open presenter lock: {error}"))?;
     try_exclusive_lock(&file)?;
@@ -109,6 +110,7 @@ fn claim_profile_lock() -> Result<(), String> {
         .create(true)
         .read(true)
         .write(true)
+        .truncate(false)
         .open(&path)
         .map_err(|error| format!("open instance lock: {error}"))?;
     try_exclusive_lock(&file)?;
