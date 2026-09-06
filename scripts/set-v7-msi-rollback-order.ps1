@@ -158,11 +158,11 @@ try {
     Invoke-MsiNonQuery "DELETE FROM ``AppSearch`` WHERE ``Property``='INSTALLDIR'"
     Invoke-MsiNonQuery "INSERT INTO ``AppSearch`` (``Property``,``Signature_``) VALUES ('INSTALLDIR','$installDirSearch')"
 
-    # Commit the new product before removing the old one. A failed new install
-    # then leaves the old product registered and its files intact.
-    $target = [int]$finalize + 10
-    if ($target -le [int]$finalize) {
-        throw 'MSI does not provide a rollback-safe sequence slot after InstallFinalize.'
+    # Remove the old jpackage product before installing new files; its uninstall
+    # recursively removes INSTALLDIR even when component GUIDs are stable.
+    $target = [int]$initialize + 10
+    if ($target -le [int]$initialize -or $target -ge [int]$installFiles) {
+        throw 'MSI does not provide a major-upgrade slot before InstallFiles.'
     }
     if ([int]$current -ne $target) {
         Invoke-MsiNonQuery "UPDATE ``InstallExecuteSequence`` SET ``Sequence``=$target WHERE ``Action``='RemoveExistingProducts'"

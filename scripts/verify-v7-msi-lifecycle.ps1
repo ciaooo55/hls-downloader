@@ -166,11 +166,15 @@ function Add-Type19Failure([string]$Path) {
     $database = $null
     try {
         $database = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @($Path, 1))
+        $initialize = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='InstallInitialize'"
+        $removeExisting = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveExistingProducts'"
+        $failureSequence = [int]$initialize + 5
+        if ($failureSequence -ge [int]$removeExisting) { throw 'MSI has no failure-injection slot before removing the installed product.' }
         foreach ($sql in @(
             "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='V7ForcedRollback'",
             "DELETE FROM ``CustomAction`` WHERE ``Action``='V7ForcedRollback'",
             "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('V7ForcedRollback',19,'','Injected lifecycle rollback failure')",
-            "INSERT INTO ``InstallExecuteSequence`` (``Action``,``Condition``,``Sequence``) VALUES ('V7ForcedRollback','NOT Installed',6590)"
+            "INSERT INTO ``InstallExecuteSequence`` (``Action``,``Condition``,``Sequence``) VALUES ('V7ForcedRollback','NOT Installed',$failureSequence)"
         )) {
             $view = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @($sql))
             try { $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null }
