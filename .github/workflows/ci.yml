@@ -40,6 +40,19 @@ jobs:
               throw "$path must honor the shared HLS_V7_BUILD_CACHE override."
             }
           }
+          $bootstrapScript = Get-Content -LiteralPath 'scripts\bootstrap-v7-toolchain.ps1' -Raw -Encoding UTF8
+          if ($bootstrapScript.Contains('api.adoptium.net/v3/binary/latest')) {
+            throw 'The v7 JDK bootstrap must not follow Adoptium latest; release inputs must be pinned.'
+          }
+          foreach ($required in @(
+            '21.0.12.1+1',
+            'f9d6e191ab098c0d416e7d588a24420a8621cd2f4720dab2459b8b7b2d2d8b4e',
+            'Get-FileHash'
+          )) {
+            if (-not $bootstrapScript.Contains($required)) {
+              throw "The v7 JDK bootstrap is missing pinned supply-chain input: $required"
+            }
+          }
 
       - name: Validate PowerShell 5.1 and 7
         shell: pwsh
