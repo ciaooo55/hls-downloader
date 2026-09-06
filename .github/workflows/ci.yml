@@ -79,7 +79,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          cargo test --locked --lib
+          # Player tests intentionally toggle process-wide backend env hooks; serial execution prevents cross-test contamination.
+          cargo test --locked --lib -- --test-threads=1
           cargo build --locked --bin HLSDownloaderUpdater
           cargo clippy --locked --all-targets
 
