@@ -7,25 +7,19 @@ publish = false
 
 [features]
 default = ["full-core"]
-full-core = [
-    "dep:rusqlite",
-    "dep:tokio",
-    "dep:russh",
-    "dep:russh-sftp",
-    "dep:schannel",
-]
+full-core = []
 presenter-client = []
 
 [dependencies]
-rusqlite = { version = "0.37", features = ["bundled", "backup"], optional = true }
+rusqlite = { version = "0.37", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "macros", "time", "sync"], optional = true }
-russh = { version = "0.62", default-features = false, features = ["flate2", "ring", "rsa"], optional = true }
-russh-sftp = { version = "2.4", optional = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
+russh = { version = "0.62", default-features = false, features = ["flate2", "ring", "rsa"] }
+russh-sftp = "2.4"
 
 [target.'cfg(windows)'.dependencies]
-schannel = { version = "0.1", optional = true }
+schannel = "0.1"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
