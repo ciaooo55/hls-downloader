@@ -1,10 +1,21 @@
 # HLS Downloader 7.0.1
 
-Windows-first desktop download manager with one active product architecture:
+Windows-first desktop download manager for resilient long-running transfers and native browser handoff.
 
-- `desktop_ui/`: Kotlin Compose Desktop workbench.
+Current v7 capabilities include:
+
+- HTTP/HTTPS downloads with resume, mirrors, per-task request identity and recovery controls.
+- HLS and DASH media downloads, including live/VOD workflows and authenticated request replay.
+- FTP, SFTP and BitTorrent transfers alongside ordinary web downloads.
+- Chromium and Firefox Manifest V3 browser integration with native confirmation, recovery and media push flows.
+- Persistent Rust Core ownership of downloads and SQLite state, so closing the workbench, browser or player does not terminate active transfers.
+- Windows desktop workbench, local playback, LAN casting/TVBox push, update/rollback validation and accessibility support.
+
+The active product architecture is deliberately split by responsibility:
+
+- `desktop_ui/`: Kotlin Compose Desktop shipping workbench.
 - `native_shell/`: resident Rust Core, SQLite owner, transfer engines and Native Messaging host.
-- `presenter_ui/`: small native presenter process for browser confirmation/progress/completion windows.
+- `presenter_ui/`: small native presenter process for low-latency browser confirmation/progress/completion windows.
 - `extension/`: WXT Manifest V3 extension for Chromium and Firefox.
 
 Python, React, Tauri, WebView2 and the v6 Win32 supervisor are not part of the active source tree. Historical implementations remain available through Git tags, including `v3.0.39`, `v5.0.13` and `v6.0.1`.

@@ -580,12 +580,12 @@ class EnginePipeClient(
     fun loadSettings(): EngineSettingsDto = session { connection ->
         val response = connection.request(request("load_settings"))
         response.requireType("settings", "读取设置失败")
-        protocolJson.decodeFromJsonElement(EngineSettingsDto.serializer(), response)
+        decodeEngineSettings(response)
     }
 
     fun saveSettings(settings: EngineSettingsDto): EngineSettingsDto {
         val response = storeSettings(settings.toStorageMap())
-        return protocolJson.decodeFromJsonElement(EngineSettingsDto.serializer(), response)
+        return decodeEngineSettings(response)
     }
 
     fun saveDefaultCookie(cookie: String): EngineSettingsDto = session { connection ->
@@ -593,7 +593,7 @@ class EnginePipeClient(
             put("type", "set_default_cookie"); put("request_id", nextRequestId()); put("cookie", cookie)
         })
         response.requireType("settings", "默认 Cookie 保存失败")
-        protocolJson.decodeFromJsonElement(EngineSettingsDto.serializer(), response)
+        decodeEngineSettings(response)
     }
 
     internal fun saveSiteRuleCredential(edit: SiteRuleCredentialEdit): EngineSettingsDto = session { connection ->
@@ -608,7 +608,7 @@ class EnginePipeClient(
             put("clear", edit.clear)
         })
         response.requireType("settings", "站点凭据保存失败")
-        protocolJson.decodeFromJsonElement(EngineSettingsDto.serializer(), response)
+        decodeEngineSettings(response)
     }
 
     fun storeSettings(values: Map<String, JsonElement>): JsonObject = session { connection ->

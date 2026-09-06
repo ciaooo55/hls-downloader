@@ -52,4 +52,44 @@ class SelectionTest {
         val program = TaskDto(id = "program", filename = "setup.exe", status = "completed", availableActions = listOf("open", "launch"))
         assertTrue("launch" in taskMenuActions(program))
     }
+
+    @Test fun emptyBatchHasNoActions() {
+        assertTrue(batchTaskMenuActions(emptyList()).isEmpty())
+    }
+
+    @Test fun batchMenuKeepsOnlyCommonBatchSafeActions() {
+        val first = TaskDto(
+            id = "first",
+            filename = "movie.mp4",
+            status = "paused",
+            playbackReady = true,
+            availableActions = listOf("resume", "delete", "open", "play"),
+        )
+        val second = TaskDto(
+            id = "second",
+            filename = "archive.zip",
+            status = "paused",
+            availableActions = listOf("resume", "delete", "open"),
+        )
+        assertEquals(
+            listOf("resume", "delete", "move_queue", "delete_files"),
+            batchTaskMenuActions(listOf(first, second)),
+        )
+    }
+
+    @Test fun derivedBatchActionsRequireEverySelectedTaskToSupportThem() {
+        val deletable = TaskDto(
+            id = "deletable",
+            filename = "one.bin",
+            status = "downloading",
+            availableActions = listOf("cancel", "delete"),
+        )
+        val cancelOnly = TaskDto(
+            id = "cancel-only",
+            filename = "two.bin",
+            status = "downloading",
+            availableActions = listOf("cancel"),
+        )
+        assertEquals(listOf("cancel"), batchTaskMenuActions(listOf(deletable, cancelOnly)))
+    }
 }

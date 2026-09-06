@@ -59,7 +59,7 @@ pub fn parse_site_rules(raw: &str) -> Vec<SiteRule> {
     if let Ok(rules) = serde_json::from_str::<Vec<SiteRule>>(text) {
         return rules.into_iter().filter_map(sanitize_rule).collect();
     }
-    text.lines().filter_map(|line| parse_line(line)).collect()
+    text.lines().filter_map(parse_line).collect()
 }
 
 fn sanitize_rule(mut rule: SiteRule) -> Option<SiteRule> {

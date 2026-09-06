@@ -6,7 +6,9 @@ description = "HLS Downloader 7 Rust Core, download engines, IPC, and Native Mes
 publish = false
 
 [features]
-default = []
+default = ["full-core"]
+full-core = []
+presenter-client = []
 
 [dependencies]
 rusqlite = { version = "0.37", features = ["bundled", "backup"] }
@@ -52,14 +54,14 @@ path = "src/lib.rs"
 [[bin]]
 name = "hls-downloader-engine"
 path = "src/bin/hls_downloader_engine.rs"
-required-features = []
+required-features = ["full-core"]
 
 [[bin]]
 name = "HLSDownloaderNativeHost"
 path = "src/bin/hls_downloader_native_host.rs"
-required-features = []
+required-features = ["full-core"]
 
 [[bin]]
 name = "HLSDownloaderUpdater"
 path = "src/bin/hls_downloader_updater.rs"
-required-features = []
+required-features = ["full-core"]

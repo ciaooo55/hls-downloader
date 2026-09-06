@@ -11,10 +11,11 @@ fn embed_windows_version() {
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
     let mut resource = winresource::WindowsResource::new();
     resource.set("ProductName", "HLS Downloader");
-    resource.set("FileDescription", "HLS Downloader");
+    resource.set("FileDescription", "HLS Downloader Presenter");
     resource.set("ProductVersion", &version);
     resource.set("FileVersion", &version);
-    resource.set("OriginalFilename", "HLSDownloader.exe");
+    resource.set("OriginalFilename", "HLSDownloaderPresenter.exe");
+    resource.set("InternalName", "HLSDownloaderPresenter");
     resource.set("LegalCopyright", "HLS Downloader");
     // Stage the icon under OUT_DIR so rc.exe never receives the non-ASCII repository path.
     let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
