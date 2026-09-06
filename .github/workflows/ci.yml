@@ -76,6 +76,22 @@ jobs:
         working-directory: desktop_ui
         run: .\gradlew.bat createDistributable --no-daemon
 
+      - name: Verify packaged desktop JVM policy
+        shell: pwsh
+        working-directory: desktop_ui
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $launcherConfig = Get-ChildItem -LiteralPath 'build\compose\binaries\main\app' -Filter 'HLSDownloader.cfg' -Recurse -File | Select-Object -First 1
+          if (-not $launcherConfig) { throw 'Compose launcher configuration is missing from createDistributable output.' }
+          $config = Get-Content -LiteralPath $launcherConfig.FullName -Raw -Encoding UTF8
+          foreach ($required in @(
+            '-Dskiko.renderApi=SOFTWARE',
+            '-Dcompose.accessibility.enable=true',
+            '-Djavax.accessibility.assistive_technologies=com.sun.java.accessibility.AccessBridge'
+          )) {
+            if (-not $config.Contains($required)) { throw "Packaged launcher is missing required JVM option: $required" }
+          }
+
       - name: Install extension dependencies
         working-directory: extension
         run: pnpm install --frozen-lockfile
