@@ -404,10 +404,13 @@ $env:HLS_ENGINE_PATH = $engine
                     throw "$extension extension manifest version is not ${productVersion}: $($manifest.version)"
                 }
                 Assert-ExtensionManifest $manifest $extension $manifestPath
+                $extensionArtifact = Join-Path $artifactRoot ("extensions\HLSDownloader-$productVersion-$extension.zip")
+                New-Item -ItemType Directory -Force -Path (Split-Path $extensionArtifact -Parent) | Out-Null
+                Copy-Item -LiteralPath $archive -Destination $extensionArtifact -Force
                 $extensionEvidence[$extension] = [ordered]@{
                     version = [string]$manifest.version
                     path = "extensions/HLSDownloader-$productVersion-$extension.zip"
-                    sha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+                    sha256 = (Get-FileHash -LiteralPath $extensionArtifact -Algorithm SHA256).Hash.ToLowerInvariant()
                 }
             }
         } finally {
@@ -453,6 +456,11 @@ $env:HLS_ENGINE_PATH = $engine
                 throw "ARTIFACT-MANIFEST.json path escaped the artifact directory: $($entry.path)"
             }
             Assert-FileSha256 $entryPath ([string]$entry.sha256) "$name artifact manifest entry"
+        }
+        foreach ($extension in @('Chromium', 'Firefox')) {
+            $entry = $manifestCheck.extensions.$extension
+            $entryPath = [IO.Path]::GetFullPath((Join-Path $artifactRootFull ([string]$entry.path)))
+            Assert-FileSha256 $entryPath ([string]$entry.sha256) "$extension extension manifest entry"
         }
         if ($isPackage) {
             # Swap the complete staging directory only after every artifact is ready.
