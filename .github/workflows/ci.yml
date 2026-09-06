@@ -48,7 +48,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
-          toolchain: stable
+          toolchain: "1.98.1"
           components: clippy
 
       - name: Cache Rust Core dependencies and target
@@ -80,7 +80,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
-          toolchain: stable
+          toolchain: "1.98.1"
 
       - name: Cache presenter dependencies and target
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
