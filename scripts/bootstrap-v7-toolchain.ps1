@@ -32,7 +32,7 @@ if (Test-ExpectedJdk $JdkRoot) {
 
 if (Test-Path -LiteralPath $JdkRoot) {
     if ($customJdkRoot) {
-        throw "Custom JdkRoot exists but is not the required JDK $jdkVersion: $JdkRoot"
+        throw "Custom JdkRoot exists but is not the required JDK ${jdkVersion}: $JdkRoot"
     }
     Remove-Item -LiteralPath $JdkRoot -Recurse -Force
 }
