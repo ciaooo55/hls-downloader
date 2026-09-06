@@ -189,6 +189,7 @@ try {
     $python = $pythonCommand.Source
     $fixtureRoot = Join-Path $artifacts "$($Scenario.ToLowerInvariant())-checkpoint"
     $fixtureState = Join-Path $fixtureRoot 'task-state.json'
+    Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $fixtureRoot | Out-Null
     $env:HLS_V7_DATA_DIR = Join-Path $fixtureRoot 'data'
     $env:HLS_V7_DOWNLOAD_DIR = Join-Path $fixtureRoot 'downloads'
