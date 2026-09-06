@@ -20,6 +20,14 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
+      - name: Guard active v7 source ownership
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Test-Path -LiteralPath 'config.default.json') {
+            throw 'Legacy config.default.json must not return: Rust Core and the versioned protocol own active v7 settings/defaults.'
+          }
+
       - name: Validate PowerShell 5.1 and 7
         shell: pwsh
         run: |
@@ -43,6 +51,15 @@ jobs:
           toolchain: stable
           components: clippy
 
+      - name: Cache Rust Core dependencies and target
+        uses: actions/cache@a102210dd13b6f687ffa4262c9f08b3c00d3c459
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: v7-rust-core-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native_shell/Cargo.lock', 'native_shell/Cargo.toml') }}
+
       - name: Test, build and lint Rust Core
         working-directory: native_shell
         shell: pwsh
@@ -64,6 +81,15 @@ jobs:
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: stable
+
+      - name: Cache presenter dependencies and target
+        uses: actions/cache@a102210dd13b6f687ffa4262c9f08b3c00d3c459
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: v7-presenter-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('presenter_ui/Cargo.lock', 'presenter_ui/Cargo.toml', 'native_shell/Cargo.lock', 'native_shell/Cargo.toml') }}
 
       - name: Test and build native presenter
         working-directory: presenter_ui
