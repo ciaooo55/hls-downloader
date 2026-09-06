@@ -13,7 +13,7 @@ WXT extension -- Native Messaging -- Rust Core + SQLite -- named pipe -- Compose
                                         |                    |
                               transfer / media / BT     snapshots + events
                                         |
-                              warm native presenter (target)
+                              warm native presenter
 ```
 
 `CoreServer` remains the only SQLite owner. UI clients never read a database,
@@ -44,19 +44,21 @@ Compose only as the explicit fallback.
 
 ## Current status
 
-`desktop_ui/` is a functional development workbench, not the shipping
-installer. It consumes snapshots, sequenced events, browser status, handoff
-offers, casting/player sessions and structured Core export results. Its custom
-component layer owns text, icons, buttons, fields, menus, dialogs, selection,
-progress, sliders and status controls. The verified minimum window is
-1024x600; the default is 1400x820.
+`desktop_ui/` is the shipping v7 main workbench. Candidate and formal Windows
+packages bundle it with the resident Rust engine, versioned Native Messaging
+host and warm presenter. It consumes snapshots, sequenced events, browser
+status, handoff offers, casting/player sessions and structured Core export
+results. Its custom component layer owns text, icons, buttons, fields, menus,
+dialogs, selection, progress, sliders and status controls. The verified minimum
+window is 1024x600; the default is 1400x820.
 
 `presenter_ui` builds `hls-downloader-presenter.exe`, a pre-warmed temporary
 surface with a separate presenter lock and no SQLite access. Historical main
-workbenches are available through Git tags rather than active source roots. The Rust engine
-now launches `--player-process` for player commands; only that child loads
-libmpv, while Core keeps a bounded JSON control channel. Real Windows libmpv
-track switching and process-kill recovery remain promotion gates.
+workbenches are available through Git tags rather than active source roots. The
+Rust engine launches `--player-process` for player commands; only that child
+loads libmpv, while Core keeps a bounded JSON control channel. Player/Core crash
+isolation and media control are covered by the v7 verification gates and must
+remain green for every release candidate.
 
 `scripts/build-v7.ps1 -Task candidate` creates a machine-validation package in
 `artifacts/v7-productization/candidate` with the Rust engine, versioned Native
@@ -69,13 +71,14 @@ validation decision.
 `scripts/build-v7.ps1 -Task package` creates the formal package in the existing
 `artifacts/v7-productization/package` directory and adds the `release_ready=true`
 gate after all 28 features are verified. Both package tiers carry the v7 Native
-Messaging manifests and atomic upgrade/rollback script. v6 remains the rollback
-path until the independent MSI install, upgrade, uninstall and registration gate
-is completed.
+Messaging manifests and atomic upgrade/rollback script. A public release still
+requires the release-evidence gates in `docs/v7-verification.md`; a green source
+build alone is not release evidence.
 
 ## Promotion gates
 
-v7 can replace v6 only after all of these are true:
+The active v7 product must preserve all of these gates on every release-bound
+change:
 
 1. The installer ships and registers a versioned Native Messaging host that
    can reach a resident Core after a reboot, without requiring the workbench
@@ -84,15 +87,20 @@ v7 can replace v6 only after all of these are true:
    acknowledgement, accept, reject and restart recovery are covered by an
    end-to-end test.
 3. The presenter is warm before an offer. The P95 time from Core offer to a
-   visible confirmation stays below the v6 baseline; a cold JVM launch is not
-   an acceptable substitute.
-4. Compose parity covers every v3/v5 workbench action that has an existing
-   Core command, including task details/logs, media selection/playback,
-   casting, import/export, duplicate resolution, queue ordering and settings.
-5. Windows CI runs the Compose protocol tests, native Core tests, package
-   smoke test and browser extension takeover test against the same bundle.
-6. `feature-parity.json` reaches 100%, the 1000-task and IPC/startup P95 gates
-   pass, and player/Core crash isolation is demonstrated by process-kill tests.
+   visible confirmation stays below the release threshold; a cold JVM launch
+   is not an acceptable substitute.
+4. Compose parity covers every contracted workbench action, including task
+   details/logs, media selection/playback, casting, import/export, duplicate
+   resolution, queue ordering, settings and accessibility/reduced-motion
+   behavior.
+5. Windows CI runs the Compose protocol tests, native Core tests and extension
+   build, and also creates the Compose distributable image so packaged JVM/jlink
+   configuration cannot regress behind green unit tests. Candidate/formal
+   release validation continues to run the same-bundle browser, performance,
+   installer and rollback gates.
+6. `feature-parity.json` stays at 100%, the 1000-task and IPC/startup P95 gates
+   pass, and player/Core crash isolation remains demonstrated by process-kill
+   tests.
 
 ## Development verification
 
