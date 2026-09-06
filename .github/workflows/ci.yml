@@ -57,8 +57,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: v7-rust-core-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native_shell/Cargo.lock', 'native_shell/Cargo.toml') }}
+            native_shell/target
+          key: v7-rust-core-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native_shell/Cargo.lock', 'native_shell/Cargo.toml') }}
 
       - name: Test, build and lint Rust Core
         working-directory: native_shell
@@ -88,8 +88,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: v7-presenter-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('presenter_ui/Cargo.lock', 'presenter_ui/Cargo.toml', 'native_shell/Cargo.lock', 'native_shell/Cargo.toml') }}
+            presenter_ui/target
+          key: v7-presenter-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('presenter_ui/Cargo.lock', 'presenter_ui/Cargo.toml', 'native_shell/Cargo.lock', 'native_shell/Cargo.toml') }}
 
       - name: Test and build native presenter
         working-directory: presenter_ui
@@ -99,6 +99,23 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           cargo test --locked
           cargo build --locked --bin hls-downloader-presenter
+
+      - name: Verify presenter Windows identity
+        working-directory: presenter_ui
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $presenter = Get-Item -LiteralPath 'target\debug\hls-downloader-presenter.exe'
+          $version = $presenter.VersionInfo
+          if ($version.OriginalFilename -ne 'HLSDownloaderPresenter.exe') {
+            throw "Presenter OriginalFilename is incorrect: $($version.OriginalFilename)"
+          }
+          if ($version.FileDescription -ne 'HLS Downloader Presenter') {
+            throw "Presenter FileDescription is incorrect: $($version.FileDescription)"
+          }
+          if ($version.InternalName -ne 'HLSDownloaderPresenter') {
+            throw "Presenter InternalName is incorrect: $($version.InternalName)"
+          }
 
   compose:
     name: Compose workbench and distribution
