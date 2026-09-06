@@ -22,8 +22,8 @@ val hlsRenderApi = providers.gradleProperty("hlsRenderApi")
     .orElse("SOFTWARE")
     .map { it.trim().uppercase() }
     .get()
-require(hlsRenderApi in setOf("SOFTWARE", "DIRECT3D", "OPENGL")) {
-    "Unsupported HLS UI renderer '$hlsRenderApi'; expected SOFTWARE, DIRECT3D or OPENGL"
+require(hlsRenderApi in setOf("SOFTWARE", "ANGLE", "DIRECT3D", "OPENGL")) {
+    "Unsupported HLS UI renderer '$hlsRenderApi'; expected SOFTWARE, ANGLE, DIRECT3D or OPENGL"
 }
 
 dependencies {
