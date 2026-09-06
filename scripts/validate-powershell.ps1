@@ -2,6 +2,7 @@ param(
     [string[]]$Path = @(
         "scripts\adversarial-v7.ps1",
         "scripts\benchmark-v7.ps1",
+        "scripts\bootstrap-v7-media-tools.ps1",
         "scripts\bootstrap-v7-toolchain.ps1",
         "scripts\build-v7.ps1",
         "scripts\cleanup-v7-build-cache.ps1",
