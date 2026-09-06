@@ -13,6 +13,19 @@ version = "7.0.1"
 val hlsBuildDir = providers.environmentVariable("HLS_COMPOSE_BUILD_DIR")
     .orElse("build")
 layout.buildDirectory.set(file(hlsBuildDir))
+
+// Keep the packaged product on the conservative software renderer by default.
+// Developers and diagnostic builds can opt into a hardware backend without editing
+// source by setting HLS_UI_RENDER_API or -PhlsRenderApi.
+val hlsRenderApi = providers.gradleProperty("hlsRenderApi")
+    .orElse(providers.environmentVariable("HLS_UI_RENDER_API"))
+    .orElse("SOFTWARE")
+    .map { it.trim().uppercase() }
+    .get()
+require(hlsRenderApi in setOf("SOFTWARE", "DIRECT3D", "OPENGL")) {
+    "Unsupported HLS UI renderer '$hlsRenderApi'; expected SOFTWARE, DIRECT3D or OPENGL"
+}
+
 dependencies {
     implementation(compose.desktop.currentOs)
     implementation("org.jetbrains.compose.material:material-icons-extended:1.7.3")
@@ -34,7 +47,7 @@ compose.desktop { application {
     jvmArgs += listOf(
         "-Dcompose.accessibility.enable=true",
         "-Djavax.accessibility.assistive_technologies=com.sun.java.accessibility.AccessBridge",
-        "-Dskiko.renderApi=SOFTWARE",
+        "-Dskiko.renderApi=$hlsRenderApi",
     )
     nativeDistributions {
         modules("jdk.accessibility", "jdk.httpserver")
