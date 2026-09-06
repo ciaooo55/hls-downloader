@@ -176,13 +176,19 @@ internal fun Button(
     val hovered by interaction.collectIsHoveredAsState()
     val focused by interaction.collectIsFocusedAsState()
     val pressed by interaction.collectIsPressedAsState()
+    val reduceMotion by MotionPreferences.reduceMotion
     val container = if (enabled) colors.container else colors.disabledContainer
     val contentColor = if (enabled) colors.content else colors.disabledContent
     val animatedContainer by animateColorAsState(
         targetValue = if (hovered && enabled) container.blendToward(Color.White, .08f) else container,
+        animationSpec = tween(motionDurationMillis(reduceMotion, 140)),
         label = "button-container",
     )
-    val pressScale by animateFloatAsState(if (pressed && enabled) .985f else 1f, label = "button-press")
+    val pressScale by animateFloatAsState(
+        if (pressed && enabled) .985f else 1f,
+        animationSpec = tween(motionDurationMillis(reduceMotion, 90)),
+        label = "button-press",
+    )
     Row(
         modifier
             .defaultMinSize(minHeight = 34.dp)
@@ -227,8 +233,17 @@ internal fun IconButton(
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
-    val animatedSurface by animateColorAsState(if (hovered && enabled) surface3 else Color.Transparent, label = "icon-button-surface")
-    val pressScale by animateFloatAsState(if (pressed && enabled) .9f else 1f, label = "icon-button-press")
+    val reduceMotion by MotionPreferences.reduceMotion
+    val animatedSurface by animateColorAsState(
+        if (hovered && enabled) surface3 else Color.Transparent,
+        animationSpec = tween(motionDurationMillis(reduceMotion, 120)),
+        label = "icon-button-surface",
+    )
+    val pressScale by animateFloatAsState(
+        if (pressed && enabled) .9f else 1f,
+        animationSpec = tween(motionDurationMillis(reduceMotion, 90)),
+        label = "icon-button-press",
+    )
     Box(
         modifier
             .defaultMinSize(34.dp, 34.dp)
@@ -268,7 +283,12 @@ internal fun Checkbox(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modi
 
 @Composable
 internal fun RadioButton(selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, accessibilityLabel: String? = null) {
-    val animatedFill by animateColorAsState(if (selected) selectedSurface else rail, label = "radio-fill")
+    val reduceMotion by MotionPreferences.reduceMotion
+    val animatedFill by animateColorAsState(
+        if (selected) selectedSurface else rail,
+        animationSpec = tween(motionDurationMillis(reduceMotion, 150)),
+        label = "radio-fill",
+    )
     Box(
         modifier
             .defaultMinSize(18.dp, 18.dp)
@@ -288,8 +308,17 @@ internal fun RadioButton(selected: Boolean, onClick: () -> Unit, modifier: Modif
 
 @Composable
 internal fun Switch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier, accessibilityLabel: String? = null) {
-    val animatedTrack by animateColorAsState(if (checked) blue else surface3, label = "switch-track")
-    val knobFraction by animateFloatAsState(if (checked) 1f else 0f, label = "switch-position")
+    val reduceMotion by MotionPreferences.reduceMotion
+    val animatedTrack by animateColorAsState(
+        if (checked) blue else surface3,
+        animationSpec = tween(motionDurationMillis(reduceMotion, 160)),
+        label = "switch-track",
+    )
+    val knobFraction by animateFloatAsState(
+        if (checked) 1f else 0f,
+        animationSpec = tween(motionDurationMillis(reduceMotion, 160)),
+        label = "switch-position",
+    )
     Box(
         modifier
             .width(36.dp)
@@ -323,7 +352,12 @@ internal fun LinearProgressIndicator(
     color: Color = blue,
     trackColor: Color = surface3,
 ) {
-    val value by animateFloatAsState(progress().coerceIn(0f, 1f), label = "progress-value")
+    val reduceMotion by MotionPreferences.reduceMotion
+    val value by animateFloatAsState(
+        progress().coerceIn(0f, 1f),
+        animationSpec = tween(motionDurationMillis(reduceMotion, 180)),
+        label = "progress-value",
+    )
     Box(modifier.semantics { progressBarRangeInfo = ProgressBarRangeInfo(value, 0f..1f) }.background(trackColor)) {
         Box(Modifier.fillMaxHeight().fillMaxWidth(value).background(color))
     }
@@ -335,14 +369,21 @@ internal fun CircularProgressIndicator(
     strokeWidth: Dp = 2.dp,
     color: Color = blue,
 ) {
-    val rotation = rememberInfiniteTransition(label = "spinner").animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(1_100, easing = LinearEasing)),
-        label = "spinner-rotation",
-    )
-    androidx.compose.foundation.Canvas(modifier.graphicsLayer { rotationZ = rotation.value }) {
-        drawArc(color, -90f, 270f, false, style = Stroke(strokeWidth.toPx()))
+    val reduceMotion by MotionPreferences.reduceMotion
+    if (reduceMotion) {
+        androidx.compose.foundation.Canvas(modifier) {
+            drawArc(color, -90f, 270f, false, style = Stroke(strokeWidth.toPx()))
+        }
+    } else {
+        val rotation = rememberInfiniteTransition(label = "spinner").animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(1_100, easing = LinearEasing)),
+            label = "spinner-rotation",
+        )
+        androidx.compose.foundation.Canvas(modifier.graphicsLayer { rotationZ = rotation.value }) {
+            drawArc(color, -90f, 270f, false, style = Stroke(strokeWidth.toPx()))
+        }
     }
 }
 
