@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "repository": "ciaooo55/hls-downloader",
+  "canonical_issue": 39,
+  "updated_at": "2026-09-08T01:32:00+08:00",
+  "priority_order": ["P0", "P1", "P2", "P3"],
+  "active_workers": 1,
+  "minimum_unfinished_target": 2,
+  "tasks": [
+    {
+      "id": "HLS-C001",
+      "title": "Bootstrap multi-agent coordination protocol",
+      "priority": "P0",
+      "status": "in_progress",
+      "owner": "worker-0",
+      "role": "coordinator+auditor+worker",
+      "branch": "coord/bootstrap-protocol",
+      "depends_on": [],
+      "acceptance": [
+        "handoff.md exposes canonical coordination issue numbers at the top",
+        "docs/manger.log records role, assignment, acceptance criteria and route decisions",
+        "this JSON registry is machine-readable and keeps at least two unfinished tasks while one worker is active",
+        "worker log and architecture/plan documents exist",
+        "changes are split across multiple commits and independently audited before merge"
+      ]
+    },
+    {
+      "id": "HLS-C002",
+      "title": "Independently audit PR #38 release security gate integration",
+      "priority": "P0",
+      "status": "planned",
+      "owner": null,
+      "role": "auditor",
+      "branch": null,
+      "depends_on": ["HLS-C001"],
+      "acceptance": [
+        "diff is compared against the stated four-workflow release contract",
+        "exact-SHA and GITHUB_SHA binding are verified from source rather than PR description",
+        "workflow run conclusions for the PR head are checked",
+        "review records PASS or actionable rejection evidence",
+        "merge occurs only if the audit passes and required checks are successful"
+      ]
+    },
+    {
+      "id": "HLS-C003",
+      "title": "Triage formal v7 release readiness and external runner blockers",
+      "priority": "P1",
+      "status": "planned",
+      "owner": null,
+      "role": "worker",
+      "branch": null,
+      "depends_on": ["HLS-C002"],
+      "acceptance": [
+        "current formal release workflow prerequisites are enumerated from repository source",
+        "external-only blockers such as trusted signing runner requirements are separated from code defects",
+        "no release_ready=true or formal publish action is performed without satisfied gates",
+        "route recommendation is written to the manager log and project plan"
+      ]
+    },
+    {
+      "id": "HLS-C004",
+      "title": "Prioritize open Dependabot major-version updates",
+      "priority": "P1",
+      "status": "planned",
+      "owner": null,
+      "role": "worker",
+      "branch": null,
+      "depends_on": ["HLS-C002"],
+      "acceptance": [
+        "open dependency PRs are grouped by runtime/build/security risk",
+        "security-relevant updates are distinguished from optional major churn",
+        "each recommended merge or defer decision cites compatibility evidence",
+        "no broad dependency batch is merged without project-specific validation"
+      ]
+    },
+    {
+      "id": "HLS-C005",
+      "title": "Repository-wide bug and contract audit after v7.0.2 changes",
+      "priority": "P1",
+      "status": "planned",
+      "owner": null,
+      "role": "auditor",
+      "branch": null,
+      "depends_on": ["HLS-C002"],
+      "acceptance": [
+        "audit focuses on release/update trust, IPC boundaries, persistence, and extension handoff contracts",
+        "findings are reproducible from source or CI evidence",
+        "confirmed defects become separate prioritized tasks with narrow acceptance criteria",
+        "speculative findings are not merged as fixes"
+      ]
+    },
+    {
+      "id": "HLS-C006",
+      "title": "Refine README from independently verified project state",
+      "priority": "P2",
+      "status": "planned",
+      "owner": null,
+      "role": "auditor",
+      "branch": null,
+      "depends_on": ["HLS-C002"],
+      "acceptance": [
+        "README describes architecture, build/release boundaries and current readiness accurately",
+        "claims are verified against source and CI rather than copied from stale planning docs",
+        "quick-start material remains concise and learnable",
+        "release readiness wording does not imply an unsigned or ungated formal release"
+      ]
+    }
+  ]
+}
