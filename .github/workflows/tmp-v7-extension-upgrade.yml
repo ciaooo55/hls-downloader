@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/tmp-v7-extension-upgrade.yml'
       - 'extension/pnpm-workspace.yaml'
+      - 'extension/tsconfig.json'
 
 permissions:
   contents: write
@@ -32,7 +33,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           corepack enable
           corepack prepare pnpm@11.7.0 --activate
-          pnpm up --save-exact wxt@0.20.27 web-ext@10.6.0 vitest@3.2.6
+          pnpm up --save-exact wxt@0.21.4 web-ext@10.6.0 vitest@3.2.6
           pnpm install --lockfile-only
           pnpm audit --audit-level=high
           pnpm test
@@ -45,7 +46,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add extension/package.json extension/pnpm-lock.yaml
+          git add extension/package.json extension/pnpm-lock.yaml extension/tsconfig.json
           if (git diff --cached --quiet) { throw 'Expected extension dependency changes were not produced.' }
           git commit -m 'build: update vulnerable extension tooling'
           git push origin HEAD:chatgpt/v7-maintenance-security-audit
