@@ -25,7 +25,10 @@ jobs:
           components: clippy,rustfmt
       - name: Apply reviewed Rust cleanup
         shell: pwsh
-        run: python scripts/_maint_rust_lints.py
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/_maint_rust_lints.py
+          python scripts/_maint_rust_hls_scope.py
       - name: Format and verify focused HLS synchronization
         working-directory: native_shell
         shell: pwsh
@@ -49,7 +52,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm .github/workflows/_maint-rust-lints.yml .github/workflows/_maint-rust-lints-retry.yml scripts/_maint_rust_lints.py
+          git rm .github/workflows/_maint-rust-lints.yml .github/workflows/_maint-rust-lints-retry.yml scripts/_maint_rust_lints.py scripts/_maint_rust_hls_scope.py
           git add native_shell
           git commit -m 'refactor: clean Rust 1.98 clippy warnings'
           git push origin HEAD:chatgpt/v7-release-gate-hardening
