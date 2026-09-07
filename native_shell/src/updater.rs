@@ -258,6 +258,7 @@ pub fn verify_installer_identity(
     }
     #[cfg(windows)]
     {
+        verify_installer_authenticode(path)?;
         let identity = read_msi_identity(path)?;
         validate_installer_identity_fields(&identity, expected_version)?;
         Ok(identity)
@@ -397,6 +398,54 @@ fn validate_installer_identity_fields(
 
 fn normalize_guid(value: &str) -> String {
     value.trim().trim_matches(['{', '}']).to_ascii_uppercase()
+}
+
+#[cfg(windows)]
+fn verify_installer_authenticode(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Security::WinTrust::{
+        WinVerifyTrust, WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0,
+        WINTRUST_FILE_INFO, WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_DISABLE_MD2_MD4,
+        WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
+    };
+
+    let path_wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut file: WINTRUST_FILE_INFO = unsafe { std::mem::zeroed() };
+    file.cbStruct = std::mem::size_of::<WINTRUST_FILE_INFO>() as u32;
+    file.pcwszFilePath = path_wide.as_ptr();
+
+    let mut trust: WINTRUST_DATA = unsafe { std::mem::zeroed() };
+    trust.cbStruct = std::mem::size_of::<WINTRUST_DATA>() as u32;
+    trust.dwUIChoice = WTD_UI_NONE;
+    trust.fdwRevocationChecks = WTD_REVOKE_NONE;
+    trust.dwUnionChoice = WTD_CHOICE_FILE;
+    trust.Anonymous = WINTRUST_DATA_0 { pFile: &mut file };
+    trust.dwStateAction = WTD_STATEACTION_VERIFY;
+    trust.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_DISABLE_MD2_MD4;
+    let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+
+    let status = unsafe {
+        WinVerifyTrust(
+            std::ptr::null_mut(),
+            &mut action,
+            &mut trust as *mut _ as *mut core::ffi::c_void,
+        )
+    };
+    trust.dwStateAction = WTD_STATEACTION_CLOSE;
+    unsafe {
+        WinVerifyTrust(
+            std::ptr::null_mut(),
+            &mut action,
+            &mut trust as *mut _ as *mut core::ffi::c_void,
+        );
+    }
+    if status != 0 {
+        return Err(format!(
+            "升级安装包 Authenticode 信任校验失败（WinVerifyTrust 0x{:08X}）",
+            status as u32
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -937,6 +986,23 @@ mod tests {
         assert!(args.contains(&"/norestart".into()));
         assert!(args.contains(&"REBOOT=ReallySuppress".into()));
         assert_eq!(args.last().unwrap(), &log.display().to_string());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn authenticode_rejects_unsigned_update_payload() {
+        let path = std::env::temp_dir().join(format!(
+            "hls-updater-unsigned-{}-{}.msi",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"unsigned update fixture").unwrap();
+        let error = verify_installer_authenticode(&path).unwrap_err();
+        assert!(error.contains("Authenticode"));
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
