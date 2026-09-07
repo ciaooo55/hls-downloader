@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "product_version": "7.0.1",
+  "product_version": "7.0.2",
   "generated_from": {
     "v3": "git:v3.0.39",
     "v5": "git:v5.0.13",
@@ -14,8 +14,8 @@
     "partial": "主要路径可用，但未达到 v3 行为或发布门禁",
     "blocked": "缺少真实实现或发布级验证"
   },
-  "release_ready": true,
-  "audit_state": "v7_0_1_release_specialties_verified",
+  "release_ready": false,
+  "audit_state": "v7_0_2_iteration_in_progress",
   "features": [
     {
       "id": "architecture.single_core",
@@ -141,7 +141,7 @@
       "compose_entry": "PlayerSessionHud controlling standalone libmpv window",
       "core_command": "play_task/player_control",
       "state_event": "player_session",
-    "verification": "player_session_reports_play_pause_speed_and_stop; null backend isolation; real libmpv-2.dll loaded generated MP4 with audio and subtitle; aid/sid switch, 50% seek, pause, stop and forced-process recovery passed"
+      "verification": "player_session_reports_play_pause_speed_and_stop; null backend isolation; real libmpv-2.dll loaded generated MP4 with audio and subtitle; aid/sid switch, 50% seek, pause, stop and forced-process recovery passed"
     },
     {
       "id": "media.cast_dlna_chromecast",
@@ -181,12 +181,12 @@
     },
     {
       "id": "torrent.multi_file_selection",
-    "status": "verified",
+      "status": "verified",
       "v3_entry": "torrent metadata and file selection",
-    "compose_entry": "TorrentSelectionDialog with tree-safe file selection",
-    "core_command": "probe_torrent/select_torrent_files/create_task",
-    "state_event": "torrent_probe_result/torrent_selection_result",
-    "verification": "torrent selection path-safety tests; selected_files_materialize_without_unselected_paths; multifile_swarm_resumes_without_refetching_and_materializes_selection reopens the partial payload through a second loopback peer, requests only missing pieces 1/2, publishes selected files 0/2, and excludes file 1; Compose protocol compile"
+      "compose_entry": "TorrentSelectionDialog with tree-safe file selection",
+      "core_command": "probe_torrent/select_torrent_files/create_task",
+      "state_event": "torrent_probe_result/torrent_selection_result",
+      "verification": "torrent selection path-safety tests; selected_files_materialize_without_unselected_paths; multifile_swarm_resumes_without_refetching_and_materializes_selection reopens the partial payload through a second loopback peer, requests only missing pieces 1/2, publishes selected files 0/2, and excludes file 1; Compose protocol compile"
     },
     {
       "id": "settings.full_migration",
@@ -268,7 +268,7 @@
       "compose_entry": "build-v7 preview packaging",
       "core_command": "engine/native host startup",
       "state_event": "ready/browser_status",
-    "verification": "isolated MSI lifecycle on Windows 11: 0.0.1 first install returned 0; active 512 MiB task checkpointed at 184156160 bytes and reopened paused after 7.0.0 cover upgrade; ProductName HLSDownloader, ProductVersion 7.0.0, fixed UpgradeCode, per-user ALLUSERS absent and Updater present; installed Engine SHA-256 matched the packaged Release Engine; real Windows Installer transaction contention returned 1618 and the next install returned 0; injected 7.0.1 Type-19 failure returned 1603 while preserving 7.0.0 ProductCode and Engine SHA-256 after RemoveExistingProducts was moved after InstallFinalize; installed workbench started Release Core and Presenter, Core remained resident after UI exit; uninstall returned 0 and removed registration, install root and shortcuts; both Windows PowerShell 5.1 and PowerShell 7 verified the idempotent MSI sequence gate"
+      "verification": "isolated MSI lifecycle on Windows 11: 0.0.1 first install returned 0; active 512 MiB task checkpointed at 184156160 bytes and reopened paused after 7.0.0 cover upgrade; ProductName HLSDownloader, ProductVersion 7.0.0, fixed UpgradeCode, per-user ALLUSERS absent and Updater present; installed Engine SHA-256 matched the packaged Release Engine; real Windows Installer transaction contention returned 1618 and the next install returned 0; injected 7.0.1 Type-19 failure returned 1603 while preserving 7.0.0 ProductCode and Engine SHA-256 after RemoveExistingProducts was moved after InstallFinalize; installed workbench started Release Core and Presenter, Core remained resident after UI exit; uninstall returned 0 and removed registration, install root and shortcuts; both Windows PowerShell 5.1 and PowerShell 7 verified the idempotent MSI sequence gate"
     }
   ],
   "summary": {

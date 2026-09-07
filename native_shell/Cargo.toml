@@ -1,6 +1,6 @@
 [package]
 name = "hls-native-shell"
-version = "7.0.1"
+version = "7.0.2"
 edition = "2021"
 description = "HLS Downloader 7 Rust Core, download engines, IPC, and Native Messaging"
 publish = false

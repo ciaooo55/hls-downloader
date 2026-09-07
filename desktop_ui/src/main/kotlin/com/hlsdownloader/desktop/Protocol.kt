@@ -28,7 +28,7 @@ private const val CORE_PIPE = "\\\\.\\pipe\\HLSDownloader.v7"
 private const val MAX_TASK_LOG_LINES = 500
 
 object Product {
-    const val version = "7.0.1"
+    const val version = "7.0.2"
     const val engineStarting = "下载引擎 · 启动中"
     const val engineConnected = "下载引擎 · 已连接"
     const val engineReconnecting = "下载引擎 · 重连中"
