@@ -18,6 +18,8 @@ on:
         required: false
         type: string
         default: ''
+  issues:
+    types: [opened]
 
 concurrency:
   group: v7-formal-release
@@ -29,6 +31,7 @@ permissions:
 
 jobs:
   release:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'issues' && github.event.action == 'opened' && github.event.issue.title == 'release:v7.0.1' && github.event.issue.user.login == github.repository_owner) }}
     name: Verify, sign and stage v7 release
     runs-on: [self-hosted, Windows, X64, hls-release]
     timeout-minutes: 180
@@ -238,7 +241,7 @@ jobs:
           if (@($release.assets).Count -ne @(Get-ChildItem -LiteralPath $stage -File).Count) { throw 'Draft release contains an unexpected asset count.' }
 
       - name: Publish verified release as Latest
-        if: ${{ inputs.publish }}
+        if: ${{ inputs.publish || (github.event_name == 'issues' && github.event.issue.title == 'release:v7.0.1' && github.event.issue.user.login == github.repository_owner) }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
