@@ -6,12 +6,12 @@ mod cast;
 mod category;
 #[cfg(feature = "full-core")]
 mod checksum;
+#[cfg(not(feature = "full-core"))]
+mod client_event;
 #[cfg(feature = "full-core")]
 mod clipboard;
 #[cfg(feature = "full-core")]
 mod connection_parts;
-#[cfg(not(feature = "full-core"))]
-mod client_event;
 mod contract;
 mod core_ipc;
 #[cfg(feature = "full-core")]
@@ -96,6 +96,8 @@ mod updater;
 mod v6_migrate;
 mod window_util;
 
+#[cfg(not(feature = "full-core"))]
+pub use client_event::EventEnvelope;
 #[cfg(feature = "full-core")]
 pub use clipboard::{
     all_urls as clipboard_all_urls, first_url as clipboard_first_url, looks_like_download_url,
@@ -121,8 +123,6 @@ pub use core_ipc::{
 pub use core_ipc::{NamedPipeClient, NamedPipeServer};
 #[cfg(feature = "full-core")]
 pub use core_runtime::{CoreRuntime, EventEnvelope};
-#[cfg(not(feature = "full-core"))]
-pub use client_event::EventEnvelope;
 #[cfg(feature = "full-core")]
 pub use core_server::CoreServer;
 #[cfg(feature = "full-core")]
@@ -149,9 +149,7 @@ pub use http_engine::{
     HttpMirrorReport, HttpRunReport, EXIT_CANCEL, EXIT_ERROR, EXIT_OK, EXIT_PAUSE,
     EXIT_RANGE_UNSUPPORTED,
 };
-pub use instance::{
-    claim_v7_instance, claim_v7_presenter_instance, is_already_running_error,
-};
+pub use instance::{claim_v7_instance, claim_v7_presenter_instance, is_already_running_error};
 #[cfg(feature = "full-core")]
 pub use metalink::{looks_like_metalink, parse_metalink};
 #[cfg(feature = "full-core")]

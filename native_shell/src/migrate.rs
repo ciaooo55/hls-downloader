@@ -846,7 +846,9 @@ mod tests {
         )
         .unwrap();
         let mut core = PersistentCore::in_memory().unwrap();
-        let count = migrate_from_5x(&mut core, &config, &dir.join("missing.db")).unwrap().0;
+        let count = migrate_from_5x(&mut core, &config, &dir.join("missing.db"))
+            .unwrap()
+            .0;
         assert_eq!(count, 0);
         assert!(core
             .store()
@@ -928,7 +930,9 @@ mod tests {
                 .unwrap();
         }
         let mut core = PersistentCore::in_memory().unwrap();
-        let count = migrate_from_5x(&mut core, &dir.join("missing.json"), &db).unwrap().0;
+        let count = migrate_from_5x(&mut core, &dir.join("missing.json"), &db)
+            .unwrap()
+            .0;
         assert_eq!(count, 2);
         assert!(db.exists());
         let tasks = core.tasks();

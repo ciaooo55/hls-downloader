@@ -68,7 +68,7 @@ impl From<&TaskSnapshot> for ExportTask {
             title: task.title.clone(),
             filename: task.filename.clone(),
             url: task.url.clone(),
-            resource_kind: task.resource_kind.clone(),
+            resource_kind: task.resource_kind,
             status: task.status.clone(),
             downloaded_bytes: task.downloaded_bytes,
             total_bytes: task.total_bytes,
@@ -211,7 +211,7 @@ fn export_csv(tasks: &[&TaskSnapshot]) -> String {
             task.filename.clone(),
             task.title.clone(),
             task.status.clone(),
-            serde_json::to_value(&task.resource_kind)
+            serde_json::to_value(task.resource_kind)
                 .ok()
                 .and_then(|value| value.as_str().map(str::to_string))
                 .unwrap_or_else(|| "file".into()),

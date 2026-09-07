@@ -22,12 +22,18 @@ New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
 [IO.File]::Delete($stdoutPath)
 [IO.File]::Delete($stderrPath)
 
-# Project build outputs stay inside the repository.
-$cacheRoot = Join-Path $repo '.tool-cache\build-cache'
+# Verification uses the same cache contract as build/bootstrap so it is portable
+# across developer machines and clean CI runners.
+if ($env:HLS_V7_BUILD_CACHE -and -not [IO.Path]::IsPathRooted($env:HLS_V7_BUILD_CACHE)) {
+    throw 'HLS_V7_BUILD_CACHE must be an absolute path.'
+}
+$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) {
+    [IO.Path]::GetFullPath($env:HLS_V7_BUILD_CACHE)
+} else {
+    Join-Path $repo '.tool-cache\build-cache'
+}
 $jdkRoot = $env:HLS_V7_JAVA_HOME
 if(-not $jdkRoot -and (Test-Path (Join-Path $cacheRoot 'jdk-21\bin\java.exe'))){ $jdkRoot = Join-Path $cacheRoot 'jdk-21' }
-# Legacy read-only tool location from earlier installs; tools are not project content.
-if(-not $jdkRoot -and (Test-Path 'E:\HLSDownloaderBuildCache\jdk-21\bin\java.exe')){ $jdkRoot = 'E:\HLSDownloaderBuildCache\jdk-21' }
 if(-not $jdkRoot){ throw 'JDK 21 was not found. Set HLS_V7_JAVA_HOME or run scripts\bootstrap-v7-toolchain.ps1.' }
 $env:JAVA_HOME = $jdkRoot
 $env:GRADLE_USER_HOME = Join-Path $cacheRoot 'gradle'

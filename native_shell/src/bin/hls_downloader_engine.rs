@@ -102,9 +102,8 @@ fn automatic_native_host_repair_enabled() -> bool {
 }
 
 fn shutdown_core() -> Result<(), String> {
-    let mut client = hls_native_shell::CoreIpcClient::connect_existing(
-        std::time::Duration::from_secs(2),
-    )?;
+    let mut client =
+        hls_native_shell::CoreIpcClient::connect_existing(std::time::Duration::from_secs(2))?;
     client
         .command(hls_native_shell::CoreCommand::Shutdown)
         .map(|_| ())

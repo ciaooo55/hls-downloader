@@ -31,10 +31,13 @@ jobs:
           if ($buildScript -match '(?i)[A-Z]:\\Users\\[^\\]+\\') {
             throw 'Release build scripts must not depend on a developer-specific Windows user profile path.'
           }
-          if ($buildScript -match '(?i)[A-Z]:\\HLSDownloaderBuildCache\\') {
-            throw 'The active v7 build must not fall back to a legacy fixed-drive build cache.'
+          foreach ($path in @('scripts\build-v7.ps1', 'scripts\smoke-v7-compose-frames.ps1')) {
+            $source = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+            if ($source -match '(?i)[A-Z]:\\HLSDownloaderBuildCache\\') {
+              throw "$path must not fall back to a legacy fixed-drive build cache."
+            }
           }
-          foreach ($path in @('scripts\bootstrap-v7-toolchain.ps1', 'scripts\build-v7.ps1', 'scripts\cleanup-v7-build-cache.ps1')) {
+          foreach ($path in @('scripts\bootstrap-v7-toolchain.ps1', 'scripts\build-v7.ps1', 'scripts\cleanup-v7-build-cache.ps1', 'scripts\smoke-v7-compose-frames.ps1')) {
             $source = Get-Content -LiteralPath $path -Raw -Encoding UTF8
             if ($source -notmatch '\$env:HLS_V7_BUILD_CACHE') {
               throw "$path must honor the shared HLS_V7_BUILD_CACHE override."
@@ -51,6 +54,15 @@ jobs:
           )) {
             if (-not $bootstrapScript.Contains($required)) {
               throw "The v7 JDK bootstrap is missing pinned supply-chain input: $required"
+            }
+          }
+          $gradleWrapper = Get-Content -LiteralPath 'desktop_ui\gradle\wrapper\gradle-wrapper.properties' -Raw -Encoding UTF8
+          foreach ($required in @(
+            'distributionUrl=https\://services.gradle.org/distributions/gradle-9.7.0-bin.zip',
+            'distributionSha256Sum=84fbba45c7f4c64abc77460e1c00f541e9f960e3c7ed2538f1ede19eacd873ae'
+          )) {
+            if (-not $gradleWrapper.Contains($required)) {
+              throw "Gradle wrapper release input is not pinned: $required"
             }
           }
 
@@ -75,7 +87,7 @@ jobs:
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: "1.98.1"
-          components: clippy
+          components: clippy,rustfmt
 
       - name: Cache Rust Core dependencies and target
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
@@ -92,10 +104,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
+          cargo fmt --all -- --check
           # Player tests intentionally toggle process-wide backend env hooks; serial execution prevents cross-test contamination.
           cargo test --locked --lib -- --test-threads=1
           cargo build --locked --bin HLSDownloaderUpdater
-          cargo clippy --locked --all-targets
+          # Product/test-helper reachability and stable IPC/media interfaces intentionally trigger these structural lints.
+          # Keep every other Clippy warning fatal so new actionable warnings still fail CI.
+          cargo clippy --locked --all-targets -- -D warnings -A dead_code -A clippy::large_enum_variant -A clippy::too_many_arguments -A clippy::type_complexity
 
   presenter:
     name: Native presenter
@@ -108,7 +123,7 @@ jobs:
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: "1.98.1"
-          components: clippy
+          components: clippy,rustfmt
 
       - name: Cache presenter dependencies and target
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
@@ -125,6 +140,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
+          cargo fmt --all -- --check
           cargo test --locked
           cargo build --locked --bin hls-downloader-presenter
           # The explicit loop keeps the disconnect branch visible beside the event body.
@@ -197,7 +213,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          node-version: "24"
+          node-version: "24.20.0"
 
       - name: Enable pnpm
         shell: pwsh
@@ -206,6 +222,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           corepack enable
           corepack prepare pnpm@11.7.0 --activate
+          if ((pnpm --version).Trim() -ne '11.7.0') { throw 'pnpm 11.7.0 activation failed.' }
 
       - name: Install extension dependencies
         working-directory: extension

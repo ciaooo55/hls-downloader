@@ -400,9 +400,7 @@ fn load_completed_ranges(job: &Job) -> Option<Vec<(u64, u64)>> {
     if !checkpoint_matches(job, &value) {
         return None;
     }
-    let Some(items) = value.get("ranges").and_then(|item| item.as_array()) else {
-        return None;
-    };
+    let items = value.get("ranges").and_then(|item| item.as_array())?;
     let ranges: Vec<(u64, u64)> = items
         .iter()
         .filter_map(|item| {
@@ -972,7 +970,7 @@ fn mark_file_sparse(_file: &File) {
         unsafe {
             let mut returned = 0u32;
             let _ = DeviceIoControl(
-                _file.as_raw_handle() as *mut core::ffi::c_void,
+                _file.as_raw_handle(),
                 FSCTL_SET_SPARSE,
                 core::ptr::null_mut(),
                 0,
@@ -1114,10 +1112,7 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         write_progress(&job.progress, total, total, 0.0, "done");
         return Ok(());
     }
-    let scheduler = Arc::new(RangeScheduler::new(
-        pending.iter().copied().collect(),
-        workers,
-    ));
+    let scheduler = Arc::new(RangeScheduler::new(pending.to_vec(), workers));
     let downloaded = Arc::new(AtomicU64::new(already));
     let completed = Arc::new(Mutex::new(loaded));
     let failed = Arc::new(Mutex::new(None::<EngineErrorCode>));
@@ -2851,8 +2846,7 @@ mod tests {
         assert!(seen
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .iter()
-            .any(|start| *start == 3));
+            .contains(&3));
     }
 
     #[test]

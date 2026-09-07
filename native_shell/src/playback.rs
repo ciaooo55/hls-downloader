@@ -231,7 +231,7 @@ fn handle_client(
         let body = format!(
             "{{\"url\":\"{}\",\"title\":\"{}\"}}",
             json_escape(&location),
-            json_escape(&token)
+            json_escape(token)
         );
         return write_response(
             &mut stream,
@@ -307,8 +307,7 @@ fn json_escape(value: &str) -> String {
     value
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
-        .replace('\r', "")
-        .replace('\n', "")
+        .replace(['\r', '\n'], "")
 }
 
 fn resolve_mount<'a>(mounts: &'a [(String, Mount)], token: &str) -> Option<&'a Mount> {

@@ -3,12 +3,18 @@ name: v7 Candidate Package
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
+  pull_request:
     paths:
       - '.github/workflows/package-v7-candidate.yml'
-      - 'scripts/bootstrap-v7-media-tools.ps1'
-      - 'scripts/bootstrap-v7-toolchain.ps1'
-      - 'scripts/build-v7.ps1'
-      - 'scripts/validate-powershell.ps1'
+      - 'native_shell/**'
+      - 'presenter_ui/**'
+      - 'desktop_ui/**'
+      - 'extension/**'
+      - 'assets/**'
+      - 'artifacts/v7-productization/feature-parity.json'
+      - 'scripts/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

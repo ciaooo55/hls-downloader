@@ -1692,7 +1692,9 @@ fn download_segment(
 ) -> Result<PathBuf, String> {
     let mut last_error = String::new();
     for attempt in 1..=MAX_SEGMENT_ATTEMPTS {
-        let result = download_segment_once(segment, headers, proxy, path, control, key_bytes, media_key, sequence);
+        let result = download_segment_once(
+            segment, headers, proxy, path, control, key_bytes, media_key, sequence,
+        );
         match result {
             Ok(path) => return Ok(path),
             Err(error) => {
@@ -1709,7 +1711,10 @@ fn download_segment(
             }
         }
     }
-    Err(format!("{last_error}（已重试 {} 次）", MAX_SEGMENT_ATTEMPTS - 1))
+    Err(format!(
+        "{last_error}（已重试 {} 次）",
+        MAX_SEGMENT_ATTEMPTS - 1
+    ))
 }
 
 fn download_segment_once(
@@ -2056,7 +2061,7 @@ fn parse_iv(value: &str) -> Result<[u8; 16], String> {
     if hex.is_empty() || hex.len() > 32 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(format!("无效 AES-128 IV: {value}"));
     }
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         hex.insert(0, '0');
     }
     let padded = format!("{hex:0>32}");
@@ -2660,6 +2665,7 @@ mod tests {
     fn authenticated_live_pause_resume_restores_atomic_timeline() {
         use std::io::{BufRead, BufReader, Write};
         use std::net::TcpListener;
+        use std::sync::mpsc;
         use std::thread;
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -2772,8 +2778,11 @@ mod tests {
         let first_dir = dir.clone();
         let first_control = control.clone();
         let first_url = url.clone();
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
         let first = thread::spawn(move || {
-            download_hls_with(
+            let _ = started_tx.send(());
+            let result = download_hls_with(
                 &first_url,
                 &first_headers,
                 "",
@@ -2785,13 +2794,24 @@ mod tests {
                     download_subtitles: false,
                     ..HlsDownloadOptions::default()
                 },
-            )
+            );
+            let _ = done_tx.send(result);
         });
+        started_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("live download worker did not start");
         let deadline = Instant::now() + Duration::from_secs(15);
         while !first_segment_seen.load(Ordering::SeqCst) {
+            match done_rx.try_recv() {
+                Ok(result) => panic!("live download exited before the first segment: {result:?}"),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    panic!("live download result channel disconnected before the first segment")
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
             assert!(
                 Instant::now() < deadline,
-                "server did not receive the first live segment"
+                "server did not receive the first live segment after worker startup"
             );
             thread::sleep(Duration::from_millis(5));
         }
@@ -2799,7 +2819,11 @@ mod tests {
         let (lock, wake) = &*release_first_segment;
         *lock.lock().unwrap() = true;
         wake.notify_all();
-        assert_eq!(first.join().unwrap().unwrap_err(), "paused");
+        let first_result = done_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("paused live download did not finish");
+        assert_eq!(first_result.unwrap_err(), "paused");
+        first.join().unwrap();
 
         let checkpoint: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("live_state.json")).unwrap())
@@ -2854,7 +2878,16 @@ mod tests {
         std::fs::create_dir_all(&seg_dir).unwrap();
         let file = seg_dir.join("000000.ts");
         std::fs::write(&file, b"seg").unwrap();
-        write_local_playlist(&dir, 4.0, false, &[file.clone()], &[1.0], &[false], false).unwrap();
+        write_local_playlist(
+            &dir,
+            4.0,
+            false,
+            std::slice::from_ref(&file),
+            &[1.0],
+            &[false],
+            false,
+        )
+        .unwrap();
         let live = std::fs::read_to_string(dir.join("local.m3u8")).unwrap();
         assert!(live.contains("#EXT-X-PLAYLIST-TYPE:EVENT"));
         assert!(!live.contains("#EXT-X-ENDLIST"));

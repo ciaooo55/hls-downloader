@@ -647,10 +647,7 @@ impl NamedPipeServer {
             return Err(error);
         }
         wake_named_pipe_accept_on_stop(self.name.clone(), Arc::clone(&stop));
-        let first = match self.serve_once_inner(Some(&ready)) {
-            Ok(stream) => stream,
-            Err(error) => return Err(error),
-        };
+        let first = self.serve_once_inner(Some(&ready))?;
         let active = Arc::new(AtomicUsize::new(0));
         let Some(first_slot) = ConnectionSlot::claim(&active) else {
             // 槽位耗尽时丢弃首连接：ready 已通知，客户端会重连重试
@@ -731,7 +728,7 @@ impl NamedPipeServer {
                 return Err(error);
             }
         };
-        let mut attrs = windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
+        let attrs = windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<windows_sys::Win32::Security::SECURITY_ATTRIBUTES>()
                 as u32,
             lpSecurityDescriptor: owner_sd.0,
@@ -746,7 +743,7 @@ impl NamedPipeServer {
                 V7_PIPE_MAX_FRAME as u32,
                 V7_PIPE_MAX_FRAME as u32,
                 0,
-                &mut attrs,
+                &attrs,
             )
         };
         if handle == INVALID_HANDLE_VALUE {

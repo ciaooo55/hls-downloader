@@ -4,14 +4,14 @@ pub fn decrypt_aes128_cbc_pkcs7(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Ve
     if key.len() != 16 || iv.len() != 16 {
         return Err("AES-128 key/IV must be 16 bytes".into());
     }
-    if data.is_empty() || data.len() % 16 != 0 {
+    if data.is_empty() || !data.len().is_multiple_of(16) {
         return Err("AES-128 ciphertext must be a multiple of 16 bytes".into());
     }
     let round_keys = expand_key(key);
     let mut prev = [0u8; 16];
     prev.copy_from_slice(iv);
     let mut plain = Vec::with_capacity(data.len());
-    for chunk in data.chunks_exact(16) {
+    for chunk in data.as_chunks::<16>().0 {
         let mut block = [0u8; 16];
         block.copy_from_slice(chunk);
         decrypt_block(&round_keys, &mut block);
@@ -131,10 +131,10 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
         padded.push(0);
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
-    for chunk in padded.chunks_exact(64) {
+    for chunk in padded.as_chunks::<64>().0 {
         let mut w = [0u32; 80];
-        for (index, part) in chunk.chunks_exact(4).enumerate() {
-            w[index] = u32::from_be_bytes(part.try_into().unwrap());
+        for (index, part) in chunk.as_chunks::<4>().0.iter().enumerate() {
+            w[index] = u32::from_be_bytes(*part);
         }
         for index in 16..80 {
             w[index] = (w[index - 3] ^ w[index - 8] ^ w[index - 14] ^ w[index - 16]).rotate_left(1);

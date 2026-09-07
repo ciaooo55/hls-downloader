@@ -9,7 +9,7 @@ pub fn attach_file_drop(
 ) -> bool {
     #[cfg(windows)]
     unsafe {
-        return install(title, tx, Box::new(wake));
+        install(title, tx, Box::new(wake))
     }
     #[cfg(not(windows))]
     {

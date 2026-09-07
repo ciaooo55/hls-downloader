@@ -301,8 +301,9 @@ fn normalize_download_dirs(
         let resolved_dir = if original.is_absolute() {
             original
         } else {
-            let resolved = locate_legacy_download_dir(&roots, &relative_dir, &task_id, &spec.filename)
-                .unwrap_or_else(|| default.clone());
+            let resolved =
+                locate_legacy_download_dir(&roots, &relative_dir, &task_id, &spec.filename)
+                    .unwrap_or_else(|| default.clone());
             spec.download_dir = resolved.to_string_lossy().into_owned();
             let updated = serde_json::to_string(&spec)
                 .map_err(|error| format!("encode migrated v6 task spec {task_id}: {error}"))?;
@@ -591,7 +592,10 @@ mod tests {
             snapshot.output_path,
             resume_root.join("movie.mp4").to_string_lossy()
         );
-        assert_eq!(read_setting(&connection, MIGRATED_FLAG).as_deref(), Some("true"));
+        assert_eq!(
+            read_setting(&connection, MIGRATED_FLAG).as_deref(),
+            Some("true")
+        );
     }
 
     #[test]
@@ -662,7 +666,10 @@ mod tests {
             Path::new(&resolved),
             &source.parent().unwrap().join("downloads")
         );
-        assert_eq!(read_setting(&connection, MIGRATED_FLAG).as_deref(), Some("true"));
+        assert_eq!(
+            read_setting(&connection, MIGRATED_FLAG).as_deref(),
+            Some("true")
+        );
     }
 
     #[test]

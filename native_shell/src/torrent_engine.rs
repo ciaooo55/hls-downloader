@@ -241,7 +241,7 @@ pub fn parse_torrent_file(bytes: &[u8]) -> Result<TorrentMeta, String> {
         if raw.len() % 20 != 0 {
             return Err("torrent piece hash list is malformed".into());
         }
-        for chunk in raw.chunks_exact(20) {
+        for chunk in raw.as_chunks::<20>().0 {
             let mut hash = [0u8; 20];
             hash.copy_from_slice(chunk);
             pieces.push(hash);
@@ -298,7 +298,7 @@ pub fn probe_torrent_source(
     if source.starts_with("magnet:") {
         let magnet = parse_magnet(source)?;
         return if magnet.pieces.is_empty() {
-            fetch_magnet_metadata(&magnet, headers, proxy, enable_dht).or_else(|_| Ok(magnet))
+            fetch_magnet_metadata(&magnet, headers, proxy, enable_dht).or(Ok(magnet))
         } else {
             Ok(magnet)
         };
@@ -864,7 +864,7 @@ pub fn parse_udp_tracker(url: &str) -> Option<(String, u16)> {
 
 pub fn udp_connect_request(transaction_id: u32) -> [u8; 16] {
     let mut packet = [0u8; 16];
-    packet[..8].copy_from_slice(&0x4172_7101_980u64.to_be_bytes());
+    packet[..8].copy_from_slice(&0x0417_2710_1980_u64.to_be_bytes());
     packet[8..12].copy_from_slice(&0u32.to_be_bytes());
     packet[12..16].copy_from_slice(&transaction_id.to_be_bytes());
     packet
@@ -973,7 +973,9 @@ pub fn parse_krpc_peers(body: &[u8]) -> (Vec<std::net::SocketAddr>, Vec<std::net
 }
 
 pub fn decode_compact_nodes(raw: &[u8]) -> Vec<std::net::SocketAddr> {
-    raw.chunks_exact(26)
+    raw.as_chunks::<26>()
+        .0
+        .iter()
         .map(|chunk| {
             let ip = std::net::Ipv4Addr::new(chunk[20], chunk[21], chunk[22], chunk[23]);
             let port = u16::from_be_bytes([chunk[24], chunk[25]]);
@@ -1226,7 +1228,9 @@ pub fn parse_compact_peers(body: &[u8]) -> Vec<std::net::SocketAddr> {
 }
 
 fn decode_compact(raw: &[u8]) -> Vec<std::net::SocketAddr> {
-    raw.chunks_exact(6)
+    raw.as_chunks::<6>()
+        .0
+        .iter()
         .map(|chunk| {
             let ip = std::net::Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]);
             let port = u16::from_be_bytes([chunk[4], chunk[5]]);
@@ -1489,8 +1493,7 @@ fn download_from_peer_ex_with_telemetry(
                         if body.len() < 8 {
                             return Err("truncated peer piece message".into());
                         }
-                        let piece_index =
-                            be32(&body[..4]) as usize;
+                        let piece_index = be32(&body[..4]) as usize;
                         let begin = be32(&body[4..8]) as usize;
                         let data = &body[8..];
                         if piece_index != index || begin != filled {
@@ -2432,7 +2435,7 @@ mod tests {
             Some(("tracker.example".into(), 1337))
         );
         let packet = udp_connect_request(0xAABBCCDD);
-        assert_eq!(&packet[..8], &0x4172_7101_980u64.to_be_bytes());
+        assert_eq!(&packet[..8], &0x0417_2710_1980_u64.to_be_bytes());
         assert_eq!(&packet[8..12], &0u32.to_be_bytes());
         assert_eq!(&packet[12..], &0xAABBCCDDu32.to_be_bytes());
     }
