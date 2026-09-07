@@ -1692,7 +1692,9 @@ fn download_segment(
 ) -> Result<PathBuf, String> {
     let mut last_error = String::new();
     for attempt in 1..=MAX_SEGMENT_ATTEMPTS {
-        let result = download_segment_once(segment, headers, proxy, path, control, key_bytes, media_key, sequence);
+        let result = download_segment_once(
+            segment, headers, proxy, path, control, key_bytes, media_key, sequence,
+        );
         match result {
             Ok(path) => return Ok(path),
             Err(error) => {
@@ -1709,7 +1711,10 @@ fn download_segment(
             }
         }
     }
-    Err(format!("{last_error}（已重试 {} 次）", MAX_SEGMENT_ATTEMPTS - 1))
+    Err(format!(
+        "{last_error}（已重试 {} 次）",
+        MAX_SEGMENT_ATTEMPTS - 1
+    ))
 }
 
 fn download_segment_once(

@@ -64,7 +64,9 @@ impl PersistentCore {
         values: &BTreeMap<String, serde_json::Value>,
     ) -> Result<Vec<EventEnvelope>, String> {
         let before = self.runtime.clone();
-        let mut events = self.runtime.handle(CoreCommand::AssignQueue { task_ids, queue_id });
+        let mut events = self
+            .runtime
+            .handle(CoreCommand::AssignQueue { task_ids, queue_id });
         events.extend(self.runtime.emit(crate::CoreEvent::SettingsChanged {
             keys: values.keys().cloned().collect(),
         }));
@@ -296,7 +298,6 @@ impl PersistentCore {
         }
         Ok(Self { runtime, store })
     }
-
 }
 
 #[cfg(test)]

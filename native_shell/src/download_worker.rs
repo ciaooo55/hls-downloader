@@ -793,9 +793,11 @@ impl CoreCoordinator {
                 core.store().setting_u64("download_speed_limit_kib", 0)?,
                 core.store()
                     .setting_bool("download_speed_schedule_enabled", false)?,
-                &core.store()
+                &core
+                    .store()
                     .setting_string("download_speed_schedule_start", "22:00")?,
-                &core.store()
+                &core
+                    .store()
                     .setting_string("download_speed_schedule_end", "08:00")?,
                 core.store().setting_u64("download_speed_schedule_kib", 0)?,
             );

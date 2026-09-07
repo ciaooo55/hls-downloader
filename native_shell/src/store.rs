@@ -525,7 +525,11 @@ fn sync_event_side_rows(transaction: &Transaction<'_>, event: &CoreEvent) -> Res
             handoff_id,
             task_id,
         } => {
-            let status = if task_id.is_some() { "accepted" } else { "rejected" };
+            let status = if task_id.is_some() {
+                "accepted"
+            } else {
+                "rejected"
+            };
             let existing: Option<String> = transaction
                 .query_row(
                     "SELECT public_json FROM handoffs WHERE handoff_id = ?1",
@@ -754,7 +758,9 @@ mod tests {
                 .as_nanos()
         ));
         let connection = Connection::open(&path).unwrap();
-        connection.execute_batch("PRAGMA user_version = 99;").unwrap();
+        connection
+            .execute_batch("PRAGMA user_version = 99;")
+            .unwrap();
         drop(connection);
 
         let error = match CoreStore::open(&path) {

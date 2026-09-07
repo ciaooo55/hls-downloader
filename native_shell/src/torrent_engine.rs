@@ -1489,8 +1489,7 @@ fn download_from_peer_ex_with_telemetry(
                         if body.len() < 8 {
                             return Err("truncated peer piece message".into());
                         }
-                        let piece_index =
-                            be32(&body[..4]) as usize;
+                        let piece_index = be32(&body[..4]) as usize;
                         let begin = be32(&body[4..8]) as usize;
                         let data = &body[8..];
                         if piece_index != index || begin != filled {
