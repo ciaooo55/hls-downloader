@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "repository": "ciaooo55/hls-downloader",
+  "task_registry_issue": 39,
+  "role_issue": 40,
+  "heartbeat_issue": 41,
+  "visitor_issue": 42,
+  "audit_issue": 45,
+  "priority_order": ["P0", "P1", "P2", "P3"],
+  "state_order": ["planned", "claimed", "in_progress", "reviewing", "blocked", "done"],
+  "workers": [
+    {"id": "C0", "role": "coordinator", "state": "working"},
+    {"id": "A0", "role": "auditor", "state": "reviewing"},
+    {"id": "W0", "role": "worker", "state": "working"}
+  ],
+  "tasks": [
+    {
+      "id": "HLS-C001",
+      "title": "Bootstrap multi-agent coordination control plane",
+      "priority": "P0",
+      "state": "in_progress",
+      "owner": "W0",
+      "coordinator": "C0",
+      "auditor": "A0",
+      "issue": 46,
+      "branch": "coordination/bootstrap-v1",
+      "acceptance": [
+        "machine-readable task registry exists",
+        "role/heartbeat/visitor/audit channels exist",
+        "handoff.md indexes coordination entry points",
+        "docs/manger.log records assignments and decisions",
+        "worker log and architecture docs exist",
+        "at least six uncompleted prioritized tasks are initialized",
+        "bootstrap is delivered by PR and independently audited"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "HLS-C002",
+      "title": "Independent audit of PR #38 formal-release security workflow gating",
+      "priority": "P0",
+      "state": "reviewing",
+      "owner": "A0",
+      "coordinator": "C0",
+      "auditor": "A0",
+      "issue": 47,
+      "pull_request": 38,
+      "acceptance": [
+        "exact-SHA push-run semantics independently verified",
+        "security workflow push path-filter change cannot deadlock formal release",
+        "PowerShell 5.1 and 7 validation passes",
+        "all PR workflows pass",
+        "stale/wrong-event run acceptance is ruled out",
+        "PASS or FAIL evidence is recorded in audit queue"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "HLS-C003",
+      "title": "Bind updater MSI trust to the HLS Downloader signing identity",
+      "priority": "P0",
+      "state": "planned",
+      "owner": null,
+      "issue": 48,
+      "acceptance": [
+        "threat model distinguishes trusted signature from trusted publisher identity",
+        "implementation validates expected signer identity without committing secrets/private keys",
+        "rotation strategy is documented",
+        "Windows tests or deterministic validation cover mismatch rejection"
+      ],
+      "depends_on": ["HLS-C002"]
+    },
+    {
+      "id": "HLS-C004",
+      "title": "Review updater Authenticode revocation and network trust policy",
+      "priority": "P1",
+      "state": "planned",
+      "owner": null,
+      "issue": 48,
+      "acceptance": [
+        "document current WTD_REVOKE_NONE/cache-only behavior and threat tradeoffs",
+        "define online/offline behavior and failure policy",
+        "add implementation/tests if policy changes"
+      ],
+      "depends_on": ["HLS-C003"]
+    },
+    {
+      "id": "HLS-C005",
+      "title": "Establish main branch governance and required-check plan",
+      "priority": "P1",
+      "state": "planned",
+      "owner": null,
+      "issue": 48,
+      "acceptance": [
+        "re-check actual branch/ruleset state",
+        "define required checks and direct-push policy",
+        "apply protections if connector capability permits or produce exact owner action plan if not",
+        "avoid path-filtered required-check deadlocks"
+      ],
+      "depends_on": ["HLS-C002"]
+    },
+    {
+      "id": "HLS-C006",
+      "title": "Add machine validation for coordination artifacts",
+      "priority": "P1",
+      "state": "planned",
+      "owner": null,
+      "issue": 49,
+      "acceptance": [
+        "handoff YAML front matter parses",
+        "tasks.json schema and unique task IDs validate",
+        "referenced coordination files exist",
+        "CI fails on malformed coordination state without requiring external secrets"
+      ],
+      "depends_on": ["HLS-C001"]
+    },
+    {
+      "id": "HLS-C007",
+      "title": "Audit and refresh README for precise current onboarding",
+      "priority": "P2",
+      "state": "planned",
+      "owner": null,
+      "issue": 50,
+      "acceptance": [
+        "README claims match current repository commands and architecture",
+        "obsolete setup/release guidance is removed",
+        "coordination entry point is discoverable without overwhelming product docs"
+      ],
+      "depends_on": ["HLS-C001"]
+    },
+    {
+      "id": "HLS-C008",
+      "title": "Validate formal-release security gates on the merged main SHA",
+      "priority": "P1",
+      "state": "planned",
+      "owner": null,
+      "issue": 48,
+      "acceptance": [
+        "merged main SHA has v7 CI, Candidate Package, Maintenance Security, and Rust Security push conclusions",
+        "formal release lookup behavior is verified against that SHA without publishing a release",
+        "evidence is recorded in logs/task registry"
+      ],
+      "depends_on": ["HLS-C002"]
+    },
+    {
+      "id": "HLS-C009",
+      "title": "Inventory security exceptions and define expiry/review policy",
+      "priority": "P2",
+      "state": "planned",
+      "owner": null,
+      "issue": 48,
+      "acceptance": [
+        "explicit audit ignores/exceptions are enumerated",
+        "each exception has rationale, owner, review trigger, and removal condition",
+        "no undocumented permanent security suppression remains"
+      ],
+      "depends_on": []
+    }
+  ],
+  "updated_utc": "2026-09-07T17:32:00Z"
+}
