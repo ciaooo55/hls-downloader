@@ -31,7 +31,6 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           corepack enable
           corepack prepare pnpm@11.7.0 --activate
-          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.pnpm??={};p.pnpm.overrides??={};p.pnpm.overrides['image-size']='2.0.3';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');"
           pnpm up --save-exact wxt@0.21.4 web-ext@10.6.0 vitest@3.2.6
           pnpm install --lockfile-only
           pnpm audit --audit-level=high
@@ -45,7 +44,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add extension/package.json extension/pnpm-lock.yaml
+          git add extension/package.json extension/pnpm-lock.yaml extension/pnpm-workspace.yaml
           if (git diff --cached --quiet) { throw 'Expected extension dependency changes were not produced.' }
           git commit -m 'build: update vulnerable extension tooling'
           git push origin HEAD:chatgpt/v7-maintenance-security-audit
