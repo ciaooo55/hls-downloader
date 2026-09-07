@@ -49,12 +49,11 @@ Write-Utf8 $featurePath (($feature | ConvertTo-Json -Depth 20) + "`n")
 $readmePath = 'README.md'
 $readme = Read-Utf8 $readmePath
 $readme = [regex]::Replace($readme, '(?m)^# HLS Downloader \d+\.\d+\.\d+$', "# HLS Downloader $Version", 1)
-$readme = [regex]::Replace($readme, 'The product version is `\d+\.\d+\.\d+`\.', "The product version is `$Version`.", 1)
+$marker = "The product version is ``$Version``."
+$readme = [regex]::Replace($readme, 'The product version is `\d+\.\d+\.\d+`\.', $marker, 1)
+$readme = [regex]::Replace($readme, ' `\d+\.\d+\.\d+` is the active development iteration; formal release readiness remains gated by fresh release evidence\.', '', 1)
 if (-not $ReleaseReady) {
-    $marker = "The product version is `$Version`."
-    if ($readme.Contains($marker) -and -not $readme.Contains("`$Version is the active development iteration")) {
-        $readme = $readme.Replace($marker, "$marker `$Version is the active development iteration; formal release readiness remains gated by fresh release evidence.")
-    }
+    $readme = $readme.Replace($marker, "$marker ``$Version`` is the active development iteration; formal release readiness remains gated by fresh release evidence.")
 }
 Write-Utf8 $readmePath $readme
 
