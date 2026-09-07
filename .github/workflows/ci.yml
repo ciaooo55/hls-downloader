@@ -76,8 +76,8 @@ jobs:
           }
           $gradleWrapper = Get-Content -LiteralPath 'desktop_ui\gradle\wrapper\gradle-wrapper.properties' -Raw -Encoding UTF8
           foreach ($required in @(
-            'distributionUrl=https\://services.gradle.org/distributions/gradle-9.7.0-bin.zip',
-            'distributionSha256Sum=84fbba45c7f4c64abc77460e1c00f541e9f960e3c7ed2538f1ede19eacd873ae'
+            'distributionUrl=https\://services.gradle.org/distributions/gradle-9.7.1-bin.zip',
+            'distributionSha256Sum=acd53f1edaf02f1a8ff99879f8a34b302661a057d9b063ae9e35b552f804d20a'
           )) {
             if (-not $gradleWrapper.Contains($required)) {
               throw "Gradle wrapper release input is not pinned: $required"

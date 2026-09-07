@@ -35,6 +35,8 @@ $legacyPaths = @(
     'E:\HLSDownloaderBuildCache\gradle',
     'E:\HLSDownloaderBuildCache\gradle-9.7.0',
     'E:\HLSDownloaderBuildCache\gradle-9.7.0-bin.zip',
+    'E:\HLSDownloaderBuildCache\gradle-9.7.1',
+    'E:\HLSDownloaderBuildCache\gradle-9.7.1-bin.zip',
     'E:\HLSDownloaderBuildCache\libmpv-20260814',
     'E:\HLSDownloaderBuildCache\compose-after-click.png',
     'E:\HLSDownloaderBuildCache\compose-after-resolution.png',

@@ -53,10 +53,10 @@ def compose_components() -> list[dict]:
     # build.gradle.kts. Record the locked versions without reviving the removed
     # React/Tauri dependency graph.
     return [
-        component("framework", "maven", "org.jetbrains.compose.desktop/desktop", "1.11.1"),
+        component("framework", "maven", "org.jetbrains.compose.desktop/desktop", "1.12.0"),
         component("library", "maven", "org.jetbrains.compose.material/material-icons-extended", "1.7.3"),
-        component("library", "maven", "org.jetbrains.kotlinx/kotlinx-coroutines-swing", "1.10.2"),
-        component("library", "maven", "org.jetbrains.kotlinx/kotlinx-serialization-json", "1.9.0"),
+        component("library", "maven", "org.jetbrains.kotlinx/kotlinx-coroutines-swing", "1.11.0"),
+        component("library", "maven", "org.jetbrains.kotlinx/kotlinx-serialization-json", "1.11.0"),
         component("framework", "generic", "Eclipse Temurin JRE", "21"),
     ]
 

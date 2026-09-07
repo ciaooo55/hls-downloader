@@ -105,9 +105,9 @@ change:
 ## Development verification
 
 ```powershell
-$env:JAVA_HOME = 'E:\HLSDownloaderBuildCache\jdk-21'
-$env:GRADLE_USER_HOME = 'E:\HLSDownloaderBuildCache\gradle'
-E:\HLSDownloaderBuildCache\gradle-9.7.0\bin\gradle.bat -p desktop_ui test --no-daemon
+cd desktop_ui
+.\gradlew.bat test --no-daemon
+cd ..
 
 & .\scripts\adversarial-v7.ps1 -Scope @('native', 'browser', 'transfer')
 ```
