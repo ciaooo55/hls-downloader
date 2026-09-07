@@ -5,12 +5,14 @@ param(
         "scripts\bootstrap-v7-media-tools.ps1",
         "scripts\bootstrap-v7-toolchain.ps1",
         "scripts\build-v7.ps1",
+        "scripts\bump-v7-version.ps1",
         "scripts\cleanup-v7-build-cache.ps1",
         "scripts\cleanup-v7-legacy-install.ps1",
         "scripts\create-v7-portable.ps1",
         "scripts\install-v7-local.ps1",
         "scripts\register-v7-native-host.ps1",
         "scripts\record-v7-release-gate.ps1",
+        "scripts\report-v7-package-size.ps1",
         "scripts\run-v7-local.ps1",
         "scripts\set-v7-msi-rollback-order.ps1",
         "scripts\vcvars.ps1",
@@ -19,6 +21,7 @@ param(
         "scripts\smoke-v7-portable-upgrade.ps1",
         "scripts\smoke-installed-v7.ps1",
         "scripts\verify-v7-feature-parity.ps1",
+        "scripts\verify-v7-version-contract.ps1",
         "scripts\verify-hls-auth-resume.ps1",
         "scripts\verify-v7-bt-selection.ps1",
         "scripts\smoke-v7-compose-frames.ps1",
@@ -49,3 +52,11 @@ if ($failed) {
     exit 1
 }
 Write-Output "PowerShell syntax validation passed for $($Path.Count) scripts."
+
+# The default v7 validation path also acts as an early product-version drift gate.
+# This catches manifest/lockfile/UI/test version mismatches before expensive Rust,
+# Compose, extension, or Candidate jobs spend minutes building stale contracts.
+if ($Path -contains "scripts\validate-powershell.ps1") {
+    & (Join-Path $PSScriptRoot 'verify-v7-version-contract.ps1')
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
