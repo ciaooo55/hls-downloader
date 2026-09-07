@@ -78,7 +78,7 @@ $performanceCommand = "& $(Quote-PS (Join-Path $PSScriptRoot 'benchmark-v7.ps1')
 Invoke-Gate 'performance' $performanceCommand 'candidate Portable; packaged SOFTWARE renderer; local transfer/IPC/host/frame thresholds'
 
 $upgradeCommand = "& $(Quote-PS (Join-Path $PSScriptRoot 'verify-v7-msi-lifecycle.ps1')) -Scenario Upgrade -CandidateManifestPath $(Quote-PS $manifestFullPath) -InstallDir 'E:\h'"
-Invoke-Gate 'installer' $upgradeCommand 'public v7.0.0 MSI -> candidate v7.0.1 MSI at E:\h; checkpoint/process recovery'
+Invoke-Gate 'installer' $upgradeCommand "public v7.0.0 MSI -> candidate v$([string]$manifest.product_version) MSI at E:\h; checkpoint/process recovery"
 
 $rollbackCommand = "& $(Quote-PS (Join-Path $PSScriptRoot 'verify-v7-msi-lifecycle.ps1')) -Scenario FailureRollback -CandidateManifestPath $(Quote-PS $manifestFullPath) -InstallDir 'E:\h'"
 Invoke-Gate 'rollback' $rollbackCommand 'candidate MSI Type-19 failure injection at E:\h; v7.0.0 product/data/registration preserved'
