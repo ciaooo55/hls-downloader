@@ -1,0 +1,67 @@
+name: v7 Candidate Extension Assets
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  upload:
+    if: ${{ github.event.issue.title == 'release:v7.0.1-candidate.1-extensions' && github.event.issue.user.login == github.repository_owner }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: v7.0.1-candidate.1
+      SOURCE_SHA: 26cd6a6f5ef0be30f5b40d6a60307bfd7f7bfce6
+      ARTIFACT_ID: '10012816450'
+    steps:
+      - name: Download successful candidate artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > candidate-artifact.zip
+          unzip -q candidate-artifact.zip -d candidate-artifact
+          manifest="$(find candidate-artifact -name ARTIFACT-MANIFEST.json -type f -print -quit)"
+          test -n "$manifest"
+          root="$(dirname "$manifest")"
+          echo "CANDIDATE_ROOT=$root" >> "$GITHUB_ENV"
+          jq -e --arg sha "$SOURCE_SHA" '.product_version == "7.0.1" and .package_tier == "candidate" and .source_commit == $sha' "$manifest" >/dev/null
+
+      - name: Verify and upload extension archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="$CANDIDATE_ROOT/ARTIFACT-MANIFEST.json"
+          assets=()
+          for browser in Chromium Firefox; do
+            rel="$(jq -r ".extensions.$browser.path" "$manifest")"
+            expected="$(jq -r ".extensions.$browser.sha256" "$manifest")"
+            file="$CANDIDATE_ROOT/$rel"
+            test -f "$file"
+            actual="$(sha256sum "$file" | awk '{print $1}')"
+            test "$actual" = "$expected"
+            assets+=("$file")
+          done
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY"
+
+      - name: Verify uploaded extension sizes and digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="$CANDIDATE_ROOT/ARTIFACT-MANIFEST.json"
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")"
+          for browser in Chromium Firefox; do
+            rel="$(jq -r ".extensions.$browser.path" "$manifest")"
+            file="$CANDIDATE_ROOT/$rel"
+            name="$(basename "$file")"
+            size="$(stat -c '%s' "$file")"
+            sha="$(sha256sum "$file" | awk '{print $1}')"
+            remote_size="$(jq -r --arg n "$name" '.assets[] | select(.name == $n) | .size' <<<"$release_json")"
+            remote_digest="$(jq -r --arg n "$name" '.assets[] | select(.name == $n) | .digest' <<<"$release_json")"
+            test "$remote_size" = "$size"
+            test "$remote_digest" = "sha256:$sha"
+          done
