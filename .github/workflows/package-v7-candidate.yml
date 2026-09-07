@@ -5,15 +5,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - '.github/workflows/package-v7-candidate.yml'
-      - 'native_shell/**'
-      - 'presenter_ui/**'
-      - 'desktop_ui/**'
-      - 'extension/**'
-      - 'assets/**'
-      - 'artifacts/v7-productization/feature-parity.json'
-      - 'scripts/**'
   pull_request:
     paths:
       - '.github/workflows/package-v7-candidate.yml'
