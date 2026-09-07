@@ -3,12 +3,6 @@ name: Rust Security
 on:
   push:
     branches: [main]
-    paths:
-      - 'native_shell/Cargo.toml'
-      - 'native_shell/Cargo.lock'
-      - 'presenter_ui/Cargo.toml'
-      - 'presenter_ui/Cargo.lock'
-      - '.github/workflows/rust-security.yml'
   pull_request:
     paths:
       - 'native_shell/Cargo.toml'
