@@ -1,0 +1,165 @@
+name: One-shot Rust Lint Cleanup
+
+on:
+  push:
+    branches:
+      - chatgpt/v7-release-gate-hardening
+    paths:
+      - '.github/workflows/_maint-rust-lints.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: chatgpt/v7-release-gate-hardening
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: '1.98.1'
+          components: clippy,rustfmt
+      - name: Apply reviewed Clippy replacements
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          root = Path('native_shell/src')
+          changes = {
+              'torrent_engine.rs': [
+                  ('0x4172_7101_980u64', '0x0417_2710_1980_u64'),
+                  ('for chunk in raw.chunks_exact(20) {', 'for chunk in raw.as_chunks::<20>().0 {'),
+                  ('fetch_magnet_metadata(&magnet, headers, proxy, enable_dht).or_else(|_| Ok(magnet))', 'fetch_magnet_metadata(&magnet, headers, proxy, enable_dht).or(Ok(magnet))'),
+                  ('raw.chunks_exact(26)\n', 'raw.as_chunks::<26>().0.iter()\n'),
+                  ('raw.chunks_exact(6)\n', 'raw.as_chunks::<6>().0.iter()\n'),
+              ],
+              'cast.rs': [
+                  ('proto_varint(((field as u64) << 3) | 0)', 'proto_varint((field as u64) << 3)'),
+              ],
+              'checksum.rs': [
+                  ("rest.replace(':', \"\").replace(' ', \"\")", "rest.replace([':', ' '], \"\")"),
+                  ('chunk.chunks_exact(4).enumerate()', 'chunk.as_chunks::<4>().0.iter().enumerate()'),
+              ],
+              'core_ipc.rs': [
+                  ('let first = match self.serve_once_inner(Some(&ready)) {\n            Ok(stream) => stream,\n            Err(error) => return Err(error),\n        };', 'let first = self.serve_once_inner(Some(&ready))?;'),
+                  ('let mut attrs = windows_sys::Win32::Security::SECURITY_ATTRIBUTES {', 'let attrs = windows_sys::Win32::Security::SECURITY_ATTRIBUTES {'),
+                  ('                &mut attrs,', '                &attrs,'),
+              ],
+              'credentials.rs': [
+                  ('return protect_windows(value.as_bytes());', 'protect_windows(value.as_bytes())'),
+                  ('return unprotect_windows(&decode_hex(&value[PREFIX.len()..])?);', 'unprotect_windows(&decode_hex(&value[PREFIX.len()..])?)'),
+                  ('value.len() % 2 != 0', '!value.len().is_multiple_of(2)'),
+                  ('value.as_bytes().chunks_exact(2)', 'value.as_bytes().as_chunks::<2>().0'),
+                  ('headers.get("Cookie").is_none()', '!headers.contains_key("Cookie")'),
+                  ('headers.get("Authorization").is_none()', '!headers.contains_key("Authorization")'),
+                  ('headers.get("Referer").is_none()', '!headers.contains_key("Referer")'),
+                  ('headers.get("Origin").is_none()', '!headers.contains_key("Origin")'),
+              ],
+              'crypto_lite.rs': [
+                  ('data.len() % 16 != 0', '!data.len().is_multiple_of(16)'),
+                  ('data.chunks_exact(16)', 'data.as_chunks::<16>().0'),
+                  ('padded.chunks_exact(64)', 'padded.as_chunks::<64>().0'),
+                  ('chunk.chunks_exact(4).enumerate()', 'chunk.as_chunks::<4>().0.iter().enumerate()'),
+              ],
+              'download_worker.rs': [
+                  ('if owner == claimant && presentation == "presenting" {\n                        "presented"\n                    } else if presenter_id.is_empty() {\n                        "presented"', 'if (owner == claimant && presentation == "presenting") || presenter_id.is_empty() {\n                        "presented"'),
+                  ('((max_bytes + 2) / 3) * 4 + 4', 'max_bytes.div_ceil(3) * 4 + 4'),
+                  ('crate::write_clipboard_files(&[published.clone()])?', 'crate::write_clipboard_files(std::slice::from_ref(&published))?'),
+                  ('let mut info = format!(\n            "d5:filesld6:lengthi4e4:pathl7:one.bineed6:lengthi4e4:pathl7:two.bineee4:name4:demo12:piece lengthi4e6:pieces40:"\n        )', 'let mut info = "d5:filesld6:lengthi4e4:pathl7:one.bineed6:lengthi4e4:pathl7:two.bineee4:name4:demo12:piece lengthi4e6:pieces40:".to_string()'),
+                  ('other.headers.get("Cookie").is_none()', '!other.headers.contains_key("Cookie")'),
+                  ('other.headers.get("Authorization").is_none()', '!other.headers.contains_key("Authorization")'),
+                  ('spec.headers.get("Cookie").is_none()', '!spec.headers.contains_key("Cookie")'),
+              ],
+              'drop_target.rs': [
+                  ('return install(title, tx, Box::new(wake));', 'install(title, tx, Box::new(wake))'),
+              ],
+              'http_engine.rs': [
+                  ('let Some(items) = value.get("ranges").and_then(|item| item.as_array()) else {\n        return None;\n    };', 'let items = value.get("ranges").and_then(|item| item.as_array())?;'),
+                  ('_file.as_raw_handle() as *mut core::ffi::c_void', '_file.as_raw_handle()'),
+                  ('pending.iter().copied().collect()', 'pending.to_vec()'),
+                  ('.iter()\n            .any(|start| *start == 3)', '.contains(&3)'),
+              ],
+              'instance.rs': [
+                  ('file.as_raw_handle() as *mut core::ffi::c_void', 'file.as_raw_handle()'),
+              ],
+              'link_file.rs': [
+                  ("if cfg!(windows) {\n        PathBuf::from(decoded)\n    } else if decoded.starts_with('/') {\n        PathBuf::from(decoded)", "if cfg!(windows) || decoded.starts_with('/') {\n        PathBuf::from(decoded)"),
+                  ('.chunks_exact(2)', '.as_chunks::<2>().0.iter()'),
+                  ("trim_end_matches(|ch| matches!(ch, '.' | ',' | ')' | ';' | ']'))", "trim_end_matches(['.', ',', ')', ';', ']'])"),
+              ],
+              'media/dash.rs': [
+                  ("fn select_video<'a>(\n    representations: &'a [Representation],\n    preferred_bandwidth: u64,\n) -> Option<&'a Representation> {", "fn select_video(\n    representations: &[Representation],\n    preferred_bandwidth: u64,\n) -> Option<&Representation> {"),
+                  (".find(|ch: char| ch == ' ' || ch == '/' || ch == '>')", ".find([' ', '/', '>'])"),
+              ],
+              'media/hls.rs': [
+                  ('hex.len() % 2 != 0', '!hex.len().is_multiple_of(2)'),
+                  ('&[file.clone()]', 'std::slice::from_ref(&file)'),
+              ],
+              'media/subtitles.rs': [
+                  (".split(|ch: char| ch == '.' || ch == ' ' || ch == '\\t')", ".split(['.', ' ', '\\t'])"),
+              ],
+              'net_policy.rs': [
+                  ('seconds.max(1).min(60)', 'seconds.clamp(1, 60)'),
+              ],
+              'playback.rs': [
+                  ('json_escape(&token)', 'json_escape(token)'),
+                  (".replace('\\r', \"\")\n        .replace('\\n', \"\")", ".replace(['\\r', '\\n'], \"\")"),
+              ],
+              'player.rs': [
+                  ('enum Backend {\n    Idle,', '#[derive(Default)]\nenum Backend {\n    #[default]\n    Idle,'),
+                  ('impl Default for Backend {\n    fn default() -> Self {\n        Self::Idle\n    }\n}\n\n', ''),
+                  ('speed.max(0.25).min(4.0)', 'speed.clamp(0.25, 4.0)'),
+                  ('if let Some(payload) = payload {\n            if let serde_json::Value::Object(fields) = payload {\n                request.extend(fields);\n            }\n        }', 'if let Some(serde_json::Value::Object(fields)) = payload {\n            request.extend(fields);\n        }'),
+                  ('fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {', '#[allow(clippy::manual_c_str_literals)]\nfn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {'),
+              ],
+              'store.rs': [
+                  ('limit.max(1).min(500)', 'limit.clamp(1, 500)'),
+                  ('settings.map_or(true, BTreeMap::is_empty)', 'settings.is_none_or(BTreeMap::is_empty)'),
+              ],
+              'task_export.rs': [
+                  ('task.resource_kind.clone()', 'task.resource_kind'),
+                  ('serde_json::to_value(&task.resource_kind)', 'serde_json::to_value(task.resource_kind)'),
+              ],
+              'ole_drag.rs': [
+                  ('&[path.clone()]', 'std::slice::from_ref(&path)'),
+                  ('.chunks_exact(2)', '.as_chunks::<2>().0.iter()'),
+              ],
+              'curl_import.rs': [
+                  ('parsed.headers.get("x-a").is_none()', '!parsed.headers.contains_key("x-a")'),
+              ],
+          }
+
+          for relative, replacements in changes.items():
+              path = root / relative
+              text = path.read_text(encoding='utf-8')
+              for old, new in replacements:
+                  if old not in text:
+                      raise SystemExit(f'expected pattern missing in {relative}: {old!r}')
+                  text = text.replace(old, new)
+              path.write_text(text, encoding='utf-8', newline='\n')
+          '@ | Set-Content -LiteralPath $env:RUNNER_TEMP\fix_lints.py -Encoding UTF8
+          python $env:RUNNER_TEMP\fix_lints.py
+      - name: Format and verify Rust Core
+        working-directory: native_shell
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo fmt --all
+          cargo test --locked --lib -- --test-threads=1
+          cargo build --locked --bin HLSDownloaderUpdater
+          cargo clippy --locked --all-targets -- -D warnings -A dead_code -A clippy::large_enum_variant -A clippy::too_many_arguments -A clippy::type_complexity
+      - name: Commit verified cleanup and remove workflow
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/_maint-rust-lints.yml
+          git add native_shell
+          git commit -m 'refactor: clean Rust 1.98 clippy warnings'
+          git push origin HEAD:chatgpt/v7-release-gate-hardening
