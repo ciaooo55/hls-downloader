@@ -1,3 +1,11 @@
+# image-size 2.0.3 is listed as the patched version for these advisories but has
+# not been published to npm. Keep these two narrowly scoped exceptions until an
+# installable upstream fix reaches web-ext/addons-linter; all other audit findings
+# remain blocking.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-5p2g-fcmc-qvqq
+    - GHSA-w3rx-r6r6-pgpr
 onlyBuiltDependencies:
   - esbuild
   - spawn-sync
