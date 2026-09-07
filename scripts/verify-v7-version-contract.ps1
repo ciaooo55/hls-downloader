@@ -11,7 +11,7 @@ function Read-Utf8([string]$RelativePath) {
 function Match-One([string]$RelativePath, [string]$Pattern, [string]$Label) {
     $matches = [regex]::Matches((Read-Utf8 $RelativePath), $Pattern)
     if ($matches.Count -ne 1) {
-        throw "$Label: expected exactly one version match in $RelativePath, found $($matches.Count)."
+        throw "${Label}: expected exactly one version match in $RelativePath, found $($matches.Count)."
     }
     return $matches[0].Groups[1].Value
 }
