@@ -6,14 +6,14 @@ task_registry_issue: 39
 schema_version: 1
 repository: ciaooo55/hls-downloader
 default_branch: main
-coordination_branch: coord/bootstrap-protocol
+coordination_branch: audit/hls-c002-pr38
 coordinator: worker-0
 auditor: worker-0
 workers:
   - worker-0
-active_task: HLS-C001
-status: bootstrapping
-last_updated: 2026-09-08T01:31:00+08:00
+active_task: HLS-C002
+status: reviewing-pr-38
+last_updated: 2026-09-08T01:40:30+08:00
 ---
 
 # Project handoff
@@ -36,8 +36,10 @@ Issue #42 is the visitor area. External project coordinators must provide their 
 ## Current project state
 
 - Active product line: v7.0.2 iteration.
+- HLS-C001 collaboration bootstrap passed independent review and merged through PR #60 at `37cc077b32be25416ca9d01d118bf1d546a0b65b`.
+- HLS-C002 is auditing product PR #38 (`release: require security workflows before formal publishing`).
+- Reviewed PR #38 head: `a99582c76e582210264ebc4e2f2761b6a41714f0`; source audit and four required head checks are currently PASS, but the head/mergeability must be refreshed immediately before merge.
 - Formal release remains gated; do not mark a formal release ready merely because candidate artifacts exist.
-- Open product PR at bootstrap: #38 (`release: require security workflows before formal publishing`).
 - The task registry is authoritative for coordination status; historical product details remain in the existing v7 architecture/refinement/iteration documents.
 
 ## Durable coordination files
