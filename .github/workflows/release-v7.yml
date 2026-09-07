@@ -59,7 +59,8 @@ jobs:
           $version = [string]$feature.product_version
           if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid product version: $version" }
           $tag = "v$version"
-          if (git ls-remote --exit-code --tags origin "refs/tags/$tag" 2>$null) { throw "Release tag already exists: $tag" }
+          $existingTag = ((git ls-remote --tags origin "refs/tags/$tag") -join '').Trim()
+          if ($existingTag) { throw "Release tag already exists: $tag" }
           if ([String]::IsNullOrWhiteSpace($env:HLS_V7_SIGN_CERT_THUMBPRINT)) { throw 'HLS_V7_SIGN_CERT_THUMBPRINT secret is required for a formal release.' }
           if (-not $env:HLS_V7_SIGN_CERT_STORE) { "HLS_V7_SIGN_CERT_STORE=CurrentUser" >> $env:GITHUB_ENV }
           if (-not $env:HLS_V7_TIMESTAMP_URL) { "HLS_V7_TIMESTAMP_URL=http://timestamp.digicert.com" >> $env:GITHUB_ENV }
@@ -88,7 +89,7 @@ jobs:
           if (-not $IsWindows -or $env:PROCESSOR_ARCHITECTURE -notmatch 'AMD64') { throw 'Formal v7 release requires Windows x64.' }
           if (-not (Test-Path -LiteralPath 'E:\' -PathType Container)) { throw 'Formal v7 release runner must provide E: for the fixed E:\h lifecycle gate.' }
           Get-Command git.exe, python.exe, go.exe, gh.exe -ErrorAction Stop | Out-Null
-          python.exe -c "import yaml" 
+          python.exe -c "import yaml"
           if ($LASTEXITCODE -ne 0) { throw 'Release runner Python must provide PyYAML for deterministic SBOM generation.' }
 
       - name: Set up Rust 1.98.1
