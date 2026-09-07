@@ -1,7 +1,7 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 plugins {
     kotlin("jvm") version "2.4.10"
-    id("org.jetbrains.compose") version "1.11.1"
+    id("org.jetbrains.compose") version "1.12.0"
     id("org.jetbrains.kotlin.plugin.compose") version "2.4.10"
     kotlin("plugin.serialization") version "2.4.10"
 }
@@ -29,8 +29,8 @@ require(hlsRenderApi in setOf("SOFTWARE", "ANGLE", "DIRECT3D", "OPENGL")) {
 dependencies {
     implementation(compose.desktop.currentOs)
     implementation("org.jetbrains.compose.material:material-icons-extended:1.7.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     testImplementation(kotlin("test"))
 }
 kotlin { jvmToolchain(21) }
