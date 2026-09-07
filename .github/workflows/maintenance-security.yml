@@ -3,9 +3,6 @@ name: Maintenance Security
 on:
   push:
     branches: [main]
-    paths:
-      - 'extension/**'
-      - '.github/workflows/maintenance-security.yml'
   pull_request:
     paths:
       - 'extension/**'
