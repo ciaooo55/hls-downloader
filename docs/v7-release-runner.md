@@ -29,10 +29,17 @@ For a hardware-backed or externally managed signing identity, keep the private k
 
 ## What the formal workflow proves
 
-A dispatch from `main` refuses to publish unless the dispatched commit is still the current remote `main` and the matching `v7 CI`, `v7 Candidate Package`, `Maintenance Security`, and `Rust Security` push runs all succeeded for that exact commit SHA. The two security workflows therefore emit a push result for every `main` commit, while pull-request execution remains path-filtered. A fresh release requires no existing version tag; a retry may reuse only an annotated tag that resolves to that exact same frozen commit and, when a release already exists, only while that release is still a draft. It then:
+A dispatch from `main` refuses to continue unless the dispatched commit is still the current remote `main` and four exact workflow identities have successful **push** runs for that same `main` SHA:
 
-1. builds a fresh candidate from that exact commit;
-2. confirms the exact-SHA extension-maintenance and RustSec workflow results before running formal release gates;
+- `v7 CI` at `.github/workflows/ci.yml`;
+- `v7 Candidate Package` at `.github/workflows/package-v7-candidate.yml`;
+- `Maintenance Security` at `.github/workflows/maintenance-security.yml`;
+- `Rust Security` at `.github/workflows/rust-security.yml`.
+
+The security workflows emit a push result for every `main` commit, while pull-request execution remains path-filtered. The formal workflow binds both workflow display name and canonical workflow path, requires `event=push`, `head_branch=main`, and the exact `GITHUB_SHA`, so a renamed or duplicate-name workflow cannot silently satisfy the gate. A fresh release requires no existing version tag; a retry may reuse only an annotated tag that resolves to that exact same frozen commit and, when a release already exists, only while that release is still a draft. It then:
+
+1. validates all four exact-SHA workflow identities before building release inputs;
+2. builds a fresh candidate from that exact commit;
 3. records browser, performance, installer-upgrade and failure-rollback evidence against the same candidate manifest;
 4. rechecks that `main` has not moved;
 5. builds the formal package using that evidence;
@@ -43,7 +50,7 @@ A dispatch from `main` refuses to publish unless the dispatched commit is still 
 10. compares every uploaded GitHub asset's reported byte size and `sha256:` digest with the local staged file;
 11. publishes the verified draft as Latest only when the dispatch `publish` switch is enabled.
 
-A missing or failed source/candidate/security workflow, missing browser, failed threshold, MSI lifecycle regression, missing signing certificate, invalid/timestamp-free signature, changed `main`, mismatched upload digest, or any missing release asset stops the workflow. No fallback turns those failures into a public release.
+A missing, renamed, path-mismatched, wrong-event, wrong-branch, wrong-SHA, or failed required workflow stops the release before candidate build. A missing browser, failed threshold, MSI lifecycle regression, missing signing certificate, invalid/timestamp-free signature, changed `main`, mismatched upload digest, or any missing release asset also stops the workflow. No fallback turns those failures into a public release.
 
 ## Safe retry semantics
 
