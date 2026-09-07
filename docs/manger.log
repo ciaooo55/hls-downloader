@@ -102,3 +102,29 @@ workflow_evidence=
   Rust Security #18 completed/success.
   v7 Candidate Package #127 in_progress at Build v7 candidate package; all environment/bootstrap steps before it completed/success.
 decision=No product-code changes requested. Hold source stable and wait only for current-head Candidate conclusion before final triple refresh.
+
+[2026-09-08T01:51:15+08:00] EVENT=ROLE_RENAME
+old_aliases=C0/W0
+new_identity=worker-1
+canonical_coordinator=worker-0
+canonical_auditor=worker-0
+evidence=Issue #39 identity update says coordinator/implementation-helper aliases become worker-1 while auditor worker-0 is unchanged.
+decision=All future assignments use worker-1. Because Issue #40 has no worker-1 declaration yet, coordinator requested role redeclaration before substantive assigned work.
+
+[2026-09-08T01:55:00+08:00] EVENT=PREANALYSIS source_task=HLS-C003 finding=FORMAL_RELEASE_VERSION_DRIFT severity=P0
+source_evidence=
+  artifacts/v7-productization/feature-parity.json product_version=7.0.2 and release_ready=false.
+  scripts/verify-v7-msi-lifecycle.ps1 hard-codes candidate manifest product_version == 7.0.1 and MSI ProductVersion == 7.0.1.
+  scripts/invoke-v7-release-gates.ps1 still describes candidate v7.0.1 in lifecycle evidence text.
+impact=Formal v7.0.2 release gates deterministically reject the current candidate even if PR #38 security-gate work is correct. This is independent of HLS-C002 and must not be used to contaminate or delay #38 beyond its own checks.
+
+[2026-09-08T01:56:20+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C007 priority=P0 owner=worker-1 role=worker
+branch=fix/hls-c007-msi-lifecycle-version
+acceptance_criteria=
+  AC1 Remove stale executable v7.0.1 candidate assumptions and bind MSI version to candidate manifest/product source of truth.
+  AC2 Keep public v7.0.0 baseline URL/SHA pinned and preserve real upgrade/product-code transition checks.
+  AC3 Fail closed on manifest/MSI version mismatch without weakening E:\h, checkpoint, upgrade, rollback, registration or recovery gates.
+  AC4 Fix stale current-candidate v7.0.1 descriptions/docs.
+  AC5 Add/adjust non-secret repository validation for future version drift and record results in docs/worker-logs/HLS-C007.md.
+  AC6 Dedicated PR requires independent auditor acceptance before merge.
+note=Initial assignment comment used stale W0 alias; corrected immediately in Issue #39 and machine-readable registry to worker-1.
