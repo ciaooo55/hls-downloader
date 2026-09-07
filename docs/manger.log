@@ -12,16 +12,17 @@ HLS-C001 bootstrap acceptance criteria:
 
 HLS-C002 PR #38 audit acceptance criteria:
 1. Exact-SHA push-run semantics independently verified.
-2. Security workflow path-filter behavior cannot deadlock formal release.
-3. PowerShell 5.1/7 validation and all PR workflows pass.
-4. Stale/wrong-event security runs cannot satisfy formal-release checks.
-5. Audit queue records PASS/FAIL evidence.
+2. All four formal-release prerequisite workflows emit a push result for every main SHA, so path filtering cannot deadlock formal release.
+3. Required runs are bound to canonical workflow name + path + push event + main branch + exact SHA.
+4. PowerShell 5.1/7 validation and all PR workflows pass.
+5. Stale/wrong-event/wrong-path runs cannot satisfy formal-release checks.
+6. Audit queue records PASS/FAIL evidence.
 
 ROLE ROSTER
 ===========
 C0 | coordinator | global | active | coordination/bootstrap-v1
 A0 | auditor     | global | active | logical independent review role held by same ChatGPT during bootstrap
-W0 | worker      | HLS-C001 | active | coordination/bootstrap-v1
+W0 | worker      | HLS-C001/HLS-C002 returned-fix | active | task branches as recorded below
 
 When new ChatGPT participants join, assign stable IDs (W1, W2, ... / A1 ...), require declaration in issue #40, and update handoff.md + tasks.json + this log.
 
@@ -31,11 +32,19 @@ TASK ASSIGNMENTS
 Scope: bootstrap collaboration control plane.
 Acceptance: see baseline above and issue #46.
 Branch: coordination/bootstrap-v1.
+Merge constraint added later: do not merge before HLS-C002/PR #38 closes the exact-main-SHA prerequisite-workflow deadlock.
 
 2026-09-07T17:30Z | C0 | ASSIGN HLS-C002 P0 -> A0
 Scope: independently audit existing PR #38 before merge.
 Acceptance: see baseline above and issue #47.
 Constraint: A0 must re-fetch committed diff/workflow evidence and may not accept W0/previous-author assertions at face value.
+
+2026-09-07T17:37Z | A0 -> W0 | RETURN HLS-C002 after FAIL
+Required fix: move security workflow checks into formal workflow's existing early gate; bind canonical workflow path; remove fail-open `GITHUB_WORKFLOW` conditional from generic script.
+
+2026-09-07T17:41Z | A0 -> W0 | EXPAND returned HLS-C002 fix after independent re-review
+Finding: existing exact-SHA formal gate for v7 CI/Candidate can already deadlock after a docs-only main merge because those push workflows were path-filtered.
+Required fix: every formal prerequisite workflow must emit a push result for every main SHA; retain PR path filters.
 
 PLANNED TASK POOL
 =================
@@ -68,6 +77,11 @@ EVENT LOG
 2026-09-07T17:32Z | W0 | Created branch coordination/bootstrap-v1 from main c89d61ba692f3bb7d77e3395f66fb6d029acf519.
 2026-09-07T17:32Z | W0 | Commit 9722b689: machine-readable handoff index.
 2026-09-07T17:32Z | W0 | Commit ced88829: shared tasks.json database with HLS-C001..HLS-C009.
+2026-09-07T17:35Z | C0 | Closed redundant informational Issues #52-#59 as not_planned/superseded; canonical operational surface remains #39/#40/#41/#42/#44/#45/#46/#47/#48/#49/#50/#51.
+2026-09-07T17:37Z | A0 | Independent audit of PR #38 FAIL; evidence and required fixes posted to #45 and PR #38.
+2026-09-07T17:39Z | W0 | PR #38 fix moved prerequisite lookup into release-v7.yml and bound workflow names/paths.
+2026-09-07T17:41Z | A0 | Re-review found pre-existing v7 CI/Candidate main-push path-filter deadlock; task scope adjusted rather than accepted prematurely.
+2026-09-07T17:43Z | W0 | Removed main push path filters from v7 CI/Candidate as well; all four formal prerequisites now have every-main-SHA trigger contract in PR #38.
 
 ROUTE DECISIONS
 ===============
@@ -76,3 +90,6 @@ D-002 | Keep handoff.md small and index-oriented; detailed history belongs in lo
 D-003 | Current product route is release hardening, not feature expansion. Highest priorities after bootstrap: finish PR #38 audit, signer identity binding, revocation policy, and branch governance.
 D-004 | Because C0/A0/W0 are the same ChatGPT during bootstrap, self-review is allowed only with role separation: worker commits first, auditor re-fetches GitHub evidence independently, coordinator then records decision.
 D-005 | Do not merge coordination bootstrap directly to main; open a PR and run audit first.
+D-006 | Redundant coordination Issues are harmful because they look like separate work queues. Keep one canonical channel per coordination function; close informational duplicates once durable docs exist.
+D-007 | HLS-C001 implementation may continue in parallel, but its merge is blocked until PR #38/HLS-C002 fixes the exact-main-SHA workflow availability contract. Reason: a docs-only bootstrap merge on old main could make formal release impossible for the current SHA.
+D-008 | Formal-release exact-SHA gates and workflow trigger coverage are one contract. If a workflow is required for every release SHA, its main-push trigger must also exist for every main SHA; do not solve only the consumer side.
