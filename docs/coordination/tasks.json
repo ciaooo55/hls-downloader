@@ -2,7 +2,7 @@
   "schema_version": 1,
   "repository": "ciaooo55/hls-downloader",
   "canonical_issue": 39,
-  "updated_at": "2026-09-08T01:32:00+08:00",
+  "updated_at": "2026-09-08T01:35:00+08:00",
   "priority_order": ["P0", "P1", "P2", "P3"],
   "active_workers": 1,
   "minimum_unfinished_target": 2,
@@ -11,10 +11,11 @@
       "id": "HLS-C001",
       "title": "Bootstrap multi-agent coordination protocol",
       "priority": "P0",
-      "status": "in_progress",
+      "status": "review",
       "owner": "worker-0",
       "role": "coordinator+auditor+worker",
       "branch": "coord/bootstrap-protocol",
+      "pr": 60,
       "depends_on": [],
       "acceptance": [
         "handoff.md exposes canonical coordination issue numbers at the top",
@@ -22,7 +23,8 @@
         "this JSON registry is machine-readable and keeps at least two unfinished tasks while one worker is active",
         "worker log and architecture/plan documents exist",
         "changes are split across multiple commits and independently audited before merge"
-      ]
+      ],
+      "review_result": "PASS_PENDING_FINAL_DIFF_REFRESH"
     },
     {
       "id": "HLS-C002",
