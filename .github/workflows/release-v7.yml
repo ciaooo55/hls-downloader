@@ -18,8 +18,6 @@ on:
         required: false
         type: string
         default: ''
-  issues:
-    types: [opened]
 
 concurrency:
   group: v7-formal-release
@@ -31,7 +29,6 @@ permissions:
 
 jobs:
   release:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'issues' && github.event.action == 'opened' && github.event.issue.title == 'release:v7.0.1' && github.event.issue.user.login == github.repository_owner) }}
     name: Verify, sign and stage v7 release
     runs-on: [self-hosted, Windows, X64, hls-release]
     timeout-minutes: 180
@@ -78,21 +75,10 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          function Test-RequiredRuns([string]$sha) {
-            $runs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?head_sha=$sha&status=completed&per_page=100" | ConvertFrom-Json
-            foreach ($required in @('v7 CI', 'v7 Candidate Package')) {
-              $match = @($runs.workflow_runs | Where-Object { $_.name -eq $required -and $_.event -eq 'push' } | Sort-Object run_number -Descending | Select-Object -First 1)
-              if ($match.Count -ne 1 -or $match[0].conclusion -ne 'success') { return $false }
-            }
-            return $true
-          }
-          if (-not (Test-RequiredRuns $env:GITHUB_SHA)) {
-            $anchor = '26cd6a6f5ef0be30f5b40d6a60307bfd7f7bfce6'
-            $changed = @(git diff --name-only "$anchor..HEAD")
-            $unexpected = @($changed | Where-Object { $_ -ne '.github/workflows/release-v7.yml' })
-            if ($changed.Count -eq 0 -or $unexpected.Count -ne 0) { throw "Current source is not validated and differs from release anchor outside release-v7.yml: $($changed -join ', ')" }
-            if (-not (Test-RequiredRuns $anchor)) { throw "Validated release anchor $anchor is missing successful v7 CI or candidate packaging." }
-            Write-Host "Using validated release-workflow-only delta from $anchor."
+          $runs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?head_sha=$env:GITHUB_SHA&status=completed&per_page=100" | ConvertFrom-Json
+          foreach ($required in @('v7 CI', 'v7 Candidate Package')) {
+            $match = @($runs.workflow_runs | Where-Object { $_.name -eq $required -and $_.event -eq 'push' } | Sort-Object run_number -Descending | Select-Object -First 1)
+            if ($match.Count -ne 1 -or $match[0].conclusion -ne 'success') { throw "$required has not succeeded for $env:GITHUB_SHA." }
           }
 
       - name: Verify dedicated Windows release runner
@@ -252,7 +238,7 @@ jobs:
           if (@($release.assets).Count -ne @(Get-ChildItem -LiteralPath $stage -File).Count) { throw 'Draft release contains an unexpected asset count.' }
 
       - name: Publish verified release as Latest
-        if: ${{ inputs.publish || (github.event_name == 'issues' && github.event.issue.title == 'release:v7.0.1' && github.event.issue.user.login == github.repository_owner) }}
+        if: ${{ inputs.publish }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
