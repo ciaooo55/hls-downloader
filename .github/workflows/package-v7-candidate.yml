@@ -84,6 +84,13 @@ jobs:
           if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw "Candidate manifest is missing: $manifest" }
           Get-Content -LiteralPath $manifest -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
 
+      - name: Audit candidate package size
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\report-v7-package-size.ps1 -MaxArtifactMiB 384
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload candidate installers and extensions
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
