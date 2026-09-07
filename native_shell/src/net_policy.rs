@@ -240,7 +240,7 @@ pub fn note_retry_after(url: &str, seconds: u64) {
     if let Ok(mut state) = budget().lock() {
         state.retry_until.insert(
             host,
-            Instant::now() + Duration::from_secs(seconds.max(1).min(60)),
+            Instant::now() + Duration::from_secs(seconds.clamp(1, 60)),
         );
         BUDGET_PULSE.notify_all();
     }

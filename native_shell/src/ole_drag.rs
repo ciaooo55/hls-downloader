@@ -220,7 +220,7 @@ mod tests {
     fn hdrop_is_unicode_dropfiles() {
         let path = std::env::temp_dir().join("hls-hdrop-probe.bin");
         std::fs::write(&path, b"x").unwrap();
-        let bytes = hdrop_bytes(&[path.clone()]).unwrap();
+        let bytes = hdrop_bytes(std::slice::from_ref(&path)).unwrap();
         assert_eq!(&bytes[..4], &20u32.to_le_bytes());
         assert_eq!(bytes[16], 1);
         #[cfg(windows)]
@@ -230,7 +230,9 @@ mod tests {
             assert!(!iid_is(IID_IUNKNOWN.as_ptr(), &IID_IDROPSOURCE));
         }
         let wide: Vec<u16> = bytes[20..]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
             .collect();
         let text = String::from_utf16_lossy(&wide);

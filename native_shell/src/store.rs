@@ -113,7 +113,7 @@ impl CoreStore {
             .prepare("SELECT message FROM logs WHERE task_id = ?1 ORDER BY id DESC LIMIT ?2")
             .map_err(|error| format!("prepare Core task log {task_id}: {error}"))?;
         let rows = statement
-            .query_map(params![task_id, limit.max(1).min(500) as i64], |row| {
+            .query_map(params![task_id, limit.clamp(1, 500) as i64], |row| {
                 row.get::<_, String>(0)
             })
             .map_err(|error| format!("query Core task log {task_id}: {error}"))?;
@@ -162,7 +162,7 @@ impl CoreStore {
         spec: Option<&TaskSpec>,
         settings: Option<&BTreeMap<String, serde_json::Value>>,
     ) -> Result<(), String> {
-        if events.is_empty() && spec.is_none() && settings.map_or(true, BTreeMap::is_empty) {
+        if events.is_empty() && spec.is_none() && settings.is_none_or(BTreeMap::is_empty) {
             return Ok(());
         }
         let transaction = self

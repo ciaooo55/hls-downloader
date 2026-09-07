@@ -58,7 +58,7 @@ pub fn parse_checksum(value: &str) -> Option<(Algorithm, String)> {
     } else {
         return None;
     };
-    let digest = rest.replace(':', "").replace(' ', "");
+    let digest = rest.replace([':', ' '], "");
     if !is_hex(&digest) {
         return None;
     }
@@ -209,8 +209,8 @@ impl Md5Hasher {
 
 fn md5_compress(state: &mut [u32; 4], chunk: &[u8; 64]) {
     let mut m = [0u32; 16];
-    for (index, part) in chunk.chunks_exact(4).enumerate() {
-        m[index] = u32::from_le_bytes(part.try_into().unwrap());
+    for (index, part) in chunk.as_chunks::<4>().0.iter().enumerate() {
+        m[index] = u32::from_le_bytes(*part);
     }
     let (mut a, mut b, mut c, mut d) = (state[0], state[1], state[2], state[3]);
     const S: [u32; 64] = [

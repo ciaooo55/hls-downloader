@@ -2287,9 +2287,9 @@ impl CoreCoordinator {
             }
             if let Some(object) = value.as_object_mut() {
                 if ok {
-                    let next = if owner == claimant && presentation == "presenting" {
-                        "presented"
-                    } else if presenter_id.is_empty() {
+                    let next = if (owner == claimant && presentation == "presenting")
+                        || presenter_id.is_empty()
+                    {
                         "presented"
                     } else if owner == claimant {
                         presentation.as_str()
@@ -3071,7 +3071,7 @@ fn materialize_replay_request_body(
 }
 
 fn decode_base64_bounded(value: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
-    if value.len() > ((max_bytes + 2) / 3) * 4 + 4 {
+    if value.len() > max_bytes.div_ceil(3) * 4 + 4 {
         return Err("POST 请求体超过 128 KiB 限制".into());
     }
     let mut output = Vec::with_capacity(value.len() / 4 * 3);
@@ -4669,7 +4669,7 @@ fn copy_completed_file(
         .ok_or_else(|| format!("unknown task {task_id}"))?;
     let paths = TaskPaths::for_task(task_id, &spec)?;
     let published = resolve_published(&paths);
-    crate::write_clipboard_files(&[published.clone()])?;
+    crate::write_clipboard_files(std::slice::from_ref(&published))?;
     coordinator.lock()?.emit(CoreEvent::Toast {
         level: "copy_file".into(),
         message: format!("已复制文件 {}", published.display()),
@@ -5926,9 +5926,7 @@ mod tests {
         let tracker_addr = tracker_listener.local_addr().unwrap();
         let announce = format!("http://{tracker_addr}/announce");
 
-        let mut info = format!(
-            "d5:filesld6:lengthi4e4:pathl7:one.bineed6:lengthi4e4:pathl7:two.bineee4:name4:demo12:piece lengthi4e6:pieces40:"
-        )
+        let mut info = "d5:filesld6:lengthi4e4:pathl7:one.bineed6:lengthi4e4:pathl7:two.bineee4:name4:demo12:piece lengthi4e6:pieces40:".to_string()
         .into_bytes();
         for piece in &pieces {
             info.extend_from_slice(piece);
@@ -6333,8 +6331,8 @@ mod tests {
             false,
             &dirs,
         );
-        assert!(other.headers.get("Cookie").is_none());
-        assert!(other.headers.get("Authorization").is_none());
+        assert!(!other.headers.contains_key("Cookie"));
+        assert!(!other.headers.contains_key("Authorization"));
         assert_eq!(
             other.headers.get("Referer").unwrap(),
             "https://site.test/watch"
@@ -6668,7 +6666,7 @@ mod tests {
             .task_spec(&snapshot.task_id)
             .cloned()
             .unwrap();
-        assert!(spec.headers.get("Cookie").is_none());
+        assert!(!spec.headers.contains_key("Cookie"));
         assert_eq!(
             spec.headers.get("Referer").unwrap(),
             "https://cdn.test/page"

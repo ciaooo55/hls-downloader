@@ -202,7 +202,7 @@ fn strip_vtt_only_tags(payload: &str) -> String {
                 let tag = &payload[index + 1..index + end];
                 let name = tag
                     .trim_start_matches('/')
-                    .split(|ch: char| ch == '.' || ch == ' ' || ch == '\t')
+                    .split(['.', ' ', '\t'])
                     .next()
                     .unwrap_or("");
                 if matches!(

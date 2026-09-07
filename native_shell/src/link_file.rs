@@ -75,9 +75,7 @@ fn decode_local_path(source: &str) -> PathBuf {
     } else {
         decoded.replace('\\', "/")
     };
-    if cfg!(windows) {
-        PathBuf::from(decoded)
-    } else if decoded.starts_with('/') {
+    if cfg!(windows) || decoded.starts_with('/') {
         PathBuf::from(decoded)
     } else {
         PathBuf::from(format!("/{decoded}"))
@@ -114,7 +112,9 @@ fn from_hex(byte: u8) -> Option<u8> {
 fn decode_link_bytes(data: &[u8]) -> String {
     if data.starts_with(&[0xff, 0xfe]) || data.starts_with(&[0xfe, 0xff]) {
         let units: Vec<u16> = data
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
             .collect();
         return String::from_utf16_lossy(&units);
@@ -297,7 +297,7 @@ fn collect_absolute_urls(text: &str) -> Vec<String> {
             let end = slice
                 .find(|ch: char| ch.is_whitespace() || matches!(ch, '<' | '>' | '"'))
                 .unwrap_or(slice.len());
-            let raw = slice[..end].trim_end_matches(|ch| matches!(ch, '.' | ',' | ')' | ';' | ']'));
+            let raw = slice[..end].trim_end_matches(['.', ',', ')', ';', ']']);
             if let Ok(url) = normalize_download_url(raw) {
                 if seen.insert(url.to_ascii_lowercase()) {
                     found.push(url);

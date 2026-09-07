@@ -199,10 +199,10 @@ pub fn audio_choices(manifest: &DashManifest) -> Vec<crate::StreamVariant> {
     choices
 }
 
-fn select_video<'a>(
-    representations: &'a [Representation],
+fn select_video(
+    representations: &[Representation],
     preferred_bandwidth: u64,
-) -> Option<&'a Representation> {
+) -> Option<&Representation> {
     let videos: Vec<_> = representations
         .iter()
         .filter(|item| is_video(item))
@@ -1192,9 +1192,7 @@ fn attr_unquoted_or_quoted(block: &str, key: &str) -> Option<String> {
         let pattern = format!("{key}=");
         let start = block.find(&pattern)?;
         let rest = &block[start + pattern.len()..];
-        let end = rest
-            .find(|ch: char| ch == ' ' || ch == '/' || ch == '>')
-            .unwrap_or(rest.len());
+        let end = rest.find([' ', '/', '>']).unwrap_or(rest.len());
         Some(rest[..end].trim_matches('"').to_string())
     })
 }

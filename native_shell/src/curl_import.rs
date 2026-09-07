@@ -228,7 +228,7 @@ mod tests {
         let parsed = parse_curl_command("curl -H \"X-A: 1\0Host: evil\" https://cdn.test/x")
             .unwrap()
             .unwrap();
-        assert!(parsed.headers.get("x-a").is_none());
+        assert!(!parsed.headers.contains_key("x-a"));
     }
 
     #[test]

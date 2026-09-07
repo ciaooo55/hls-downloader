@@ -17,7 +17,7 @@ impl CredentialVault {
         }
         #[cfg(windows)]
         {
-            return protect_windows(value.as_bytes());
+            protect_windows(value.as_bytes())
         }
         #[cfg(not(windows))]
         {
@@ -32,7 +32,7 @@ impl CredentialVault {
         }
         #[cfg(windows)]
         {
-            return unprotect_windows(&decode_hex(&value[PREFIX.len()..])?);
+            unprotect_windows(&decode_hex(&value[PREFIX.len()..])?)
         }
         #[cfg(not(windows))]
         {
@@ -132,11 +132,11 @@ fn encode_hex(value: &[u8]) -> String {
 }
 
 fn decode_hex(value: &str) -> Result<Vec<u8>, String> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err("DPAPI credential hex has odd length".into());
     }
     let mut bytes = Vec::with_capacity(value.len() / 2);
-    for pair in value.as_bytes().chunks_exact(2) {
+    for pair in value.as_bytes().as_chunks::<2>().0 {
         let high =
             hex_digit(pair[0]).ok_or_else(|| "DPAPI credential hex is invalid".to_string())?;
         let low =
@@ -466,7 +466,7 @@ mod tests {
             r#"{"cookie":"page=1","request_contexts":{"https://cdn.test":{"cookie":""}}}"#,
             "https://cdn.test/video.bin",
         );
-        assert!(headers.get("Cookie").is_none());
+        assert!(!headers.contains_key("Cookie"));
     }
 
     #[test]
@@ -477,8 +477,8 @@ mod tests {
         );
         let mut headers = std::collections::BTreeMap::new();
         apply_replay_json_for(&mut headers, &replay, "https://cdn.test/segment.ts");
-        assert!(headers.get("Cookie").is_none());
-        assert!(headers.get("Authorization").is_none());
+        assert!(!headers.contains_key("Cookie"));
+        assert!(!headers.contains_key("Authorization"));
         assert_eq!(headers.get("X-Playback").map(String::as_str), Some("ok"));
     }
 
@@ -503,9 +503,9 @@ mod tests {
         );
         let mut headers = std::collections::BTreeMap::new();
         apply_replay_json_for(&mut headers, &replay, "https://cdn.test/segment.ts");
-        assert!(headers.get("Cookie").is_none());
-        assert!(headers.get("Referer").is_none());
-        assert!(headers.get("Origin").is_none());
+        assert!(!headers.contains_key("Cookie"));
+        assert!(!headers.contains_key("Referer"));
+        assert!(!headers.contains_key("Origin"));
         assert_eq!(
             headers.get("Authorization").map(String::as_str),
             Some("Bearer cdn")
@@ -562,7 +562,7 @@ mod tests {
             &mut headers,
             r#"{"request_headers":{"X-Foo\r\nCookie":"stolen=1","Transfer-Encoding":"chunked","X-Trace":"ok"}}"#,
         );
-        assert!(headers.get("Cookie").is_none());
+        assert!(!headers.contains_key("Cookie"));
         assert!(headers
             .keys()
             .all(|key| !key.eq_ignore_ascii_case("transfer-encoding")));

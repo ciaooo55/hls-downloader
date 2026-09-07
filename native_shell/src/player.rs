@@ -33,7 +33,9 @@ pub struct Player {
     last_embed: Mutex<String>,
 }
 
+#[derive(Default)]
 enum Backend {
+    #[default]
     Idle,
     Mpv(MpvSession),
     Child(PlayerChild),
@@ -49,12 +51,6 @@ impl Drop for PlayerChild {
     fn drop(&mut self) {
         let _ = self.process.kill();
         let _ = self.process.wait();
-    }
-}
-
-impl Default for Backend {
-    fn default() -> Self {
-        Self::Idle
     }
 }
 
@@ -100,7 +96,7 @@ impl Player {
         let mut inner = self.inner.lock().map_err(|_| "player lock")?;
         self.command_locked(
             &mut inner,
-            &format!("set speed {:.3}", speed.max(0.25).min(4.0)),
+            &format!("set speed {:.3}", speed.clamp(0.25, 4.0)),
         )
     }
 
@@ -369,10 +365,8 @@ impl PlayerChild {
     ) -> Result<serde_json::Value, String> {
         let mut request = serde_json::Map::new();
         request.insert("op".into(), serde_json::Value::String(op.to_string()));
-        if let Some(payload) = payload {
-            if let serde_json::Value::Object(fields) = payload {
-                request.extend(fields);
-            }
+        if let Some(serde_json::Value::Object(fields)) = payload {
+            request.extend(fields);
         }
         let line = serde_json::Value::Object(request).to_string();
         writeln!(self.stdin, "{line}").map_err(|error| format!("播放器命令写入失败: {error}"))?;
@@ -466,6 +460,7 @@ fn quote_mpv(url: &str) -> Result<String, String> {
     ))
 }
 
+#[allow(clippy::manual_c_str_literals)]
 fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
     #[cfg(windows)]
     {

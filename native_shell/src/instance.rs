@@ -134,7 +134,7 @@ fn try_exclusive_lock(file: &File) -> Result<(), String> {
     let mut overlapped: OVERLAPPED = unsafe { zeroed() };
     let ok = unsafe {
         LockFileEx(
-            file.as_raw_handle() as *mut core::ffi::c_void,
+            file.as_raw_handle(),
             LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
             0,
             1,
