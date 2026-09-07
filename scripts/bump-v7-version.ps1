@@ -27,6 +27,17 @@ function Replace-Required([string]$RelativePath, [string]$Pattern, [string]$Repl
     Write-Utf8 $RelativePath ([regex]::Replace($content, $Pattern, $Replacement))
 }
 
+function Set-CargoLockLocalVersion([string]$RelativePath, [string]$PackageName) {
+    $content = Read-Utf8 $RelativePath
+    $escaped = [regex]::Escape($PackageName)
+    $pattern = "(?ms)(\[\[package\]\]\r?\nname = `"$escaped`"\r?\nversion = `")\d+\.\d+\.\d+(`")"
+    $matches = [regex]::Matches($content, $pattern)
+    if ($matches.Count -ne 1) {
+        throw "$RelativePath expected exactly one local package entry for $PackageName, found $($matches.Count)."
+    }
+    Write-Utf8 $RelativePath ([regex]::Replace($content, $pattern, ('${1}' + $Version + '${2}'), 1))
+}
+
 Replace-Required 'native_shell\Cargo.toml' '(?m)^version = "\d+\.\d+\.\d+"$' "version = `"$Version`""
 Replace-Required 'presenter_ui\Cargo.toml' '(?m)^version = "\d+\.\d+\.\d+"$' "version = `"$Version`""
 Replace-Required 'extension\package.json' '(?m)^  "version": "\d+\.\d+\.\d+",$' "  `"version`": `"$Version`"," 
@@ -34,6 +45,10 @@ Replace-Required 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.
 Replace-Required 'desktop_ui\build.gradle.kts' '(?m)^version = "\d+\.\d+\.\d+"$' "version = `"$Version`""
 Replace-Required 'desktop_ui\build.gradle.kts' '(?m)^        packageVersion = "\d+\.\d+\.\d+"$' "        packageVersion = `"$Version`""
 Replace-Required 'desktop_ui\build.gradle.kts' '(?m)^        description = "HLS Downloader \d+\.\d+\.\d+"$' "        description = `"HLS Downloader $Version`""
+
+Set-CargoLockLocalVersion 'native_shell\Cargo.lock' 'hls-native-shell'
+Set-CargoLockLocalVersion 'presenter_ui\Cargo.lock' 'hls-native-shell'
+Set-CargoLockLocalVersion 'presenter_ui\Cargo.lock' 'hls-native-ui'
 
 $featurePath = 'artifacts\v7-productization\feature-parity.json'
 $feature = Read-Utf8 $featurePath | ConvertFrom-Json
@@ -57,5 +72,4 @@ if (-not $ReleaseReady) {
 }
 Write-Utf8 $readmePath $readme
 
-Write-Host "Updated v7 product version to $Version (release_ready=$([bool]$ReleaseReady))."
-Write-Host 'Regenerate native_shell/Cargo.lock and presenter_ui/Cargo.lock before committing.'
+Write-Host "Updated v7 product version and local Cargo lock entries to $Version (release_ready=$([bool]$ReleaseReady))."
