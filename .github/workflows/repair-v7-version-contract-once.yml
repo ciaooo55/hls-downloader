@@ -1,0 +1,51 @@
+name: v7 One-shot Version Contract Repair
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: read
+
+jobs:
+  repair:
+    if: ${{ github.event.issue.user.login == github.repository_owner && github.event.issue.title == 'maintenance:repair-v7.0.2-contract' }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: '1.98.1'
+
+      - name: Repair synchronized 7.0.2 contracts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & .\scripts\bump-v7-version.ps1 -Version 7.0.2
+          cargo metadata --locked --format-version 1 --manifest-path native_shell/Cargo.toml | Out-Null
+          cargo metadata --locked --format-version 1 --manifest-path presenter_ui/Cargo.toml | Out-Null
+          if (-not (Select-String -LiteralPath desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/ProtocolTest.kt -Pattern 'assertEquals\("7\.0\.2", Product\.version\)' -Quiet)) { throw 'Compose version contract test is not synchronized.' }
+          git diff --check
+
+      - name: Commit repair
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add README.md artifacts/v7-productization/feature-parity.json native_shell/Cargo.toml native_shell/Cargo.lock presenter_ui/Cargo.toml presenter_ui/Cargo.lock extension/package.json desktop_ui/build.gradle.kts desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/ProtocolTest.kt
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'build: repair v7.0.2 version contracts'
+            git push origin HEAD:main
+          } else {
+            throw 'Repair produced no staged changes.'
+          }
