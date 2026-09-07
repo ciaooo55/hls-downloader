@@ -12,8 +12,8 @@ auditor: worker-0
 workers:
   - worker-0
 active_task: HLS-C002
-status: reaudit-pr-38-checks-in-progress
-last_updated: 2026-09-08T01:42:00+08:00
+status: source-pass-checks-pending
+last_updated: 2026-09-08T01:45:30+08:00
 ---
 
 # Project handoff
@@ -37,12 +37,12 @@ Issue #42 is the visitor area. External project coordinators must provide their 
 
 - Active product line: v7.0.2 iteration.
 - HLS-C001 collaboration bootstrap passed independent review and merged through PR #60 at `37cc077b32be25416ca9d01d118bf1d546a0b65b`.
-- HLS-C002 is re-auditing product PR #38 after its head changed during the mandatory pre-merge refresh.
-- Superseded PR #38 head: `a99582c76e582210264ebc4e2f2761b6a41714f0`; its PASS is not valid for merge authorization.
-- Current PR #38 head: `556722c4397e905dfd352dd60bfa03956d453ebd`.
-- Current-head source review is positive and includes the new `.github/workflows/release-v7.yml` exact identity gate; however the four current-head checks are still in progress, so PR #38 is not authorized to merge yet.
+- HLS-C002 is auditing product PR #38.
+- Several PR #38 heads were invalidated during mandatory refresh; never reuse a PASS from a superseded SHA.
+- Current audited PR #38 head: `8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec`.
+- Current source review is PASS: all four formal-release prerequisite workflows now emit a result for every main push; PR filters remain; formal workflow binds exact name/path/push/main/SHA; local generic release-gate script is untouched.
+- Current checks: Maintenance Security succeeded; v7 CI, v7 Candidate Package and Rust Security were still running at the last durable update. PR #38 is not authorized to merge until all four succeed on the same unchanged head.
 - Formal release remains gated; do not mark a formal release ready merely because candidate artifacts exist.
-- The task registry is authoritative for coordination status; historical product details remain in the existing v7 architecture/refinement/iteration documents.
 
 ## Durable coordination files
 
