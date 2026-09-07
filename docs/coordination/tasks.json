@@ -24,6 +24,7 @@
       "auditor": "A0",
       "issue": 46,
       "branch": "coordination/bootstrap-v1",
+      "merge_blocked_by": ["HLS-C002"],
       "acceptance": [
         "machine-readable task registry exists",
         "role/heartbeat/visitor/audit channels exist",
@@ -37,20 +38,22 @@
     },
     {
       "id": "HLS-C002",
-      "title": "Independent audit of PR #38 formal-release security workflow gating",
+      "title": "Independent audit and hardening of PR #38 formal-release prerequisite workflow gating",
       "priority": "P0",
-      "state": "reviewing",
+      "state": "in_progress",
       "owner": "A0",
+      "worker_fix_owner": "W0",
       "coordinator": "C0",
       "auditor": "A0",
       "issue": 47,
       "pull_request": 38,
       "acceptance": [
         "exact-SHA push-run semantics independently verified",
-        "security workflow push path-filter change cannot deadlock formal release",
+        "all four formal-release prerequisite workflows emit a push result for every main SHA",
+        "required runs are bound to canonical workflow name and path plus push event, main branch and exact SHA",
         "PowerShell 5.1 and 7 validation passes",
         "all PR workflows pass",
-        "stale/wrong-event run acceptance is ruled out",
+        "stale, wrong-event, wrong-branch or wrong-path runs cannot satisfy formal-release checks",
         "PASS or FAIL evidence is recorded in audit queue"
       ],
       "depends_on": []
@@ -157,5 +160,5 @@
       "depends_on": []
     }
   ],
-  "updated_utc": "2026-09-07T17:32:00Z"
+  "updated_utc": "2026-09-07T17:44:00Z"
 }
