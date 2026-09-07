@@ -43,14 +43,17 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $feature = Get-Content artifacts/v7-productization/feature-parity.json -Raw -Encoding UTF8 | ConvertFrom-Json
           if ($feature.product_version -ne '7.0.2') { throw 'feature parity version bump failed' }
           if ($feature.release_ready) { throw '7.0.2 must begin as an iteration, not release-ready' }
           foreach ($file in @('native_shell/Cargo.toml','presenter_ui/Cargo.toml','extension/package.json','desktop_ui/build.gradle.kts','desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt')) {
             if (-not (Select-String -LiteralPath $file -Pattern '7\.0\.2' -Quiet)) { throw "$file did not receive 7.0.2" }
           }
-          if (-not (Select-String -LiteralPath native_shell/Cargo.lock -Pattern 'version = "7\.0\.2"' -Quiet)) { throw 'native_shell Cargo.lock was not regenerated for 7.0.2' }
-          if (-not (Select-String -LiteralPath presenter_ui/Cargo.lock -Pattern 'version = "7\.0\.2"' -Quiet)) { throw 'presenter_ui Cargo.lock was not regenerated for 7.0.2' }
+          cargo metadata --locked --no-deps --format-version 1 --manifest-path native_shell/Cargo.toml | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'native_shell Cargo.lock is not usable with --locked' }
+          cargo metadata --locked --no-deps --format-version 1 --manifest-path presenter_ui/Cargo.toml | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'presenter_ui Cargo.lock is not usable with --locked' }
 
       - name: Commit 7.0.2 iteration start
         shell: pwsh
