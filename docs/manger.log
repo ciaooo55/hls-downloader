@@ -50,3 +50,119 @@ independent_evidence=
   PR #60 is mergeable.
 ci_evidence=no PR workflow runs were returned for the documentation-only head; no CI success is claimed or used as acceptance evidence.
 decision=Move HLS-C001 to review, refresh the final PR diff after audit-state commits, then merge with merge commits preserved if still clean and mergeable.
+
+[2026-09-08T01:37:00+08:00] EVENT=TASK_COMPLETE task=HLS-C001 pr=#60 result=PASS merge=37cc077b32be25416ca9d01d118bf1d546a0b65b
+note=PR #60 merged with merge method, preserving nine task commits.
+
+[2026-09-08T01:37:15+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C002 priority=P0 owner=worker-0 role=auditor
+branch=audit/hls-c002-pr38
+acceptance_criteria=
+  AC1 Compare actual PR #38 diff with the four-workflow formal-release contract.
+  AC2 Verify exact-SHA workflow lookup and GITHUB_SHA binding from source.
+  AC3 Inspect required workflow conclusions for the current PR #38 head.
+  AC4 Record PASS or actionable rejection evidence.
+  AC5 Merge PR #38 only if audit passes and required checks are successful.
+
+[2026-09-08T01:39:30+08:00] EVENT=AUDIT task=HLS-C002 pr=#38 auditor=worker-0 result=PASS_INVALIDATED_BY_HEAD_CHANGE
+reviewed_head=a99582c76e582210264ebc4e2f2761b6a41714f0
+reason=Mandatory pre-merge refresh found PR head changed and changed-file count increased. Old audit cannot authorize the new head.
+
+[2026-09-08T01:41:00+08:00] EVENT=REAUDIT task=HLS-C002 pr=#38 auditor=worker-0 state=REJECTED
+reviewed_head=9cb3bba5631ae54b328e4967a1019e758f54039c
+finding=Formal workflow required exact-SHA v7 CI and v7 Candidate Package, but those workflows still used main/PR path filters that did not fire on the latest release-governance head. Prior-head successes could not authorize the new SHA.
+action=Posted actionable rejection on PR #38; do not merge until trigger/gate contract is fixed and re-audited.
+
+[2026-09-08T01:44:30+08:00] EVENT=REAUDIT task=HLS-C002 pr=#38 auditor=worker-0 state=SOURCE_PASS_CHECKS_PENDING
+current_head=8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec
+resolution=Worker removed main-push path filters from all four prerequisite workflows while preserving PR path filters. Formal release now receives four exact-SHA prerequisite conclusions for every main commit.
+source_evidence=
+  Current diff is six release-governance files only.
+  Formal workflow binds canonical name + path + push + main + exact GITHUB_SHA before candidate build.
+  Generic/local release-gates script is no longer modified.
+  Release runner documentation matches the all-four-every-main fail-closed contract.
+workflow_evidence=
+  Maintenance Security #44 completed/success.
+  v7 CI #479 in_progress; some jobs already success.
+  v7 Candidate Package #127 in_progress.
+  Rust Security #18 in_progress.
+decision=Source contract passes, but HLS-C002 remains unfinished until the same head has four successful required checks. Any further head change restarts final review.
+
+[2026-09-08T01:48:30+08:00] EVENT=ROLE_RECONCILIATION task=HLS-C002
+canonical_coordinator=worker-0
+canonical_auditor=worker-0
+collaborating_session=C0/W0
+implementation_worker=W0
+evidence=Issue #39 concurrent-state reconciliation states worker-0 remains the independent canonical auditor and C0/W0 will not self-PASS or merge PR #38 ahead of that review.
+decision=Keep the user-assigned coordinator identity with worker-0 while treating C0/W0 as a collaborating implementation session. HLS-C002 merge authorization remains exclusively tied to worker-0 independent audit evidence.
+
+[2026-09-08T01:49:00+08:00] EVENT=CHECKPOINT task=HLS-C002 pr=#38 head=8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec
+workflow_evidence=
+  Maintenance Security #44 completed/success.
+  v7 CI #479 completed/success.
+  Rust Security #18 completed/success.
+  v7 Candidate Package #127 in_progress at Build v7 candidate package; all environment/bootstrap steps before it completed/success.
+decision=No product-code changes requested. Hold source stable and wait only for current-head Candidate conclusion before final triple refresh.
+
+[2026-09-08T01:51:15+08:00] EVENT=ROLE_RENAME
+old_aliases=C0/W0
+new_identity=worker-1
+canonical_coordinator=worker-0
+canonical_auditor=worker-0
+evidence=Issue #39 identity update says coordinator/implementation-helper aliases become worker-1 while auditor worker-0 is unchanged.
+decision=All future assignments use worker-1. Because the first paginated check of Issue #40 missed the worker-1 declaration, coordinator temporarily requested redeclaration; this was later corrected after reading the complete issue comments.
+
+[2026-09-08T01:55:00+08:00] EVENT=PREANALYSIS source_task=HLS-C003 finding=FORMAL_RELEASE_VERSION_DRIFT severity=P0
+source_evidence=
+  artifacts/v7-productization/feature-parity.json product_version=7.0.2 and release_ready=false.
+  scripts/verify-v7-msi-lifecycle.ps1 hard-codes candidate manifest product_version == 7.0.1 and MSI ProductVersion == 7.0.1.
+  scripts/invoke-v7-release-gates.ps1 still describes candidate v7.0.1 in lifecycle evidence text.
+impact=Formal v7.0.2 release gates deterministically reject the current candidate even if PR #38 security-gate work is correct. This is independent of HLS-C002 and must not be used to contaminate or delay #38 beyond its own checks.
+
+[2026-09-08T01:56:20+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C007 priority=P0 owner=worker-1 role=worker
+branch=fix/hls-c007-msi-lifecycle-version
+acceptance_criteria=
+  AC1 Remove stale executable v7.0.1 candidate assumptions and bind MSI version to candidate manifest/product source of truth.
+  AC2 Keep public v7.0.0 baseline URL/SHA pinned and preserve real upgrade/product-code transition checks.
+  AC3 Fail closed on manifest/MSI version mismatch without weakening E:\h, checkpoint, upgrade, rollback, registration or recovery gates.
+  AC4 Fix stale current-candidate v7.0.1 descriptions/docs.
+  AC5 Add/adjust non-secret repository validation for future version drift and record results in docs/worker-logs/HLS-C007.md.
+  AC6 Dedicated PR requires independent auditor acceptance before merge.
+note=Initial assignment comment used stale W0 alias; corrected immediately in Issue #39 and machine-readable registry to worker-1.
+
+[2026-09-08T02:00:30+08:00] EVENT=STATE_CORRECTION task=HLS-C007
+finding=Complete Issue #40 read confirmed worker-1 had already redeclared at 2026-09-07T17:51:02Z as coordinator and worker. Earlier pagination missed the existing declaration.
+correction=Withdraw the redeclaration blocker. HLS-C007 status is planned/reserved for worker-1 with startup_state=assigned_awaiting_ack_and_branch_init until worker-1 acknowledges or creates the branch.
+reason=Branch initialization is normal task startup, not an external blocker; do not misuse the blocked state or heartbeat timeout before execution actually begins.
+
+[2026-09-08T02:03:00+08:00] EVENT=REASSIGNMENT task=HLS-C007 priority=P0 from=worker-1 to=worker-0
+reason=More than five minutes elapsed after HLS-C007 assignment without a task ACK, task branch, or new worker-1 heartbeat. Last observed worker-1 heartbeat remained 2026-09-07T17:51:08Z.
+action=Issue #39 recorded heartbeat-timeout reassignment; worker-0 created fix/hls-c007-msi-lifecycle-version and assumed ordinary-worker role. Returning worker-1 must re-enter coordination before receiving unfinished work.
+
+[2026-09-08T02:05:30+08:00] EVENT=AUDIT task=HLS-C002 pr=#38 auditor=worker-0 result=PASS
+authorized_head=8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec
+final_refresh=
+  PR remained open, non-draft, mergeable and on the exact authorized head.
+  Diff remained exactly six expected release-governance files.
+  Maintenance Security #44 completed/success.
+  v7 CI #479 completed/success.
+  Rust Security #18 completed/success.
+  v7 Candidate Package #127 completed/success.
+decision=Post final independent PASS on PR #38 and Issue #39; authorize only this exact head. Formal v7.0.2 publishing remains out of scope and gated separately.
+
+[2026-09-08T02:06:00+08:00] EVENT=TASK_COMPLETE task=HLS-C002 pr=#38 result=PASS merge=884f628eb264bb63ba7a093c67e700e3bf3d3024
+note=PR #38 merged with normal merge method, preserving its eleven implementation commits. HLS-C002 is done; this does not change release_ready=false or waive trusted-runner/signing/MSI/browser/performance/rollback gates.
+
+[2026-09-08T02:07:00+08:00] EVENT=TASK_START task=HLS-C007 priority=P0 owner=worker-0 role=worker
+branch=fix/hls-c007-msi-lifecycle-version
+base=884f628eb264bb63ba7a093c67e700e3bf3d3024
+route=Extract a reusable candidate-version contract driven by canonical feature-parity metadata, apply it to the real MSI lifecycle gate, extend the existing non-secret version-drift validation path, preserve the fixed v7.0.0 baseline and every lifecycle safety gate, then require independent PR review.
+
+[2026-09-08T02:13:30+08:00] EVENT=IMPLEMENTATION_CHECKPOINT task=HLS-C007 pr=#63 owner=worker-0
+implementation=
+  Added scripts/V7VersionContract.psm1 for canonical candidate/manifest/MSI fail-closed binding.
+  verify-v7-msi-lifecycle.ps1 now resolves the candidate version dynamically and keeps the pinned v7.0.0 baseline, UpgradeCode/ProductCode, E:\h, checkpoint, process recovery, upgrade, rollback, registration, data-preservation and cleanup gates.
+  invoke-v7-release-gates.ps1 evidence text now uses the actual candidate manifest version.
+  Existing verify-v7-version-contract.ps1 now exercises the shared production version module and mismatch/non-upgrade rejection paths; validate-powershell.ps1 already invokes it under the existing CI validation path.
+  Redundant standalone test was removed after consolidation.
+  docs/worker-logs/HLS-C007.md added and dedicated PR #63 opened.
+decision=HLS-C007 implementation is not accepted yet. Await current-head CI and independent diff review; task remains in_progress.
