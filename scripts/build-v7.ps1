@@ -318,19 +318,19 @@ if ($isPackage) {
     Copy-Item -LiteralPath $provenanceForBuild -Destination (Join-Path $resources 'BUILD-PROVENANCE.json') -Force
     # Formal and candidate packages must never inherit media binaries from a
     # previous ignored resources/common directory or a developer-specific path.
-    $requiredMediaTools = @('ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe')
+    $requiredMediaTools = @('ffmpeg.exe', 'ffprobe.exe')
     $ffmpegRoot = $env:HLS_V7_FFMPEG_DIR
     if ([String]::IsNullOrWhiteSpace($ffmpegRoot)) {
         $ffmpegCommand = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
         if ($ffmpegCommand) { $ffmpegRoot = Split-Path $ffmpegCommand.Source -Parent }
     }
     if ([String]::IsNullOrWhiteSpace($ffmpegRoot)) {
-        throw 'Candidate/formal packaging requires HLS_V7_FFMPEG_DIR or ffmpeg.exe on PATH; ffmpeg, ffprobe and ffplay must come from the same directory.'
+        throw 'Candidate/formal packaging requires HLS_V7_FFMPEG_DIR or ffmpeg.exe on PATH; packaged ffmpeg and ffprobe must come from the same verified media-tool directory.'
     }
     $ffmpegRoot = [IO.Path]::GetFullPath($ffmpegRoot)
     $missingMediaTools = @($requiredMediaTools | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ffmpegRoot $_) -PathType Leaf) })
     if ($missingMediaTools.Count -ne 0) {
-        throw "Candidate/formal packaging requires ffmpeg.exe, ffprobe.exe and ffplay.exe in one directory. Missing from ${ffmpegRoot}: $($missingMediaTools -join ', ')"
+        throw "Candidate/formal packaging requires ffmpeg.exe and ffprobe.exe in one verified media-tool directory. Missing from ${ffmpegRoot}: $($missingMediaTools -join ', ')"
     }
     foreach ($tool in $requiredMediaTools) {
         Copy-Item -LiteralPath (Join-Path $ffmpegRoot $tool) -Destination (Join-Path $resources $tool) -Force
