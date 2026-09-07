@@ -627,7 +627,7 @@ fn upsert_task(
                  snapshot_json = excluded.snapshot_json,
                  updated_at_ms = excluded.updated_at_ms,
                  event_sequence = excluded.event_sequence"#,
-            params![snapshot.task_id, json, now, sequence],
+            params![snapshot.task_id, json, now, i64::try_from(sequence).map_err(|_| format!("Core task {} event sequence exceeds SQLite INTEGER range", snapshot.task_id))?],
         )
         .map_err(|error| format!("persist Core task {}: {error}", snapshot.task_id))?;
     Ok(())
