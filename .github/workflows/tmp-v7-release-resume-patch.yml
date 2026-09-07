@@ -6,6 +6,7 @@ on:
       - chatgpt/v7-release-safe-resume
     paths:
       - '.github/workflows/tmp-v7-release-resume-patch.yml'
+      - 'scripts/tmp-patch-v7-release-resume.ps1'
 
 permissions:
   contents: write
