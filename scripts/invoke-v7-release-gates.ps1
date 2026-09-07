@@ -43,7 +43,7 @@ function Invoke-Gate([string]$Id, [string]$Command, [string]$InputDescription) {
     if ($gateExitCode -ne 0) { throw "Release gate $Id failed with exit code $gateExitCode." }
 }
 function Assert-GitHubSecurityWorkflows {
-    if ($env:GITHUB_ACTIONS -ne 'true') { return }
+    if ($env:GITHUB_ACTIONS -ne 'true' -or $env:GITHUB_WORKFLOW -ne 'v7 Formal Release') { return }
     foreach ($requiredEnvironment in @('GITHUB_REPOSITORY', 'GITHUB_SHA', 'GH_TOKEN')) {
         if ([String]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($requiredEnvironment))) {
             throw "$requiredEnvironment is required to validate formal-release security workflows in GitHub Actions."
