@@ -45,7 +45,8 @@ jobs:
         run: |
           set -euo pipefail
           cargo install cargo-audit --version 0.22.2 --locked
-          test "$(cargo audit --version)" = 'cargo-audit 0.22.2'
+          cargo audit --version | tee /tmp/cargo-audit-version.txt
+          grep -Eq '(^|[^0-9])0\.22\.2([^0-9]|$)' /tmp/cargo-audit-version.txt
 
       - name: Audit Rust Core lockfile
         shell: bash
