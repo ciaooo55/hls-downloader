@@ -56,6 +56,15 @@ jobs:
               throw "The v7 JDK bootstrap is missing pinned supply-chain input: $required"
             }
           }
+          $gradleWrapper = Get-Content -LiteralPath 'desktop_ui\gradle\wrapper\gradle-wrapper.properties' -Raw -Encoding UTF8
+          foreach ($required in @(
+            'distributionUrl=https\://services.gradle.org/distributions/gradle-9.7.0-bin.zip',
+            'distributionSha256Sum=84fbba45c7f4c64abc77460e1c00f541e9f960e3c7ed2538f1ede19eacd873ae'
+          )) {
+            if (-not $gradleWrapper.Contains($required)) {
+              throw "Gradle wrapper release input is not pinned: $required"
+            }
+          }
 
       - name: Validate PowerShell 5.1 and 7
         shell: pwsh
