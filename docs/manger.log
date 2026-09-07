@@ -86,3 +86,19 @@ workflow_evidence=
   v7 Candidate Package #127 in_progress.
   Rust Security #18 in_progress.
 decision=Source contract passes, but HLS-C002 remains unfinished until the same head has four successful required checks. Any further head change restarts final review.
+
+[2026-09-08T01:48:30+08:00] EVENT=ROLE_RECONCILIATION task=HLS-C002
+canonical_coordinator=worker-0
+canonical_auditor=worker-0
+collaborating_session=C0/W0
+implementation_worker=W0
+evidence=Issue #39 concurrent-state reconciliation states worker-0 remains the independent canonical auditor and C0/W0 will not self-PASS or merge PR #38 ahead of that review.
+decision=Keep the user-assigned coordinator identity with worker-0 while treating C0/W0 as a collaborating implementation session. HLS-C002 merge authorization remains exclusively tied to worker-0 independent audit evidence.
+
+[2026-09-08T01:49:00+08:00] EVENT=CHECKPOINT task=HLS-C002 pr=#38 head=8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec
+workflow_evidence=
+  Maintenance Security #44 completed/success.
+  v7 CI #479 completed/success.
+  Rust Security #18 completed/success.
+  v7 Candidate Package #127 in_progress at Build v7 candidate package; all environment/bootstrap steps before it completed/success.
+decision=No product-code changes requested. Hold source stable and wait only for current-head Candidate conclusion before final triple refresh.
