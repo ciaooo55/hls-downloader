@@ -15,7 +15,7 @@
     "test": "wxt prepare && tsc --noEmit && vitest run"
   },
   "devDependencies": {
-    "@types/chrome": "0.0.326",
+    "@types/chrome": "0.2.8",
     "typescript": "5.8.3",
     "vitest": "3.2.6",
     "web-ext": "10.6.0",
