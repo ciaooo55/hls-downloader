@@ -1,0 +1,61 @@
+name: Maintenance Security
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'extension/**'
+      - '.github/workflows/maintenance-security.yml'
+  pull_request:
+    paths:
+      - 'extension/**'
+      - '.github/workflows/maintenance-security.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  extension_security:
+    name: Extension audit and Firefox lint
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24.20.0'
+
+      - name: Enable pinned pnpm
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          corepack enable
+          corepack prepare pnpm@11.7.0 --activate
+          if ((pnpm --version).Trim() -ne '11.7.0') { throw 'pnpm 11.7.0 activation failed.' }
+
+      - name: Install locked extension dependencies
+        working-directory: extension
+        shell: pwsh
+        run: pnpm install --frozen-lockfile
+
+      - name: Reject high or critical dependency advisories
+        working-directory: extension
+        shell: pwsh
+        run: pnpm audit --audit-level=high
+
+      - name: Build Firefox extension
+        working-directory: extension
+        shell: pwsh
+        run: pnpm run build:firefox
+
+      - name: Run Mozilla web-ext lint against generated MV3 output
+        working-directory: extension
+        shell: pwsh
+        run: pnpm exec web-ext lint --source-dir .output/firefox-mv3
