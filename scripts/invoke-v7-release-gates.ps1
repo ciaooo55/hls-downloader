@@ -42,6 +42,34 @@ function Invoke-Gate([string]$Id, [string]$Command, [string]$InputDescription) {
     $gateExitCode = $LASTEXITCODE
     if ($gateExitCode -ne 0) { throw "Release gate $Id failed with exit code $gateExitCode." }
 }
+function Assert-GitHubSecurityWorkflows {
+    if ($env:GITHUB_ACTIONS -ne 'true') { return }
+    foreach ($requiredEnvironment in @('GITHUB_REPOSITORY', 'GITHUB_SHA', 'GH_TOKEN')) {
+        if ([String]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($requiredEnvironment))) {
+            throw "$requiredEnvironment is required to validate formal-release security workflows in GitHub Actions."
+        }
+    }
+    if ($env:GITHUB_SHA.Trim() -ne $currentCommit) {
+        throw "GitHub Actions source SHA does not match the candidate source: actions=$env:GITHUB_SHA candidate=$currentCommit"
+    }
+    $gh = (Get-Command gh.exe -ErrorAction Stop).Source
+    $runOutput = @(& $gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?head_sha=$currentCommit&status=completed&per_page=100")
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to query GitHub workflow runs for formal-release security validation.' }
+    $runs = ($runOutput -join "`n") | ConvertFrom-Json
+    foreach ($requiredWorkflow in @('Maintenance Security', 'Rust Security')) {
+        $match = @(
+            $runs.workflow_runs |
+                Where-Object { $_.name -eq $requiredWorkflow -and $_.event -eq 'push' -and $_.head_sha -eq $currentCommit } |
+                Sort-Object run_number -Descending |
+                Select-Object -First 1
+        )
+        if ($match.Count -ne 1 -or $match[0].conclusion -ne 'success') {
+            throw "$requiredWorkflow has not succeeded for $currentCommit."
+        }
+    }
+}
+
+Assert-GitHubSecurityWorkflows
 
 $edge = Resolve-Browser $EdgeBinary @(
     (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'),
