@@ -39,10 +39,18 @@ function Resolve-Certificate([string]$Scope, [string]$ExpectedThumbprint, [bool]
     if (-not $certificate) { throw "Signing certificate was not found at $certificatePath." }
     if ($RequirePrivateKey -and -not $certificate.HasPrivateKey) { throw 'Signing certificate does not expose a private key to the release runner.' }
     if ((Get-Date) -lt $certificate.NotBefore -or (Get-Date) -gt $certificate.NotAfter) { throw 'Signing certificate is not currently valid.' }
-    if (@($certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' -and $_.Format($false) -notmatch 'Code Signing' }).Count -gt 0) {
+    $eku = @($certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' })
+    if ($eku.Count -gt 0 -and @($eku | Where-Object { $_.Format($false) -match 'Code Signing|1\.3\.6\.1\.5\.5\.7\.3\.3' }).Count -eq 0) {
         throw 'Configured certificate does not advertise Code Signing usage.'
     }
     return $certificate
+}
+
+function Invoke-SignTool([string[]]$Arguments, [string]$Operation, [string]$Target) {
+    $diagnostics = @(& $signTool @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+    $exitCode = $LASTEXITCODE
+    foreach ($line in $diagnostics) { Write-Verbose $line }
+    if ($exitCode -ne 0) { throw "signtool $Operation failed for $Target with exit code $exitCode.`n$($diagnostics -join [Environment]::NewLine)" }
 }
 
 $signTool = Resolve-SignTool $SignToolPath
@@ -55,12 +63,10 @@ foreach ($file in $files) {
         $arguments = @('sign', '/fd', 'SHA256', '/td', 'SHA256', '/tr', $TimestampUrl, '/sha1', $thumbprint)
         if ($CertificateStore -eq 'LocalMachine') { $arguments += '/sm' }
         $arguments += $file
-        & $signTool @arguments
-        if ($LASTEXITCODE -ne 0) { throw "signtool sign failed for $file with exit code $LASTEXITCODE." }
+        Invoke-SignTool $arguments 'sign' $file
     }
 
-    & $signTool verify /pa /all /v $file
-    if ($LASTEXITCODE -ne 0) { throw "signtool verify failed for $file with exit code $LASTEXITCODE." }
+    Invoke-SignTool @('verify', '/pa', '/all', '/v', $file) 'verify' $file
     $signature = Get-AuthenticodeSignature -LiteralPath $file
     if ($signature.Status -ne 'Valid') { throw "Authenticode status is $($signature.Status) for $file." }
     if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $certificate.Thumbprint.ToUpperInvariant()) {
