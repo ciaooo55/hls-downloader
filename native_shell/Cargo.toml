@@ -11,7 +11,7 @@ full-core = []
 presenter-client = []
 
 [dependencies]
-rusqlite = { version = "0.37", features = ["bundled", "backup"] }
+rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
