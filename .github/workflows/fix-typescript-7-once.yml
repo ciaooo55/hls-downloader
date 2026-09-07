@@ -12,46 +12,37 @@ permissions:
 
 jobs:
   patch:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: dependabot/npm_and_yarn/extension/typescript-7.0.2
 
       - name: Adapt Response.bytes override for TypeScript 7
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('extension/entrypoints/hooks.content.ts')
-          text = path.read_text(encoding='utf-8')
-          old = """        responsePrototype.bytes = async function (this: Response) {
-          const value = await responseBytes.call(this)
-          rememberBufferSource(value, this.url)
-          return value
-        }
-"""
-          new = """        responsePrototype.bytes = async function (this: Response) {
-          const value = await responseBytes.call(this)
-          rememberBufferSource(value, this.url)
-          return new Uint8Array(value)
-        }
-"""
-          if old not in text:
-              raise SystemExit('Expected Response.bytes override not found')
-          path.write_text(text.replace(old, new), encoding='utf-8')
-          PY
+          $ErrorActionPreference = 'Stop'
+          $path = 'extension/entrypoints/hooks.content.ts'
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          $old = '          return value'
+          $new = '          return new Uint8Array(value)'
+          $anchor = '        responsePrototype.bytes = async function (this: Response) {'
+          $start = $text.IndexOf($anchor)
+          if ($start -lt 0) { throw 'Expected Response.bytes override not found.' }
+          $return = $text.IndexOf($old, $start)
+          if ($return -lt 0) { throw 'Expected Response.bytes return statement not found.' }
+          $text = $text.Remove($return, $old.Length).Insert($return, $new)
+          [IO.File]::WriteAllText((Resolve-Path $path), $text, [Text.UTF8Encoding]::new($false))
           git diff --check
           git diff -- extension/entrypoints/hooks.content.ts
 
       - name: Commit TypeScript 7 compatibility fix
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = 'Stop'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add extension/entrypoints/hooks.content.ts
-          git diff --cached --quiet && { echo 'No TypeScript 7 compatibility change produced.' >&2; exit 1; }
+          if (git diff --cached --quiet) { throw 'No TypeScript 7 compatibility change produced.' }
           git commit -m 'fix: normalize Response bytes for TypeScript 7'
           git push origin HEAD:dependabot/npm_and_yarn/extension/typescript-7.0.2
