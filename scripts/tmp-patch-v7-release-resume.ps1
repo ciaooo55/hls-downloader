@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $path = '.github/workflows/release-v7.yml'
-$source = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+$source = (Get-Content -LiteralPath $path -Raw -Encoding UTF8) -replace "`r`n", "`n"
 
 $oldPreflight = @'
           $existingTag = ((git ls-remote --tags origin "refs/tags/$tag") -join '').Trim()
@@ -43,6 +43,8 @@ $newPreflight = @'
           "HLS_V7_RELEASE_MODE=$releaseMode" >> $env:GITHUB_ENV
           if ([String]::IsNullOrWhiteSpace($env:HLS_V7_SIGN_CERT_THUMBPRINT)) { throw 'HLS_V7_SIGN_CERT_THUMBPRINT secret is required for a formal release.' }
 '@
+$oldPreflight = (($oldPreflight -replace "`r`n", "`n").TrimEnd())
+$newPreflight = (($newPreflight -replace "`r`n", "`n").TrimEnd())
 if (-not $source.Contains($oldPreflight)) { throw 'Formal release preflight block no longer matches the expected source.' }
 $source = $source.Replace($oldPreflight, $newPreflight)
 
@@ -89,6 +91,8 @@ $newCreate = @'
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 '@
+$oldCreate = (($oldCreate -replace "`r`n", "`n").TrimEnd())
+$newCreate = (($newCreate -replace "`r`n", "`n").TrimEnd())
 if (-not $source.Contains($oldCreate)) { throw 'Formal release tag/draft block no longer matches the expected source.' }
 $source = $source.Replace($oldCreate, $newCreate)
 Set-Content -LiteralPath $path -Value $source -Encoding utf8NoBOM -NoNewline
