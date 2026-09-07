@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use russh::client::{self, Handle};
-use russh::keys::{load_secret_key, PrivateKeyWithHashAlg, PublicKey};
+use russh::keys::{load_secret_key, PrivateKeyWithHashAlg, PublicKey, PublicKeyOrCertificate};
 use russh_sftp::client::SftpSession as RusshSftp;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
@@ -39,12 +39,12 @@ impl client::Handler for TofuHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         match crate::sftp_engine::tofu_record(
             &self.host,
             self.port,
-            &fingerprint_host_key(server_public_key),
+            &fingerprint_host_key(&server_public_key.public_key()),
         ) {
             Ok(()) => Ok(true),
             Err(message) => {
