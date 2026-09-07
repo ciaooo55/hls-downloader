@@ -52,6 +52,99 @@ jobs:
           $crypto = Get-Content -LiteralPath $cryptoPath -Raw -Encoding UTF8
           $crypto = $crypto.Replace('u32::from_be_bytes(part.try_into().unwrap())', 'u32::from_be_bytes(*part)')
           Set-Content -LiteralPath $cryptoPath -Value $crypto -Encoding UTF8 -NoNewline
+
+          $hlsPath = 'native_shell\src\media\hls.rs'
+          $hls = Get-Content -LiteralPath $hlsPath -Raw -Encoding UTF8
+          $oldUse = @'
+        use std::net::TcpListener;
+        use std::thread;
+'@
+          $newUse = @'
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+        use std::thread;
+'@
+          if (-not $hls.Contains($oldUse)) { throw 'Authenticated live HLS test imports changed unexpectedly.' }
+          $hls = $hls.Replace($oldUse, $newUse)
+
+          $oldSpawn = @'
+        let first = thread::spawn(move || {
+            download_hls_with(
+                &first_url,
+                &first_headers,
+                "",
+                &first_dir,
+                &first_control,
+                HlsDownloadOptions {
+                    live: true,
+                    concurrency: 1,
+                    download_subtitles: false,
+                    ..HlsDownloadOptions::default()
+                },
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !first_segment_seen.load(Ordering::SeqCst) {
+            assert!(
+                Instant::now() < deadline,
+                "server did not receive the first live segment"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+'@
+          $newSpawn = @'
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        let first = thread::spawn(move || {
+            let _ = started_tx.send(());
+            let result = download_hls_with(
+                &first_url,
+                &first_headers,
+                "",
+                &first_dir,
+                &first_control,
+                HlsDownloadOptions {
+                    live: true,
+                    concurrency: 1,
+                    download_subtitles: false,
+                    ..HlsDownloadOptions::default()
+                },
+            );
+            let _ = done_tx.send(result);
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("live download worker did not start");
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !first_segment_seen.load(Ordering::SeqCst) {
+            match done_rx.try_recv() {
+                Ok(result) => panic!("live download exited before the first segment: {result:?}"),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    panic!("live download result channel disconnected before the first segment")
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            assert!(
+                Instant::now() < deadline,
+                "server did not receive the first live segment after worker startup"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+'@
+          if (-not $hls.Contains($oldSpawn)) { throw 'Authenticated live HLS worker block changed unexpectedly.' }
+          $hls = $hls.Replace($oldSpawn, $newSpawn)
+
+          $oldJoin = '        assert_eq!(first.join().unwrap().unwrap_err(), "paused");'
+          $newJoin = @'
+        let first_result = done_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("paused live download did not finish");
+        assert_eq!(first_result.unwrap_err(), "paused");
+        first.join().unwrap();
+'@
+          if (-not $hls.Contains($oldJoin)) { throw 'Authenticated live HLS join assertion changed unexpectedly.' }
+          $hls = $hls.Replace($oldJoin, $newJoin.TrimEnd())
+          Set-Content -LiteralPath $hlsPath -Value $hls -Encoding UTF8 -NoNewline
       - name: Format and verify Rust Core
         working-directory: native_shell
         shell: pwsh
@@ -59,6 +152,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           cargo fmt --all
+          cargo test --locked --lib media::hls::tests::authenticated_live_pause_resume_restores_atomic_timeline -- --test-threads=1
           cargo test --locked --lib -- --test-threads=1
           cargo build --locked --bin HLSDownloaderUpdater
           cargo clippy --locked --all-targets -- -D warnings -A dead_code -A clippy::large_enum_variant -A clippy::too_many_arguments -A clippy::type_complexity
