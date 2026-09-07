@@ -6,7 +6,7 @@ No private packages, generated source files, or remote build services are requir
 ## Environment
 
 - Windows 11 x64 (the same commands also work on Linux)
-- Node.js 25
+- Node.js 24.20.0
 - Corepack
 - pnpm 11.7.0
 
@@ -19,6 +19,7 @@ corepack enable
 corepack prepare pnpm@11.7.0 --activate
 pnpm install --frozen-lockfile
 pnpm run build:firefox
+pnpm exec web-ext lint --source-dir .output/firefox-mv3
 ```
 
 The unpacked extension is written to `.output/firefox-mv3`. To create the upload
