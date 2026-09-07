@@ -1,0 +1,42 @@
+HLS DOWNLOADER COORDINATOR LOG
+schema=1
+repository=ciaooo55/hls-downloader
+canonical_task_registry_issue=#39
+canonical_role_issue=#40
+canonical_heartbeat_issue=#41
+canonical_visitor_issue=#42
+
+[2026-09-08T01:29:00+08:00] EVENT=ROLE_ASSIGNMENT
+coordinator=worker-0
+auditor=worker-0
+workers=worker-0
+reason=no separate auditor or ordinary worker is currently available; coordinator must self-assign, implement, and independently audit rather than freeze.
+
+[2026-09-08T01:30:00+08:00] EVENT=COORDINATION_CHANNELS
+registry_issue=#39
+role_issue=#40
+heartbeat_issue=#41
+visitor_issue=#42
+note=Concurrent initialization produced the canonical issues. Duplicate role issue #43 was closed as duplicate of #40 to keep one declaration channel.
+
+[2026-09-08T01:30:30+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C001 priority=P0 owner=worker-0 role=coordinator+auditor+worker
+branch=coord/bootstrap-protocol
+acceptance_criteria=
+  AC1 handoff.md begins with canonical visitor/role/heartbeat/task-registry issue metadata.
+  AC2 docs/manger.log records roles, assignment, acceptance criteria, and route decisions.
+  AC3 docs/coordination/tasks.json is valid machine-readable JSON with priorities/status/owners/acceptance criteria and at least two unfinished planned tasks while one worker is active.
+  AC4 docs/worker-logs/HLS-C001.md records implementation and independent review evidence.
+  AC5 docs/architecture/coordination-protocol.md and docs/architecture/project-plan.md define the operating model and current route.
+  AC6 work is split across multiple commits and proposed by PR; review compares the actual diff with AC1-AC5.
+
+[2026-09-08T01:31:00+08:00] EVENT=ROUTE_DECISION
+context=Project already has mature v7 architecture/refinement documentation and an open release-hardening PR #38.
+decision=Bootstrap collaboration infrastructure first without rewriting existing product architecture; immediately follow with HLS-C002 independent audit of PR #38, then continue product-risk backlog by priority.
+reason=The collaboration protocol is a prerequisite for safe multi-agent work, while #38 is already the highest-value active product change and should not be displaced by broad speculative refactors.
+
+[2026-09-08T01:31:30+08:00] EVENT=BACKLOG_POLICY
+minimum_unfinished_tasks=2
+planned_unfinished_target=6
+priority_order=P0>P1>P2>P3
+claim_policy=Idle participants self-claim the highest-priority compatible task from docs/coordination/tasks.json and mirror the claim in Issue #39 without approval.
+review_policy=Auditor checks acceptance evidence independently; task-owner assertions alone are insufficient.
