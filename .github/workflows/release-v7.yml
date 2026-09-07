@@ -100,15 +100,34 @@ jobs:
           "HLS_V7_BUILD_CACHE=$cacheRoot" >> $env:GITHUB_ENV
           "HLS_V7_JAVA_HOME=$(Join-Path $cacheRoot 'jdk-21')" >> $env:GITHUB_ENV
 
-      - name: Require successful main source and candidate CI
+      - name: Require successful exact-SHA source, candidate and security workflows
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           $runs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?head_sha=$env:GITHUB_SHA&status=completed&per_page=100" | ConvertFrom-Json
-          foreach ($required in @('v7 CI', 'v7 Candidate Package')) {
-            $match = @($runs.workflow_runs | Where-Object { $_.name -eq $required -and $_.event -eq 'push' } | Sort-Object run_number -Descending | Select-Object -First 1)
-            if ($match.Count -ne 1 -or $match[0].conclusion -ne 'success') { throw "$required has not succeeded for $env:GITHUB_SHA." }
+          $requiredWorkflows = @(
+            [pscustomobject]@{ Name = 'v7 CI'; Path = '.github/workflows/ci.yml' },
+            [pscustomobject]@{ Name = 'v7 Candidate Package'; Path = '.github/workflows/package-v7-candidate.yml' },
+            [pscustomobject]@{ Name = 'Maintenance Security'; Path = '.github/workflows/maintenance-security.yml' },
+            [pscustomobject]@{ Name = 'Rust Security'; Path = '.github/workflows/rust-security.yml' }
+          )
+          foreach ($required in $requiredWorkflows) {
+            $match = @(
+              $runs.workflow_runs |
+                Where-Object {
+                  $_.name -eq $required.Name -and
+                  $_.path -eq $required.Path -and
+                  $_.event -eq 'push' -and
+                  $_.head_branch -eq 'main' -and
+                  $_.head_sha -eq $env:GITHUB_SHA
+                } |
+                Sort-Object run_number -Descending |
+                Select-Object -First 1
+            )
+            if ($match.Count -ne 1 -or $match[0].conclusion -ne 'success') {
+              throw "$($required.Name) at $($required.Path) has not succeeded for main SHA $env:GITHUB_SHA."
+            }
           }
 
       - name: Verify dedicated Windows release runner
