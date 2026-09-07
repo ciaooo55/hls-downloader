@@ -1,0 +1,245 @@
+name: v7 Formal Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the verified draft as Latest after digest verification
+        required: true
+        type: boolean
+        default: false
+      edge_binary:
+        description: Optional absolute Edge path on the hls-release runner
+        required: false
+        type: string
+        default: ''
+      firefox_binary:
+        description: Optional absolute Firefox path on the hls-release runner
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  group: v7-formal-release
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  release:
+    name: Verify, sign and stage v7 release
+    runs-on: [self-hosted, Windows, X64, hls-release]
+    timeout-minutes: 180
+    environment: v7-release
+    env:
+      HLS_V7_SIGN_CERT_THUMBPRINT: ${{ secrets.HLS_V7_SIGN_CERT_THUMBPRINT }}
+      HLS_V7_SIGN_CERT_STORE: ${{ vars.HLS_V7_SIGN_CERT_STORE }}
+      HLS_V7_TIMESTAMP_URL: ${{ vars.HLS_V7_TIMESTAMP_URL }}
+      HLS_V7_EDGE_BINARY: ${{ inputs.edge_binary }}
+      HLS_V7_FIREFOX_BINARY: ${{ inputs.firefox_binary }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out frozen source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+
+      - name: Refuse non-main or stale release source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw "Formal release must be dispatched from main, got $env:GITHUB_REF" }
+          $head = (git rev-parse HEAD).Trim()
+          $remoteMain = (git ls-remote origin refs/heads/main).Split("`t")[0].Trim()
+          if ($head -ne $remoteMain) { throw "Release source is not current main: HEAD=$head main=$remoteMain" }
+          $feature = Get-Content 'artifacts\v7-productization\feature-parity.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+          $version = [string]$feature.product_version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid product version: $version" }
+          $tag = "v$version"
+          if (git ls-remote --exit-code --tags origin "refs/tags/$tag" 2>$null) { throw "Release tag already exists: $tag" }
+          if ([String]::IsNullOrWhiteSpace($env:HLS_V7_SIGN_CERT_THUMBPRINT)) { throw 'HLS_V7_SIGN_CERT_THUMBPRINT secret is required for a formal release.' }
+          if (-not $env:HLS_V7_SIGN_CERT_STORE) { "HLS_V7_SIGN_CERT_STORE=CurrentUser" >> $env:GITHUB_ENV }
+          if (-not $env:HLS_V7_TIMESTAMP_URL) { "HLS_V7_TIMESTAMP_URL=http://timestamp.digicert.com" >> $env:GITHUB_ENV }
+          "HLS_V7_VERSION=$version" >> $env:GITHUB_ENV
+          "HLS_V7_TAG=$tag" >> $env:GITHUB_ENV
+          $cacheRoot = Join-Path $env:RUNNER_TEMP "hls-v7-release-$head"
+          "HLS_V7_BUILD_CACHE=$cacheRoot" >> $env:GITHUB_ENV
+          "HLS_V7_JAVA_HOME=$(Join-Path $cacheRoot 'jdk-21')" >> $env:GITHUB_ENV
+
+      - name: Require successful main source and candidate CI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $runs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?head_sha=$env:GITHUB_SHA&status=completed&per_page=100" | ConvertFrom-Json
+          foreach ($required in @('v7 CI', 'v7 Candidate Package')) {
+            $match = @($runs.workflow_runs | Where-Object { $_.name -eq $required -and $_.event -eq 'push' } | Sort-Object run_number -Descending | Select-Object -First 1)
+            if ($match.Count -ne 1 -or $match[0].conclusion -ne 'success') { throw "$required has not succeeded for $env:GITHUB_SHA." }
+          }
+
+      - name: Verify dedicated Windows release runner
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if (-not $IsWindows -or $env:PROCESSOR_ARCHITECTURE -notmatch 'AMD64') { throw 'Formal v7 release requires Windows x64.' }
+          if (-not (Test-Path -LiteralPath 'E:\' -PathType Container)) { throw 'Formal v7 release runner must provide E: for the fixed E:\h lifecycle gate.' }
+          Get-Command git.exe, python.exe, go.exe, gh.exe -ErrorAction Stop | Out-Null
+          python.exe -c "import yaml" 
+          if ($LASTEXITCODE -ne 0) { throw 'Release runner Python must provide PyYAML for deterministic SBOM generation.' }
+
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: '1.98.1'
+
+      - name: Set up Node 24.20.0
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24.20.0'
+
+      - name: Enable pinned pnpm
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          corepack enable
+          corepack prepare pnpm@11.7.0 --activate
+          if ((pnpm --version).Trim() -ne '11.7.0') { throw 'pnpm 11.7.0 activation failed.' }
+
+      - name: Bootstrap pinned JDK and FFmpeg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\bootstrap-v7-toolchain.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $mediaDir = & .\scripts\bootstrap-v7-media-tools.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ([String]::IsNullOrWhiteSpace($mediaDir)) { throw 'FFmpeg bootstrap did not return a media directory.' }
+          "HLS_V7_FFMPEG_DIR=$mediaDir" >> $env:GITHUB_ENV
+          "HLS_V7_PYTHON=$((Get-Command python.exe -ErrorAction Stop).Source)" >> $env:GITHUB_ENV
+
+      - name: Build frozen candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $env:HLS_V7_PNPM = (Get-Command pnpm.cmd -ErrorAction Stop).Source
+          & .\scripts\build-v7.ps1 -Task candidate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run browser, performance, installer and rollback gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\invoke-v7-release-gates.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Reconfirm frozen main before formal package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $head = (git rev-parse HEAD).Trim()
+          $remoteMain = (git ls-remote origin refs/heads/main).Split("`t")[0].Trim()
+          if ($head -ne $remoteMain) { throw "main moved while release gates were running: HEAD=$head main=$remoteMain" }
+
+      - name: Build formal package from the same evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $env:HLS_V7_PNPM = (Get-Command pnpm.cmd -ErrorAction Stop).Source
+          & .\scripts\build-v7.ps1 -Task package
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Authenticode sign and verify formal Windows artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\finalize-v7-signed-package.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\scripts\verify-v7-authenticode.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Firefox store source bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          pnpm --dir extension install --frozen-lockfile
+          pnpm --dir extension run zip:firefox-store
+          $source = Get-ChildItem -LiteralPath 'extension\.output' -File -Recurse -Filter '*.zip' |
+            Where-Object { $_.Name -match '(?i)sources' } |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+          if (-not $source) { throw 'Firefox store source ZIP was not produced.' }
+          "HLS_V7_FIREFOX_SOURCES=$($source.FullName)" >> $env:GITHUB_ENV
+
+      - name: Stage release assets and checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\stage-v7-release.ps1 -FirefoxSources $env:HLS_V7_FIREFOX_SOURCES
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload verified release staging artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: HLSDownloader-${{ env.HLS_V7_VERSION }}-formal-${{ github.sha }}
+          path: artifacts/v7-productization/release-staging/**
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Create annotated tag and draft GitHub Release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $head = (git rev-parse HEAD).Trim()
+          $remoteMain = (git ls-remote origin refs/heads/main).Split("`t")[0].Trim()
+          if ($head -ne $remoteMain) { throw 'main moved before tag creation; refusing stale release.' }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a $env:HLS_V7_TAG -m "HLS Downloader $env:HLS_V7_VERSION" $head
+          git push origin $env:HLS_V7_TAG
+          $stage = (Resolve-Path 'artifacts\v7-productization\release-staging').Path
+          $assets = @(Get-ChildItem -LiteralPath $stage -File | Select-Object -ExpandProperty FullName)
+          $notes = Join-Path $stage "README-$env:HLS_V7_VERSION.txt"
+          gh release create $env:HLS_V7_TAG @assets --repo $env:GITHUB_REPOSITORY --title "HLS Downloader $env:HLS_V7_VERSION" --notes-file $notes --draft --verify-tag
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify uploaded GitHub asset size and SHA-256 digest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:HLS_V7_TAG" | ConvertFrom-Json
+          if (-not $release.draft) { throw 'Release must remain draft until all uploaded digests are verified.' }
+          $stage = (Resolve-Path 'artifacts\v7-productization\release-staging').Path
+          foreach ($file in Get-ChildItem -LiteralPath $stage -File) {
+            $asset = @($release.assets | Where-Object { $_.name -eq $file.Name })
+            if ($asset.Count -ne 1) { throw "Uploaded release asset missing or duplicated: $($file.Name)" }
+            $sha = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ([int64]$asset[0].size -ne [int64]$file.Length) { throw "Release asset size mismatch: $($file.Name)" }
+            if ([string]$asset[0].digest -ne "sha256:$sha") { throw "Release asset digest mismatch: $($file.Name)" }
+          }
+          if (@($release.assets).Count -ne @(Get-ChildItem -LiteralPath $stage -File).Count) { throw 'Draft release contains an unexpected asset count.' }
+
+      - name: Publish verified release as Latest
+        if: ${{ inputs.publish }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          gh release edit $env:HLS_V7_TAG --repo $env:GITHUB_REPOSITORY --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Stop release-owned processes
+        if: always()
+        shell: pwsh
+        run: |
+          & .\scripts\shutdown-running.ps1 -InstallDir 'E:\h'
+          exit 0
