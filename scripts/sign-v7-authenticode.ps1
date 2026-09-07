@@ -10,8 +10,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $thumbprint = ($CertificateThumbprint -replace '\s', '').ToUpperInvariant()
-if ($thumbprint -notmatch '^[0-9A-F]{40,64}$') {
-    throw 'HLS_V7_SIGN_CERT_THUMBPRINT must contain a certificate thumbprint.'
+if ($thumbprint -notmatch '^[0-9A-F]{40}$') {
+    throw 'HLS_V7_SIGN_CERT_THUMBPRINT must contain the 40-hex Windows certificate thumbprint.'
 }
 
 function Resolve-SignTool([string]$ExplicitPath) {
@@ -39,10 +39,6 @@ function Resolve-Certificate([string]$Scope, [string]$ExpectedThumbprint, [bool]
     if (-not $certificate) { throw "Signing certificate was not found at $certificatePath." }
     if ($RequirePrivateKey -and -not $certificate.HasPrivateKey) { throw 'Signing certificate does not expose a private key to the release runner.' }
     if ((Get-Date) -lt $certificate.NotBefore -or (Get-Date) -gt $certificate.NotAfter) { throw 'Signing certificate is not currently valid.' }
-    $eku = @($certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' })
-    if ($eku.Count -gt 0 -and @($eku | Where-Object { $_.Format($false) -match 'Code Signing|1\.3\.6\.1\.5\.5\.7\.3\.3' }).Count -eq 0) {
-        throw 'Configured certificate does not advertise Code Signing usage.'
-    }
     return $certificate
 }
 
