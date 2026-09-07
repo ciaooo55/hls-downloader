@@ -50,13 +50,13 @@ jobs:
 
       # russh's RSA support currently resolves rsa 0.10.0-rc.18. RustSec
       # RUSTSEC-2023-0071 has no fixed upgrade available, so keep that single
-      # advisory explicit while still failing on every other vulnerability and
-      # on unmaintained/unsound advisories. Yanked transitive prereleases remain
-      # visible in cargo-audit output but do not make this new baseline unusable.
+      # vulnerability explicit. Existing unmaintained/yanked transitive crates
+      # remain visible in cargo-audit output; unsound advisories and every other
+      # vulnerability still fail this gate.
       - name: Audit Rust Core lockfile
         shell: bash
-        run: cargo audit --file native_shell/Cargo.lock --ignore RUSTSEC-2023-0071 --deny unmaintained --deny unsound
+        run: cargo audit --file native_shell/Cargo.lock --ignore RUSTSEC-2023-0071 --deny unsound
 
       - name: Audit Native Presenter lockfile
         shell: bash
-        run: cargo audit --file presenter_ui/Cargo.lock --ignore RUSTSEC-2023-0071 --deny unmaintained --deny unsound
+        run: cargo audit --file presenter_ui/Cargo.lock --ignore RUSTSEC-2023-0071 --deny unsound
