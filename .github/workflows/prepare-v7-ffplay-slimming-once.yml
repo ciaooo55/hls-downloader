@@ -26,8 +26,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $path = 'scripts\build-v7.ps1'
           $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
-          $oldTools = "$requiredMediaTools = @('ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe')"
-          $newTools = "$requiredMediaTools = @('ffmpeg.exe', 'ffprobe.exe')"
+          $oldTools = '$requiredMediaTools = @(''ffmpeg.exe'', ''ffprobe.exe'', ''ffplay.exe'')'
+          $newTools = '$requiredMediaTools = @(''ffmpeg.exe'', ''ffprobe.exe'')'
           if (-not $text.Contains($oldTools)) { throw 'Expected three-tool package contract was not found.' }
           $text = $text.Replace($oldTools, $newTools)
           $text = $text.Replace('Candidate/formal packaging requires HLS_V7_FFMPEG_DIR or ffmpeg.exe on PATH; ffmpeg, ffprobe and ffplay must come from the same directory.', 'Candidate/formal packaging requires HLS_V7_FFMPEG_DIR or ffmpeg.exe on PATH; packaged ffmpeg and ffprobe must come from the same verified media-tool directory.')
@@ -36,7 +36,10 @@ jobs:
 
           $readme = 'README.md'
           $readmeText = Get-Content -LiteralPath $readme -Raw -Encoding UTF8
-          $readmeText = $readmeText.Replace('Candidate and formal packaging require `ffmpeg.exe`, `ffprobe.exe` and `ffplay.exe` from one directory: set `HLS_V7_FFMPEG_DIR` explicitly, or place all three beside the `ffmpeg.exe` resolved from `PATH`.', 'Candidate and formal packaging source media tools from one verified FFmpeg directory. The shipped runtime requires `ffmpeg.exe` and `ffprobe.exe`; `ffplay.exe` remains part of the pinned upstream tool bundle used during bootstrap verification but is not shipped because local playback uses bundled libmpv.')
+          $oldReadme = 'Candidate and formal packaging require `ffmpeg.exe`, `ffprobe.exe` and `ffplay.exe` from one directory: set `HLS_V7_FFMPEG_DIR` explicitly, or place all three beside the `ffmpeg.exe` resolved from `PATH`.'
+          $newReadme = 'Candidate and formal packaging source media tools from one verified FFmpeg directory. The shipped runtime requires `ffmpeg.exe` and `ffprobe.exe`; `ffplay.exe` remains part of the pinned upstream tool bundle used during bootstrap verification but is not shipped because local playback uses bundled libmpv.'
+          if (-not $readmeText.Contains($oldReadme)) { throw 'Expected README media-tool contract was not found.' }
+          $readmeText = $readmeText.Replace($oldReadme, $newReadme)
           [IO.File]::WriteAllText((Resolve-Path $readme), $readmeText, [Text.UTF8Encoding]::new($false))
           git diff --check
 
