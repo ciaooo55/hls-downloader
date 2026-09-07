@@ -36,33 +36,12 @@ jobs:
           $newImport = 'use russh::keys::{load_secret_key, PrivateKeyWithHashAlg, PublicKey, PublicKeyOrCertificate};'
           if (-not $text.Contains($oldImport)) { throw 'Expected russh key import was not found.' }
           $text = $text.Replace($oldImport, $newImport)
-          $oldSignature = @'
-    async fn check_server_key(
-        &mut self,
-        server_public_key: &PublicKey,
-    ) -> Result<bool, Self::Error> {
-        match crate::sftp_engine::tofu_record(
-            &self.host,
-            self.port,
-            &fingerprint_host_key(server_public_key),
-        ) {
-'@
-          $newSignature = @'
-    async fn check_server_key(
-        &mut self,
-        server_public_key: &PublicKeyOrCertificate,
-    ) -> Result<bool, Self::Error> {
-        let server_public_key = server_public_key.public_key();
-        match crate::sftp_engine::tofu_record(
-            &self.host,
-            self.port,
-            &fingerprint_host_key(&server_public_key),
-        ) {
-'@
-          if (-not $text.Contains($oldSignature)) { throw 'Expected check_server_key implementation was not found.' }
-          $text = $text.Replace($oldSignature, $newSignature)
+          if (-not $text.Contains('server_public_key: &PublicKey,')) { throw 'Expected check_server_key parameter was not found.' }
+          $text = $text.Replace('server_public_key: &PublicKey,', 'server_public_key: &PublicKeyOrCertificate,')
+          if (-not $text.Contains('&fingerprint_host_key(server_public_key),')) { throw 'Expected TOFU fingerprint call was not found.' }
+          $text = $text.Replace('&fingerprint_host_key(server_public_key),', '&fingerprint_host_key(&server_public_key.public_key()),')
           [IO.File]::WriteAllText((Resolve-Path $path), $text, [Text.UTF8Encoding]::new($false))
-          cargo fmt --manifest-path native_shell/Cargo.toml --all -- --check
+          cargo fmt --manifest-path native_shell/Cargo.toml --all
           git diff --check
 
       - name: Run Rust Core tests
