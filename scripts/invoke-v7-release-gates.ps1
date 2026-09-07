@@ -38,8 +38,9 @@ function Add-OptionalArgument([Collections.Generic.List[string]]$Parts, [string]
     }
 }
 function Invoke-Gate([string]$Id, [string]$Command, [string]$InputDescription) {
-    & (Join-Path $PSScriptRoot 'record-v7-release-gate.ps1') -GateId $Id -Command $Command -GateInput $InputDescription -CandidateManifestPath $manifestFullPath
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'record-v7-release-gate.ps1') -GateId $Id -Command $Command -GateInput $InputDescription -CandidateManifestPath $manifestFullPath
+    $gateExitCode = $LASTEXITCODE
+    if ($gateExitCode -ne 0) { throw "Release gate $Id failed with exit code $gateExitCode." }
 }
 
 $edge = Resolve-Browser $EdgeBinary @(
