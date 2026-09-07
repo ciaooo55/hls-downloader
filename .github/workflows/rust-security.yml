@@ -1,0 +1,56 @@
+name: Rust Security
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'native_shell/Cargo.toml'
+      - 'native_shell/Cargo.lock'
+      - 'presenter_ui/Cargo.toml'
+      - 'presenter_ui/Cargo.lock'
+      - '.github/workflows/rust-security.yml'
+  pull_request:
+    paths:
+      - 'native_shell/Cargo.toml'
+      - 'native_shell/Cargo.lock'
+      - 'presenter_ui/Cargo.toml'
+      - 'presenter_ui/Cargo.lock'
+      - '.github/workflows/rust-security.yml'
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rustsec:
+    name: Audit locked Rust dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: '1.98.1'
+
+      - name: Install pinned cargo-audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install cargo-audit --version 0.22.2 --locked
+          test "$(cargo audit --version)" = 'cargo-audit 0.22.2'
+
+      - name: Audit Rust Core lockfile
+        shell: bash
+        run: cargo audit --file native_shell/Cargo.lock --deny warnings
+
+      - name: Audit Native Presenter lockfile
+        shell: bash
+        run: cargo audit --file presenter_ui/Cargo.lock --deny warnings
