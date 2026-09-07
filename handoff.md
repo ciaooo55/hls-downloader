@@ -12,8 +12,8 @@ auditor: worker-0
 workers:
   - worker-0
 active_task: HLS-C002
-status: reviewing-pr-38
-last_updated: 2026-09-08T01:40:30+08:00
+status: reaudit-pr-38-checks-in-progress
+last_updated: 2026-09-08T01:42:00+08:00
 ---
 
 # Project handoff
@@ -37,8 +37,10 @@ Issue #42 is the visitor area. External project coordinators must provide their 
 
 - Active product line: v7.0.2 iteration.
 - HLS-C001 collaboration bootstrap passed independent review and merged through PR #60 at `37cc077b32be25416ca9d01d118bf1d546a0b65b`.
-- HLS-C002 is auditing product PR #38 (`release: require security workflows before formal publishing`).
-- Reviewed PR #38 head: `a99582c76e582210264ebc4e2f2761b6a41714f0`; source audit and four required head checks are currently PASS, but the head/mergeability must be refreshed immediately before merge.
+- HLS-C002 is re-auditing product PR #38 after its head changed during the mandatory pre-merge refresh.
+- Superseded PR #38 head: `a99582c76e582210264ebc4e2f2761b6a41714f0`; its PASS is not valid for merge authorization.
+- Current PR #38 head: `556722c4397e905dfd352dd60bfa03956d453ebd`.
+- Current-head source review is positive and includes the new `.github/workflows/release-v7.yml` exact identity gate; however the four current-head checks are still in progress, so PR #38 is not authorized to merge yet.
 - Formal release remains gated; do not mark a formal release ready merely because candidate artifacts exist.
 - The task registry is authoritative for coordination status; historical product details remain in the existing v7 architecture/refinement/iteration documents.
 
