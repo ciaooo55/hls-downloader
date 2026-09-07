@@ -1,0 +1,74 @@
+name: One-shot Rust Lint Cleanup Retry
+
+on:
+  push:
+    branches:
+      - chatgpt/v7-release-gate-hardening
+    paths:
+      - '.github/workflows/_maint-rust-lints-retry.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: chatgpt/v7-release-gate-hardening
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: '1.98.1'
+          components: clippy,rustfmt
+      - name: Reuse reviewed replacements with array fixups
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          from pathlib import Path
+          import os
+
+          workflow = Path('.github/workflows/_maint-rust-lints.yml')
+          lines = workflow.read_text(encoding='utf-8').splitlines()
+          start_marker = "          @'"
+          end_prefix = "          '@ | Set-Content"
+          start = lines.index(start_marker) + 1
+          end = next(i for i in range(start, len(lines)) if lines[i].startswith(end_prefix))
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines[start:end]) + '\n'
+          target = Path(os.environ['RUNNER_TEMP']) / 'fix_lints.py'
+          target.write_text(script, encoding='utf-8', newline='\n')
+          '@ | Set-Content -LiteralPath $env:RUNNER_TEMP\extract_fix.py -Encoding UTF8
+          python $env:RUNNER_TEMP\extract_fix.py
+          python $env:RUNNER_TEMP\fix_lints.py
+
+          $checksumPath = 'native_shell\src\checksum.rs'
+          $checksum = Get-Content -LiteralPath $checksumPath -Raw -Encoding UTF8
+          $checksum = $checksum.Replace('u32::from_le_bytes(part.try_into().unwrap())', 'u32::from_le_bytes(*part)')
+          Set-Content -LiteralPath $checksumPath -Value $checksum -Encoding UTF8 -NoNewline
+
+          $cryptoPath = 'native_shell\src\crypto_lite.rs'
+          $crypto = Get-Content -LiteralPath $cryptoPath -Raw -Encoding UTF8
+          $crypto = $crypto.Replace('u32::from_be_bytes(part.try_into().unwrap())', 'u32::from_be_bytes(*part)')
+          Set-Content -LiteralPath $cryptoPath -Value $crypto -Encoding UTF8 -NoNewline
+      - name: Format and verify Rust Core
+        working-directory: native_shell
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo fmt --all
+          cargo test --locked --lib -- --test-threads=1
+          cargo build --locked --bin HLSDownloaderUpdater
+          cargo clippy --locked --all-targets -- -D warnings -A dead_code -A clippy::large_enum_variant -A clippy::too_many_arguments -A clippy::type_complexity
+      - name: Commit verified cleanup and remove maintenance workflows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/_maint-rust-lints.yml .github/workflows/_maint-rust-lints-retry.yml
+          git add native_shell
+          git commit -m 'refactor: clean Rust 1.98 clippy warnings'
+          git push origin HEAD:chatgpt/v7-release-gate-hardening
