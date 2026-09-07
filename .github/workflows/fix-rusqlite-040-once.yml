@@ -28,42 +28,16 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-
           $path = 'native_shell/src/store.rs'
           $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
-          $old = @'
-    transaction
-        .execute(
-            r#"INSERT INTO tasks(task_id, snapshot_json, created_at_ms, updated_at_ms, event_sequence)
-               VALUES (?1, ?2, ?3, ?3, ?4)
-               ON CONFLICT(task_id) DO UPDATE SET
-                 snapshot_json = excluded.snapshot_json,
-                 updated_at_ms = excluded.updated_at_ms,
-                 event_sequence = excluded.event_sequence"#,
-            params![snapshot.task_id, json, now, sequence],
-        )
-'@
-          $new = @'
-    let sequence = i64::try_from(sequence)
-        .map_err(|_| format!("Core task {} event sequence exceeds SQLite INTEGER range", snapshot.task_id))?;
-    transaction
-        .execute(
-            r#"INSERT INTO tasks(task_id, snapshot_json, created_at_ms, updated_at_ms, event_sequence)
-               VALUES (?1, ?2, ?3, ?3, ?4)
-               ON CONFLICT(task_id) DO UPDATE SET
-                 snapshot_json = excluded.snapshot_json,
-                 updated_at_ms = excluded.updated_at_ms,
-                 event_sequence = excluded.event_sequence"#,
-            params![snapshot.task_id, json, now, sequence],
-        )
-'@
-          if (-not $text.Contains($old)) { throw 'Expected upsert_task SQL block was not found.' }
+          $old = '            params![snapshot.task_id, json, now, sequence],'
+          $new = '            params![snapshot.task_id, json, now, i64::try_from(sequence).map_err(|_| format!("Core task {} event sequence exceeds SQLite INTEGER range", snapshot.task_id))?],'
+          if (-not $text.Contains($old)) { throw 'Expected rusqlite sequence binding was not found.' }
           $text = $text.Replace($old, $new)
           [IO.File]::WriteAllText((Resolve-Path $path), $text, [Text.UTF8Encoding]::new($false))
-
           cargo generate-lockfile --manifest-path presenter_ui/Cargo.toml
           cargo metadata --locked --no-deps --format-version 1 --manifest-path presenter_ui/Cargo.toml | Out-Null
-          cargo fmt --manifest-path native_shell/Cargo.toml --all -- --check
+          cargo fmt --manifest-path native_shell/Cargo.toml --all
           git diff --check
           git diff -- native_shell/src/store.rs presenter_ui/Cargo.lock
 
