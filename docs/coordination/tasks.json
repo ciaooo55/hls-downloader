@@ -2,10 +2,10 @@
   "schema_version": 1,
   "repository": "ciaooo55/hls-downloader",
   "canonical_issue": 39,
-  "updated_at": "2026-09-08T01:45:00+08:00",
+  "updated_at": "2026-09-08T01:52:00+08:00",
   "priority_order": ["P0", "P1", "P2", "P3"],
-  "active_workers": 1,
-  "minimum_unfinished_target": 2,
+  "active_workers": 2,
+  "minimum_unfinished_target": 4,
   "tasks": [
     {
       "id": "HLS-C001",
@@ -51,7 +51,7 @@
         "merge occurs only if the audit passes and required checks are successful"
       ],
       "review_result": "SOURCE_PASS_CHECKS_PENDING",
-      "blocking_checks": ["v7 CI", "v7 Candidate Package", "Rust Security"]
+      "blocking_checks": ["v7 Candidate Package"]
     },
     {
       "id": "HLS-C003",
@@ -116,6 +116,29 @@
         "quick-start material remains concise and learnable",
         "release readiness wording does not imply an unsigned or ungated formal release"
       ]
+    },
+    {
+      "id": "HLS-C007",
+      "title": "Fix v7.0.2 MSI lifecycle version drift in formal release gates",
+      "priority": "P0",
+      "status": "in_progress",
+      "owner": "W0",
+      "role": "worker",
+      "branch": "fix/hls-c007-msi-lifecycle-version",
+      "depends_on": [],
+      "acceptance": [
+        "remove stale literal v7.0.1 assumptions from executable MSI lifecycle acceptance logic and bind candidate MSI version to the candidate manifest/product source of truth",
+        "keep the public v7.0.0 MSI baseline URL and SHA-256 pinned and preserve a real major-upgrade/product-code transition check",
+        "fail closed if candidate manifest product_version and MSI ProductVersion disagree without weakening E:\\h, checkpoint, upgrade, rollback, registration or process-recovery gates",
+        "update stale current-candidate v7.0.1 descriptions or documentation",
+        "add or adjust repository validation that catches future release-version drift without requiring the private signing key and record commands/results in docs/worker-logs/HLS-C007.md",
+        "open a dedicated PR for independent audit before merge"
+      ],
+      "evidence": {
+        "product_version_source": "artifacts/v7-productization/feature-parity.json => 7.0.2",
+        "release_ready": false,
+        "stale_gate": "scripts/verify-v7-msi-lifecycle.ps1 requires manifest/MSI == 7.0.1"
+      }
     }
   ]
 }
