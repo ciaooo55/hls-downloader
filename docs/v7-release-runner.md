@@ -36,7 +36,9 @@ A dispatch from `main` refuses to continue unless the dispatched commit is still
 - `Maintenance Security` at `.github/workflows/maintenance-security.yml`;
 - `Rust Security` at `.github/workflows/rust-security.yml`.
 
-The security workflows emit a push result for every `main` commit, while pull-request execution remains path-filtered. The formal workflow binds both workflow display name and canonical workflow path, requires `event=push`, `head_branch=main`, and the exact `GITHUB_SHA`, so a renamed or duplicate-name workflow cannot silently satisfy the gate. A fresh release requires no existing version tag; a retry may reuse only an annotated tag that resolves to that exact same frozen commit and, when a release already exists, only while that release is still a draft. It then:
+All four required workflows emit a push result for every `main` commit so an exact-SHA formal release can never be stranded by a docs-only or otherwise path-filtered merge. Pull-request execution remains path-filtered to avoid needlessly running heavyweight validation for unrelated PR changes. The formal workflow binds both workflow display name and canonical workflow path, requires `event=push`, `head_branch=main`, and the exact `GITHUB_SHA`, so a renamed or duplicate-name workflow cannot silently satisfy the gate.
+
+A fresh release requires no existing version tag; a retry may reuse only an annotated tag that resolves to that exact same frozen commit and, when a release already exists, only while that release is still a draft. It then:
 
 1. validates all four exact-SHA workflow identities before building release inputs;
 2. builds a fresh candidate from that exact commit;
