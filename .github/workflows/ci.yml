@@ -3,15 +3,6 @@ name: v7 CI
 on:
   push:
     branches: [main]
-    paths:
-      - '.github/workflows/ci.yml'
-      - 'native_shell/**'
-      - 'presenter_ui/**'
-      - 'desktop_ui/**'
-      - 'extension/**'
-      - 'assets/**'
-      - 'artifacts/v7-productization/feature-parity.json'
-      - 'scripts/**'
   pull_request:
     paths:
       - '.github/workflows/ci.yml'
