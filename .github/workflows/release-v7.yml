@@ -111,15 +111,23 @@ jobs:
           corepack prepare pnpm@11.7.0 --activate
           if ((pnpm --version).Trim() -ne '11.7.0') { throw 'pnpm 11.7.0 activation failed.' }
 
-      - name: Bootstrap pinned JDK and FFmpeg
+      - name: Bootstrap pinned JDK
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & .\scripts\bootstrap-v7-toolchain.ps1
+          $PSNativeCommandUseErrorActionPreference = $true
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\bootstrap-v7-toolchain.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $mediaDir = & .\scripts\bootstrap-v7-media-tools.ps1
+
+      - name: Bootstrap pinned FFmpeg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $output = @(& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\bootstrap-v7-media-tools.ps1)
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ([String]::IsNullOrWhiteSpace($mediaDir)) { throw 'FFmpeg bootstrap did not return a media directory.' }
+          $mediaDir = @($output | Where-Object { -not [String]::IsNullOrWhiteSpace($_) }) | Select-Object -Last 1
+          if ([String]::IsNullOrWhiteSpace($mediaDir) -or -not (Test-Path -LiteralPath $mediaDir -PathType Container)) { throw 'FFmpeg bootstrap did not return a valid media directory.' }
           "HLS_V7_FFMPEG_DIR=$mediaDir" >> $env:GITHUB_ENV
           "HLS_V7_PYTHON=$((Get-Command python.exe -ErrorAction Stop).Source)" >> $env:GITHUB_ENV
 
