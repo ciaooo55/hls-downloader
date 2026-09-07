@@ -2,7 +2,7 @@
   "schema_version": 1,
   "repository": "ciaooo55/hls-downloader",
   "canonical_issue": 39,
-  "updated_at": "2026-09-08T01:41:30+08:00",
+  "updated_at": "2026-09-08T01:45:00+08:00",
   "priority_order": ["P0", "P1", "P2", "P3"],
   "active_workers": 1,
   "minimum_unfinished_target": 2,
@@ -36,17 +36,22 @@
       "role": "auditor",
       "branch": "audit/hls-c002-pr38",
       "product_pr": 38,
-      "reviewed_head": "556722c4397e905dfd352dd60bfa03956d453ebd",
-      "superseded_head": "a99582c76e582210264ebc4e2f2761b6a41714f0",
+      "reviewed_head": "8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec",
+      "superseded_heads": [
+        "a99582c76e582210264ebc4e2f2761b6a41714f0",
+        "556722c4397e905dfd352dd60bfa03956d453ebd",
+        "9cb3bba5631ae54b328e4967a1019e758f54039c"
+      ],
       "depends_on": ["HLS-C001"],
       "acceptance": [
         "diff is compared against the stated four-workflow release contract",
-        "exact-SHA and GITHUB_SHA binding are verified from source rather than PR description",
+        "exact workflow identity and SHA binding are verified from source rather than PR description",
         "workflow run conclusions for the PR head are checked",
         "review records PASS or actionable rejection evidence",
         "merge occurs only if the audit passes and required checks are successful"
       ],
-      "review_result": "CURRENT_HEAD_SOURCE_PASS_CHECKS_IN_PROGRESS"
+      "review_result": "SOURCE_PASS_CHECKS_PENDING",
+      "blocking_checks": ["v7 CI", "v7 Candidate Package", "Rust Security"]
     },
     {
       "id": "HLS-C003",
