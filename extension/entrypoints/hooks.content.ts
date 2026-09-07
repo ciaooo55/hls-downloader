@@ -268,7 +268,7 @@ export default defineContentScript({
         responsePrototype.bytes = async function (this: Response) {
           const value = await responseBytes.call(this)
           rememberBufferSource(value, this.url)
-          return value
+          return new Uint8Array(value)
         }
       }
       const responseClone = Response.prototype.clone
