@@ -2,6 +2,12 @@
 
 Windows-first desktop download manager for resilient long-running transfers and native browser handoff.
 
+## Download
+
+The current public test build is **v7.0.1-candidate.1**: https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.1-candidate.1
+
+It includes Windows x64 EXE/MSI installers, a Portable ZIP, Chromium and Firefox extension ZIPs, plus manifest/provenance metadata. Candidate assets are built from the fully successful v7 Candidate Package and their manifest-listed SHA-256 values are rechecked before upload. They are **not** the final Authenticode-signed v7.0.1 stable release; the stable tag remains reserved for the dedicated Windows signing/release runner.
+
 Current v7 capabilities include:
 
 - HTTP/HTTPS downloads with resume, mirrors, per-task request identity and recovery controls.
