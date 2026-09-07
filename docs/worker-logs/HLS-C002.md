@@ -16,7 +16,8 @@
 - Audit branch: `audit/hls-c002-pr38`
 - Product PR under review: #38
 - Superseded heads: `a99582c76e582210264ebc4e2f2761b6a41714f0`, `556722c4397e905dfd352dd60bfa03956d453ebd`, `9cb3bba5631ae54b328e4967a1019e758f54039c`
-- Current head under audit: `8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec`
+- Accepted head: `8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec`
+- Merge commit: `884f628eb264bb63ba7a093c67e700e3bf3d3024`
 
 ## Audit history
 
@@ -30,9 +31,9 @@ At head `9cb3bba...`, the formal workflow correctly required four exact-SHA iden
 
 The worker revised the branch in response instead of merging around the failure.
 
-## Current-head independent source review
+## Accepted-head independent source review
 
-Current PR #38 changes exactly six release-governance files:
+PR #38 at accepted head changes exactly six release-governance files:
 
 - `.github/workflows/ci.yml`
 - `.github/workflows/maintenance-security.yml`
@@ -47,7 +48,7 @@ No generic/local release-gates script is modified.
 
 For all four prerequisite workflows (`v7 CI`, `v7 Candidate Package`, `Maintenance Security`, `Rust Security`), the `main` push trigger no longer has a paths filter. Their pull-request path filters remain in place.
 
-Result: every `main` commit receives a conclusion from all four formal-release prerequisites, including docs-only or release-governance merges, while unrelated PRs do not automatically run heavyweight checks.
+Result: every `main` commit can receive a conclusion from all four formal-release prerequisites, including docs-only or release-governance merges, while unrelated PRs remain path-filtered.
 
 This resolves the pre-existing exact-SHA deadlock where the formal release insisted on current `main` but a path-filtered main commit could lack CI/Candidate results for that exact SHA.
 
@@ -71,23 +72,25 @@ Result: duplicate-name, renamed-path, PR-event, wrong-branch, stale-SHA, missing
 
 ### Local/manual behavior
 
-The latest PR does not modify `scripts/invoke-v7-release-gates.ps1`. GitHub workflow identity policy therefore stays in the GitHub formal workflow rather than leaking into the generic/local gate script.
+The accepted PR does not modify `scripts/invoke-v7-release-gates.ps1`. GitHub workflow identity policy therefore stays in the GitHub formal workflow rather than leaking into the generic/local gate script.
 
 ### Documentation
 
-`docs/v7-release-runner.md` now states that all four prerequisites emit a push result for every `main` commit, explains canonical name/path + push/main/exact-SHA binding, and documents the fail-closed conditions.
+`docs/v7-release-runner.md` states that all four prerequisites emit a push result for every `main` commit, explains canonical name/path + push/main/exact-SHA binding, and documents the fail-closed conditions.
 
-## Current-head workflow evidence
+## Final current-head workflow evidence
 
-For `8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec`, all four expected PR checks are now present:
+The mandatory final refresh was performed immediately before merge against unchanged head `8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec`:
 
 - `Maintenance Security` run #44 — completed / success
-- `v7 CI` run #479 — in progress at last read; Browser extensions and Validate contracts jobs already succeeded, Rust Core/Compose/Presenter still running
-- `v7 Candidate Package` run #127 — in progress at candidate build step
-- `Rust Security` run #18 — in progress at pinned cargo-audit install/audit path
+- `v7 CI` run #479 — completed / success
+- `Rust Security` run #18 — completed / success
+- `v7 Candidate Package` run #127 — completed / success
 
-No current-head failure has been observed, but incomplete checks are not acceptance evidence.
+The same refresh also confirmed PR #38 remained open, non-draft, mergeable, and still contained exactly the six expected files above. No prior-head check result was reused for authorization.
 
 ## Auditor result
 
-**SOURCE PASS / CHECKS PENDING.** The current source contract satisfies HLS-C002 criteria 1, 2, and 4, including resolution of the trigger deadlock identified by audit. Criteria 3 and 5 remain unsatisfied until the same head is refreshed and all four required checks conclude success. Any further head movement invalidates this current-head authorization state and requires another diff/check refresh.
+**PASS.** HLS-C002 acceptance criteria 1–5 are satisfied for exact head `8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec` only. A final PR review and task-registry PASS were posted before merge, then PR #38 was merged with the normal merge method as `884f628eb264bb63ba7a093c67e700e3bf3d3024`, preserving its 11 implementation commits.
+
+This result authorizes the release-security workflow integration only. It does **not** assert formal v7.0.2 release readiness, does not set `release_ready=true`, and does not waive signing, trusted runner, MSI lifecycle, browser, performance, rollback, or other formal release gates. HLS-C003/HLS-C007 continue separately.
