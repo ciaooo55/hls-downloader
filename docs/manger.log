@@ -452,3 +452,78 @@ changes=
   handoff.md routes new participants to C015 then C014 and retains visitor/role/heartbeat/task-registry metadata.
 boundary=Documentation/governance/coordination only; canonical release_ready remains false and no executable release gate or publication state changed.
 decision=Open a dedicated C015 PR, audit its exact final head and changed-file boundary, and merge only if no active FAIL remains.
+
+[2026-09-08T18:08:00+08:00] EVENT=AUDIT task=HLS-C015 pr=#78 auditor=worker-0 result=FAIL_STALE_PROJECT_PLAN
+reviewed_head=05f84711e23eb8299600b5fdc751055b3583bf19
+finding=The intended governance changes were narrow, but docs/architecture/project-plan.md still described HLS-C013 as active and HLS-C014 as next while tasks.json and handoff already routed HLS-C015 active and HLS-C014 waiting.
+action=Rejected the exact head, recorded the FAIL in Issue #39, updated the live project plan on the same task branch, and required a fresh review of the new exact head. The rejected head has no merge authorization.
+
+[2026-09-08T18:10:00+08:00] EVENT=REAUDIT task=HLS-C015 pr=#78 auditor=worker-0 result=PASS_FALLBACK_NO_INDEPENDENT_AUDITOR
+authorized_head=c547b0ed3ef2a4837b27478aada0c996f42bc518
+independent_evidence=
+  PR remained open, non-draft and mergeable on unchanged main@718ee541ce584a4ac229b120a9a478583fc07c0a.
+  Changed files were exactly seven governance/documentation/coordination files, including the corrected live project plan; no product/runtime/workflow/build-script/feature-parity source changed.
+  AGENTS.md now identifies v7.0.2 and canonical feature-parity metadata as version/readiness truth while preserving explicit reviewed readiness plus visual/performance/installer/rollback requirements.
+  formal-release-readiness.md closes the stale current-facing v7.0.1 observation while preserving labeled historical evidence.
+  project-plan.md, tasks.json and handoff now agree on C015 active/C014 waiting and preserve the canonical #39/#40/#41/#42 coordination entry points.
+  manger.log remained append-only.
+  The docs-only PR head had no workflow/status contexts; no PR-CI success was claimed.
+limitation=single active GitHub identity cannot honestly provide an independent self-APPROVE; exact-head PASS was recorded as a COMMENT review under documented fallback.
+
+[2026-09-08T18:11:00+08:00] EVENT=TASK_COMPLETE task=HLS-C015 pr=#78 result=PASS_FALLBACK_NO_INDEPENDENT_AUDITOR
+accepted_head=c547b0ed3ef2a4837b27478aada0c996f42bc518
+merge=d37e8cac666c3ebd7f3c8ffa326a15321ef76185
+note=PR #78 merged with merge method after the rejected-head correction. It changed governance/documentation/coordination only; canonical release_ready remained false and no tag/sign/release/dispatch/publish action occurred.
+
+[2026-09-08T18:12:00+08:00] EVENT=TASK_RESUME task=HLS-C014 priority=P0 owner=worker-0 role=coordinator+auditor+worker
+branch=coord/hls-c014-release-readiness-decision
+base=d37e8cac666c3ebd7f3c8ffa326a15321ef76185
+action=Fast-forwarded the zero-task-commit C014 branch to the post-C015 main merge before implementation. Revalidated that main remained exactly d37e8cac at the baseline checkpoints.
+release_boundary=No readiness metadata was changed merely because C015 merged.
+
+[2026-09-08T18:13:00+08:00] EVENT=READINESS_SEMANTICS task=HLS-C014
+history=
+  v7.0.1 release-ready metadata used release_ready=true with audit_state=v7_0_1_release_specialties_verified.
+  The automated start of the v7.0.2 iteration reset those fields together to release_ready=false and audit_state=v7_0_2_iteration_in_progress while incrementing the canonical product version.
+interpretation=release_ready is a repository lifecycle/governance permission to enter the existing formal package/release gates; it is not proof that trusted runner, browser, MSI lifecycle/rollback, signing, protected-environment, draft-asset or operator-publication gates have already passed.
+proposed_transition=If C014 decision conditions pass, change only release_ready false->true and audit_state v7_0_2_iteration_in_progress->v7_0_2_release_specialties_verified, plus review/coordination documentation.
+
+[2026-09-08T18:18:00+08:00] EVENT=BACKLOG_ADD task=HLS-C016 priority=P0
+status=planned
+owner=unassigned
+depends_on=HLS-C014
+acceptance_criteria=
+  AC1 After accepted C014 merge, freeze that exact merge SHA; predecessor-SHA workflow results are not release evidence.
+  AC2 Require v7 CI, v7 Candidate Package, Maintenance Security and Rust Security completed/success for push/main/exact frozen SHA.
+  AC3 Reconfirm remote main is still identical before eligibility classification.
+  AC4 Confirm canonical v7.0.2 remains 28/28 verified and release_ready=true if C014 authorized the transition.
+  AC5 Do not tag/sign/release/publish/formally dispatch; hand off only to the trusted Windows runner/signing/browser/environment/operator boundary or create a source-fix task on failure.
+  AC6 Keep any post-freeze evidence branch unmerged while that SHA is intended for release, because merging coordination evidence would move main and invalidate the exact-SHA set.
+backlog=active_workers=1; unfinished=HLS-C014,HLS-C016; minimum_unfinished_target=2.
+
+[2026-09-08T18:19:00+08:00] EVENT=STATE_CORRECTION task=HLS-C014
+finding=An intermediate tasks.json commit compressed several already-completed tasks' historical evidence while registering C016.
+correction=The immediately following commit restored the prior machine-readable historical evidence and retained the new C014/C015/C016 state.
+reason=Durable handoff quality must not regress merely to shorten the registry. The intermediate commit remains visible in Git history but is not the intended state.
+
+[2026-09-08T18:20:00+08:00] EVENT=BASELINE_CHECKPOINT task=HLS-C014
+baseline_main=d37e8cac666c3ebd7f3c8ffa326a15321ef76185
+workflow_evidence=
+  v7 CI #527 completed/success.
+  Maintenance Security #70 completed/success.
+  Rust Security #44 completed/success.
+  v7 Candidate Package #175 remained in_progress at Build v7 candidate package; all setup/bootstrap steps before the build had succeeded, with package-size audit/upload pending.
+decision=Do not call the baseline four-workflow PASS and do not change canonical readiness while Candidate #175 is unresolved.
+
+[2026-09-08T18:21:00+08:00] EVENT=FREEZE_PREPARATION task=HLS-C016
+implementation=Pre-initialized docs/worker-logs/HLS-C016.md on the C014 branch before the final release SHA exists. The procedure requires the eventual C014 merge commit itself, fresh four-workflow exact-SHA success, a final main-identical comparison, and Issue/unmerged-branch evidence while the release SHA is frozen.
+reason=Creating/merging a new coordination log only after freeze would self-invalidate the exact SHA that was just audited.
+
+[2026-09-08T18:22:00+08:00] EVENT=PR_OPEN task=HLS-C014 pr=#79 state=DRAFT
+initial_head=ca58bee014cacc37c59066d964316071af6cc76f
+note=Draft PR intentionally exposes decision architecture, worker logs and coordination state while Candidate #175 is unresolved. This head is explicitly NOT audit-ready and must not receive PASS. Canonical release_ready remains false; the head is expected to move if the narrow readiness transition is later authorized.
+
+[2026-09-08T18:28:00+08:00] EVENT=PREREQUISITE_REVIEW task=HLS-C014
+finding=Both v7 CI and v7 Candidate Package pull-request path filters explicitly include artifacts/v7-productization/feature-parity.json.
+consequence=If C014 changes canonical readiness metadata, final PR #79 must receive and pass the applicable exact-head PR workflows; it cannot be reviewed as a docs-only/no-check PR.
+current_state=Candidate #175 on the predecessor main baseline remains unresolved, so no readiness metadata change has been made yet.
