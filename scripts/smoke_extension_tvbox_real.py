@@ -226,6 +226,17 @@ def _is_path_prefix(prefix: list[int], value: list[int]) -> bool:
     return len(prefix) <= len(value) and value[: len(prefix)] == prefix
 
 
+def _actionable_ancestor(nodes: list[dict], target: dict) -> dict | None:
+    target_path = [int(value) for value in target.get("path", [])]
+    actionable = [
+        item
+        for item in nodes
+        if item.get("actions")
+        and _is_path_prefix([int(value) for value in item.get("path", [])], target_path)
+    ]
+    return max(actionable, key=lambda item: len(item.get("path", []))) if actionable else None
+
+
 def select_expected_device(
     *,
     access_bridge_dll: Path,
@@ -242,8 +253,8 @@ def select_expected_device(
     vm_id, root = client.context_from_window(hwnd)
     try:
         deadline = time.monotonic() + 60.0
-        nodes: list[dict] = []
-        target: dict | None = None
+        chosen_target: dict | None = None
+        chosen_action: dict | None = None
         while time.monotonic() < deadline:
             nodes = client.walk(vm_id, root, 5000)
             host_nodes = [
@@ -261,30 +272,33 @@ def select_expected_device(
                 and int((item.get("bounds") or [0, 0, 0, 0])[3]) > 0
             ]
             candidates = host_nodes or label_nodes
-            if len(candidates) == 1:
-                target = candidates[0]
+            resolved: list[tuple[dict, dict, tuple[int, ...]]] = []
+            for target in candidates:
+                action_node = _actionable_ancestor(nodes, target)
+                if action_node is None:
+                    continue
+                action_path = tuple(int(value) for value in action_node.get("path", []))
+                resolved.append((target, action_node, action_path))
+            action_paths = {item[2] for item in resolved}
+            if len(action_paths) == 1 and resolved:
+                chosen_target, chosen_action, _ = max(
+                    resolved,
+                    key=lambda item: len(item[0].get("path", [])),
+                )
                 break
+            if len(action_paths) > 1:
+                raise RuntimeError(
+                    f"Receiver accessibility identity is ambiguous for {expected_host}/{label}: paths={sorted(action_paths)}"
+                )
             client.dll.releaseJavaObject(vm_id, root)
             client.pump_messages()
             time.sleep(0.1)
             vm_id, root = client.context_from_window(hwnd)
-        if target is None:
+        if chosen_target is None or chosen_action is None:
             raise RuntimeError(
-                f"Expected exactly one visible accessibility node for receiver {expected_host}/{label}"
+                f"No actionable accessibility identity appeared for receiver {expected_host}/{label}"
             )
-        target_path = [int(value) for value in target.get("path", [])]
-        actionable = [
-            item
-            for item in nodes
-            if item.get("actions")
-            and _is_path_prefix([int(value) for value in item.get("path", [])], target_path)
-        ]
-        if not actionable:
-            raise RuntimeError(
-                f"Receiver node has no actionable accessibility ancestor: target={target}"
-            )
-        action_node = max(actionable, key=lambda item: len(item.get("path", [])))
-        action_path = [int(value) for value in action_node.get("path", [])]
+        action_path = [int(value) for value in chosen_action.get("path", [])]
         context, owned = client.resolve_path(vm_id, root, action_path)
         try:
             invoked = client.invoke(vm_id, context, None)
@@ -296,8 +310,8 @@ def select_expected_device(
             "window": {"hwnd": hwnd, "title": title, "vm_id": vm_id},
             "receiver_label": label,
             "receiver_host": expected_host,
-            "matched_node": target,
-            "action_node": action_node,
+            "matched_node": chosen_target,
+            "action_node": chosen_action,
             "action": invoked,
         }
     finally:
