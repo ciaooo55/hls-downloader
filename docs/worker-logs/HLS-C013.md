@@ -2,7 +2,8 @@
 
 ## Audit boundary
 
-- Role: auditor fallback (`worker-0`; no independent worker currently active)
+- Evidence owner / initial auditor fallback: `worker-0`.
+- Independent final auditor: `worker-1`, re-declared and joined HLS-C013 before final classification.
 - Frozen main SHA: `1c93cffe5fa5d884b07531d211a79f8b6d54b8ea`
 - Audit branch: `audit/hls-c013-final-readiness`
 - Audit is evidence-only. It does not change `release_ready`, product/runtime code, workflows, tags, releases, signing state or publication state.
@@ -65,6 +66,14 @@ For `main@1c93cffe5fa5d884b07531d211a79f8b6d54b8ea`, the final exact-SHA refresh
 - `Rust Security` #42 — **SUCCESS**.
 
 The initial audit capture observed Candidate #173 while it was still running; this final refresh supersedes that preliminary state. A separate compare of `1c93cffe5fa5d884b07531d211a79f8b6d54b8ea...main` returned `identical` after Candidate #173 completed, proving the frozen audit SHA had not moved before classification.
+
+## Independent audit handoff
+
+The task began under the repository's single-participant auditor fallback because only `worker-0` was active at initial capture. Before final classification, `worker-1` re-declared in role issue #40 and joined HLS-C013 as an independent auditor without writing to the evidence-owner branch.
+
+`worker-1` independently re-checked the frozen `main` SHA, the four exact-SHA main/push workflow results, Candidate #173 job/artifact binding, canonical v7.0.2 / `release_ready=false` state, formal package gates, and the merged C009/C010/C011 security boundaries. The durable result in task registry issue #39 is `AUDIT_RESULT HLS-C013 auditor=worker-1 result=PASS_SOURCE / DELIVERY_UPDATE_REQUIRED`: source/CI readiness passed, with the only delivery correction being to replace the now-stale fallback-only role statement with this independent-review record.
+
+This section closes that delivery correction. The final PASS therefore no longer relies solely on the fallback auditor's own implementation/evidence claims.
 
 ## External trust boundary
 
