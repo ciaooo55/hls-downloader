@@ -875,9 +875,9 @@ fn parse_core_bind(raw: Option<&str>) -> Result<std::net::SocketAddr, String> {
     Ok(addr)
 }
 
-pub fn default_core_bind() -> Result<std::net::SocketAddr, String> {
+pub fn default_core_bind() -> std::net::SocketAddr {
     let configured = std::env::var("HLS_V7_CORE_BIND").ok();
-    parse_core_bind(configured.as_deref())
+    parse_core_bind(configured.as_deref()).unwrap_or_else(|error| panic!("{error}"))
 }
 
 pub fn serve_tcp_listener(
@@ -1013,7 +1013,7 @@ impl CoreIpcClient {
                 thread::sleep(Duration::from_millis(10).min(remaining));
             }
         }
-        Self::connect_addr(default_core_bind()?)
+        Self::connect_addr(default_core_bind())
     }
 
     #[cfg(windows)]
