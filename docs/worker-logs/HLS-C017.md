@@ -65,4 +65,10 @@ C017 is intentionally split across narrow commits so reviewers can audit each du
 
 Boundary check: these commits touch only coordination/documentation surfaces. They do not modify root `AGENTS.md` (the accepted PR #78 fix is preserved from main), product/runtime code, workflows, build scripts, feature-parity metadata, `release_ready`, tags, releases, signing, dispatch or publication.
 
-Implementation is ready to be proposed as a dedicated main PR. After the PR number is known, machine state will move from `in_progress` to protocol state `review` and this log will record the final review head. Those final metadata commits will invalidate any earlier review; worker-0 must review only the final exact head.
+### 2026-09-08T18:32-18:34+08:00 — PR and review handoff
+
+- Dedicated PR #80 opened against exact base `main@d37e8cac666c3ebd7f3c8ffa326a15321ef76185`.
+- The PR initially reported a transient `mergeable=false` during creation; refresh showed `mergeable=true` while main remained unchanged. Draft PR #79 for paused C014 did not move main.
+- Commit `723ed2da6bf9b489c7a542d962e6b590b12ab449` registered PR #80 and moved HLS-C017 from `in_progress` to protocol state `review` with `worker-0` as requested auditor.
+- This worker-log commit is the final intended implementation write. After it lands, the branch is frozen and the resulting exact PR head is the only head eligible for audit.
+- No review on an older head authorizes merge. worker-0 must independently compare the final PR diff/state with AC1-AC8 and confirm main/base stability before PASS.
