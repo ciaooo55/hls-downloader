@@ -23,6 +23,10 @@ if ($desktopShell.Count -eq 0) {
     throw "Installed-browser media-push validation requires an Explorer desktop in the current Windows session $sessionId. Start the hls-release runner from the logged-in release user's desktop, not as a Windows service."
 }
 
+# Callers may also inspect LASTEXITCODE after invoking this PowerShell script.
+# A successful .ps1 invocation does not inherently reset a stale native-process
+# exit code, so normalize it explicitly; failures throw before reaching here.
+$global:LASTEXITCODE = 0
 Write-Output ([ordered]@{
     schema = 1
     passed = $true
