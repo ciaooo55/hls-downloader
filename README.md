@@ -4,9 +4,9 @@ Windows-first desktop download manager for resilient long-running transfers and 
 
 ## Download
 
-The current public test build is **v7.0.1-candidate.1**: https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.1-candidate.1
+The latest **published** public test package is the historical **v7.0.1-candidate.1** prerelease: https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.1-candidate.1
 
-It includes Windows x64 EXE/MSI installers, a Portable ZIP, Chromium and Firefox extension ZIPs, plus manifest/provenance metadata. Candidate assets are built from the fully successful v7 Candidate Package and their manifest-listed SHA-256 values are rechecked before upload. They are **not** the final Authenticode-signed v7.0.1 stable release; the stable tag remains reserved for the dedicated Windows signing/release runner.
+That prerelease contains Windows x64 EXE/MSI installers, a Portable ZIP, Chromium and Firefox extension ZIPs, plus manifest/provenance metadata. It was built from the v7.0.1 candidate line and does **not** represent the current `main` source. The active source/candidate version is now **7.0.2**. Canonical `artifacts/v7-productization/feature-parity.json` currently declares `release_ready=false`, so no v7.0.2 formal public release is authorized yet. Candidate builds may still be produced for validation; the signed formal package remains gated by the dedicated release workflow and controlled Windows signing runner.
 
 Current v7 capabilities include:
 
@@ -30,7 +30,7 @@ Python, React, Tauri, WebView2 and the v6 Win32 supervisor are not part of the a
 
 `HLSDownloader.exe` never opens SQLite. It sends versioned commands to the single Rust Core over `\\.\pipe\HLSDownloader.v7`. The Native Messaging host and native presenter connect to the same Core. Closing Compose, the browser or the player does not stop active downloads.
 
-The product version is `7.0.2`. `7.0.2` is the active development iteration; formal release readiness remains gated by fresh release evidence. `main` contains the complete active v7 source while historical implementations remain in Git tags. The existing `v7.0.0` release remains immutable; new release evidence and artifacts bind to `v7.0.1`.
+The product version is `7.0.2`. `7.0.2` is the active development iteration; formal release readiness remains gated by fresh release evidence and `release_ready=true`. `main` contains the complete active v7 source while historical implementations and prior candidates remain immutable references. The public `v7.0.0` release remains an upgrade baseline, and `v7.0.1-candidate.1` remains a historical test prerelease. New candidate/evidence/formal artifacts must resolve and bind the current canonical `7.0.2` version rather than inheriting the old v7.0.1 literal.
 
 ## Build And Test
 
@@ -57,7 +57,7 @@ Use `scripts\build-v7.ps1 -Task test` for the integrated local gate and `pwsh -N
 
 Project build/tool caches default to `.tool-cache\build-cache`. Set `HLS_V7_BUILD_CACHE` to an **absolute** alternate cache root when the repository path or disk layout requires relocation; `bootstrap-v7-toolchain.ps1`, `build-v7.ps1` and `cleanup-v7-build-cache.ps1` all resolve and use that same root, and reject an ambiguous relative override. On Windows, the canonical build script temporarily maps the selected cache root to an ASCII drive path for Compose/jlink and removes the mapping on exit. The bootstrap pins Eclipse Temurin JDK `21.0.12.1+1` for Windows x64 and verifies the official archive SHA-256 before extraction; it never follows Adoptium's moving `latest` endpoint. Source CI pins Rust `1.98.1`, Node.js `24.20.0` and pnpm `11.7.0`; the Gradle wrapper pins the `9.7.1` distribution together with its official SHA-256 so release builds do not silently follow mutable toolchain inputs. Set `HLS_V7_JAVA_HOME` only to override the JDK 21 inside that cache, and `HLS_V7_PYTHON` for optional smoke tooling. Candidate and formal packaging source media tools from one verified FFmpeg directory. The shipped runtime requires `ffmpeg.exe` and `ffprobe.exe`; `ffplay.exe` remains part of the pinned upstream tool bundle used during bootstrap verification but is not shipped because local playback uses bundled libmpv. The ignored `desktop_ui\resources\common` staging directory is recreated for every package build and removed afterward so stale local binaries cannot leak into a later artifact.
 
-Generated packages, test reports, runtime data and build caches are ignored by Git. `artifacts/v7-productization/feature-parity.json` is the sole machine-readable v3/v5/v6-to-v7 feature contract; validate it with `scripts\verify-v7-feature-parity.ps1`. See `docs/v7-verification.md` for measured results and remaining formal release gates.
+Generated packages, test reports, runtime data and build caches are ignored by Git. `artifacts/v7-productization/feature-parity.json` is the sole machine-readable v3/v5/v6-to-v7 feature contract; validate it with `scripts\verify-v7-feature-parity.ps1`. See `docs/v7-verification.md` for historical measured evidence and the pointers to the current formal release gates; use `docs/architecture/formal-release-readiness.md` and `docs/v7-release-runner.md` for current release guidance.
 
 ## Source History
 
