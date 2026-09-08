@@ -885,6 +885,14 @@ pub fn serve_tcp_listener(
     stop: Arc<AtomicBool>,
     handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync>,
 ) -> Result<(), String> {
+    let local_addr = listener
+        .local_addr()
+        .map_err(|error| format!("Core listener address: {error}"))?;
+    if !local_addr.ip().is_loopback() {
+        return Err(format!(
+            "v7 Core TCP listener requires loopback, got {local_addr}"
+        ));
+    }
     listener
         .set_nonblocking(true)
         .map_err(|error| format!("Core listener nonblocking: {error}"))?;
@@ -1228,6 +1236,21 @@ mod tests {
             );
         }
         assert!(parse_core_bind(Some("not-an-address")).is_err());
+    }
+
+    #[test]
+    fn prebound_non_loopback_listener_is_rejected_at_server_boundary() {
+        let listener = TcpListener::bind("0.0.0.0:0").unwrap();
+        assert!(!listener.local_addr().unwrap().ip().is_loopback());
+        let stop = Arc::new(AtomicBool::new(true));
+        let handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> =
+            Arc::new(|_| CorePipeResponse::Error {
+                request_id: None,
+                code: "test".into(),
+                message: "test".into(),
+            });
+        let error = serve_tcp_listener(listener, stop, handler).unwrap_err();
+        assert!(error.contains("loopback"), "unexpected error: {error}");
     }
 
     #[cfg(windows)]
