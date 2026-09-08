@@ -297,3 +297,32 @@ implementation=
   Preserved the existing default_core_bind public return type to avoid unrelated Core server API churn; explicit invalid/non-loopback configuration fails closed.
   No named-pipe code is changed.
 decision=PR #67 opened. Do not merge until current-head CI compiles/runs the Rust path and independent exact-head diff review passes.
+
+[2026-09-08T15:36:00+08:00] EVENT=RETROSPECTIVE_SECURITY_CLOSEOUT tasks=HLS-C009,HLS-C010,HLS-C011
+note=The manager log had not been updated after the initial C010 checkpoint; the following entries record already-verified GitHub outcomes without rewriting the earlier timeline.
+C009=PR #68 accepted exact head 6623b534b3b298a237b4f8feea7ade286f9827fe; merged acb6969bdeaaa1a7b96b30d5daa06772e0a35de9; runtime automatic update signer is bound to the formal project signer plus explicit source-controlled rollover identities; merged-main four prerequisite workflows passed.
+C010=PR #67 accepted exact head 047b7815a52de6008d9e281d895ea589aa5c0376; merged 125d146ad10971628019f02a688f0f27cf9468ac; config/client/actual pre-bound server listener all enforce loopback; merged-main v7 CI #515, Candidate #163, Maintenance Security and Rust Security passed.
+C011=PR #69 accepted exact head 05ad6e52da0641cbdf73479dde3be8fe6e4015af; merged 6b5f596325a4b00758ccd062b92eaeb80b0256ee; cross-origin replay-owned custom headers are removed before exact target-origin context restoration; exact-head v7 CI #521/Candidate #169 passed and merged-main v7 CI #522/Candidate #170/Maintenance #65/Rust Security #39 all passed.
+
+[2026-09-08T15:37:00+08:00] EVENT=WORKER_TIMEOUT worker=worker-1
+last_heartbeat=2026-09-08T06:02:08Z
+comparison_heartbeat=worker-0@2026-09-08T07:08:24Z
+finding=Exact GitHub timestamps prove a gap greater than 66 minutes, exceeding the 5-minute lost-worker threshold. No later worker-1 heartbeat was present when reassignment occurred.
+action=worker-1 marked inactive; HLS-C008 reassigned with zero worker commits on its branch; returning worker-1 must redeclare/heartbeat before receiving work.
+
+[2026-09-08T15:38:00+08:00] EVENT=DOCUMENTATION_CLOSEOUT tasks=HLS-C006,HLS-C008
+C006=PR #70 exact head 97e59b14d646e2dd57ca3017b166c507fabdc8f3 merged adf74c30d9936214b060d062f56813c879ca5ee2 under no-independent-auditor fallback; README now distinguishes historical public v7.0.1-candidate.1 from active 7.0.2/release_ready=false and matches current candidate/formal build semantics.
+C008=PR #72 final exact head 060a51d1e605381de24a017e8f1c4370b06d22d4 merged 7e40cd509a5cc49bc887d1814199b9f5a810326c under no-independent-auditor fallback; current-facing release/branch/install docs now follow canonical 7.0.2 while preserving v7.0.1 measurements/hashes/candidate as historical evidence.
+audit_note=C008 audit was restarted after its head moved from 9923173cce559e377fc8da0f544a5db221b41f61 to 060a51d1e605381de24a017e8f1c4370b06d22d4; the extra commit corrected formal workflow gate ordering and the new exact head was reviewed from scratch.
+
+[2026-09-08T15:39:00+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C012 priority=P2 owner=worker-0 role=coordinator+worker
+branch=coord/hls-c012-state-sync
+acceptance=Synchronize tasks.json, handoff.md, manager log and C012 worker log with actual C009-C011/C006/C008 outcomes; coordination-only; no release_ready/product/gate changes.
+
+[2026-09-08T15:39:30+08:00] EVENT=ROUTE_DECISION
+current_main=7e40cd509a5cc49bc887d1814199b9f5a810326c
+active_workers=1
+unfinished_tasks=HLS-C012,HLS-C013
+minimum_unfinished_target=2
+decision=Merge reviewed C012 coordination-only state first. Then freeze the resulting new main SHA for HLS-C013 and require all four exact-SHA main-push workflows before final source-readiness classification. Intermediate workflow results on 7e40cd5 are useful integration evidence but cannot replace the later C012-merge SHA required by C013.
+release_boundary=feature-parity remains release_ready=false; no tag/release/publish action is authorized.
