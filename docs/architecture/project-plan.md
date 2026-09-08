@@ -10,8 +10,8 @@ This plan is the live coordinator route. Historical implementation detail remain
 - PR #75 merged C013 evidence to main as `718ee541ce584a4ac229b120a9a478583fc07c0a` before worker-1 exact-head delivery PASS while a durable delivery changes-required finding remained active. Treat this as a process deviation, not as invalidation of the independently reproduced source evidence.
 - HLS-C015 is canonically the live governance/AGENTS drift fix. PR #78 head `c547b0ed3ef2a4837b27478aada0c996f42bc518` merged as current main `d37e8cac666c3ebd7f3c8ffa326a15321ef76185`; root `AGENTS.md` now correctly identifies active v7.0.2 and related formal-readiness wording is reconciled. worker-1 independently audited the merged seven-file technical boundary and found no product/release-state change.
 - PR #78 also merged under fallback review while worker-1 was active and left stale/invalid collaboration metadata. In parallel, worker-1 and worker-0 collided on HLS-C015/HLS-C016 meanings and a racing heartbeat refresh caused a false worker-0 timeout classification.
-- HLS-C017 is therefore the only active P0 task. It reconciles those collaboration-state races without reverting the technically valid PR #78 changes or touching `release_ready`.
-- HLS-C014 has preserved docs/coordination work on branch `coord/hls-c014-release-readiness-decision`. It is paused behind C017; no C014 merge is authorized from the stale pre-C017 base.
+- HLS-C017 is therefore the only active P0 task. It reconciles those collaboration-state races without reverting the technically valid PR #78 changes or touching `release_ready` on main.
+- HLS-C014 is paused behind C017, but its draft PR #79 was concurrently advanced to head `7daf403e02fad14424c9243521f868d78799f9e8` (15 commits) and its unmerged branch now contains a proposed `release_ready=true` transition. Current main remains `release_ready=false`. Treat #79 only as preserved draft evidence; after C017 it must be rebased/re-reviewed from the new main and cannot be merged from its stale base.
 - Canonical HLS-C016 is the post-C014 exact-final-main-SHA verification/handoff task. The earlier worker-1 proposal to use C016 for AGENTS drift is cancelled/superseded because HLS-C015/PR #78 already completed that work.
 
 ## Route principles
@@ -90,7 +90,7 @@ worker-1 owns C017 implementation. worker-0 was the requested independent audito
 
 ## Next phase — HLS-C014 explicit readiness decision
 
-After C017 is accepted and merged, rebase or recreate the preserved C014 work from the new main baseline. Reuse only evidence that remains correct after rebase; do not blindly merge the stale branch.
+After C017 is accepted and merged, rebase or recreate the preserved C014 work from the new main baseline. Reuse only evidence that remains correct after rebase; do not blindly merge the current draft branch, which already contains an unmerged readiness transition from the stale base.
 
 C014 must independently revalidate source/governance evidence and then make one explicit decision:
 
