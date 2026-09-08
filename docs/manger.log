@@ -326,3 +326,70 @@ unfinished_tasks=HLS-C012,HLS-C013
 minimum_unfinished_target=2
 decision=Merge reviewed C012 coordination-only state first. Then freeze the resulting new main SHA for HLS-C013 and require all four exact-SHA main-push workflows before final source-readiness classification. Intermediate workflow results on 7e40cd5 are useful integration evidence but cannot replace the later C012-merge SHA required by C013.
 release_boundary=feature-parity remains release_ready=false; no tag/release/publish action is authorized.
+
+[2026-09-08T17:43:00+08:00] EVENT=ROLE_REENTRY
+coordinator=worker-0
+auditor=worker-0
+workers=worker-0
+role_issue=#40
+heartbeat_issue=#41
+reason=user assigned coordinator role and no independent auditor/worker is currently available; worker-0 explicitly redeclared all three fallback roles instead of freezing the conversation.
+
+[2026-09-08T17:44:00+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C013 priority=P2 owner=worker-0 role=coordinator+auditor+worker
+branch=audit/hls-c013-final-readiness
+frozen_main=1c93cffe5fa5d884b07531d211a79f8b6d54b8ea
+acceptance_criteria=
+  AC1 Audit current main after C012 against the executable exact-SHA formal-release prerequisites.
+  AC2 Keep canonical release_ready=false and separate reproducible source/CI blockers from trusted runner/signing/browser/environment/operator prerequisites.
+  AC3 Verify v7 CI, v7 Candidate Package, Maintenance Security and Rust Security are completed/success for push/main/exact frozen SHA before any source-ready classification.
+  AC4 Perform no tag/release/publish action and weaken no formal release or package gate.
+  AC5 Record either an actionable source-fix route or a clear governance/external-gate handoff.
+takeover_note=The shared C013 branch already contained one preliminary evidence-log commit captured while Candidate #173 was running. Preserve that handoff and append/finalize evidence rather than discarding concurrent work.
+
+[2026-09-08T17:45:00+08:00] EVENT=POST_MERGE_RECONCILIATION task=HLS-C012 pr=#73 result=PASS_FALLBACK_NO_INDEPENDENT_AUDITOR
+accepted_head=777886d29650caad03712f8bbb180dddc3f32f91
+merge=1c93cffe5fa5d884b07531d211a79f8b6d54b8ea
+finding=C012 durable coordination-state PR is merged; its merge SHA is therefore the correct HLS-C013 frozen audit source.
+
+[2026-09-08T17:46:00+08:00] EVENT=AUDIT_CHECKPOINT task=HLS-C013 state=READY_FOR_EXACT_HEAD_REVIEW
+frozen_main=1c93cffe5fa5d884b07531d211a79f8b6d54b8ea
+independent_evidence=
+  Canonical feature parity is v7.0.2 with 28/28 verified, 0 partial, 0 blocked, but release_ready=false.
+  Frozen build-v7.ps1 formal packaging invokes RequireCanonicalComplete + RequireReleaseReady + RequireCleanWorktree + ReleaseEvidence.
+  Frozen verify-v7-feature-parity.ps1 independently rejects formal packaging when release_ready is not true and separately requires canonical 28/28 completeness.
+  Frozen release-v7.yml still binds all four prerequisite workflow results to canonical workflow name/path + push + main + exact GITHUB_SHA and retains current-main rechecks, trusted runner/browser/signing and explicit publish gates.
+  main@1c93cffe has v7 CI #525 success, Candidate #173 success, Maintenance Security #68 success and Rust Security #42 success.
+  Final compare of 1c93cffe...main is identical after Candidate #173 completed.
+  Compare from accepted HLS-C011 merge 6b5f596... through frozen main changes only README/release documentation/worker logs/coordination files; no product/runtime/workflow/script/feature-parity source was rewritten.
+classification=source_ci_contract_clean_formal_publication_still_blocked
+release_boundary=release_ready=false remains intentionally unchanged; no tag/release/publish/signing action was taken.
+
+[2026-09-08T17:47:00+08:00] EVENT=BACKLOG_ADD task=HLS-C014 priority=P0
+owner=unassigned
+role=coordinator+auditor
+depends_on=HLS-C013
+acceptance_criteria=
+  AC1 Revalidate accepted C013 evidence and canonical 28/28 completeness independently.
+  AC2 Make an explicit reviewed governance decision whether release_ready may transition to true; if not, record the concrete blocker rather than fabricating external evidence.
+  AC3 If authorized, change readiness state only in a narrow reviewable task and preserve all formal gates.
+  AC4 After the final reviewed merge, freeze the resulting main SHA and require four fresh push/main/exact-SHA prerequisite successes before formal dispatch.
+  AC5 Never tag, sign, release or publish without trusted runner/signing/browser/environment controls and explicit operator authorization.
+reason=C013 is evidence-only and is explicitly forbidden to convert green CI into release authorization. The remaining repository-level policy gate therefore needs its own auditable decision task.
+
+[2026-09-08T17:48:00+08:00] EVENT=ROUTE_DECISION
+active_workers=1
+unfinished_tasks=HLS-C013,HLS-C014
+minimum_unfinished_target=2
+decision=Finish exact-head review of the documentation/coordination-only C013 branch. If accepted, merge through PR only; do not write directly to main. Then C014 becomes the next P0 task. Any C014 merge creates a new prospective release SHA and requires a fresh four-workflow exact-SHA set before trusted formal-release dispatch.
+
+[2026-09-08T17:49:00+08:00] EVENT=IMPLEMENTATION_CHECKPOINT task=HLS-C013
+branch=audit/hls-c013-final-readiness
+changes=
+  Finalized docs/worker-logs/HLS-C013.md after Candidate #173 success and frozen-main refresh.
+  Added docs/architecture/v7-final-readiness-audit.md.
+  Reconciled tasks.json from C012 completion into C013 ready_for_review and added planned C014.
+  Routed handoff.md to C013 review/C014 decision and retained visitor/role/heartbeat/task-registry issue metadata at the top.
+  Replanned docs/architecture/project-plan.md around the final readiness decision rather than stale earlier active phases.
+  Appended this manager-log sequence without deleting earlier process-deviation history.
+boundary=No product/runtime/workflow/build-script/feature-parity/tag/release/publish change is part of HLS-C013.
+decision=Open a dedicated PR and audit its exact head/diff plus machine-readable registry validity before merge authorization.
