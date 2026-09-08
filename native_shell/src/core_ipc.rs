@@ -859,13 +859,25 @@ pub fn hello_request() -> CorePipeRequest {
 }
 
 pub const V7_TCP_PORT: u16 = 18765;
-pub fn default_core_bind() -> std::net::SocketAddr {
-    if let Ok(raw) = std::env::var("HLS_V7_CORE_BIND") {
-        if let Ok(addr) = raw.parse() {
-            return addr;
-        }
+
+fn parse_core_bind(raw: Option<&str>) -> Result<std::net::SocketAddr, String> {
+    let addr = match raw {
+        Some(raw) => raw
+            .parse::<std::net::SocketAddr>()
+            .map_err(|error| format!("HLS_V7_CORE_BIND is invalid: {error}"))?,
+        None => std::net::SocketAddr::from(([127, 0, 0, 1], V7_TCP_PORT)),
+    };
+    if !addr.ip().is_loopback() {
+        return Err(format!(
+            "HLS_V7_CORE_BIND must use a loopback address, got {addr}"
+        ));
     }
-    std::net::SocketAddr::from(([127, 0, 0, 1], V7_TCP_PORT))
+    Ok(addr)
+}
+
+pub fn default_core_bind() -> Result<std::net::SocketAddr, String> {
+    let configured = std::env::var("HLS_V7_CORE_BIND").ok();
+    parse_core_bind(configured.as_deref())
 }
 
 pub fn serve_tcp_listener(
@@ -938,6 +950,9 @@ impl IpcTransport {
 
 impl CoreIpcClient {
     pub fn connect_addr(addr: std::net::SocketAddr) -> Result<Self, String> {
+        if !addr.ip().is_loopback() {
+            return Err(format!("v7 Core TCP client requires loopback, got {addr}"));
+        }
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
             match TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
@@ -998,7 +1013,7 @@ impl CoreIpcClient {
                 thread::sleep(Duration::from_millis(10).min(remaining));
             }
         }
-        Self::connect_addr(default_core_bind())
+        Self::connect_addr(default_core_bind()?)
     }
 
     #[cfg(windows)]
@@ -1182,6 +1197,34 @@ mod tests {
                 version: V7_PROTOCOL_VERSION,
             }
         );
+    }
+
+    #[test]
+    fn core_bind_accepts_only_loopback_ipv4_and_ipv6() {
+        assert_eq!(
+            parse_core_bind(None).unwrap(),
+            std::net::SocketAddr::from(([127, 0, 0, 1], V7_TCP_PORT))
+        );
+        for raw in ["127.0.0.1:18765", "127.42.0.9:4567", "[::1]:18765"] {
+            let addr = parse_core_bind(Some(raw)).unwrap();
+            assert!(addr.ip().is_loopback(), "expected loopback: {raw}");
+        }
+    }
+
+    #[test]
+    fn core_bind_rejects_wildcard_lan_and_public_addresses() {
+        for raw in [
+            "0.0.0.0:18765",
+            "[::]:18765",
+            "192.168.1.25:18765",
+            "10.0.0.25:18765",
+            "203.0.113.7:18765",
+            "[2001:db8::7]:18765",
+        ] {
+            let error = parse_core_bind(Some(raw)).unwrap_err();
+            assert!(error.contains("loopback"), "unexpected error for {raw}: {error}");
+        }
+        assert!(parse_core_bind(Some("not-an-address")).is_err());
     }
 
     #[cfg(windows)]
