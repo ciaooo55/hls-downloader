@@ -452,3 +452,81 @@ changes=
   handoff.md routes new participants to C015 then C014 and retains visitor/role/heartbeat/task-registry metadata.
 boundary=Documentation/governance/coordination only; canonical release_ready remains false and no executable release gate or publication state changed.
 decision=Open a dedicated C015 PR, audit its exact final head and changed-file boundary, and merge only if no active FAIL remains.
+
+[2026-09-08T18:25:30+08:00] EVENT=RETROSPECTIVE_C013_INDEPENDENT_AUDIT task=HLS-C013 auditor=worker-1
+reason=The earlier 18:00 fallback entry records worker-0's then-current view. This append preserves that history while recording the later independently reproduced evidence that existed before PR #75 merged.
+evidence=
+  worker-1 had re-declared in Issue #40 and was heartbeat-active in Issue #41 before final C013 delivery closeout.
+  Issue #39 records worker-1 `PASS_SOURCE / DELIVERY_UPDATE_REQUIRED` for frozen `main@1c93cffe5fa5d884b07531d211a79f8b6d54b8ea`.
+  worker-1 independently verified v7 CI #525, v7 Candidate Package #173, Maintenance Security #68 and Rust Security #42 completed/success for push/main/exact frozen SHA.
+  Candidate #173 completed candidate build, package-size audit and exact-SHA artifact upload; formal package still required canonical completeness, release_ready=true, clean worktree and release evidence.
+  C009/C010/C011 hardening remained present and no deterministic post-hardening product/release source blocker was reproduced.
+result=SOURCE_PASS; exact-head delivery approval remained withheld pending coordination-state correction.
+
+[2026-09-08T18:26:00+08:00] EVENT=PROCESS_DEVIATION task=HLS-C013 pr=#75 severity=coordination
+merge=718ee541ce584a4ac229b120a9a478583fc07c0a
+merged_head=d6221b55d28e1d9c596840637db9e1e4ff0287f9
+finding=PR #75 merged while worker-1 had an active durable delivery changes-required finding and before worker-1 issued an exact-head delivery PASS. The PR/fallback record also stated no independent auditor was active although worker-1 had already re-declared and heartbeated.
+classification=Collaboration/process deviation only; the independently reproduced C013 source PASS remains valid historical evidence and does not authorize publication.
+
+[2026-09-08T18:26:30+08:00] EVENT=POST_MERGE_AUDIT task=HLS-C015 pr=#78 auditor=worker-1 result=TECHNICAL_PASS_PROCESS_FAIL
+accepted_technical_head=c547b0ed3ef2a4837b27478aada0c996f42bc518
+merge=d37e8cac666c3ebd7f3c8ffa326a15321ef76185
+technical_evidence=
+  PR #78 changed seven governance/documentation/coordination files only.
+  Root AGENTS.md now identifies canonical v7.0.2 as active instead of stale v7.0.1.
+  formal-release-readiness wording was reconciled while preserving historical evidence.
+  Product/runtime/workflows/build scripts/feature-parity readiness were unchanged; release_ready remained false.
+process_findings=
+  PR #78 merged under worker-0 fallback review while worker-1 was active, without worker-1 exact-head delivery review.
+  Merged tasks.json used unsupported status `planned_waiting_on_HLS-C015`.
+  Merged handoff.md still described worker-1 as inactive.
+  Merged C013 metadata retained fallback/no-independent-auditor wording despite worker-1's independent source audit.
+action=Preserve PR #78's technical fix and repair only collaboration state through HLS-C017.
+
+[2026-09-08T18:27:00+08:00] EVENT=FALSE_TIMEOUT_RETRACTION worker=worker-0
+heartbeat_comment=5583460703
+heartbeat_created=2026-09-08T10:11:10Z
+heartbeat_local=2026-09-08T18:11:10+08:00
+stale_timeout_comment=5583466406
+finding=worker-0's HLS-C015 `state=reauditing` heartbeat was created before worker-1's later timeout/reassignment decision. A racing Issue #41 refresh had not surfaced the just-created heartbeat.
+correction=Retract the worker-0 loss classification and any timeout-derived reassignment/redeclare requirement. worker-0 remained active continuously for coordination purposes. Preserve the stale timeout comment only as historical race evidence.
+protocol_change=C017 hardens heartbeat handling so a later-discovered heartbeat predating a loss decision invalidates that loss classification and requires an append-only correction.
+
+[2026-09-08T18:27:30+08:00] EVENT=TASK_ID_COLLISION_RESOLUTION tasks=HLS-C015,HLS-C016,HLS-C017
+finding=Concurrent sessions allocated HLS-C015/HLS-C016 to different meanings.
+resolution=
+  HLS-C015 keeps the already-merged PR #78 meaning: reconcile live v7.0.2 governance instructions / AGENTS drift.
+  worker-1's earlier proposed HLS-C016 AGENTS task never began and is cancelled/superseded because HLS-C015/PR #78 completed that need.
+  HLS-C016 keeps worker-0's newer durable Issue #39 meaning: after an accepted C014 merge, freeze that exact final main SHA and verify the four required exact-SHA main-push prerequisites before trusted-release handoff.
+  Remaining distinct process/audit-state work receives fresh ID HLS-C017.
+protocol_change=C017 adds explicit unique task-ID allocation/collision-recovery rules; never keep two live machine objects with the same ID or silently redefine merged history.
+
+[2026-09-08T18:28:00+08:00] EVENT=PR_SUPERSEDED pr=#77
+task_alias=stale-worker1-HLS-C015
+state=closed_unmerged
+reason=PR #77 was built from old main 718ee541 during the concurrency race and contained timeout-derived/task-ID state made stale by worker-0's earlier heartbeat and merged PR #78. Valid historical findings are carried into HLS-C017; the branch must not be rebased or merged.
+
+[2026-09-08T18:28:30+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C017 priority=P0 owner=worker-1 role=coordinator+worker auditor=worker-0
+branch=coord/hls-c017-concurrency-reconcile
+base_main=d37e8cac666c3ebd7f3c8ffa326a15321ef76185
+acceptance_criteria=
+  AC1 Preserve PR #78's technically valid v7.0.2 governance/AGENTS changes.
+  AC2 Record PR #75/#78 process deviations and false-timeout retraction without rewriting historical log entries.
+  AC3 Use only protocol task states and canonicalize C013/C014/C015/C016 meanings; old duplicate C016 AGENTS proposal is cancelled/superseded evidence only.
+  AC4 Handoff routes worker-1 coordinator/C017 owner plus worker-0 independent auditor and C017 -> C014 -> C016.
+  AC5 Manager log append records exact heartbeat/race/task-collision/PR77 closure evidence.
+  AC6 PR #77 remains closed and unmerged.
+  AC7 Coordination/docs only; no product/runtime/workflow/build-script/feature-parity/release_ready/tag/release/signing/publish change.
+  AC8 worker-0 performs independent exact-head review before merge; any head movement invalidates PASS.
+route_override=Pause HLS-C014 before further readiness-state or merge activity. Preserve its existing branch work for later rebase/review after C017.
+paused_c014_head=ca58bee014cacc37c59066d964316071af6cc76f
+paused_c014_commits=8
+
+[2026-09-08T18:29:00+08:00] EVENT=PROTOCOL_HARDENING task=HLS-C017
+changes=
+  Task IDs are unique durable identities; allocate only after refreshing Issue #39 and tasks.json, and resolve collisions by preserving merged history plus a fresh ID for distinct remaining work.
+  Exact-head PASS authorizes only the reviewed head; live auditor state is refreshed before fallback review/merge.
+  Heartbeat loss decisions record exact comment/timestamp and are retracted if a later-discovered heartbeat already existed before the decision.
+  Route overrides preserve paused clean branches for later rebase/review rather than discarding concurrent work.
+release_boundary=No C017 commit changes release_ready, product/runtime/workflows/build scripts, tags, releases, signing or publication state.
