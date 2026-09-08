@@ -47,6 +47,23 @@ Consequence: a release-channel compromise that supplies a matching version/name/
 
 Action: created HLS-C009 with narrow acceptance criteria. HLS-C005 remains audit-only and does not modify updater implementation.
 
+## Finding 2 — optional Core TCP transport does not enforce loopback
+
+**Result: confirmed; split to HLS-C010 (P1).**
+
+Positive controls observed first:
+
+- Windows product IPC uses a named pipe by default.
+- The named-pipe server builds a protected DACL granting Generic All only to the object Owner Rights SID and SYSTEM, and fails startup if that owner DACL cannot be created.
+- Core frames are capped at 4 MiB, connections are capped, and named-pipe/TCP body reads have absolute deadlines.
+- Native Messaging registration restricts Chromium to the fixed extension origin and Firefox to the fixed extension ID.
+
+The defect is limited to the optional TCP path. Source comments call it the test/Linux **loopback** transport, but `default_core_bind()` accepts any syntactically valid `SocketAddr` from `HLS_V7_CORE_BIND` without checking `ip().is_loopback()`. On Windows, merely setting that variable also opts the product into TCP. A wildcard or LAN address can therefore bind the complete Core protocol off-host.
+
+The TCP transport has protocol/version hello but no client authentication/session secret. The request surface includes arbitrary Core commands plus settings, credential storage/load, default-cookie changes, handoff persistence and shutdown-capable operations. Consequently the configuration `HLS_V7_CORE_BIND=0.0.0.0:18765` contradicts the loopback trust model and can expose privileged same-user Core operations to a network peer.
+
+Action: created HLS-C010. Its fix scope is to reject non-loopback IPv4/IPv6 bind addresses while preserving loopback test/Linux behavior and the existing Windows named-pipe security model.
+
 ## Status
 
-`in_progress`: update-trust boundary produced HLS-C009; next audit boundary is Core/Compose/Native Messaging IPC framing and authentication.
+`in_progress`: update trust produced HLS-C009; IPC audit produced HLS-C010. Next boundary is SQLite durability/checkpoint/restart and task-state handoff.
