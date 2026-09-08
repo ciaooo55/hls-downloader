@@ -2,7 +2,7 @@
   "schema_version": 1,
   "repository": "ciaooo55/hls-downloader",
   "canonical_issue": 39,
-  "updated_at": "2026-09-08T11:31:00+08:00",
+  "updated_at": "2026-09-08T11:44:00+08:00",
   "priority_order": ["P0", "P1", "P2", "P3"],
   "active_workers": 2,
   "minimum_unfinished_target": 4,
@@ -31,32 +31,27 @@
       "product_pr": 38,
       "accepted_head": "8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec",
       "merge_commit": "884f628eb264bb63ba7a093c67e700e3bf3d3024",
-      "superseded_heads": ["a99582c76e582210264ebc4e2f2761b6a41714f0", "556722c4397e905dfd352dd60bfa03956d453ebd", "9cb3bba5631ae54b328e4967a1019e758f54039c"],
       "depends_on": ["HLS-C001"],
-      "review_result": "PASS",
-      "evidence": {
-        "Maintenance Security": "run 44 success",
-        "v7 CI": "run 479 success",
-        "Rust Security": "run 18 success",
-        "v7 Candidate Package": "run 127 success"
-      }
+      "review_result": "PASS"
     },
     {
       "id": "HLS-C003",
       "title": "Triage formal v7 release readiness and external runner blockers",
       "priority": "P1",
-      "status": "in_progress",
+      "status": "done",
       "owner": "worker-0",
       "role": "coordinator+auditor+worker",
       "branch": "audit/hls-c003-release-readiness",
       "pr": 64,
+      "accepted_head": "c3a3e2765852b2972f51e5edd7da90960b39a176",
+      "merge_commit": "11dff75cd6f2e8e73da6e4cde9f8fdbb75396d94",
+      "review_result": "PASS",
       "depends_on": ["HLS-C002", "HLS-C007"],
-      "acceptance": [
-        "current formal release workflow prerequisites are enumerated from repository source",
-        "external-only blockers such as trusted signing runner requirements are separated from code defects",
-        "no release_ready=true or formal publish action is performed without satisfied gates",
-        "route recommendation is written to the manager log and project plan"
-      ]
+      "evidence": {
+        "source_blockers": "HLS-C002 and HLS-C007 closed; no third deterministic formal-release source blocker reproduced",
+        "release_ready": false,
+        "external_boundary": "hls-release Windows x64 runner, E:\\h, browsers, signing key/cert, timestamp/network, protected environment, operator publish authorization"
+      }
     },
     {
       "id": "HLS-C004",
@@ -78,10 +73,10 @@
       "id": "HLS-C005",
       "title": "Repository-wide bug and contract audit after v7.0.2 changes",
       "priority": "P1",
-      "status": "planned",
-      "owner": null,
-      "role": "auditor",
-      "branch": null,
+      "status": "in_progress",
+      "owner": "worker-0",
+      "role": "coordinator+auditor+worker",
+      "branch": "audit/hls-c005-contract-audit",
       "depends_on": ["HLS-C002", "HLS-C007"],
       "acceptance": [
         "audit focuses on release/update trust, IPC boundaries, persistence, and extension handoff contracts",
@@ -98,7 +93,7 @@
       "owner": null,
       "role": "auditor",
       "branch": null,
-      "depends_on": ["HLS-C002", "HLS-C007"],
+      "depends_on": ["HLS-C003"],
       "acceptance": [
         "README describes architecture, build/release boundaries and current readiness accurately",
         "claims are verified against source and CI rather than copied from stale planning docs",
@@ -118,24 +113,23 @@
       "accepted_head": "e3761362625ef017c1e842293ca36ae07d4b3842",
       "merge_commit": "c6779fd1017bb8f7378eec7d0ba5cd1e5f079dd1",
       "review_result": "PASS",
-      "reassigned_from": "worker-1",
-      "reassignment_reason": "worker-1 produced no HLS-C007 ACK, branch, or heartbeat for more than five minutes after assignment",
-      "depends_on": [],
+      "depends_on": []
+    },
+    {
+      "id": "HLS-C008",
+      "title": "Reconcile current v7.0.2 release documentation drift",
+      "priority": "P2",
+      "status": "planned",
+      "owner": null,
+      "role": "worker|auditor",
+      "branch": null,
+      "depends_on": ["HLS-C003"],
       "acceptance": [
-        "remove stale literal v7.0.1 assumptions from executable MSI lifecycle acceptance logic and bind candidate MSI version to canonical product metadata plus the candidate manifest",
-        "keep the public v7.0.0 MSI baseline URL and SHA-256 pinned and preserve a real major-upgrade/product-code transition check",
-        "fail closed if candidate manifest product_version and MSI ProductVersion disagree without weakening E:\\h, checkpoint, upgrade, rollback, registration or process-recovery gates",
-        "update stale current-candidate v7.0.1 descriptions",
-        "extend repository validation to catch future release-version drift without private signing material",
-        "dedicated PR requires independent audit before merge"
-      ],
-      "evidence": {
-        "product_version_source": "artifacts/v7-productization/feature-parity.json => 7.0.2",
-        "release_ready": false,
-        "implementation_pr": 63,
-        "v7_ci": "run 481 success; Validate contracts including PowerShell 5.1 and 7 success",
-        "candidate_package": "run 129 success"
-      }
+        "current-facing README/release guidance consistently distinguishes active v7.0.2 state from historical v7.0.1 evidence",
+        "historical v7.0.1 documents remain explicitly historical rather than appearing current",
+        "no documentation change sets or implies release_ready=true",
+        "formal workflow and executable release gates are not weakened by documentation cleanup"
+      ]
     }
   ]
 }
