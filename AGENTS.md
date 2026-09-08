@@ -1,6 +1,8 @@
 # HLS Downloader repository instructions
 
-HLS Downloader is a Windows-first desktop download manager. The only active product version is `7.0.1`.
+HLS Downloader is a Windows-first desktop download manager. The only active product version is `7.0.2`.
+
+Canonical product version and release-readiness state come from `artifacts/v7-productization/feature-parity.json`. Live instructions and current-facing documentation must follow that tracked metadata rather than overriding it with a hard-coded historical version or an inferred readiness state.
 
 ## Active architecture
 
@@ -24,4 +26,4 @@ cd ..\extension; pnpm test; pnpm run build
 
 PowerShell scripts intended for users must parse under Windows PowerShell 5.1 and PowerShell 7. Text JSON/manifests must be written as UTF-8 without BOM unless the target format requires otherwise.
 
-Do not generate formal packages until `artifacts/v7-productization/feature-parity.json` is fully verified and all visual, performance, installer and rollback gates pass.
+Do not generate formal packages unless the canonical feature-parity matrix is fully verified, `release_ready=true` has been explicitly reviewed and authorized, and the visual, performance, installer and rollback gates pass for the formal-release attempt. Candidate CI success alone is not publication authorization, and no repository instruction may bypass the trusted release workflow or its operator controls.
