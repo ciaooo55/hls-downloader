@@ -15,8 +15,8 @@ active_tasks:
   - HLS-C014
 primary_active_task: HLS-C014
 next_priority_task: HLS-C016
-status: canonical-readiness-decision-in-progress
-last_updated: 2026-09-08T18:21:00+08:00
+status: canonical-readiness-transition-awaiting-final-pr-checks
+last_updated: 2026-09-08T18:37:00+08:00
 ---
 
 # Project handoff
@@ -41,15 +41,16 @@ Issue #42 is the visitor area. External project coordinators must provide their 
 
 ## Current project state
 
-- Active product line: v7.0.2. Canonical `artifacts/v7-productization/feature-parity.json` is 28/28 verified with zero partial/blocked entries. At C014 start it still carries `release_ready=false` and `audit_state=v7_0_2_iteration_in_progress`.
+- Active product line: v7.0.2. Canonical `artifacts/v7-productization/feature-parity.json` remains 28/28 verified with zero partial/blocked entries.
 - HLS-C013 / PR #75 completed the final frozen-source audit and concluded that the source/CI contract was clean while formal publication remained intentionally blocked by the canonical readiness policy and external trusted-release prerequisites.
 - HLS-C015 / PR #78 is complete. Its first head `05f84711e23eb8299600b5fdc751055b3583bf19` was rejected because the live project plan was stale; the corrected exact head `c547b0ed3ef2a4837b27478aada0c996f42bc518` passed fallback review and merged as `d37e8cac666c3ebd7f3c8ffa326a15321ef76185`.
-- C015 reconciled live governance only: root `AGENTS.md` now names v7.0.2 as active, canonical feature-parity metadata as version/readiness truth, and explicitly requires fully verified parity + a separately reviewed `release_ready=true` decision + visual/performance/installer/rollback gates. Candidate CI is not publication authorization.
-- HLS-C014 is active on `coord/hls-c014-release-readiness-decision`, fast-forwarded to post-C015 `main@d37e8cac666c3ebd7f3c8ffa326a15321ef76185` before task commits.
-- Repository history establishes the readiness-state precedent: the v7.0.1 release-ready state used `release_ready=true` with `audit_state=v7_0_1_release_specialties_verified`; the automated v7.0.2 iteration-start commit reset them together to `false` and `v7_0_2_iteration_in_progress`. C014 therefore treats readiness as repository-governance permission to enter the existing formal gate, not proof that external release prerequisites already passed.
-- On the post-C015 main baseline, v7 CI #527, Maintenance Security #70, and Rust Security #44 completed successfully. v7 Candidate Package #175 remained in progress at the last refresh. C014 has not counted an in-progress run as success and has not changed canonical readiness metadata yet.
-- If the decision conditions remain satisfied after the final baseline refresh, C014's proposed narrow metadata transition is `release_ready: false -> true` and `audit_state: v7_0_2_iteration_in_progress -> v7_0_2_release_specialties_verified`. No feature item, version, workflow, runtime or formal gate is part of that transition.
-- HLS-C016 is the next P0 task and preserves the two-unfinished-task backlog for one active worker. After an accepted C014 merge, C016 must freeze that exact new main SHA and require four fresh successful `push/main/exact-SHA` prerequisite workflows. Predecessor-SHA results do not authorize formal release.
+- C015 reconciled live governance only: root `AGENTS.md` names v7.0.2 as active, canonical feature-parity metadata as version/readiness truth, and requires fully verified parity + a separately reviewed `release_ready=true` decision + visual/performance/installer/rollback gates. Candidate CI is not publication authorization.
+- HLS-C014 is active on `coord/hls-c014-release-readiness-decision`. Its post-C015 baseline `main@d37e8cac666c3ebd7f3c8ffa326a15321ef76185` remained unchanged through the final decision checkpoint.
+- All four post-C015 baseline `push/main/exact-SHA` prerequisites succeeded: v7 CI #527, v7 Candidate Package #175, Maintenance Security #70 and Rust Security #44.
+- Repository history establishes the readiness-state precedent: v7.0.1 ready state used `release_ready=true` with `audit_state=v7_0_1_release_specialties_verified`; the automated v7.0.2 iteration-start commit reset them together to `false` and `v7_0_2_iteration_in_progress`. Readiness is repository-governance permission to enter the existing formal gate, not proof that external release prerequisites already passed.
+- C014 therefore authorized and committed the narrow lifecycle transition in commit `73cde20466d5218b55f1869ded79a08886bb6bc2`: `release_ready=false -> true` and `audit_state=v7_0_2_iteration_in_progress -> v7_0_2_release_specialties_verified`. No feature item, product version, summary, generated-from reference, runtime, workflow or build script changed in that commit.
+- C014 is **not complete yet**. PR #79 must finish its applicable checks on its final exact head and then receive an exact-head fallback audit. Because `feature-parity.json` is included in v7 CI and v7 Candidate Package pull-request path filters, this PR is not a docs-only/no-check review.
+- HLS-C016 is the next P0 task and preserves the two-unfinished-task backlog for one active worker. After an accepted C014 merge, C016 must freeze that exact **merge SHA** and require four new successful `push/main/exact-SHA` prerequisite workflows. Predecessor-SHA or PR-head results do not authorize formal release.
 - C016 must not merge post-freeze evidence/coordination commits into `main` while the frozen SHA is intended for release, because any such merge would create a new prospective release SHA and invalidate the old exact-SHA set. Evidence may remain in Issue #39 / Issue #41 and on an unmerged evidence branch during the freeze.
 - External formal-release prerequisites remain mandatory: dedicated Windows x64 `hls-release` runner, fixed `E:\h`, real Edge/Firefox, signing certificate/private key and timestamp trust, protected `v7-release` environment/approval, candidate-bound visual/performance/MSI/rollback evidence, draft asset digest verification, and explicit operator publish choice.
 - No current task authorizes tagging, signing, formal-release dispatch, release creation or publication.
