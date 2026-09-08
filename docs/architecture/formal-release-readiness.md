@@ -22,6 +22,14 @@ The formal v7 release path is one frozen-source pipeline:
 
 HLS-C002 and HLS-C007 close the two currently reproduced source-level defects in this chain: exact-SHA prerequisite workflow starvation and stale v7.0.1 MSI lifecycle candidate assumptions.
 
+## Formal package decision gate
+
+The candidate path and formal package path intentionally have different requirements. Candidate packaging may run while the iteration is still closing evidence, but formal packaging calls the canonical feature verifier with complete-feature, `release_ready`, release-evidence and clean-worktree requirements.
+
+Therefore `release_ready=false` is a real formal-package blocker by design, not an implementation defect to bypass. Changing it is a reviewed readiness decision outside HLS-C003.
+
+Release evidence generation does not violate the clean-worktree gate. Repository `.gitignore` ignores generated content under `artifacts/v7-productization/*` while explicitly keeping only the canonical `feature-parity.json` tracked. The aggregate and per-gate evidence, candidate artifacts and formal staging files can therefore be created without modifying tracked source. The evidence recorder additionally binds reports to the current source commit/tree and candidate manifest digest.
+
 ## External trust boundary
 
 The following inputs must **not** be manufactured or relaxed by repository code merely to make a release pass:
@@ -44,6 +52,16 @@ The exact-SHA model means the releaseable unit is the **final frozen main SHA**,
 
 Operational consequence: once the project is preparing a formal release, coordination-only changes should be accumulated on branches and merged deliberately. After the final reviewed merge, stop moving `main` until all four required push workflows finish for that SHA and the formal release dispatch either completes or is abandoned.
 
+## Draft and publication boundary
+
+The workflow creates or resumes only a draft release associated with the exact frozen commit. It then compares every uploaded asset's byte size and GitHub-reported SHA-256 digest with the local staging files. The release must still be a draft during this verification. Conversion to Latest occurs only when the workflow-dispatch `publish` input is explicitly true.
+
+This separates "formal artifacts have been built and uploaded" from "the public release is authorized" and avoids treating an interrupted draft upload as an implicit publication decision.
+
 ## Readiness truth source
 
 `feature-parity.json` currently declares v7.0.2 with `release_ready=false`. HLS-C003 treats that state as authoritative and does not change it. Candidate CI success, repository source completeness, or availability of a draft package is insufficient by itself to authorize a formal public release.
+
+## Documentation boundary
+
+Some current-facing documentation still contains v7.0.1 candidate/formal-release wording while the active product version is v7.0.2. Those stale descriptions should be corrected as documentation work. Historical v7.0.1 evidence may remain when clearly labeled historical. Documentation cleanup must not alter the executable release gate or imply `release_ready=true` before the canonical readiness decision is actually made.
