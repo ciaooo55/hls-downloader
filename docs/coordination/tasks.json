@@ -2,10 +2,10 @@
   "schema_version": 1,
   "repository": "ciaooo55/hls-downloader",
   "canonical_issue": 39,
-  "updated_at": "2026-09-08T11:18:00+08:00",
+  "updated_at": "2026-09-08T11:31:00+08:00",
   "priority_order": ["P0", "P1", "P2", "P3"],
-  "active_workers": 1,
-  "minimum_unfinished_target": 2,
+  "active_workers": 2,
+  "minimum_unfinished_target": 4,
   "tasks": [
     {
       "id": "HLS-C001",
@@ -49,6 +49,7 @@
       "owner": "worker-0",
       "role": "coordinator+auditor+worker",
       "branch": "audit/hls-c003-release-readiness",
+      "pr": 64,
       "depends_on": ["HLS-C002", "HLS-C007"],
       "acceptance": [
         "current formal release workflow prerequisites are enumerated from repository source",
@@ -61,10 +62,10 @@
       "id": "HLS-C004",
       "title": "Prioritize open Dependabot major-version updates",
       "priority": "P1",
-      "status": "planned",
-      "owner": null,
+      "status": "in_progress",
+      "owner": "worker-1",
       "role": "worker",
-      "branch": null,
+      "branch": "deps/hls-c004-dependabot-triage",
       "depends_on": ["HLS-C002"],
       "acceptance": [
         "open dependency PRs are grouped by runtime/build/security risk",
