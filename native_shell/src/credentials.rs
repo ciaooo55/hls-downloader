@@ -179,12 +179,13 @@ pub fn apply_replay_json_for(
     request_url: &str,
 ) {
     apply_base_replay(headers, json);
-    if replay_targets_other_origin(json, request_url) {
+    let cross_origin = replay_targets_other_origin(json, request_url);
+    if cross_origin {
         remove_header(headers, "Cookie");
         remove_header(headers, "Authorization");
         remove_header(headers, "Proxy-Authorization");
     }
-    apply_scoped_request_context(headers, json, request_url);
+    apply_scoped_request_context_inner(headers, json, request_url, cross_origin);
 }
 
 /// Bind an in-memory replay context to the task URL. Child HLS/DASH requests
@@ -259,12 +260,24 @@ fn apply_base_navigation_context(
     insert_header(headers, "User-Agent", value.get("user_agent"));
 }
 
+/// Apply a scoped replay context at a redirect boundary. The HTTP engine calls
+/// this only after proving the redirect changed origin, so replay-controlled
+/// custom headers must be cleared even when the redirect returns to `_task_url`.
 pub(crate) fn apply_scoped_request_context(
     headers: &mut std::collections::BTreeMap<String, String>,
     json: &str,
     request_url: &str,
 ) {
-    if replay_targets_other_origin(json, request_url) {
+    apply_scoped_request_context_inner(headers, json, request_url, true);
+}
+
+fn apply_scoped_request_context_inner(
+    headers: &mut std::collections::BTreeMap<String, String>,
+    json: &str,
+    request_url: &str,
+    clear_replay_headers: bool,
+) {
+    if clear_replay_headers {
         for name in replay_request_header_names(json) {
             remove_header(headers, &name);
         }
@@ -630,6 +643,30 @@ mod tests {
             headers.get("X-Cdn-B-Token").map(String::as_str),
             Some("b-secret")
         );
+        assert_eq!(
+            headers.get("X-Task-Header").map(String::as_str),
+            Some("task-owned")
+        );
+    }
+
+    #[test]
+    fn scoped_context_filter_clears_previous_origin_on_return_to_source() {
+        let replay = bind_replay_source_url(
+            r#"{
+                "request_contexts":{
+                    "https://cdn.test":{
+                        "request_headers":{"X-Cdn-Token":"cdn-secret"}
+                    }
+                }
+            }"#,
+            "https://manifest.test/master.m3u8",
+        );
+        let mut headers = std::collections::BTreeMap::from([
+            ("X-Cdn-Token".to_string(), "cdn-secret".to_string()),
+            ("X-Task-Header".to_string(), "task-owned".to_string()),
+        ]);
+        apply_scoped_request_context(&mut headers, &replay, "https://manifest.test/return.ts");
+        assert!(!headers.contains_key("X-Cdn-Token"));
         assert_eq!(
             headers.get("X-Task-Header").map(String::as_str),
             Some("task-owned")
