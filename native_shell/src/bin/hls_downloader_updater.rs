@@ -123,16 +123,30 @@ fn verify_update_signer(args: &[OsString]) -> Result<(), String> {
 #[cfg(windows)]
 fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
     use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Security::Cryptography::{
         CertGetCertificateContextProperty, CERT_SHA1_HASH_PROP_ID,
     };
     use windows_sys::Win32::Security::WinTrust::{
-        WTHelperGetProvCertFromChain, WTHelperGetProvSignerFromChain,
-        WTHelperProvDataFromStateData, WinVerifyTrust, WINTRUST_ACTION_GENERIC_VERIFY_V2,
-        WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO, WTD_CACHE_ONLY_URL_RETRIEVAL,
-        WTD_CHOICE_FILE, WTD_DISABLE_MD2_MD4, WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE,
-        WTD_STATEACTION_VERIFY, WTD_UI_NONE,
+        CRYPT_PROVIDER_CERT, CRYPT_PROVIDER_DATA, CRYPT_PROVIDER_SGNR, WinVerifyTrust,
+        WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO,
+        WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_DISABLE_MD2_MD4, WTD_REVOKE_NONE,
+        WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
     };
+    use windows_sys::Win32::System::LibraryLoader::{
+        FreeLibrary, GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
+    };
+
+    type ProvDataFromStateData =
+        unsafe extern "system" fn(HANDLE) -> *mut CRYPT_PROVIDER_DATA;
+    type GetProvSignerFromChain = unsafe extern "system" fn(
+        *mut CRYPT_PROVIDER_DATA,
+        u32,
+        i32,
+        u32,
+    ) -> *mut CRYPT_PROVIDER_SGNR;
+    type GetProvCertFromChain =
+        unsafe extern "system" fn(*mut CRYPT_PROVIDER_SGNR, u32) -> *mut CRYPT_PROVIDER_CERT;
 
     if !path.is_file() {
         return Err("升级安装包不存在，无法验证签名者".into());
@@ -174,16 +188,55 @@ fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
         ));
     }
 
+    let wintrust_name: Vec<u16> = "wintrust.dll".encode_utf16().chain(Some(0)).collect();
+    let module = unsafe {
+        LoadLibraryExW(
+            wintrust_name.as_ptr(),
+            std::ptr::null_mut(),
+            LOAD_LIBRARY_SEARCH_SYSTEM32,
+        )
+    };
+    if module.is_null() {
+        trust.dwStateAction = WTD_STATEACTION_CLOSE;
+        unsafe {
+            WinVerifyTrust(
+                std::ptr::null_mut(),
+                &mut action,
+                &mut trust as *mut _ as *mut core::ffi::c_void,
+            );
+        }
+        return Err("无法从 System32 加载 Wintrust.dll 读取已验证签名者".into());
+    }
+
     let result = (|| {
-        let provider = unsafe { WTHelperProvDataFromStateData(trust.hWVTStateData) };
+        let prov_data_proc = unsafe {
+            GetProcAddress(module, b"WTHelperProvDataFromStateData\0".as_ptr())
+        }
+        .ok_or_else(|| "Wintrust.dll 缺少 WTHelperProvDataFromStateData".to_string())?;
+        let signer_proc = unsafe {
+            GetProcAddress(module, b"WTHelperGetProvSignerFromChain\0".as_ptr())
+        }
+        .ok_or_else(|| "Wintrust.dll 缺少 WTHelperGetProvSignerFromChain".to_string())?;
+        let cert_proc = unsafe {
+            GetProcAddress(module, b"WTHelperGetProvCertFromChain\0".as_ptr())
+        }
+        .ok_or_else(|| "Wintrust.dll 缺少 WTHelperGetProvCertFromChain".to_string())?;
+
+        let prov_data_from_state: ProvDataFromStateData = unsafe {
+            std::mem::transmute(prov_data_proc)
+        };
+        let get_signer: GetProvSignerFromChain = unsafe { std::mem::transmute(signer_proc) };
+        let get_cert: GetProvCertFromChain = unsafe { std::mem::transmute(cert_proc) };
+
+        let provider = unsafe { prov_data_from_state(trust.hWVTStateData) };
         if provider.is_null() {
             return Err("无法读取已验证的 Authenticode provider 状态".into());
         }
-        let signer = unsafe { WTHelperGetProvSignerFromChain(provider, 0, 0, 0) };
+        let signer = unsafe { get_signer(provider, 0, 0, 0) };
         if signer.is_null() {
             return Err("无法读取已验证的 Authenticode 主签名者".into());
         }
-        let cert = unsafe { WTHelperGetProvCertFromChain(signer, 0) };
+        let cert = unsafe { get_cert(signer, 0) };
         if cert.is_null() {
             return Err("无法读取已验证的 Authenticode leaf 证书".into());
         }
@@ -210,6 +263,9 @@ fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
             .collect::<String>())
     })();
 
+    unsafe {
+        FreeLibrary(module);
+    }
     trust.dwStateAction = WTD_STATEACTION_CLOSE;
     unsafe {
         WinVerifyTrust(
