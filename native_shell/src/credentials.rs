@@ -236,6 +236,14 @@ fn replay_request_header_names(json: &str) -> Vec<String> {
     };
     let mut headers = std::collections::BTreeMap::new();
     merge_header_map(&mut headers, value.get("request_headers"));
+    if let Some(contexts) = value
+        .get("request_contexts")
+        .and_then(|contexts| contexts.as_object())
+    {
+        for scoped in contexts.values() {
+            merge_header_map(&mut headers, scoped.get("request_headers"));
+        }
+    }
     headers.into_keys().collect()
 }
 
@@ -588,6 +596,42 @@ mod tests {
         assert_eq!(
             headers.get("Referer").map(String::as_str),
             Some("https://page.test/watch")
+        );
+    }
+
+    #[test]
+    fn scoped_context_filter_drops_previous_origin_headers_on_redirect_chain() {
+        let replay = bind_replay_source_url(
+            r#"{
+                "request_contexts":{
+                    "https://cdn-a.test":{
+                        "request_headers":{"X-Cdn-A-Token":"a-secret"}
+                    },
+                    "https://cdn-b.test":{
+                        "request_headers":{"X-Cdn-B-Token":"b-secret"}
+                    }
+                }
+            }"#,
+            "https://manifest.test/master.m3u8",
+        );
+        let mut headers = std::collections::BTreeMap::from([(
+            "X-Task-Header".to_string(),
+            "task-owned".to_string(),
+        )]);
+        apply_scoped_request_context(&mut headers, &replay, "https://cdn-a.test/first.ts");
+        assert_eq!(
+            headers.get("X-Cdn-A-Token").map(String::as_str),
+            Some("a-secret")
+        );
+        apply_scoped_request_context(&mut headers, &replay, "https://cdn-b.test/second.ts");
+        assert!(!headers.contains_key("X-Cdn-A-Token"));
+        assert_eq!(
+            headers.get("X-Cdn-B-Token").map(String::as_str),
+            Some("b-secret")
+        );
+        assert_eq!(
+            headers.get("X-Task-Header").map(String::as_str),
+            Some("task-owned")
         );
     }
 
