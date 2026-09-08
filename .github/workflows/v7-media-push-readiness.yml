@@ -1,0 +1,173 @@
+name: v7 Media Push Readiness
+
+on:
+  workflow_dispatch:
+    inputs:
+      edge_binary:
+        description: Optional absolute Edge path on the hls-release runner
+        required: false
+        type: string
+        default: ''
+      firefox_binary:
+        description: Optional absolute Firefox path on the hls-release runner
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  group: v7-media-push-readiness
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate installed-browser media push before release readiness
+    runs-on: [self-hosted, Windows, X64, hls-release]
+    timeout-minutes: 120
+    environment: v7-release
+    env:
+      HLS_V7_TVBOX_EXPECTED_HOST: ${{ vars.HLS_V7_TVBOX_EXPECTED_HOST }}
+      HLS_V7_EDGE_BINARY: ${{ inputs.edge_binary }}
+      HLS_V7_FIREFOX_BINARY: ${{ inputs.firefox_binary }}
+    steps:
+      - name: Check out prospective main source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Refuse non-main or stale readiness source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw "Readiness validation must be dispatched from main, got $env:GITHUB_REF" }
+          $head = (git rev-parse HEAD).Trim()
+          $remoteMain = (git ls-remote origin refs/heads/main).Split("`t")[0].Trim()
+          if ($head -ne $remoteMain) { throw "Readiness source is not current main: HEAD=$head main=$remoteMain" }
+          if ([String]::IsNullOrWhiteSpace($env:HLS_V7_TVBOX_EXPECTED_HOST)) {
+            throw 'v7-release environment must configure HLS_V7_TVBOX_EXPECTED_HOST; real LAN validation never skips.'
+          }
+          $feature = Get-Content 'artifacts\v7-productization\feature-parity.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ([bool]$feature.release_ready) {
+            throw 'Pre-readiness media-push validation expects release_ready=false; use the formal release gate after readiness is granted.'
+          }
+
+      - name: Set isolated v7 build cache
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cacheRoot = Join-Path $env:RUNNER_TEMP "hls-v7-readiness-$env:GITHUB_SHA"
+          "HLS_V7_BUILD_CACHE=$cacheRoot" >> $env:GITHUB_ENV
+          "HLS_V7_JAVA_HOME=$(Join-Path $cacheRoot 'jdk-21')" >> $env:GITHUB_ENV
+
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: '1.98.1'
+
+      - name: Set up Node 24.20.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.20.0'
+
+      - name: Enable pinned pnpm
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          corepack enable
+          corepack prepare pnpm@11.7.0 --activate
+          if ((pnpm --version).Trim() -ne '11.7.0') { throw 'pnpm 11.7.0 activation failed.' }
+
+      - name: Bootstrap pinned JDK and FFmpeg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\bootstrap-v7-toolchain.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $mediaDir = & .\scripts\bootstrap-v7-media-tools.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ([String]::IsNullOrWhiteSpace($mediaDir)) { throw 'FFmpeg bootstrap did not return a media directory.' }
+          "HLS_V7_FFMPEG_DIR=$mediaDir" >> $env:GITHUB_ENV
+          "HLS_V7_PYTHON=$((Get-Command python.exe -ErrorAction Stop).Source)" >> $env:GITHUB_ENV
+
+      - name: Build candidate without requiring release readiness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $env:HLS_V7_PNPM = (Get-Command pnpm.cmd -ErrorAction Stop).Source
+          & .\scripts\build-v7.ps1 -Task candidate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $manifest = 'artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json'
+          if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw "Candidate manifest is missing: $manifest" }
+          $candidate = Get-Content -LiteralPath $manifest -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ([string]$candidate.source_commit -ne $env:GITHUB_SHA) { throw 'Candidate manifest is not bound to the readiness source SHA.' }
+
+      - name: Run installed-browser to real-LAN media-push gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arguments = @(
+            '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
+            '-File','.\scripts\verify-v7-browser-media-push.ps1',
+            '-CandidateManifestPath','artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json',
+            '-ExpectedTvboxHost',$env:HLS_V7_TVBOX_EXPECTED_HOST,
+            '-Python',$env:HLS_V7_PYTHON,
+            '-Ffmpeg',(Join-Path $env:HLS_V7_FFMPEG_DIR 'ffmpeg.exe')
+          )
+          if (-not [String]::IsNullOrWhiteSpace($env:HLS_V7_EDGE_BINARY)) { $arguments += @('-EdgeBinary',$env:HLS_V7_EDGE_BINARY) }
+          if (-not [String]::IsNullOrWhiteSpace($env:HLS_V7_FIREFOX_BINARY)) { $arguments += @('-FirefoxBinary',$env:HLS_V7_FIREFOX_BINARY) }
+          & powershell.exe @arguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Reconfirm frozen main after external validation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $head = (git rev-parse HEAD).Trim()
+          $remoteMain = (git ls-remote origin refs/heads/main).Split("`t")[0].Trim()
+          if ($head -ne $remoteMain) { throw "main moved during readiness validation: HEAD=$head main=$remoteMain" }
+
+      - name: Write readiness attestation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = 'artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json'
+          $feature = Get-Content 'artifacts\v7-productization\feature-parity.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+          $reports = @{}
+          foreach ($browser in @('edge','firefox')) {
+            $path = "artifacts\v7-productization\release-evidence\browser-media-push\$browser-tvbox-real.json"
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing $browser media-push report: $path" }
+            $report = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($report.passed -ne $true) { throw "$browser media-push report did not pass." }
+            $reports[$browser] = [ordered]@{ path=$path.Replace('\\','/'); sha256=(Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() }
+          }
+          $attestation = [ordered]@{
+            schema = 1
+            kind = 'v7_media_push_readiness'
+            product_version = [string]$feature.product_version
+            source_commit = $env:GITHUB_SHA
+            source_tree = (git rev-parse 'HEAD^{tree}').Trim()
+            candidate_manifest_sha256 = (Get-FileHash $manifest -Algorithm SHA256).Hash.ToLowerInvariant()
+            expected_receiver_host = $env:HLS_V7_TVBOX_EXPECTED_HOST
+            browser_reports = $reports
+            workflow_run_id = $env:GITHUB_RUN_ID
+            workflow_run_attempt = $env:GITHUB_RUN_ATTEMPT
+          }
+          $path = 'artifacts\v7-productization\release-evidence\browser-media-push\READINESS-ATTESTATION.json'
+          $attestation | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+          Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
+
+      - name: Upload candidate-bound readiness evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: HLSDownloader-v7-media-push-readiness-${{ github.sha }}
+          path: |
+            artifacts/v7-productization/candidate/ARTIFACT-MANIFEST.json
+            artifacts/v7-productization/release-evidence/browser-media-push/*.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
