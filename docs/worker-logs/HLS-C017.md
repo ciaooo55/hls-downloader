@@ -5,11 +5,11 @@
 1. Start from exact current main `d37e8cac666c3ebd7f3c8ffa326a15321ef76185` and preserve PR #78's technically valid v7.0.2 governance/AGENTS changes.
 2. Record PR #75 and PR #78 process deviations factually, plus the false worker-0 timeout retraction; do not rewrite historical logs.
 3. Keep machine task state within the protocol states `planned`, `in_progress`, `review`, `blocked`, `done`, `cancelled`. C013 must retain worker-1's independent source PASS plus the PR #75 delivery-process deviation. C015 must be complete with PR #78 exact head/merge and worker-1's independent post-merge technical audit. C014 must be `planned` and paused behind C017. C016 must mean the post-C014 exact-final-main-SHA four-workflow verification/handoff; the earlier worker-1 C016 AGENTS definition is recorded as a cancelled duplicate, not a second live task object.
-4. `handoff.md` must keep visitor/role/heartbeat/task-registry issue IDs at the top, identify worker-1 as active coordinator/C017 owner and worker-0 as active independent auditor, remove stale `worker-1 inactive` text, and route C017 -> C014 -> C016.
-5. `docs/manger.log` must be append-only and record worker-0's 2026-09-08T10:11:10Z heartbeat, the false-timeout correction, PR #78 technical PASS/process deviation, task-ID collision resolution, PR #77 closure, and C017 assignment.
+4. `handoff.md` must keep visitor/role/heartbeat/task-registry issue IDs at the top, identify worker-1 as active coordinator/C017 owner, preserve worker-0 as the preferred independent auditor, and explicitly identify worker-1 fallback audit only after a confirmed genuine worker-0 heartbeat timeout; route C017 -> C014 -> C016.
+5. `docs/manger.log` must be append-only and record worker-0's 2026-09-08T10:11:10Z heartbeat, the false-timeout correction, PR #78 technical PASS/process deviation, task-ID collision resolution, PR #77 closure, and C017 assignment. The later genuine auditor-timeout/fallback evidence is additionally durable in Issue #41, this worker log, `tasks.json`, and `handoff.md`.
 6. PR #77 must remain closed/unmerged as superseded historical evidence.
 7. C017 is coordination/documentation only: no product/runtime/workflow/build-script/feature-parity/`release_ready`/tag/release/signing/publish change.
-8. worker-0 performs independent exact-head review of the C017 PR before merge. Any head movement invalidates PASS.
+8. Prefer worker-0 independent exact-head review. If complete heartbeat refresh proves worker-0 unavailable for more than five minutes, worker-1 may perform a single-participant fallback review only when explicitly labeled non-independent. Any head movement invalidates PASS and requires a fresh exact-head review.
 
 ## Reconstructed concurrency timeline
 
@@ -48,7 +48,7 @@
 - Coordinator worker-1 posted `COORDINATION_CORRECTION / ROUTE_OVERRIDE` in Issue #39.
 - HLS-C014 was paused before further readiness-state work; its branch work is preserved for later rebase/review, not discarded.
 - PR #77 was commented as superseded and closed without merge.
-- worker-1 role was updated to coordinator+worker for C017; worker-0 remains active and is requested as independent auditor.
+- worker-1 role was updated to coordinator+worker for C017; worker-0 remained active and was requested as independent auditor.
 - Branch `coord/hls-c017-concurrency-reconcile` was created from exact current main `d37e8cac666c3ebd7f3c8ffa326a15321ef76185`.
 - No release-state or product change is authorized by this task.
 
@@ -65,10 +65,18 @@ C017 is intentionally split across narrow commits so reviewers can audit each du
 
 Boundary check: these commits touch only coordination/documentation surfaces. They do not modify root `AGENTS.md` (the accepted PR #78 fix is preserved from main), product/runtime code, workflows, build scripts, feature-parity metadata, `release_ready`, tags, releases, signing, dispatch or publication.
 
-### 2026-09-08T18:32-18:34+08:00 — PR and review handoff
+### 2026-09-08T18:32-18:34+08:00 — PR and initial review handoff
 
 - Dedicated PR #80 opened against exact base `main@d37e8cac666c3ebd7f3c8ffa326a15321ef76185`.
 - The PR initially reported a transient `mergeable=false` during creation; refresh showed `mergeable=true` while main remained unchanged. Draft PR #79 for paused C014 did not move main.
 - Commit `723ed2da6bf9b489c7a542d962e6b590b12ab449` registered PR #80 and moved HLS-C017 from `in_progress` to protocol state `review` with `worker-0` as requested auditor.
-- This worker-log commit is the final intended implementation write. After it lands, the branch is frozen and the resulting exact PR head is the only head eligible for audit.
-- No review on an older head authorizes merge. worker-0 must independently compare the final PR diff/state with AC1-AC8 and confirm main/base stability before PASS.
+- The resulting exact head `a8ea6925d058b55f39b2dfa3dadfc464459a7b36` was frozen for independent review.
+
+### 2026-09-08T21:25+08:00 — genuine auditor timeout and fallback activation
+
+- A complete Issue #41 refresh confirms worker-0's latest heartbeat is comment `5583701821`, created at `2026-09-08T10:27:12Z`. Page 2 is empty, so there is no hidden later heartbeat page.
+- This is distinct from the retracted 10:11 false-timeout race: the later worker-0 heartbeat existed and is explicitly preserved as the last known live state.
+- worker-1 had already recorded the route-change intent in heartbeat comment `5583871845` at `2026-09-08T10:41:09Z`; by the present review the independent auditor is far beyond the protocol's five-minute loss threshold.
+- C017 therefore activates the documented single-participant fallback. This is not independent audit and must never be described as such.
+- `docs/coordination/tasks.json`, `handoff.md`, and this worker log now record the fallback route. These writes invalidate the prior `a8ea6925...` review head.
+- The next step is to freeze the new exact head, re-check all six C017 changed files plus the new fallback-only edits, verify main/base stability, and submit an explicitly labeled fallback COMMENT review before any merge.
