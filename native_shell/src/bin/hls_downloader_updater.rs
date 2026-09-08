@@ -6,7 +6,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const SIGNER_TRUST_JSON: &str = include_str!("../../../artifacts/v7-productization/update-signer-trust.json");
+const SIGNER_TRUST_JSON: &str =
+    include_str!("../../../artifacts/v7-productization/update-signer-trust.json");
 const EXPECTED_TRUST_IDENTITY: &str = "authenticode_leaf_certificate_sha1";
 const EXPECTED_TRUST_POLICY: &str = "formal-build-signer-or-explicit-rollover";
 
@@ -82,7 +83,9 @@ fn authorize_signer_thumbprint(
     if rollover.iter().any(|allowed| allowed == &candidate) {
         return Ok(());
     }
-    Err(format!("升级安装包签名者不是受信任的 HLS Downloader 发布证书: {candidate}"))
+    Err(format!(
+        "升级安装包签名者不是受信任的 HLS Downloader 发布证书: {candidate}"
+    ))
 }
 
 fn embedded_primary_signer() -> Option<&'static str> {
@@ -124,11 +127,11 @@ fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
         CertGetCertificateContextProperty, CERT_SHA1_HASH_PROP_ID,
     };
     use windows_sys::Win32::Security::WinTrust::{
-        WinVerifyTrust, WTHelperGetProvCertFromChain, WTHelperGetProvSignerFromChain,
-        WTHelperProvDataFromStateData, WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA,
-        WINTRUST_DATA_0, WINTRUST_FILE_INFO, WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE,
-        WTD_DISABLE_MD2_MD4, WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY,
-        WTD_UI_NONE,
+        WTHelperGetProvCertFromChain, WTHelperGetProvSignerFromChain,
+        WTHelperProvDataFromStateData, WinVerifyTrust, WINTRUST_ACTION_GENERIC_VERIFY_V2,
+        WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO, WTD_CACHE_ONLY_URL_RETRIEVAL,
+        WTD_CHOICE_FILE, WTD_DISABLE_MD2_MD4, WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE,
+        WTD_STATEACTION_VERIFY, WTD_UI_NONE,
     };
 
     if !path.is_file() {
@@ -201,7 +204,10 @@ fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
         if ok == 0 || hash_len as usize != hash.len() {
             return Err("无法读取 Authenticode leaf 证书 SHA-1 指纹".into());
         }
-        Ok(hash.iter().map(|byte| format!("{byte:02X}")).collect::<String>())
+        Ok(hash
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<String>())
     })();
 
     trust.dwStateAction = WTD_STATEACTION_CLOSE;
@@ -248,7 +254,8 @@ mod tests {
     fn primary_and_rollover_signers_are_accepted_but_unrelated_signer_is_rejected() {
         assert!(authorize_signer_thumbprint(PRIMARY, Some(PRIMARY), SIGNER_TRUST_JSON).is_ok());
         assert!(authorize_signer_thumbprint(ROLLOVER, Some(PRIMARY), &rollover_json()).is_ok());
-        let error = authorize_signer_thumbprint(OTHER, Some(PRIMARY), &rollover_json()).unwrap_err();
+        let error =
+            authorize_signer_thumbprint(OTHER, Some(PRIMARY), &rollover_json()).unwrap_err();
         assert!(error.contains("不是受信任"));
     }
 
@@ -268,7 +275,9 @@ mod tests {
         let no_reason = format!(
             r#"{{"schema":1,"identity":"{EXPECTED_TRUST_IDENTITY}","policy":"{EXPECTED_TRUST_POLICY}","rollover_signers":[{{"thumbprint":"{ROLLOVER}","reason":"   "}}]}}"#
         );
-        assert!(parse_signer_trust(&no_reason).unwrap_err().contains("审核原因"));
+        assert!(parse_signer_trust(&no_reason)
+            .unwrap_err()
+            .contains("审核原因"));
     }
 
     #[test]
@@ -276,11 +285,15 @@ mod tests {
         let wrong_schema = format!(
             r#"{{"schema":2,"identity":"{EXPECTED_TRUST_IDENTITY}","policy":"{EXPECTED_TRUST_POLICY}","rollover_signers":[]}}"#
         );
-        assert!(parse_signer_trust(&wrong_schema).unwrap_err().contains("schema"));
+        assert!(parse_signer_trust(&wrong_schema)
+            .unwrap_err()
+            .contains("schema"));
         let wrong_identity = format!(
             r#"{{"schema":1,"identity":"subject_name","policy":"{EXPECTED_TRUST_POLICY}","rollover_signers":[]}}"#
         );
-        assert!(parse_signer_trust(&wrong_identity).unwrap_err().contains("身份类型"));
+        assert!(parse_signer_trust(&wrong_identity)
+            .unwrap_err()
+            .contains("身份类型"));
     }
 
     #[test]
@@ -291,7 +304,10 @@ mod tests {
             OsString::from("--msi"),
             OsString::from(r"C:\Temp\HLSDownloader.msi"),
         ];
-        assert_eq!(find_msi_argument(&args).unwrap(), PathBuf::from(r"C:\Temp\HLSDownloader.msi"));
+        assert_eq!(
+            find_msi_argument(&args).unwrap(),
+            PathBuf::from(r"C:\Temp\HLSDownloader.msi")
+        );
     }
 
     #[cfg(windows)]
