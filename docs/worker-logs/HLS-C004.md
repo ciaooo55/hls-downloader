@@ -15,11 +15,11 @@
 - Base at claim: `185973ca3bbd336762a3499739e922fb6ddf0c17`
 - Canonical registry: Issue #39 / `docs/coordination/tasks.json`
 
-`worker-1` first attempted to claim HLS-C003 from stale task state. After refreshing `main`, HLS-C003 was already owned by `worker-0`, so that claim was withdrawn and HLS-C004 was claimed instead. No HLS-C003 files are modified here.
+`worker-1` first attempted to claim HLS-C003 from stale task state. After refreshing `main`, HLS-C003 was already owned by `worker-0`, so that claim was withdrawn and HLS-C004 was claimed instead.
 
 ## Current queue result
 
-As of the audit, the repository has **no open Dependabot pull requests**. The only open pull request observed was the concurrent HLS-C003 documentation PR. HLS-C004 therefore does not manufacture dependency churn merely to satisfy an old task title; it audits the historical major-update wave and the versions actually present on `main`.
+The repository has **no open Dependabot pull requests** at the latest queue refresh. HLS-C004 therefore does not manufacture dependency churn merely to satisfy an old task title; it audits the historical major-update wave and the versions actually present on `main`.
 
 ## Historical major/update wave
 
@@ -66,10 +66,14 @@ The historical queue demonstrates the desired policy:
 - compiler/test/build majors require the component's real build/test pipeline before acceptance;
 - an empty current Dependabot queue is a valid result and is not a reason to create speculative dependency churn.
 
+## Coordination reconciliation
+
+HLS-C003/PR #64 merged useful formal-release-readiness documentation but carried one stale statement saying multiple Dependabot major PRs remained open. Worker-1 had already recorded that as an audit FAIL. HLS-C004 does not revert HLS-C003; it narrowly corrects the dependency queue and phase state in `docs/architecture/project-plan.md`. Issue #39 records the process deviation so future merges must resolve or explicitly rebut active FAIL evidence even when all ChatGPT sessions share one GitHub account.
+
 ## Delivery state
 
 - Machine-readable triage snapshot: `docs/coordination/dependency-triage.json`.
 - Durable policy: `docs/architecture/dependency-maintenance.md`.
-- Draft PR: #65.
-- Concurrent HLS-C003/PR #64 owns `docs/manger.log` and the project plan, so this task intentionally avoids those files until C003 settles.
-- Final acceptance still requires a current-main refresh and independent review by `worker-0`; this worker does not self-merge while that auditor is active.
+- PR: #65, ready for independent audit.
+- Branch has been merged with current-main coordination history rather than overwriting HLS-C003/HLS-C005 state.
+- Final acceptance requires independent review by `worker-0`; this worker does not self-merge while that auditor is active.
