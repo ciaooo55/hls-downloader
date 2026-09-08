@@ -76,10 +76,10 @@ fn authorize_signer_thumbprint(
     let primary = primary
         .ok_or_else(|| "正式发布构建缺少嵌入的 HLS_V7_SIGN_CERT_THUMBPRINT".to_string())
         .and_then(normalize_thumbprint)?;
+    let rollover = parse_signer_trust(trust_json)?;
     if candidate == primary {
         return Ok(());
     }
-    let rollover = parse_signer_trust(trust_json)?;
     if rollover.iter().any(|allowed| allowed == &candidate) {
         return Ok(());
     }
@@ -357,6 +357,13 @@ mod tests {
         assert!(parse_signer_trust(&wrong_identity)
             .unwrap_err()
             .contains("身份类型"));
+    }
+
+    #[test]
+    fn primary_signer_still_requires_a_valid_local_trust_contract() {
+        let malformed = r#"{"schema":1,"identity":"authenticode_leaf_certificate_sha1","policy":"formal-build-signer-or-explicit-rollover","rollover_signers":["#;
+        let error = authorize_signer_thumbprint(PRIMARY, Some(PRIMARY), malformed).unwrap_err();
+        assert!(error.contains("解析更新签名信任配置失败"));
     }
 
     #[test]
