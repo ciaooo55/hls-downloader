@@ -15,9 +15,42 @@
 - C017 / PR #80 merged as `426fc8eed97339885be16bf0ef5fff386a38bd31` after explicitly labeled single-participant fallback review.
 - Old C014 PR #79 was closed unmerged as superseded. Its head `7daf403e...` had 15 commits and an unmerged `release_ready=true` proposal mixed with stale coordination snapshots.
 - New branch `coord/hls-c014-release-readiness-decision-v2` was created directly from post-C017 main rather than merging/rebasing the stale coordination history.
-- No readiness state has been changed on v2 yet.
-- Post-C017 main triggered exactly four prerequisite push workflows. At restart, v7 CI #534 and Candidate #182 were still running; remaining security workflows were also part of the same exact-SHA set. Transition is withheld until all four are successful.
+- No readiness state was changed during restart.
+
+## 2026-09-08T22:06+08:00 — post-C017 baseline complete
+
+Exact `main@426fc8eed97339885be16bf0ef5fff386a38bd31` prerequisite results:
+
+- v7 CI #534 — SUCCESS
+- v7 Candidate Package #182 — SUCCESS
+- Maintenance Security #71 — SUCCESS
+- Rust Security #45 — SUCCESS
+
+A live main refresh still resolved to the same SHA. The C013 frozen-source to post-C017 main comparison contains only governance/documentation changes; runtime, workflows, build scripts and canonical feature-parity source did not change in that interval.
+
+## Audit-state correction
+
+The superseded #79 readiness patch changed `audit_state` to `v7_0_2_release_specialties_verified`. That value is not accepted for v2.
+
+Evidence:
+
+1. Git history shows the v7.0.1 `release_specialties_verified` label entered with commit `d7ebd90b8dcaa8b9426690415081caaf49a49a63`, which also promoted remaining partial features using actual focused/browser release-specialty evidence.
+2. Current `scripts/bump-v7-version.ps1` defines `-ReleaseReady` lifecycle state as `v<version>_release_ready`; for 7.0.2 this is `v7_0_2_release_ready`.
+3. Formal release still regenerates candidate-bound browser/performance/MSI/rollback evidence on the trusted runner before formal packaging, signing, draft creation or publication.
+
+Using `v7_0_2_release_specialties_verified` before those v7.0.2 trusted-runner gates run would overstate evidence. The authorized narrow transition is therefore:
+
+- `release_ready: false -> true`
+- `audit_state: v7_0_2_iteration_in_progress -> v7_0_2_release_ready`
+
+No feature entry, verification text, product version, source, workflow, build script, tag, release, signing, dispatch or publication state is authorized to change.
+
+## Final-head rule
+
+The readiness metadata commit must be the final content commit so that the resulting PR head triggers the applicable v7 CI and Candidate Package pull-request workflows. Once that head exists it is frozen; any subsequent commit invalidates exact-head review/check evidence.
+
+After merge, HLS-C016 owns the exact merge SHA and must wait for four fresh `push/main/exact-SHA` successes before any trusted formal-release attempt.
 
 ## Boundary
 
-This task does not tag, sign, dispatch, create a Release or publish. External trusted-release prerequisites remain mandatory even if canonical readiness is eventually authorized.
+This task does not tag, sign, dispatch, create a Release or publish. External trusted-release prerequisites remain mandatory even after canonical readiness is authorized.
