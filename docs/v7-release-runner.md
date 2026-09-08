@@ -1,8 +1,8 @@
 # v7 formal release runner
 
-`v7 Candidate Package` remains suitable for ordinary GitHub-hosted Windows runners. A public `v7.0.1` release is intentionally stricter: `.github/workflows/release-v7.yml` only targets a dedicated self-hosted Windows x64 runner carrying the custom label `hls-release`.
+`v7 Candidate Package` remains suitable for ordinary GitHub-hosted Windows runners. A formal release of the **current canonical v7 product version** is intentionally stricter: `.github/workflows/release-v7.yml` only targets a dedicated self-hosted Windows x64 runner carrying the custom label `hls-release`. At the current `main` state the canonical version is `7.0.2`, and `feature-parity.json` declares `release_ready=false`, so this document describes the release contract rather than authorizing publication.
 
-The distinction is deliberate. The MSI lifecycle contract verifies the public `v7.0.0` MSI and requires the real install root `E:\h`; browser evidence needs installed Edge and Firefox; public Windows artifacts also require a code-signing private key that must never be stored in the repository or copied into an ordinary hosted runner.
+The distinction is deliberate. The MSI lifecycle contract verifies the immutable public `v7.0.0` MSI as its upgrade baseline while resolving the candidate version from canonical feature-parity/package metadata; it also requires the real install root `E:\h`. Browser evidence needs installed Edge and Firefox; public Windows artifacts require a code-signing private key that must never be stored in the repository or copied into an ordinary hosted runner.
 
 ## Runner contract
 
@@ -41,14 +41,14 @@ All four required workflows emit a push result for every `main` commit so an exa
 A fresh release requires no existing version tag; a retry may reuse only an annotated tag that resolves to that exact same frozen commit and, when a release already exists, only while that release is still a draft. It then:
 
 1. validates all four exact-SHA workflow identities before building release inputs;
-2. builds a fresh candidate from that exact commit;
+2. resolves the canonical product version and builds a fresh candidate from that exact commit;
 3. records browser, performance, installer-upgrade and failure-rollback evidence against the same candidate manifest;
 4. rechecks that `main` has not moved;
 5. builds the formal package using that evidence;
 6. Authenticode-signs and timestamps the top-level Windows EXE/MSI and the first-party executables carried by the Portable ZIP, then verifies signer identity and trust;
 7. creates the Firefox store source bundle, CycloneDX SBOM, release evidence bundle and `SHA256SUMS.txt`;
 8. uploads the staged files as a retained Actions artifact;
-9. creates or safely resumes an annotated version tag and **Draft** GitHub Release;
+9. creates or safely resumes an annotated version tag and **Draft** GitHub Release for that resolved version;
 10. compares every uploaded GitHub asset's reported byte size and `sha256:` digest with the local staged file;
 11. publishes the verified draft as Latest only when the dispatch `publish` switch is enabled.
 
@@ -56,14 +56,14 @@ A missing, renamed, path-mismatched, wrong-event, wrong-branch, wrong-SHA, or fa
 
 ## Safe retry semantics
 
-The formal workflow is resumable only for release state that can be proven to belong to the same frozen `main` commit:
+The formal workflow is resumable only for release state that can be proven to belong to the same frozen `main` commit and resolved canonical version:
 
-- no tag: create a fresh annotated tag and draft release;
-- annotated tag on the exact current commit, but no release: reuse the validated tag and create the draft;
-- annotated tag on the exact current commit with an existing draft release: reject unexpected assets, refresh title and notes, and replace only the expected staged assets before digest verification.
+- no version tag: create a fresh annotated tag and draft release;
+- annotated version tag on the exact current commit, but no release: reuse the validated tag and create the draft;
+- annotated version tag on the exact current commit with an existing draft release: reject unexpected assets, refresh title and notes, and replace only the expected staged assets before digest verification.
 
 A lightweight tag, a tag pointing at any other commit, or an already-published release is always rejected. This lets an interrupted tag push or draft upload be retried without weakening the source, signing, release-gate, or digest checks.
 
 ## Candidate versus formal release
 
-Use the hosted candidate workflow for ordinary development validation and downloadable test packages. Use the formal workflow only on the controlled `hls-release` machine. This preserves the existing hard release evidence instead of weakening it to fit a generic hosted runner.
+Use the hosted candidate workflow for ordinary development validation and downloadable test packages. Use the formal workflow only on the controlled `hls-release` machine, and only after canonical readiness allows formal packaging. The historical `v7.0.1-candidate.1` prerelease remains a published test artifact, not a substitute for a fresh v7.0.2 candidate or formal-release decision. This preserves the hard release evidence instead of weakening it to fit a generic hosted runner.
