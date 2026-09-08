@@ -179,12 +179,13 @@ pub fn apply_replay_json_for(
     request_url: &str,
 ) {
     apply_base_replay(headers, json);
-    if replay_targets_other_origin(json, request_url) {
+    let cross_origin = replay_targets_other_origin(json, request_url);
+    if cross_origin {
         remove_header(headers, "Cookie");
         remove_header(headers, "Authorization");
         remove_header(headers, "Proxy-Authorization");
     }
-    apply_scoped_request_context(headers, json, request_url);
+    apply_scoped_request_context_inner(headers, json, request_url, cross_origin);
 }
 
 /// Bind an in-memory replay context to the task URL. Child HLS/DASH requests
@@ -230,11 +231,58 @@ fn apply_base_replay(headers: &mut std::collections::BTreeMap<String, String>, j
     merge_header_map(headers, value.get("request_headers"));
 }
 
+fn replay_request_header_names(json: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let mut headers = std::collections::BTreeMap::new();
+    merge_header_map(&mut headers, value.get("request_headers"));
+    if let Some(contexts) = value
+        .get("request_contexts")
+        .and_then(|contexts| contexts.as_object())
+    {
+        for scoped in contexts.values() {
+            merge_header_map(&mut headers, scoped.get("request_headers"));
+        }
+    }
+    headers.into_keys().collect()
+}
+
+fn apply_base_navigation_context(
+    headers: &mut std::collections::BTreeMap<String, String>,
+    json: &str,
+) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return;
+    };
+    insert_header(headers, "Referer", value.get("referer"));
+    insert_header(headers, "Origin", value.get("origin"));
+    insert_header(headers, "User-Agent", value.get("user_agent"));
+}
+
+/// Apply a scoped replay context at a redirect boundary. The HTTP engine calls
+/// this only after proving the redirect changed origin, so replay-controlled
+/// custom headers must be cleared even when the redirect returns to `_task_url`.
 pub(crate) fn apply_scoped_request_context(
     headers: &mut std::collections::BTreeMap<String, String>,
     json: &str,
     request_url: &str,
 ) {
+    apply_scoped_request_context_inner(headers, json, request_url, true);
+}
+
+fn apply_scoped_request_context_inner(
+    headers: &mut std::collections::BTreeMap<String, String>,
+    json: &str,
+    request_url: &str,
+    clear_replay_headers: bool,
+) {
+    if clear_replay_headers {
+        for name in replay_request_header_names(json) {
+            remove_header(headers, &name);
+        }
+        apply_base_navigation_context(headers, json);
+    }
     let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
         return;
     };
@@ -470,32 +518,182 @@ mod tests {
     }
 
     #[test]
-    fn replay_json_does_not_send_task_secrets_to_unscoped_cross_origin_child() {
+    fn replay_json_keeps_base_request_headers_on_same_origin() {
         let replay = bind_replay_source_url(
-            r#"{"cookie":"manifest=1","request_headers":{"authorization":"Bearer manifest","X-Playback":"ok"}}"#,
+            r#"{"cookie":"manifest=1","request_headers":{"authorization":"Bearer manifest","X-Playback":"same-origin"}}"#,
             "https://manifest.test/master.m3u8",
         );
         let mut headers = std::collections::BTreeMap::new();
-        apply_replay_json_for(&mut headers, &replay, "https://cdn.test/segment.ts");
-        assert!(!headers.contains_key("Cookie"));
-        assert!(!headers.contains_key("Authorization"));
-        assert_eq!(headers.get("X-Playback").map(String::as_str), Some("ok"));
+        apply_replay_json_for(&mut headers, &replay, "https://manifest.test/segment.ts");
+        assert_eq!(
+            headers.get("Cookie").map(String::as_str),
+            Some("manifest=1")
+        );
+        assert_eq!(
+            headers.get("Authorization").map(String::as_str),
+            Some("Bearer manifest")
+        );
+        assert_eq!(
+            headers.get("X-Playback").map(String::as_str),
+            Some("same-origin")
+        );
     }
 
     #[test]
-    fn exact_scoped_context_clears_invented_identity_and_restores_its_authorization() {
+    fn replay_json_does_not_send_base_request_headers_to_unscoped_cross_origin_child() {
+        let replay = bind_replay_source_url(
+            r#"{
+                "cookie":"manifest=1",
+                "referer":"https://page.test/watch",
+                "origin":"https://page.test",
+                "user_agent":"Browser UA",
+                "request_headers":{
+                    "authorization":"Bearer manifest",
+                    "X-Playback":"secret",
+                    "X-Api-Key":"private"
+                }
+            }"#,
+            "https://manifest.test/master.m3u8",
+        );
+        let mut headers = std::collections::BTreeMap::from([(
+            "X-Task-Header".to_string(),
+            "task-owned".to_string(),
+        )]);
+        apply_replay_json_for(&mut headers, &replay, "https://cdn.test/segment.ts");
+        assert!(!headers.contains_key("Cookie"));
+        assert!(!headers.contains_key("Authorization"));
+        assert!(!headers.contains_key("X-Playback"));
+        assert!(!headers.contains_key("X-Api-Key"));
+        assert_eq!(
+            headers.get("X-Task-Header").map(String::as_str),
+            Some("task-owned")
+        );
+        assert_eq!(
+            headers.get("Referer").map(String::as_str),
+            Some("https://page.test/watch")
+        );
+        assert_eq!(
+            headers.get("Origin").map(String::as_str),
+            Some("https://page.test")
+        );
+        assert_eq!(
+            headers.get("User-Agent").map(String::as_str),
+            Some("Browser UA")
+        );
+    }
+
+    #[test]
+    fn scoped_context_filter_covers_cross_origin_redirect_handoff() {
+        let replay = bind_replay_source_url(
+            r#"{
+                "referer":"https://page.test/watch",
+                "request_headers":{"X-Api-Key":"source-secret"},
+                "request_contexts":{
+                    "https://cdn.test":{
+                        "referer":"https://page.test/watch",
+                        "request_headers":{"X-Cdn-Token":"target-secret"}
+                    }
+                }
+            }"#,
+            "https://manifest.test/master.m3u8",
+        );
+        let mut headers = std::collections::BTreeMap::from([
+            ("Referer".to_string(), "https://page.test/watch".to_string()),
+            ("X-Api-Key".to_string(), "source-secret".to_string()),
+        ]);
+        apply_scoped_request_context(&mut headers, &replay, "https://cdn.test/redirected.ts");
+        assert!(!headers.contains_key("X-Api-Key"));
+        assert_eq!(
+            headers.get("X-Cdn-Token").map(String::as_str),
+            Some("target-secret")
+        );
+        assert_eq!(
+            headers.get("Referer").map(String::as_str),
+            Some("https://page.test/watch")
+        );
+    }
+
+    #[test]
+    fn scoped_context_filter_drops_previous_origin_headers_on_redirect_chain() {
+        let replay = bind_replay_source_url(
+            r#"{
+                "request_contexts":{
+                    "https://cdn-a.test":{
+                        "request_headers":{"X-Cdn-A-Token":"a-secret"}
+                    },
+                    "https://cdn-b.test":{
+                        "request_headers":{"X-Cdn-B-Token":"b-secret"}
+                    }
+                }
+            }"#,
+            "https://manifest.test/master.m3u8",
+        );
+        let mut headers = std::collections::BTreeMap::from([(
+            "X-Task-Header".to_string(),
+            "task-owned".to_string(),
+        )]);
+        apply_scoped_request_context(&mut headers, &replay, "https://cdn-a.test/first.ts");
+        assert_eq!(
+            headers.get("X-Cdn-A-Token").map(String::as_str),
+            Some("a-secret")
+        );
+        apply_scoped_request_context(&mut headers, &replay, "https://cdn-b.test/second.ts");
+        assert!(!headers.contains_key("X-Cdn-A-Token"));
+        assert_eq!(
+            headers.get("X-Cdn-B-Token").map(String::as_str),
+            Some("b-secret")
+        );
+        assert_eq!(
+            headers.get("X-Task-Header").map(String::as_str),
+            Some("task-owned")
+        );
+    }
+
+    #[test]
+    fn scoped_context_filter_clears_previous_origin_on_return_to_source() {
+        let replay = bind_replay_source_url(
+            r#"{
+                "request_contexts":{
+                    "https://cdn.test":{
+                        "request_headers":{"X-Cdn-Token":"cdn-secret"}
+                    }
+                }
+            }"#,
+            "https://manifest.test/master.m3u8",
+        );
+        let mut headers = std::collections::BTreeMap::from([
+            ("X-Cdn-Token".to_string(), "cdn-secret".to_string()),
+            ("X-Task-Header".to_string(), "task-owned".to_string()),
+        ]);
+        apply_scoped_request_context(&mut headers, &replay, "https://manifest.test/return.ts");
+        assert!(!headers.contains_key("X-Cdn-Token"));
+        assert_eq!(
+            headers.get("X-Task-Header").map(String::as_str),
+            Some("task-owned")
+        );
+    }
+
+    #[test]
+    fn exact_scoped_context_clears_base_identity_and_restores_target_headers() {
         let replay = bind_replay_source_url(
             r#"{
                 "cookie":"page=1",
                 "referer":"https://page.test/watch",
                 "origin":"https://page.test",
-                "request_headers":{"authorization":"Bearer page"},
+                "request_headers":{
+                    "authorization":"Bearer page",
+                    "X-Playback":"page-secret"
+                },
                 "request_contexts":{
                     "https://cdn.test":{
                         "cookie":"",
                         "referer":"",
                         "origin":"",
-                        "request_headers":{"authorization":"Bearer cdn"}
+                        "request_headers":{
+                            "authorization":"Bearer cdn",
+                            "X-Playback":"cdn-scoped",
+                            "X-Cdn-Token":"cdn-only"
+                        }
                     }
                 }
             }"#,
@@ -509,6 +707,14 @@ mod tests {
         assert_eq!(
             headers.get("Authorization").map(String::as_str),
             Some("Bearer cdn")
+        );
+        assert_eq!(
+            headers.get("X-Playback").map(String::as_str),
+            Some("cdn-scoped")
+        );
+        assert_eq!(
+            headers.get("X-Cdn-Token").map(String::as_str),
+            Some("cdn-only")
         );
     }
 
