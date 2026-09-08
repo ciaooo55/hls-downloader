@@ -31,6 +31,22 @@
 - If no defect is found in a boundary, record the evidence instead of inventing work.
 - Any implementation fix must use a separate task branch/PR and independent review.
 
+## Finding 1 — runtime updater signer identity is not pinned
+
+**Result: confirmed; split to HLS-C009 (P1).**
+
+Evidence from current `main`:
+
+- Release discovery is fixed to the repository's GitHub `releases/latest` API.
+- Automatic MSI selection requires a non-zero GitHub asset size and a `sha256:` digest; the downloaded bytes are rechecked against both before atomic publish.
+- Runtime MSI acceptance also requires exact expected `ProductVersion`, `ProductName=HLSDownloader`, the fixed project `UpgradeCode`, per-user installation context and a successful Windows `WinVerifyTrust` result.
+- The formal release path is stronger: `sign-v7-authenticode.ps1` verifies that every signed first-party artifact's signer certificate thumbprint equals the configured `HLS_V7_SIGN_CERT_THUMBPRINT`, and `verify-v7-authenticode.ps1` binds its signature report to that signer and the exact source commit/tree.
+- `native_shell/src/updater.rs::verify_installer_authenticode`, however, stops after generic `WinVerifyTrust` success. It does not compare the signer certificate/public-key identity against a locally trusted HLS Downloader signer contract.
+
+Consequence: a release-channel compromise that supplies a matching version/name/UpgradeCode MSI, updates the network-controlled digest/size metadata, and signs the MSI with a different but Windows-trusted code-signing certificate is not explicitly rejected by the existing runtime signer check. The formal pipeline would reject such a signer, but an already-installed client's automatic updater does not enforce that same identity boundary.
+
+Action: created HLS-C009 with narrow acceptance criteria. HLS-C005 remains audit-only and does not modify updater implementation.
+
 ## Status
 
-`in_progress`: audit branch initialized; source inspection starts with update trust and IPC boundaries.
+`in_progress`: update-trust boundary produced HLS-C009; next audit boundary is Core/Compose/Native Messaging IPC framing and authentication.
