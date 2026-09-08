@@ -128,18 +128,18 @@ fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
         CertGetCertificateContextProperty, CERT_SHA1_HASH_PROP_ID,
     };
     use windows_sys::Win32::Security::WinTrust::{
-        WinVerifyTrust, CRYPT_PROVIDER_CERT, CRYPT_PROVIDER_DATA, CRYPT_PROVIDER_SGNR,
+        WinVerifyTrust, CRYPT_PROVIDER_CERT, CRYPT_PROVIDER_SGNR,
         WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO,
         WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_DISABLE_MD2_MD4, WTD_REVOKE_NONE,
         WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
     };
     use windows_sys::Win32::System::LibraryLoader::{
-        FreeLibrary, GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
+        GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
     };
 
-    type ProvDataFromStateData = unsafe extern "system" fn(HANDLE) -> *mut CRYPT_PROVIDER_DATA;
+    type ProvDataFromStateData = unsafe extern "system" fn(HANDLE) -> *mut core::ffi::c_void;
     type GetProvSignerFromChain = unsafe extern "system" fn(
-        *mut CRYPT_PROVIDER_DATA,
+        *mut core::ffi::c_void,
         u32,
         i32,
         u32,
@@ -258,9 +258,9 @@ fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
             .collect::<String>())
     })();
 
-    unsafe {
-        FreeLibrary(module);
-    }
+    // This helper performs one signer verification per process. Keep the System32
+    // WinTrust module loaded until process exit so the dynamically resolved
+    // function pointers can never outlive their module.
     trust.dwStateAction = WTD_STATEACTION_CLOSE;
     unsafe {
         WinVerifyTrust(
