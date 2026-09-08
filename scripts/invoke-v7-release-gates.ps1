@@ -17,6 +17,8 @@ $currentTree = (& git -C $repo rev-parse 'HEAD^{tree}').Trim()
 if ([int]$manifest.schema -ne 1 -or [string]$manifest.package_tier -ne 'candidate' -or [string]$manifest.source_commit -ne $currentCommit -or [string]$manifest.source_tree -ne $currentTree) {
     throw 'Release gates require a candidate from the current source commit/tree.'
 }
+& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'assert-v7-release-gaps.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Formal release gap assertion failed.' }
 if (-not (Test-Path -LiteralPath 'E:\' -PathType Container)) { throw 'The formal release runner must provide the E: volume used by the MSI lifecycle gate.' }
 
 function Resolve-Browser([string]$Explicit, [string[]]$Defaults, [string]$Label) {
