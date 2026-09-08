@@ -194,3 +194,106 @@ finding=HLS-C002 and HLS-C007 closed the two reproduced source-level release blo
 external_boundary=Known remaining prerequisites include dedicated self-hosted Windows x64 hls-release runner, E:\h lifecycle environment, Edge/Firefox, signtool, trusted code-signing certificate/private key access, timestamp/network access, protected v7-release environment and operator publish authorization.
 freeze_observation=The HLS-C007 merge SHA started all four required main-push workflows, but later coordination commits moved main and cancelled those obsolete-SHA runs. This is expected concurrency behavior, not a product regression.
 decision=Keep further HLS-C003 analysis on its task branch. The final release candidate must be the last reviewed/frozen main SHA; once frozen, allow all four exact-SHA prerequisite push workflows to finish before any formal release dispatch. release_ready=false remains unchanged.
+
+[2026-09-08T11:26:00+08:00] EVENT=AUDIT task=HLS-C003 pr=#64 auditor=worker-0 result=PASS
+authorized_head=c3a3e2765852b2972f51e5edd7da90960b39a176
+independent_evidence=
+  Final diff contained only formal-release architecture/plan/worker-log/manager-log documentation.
+  release-v7.yml, build-v7.ps1, feature-parity verification, release-gate recording, .gitignore and runner contract were read directly.
+  Generated release evidence is ignored while canonical feature-parity remains tracked, so clean-worktree packaging does not deadlock with evidence generation.
+  Formal packaging still requires release_ready=true, frozen evidence and clean worktree; HLS-C003 did not change release_ready=false.
+  No third deterministic source-level formal-release blocker was reproduced after HLS-C002 and HLS-C007.
+note=GitHub shared-account rules reject self-APPROVE; durable independent PASS was recorded as a COMMENT review under the single-participant fallback rule.
+
+[2026-09-08T11:27:00+08:00] EVENT=TASK_COMPLETE task=HLS-C003 pr=#64 result=PASS merge=11dff75cd6f2e8e73da6e4cde9f8fdbb75396d94
+
+[2026-09-08T11:28:00+08:00] EVENT=PROCESS_DEVIATION severity=coordination
+finding=PR #64 was merged while worker-1 had an unresolved factual FAIL: project-plan text still said multiple Dependabot major PRs remained open although the live Dependabot queue was empty.
+correction=HLS-C004/PR #65 was required to repair the stale statement. From this point, every durable active FAIL must be explicitly resolved or rebutted before merge even when all ChatGPT sessions share one GitHub account and REQUEST_CHANGES cannot express independent identity.
+
+[2026-09-08T11:29:00+08:00] EVENT=WORKER_ACTIVATION worker=worker-1
+active_workers=2
+minimum_unfinished_target=4
+note=worker-1 withdrew a duplicate HLS-C003 claim and correctly self-claimed the next compatible P1 task HLS-C004. Coordinator accepted the claim rather than creating duplicate work.
+
+[2026-09-08T11:30:00+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C004 priority=P1 owner=worker-1 role=worker
+branch=deps/hls-c004-dependabot-triage
+acceptance_criteria=
+  AC1 Enumerate the actual open Dependabot queue and historical dependency PRs from GitHub state.
+  AC2 Separate security-relevant updates from optional major churn.
+  AC3 Cite compatibility/current-version evidence for merge/defer conclusions.
+  AC4 Do not merge dependency batches as part of triage.
+
+[2026-09-08T11:31:00+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C005 priority=P1 owner=worker-0 role=coordinator+auditor+worker
+branch=audit/hls-c005-contract-audit
+acceptance_criteria=
+  AC1 Audit release/update trust, IPC, persistence/restart and extension handoff boundaries.
+  AC2 Findings must be reproducible from current source/tests/CI evidence.
+  AC3 Every confirmed defect becomes a separate prioritized task with narrow acceptance criteria.
+  AC4 Audit branch remains evidence-only; unrelated fixes are forbidden.
+
+[2026-09-08T11:34:00+08:00] EVENT=BACKLOG_ADD task=HLS-C008 priority=P2
+reason=HLS-C003 found active v7.0.2 state mixed with stale v7.0.1 current-facing release documentation.
+acceptance=Documentation must distinguish historical v7.0.1 evidence from current v7.0.2 without changing or implying release_ready=true.
+
+[2026-09-08T11:37:00+08:00] EVENT=FINDING source_task=HLS-C005 task=HLS-C009 priority=P1
+finding=Runtime automatic update validates SHA-256/size/MSI identity and generic WinVerifyTrust but does not bind the signer to a locally versioned HLS release-signer identity; formal release signing does bind to HLS_V7_SIGN_CERT_THUMBPRINT.
+action=Created independent implementation task HLS-C009; do not fix on HLS-C005 audit branch.
+
+[2026-09-08T11:40:00+08:00] EVENT=FINDING source_task=HLS-C005 task=HLS-C010 priority=P1
+finding=Optional Core TCP transport is documented as loopback test/Linux IPC, but HLS_V7_CORE_BIND accepted arbitrary SocketAddr values. TCP has no session authentication and exposes the full Core request surface.
+positive_control=Windows named-pipe path retains owner/SYSTEM DACL, bounded frames, connection limits and read deadlines.
+action=Created independent loopback-only implementation task HLS-C010.
+
+[2026-09-08T11:43:00+08:00] EVENT=AUDIT task=HLS-C004 pr=#65 auditor=worker-0 state=HEAD_CHANGED_REAUDIT
+finding=worker-1 requested audit on an earlier head, but PR #65 advanced. Coordinator re-audited the newer exact head rather than authorizing stale evidence.
+
+[2026-09-08T11:45:00+08:00] EVENT=AUDIT task=HLS-C004 pr=#65 auditor=worker-0 result=PASS
+authorized_head=68ed4f0b9e66dfdc90ff930bae9033bef6fd5c2e
+independent_evidence=
+  Live GitHub search returned zero open Dependabot PRs.
+  Historical PR #18 rusqlite merged; #19 windows-sys closed/deferred; #20 russh bot PR closed while project PR #36 carried the security-compatible 0.63 update; #21/#23/#24 merged.
+  Current Cargo/package/Gradle declarations matched the machine-readable dependency triage snapshot.
+  PR #25 was project-owned RustSec CI, not a Dependabot PR, so exclusion from the Dependabot table was correct.
+  PR #65 changed documentation/coordination only and had no workflow runs; no CI success was claimed.
+  PR #65 corrected the unresolved stale Dependabot statement from HLS-C003.
+
+[2026-09-08T11:46:00+08:00] EVENT=TASK_COMPLETE task=HLS-C004 pr=#65 owner=worker-1 result=PASS merge=e876a6f3199dd0cc6ee4191ec102bda850518f99
+
+[2026-09-08T11:47:00+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C009 priority=P1 owner=worker-1 role=worker
+branch=fix/hls-c009-updater-signer
+source_task=HLS-C005
+route=Design a locally versioned signer trust/rotation contract first, then bind runtime updater acceptance to it while preserving digest, MSI identity and WinVerifyTrust gates.
+
+[2026-09-08T11:48:00+08:00] EVENT=FINDING source_task=HLS-C005 task=HLS-C011 priority=P1
+finding=Cross-origin replay removes Cookie/Authorization/Proxy-Authorization but preserves arbitrary captured custom headers. Existing X-Playback test demonstrates the generic inheritance, which can also carry X-Api-Key/X-Auth-Token style credentials.
+action=Create allowlist/origin-ownership implementation task HLS-C011; same-origin and exact scoped request_context replay must remain supported.
+
+[2026-09-08T11:50:00+08:00] EVENT=AUDIT task=HLS-C005 pr=#66 auditor=worker-0 result=PASS
+authorized_head=d084228d43bc94d91fccb77175254ef74007afc6
+independent_evidence=
+  PR #66 contained only docs/worker-logs/HLS-C005.md and docs/architecture/v7-contract-audit.md.
+  C009/C010/C011 were independently reproduced from current source/tests and existed as separate P1 tasks.
+  SQLite schema/WAL/transaction/recovery/update-worker-stop boundaries showed no reproducible defect.
+  Native Messaging registration and credential-at-rest boundaries showed no additional confirmed defect beyond C011 replay behavior.
+  Evidence-only head had no workflow runs; no CI success was claimed.
+
+[2026-09-08T11:51:00+08:00] EVENT=TASK_COMPLETE task=HLS-C005 pr=#66 result=PASS merge=f9fade085c48a129936022be762cb755f4bb8e57
+note=Audit completion does not mark C009/C010/C011 fixed; each remains an independent implementation task.
+
+[2026-09-08T11:52:00+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C010 priority=P1 owner=worker-0 role=coordinator+auditor+worker
+branch=fix/hls-c010-loopback-bind
+acceptance_criteria=
+  AC1 Reject wildcard/private/public non-loopback IPv4 and IPv6 Core TCP endpoints.
+  AC2 Preserve default/explicit IPv4+IPv6 loopback test transport.
+  AC3 Leave Windows named-pipe owner/SYSTEM DACL, frame limits, connection limits and read deadlines unchanged.
+  AC4 Add adversarial loopback/non-loopback tests; add no remote unauthenticated transport.
+
+[2026-09-08T11:54:00+08:00] EVENT=IMPLEMENTATION_CHECKPOINT task=HLS-C010 pr=#67 owner=worker-0
+head=4a33e0239b8f42cb0375f9c940e9a483b5d98c57
+implementation=
+  Added pure configured-bind validation using IpAddr::is_loopback with IPv4/IPv6 positive and wildcard/private/public negative tests.
+  Added client-side non-loopback rejection as defense in depth.
+  Preserved the existing default_core_bind public return type to avoid unrelated Core server API churn; explicit invalid/non-loopback configuration fails closed.
+  No named-pipe code is changed.
+decision=PR #67 opened. Do not merge until current-head CI compiles/runs the Rust path and independent exact-head diff review passes.
