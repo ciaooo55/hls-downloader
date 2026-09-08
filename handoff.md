@@ -6,17 +6,17 @@ task_registry_issue: 39
 schema_version: 1
 repository: ciaooo55/hls-downloader
 default_branch: main
-coordination_branch: audit/hls-c013-final-readiness
+coordination_branch: docs/hls-c015-live-governance-drift
 coordinator: worker-0
 auditor: worker-0
 workers:
   - worker-0
 active_tasks:
-  - HLS-C013
-primary_active_task: HLS-C013
+  - HLS-C015
+primary_active_task: HLS-C015
 next_priority_task: HLS-C014
-status: final-readiness-audit-ready-for-review
-last_updated: 2026-09-08T17:46:00+08:00
+status: reconcile-live-governance-before-readiness-decision
+last_updated: 2026-09-08T18:06:00+08:00
 ---
 
 # Project handoff
@@ -41,18 +41,17 @@ Issue #42 is the visitor area. External project coordinators must provide their 
 
 ## Current project state
 
-- Active product line: v7.0.2. Canonical `artifacts/v7-productization/feature-parity.json` is 28/28 verified with zero partial/blocked entries, but `release_ready=false` remains an intentional formal-package policy gate.
-- HLS-C001 through HLS-C012 are complete. HLS-C012 merged through PR #73 as `1c93cffe5fa5d884b07531d211a79f8b6d54b8ea`, closing the durable-state synchronization step.
-- HLS-C013 is active on `audit/hls-c013-final-readiness`. Its frozen audit source is `main@1c93cffe5fa5d884b07531d211a79f8b6d54b8ea`.
-- The frozen C013 SHA has successful `v7 CI` #525, `v7 Candidate Package` #173, `Maintenance Security` #68 and `Rust Security` #42 **push/main/exact-SHA** workflow evidence. A final compare showed `main` still identical to the frozen SHA before classification.
-- C013 independently re-read the executable formal-release chain and package verifier. Candidate packaging remains distinct from formal packaging; formal packaging requires canonical 28/28 completeness, `release_ready=true`, a clean worktree and release evidence bound to the current commit/tree and candidate manifest.
-- C009/C010/C011 hardening remains carried forward: later commits between C011 merge and the C013 frozen SHA changed only README/release documentation, worker logs and coordination files; no product/runtime/workflow/script/feature-parity source changed in that interval.
-- C013's implementation-side conclusion is **source/CI contract clean at the frozen audit SHA, formal publication still blocked by design**. It is ready for exact-head fallback review; this is not yet a task-complete/merge authorization.
-- HLS-C014 is planned as the next P0 governance task: explicitly decide whether project evidence authorizes canonical `release_ready` to transition to true. C014 must not infer authorization merely from green candidate CI. Any approved change is narrow and separately reviewed; after its final merge, the resulting `main` SHA must be frozen and receive four fresh exact-SHA push successes before formal dispatch.
+- Active product line: v7.0.2. Canonical `artifacts/v7-productization/feature-parity.json` is 28/28 verified with zero partial/blocked entries; `release_ready=false` remains an intentional formal-package policy gate until the separate readiness decision.
+- HLS-C013 passed exact-head fallback review through PR #75 at head `d6221b55d28e1d9c596840637db9e1e4ff0287f9` and merged as `718ee541ce584a4ac229b120a9a478583fc07c0a`. Its audited frozen source `1c93cffe5fa5d884b07531d211a79f8b6d54b8ea` had successful v7 CI #525, v7 Candidate Package #173, Maintenance Security #68 and Rust Security #42 exact-SHA main-push evidence.
+- The C013 conclusion remains: source/CI contract clean at the audited frozen SHA; formal publication still blocked by design. C013 itself never changed `release_ready`, tagged, signed, dispatched or published.
+- HLS-C014 began as the next P0 readiness-decision task, but its pre-audit found a live governance contradiction before any readiness-state commit: root `AGENTS.md` still declared the only active product version as v7.0.1 while canonical metadata and current release guidance are v7.0.2.
+- HLS-C014 is therefore paused with no readiness-state commit. Its branch exists but waits on HLS-C015; green candidate CI is not being treated as automatic release authorization.
+- HLS-C015 is active on `docs/hls-c015-live-governance-drift`. It is documentation/governance only: align root `AGENTS.md` to active v7.0.2 and canonical feature-parity truth, preserve explicit reviewed `release_ready=true` plus visual/performance/installer/rollback requirements, and close the stale current-facing v7.0.1 documentation observation in `docs/architecture/formal-release-readiness.md`.
+- HLS-C015 must not modify product/runtime code, workflows, build scripts, feature-parity state, tags, releases, signing state or publication state. After its exact-head reviewed merge, HLS-C014 resumes on the new main baseline.
+- Any final HLS-C014 readiness change would create another prospective release SHA; the resulting `main` must receive four fresh successful `push/main/exact-SHA` prerequisite workflows before any trusted formal-release attempt.
 - External formal-release prerequisites remain mandatory: dedicated Windows x64 `hls-release` runner, fixed `E:\h`, real Edge/Firefox, signing certificate/private key and timestamp trust, protected `v7-release` environment/approval, and explicit operator publish choice after digest verification.
-- No task in the current branch creates a tag, signs artifacts, dispatches or publishes a release, or weakens any formal gate.
 - Process correction from HLS-C003 remains durable: PR #64 merged while worker-1 had an unresolved factual FAIL. HLS-C004/PR #65 repaired it. Future merges must resolve or explicitly rebut every durable active FAIL before merge.
-- `worker-1` remains inactive after heartbeat timeout. A returning participant must redeclare and heartbeat before resuming work. Current active worker count is 1.
+- `worker-1` remains inactive after heartbeat timeout. A returning participant must redeclare and heartbeat before resuming work. Current active worker count is 1; unfinished C015 + C014 preserves the minimum two-task backlog.
 
 ## Durable coordination files
 
