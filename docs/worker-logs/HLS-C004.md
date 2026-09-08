@@ -30,7 +30,7 @@ As of the audit, the repository has **no open Dependabot pull requests**. The on
 | #20 | `russh` 0.62.7 -> 0.63.2 | closed, not merged | runtime + security + breaking API | Superseded correctly by #36, which carried the security update and adapted the SFTP TOFU host-key handler to `PublicKeyOrCertificate`. |
 | #21 | GitHub Actions major group | merged | CI/supply chain | Good merge. Workflows now use exact immutable commit SHAs for checkout/cache/setup-java/setup-node/upload-artifact and have been exercised by v7 CI/release work. |
 | #22 | `@types/chrome` 0.0.326 -> 0.2.8 | merged | dev/type tooling | Good merge; current extension manifest is 0.2.8. |
-| #23 | Compose/coroutines/serialization/Gradle group | merged | runtime + build | Good merge only because repository CI validates Compose tests/distribution. Current Compose is 1.12.0; coroutines/serialization are 1.11.0. |
+| #23 | Compose/coroutines/serialization/Gradle group | merged | runtime + build | Good merge only because repository CI validates Compose tests/distribution. Current Compose is 1.12.0; coroutines/serialization are 1.11.0; wrapper is Gradle 9.7.1 with a pinned distribution SHA-256. |
 | #24 | Vitest 3.2.6 -> 5.0.0 | merged | dev/test major | Accepted with project validation. Current extension uses Node 24.20.0 in CI and Vitest 5.0.0; extension tests have remained part of v7 CI. |
 | #26 | TypeScript 5.8.3 -> 7.0.2 | merged | dev/compiler major | Accepted with project validation. Current extension manifest is TypeScript 7.0.2 and `pnpm test` includes `tsc --noEmit`. |
 
@@ -48,7 +48,13 @@ As of the audit, the repository has **no open Dependabot pull requests**. The on
 - `typescript = 7.0.2`
 - `vitest = 5.0.0`
 
-`desktop_ui/build.gradle.kts` currently declares Compose `1.12.0`, coroutines Swing `1.11.0`, serialization JSON `1.11.0`, Kotlin `2.4.10`, and product version `7.0.2`.
+`desktop_ui/build.gradle.kts` currently declares Compose `1.12.0`, coroutines Swing `1.11.0`, serialization JSON `1.11.0`, Kotlin `2.4.10`, and product version `7.0.2`. `desktop_ui/gradle/wrapper/gradle-wrapper.properties` pins Gradle `9.7.1` plus distribution SHA-256 `acd53f1edaf02f1a8ff99879f8a34b302661a057d9b063ae9e35b552f804d20a`.
+
+## Why #19 is deferred rather than silently considered landed
+
+PR #19 did not merge. Its discussion records that the branch had been edited outside Dependabot, after which Dependabot refused to rebase it and suggested recreation. Current `native_shell/Cargo.toml` independently confirms `windows-sys` remains on 0.59.
+
+That history is not evidence that 0.61 is unsafe; it is evidence that the proposed update never completed. HLS-C004 still recommends **defer**, because the currently demonstrated reason to change is version freshness rather than a repository-specific security/functional requirement, while `windows-sys` participates in a large Win32 surface including WinTrust, WinHTTP, COM, registry, IPC, power and shell integration. Reopen only under the policy triggers documented in `docs/architecture/dependency-maintenance.md` and validate the affected Windows paths as a dedicated compatibility change.
 
 ## Policy conclusion
 
@@ -60,9 +66,10 @@ The historical queue demonstrates the desired policy:
 - compiler/test/build majors require the component's real build/test pipeline before acceptance;
 - an empty current Dependabot queue is a valid result and is not a reason to create speculative dependency churn.
 
-## Remaining work
+## Delivery state
 
-- Add a machine-readable triage snapshot for future agents/auditors.
-- Add the durable dependency-maintenance policy under `docs/architecture/`.
-- Refresh against current `main` before review because worker-0 is concurrently working HLS-C003.
-- Submit this documentation-only task for independent review by `worker-0`; do not self-merge without that review while the auditor is available.
+- Machine-readable triage snapshot: `docs/coordination/dependency-triage.json`.
+- Durable policy: `docs/architecture/dependency-maintenance.md`.
+- Draft PR: #65.
+- Concurrent HLS-C003/PR #64 owns `docs/manger.log` and the project plan, so this task intentionally avoids those files until C003 settles.
+- Final acceptance still requires a current-main refresh and independent review by `worker-0`; this worker does not self-merge while that auditor is active.
