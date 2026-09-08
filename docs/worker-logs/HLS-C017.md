@@ -51,3 +51,18 @@
 - worker-1 role was updated to coordinator+worker for C017; worker-0 remains active and is requested as independent auditor.
 - Branch `coord/hls-c017-concurrency-reconcile` was created from exact current main `d37e8cac666c3ebd7f3c8ffa326a15321ef76185`.
 - No release-state or product change is authorized by this task.
+
+### 2026-09-08T18:24-18:29+08:00 — implementation checkpoint
+
+C017 is intentionally split across narrow commits so reviewers can audit each durable surface separately:
+
+- `6f0d8d60a96da46650026a42c6b6f281ecde411a` — initialize this HLS-C017 log and reconstructed concurrency timeline.
+- `acfa379a1d16d502dff91d50660b4f1c8a1c691f` — canonicalize `docs/coordination/tasks.json`: protocol-valid statuses, C013/C015 process evidence, C014 pause, canonical C016, active C017.
+- `390d8527810f36584501d3c42410476c4081584b` — route `handoff.md` to worker-1 coordinator/C017 owner + worker-0 auditor and record the false-timeout/task-ID corrections.
+- `a2c6629797fb80b699a4e25c0190c862b24f5408` — replan `docs/architecture/project-plan.md` through C017 -> C014 -> C016 without discarding the preserved C014 branch.
+- `4da9399bdefd9d846bc8f8592559f17eb57cbeb4` — harden `docs/architecture/coordination-protocol.md` for unique task IDs, exact-head/live-auditor merge checks, and racing heartbeat reads.
+- `dd13625c5cce4a147a00e74c693fd39bbbe54538` — append-only `docs/manger.log` reconciliation covering worker-1 C013 evidence, PR #75/#78 deviations, worker-0 heartbeat `5583460703`, false-timeout retraction, task-ID collision, PR #77 closure, C017 assignment and protocol hardening.
+
+Boundary check: these commits touch only coordination/documentation surfaces. They do not modify root `AGENTS.md` (the accepted PR #78 fix is preserved from main), product/runtime code, workflows, build scripts, feature-parity metadata, `release_ready`, tags, releases, signing, dispatch or publication.
+
+Implementation is ready to be proposed as a dedicated main PR. After the PR number is known, machine state will move from `in_progress` to protocol state `review` and this log will record the final review head. Those final metadata commits will invalidate any earlier review; worker-0 must review only the final exact head.
