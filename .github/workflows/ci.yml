@@ -116,6 +116,8 @@ jobs:
           cargo fmt --all -- --check
           # Player tests intentionally toggle process-wide backend env hooks; serial execution prevents cross-test contamination.
           cargo test --locked --lib -- --test-threads=1
+          # The updater binary owns runtime release-signer authorization tests, including the Windows WinTrust path.
+          cargo test --locked --bin HLSDownloaderUpdater
           cargo build --locked --bin HLSDownloaderUpdater
           # Product/test-helper reachability and stable IPC/media interfaces intentionally trigger these structural lints.
           # Keep every other Clippy warning fatal so new actionable warnings still fail CI.
