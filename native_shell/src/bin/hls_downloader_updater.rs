@@ -128,7 +128,7 @@ fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
         CertGetCertificateContextProperty, CERT_SHA1_HASH_PROP_ID,
     };
     use windows_sys::Win32::Security::WinTrust::{
-        CRYPT_PROVIDER_CERT, CRYPT_PROVIDER_DATA, CRYPT_PROVIDER_SGNR, WinVerifyTrust,
+        WinVerifyTrust, CRYPT_PROVIDER_CERT, CRYPT_PROVIDER_DATA, CRYPT_PROVIDER_SGNR,
         WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO,
         WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_DISABLE_MD2_MD4, WTD_REVOKE_NONE,
         WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
@@ -137,8 +137,7 @@ fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
         FreeLibrary, GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
     };
 
-    type ProvDataFromStateData =
-        unsafe extern "system" fn(HANDLE) -> *mut CRYPT_PROVIDER_DATA;
+    type ProvDataFromStateData = unsafe extern "system" fn(HANDLE) -> *mut CRYPT_PROVIDER_DATA;
     type GetProvSignerFromChain = unsafe extern "system" fn(
         *mut CRYPT_PROVIDER_DATA,
         u32,
@@ -209,22 +208,18 @@ fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
     }
 
     let result = (|| {
-        let prov_data_proc = unsafe {
-            GetProcAddress(module, b"WTHelperProvDataFromStateData\0".as_ptr())
-        }
-        .ok_or_else(|| "Wintrust.dll 缺少 WTHelperProvDataFromStateData".to_string())?;
-        let signer_proc = unsafe {
-            GetProcAddress(module, b"WTHelperGetProvSignerFromChain\0".as_ptr())
-        }
-        .ok_or_else(|| "Wintrust.dll 缺少 WTHelperGetProvSignerFromChain".to_string())?;
-        let cert_proc = unsafe {
-            GetProcAddress(module, b"WTHelperGetProvCertFromChain\0".as_ptr())
-        }
-        .ok_or_else(|| "Wintrust.dll 缺少 WTHelperGetProvCertFromChain".to_string())?;
+        let prov_data_proc =
+            unsafe { GetProcAddress(module, b"WTHelperProvDataFromStateData\0".as_ptr()) }
+                .ok_or_else(|| "Wintrust.dll 缺少 WTHelperProvDataFromStateData".to_string())?;
+        let signer_proc =
+            unsafe { GetProcAddress(module, b"WTHelperGetProvSignerFromChain\0".as_ptr()) }
+                .ok_or_else(|| "Wintrust.dll 缺少 WTHelperGetProvSignerFromChain".to_string())?;
+        let cert_proc =
+            unsafe { GetProcAddress(module, b"WTHelperGetProvCertFromChain\0".as_ptr()) }
+                .ok_or_else(|| "Wintrust.dll 缺少 WTHelperGetProvCertFromChain".to_string())?;
 
-        let prov_data_from_state: ProvDataFromStateData = unsafe {
-            std::mem::transmute(prov_data_proc)
-        };
+        let prov_data_from_state: ProvDataFromStateData =
+            unsafe { std::mem::transmute(prov_data_proc) };
         let get_signer: GetProvSignerFromChain = unsafe { std::mem::transmute(signer_proc) };
         let get_cert: GetProvCertFromChain = unsafe { std::mem::transmute(cert_proc) };
 
