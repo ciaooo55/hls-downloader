@@ -21,10 +21,15 @@
 - `.github/workflows/release-v7.yml`
 - `docs/v7-release-runner.md`
 - `artifacts/v7-productization/feature-parity.json`
+- `scripts/build-v7.ps1`
+- `scripts/verify-v7-feature-parity.ps1`
+- `scripts/invoke-v7-release-gates.ps1`
+- `scripts/record-v7-release-gate.ps1`
+- `.gitignore`
 - HLS-C002 accepted exact-SHA security workflow contract
 - HLS-C007 accepted canonical MSI candidate-version contract
 
-## Initial classification
+## Classification
 
 ### Repository contract already present
 
@@ -41,7 +46,21 @@ The formal workflow is deliberately fail-closed. It requires:
 - staged assets, checksums, SBOM/evidence, draft-release upload, and post-upload byte-size/SHA-256 verification;
 - explicit `publish=true` before a verified draft becomes Latest.
 
-HLS-C002 fixed exact-SHA prerequisite workflow coverage. HLS-C007 fixed the deterministic v7.0.1/v7.0.2 MSI lifecycle version drift. No remaining source defect is established by those two previously identified blockers.
+HLS-C002 fixed exact-SHA prerequisite workflow coverage. HLS-C007 fixed the deterministic v7.0.1/v7.0.2 MSI lifecycle version drift.
+
+### Formal-package readiness decision
+
+`build-v7.ps1 -Task package` deliberately invokes `verify-v7-feature-parity.ps1` with `-RequireCanonicalComplete -RequireReleaseReady -RequireCleanWorktree`. The verifier therefore rejects formal packaging until the canonical matrix is 28/28 verified, `release_ready=true`, the release evidence matches the current commit/tree, and the Git worktree is clean.
+
+This is a policy gate rather than a defect. HLS-C003 does not flip `release_ready` because canonical `feature-parity.json` still says `release_ready=false` and `audit_state=v7_0_2_iteration_in_progress`.
+
+The clean-worktree requirement does **not** deadlock with release evidence generation: `.gitignore` ignores `artifacts/v7-productization/*` except the canonical `feature-parity.json`. Browser/performance/installer/rollback reports, aggregate `release-evidence.json`, candidate output and formal package staging therefore remain local ignored artifacts. `record-v7-release-gate.ps1` binds each report and aggregate evidence file to the current source commit/tree and candidate manifest hash.
+
+### Draft and publication protection
+
+The formal workflow keeps the GitHub Release as a draft while validating uploaded asset count, byte size and GitHub-reported `sha256:` digest against local staged files. Only the explicit workflow-dispatch `publish` input permits the final `gh release edit --draft=false --latest` step.
+
+No path inspected in HLS-C003 bypasses the current-main check, exact-SHA prerequisite check, release evidence binding, `release_ready` gate, signing verification or upload digest verification.
 
 ### External / operator prerequisites
 
@@ -58,18 +77,27 @@ These cannot be satisfied by ordinary repository code alone and must remain exte
 
 ### Current readiness state
 
-Canonical `artifacts/v7-productization/feature-parity.json` is `product_version=7.0.2`, `release_ready=false`, `audit_state=v7_0_2_iteration_in_progress`. HLS-C003 will not change that value.
+Canonical `artifacts/v7-productization/feature-parity.json` is `product_version=7.0.2`, `release_ready=false`, `audit_state=v7_0_2_iteration_in_progress`. HLS-C003 does not change that value.
 
-The HLS-C007 merge SHA `c6779fd1017bb8f7378eec7d0ba5cd1e5f079dd1` did start all four required `main` push workflows, but subsequent coordination commits moved `main` and cancelled those runs. This is expected concurrency behavior, not product-test success or failure. Therefore a formal release must target a final frozen `main` commit and allow all four exact-SHA prerequisite workflows for that final commit to finish successfully before dispatch.
+The HLS-C007 merge SHA `c6779fd1017bb8f7378eec7d0ba5cd1e5f079dd1` did start all four required `main` push workflows, but subsequent coordination commits moved `main` and cancelled those obsolete-SHA runs. That is expected exact-SHA concurrency behavior, not a product-test success or failure. A formal release must target a final frozen `main` commit and allow all four exact-SHA prerequisite workflows for that final commit to finish successfully before dispatch.
+
+A later coordination commit `f87e7a0b4225afd6348c3d9e9782ee543deb65d0` again started all four required `main` push workflows, demonstrating that the every-main-push contract remains active. Those runs are ordinary evidence for that commit, not authorization for release while `release_ready=false`.
+
+### Documentation drift observed
+
+`README.md` still mixes active product version 7.0.2 with v7.0.1 candidate/formal-release wording, and `docs/v7-fast-release-path.md` is explicitly a historical v7.0.1 path containing `release_ready=true`. These are documentation-quality risks, not executable formal-workflow blockers. They should be handled by the README/documentation refinement backlog without changing release gates or falsely promoting readiness.
 
 ## Route recommendation
 
-1. Finish coordination/release-readiness documentation on this task branch; avoid unnecessary direct `main` writes while collecting exact-SHA evidence.
-2. Audit current `main` for any additional reproducible release-code defect. If none is found, do not invent a source fix.
+1. Finish reviewed repository work and documentation before freezing a release SHA.
+2. Do not invent another source fix: this audit found no third deterministic formal-release code blocker after HLS-C002 and HLS-C007.
 3. Treat runner/signing/browser/`E:\h`/environment/operator requirements as external blockers, not reasons to weaken workflow gates.
-4. When repository changes are finished, merge one final reviewed documentation/triage PR, freeze that resulting `main` SHA, and wait for all four exact-SHA push workflows to succeed.
-5. Only then may an operator with the trusted release machine dispatch `v7 Formal Release`; `release_ready=false` remains unchanged until the project's existing release-readiness policy explicitly authorizes changing it.
+4. Keep `release_ready=false` until the project's readiness policy has independently established the criteria for changing it and that change itself is reviewed.
+5. When repository changes are finished, merge the final reviewed work, freeze that resulting `main` SHA, and wait for all four exact-SHA push workflows to succeed.
+6. Only then may an authorized operator on the trusted release machine dispatch `v7 Formal Release`; publication remains a separate explicit action after draft digest verification.
 
-## Status
+## Independent acceptance result
 
-`in_progress`: initial prerequisite classification complete; final coordinator/auditor pass still requires checking the current final-main workflow evidence and confirming no additional source blocker from the formal workflow path.
+**PASS for HLS-C003 scope.** The current formal-release chain and its external trust boundary are now enumerated from source. No additional deterministic source blocker was reproduced. `release_ready=false`, tag state and public release state were left unchanged.
+
+This PASS authorizes merging only the HLS-C003 documentation/coordination PR after a final diff/base refresh. It does **not** authorize a formal v7.0.2 release.
