@@ -4,9 +4,11 @@ Windows-first desktop download manager for resilient long-running transfers and 
 
 ## Download
 
-The current public test build is **v7.0.1-candidate.1**: https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.1-candidate.1
+The latest published public test build is **v7.0.1-candidate.1**: https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.1-candidate.1
 
-It includes Windows x64 EXE/MSI installers, a Portable ZIP, Chromium and Firefox extension ZIPs, plus manifest/provenance metadata. Candidate assets are built from the fully successful v7 Candidate Package and their manifest-listed SHA-256 values are rechecked before upload. They are **not** the final Authenticode-signed v7.0.1 stable release; the stable tag remains reserved for the dedicated Windows signing/release runner.
+That published candidate belongs to the earlier 7.0.1 test line. It includes Windows x64 EXE/MSI installers, a Portable ZIP, Chromium and Firefox extension ZIPs, plus manifest/provenance metadata. Its assets were built from a successful v7 Candidate Package and their manifest-listed SHA-256 values were rechecked before upload.
+
+The active source line is **v7.0.2**. There is no published formal v7.0.2 release yet: `artifacts/v7-productization/feature-parity.json` remains `release_ready=false`, and formal publishing still requires the trusted Windows release runner, Authenticode signing/timestamp validation, exact-main-SHA prerequisite workflows, release evidence, and explicit publish authorization.
 
 Current v7 capabilities include:
 
@@ -30,9 +32,17 @@ Python, React, Tauri, WebView2 and the v6 Win32 supervisor are not part of the a
 
 `HLSDownloader.exe` never opens SQLite. It sends versioned commands to the single Rust Core over `\\.\pipe\HLSDownloader.v7`. The Native Messaging host and native presenter connect to the same Core. Closing Compose, the browser or the player does not stop active downloads.
 
-The product version is `7.0.2`. `7.0.2` is the active development iteration; formal release readiness remains gated by fresh release evidence. `main` contains the complete active v7 source while historical implementations remain in Git tags. The existing `v7.0.0` release remains immutable; new release evidence and artifacts bind to `v7.0.1`.
+The product version is `7.0.2`. `7.0.2` is the active development iteration; formal release readiness remains gated by fresh release evidence. `main` contains the complete active v7 source while historical implementations remain in Git tags. The existing `v7.0.0` release remains immutable; current candidate and formal package evidence is bound to the canonical `7.0.2` product version rather than the historical 7.0.1 candidate line.
 
 ## Build And Test
+
+On a clean Windows development machine, bootstrap the pinned toolchain once from the repository root:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-v7-toolchain.ps1
+```
+
+Then run the component checks you need:
 
 ```powershell
 # Rust Core
@@ -53,7 +63,7 @@ pnpm test
 pnpm run build
 ```
 
-Use `scripts\build-v7.ps1 -Task test` for the integrated local gate and `pwsh -NoProfile -Command "& { .\scripts\adversarial-v7.ps1 -Scope @('native','browser','transfer') }"` for the full fault/transfer matrix. `scripts\build-v7.ps1 -Task candidate` produces a machine-validation package under `artifacts\v7-productization\candidate`; it requires the canonical feature matrix, no blocked features and a clean Git worktree, while allowing partial features so candidate evidence can close them. It does not require `release_ready=true`. `scripts\build-v7.ps1 -Task package` produces the formal Windows App Image, EXE, MSI and Portable ZIP under `artifacts\v7-productization\package`; it requires all 28 features verified and adds the `release_ready=true` gate. `scripts\install-v7-local.ps1` performs an atomic per-user local upgrade to the single allowed install directory `E:\h`, retains the previous image as rollback, registers the v7 Native Messaging host, creates the Start menu shortcut, and republishes exactly one current Chromium/Firefox extension package each on the desktop, removing the previous copies.
+From the repository root, `scripts\build-v7.ps1 -Task test` is the integrated local gate and `pwsh -NoProfile -Command "& { .\scripts\adversarial-v7.ps1 -Scope @('native','browser','transfer') }"` runs the full fault/transfer matrix. `scripts\build-v7.ps1 -Task candidate` produces a machine-validation package under `artifacts\v7-productization\candidate`; it requires the canonical feature matrix, no blocked features and a clean Git worktree, while allowing incomplete verification so candidate evidence can close remaining validation work. It does not require `release_ready=true`. `scripts\build-v7.ps1 -Task package` produces the formal Windows App Image, EXE, MSI and Portable ZIP under `artifacts\v7-productization\package`; it requires the canonical feature matrix to be complete, a clean Git worktree, current release evidence, and `release_ready=true`. `scripts\install-v7-local.ps1` performs an atomic per-user local upgrade to the single allowed install directory `E:\h`, retains the previous image as rollback, registers the v7 Native Messaging host, creates the Start menu shortcut, and republishes exactly one current Chromium/Firefox extension package each on the desktop, removing the previous copies.
 
 Project build/tool caches default to `.tool-cache\build-cache`. Set `HLS_V7_BUILD_CACHE` to an **absolute** alternate cache root when the repository path or disk layout requires relocation; `bootstrap-v7-toolchain.ps1`, `build-v7.ps1` and `cleanup-v7-build-cache.ps1` all resolve and use that same root, and reject an ambiguous relative override. On Windows, the canonical build script temporarily maps the selected cache root to an ASCII drive path for Compose/jlink and removes the mapping on exit. The bootstrap pins Eclipse Temurin JDK `21.0.12.1+1` for Windows x64 and verifies the official archive SHA-256 before extraction; it never follows Adoptium's moving `latest` endpoint. Source CI pins Rust `1.98.1`, Node.js `24.20.0` and pnpm `11.7.0`; the Gradle wrapper pins the `9.7.1` distribution together with its official SHA-256 so release builds do not silently follow mutable toolchain inputs. Set `HLS_V7_JAVA_HOME` only to override the JDK 21 inside that cache, and `HLS_V7_PYTHON` for optional smoke tooling. Candidate and formal packaging source media tools from one verified FFmpeg directory. The shipped runtime requires `ffmpeg.exe` and `ffprobe.exe`; `ffplay.exe` remains part of the pinned upstream tool bundle used during bootstrap verification but is not shipped because local playback uses bundled libmpv. The ignored `desktop_ui\resources\common` staging directory is recreated for every package build and removed afterward so stale local binaries cannot leak into a later artifact.
 

@@ -1,4 +1,8 @@
-# HLS Downloader 7.0.1 升级说明
+# HLS Downloader 7.0.2 升级说明
+
+当前活动产品版本来自 `artifacts/v7-productization/feature-parity.json`，目前为 `7.0.2`；canonical `release_ready=false`，所以本文描述当前源码/本机 candidate 行为，不代表正式 v7.0.2 已发布。
+
+> 历史公开测试包 `v7.0.1-candidate.1` 保持原样；它的扩展包、manifest/provenance 和哈希属于上一轮 7.0.1 测试线。
 
 ## 架构升级
 
@@ -7,6 +11,9 @@
 - Native Presenter 是预热的浏览器确认、进度和完成窗口；工作台启动时会确保它常驻，单实例锁防止重复窗口。
 - WXT MV3 扩展支持 Chromium 和 Firefox，通过 Native Messaging 连接同一个 Core。
 - 播放器使用独立进程，崩溃或关闭不会终止下载。
+- 自动更新安装除 SHA-256、WinVerifyTrust 和 MSI identity 外，还要求本地版本化 HLS release-signer trust contract；任意其他 Windows-trusted signer 不会被当作项目更新签名者。
+- 可选 Core TCP test/Linux transport 现在在配置、client 和实际 server listener 三个边界都要求 loopback；Windows 正常路径继续使用 owner/SYSTEM DACL 的 Named Pipe。
+- 浏览器 replay contract 的自定义请求头按 origin 隔离；跨 origin 默认移除 replay-owned header，只有精确匹配目标 origin 的 `request_context` 可以恢复自己的 header/cookie/navigation identity。
 
 ## 用户体验
 
@@ -24,12 +31,14 @@
 
 支持 HTTP/HTTPS、FTP/FTPS、SFTP、HLS/LL-HLS、DASH、直播、BT/磁力、本地种子、Curl、Metalink、批量链接和网页抓取；支持任务筛选、队列、导入导出、日志、校验、播放、DLNA/Chromecast、TVBox、浏览器接管和更新检查。
 
-## 本机位置
+## 当前本机位置
 
 - 程序：`E:\h`
-- Chromium 扩展：`extensions\HLSDownloader-7.0.1-Chromium.zip`
-- Firefox 扩展：`extensions\HLSDownloader-7.0.1-Firefox.zip`
-- 开始菜单：`HLS Downloader 7.0.1`
+- Chromium 扩展：`extensions\HLSDownloader-7.0.2-Chromium.zip`
+- Firefox 扩展：`extensions\HLSDownloader-7.0.2-Firefox.zip`
+- 开始菜单：`HLS Downloader 7.0.2`
 - 回滚镜像：`E:\h.v7-backup`（仅在事务失败恢复期间短暂存在）
 
-验证数据和正式标签前门槛见 `docs/v7-verification.md`。
+这些字面文件名描述**当前 7.0.2 canonical version**。实际安装脚本从 feature-parity/manifest 解析产品版本；未来升级不应通过修改本文来改变安装版本。
+
+验证数据、历史 7.0.1 基线与当前正式标签前门槛见 `docs/v7-verification.md`；本机事务升级细节见 `docs/v7-local-upgrade.md`。
