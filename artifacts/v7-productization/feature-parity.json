@@ -15,7 +15,7 @@
     "blocked": "缺少真实实现或发布级验证"
   },
   "release_ready": true,
-  "audit_state": "v7_0_2_release_specialties_verified",
+  "audit_state": "v7_0_2_release_ready",
   "features": [
     {
       "id": "architecture.single_core",
@@ -51,7 +51,7 @@
       "compose_entry": "TaskTable Ctrl/Shift/keyboard/drag handle",
       "core_command": "task_action/reorder_queue/place_queue",
       "state_event": "task_updated",
-      "verification": "desktop_ui SelectionTest; row-wide single click and double-click details; physical left-drag selected four contiguous rows in the 1000-task Compose list; Ctrl/Shift semantic UI API selected 1 then 4 then 5 tasks; right-click selects the target and opens at the pointer; .zip excludes launch/play/cast/TVBox while executable and media tasks retain applicable actions; ui-api/selection-audit"
+      "verification": "desktop_ui SelectionTest; task-row secondary-click menu; explicit protocol/file-suffix metadata; one aggregate progress track; visual/compose-foundation-main-light.png; visual/compose-foundation-cast-dark-1024x600-125-fixed.png"
     },
     {
       "id": "tasks.named_queue_profiles",
@@ -114,7 +114,7 @@
       "compose_entry": "ContentHeader import / desktop drop target with .json filter",
       "core_command": "import_paths/create_task",
       "state_event": "task_created/error",
-      "verification": "task_export exported_json_imports_task_configuration_without_runtime_state; task_import_rejects_foreign_schema_and_unsafe_urls; coordinator_reimports_its_exported_json_as_new_tasks; Compose ProtocolTest"
+      "verification": "task_export exported_json_imports_task_configuration_without_runtime_state; task_import_rejects_foreign_schema_and_unsafe_urls; coordinator_reimports_its_exported_json_as_new tasks; Compose ProtocolTest"
     },
     {
       "id": "workbench.automatic_responsive_layout",
