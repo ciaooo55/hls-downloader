@@ -17,7 +17,7 @@ The residual-gap assertion is intentionally separate from the feature status sum
 
 ## Candidate-bound end-to-end gate
 
-The eventual `browser_media_push` evidence must prove the production path on the dedicated Windows release runner:
+The `browser_media_push` evidence must prove the production path on the dedicated Windows release runner:
 
 1. Verify the candidate manifest belongs to the current source commit/tree.
 2. Install the candidate MSI into the formal lifecycle location and verify the candidate's actual Native Messaging host registration is present.
@@ -32,9 +32,9 @@ The eventual `browser_media_push` evidence must prove the production path on the
 
 ## Ordering
 
-The current MSI lifecycle gate uninstalls its candidate during cleanup, so `browser_media_push` cannot simply be appended after `installer` and assume an installed candidate remains. Its implementation must own an isolated candidate install/cleanup lifecycle or refactor a shared lifecycle helper while preserving rollback isolation.
+The current MSI lifecycle gate uninstalls its candidate during cleanup, so `browser_media_push` cannot simply be appended after `installer` and assume an installed candidate remains. Its implementation owns an isolated candidate install/cleanup lifecycle while preserving rollback isolation.
 
-A safe target order is:
+The formal gate order is:
 
 1. browser (portable browser behavior)
 2. performance
@@ -42,7 +42,21 @@ A safe target order is:
 4. installer (upgrade lifecycle)
 5. rollback
 
-The aggregate release evidence then requires five passed gates rather than four.
+The aggregate release evidence therefore requires five passed gates rather than four.
+
+## Pre-readiness execution and deadlock avoidance
+
+The real-device evidence cannot be collected only inside the formal release workflow. Formal packaging requires `release_ready=true`, while the canonical status contract does not allow C014 to grant release readiness while this feature remains `partial`. Requiring the formal workflow to be the first place that closes the gap would create a circular dependency.
+
+HLS-C018 therefore has a source-hardening boundary and HLS-C019 owns external evidence:
+
+1. **HLS-C018** merges the fail-closed implementation while the feature remains truthfully `partial` and `release_ready=false`. It adds the production `browser_media_push` formal gate, residual-gap assertion, regression coverage, and the `v7 Media Push Readiness` workflow.
+2. **HLS-C019** runs `v7 Media Push Readiness` from an exact, current `main` SHA on the protected `hls-release` Windows runner while `release_ready=false`. The workflow builds a candidate without formal-only readiness requirements, exercises real Edge and Firefox through the candidate MSI-installed Native Messaging registration to the configured LAN receiver, reconfirms main did not move, and uploads candidate-bound readiness evidence.
+3. After a successful C019 run, a narrow reviewed metadata task may remove the canonical `gap` and promote `browser.media_push_device_selection` from `partial` to `verified`. That promotion must cite the workflow run, source SHA/tree, candidate manifest digest, browser report digests and receiver identity. It must not set `release_ready=true` in the same task.
+4. **HLS-C014** restarts only after that promotion is accepted and main is again 28/28 verified. C014 obtains fresh exact-main prerequisite workflows before deciding `release_ready`.
+5. The final formal release still reruns `browser_media_push` against the final readiness SHA. Pre-readiness evidence authorizes only the feature-status promotion; it never substitutes for final-SHA formal evidence.
+
+The pre-readiness workflow refuses branch heads, stale main, `release_ready=true`, missing receiver configuration, and receiver/test failures. It has read-only repository permissions and performs no tag, signing, Release creation or publication.
 
 ## Evidence identity
 
@@ -59,8 +73,8 @@ Every report must include or derive from:
 - receiver-originated fetch records;
 - gate result and timestamps.
 
-Predecessor-SHA evidence, a direct Core push, or a receiver fetch not attributable to the selected receiver cannot authorize the gate.
+The pre-readiness attestation additionally binds the exact workflow run/attempt and both browser report digests. Predecessor-SHA evidence, a direct Core push, or a receiver fetch not attributable to the selected receiver cannot authorize the gate.
 
 ## External dependency
 
-A real LAN receiver is an external trusted-release prerequisite, like the signing key and dedicated runner. Repository CI can test the fail-closed contract and gate implementation, but it must not fabricate a receiver. If the protected release environment does not provide the configured receiver, formal release remains blocked and canonical readiness stays false.
+A real LAN receiver is an external trusted-release prerequisite, like the signing key and dedicated runner. Repository CI can test the fail-closed contract and gate implementation, but it must not fabricate a receiver. If the protected release environment does not provide the configured receiver, HLS-C019 remains blocked, canonical readiness stays false, and formal release remains impossible by construction.
