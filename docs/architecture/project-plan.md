@@ -10,7 +10,7 @@ This plan complements the existing `docs/v7-refinement-plan.md` and `docs/v7-ite
 - HLS-C002 accepted and merged the exact-SHA four-workflow formal-release security contract through PR #38.
 - HLS-C007 accepted and merged the canonical v7.0.2 MSI lifecycle version contract through PR #63.
 - Canonical `feature-parity.json` still declares `release_ready=false`; no coordination task is authorized to change that merely because CI or a candidate build succeeds.
-- Multiple Dependabot major-version PRs remain open and should be treated as compatibility work, not merged as a single bulk update by default.
+- The historical Dependabot major-update wave is closed; no Dependabot PR is currently open. HLS-C004 treats future dependency work as evidence-driven compatibility/security maintenance rather than manufacturing version churn.
 
 ## Route principles
 
@@ -40,7 +40,7 @@ Task: `HLS-C007`.
 
 The active v7.0.2 line was still checked against executable literal v7.0.1 assumptions. PR #63 centralized the candidate version contract on canonical feature-parity metadata, preserved the public v7.0.0 upgrade baseline and all lifecycle safety gates, extended non-secret drift validation, passed current-head v7 CI and Candidate Package checks, and merged as `c6779fd1017bb8f7378eec7d0ba5cd1e5f079dd1`.
 
-## Phase 2 — Formal release readiness triage (P1, active)
+## Phase 2 — Formal release readiness triage (P1, complete)
 
 Task: `HLS-C003`.
 
@@ -53,15 +53,17 @@ Classify every remaining prerequisite as one of:
 
 Current route evidence shows the formal workflow already requires a dedicated self-hosted Windows x64 `hls-release` runner, fixed `E:\h` lifecycle environment, real Edge/Firefox evidence, Authenticode signing/timestamp trust, four successful exact-SHA main-push workflows, frozen-main rechecks, staged asset checksums/SBOM/evidence, draft upload digest verification, and explicit publish authorization.
 
-The HLS-C002 and HLS-C007 source defects are closed. External runner/signing/browser/environment requirements are intentionally not solvable by weakening repository code. HLS-C003 must confirm no additional reproducible source blocker, document the trust boundary, and leave `release_ready=false` unchanged.
+The HLS-C002 and HLS-C007 source defects are closed. External runner/signing/browser/environment requirements are intentionally not solvable by weakening repository code. HLS-C003 documented that boundary and left `release_ready=false` unchanged.
 
 Shortest safe route after HLS-C003: finish reviewed repository work, merge the final required PR, freeze the resulting `main` SHA, allow all four exact-SHA prerequisite push workflows for that SHA to succeed, then let an authorized operator use the trusted release machine to dispatch the formal workflow. Any main movement invalidates that prospective release SHA and requires fresh prerequisite conclusions.
 
-## Phase 3 — Dependency maintenance triage (P1)
+## Phase 3 — Dependency maintenance triage (P1, active)
 
 Task: `HLS-C004`.
 
-Review open Dependabot PRs individually. Major upgrades for Actions, TypeScript, Vitest, Compose/Kotlin ecosystem, rusqlite, windows-sys, and similar components can change runtime/toolchain contracts. Rank by security value and compatibility risk; merge only after project-specific evidence is available.
+The current Dependabot queue is empty. HLS-C004 therefore audits the historical update wave (#18–#26), verifies the versions actually present on `main`, and records explicit `land` / `adapt` / `defer` / `reject` policy instead of opening speculative major-version PRs.
+
+Security-bearing runtime updates remain high priority, but breaking APIs require project-owned compatibility work (the `russh` #20 -> #36 path is the accepted precedent). The unresolved historical `windows-sys` 0.61 proposal remains deferred until a security, functional, toolchain, or dedicated Windows-compatibility trigger justifies reopening it.
 
 Security fixes that are already superseded by first-party integrated work should be closed or documented rather than duplicated.
 
