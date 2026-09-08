@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import ctypes
 import functools
 import hashlib
 import http.server
@@ -39,6 +38,7 @@ from smoke_extension_media import (
     _open_first_media_actions,
     _overlay_state,
 )
+from smoke_v7_accessibility import JabClient
 from smoke_v7_tvbox_real import local_lan_ip, send_frame, wait_core
 
 
@@ -222,74 +222,86 @@ def run_access_bridge(
     return json.loads(output.read_text(encoding="utf-8"))
 
 
+def _is_path_prefix(prefix: list[int], value: list[int]) -> bool:
+    return len(prefix) <= len(value) and value[: len(prefix)] == prefix
+
+
 def select_expected_device(
     *,
-    access_bridge_python: Path,
     access_bridge_dll: Path,
     expected_device: dict[str, object],
     expected_host: str,
-    probe_report: Path,
 ) -> dict[str, object]:
-    """Locate the expected receiver through Access Bridge and click its real UI row."""
+    """Select the expected receiver using the real Java Access Bridge action."""
     label = str(expected_device.get("label", "")).strip()
     if not label:
         raise RuntimeError(f"Discovered receiver has no label: {expected_device}")
-    report = run_access_bridge(
-        python=access_bridge_python,
-        dll=access_bridge_dll,
-        output=probe_report,
-        require_name=[label],
-    )
-    nodes = [item for item in report.get("nodes", []) if isinstance(item, dict)]
-    host_nodes = [
-        item
-        for item in nodes
-        if expected_host in str(item.get("name", ""))
-        and isinstance(item.get("bounds"), list)
-        and len(item["bounds"]) == 4
-    ]
-    label_nodes = [
-        item
-        for item in nodes
-        if str(item.get("name", "")).strip() == label
-        and isinstance(item.get("bounds"), list)
-        and len(item["bounds"]) == 4
-    ]
-    candidates = host_nodes or label_nodes
-    visible = [
-        item
-        for item in candidates
-        if int(item["bounds"][2]) > 0 and int(item["bounds"][3]) > 0
-    ]
-    if len(visible) != 1:
-        raise RuntimeError(
-            f"Expected exactly one visible accessibility node for receiver {expected_host}/{label}; matches={visible}"
-        )
-    target = visible[0]
-    x, y, width, height = (int(value) for value in target["bounds"])
-    click_x = x + max(1, width // 2)
-    click_y = y + max(1, height // 2)
-    hwnd = int((report.get("window") or {}).get("hwnd") or 0)
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    if hwnd and not user32.SetForegroundWindow(hwnd):
-        # Windows may deny foreground activation transiently. The subsequent
-        # coordinate click is still attempted, and confirmation readiness is
-        # independently checked through Access Bridge before the gate can pass.
-        pass
-    time.sleep(0.2)
-    if not user32.SetCursorPos(click_x, click_y):
-        raise RuntimeError(f"Could not move pointer to receiver node at {click_x},{click_y}")
-    mouse_event = user32.mouse_event
-    mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
-    mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
-    time.sleep(0.5)
-    return {
-        "receiver_label": label,
-        "receiver_host": expected_host,
-        "node": target,
-        "click": [click_x, click_y],
-        "accessibility_probe": report,
-    }
+    client = JabClient(access_bridge_dll)
+    client.start()
+    hwnd, title = client.find_window("HLS Downloader", 60.0)
+    vm_id, root = client.context_from_window(hwnd)
+    try:
+        deadline = time.monotonic() + 60.0
+        nodes: list[dict] = []
+        target: dict | None = None
+        while time.monotonic() < deadline:
+            nodes = client.walk(vm_id, root, 5000)
+            host_nodes = [
+                item
+                for item in nodes
+                if expected_host in str(item.get("name", ""))
+                and int((item.get("bounds") or [0, 0, 0, 0])[2]) > 0
+                and int((item.get("bounds") or [0, 0, 0, 0])[3]) > 0
+            ]
+            label_nodes = [
+                item
+                for item in nodes
+                if str(item.get("name", "")).strip() == label
+                and int((item.get("bounds") or [0, 0, 0, 0])[2]) > 0
+                and int((item.get("bounds") or [0, 0, 0, 0])[3]) > 0
+            ]
+            candidates = host_nodes or label_nodes
+            if len(candidates) == 1:
+                target = candidates[0]
+                break
+            client.dll.releaseJavaObject(vm_id, root)
+            client.pump_messages()
+            time.sleep(0.1)
+            vm_id, root = client.context_from_window(hwnd)
+        if target is None:
+            raise RuntimeError(
+                f"Expected exactly one visible accessibility node for receiver {expected_host}/{label}"
+            )
+        target_path = [int(value) for value in target.get("path", [])]
+        actionable = [
+            item
+            for item in nodes
+            if item.get("actions")
+            and _is_path_prefix([int(value) for value in item.get("path", [])], target_path)
+        ]
+        if not actionable:
+            raise RuntimeError(
+                f"Receiver node has no actionable accessibility ancestor: target={target}"
+            )
+        action_node = max(actionable, key=lambda item: len(item.get("path", [])))
+        action_path = [int(value) for value in action_node.get("path", [])]
+        context, owned = client.resolve_path(vm_id, root, action_path)
+        try:
+            invoked = client.invoke(vm_id, context, None)
+        finally:
+            for item in reversed(owned):
+                client.dll.releaseJavaObject(vm_id, item)
+        time.sleep(0.5)
+        return {
+            "window": {"hwnd": hwnd, "title": title, "vm_id": vm_id},
+            "receiver_label": label,
+            "receiver_host": expected_host,
+            "matched_node": target,
+            "action_node": action_node,
+            "action": invoked,
+        }
+    finally:
+        client.dll.releaseJavaObject(vm_id, root)
 
 
 def run_browser(
@@ -327,7 +339,6 @@ def run_browser(
         thread.start()
         addon = unpack_firefox_addon(extension, root) if browser == "firefox" else None
         driver = None
-        select_report = root / "access-bridge-select.json"
         confirm_report = root / "access-bridge-confirm.json"
         try:
             driver = launch_browser(
@@ -378,11 +389,9 @@ def run_browser(
                 raise RuntimeError(f"{browser}: TVBox production action could not be clicked")
 
             selection = select_expected_device(
-                access_bridge_python=access_bridge_python,
                 access_bridge_dll=access_bridge_dll,
                 expected_device=expected_device,
                 expected_host=expected_host,
-                probe_report=select_report,
             )
             confirmation = run_access_bridge(
                 python=access_bridge_python,
