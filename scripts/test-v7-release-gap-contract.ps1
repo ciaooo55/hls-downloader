@@ -32,8 +32,19 @@ function Write-Fixture([string]$Path, [bool]$WithGap) {
 }
 
 function Invoke-Assert([string]$Fixture) {
-    $output = @(& $shellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $assertScript -FeatureParityPath $Fixture 2>&1)
-    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($output -join "`n") }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # The gapped fixture is expected to make the child shell exit non-zero.
+        # Windows PowerShell surfaces child stderr as ErrorRecord objects, so
+        # keep those records non-terminating here and assert the exit code below.
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $shellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $assertScript -FeatureParityPath $Fixture 2>&1 |
+            ForEach-Object { $_.ToString() })
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    return [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join "`n") }
 }
 
 try {
