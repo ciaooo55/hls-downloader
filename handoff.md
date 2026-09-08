@@ -6,14 +6,14 @@ task_registry_issue: 39
 schema_version: 1
 repository: ciaooo55/hls-downloader
 default_branch: main
-coordination_branch: audit/hls-c002-pr38
+coordination_branch: audit/hls-c003-release-readiness
 coordinator: worker-0
 auditor: worker-0
 workers:
   - worker-0
-active_task: HLS-C007
-status: implementation-pr-63-ci-review
-last_updated: 2026-09-08T02:15:00+08:00
+active_task: HLS-C003
+status: formal-release-readiness-triage
+last_updated: 2026-09-08T11:20:00+08:00
 ---
 
 # Project handoff
@@ -37,12 +37,11 @@ Issue #42 is the visitor area. External project coordinators must provide their 
 
 - Active product line: v7.0.2 iteration.
 - HLS-C001 collaboration bootstrap passed independent review and merged through PR #60 at `37cc077b32be25416ca9d01d118bf1d546a0b65b`.
-- HLS-C002 independently accepted product PR #38 at exact head `8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec` after all four current-head checks succeeded; PR #38 merged as `884f628eb264bb63ba7a093c67e700e3bf3d3024` with its 11 commits preserved.
-- The accepted release-security contract makes all four prerequisite workflows emit every-main-push conclusions and makes the formal workflow bind exact workflow name/path, push event, main branch and release SHA.
-- Formal release is still **not** authorized: canonical `feature-parity.json` remains `release_ready=false`, trusted signing/runner/browser/performance/MSI/rollback gates remain mandatory.
-- HLS-C003 pre-analysis found a separate deterministic blocker: the v7.0.2 product line was still checked against literal v7.0.1 values in the executable MSI lifecycle gate.
-- HLS-C007 is the active P0 fix. It was reassigned from disconnected `worker-1` to `worker-0`; branch `fix/hls-c007-msi-lifecycle-version`, implementation PR #63.
-- PR #63 centralizes the candidate version contract on canonical product metadata, keeps the pinned public v7.0.0 baseline, extends the existing no-secret version-drift validation path, and awaits independent current-head CI/diff review before merge.
+- HLS-C002 independently accepted product PR #38 at exact head `8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec`; PR #38 merged as `884f628eb264bb63ba7a093c67e700e3bf3d3024`.
+- HLS-C007 fixed stale v7.0.1 assumptions in the executable MSI lifecycle gate. PR #63 passed current-head v7 CI run 481 and Candidate Package run 129, was independently accepted at head `e3761362625ef017c1e842293ca36ae07d4b3842`, and merged as `c6779fd1017bb8f7378eec7d0ba5cd1e5f079dd1`.
+- Formal release is still **not** authorized: canonical `feature-parity.json` remains `release_ready=false`; trusted signing/runner/browser/performance/MSI/rollback gates remain mandatory.
+- HLS-C003 is now active on `audit/hls-c003-release-readiness`. Its goal is to enumerate every remaining formal-release prerequisite from source, split repository-code defects from external infrastructure/operator blockers, and recommend the shortest safe route without weakening gates.
+- HLS-C004/HLS-C005/HLS-C006 remain planned, keeping the unfinished backlog above the 2x-active-worker minimum.
 
 ## Durable coordination files
 
