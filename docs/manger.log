@@ -393,3 +393,51 @@ changes=
   Appended this manager-log sequence without deleting earlier process-deviation history.
 boundary=No product/runtime/workflow/build-script/feature-parity/tag/release/publish change is part of HLS-C013.
 decision=Open a dedicated PR and audit its exact head/diff plus machine-readable registry validity before merge authorization.
+
+[2026-09-08T18:11:30+08:00] EVENT=RETROSPECTIVE_C013_INDEPENDENT_REVIEW task=HLS-C013 auditor=worker-1
+reason=The earlier 17:43-17:49 sequence reflects worker-0's initial fallback state. This append records the later independent worker-1 review without rewriting that historical state.
+evidence=
+  worker-1 re-declared in role Issue #40 and heartbeated in Issue #41 before final C013 delivery classification.
+  Issue #39 comment 5583047032 records worker-1 `PASS_SOURCE / DELIVERY_UPDATE_REQUIRED` on frozen main 1c93cffe5fa5d884b07531d211a79f8b6d54b8ea.
+  Independent refresh verified v7 CI #525, Candidate #173, Maintenance Security #68 and Rust Security #42 completed/success for push/main/exact frozen SHA.
+  Candidate #173 completed candidate build, package-size audit and exact-SHA artifact upload.
+  Formal package path still requires canonical completeness, release_ready=true, clean worktree and release evidence; release_ready remained false.
+  C009/C010/C011 hardening remained present and no new deterministic product/release source blocker was reproduced.
+helper_prs=
+  PR #74 corrected stale C013 worker-log fallback-only metadata on a child branch.
+  PR #76 corrected protocol review-state/live independent-auditor handoff metadata on a child branch.
+result=SOURCE_PASS; delivery approval remained withheld pending durable coordination/log reconciliation.
+
+[2026-09-08T18:12:00+08:00] EVENT=PROCESS_DEVIATION task=HLS-C013 pr=#75 severity=coordination
+merge=718ee541ce584a4ac229b120a9a478583fc07c0a
+merged_head=d6221b55d28e1d9c596840637db9e1e4ff0287f9
+finding=PR #75 merged C013 to main while worker-1 had an active durable delivery changes-required finding and before worker-1 issued an exact-head delivery PASS. The PR body also described no independent auditor as active although worker-1 had already re-declared and heartbeated.
+classification=Same collaboration/process-deviation class as the earlier PR #64 incident; not a new product-source defect and not a release authorization.
+correction=Pause dependent readiness governance and reconcile the audit chain/machine state through HLS-C015 before further readiness decisions.
+
+[2026-09-08T18:12:30+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C015 priority=P0 owner=worker-0 coordinator=worker-1 auditor=worker-1
+branch=coord/hls-c015-c013-process-reconcile
+pr=#77
+base_main=718ee541ce584a4ac229b120a9a478583fc07c0a
+acceptance_criteria=
+  AC1 Record PR #75 premature merge and final independent-audit state factually in manager/worker logs.
+  AC2 Restore protocol-valid machine/handoff state and independent audit-chain facts on a main-based correction branch.
+  AC3 Preserve valid JSON, exact merge metadata and C014 pause.
+  AC4 Keep this manager log append-only and preserve historical fallback statements as historical.
+  AC5 Coordination/docs only: no product/runtime/workflow/build-script/feature-parity/release_ready/tag/release/signing/publish change.
+  AC6 Exact-head review required before PR #77 merge; head movement invalidates older PASS.
+route=C014 branch had no task commits when interrupted, so no implementation work was lost.
+
+[2026-09-08T18:13:00+08:00] EVENT=BACKLOG_ADD task=HLS-C016 priority=P0
+finding=Root AGENTS.md on main@718ee541 says the only active product version is 7.0.1 while canonical feature-parity metadata says product_version=7.0.2 and release_ready=false.
+classification=Repository-instruction/current-state drift, not a product/runtime/release-workflow defect.
+route=Finish HLS-C015 first. Then fix the active-version instruction in dedicated HLS-C016, preserving legitimate historical v7.0.1 candidate/baseline evidence. HLS-C014 readiness governance depends on both C015 and C016.
+
+[2026-09-08T18:14:00+08:00] EVENT=WORKER_TIMEOUT task=HLS-C015 worker=worker-0
+last_confirmed_heartbeat=2026-09-08T10:03:25Z
+last_confirmed_heartbeat_local=2026-09-08T18:03:25+08:00
+heartbeat_comment=Issue #41 comment 5583304411
+finding=A fresh Issue #41 refresh after 18:10+08:00 contained no newer worker-0 heartbeat while HLS-C015 remained unfinished, exceeding the protocol's >5-minute liveness threshold.
+action=Reassign remaining HLS-C015 implementation/log work from worker-0 to worker-1. worker-1 re-declared coordinator+auditor+worker in Issue #40 and recorded reassignment in Issue #39/heartbeat #41.
+audit_limit=With no separate active participant after the timeout, final C015 review must be explicitly labeled single-participant fallback unless worker-0 returns, redeclares and independently reviews the final exact head before merge.
+release_boundary=release_ready=false remains unchanged; C014 remains paused; no product/runtime/workflow/build-script/tag/release/signing/publish action is authorized.
