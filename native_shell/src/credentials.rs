@@ -244,9 +244,9 @@ fn apply_base_navigation_context(
     let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
         return;
     };
-    replace_header(headers, "Referer", value.get("referer"));
-    replace_header(headers, "Origin", value.get("origin"));
-    replace_header(headers, "User-Agent", value.get("user_agent"));
+    insert_header(headers, "Referer", value.get("referer"));
+    insert_header(headers, "Origin", value.get("origin"));
+    insert_header(headers, "User-Agent", value.get("user_agent"));
 }
 
 pub(crate) fn apply_scoped_request_context(
@@ -267,7 +267,7 @@ pub(crate) fn apply_scoped_request_context(
     else {
         return;
     };
-    merge_header_map(headers, scoped.get("request_headers"));
+    let _ = merge_header_map(headers, scoped.get("request_headers"));
     replace_header(headers, "Referer", scoped.get("referer"));
     replace_header(headers, "Origin", scoped.get("origin"));
     insert_header(headers, "User-Agent", scoped.get("user_agent"));
