@@ -1222,7 +1222,10 @@ mod tests {
             "[2001:db8::7]:18765",
         ] {
             let error = parse_core_bind(Some(raw)).unwrap_err();
-            assert!(error.contains("loopback"), "unexpected error for {raw}: {error}");
+            assert!(
+                error.contains("loopback"),
+                "unexpected error for {raw}: {error}"
+            );
         }
         assert!(parse_core_bind(Some("not-an-address")).is_err());
     }
