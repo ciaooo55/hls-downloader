@@ -11,7 +11,7 @@ This plan is the live coordinator route. Historical implementation detail remain
 - HLS-C015 is canonically the live governance/AGENTS drift fix. PR #78 head `c547b0ed3ef2a4837b27478aada0c996f42bc518` merged as current main `d37e8cac666c3ebd7f3c8ffa326a15321ef76185`; root `AGENTS.md` now correctly identifies active v7.0.2 and related formal-readiness wording is reconciled. worker-1 independently audited the merged seven-file technical boundary and found no product/release-state change.
 - PR #78 also merged under fallback review while worker-1 was active and left stale/invalid collaboration metadata. In parallel, worker-1 and worker-0 collided on HLS-C015/HLS-C016 meanings and a racing heartbeat refresh caused a false worker-0 timeout classification.
 - HLS-C017 is therefore the only active P0 task. It reconciles those collaboration-state races without reverting the technically valid PR #78 changes or touching `release_ready`.
-- HLS-C014 has eight preserved docs/coordination commits on branch `coord/hls-c014-release-readiness-decision` through `ca58bee014cacc37c59066d964316071af6cc76f`. It is paused behind C017; no C014 merge is authorized from the stale pre-C017 base.
+- HLS-C014 has preserved docs/coordination work on branch `coord/hls-c014-release-readiness-decision`. It is paused behind C017; no C014 merge is authorized from the stale pre-C017 base.
 - Canonical HLS-C016 is the post-C014 exact-final-main-SHA verification/handoff task. The earlier worker-1 proposal to use C016 for AGENTS drift is cancelled/superseded because HLS-C015/PR #78 already completed that work.
 
 ## Route principles
@@ -84,13 +84,13 @@ C017 must:
 4. restore protocol-valid machine states and truthful worker/auditor identities;
 5. canonicalize HLS-C015 as PR #78 governance fix and HLS-C016 as the newer post-C014 exact-SHA verification task, with the older unstarted C016/AGENTS meaning explicitly cancelled as duplicate;
 6. keep PR #77 closed/unmerged as superseded evidence;
-7. remain coordination/documentation-only and receive worker-0 independent exact-head review before merge.
+7. remain coordination/documentation-only and receive independent exact-head review when the preferred auditor is live; if the preferred auditor is genuinely unavailable beyond the confirmed heartbeat threshold, use only the protocol's explicitly labeled non-independent single-participant fallback and re-review the final head from scratch.
 
-worker-1 owns C017 implementation. worker-0 remains active and is the requested independent auditor. Any C017 head movement after PASS invalidates that PASS.
+worker-1 owns C017 implementation. worker-0 was the requested independent auditor, but a complete Issue #41 refresh shows its latest heartbeat is comment `5583701821` at `2026-09-08T10:27:12Z`, with no later page. C017 therefore uses the documented worker-1 single-participant fallback for final review. This is not independent review. Any C017 head movement after PASS invalidates that PASS.
 
 ## Next phase — HLS-C014 explicit readiness decision
 
-After C017 is independently accepted and merged, rebase or recreate the preserved C014 work from the new main baseline. Reuse only evidence that remains correct after rebase; do not blindly merge the stale eight-commit branch.
+After C017 is accepted and merged, rebase or recreate the preserved C014 work from the new main baseline. Reuse only evidence that remains correct after rebase; do not blindly merge the stale branch.
 
 C014 must independently revalidate source/governance evidence and then make one explicit decision:
 
