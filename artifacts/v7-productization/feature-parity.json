@@ -226,7 +226,7 @@
     },
     {
       "id": "browser.media_push_device_selection",
-      "status": "verified",
+      "status": "partial",
       "v3_entry": "browser cast/TVBox push request",
       "compose_entry": "MediaPushRequested event -> DevicePickerDialog -> CastSessionHud",
       "core_command": "request_media_push/resolve_media_push/discover_cast_devices/share_media",
@@ -272,10 +272,10 @@
     }
   ],
   "summary": {
-    "verified": 28,
-    "partial": 0,
+    "verified": 27,
+    "partial": 1,
     "blocked": 0,
     "total": 28,
-    "verified_percent": 100.0
+    "verified_percent": 96.4
   }
 }
