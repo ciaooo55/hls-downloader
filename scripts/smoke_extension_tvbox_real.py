@@ -61,6 +61,14 @@ class ReceiverAwareHandler(QuietStaticHandler):
             type(self).receiver_fetched.set()
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def discover_and_preselect(core_port: int, expected_host: str) -> dict[str, object]:
     stream = wait_core(core_port, timeout=30.0)
     try:
@@ -156,13 +164,13 @@ def launch_browser(
     browser: str,
     extension: Path,
     profile: Path,
-    browser_binary: Path | None,
+    browser_binary: Path,
     driver_path: Path | None,
     addon: Path | None,
 ):
     if browser == "edge":
         options = EdgeOptions()
-        options.binary_location = str(browser_binary or _find_edge())
+        options.binary_location = str(browser_binary)
         options.add_argument(f"--user-data-dir={profile}")
         options.add_argument("--disable-features=DisableLoadExtensionCommandLineSwitch")
         options.add_argument(f"--disable-extensions-except={extension}")
@@ -175,7 +183,7 @@ def launch_browser(
         return webdriver.Edge(service=service, options=options)
 
     options = FirefoxOptions()
-    options.binary_location = str(browser_binary or _find_firefox())
+    options.binary_location = str(browser_binary)
     options.set_preference("media.autoplay.default", 0)
     options.set_preference("media.autoplay.blocking_policy", 0)
     options.set_preference("browser.shell.checkDefaultBrowser", False)
@@ -203,6 +211,9 @@ def run_browser(
     started = time.perf_counter()
     expected_device = discover_and_preselect(core_port, expected_host)
     lan_ip = local_lan_ip(expected_host)
+    resolved_browser_binary = (browser_binary or (_find_edge() if browser == "edge" else _find_firefox())).resolve()
+    if not resolved_browser_binary.is_file():
+        raise FileNotFoundError(f"{browser}: browser executable is missing: {resolved_browser_binary}")
     with tempfile.TemporaryDirectory(prefix=f"hls-{browser}-tvbox-real-") as temporary:
         root = Path(temporary)
         media_root = root / "site"
@@ -225,10 +236,25 @@ def run_browser(
                 browser=browser,
                 extension=extension,
                 profile=profile,
-                browser_binary=browser_binary,
+                browser_binary=resolved_browser_binary,
                 driver_path=driver_path,
                 addon=addon,
             )
+            capabilities = driver.capabilities or {}
+            service_path = Path(str(getattr(driver.service, "path", ""))) if getattr(driver, "service", None) else None
+            browser_identity = {
+                "executable": str(resolved_browser_binary),
+                "executable_sha256": file_sha256(resolved_browser_binary),
+                "version": str(capabilities.get("browserVersion", "")),
+                "driver_executable": str(service_path) if service_path else "",
+                "driver_sha256": file_sha256(service_path) if service_path and service_path.is_file() else "",
+                "driver_version": str(
+                    capabilities.get("moz:geckodriverVersion", "")
+                    or (capabilities.get("msedge", {}) or {}).get("msedgedriverVersion", "")
+                ),
+            }
+            if not browser_identity["version"]:
+                raise RuntimeError(f"{browser}: Selenium did not report browserVersion")
             origin = f"http://{lan_ip}:{server.server_port}"
             driver.get(f"{origin}/index.html?mode=direct")
             deadline = time.monotonic() + 30.0
@@ -305,10 +331,11 @@ def run_browser(
                 "schema": 1,
                 "passed": True,
                 "browser": browser,
+                "browser_identity": browser_identity,
                 "expected_receiver_host": expected_host,
                 "selected_device": expected_device,
                 "fixture_url": f"{origin}/stream.mp4?player=direct",
-                "fixture_sha256": hashlib.sha256(stream_path.read_bytes()).hexdigest(),
+                "fixture_sha256": file_sha256(stream_path),
                 "browser_ui": ui_state,
                 "receiver_requests": matching,
                 "all_requests": ReceiverAwareHandler.requests,
