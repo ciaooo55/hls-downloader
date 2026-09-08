@@ -25,6 +25,7 @@ $installedProductCode = $null
 $result = $null
 $previousDataDir = $env:HLS_V7_DATA_DIR
 $previousDownloadDir = $env:HLS_V7_DOWNLOAD_DIR
+Import-Module (Join-Path $PSScriptRoot 'V7VersionContract.psm1') -Force
 
 $expectedInstallDir = [IO.Path]::GetFullPath('E:\h').TrimEnd('\', '/')
 $InstallDir = [IO.Path]::GetFullPath($InstallDir).TrimEnd('\', '/')
@@ -199,6 +200,7 @@ try {
     $originPort = Get-FreeTcpPort
     $manifestPath = (Resolve-Path -LiteralPath $CandidateManifestPath).Path
     $manifest = [IO.File]::ReadAllText($manifestPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+    $expectedCandidateVersion = Resolve-V7CandidateVersion -RepositoryRoot $repo -CandidateManifest $manifest -BaselineVersion '7.0.0'
     $candidate = Resolve-FullPath ([string]$manifest.artifacts.msi.path) (Split-Path $manifestPath -Parent)
     Add-Step 'candidate-msi-exists' (Test-Path -LiteralPath $candidate -PathType Leaf) $candidate
     $candidateHash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -215,8 +217,10 @@ try {
     $upgradeCode = Get-MsiProperty $candidate 'UpgradeCode'
     $candidateProductCode = Get-MsiProperty $candidate 'ProductCode'
     $oldProductCode = Get-MsiProperty $old 'ProductCode'
-    Add-Step 'candidate-manifest-version' (([string]$manifest.product_version) -eq '7.0.1') ([string]$manifest.product_version)
-    Add-Step 'candidate-msi-version' ($candidateVersion -eq '7.0.1') $candidateVersion
+    Add-Step 'candidate-manifest-version' (([string]$manifest.product_version) -eq $expectedCandidateVersion) ([string]$manifest.product_version)
+    [void](Assert-V7CandidateMsiVersion -ExpectedVersion $expectedCandidateVersion -MsiProductVersion $candidateVersion)
+    Add-Step 'candidate-msi-version' ($candidateVersion -eq $expectedCandidateVersion) $candidateVersion
+    Add-Step 'candidate-version-newer-than-baseline' ([version]$candidateVersion -gt [version]'7.0.0') "$candidateVersion > 7.0.0"
     Add-Step 'upgrade-code-match' ($upgradeCode -eq '{1C80D5F7-A1EC-4BAE-A4A6-E010C5A3EE6B}' -and (Get-MsiProperty $old 'UpgradeCode') -eq $upgradeCode) $upgradeCode
     Add-Step 'candidate-product-code-is-new' ($candidateProductCode -ne $oldProductCode) $candidateProductCode
 
@@ -245,7 +249,7 @@ try {
         $exit = Invoke-Msi @('/i', $candidate, '/qn', "INSTALLDIR=$InstallDir") (Join-Path $artifacts 'upgrade-candidate.log')
         Add-Step 'upgrade-exit' ($exit -in @(0, 3010, 1641)) $exit
         $afterProduct = Get-InstalledProduct $upgradeCode
-        Add-Step 'product-upgraded' ($afterProduct.version -eq '7.0.1' -and $afterProduct.product_code -ne $oldProduct.product_code) $afterProduct
+        Add-Step 'product-upgraded' ($afterProduct.version -eq $expectedCandidateVersion -and $afterProduct.product_code -ne $oldProduct.product_code) $afterProduct
         Add-Step 'old-application-process-ended' ($null -eq (Get-Process -Id $beforeProcess.launcher_pid -ErrorAction SilentlyContinue)) $beforeProcess.launcher_pid
         $afterProcess = Start-InstalledApplication $InstallDir
         Add-Step 'application-process-restarted' ($afterProcess.engine_pid -ne $beforeProcess.engine_pid -and $afterProcess.presenter_pid -ne $beforeProcess.presenter_pid) $afterProcess
@@ -263,7 +267,7 @@ try {
         $oldProcess = Start-InstalledApplication $InstallDir
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'scripts\shutdown-running.ps1') -InstallDir $InstallDir
         Add-Step 'old-application-checkpointed' ($LASTEXITCODE -eq 0) $LASTEXITCODE
-        $rollbackMsi = Join-Path $artifacts 'HLSDownloader-7.0.1-forced-rollback.msi'
+        $rollbackMsi = Join-Path $artifacts "HLSDownloader-$expectedCandidateVersion-forced-rollback.msi"
         Copy-Item -LiteralPath $candidate -Destination $rollbackMsi -Force
         Add-Type19Failure $rollbackMsi
         Add-Step 'candidate-original-unchanged' (((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()) -eq $candidateHash) $candidateHash
@@ -290,7 +294,7 @@ try {
     Add-Step 'uninstall-exit' ($uninstallExit -in @(0, 3010, 1641)) $uninstallExit
     Add-Step 'product-unregistered' ($null -eq (Get-InstalledProduct $upgradeCode)) $installedProductCode
     $installedProductCode = $null
-    $result = [ordered]@{ schema = 1; scenario = $Scenario; status = 'passed'; restart_scope = 'application-process-only'; system_reboot = $false; install_dir = $InstallDir; candidate_manifest = $manifestPath; candidate_msi = $candidate; old_msi = $old; old_msi_sha256 = $oldHash; started_at = $started; finished_at = (Get-Date).ToUniversalTime().ToString('o'); steps = $steps }
+    $result = [ordered]@{ schema = 1; scenario = $Scenario; status = 'passed'; restart_scope = 'application-process-only'; system_reboot = $false; install_dir = $InstallDir; candidate_version = $expectedCandidateVersion; candidate_manifest = $manifestPath; candidate_msi = $candidate; old_msi = $old; old_msi_sha256 = $oldHash; started_at = $started; finished_at = (Get-Date).ToUniversalTime().ToString('o'); steps = $steps }
 } catch {
     $result = [ordered]@{ schema = 1; scenario = $Scenario; status = 'failed'; restart_scope = 'application-process-only'; system_reboot = $false; install_dir = $InstallDir; started_at = $started; finished_at = (Get-Date).ToUniversalTime().ToString('o'); error = $_.Exception.Message; steps = $steps }
 } finally {

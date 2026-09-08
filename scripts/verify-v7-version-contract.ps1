@@ -3,6 +3,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+Import-Module (Join-Path $PSScriptRoot 'V7VersionContract.psm1') -Force
 
 function Read-Utf8([string]$RelativePath) {
     [IO.File]::ReadAllText((Join-Path $repo $RelativePath), [Text.Encoding]::UTF8)
@@ -61,4 +62,44 @@ if (-not ([string]$feature.audit_state).StartsWith($expectedAuditPrefix, [String
     throw "feature-parity audit_state must be version-scoped with prefix $expectedAuditPrefix; found $($feature.audit_state)."
 }
 
-Write-Host "v7 version contract is synchronized at $version (release_ready=$([bool]$feature.release_ready), audit_state=$($feature.audit_state))."
+# The same no-secret version contract used by the MSI lifecycle gate must stay
+# synchronized with the canonical product version. These checks run in the
+# existing validate-powershell path before expensive build/package jobs.
+$syntheticManifest = [pscustomobject]@{ product_version = $version }
+$resolvedVersion = Resolve-V7CandidateVersion -RepositoryRoot $repo -CandidateManifest $syntheticManifest -BaselineVersion '7.0.0'
+Assert-Version $version $resolvedVersion 'MSI lifecycle canonical candidate'
+if (-not (Assert-V7CandidateMsiVersion -ExpectedVersion $resolvedVersion -MsiProductVersion $version)) {
+    throw 'Matching MSI ProductVersion was rejected by the lifecycle version contract.'
+}
+
+$manifestMismatchRejected = $false
+try {
+    [void](Resolve-V7CandidateVersion -RepositoryRoot $repo -CandidateManifest ([pscustomobject]@{ product_version = '0.0.1' }) -BaselineVersion '7.0.0')
+} catch {
+    $manifestMismatchRejected = $true
+}
+if (-not $manifestMismatchRejected) {
+    throw 'MSI lifecycle version contract did not reject a mismatched candidate manifest.'
+}
+
+$msiMismatchRejected = $false
+try {
+    [void](Assert-V7CandidateMsiVersion -ExpectedVersion $resolvedVersion -MsiProductVersion '0.0.1')
+} catch {
+    $msiMismatchRejected = $true
+}
+if (-not $msiMismatchRejected) {
+    throw 'MSI lifecycle version contract did not reject a mismatched MSI ProductVersion.'
+}
+
+$nonUpgradeRejected = $false
+try {
+    [void](Resolve-V7CandidateVersion -RepositoryRoot $repo -CandidateManifest $syntheticManifest -BaselineVersion $version)
+} catch {
+    $nonUpgradeRejected = $true
+}
+if (-not $nonUpgradeRejected) {
+    throw 'MSI lifecycle version contract did not reject a candidate that is not newer than its baseline.'
+}
+
+Write-Host "v7 version contract is synchronized at $version (release_ready=$([bool]$feature.release_ready), audit_state=$($feature.audit_state)); MSI lifecycle mismatch checks fail closed."
