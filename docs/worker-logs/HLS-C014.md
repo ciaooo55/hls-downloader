@@ -60,3 +60,17 @@ If authorized, the consistent metadata transition is `release_ready: false -> tr
 ## Mandatory post-merge task
 
 HLS-C016 must own the final frozen-SHA verification/handoff after any accepted C014 merge. It must not reuse pre-merge or predecessor-SHA workflow conclusions. The C014 merge SHA itself must receive all four successful `push/main/exact-SHA` prerequisites before the project can be described as eligible for an authorized trusted-runner formal-release attempt.
+
+## Post-C015 baseline checkpoint
+
+At the latest baseline refresh before any readiness metadata change:
+
+- `main` still compared identical to `d37e8cac666c3ebd7f3c8ffa326a15321ef76185`;
+- `v7 CI` #527 completed **success**;
+- `Maintenance Security` #70 completed **success**;
+- `Rust Security` #44 completed **success**;
+- `v7 Candidate Package` #175 remained **in_progress** in `Build v7 candidate package`; its environment/bootstrap steps had all completed successfully, with package-size audit and artifact upload still pending.
+
+This is deliberately not recorded as a four-workflow PASS. The canonical readiness metadata remains unchanged while Candidate #175 is unresolved.
+
+Coordination state now includes planned P0 HLS-C016, preserving two unfinished tasks for one active worker. An intermediate registry commit briefly compressed old completed-task evidence while adding C016; the immediately following correction restored the prior machine-readable evidence and kept the C014/C016 additions. That intermediate commit must not be mistaken for intentional historical-state deletion.
