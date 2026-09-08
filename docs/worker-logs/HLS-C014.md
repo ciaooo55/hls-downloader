@@ -27,7 +27,7 @@ HLS-C013 audited frozen `main@1c93cffe5fa5d884b07531d211a79f8b6d54b8ea` and foun
 
 HLS-C015 then changed governance/documentation only. It corrected root `AGENTS.md` to active v7.0.2, bound live version/readiness truth to canonical feature-parity metadata, and made explicit that formal packaging requires fully verified parity plus a separately reviewed `release_ready=true` decision and the visual/performance/installer/rollback gates. It did not change product/runtime/workflow/build-script/feature-parity source.
 
-The post-C015 main SHA `d37e8cac666c3ebd7f3c8ffa326a15321ef76185` created all four required main-push prerequisite workflows, demonstrating trigger coverage. Their conclusions must be refreshed before the readiness change is finally accepted; an in-progress run is not counted as success.
+The post-C015 main SHA `d37e8cac666c3ebd7f3c8ffa326a15321ef76185` created all four required main-push prerequisite workflows, demonstrating trigger coverage.
 
 ## Historical readiness semantics
 
@@ -55,22 +55,33 @@ C014 may authorize the narrow transition only if all of the following remain tru
 4. the readiness change is limited to canonical readiness metadata plus coordination/audit documentation;
 5. the PR review and any applicable checks pass on the exact final head.
 
-If authorized, the consistent metadata transition is `release_ready: false -> true` and `audit_state: v7_0_2_iteration_in_progress -> v7_0_2_release_specialties_verified`, mirroring the established v7.0.1 transition semantics without asserting that external formal-release gates have already passed.
-
 ## Mandatory post-merge task
 
-HLS-C016 must own the final frozen-SHA verification/handoff after any accepted C014 merge. It must not reuse pre-merge or predecessor-SHA workflow conclusions. The C014 merge SHA itself must receive all four successful `push/main/exact-SHA` prerequisites before the project can be described as eligible for an authorized trusted-runner formal-release attempt.
+HLS-C016 owns the final frozen-SHA verification/handoff after any accepted C014 merge. It must not reuse pre-merge or predecessor-SHA workflow conclusions. The C014 merge SHA itself must receive all four successful `push/main/exact-SHA` prerequisites before the project can be described as eligible for an authorized trusted-runner formal-release attempt.
 
-## Post-C015 baseline checkpoint
+## Post-C015 baseline result
 
-At the latest baseline refresh before any readiness metadata change:
+Final baseline refresh before the canonical transition:
 
-- `main` still compared identical to `d37e8cac666c3ebd7f3c8ffa326a15321ef76185`;
-- `v7 CI` #527 completed **success**;
-- `Maintenance Security` #70 completed **success**;
-- `Rust Security` #44 completed **success**;
-- `v7 Candidate Package` #175 remained **in_progress** in `Build v7 candidate package`; its environment/bootstrap steps had all completed successfully, with package-size audit and artifact upload still pending.
+- `main` compared **identical** to `d37e8cac666c3ebd7f3c8ffa326a15321ef76185`;
+- `v7 CI` #527: `push/main/exact-SHA`, **success**;
+- `v7 Candidate Package` #175: `push/main/exact-SHA`, **success**; build, package-size audit and artifact upload completed;
+- `Maintenance Security` #70: `push/main/exact-SHA`, **success**;
+- `Rust Security` #44: `push/main/exact-SHA`, **success**.
 
-This is deliberately not recorded as a four-workflow PASS. The canonical readiness metadata remains unchanged while Candidate #175 is unresolved.
+Canonical v7.0.2 remained 28/28 verified with zero partial/blocked features, and no new source/security/governance blocker was reproduced.
 
-Coordination state now includes planned P0 HLS-C016, preserving two unfinished tasks for one active worker. An intermediate registry commit briefly compressed old completed-task evidence while adding C016; the immediately following correction restored the prior machine-readable evidence and kept the C014/C016 additions. That intermediate commit must not be mistaken for intentional historical-state deletion.
+## Canonical readiness decision
+
+**AUTHORIZED_FOR_CANONICAL_READINESS_TRANSITION, PENDING FINAL PR-HEAD CHECKS/REVIEW.**
+
+The repository-level decision conditions are satisfied. Commit `73cde20466d5218b55f1869ded79a08886bb6bc2` therefore changes only the canonical lifecycle metadata:
+
+- `release_ready: false -> true`
+- `audit_state: v7_0_2_iteration_in_progress -> v7_0_2_release_specialties_verified`
+
+No feature entry, product version, summary, generated-from reference, runtime source, workflow, build script, tag, release, signing state or publication state is changed by that commit.
+
+This is not yet task completion or merge authorization. Because `feature-parity.json` is inside both v7 CI and Candidate pull-request path filters, the **final PR #79 exact head** must receive its own applicable checks and exact-head fallback review. Any later head movement invalidates a previous review/check set. After merge, HLS-C016 must ignore all predecessor-SHA workflow successes and validate the actual merge SHA from scratch.
+
+Coordination state includes planned P0 HLS-C016, preserving two unfinished tasks for one active worker. An intermediate registry commit briefly compressed old completed-task evidence while adding C016; the immediately following correction restored the prior machine-readable evidence and kept the C014/C016 additions. That intermediate commit must not be mistaken for intentional historical-state deletion.
