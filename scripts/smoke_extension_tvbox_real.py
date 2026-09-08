@@ -2,15 +2,16 @@
 """Drive the production browser -> Native Host -> Compose -> TVBox path.
 
 This smoke intentionally does not issue Core share_media/cast commands. Core TCP is
-used only to discover and preselect the expected receiver. The actual media-push
-request originates from the production extension and the final confirmation is
-invoked through the packaged Compose accessibility surface.
+used only to discover the expected receiver. The actual media-push request originates
+from the production extension; the target device is selected through the packaged
+Compose accessibility surface and the final confirmation is invoked there as well.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
 import functools
 import hashlib
 import http.server
@@ -69,7 +70,8 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def discover_and_preselect(core_port: int, expected_host: str) -> dict[str, object]:
+def discover_expected_device(core_port: int, expected_host: str) -> dict[str, object]:
+    """Discover the exact receiver without mutating Compose-visible settings."""
     stream = wait_core(core_port, timeout=30.0)
     try:
         discovery = send_frame(
@@ -98,18 +100,7 @@ def discover_and_preselect(core_port: int, expected_host: str) -> dict[str, obje
             raise RuntimeError(
                 f"Expected exactly one TVBox receiver at {expected_host}; discovered={devices}"
             )
-        device = candidates[0]
-        settings = send_frame(
-            stream,
-            {
-                "type": "store_settings",
-                "request_id": 102,
-                "values": {"preferred_cast_device_id": str(device.get("id", ""))},
-            },
-        )
-        if settings.get("type") != "settings":
-            raise RuntimeError(f"Core did not persist preferred TVBox receiver: {settings}")
-        return device
+        return candidates[0]
     finally:
         stream.close()
 
@@ -195,6 +186,112 @@ def launch_browser(
     return driver
 
 
+def run_access_bridge(
+    *,
+    python: Path,
+    dll: Path,
+    output: Path,
+    require_name: list[str],
+    invoke_name: str | None = None,
+    require_after_name: list[str] | None = None,
+) -> dict[str, object]:
+    command = [
+        str(python),
+        str(Path(__file__).resolve().parent / "smoke_v7_accessibility.py"),
+        "--dll",
+        str(dll),
+        "--title",
+        "HLS Downloader",
+        "--timeout",
+        "60",
+        "--min-nodes",
+        "10",
+    ]
+    for name in require_name:
+        command.extend(["--require-name", name])
+    if invoke_name:
+        command.extend(["--invoke-name", invoke_name])
+    for name in require_after_name or []:
+        command.extend(["--require-after-name", name])
+    command.extend(["--output", str(output)])
+    access = subprocess.run(command, text=True, capture_output=True, timeout=90)
+    if access.returncode != 0:
+        raise RuntimeError(
+            f"Compose accessibility operation failed: stdout={access.stdout} stderr={access.stderr}"
+        )
+    return json.loads(output.read_text(encoding="utf-8"))
+
+
+def select_expected_device(
+    *,
+    access_bridge_python: Path,
+    access_bridge_dll: Path,
+    expected_device: dict[str, object],
+    expected_host: str,
+    probe_report: Path,
+) -> dict[str, object]:
+    """Locate the expected receiver through Access Bridge and click its real UI row."""
+    label = str(expected_device.get("label", "")).strip()
+    if not label:
+        raise RuntimeError(f"Discovered receiver has no label: {expected_device}")
+    report = run_access_bridge(
+        python=access_bridge_python,
+        dll=access_bridge_dll,
+        output=probe_report,
+        require_name=[label],
+    )
+    nodes = [item for item in report.get("nodes", []) if isinstance(item, dict)]
+    host_nodes = [
+        item
+        for item in nodes
+        if expected_host in str(item.get("name", ""))
+        and isinstance(item.get("bounds"), list)
+        and len(item["bounds"]) == 4
+    ]
+    label_nodes = [
+        item
+        for item in nodes
+        if str(item.get("name", "")).strip() == label
+        and isinstance(item.get("bounds"), list)
+        and len(item["bounds"]) == 4
+    ]
+    candidates = host_nodes or label_nodes
+    visible = [
+        item
+        for item in candidates
+        if int(item["bounds"][2]) > 0 and int(item["bounds"][3]) > 0
+    ]
+    if len(visible) != 1:
+        raise RuntimeError(
+            f"Expected exactly one visible accessibility node for receiver {expected_host}/{label}; matches={visible}"
+        )
+    target = visible[0]
+    x, y, width, height = (int(value) for value in target["bounds"])
+    click_x = x + max(1, width // 2)
+    click_y = y + max(1, height // 2)
+    hwnd = int((report.get("window") or {}).get("hwnd") or 0)
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    if hwnd and not user32.SetForegroundWindow(hwnd):
+        # Windows may deny foreground activation transiently. The subsequent
+        # coordinate click is still attempted, and confirmation readiness is
+        # independently checked through Access Bridge before the gate can pass.
+        pass
+    time.sleep(0.2)
+    if not user32.SetCursorPos(click_x, click_y):
+        raise RuntimeError(f"Could not move pointer to receiver node at {click_x},{click_y}")
+    mouse_event = user32.mouse_event
+    mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
+    mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
+    time.sleep(0.5)
+    return {
+        "receiver_label": label,
+        "receiver_host": expected_host,
+        "node": target,
+        "click": [click_x, click_y],
+        "accessibility_probe": report,
+    }
+
+
 def run_browser(
     *,
     browser: str,
@@ -209,7 +306,7 @@ def run_browser(
     output: Path,
 ) -> dict[str, object]:
     started = time.perf_counter()
-    expected_device = discover_and_preselect(core_port, expected_host)
+    expected_device = discover_expected_device(core_port, expected_host)
     lan_ip = local_lan_ip(expected_host)
     resolved_browser_binary = (browser_binary or (_find_edge() if browser == "edge" else _find_firefox())).resolve()
     if not resolved_browser_binary.is_file():
@@ -230,7 +327,8 @@ def run_browser(
         thread.start()
         addon = unpack_firefox_addon(extension, root) if browser == "firefox" else None
         driver = None
-        access_report = root / "access-bridge.json"
+        select_report = root / "access-bridge-select.json"
+        confirm_report = root / "access-bridge-confirm.json"
         try:
             driver = launch_browser(
                 browser=browser,
@@ -279,33 +377,20 @@ def run_browser(
             if not click_tvbox_action(driver):
                 raise RuntimeError(f"{browser}: TVBox production action could not be clicked")
 
-            access = subprocess.run(
-                [
-                    str(access_bridge_python),
-                    str(Path(__file__).resolve().parent / "smoke_v7_accessibility.py"),
-                    "--dll",
-                    str(access_bridge_dll),
-                    "--title",
-                    "HLS Downloader",
-                    "--timeout",
-                    "60",
-                    "--min-nodes",
-                    "10",
-                    "--require-name",
-                    "确认推送",
-                    "--invoke-name",
-                    "确认推送",
-                    "--output",
-                    str(access_report),
-                ],
-                text=True,
-                capture_output=True,
-                timeout=90,
+            selection = select_expected_device(
+                access_bridge_python=access_bridge_python,
+                access_bridge_dll=access_bridge_dll,
+                expected_device=expected_device,
+                expected_host=expected_host,
+                probe_report=select_report,
             )
-            if access.returncode != 0:
-                raise RuntimeError(
-                    f"{browser}: Compose accessibility confirmation failed: stdout={access.stdout} stderr={access.stderr}"
-                )
+            confirmation = run_access_bridge(
+                python=access_bridge_python,
+                dll=access_bridge_dll,
+                output=confirm_report,
+                require_name=["确认推送"],
+                invoke_name="确认推送",
+            )
 
             ui_deadline = time.monotonic() + 135.0
             ui_state: dict[str, object] = {}
@@ -334,12 +419,13 @@ def run_browser(
                 "browser_identity": browser_identity,
                 "expected_receiver_host": expected_host,
                 "selected_device": expected_device,
+                "device_selection": selection,
                 "fixture_url": f"{origin}/stream.mp4?player=direct",
                 "fixture_sha256": file_sha256(stream_path),
                 "browser_ui": ui_state,
                 "receiver_requests": matching,
                 "all_requests": ReceiverAwareHandler.requests,
-                "access_bridge": json.loads(access_report.read_text(encoding="utf-8")),
+                "access_bridge": confirmation,
                 "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
             }
             output.parent.mkdir(parents=True, exist_ok=True)
