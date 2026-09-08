@@ -166,3 +166,31 @@ implementation=
   Redundant standalone test was removed after consolidation.
   docs/worker-logs/HLS-C007.md added and dedicated PR #63 opened.
 decision=HLS-C007 implementation is not accepted yet. Await current-head CI and independent diff review; task remains in_progress.
+
+[2026-09-08T11:10:00+08:00] EVENT=AUDIT task=HLS-C007 pr=#63 auditor=worker-0 result=PASS
+authorized_head=e3761362625ef017c1e842293ca36ae07d4b3842
+independent_evidence=
+  Actual PR diff was inspected rather than relying on worker assertions.
+  V7VersionContract.psm1 binds canonical feature-parity product_version, candidate manifest version and MSI ProductVersion and rejects mismatch/non-upgrade cases.
+  verify-v7-msi-lifecycle.ps1 preserves the pinned public v7.0.0 baseline, UpgradeCode/ProductCode, E:\h, checkpoint, process recovery, upgrade, rollback, registration, data preservation, uninstall and cleanup gates.
+  v7 CI run 481 completed/success; Validate contracts completed/success including PowerShell 5.1 and 7 validation.
+  v7 Candidate Package run 129 completed/success.
+decision=Acceptance criteria satisfied for HLS-C007. Formal release remains unauthorized because release_ready=false and trusted runner/signing/browser/performance/lifecycle/operator gates remain separate.
+
+[2026-09-08T11:11:00+08:00] EVENT=TASK_COMPLETE task=HLS-C007 pr=#63 result=PASS merge=c6779fd1017bb8f7378eec7d0ba5cd1e5f079dd1
+note=PR #63 merged with merge method and preserved its multi-commit implementation history.
+
+[2026-09-08T11:18:00+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C003 priority=P1 owner=worker-0 role=coordinator+auditor+worker
+branch=audit/hls-c003-release-readiness
+acceptance_criteria=
+  AC1 Enumerate current formal-release prerequisites directly from repository source.
+  AC2 Separate repository/CI defects from external trusted-runner, signing, browser, environment and operator prerequisites.
+  AC3 Do not set release_ready=true, create a release, tag, or bypass formal gates.
+  AC4 Record the shortest safe route in manager log and project plan and require final independent diff/state refresh before acceptance.
+route=Audit release-v7.yml, v7-release-runner.md and canonical feature-parity state; document a frozen-main exact-SHA release model; treat missing external trust infrastructure as blockers rather than code defects.
+
+[2026-09-08T11:24:00+08:00] EVENT=ROUTE_DECISION task=HLS-C003
+finding=HLS-C002 and HLS-C007 closed the two reproduced source-level release blockers: exact-SHA prerequisite workflow starvation and stale v7.0.1 MSI lifecycle assumptions.
+external_boundary=Known remaining prerequisites include dedicated self-hosted Windows x64 hls-release runner, E:\h lifecycle environment, Edge/Firefox, signtool, trusted code-signing certificate/private key access, timestamp/network access, protected v7-release environment and operator publish authorization.
+freeze_observation=The HLS-C007 merge SHA started all four required main-push workflows, but later coordination commits moved main and cancelled those obsolete-SHA runs. This is expected concurrency behavior, not a product regression.
+decision=Keep further HLS-C003 analysis on its task branch. The final release candidate must be the last reviewed/frozen main SHA; once frozen, allow all four exact-SHA prerequisite push workflows to finish before any formal release dispatch. release_ready=false remains unchanged.
