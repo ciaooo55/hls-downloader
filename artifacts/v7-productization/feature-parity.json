@@ -14,8 +14,8 @@
     "partial": "主要路径可用，但未达到 v3 行为或发布门禁",
     "blocked": "缺少真实实现或发布级验证"
   },
-  "release_ready": false,
-  "audit_state": "v7_0_2_iteration_in_progress",
+  "release_ready": true,
+  "audit_state": "v7_0_2_release_specialties_verified",
   "features": [
     {
       "id": "architecture.single_core",
