@@ -44,18 +44,19 @@ All four required workflows emit a push result for every `main` commit so an exa
 
 A fresh release requires no existing canonical-version tag; a retry may reuse only an annotated tag that resolves to that exact same frozen commit and, when a release already exists, only while that release is still a draft. It then:
 
-1. reads/validates the canonical product version and requires the formal package contract, including `release_ready=true`;
+1. checks that the dispatch is the current `main`, reads/validates the canonical product version, validates existing tag/draft retry state, and requires the signing identity configuration; this early step does **not** change or bypass `release_ready`;
 2. validates all four exact-SHA workflow identities before building release inputs;
-3. builds a fresh candidate from that exact commit;
-4. records browser, performance, installer-upgrade and failure-rollback evidence against the same candidate manifest;
-5. rechecks that `main` has not moved;
-6. builds the formal package using that evidence;
-7. Authenticode-signs and timestamps the top-level Windows EXE/MSI and the first-party executables carried by the Portable ZIP, then verifies signer identity and trust;
-8. creates the Firefox store source bundle, CycloneDX SBOM, release evidence bundle and `SHA256SUMS.txt`;
-9. uploads the staged files as a retained Actions artifact;
-10. creates or safely resumes the canonical annotated version tag and **Draft** GitHub Release;
-11. compares every uploaded GitHub asset's reported byte size and `sha256:` digest with the local staged file;
-12. publishes the verified draft as Latest only when the dispatch `publish` switch is enabled.
+3. verifies the dedicated Windows release runner and bootstraps the pinned toolchains;
+4. builds a fresh candidate from that exact commit;
+5. records browser, performance, installer-upgrade and failure-rollback evidence against the same candidate manifest;
+6. rechecks that `main` has not moved;
+7. builds the formal package using that evidence; `build-v7.ps1 -Task package` is where canonical completeness, current release evidence, clean-worktree and `release_ready=true` are enforced;
+8. Authenticode-signs and timestamps the top-level Windows EXE/MSI and the first-party executables carried by the Portable ZIP, then verifies signer identity and trust;
+9. creates the Firefox store source bundle, CycloneDX SBOM, release evidence bundle and `SHA256SUMS.txt`;
+10. uploads the staged files as a retained Actions artifact;
+11. creates or safely resumes the canonical annotated version tag and **Draft** GitHub Release;
+12. compares every uploaded GitHub asset's reported byte size and `sha256:` digest with the local staged file;
+13. publishes the verified draft as Latest only when the dispatch `publish` switch is enabled.
 
 A missing, renamed, path-mismatched, wrong-event, wrong-branch, wrong-SHA, or failed required workflow stops the release before candidate build. `release_ready=false`, a missing browser, failed threshold, MSI lifecycle regression, missing signing certificate, invalid/timestamp-free signature, changed `main`, mismatched upload digest, or any missing release asset also stops the workflow. No fallback turns those failures into a public release.
 
