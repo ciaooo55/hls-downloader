@@ -577,6 +577,7 @@ mod tests {
                 "request_headers":{"X-Api-Key":"source-secret"},
                 "request_contexts":{
                     "https://cdn.test":{
+                        "referer":"https://page.test/watch",
                         "request_headers":{"X-Cdn-Token":"target-secret"}
                     }
                 }
