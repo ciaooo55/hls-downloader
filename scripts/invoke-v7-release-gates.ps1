@@ -17,6 +17,8 @@ $currentTree = (& git -C $repo rev-parse 'HEAD^{tree}').Trim()
 if ([int]$manifest.schema -ne 1 -or [string]$manifest.package_tier -ne 'candidate' -or [string]$manifest.source_commit -ne $currentCommit -or [string]$manifest.source_tree -ne $currentTree) {
     throw 'Release gates require a candidate from the current source commit/tree.'
 }
+& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'assert-v7-release-gaps.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Formal release gap assertion failed.' }
 if (-not (Test-Path -LiteralPath 'E:\' -PathType Container)) { throw 'The formal release runner must provide the E: volume used by the MSI lifecycle gate.' }
 
 function Resolve-Browser([string]$Explicit, [string[]]$Defaults, [string]$Label) {
@@ -77,6 +79,19 @@ Invoke-Gate 'browser' ($browserParts -join ' ') "candidate portable; Edge=$edge;
 $performanceCommand = "& $(Quote-PS (Join-Path $PSScriptRoot 'benchmark-v7.ps1')) -CandidateManifestPath $(Quote-PS $manifestFullPath)"
 Invoke-Gate 'performance' $performanceCommand 'candidate Portable; packaged SOFTWARE renderer; local transfer/IPC/host/frame thresholds'
 
+$mediaPushParts = [Collections.Generic.List[string]]::new()
+$mediaPushParts.Add('&')
+$mediaPushParts.Add((Quote-PS (Join-Path $PSScriptRoot 'verify-v7-browser-media-push.ps1')))
+$mediaPushParts.Add('-CandidateManifestPath'); $mediaPushParts.Add((Quote-PS $manifestFullPath))
+$mediaPushParts.Add('-ExpectedTvboxHost'); $mediaPushParts.Add((Quote-PS ([string]$env:HLS_V7_TVBOX_EXPECTED_HOST)))
+$mediaPushParts.Add('-EdgeBinary'); $mediaPushParts.Add((Quote-PS $edge))
+$mediaPushParts.Add('-FirefoxBinary'); $mediaPushParts.Add((Quote-PS $firefox))
+$mediaPushParts.Add('-Python'); $mediaPushParts.Add((Quote-PS $python))
+$mediaPushParts.Add('-Ffmpeg'); $mediaPushParts.Add((Quote-PS $ffmpeg))
+Add-OptionalArgument $mediaPushParts '-EdgeDriver' $EdgeDriver
+Add-OptionalArgument $mediaPushParts '-FirefoxDriver' $FirefoxDriver
+Invoke-Gate 'browser_media_push' ($mediaPushParts -join ' ') "candidate MSI installed registration + real Edge/Firefox TVBox path; expected receiver=$env:HLS_V7_TVBOX_EXPECTED_HOST"
+
 $upgradeCommand = "& $(Quote-PS (Join-Path $PSScriptRoot 'verify-v7-msi-lifecycle.ps1')) -Scenario Upgrade -CandidateManifestPath $(Quote-PS $manifestFullPath) -InstallDir 'E:\h'"
 Invoke-Gate 'installer' $upgradeCommand "public v7.0.0 MSI -> candidate v$([string]$manifest.product_version) MSI at E:\h; checkpoint/process recovery"
 
@@ -86,5 +101,5 @@ Invoke-Gate 'rollback' $rollbackCommand 'candidate MSI Type-19 failure injection
 $aggregate = Join-Path $repo 'artifacts\v7-productization\release-evidence.json'
 $evidence = Get-Content -LiteralPath $aggregate -Raw -Encoding UTF8 | ConvertFrom-Json
 $passed = @($evidence.gates | Where-Object { $_.result -eq 'passed' -and [int]$_.exit_status -eq 0 })
-if (@($evidence.gates).Count -ne 4 -or $passed.Count -ne 4) { throw 'All four release gates were not recorded as passed.' }
+if (@($evidence.gates).Count -ne 5 -or $passed.Count -ne 5) { throw 'All five release gates were not recorded as passed.' }
 Write-Output ([ordered]@{ schema = 1; passed = $true; product_version = [string]$manifest.product_version; source_commit = $currentCommit; gates = @($evidence.gates | ForEach-Object { $_.id }) } | ConvertTo-Json -Compress)

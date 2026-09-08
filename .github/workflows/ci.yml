@@ -84,6 +84,9 @@ jobs:
           pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validate-powershell.ps1
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-v7-feature-parity.ps1
           pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-v7-feature-parity.ps1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-release-gap-contract.ps1 -Shell powershell.exe
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-release-gap-contract.ps1 -Shell pwsh.exe
+          python.exe -m py_compile scripts/smoke_extension_tvbox_real.py
 
   rust_core:
     name: Rust Core
