@@ -2,155 +2,20 @@
   "schema_version": 1,
   "repository": "ciaooo55/hls-downloader",
   "canonical_issue": 39,
-  "updated_at": "2026-09-08T11:52:00+08:00",
+  "updated_at": "2026-09-08T11:57:00+08:00",
   "priority_order": ["P0", "P1", "P2", "P3"],
   "active_workers": 2,
   "minimum_unfinished_target": 4,
   "tasks": [
-    {
-      "id": "HLS-C001",
-      "title": "Bootstrap multi-agent coordination protocol",
-      "priority": "P0",
-      "status": "done",
-      "owner": "worker-0",
-      "role": "coordinator+auditor+worker",
-      "branch": "coord/bootstrap-protocol",
-      "pr": 60,
-      "merge_commit": "37cc077b32be25416ca9d01d118bf1d546a0b65b",
-      "depends_on": [],
-      "review_result": "PASS"
-    },
-    {
-      "id": "HLS-C002",
-      "title": "Independently audit PR #38 release security gate integration",
-      "priority": "P0",
-      "status": "done",
-      "owner": "worker-0",
-      "role": "auditor",
-      "branch": "audit/hls-c002-pr38",
-      "product_pr": 38,
-      "accepted_head": "8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec",
-      "merge_commit": "884f628eb264bb63ba7a093c67e700e3bf3d3024",
-      "depends_on": ["HLS-C001"],
-      "review_result": "PASS"
-    },
-    {
-      "id": "HLS-C003",
-      "title": "Triage formal v7 release readiness and external runner blockers",
-      "priority": "P1",
-      "status": "done",
-      "owner": "worker-0",
-      "role": "coordinator+auditor+worker",
-      "branch": "audit/hls-c003-release-readiness",
-      "pr": 64,
-      "accepted_head": "c3a3e2765852b2972f51e5edd7da90960b39a176",
-      "merge_commit": "11dff75cd6f2e8e73da6e4cde9f8fdbb75396d94",
-      "review_result": "PASS",
-      "depends_on": ["HLS-C002", "HLS-C007"],
-      "evidence": {
-        "source_blockers": "HLS-C002 and HLS-C007 closed; no third deterministic formal-release source blocker reproduced",
-        "release_ready": false,
-        "external_boundary": "hls-release Windows x64 runner, E:\\h, browsers, signing key/cert, timestamp/network, protected environment, operator publish authorization"
-      }
-    },
-    {
-      "id": "HLS-C004",
-      "title": "Prioritize open Dependabot major-version updates",
-      "priority": "P1",
-      "status": "in_progress",
-      "owner": "worker-1",
-      "role": "worker",
-      "branch": "deps/hls-c004-dependabot-triage",
-      "depends_on": ["HLS-C002"],
-      "acceptance": [
-        "open dependency PRs are grouped by runtime/build/security risk",
-        "security-relevant updates are distinguished from optional major churn",
-        "each recommended merge or defer decision cites compatibility evidence",
-        "no broad dependency batch is merged without project-specific validation"
-      ]
-    },
-    {
-      "id": "HLS-C005",
-      "title": "Repository-wide bug and contract audit after v7.0.2 changes",
-      "priority": "P1",
-      "status": "in_progress",
-      "owner": "worker-0",
-      "role": "coordinator+auditor+worker",
-      "branch": "audit/hls-c005-contract-audit",
-      "depends_on": ["HLS-C002", "HLS-C007"],
-      "acceptance": [
-        "audit focuses on release/update trust, IPC boundaries, persistence, and extension handoff contracts",
-        "findings are reproducible from source or CI evidence",
-        "confirmed defects become separate prioritized tasks with narrow acceptance criteria",
-        "speculative findings are not merged as fixes"
-      ]
-    },
-    {
-      "id": "HLS-C006",
-      "title": "Refine README from independently verified project state",
-      "priority": "P2",
-      "status": "planned",
-      "owner": null,
-      "role": "auditor",
-      "branch": null,
-      "depends_on": ["HLS-C003"],
-      "acceptance": [
-        "README describes architecture, build/release boundaries and current readiness accurately",
-        "claims are verified against source and CI rather than copied from stale planning docs",
-        "quick-start material remains concise and learnable",
-        "release readiness wording does not imply an unsigned or ungated formal release"
-      ]
-    },
-    {
-      "id": "HLS-C007",
-      "title": "Fix v7.0.2 MSI lifecycle version drift in formal release gates",
-      "priority": "P0",
-      "status": "done",
-      "owner": "worker-0",
-      "role": "worker+auditor",
-      "branch": "fix/hls-c007-msi-lifecycle-version",
-      "pr": 63,
-      "accepted_head": "e3761362625ef017c1e842293ca36ae07d4b3842",
-      "merge_commit": "c6779fd1017bb8f7378eec7d0ba5cd1e5f079dd1",
-      "review_result": "PASS",
-      "depends_on": []
-    },
-    {
-      "id": "HLS-C008",
-      "title": "Reconcile current v7.0.2 release documentation drift",
-      "priority": "P2",
-      "status": "planned",
-      "owner": null,
-      "role": "worker|auditor",
-      "branch": null,
-      "depends_on": ["HLS-C003"],
-      "acceptance": [
-        "current-facing README/release guidance consistently distinguishes active v7.0.2 state from historical v7.0.1 evidence",
-        "historical v7.0.1 documents remain explicitly historical rather than appearing current",
-        "no documentation change sets or implies release_ready=true",
-        "formal workflow and executable release gates are not weakened by documentation cleanup"
-      ]
-    },
-    {
-      "id": "HLS-C009",
-      "title": "Bind runtime automatic updates to the project release signer identity",
-      "priority": "P1",
-      "status": "planned",
-      "owner": null,
-      "role": "worker",
-      "branch": null,
-      "depends_on": ["HLS-C005"],
-      "acceptance": [
-        "automatic update rejects an MSI whose Authenticode chain is valid but whose signer is not an explicitly trusted HLS Downloader release signer",
-        "the expected signer identity comes from a versioned local trust contract rather than GitHub release metadata or another network-controlled field",
-        "the design supports deliberate certificate rotation without accepting arbitrary Windows-trusted code-signing certificates",
-        "existing SHA-256, size, exact product version, ProductName, UpgradeCode, per-user MSI and WinVerifyTrust checks remain fail-closed",
-        "Windows-focused automated coverage proves both accepted signer and wrong-signer rejection paths before merge"
-      ],
-      "evidence": {
-        "runtime_gap": "native_shell/src/updater.rs verifies WinVerifyTrust and MSI identity but does not compare the signer to the formal release signer identity",
-        "formal_contract": "scripts/sign-v7-authenticode.ps1 and verify-v7-authenticode.ps1 bind formal artifacts to HLS_V7_SIGN_CERT_THUMBPRINT"
-      }
-    }
+    {"id":"HLS-C001","title":"Bootstrap multi-agent coordination protocol","priority":"P0","status":"done","owner":"worker-0","role":"coordinator+auditor+worker","branch":"coord/bootstrap-protocol","pr":60,"merge_commit":"37cc077b32be25416ca9d01d118bf1d546a0b65b","depends_on":[],"review_result":"PASS"},
+    {"id":"HLS-C002","title":"Independently audit PR #38 release security gate integration","priority":"P0","status":"done","owner":"worker-0","role":"auditor","branch":"audit/hls-c002-pr38","product_pr":38,"accepted_head":"8b5161eaf5bddeab061f714e5e8a88fa1e42f8ec","merge_commit":"884f628eb264bb63ba7a093c67e700e3bf3d3024","depends_on":["HLS-C001"],"review_result":"PASS"},
+    {"id":"HLS-C003","title":"Triage formal v7 release readiness and external runner blockers","priority":"P1","status":"done","owner":"worker-0","role":"coordinator+auditor+worker","branch":"audit/hls-c003-release-readiness","pr":64,"accepted_head":"c3a3e2765852b2972f51e5edd7da90960b39a176","merge_commit":"11dff75cd6f2e8e73da6e4cde9f8fdbb75396d94","review_result":"PASS","depends_on":["HLS-C002","HLS-C007"],"evidence":{"source_blockers":"HLS-C002 and HLS-C007 closed; no third deterministic formal-release source blocker reproduced","release_ready":false,"external_boundary":"hls-release Windows x64 runner, E:\\h, browsers, signing key/cert, timestamp/network, protected environment, operator publish authorization"}},
+    {"id":"HLS-C004","title":"Prioritize open Dependabot major-version updates","priority":"P1","status":"in_progress","owner":"worker-1","role":"worker","branch":"deps/hls-c004-dependabot-triage","depends_on":["HLS-C002"],"acceptance":["open dependency PRs are grouped by runtime/build/security risk","security-relevant updates are distinguished from optional major churn","each recommended merge or defer decision cites compatibility evidence","no broad dependency batch is merged without project-specific validation"]},
+    {"id":"HLS-C005","title":"Repository-wide bug and contract audit after v7.0.2 changes","priority":"P1","status":"in_progress","owner":"worker-0","role":"coordinator+auditor+worker","branch":"audit/hls-c005-contract-audit","depends_on":["HLS-C002","HLS-C007"],"acceptance":["audit focuses on release/update trust, IPC boundaries, persistence, and extension handoff contracts","findings are reproducible from source or CI evidence","confirmed defects become separate prioritized tasks with narrow acceptance criteria","speculative findings are not merged as fixes"]},
+    {"id":"HLS-C006","title":"Refine README from independently verified project state","priority":"P2","status":"planned","owner":null,"role":"auditor","branch":null,"depends_on":["HLS-C003"],"acceptance":["README describes architecture, build/release boundaries and current readiness accurately","claims are verified against source and CI rather than copied from stale planning docs","quick-start material remains concise and learnable","release readiness wording does not imply an unsigned or ungated formal release"]},
+    {"id":"HLS-C007","title":"Fix v7.0.2 MSI lifecycle version drift in formal release gates","priority":"P0","status":"done","owner":"worker-0","role":"worker+auditor","branch":"fix/hls-c007-msi-lifecycle-version","pr":63,"accepted_head":"e3761362625ef017c1e842293ca36ae07d4b3842","merge_commit":"c6779fd1017bb8f7378eec7d0ba5cd1e5f079dd1","review_result":"PASS","depends_on":[]},
+    {"id":"HLS-C008","title":"Reconcile current v7.0.2 release documentation drift","priority":"P2","status":"planned","owner":null,"role":"worker|auditor","branch":null,"depends_on":["HLS-C003"],"acceptance":["current-facing README/release guidance consistently distinguishes active v7.0.2 state from historical v7.0.1 evidence","historical v7.0.1 documents remain explicitly historical rather than appearing current","no documentation change sets or implies release_ready=true","formal workflow and executable release gates are not weakened by documentation cleanup"]},
+    {"id":"HLS-C009","title":"Bind runtime automatic updates to the project release signer identity","priority":"P1","status":"planned","owner":null,"role":"worker","branch":null,"depends_on":["HLS-C005"],"acceptance":["automatic update rejects an MSI whose Authenticode chain is valid but whose signer is not an explicitly trusted HLS Downloader release signer","the expected signer identity comes from a versioned local trust contract rather than GitHub release metadata or another network-controlled field","the design supports deliberate certificate rotation without accepting arbitrary Windows-trusted code-signing certificates","existing SHA-256, size, exact product version, ProductName, UpgradeCode, per-user MSI and WinVerifyTrust checks remain fail-closed","Windows-focused automated coverage proves both accepted signer and wrong-signer rejection paths before merge"],"evidence":{"runtime_gap":"native_shell/src/updater.rs verifies WinVerifyTrust and MSI identity but does not compare the signer to the formal release signer identity","formal_contract":"scripts/sign-v7-authenticode.ps1 and verify-v7-authenticode.ps1 bind formal artifacts to HLS_V7_SIGN_CERT_THUMBPRINT"}},
+    {"id":"HLS-C010","title":"Enforce loopback-only Core TCP debug transport","priority":"P1","status":"planned","owner":null,"role":"worker","branch":null,"depends_on":["HLS-C005"],"acceptance":["HLS_V7_CORE_BIND rejects every non-loopback IPv4 and IPv6 address rather than exposing the unauthenticated Core protocol to LAN or wildcard interfaces","default and explicitly configured loopback addresses continue to support test/Linux IPC","the Windows named-pipe owner/SYSTEM DACL and existing frame-size/read-timeout protections remain unchanged","automated tests cover 127.0.0.1, ::1, wildcard and representative private/public non-loopback addresses","no new unauthenticated remote transport is introduced"],"evidence":{"contract_mismatch":"core_ipc.rs describes TCP as loopback test/Linux transport but default_core_bind accepts any SocketAddr from HLS_V7_CORE_BIND","impact":"TCP dispatch has no session authentication and exposes full CorePipeRequest including command, settings, credential and shutdown operations"}}
   ]
 }
