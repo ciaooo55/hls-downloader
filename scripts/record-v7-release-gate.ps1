@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)]
-    [ValidateSet('browser', 'performance', 'installer', 'rollback')]
+    [ValidateSet('browser', 'browser_media_push', 'performance', 'installer', 'rollback')]
     [string]$GateId,
     [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$Command,
     [Parameter(Mandatory=$true)][Alias('Input')][ValidateNotNullOrEmpty()][string]$GateInput,
