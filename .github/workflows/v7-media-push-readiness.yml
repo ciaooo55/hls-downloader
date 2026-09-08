@@ -54,6 +54,13 @@ jobs:
             throw 'Pre-readiness media-push validation expects release_ready=false; use the formal release gate after readiness is granted.'
           }
 
+      - name: Require interactive release desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\assert-v7-interactive-runner.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Set isolated v7 build cache
         shell: pwsh
         run: |
