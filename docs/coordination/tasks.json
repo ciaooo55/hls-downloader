@@ -2,7 +2,7 @@
   "schema_version": 1,
   "repository": "ciaooo55/hls-downloader",
   "canonical_issue": 39,
-  "updated_at": "2026-09-08T11:44:00+08:00",
+  "updated_at": "2026-09-08T11:52:00+08:00",
   "priority_order": ["P0", "P1", "P2", "P3"],
   "active_workers": 2,
   "minimum_unfinished_target": 4,
@@ -130,6 +130,27 @@
         "no documentation change sets or implies release_ready=true",
         "formal workflow and executable release gates are not weakened by documentation cleanup"
       ]
+    },
+    {
+      "id": "HLS-C009",
+      "title": "Bind runtime automatic updates to the project release signer identity",
+      "priority": "P1",
+      "status": "planned",
+      "owner": null,
+      "role": "worker",
+      "branch": null,
+      "depends_on": ["HLS-C005"],
+      "acceptance": [
+        "automatic update rejects an MSI whose Authenticode chain is valid but whose signer is not an explicitly trusted HLS Downloader release signer",
+        "the expected signer identity comes from a versioned local trust contract rather than GitHub release metadata or another network-controlled field",
+        "the design supports deliberate certificate rotation without accepting arbitrary Windows-trusted code-signing certificates",
+        "existing SHA-256, size, exact product version, ProductName, UpgradeCode, per-user MSI and WinVerifyTrust checks remain fail-closed",
+        "Windows-focused automated coverage proves both accepted signer and wrong-signer rejection paths before merge"
+      ],
+      "evidence": {
+        "runtime_gap": "native_shell/src/updater.rs verifies WinVerifyTrust and MSI identity but does not compare the signer to the formal release signer identity",
+        "formal_contract": "scripts/sign-v7-authenticode.ps1 and verify-v7-authenticode.ps1 bind formal artifacts to HLS_V7_SIGN_CERT_THUMBPRINT"
+      }
     }
   ]
 }
