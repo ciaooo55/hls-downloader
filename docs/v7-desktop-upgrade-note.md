@@ -1,4 +1,6 @@
-# HLS Downloader 7.0.1 升级说明
+# HLS Downloader 7.0.2 升级说明
+
+> 当前活动源码版本为 `7.0.2`。上一轮 `v7.0.1-candidate.1` 公开测试包仍可作为历史候选参考，但不是当前 `main` 的产物，也不代表 v7.0.2 已正式发布。当前正式发布状态以 canonical `feature-parity.json` 与 formal-release readiness 文档为准；现为 `release_ready=false`。
 
 ## 架构升级
 
@@ -27,9 +29,10 @@
 ## 本机位置
 
 - 程序：`E:\h`
-- Chromium 扩展：`extensions\HLSDownloader-7.0.1-Chromium.zip`
-- Firefox 扩展：`extensions\HLSDownloader-7.0.1-Firefox.zip`
-- 开始菜单：`HLS Downloader 7.0.1`
+- 浏览器扩展：`extensions\HLSDownloader-<manifest-version>-Chromium.zip` 与 `extensions\HLSDownloader-<manifest-version>-Firefox.zip`
+- 开始菜单：由当前 candidate/formal manifest 的产品版本生成
 - 回滚镜像：`E:\h.v7-backup`（仅在事务失败恢复期间短暂存在）
 
-验证数据和正式标签前门槛见 `docs/v7-verification.md`。
+不要从历史文档中的 `7.0.1` 文件名推断当前安装版本；候选/正式包的产品版本必须与 `ARTIFACT-MANIFEST.json` 和 canonical feature-parity 元数据一致。
+
+历史验证数据见 `docs/v7-verification.md`；当前正式发布门槛见 `docs/architecture/formal-release-readiness.md` 与 `docs/v7-release-runner.md`。
