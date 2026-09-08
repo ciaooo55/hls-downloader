@@ -28,7 +28,8 @@
     "empty_queue": "do_not_manufacture_dependency_churn"
   },
   "delivery": {
-    "draft_pr": 65,
+    "pr": 65,
+    "review_state": "ready_for_independent_audit",
     "independent_review_required": true,
     "self_merge_allowed_while_worker_0_active": false
   }
