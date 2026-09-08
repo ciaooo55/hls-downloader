@@ -14,7 +14,7 @@
 - Roles: coordinator + auditor + worker
 - Branch: `audit/hls-c005-contract-audit`
 - Depends on: HLS-C002, HLS-C007
-- Concurrent work: `worker-1` owns HLS-C004 dependency triage.
+- Concurrent work: `worker-1` completed HLS-C004 and is now implementing HLS-C009.
 
 ## Audit order
 
@@ -64,6 +64,56 @@ The TCP transport has protocol/version hello but no client authentication/sessio
 
 Action: created HLS-C010. Its fix scope is to reject non-loopback IPv4/IPv6 bind addresses while preserving loopback test/Linux behavior and the existing Windows named-pipe security model.
 
+## Persistence and restart boundary
+
+**Result: PASS; no separate defect task created.**
+
+Evidence from current source:
+
+- `Store::open` enables foreign keys, WAL mode and `synchronous=NORMAL`, and refuses unsupported schema versions instead of silently migrating unknown layouts.
+- Task snapshots, task events, task specs, settings and event checkpoints use transactions where the state must move atomically; task deletion also removes its spec/log state.
+- Credential data is stored as protected blobs, not copied into public task snapshots.
+- Core service persistence rolls in-memory runtime state back when the SQLite write fails instead of reporting an event that was never committed.
+- Startup recovery only converts genuinely interrupted `downloading` / `recording` / `merging` / `checking` tasks into `paused`, or into `queued` when the explicit `resume_interrupted_on_startup` policy is enabled.
+- Update preparation pauses active tasks and waits for worker termination before installer handoff; timeout aborts the update rather than proceeding with live workers.
+
+No reproducible lost-update, accidental auto-resume, or public-secret persistence violation was found in this audit scope.
+
+## Finding 3 — arbitrary custom replay headers cross origins
+
+**Result: confirmed; split to HLS-C011 (P1).**
+
+The browser extension captures arbitrary request headers in `RequestChainStore`. `replayableRequestHeaders()` removes cookies, proxy authentication and hop-by-hop/transport-owned fields, but intentionally permits ordinary custom headers and `Authorization` so an exact origin context can replay authenticated resources.
+
+The Core credential replay layer binds a replay JSON object to `_task_url`. When a child request moves to a different origin, `apply_replay_json_for()` applies the base request headers first and then removes only `Cookie`, `Authorization` and `Proxy-Authorization` before applying an exact `request_contexts[target_origin]` entry.
+
+An existing unit test explicitly verifies that a base `X-Playback: ok` header survives an unscoped cross-origin child while Cookie and Authorization are removed. That behavior is unsafe as a generic rule because arbitrary custom headers may themselves be credentials (`X-Api-Key`, `X-Auth-Token`, vendor session headers, signed API headers, etc.). The extension does not know which arbitrary names are secrets at capture time.
+
+Consequence: a task whose source-origin replay context contains a custom credential header can send that header to an unscoped cross-origin HLS/DASH child even though the contract claims task secrets are not forwarded cross-origin. Exact origin-scoped `request_contexts` already provide the correct mechanism for deliberately replaying required headers to a CDN origin.
+
+Action: created HLS-C011. The fix must prefer an allowlist or explicit origin ownership model rather than adding an inevitably incomplete list of secret-looking header names. Same-origin custom replay and exact matching scoped contexts must remain supported.
+
+## Native Messaging / handoff positive controls
+
+**Result: PASS apart from HLS-C011 replay leakage.**
+
+- Native Messaging registration constrains Chromium and Firefox to the intended extension identities.
+- Credential-bearing browser handoff state is stored separately from public handoff presentation; Windows uses DPAPI-backed protected blobs and non-Windows paths reject credential persistence rather than pretending it is protected.
+- Extension replay metadata exposed for diagnostics is filtered for keys that look like cookies, authorization, tokens, passwords, secrets, credentials or request-header payloads.
+- Origin-scoped request contexts override the browser-page fallback for their exact origin, including clearing invented Cookie/Referer/Origin values when the browser did not send them.
+
+No additional handoff ownership or credential-at-rest defect was reproduced beyond HLS-C011.
+
+## Audit conclusion
+
+HLS-C005 covered all declared high-risk boundaries and produced three narrow implementation tasks:
+
+- **HLS-C009 (P1):** bind runtime automatic updates to a locally versioned project signer identity.
+- **HLS-C010 (P1):** enforce loopback-only optional Core TCP binding.
+- **HLS-C011 (P1):** prevent arbitrary custom credential headers from crossing replay origins.
+
+The SQLite/restart and Native Messaging registration/credential-at-rest boundaries passed the source audit. HLS-C005 itself contains documentation/evidence only; product fixes belong to C009/C010/C011 branches and require their own validation and review.
+
 ## Status
 
-`in_progress`: update trust produced HLS-C009; IPC audit produced HLS-C010. Next boundary is SQLite durability/checkpoint/restart and task-state handoff.
+`ready_for_review`: all acceptance boundaries have been inspected, confirmed defects are split into independent tasks, and no speculative implementation is bundled into this branch. Final acceptance must refresh the branch against current `main`, inspect the exact diff, and confirm task-registry/handoff state remains consistent.
