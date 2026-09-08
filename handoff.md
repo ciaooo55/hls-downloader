@@ -11,16 +11,12 @@ coordinator: worker-0
 auditor: worker-0
 workers:
   - worker-0
-  - worker-1
 active_tasks:
-  - HLS-C006
-  - HLS-C008
-  - HLS-C011
   - HLS-C012
-primary_active_task: HLS-C006
+primary_active_task: HLS-C012
 next_priority_task: HLS-C013
-status: post-hardening-documentation-and-coordination-closeout
-last_updated: 2026-09-08T15:12:00+08:00
+status: durable-state-closeout-before-final-readiness-audit
+last_updated: 2026-09-08T15:37:00+08:00
 ---
 
 # Project handoff
@@ -37,6 +33,7 @@ This file is the canonical fast-entry document for ChatGPT participants. Parse t
 6. Completion requires acceptance evidence, PR/commit references, and independent review against the task criteria.
 7. A durable active audit FAIL must be resolved or explicitly rebutted before merge, even when GitHub cannot express `REQUEST_CHANGES` because multiple ChatGPT sessions share one GitHub account.
 8. An exact-head PASS is invalid after the reviewed PR head moves. Re-review the new head before merge.
+9. When the independent worker is lost, use the documented fallback only after confirming the last GitHub heartbeat timestamp; record the limitation instead of pretending that self-review is independent.
 
 ## Cross-project coordination
 
@@ -45,15 +42,16 @@ Issue #42 is the visitor area. External project coordinators must provide their 
 ## Current project state
 
 - Active product line: v7.0.2 iteration. Canonical `artifacts/v7-productization/feature-parity.json` remains `release_ready=false`; no current coordination task authorizes formal publishing.
-- HLS-C001 coordination bootstrap, HLS-C002 exact-SHA release workflow contract, HLS-C007 MSI lifecycle version binding, HLS-C003 formal-release triage, HLS-C004 dependency triage and HLS-C005 cross-cutting contract audit are complete.
+- HLS-C001 coordination bootstrap, HLS-C002 exact-SHA release workflow contract, HLS-C003 formal-release triage, HLS-C004 dependency triage, HLS-C005 cross-cutting contract audit and HLS-C007 MSI lifecycle version binding are complete.
 - Process correction from HLS-C003 remains durable: PR #64 merged while worker-1 had an unresolved factual FAIL about the Dependabot queue. HLS-C004/PR #65 repaired that stale statement. Future merges must resolve or explicitly rebut every durable active FAIL before merge.
-- HLS-C009 closed the updater signer-ownership gap in PR #68. Runtime automatic installation now requires the formal project signer or a source-controlled rollover identity in addition to SHA-256, WinVerifyTrust and MSI identity checks. PR #68 merged as `acb6969bdeaaa1a7b96b30d5daa06772e0a35de9`; merged-main required workflows later passed.
-- HLS-C010 closed the optional Core TCP exposure in PR #67. Configured/client addresses and the actual pre-bound server listener must be loopback; the Windows named-pipe security path was not weakened. PR #67 merged as `125d146ad10971628019f02a688f0f27cf9468ac`; merged-main v7 CI #515, Candidate #163, Maintenance Security and Rust Security passed.
-- HLS-C011 closed cross-origin custom replay-header leakage in PR #69. The exact accepted head `05ad6e52da0641cbdf73479dde3be8fe6e4015af` passed v7 CI #521 and Candidate #169 and merged as `6b5f596325a4b00758ccd062b92eaeb80b0256ee`. On that merged-main SHA, v7 CI #522, Maintenance Security #65 and Rust Security #39 passed; Candidate #170 is still the only outstanding post-merge verification at this checkpoint. Do not mark C011 done until it succeeds.
-- `worker-0` owns HLS-C006 on `docs/hls-c006-readme-accuracy`; PR #70 is frozen at `97e59b14d646e2dd57ca3017b166c507fabdc8f3` for independent worker-1 audit. It distinguishes the real published `v7.0.1-candidate.1` test build from the active 7.0.2 source/formal-package contract and leaves `release_ready=false` intact.
-- `worker-1` owns HLS-C008 on `docs/hls-c008-release-doc-drift`. Its scope is current-facing v7 release/branch/install documentation: preserve historical 7.0.1 measurements as history while correcting stale current guidance to the active 7.0.2 contract. It must not edit release workflows or imply release authorization.
-- `worker-0` owns HLS-C012 on `coord/hls-c012-state-sync`. This branch synchronizes `tasks.json`, this handoff and `docs/manger.log` with the already-merged security work. It is coordination-only and should receive a final refresh after C006/C008/C011 settle before merge.
-- HLS-C013 is the planned final post-hardening release-readiness re-audit. It runs only after C006/C008/C012 closeout, freezes the resulting `main` SHA, requires all four exact-SHA push workflows, keeps `release_ready=false`, and recommends either external trusted-release gates or an actionable source fix. It never publishes.
+- HLS-C009 closed updater signer ownership in PR #68, accepted head `6623b534b3b298a237b4f8feea7ade286f9827fe`, merge `acb6969bdeaaa1a7b96b30d5daa06772e0a35de9`. Runtime installation now requires the formal project signer or a source-controlled rollover identity in addition to the pre-existing digest, WinVerifyTrust and MSI identity checks.
+- HLS-C010 closed optional Core TCP exposure in PR #67, accepted head `047b7815a52de6008d9e281d895ea589aa5c0376`, merge `125d146ad10971628019f02a688f0f27cf9468ac`. Configured/client addresses and the actual pre-bound server listener are loopback-only; the Windows named-pipe security path was not weakened.
+- HLS-C011 closed cross-origin replay-controlled custom-header leakage in PR #69, accepted head `05ad6e52da0641cbdf73479dde3be8fe6e4015af`, merge `6b5f596325a4b00758ccd062b92eaeb80b0256ee`. Exact-head v7 CI #521 and Candidate #169 passed before merge; merged-main v7 CI #522, Candidate #170, Maintenance Security #65 and Rust Security #39 all passed. Redirect and multi-hop scoped-header isolation are covered.
+- HLS-C006 README accuracy work merged through PR #70 at `adf74c30d9936214b060d062f56813c879ca5ee2`. It distinguishes the real published historical `v7.0.1-candidate.1` from the active v7.0.2 source/candidate contract and keeps `release_ready=false` explicit.
+- HLS-C008 release/branch/install documentation reconciliation merged through PR #72 at `7e40cd509a5cc49bc887d1814199b9f5a810326c`, accepted head `060a51d1e605381de24a017e8f1c4370b06d22d4`. Historical v7.0.1 measurements and hashes remain historical; current formal guidance is version-dynamic and fail-closed. A reviewer-found release-runner ordering error was corrected before merge.
+- `worker-1` is not counted as active after exceeding the heartbeat timeout; a returning participant must redeclare before resuming work. Current active worker count is 1.
+- `worker-0` owns HLS-C012 on `coord/hls-c012-state-sync`. It is coordination-only: synchronize `tasks.json`, this handoff, `docs/manger.log` and the C012 work log with the completed hardening/documentation state. It cannot change product code, workflows, assets or `release_ready`.
+- HLS-C013 is the only planned next task: a final post-hardening v7.0.2 release-readiness re-audit after C012 merges. It must audit the resulting frozen `main` SHA, require all four exact-SHA main-push workflows before any source-ready conclusion, keep `release_ready=false`, and recommend either external trusted-release gates or a new actionable source fix. It never tags or publishes.
 
 ## Durable coordination files
 
