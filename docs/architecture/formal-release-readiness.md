@@ -62,6 +62,10 @@ This separates "formal artifacts have been built and uploaded" from "the public 
 
 `feature-parity.json` currently declares v7.0.2 with `release_ready=false`. HLS-C003 treats that state as authoritative and does not change it. Candidate CI success, repository source completeness, or availability of a draft package is insufficient by itself to authorize a formal public release.
 
+Root `AGENTS.md` now follows the same tracked metadata contract: v7.0.2 is the active product line, canonical feature parity/readiness is the source of truth, and formal packaging additionally requires an explicitly reviewed `release_ready=true` decision plus the visual, performance, installer and rollback gates. This documentation contract does not replace or weaken the executable workflow.
+
 ## Documentation boundary
 
-Some current-facing documentation still contains v7.0.1 candidate/formal-release wording while the active product version is v7.0.2. Those stale descriptions should be corrected as documentation work. Historical v7.0.1 evidence may remain when clearly labeled historical. Documentation cleanup must not alter the executable release gate or imply `release_ready=true` before the canonical readiness decision is actually made.
+HLS-C008 reconciled the current-facing release, install and branch guidance to v7.0.2, and HLS-C015 reconciles the remaining live root `AGENTS.md` active-version/readiness instruction. Historical v7.0.1 candidates, measurements, hashes and migration evidence may remain when they are clearly labeled historical.
+
+After those reconciliations there is no known current-facing v7.0.1 release-governance wording being carried as an intentional open item. Future documentation drift should be treated as a new reproducible task. Documentation alignment itself never authorizes `release_ready=true`, a formal dispatch, signing, tagging or publication.

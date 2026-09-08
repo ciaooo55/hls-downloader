@@ -393,3 +393,62 @@ changes=
   Appended this manager-log sequence without deleting earlier process-deviation history.
 boundary=No product/runtime/workflow/build-script/feature-parity/tag/release/publish change is part of HLS-C013.
 decision=Open a dedicated PR and audit its exact head/diff plus machine-readable registry validity before merge authorization.
+
+[2026-09-08T18:00:00+08:00] EVENT=AUDIT task=HLS-C013 pr=#75 auditor=worker-0 result=PASS_FALLBACK_NO_INDEPENDENT_AUDITOR
+authorized_head=d6221b55d28e1d9c596840637db9e1e4ff0287f9
+independent_evidence=
+  PR remained open, non-draft and mergeable on base main@1c93cffe with the exact authorized head.
+  Changed files were exactly six documentation/coordination files; no product/runtime/workflow/build-script/feature-parity source was changed.
+  manger.log patch was append-only and preserved the PR #64 process-deviation history.
+  tasks.json preserved one active worker, one active task and two unfinished tasks while routing C013 to review and C014 to planned.
+  handoff.md retained visitor #42, role #40, heartbeat #41 and task-registry #39 metadata at the top.
+  The docs-only PR head had no PR workflow/status context; no PR-CI success was claimed or substituted for the frozen-main evidence.
+limitation=single active GitHub identity cannot honestly provide an independent self-APPROVE; PASS was recorded as an exact-head COMMENT review under documented fallback.
+
+[2026-09-08T18:01:00+08:00] EVENT=TASK_COMPLETE task=HLS-C013 pr=#75 result=PASS_FALLBACK_NO_INDEPENDENT_AUDITOR
+accepted_head=d6221b55d28e1d9c596840637db9e1e4ff0287f9
+merge=718ee541ce584a4ac229b120a9a478583fc07c0a
+note=PR #75 merged with merge method and preserved its multi-commit evidence/coordination history. release_ready remains false; no tag/release/sign/publish action occurred.
+
+[2026-09-08T18:02:00+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C014 priority=P0 owner=worker-0 role=coordinator+auditor+worker
+branch=coord/hls-c014-release-readiness-decision
+base=718ee541ce584a4ac229b120a9a478583fc07c0a
+acceptance_criteria=
+  AC1 Revalidate accepted C013 evidence and canonical 28/28 completeness on the post-C013 main baseline.
+  AC2 Explicitly decide whether governance authorizes release_ready to become true; if not, preserve false and record the concrete blocker.
+  AC3 If authorized, make only a narrow reviewed readiness-state change and weaken no executable gate.
+  AC4 After a final reviewed merge, freeze that new main SHA and require four fresh exact-SHA push/main prerequisite successes before formal dispatch.
+  AC5 Never tag, sign, release or publish without trusted runner/signing/browser/environment controls and explicit operator authorization.
+initial_state=main is exactly 718ee541ce584a4ac229b120a9a478583fc07c0a; four main-push prerequisite workflows were created and were still queued/running at task start, so no success was assumed.
+
+[2026-09-08T18:03:00+08:00] EVENT=FINDING source_task=HLS-C014 task=HLS-C015 priority=P0
+finding=Root AGENTS.md still declares the only active product version as 7.0.1 while canonical feature-parity metadata and current release guidance declare v7.0.2. The v7 refinement plan treats AGENTS.md as a live packaging constraint, so this is a governance contradiction rather than harmless historical evidence.
+secondary_finding=docs/architecture/formal-release-readiness.md still carries a stale open observation that some current-facing v7.0.1 wording remains, although HLS-C008 already reconciled release/install/branch docs and root AGENTS.md is the remaining live contradiction found by C014.
+decision=Do not change release_ready while live repository governance instructions conflict with canonical product state.
+
+[2026-09-08T18:04:00+08:00] EVENT=ROUTE_REPLAN task=HLS-C014
+old_state=working
+new_state=planned_waiting_on_HLS-C015
+branch_state=coord/hls-c014-release-readiness-decision exists with zero task commits and is retained for later fast-forward/reuse.
+reason=C014 must make a clean governance decision after live instructions are internally consistent; folding unrelated documentation repair into a readiness-state PR would weaken review clarity.
+
+[2026-09-08T18:05:00+08:00] EVENT=TASK_ASSIGNMENT task=HLS-C015 priority=P0 owner=worker-0 role=coordinator+auditor+worker
+branch=docs/hls-c015-live-governance-drift
+base=718ee541ce584a4ac229b120a9a478583fc07c0a
+acceptance_criteria=
+  AC1 Root AGENTS.md identifies v7.0.2 as active and canonical feature-parity metadata as the version/readiness source of truth.
+  AC2 Formal-package instructions preserve fully verified parity, explicit reviewed release_ready=true authorization, and visual/performance/installer/rollback gates; candidate CI alone is not publication authorization.
+  AC3 formal-release-readiness.md no longer carries stale current-facing v7.0.1 wording as an open item; historical evidence remains valid when clearly labeled.
+  AC4 No product/runtime/workflow/build-script/feature-parity/tag/release/publish change.
+  AC5 Dedicated PR, exact-head fallback audit, and no invented CI success for documentation-only path filtering.
+backlog=active_workers=1; unfinished=HLS-C015,HLS-C014; minimum_unfinished_target=2.
+
+[2026-09-08T18:07:00+08:00] EVENT=IMPLEMENTATION_CHECKPOINT task=HLS-C015
+changes=
+  Added docs/worker-logs/HLS-C015.md with acceptance criteria and reproduced evidence.
+  Root AGENTS.md now identifies v7.0.2 and canonical feature-parity metadata as version/readiness truth; formal-package wording requires explicit reviewed release_ready=true plus visual/performance/installer/rollback gates and rejects candidate CI as publication authorization.
+  docs/architecture/formal-release-readiness.md now records HLS-C008/C015 documentation reconciliation and removes the stale known-open current-facing v7.0.1 observation without deleting historical evidence.
+  tasks.json records C013 completion, C014 waiting and C015 active while preserving the 2x single-worker unfinished target.
+  handoff.md routes new participants to C015 then C014 and retains visitor/role/heartbeat/task-registry metadata.
+boundary=Documentation/governance/coordination only; canonical release_ready remains false and no executable release gate or publication state changed.
+decision=Open a dedicated C015 PR, audit its exact final head and changed-file boundary, and merge only if no active FAIL remains.
