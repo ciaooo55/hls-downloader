@@ -178,15 +178,11 @@ pub fn apply_replay_json_for(
     json: &str,
     request_url: &str,
 ) {
-    let base_request_headers = apply_base_replay(headers, json);
+    apply_base_replay(headers, json);
     if replay_targets_other_origin(json, request_url) {
         remove_header(headers, "Cookie");
         remove_header(headers, "Authorization");
         remove_header(headers, "Proxy-Authorization");
-        for name in base_request_headers {
-            remove_header(headers, &name);
-        }
-        apply_base_navigation_context(headers, json);
     }
     apply_scoped_request_context(headers, json, request_url);
 }
@@ -223,18 +219,24 @@ fn replay_targets_other_origin(json: &str, request_url: &str) -> bool {
     !source.is_empty() && source != target
 }
 
-fn apply_base_replay(
-    headers: &mut std::collections::BTreeMap<String, String>,
-    json: &str,
-) -> Vec<String> {
+fn apply_base_replay(headers: &mut std::collections::BTreeMap<String, String>, json: &str) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
-        return Vec::new();
+        return;
     };
     insert_header(headers, "Cookie", value.get("cookie"));
     insert_header(headers, "Referer", value.get("referer"));
     insert_header(headers, "Origin", value.get("origin"));
     insert_header(headers, "User-Agent", value.get("user_agent"));
-    merge_header_map(headers, value.get("request_headers"))
+    merge_header_map(headers, value.get("request_headers"));
+}
+
+fn replay_request_header_names(json: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let mut headers = std::collections::BTreeMap::new();
+    merge_header_map(&mut headers, value.get("request_headers"));
+    headers.into_keys().collect()
 }
 
 fn apply_base_navigation_context(
@@ -254,6 +256,12 @@ pub(crate) fn apply_scoped_request_context(
     json: &str,
     request_url: &str,
 ) {
+    if replay_targets_other_origin(json, request_url) {
+        for name in replay_request_header_names(json) {
+            remove_header(headers, &name);
+        }
+        apply_base_navigation_context(headers, json);
+    }
     let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
         return;
     };
@@ -267,7 +275,7 @@ pub(crate) fn apply_scoped_request_context(
     else {
         return;
     };
-    let _ = merge_header_map(headers, scoped.get("request_headers"));
+    merge_header_map(headers, scoped.get("request_headers"));
     replace_header(headers, "Referer", scoped.get("referer"));
     replace_header(headers, "Origin", scoped.get("origin"));
     insert_header(headers, "User-Agent", scoped.get("user_agent"));
@@ -362,9 +370,9 @@ fn value_as_header_text(value: &serde_json::Value) -> Option<String> {
 fn merge_header_map(
     headers: &mut std::collections::BTreeMap<String, String>,
     value: Option<&serde_json::Value>,
-) -> Vec<String> {
+) {
     let Some(value) = value else {
-        return Vec::new();
+        return;
     };
     let object = match value {
         serde_json::Value::Object(map) => Some(map.clone()),
@@ -374,22 +382,18 @@ fn merge_header_map(
         _ => None,
     };
     let Some(object) = object else {
-        return Vec::new();
+        return;
     };
-    let mut inserted = Vec::new();
     for (key, val) in object {
         if !replay_header_name_ok(&key) {
             continue;
         }
         if let Some(text) = value_as_header_text(&val) {
             if !text.trim().is_empty() && !text.contains('\r') && !text.contains('\n') {
-                let name = canonical_header_name(&key);
-                headers.insert(name.clone(), text);
-                inserted.push(name);
+                headers.insert(canonical_header_name(&key), text);
             }
         }
     }
-    inserted
 }
 
 fn replay_header_name_ok(name: &str) -> bool {
@@ -551,6 +555,36 @@ mod tests {
         assert_eq!(
             headers.get("User-Agent").map(String::as_str),
             Some("Browser UA")
+        );
+    }
+
+    #[test]
+    fn scoped_context_filter_covers_cross_origin_redirect_handoff() {
+        let replay = bind_replay_source_url(
+            r#"{
+                "referer":"https://page.test/watch",
+                "request_headers":{"X-Api-Key":"source-secret"},
+                "request_contexts":{
+                    "https://cdn.test":{
+                        "request_headers":{"X-Cdn-Token":"target-secret"}
+                    }
+                }
+            }"#,
+            "https://manifest.test/master.m3u8",
+        );
+        let mut headers = std::collections::BTreeMap::from([
+            ("Referer".to_string(), "https://page.test/watch".to_string()),
+            ("X-Api-Key".to_string(), "source-secret".to_string()),
+        ]);
+        apply_scoped_request_context(&mut headers, &replay, "https://cdn.test/redirected.ts");
+        assert!(!headers.contains_key("X-Api-Key"));
+        assert_eq!(
+            headers.get("X-Cdn-Token").map(String::as_str),
+            Some("target-secret")
+        );
+        assert_eq!(
+            headers.get("Referer").map(String::as_str),
+            Some("https://page.test/watch")
         );
     }
 
