@@ -6,17 +6,17 @@ task_registry_issue: 39
 schema_version: 1
 repository: ciaooo55/hls-downloader
 default_branch: main
-coordination_branch: audit/hls-c013-final-readiness
-coordinator: worker-0
-auditor: worker-0
+coordination_branch: coord/hls-c015-c013-process-reconcile
+coordinator: worker-1
+auditor: worker-1
 workers:
   - worker-0
 active_tasks:
-  - HLS-C013
-primary_active_task: HLS-C013
+  - HLS-C015
+primary_active_task: HLS-C015
 next_priority_task: HLS-C014
-status: final-readiness-audit-ready-for-review
-last_updated: 2026-09-08T17:46:00+08:00
+status: reconcile-c013-premature-merge-before-readiness-governance
+last_updated: 2026-09-08T18:05:00+08:00
 ---
 
 # Project handoff
@@ -41,18 +41,18 @@ Issue #42 is the visitor area. External project coordinators must provide their 
 
 ## Current project state
 
-- Active product line: v7.0.2. Canonical `artifacts/v7-productization/feature-parity.json` is 28/28 verified with zero partial/blocked entries, but `release_ready=false` remains an intentional formal-package policy gate.
-- HLS-C001 through HLS-C012 are complete. HLS-C012 merged through PR #73 as `1c93cffe5fa5d884b07531d211a79f8b6d54b8ea`, closing the durable-state synchronization step.
-- HLS-C013 is active on `audit/hls-c013-final-readiness`. Its frozen audit source is `main@1c93cffe5fa5d884b07531d211a79f8b6d54b8ea`.
-- The frozen C013 SHA has successful `v7 CI` #525, `v7 Candidate Package` #173, `Maintenance Security` #68 and `Rust Security` #42 **push/main/exact-SHA** workflow evidence. A final compare showed `main` still identical to the frozen SHA before classification.
-- C013 independently re-read the executable formal-release chain and package verifier. Candidate packaging remains distinct from formal packaging; formal packaging requires canonical 28/28 completeness, `release_ready=true`, a clean worktree and release evidence bound to the current commit/tree and candidate manifest.
-- C009/C010/C011 hardening remains carried forward: later commits between C011 merge and the C013 frozen SHA changed only README/release documentation, worker logs and coordination files; no product/runtime/workflow/script/feature-parity source changed in that interval.
-- C013's implementation-side conclusion is **source/CI contract clean at the frozen audit SHA, formal publication still blocked by design**. It is ready for exact-head fallback review; this is not yet a task-complete/merge authorization.
-- HLS-C014 is planned as the next P0 governance task: explicitly decide whether project evidence authorizes canonical `release_ready` to transition to true. C014 must not infer authorization merely from green candidate CI. Any approved change is narrow and separately reviewed; after its final merge, the resulting `main` SHA must be frozen and receive four fresh exact-SHA push successes before formal dispatch.
+- Active product line: v7.0.2. Canonical `artifacts/v7-productization/feature-parity.json` remains 28/28 verified with zero partial/blocked entries and `release_ready=false`.
+- HLS-C012 merged through PR #73 as `1c93cffe5fa5d884b07531d211a79f8b6d54b8ea`. That frozen SHA was the source audited by HLS-C013.
+- The C013 frozen SHA had successful `v7 CI` #525, `v7 Candidate Package` #173, `Maintenance Security` #68 and `Rust Security` #42 **push/main/exact-SHA** workflow evidence. `worker-1` independently revalidated the frozen SHA, candidate artifact binding, formal package gates and carried-forward C009-C011 hardening and issued a source-level PASS.
+- PR #75 nevertheless merged C013 to `main` as `718ee541ce584a4ac229b120a9a478583fc07c0a` from head `d6221b55d28e1d9c596840637db9e1e4ff0287f9` before `worker-1` issued an exact-head delivery PASS and while a durable delivery changes-required finding remained active. PR #75 also described the audit as fallback/no-independent-auditor even though `worker-1` had already re-declared and heartbeated. This is a collaboration/process deviation, not a new product-source defect.
+- HLS-C015 is now the active P0 correction task on `coord/hls-c015-c013-process-reconcile`, based exactly on current `main@718ee541ce584a4ac229b120a9a478583fc07c0a`. Its purpose is to restore truthful machine/handoff/manager-log state and the independent audit chain without changing product or release behavior.
+- `worker-1` is the current coordinator and independent auditor. `worker-0` is the one active ordinary worker and owns the required HLS-C015 manager-log continuation. Helper work by `worker-1` may use child/narrow commits but does not turn the correction into self-approval.
+- HLS-C014 readiness governance is paused behind HLS-C015. Its branch `coord/hls-c014-release-readiness-decision` was created at `718ee541...` and had no task commit when interrupted, so no implementation work is lost.
+- Because PR #75 moved `main`, the four successful workflow runs for old frozen SHA `1c93cffe...` remain valid C013 source-audit evidence but can never authorize a formal release of the newer main. Any eventual readiness-authorized final main SHA must receive a fresh four-workflow exact-SHA set.
+- C013/C015/C014 are genuine project-closeout work. Do not manufacture filler tasks solely to satisfy the normal 2× backlog target.
 - External formal-release prerequisites remain mandatory: dedicated Windows x64 `hls-release` runner, fixed `E:\h`, real Edge/Firefox, signing certificate/private key and timestamp trust, protected `v7-release` environment/approval, and explicit operator publish choice after digest verification.
-- No task in the current branch creates a tag, signs artifacts, dispatches or publishes a release, or weakens any formal gate.
-- Process correction from HLS-C003 remains durable: PR #64 merged while worker-1 had an unresolved factual FAIL. HLS-C004/PR #65 repaired it. Future merges must resolve or explicitly rebut every durable active FAIL before merge.
-- `worker-1` remains inactive after heartbeat timeout. A returning participant must redeclare and heartbeat before resuming work. Current active worker count is 1.
+- HLS-C015 cannot set `release_ready=true`, change product/runtime/workflows/build scripts, create a tag/release, sign artifacts, dispatch a formal release, or publish.
+- Process correction from HLS-C003 remains durable: PR #64 previously merged while worker-1 had an unresolved factual FAIL. HLS-C004/PR #65 repaired that stale state. PR #75 is now explicitly treated as the same class of process deviation and must be reconciled before C014 resumes.
 
 ## Durable coordination files
 
