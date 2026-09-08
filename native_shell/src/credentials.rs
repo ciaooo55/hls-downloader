@@ -504,7 +504,10 @@ mod tests {
         );
         let mut headers = std::collections::BTreeMap::new();
         apply_replay_json_for(&mut headers, &replay, "https://manifest.test/segment.ts");
-        assert_eq!(headers.get("Cookie").map(String::as_str), Some("manifest=1"));
+        assert_eq!(
+            headers.get("Cookie").map(String::as_str),
+            Some("manifest=1")
+        );
         assert_eq!(
             headers.get("Authorization").map(String::as_str),
             Some("Bearer manifest")
