@@ -7,7 +7,7 @@
   "open_dependabot_prs": [],
   "historical_updates": [
     {"pr": 18, "dependency": "rusqlite", "from": "0.37.0", "to": "0.40.2", "result": "merged", "risk": ["runtime", "security"], "recommendation": "landed"},
-    {"pr": 19, "dependency": "windows-sys", "from": "0.59.0", "to": "0.61.2", "result": "closed_unmerged", "risk": ["windows-api", "compatibility"], "recommendation": "defer_without_project_specific_need"},
+    {"pr": 19, "dependency": "windows-sys", "from": "0.59.0", "to": "0.61.2", "result": "closed_unmerged", "risk": ["windows-api", "compatibility"], "recommendation": "defer_without_project_specific_need", "evidence": "dependabot_rebase_refused_after_external_edits; current_manifest_remains_0.59"},
     {"pr": 20, "dependency": "russh", "from": "0.62.7", "to": "0.63.2", "result": "closed_superseded", "risk": ["runtime", "security", "breaking-api"], "recommendation": "landed_via_pr_36"},
     {"pr": 21, "dependency": "github-actions-group", "result": "merged", "risk": ["ci", "supply-chain"], "recommendation": "landed_exact_sha_pins"},
     {"pr": 22, "dependency": "@types/chrome", "from": "0.0.326", "to": "0.2.8", "result": "merged", "risk": ["dev-tooling"], "recommendation": "landed"},
@@ -18,7 +18,7 @@
   "current_versions": {
     "native_shell": {"rusqlite": "0.40", "russh": "0.63", "windows-sys": "0.59"},
     "extension": {"@types/chrome": "0.2.8", "typescript": "7.0.2", "vitest": "5.0.0"},
-    "desktop_ui": {"kotlin": "2.4.10", "compose": "1.12.0", "coroutines-swing": "1.11.0", "serialization-json": "1.11.0"}
+    "desktop_ui": {"kotlin": "2.4.10", "compose": "1.12.0", "coroutines-swing": "1.11.0", "serialization-json": "1.11.0", "gradle_wrapper": "9.7.1", "gradle_distribution_sha256": "acd53f1edaf02f1a8ff99879f8a34b302661a057d9b063ae9e35b552f804d20a"}
   },
   "policy": {
     "security_runtime": "prioritize_but_adapt_breaking_apis_in_project_owned_pr",
@@ -26,5 +26,10 @@
     "github_actions": "pin_exact_commit_sha_after_update",
     "dev_tool_major": "require_component_build_typecheck_and_tests",
     "empty_queue": "do_not_manufacture_dependency_churn"
+  },
+  "delivery": {
+    "draft_pr": 65,
+    "independent_review_required": true,
+    "self_merge_allowed_while_worker_0_active": false
   }
 }
