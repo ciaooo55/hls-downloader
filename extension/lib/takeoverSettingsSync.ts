@@ -13,7 +13,6 @@ export interface TakeoverSettingsUpdate {
 
 interface PendingTakeoverSettings extends TakeoverSettingsUpdate {
   id: string
-  updatedAt: number
 }
 
 type DesktopRequest = (message: Record<string, unknown>) => Promise<any>
@@ -29,10 +28,7 @@ function normalizePending(value: unknown): PendingTakeoverSettings | null {
   const raw = value as Partial<PendingTakeoverSettings>
   const id = String(raw.id || '')
   if (!id) return null
-  const pending: PendingTakeoverSettings = {
-    id,
-    updatedAt: Number(raw.updatedAt) || 0,
-  }
+  const pending: PendingTakeoverSettings = { id }
   if (typeof raw.enabled === 'boolean') pending.enabled = raw.enabled
   const minimumBytes = normalizedBytes(raw.minimumBytes)
   if (minimumBytes !== undefined) pending.minimumBytes = minimumBytes
@@ -55,7 +51,6 @@ export class TakeoverSettingsSync {
     private readonly requestDesktop: DesktopRequest,
     private readonly createId: () => string = () => globalThis.crypto?.randomUUID?.()
       || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
-    private readonly now: () => number = Date.now,
   ) {}
 
   async queue(update: TakeoverSettingsUpdate): Promise<Record<string, unknown>> {
@@ -67,7 +62,6 @@ export class TakeoverSettingsSync {
     const minimumBytes = normalizedBytes(update.minimumBytes) ?? previous?.minimumBytes
     const pending: PendingTakeoverSettings = {
       id: this.createId(),
-      updatedAt: this.now(),
       ...(typeof enabled === 'boolean' ? { enabled } : {}),
       ...(minimumBytes !== undefined ? { minimumBytes } : {}),
     }
