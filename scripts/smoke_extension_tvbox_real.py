@@ -2,9 +2,9 @@
 """Drive the production browser -> Native Host -> Compose -> TVBox path.
 
 This smoke intentionally does not issue Core share_media/cast commands. Core TCP is
-used only to discover and preselect the expected receiver. The actual media-push
-request originates from the production extension and the final confirmation is
-invoked through the packaged Compose accessibility surface.
+used only to discover the expected receiver. The actual media-push request originates
+from the production extension; the target device is selected through the packaged
+Compose accessibility surface and the final confirmation is invoked there as well.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from smoke_extension_media import (
     _open_first_media_actions,
     _overlay_state,
 )
+from smoke_v7_accessibility import JabClient
 from smoke_v7_tvbox_real import local_lan_ip, send_frame, wait_core
 
 
@@ -69,7 +70,8 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def discover_and_preselect(core_port: int, expected_host: str) -> dict[str, object]:
+def discover_expected_device(core_port: int, expected_host: str) -> dict[str, object]:
+    """Discover the exact receiver without mutating Compose-visible settings."""
     stream = wait_core(core_port, timeout=30.0)
     try:
         discovery = send_frame(
@@ -98,18 +100,7 @@ def discover_and_preselect(core_port: int, expected_host: str) -> dict[str, obje
             raise RuntimeError(
                 f"Expected exactly one TVBox receiver at {expected_host}; discovered={devices}"
             )
-        device = candidates[0]
-        settings = send_frame(
-            stream,
-            {
-                "type": "store_settings",
-                "request_id": 102,
-                "values": {"preferred_cast_device_id": str(device.get("id", ""))},
-            },
-        )
-        if settings.get("type") != "settings":
-            raise RuntimeError(f"Core did not persist preferred TVBox receiver: {settings}")
-        return device
+        return candidates[0]
     finally:
         stream.close()
 
@@ -195,6 +186,138 @@ def launch_browser(
     return driver
 
 
+def run_access_bridge(
+    *,
+    python: Path,
+    dll: Path,
+    output: Path,
+    require_name: list[str],
+    invoke_name: str | None = None,
+    require_after_name: list[str] | None = None,
+) -> dict[str, object]:
+    command = [
+        str(python),
+        str(Path(__file__).resolve().parent / "smoke_v7_accessibility.py"),
+        "--dll",
+        str(dll),
+        "--title",
+        "HLS Downloader",
+        "--timeout",
+        "60",
+        "--min-nodes",
+        "10",
+    ]
+    for name in require_name:
+        command.extend(["--require-name", name])
+    if invoke_name:
+        command.extend(["--invoke-name", invoke_name])
+    for name in require_after_name or []:
+        command.extend(["--require-after-name", name])
+    command.extend(["--output", str(output)])
+    access = subprocess.run(command, text=True, capture_output=True, timeout=90)
+    if access.returncode != 0:
+        raise RuntimeError(
+            f"Compose accessibility operation failed: stdout={access.stdout} stderr={access.stderr}"
+        )
+    return json.loads(output.read_text(encoding="utf-8"))
+
+
+def _is_path_prefix(prefix: list[int], value: list[int]) -> bool:
+    return len(prefix) <= len(value) and value[: len(prefix)] == prefix
+
+
+def _actionable_ancestor(nodes: list[dict], target: dict) -> dict | None:
+    target_path = [int(value) for value in target.get("path", [])]
+    actionable = [
+        item
+        for item in nodes
+        if item.get("actions")
+        and _is_path_prefix([int(value) for value in item.get("path", [])], target_path)
+    ]
+    return max(actionable, key=lambda item: len(item.get("path", []))) if actionable else None
+
+
+def select_expected_device(
+    *,
+    access_bridge_dll: Path,
+    expected_device: dict[str, object],
+    expected_host: str,
+) -> dict[str, object]:
+    """Select the expected receiver using the real Java Access Bridge action."""
+    label = str(expected_device.get("label", "")).strip()
+    if not label:
+        raise RuntimeError(f"Discovered receiver has no label: {expected_device}")
+    client = JabClient(access_bridge_dll)
+    client.start()
+    hwnd, title = client.find_window("HLS Downloader", 60.0)
+    vm_id, root = client.context_from_window(hwnd)
+    try:
+        deadline = time.monotonic() + 60.0
+        chosen_target: dict | None = None
+        chosen_action: dict | None = None
+        while time.monotonic() < deadline:
+            nodes = client.walk(vm_id, root, 5000)
+            host_nodes = [
+                item
+                for item in nodes
+                if expected_host in str(item.get("name", ""))
+                and int((item.get("bounds") or [0, 0, 0, 0])[2]) > 0
+                and int((item.get("bounds") or [0, 0, 0, 0])[3]) > 0
+            ]
+            label_nodes = [
+                item
+                for item in nodes
+                if str(item.get("name", "")).strip() == label
+                and int((item.get("bounds") or [0, 0, 0, 0])[2]) > 0
+                and int((item.get("bounds") or [0, 0, 0, 0])[3]) > 0
+            ]
+            candidates = host_nodes or label_nodes
+            resolved: list[tuple[dict, dict, tuple[int, ...]]] = []
+            for target in candidates:
+                action_node = _actionable_ancestor(nodes, target)
+                if action_node is None:
+                    continue
+                action_path = tuple(int(value) for value in action_node.get("path", []))
+                resolved.append((target, action_node, action_path))
+            action_paths = {item[2] for item in resolved}
+            if len(action_paths) == 1 and resolved:
+                chosen_target, chosen_action, _ = max(
+                    resolved,
+                    key=lambda item: len(item[0].get("path", [])),
+                )
+                break
+            if len(action_paths) > 1:
+                raise RuntimeError(
+                    f"Receiver accessibility identity is ambiguous for {expected_host}/{label}: paths={sorted(action_paths)}"
+                )
+            client.dll.releaseJavaObject(vm_id, root)
+            client.pump_messages()
+            time.sleep(0.1)
+            vm_id, root = client.context_from_window(hwnd)
+        if chosen_target is None or chosen_action is None:
+            raise RuntimeError(
+                f"No actionable accessibility identity appeared for receiver {expected_host}/{label}"
+            )
+        action_path = [int(value) for value in chosen_action.get("path", [])]
+        context, owned = client.resolve_path(vm_id, root, action_path)
+        try:
+            invoked = client.invoke(vm_id, context, None)
+        finally:
+            for item in reversed(owned):
+                client.dll.releaseJavaObject(vm_id, item)
+        time.sleep(0.5)
+        return {
+            "window": {"hwnd": hwnd, "title": title, "vm_id": vm_id},
+            "receiver_label": label,
+            "receiver_host": expected_host,
+            "matched_node": chosen_target,
+            "action_node": chosen_action,
+            "action": invoked,
+        }
+    finally:
+        client.dll.releaseJavaObject(vm_id, root)
+
+
 def run_browser(
     *,
     browser: str,
@@ -209,7 +332,7 @@ def run_browser(
     output: Path,
 ) -> dict[str, object]:
     started = time.perf_counter()
-    expected_device = discover_and_preselect(core_port, expected_host)
+    expected_device = discover_expected_device(core_port, expected_host)
     lan_ip = local_lan_ip(expected_host)
     resolved_browser_binary = (browser_binary or (_find_edge() if browser == "edge" else _find_firefox())).resolve()
     if not resolved_browser_binary.is_file():
@@ -230,7 +353,7 @@ def run_browser(
         thread.start()
         addon = unpack_firefox_addon(extension, root) if browser == "firefox" else None
         driver = None
-        access_report = root / "access-bridge.json"
+        confirm_report = root / "access-bridge-confirm.json"
         try:
             driver = launch_browser(
                 browser=browser,
@@ -279,33 +402,18 @@ def run_browser(
             if not click_tvbox_action(driver):
                 raise RuntimeError(f"{browser}: TVBox production action could not be clicked")
 
-            access = subprocess.run(
-                [
-                    str(access_bridge_python),
-                    str(Path(__file__).resolve().parent / "smoke_v7_accessibility.py"),
-                    "--dll",
-                    str(access_bridge_dll),
-                    "--title",
-                    "HLS Downloader",
-                    "--timeout",
-                    "60",
-                    "--min-nodes",
-                    "10",
-                    "--require-name",
-                    "确认推送",
-                    "--invoke-name",
-                    "确认推送",
-                    "--output",
-                    str(access_report),
-                ],
-                text=True,
-                capture_output=True,
-                timeout=90,
+            selection = select_expected_device(
+                access_bridge_dll=access_bridge_dll,
+                expected_device=expected_device,
+                expected_host=expected_host,
             )
-            if access.returncode != 0:
-                raise RuntimeError(
-                    f"{browser}: Compose accessibility confirmation failed: stdout={access.stdout} stderr={access.stderr}"
-                )
+            confirmation = run_access_bridge(
+                python=access_bridge_python,
+                dll=access_bridge_dll,
+                output=confirm_report,
+                require_name=["确认推送"],
+                invoke_name="确认推送",
+            )
 
             ui_deadline = time.monotonic() + 135.0
             ui_state: dict[str, object] = {}
@@ -334,12 +442,13 @@ def run_browser(
                 "browser_identity": browser_identity,
                 "expected_receiver_host": expected_host,
                 "selected_device": expected_device,
+                "device_selection": selection,
                 "fixture_url": f"{origin}/stream.mp4?player=direct",
                 "fixture_sha256": file_sha256(stream_path),
                 "browser_ui": ui_state,
                 "receiver_requests": matching,
                 "all_requests": ReceiverAwareHandler.requests,
-                "access_bridge": json.loads(access_report.read_text(encoding="utf-8")),
+                "access_bridge": confirmation,
                 "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
             }
             output.parent.mkdir(parents=True, exist_ok=True)
