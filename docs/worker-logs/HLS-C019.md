@@ -20,14 +20,16 @@
 
 ## Exact-main prerequisite evidence
 
-At this evidence branch creation:
+Fresh push/main evidence for the frozen target is complete:
 
 - Maintenance Security #75 / run `34304837652`: `success`.
-- v7 CI #565 / run `34304837660`: `in_progress`.
-- v7 Candidate Package #214 / run `34304837615`: `in_progress`.
-- Rust Security #49 / run `34304837582`: `in_progress`.
+- v7 CI #565 / run `34304837660`: `success`.
+- v7 Candidate Package #214 / run `34304837615`: `success`.
+- Rust Security #49 / run `34304837582`: `success`.
 
-No external readiness dispatch is authorized until all four are successful and `main` is reconfirmed identical to the frozen target.
+`main` was reconfirmed unchanged at `178bf4276d9f2c8c8c485286a0ad66e5d59dd468` after all four completed. The prerequisite phase of HLS-C019 is therefore **PASS** and the external `v7 Media Push Readiness` dispatch is now authorized for this exact SHA only.
+
+No `v7 Media Push Readiness` workflow_dispatch run exists for this SHA as of this checkpoint. Readiness itself remains **PENDING EXTERNAL RUN**; prerequisite success is not readiness evidence and must not be promoted into feature or release metadata.
 
 ## Machine-enforced readiness boundary
 
@@ -38,6 +40,13 @@ C021 separately requires an interactive Windows desktop before expensive work. C
 ## External boundary
 
 The connected GitHub tool can inspect runs/jobs/logs/artifacts and rerun existing runs, but does not expose an action to create a brand-new `workflow_dispatch`. Runner inventory is also an unavailable administration endpoint. Therefore no trusted-runner availability or readiness PASS is claimed until a real `v7 Media Push Readiness` run appears for this exact SHA.
+
+When such a run appears, acceptance requires all of the following before any metadata promotion:
+
+1. `event=workflow_dispatch`, `head_branch=main`, and `head_sha=178bf4276d9f2c8c8c485286a0ad66e5d59dd468`.
+2. The validation job and every step complete successfully, including exact-SHA prerequisite assertion, interactive desktop preflight, candidate build, installed-browser real-LAN media-push gate, frozen-main reconfirmation, attestation write, and evidence upload.
+3. Uploaded readiness evidence binds the same source commit/tree, candidate manifest/MSI digests, configured receiver, Edge/Firefox registration snapshots, browser executable identities and report hashes, workflow run ID and attempt.
+4. `main` remains unchanged after the external run finishes.
 
 ## Safety
 
