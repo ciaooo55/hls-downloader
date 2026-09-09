@@ -18,7 +18,7 @@ describe('offline-safe takeover settings', () => {
   it('applies a popup choice immediately and retries it after reconnect', async () => {
     const storage = new MemoryStorage()
     const desktop = vi.fn().mockRejectedValue(new Error('native host offline'))
-    const sync = new TakeoverSettingsSync(storage, desktop, () => 'change-1', () => 100)
+    const sync = new TakeoverSettingsSync(storage, desktop, () => 'change-1')
 
     await expect(sync.queue({ enabled: false })).resolves.toMatchObject({
       ok: true,
@@ -44,7 +44,7 @@ describe('offline-safe takeover settings', () => {
       .mockReturnValueOnce(first)
       .mockResolvedValueOnce({ ok: true, takeover_enabled: false, takeover_minimum_bytes: 0 })
     let sequence = 0
-    const sync = new TakeoverSettingsSync(storage, desktop, () => `change-${++sequence}`, () => sequence)
+    const sync = new TakeoverSettingsSync(storage, desktop, () => `change-${++sequence}`)
 
     await sync.queue({ enabled: true })
     await sync.queue({ enabled: false })
@@ -60,7 +60,7 @@ describe('offline-safe takeover settings', () => {
   it('shows the pending local value instead of an older desktop ping', async () => {
     const storage = new MemoryStorage()
     const never = new Promise(() => undefined)
-    const sync = new TakeoverSettingsSync(storage, () => never, () => 'queued', () => 1)
+    const sync = new TakeoverSettingsSync(storage, () => never, () => 'queued')
     await sync.queue({ enabled: false, minimumBytes: 4096 })
 
     await expect(sync.applyPing({
