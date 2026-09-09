@@ -30,9 +30,9 @@ The `browser_media_push` evidence must prove the production path on the dedicate
 9. Record the evidence through the same candidate-manifest-bound release evidence mechanism as the existing browser/performance/installer/rollback gates.
 10. Only after both browser families and the configured real receiver pass may the canonical gap be removed and the feature return to verified.
 
-The Native Messaging portion is itself candidate-bound rather than merely presence-checked. For each browser the gate follows the HKCU registration to its selected JSON manifest, validates the production host name/type and browser-specific allowlist, and requires the manifest-declared executable to resolve exactly to the current candidate installation's `E:\h\HLSDownloaderNativeHost.exe`. The host executable and both selected manifests are SHA-256 bound into the gate evidence. A stale registry key or leftover manifest/host pair therefore cannot satisfy the candidate gate merely because the referenced file still exists.
+The Native Messaging portion is itself candidate-bound rather than merely presence-checked. For each browser the gate follows the HKCU registration to its selected JSON manifest, validates the production host name/type and browser-specific allowlist, and requires the manifest-declared executable to resolve exactly to the current candidate installation's `E:\h\app\resources\HLSDownloaderNativeHost.exe`. The host executable and both selected manifests are SHA-256 bound into the gate evidence. A stale registry key or leftover manifest/host pair therefore cannot satisfy the candidate gate merely because the referenced file still exists.
 
-The manifest file is not required to live under `E:\h`. Production registration prefers the Engine directory but may legitimately fall back to `%LOCALAPPDATA%\HLSDownloader\v7-native-host` when the preferred directory is not writable. The invariant is the manifest's declared host identity and digest, not its storage directory.
+The packaged path is an explicit MSI lifecycle contract: `verify-v7-msi-lifecycle.ps1` exercises the installed Engine at `E:\h\app\resources\HLSDownloaderEngine.exe`, while production native-host registration resolves `HLSDownloaderNativeHost.exe` as the Engine's sibling. The manifest file itself is not required to live under `E:\h\app\resources`; production registration prefers the Engine directory but may legitimately fall back to `%LOCALAPPDATA%\HLSDownloader\v7-native-host` when the preferred directory is not writable. The invariant is the manifest's declared host identity and digest, not its storage directory.
 
 ## Ordering
 
@@ -71,7 +71,7 @@ Every report must include or derive from:
 - product version;
 - candidate MSI path/digest;
 - browser executable identities;
-- exact installed Native Messaging host identity: registry key -> selected manifest digest -> manifest-declared exact candidate host path -> `E:\h\HLSDownloaderNativeHost.exe` SHA-256, plus the browser-specific production allowlist;
+- exact installed Native Messaging host identity: registry key -> selected manifest digest -> manifest-declared exact candidate host path -> `E:\h\app\resources\HLSDownloaderNativeHost.exe` SHA-256, plus the browser-specific production allowlist;
 - expected/discovered/selected receiver identity;
 - media fixture SHA-256;
 - receiver-originated fetch records;
