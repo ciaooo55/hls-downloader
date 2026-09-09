@@ -61,7 +61,7 @@ if ($usingDefaultPath) {
 
     $gateParameter = [regex]::Match(
         $recorderSource,
-        "(?s)\[ValidateSet\((.*?)\)\]\s*\[string\]\$GateId"
+        '(?s)\[ValidateSet\((.*?)\)\]\s*\[string\]\$GateId'
     )
     if (-not $gateParameter.Success) {
         throw 'Could not resolve the GateId ValidateSet from record-v7-release-gate.ps1.'
