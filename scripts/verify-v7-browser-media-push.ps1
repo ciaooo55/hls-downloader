@@ -223,7 +223,7 @@ try {
         throw "Installed candidate identity mismatch: $($product | ConvertTo-Json -Compress)"
     }
 
-    $expectedNativeHost = [IO.Path]::GetFullPath((Join-Path $InstallDir 'HLSDownloaderNativeHost.exe'))
+    $expectedNativeHost = [IO.Path]::GetFullPath((Join-Path $InstallDir 'app\resources\HLSDownloaderNativeHost.exe'))
     if (-not (Test-Path -LiteralPath $expectedNativeHost -PathType Leaf)) {
         throw "Installed candidate Native Messaging host is missing: $expectedNativeHost"
     }
