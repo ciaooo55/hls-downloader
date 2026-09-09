@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "task": "HLS-C004",
+  "repository": "ciaooo55/hls-downloader",
+  "worker": "worker-1",
+  "base_main": "185973ca3bbd336762a3499739e922fb6ddf0c17",
+  "open_dependabot_prs": [],
+  "historical_updates": [
+    {"pr": 18, "dependency": "rusqlite", "from": "0.37.0", "to": "0.40.2", "result": "merged", "risk": ["runtime", "security"], "recommendation": "landed"},
+    {"pr": 19, "dependency": "windows-sys", "from": "0.59.0", "to": "0.61.2", "result": "closed_unmerged", "risk": ["windows-api", "compatibility"], "recommendation": "defer_without_project_specific_need", "evidence": "dependabot_rebase_refused_after_external_edits; current_manifest_remains_0.59"},
+    {"pr": 20, "dependency": "russh", "from": "0.62.7", "to": "0.63.2", "result": "closed_superseded", "risk": ["runtime", "security", "breaking-api"], "recommendation": "landed_via_pr_36"},
+    {"pr": 21, "dependency": "github-actions-group", "result": "merged", "risk": ["ci", "supply-chain"], "recommendation": "landed_exact_sha_pins"},
+    {"pr": 22, "dependency": "@types/chrome", "from": "0.0.326", "to": "0.2.8", "result": "merged", "risk": ["dev-tooling"], "recommendation": "landed"},
+    {"pr": 23, "dependency": "compose-tooling-group", "result": "merged", "risk": ["runtime", "build"], "recommendation": "landed_with_component_ci"},
+    {"pr": 24, "dependency": "vitest", "from": "3.2.6", "to": "5.0.0", "result": "merged", "risk": ["dev-tooling", "breaking-api"], "recommendation": "landed_with_extension_tests"},
+    {"pr": 26, "dependency": "typescript", "from": "5.8.3", "to": "7.0.2", "result": "merged", "risk": ["dev-tooling", "compiler", "breaking-api"], "recommendation": "landed_with_typecheck"}
+  ],
+  "current_versions": {
+    "native_shell": {"rusqlite": "0.40", "russh": "0.63", "windows-sys": "0.59"},
+    "extension": {"@types/chrome": "0.2.8", "typescript": "7.0.2", "vitest": "5.0.0"},
+    "desktop_ui": {"kotlin": "2.4.10", "compose": "1.12.0", "coroutines-swing": "1.11.0", "serialization-json": "1.11.0", "gradle_wrapper": "9.7.1", "gradle_distribution_sha256": "acd53f1edaf02f1a8ff99879f8a34b302661a057d9b063ae9e35b552f804d20a"}
+  },
+  "policy": {
+    "security_runtime": "prioritize_but_adapt_breaking_apis_in_project_owned_pr",
+    "windows_binding_major": "defer_without_security_or_functional_requirement_and_dedicated_compatibility_validation",
+    "github_actions": "pin_exact_commit_sha_after_update",
+    "dev_tool_major": "require_component_build_typecheck_and_tests",
+    "empty_queue": "do_not_manufacture_dependency_churn"
+  },
+  "delivery": {
+    "pr": 65,
+    "review_state": "ready_for_independent_audit",
+    "independent_review_required": true,
+    "self_merge_allowed_while_worker_0_active": false
+  }
+}

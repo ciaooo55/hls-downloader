@@ -1,0 +1,53 @@
+# HLS Downloader 7.0.2 模块与功能衔接
+
+## 运行时边界
+
+```text
+浏览器扩展 (WXT MV3)
+        | Native Messaging: bounded JSON
+        v
+Rust Core + SQLite (唯一状态/凭据/传输所有者)
+        | v7 framed JSON over \\.\pipe\HLSDownloader.v7
+        +--> Compose Desktop workbench (主工作台)
+        +--> native presenter (热确认/进度/完成)
+        +--> player child / LAN cast publisher (隔离子进程或临时服务)
+```
+
+| 模块 | 负责的功能 | 对外契约 | 不负责 |
+| --- | --- | --- | --- |
+| `native_shell/src/core_server.rs` + `core_service.rs` + `store.rs` | Core 生命周期、SQLite、任务快照/事件、有界任务日志、设置、迁移 | `CoreCommand` / `CoreEvent` / `CoreResponse` | UI 渲染、浏览器 DOM |
+| `native_shell/src/download_worker.rs` + `http_engine.rs` + `media/` | HTTP/HLS/DASH/FTP/SFTP/BT 下载、真实 worker ranges、恢复、校验 | `create_task`、`task_action`、`refresh_task_request`、进度事件 | 独立数据库、第二调度器 |
+| `native_shell/src/native_host.rs` + `native_host_registration.rs` | Native Messaging、浏览器凭据封装、Host 注册 | `ping`、资源识别、handoff/media push | 直接写 UI 状态 |
+| `native_shell/src/core_ipc.rs` + `contract.rs` | v7 命名管道、长度帧、版本协商、错误边界 | `hls-downloader-v7-core`、`\\.\pipe\HLSDownloader.v7` | v6 默认启动路径 |
+| `desktop_ui/src/main/.../Main.kt` + `Protocol.kt` | 主工作台、任务/队列/设置/播放/投屏操作 | 只通过 Core IPC 读快照、发命令 | SQLite、浏览器 Cookie |
+| `presenter_ui/src/hot_main.rs` | 预热确认、进度、完成窗口；Core 重连 | 同一 Core 事件/命令契约 | 主工作台、SQLite |
+| `extension/entrypoints` + `extension/lib` | 下载接管、HLS/DASH 识别、媒体发现、用户授权 | Native Messaging 请求/响应；本地浏览器存储 | 传输执行、持久任务状态 |
+| `scripts/install-v7-local.ps1` + `upgrade-v7-portable.ps1` | 本机/便携升级、回滚、Host 注册、扩展分发 | `E:\h` 单一安装；桌面每浏览器一个 ZIP | 编译、正式发布门禁 |
+
+## 功能链路
+
+| 用户功能 | 起点 | Core 命令/事件 | 终点 |
+| --- | --- | --- | --- |
+| 新建与批量导入 | Compose `NewTaskDialog` / drop target；扩展资源识别 | `probe_url` → `create_task` → `task_created` | 队列中的持久任务 |
+| 浏览器接管 | 扩展 `background.ts` / `nativeBridge.ts` | Native Messaging → handoff → `task_created` / 错误 | 热确认 Presenter，失败时 Compose 回退 |
+| 下载控制 | Compose `TaskTable`；Presenter 快捷操作 | `task_action` → `task_updated` / `task_progress` | Core worker 持续执行，UI 可关闭 |
+| 任务详情 | Compose `TaskDetailsDialog` | `get_task_log` / speed action → 持久日志、快照、真实活动 ranges | 日志、速度、连接图与实际 Core 状态一致 |
+| 认证恢复 | Compose 详情表单；扩展 request context | `refresh_task_request`，凭据仅在 Core 出站请求使用 | 断点恢复，不进入公共快照 |
+| 播放/投屏/TVBox | Compose player/device picker；扩展 media push | `play_task`、`cast_to_device`、`share_media` → session 事件 | 隔离播放器或 LAN 发布地址 |
+| 设置与升级 | Compose Settings；本地脚本 | `get_settings` / `set_settings_atomic`；安装脚本注册 Host | 单一 Core 配置与单一 `E:\h` 安装 |
+
+## 当前收敛点
+
+- 当前功能矩阵为 `27/28 verified`、`1 partial`、`release_ready=false`。唯一 partial 是 `browser.media_push_device_selection`，仍需安装包中的真实浏览器注册和真实局域网设备门禁；candidate CI 不替代该证据。计划任务由调度器认领时统一重置 control，最终发布与完成状态在 Core 同一互斥区提交；handoff/media-push 旁路行与事件 checkpoint 同事务提交，交接解析失败时仍保留内存 offer 供重试。
+- 浏览器 pending handoff 可跨重连恢复；扩展不会再把本地轮询超时伪装成 Core 终态，不确定所有权保持浏览器任务暂停并由持久 alarm 复核，用户已自行处理的任务会终止跟进。
+- Core 已在启动阶段报告 named pipe ready，失败会返回明确错误；pending media push 会从 SQLite 恢复到运行时，可跨重启 resolve。
+- Core IPC 对完全空闲帧头设置 120 秒上限，对完整帧头后的帧体设置不可续期的 15 秒预算；BT/磁力探测使用单后台槽，避免阻塞请求线程或无界并发。
+- Core 启动恢复的 SQLite 写失败会向启动方传播，watcher 只在恢复成功后创建；v7 `Shutdown` 会先暂停活动 worker、等待断点状态收敛，再唤醒命名管道 accept 有序停服。
+- Compose 主工作台通过跨进程文件锁保持单实例，重复启动仅发送 `open_main`；系统关闭按钮和自绘标题栏关闭按钮共用托盘驻留规则；Presenter 的暂停/取消与打开主窗口操作不再阻塞 UI 线程，并按当前任务隔离反馈。
+- NativeBridge 只接受与当前请求严格匹配的 v7 response id；首次发送同步失败时主动断开无效端口，避免队列错配和 Native Host 连接泄漏。
+- 构建门禁核对扩展协议常量；安装覆盖前验证 `E:\h` 所有权；Portable 升级与回滚验证 Chromium/Firefox 扩展身份连续。本轮只修改脚本，不执行安装或打包。
+- 设置保存先完成 Core 持久化，失败时保留对话框草稿；Presenter 探测完成前暂存接管事件，避免启动竞态。
+- 工作台在事件序列断档时重新读取快照；Presenter 每次重连都恢复任务快照和待处理交接，托盘/Presenter 唤起优先激活已有工作台。
+- candidate/formal 产物目录写入 `ARTIFACT-MANIFEST.json`，统一记录 EXE、MSI、Portable 和扩展摘要。
+- 构建与安装同时校验扩展 MV3、Chromium 公钥和 Firefox Gecko ID。
+- 新增功能时先扩展 `contract.rs` 的命令/事件，再接 Core handler，最后接 Compose/Presenter/extension 的单一路径；不要新增第二个状态所有者。

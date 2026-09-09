@@ -1,0 +1,276 @@
+name: v7 CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - '.github/workflows/ci.yml'
+      - 'native_shell/**'
+      - 'presenter_ui/**'
+      - 'desktop_ui/**'
+      - 'extension/**'
+      - 'assets/**'
+      - 'artifacts/v7-productization/feature-parity.json'
+      - 'scripts/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate contracts
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Guard active v7 source ownership
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Test-Path -LiteralPath 'config.default.json') {
+            throw 'Legacy config.default.json must not return: Rust Core and the versioned protocol own active v7 settings/defaults.'
+          }
+          $buildScript = Get-Content -LiteralPath 'scripts\build-v7.ps1' -Raw -Encoding UTF8
+          if ($buildScript -match '(?i)[A-Z]:\\Users\\[^\\]+\\') {
+            throw 'Release build scripts must not depend on a developer-specific Windows user profile path.'
+          }
+          foreach ($path in @('scripts\build-v7.ps1', 'scripts\smoke-v7-compose-frames.ps1')) {
+            $source = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+            if ($source -match '(?i)[A-Z]:\\HLSDownloaderBuildCache\\') {
+              throw "$path must not fall back to a legacy fixed-drive build cache."
+            }
+          }
+          foreach ($path in @('scripts\bootstrap-v7-toolchain.ps1', 'scripts\build-v7.ps1', 'scripts\cleanup-v7-build-cache.ps1', 'scripts\smoke-v7-compose-frames.ps1')) {
+            $source = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+            if ($source -notmatch '\$env:HLS_V7_BUILD_CACHE') {
+              throw "$path must honor the shared HLS_V7_BUILD_CACHE override."
+            }
+          }
+          $bootstrapScript = Get-Content -LiteralPath 'scripts\bootstrap-v7-toolchain.ps1' -Raw -Encoding UTF8
+          if ($bootstrapScript.Contains('api.adoptium.net/v3/binary/latest')) {
+            throw 'The v7 JDK bootstrap must not follow Adoptium latest; release inputs must be pinned.'
+          }
+          foreach ($required in @(
+            '21.0.12.1+1',
+            'f9d6e191ab098c0d416e7d588a24420a8621cd2f4720dab2459b8b7b2d2d8b4e',
+            'Get-FileHash'
+          )) {
+            if (-not $bootstrapScript.Contains($required)) {
+              throw "The v7 JDK bootstrap is missing pinned supply-chain input: $required"
+            }
+          }
+          $gradleWrapper = Get-Content -LiteralPath 'desktop_ui\gradle\wrapper\gradle-wrapper.properties' -Raw -Encoding UTF8
+          foreach ($required in @(
+            'distributionUrl=https\://services.gradle.org/distributions/gradle-9.7.1-bin.zip',
+            'distributionSha256Sum=acd53f1edaf02f1a8ff99879f8a34b302661a057d9b063ae9e35b552f804d20a'
+          )) {
+            if (-not $gradleWrapper.Contains($required)) {
+              throw "Gradle wrapper release input is not pinned: $required"
+            }
+          }
+
+      - name: Validate PowerShell 5.1 and 7
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validate-powershell.ps1
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validate-powershell.ps1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-v7-feature-parity.ps1
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-v7-feature-parity.ps1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-release-gap-contract.ps1 -Shell powershell.exe
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-release-gap-contract.ps1 -Shell pwsh.exe
+          python.exe -m py_compile scripts/smoke_extension_tvbox_real.py
+
+  rust_core:
+    name: Rust Core
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: "1.98.1"
+          components: clippy,rustfmt
+
+      - name: Cache Rust Core dependencies and target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: v7-rust-core-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native_shell/Cargo.lock', 'native_shell/Cargo.toml') }}
+
+      - name: Test, build and lint Rust Core
+        working-directory: native_shell
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo fmt --all -- --check
+          # Player tests intentionally toggle process-wide backend env hooks; serial execution prevents cross-test contamination.
+          cargo test --locked --lib -- --test-threads=1
+          # The updater binary owns runtime release-signer authorization tests, including the Windows WinTrust path.
+          cargo test --locked --bin HLSDownloaderUpdater
+          cargo build --locked --bin HLSDownloaderUpdater
+          # Product/test-helper reachability and stable IPC/media interfaces intentionally trigger these structural lints.
+          # Keep every other Clippy warning fatal so new actionable warnings still fail CI.
+          cargo clippy --locked --all-targets -- -D warnings -A dead_code -A clippy::large_enum_variant -A clippy::too_many_arguments -A clippy::type_complexity
+
+  presenter:
+    name: Native presenter
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: "1.98.1"
+          components: clippy,rustfmt
+
+      - name: Cache presenter dependencies and target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: v7-presenter-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('presenter_ui/Cargo.lock', 'presenter_ui/Cargo.toml', 'native_shell/Cargo.lock', 'native_shell/Cargo.toml') }}
+
+      - name: Test, build and lint native presenter
+        working-directory: presenter_ui
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo fmt --all -- --check
+          cargo test --locked
+          cargo build --locked --bin hls-downloader-presenter
+          # The explicit loop keeps the disconnect branch visible beside the event body.
+          # Preserve that readability choice while still failing CI on every other warning.
+          cargo clippy --locked --bin hls-downloader-presenter -- -D warnings -A clippy::while_let_loop
+
+      - name: Verify presenter Windows identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $presenter = Get-Item -LiteralPath 'target\debug\hls-downloader-presenter.exe'
+          $version = $presenter.VersionInfo
+          if ($version.OriginalFilename -ne 'HLSDownloaderPresenter.exe') {
+            throw "Presenter OriginalFilename is incorrect: $($version.OriginalFilename)"
+          }
+          if ($version.FileDescription -ne 'HLS Downloader Presenter') {
+            throw "Presenter FileDescription is incorrect: $($version.FileDescription)"
+          }
+          if ($version.InternalName -ne 'HLSDownloaderPresenter') {
+            throw "Presenter InternalName is incorrect: $($version.InternalName)"
+          }
+
+  compose:
+    name: Compose workbench and distribution
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Java 21
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Test Compose workbench
+        working-directory: desktop_ui
+        shell: pwsh
+        run: .\gradlew.bat test --no-daemon
+
+      - name: Build Compose distribution image
+        working-directory: desktop_ui
+        shell: pwsh
+        run: .\gradlew.bat createDistributable --no-daemon
+
+      - name: Verify packaged desktop JVM policy
+        shell: pwsh
+        working-directory: desktop_ui
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $launcherConfig = Get-ChildItem -LiteralPath 'build\compose\binaries\main\app' -Filter 'HLSDownloader.cfg' -Recurse -File | Select-Object -First 1
+          if (-not $launcherConfig) { throw 'Compose launcher configuration is missing from createDistributable output.' }
+          $config = Get-Content -LiteralPath $launcherConfig.FullName -Raw -Encoding UTF8
+          foreach ($required in @(
+            '-Dskiko.renderApi=SOFTWARE',
+            '-Dcompose.accessibility.enable=true',
+            '-Djavax.accessibility.assistive_technologies=com.sun.java.accessibility.AccessBridge'
+          )) {
+            if (-not $config.Contains($required)) { throw "Packaged launcher is missing required JVM option: $required" }
+          }
+
+  extension:
+    name: Browser extensions
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24.20.0"
+
+      - name: Enable pnpm
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          corepack enable
+          corepack prepare pnpm@11.7.0 --activate
+          if ((pnpm --version).Trim() -ne '11.7.0') { throw 'pnpm 11.7.0 activation failed.' }
+
+      - name: Install extension dependencies
+        working-directory: extension
+        shell: pwsh
+        run: pnpm install --frozen-lockfile
+
+      - name: Test and build browser extensions
+        working-directory: extension
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          pnpm test
+          pnpm run build
+
+  test:
+    name: test
+    needs: [validate, rust_core, presenter, compose, extension]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every v7 source gate
+        shell: bash
+        env:
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          RUST_CORE_RESULT: ${{ needs.rust_core.result }}
+          PRESENTER_RESULT: ${{ needs.presenter.result }}
+          COMPOSE_RESULT: ${{ needs.compose.result }}
+          EXTENSION_RESULT: ${{ needs.extension.result }}
+        run: |
+          for result in "$VALIDATE_RESULT" "$RUST_CORE_RESULT" "$PRESENTER_RESULT" "$COMPOSE_RESULT" "$EXTENSION_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "Required v7 CI job did not succeed: $result"
+              exit 1
+            fi
+          done

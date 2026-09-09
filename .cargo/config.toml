@@ -1,0 +1,7 @@
+[build]
+# Keep build output inside the repository; override with CARGO_TARGET_DIR for an
+# external ASCII-safe cache when needed.
+target-dir = "target"
+
+[env]
+CARGO_INCREMENTAL = "1"

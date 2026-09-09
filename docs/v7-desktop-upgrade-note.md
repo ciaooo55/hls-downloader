@@ -1,0 +1,44 @@
+# HLS Downloader 7.0.2 升级说明
+
+当前活动产品版本来自 `artifacts/v7-productization/feature-parity.json`，目前为 `7.0.2`；canonical `release_ready=false`，所以本文描述当前源码/本机 candidate 行为，不代表正式 v7.0.2 已发布。
+
+> 历史公开测试包 `v7.0.1-candidate.1` 保持原样；它的扩展包、manifest/provenance 和哈希属于上一轮 7.0.1 测试线。
+
+## 架构升级
+
+- Compose Desktop 是唯一主工作台；主界面不访问 SQLite。
+- Rust Core 是唯一下载、调度、数据库、迁移和恢复进程；关闭 UI 不停止下载。
+- Native Presenter 是预热的浏览器确认、进度和完成窗口；工作台启动时会确保它常驻，单实例锁防止重复窗口。
+- WXT MV3 扩展支持 Chromium 和 Firefox，通过 Native Messaging 连接同一个 Core。
+- 播放器使用独立进程，崩溃或关闭不会终止下载。
+- 自动更新安装除 SHA-256、WinVerifyTrust 和 MSI identity 外，还要求本地版本化 HLS release-signer trust contract；任意其他 Windows-trusted signer 不会被当作项目更新签名者。
+- 可选 Core TCP test/Linux transport 现在在配置、client 和实际 server listener 三个边界都要求 loopback；Windows 正常路径继续使用 owner/SYSTEM DACL 的 Named Pipe。
+- 浏览器 replay contract 的自定义请求头按 origin 隔离；跨 origin 默认移除 replay-owned header，只有精确匹配目标 origin 的 `request_context` 可以恢复自己的 header/cookie/navigation identity。
+
+## 用户体验
+
+- 保留 v3 的标题栏、工具栏、队列/分类栏、任务表和底部状态栏结构。
+- 任务行只显示一个总进度；协议和真实后缀直接显示在文件名下。
+- 点击任务行任意非命令区域即可选择；支持按住左键框选、Ctrl 增减选择、Shift 连续范围、多选批量操作和键盘导航。
+- 右键菜单跟随鼠标，并按媒体、程序、压缩包等文件能力过滤操作。
+- 主窗口不持续置顶，只在浏览器新任务、下载完成、失败或错误时请求关注。
+- 设置按下载与目录、连接、计划、浏览器、媒体、投屏与推送、外观、通知、维护和关于分类。
+- 投屏与 TVBox 推送使用不同入口和状态，支持真实局域网发现、离线反馈和局域网媒体发布。
+- 浏览器悬浮层仅显示与资源匹配的下载、投屏和 TVBox 操作，并保留页面 Referer/Origin 与同源凭据边界。
+- 错误日志以 UTF-8 JSONL 保存，包含时间、组件、事件、任务和请求编号，便于维护定位。
+
+## 功能范围
+
+支持 HTTP/HTTPS、FTP/FTPS、SFTP、HLS/LL-HLS、DASH、直播、BT/磁力、本地种子、Curl、Metalink、批量链接和网页抓取；支持任务筛选、队列、导入导出、日志、校验、播放、DLNA/Chromecast、TVBox、浏览器接管和更新检查。
+
+## 当前本机位置
+
+- 程序：`E:\h`
+- Chromium 扩展：`extensions\HLSDownloader-7.0.2-Chromium.zip`
+- Firefox 扩展：`extensions\HLSDownloader-7.0.2-Firefox.zip`
+- 开始菜单：`HLS Downloader 7.0.2`
+- 回滚镜像：`E:\h.v7-backup`（仅在事务失败恢复期间短暂存在）
+
+这些字面文件名描述**当前 7.0.2 canonical version**。实际安装脚本从 feature-parity/manifest 解析产品版本；未来升级不应通过修改本文来改变安装版本。
+
+验证数据、历史 7.0.1 基线与当前正式标签前门槛见 `docs/v7-verification.md`；本机事务升级细节见 `docs/v7-local-upgrade.md`。

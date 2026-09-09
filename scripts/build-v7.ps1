@@ -1,0 +1,549 @@
+[CmdletBinding()]
+param([ValidateSet('run','test','candidate','package','adversarial')][string]$Task='run')
+$ErrorActionPreference = 'Stop'
+$repo=(Resolve-Path "$PSScriptRoot\..").Path
+$protocolSource = Get-Content -LiteralPath (Join-Path $repo 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt') -Raw -Encoding UTF8
+if ($protocolSource -notmatch 'CORE_PROTOCOL\s*=\s*"hls-downloader-v7-core"' -or
+    $protocolSource -notmatch 'CORE_PIPE\s*=\s*"\\\\\\\\\.\\\\pipe\\\\HLSDownloader\.v7"') {
+    throw 'v7 build refused: Compose IPC defaults are not v7.'
+}
+$contractSource = Get-Content -LiteralPath (Join-Path $repo 'native_shell\src\contract.rs') -Raw -Encoding UTF8
+if ($contractSource -notmatch 'V7_PROTOCOL_NAME\s*:\s*&str\s*=\s*"hls-downloader-v7-core"') {
+    throw 'v7 build refused: Rust v7 protocol contract is missing.'
+}
+$extensionProtocolSource = Get-Content -LiteralPath (Join-Path $repo 'extension\lib\directBackend.ts') -Raw -Encoding UTF8
+if ($extensionProtocolSource -notmatch "V7_CORE_PROTOCOL\s*=\s*'hls-downloader-v7-core'") {
+    throw 'v7 build refused: browser extension v7 Core protocol contract is missing.'
+}
+$featureParity = Join-Path $repo 'artifacts\v7-productization\feature-parity.json'
+$productVersion = [string](Get-Content -LiteralPath $featureParity -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
+$composeBuildSource = Get-Content -LiteralPath (Join-Path $repo 'desktop_ui\build.gradle.kts') -Raw -Encoding UTF8
+$moduleVersions = @(
+    ([regex]::Match((Get-Content -LiteralPath (Join-Path $repo 'native_shell\Cargo.toml') -Raw -Encoding UTF8), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    ([regex]::Match((Get-Content -LiteralPath (Join-Path $repo 'presenter_ui\Cargo.toml') -Raw -Encoding UTF8), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    [string](Get-Content -LiteralPath (Join-Path $repo 'extension\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version,
+    ([regex]::Match($protocolSource, 'const val version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    ([regex]::Match($composeBuildSource, '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    ([regex]::Match($composeBuildSource, 'packageVersion\s*=\s*"([^"]+)"')).Groups[1].Value
+)
+if ([String]::IsNullOrWhiteSpace($productVersion) -or @($moduleVersions | Where-Object { $_ -ne $productVersion }).Count -ne 0) {
+    throw "Product version mismatch: feature parity=$productVersion; modules=$($moduleVersions -join ', ')"
+}
+$isPackage = @('candidate', 'package') -contains $Task
+$packageTier = if ($Task -eq 'candidate') { 'candidate' } else { 'formal' }
+$packageRoot = if ($Task -eq 'candidate') {
+    Join-Path $repo 'artifacts\v7-productization\candidate'
+} else {
+    Join-Path $repo 'artifacts\v7-productization\package'
+}
+$provenance = Join-Path $packageRoot 'BUILD-PROVENANCE.json'
+$artifactSuffix = if ($Task -eq 'candidate') { '-candidate' } else { '' }
+$provenanceForBuild = $provenance
+$packageProvenanceTemp = $null
+$packageStagingRoot = $null
+$packageSwapBackupRoot = $null
+$packageResources = $null
+$composeSubstDrive = $null
+$previousComposeBuildDir = $env:HLS_COMPOSE_BUILD_DIR
+
+function Mount-ComposeBuildCache([string]$Path) {
+    New-Item -ItemType Directory -Force -Path $Path | Out-Null
+    $resolved = (Resolve-Path -LiteralPath $Path).Path
+    foreach ($letter in @('Z','Y','X','W','V','U','T','S','R','Q','P')) {
+        $drive = "${letter}:"
+        if (Test-Path -LiteralPath "$drive\") { continue }
+        & subst.exe $drive $resolved | Out-Null
+        if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath "$drive\")) {
+            return $drive
+        }
+    }
+    throw 'No free drive letter is available for the ASCII Compose build path.'
+}
+
+if ($Task -eq 'candidate') {
+    # Candidate packages are for external machine validation. They require the
+    # canonical matrix, no blocked features and a clean tree, but not
+    # release_ready or complete verification yet.
+    # Write provenance outside the replaceable candidate directory first, so a
+    # Failed gates never destroy the last candidate that passed validation.
+    $packageProvenanceTemp = Join-Path (Split-Path $packageRoot -Parent) ('.BUILD-PROVENANCE.candidate.' + [guid]::NewGuid().ToString('n') + '.tmp')
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireNoBlocked -RequireCleanWorktree -PackageTier candidate -ProvenancePath $packageProvenanceTemp
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item -LiteralPath $packageProvenanceTemp -Force -ErrorAction SilentlyContinue
+        exit $LASTEXITCODE
+    }
+}
+if ($Task -eq 'package') {
+    # Formal packages add the release_ready decision after candidate validation.
+    $packageProvenanceTemp = Join-Path (Split-Path $packageRoot -Parent) ('.BUILD-PROVENANCE.formal.' + [guid]::NewGuid().ToString('n') + '.tmp')
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireCanonicalComplete -RequireReleaseReady -RequireCleanWorktree -PackageTier formal -ReleaseEvidencePath "$repo\artifacts\v7-productization\release-evidence.json" -ProvenancePath $packageProvenanceTemp
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item -LiteralPath $packageProvenanceTemp -Force -ErrorAction SilentlyContinue
+        exit $LASTEXITCODE
+    }
+}
+try {
+$artifactRoot = $packageRoot
+if ($isPackage) {
+    $packageStagingRoot = Join-Path (Split-Path $packageRoot -Parent) ('.' + $packageTier + '-staging.' + [guid]::NewGuid().ToString('n'))
+    New-Item -ItemType Directory -Force -Path $packageStagingRoot | Out-Null
+    $provenanceForBuild = Join-Path $packageStagingRoot 'BUILD-PROVENANCE.json'
+    Move-Item -LiteralPath $packageProvenanceTemp -Destination $provenanceForBuild -Force
+    $artifactRoot = $packageStagingRoot
+}
+# Bootstrap, build and cleanup share one cache root. It is repository-local by
+# default, while HLS_V7_BUILD_CACHE intentionally relocates all three together.
+if ($env:HLS_V7_BUILD_CACHE -and -not [IO.Path]::IsPathRooted($env:HLS_V7_BUILD_CACHE)) { throw 'HLS_V7_BUILD_CACHE must be an absolute path.' }
+$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { [IO.Path]::GetFullPath($env:HLS_V7_BUILD_CACHE) } else { Join-Path $repo '.tool-cache\build-cache' }
+$env:CARGO_HOME=Join-Path $cacheRoot 'cargo'
+$env:CARGO_TARGET_DIR=Join-Path $cacheRoot 'cargo-target'
+$env:GRADLE_USER_HOME=Join-Path $cacheRoot 'gradle'
+# jlink reads its @args file in the system codepage. A temporary drive alias
+# gives it an ASCII path while generated files remain under the selected cache.
+$composeSubstDrive = Mount-ComposeBuildCache $cacheRoot
+$env:HLS_COMPOSE_BUILD_DIR = "$composeSubstDrive\compose-build"
+# Keep Corepack state under the same selected cache so relocation/cleanup do
+# not leave a second hidden tool state behind in the repository.
+$env:COREPACK_HOME=Join-Path $cacheRoot 'corepack-home'
+$env:COREPACK_ENABLE_DOWNLOAD_PROMPT='0'
+$jdkRoot = $env:HLS_V7_JAVA_HOME
+if(-not $jdkRoot -and (Test-Path (Join-Path $cacheRoot 'jdk-21\bin\java.exe'))){ $jdkRoot = Join-Path $cacheRoot 'jdk-21' }
+if(-not $jdkRoot){ throw 'JDK 21 was not found. Set HLS_V7_JAVA_HOME or run scripts\bootstrap-v7-toolchain.ps1.' }
+$env:JAVA_HOME=$jdkRoot
+if(!(Test-Path "$env:JAVA_HOME\bin\java.exe")){ throw "JDK 21 is missing at $env:JAVA_HOME. Run scripts\bootstrap-v7-toolchain.ps1." }
+$libMpvCache = Join-Path $cacheRoot 'libmpv-20260814'
+$sevenZipExe = Join-Path $libMpvCache '7zr.exe'
+$libMpvArchive = Join-Path $libMpvCache 'mpv-dev-x86_64.7z'
+$sevenZipUrl = 'https://github.com/ip7z/7zip/releases/download/26.02/7zr.exe'
+$sevenZipSha256 = '56b8cc9f4971cef253644fafe54063ed7fdca551d4dee0f8c6baa81b855acd72'
+$libMpvArchiveUrl = 'https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260814/mpv-dev-x86_64-20260814-git-7b8915bc1d.7z'
+$libMpvArchiveSha256 = '0af22b28e920620036d3ae08fd9283156dc9af0420bf4df84b0e02282094599c'
+$curlImpersonateVersion = 'v2.0.0'
+$curlImpersonateCache = Join-Path $cacheRoot "curl-impersonate-$curlImpersonateVersion"
+$curlImpersonateArchive = Join-Path $curlImpersonateCache 'curl-impersonate-v2.0.0.x86_64-win32.tar.gz'
+$curlImpersonateUrl = 'https://github.com/lexiforest/curl-impersonate/releases/download/v2.0.0/curl-impersonate-v2.0.0.x86_64-win32.tar.gz'
+$curlImpersonateSha256 = 'd2e5905f8adf76f042afe78d1758a978253afddf4eb7bdcb8ddfb38c2f0e530c'
+
+function Assert-FileSha256([string]$Path, [string]$Expected, [string]$Label) {
+    if (-not (Test-Path -LiteralPath $Path)) { throw "$Label is missing: $Path" }
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $Expected.ToLowerInvariant()) { throw "$Label SHA-256 mismatch: expected $Expected, got $actual" }
+}
+
+function Get-VerifiedFile([string]$Url, [string]$Path, [string]$Expected, [string]$Label) {
+    New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($Path)) | Out-Null
+    if (Test-Path -LiteralPath $Path) {
+        try { Assert-FileSha256 $Path $Expected $Label; return } catch { Remove-Item -LiteralPath $Path -Force }
+    }
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        & $curl.Source --location --fail --retry 3 --retry-delay 2 --max-time 900 --output $Path $Url
+        if ($LASTEXITCODE -ne 0) { throw "$Label download failed with exit $LASTEXITCODE" }
+    } else {
+        Invoke-WebRequest -Uri $Url -OutFile $Path -MaximumRedirection 10
+    }
+    Assert-FileSha256 $Path $Expected $Label
+}
+
+function Copy-LibMpv([string]$Destination) {
+    Get-VerifiedFile $sevenZipUrl $sevenZipExe $sevenZipSha256 '7zr.exe'
+    Get-VerifiedFile $libMpvArchiveUrl $libMpvArchive $libMpvArchiveSha256 'libmpv archive'
+    $extract = Join-Path $libMpvCache 'extract'
+    if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $extract | Out-Null
+    try {
+        & $sevenZipExe e -y "-o$extract" $libMpvArchive 'libmpv-2.dll'
+        if ($LASTEXITCODE -ne 0) { throw "7zr failed to extract libmpv-2.dll (exit $LASTEXITCODE)" }
+        $dll = Get-ChildItem -LiteralPath $extract -Filter 'libmpv-2.dll' -Recurse -File | Select-Object -First 1
+        if (-not $dll) { throw 'libmpv archive did not contain libmpv-2.dll' }
+        Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path $Destination 'libmpv-2.dll') -Force
+        Assert-FileSha256 (Join-Path $Destination 'libmpv-2.dll') ((Get-FileHash -LiteralPath $dll.FullName -Algorithm SHA256).Hash) 'bundled libmpv-2.dll'
+    } finally { Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+function Copy-CurlImpersonate([string]$Destination) {
+    Get-VerifiedFile $curlImpersonateUrl $curlImpersonateArchive $curlImpersonateSha256 "curl-impersonate $curlImpersonateVersion Windows x64 archive"
+    $systemTar = Join-Path $env:SystemRoot 'System32\tar.exe'
+    $tarExe = if (Test-Path -LiteralPath $systemTar -PathType Leaf) {
+        $systemTar
+    } else {
+        $tarCommand = Get-Command tar.exe -ErrorAction SilentlyContinue
+        if ($tarCommand) { $tarCommand.Source }
+    }
+    if ([String]::IsNullOrWhiteSpace($tarExe)) { throw 'tar.exe is required to extract curl-impersonate.' }
+    $extract = Join-Path $curlImpersonateCache 'extract'
+    if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $extract | Out-Null
+    try {
+        & $tarExe -xzf $curlImpersonateArchive -C $extract './curl-impersonate.exe'
+        if ($LASTEXITCODE -ne 0) { throw "tar.exe failed to extract curl-impersonate.exe (exit $LASTEXITCODE)" }
+        $source = Join-Path $extract 'curl-impersonate.exe'
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw 'Verified curl-impersonate archive did not contain curl-impersonate.exe.'
+        }
+        $toolDirectory = Join-Path (Join-Path $Destination 'tools') 'curl-impersonate'
+        New-Item -ItemType Directory -Force -Path $toolDirectory | Out-Null
+        $target = Join-Path $toolDirectory 'curl-impersonate.exe'
+        Copy-Item -LiteralPath $source -Destination $target -Force
+        Assert-FileSha256 $target ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash) 'bundled curl-impersonate.exe'
+    } finally {
+        Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+$identitySource = Get-Content -LiteralPath (Join-Path $repo 'extension\lib\storeIdentity.ts') -Raw -Encoding UTF8
+$expectedChromiumKey = ([regex]::Match($identitySource, "CHROMIUM_PUBLIC_KEY = '([^']+)'" )).Groups[1].Value
+$expectedFirefoxId = ([regex]::Match($identitySource, "FIREFOX_EXTENSION_ID = '([^']+)'" )).Groups[1].Value
+if ([String]::IsNullOrWhiteSpace($expectedChromiumKey) -or [String]::IsNullOrWhiteSpace($expectedFirefoxId)) {
+    throw 'Extension store identity constants are missing.'
+}
+
+function Assert-ExtensionManifest($Manifest, [string]$Browser, [string]$Path) {
+    if ([int]$Manifest.manifest_version -ne 3) {
+        throw "$Browser extension manifest is not Manifest V3: $Path"
+    }
+    if ($Browser -eq 'Chromium') {
+        if ([string]$Manifest.key -ne $expectedChromiumKey) {
+            throw "Chromium extension key does not match store identity: $Path"
+        }
+    } elseif ([string]$Manifest.browser_specific_settings.gecko.id -ne $expectedFirefoxId) {
+        throw "Firefox extension id does not match store identity: $Path"
+    }
+}
+
+function Build-Extension([string]$Resources, [switch]$TestOnly) {
+    # HLS_V7_PNPM overrides; otherwise PATH, then the repository-local Node
+    # tools directory that bootstrap provisions.
+    $pnpmPath = $env:HLS_V7_PNPM
+    if (-not $pnpmPath) {
+        $pnpmCommand = Get-Command pnpm.cmd -ErrorAction SilentlyContinue
+        $pnpmPath = if ($pnpmCommand) { $pnpmCommand.Source } else { Join-Path $repo '.tool-cache\node-v22.14.0-win-x64\pnpm.cmd' }
+    }
+    if (-not (Test-Path -LiteralPath $pnpmPath)) { throw 'pnpm.cmd is required to build the production browser extension.' }
+    # npm scripts spawn node/wxt directly, so the repository-local Node tools
+    # must be on PATH when they exist.
+    $nodeTools = Get-ChildItem -LiteralPath (Join-Path $repo '.tool-cache') -Directory -Filter 'node-v*' -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'node.exe') -PathType Leaf } |
+        Select-Object -First 1
+    if ($nodeTools) { $env:PATH = "$($nodeTools.FullName);$env:PATH" }
+    $package = Get-Content -LiteralPath (Join-Path $repo 'extension\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($package.version -ne $productVersion) { throw "Browser extension package version must be ${productVersion}: $($package.version)" }
+    $previousCi = $env:CI
+    Push-Location (Join-Path $repo 'extension')
+    try {
+        $env:CI = 'true'
+        # Probe inside the extension directory so corepack resolves the pnpm
+        # version pinned by extension/package.json instead of its global default.
+        $pnpmVersion = (& $pnpmPath --version).Trim()
+        if ($LASTEXITCODE -ne 0 -or $pnpmVersion -ne '11.7.0') {
+            throw "Production extension build requires pnpm 11.7.0; found $pnpmVersion"
+        }
+        & $pnpmPath install --frozen-lockfile
+        if ($LASTEXITCODE -ne 0) { throw "pnpm install failed with exit $LASTEXITCODE" }
+        if ($TestOnly) {
+            & $pnpmPath test
+            if ($LASTEXITCODE -ne 0) { throw "pnpm test failed with exit $LASTEXITCODE" }
+        }
+        & $pnpmPath run build
+        if ($LASTEXITCODE -ne 0) { throw "pnpm run build failed with exit $LASTEXITCODE" }
+    } finally {
+        $env:CI = $previousCi
+        Pop-Location
+    }
+    if ($TestOnly) { return }
+    New-Item -ItemType Directory -Force -Path (Join-Path $Resources 'extensions') | Out-Null
+    foreach ($item in @(
+        @{ Source = 'chrome-mv3'; Name = "HLSDownloader-$productVersion-Chromium.zip" },
+        @{ Source = 'firefox-mv3'; Name = "HLSDownloader-$productVersion-Firefox.zip" }
+    )) {
+        $source = Join-Path (Join-Path $repo 'extension\.output') $item.Source
+        if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Production extension output is missing: $source" }
+        $manifestPath = Join-Path $source 'manifest.json'
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($manifest.version -ne $productVersion) { throw "Built $($item.Source) manifest version is not ${productVersion}: $($manifest.version)" }
+        Assert-ExtensionManifest $manifest $(if ($item.Source -eq 'chrome-mv3') { 'Chromium' } else { 'Firefox' }) $manifestPath
+        Compress-Archive -Path (Join-Path $source '*') -DestinationPath (Join-Path (Join-Path $Resources 'extensions') $item.Name) -CompressionLevel Optimal -Force
+    }
+}
+
+if ($isPackage) {
+    $packageResources = Join-Path $repo 'desktop_ui\resources\common'
+    if (Test-Path -LiteralPath $packageResources) {
+        Remove-Item -LiteralPath $packageResources -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $packageResources | Out-Null
+    Build-Extension $packageResources
+}
+
+$cargoCommand = Get-Command cargo.exe -ErrorAction SilentlyContinue
+$cargo = if ($cargoCommand) { $cargoCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
+if ($Task -eq 'test') {
+    & $cargo test --manifest-path "$repo\native_shell\Cargo.toml" --lib
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & $cargo test --manifest-path "$repo\presenter_ui\Cargo.toml"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Build-Extension -TestOnly
+}
+$engineTarget = if ($isPackage) { 'release' } else { 'debug' }
+& $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-engine
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin HLSDownloaderNativeHost
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin HLSDownloaderUpdater
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $cargo build --manifest-path "$repo\presenter_ui\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-presenter
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$engine = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\hls-downloader-engine.exe"
+if (!(Test-Path -LiteralPath $engine)) { throw "Rust engine was not produced: $engine" }
+$nativeHost = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloaderNativeHost.exe"
+if (!(Test-Path -LiteralPath $nativeHost)) { throw "Native Messaging host was not produced: $nativeHost" }
+$updater = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloaderUpdater.exe"
+if (!(Test-Path -LiteralPath $updater)) { throw "Update helper was not produced: $updater" }
+$presenter = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\hls-downloader-presenter.exe"
+if (!(Test-Path -LiteralPath $presenter)) { throw "v7 presenter was not produced: $presenter" }
+Push-Location "$repo\desktop_ui"
+try {
+if ($isPackage) {
+    $resources = $packageResources
+    if ([String]::IsNullOrWhiteSpace($resources) -or -not (Test-Path -LiteralPath $resources -PathType Container)) {
+        throw 'The isolated package resource directory was not prepared.'
+    }
+    Copy-Item -LiteralPath (Join-Path $repo 'assets\app-icon.ico') -Destination (Join-Path $resources 'app-icon.ico') -Force
+    Copy-Item -LiteralPath $engine -Destination (Join-Path $resources 'HLSDownloaderEngine.exe') -Force
+    # The dedicated bridge has no Compose/Slint dependency and never opens SQLite.
+    Copy-Item -LiteralPath $nativeHost -Destination (Join-Path $resources 'HLSDownloaderNativeHost.exe') -Force
+    Copy-Item -LiteralPath $updater -Destination (Join-Path $resources 'HLSDownloaderUpdater.exe') -Force
+    Copy-Item -LiteralPath $presenter -Destination (Join-Path $resources 'HLSDownloaderPresenter.exe') -Force
+    Copy-Item -LiteralPath $featureParity -Destination (Join-Path $resources 'FEATURE-PARITY.json') -Force
+    Copy-Item -LiteralPath $provenanceForBuild -Destination (Join-Path $resources 'BUILD-PROVENANCE.json') -Force
+    # Formal and candidate packages must never inherit media binaries from a
+    # previous ignored resources/common directory or a developer-specific path.
+    $requiredMediaTools = @('ffmpeg.exe', 'ffprobe.exe')
+    $ffmpegRoot = $env:HLS_V7_FFMPEG_DIR
+    if ([String]::IsNullOrWhiteSpace($ffmpegRoot)) {
+        $ffmpegCommand = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
+        if ($ffmpegCommand) { $ffmpegRoot = Split-Path $ffmpegCommand.Source -Parent }
+    }
+    if ([String]::IsNullOrWhiteSpace($ffmpegRoot)) {
+        throw 'Candidate/formal packaging requires HLS_V7_FFMPEG_DIR or ffmpeg.exe on PATH; packaged ffmpeg and ffprobe must come from the same verified media-tool directory.'
+    }
+    $ffmpegRoot = [IO.Path]::GetFullPath($ffmpegRoot)
+    $missingMediaTools = @($requiredMediaTools | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ffmpegRoot $_) -PathType Leaf) })
+    if ($missingMediaTools.Count -ne 0) {
+        throw "Candidate/formal packaging requires ffmpeg.exe and ffprobe.exe in one verified media-tool directory. Missing from ${ffmpegRoot}: $($missingMediaTools -join ', ')"
+    }
+    foreach ($tool in $requiredMediaTools) {
+        Copy-Item -LiteralPath (Join-Path $ffmpegRoot $tool) -Destination (Join-Path $resources $tool) -Force
+    }
+    Copy-CurlImpersonate $resources
+    Copy-LibMpv $resources
+    # Compose's jlink task rejects a leftover output directory after an interrupted package run.
+    $runtimeImage = Join-Path $env:HLS_COMPOSE_BUILD_DIR 'compose\tmp\main\runtime'
+    if (Test-Path -LiteralPath $runtimeImage) {
+        Remove-Item -LiteralPath $runtimeImage -Recurse -Force
+    }
+}
+$env:HLS_ENGINE_PATH = $engine
+    switch ($Task) {
+        'run' {
+            $engineProcess = Start-Process -FilePath $engine -WorkingDirectory (Split-Path $engine -Parent) -PassThru
+            Start-Sleep -Milliseconds 250
+            $presenterProcess = Start-Process -FilePath $presenter -WorkingDirectory (Split-Path $presenter -Parent) -PassThru
+            try { & .\gradlew.bat run } finally {
+                if ($presenterProcess -and -not $presenterProcess.HasExited) { $presenterProcess.CloseMainWindow() | Out-Null }
+            }
+        }
+        'test' { & .\gradlew.bat test --no-daemon }
+        'candidate' { & .\gradlew.bat clean createDistributable packageDistributionForCurrentOS }
+        'package' { & .\gradlew.bat clean createDistributable packageDistributionForCurrentOS }
+        'adversarial' { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\adversarial-v7.ps1" -Scope native }
+    }
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if ($isPackage) {
+        $exe = Get-ChildItem -LiteralPath (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'compose\binaries\main\exe') -Filter "HLSDownloader-$productVersion.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $exe) { throw 'The v7 installer EXE was not produced in the isolated build cache.' }
+        $msi = Get-ChildItem -LiteralPath (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'compose\binaries\main\msi') -Filter "HLSDownloader-$productVersion.msi" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $msi) { throw 'The v7 MSI was not produced in the isolated build cache.' }
+        $sourceCommit = (& git -C $repo rev-parse HEAD).Trim()
+        $productCode = '{' + $sourceCommit.Substring(0, 8) + '-' + $sourceCommit.Substring(8, 4) + '-' + $sourceCommit.Substring(12, 4) + '-' + $sourceCommit.Substring(16, 4) + '-' + $sourceCommit.Substring(20, 12) + '}'
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\set-v7-msi-rollback-order.ps1" -MsiPath $msi.FullName -ProductCode $productCode
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+        Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.exe")) -Force
+        Copy-Item -LiteralPath $msi.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.msi")) -Force
+        $portablePath = Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64-Portable$artifactSuffix.zip")
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\create-v7-portable.ps1" -OutZip $portablePath
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $extensionEvidence = [ordered]@{}
+        $portableCheck = Join-Path $artifactRoot ('.portable-verify-' + [guid]::NewGuid().ToString('n'))
+        try {
+            Expand-Archive -LiteralPath $portablePath -DestinationPath $portableCheck -Force
+            $portableRoot = Join-Path $portableCheck 'HLSDownloader'
+            $provenanceInPackage = Join-Path $portableRoot 'app\resources\BUILD-PROVENANCE.json'
+            if (-not (Test-Path -LiteralPath $provenanceInPackage -PathType Leaf)) {
+                throw 'Portable package is missing app/resources/BUILD-PROVENANCE.json.'
+            }
+            $provenanceJson = Get-Content -LiteralPath $provenanceInPackage -Raw -Encoding UTF8 | ConvertFrom-Json
+            $sourceCommit = (& git -C $repo rev-parse HEAD).Trim()
+            $sourceTree = (& git -C $repo rev-parse 'HEAD^{tree}').Trim()
+            if ($provenanceJson.source_commit -ne $sourceCommit) {
+                throw "Portable provenance source_commit does not match HEAD: $($provenanceJson.source_commit) != $sourceCommit"
+            }
+            if ($provenanceJson.source_tree -ne $sourceTree) {
+                throw "Portable provenance source_tree does not match HEAD: $($provenanceJson.source_tree) != $sourceTree"
+            }
+            if ($provenanceJson.package_tier -ne $packageTier) {
+                throw "Portable provenance package_tier does not match the build tier: $($provenanceJson.package_tier) != $packageTier"
+            }
+            if ($provenanceJson.product_version -ne $productVersion) {
+                throw "Portable provenance product_version is not ${productVersion}: $($provenanceJson.product_version)"
+            }
+            $featureInPackage = Join-Path $portableRoot 'app\resources\FEATURE-PARITY.json'
+            if (-not (Test-Path -LiteralPath $featureInPackage -PathType Leaf)) {
+                throw 'Portable package is missing app/resources/FEATURE-PARITY.json.'
+            }
+            $featureHashInPackage = (Get-FileHash -LiteralPath $featureInPackage -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($provenanceJson.feature_parity_sha256 -ne $featureHashInPackage) {
+                throw "Portable feature parity hash does not match provenance: $($provenanceJson.feature_parity_sha256) != $featureHashInPackage"
+            }
+            foreach ($tool in $requiredMediaTools) {
+                $packagedTool = Join-Path $portableRoot ("app\resources\$tool")
+                if (-not (Test-Path -LiteralPath $packagedTool -PathType Leaf)) {
+                    throw "Portable package is missing required media tool: $tool"
+                }
+            }
+            foreach ($extension in @('Chromium', 'Firefox')) {
+                $archive = Join-Path $portableRoot ("extensions\HLSDownloader-$productVersion-$extension.zip")
+                if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+                    throw "Portable package is missing the $extension extension archive."
+                }
+                $extensionCheck = Join-Path $portableCheck ("extension-$extension")
+                Expand-Archive -LiteralPath $archive -DestinationPath $extensionCheck -Force
+                $manifestPath = Join-Path $extensionCheck 'manifest.json'
+                if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+                    throw "$extension extension archive is missing manifest.json."
+                }
+                $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ($manifest.version -ne $productVersion) {
+                    throw "$extension extension manifest version is not ${productVersion}: $($manifest.version)"
+                }
+                Assert-ExtensionManifest $manifest $extension $manifestPath
+                $extensionArtifact = Join-Path $artifactRoot ("extensions\HLSDownloader-$productVersion-$extension.zip")
+                New-Item -ItemType Directory -Force -Path (Split-Path $extensionArtifact -Parent) | Out-Null
+                Copy-Item -LiteralPath $archive -Destination $extensionArtifact -Force
+                $extensionEvidence[$extension] = [ordered]@{
+                    version = [string]$manifest.version
+                    path = "extensions/HLSDownloader-$productVersion-$extension.zip"
+                    sha256 = (Get-FileHash -LiteralPath $extensionArtifact -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
+            }
+        } finally {
+            Remove-Item -LiteralPath $portableCheck -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Copy-Item -LiteralPath $featureParity -Destination (Join-Path $artifactRoot 'FEATURE-PARITY.json') -Force
+        $exePath = Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.exe")
+        $msiPath = Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.msi")
+        $artifactManifest = [ordered]@{
+            schema = 1
+            product_version = $productVersion
+            package_tier = $packageTier
+            source_commit = $sourceCommit
+            source_tree = $sourceTree
+            feature_parity_path = 'FEATURE-PARITY.json'
+            feature_parity_sha256 = (Get-FileHash -LiteralPath (Join-Path $artifactRoot 'FEATURE-PARITY.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+            artifacts = [ordered]@{
+                exe = [ordered]@{ path = [IO.Path]::GetFileName($exePath); sha256 = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash.ToLowerInvariant() }
+                msi = [ordered]@{ path = [IO.Path]::GetFileName($msiPath); sha256 = (Get-FileHash -LiteralPath $msiPath -Algorithm SHA256).Hash.ToLowerInvariant() }
+                portable = [ordered]@{ path = [IO.Path]::GetFileName($portablePath); sha256 = (Get-FileHash -LiteralPath $portablePath -Algorithm SHA256).Hash.ToLowerInvariant() }
+            }
+            extensions = $extensionEvidence
+            generated_at_utc = [DateTime]::UtcNow.ToString('o')
+        }
+        $artifactManifestPath = Join-Path $artifactRoot 'ARTIFACT-MANIFEST.json'
+        [IO.File]::WriteAllText($artifactManifestPath, ($artifactManifest | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+        $manifestCheck = Get-Content -LiteralPath $artifactManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ([int]$manifestCheck.schema -ne 1 -or
+            $manifestCheck.product_version -ne $productVersion -or
+            $manifestCheck.package_tier -ne $packageTier -or
+            $manifestCheck.source_commit -ne $sourceCommit -or
+            $manifestCheck.source_tree -ne $sourceTree) {
+            throw 'Generated ARTIFACT-MANIFEST.json does not match the current build identity.'
+        }
+        $artifactRootFull = [IO.Path]::GetFullPath($artifactRoot).TrimEnd([char[]]@('\', '/'))
+        foreach ($name in @('exe', 'msi', 'portable')) {
+            $entry = $manifestCheck.artifacts.$name
+            if ($null -eq $entry -or [String]::IsNullOrWhiteSpace([string]$entry.path)) {
+                throw "Generated ARTIFACT-MANIFEST.json is missing the $name artifact entry."
+            }
+            $entryPath = [IO.Path]::GetFullPath((Join-Path $artifactRootFull ([string]$entry.path)))
+            if (-not $entryPath.StartsWith($artifactRootFull + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "ARTIFACT-MANIFEST.json path escaped the artifact directory: $($entry.path)"
+            }
+            Assert-FileSha256 $entryPath ([string]$entry.sha256) "$name artifact manifest entry"
+        }
+        foreach ($extension in @('Chromium', 'Firefox')) {
+            $entry = $manifestCheck.extensions.$extension
+            $entryPath = [IO.Path]::GetFullPath((Join-Path $artifactRootFull ([string]$entry.path)))
+            Assert-FileSha256 $entryPath ([string]$entry.sha256) "$extension extension manifest entry"
+        }
+        if ($isPackage) {
+            # Swap the complete staging directory only after every artifact is ready.
+            $packageSwapBackupRoot = Join-Path (Split-Path $packageRoot -Parent) ('.' + $packageTier + '-backup.' + [guid]::NewGuid().ToString('n'))
+            $oldPackageMoved = $false
+            try {
+                if (Test-Path -LiteralPath $packageRoot) {
+                    Move-Item -LiteralPath $packageRoot -Destination $packageSwapBackupRoot
+                    $oldPackageMoved = $true
+                }
+                Move-Item -LiteralPath $packageStagingRoot -Destination $packageRoot
+                $packageStagingRoot = $null
+
+                if ($oldPackageMoved -and (Test-Path -LiteralPath $packageSwapBackupRoot)) {
+                    try {
+                        Remove-Item -LiteralPath $packageSwapBackupRoot -Recurse -Force -ErrorAction Stop
+                        $packageSwapBackupRoot = $null
+                    } catch {
+                        Write-Warning "The new $packageTier package is committed, but the previous package backup could not be removed: $packageSwapBackupRoot"
+                        # The new package is already committed. Preserve both directories.
+                        $packageSwapBackupRoot = $null
+                    }
+                }
+            } catch {
+                if ($oldPackageMoved -and (Test-Path -LiteralPath $packageRoot)) {
+                    Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                if ($oldPackageMoved -and (Test-Path -LiteralPath $packageSwapBackupRoot)) {
+                    Move-Item -LiteralPath $packageSwapBackupRoot -Destination $packageRoot -Force
+                    $packageSwapBackupRoot = $null
+                }
+                throw
+            }
+        }
+    }
+} finally {
+    Pop-Location
+}
+} finally {
+    if ($null -ne $packageProvenanceTemp -and (Test-Path -LiteralPath $packageProvenanceTemp)) {
+        Remove-Item -LiteralPath $packageProvenanceTemp -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $packageStagingRoot -and (Test-Path -LiteralPath $packageStagingRoot)) {
+        Remove-Item -LiteralPath $packageStagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $packageResources -and (Test-Path -LiteralPath $packageResources)) {
+        Remove-Item -LiteralPath $packageResources -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $composeSubstDrive) {
+        & subst.exe $composeSubstDrive /d | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Could not remove temporary Compose build mapping $composeSubstDrive"
+        }
+    }
+    if ([String]::IsNullOrEmpty($previousComposeBuildDir)) {
+        Remove-Item Env:HLS_COMPOSE_BUILD_DIR -ErrorAction SilentlyContinue
+    } else {
+        $env:HLS_COMPOSE_BUILD_DIR = $previousComposeBuildDir
+    }
+    # A swap failure may leave the last usable candidate at the backup path.
+    # Preserve it for manual recovery when the in-place restoration also fails.
+}

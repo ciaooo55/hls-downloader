@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "identity": "authenticode_leaf_certificate_sha1",
+  "policy": "formal-build-signer-or-explicit-rollover",
+  "rollover_signers": []
+}

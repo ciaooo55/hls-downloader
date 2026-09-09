@@ -1,0 +1,7 @@
+{
+  "name": "com.ciaooo55.hls_downloader",
+  "description": "HLS Downloader Native Messaging Host",
+  "path": "HLSDownloaderNativeHost.exe",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/"]
+}

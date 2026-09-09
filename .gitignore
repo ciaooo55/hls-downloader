@@ -1,0 +1,63 @@
+# Secrets and local overrides
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Frontend
+node_modules/
+/target/
+native_shell/target/
+native_shell/site-cache/
+presenter_ui/target/
+extension/node_modules/
+extension/.wxt/
+extension/.output/
+**/.gradle/
+desktop_ui/.kotlin/
+
+# Build and packaging output
+bin/
+!native_shell/src/bin/
+!native_shell/src/bin/*.rs
+build/
+release/
+tools/
+.tool-cache/
+# Keep release evidence local, except for the canonical feature contract used
+# by the formal package gate.
+artifacts/*
+!artifacts/v7-productization/
+artifacts/v7-productization/*
+!artifacts/v7-productization/feature-parity.json
+desktop_ui/resources/common/
+
+# Runtime state
+downloads/
+data.db
+data.db-shm
+data.db-wal
+.webview/
+.webview-*/
+*.log
+
+# Local worktrees and editors
+.worktrees/
+docs/superpowers/
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
+
+
+# Per-install runtime config (holds the local IPC token)
+config.json

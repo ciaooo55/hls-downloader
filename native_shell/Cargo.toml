@@ -1,0 +1,68 @@
+[package]
+name = "hls-native-shell"
+version = "7.0.2"
+edition = "2021"
+description = "HLS Downloader 7 Rust Core, download engines, IPC, and Native Messaging"
+publish = false
+
+[features]
+default = ["full-core"]
+full-core = []
+presenter-client = []
+
+[dependencies]
+rusqlite = { version = "0.40", features = ["bundled", "backup"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
+russh = { version = "0.63", default-features = false, features = ["flate2", "ring", "rsa"] }
+russh-sftp = "2.4"
+
+[target.'cfg(windows)'.dependencies]
+schannel = "0.1"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_Networking_WinHttp",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_ApplicationInstallationAndServicing",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
+    "Win32_System_IO",
+    "Win32_System_Ole",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_System_Power",
+    "Win32_System_Registry",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Controls_Dialogs",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[lib]
+name = "hls_native_shell"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hls-downloader-engine"
+path = "src/bin/hls_downloader_engine.rs"
+required-features = ["full-core"]
+
+[[bin]]
+name = "HLSDownloaderNativeHost"
+path = "src/bin/hls_downloader_native_host.rs"
+required-features = ["full-core"]
+
+[[bin]]
+name = "HLSDownloaderUpdater"
+path = "src/bin/hls_downloader_updater.rs"
+required-features = ["full-core"]
