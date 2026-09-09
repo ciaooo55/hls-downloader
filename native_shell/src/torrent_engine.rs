@@ -266,6 +266,11 @@ pub fn parse_torrent_file(bytes: &[u8]) -> Result<TorrentMeta, String> {
         if piece_length == 0 {
             return Err("torrent piece length is missing".into());
         }
+        if piece_length > MAX_PIECE_LENGTH {
+            return Err(format!(
+                "torrent piece length {piece_length} 超过上限 {MAX_PIECE_LENGTH}"
+            ));
+        }
         let expected_pieces = length.div_ceil(piece_length) as usize;
         if pieces.len() != expected_pieces {
             return Err(format!(
@@ -554,6 +559,7 @@ fn download_torrent_with_telemetry(
             replay_json: String::new(),
         };
         run_job(&job).map_err(|error| error.to_string())?;
+        verify_web_seed_pieces(output, &meta)?;
         return fs::metadata(output)
             .map(|meta| meta.len())
             .map_err(|error| error.to_string());
@@ -795,6 +801,12 @@ fn announce_peers(
     peers.dedup();
     Ok(peers)
 }
+
+/// 不可信来源（peer / 种子）声明的单个 ut_metadata 块或 torrent piece 的最大尺寸。
+/// 在分配前拒绝超额声明，避免恶意输入让常驻 Core 进程 OOM / abort。
+const MAX_UT_METADATA_BYTES: usize = 16 * 1024 * 1024;
+/// torrent piece length 的上限；正常种子远小于此值，超过即视为恶意或损坏。
+const MAX_PIECE_LENGTH: u64 = 256 * 1024 * 1024;
 
 const DEFAULT_TRACKERS: &[&str] = &[
     "udp://tracker.opentrackr.org:1337/announce",
@@ -1098,6 +1110,11 @@ fn fetch_ut_metadata_from_peer(
     }
     if metadata_size == 0 {
         return Err("peer 没有 metadata_size".into());
+    }
+    if metadata_size > MAX_UT_METADATA_BYTES {
+        return Err(format!(
+            "peer metadata_size {metadata_size} 超过上限 {MAX_UT_METADATA_BYTES}"
+        ));
     }
     let pieces = metadata_size.div_ceil(16 * 1024);
     let mut info = vec![0u8; metadata_size];
@@ -1582,6 +1599,31 @@ fn note_peer_availability(id: u8, body: &[u8], pieces: &mut [bool]) -> bool {
         }
         _ => false,
     }
+}
+
+/// Web seed 路径按 piece SHA1 校验下载载荷。HTTP web seed 与 swarm 不同，此前直接
+/// 信任服务器内容；这里逐 piece 校验，保证与 swarm 路径一致的数据完整性。
+/// `piece_length` 已在 `parse_torrent_file` 被 `MAX_PIECE_LENGTH` 限制，分块分配安全。
+fn verify_web_seed_pieces(path: &Path, meta: &TorrentMeta) -> Result<(), String> {
+    use std::io::{Read, Seek, SeekFrom};
+    if meta.pieces.is_empty() || meta.piece_length == 0 {
+        return Ok(());
+    }
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("open web seed payload for verification: {error}"))?;
+    for (index, hash) in meta.pieces.iter().enumerate() {
+        let start = index as u64 * meta.piece_length;
+        let len = ((meta.length - start).min(meta.piece_length)) as usize;
+        file.seek(SeekFrom::Start(start))
+            .map_err(|error| format!("seek web seed piece {index}: {error}"))?;
+        let mut buf = vec![0u8; len];
+        file.read_exact(&mut buf)
+            .map_err(|error| format!("read web seed piece {index}: {error}"))?;
+        if crate::crypto_lite::sha1(&buf) != *hash {
+            return Err(format!("web seed 内容与种子 piece {index} 的 SHA1 不匹配"));
+        }
+    }
+    Ok(())
 }
 
 fn piece_is_complete(file: &mut fs::File, start: u64, len: usize, hash: &[u8; 20]) -> bool {
