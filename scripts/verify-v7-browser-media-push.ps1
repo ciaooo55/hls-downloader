@@ -87,7 +87,24 @@ try {
     if (-not [String]::IsNullOrWhiteSpace($Python)) { $coreArguments.Python = $Python }
     if (-not [String]::IsNullOrWhiteSpace($Ffmpeg)) { $coreArguments.Ffmpeg = $Ffmpeg }
 
-    & $coreScript @coreArguments
+    $coreOutput = @(& $coreScript @coreArguments | ForEach-Object { $_.ToString() })
+    $coreJson = @($coreOutput | Where-Object { $_.TrimStart().StartsWith('{') }) | Select-Object -Last 1
+    if ([String]::IsNullOrWhiteSpace([string]$coreJson)) {
+        throw 'Browser media-push core verifier did not emit its JSON summary.'
+    }
+    $summary = [string]$coreJson | ConvertFrom-Json
+    if ($summary.passed -ne $true -or
+        [string]$summary.source_commit -ne $currentCommit -or
+        [string]$summary.source_tree -ne $currentTree -or
+        [string]$summary.native_host_executable.sha256 -ne $portableNativeHostSha256) {
+        throw "Browser media-push core summary is not bound to the manifest-bound Portable Native Host: $coreJson"
+    }
+    $summary | Add-Member -NotePropertyName native_host_provenance -NotePropertyValue ([pscustomobject][ordered]@{
+        candidate_portable_path = [string]$portableEntry.path
+        candidate_portable_sha256 = $portableSha256
+        portable_native_host_sha256 = $portableNativeHostSha256
+    }) -Force
+    Write-Output ($summary | ConvertTo-Json -Depth 10 -Compress)
 } finally {
     Remove-Item -LiteralPath $packageResources -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
