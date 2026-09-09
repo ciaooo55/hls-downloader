@@ -214,6 +214,20 @@ $previousTcp = $env:HLS_V7_CORE_TCP
 $previousBind = $env:HLS_V7_CORE_BIND
 $previousMigrate = $env:HLS_V6_SKIP_MIGRATE
 $result = $null
+$expectedNativeHost = [IO.Path]::GetFullPath((Join-Path $InstallDir 'app\resources\HLSDownloaderNativeHost.exe'))
+$packagedNativeHostInput = Join-Path $repo 'desktop_ui\resources\common\HLSDownloaderNativeHost.exe'
+if (-not (Test-Path -LiteralPath $packagedNativeHostInput -PathType Leaf)) {
+    throw "Candidate build input Native Messaging host is missing: $packagedNativeHostInput"
+}
+$packagedNativeHostSha256 = (Get-FileHash -LiteralPath $packagedNativeHostInput -Algorithm SHA256).Hash.ToLowerInvariant()
+if (Test-Path -LiteralPath $expectedNativeHost -PathType Leaf) {
+    throw "Browser media-push gate requires no pre-existing installed Native Messaging host before candidate MSI install: $expectedNativeHost"
+}
+$preEdgeRegistration = @(Get-NativeHostRegistration 'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts')
+$preFirefoxRegistration = @(Get-NativeHostRegistration 'HKCU:\Software\Mozilla\NativeMessagingHosts')
+if ($preEdgeRegistration.Count -gt 0 -or $preFirefoxRegistration.Count -gt 0) {
+    throw "Browser media-push gate requires no pre-existing HLS Native Messaging registration before candidate MSI install: edge=$($preEdgeRegistration | ConvertTo-Json -Compress) firefox=$($preFirefoxRegistration | ConvertTo-Json -Compress)"
+}
 try {
     $installExit = Invoke-Msi @('/i', $candidate, '/qn', "INSTALLDIR=$InstallDir") $installLog
     if ($installExit -notin @(0, 3010, 1641)) { throw "Candidate MSI install failed with exit $installExit" }
@@ -223,11 +237,13 @@ try {
         throw "Installed candidate identity mismatch: $($product | ConvertTo-Json -Compress)"
     }
 
-    $expectedNativeHost = [IO.Path]::GetFullPath((Join-Path $InstallDir 'app\resources\HLSDownloaderNativeHost.exe'))
     if (-not (Test-Path -LiteralPath $expectedNativeHost -PathType Leaf)) {
         throw "Installed candidate Native Messaging host is missing: $expectedNativeHost"
     }
     $expectedNativeHostSha256 = (Get-FileHash -LiteralPath $expectedNativeHost -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($expectedNativeHostSha256 -ne $packagedNativeHostSha256) {
+        throw "Installed Native Messaging host does not match the current candidate build input: installed=$expectedNativeHostSha256 packaged=$packagedNativeHostSha256"
+    }
     $edgeRegistration = @(Assert-NativeHostRegistration `
         'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts' `
         'Edge' `
@@ -324,6 +340,8 @@ try {
         native_host_executable = [ordered]@{
             path = $expectedNativeHost
             sha256 = $expectedNativeHostSha256
+            packaged_input_path = 'desktop_ui/resources/common/HLSDownloaderNativeHost.exe'
+            packaged_input_sha256 = $packagedNativeHostSha256
         }
         edge_registration = $edgeRegistration
         firefox_registration = $firefoxRegistration
