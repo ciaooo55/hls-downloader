@@ -91,12 +91,74 @@ function Get-NativeHostRegistration([string]$Parent) {
     if (-not (Test-Path -LiteralPath $Parent)) { return @() }
     return @(
         Get-ChildItem -LiteralPath $Parent |
-            Where-Object { $_.PSChildName -match 'hls.?downloader' } |
+            Where-Object { $_.PSChildName -eq 'com.ciaooo55.hls_downloader' } |
             ForEach-Object {
                 $manifestPath = [string]$_.GetValue('')
-                [ordered]@{ key = $_.Name; manifest = $manifestPath; exists = (Test-Path -LiteralPath $manifestPath -PathType Leaf) }
+                [ordered]@{
+                    key = $_.Name
+                    host_name = $_.PSChildName
+                    manifest = $manifestPath
+                    exists = (Test-Path -LiteralPath $manifestPath -PathType Leaf)
+                }
             }
     )
+}
+
+function Assert-NativeHostRegistration(
+    [string]$Parent,
+    [string]$Label,
+    [string]$AllowlistField,
+    [string]$ExpectedAllowlistValue,
+    [string]$ExpectedHostPath
+) {
+    $registrations = @(Get-NativeHostRegistration $Parent)
+    if ($registrations.Count -ne 1 -or -not [bool]$registrations[0].exists) {
+        throw "Candidate MSI did not install exactly one usable $Label Native Messaging registration: $($registrations | ConvertTo-Json -Compress)"
+    }
+
+    $entry = $registrations[0]
+    $manifestPath = [IO.Path]::GetFullPath([string]$entry.manifest)
+    try {
+        $nativeManifest = [IO.File]::ReadAllText($manifestPath, $utf8NoBom) | ConvertFrom-Json
+    } catch {
+        throw "$Label Native Messaging manifest is not valid UTF-8 JSON: $manifestPath; $($_.Exception.Message)"
+    }
+
+    if ([string]$nativeManifest.name -ne 'com.ciaooo55.hls_downloader' -or [string]$nativeManifest.type -ne 'stdio') {
+        throw "$Label Native Messaging manifest identity mismatch: $($nativeManifest | ConvertTo-Json -Compress)"
+    }
+    if ([String]::IsNullOrWhiteSpace([string]$nativeManifest.path)) {
+        throw "$Label Native Messaging manifest does not declare a host executable: $manifestPath"
+    }
+
+    $actualHostPath = [IO.Path]::GetFullPath([string]$nativeManifest.path)
+    $expectedHostFullPath = [IO.Path]::GetFullPath($ExpectedHostPath)
+    if (-not [String]::Equals($actualHostPath, $expectedHostFullPath, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label Native Messaging manifest is not bound to the installed candidate host: actual=$actualHostPath expected=$expectedHostFullPath"
+    }
+    if (-not (Test-Path -LiteralPath $actualHostPath -PathType Leaf)) {
+        throw "$Label Native Messaging host executable is missing: $actualHostPath"
+    }
+
+    $property = $nativeManifest.PSObject.Properties[$AllowlistField]
+    if ($null -eq $property) {
+        throw "$Label Native Messaging manifest is missing $AllowlistField: $manifestPath"
+    }
+    $allowlist = @($property.Value)
+    if ($allowlist.Count -ne 1 -or [string]$allowlist[0] -ne $ExpectedAllowlistValue) {
+        throw "$Label Native Messaging allowlist mismatch for ${AllowlistField}: $($allowlist | ConvertTo-Json -Compress)"
+    }
+
+    return [ordered]@{
+        key = [string]$entry.key
+        host_name = [string]$entry.host_name
+        manifest = $manifestPath
+        manifest_sha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        host = $actualHostPath
+        host_sha256 = (Get-FileHash -LiteralPath $actualHostPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        allowlist_field = $AllowlistField
+        allowlist = $allowlist
+    }
 }
 
 function Assert-Artifact([string]$Root, $Entry, [string]$Label) {
@@ -152,6 +214,20 @@ $previousTcp = $env:HLS_V7_CORE_TCP
 $previousBind = $env:HLS_V7_CORE_BIND
 $previousMigrate = $env:HLS_V6_SKIP_MIGRATE
 $result = $null
+$expectedNativeHost = [IO.Path]::GetFullPath((Join-Path $InstallDir 'app\resources\HLSDownloaderNativeHost.exe'))
+$packagedNativeHostInput = Join-Path $repo 'desktop_ui\resources\common\HLSDownloaderNativeHost.exe'
+if (-not (Test-Path -LiteralPath $packagedNativeHostInput -PathType Leaf)) {
+    throw "Candidate build input Native Messaging host is missing: $packagedNativeHostInput"
+}
+$packagedNativeHostSha256 = (Get-FileHash -LiteralPath $packagedNativeHostInput -Algorithm SHA256).Hash.ToLowerInvariant()
+if (Test-Path -LiteralPath $expectedNativeHost -PathType Leaf) {
+    throw "Browser media-push gate requires no pre-existing installed Native Messaging host before candidate MSI install: $expectedNativeHost"
+}
+$preEdgeRegistration = @(Get-NativeHostRegistration 'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts')
+$preFirefoxRegistration = @(Get-NativeHostRegistration 'HKCU:\Software\Mozilla\NativeMessagingHosts')
+if ($preEdgeRegistration.Count -gt 0 -or $preFirefoxRegistration.Count -gt 0) {
+    throw "Browser media-push gate requires no pre-existing HLS Native Messaging registration before candidate MSI install: edge=$($preEdgeRegistration | ConvertTo-Json -Compress) firefox=$($preFirefoxRegistration | ConvertTo-Json -Compress)"
+}
 try {
     $installExit = Invoke-Msi @('/i', $candidate, '/qn', "INSTALLDIR=$InstallDir") $installLog
     if ($installExit -notin @(0, 3010, 1641)) { throw "Candidate MSI install failed with exit $installExit" }
@@ -161,13 +237,28 @@ try {
         throw "Installed candidate identity mismatch: $($product | ConvertTo-Json -Compress)"
     }
 
-    $edgeRegistration = @(Get-NativeHostRegistration 'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts')
-    $firefoxRegistration = @(Get-NativeHostRegistration 'HKCU:\Software\Mozilla\NativeMessagingHosts')
-    if ($edgeRegistration.Count -ne 1 -or -not [bool]$edgeRegistration[0].exists) {
-        throw "Candidate MSI did not install exactly one usable Edge Native Messaging registration: $($edgeRegistration | ConvertTo-Json -Compress)"
+    if (-not (Test-Path -LiteralPath $expectedNativeHost -PathType Leaf)) {
+        throw "Installed candidate Native Messaging host is missing: $expectedNativeHost"
     }
-    if ($firefoxRegistration.Count -ne 1 -or -not [bool]$firefoxRegistration[0].exists) {
-        throw "Candidate MSI did not install exactly one usable Firefox Native Messaging registration: $($firefoxRegistration | ConvertTo-Json -Compress)"
+    $expectedNativeHostSha256 = (Get-FileHash -LiteralPath $expectedNativeHost -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($expectedNativeHostSha256 -ne $packagedNativeHostSha256) {
+        throw "Installed Native Messaging host does not match the current candidate build input: installed=$expectedNativeHostSha256 packaged=$packagedNativeHostSha256"
+    }
+    $edgeRegistration = @(Assert-NativeHostRegistration `
+        'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts' `
+        'Edge' `
+        'allowed_origins' `
+        'chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/' `
+        $expectedNativeHost)
+    $firefoxRegistration = @(Assert-NativeHostRegistration `
+        'HKCU:\Software\Mozilla\NativeMessagingHosts' `
+        'Firefox' `
+        'allowed_extensions' `
+        'hls-downloader-store@ciaooo55.com' `
+        $expectedNativeHost)
+    if ([string]$edgeRegistration[0].host_sha256 -ne $expectedNativeHostSha256 -or
+        [string]$firefoxRegistration[0].host_sha256 -ne $expectedNativeHostSha256) {
+        throw 'Native Messaging registration host digests do not match the installed candidate host.'
     }
 
     $chromiumDir = Join-Path $tempRoot 'chromium-extension'
@@ -246,6 +337,12 @@ try {
         candidate_manifest_sha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
         candidate_msi_sha256 = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
         installed_product = $product
+        native_host_executable = [ordered]@{
+            path = $expectedNativeHost
+            sha256 = $expectedNativeHostSha256
+            packaged_input_path = 'desktop_ui/resources/common/HLSDownloaderNativeHost.exe'
+            packaged_input_sha256 = $packagedNativeHostSha256
+        }
         edge_registration = $edgeRegistration
         firefox_registration = $firefoxRegistration
         expected_receiver_host = $ExpectedTvboxHost
