@@ -37,14 +37,11 @@ if ($failed) {
 Write-Output "PowerShell syntax validation passed for $($Path.Count) scripts."
 
 if ($usingDefaultPath) {
-    # The default validation path also acts as an early product-version drift
-    # gate before expensive Rust/Compose/Candidate work starts.
-    & (Join-Path $PSScriptRoot 'verify-v7-version-contract.ps1')
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
     # Keep the formal release caller and recorder in one executable contract.
     # C018 added browser_media_push as a fifth Invoke-Gate call but the recorder
     # retained a four-value ValidateSet; syntax-only checks could not detect it.
+    # Run this before verify-v7-version-contract.ps1 because that legacy script
+    # intentionally exits its PowerShell host after completing its checks.
     $invokePath = Join-Path $PSScriptRoot 'invoke-v7-release-gates.ps1'
     $recorderPath = Join-Path $PSScriptRoot 'record-v7-release-gate.ps1'
     $invokeSource = Get-Content -LiteralPath $invokePath -Raw -Encoding UTF8
@@ -76,4 +73,9 @@ if ($usingDefaultPath) {
         throw "Formal release invokes GateId values rejected by the recorder: $($missingGateIds -join ', ')"
     }
     Write-Output "Formal release gate-id contract passed: $($invokedGateIds -join ', ')."
+
+    # The default validation path also acts as an early product-version drift
+    # gate before expensive Rust/Compose/Candidate work starts. Keep this last:
+    # verify-v7-version-contract.ps1 exits the current PowerShell process.
+    & (Join-Path $PSScriptRoot 'verify-v7-version-contract.ps1')
 }
