@@ -19,6 +19,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -52,6 +53,44 @@ jobs:
           $feature = Get-Content 'artifacts\v7-productization\feature-parity.json' -Raw -Encoding UTF8 | ConvertFrom-Json
           if ([bool]$feature.release_ready) {
             throw 'Pre-readiness media-push validation expects release_ready=false; use the formal release gate after readiness is granted.'
+          }
+
+      - name: Require successful exact-SHA source, candidate and security workflows
+        shell: pwsh
+        env:
+          HLS_V7_ACTIONS_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{
+            Authorization = "Bearer $env:HLS_V7_ACTIONS_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+            'User-Agent' = 'hls-downloader-media-push-readiness'
+          }
+          $uri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs?head_sha=$env:GITHUB_SHA&status=completed&per_page=100"
+          $runs = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
+          $requiredWorkflows = @(
+            [pscustomobject]@{ Name = 'v7 CI'; Path = '.github/workflows/ci.yml' },
+            [pscustomobject]@{ Name = 'v7 Candidate Package'; Path = '.github/workflows/package-v7-candidate.yml' },
+            [pscustomobject]@{ Name = 'Maintenance Security'; Path = '.github/workflows/maintenance-security.yml' },
+            [pscustomobject]@{ Name = 'Rust Security'; Path = '.github/workflows/rust-security.yml' }
+          )
+          foreach ($required in $requiredWorkflows) {
+            $match = @(
+              $runs.workflow_runs |
+                Where-Object {
+                  $_.name -eq $required.Name -and
+                  $_.path -eq $required.Path -and
+                  $_.event -eq 'push' -and
+                  $_.head_branch -eq 'main' -and
+                  $_.head_sha -eq $env:GITHUB_SHA
+                } |
+                Sort-Object run_number -Descending |
+                Select-Object -First 1
+            )
+            if ($match.Count -ne 1 -or $match[0].conclusion -ne 'success') {
+              throw "$($required.Name) at $($required.Path) has not succeeded for main SHA $env:GITHUB_SHA."
+            }
           }
 
       - name: Require interactive release desktop
