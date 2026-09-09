@@ -142,7 +142,7 @@ function Assert-NativeHostRegistration(
 
     $property = $nativeManifest.PSObject.Properties[$AllowlistField]
     if ($null -eq $property) {
-        throw "$Label Native Messaging manifest is missing $AllowlistField: $manifestPath"
+        throw "$Label Native Messaging manifest is missing ${AllowlistField}: $manifestPath"
     }
     $allowlist = @($property.Value)
     if ($allowlist.Count -ne 1 -or [string]$allowlist[0] -ne $ExpectedAllowlistValue) {
