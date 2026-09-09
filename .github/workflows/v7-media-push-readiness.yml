@@ -175,7 +175,7 @@ jobs:
           if ([string]$summary.candidate_msi_sha256 -notmatch '^[0-9a-f]{64}$') { throw 'Gate summary candidate MSI digest is invalid.' }
           if (@($summary.edge_registration).Count -ne 1 -or @($summary.firefox_registration).Count -ne 1) { throw 'Gate summary is missing installed Native Messaging registration snapshots.' }
 
-          $expectedNativeHost = [IO.Path]::GetFullPath('E:\h\HLSDownloaderNativeHost.exe')
+          $expectedNativeHost = [IO.Path]::GetFullPath('E:\h\app\resources\HLSDownloaderNativeHost.exe')
           $nativeHostPath = [IO.Path]::GetFullPath([string]$summary.native_host_executable.path)
           $nativeHostSha256 = [string]$summary.native_host_executable.sha256
           if (-not [String]::Equals($nativeHostPath, $expectedNativeHost, [StringComparison]::OrdinalIgnoreCase) -or $nativeHostSha256 -notmatch '^[0-9a-f]{64}$') {
