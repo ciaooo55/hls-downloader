@@ -94,6 +94,8 @@ export function handoffStatusLabel(status?: string): string {
       return '已取消'
     case 'expired':
       return '已过期'
+    case 'failed':
+      return '失败'
     case 'accepting':
       return '确认中'
     case 'pending':
