@@ -19,6 +19,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -53,6 +54,15 @@ jobs:
           if ([bool]$feature.release_ready) {
             throw 'Pre-readiness media-push validation expects release_ready=false; use the formal release gate after readiness is granted.'
           }
+
+      - name: Require successful exact-SHA source, candidate and security workflows
+        shell: pwsh
+        env:
+          HLS_V7_ACTIONS_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\assert-v7-exact-main-workflows.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Require interactive release desktop
         shell: pwsh
