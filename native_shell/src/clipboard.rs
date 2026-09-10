@@ -21,7 +21,7 @@ pub fn all_urls(text: &str) -> Vec<String> {
         if !looks_like_download_url(line) {
             continue;
         }
-        let key = line.to_ascii_lowercase();
+        let key = line.to_string();
         if seen.insert(key) {
             urls.push(line.to_string());
         }
@@ -219,6 +219,19 @@ mod tests {
         assert_eq!(
             first_url("note\nhttps://cdn.test/a.bin\n"),
             Some("https://cdn.test/a.bin".into())
+        );
+    }
+
+    #[test]
+    fn preserves_case_distinct_http_resources() {
+        assert_eq!(
+            all_urls(
+                "https://cdn.test/Video.MP4 https://cdn.test/video.mp4 https://cdn.test/Video.MP4"
+            ),
+            vec![
+                "https://cdn.test/Video.MP4".to_string(),
+                "https://cdn.test/video.mp4".to_string(),
+            ]
         );
     }
 }
