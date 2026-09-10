@@ -11,9 +11,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const MIGRATED_FLAG: &str = "migrated_from_5x";
+const MIGRATION_CURSOR_KEY: &str = "migrated_from_5x_rowid";
 
 /// Rows imported per startup so a huge legacy table cannot stall the first
-/// launch. The next startup continues the import because it dedupes by URL.
+/// launch. A persisted rowid cursor continues with the next batch on restart.
 const LEGACY_IMPORT_BATCH: usize = 2000;
 
 /// Import once from discovered 5.x paths. Never deletes 5.x files.
@@ -33,8 +34,6 @@ pub fn maybe_migrate_from_5x(core: &mut PersistentCore) -> Result<u32, String> {
         return Ok(0);
     }
     let (imported, complete) = migrate_from_5x(core, &config, &db)?;
-    // An incomplete batch retries on the next startup; partial imports are
-    // skipped by the URL dedupe, so continuation never duplicates tasks.
     if complete {
         core.store_mut().set_setting(MIGRATED_FLAG, true)?;
     }
@@ -112,6 +111,16 @@ pub fn migrate_from_5x(
     config_path: &Path,
     db_path: &Path,
 ) -> Result<(u32, bool), String> {
+    migrate_from_5x_with_batch(core, config_path, db_path, LEGACY_IMPORT_BATCH)
+}
+
+fn migrate_from_5x_with_batch(
+    core: &mut PersistentCore,
+    config_path: &Path,
+    db_path: &Path,
+    batch_size: usize,
+) -> Result<(u32, bool), String> {
+    let batch_size = batch_size.max(1);
     let mut imported = 0u32;
     let mut default_download_dir = String::new();
     if config_path.exists() {
@@ -144,16 +153,21 @@ pub fn migrate_from_5x(
         .into_iter()
         .filter_map(|task| core.task_spec(&task.task_id).map(|spec| spec.url.clone()))
         .collect();
-    let loaded = load_legacy_tasks(&connection, LEGACY_IMPORT_BATCH + 1)?;
-    // One extra row beyond the batch proves more rows remain for the next
-    // startup, which then continues because imports dedupe by URL.
-    let truncated = loaded.len() > LEGACY_IMPORT_BATCH;
+    let after_rowid = core
+        .store()
+        .setting_string(MIGRATION_CURSOR_KEY, "")?
+        .parse::<i64>()
+        .unwrap_or(i64::MIN);
+    let loaded = load_legacy_tasks(&connection, after_rowid, batch_size.saturating_add(1))?;
+    // One extra row beyond the batch proves more rows remain. The persisted
+    // rowid cursor makes the next startup continue after the processed batch.
+    let truncated = loaded.len() > batch_size;
     let rows = if truncated {
-        &loaded[..LEGACY_IMPORT_BATCH]
+        &loaded[..batch_size]
     } else {
         &loaded[..]
     };
-    for row in rows {
+    for (_, row) in rows {
         if row.url.trim().is_empty() || existing_urls.contains(&row.url) {
             continue;
         }
@@ -209,10 +223,17 @@ pub fn migrate_from_5x(
         }
         imported += 1;
     }
+    if let Some((rowid, _)) = rows.last() {
+        core.store_mut()
+            .set_setting(MIGRATION_CURSOR_KEY, rowid.to_string())?;
+    }
     if truncated {
         eprintln!(
-            "legacy 5.x import paused after {LEGACY_IMPORT_BATCH} rows; restart HLS Downloader to continue"
+            "legacy 5.x import paused after {batch_size} rows; restart HLS Downloader to continue"
         );
+    } else {
+        core.store_mut()
+            .set_setting(MIGRATION_CURSOR_KEY, i64::MIN.to_string())?;
     }
     Ok((imported, !truncated))
 }
@@ -442,8 +463,9 @@ struct LegacyTask {
 
 fn load_legacy_tasks(
     connection: &rusqlite::Connection,
+    after_rowid: i64,
     limit: usize,
-) -> Result<Vec<LegacyTask>, String> {
+) -> Result<Vec<(i64, LegacyTask)>, String> {
     let columns: std::collections::BTreeSet<String> = {
         let mut statement = connection
             .prepare("PRAGMA table_info(tasks)")
@@ -458,7 +480,7 @@ fn load_legacy_tasks(
     if !columns.contains("url") {
         return Err("legacy tasks table does not contain url".into());
     }
-    let mut sql = String::from("SELECT url");
+    let mut sql = String::from("SELECT rowid, url");
     let extras = [
         "id",
         "filename",
@@ -486,35 +508,38 @@ fn load_legacy_tasks(
             sql.push_str("NULL");
         }
     }
-    sql.push_str(" FROM tasks ORDER BY rowid LIMIT ?");
+    sql.push_str(" FROM tasks WHERE rowid > ? ORDER BY rowid LIMIT ?");
     let mut statement = connection
         .prepare(&sql)
         .map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map(rusqlite::params![limit as i64], |row| {
-            Ok(LegacyTask {
-                url: row.get::<_, String>(0).unwrap_or_default(),
-                id: optional_string(row, 1),
-                filename: optional_string(row, 2),
-                title: optional_string(row, 3),
-                task_type: optional_string(row, 4),
-                request_method: optional_string(row, 5),
-                total_bytes: optional_u64(row, 6),
-                downloaded_bytes: optional_u64(row, 7).unwrap_or(0),
-                speed_limit_kib: row.get::<_, i64>(8).ok(),
-                output_path: row.get::<_, String>(9).ok().filter(|path| !path.is_empty()),
-                status: optional_string(row, 10),
-                referer: optional_string(row, 11),
-                origin: optional_string(row, 12),
-                user_agent: optional_string(row, 13),
-                cookie: optional_string(row, 14),
-                request_headers: optional_string(row, 15),
-                checksum: row
-                    .get::<_, String>(16)
-                    .ok()
-                    .filter(|value| !value.trim().is_empty()),
-                concurrency: row.get::<_, i64>(17).ok(),
-            })
+        .query_map(rusqlite::params![after_rowid, limit as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                LegacyTask {
+                    url: row.get::<_, String>(1).unwrap_or_default(),
+                    id: optional_string(row, 2),
+                    filename: optional_string(row, 3),
+                    title: optional_string(row, 4),
+                    task_type: optional_string(row, 5),
+                    request_method: optional_string(row, 6),
+                    total_bytes: optional_u64(row, 7),
+                    downloaded_bytes: optional_u64(row, 8).unwrap_or(0),
+                    speed_limit_kib: row.get::<_, i64>(9).ok(),
+                    output_path: row.get::<_, String>(10).ok().filter(|path| !path.is_empty()),
+                    status: optional_string(row, 11),
+                    referer: optional_string(row, 12),
+                    origin: optional_string(row, 13),
+                    user_agent: optional_string(row, 14),
+                    cookie: optional_string(row, 15),
+                    request_headers: optional_string(row, 16),
+                    checksum: row
+                        .get::<_, String>(17)
+                        .ok()
+                        .filter(|value| !value.trim().is_empty()),
+                    concurrency: row.get::<_, i64>(18).ok(),
+                },
+            ))
         })
         .map_err(|error| error.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -957,6 +982,65 @@ mod tests {
             .unwrap();
         let plain = crate::CredentialVault.unprotect(&blob).unwrap_or(blob);
         assert!(plain.contains("sid=1"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migration_continues_after_each_bounded_batch() {
+        let dir = std::env::temp_dir().join(format!(
+            "hls-migrate-batches-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("data.db");
+        {
+            let connection = rusqlite::Connection::open(&db).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE tasks (id TEXT PRIMARY KEY, url TEXT NOT NULL, filename TEXT DEFAULT '');
+                     INSERT INTO tasks(id, url, filename) VALUES
+                         ('t1', 'https://cdn.test/1.bin', '1.bin'),
+                         ('t2', 'https://cdn.test/2.bin', '2.bin'),
+                         ('t3', 'https://cdn.test/3.bin', '3.bin'),
+                         ('t4', 'https://cdn.test/4.bin', '4.bin'),
+                         ('t5', 'https://cdn.test/5.bin', '5.bin');",
+                )
+                .unwrap();
+        }
+        let config = dir.join("missing.json");
+        let mut core = PersistentCore::in_memory().unwrap();
+
+        assert_eq!(
+            migrate_from_5x_with_batch(&mut core, &config, &db, 2).unwrap(),
+            (2, false)
+        );
+        assert_eq!(core.tasks().len(), 2);
+        assert_eq!(
+            migrate_from_5x_with_batch(&mut core, &config, &db, 2).unwrap(),
+            (2, false)
+        );
+        assert_eq!(core.tasks().len(), 4);
+        assert_eq!(
+            migrate_from_5x_with_batch(&mut core, &config, &db, 2).unwrap(),
+            (1, true)
+        );
+        assert_eq!(core.tasks().len(), 5);
+        let mut urls = core
+            .tasks()
+            .into_iter()
+            .filter_map(|task| core.task_spec(&task.task_id).map(|spec| spec.url.clone()))
+            .collect::<Vec<_>>();
+        urls.sort();
+        assert_eq!(
+            urls,
+            (1..=5)
+                .map(|index| format!("https://cdn.test/{index}.bin"))
+                .collect::<Vec<_>>()
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
