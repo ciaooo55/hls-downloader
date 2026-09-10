@@ -2,7 +2,8 @@ use crate::{ResourceKind, StreamVariant};
 
 pub fn classify_url(url: &str) -> ResourceKind {
     let lower = url.trim().to_ascii_lowercase();
-    if lower.starts_with("magnet:") || lower.ends_with(".torrent") {
+    let path = lower.split(['?', '#']).next().unwrap_or(&lower);
+    if lower.starts_with("magnet:") || path.ends_with(".torrent") {
         ResourceKind::Torrent
     } else if lower.ends_with(".metalink") || lower.ends_with(".meta4") {
         ResourceKind::File
@@ -154,6 +155,10 @@ mod tests {
         assert_eq!(classify_url("https://cdn/a.mpd"), ResourceKind::Dash);
         assert_eq!(
             classify_url("magnet:?xt=urn:btih:abc"),
+            ResourceKind::Torrent
+        );
+        assert_eq!(
+            classify_url("https://cdn/a.torrent?token=signed#download"),
             ResourceKind::Torrent
         );
         assert_eq!(classify_url("sftp://nas/a.bin"), ResourceKind::Sftp);
