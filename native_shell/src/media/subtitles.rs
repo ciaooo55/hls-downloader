@@ -84,11 +84,21 @@ pub fn has_cues(vtt_text: &str) -> bool {
 }
 
 fn timestamp_offset(text: &str) -> f64 {
-    let upper = text.to_ascii_uppercase();
-    let Some(start) = upper.find("X-TIMESTAMP-MAP=") else {
+    let mut body = None;
+    for line in text.lines() {
+        let line = line.trim_end_matches('\r').trim_start_matches('\u{feff}');
+        if line.trim().is_empty() {
+            break;
+        }
+        let upper = line.to_ascii_uppercase();
+        if let Some(start) = upper.find("X-TIMESTAMP-MAP=") {
+            body = Some(&line[start + 16..]);
+            break;
+        }
+    }
+    let Some(body) = body else {
         return 0.0;
     };
-    let body = text[start + 16..].split(['\r', '\n']).next().unwrap_or("");
     let mut local = 0.0;
     let mut mpegts = 0.0;
     for part in body.split(',') {
@@ -266,6 +276,15 @@ mod tests {
         let cues = parse_cues(vtt);
         assert_eq!(cues.len(), 1);
         assert_eq!(cues[0].payload, "real cue");
+    }
+
+    #[test]
+    fn cue_payload_timestamp_map_does_not_shift_segment() {
+        let vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:900000\n";
+        assert_eq!(timestamp_offset(vtt), 0.0);
+        let merged = merge_webvtt_segments(&[vtt.into()]);
+        assert!(merged.contains("00:00:01.000 --> 00:00:02.000"));
+        assert!(!merged.contains("00:00:11.000 --> 00:00:12.000"));
     }
 
     #[test]
