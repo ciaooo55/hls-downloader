@@ -39,12 +39,13 @@ function normalizePending(value: unknown): PendingTakeoverSettings | null {
  * Keep the popup usable during a short Native Messaging/Core restart.
  *
  * The user's choice is written locally first and tagged with a unique id. A
- * reconnect later sends the newest pending value to the desktop. The id is
- * checked again before clearing it, so a slow response to an older click can
- * never overwrite a newer click.
+ * reconnect later sends the newest pending value to the desktop. Storage
+ * writes are serialized so a slow acknowledgement cannot clear or overwrite a
+ * newer click that arrives while the previous pending value is being settled.
  */
 export class TakeoverSettingsSync {
   private syncing: Promise<void> | null = null
+  private storageWrite: Promise<void> = Promise.resolve()
 
   constructor(
     private readonly storage: TakeoverSettingsStorageArea,
@@ -69,8 +70,8 @@ export class TakeoverSettingsSync {
     if (typeof update.enabled === 'boolean') local.enabled = update.enabled
     const localMinimum = normalizedBytes(update.minimumBytes)
     if (localMinimum !== undefined) local.minimumBytes = localMinimum
-    await this.storage.set(local)
-    void this.sync()
+    await this.withStorageWrite(() => this.storage.set(local))
+    this.triggerSync()
     return {
       ok: true,
       queued: true,
@@ -81,23 +82,33 @@ export class TakeoverSettingsSync {
 
   async applyPing(response: any): Promise<any> {
     const pending = await this.readPending()
-    if (!pending) {
+    if (pending) {
+      this.triggerSync()
+      return this.pendingResponse(response, pending)
+    }
+    return this.withStorageWrite(async () => {
+      const newest = await this.readPending()
+      if (newest) {
+        this.triggerSync()
+        return this.pendingResponse(response, newest)
+      }
       await this.applyDesktopResponse(response)
       return response
-    }
-    void this.sync()
-    return {
-      ...response,
-      ...(typeof pending.enabled === 'boolean' ? { takeover_enabled: pending.enabled } : {}),
-      ...(pending.minimumBytes !== undefined ? { takeover_minimum_bytes: pending.minimumBytes } : {}),
-      takeover_settings_pending: true,
-    }
+    })
   }
 
   sync(): Promise<void> {
     if (this.syncing) return this.syncing
     this.syncing = this.syncLoop().finally(() => { this.syncing = null })
     return this.syncing
+  }
+
+  private triggerSync(): void {
+    const active = this.sync()
+    void active.then(async () => {
+      if (this.syncing || !(await this.readPending())) return
+      void this.sync()
+    })
   }
 
   private async syncLoop(): Promise<void> {
@@ -115,11 +126,15 @@ export class TakeoverSettingsSync {
         // The durable pending value is retried by the next heartbeat/popup ping.
         return
       }
-      const newest = await this.readPending()
-      if (!newest) return
-      if (newest.id !== pending.id) continue
-      await this.storage.remove(PENDING_TAKEOVER_SETTINGS_KEY)
-      await this.applyDesktopResponse(response)
+      const settled = await this.withStorageWrite(async () => {
+        const newest = await this.readPending()
+        if (!newest) return true
+        if (newest.id !== pending.id) return false
+        await this.storage.remove(PENDING_TAKEOVER_SETTINGS_KEY)
+        await this.applyDesktopResponse(response)
+        return true
+      })
+      if (!settled) continue
       return
     }
   }
@@ -129,11 +144,26 @@ export class TakeoverSettingsSync {
     return normalizePending(stored[PENDING_TAKEOVER_SETTINGS_KEY])
   }
 
+  private pendingResponse(response: any, pending: PendingTakeoverSettings): any {
+    return {
+      ...response,
+      ...(typeof pending.enabled === 'boolean' ? { takeover_enabled: pending.enabled } : {}),
+      ...(pending.minimumBytes !== undefined ? { takeover_minimum_bytes: pending.minimumBytes } : {}),
+      takeover_settings_pending: true,
+    }
+  }
+
   private async applyDesktopResponse(response: any): Promise<void> {
     const values: Record<string, unknown> = {}
     if (typeof response?.takeover_enabled === 'boolean') values.enabled = response.takeover_enabled
     const minimumBytes = normalizedBytes(response?.takeover_minimum_bytes)
     if (minimumBytes !== undefined) values.minimumBytes = minimumBytes
     if (Object.keys(values).length) await this.storage.set(values)
+  }
+
+  private withStorageWrite<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.storageWrite.then(operation, operation)
+    this.storageWrite = run.then(() => undefined, () => undefined)
+    return run
   }
 }

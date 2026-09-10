@@ -14,6 +14,21 @@ class MemoryStorage {
   async remove(key: string) { delete this.values[key] }
 }
 
+class DelayedRemoveStorage extends MemoryStorage {
+  private releaseRemove!: () => void
+  private readonly removeGate = new Promise<void>(resolve => { this.releaseRemove = resolve })
+  private markRemoveStarted!: () => void
+  readonly removeStarted = new Promise<void>(resolve => { this.markRemoveStarted = resolve })
+
+  allowRemove() { this.releaseRemove() }
+
+  override async remove(key: string) {
+    this.markRemoveStarted()
+    await this.removeGate
+    delete this.values[key]
+  }
+}
+
 describe('offline-safe takeover settings', () => {
   it('applies a popup choice immediately and retries it after reconnect', async () => {
     const storage = new MemoryStorage()
@@ -52,6 +67,27 @@ describe('offline-safe takeover settings', () => {
     await sync.sync()
 
     expect(desktop).toHaveBeenNthCalledWith(1, { op: 'set_takeover_settings', enabled: true })
+    expect(desktop).toHaveBeenNthCalledWith(2, { op: 'set_takeover_settings', enabled: false })
+    expect(storage.values.enabled).toBe(false)
+    expect(storage.values[PENDING_TAKEOVER_SETTINGS_KEY]).toBeUndefined()
+  })
+
+  it('does not let an in-flight acknowledgement delete a newer pending choice', async () => {
+    const storage = new DelayedRemoveStorage()
+    const desktop = vi.fn()
+      .mockResolvedValueOnce({ ok: true, takeover_enabled: true, takeover_minimum_bytes: 0 })
+      .mockResolvedValueOnce({ ok: true, takeover_enabled: false, takeover_minimum_bytes: 0 })
+    let sequence = 0
+    const sync = new TakeoverSettingsSync(storage, desktop, () => `change-${++sequence}`)
+
+    await sync.queue({ enabled: true })
+    await storage.removeStarted
+    const newer = sync.queue({ enabled: false })
+    storage.allowRemove()
+    await newer
+
+    await vi.waitFor(() => expect(desktop).toHaveBeenCalledTimes(2))
+    await sync.sync()
     expect(desktop).toHaveBeenNthCalledWith(2, { op: 'set_takeover_settings', enabled: false })
     expect(storage.values.enabled).toBe(false)
     expect(storage.values[PENDING_TAKEOVER_SETTINGS_KEY]).toBeUndefined()
