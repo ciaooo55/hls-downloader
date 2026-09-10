@@ -1,77 +1,147 @@
-# HLS Downloader 7.0.2
+<div align="center">
+  <img src="assets/app-icon.png" alt="HLS Downloader" width="112" />
 
-Windows-first desktop download manager for resilient long-running transfers and native browser handoff.
+  <h1>HLS Downloader</h1>
 
-## Download
+  <p><strong>不只是 m3u8 下载器，而是一套面向 Windows 的现代下载工作台。</strong></p>
+  <p>普通文件 · HLS · DASH · FTP · SFTP · BitTorrent · 浏览器接管 · 断点续传 · 本地播放 · 局域网投屏</p>
 
-The latest published public test build is **v7.0.1-candidate.1**: https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.1-candidate.1
+  <p>
+    <strong>简体中文</strong> · <a href="README_EN.md">English</a>
+  </p>
 
-That published candidate belongs to the earlier 7.0.1 test line. It includes Windows x64 EXE/MSI installers, a Portable ZIP, Chromium and Firefox extension ZIPs, plus manifest/provenance metadata. Its assets were built from a successful v7 Candidate Package and their manifest-listed SHA-256 values were rechecked before upload.
+  <p>
+    <a href="https://github.com/ciaooo55/hls-downloader/releases"><img src="https://img.shields.io/badge/Download-GitHub%20Releases-2ea44f?style=for-the-badge&logo=github" alt="Download" /></a>
+    <a href="https://github.com/ciaooo55/hls-downloader/actions/workflows/ci.yml"><img src="https://github.com/ciaooo55/hls-downloader/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/ciaooo55/hls-downloader?style=flat-square" alt="License" /></a>
+    <img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows x64" />
+    <img src="https://img.shields.io/badge/core-Rust-000000?style=flat-square&logo=rust&logoColor=white" alt="Rust Core" />
+  </p>
+</div>
 
-The active source line is **v7.0.2**. There is no published formal v7.0.2 release yet: `artifacts/v7-productization/feature-parity.json` remains `release_ready=false`, and formal publishing still requires the trusted Windows release runner, Authenticode signing/timestamp validation, exact-main-SHA prerequisite workflows, release evidence, and explicit publish authorization.
+---
 
-Current v7 capabilities include:
+HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通文件下载、HLS/DASH 流媒体、FTP/SFTP、BitTorrent，以及浏览器里的下载接管统一放进一个可恢复、可追踪的任务队列里。
 
-- HTTP/HTTPS downloads with resume, mirrors, per-task request identity and recovery controls.
-- HLS and DASH media downloads, including live/VOD workflows and authenticated request replay.
-- FTP, SFTP and BitTorrent transfers alongside ordinary web downloads.
-- Chromium and Firefox Manifest V3 browser integration with native confirmation, recovery and media push flows.
-- Persistent Rust Core ownership of downloads and SQLite state, so closing the workbench, browser or player does not terminate active transfers.
-- Windows desktop workbench, local playback, LAN casting/TVBox push, update/rollback validation and accessibility support.
+它和普通“关掉窗口就结束”的下载器不太一样：真正的下载任务由独立的 **Rust Core** 持有，桌面工作台、浏览器扩展和原生提示窗口只是客户端。即使关闭主窗口、浏览器或播放器，正在运行的任务也不会因为 UI 消失而一起终止。
 
-The active product architecture is deliberately split by responsibility:
+## 🚀 下载
 
-- `desktop_ui/`: Kotlin Compose Desktop shipping workbench.
-- `native_shell/`: resident Rust Core, SQLite owner, transfer engines and Native Messaging host.
-- `presenter_ui/`: small native presenter process for low-latency browser confirmation/progress/completion windows.
-- `extension/`: WXT Manifest V3 extension for Chromium and Firefox.
+推荐直接从 **GitHub Releases** 获取构建好的 Windows 版本：
 
-Python, React, Tauri, WebView2 and the v6 Win32 supervisor are not part of the active source tree. Historical implementations remain available through Git tags, including `v3.0.39`, `v5.0.13` and `v6.0.1`.
+[![Open Releases](https://img.shields.io/badge/打开-Releases-2ea44f?style=for-the-badge&logo=github)](https://github.com/ciaooo55/hls-downloader/releases)
 
-## Architecture
+发布包可包含 Windows x64 的 **EXE / MSI / Portable ZIP**，以及配套的 **Chromium / Firefox 浏览器扩展**。
 
-`HLSDownloader.exe` never opens SQLite. It sends versioned commands to the single Rust Core over `\\.\pipe\HLSDownloader.v7`. The Native Messaging host and native presenter connect to the same Core. Closing Compose, the browser or the player does not stop active downloads.
+> [!NOTE]
+> 当前 `main` 是 **7.0.2** 源码开发线。公开安装包以 Releases 页面为准；带 `candidate` / `pre-release` 标记的版本应按测试版使用。
 
-The product version is `7.0.2`. `7.0.2` is the active development iteration; formal release readiness remains gated by fresh release evidence. `main` contains the complete active v7 source while historical implementations remain in Git tags. The existing `v7.0.0` release remains immutable; current candidate and formal package evidence is bound to the canonical `7.0.2` product version rather than the historical 7.0.1 candidate line.
+## ✨ 为什么用它
 
-## Build And Test
+| | |
+| --- | --- |
+| ⚡ **可靠续传**<br>支持长时间任务、断点恢复、失败重试、请求恢复与任务状态持久化。 | 🎬 **HLS / DASH 下载**<br>支持 HLS 与 DASH，覆盖点播和直播工作流，并能处理需要请求上下文的媒体任务。 |
+| 🌐 **浏览器接管**<br>Chromium 与 Firefox Manifest V3 扩展可识别下载和媒体资源，并通过 Native Messaging 交给桌面端。 | 🧠 **独立 Rust Core**<br>Core 独立持有下载状态与 SQLite；主界面、浏览器或播放器关闭后，活动传输仍可继续。 |
+| 📦 **多协议统一管理**<br>HTTP/HTTPS、FTP、SFTP、BitTorrent 与流媒体任务都进入同一套队列和控制逻辑。 | 🧩 **桌面工作台**<br>支持新建任务、粘贴/拖放、批量导入、暂停/恢复/重试、任务详情、日志、速度与连接状态查看。 |
+| 📺 **播放与投屏**<br>下载后的媒体可本地播放，也可通过局域网发布到兼容设备 / TVBox 场景。 | 🛟 **升级与回滚**<br>安装与更新流程包含校验、Native Messaging Host 注册和回滚路径，降低升级失败带来的影响。 |
 
-On a clean Windows development machine, bootstrap the pinned toolchain once from the repository root:
+## 🔌 支持范围
+
+| 类型 | 支持 | 说明 |
+| --- | :---: | --- |
+| HTTP / HTTPS | ✅ | 普通文件下载、恢复、任务级请求上下文 |
+| HLS / `.m3u8` | ✅ | VOD / Live |
+| DASH / `.mpd` | ✅ | 流媒体下载 |
+| FTP | ✅ | 文件传输 |
+| SFTP | ✅ | SSH 文件传输 |
+| BitTorrent / Magnet | ✅ | BT 任务与磁力链接工作流 |
+| Chromium 扩展 | ✅ | Manifest V3 + Native Messaging |
+| Firefox 扩展 | ✅ | Manifest V3 + Native Messaging |
+| 本地播放 | ✅ | 打包版本使用内置媒体播放链路 |
+| 局域网投屏 | ✅ | LAN 发布 / 设备选择 / TVBox 工作流 |
+
+## 🧭 三步开始
+
+1. 从 [Releases](https://github.com/ciaooo55/hls-downloader/releases) 下载并安装桌面端；需要浏览器接管时，同时使用对应的 Chromium / Firefox 扩展。
+2. 在桌面端直接粘贴链接、拖放内容、新建/批量导入任务，或者让浏览器扩展把识别到的下载与媒体资源交给 HLS Downloader。
+3. 在工作台里管理暂停、恢复、重试、日志和播放。下载由 Core 持续持有，因此你不需要为了让任务继续而一直开着主界面。
+
+## 🌐 浏览器接管是怎么工作的
+
+浏览器扩展并不自己执行下载。它负责识别资源、收集完成任务所需的请求信息，然后通过 Native Messaging 把任务交给本机 Core。
+
+这意味着浏览器只是入口，而不是下载生命周期的所有者：浏览器崩溃、关闭或扩展重新连接时，已经进入 Core 的任务仍由桌面端自己的持久状态管理。
+
+## 🏗️ 架构
+
+```mermaid
+flowchart LR
+    B["Chromium / Firefox"] -->|Native Messaging| C["Rust Core"]
+    UI["Compose Desktop"] <-->|Named Pipe IPC| C
+    P["Native Presenter"] <-->|Named Pipe IPC| C
+    C --> DB[(SQLite)]
+    C --> E["HTTP · HLS · DASH · FTP · SFTP · BT"]
+    C --> M["Local Player · LAN Cast"]
+```
+
+核心原则很简单：**只有 Core 拥有下载状态和 SQLite**。Compose Desktop、浏览器扩展、Presenter、播放器和投屏链路都围绕同一个 Core 协作，不再各自维护第二套下载状态。
+
+## 📁 项目结构
+
+| 目录 | 作用 |
+| --- | --- |
+| `native_shell/` | Rust Core、SQLite、传输引擎、Native Messaging Host、更新器 |
+| `desktop_ui/` | Kotlin / Compose Desktop 主工作台 |
+| `presenter_ui/` | 低延迟的原生确认、进度与完成窗口 |
+| `extension/` | WXT 构建的 Chromium / Firefox Manifest V3 扩展 |
+| `scripts/` | Windows 构建、测试、安装、升级、打包与验证脚本 |
+| `docs/` | v7 架构、模块图、验证记录、升级说明与源码历史 |
+
+## 🛠️ 从源码构建
+
+项目优先面向 Windows。首次开发时，可从仓库根目录引导固定版本的工具链：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-v7-toolchain.ps1
 ```
 
-Then run the component checks you need:
+运行集成测试：
+
+```powershell
+.\scripts\build-v7.ps1 -Task test
+```
+
+也可以分别测试各组件：
 
 ```powershell
 # Rust Core
 cargo test --manifest-path native_shell/Cargo.toml --lib
 
-# Native hot presenter
+# Native Presenter
 cargo test --manifest-path presenter_ui/Cargo.toml
-cargo build --manifest-path presenter_ui/Cargo.toml --bin hls-downloader-presenter
 
-# Compose workbench
+# Compose Desktop
 cd desktop_ui
 .\gradlew.bat test --no-daemon
 
-# Browser extension
+# Browser Extension
 cd ..\extension
 pnpm install --frozen-lockfile
 pnpm test
 pnpm run build
 ```
 
-From the repository root, `scripts\build-v7.ps1 -Task test` is the integrated local gate and `pwsh -NoProfile -Command "& { .\scripts\adversarial-v7.ps1 -Scope @('native','browser','transfer') }"` runs the full fault/transfer matrix. `scripts\build-v7.ps1 -Task candidate` produces a machine-validation package under `artifacts\v7-productization\candidate`; it requires the canonical feature matrix, no blocked features and a clean Git worktree, while allowing incomplete verification so candidate evidence can close remaining validation work. It does not require `release_ready=true`. `scripts\build-v7.ps1 -Task package` produces the formal Windows App Image, EXE, MSI and Portable ZIP under `artifacts\v7-productization\package`; it requires the canonical feature matrix to be complete, a clean Git worktree, current release evidence, and `release_ready=true`. `scripts\install-v7-local.ps1` performs an atomic per-user local upgrade to the single allowed install directory `E:\h`, retains the previous image as rollback, registers the v7 Native Messaging host, creates the Start menu shortcut, and republishes exactly one current Chromium/Firefox extension package each on the desktop, removing the previous copies.
+更完整的实现与验证细节见：
 
-Project build/tool caches default to `.tool-cache\build-cache`. Set `HLS_V7_BUILD_CACHE` to an **absolute** alternate cache root when the repository path or disk layout requires relocation; `bootstrap-v7-toolchain.ps1`, `build-v7.ps1` and `cleanup-v7-build-cache.ps1` all resolve and use that same root, and reject an ambiguous relative override. On Windows, the canonical build script temporarily maps the selected cache root to an ASCII drive path for Compose/jlink and removes the mapping on exit. The bootstrap pins Eclipse Temurin JDK `21.0.12.1+1` for Windows x64 and verifies the official archive SHA-256 before extraction; it never follows Adoptium's moving `latest` endpoint. Source CI pins Rust `1.98.1`, Node.js `24.20.0` and pnpm `11.7.0`; the Gradle wrapper pins the `9.7.1` distribution together with its official SHA-256 so release builds do not silently follow mutable toolchain inputs. Set `HLS_V7_JAVA_HOME` only to override the JDK 21 inside that cache, and `HLS_V7_PYTHON` for optional smoke tooling. Candidate and formal packaging source media tools from one verified FFmpeg directory. The shipped runtime requires `ffmpeg.exe` and `ffprobe.exe`; `ffplay.exe` remains part of the pinned upstream tool bundle used during bootstrap verification but is not shipped because local playback uses bundled libmpv. The ignored `desktop_ui\resources\common` staging directory is recreated for every package build and removed afterward so stale local binaries cannot leak into a later artifact.
+- [v7 架构](docs/v7-architecture.md)
+- [v7 模块与功能衔接](docs/v7-module-map.md)
+- [v7 验证状态](docs/v7-verification.md)
+- [本地升级与回滚](docs/v7-local-upgrade.md)
+- [源码布局与历史版本](docs/source-layout-and-history.md)
 
-Generated packages, test reports, runtime data and build caches are ignored by Git. `artifacts/v7-productization/feature-parity.json` is the sole machine-readable v3/v5/v6-to-v7 feature contract; validate it with `scripts\verify-v7-feature-parity.ps1`. See `docs/v7-verification.md` for measured results and remaining formal release gates.
+## 🧬 一个仓库，多代实现
 
-## Source History
-
-The repository is one history rather than multiple copied projects:
+当前 `main` 保留完整的 v7 源码；v3、v5、v6 的历史实现保留在 Git tags 中，而不是复制成多个互相漂移的项目。
 
 ```powershell
 git show v3.0.39:frontend/package.json
@@ -79,4 +149,16 @@ git show v5.0.13:backend/app/main.py
 git show v6.0.1:native_ui/Cargo.toml
 ```
 
-See `docs/source-layout-and-history.md`, `docs/v7-architecture.md`, `docs/v7-local-upgrade.md` and `docs/v7-verification.md`.
+## 🔐 安全、隐私与合法使用
+
+请只下载你有权访问、保存或处理的内容，并遵守所在地区的法律、网站条款和内容许可。
+
+项目相关文档： [LICENSE](LICENSE) · [SECURITY](SECURITY.md) · [PRIVACY](PRIVACY.md) · [TERMS](TERMS.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
+
+## ⭐ 喜欢这个项目？
+
+如果 HLS Downloader 对你有帮助，欢迎点一个 **Star**。Bug、兼容性问题和功能建议也可以直接在 [Issues](https://github.com/ciaooo55/hls-downloader/issues) 里反馈。
+
+<div align="center">
+  <sub>Built for long-running downloads, browser handoff and resilient media workflows on Windows.</sub>
+</div>
