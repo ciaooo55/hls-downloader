@@ -525,8 +525,7 @@ mod tests {
     #[test]
     fn fragmented_mixed_case_range_is_served() {
         let server = MediaServer::start().unwrap();
-        let dir =
-            std::env::temp_dir().join(format!("hls-play-split-range-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hls-play-split-range-{}", std::process::id()));
         fs_create(&dir);
         let file = dir.join("a.bin");
         std::fs::write(&file, b"0123456789").unwrap();
