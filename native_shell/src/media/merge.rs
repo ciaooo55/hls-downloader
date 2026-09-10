@@ -94,6 +94,9 @@ pub fn mux_av(
     for subtitle in subtitles {
         command.args(["-i"]).arg(subtitle);
     }
+    for arg in mux_map_args(audio.is_some(), subtitles.len()) {
+        command.arg(arg);
+    }
     command.args(["-c", "copy"]);
     if !subtitles.is_empty() {
         command.args(["-c:s", "mov_text"]);
@@ -105,6 +108,21 @@ pub fn mux_av(
     } else {
         Err(format!("ffmpeg mux exited with {status}"))
     }
+}
+
+fn mux_map_args(has_external_audio: bool, subtitle_count: usize) -> Vec<String> {
+    let mut args = vec!["-map".into(), "0:v:0?".into(), "-map".into()];
+    if has_external_audio {
+        args.push("1:a:0".into());
+    } else {
+        args.push("0:a:0?".into());
+    }
+    let first_subtitle_input = if has_external_audio { 2 } else { 1 };
+    for index in 0..subtitle_count {
+        args.push("-map".into());
+        args.push(format!("{}:s:0", first_subtitle_input + index));
+    }
+    args
 }
 
 fn which(name: &str) -> Option<PathBuf> {
@@ -150,5 +168,21 @@ mod tests {
         mux_av(&video, None, &[], &output).unwrap();
         assert_eq!(fs::read(&output).unwrap(), b"VIDEO");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn mux_maps_every_selected_track() {
+        assert_eq!(
+            mux_map_args(false, 2),
+            vec![
+                "-map", "0:v:0?", "-map", "0:a:0?", "-map", "1:s:0", "-map", "2:s:0"
+            ]
+        );
+        assert_eq!(
+            mux_map_args(true, 2),
+            vec![
+                "-map", "0:v:0?", "-map", "1:a:0", "-map", "2:s:0", "-map", "3:s:0"
+            ]
+        );
     }
 }
