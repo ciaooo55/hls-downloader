@@ -60,19 +60,20 @@ pub fn mirror_identity_compatible(
     candidate_len: Option<u64>,
     candidate_etag: &str,
 ) -> bool {
-    if let (Some(left), Some(right)) = (primary_len, candidate_len) {
-        if left != right {
-            return false;
-        }
-    }
+    let lengths_match = match (primary_len, candidate_len) {
+        (Some(left), Some(right)) if left != right => return false,
+        (Some(_), Some(_)) => true,
+        _ => false,
+    };
     let left = strong_etag(primary_etag);
     let right = strong_etag(candidate_etag);
     if !left.is_empty() && !right.is_empty() {
         return left == right;
     }
-    // One side missing a strong ETag is common on CDN mirrors. Length already
-    // had to match above; two different strong ETags still fail closed.
-    true
+    // Equal known lengths are sufficient when a CDN omits strong ETags. If
+    // either length is unknown, require matching strong ETags instead of
+    // admitting a mirror whose resource identity cannot be verified.
+    lengths_match
 }
 
 fn strong_etag(value: &str) -> String {
@@ -134,6 +135,24 @@ mod tests {
             "\"abc\"",
             Some(10),
             ""
+        ));
+    }
+
+    #[test]
+    fn unknown_length_requires_matching_strong_etag() {
+        assert!(!mirror_identity_compatible(Some(10), "", None, ""));
+        assert!(!mirror_identity_compatible(None, "", None, ""));
+        assert!(mirror_identity_compatible(
+            None,
+            "\"same\"",
+            None,
+            "\"same\""
+        ));
+        assert!(!mirror_identity_compatible(
+            None,
+            "W/\"same\"",
+            None,
+            "W/\"same\""
         ));
     }
 }
