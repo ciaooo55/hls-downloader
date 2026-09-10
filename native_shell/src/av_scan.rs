@@ -1,8 +1,10 @@
 //! Post-download AV scan. Windows Defender by default; optional `{file}` template.
 
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScanResult {
@@ -181,6 +183,10 @@ fn split_command(line: &str) -> Vec<String> {
 }
 
 fn run_command(engine: &str, argv: &[String]) -> ScanResult {
+    run_command_with_timeout(engine, argv, scan_timeout())
+}
+
+fn run_command_with_timeout(engine: &str, argv: &[String], timeout: Duration) -> ScanResult {
     if argv.is_empty() {
         return ScanResult {
             state: "skipped".into(),
@@ -189,9 +195,12 @@ fn run_command(engine: &str, argv: &[String]) -> ScanResult {
         };
     }
     let mut command = Command::new(&argv[0]);
-    command.args(&argv[1..]);
-    let output = match command.output() {
-        Ok(output) => output,
+    command
+        .args(&argv[1..])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
         Err(error) => {
             return ScanResult {
                 state: "error".into(),
@@ -200,11 +209,67 @@ fn run_command(engine: &str, argv: &[String]) -> ScanResult {
             }
         }
     };
-    let code = output.status.code().unwrap_or(1);
-    let text = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .replace('\n', " ");
-    interpret(engine, code, &text)
+    let mut output_reader = child.stdout.take().map(|mut stdout| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = stdout.read_to_end(&mut bytes);
+            bytes
+        })
+    });
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let code = status.code().unwrap_or(1);
+                let text = collect_output(&mut output_reader);
+                return interpret(engine, code, &text);
+            }
+            Ok(None) if started.elapsed() >= timeout => {
+                let kill_error = child.kill().err();
+                let wait_error = child.wait().err();
+                let _ = collect_output(&mut output_reader);
+                let mut detail = timeout_detail(timeout);
+                if let Some(error) = kill_error {
+                    detail.push_str(&format!("; kill failed: {error}"));
+                }
+                if let Some(error) = wait_error {
+                    detail.push_str(&format!("; wait failed: {error}"));
+                }
+                return ScanResult {
+                    state: "error".into(),
+                    engine: engine.into(),
+                    detail,
+                };
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = collect_output(&mut output_reader);
+                return ScanResult {
+                    state: "error".into(),
+                    engine: engine.into(),
+                    detail: format!("scanner wait failed: {error}"),
+                };
+            }
+        }
+    }
+}
+
+fn collect_output(reader: &mut Option<JoinHandle<Vec<u8>>>) -> String {
+    let bytes = reader
+        .take()
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    String::from_utf8_lossy(&bytes).trim().replace('\n', " ")
+}
+
+fn timeout_detail(timeout: Duration) -> String {
+    if timeout.as_secs() > 0 {
+        format!("scanner timed out after {}s", timeout.as_secs())
+    } else {
+        format!("scanner timed out after {}ms", timeout.as_millis())
+    }
 }
 
 fn interpret(engine: &str, code: i32, output: &str) -> ScanResult {
@@ -291,5 +356,27 @@ mod tests {
         assert!(validate_custom_command("%COMSPEC% /c calc {file}").is_err());
         let skipped = scan_file(&path, r"C:\Windows\explorer.exe {file}");
         assert_eq!(skipped.state, "skipped");
+    }
+
+    #[test]
+    fn timeout_terminates_scanner_process() {
+        let argv = vec![
+            std::env::current_exe()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            "--ignored".into(),
+            "--exact".into(),
+            "av_scan::tests::scanner_timeout_fixture".into(),
+        ];
+        let result = run_command_with_timeout("custom", &argv, Duration::from_millis(50));
+        assert_eq!(result.state, "error");
+        assert!(result.detail.contains("timed out"));
+    }
+
+    #[test]
+    #[ignore]
+    fn scanner_timeout_fixture() {
+        std::thread::sleep(Duration::from_secs(2));
     }
 }
