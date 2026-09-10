@@ -65,6 +65,16 @@ describe('HLS metadata', () => {
     )
   })
 
+  it('inherits terse signatures only when the s/e pair is present', () => {
+    const manifest = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nvideo.m3u8\n'
+    expect(parseHlsManifest(manifest, 'https://edge.test/live/master.m3u8?s=sort').variants[0].url)
+      .toBe('https://edge.test/live/video.m3u8')
+    expect(parseHlsManifest(manifest, 'https://edge.test/live/master.m3u8?e=event').variants[0].url)
+      .toBe('https://edge.test/live/video.m3u8')
+    expect(parseHlsManifest(manifest, 'https://edge.test/live/master.m3u8?s=abc&e=123&_t=nonce').variants[0].url)
+      .toBe('https://edge.test/live/video.m3u8?s=abc&e=123&_t=nonce')
+  })
+
   it('merges provider access fields when a child already has its own query', () => {
     const info = parseHlsManifest(
       '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nvideo.m3u8?playlistType=child\n',

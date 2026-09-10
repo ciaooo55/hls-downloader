@@ -1,4 +1,4 @@
-const ACCESS_QUERY = /^(?:token|auth|authorization|signature|sig|expires?|expiry|policy|key-pair-id|hdnea|hmac|jwt|session|sessionid|access[_-]?key|x-amz-.+|pkey|psch|playlisttype|validfrom|validto|ipa|hdl|hash|s|e|_t)$/i
+const ACCESS_QUERY = /^(?:token|auth|authorization|signature|sig|expires?|expiry|policy|key-pair-id|hdnea|hmac|jwt|session|sessionid|access[_-]?key|x-amz-.+|pkey|psch|playlisttype|validfrom|validto|ipa|hdl|hash)$/i
 
 function decodedName(pair: string): string {
   const raw = pair.split('=', 1)[0]
