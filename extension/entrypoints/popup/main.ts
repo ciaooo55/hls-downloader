@@ -6,6 +6,7 @@ import { normalizeCookiePermissionHosts } from '../../lib/browserCookies'
 import { extensionNeedsUpgrade } from '../../lib/version'
 import { engineConnectionLabel, EXTENSION_PRODUCT_LABEL, extensionVersionLabel } from '../../lib/productCopy'
 import { withDeadline } from '../../lib/asyncDeadline'
+import { mediaPushTerminalResult } from '../../lib/mediaPush'
 import {
   THEME_BASE_CSS,
   THEME_STORAGE_KEY,
@@ -389,8 +390,9 @@ async function main() {
     const deadline = Date.now() + 130_000
     while (Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 1_000))
-      const status = await browser.runtime.sendMessage({ type: 'media-push-status', requestId }).catch(() => null)
-      if (['done', 'failed', 'canceled'].includes(String(status?.status || ''))) return status
+      const response = await browser.runtime.sendMessage({ type: 'media-push-status', requestId }).catch(() => null)
+      const terminal = mediaPushTerminalResult(response)
+      if (terminal) return terminal
     }
     return { status: 'pending', message: '桌面端尚未完成设备选择' }
   }
