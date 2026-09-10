@@ -142,12 +142,7 @@ mod tests {
     fn unknown_length_requires_matching_strong_etag() {
         assert!(!mirror_identity_compatible(Some(10), "", None, ""));
         assert!(!mirror_identity_compatible(None, "", None, ""));
-        assert!(mirror_identity_compatible(
-            None,
-            "\"same\"",
-            None,
-            "\"same\""
-        ));
+        assert!(mirror_identity_compatible(None, "\"same\"", None, "\"same\""));
         assert!(!mirror_identity_compatible(
             None,
             "W/\"same\"",
