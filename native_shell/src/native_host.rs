@@ -1181,7 +1181,10 @@ mod tests {
             }))
             .unwrap_err();
         assert!(invalid_download.contains("不受支持"));
-        assert_eq!(NEXT_HANDOFF.load(Ordering::Relaxed), sequence_before_invalid);
+        assert_eq!(
+            NEXT_HANDOFF.load(Ordering::Relaxed),
+            sequence_before_invalid
+        );
         let file = session
             .dispatch(&json!({
                 "op": "offer",
