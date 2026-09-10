@@ -237,7 +237,14 @@ fn export_csv(tasks: &[&TaskSnapshot]) -> String {
     lines.join("\r\n")
 }
 
-fn csv_cell(value: String) -> String {
+fn csv_cell(mut value: String) -> String {
+    if value
+        .chars()
+        .next()
+        .is_some_and(|ch| matches!(ch, '=' | '+' | '-' | '@' | '\t' | '\r' | '\n'))
+    {
+        value.insert(0, '\'');
+    }
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
@@ -289,6 +296,18 @@ mod tests {
             urls,
             "https://example.test/earlier\r\nhttps://example.test/later"
         );
+    }
+
+    #[test]
+    fn csv_neutralizes_spreadsheet_formula_cells() {
+        assert_eq!(csv_cell("=2+2".into()), "\"'=2+2\"");
+        assert_eq!(csv_cell("+SUM(1,1)".into()), "\"'+SUM(1,1)\"");
+        assert_eq!(csv_cell("-1+2".into()), "\"'-1+2\"");
+        assert_eq!(csv_cell("@SUM(A1:A2)".into()), "\"'@SUM(A1:A2)\"");
+        assert_eq!(csv_cell("\t=2+2".into()), "\"'\t=2+2\"");
+        assert_eq!(csv_cell("\r=2+2".into()), "\"'\r=2+2\"");
+        assert_eq!(csv_cell("\n=2+2".into()), "\"'\n=2+2\"");
+        assert_eq!(csv_cell("safe".into()), "\"safe\"");
     }
 
     #[test]
