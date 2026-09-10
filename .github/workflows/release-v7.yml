@@ -37,6 +37,7 @@ jobs:
       HLS_V7_SIGN_CERT_THUMBPRINT: ${{ secrets.HLS_V7_SIGN_CERT_THUMBPRINT }}
       HLS_V7_SIGN_CERT_STORE: ${{ vars.HLS_V7_SIGN_CERT_STORE }}
       HLS_V7_TIMESTAMP_URL: ${{ vars.HLS_V7_TIMESTAMP_URL }}
+      HLS_V7_TVBOX_EXPECTED_HOST: ${{ vars.HLS_V7_TVBOX_EXPECTED_HOST }}
       HLS_V7_EDGE_BINARY: ${{ inputs.edge_binary }}
       HLS_V7_FIREFOX_BINARY: ${{ inputs.firefox_binary }}
       GH_TOKEN: ${{ github.token }}
