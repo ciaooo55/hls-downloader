@@ -11,13 +11,13 @@ pub fn classify_url(url: &str) -> ResourceKind {
         ResourceKind::Sftp
     } else if lower.starts_with("ftp://") || lower.starts_with("ftps://") {
         ResourceKind::Ftp
-    } else if lower.contains(".m3u8") || lower.contains("vnd.apple.mpegurl") {
-        if lower.contains("live") {
+    } else if path.contains(".m3u8") || lower.contains("vnd.apple.mpegurl") {
+        if path.contains("live") {
             ResourceKind::Live
         } else {
             ResourceKind::Hls
         }
-    } else if lower.contains(".mpd") || lower.contains("dash+xml") {
+    } else if path.contains(".mpd") || lower.contains("dash+xml") {
         ResourceKind::Dash
     } else {
         ResourceKind::File
@@ -75,6 +75,11 @@ pub fn probe_with_harvest_context(
     if !crate::http_engine::remote_resource_url_allowed(url) {
         return Err("链接协议不受支持".into());
     }
+    let path_lower = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .to_ascii_lowercase();
     let mut kind = classify_url(url);
     let mut variants = Vec::new();
     let mut harvest = Vec::new();
@@ -103,7 +108,7 @@ pub fn probe_with_harvest_context(
             if status == 200 || status == 206 {
                 let text = String::from_utf8_lossy(&body);
                 if text.contains("#EXTM3U") {
-                    kind = if url.to_ascii_lowercase().contains("live") {
+                    kind = if path_lower.contains("live") {
                         ResourceKind::Live
                     } else {
                         ResourceKind::Hls
@@ -171,5 +176,29 @@ mod tests {
         assert!(probe_url("javascript:alert(1)").is_err());
         assert!(probe_url("file:///C:/Windows/win.ini").is_err());
         assert!(probe_url("ms-msdt:foo").is_err());
+    }
+
+    #[test]
+    fn query_values_do_not_reclassify_the_resource_path() {
+        assert_eq!(
+            classify_url("https://cdn/file.mp4?next=https://edge/live.m3u8"),
+            ResourceKind::File
+        );
+        assert_eq!(
+            classify_url("https://cdn/file.mp4?manifest=clip.mpd"),
+            ResourceKind::File
+        );
+        assert_eq!(
+            classify_url("https://cdn/movie.m3u8?token=live-session"),
+            ResourceKind::Hls
+        );
+        assert_eq!(
+            classify_url("https://cdn/live/channel.m3u8?token=session"),
+            ResourceKind::Live
+        );
+        assert_eq!(
+            classify_url("https://cdn/opaque?content_type=application/vnd.apple.mpegurl"),
+            ResourceKind::Hls
+        );
     }
 }
