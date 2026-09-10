@@ -16,15 +16,22 @@ pub fn canonical_http_url(value: &str) -> String {
         return String::new();
     }
     let rest = rest.split_once('#').map(|(keep, _)| keep).unwrap_or(rest);
-    let (authority, path_query) = rest.split_once('/').unwrap_or((rest, ""));
+    let boundary = rest
+        .char_indices()
+        .find(|(_, ch)| matches!(ch, '/' | '?'))
+        .map(|(index, _)| index)
+        .unwrap_or(rest.len());
+    let (authority, path_query) = rest.split_at(boundary);
     let authority = authority.trim_end_matches('.').to_ascii_lowercase();
     if authority.is_empty() {
         return String::new();
     }
-    format!(
-        "{scheme}://{authority}/{}",
-        path_query.trim_start_matches('/')
-    )
+    let suffix = if path_query.starts_with('?') {
+        format!("/{path_query}")
+    } else {
+        format!("/{}", path_query.trim_start_matches('/'))
+    };
+    format!("{scheme}://{authority}{suffix}")
 }
 
 pub fn normalize_mirror_urls(primary: &str, mirrors: &[String]) -> Vec<String> {
@@ -105,6 +112,22 @@ mod tests {
             ],
         );
         assert_eq!(mirrors, vec!["https://mirror.example/a.bin"]);
+    }
+
+    #[test]
+    fn root_query_preserves_signed_value_case() {
+        assert_eq!(
+            canonical_http_url("https://CDN.example?token=ABC#fragment"),
+            "https://cdn.example/?token=ABC"
+        );
+        let mirrors = normalize_mirror_urls(
+            "https://cdn.example?token=ABC",
+            &[
+                "https://CDN.example/?token=ABC#fragment".into(),
+                "https://cdn.example?token=abc".into(),
+            ],
+        );
+        assert_eq!(mirrors, vec!["https://cdn.example?token=abc"]);
     }
 
     #[test]
