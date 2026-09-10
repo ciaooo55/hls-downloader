@@ -16,6 +16,21 @@ describe('early Chromium direct-download response detection', () => {
     )).toBe(true)
   })
 
+  it('does not pre-offer a response the server explicitly marked inline', () => {
+    expect(isEarlyDirectDownloadResponse(
+      { type: 'main_frame', method: 'GET', statusCode: 200 },
+      {
+        disposition: 'inline; filename="manual.pdf"',
+        resource: resource({
+          url: 'https://docs.test/manual',
+          kind: 'file',
+          mimeType: 'application/pdf',
+          filename: 'manual.pdf',
+        }),
+      },
+    )).toBe(false)
+  })
+
   it('accepts a direct media navigation without Content-Disposition', () => {
     expect(isEarlyDirectDownloadResponse(
       { type: 'sub_frame', method: 'GET', statusCode: 206 },

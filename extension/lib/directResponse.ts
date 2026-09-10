@@ -22,6 +22,10 @@ function hasDownloadHeaders(disposition: string, resource: ObservedDownloadResou
     || resource.mimeType?.toLowerCase().includes('application/octet-stream') === true
 }
 
+function explicitlyInline(disposition: string): boolean {
+  return /^\s*inline(?:\s*;|\s*$)/i.test(disposition)
+}
+
 /**
  * Decide whether response headers are strong enough to offer a browser
  * navigation before Chrome creates its DownloadItem.  XHR/fetch responses
@@ -35,6 +39,11 @@ export function isEarlyDirectDownloadResponse(
   if (!['main_frame', 'sub_frame'].includes(String(details.type || ''))) return false
   if (String(details.method || 'GET').toUpperCase() !== 'GET') return false
   if (Number(details.statusCode) < 200 || Number(details.statusCode) >= 300) return false
+  // `inline` explicitly asks the browser to present the response. A filename
+  // or concrete PDF/media MIME on that response is not evidence that the user
+  // started a download. If the browser later creates a DownloadItem anyway,
+  // the normal takeover path can still handle it with the real browser item.
+  if (explicitlyInline(observed.disposition)) return false
   if (hasDownloadHeaders(observed.disposition, observed.resource)) return true
   const resource = observed.resource
   if (!resource) return false
