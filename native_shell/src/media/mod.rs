@@ -29,16 +29,24 @@ pub(crate) fn resolve_http_uri(base: &str, reference: &str) -> String {
         };
         return inherit_access_query(base, &format!("{scheme}://{rest}"));
     }
-    if let Some(scheme_end) = base.find("://") {
-        let after = &base[scheme_end + 3..];
-        let host_end = after.find('/').map(|index| scheme_end + 3 + index);
+    let clean_base = base.split(['?', '#']).next().unwrap_or(base);
+    if let Some(scheme_end) = clean_base.find("://") {
+        let authority_start = scheme_end + 3;
+        let path_start = clean_base[authority_start..]
+            .find('/')
+            .map(|index| authority_start + index);
+        let origin_end = path_start.unwrap_or(clean_base.len());
+        let origin = &clean_base[..origin_end];
         if reference.starts_with('/') {
-            let origin = host_end.map(|index| &base[..index]).unwrap_or(base);
             return inherit_access_query(base, &format!("{origin}{reference}"));
         }
-        let clean_base = base.split(['?', '#']).next().unwrap_or(base);
-        let dir_end = clean_base.rfind('/').unwrap_or(clean_base.len());
-        return inherit_access_query(base, &format!("{}/{reference}", &clean_base[..dir_end]));
+        let directory = path_start
+            .map(|_| {
+                let dir_end = clean_base.rfind('/').unwrap_or(origin_end);
+                &clean_base[..dir_end]
+            })
+            .unwrap_or(clean_base);
+        return inherit_access_query(base, &format!("{directory}/{reference}"));
     }
     String::new()
 }
@@ -158,3 +166,20 @@ pub use hls::{
 };
 #[allow(unused_imports)]
 pub use merge::{concat_files, merge_with_ffmpeg, mux_av};
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_http_uri;
+
+    #[test]
+    fn resolves_children_from_query_bearing_origin_base() {
+        assert_eq!(
+            resolve_http_uri("https://cdn.example?token=abc", "/seg.ts"),
+            "https://cdn.example/seg.ts?token=abc"
+        );
+        assert_eq!(
+            resolve_http_uri("https://cdn.example?token=abc", "seg.ts"),
+            "https://cdn.example/seg.ts?token=abc"
+        );
+    }
+}
