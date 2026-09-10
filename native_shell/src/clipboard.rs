@@ -84,8 +84,8 @@ fn windows_clipboard() -> Option<String> {
             CloseClipboard();
             return None;
         }
-        let units = (GlobalSize(handle) / std::mem::size_of::<u16>())
-            .min(MAX_CLIPBOARD_UTF16_UNITS);
+        let units =
+            (GlobalSize(handle) / std::mem::size_of::<u16>()).min(MAX_CLIPBOARD_UTF16_UNITS);
         if units == 0 {
             CloseClipboard();
             return None;
