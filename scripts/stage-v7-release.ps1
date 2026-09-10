@@ -62,7 +62,7 @@ if (-not (Test-Path -LiteralPath $releaseEvidence -PathType Leaf)) { throw 'Rele
 $evidenceDir = Join-Path $repo 'artifacts\v7-productization\release-evidence'
 if (-not (Test-Path -LiteralPath $evidenceDir -PathType Container)) { throw 'Per-gate release evidence is missing.' }
 $gateBundle = Join-Path $stage "HLSDownloader-$version-Release-Evidence.zip"
-Compress-Archive -Path (Join-Path $evidenceDir '*.json') -DestinationPath $gateBundle -CompressionLevel Optimal -Force
+Compress-Archive -Path (Join-Path $evidenceDir '*') -DestinationPath $gateBundle -CompressionLevel Optimal -Force
 
 $sbom = Join-Path $stage "HLSDownloader-$version-SBOM.cdx.json"
 & $Python (Join-Path $PSScriptRoot 'generate_sbom.py') --version $version --output $sbom
