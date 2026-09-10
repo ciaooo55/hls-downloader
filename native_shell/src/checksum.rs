@@ -126,9 +126,16 @@ pub fn verify_file_result(
     path: &Path,
     expected: &str,
 ) -> Result<Option<VerificationResult>, String> {
-    let Some((algorithm, want)) = parse_checksum(expected) else {
+    let normalized = expected
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim();
+    if normalized.is_empty() {
         return Ok(None);
-    };
+    }
+    let (algorithm, want) = parse_checksum(expected)
+        .ok_or_else(|| "checksum format is malformed or unsupported".to_string())?;
     let actual = hash_file(path, algorithm)?;
     Ok(Some(VerificationResult {
         algorithm: algorithm.label().into(),
@@ -283,6 +290,30 @@ mod tests {
             "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         )
         .unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn empty_checksum_remains_optional() {
+        let dir = std::env::temp_dir().join("v7-checksum-optional");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("a.bin");
+        std::fs::write(&path, b"abc").unwrap();
+        assert_eq!(verify_file_result(&path, "   ").unwrap(), None);
+        assert_eq!(verify_file_result(&path, "\"\"").unwrap(), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn malformed_non_empty_checksum_fails_closed() {
+        let dir = std::env::temp_dir().join("v7-checksum-malformed");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("a.bin");
+        std::fs::write(&path, b"abc").unwrap();
+        for checksum in ["garbage", "sha512:abcd", "sha256:not-hex"] {
+            let error = verify_file_result(&path, checksum).unwrap_err();
+            assert!(error.contains("malformed or unsupported"));
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 
