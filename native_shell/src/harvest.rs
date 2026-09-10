@@ -255,9 +255,14 @@ mod tests {
 
     #[test]
     fn case_distinct_paths_survive_harvest_dedup() {
-        let html = r#"<a href="https://cdn.test/A.zip">A</a><a href="https://cdn.test/a.zip">a</a>"#;
+        let html =
+            r#"<a href="https://cdn.test/A.zip">A</a><a href="https://cdn.test/a.zip">a</a>"#;
         let links = harvest_html(html, "https://site.test/page");
-        assert!(links.iter().any(|item| item.url == "https://cdn.test/A.zip"));
-        assert!(links.iter().any(|item| item.url == "https://cdn.test/a.zip"));
+        assert!(links
+            .iter()
+            .any(|item| item.url == "https://cdn.test/A.zip"));
+        assert!(links
+            .iter()
+            .any(|item| item.url == "https://cdn.test/a.zip"));
     }
 }
