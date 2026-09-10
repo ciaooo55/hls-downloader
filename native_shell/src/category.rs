@@ -12,9 +12,9 @@ pub fn download_category(filename: &str, url: &str, kind: crate::ResourceKind) -
     } else {
         filename
     };
-    let ext = extension(name);
+    let ext = extension(name).to_ascii_lowercase();
     if matches!(
-        ext,
+        ext.as_str(),
         "mp4"
             | "mkv"
             | "webm"
@@ -32,10 +32,13 @@ pub fn download_category(filename: &str, url: &str, kind: crate::ResourceKind) -
             | "webp"
     ) {
         "media"
-    } else if matches!(ext, "exe" | "msi" | "msix" | "appx" | "bat" | "cmd") {
+    } else if matches!(
+        ext.as_str(),
+        "exe" | "msi" | "msix" | "appx" | "bat" | "cmd"
+    ) {
         "program"
     } else if matches!(
-        ext,
+        ext.as_str(),
         "zip" | "7z" | "rar" | "tar" | "gz" | "bz2" | "xz" | "iso"
     ) {
         "archive"
@@ -197,5 +200,21 @@ mod tests {
             "E:\\Videos"
         );
         assert!(category_dirs_json(&override_media).contains("Videos"));
+    }
+
+    #[test]
+    fn category_extensions_are_case_insensitive() {
+        assert_eq!(
+            download_category("VIDEO.MP4", "", ResourceKind::File),
+            "media"
+        );
+        assert_eq!(
+            download_category("SETUP.EXE", "", ResourceKind::File),
+            "program"
+        );
+        assert_eq!(
+            download_category("ARCHIVE.ZIP", "", ResourceKind::File),
+            "archive"
+        );
     }
 }
