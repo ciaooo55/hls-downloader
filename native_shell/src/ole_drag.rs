@@ -45,6 +45,15 @@ pub fn completed_file_drag(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
+fn drag_drop_result(hr: i32) -> Result<(), String> {
+    if hr < 0 {
+        Err(format!("DoDragDrop {hr:#x}"))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
 fn windows_drag_from_clipboard() -> Result<(), String> {
     #[link(name = "ole32")]
     unsafe extern "system" {
@@ -73,7 +82,7 @@ fn windows_drag_from_clipboard() -> Result<(), String> {
         }
         let source = Box::into_raw(Box::new(DropSource::new()));
         let mut effect: u32 = 0;
-        let _ = DoDragDrop(
+        let dragged = DoDragDrop(
             data,
             source as *mut core::ffi::c_void,
             DROPEFFECT_COPY | DROPEFFECT_LINK,
@@ -85,6 +94,7 @@ fn windows_drag_from_clipboard() -> Result<(), String> {
             std::mem::transmute(*vtbl.add(2));
         release(data);
         OleUninitialize();
+        drag_drop_result(dragged)?;
     }
     Ok(())
 }
@@ -228,6 +238,9 @@ mod tests {
             assert!(iid_is(IID_IUNKNOWN.as_ptr(), &IID_IUNKNOWN));
             assert!(iid_is(IID_IDROPSOURCE.as_ptr(), &IID_IDROPSOURCE));
             assert!(!iid_is(IID_IUNKNOWN.as_ptr(), &IID_IDROPSOURCE));
+            assert!(drag_drop_result(0).is_ok());
+            assert!(drag_drop_result(0x0004_0101).is_ok());
+            assert!(drag_drop_result(0x8000_4005u32 as i32).is_err());
         }
         let wide: Vec<u16> = bytes[20..]
             .as_chunks::<2>()
