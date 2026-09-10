@@ -253,7 +253,17 @@ pub fn validate_site_rules(raw: &str) -> Result<(), String> {
         serde_json::from_str::<Vec<SiteRule>>(text)
             .map_err(|error| format!("站点规则 JSON 无效: {error}"))?
     } else {
-        parse_site_rules(text)
+        let mut rules = Vec::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let rule = parse_line(line)
+                .ok_or_else(|| format!("站点规则文本格式无效: {line}"))?;
+            rules.push(rule);
+        }
+        rules
     };
     if rules.len() > 100 {
         return Err("站点规则不能超过 100 条".into());
@@ -361,6 +371,9 @@ mod tests {
         assert!(validate_site_rules(r#"[{"host":"bad/path"}]"#).is_err());
         assert!(validate_site_rules(r#"[{"host":"a.test","origin":"javascript:bad"}]"#).is_err());
         assert!(validate_site_rules(r#"[{"host":"a.test","proxy_mode":"direct"}]"#).is_ok());
+        assert!(validate_site_rules("not-a-rule").is_err());
+        assert!(validate_site_rules("# comment only\n").is_ok());
+        assert!(validate_site_rules("cdn.test=speed:256,conn:2").is_ok());
         assert_eq!(
             credential_ref_for_host("A.Test"),
             credential_ref_for_host("a.test")
