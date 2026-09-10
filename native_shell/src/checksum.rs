@@ -59,7 +59,12 @@ pub fn parse_checksum(value: &str) -> Option<(Algorithm, String)> {
         return None;
     };
     let digest = rest.replace([':', ' '], "");
-    if !is_hex(&digest) {
+    let expected_len = match algo {
+        Algorithm::Md5 => 32,
+        Algorithm::Sha1 => 40,
+        Algorithm::Sha256 => 64,
+    };
+    if digest.len() != expected_len || !is_hex(&digest) {
         return None;
     }
     Some((algo, digest))
@@ -384,6 +389,13 @@ mod tests {
                 .0,
             Algorithm::Md5
         );
+    }
+
+    #[test]
+    fn rejects_prefixed_digests_with_wrong_lengths() {
+        assert!(parse_checksum("md5:abcd").is_none());
+        assert!(parse_checksum("sha1:abcd").is_none());
+        assert!(parse_checksum("sha256:abcd").is_none());
     }
 
     #[test]
