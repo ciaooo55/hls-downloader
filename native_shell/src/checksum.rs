@@ -162,13 +162,7 @@ struct Sha1Hasher {
 impl Sha1Hasher {
     fn new() -> Self {
         Self {
-            state: [
-                0x67452301,
-                0xefcdab89,
-                0x98badcfe,
-                0x10325476,
-                0xc3d2e1f0,
-            ],
+            state: [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0],
             buffer: [0; 64],
             filled: 0,
             total_bytes: 0,
