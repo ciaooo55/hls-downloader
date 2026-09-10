@@ -3,27 +3,31 @@
 use std::net::IpAddr;
 use std::path::Path;
 
-pub fn is_public_download_url(value: &str) -> bool {
+fn http_parts(value: &str) -> Option<(&str, &str, &str)> {
     let raw = value.trim();
-    let Some((scheme, rest)) = raw.split_once("://") else {
+    let (scheme, rest) = raw.split_once("://")?;
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+        return None;
+    }
+    let boundary = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    Some((scheme, &rest[..boundary], &rest[boundary..]))
+}
+
+fn authority_host(authority: &str) -> String {
+    let authority = authority.rsplit('@').next().unwrap_or("").trim();
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split_once(']').map(|(host, _)| host).unwrap_or(rest)
+    } else {
+        authority.split(':').next().unwrap_or(authority)
+    };
+    host.trim().trim_matches('.').to_ascii_lowercase()
+}
+
+pub fn is_public_download_url(value: &str) -> bool {
+    let Some((_, authority, _)) = http_parts(value) else {
         return false;
     };
-    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
-        return false;
-    }
-    let host = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or("")
-        .split('@')
-        .next_back()
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .trim_matches('.')
-        .to_ascii_lowercase();
+    let host = authority_host(authority);
     if host.is_empty()
         || host == "localhost"
         || host.ends_with(".localhost")
@@ -43,25 +47,35 @@ pub fn is_public_download_url(value: &str) -> bool {
                     || (oct[0] == 100 && (oct[1] & 0b1100_0000) == 64)
                     || oct[0] == 0)
             }
-            IpAddr::V6(v6) => !(v6.is_loopback() || v6.is_multicast() || v6.is_unspecified()),
+            IpAddr::V6(v6) => {
+                !(v6.is_loopback()
+                    || v6.is_multicast()
+                    || v6.is_unspecified()
+                    || v6.is_unique_local()
+                    || v6.is_unicast_link_local())
+            }
         };
     }
     true
 }
 
 pub fn redact_url(value: &str) -> String {
-    let Some((scheme, rest)) = value.split_once("://") else {
+    let Some((scheme, authority, suffix)) = http_parts(value) else {
         return String::new();
     };
-    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
-    let host = authority.split('@').next_back().unwrap_or(authority);
-    if path.is_empty() {
-        format!("{scheme}://{host}/")
+    let authority = authority.rsplit('@').next().unwrap_or("").trim();
+    if authority.is_empty() {
+        return String::new();
+    }
+    let path = if suffix.starts_with('/') {
+        suffix.split(['?', '#']).next().unwrap_or("")
     } else {
-        format!(
-            "{scheme}://{host}/{}",
-            path.split('?').next().unwrap_or(path)
-        )
+        ""
+    };
+    if path.is_empty() {
+        format!("{scheme}://{authority}/")
+    } else {
+        format!("{scheme}://{authority}{path}")
     }
 }
 
@@ -94,15 +108,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn public_http_is_marked_and_loopback_is_not() {
+    fn public_http_is_marked_and_local_addresses_are_not() {
         assert!(is_public_download_url("https://cdn.example.test/a.bin"));
         assert!(!is_public_download_url("http://127.0.0.1/a.bin"));
         assert!(!is_public_download_url("http://192.168.1.8/a.bin"));
+        assert!(!is_public_download_url("http://[::1]/a.bin"));
+        assert!(!is_public_download_url("http://[fe80::1]/a.bin"));
+        assert!(!is_public_download_url("http://[fd00::1]/a.bin"));
         assert!(!is_public_download_url("ftp://files.example.test/a.bin"));
-        let text = zone_identifier_text("https://user:pass@cdn.example.test/path?token=1");
+    }
+
+    #[test]
+    fn zone_identifier_never_keeps_credentials_query_or_fragment() {
+        let text = zone_identifier_text("https://user:pass@cdn.example.test/path?token=1#part");
         assert!(text.contains("ZoneId=3"));
         assert!(text.contains("HostUrl=https://cdn.example.test/path"));
         assert!(!text.contains("user:pass"));
         assert!(!text.contains("token=1"));
+        assert!(!text.contains("#part"));
+
+        let root_query = zone_identifier_text("https://cdn.example.test?token=root-secret");
+        assert!(root_query.contains("HostUrl=https://cdn.example.test/"));
+        assert!(!root_query.contains("root-secret"));
+
+        let trailing_slash = zone_identifier_text("https://cdn.example.test/path/?token=1");
+        assert!(trailing_slash.contains("HostUrl=https://cdn.example.test/path/"));
     }
 }
