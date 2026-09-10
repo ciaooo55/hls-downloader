@@ -329,13 +329,22 @@ fn safe_join(dir: &Path, sub: &str) -> Option<PathBuf> {
     Some(dir.join(sub))
 }
 
+fn range_header(request: &str) -> Option<&str> {
+    request.lines().skip(1).find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if name.trim().eq_ignore_ascii_case("range") {
+            value.trim().strip_prefix("bytes=")
+        } else {
+            None
+        }
+    })
+}
+
 fn serve_file(stream: &mut TcpStream, request: &str, file_path: &Path) -> Result<(), String> {
     let mut file = File::open(file_path).map_err(|error| error.to_string())?;
     let total = file.metadata().map_err(|error| error.to_string())?.len();
     let content_type = content_type(file_path);
-    let range = request
-        .lines()
-        .find_map(|line| line.strip_prefix("Range: bytes="));
+    let range = range_header(request);
     if let Some(range) = range {
         let Some((start, end)) = parse_range(range, total) else {
             return write_status(stream, 416, b"range not satisfiable");
@@ -467,7 +476,7 @@ mod tests {
         server.mount("task-1", file);
         let mut stream = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
         stream
-            .write_all(b"GET /media/task-1 HTTP/1.1\r\nRange: bytes=2-5\r\n\r\n")
+            .write_all(b"GET /media/task-1 HTTP/1.1\r\nrange: bytes=2-5\r\n\r\n")
             .unwrap();
         let mut buf = Vec::new();
         stream.read_to_end(&mut buf).unwrap();
