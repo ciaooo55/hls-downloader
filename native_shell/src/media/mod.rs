@@ -66,12 +66,20 @@ fn inherit_access_query(base: &str, resolved: &str) -> String {
         .filter(|pair| !pair.is_empty())
         .map(query_name)
         .collect();
+    let base_names: std::collections::BTreeSet<String> = base_query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(query_name)
+        .collect();
+    let terse_signature = base_names.contains("s") && base_names.contains("e");
     let inherited: Vec<&str> = base_query
         .split('&')
         .filter(|pair| !pair.is_empty())
         .filter(|pair| {
             let name = query_name(pair);
-            !child_names.contains(&name) && hls_access_query_name(&name)
+            !child_names.contains(&name)
+                && (hls_access_query_name(&name)
+                    || (terse_signature && matches!(name.as_str(), "s" | "e" | "_t")))
         })
         .collect();
     if inherited.is_empty() {
@@ -134,9 +142,6 @@ fn hls_access_query_name(name: &str) -> bool {
                 | "ipa"
                 | "hdl"
                 | "hash"
-                | "s"
-                | "e"
-                | "_t"
         )
 }
 
@@ -180,6 +185,25 @@ mod tests {
         assert_eq!(
             resolve_http_uri("https://cdn.example?token=abc", "seg.ts"),
             "https://cdn.example/seg.ts?token=abc"
+        );
+    }
+
+    #[test]
+    fn inherits_terse_signatures_only_as_a_pair() {
+        assert_eq!(
+            resolve_http_uri("https://cdn.example/master.m3u8?s=sort", "seg.ts"),
+            "https://cdn.example/seg.ts"
+        );
+        assert_eq!(
+            resolve_http_uri("https://cdn.example/master.m3u8?e=event", "seg.ts"),
+            "https://cdn.example/seg.ts"
+        );
+        assert_eq!(
+            resolve_http_uri(
+                "https://cdn.example/master.m3u8?s=abc&e=123&_t=nonce",
+                "seg.ts"
+            ),
+            "https://cdn.example/seg.ts?s=abc&e=123&_t=nonce"
         );
     }
 }
