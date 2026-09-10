@@ -259,8 +259,7 @@ pub fn validate_site_rules(raw: &str) -> Result<(), String> {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let rule = parse_line(line)
-                .ok_or_else(|| format!("站点规则文本格式无效: {line}"))?;
+            let rule = parse_line(line).ok_or_else(|| format!("站点规则文本格式无效: {line}"))?;
             rules.push(rule);
         }
         rules
