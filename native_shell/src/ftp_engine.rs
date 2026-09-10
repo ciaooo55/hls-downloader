@@ -77,7 +77,13 @@ pub fn parse_ftp_url(url: &str) -> Result<FtpTarget, String> {
     };
     let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
     let (host, port) = if let Some((host, port)) = hostport.rsplit_once(':') {
-        (host, port.parse().unwrap_or(if tls { 990 } else { 21 }))
+        let port = port
+            .parse::<u16>()
+            .map_err(|_| "FTP port invalid".to_string())?;
+        if port == 0 {
+            return Err("FTP port invalid".into());
+        }
+        (host, port)
     } else {
         (hostport, if tls { 990 } else { 21 })
     };
@@ -337,6 +343,8 @@ mod tests {
         let explicit = parse_ftp_url("ftps://files.example:21/a.bin").unwrap();
         assert_eq!(explicit.port, 21);
         assert!(explicit.tls);
+        assert!(parse_ftp_url("ftp://files.example:notaport/a.bin").is_err());
+        assert!(parse_ftp_url("ftp://files.example:0/a.bin").is_err());
         assert!(parse_ftp_url("ftp://files.example/a.bin\r\nSITE EXEC x").is_err());
         assert!(parse_ftp_url("ftp://alice\r\nPASS x@files.example/a.bin").is_err());
         let at = parse_ftp_url("ftp://alice:p@ss@files.example:2121/pub/a.bin").unwrap();
