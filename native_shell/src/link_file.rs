@@ -110,12 +110,21 @@ fn from_hex(byte: u8) -> Option<u8> {
 }
 
 fn decode_link_bytes(data: &[u8]) -> String {
-    if data.starts_with(&[0xff, 0xfe]) || data.starts_with(&[0xfe, 0xff]) {
-        let units: Vec<u16> = data
+    if data.starts_with(&[0xff, 0xfe]) {
+        let units: Vec<u16> = data[2..]
             .as_chunks::<2>()
             .0
             .iter()
             .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    if data.starts_with(&[0xfe, 0xff]) {
+        let units: Vec<u16> = data[2..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
             .collect();
         return String::from_utf16_lossy(&units);
     }
@@ -189,7 +198,7 @@ fn extract_text_urls(text: &str) -> Result<Vec<String>, String> {
             continue;
         }
         if let Ok(url) = normalize_download_url(candidate) {
-            if seen.insert(url.to_ascii_lowercase()) {
+            if seen.insert(url.clone()) {
                 found.push(url);
                 if found.len() >= MAX_LINK_URLS {
                     break;
@@ -299,7 +308,7 @@ fn collect_absolute_urls(text: &str) -> Vec<String> {
                 .unwrap_or(slice.len());
             let raw = slice[..end].trim_end_matches(['.', ',', ')', ';', ']']);
             if let Ok(url) = normalize_download_url(raw) {
-                if seen.insert(url.to_ascii_lowercase()) {
+                if seen.insert(url.clone()) {
                     found.push(url);
                     if found.len() >= MAX_LINK_URLS {
                         return found;
@@ -416,6 +425,26 @@ mod tests {
         let text = "#EXTM3U\n#EXTINF:4,\nhttps://cdn.test/1.ts\n#EXTINF:4,\nhttps://cdn.test/2.ts\n#EXTINF:4,\nhttps://cdn.test/3.ts\n";
         let error = extract_download_urls(text, "m3u8").unwrap_err();
         assert!(error.contains("本地分片"));
+    }
+
+    #[test]
+    fn utf16_bom_controls_link_file_endianness() {
+        let text = "https://cdn.test/A.bin\n";
+        let mut little = vec![0xff, 0xfe];
+        let mut big = vec![0xfe, 0xff];
+        for unit in text.encode_utf16() {
+            little.extend_from_slice(&unit.to_le_bytes());
+            big.extend_from_slice(&unit.to_be_bytes());
+        }
+        assert_eq!(decode_link_bytes(&little), text);
+        assert_eq!(decode_link_bytes(&big), text);
+    }
+
+    #[test]
+    fn case_distinct_urls_are_not_collapsed() {
+        let text = "https://cdn.test/A.bin\nhttps://cdn.test/a.bin\n";
+        assert_eq!(extract_download_urls(text, "txt").unwrap().len(), 2);
+        assert_eq!(collect_absolute_urls(text).len(), 2);
     }
 
     #[test]

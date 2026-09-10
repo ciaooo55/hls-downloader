@@ -24,7 +24,7 @@ pub fn harvest_html_filtered(html: &str, base: &str, min_bytes: u64) -> Vec<Harv
     let mut links = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for (raw, tag_size) in extract_urls(html, base) {
-        if !seen.insert(raw.to_ascii_lowercase()) {
+        if !seen.insert(raw.clone()) {
             continue;
         }
         if let Some(mut link) = to_link(&raw) {
@@ -251,5 +251,13 @@ mod tests {
         let html = r#"<a href="javascript:alert(1)">x</a><a href="JAVASCRIPT:alert(1)">y</a><a href="file:///C:/secret.mp4">z</a><a href="&#xFEFF;javascript:alert(1)">b</a><a href="ms-msdt:foo.mp4">m</a>"#;
         let links = harvest_html(html, "https://site.test/page");
         assert!(links.is_empty());
+    }
+
+    #[test]
+    fn case_distinct_paths_survive_harvest_dedup() {
+        let html = r#"<a href="https://cdn.test/A.zip">A</a><a href="https://cdn.test/a.zip">a</a>"#;
+        let links = harvest_html(html, "https://site.test/page");
+        assert!(links.iter().any(|item| item.url == "https://cdn.test/A.zip"));
+        assert!(links.iter().any(|item| item.url == "https://cdn.test/a.zip"));
     }
 }
