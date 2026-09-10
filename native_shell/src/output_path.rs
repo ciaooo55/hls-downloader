@@ -2,6 +2,9 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+static OUTPUT_PUBLISH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 pub fn normalize_policy(value: &str) -> &'static str {
     match value.trim().to_ascii_lowercase().as_str() {
@@ -58,6 +61,14 @@ pub fn publish_file(
     policy: &str,
     keep_temp: bool,
 ) -> Result<PathBuf, String> {
+    // Selection and publication must be one process-wide operation. Otherwise two
+    // downloads finishing together can both select the same rename suffix and the
+    // later publisher can delete the first task's completed file.
+    let _publish_guard = OUTPUT_PUBLISH_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "output publication lock poisoned".to_string())?;
+
     let dest = choose_output_path(dest, policy)?;
     if dest.exists() {
         fs::remove_file(&dest).map_err(|error| format!("replace existing output: {error}"))?;
@@ -160,6 +171,38 @@ mod tests {
         assert!(!source.exists());
         assert!(!work.join("control").exists());
         assert!(!work.join("progress.json").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn concurrent_rename_publication_keeps_every_completed_file() {
+        let dir = test_dir("concurrent-rename");
+        let work = dir.join("work");
+        let output = dir.join("downloads").join("clip.mp4");
+        fs::create_dir_all(&work).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(5));
+        let mut workers = Vec::new();
+        for index in 0..4 {
+            let source = work.join(format!("payload-{index}.downloading"));
+            fs::write(&source, format!("payload-{index}")).unwrap();
+            let output = output.clone();
+            let barrier = std::sync::Arc::clone(&barrier);
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                publish_file(&source, &output, "rename", false).unwrap()
+            }));
+        }
+        barrier.wait();
+
+        let published: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        let unique: std::collections::HashSet<_> = published.iter().cloned().collect();
+        assert_eq!(unique.len(), 4);
+        for path in published {
+            assert!(path.is_file());
+        }
         let _ = fs::remove_dir_all(dir);
     }
 }
