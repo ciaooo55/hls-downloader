@@ -278,7 +278,6 @@ impl NativeHostSession {
 
     fn offer(&mut self, message: &Value) -> Result<Value, String> {
         let payload = resource_payload(message)?;
-        let credential_ref = self.persist_browser_context(payload)?;
         let request_id = payload
             .get("client_request_id")
             .and_then(Value::as_str)
@@ -292,6 +291,7 @@ impl NativeHostSession {
             }
         }
 
+        let credential_ref = self.persist_browser_context(payload)?;
         let mut offer = parse_offer(payload)?;
         offer.credential_ref = credential_ref;
         let id = next_handoff_id();
@@ -571,11 +571,7 @@ impl NativeHostSession {
         let serialized = serde_json::to_string(&Value::Object(context))
             .map_err(|error| format!("encode browser replay context: {error}"))?;
         let protected = CredentialVault.protect(&serialized)?;
-        let credential_ref = format!(
-            "cred-{:x}-{}",
-            unix_time_ms(),
-            NEXT_HANDOFF.load(Ordering::Relaxed)
-        );
+        let credential_ref = next_credential_ref();
         self.core
             .store_credential(&credential_ref, &protected, "browser_replay")?;
         Ok(Some(credential_ref))
@@ -894,6 +890,11 @@ fn next_handoff_id() -> String {
     format!("handoff-{:x}-{sequence:x}", unix_time_ms())
 }
 
+fn next_credential_ref() -> String {
+    let sequence = NEXT_HANDOFF.fetch_add(1, Ordering::Relaxed);
+    format!("cred-{:x}-{sequence:x}", unix_time_ms())
+}
+
 fn unix_time_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -994,9 +995,28 @@ mod tests {
             }
         });
         let first = session.dispatch(&request).unwrap();
-        let second = session.dispatch(&request).unwrap();
+        let sequence_after_first = NEXT_HANDOFF.load(Ordering::Relaxed);
+        let retry = json!({
+            "op": "offer",
+            "resource": {
+                "url": "https://cdn.test/setup.exe",
+                "filename": "setup.exe",
+                "resource_kind": "file",
+                "client_request_id": "resource:1:abc",
+                "cookie": "session=retry-must-not-be-persisted"
+            }
+        });
+        let second = session.dispatch(&retry).unwrap();
         assert_eq!(first["handoff"]["id"], second["handoff"]["id"]);
         assert_eq!(session.handoffs.len(), 1);
+        assert_eq!(NEXT_HANDOFF.load(Ordering::Relaxed), sequence_after_first);
+    }
+
+    #[test]
+    fn credential_refs_advance_without_handoff_progress() {
+        let first = next_credential_ref();
+        let second = next_credential_ref();
+        assert_ne!(first, second);
     }
 
     #[test]
