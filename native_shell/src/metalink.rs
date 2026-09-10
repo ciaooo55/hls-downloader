@@ -130,10 +130,7 @@ fn parse_file_block(block: &str, metalink3: bool) -> Option<MetalinkFile> {
 fn pick_urls(ranked: Vec<(i32, String)>) -> Option<(String, Vec<String>)> {
     let mut ordered = Vec::new();
     for (_, url) in ranked {
-        if ordered
-            .iter()
-            .any(|item: &String| item.eq_ignore_ascii_case(&url))
-        {
+        if ordered.iter().any(|item: &String| item == &url) {
             continue;
         }
         ordered.push(url);
@@ -286,6 +283,16 @@ mod tests {
         );
         assert!(files[0].checksum.starts_with("sha256:"));
         assert_eq!(files[0].size, 4);
+    }
+
+    #[test]
+    fn preserves_case_distinct_resource_urls() {
+        let files = parse_metalink(
+            r#"<metalink><file name="case.bin"><url priority="1">https://cdn.test/File.bin</url><url priority="2">https://cdn.test/file.bin</url><url priority="3">https://cdn.test/File.bin</url></file></metalink>"#,
+        )
+        .unwrap();
+        assert_eq!(files[0].url, "https://cdn.test/File.bin");
+        assert_eq!(files[0].mirrors, vec!["https://cdn.test/file.bin"]);
     }
 
     #[test]
