@@ -1,5 +1,10 @@
 //! HWND helpers: overlay caption drag, player parent, OS reduce-motion.
 
+#[cfg(any(windows, test))]
+fn window_long_ptr_call_succeeded(value: isize, last_error: u32) -> bool {
+    value != 0 || last_error == 0
+}
+
 pub fn window_handle_by_title(title: &str) -> Option<i64> {
     #[cfg(windows)]
     {
@@ -169,6 +174,7 @@ pub fn activate_window_by_title(title: &str) -> bool {
 pub fn hide_window_from_taskbar_by_title(title: &str) -> bool {
     #[cfg(windows)]
     {
+        use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_NOTOPMOST,
             SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
@@ -180,10 +186,18 @@ pub fn hide_window_from_taskbar_by_title(title: &str) -> bool {
         };
         let hwnd = raw_hwnd as windows_sys::Win32::Foundation::HWND;
         unsafe {
+            SetLastError(0);
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            if !window_long_ptr_call_succeeded(style, GetLastError()) {
+                return false;
+            }
             let next = (style & !(WS_EX_APPWINDOW as isize)) | WS_EX_TOOLWINDOW as isize;
             if next != style {
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
+                SetLastError(0);
+                let previous = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
+                if !window_long_ptr_call_succeeded(previous, GetLastError()) {
+                    return false;
+                }
                 SetWindowPos(
                     hwnd,
                     HWND_NOTOPMOST,
@@ -243,5 +257,12 @@ mod tests {
         assert!(!hide_window_from_taskbar_by_title(
             "HLSDownloader-no-such-window-title"
         ));
+    }
+
+    #[test]
+    fn zero_window_long_result_only_fails_with_a_win32_error() {
+        assert!(window_long_ptr_call_succeeded(0, 0));
+        assert!(window_long_ptr_call_succeeded(1, 5));
+        assert!(!window_long_ptr_call_succeeded(0, 5));
     }
 }
