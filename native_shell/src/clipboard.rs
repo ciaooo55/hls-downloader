@@ -1,5 +1,7 @@
 //! Optional clipboard URL watch. Windows only; other targets stay empty.
 
+const MAX_CLIPBOARD_UTF16_UNITS: usize = 32_768;
+
 pub fn looks_like_download_url(text: &str) -> bool {
     let line = text
         .lines()
@@ -30,6 +32,10 @@ pub fn all_urls(text: &str) -> Vec<String> {
         }
     }
     urls
+}
+
+fn nul_terminated_len(units: &[u16]) -> Option<usize> {
+    units.iter().position(|unit| *unit == 0)
 }
 
 pub fn read_text() -> Option<String> {
@@ -78,19 +84,24 @@ fn windows_clipboard() -> Option<String> {
             CloseClipboard();
             return None;
         }
+        let units = (GlobalSize(handle) / std::mem::size_of::<u16>())
+            .min(MAX_CLIPBOARD_UTF16_UNITS);
+        if units == 0 {
+            CloseClipboard();
+            return None;
+        }
         let ptr = GlobalLock(handle) as *const u16;
         if ptr.is_null() {
             CloseClipboard();
             return None;
         }
-        let mut len = 0usize;
-        while *ptr.add(len) != 0 {
-            len += 1;
-            if len > 32_768 {
-                break;
-            }
-        }
-        let text = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len));
+        let slice = std::slice::from_raw_parts(ptr, units);
+        let Some(len) = nul_terminated_len(slice) else {
+            GlobalUnlock(handle);
+            CloseClipboard();
+            return None;
+        };
+        let text = String::from_utf16_lossy(&slice[..len]);
         GlobalUnlock(handle);
         CloseClipboard();
         let trimmed = text.trim().to_string();
@@ -203,6 +214,7 @@ unsafe extern "system" {
     fn GlobalUnlock(handle: isize) -> i32;
     fn GlobalAlloc(flags: u32, bytes: usize) -> isize;
     fn GlobalFree(handle: isize) -> isize;
+    fn GlobalSize(handle: isize) -> usize;
 }
 
 #[cfg(test)]
@@ -233,5 +245,11 @@ mod tests {
                 "https://cdn.test/video.mp4".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn bounded_clipboard_text_requires_nul_termination() {
+        assert_eq!(nul_terminated_len(&[b'a' as u16, 0, b'b' as u16]), Some(1));
+        assert_eq!(nul_terminated_len(&[b'a' as u16, b'b' as u16]), None);
     }
 }
