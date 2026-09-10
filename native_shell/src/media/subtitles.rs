@@ -117,7 +117,7 @@ fn parse_cues(text: &str) -> Vec<Cue> {
             .map(|line| line.trim_end_matches('\r'))
             .filter(|line| !line.trim().is_empty())
             .collect();
-        if lines.is_empty() {
+        if lines.is_empty() || is_metadata_block(&lines) {
             continue;
         }
         let Some(timing_at) = lines.iter().position(|line| is_timing_line(line)) else {
@@ -148,6 +148,20 @@ fn parse_cues(text: &str) -> Vec<Cue> {
         });
     }
     cues
+}
+
+fn is_metadata_block(lines: &[&str]) -> bool {
+    let Some(first) = lines.first() else {
+        return false;
+    };
+    let upper = first.trim().to_ascii_uppercase();
+    upper == "WEBVTT"
+        || upper.starts_with("WEBVTT ")
+        || upper == "STYLE"
+        || upper == "REGION"
+        || upper == "NOTE"
+        || upper.starts_with("NOTE ")
+        || upper.starts_with("NOTE\t")
 }
 
 fn is_timing_line(line: &str) -> bool {
@@ -244,6 +258,14 @@ mod tests {
             cues[0].payload,
             "NOTE visible text\nSTYLE guide\nREGION name\nX-TIMESTAMP-MAP=literal payload"
         );
+    }
+
+    #[test]
+    fn metadata_blocks_with_timing_like_text_are_not_cues() {
+        let vtt = "WEBVTT\n\nNOTE parser diagnostics\n00:00:01.000 --> 00:00:02.000\nnot a cue\n\n00:00:03.000 --> 00:00:04.000\nreal cue\n";
+        let cues = parse_cues(vtt);
+        assert_eq!(cues.len(), 1);
+        assert_eq!(cues[0].payload, "real cue");
     }
 
     #[test]
