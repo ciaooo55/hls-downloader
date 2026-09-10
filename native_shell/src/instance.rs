@@ -189,7 +189,9 @@ mod tests {
     #[test]
     fn only_lock_contention_is_reported_as_an_existing_instance() {
         use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_LOCK_VIOLATION};
-        assert!(is_already_running_error(&lock_failure(ERROR_LOCK_VIOLATION)));
+        assert!(is_already_running_error(&lock_failure(
+            ERROR_LOCK_VIOLATION
+        )));
         let unexpected = lock_failure(ERROR_ACCESS_DENIED);
         assert!(!is_already_running_error(&unexpected));
         assert!(unexpected.starts_with("LockFileEx failed:"));
