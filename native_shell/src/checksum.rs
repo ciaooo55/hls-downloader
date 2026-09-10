@@ -1,6 +1,6 @@
 //! Whole-file digest check before a download is published.
 
-use crate::crypto_lite::{sha1_hex, Sha256Hasher};
+use crate::crypto_lite::Sha256Hasher;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -87,10 +87,17 @@ pub fn hash_file(path: &Path, algorithm: Algorithm) -> Result<String, String> {
                 .collect())
         }
         Algorithm::Sha1 => {
-            let mut data = Vec::new();
-            file.read_to_end(&mut data)
-                .map_err(|error| format!("read for checksum: {error}"))?;
-            Ok(sha1_hex(&data))
+            let mut hasher = Sha1Hasher::new();
+            loop {
+                let count = file
+                    .read(&mut buffer)
+                    .map_err(|error| format!("read for checksum: {error}"))?;
+                if count == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..count]);
+            }
+            Ok(hasher.finish_hex())
         }
         Algorithm::Md5 => {
             let mut hasher = Md5Hasher::new();
@@ -143,6 +150,116 @@ pub fn verify_file_result(
 
 fn is_hex(value: &str) -> bool {
     !value.is_empty() && value.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+struct Sha1Hasher {
+    state: [u32; 5],
+    buffer: [u8; 64],
+    filled: usize,
+    total_bytes: u64,
+}
+
+impl Sha1Hasher {
+    fn new() -> Self {
+        Self {
+            state: [
+                0x67452301,
+                0xefcdab89,
+                0x98badcfe,
+                0x10325476,
+                0xc3d2e1f0,
+            ],
+            buffer: [0; 64],
+            filled: 0,
+            total_bytes: 0,
+        }
+    }
+
+    fn update(&mut self, mut data: &[u8]) {
+        self.total_bytes += data.len() as u64;
+        if self.filled > 0 {
+            let take = (64 - self.filled).min(data.len());
+            self.buffer[self.filled..self.filled + take].copy_from_slice(&data[..take]);
+            self.filled += take;
+            data = &data[take..];
+            if self.filled == 64 {
+                sha1_compress(&mut self.state, &self.buffer);
+                self.filled = 0;
+            }
+        }
+        while data.len() >= 64 {
+            let mut block = [0u8; 64];
+            block.copy_from_slice(&data[..64]);
+            sha1_compress(&mut self.state, &block);
+            data = &data[64..];
+        }
+        if !data.is_empty() {
+            self.buffer[..data.len()].copy_from_slice(data);
+            self.filled = data.len();
+        }
+    }
+
+    fn finish_hex(mut self) -> String {
+        let bit_len = self.total_bytes * 8;
+        self.buffer[self.filled] = 0x80;
+        self.filled += 1;
+        if self.filled > 56 {
+            for slot in self.buffer.iter_mut().skip(self.filled) {
+                *slot = 0;
+            }
+            sha1_compress(&mut self.state, &self.buffer);
+            self.filled = 0;
+        }
+        for slot in self.buffer.iter_mut().take(56).skip(self.filled) {
+            *slot = 0;
+        }
+        self.buffer[56..64].copy_from_slice(&bit_len.to_be_bytes());
+        sha1_compress(&mut self.state, &self.buffer);
+        let mut out = [0u8; 20];
+        for (index, word) in self.state.iter().enumerate() {
+            out[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+        }
+        out.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+}
+
+fn sha1_compress(state: &mut [u32; 5], chunk: &[u8; 64]) {
+    let mut w = [0u32; 80];
+    for (index, part) in chunk.as_chunks::<4>().0.iter().enumerate() {
+        w[index] = u32::from_be_bytes(*part);
+    }
+    for index in 16..80 {
+        w[index] = (w[index - 3] ^ w[index - 8] ^ w[index - 14] ^ w[index - 16]).rotate_left(1);
+    }
+    let mut a = state[0];
+    let mut b = state[1];
+    let mut c = state[2];
+    let mut d = state[3];
+    let mut e = state[4];
+    for (index, word) in w.iter().enumerate() {
+        let (f, k) = match index {
+            0..=19 => ((b & c) | ((!b) & d), 0x5a827999),
+            20..=39 => (b ^ c ^ d, 0x6ed9eba1),
+            40..=59 => ((b & c) | (b & d) | (c & d), 0x8f1bbcdc),
+            _ => (b ^ c ^ d, 0xca62c1d6),
+        };
+        let temp = a
+            .rotate_left(5)
+            .wrapping_add(f)
+            .wrapping_add(e)
+            .wrapping_add(k)
+            .wrapping_add(*word);
+        e = d;
+        d = c;
+        c = b.rotate_left(30);
+        b = a;
+        a = temp;
+    }
+    state[0] = state[0].wrapping_add(a);
+    state[1] = state[1].wrapping_add(b);
+    state[2] = state[2].wrapping_add(c);
+    state[3] = state[3].wrapping_add(d);
+    state[4] = state[4].wrapping_add(e);
 }
 
 struct Md5Hasher {
@@ -310,6 +427,22 @@ mod tests {
             let error = verify_file_result(&path, checksum).unwrap_err();
             assert!(error.contains("malformed or unsupported"));
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sha1_file_hash_streams_across_read_boundaries() {
+        let dir = std::env::temp_dir().join("v7-checksum-sha1-stream");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("large.bin");
+        let data = (0..(64 * 1024 + 257))
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        std::fs::write(&path, &data).unwrap();
+        assert_eq!(
+            hash_file(&path, Algorithm::Sha1).unwrap(),
+            crate::crypto_lite::sha1_hex(&data)
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
