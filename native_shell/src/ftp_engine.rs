@@ -138,7 +138,8 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
         0
     };
     if resume_from > 0 {
-        command(&mut ctrl, &format!("REST {resume_from}"))?;
+        let reply = command(&mut ctrl, &format!("REST {resume_from}"))?;
+        require_reply_code(&reply, &[350], "REST")?;
     }
     let pasv = command(&mut ctrl, "PASV")?;
     let data_port = parse_pasv_port(&pasv)?;
@@ -149,7 +150,8 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     } else {
         Conn::Plain(data_raw)
     };
-    command(&mut ctrl, &format!("RETR {}", target.path))?;
+    let reply = command(&mut ctrl, &format!("RETR {}", target.path))?;
+    require_reply_code(&reply, &[125, 150], "RETR")?;
     let mut file = if resume_from > 0 {
         std::fs::OpenOptions::new()
             .append(true)
@@ -182,7 +184,15 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
         crate::http_engine::write_progress(&progress, downloaded, size, 0.0, "downloading");
         crate::net_policy::consume(count);
     }
-    let _ = size;
+    drop(data);
+    file.flush().map_err(|error| error.to_string())?;
+    let reply = read_reply(&mut ctrl)?;
+    require_reply_code(&reply, &[226, 250], "transfer completion")?;
+    if size > 0 && downloaded != size {
+        return Err(format!(
+            "FTP transfer size mismatch: expected {size}, received {downloaded}"
+        ));
+    }
     Ok(downloaded)
 }
 
@@ -220,19 +230,74 @@ fn command(stream: &mut Conn, line: &str) -> Result<String, String> {
     read_reply(stream)
 }
 
+fn reply_code(reply: &str) -> Option<u16> {
+    let bytes = reply.as_bytes().get(..3)?;
+    if !bytes.iter().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok()?.parse().ok()
+}
+
+fn require_reply_code(reply: &str, allowed: &[u16], action: &str) -> Result<(), String> {
+    if reply_code(reply).is_some_and(|code| allowed.contains(&code)) {
+        return Ok(());
+    }
+    let summary = reply.trim().chars().take(200).collect::<String>();
+    let summary = if summary.is_empty() {
+        "empty reply".to_string()
+    } else {
+        summary
+    };
+    Err(format!("FTP {action} rejected: {summary}"))
+}
+
+fn reply_is_complete(reply: &[u8]) -> Result<bool, String> {
+    if !reply.ends_with(b"\r\n") {
+        return Ok(false);
+    }
+    let first_end = reply
+        .windows(2)
+        .position(|pair| pair == b"\r\n")
+        .ok_or_else(|| "FTP reply is missing a complete first line".to_string())?;
+    let first = &reply[..first_end];
+    if first.len() < 3 || !first[..3].iter().all(|byte| byte.is_ascii_digit()) {
+        return Err("FTP reply is missing a valid status code".into());
+    }
+    if first.len() == 3 {
+        return Ok(true);
+    }
+    match first[3] {
+        b' ' => Ok(true),
+        b'-' => {
+            let code = &first[..3];
+            let body = &reply[..reply.len() - 2];
+            let last_start = body
+                .windows(2)
+                .rposition(|pair| pair == b"\r\n")
+                .map(|index| index + 2)
+                .unwrap_or(0);
+            let last = &body[last_start..];
+            Ok(last.len() >= 3
+                && &last[..3] == code
+                && (last.len() == 3 || last.get(3) == Some(&b' ')))
+        }
+        _ => Err("FTP reply status separator is invalid".into()),
+    }
+}
+
 fn read_reply(stream: &mut Conn) -> Result<String, String> {
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
     while buf.len() < 8192 {
         if stream.read(&mut byte).map_err(|error| error.to_string())? == 0 {
-            break;
+            return Err("FTP control connection closed before a complete reply".into());
         }
         buf.push(byte[0]);
-        if buf.ends_with(b"\r\n") && buf.len() >= 4 && buf[3] == b' ' {
-            break;
+        if buf.ends_with(b"\r\n") && reply_is_complete(&buf)? {
+            return String::from_utf8(buf).map_err(|error| error.to_string());
         }
     }
-    String::from_utf8(buf).map_err(|error| error.to_string())
+    Err("FTP reply exceeds the 8192-byte safety limit".into())
 }
 
 fn parse_pasv_port(reply: &str) -> Result<u16, String> {
@@ -293,5 +358,23 @@ mod tests {
         );
         assert!(parse_pasv_port("227 Entering Passive Mode (169,254,169,254,0,0)").is_err());
         assert!(parse_pasv_port("227 no-parens").is_err());
+    }
+
+    #[test]
+    fn recognizes_single_and_multiline_replies() {
+        assert_eq!(reply_code("350 Restarting at 1024\r\n"), Some(350));
+        assert!(reply_is_complete(b"220 Ready\r\n").unwrap());
+        assert!(!reply_is_complete(b"220-Welcome\r\nfeature line\r\n").unwrap());
+        assert!(reply_is_complete(b"220-Welcome\r\nfeature line\r\n220 Ready\r\n").unwrap());
+        assert!(reply_is_complete(b"broken\r\n").is_err());
+    }
+
+    #[test]
+    fn transfer_reply_checks_fail_closed() {
+        assert!(require_reply_code("350 Restarting\r\n", &[350], "REST").is_ok());
+        assert!(require_reply_code("500 REST unsupported\r\n", &[350], "REST").is_err());
+        assert!(require_reply_code("150 Opening data\r\n", &[125, 150], "RETR").is_ok());
+        assert!(require_reply_code("226 Transfer complete\r\n", &[226, 250], "transfer completion").is_ok());
+        assert!(require_reply_code("426 Transfer aborted\r\n", &[226, 250], "transfer completion").is_err());
     }
 }
