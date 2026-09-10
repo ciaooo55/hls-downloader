@@ -79,7 +79,10 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
                     if value.starts_with('@') {
                         return Err("不能导入引用本机文件的 cURL 请求体".into());
                     }
-                    body = value;
+                    if !body.is_empty() {
+                        body.push('&');
+                    }
+                    body.push_str(&value);
                     if method == "GET" {
                         method = "POST".into();
                     }
@@ -220,6 +223,17 @@ mod tests {
         assert_eq!(parsed.cookie, "a=1");
         assert_eq!(parsed.referer, "https://ref.test");
         assert_eq!(parsed.body, "q=1");
+    }
+
+    #[test]
+    fn joins_repeated_data_options_like_curl() {
+        let parsed = parse_curl_command(
+            r#"curl -d "name=daniel" --data-raw "skill=lousy" https://cdn.test/form"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(parsed.method, "POST");
+        assert_eq!(parsed.body, "name=daniel&skill=lousy");
     }
 
     #[test]
