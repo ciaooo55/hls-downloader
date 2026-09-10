@@ -174,15 +174,11 @@ mod tests {
     fn mux_maps_every_selected_track() {
         assert_eq!(
             mux_map_args(false, 2),
-            vec![
-                "-map", "0:v:0?", "-map", "0:a:0?", "-map", "1:s:0", "-map", "2:s:0"
-            ]
+            vec!["-map", "0:v:0?", "-map", "0:a:0?", "-map", "1:s:0", "-map", "2:s:0"]
         );
         assert_eq!(
             mux_map_args(true, 2),
-            vec![
-                "-map", "0:v:0?", "-map", "1:a:0", "-map", "2:s:0", "-map", "3:s:0"
-            ]
+            vec!["-map", "0:v:0?", "-map", "1:a:0", "-map", "2:s:0", "-map", "3:s:0"]
         );
     }
 }
