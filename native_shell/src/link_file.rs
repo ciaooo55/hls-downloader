@@ -61,7 +61,12 @@ pub fn urls_from_path(path: &Path) -> Result<Vec<String>, String> {
 
 fn decode_local_path(source: &str) -> PathBuf {
     let trimmed = source.trim().trim_matches('"');
-    let Some(rest) = trimmed.strip_prefix("file:") else {
+    let rest = if trimmed
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("file:"))
+    {
+        &trimmed[5..]
+    } else {
         return PathBuf::from(trimmed);
     };
     let rest = rest.trim_start_matches('/');
@@ -445,6 +450,13 @@ mod tests {
         let text = "https://cdn.test/A.bin\nhttps://cdn.test/a.bin\n";
         assert_eq!(extract_download_urls(text, "txt").unwrap().len(), 2);
         assert_eq!(collect_absolute_urls(text).len(), 2);
+    }
+
+    #[test]
+    fn file_scheme_is_case_insensitive() {
+        let lower = decode_local_path("file:///tmp/demo%20file.txt");
+        assert_eq!(decode_local_path("FILE:///tmp/demo%20file.txt"), lower);
+        assert_eq!(decode_local_path("FiLe:///tmp/demo%20file.txt"), lower);
     }
 
     #[test]
