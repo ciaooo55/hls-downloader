@@ -374,7 +374,17 @@ mod tests {
         assert!(require_reply_code("350 Restarting\r\n", &[350], "REST").is_ok());
         assert!(require_reply_code("500 REST unsupported\r\n", &[350], "REST").is_err());
         assert!(require_reply_code("150 Opening data\r\n", &[125, 150], "RETR").is_ok());
-        assert!(require_reply_code("226 Transfer complete\r\n", &[226, 250], "transfer completion").is_ok());
-        assert!(require_reply_code("426 Transfer aborted\r\n", &[226, 250], "transfer completion").is_err());
+        assert!(require_reply_code(
+            "226 Transfer complete\r\n",
+            &[226, 250],
+            "transfer completion"
+        )
+        .is_ok());
+        assert!(require_reply_code(
+            "426 Transfer aborted\r\n",
+            &[226, 250],
+            "transfer completion"
+        )
+        .is_err());
     }
 }
