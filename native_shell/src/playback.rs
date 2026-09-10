@@ -11,6 +11,8 @@ use std::thread;
 static PORT: AtomicU16 = AtomicU16::new(0);
 
 const STREAM_CHUNK: usize = 64 * 1024;
+const REQUEST_HEADER_LIMIT: usize = 16 * 1024;
+const REQUEST_HEADER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Clone)]
 pub struct MediaServer {
@@ -196,15 +198,47 @@ fn peer_allowed(ip: IpAddr, lan: bool) -> bool {
     }
 }
 
+fn read_request_headers(stream: &mut TcpStream) -> Result<String, String> {
+    stream
+        .set_read_timeout(Some(REQUEST_HEADER_TIMEOUT))
+        .map_err(|error| error.to_string())?;
+    let mut request = Vec::with_capacity(1024);
+    let mut buf = [0u8; 1024];
+    while request.len() < REQUEST_HEADER_LIMIT {
+        let remaining = REQUEST_HEADER_LIMIT - request.len();
+        let read_len = buf.len().min(remaining);
+        let count = match stream.read(&mut buf[..read_len]) {
+            Ok(count) => count,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Err("media request headers timed out".into());
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        if count == 0 {
+            return Err("media request closed before headers completed".into());
+        }
+        request.extend_from_slice(&buf[..count]);
+        if let Some(index) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            return Ok(String::from_utf8_lossy(&request[..index + 4]).into_owned());
+        }
+    }
+    Err(format!(
+        "media request headers exceed {REQUEST_HEADER_LIMIT} bytes"
+    ))
+}
+
 fn handle_client(
     mut stream: TcpStream,
     mounts: &[(String, Mount)],
     port: u16,
 ) -> Result<(), String> {
     let peer = stream.peer_addr().ok().map(|addr| addr.ip());
-    let mut buf = [0u8; 4096];
-    let count = stream.read(&mut buf).map_err(|error| error.to_string())?;
-    let request = String::from_utf8_lossy(&buf[..count]);
+    let request = read_request_headers(&mut stream)?;
     let path = request
         .lines()
         .next()
@@ -332,11 +366,13 @@ fn safe_join(dir: &Path, sub: &str) -> Option<PathBuf> {
 fn range_header(request: &str) -> Option<&str> {
     request.lines().skip(1).find_map(|line| {
         let (name, value) = line.split_once(':')?;
-        if name.trim().eq_ignore_ascii_case("range") {
-            value.trim().strip_prefix("bytes=")
-        } else {
-            None
+        if !name.trim().eq_ignore_ascii_case("range") {
+            return None;
         }
+        let (unit, range) = value.trim().split_once('=')?;
+        unit.trim()
+            .eq_ignore_ascii_case("bytes")
+            .then_some(range.trim())
     })
 }
 
@@ -478,6 +514,31 @@ mod tests {
         stream
             .write_all(b"GET /media/task-1 HTTP/1.1\r\nrange: bytes=2-5\r\n\r\n")
             .unwrap();
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).unwrap();
+        let text = String::from_utf8_lossy(&buf);
+        assert!(text.contains("206"));
+        assert!(text.contains("2345"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fragmented_mixed_case_range_is_served() {
+        let server = MediaServer::start().unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("hls-play-split-range-{}", std::process::id()));
+        fs_create(&dir);
+        let file = dir.join("a.bin");
+        std::fs::write(&file, b"0123456789").unwrap();
+        server.mount("task-split", file);
+        let mut stream = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        stream
+            .write_all(b"GET /media/task-split HTTP/1.1\r\nHost: localhost\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        stream.write_all(b"Range: Bytes=2-5\r\n\r\n").unwrap();
         let mut buf = Vec::new();
         stream.read_to_end(&mut buf).unwrap();
         let text = String::from_utf8_lossy(&buf);
