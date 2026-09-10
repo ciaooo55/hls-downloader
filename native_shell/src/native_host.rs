@@ -291,8 +291,8 @@ impl NativeHostSession {
             }
         }
 
-        let credential_ref = self.persist_browser_context(payload)?;
         let mut offer = parse_offer(payload)?;
+        let credential_ref = self.persist_browser_context(payload)?;
         offer.credential_ref = credential_ref;
         let id = next_handoff_id();
         offer.handoff_id = id.clone();
@@ -329,8 +329,8 @@ impl NativeHostSession {
 
     fn download(&mut self, message: &Value) -> Result<Value, String> {
         let payload = resource_payload(message)?;
-        let credential_ref = self.persist_browser_context(payload)?;
         let offer = parse_offer(payload)?;
+        let credential_ref = self.persist_browser_context(payload)?;
         let filename = filename(payload, &offer.url);
         let events = self.core.handle(CoreCommand::CreateTask {
             spec: TaskSpec {
@@ -1160,13 +1160,28 @@ mod tests {
     #[test]
     fn browser_offer_rejects_javascript_and_file_urls() {
         let mut session = NativeHostSession::in_memory().unwrap();
+        let sequence_before_invalid = NEXT_HANDOFF.load(Ordering::Relaxed);
         let javascript = session
             .dispatch(&json!({
                 "op": "offer",
-                "resource": { "url": "javascript:alert(1)" }
+                "resource": {
+                    "url": "javascript:alert(1)",
+                    "cookie": "session=must-not-be-vaulted"
+                }
             }))
             .unwrap_err();
         assert!(javascript.contains("不受支持"));
+        let invalid_download = session
+            .dispatch(&json!({
+                "op": "download",
+                "resource": {
+                    "url": "javascript:alert(2)",
+                    "cookie": "session=must-not-be-vaulted"
+                }
+            }))
+            .unwrap_err();
+        assert!(invalid_download.contains("不受支持"));
+        assert_eq!(NEXT_HANDOFF.load(Ordering::Relaxed), sequence_before_invalid);
         let file = session
             .dispatch(&json!({
                 "op": "offer",
