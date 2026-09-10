@@ -20,11 +20,38 @@ class MemoryStorage implements IntentStorageArea {
   }
 }
 
+class DelayedFirstSetStorage extends MemoryStorage {
+  private first = true
+  private releaseFirst!: () => void
+  private readonly firstGate = new Promise<void>(resolve => { this.releaseFirst = resolve })
+  private markFirstStarted!: () => void
+  readonly firstStarted = new Promise<void>(resolve => { this.markFirstStarted = resolve })
+
+  allowFirst() { this.releaseFirst() }
+
+  override async set(items: Record<string, unknown>): Promise<void> {
+    this.sets += 1
+    if (this.first) {
+      this.first = false
+      this.markFirstStarted()
+      await this.firstGate
+    }
+    this.values = { ...this.values, ...items }
+  }
+}
+
 function intent(overrides: Partial<DownloadClickIntent> = {}): DownloadClickIntent {
   return {
     href: 'https://site.test/download?id=7', pageUrl: 'https://site.test/page',
     tabId: 3, frameId: 0, altBypass: false, ctrlForce: false, generic: false,
     opensNewTab: false, controlHint: true, at: 10_000, ...overrides,
+  }
+}
+
+function matchingDownload() {
+  return {
+    url: 'https://cdn.test/file.zip', referrer: 'https://site.test/page', tabId: 3,
+    chainUrls: ['https://site.test/download?id=7', 'https://cdn.test/file.zip'],
   }
 }
 
@@ -55,11 +82,24 @@ describe('persistent click-intent store', () => {
     const storage = new MemoryStorage()
     const store = new ClickIntentStore(storage, 'intents', () => 10_300)
     await store.remember(intent())
-    const download = {
-      url: 'https://cdn.test/file.zip', referrer: 'https://site.test/page', tabId: 3,
-      chainUrls: ['https://site.test/download?id=7', 'https://cdn.test/file.zip'],
-    }
+    const download = matchingDownload()
     await expect(store.consume(download)).resolves.toMatchObject({ tabId: 3 })
     await expect(store.consume(download)).resolves.toBeUndefined()
+  })
+
+  it('does not let a slow remember write resurrect an already consumed click', async () => {
+    const storage = new DelayedFirstSetStorage()
+    const store = new ClickIntentStore(storage, 'intents', () => 10_300)
+    const remembering = store.remember(intent())
+    await storage.firstStarted
+
+    const consuming = store.consume(matchingDownload())
+    await Promise.resolve()
+    expect(storage.sets).toBe(1)
+
+    storage.allowFirst()
+    await remembering
+    await expect(consuming).resolves.toMatchObject({ tabId: 3 })
+    expect(storage.values.intents).toEqual([])
   })
 })

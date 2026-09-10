@@ -27,6 +27,7 @@ export class ClickIntentStore {
   private intents: DownloadClickIntent[] = []
   private hydrated = false
   private hydration: Promise<void> | null = null
+  private persistence: Promise<void> = Promise.resolve()
 
   constructor(
     private readonly storage: IntentStorageArea,
@@ -109,8 +110,11 @@ export class ClickIntentStore {
       .filter(intent => now - intent.at <= RETENTION_MS)
       .sort((left, right) => right.at - left.at)
       .slice(0, MAX_INTENTS)
+    const snapshot = [...this.intents]
+    const write = this.persistence.then(() => this.storage.set({ [this.key]: snapshot }))
+    this.persistence = write.catch(() => undefined)
     try {
-      await this.storage.set({ [this.key]: this.intents })
+      await write
     } catch {
       // The live service worker can still consume in-memory intents.
     }
