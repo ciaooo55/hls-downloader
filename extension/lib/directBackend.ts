@@ -1,3 +1,5 @@
+export const V7_CORE_PROTOCOL = 'hls-downloader-v7-core'
+
 export interface DirectBackendIdentity {
   version: string
   client_id: string
