@@ -112,7 +112,7 @@ fn parse_cues(text: &str) -> Vec<Cue> {
     let cleaned = text.replace('\u{feff}', "").replace("\r\n", "\n");
     let mut cues = Vec::new();
     for block in cleaned.split("\n\n") {
-        let mut lines: Vec<&str> = block
+        let lines: Vec<&str> = block
             .split('\n')
             .map(|line| line.trim_end_matches('\r'))
             .filter(|line| !line.trim().is_empty())
@@ -120,14 +120,6 @@ fn parse_cues(text: &str) -> Vec<Cue> {
         if lines.is_empty() {
             continue;
         }
-        lines.retain(|line| {
-            let upper = line.trim().to_ascii_uppercase();
-            !(upper.starts_with("WEBVTT")
-                || upper.starts_with("NOTE")
-                || upper.starts_with("STYLE")
-                || upper.starts_with("REGION")
-                || upper.starts_with("X-TIMESTAMP-MAP"))
-        });
         let Some(timing_at) = lines.iter().position(|line| is_timing_line(line)) else {
             continue;
         };
@@ -241,6 +233,17 @@ mod tests {
         let merged =
             merge_webvtt_segments(&["WEBVTT\n\n00:00:01.500 --> 00:00:03.000\nhello\n".into()]);
         assert!(merged.contains("00:00:01.500 --> 00:00:03.000"));
+    }
+
+    #[test]
+    fn cue_payload_preserves_metadata_like_prefixes() {
+        let vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nNOTE visible text\nSTYLE guide\nREGION name\nX-TIMESTAMP-MAP=literal payload\n";
+        let cues = parse_cues(vtt);
+        assert_eq!(cues.len(), 1);
+        assert_eq!(
+            cues[0].payload,
+            "NOTE visible text\nSTYLE guide\nREGION name\nX-TIMESTAMP-MAP=literal payload"
+        );
     }
 
     #[test]
