@@ -123,6 +123,19 @@ fn lock_path() -> PathBuf {
 }
 
 #[cfg(windows)]
+fn lock_failure(error: u32) -> String {
+    use windows_sys::Win32::Foundation::ERROR_LOCK_VIOLATION;
+    if error == ERROR_LOCK_VIOLATION {
+        already_running_error("native shell")
+    } else {
+        format!(
+            "LockFileEx failed: {}",
+            std::io::Error::from_raw_os_error(error as i32)
+        )
+    }
+}
+
+#[cfg(windows)]
 fn try_exclusive_lock(file: &File) -> Result<(), String> {
     use std::mem::zeroed;
     use std::os::windows::io::AsRawHandle;
@@ -143,8 +156,8 @@ fn try_exclusive_lock(file: &File) -> Result<(), String> {
         )
     };
     if ok == 0 {
-        let _ = unsafe { GetLastError() };
-        return Err(already_running_error("native shell"));
+        let error = unsafe { GetLastError() };
+        return Err(lock_failure(error));
     }
     Ok(())
 }
@@ -170,5 +183,15 @@ mod tests {
         assert!(lock_path().file_name().unwrap() == "instance.lock");
         let presenter = crate::default_v7_database_path().with_file_name("presenter.lock");
         assert_eq!(presenter.file_name().unwrap(), "presenter.lock");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn only_lock_contention_is_reported_as_an_existing_instance() {
+        use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_LOCK_VIOLATION};
+        assert!(is_already_running_error(&lock_failure(ERROR_LOCK_VIOLATION)));
+        let unexpected = lock_failure(ERROR_ACCESS_DENIED);
+        assert!(!is_already_running_error(&unexpected));
+        assert!(unexpected.starts_with("LockFileEx failed:"));
     }
 }
