@@ -28,9 +28,6 @@ pub fn choose_output_path(path: &Path, policy: &str) -> Result<PathBuf, String> 
         return Err(format!("target already exists: {}", dest.display()));
     }
     if policy == "overwrite" || (policy == "skip" && size == 0) {
-        if dest.is_file() {
-            fs::remove_file(&dest).map_err(|error| format!("overwrite output: {error}"))?;
-        }
         return Ok(dest);
     }
     let stem = dest
@@ -55,6 +52,52 @@ pub fn choose_output_path(path: &Path, policy: &str) -> Result<PathBuf, String> 
     ))
 }
 
+fn backup_path(dest: &Path) -> Result<PathBuf, String> {
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    let original = dest.file_name().unwrap_or_default();
+    for index in 0..10_000 {
+        let mut name = original.to_os_string();
+        name.push(format!(".hls-backup-{}-{index}", std::process::id()));
+        let candidate = parent.join(name);
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(format!(
+        "cannot allocate output backup name: {}",
+        dest.display()
+    ))
+}
+
+fn publish_payload(source: &Path, dest: &Path, keep_temp: bool) -> Result<(), String> {
+    if keep_temp {
+        // Keeping temporary files must have the same meaning on same-volume and
+        // cross-volume work directories. A rename would consume the working
+        // payload, so explicitly copy when the user asked to retain it.
+        return fs::copy(source, dest)
+            .map(|_| ())
+            .map_err(|error| format!("publish completed output: {error}"));
+    }
+
+    if fs::rename(source, dest).is_ok() {
+        return Ok(());
+    }
+
+    // Cross-volume publication cannot use rename. Copy the completed file,
+    // then remove the working payload so a successful download does not leave
+    // a second full-size copy under .hls-tasks.
+    fs::copy(source, dest)
+        .map(|_| ())
+        .map_err(|error| format!("publish completed output: {error}"))?;
+    if let Err(error) = fs::remove_file(source) {
+        eprintln!(
+            "published output but could not remove temporary payload {}: {error}",
+            source.display()
+        );
+    }
+    Ok(())
+}
+
 pub fn publish_file(
     source: &Path,
     dest: &Path,
@@ -63,35 +106,46 @@ pub fn publish_file(
 ) -> Result<PathBuf, String> {
     // Selection and publication must be one process-wide operation. Otherwise two
     // downloads finishing together can both select the same rename suffix and the
-    // later publisher can delete the first task's completed file.
+    // later publisher can replace the first task's completed file.
     let _publish_guard = OUTPUT_PUBLISH_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
         .map_err(|_| "output publication lock poisoned".to_string())?;
 
     let dest = choose_output_path(dest, policy)?;
-    if dest.exists() {
-        fs::remove_file(&dest).map_err(|error| format!("replace existing output: {error}"))?;
+    let backup = if dest.exists() {
+        if !dest.is_file() {
+            return Err(format!("target is not a file: {}", dest.display()));
+        }
+        let backup = backup_path(&dest)?;
+        fs::rename(&dest, &backup)
+            .map_err(|error| format!("prepare existing output replacement: {error}"))?;
+        Some(backup)
+    } else {
+        None
+    };
+
+    if let Err(error) = publish_payload(source, &dest, keep_temp) {
+        if dest.exists() {
+            let _ = fs::remove_file(&dest);
+        }
+        if let Some(backup) = &backup {
+            if let Err(restore_error) = fs::rename(backup, &dest) {
+                return Err(format!(
+                    "{error}; restore existing output {} failed: {restore_error}; backup kept at {}",
+                    dest.display(),
+                    backup.display()
+                ));
+            }
+        }
+        return Err(error);
     }
 
-    if keep_temp {
-        // Keeping temporary files must have the same meaning on same-volume and
-        // cross-volume work directories. A rename would consume the working
-        // payload, so explicitly copy when the user asked to retain it.
-        fs::copy(source, &dest)
-            .map(|_| ())
-            .map_err(|error| format!("publish completed output: {error}"))?;
-    } else if fs::rename(source, &dest).is_err() {
-        // Cross-volume publication cannot use rename. Copy the completed file,
-        // then remove the working payload so a successful download does not
-        // leave a second full-size copy under .hls-tasks.
-        fs::copy(source, &dest)
-            .map(|_| ())
-            .map_err(|error| format!("publish completed output: {error}"))?;
-        if let Err(error) = fs::remove_file(source) {
+    if let Some(backup) = backup {
+        if let Err(error) = fs::remove_file(&backup) {
             eprintln!(
-                "published output but could not remove temporary payload {}: {error}",
-                source.display()
+                "published output but could not remove previous-output backup {}: {error}",
+                backup.display()
             );
         }
     }
@@ -171,6 +225,38 @@ mod tests {
         assert!(!source.exists());
         assert!(!work.join("control").exists());
         assert!(!work.join("progress.json").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn overwrite_replaces_existing_file_only_after_publish_can_start() {
+        let dir = test_dir("overwrite-success");
+        let work = dir.join("work");
+        let output = dir.join("downloads").join("clip.mp4");
+        fs::create_dir_all(&work).unwrap();
+        fs::create_dir_all(output.parent().unwrap()).unwrap();
+        let source = work.join("payload.downloading");
+        fs::write(&source, b"new-payload").unwrap();
+        fs::write(&output, b"old-payload").unwrap();
+
+        let published = publish_file(&source, &output, "overwrite", false).unwrap();
+        assert_eq!(published, output);
+        assert_eq!(fs::read(&published).unwrap(), b"new-payload");
+        assert!(!source.exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn overwrite_failure_restores_existing_file() {
+        let dir = test_dir("overwrite-restore");
+        let output = dir.join("downloads").join("clip.mp4");
+        fs::create_dir_all(output.parent().unwrap()).unwrap();
+        fs::write(&output, b"old-payload").unwrap();
+        let missing_source = dir.join("work").join("missing.downloading");
+
+        let error = publish_file(&missing_source, &output, "overwrite", false).unwrap_err();
+        assert!(error.contains("publish completed output"));
+        assert_eq!(fs::read(&output).unwrap(), b"old-payload");
         let _ = fs::remove_dir_all(dir);
     }
 
