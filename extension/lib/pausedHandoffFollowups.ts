@@ -100,6 +100,7 @@ export class PausedHandoffFollowUpStore {
   private followUps: PausedHandoffFollowUp[] = []
   private hydrated = false
   private hydration: Promise<void> | null = null
+  private persistence: Promise<void> = Promise.resolve()
 
   constructor(
     private readonly storage: FollowUpStorageArea,
@@ -145,8 +146,11 @@ export class PausedHandoffFollowUpStore {
   }
 
   private async persist(): Promise<void> {
+    const snapshot = this.list()
+    const write = this.persistence.then(() => this.storage.set({ [this.key]: snapshot }))
+    this.persistence = write.catch(() => undefined)
     try {
-      await this.storage.set({ [this.key]: this.list() })
+      await write
     } catch {
       // The live service worker can still act on in-memory follow-ups.
     }

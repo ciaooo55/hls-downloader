@@ -23,6 +23,26 @@ class MemoryStorage implements FollowUpStorageArea {
   }
 }
 
+class DelayedFirstSetStorage extends MemoryStorage {
+  private first = true
+  private releaseFirst!: () => void
+  private readonly firstGate = new Promise<void>(resolve => { this.releaseFirst = resolve })
+  private markFirstStarted!: () => void
+  readonly firstStarted = new Promise<void>(resolve => { this.markFirstStarted = resolve })
+
+  allowFirst() { this.releaseFirst() }
+
+  override async set(items: Record<string, unknown>): Promise<void> {
+    this.sets += 1
+    if (this.first) {
+      this.first = false
+      this.markFirstStarted()
+      await this.firstGate
+    }
+    Object.assign(this.values, items)
+  }
+}
+
 function followUp(overrides: Partial<PausedHandoffFollowUp> = {}): PausedHandoffFollowUp {
   return {
     downloadId: 7, handoffId: 'handoff-1', phase: 'resolution',
@@ -60,6 +80,23 @@ describe('paused handoff follow-up store', () => {
     }
     expect(store.list().length).toBe(29)
     expect(storage.values[PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY]).toHaveLength(29)
+  })
+
+  it('serializes whole-list persistence so an older snapshot cannot erase a newer handoff', async () => {
+    const storage = new DelayedFirstSetStorage()
+    let now = 1_000
+    const store = new PausedHandoffFollowUpStore(storage, PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY, () => now++)
+
+    const first = store.remember({ downloadId: 1, handoffId: 'handoff-1', phase: 'resolution', deadline: 61_000 })
+    await storage.firstStarted
+    const second = store.remember({ downloadId: 2, handoffId: 'handoff-2', phase: 'resolution', deadline: 62_000 })
+
+    storage.allowFirst()
+    await Promise.all([first, second])
+
+    expect(store.list().map(item => item.handoffId)).toEqual(['handoff-1', 'handoff-2'])
+    expect((storage.values[PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY] as PausedHandoffFollowUp[])
+      .map(item => item.handoffId)).toEqual(['handoff-1', 'handoff-2'])
   })
 
   it('drops a finished follow-up without writing again for unknown ids', async () => {
