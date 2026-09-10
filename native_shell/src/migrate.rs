@@ -526,7 +526,10 @@ fn load_legacy_tasks(
                     total_bytes: optional_u64(row, 7),
                     downloaded_bytes: optional_u64(row, 8).unwrap_or(0),
                     speed_limit_kib: row.get::<_, i64>(9).ok(),
-                    output_path: row.get::<_, String>(10).ok().filter(|path| !path.is_empty()),
+                    output_path: row
+                        .get::<_, String>(10)
+                        .ok()
+                        .filter(|path| !path.is_empty()),
                     status: optional_string(row, 11),
                     referer: optional_string(row, 12),
                     origin: optional_string(row, 13),
