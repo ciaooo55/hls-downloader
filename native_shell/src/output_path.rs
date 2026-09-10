@@ -62,9 +62,29 @@ pub fn publish_file(
     if dest.exists() {
         fs::remove_file(&dest).map_err(|error| format!("replace existing output: {error}"))?;
     }
-    fs::rename(source, &dest)
-        .or_else(|_| fs::copy(source, &dest).map(|_| ()))
-        .map_err(|error| format!("publish completed output: {error}"))?;
+
+    if keep_temp {
+        // Keeping temporary files must have the same meaning on same-volume and
+        // cross-volume work directories. A rename would consume the working
+        // payload, so explicitly copy when the user asked to retain it.
+        fs::copy(source, &dest)
+            .map(|_| ())
+            .map_err(|error| format!("publish completed output: {error}"))?;
+    } else if fs::rename(source, &dest).is_err() {
+        // Cross-volume publication cannot use rename. Copy the completed file,
+        // then remove the working payload so a successful download does not
+        // leave a second full-size copy under .hls-tasks.
+        fs::copy(source, &dest)
+            .map(|_| ())
+            .map_err(|error| format!("publish completed output: {error}"))?;
+        if let Err(error) = fs::remove_file(source) {
+            eprintln!(
+                "published output but could not remove temporary payload {}: {error}",
+                source.display()
+            );
+        }
+    }
+
     if !keep_temp {
         if let Some(parent) = source.parent() {
             let _ = fs::remove_file(parent.join("control"));
@@ -78,9 +98,20 @@ pub fn publish_file(
 mod tests {
     use super::*;
 
+    fn test_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "hls-v7-output-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
     #[test]
     fn rename_allocates_suffix() {
-        let dir = std::env::temp_dir().join("v6-output-rename");
+        let dir = test_dir("rename");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let first = dir.join("clip.mp4");
@@ -89,6 +120,46 @@ mod tests {
         assert_eq!(next.file_name().unwrap(), "clip_1.mp4");
         let skip = choose_output_path(&first, "skip").unwrap_err();
         assert!(skip.contains("already exists"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn keep_temp_copies_output_without_consuming_working_payload() {
+        let dir = test_dir("keep-temp");
+        let work = dir.join("work");
+        let output = dir.join("downloads").join("clip.mp4");
+        fs::create_dir_all(&work).unwrap();
+        let source = work.join("payload.downloading");
+        fs::write(&source, b"payload").unwrap();
+        fs::write(work.join("control"), b"run").unwrap();
+        fs::write(work.join("progress.json"), b"{}").unwrap();
+
+        let published = publish_file(&source, &output, "overwrite", true).unwrap();
+        assert_eq!(published, output);
+        assert_eq!(fs::read(&published).unwrap(), b"payload");
+        assert_eq!(fs::read(&source).unwrap(), b"payload");
+        assert!(work.join("control").exists());
+        assert!(work.join("progress.json").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn normal_publish_consumes_working_payload_and_control_files() {
+        let dir = test_dir("consume-temp");
+        let work = dir.join("work");
+        let output = dir.join("downloads").join("clip.mp4");
+        fs::create_dir_all(&work).unwrap();
+        let source = work.join("payload.downloading");
+        fs::write(&source, b"payload").unwrap();
+        fs::write(work.join("control"), b"run").unwrap();
+        fs::write(work.join("progress.json"), b"{}").unwrap();
+
+        let published = publish_file(&source, &output, "overwrite", false).unwrap();
+        assert_eq!(published, output);
+        assert_eq!(fs::read(&published).unwrap(), b"payload");
+        assert!(!source.exists());
+        assert!(!work.join("control").exists());
+        assert!(!work.join("progress.json").exists());
         let _ = fs::remove_dir_all(dir);
     }
 }
