@@ -126,11 +126,7 @@ pub fn verify_file_result(
     path: &Path,
     expected: &str,
 ) -> Result<Option<VerificationResult>, String> {
-    let normalized = expected
-        .trim()
-        .trim_matches('"')
-        .trim_matches('\'')
-        .trim();
+    let normalized = expected.trim().trim_matches('"').trim_matches('\'').trim();
     if normalized.is_empty() {
         return Ok(None);
     }
