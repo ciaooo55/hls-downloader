@@ -12,7 +12,7 @@ pub fn classify_url(url: &str) -> ResourceKind {
     } else if lower.starts_with("ftp://") || lower.starts_with("ftps://") {
         ResourceKind::Ftp
     } else if path.contains(".m3u8") || lower.contains("vnd.apple.mpegurl") {
-        if path.contains("live") {
+        if path.contains("live") || query_marks_live(&lower) {
             ResourceKind::Live
         } else {
             ResourceKind::Hls
@@ -22,6 +22,21 @@ pub fn classify_url(url: &str) -> ResourceKind {
     } else {
         ResourceKind::File
     }
+}
+
+fn query_marks_live(url: &str) -> bool {
+    let Some((_, query)) = url.split_once('?') else {
+        return false;
+    };
+    let query = query.split('#').next().unwrap_or(query);
+    query.split('&').any(|pair| {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if !key.eq_ignore_ascii_case("live") {
+            return false;
+        }
+        let value = value.trim();
+        value.is_empty() || !matches!(value, "0" | "false" | "no" | "off")
+    })
 }
 
 pub fn kind_label(kind: ResourceKind) -> &'static str {
@@ -108,7 +123,7 @@ pub fn probe_with_harvest_context(
             if status == 200 || status == 206 {
                 let text = String::from_utf8_lossy(&body);
                 if text.contains("#EXTM3U") {
-                    kind = if path_lower.contains("live") {
+                    kind = if path_lower.contains("live") || query_marks_live(url) {
                         ResourceKind::Live
                     } else {
                         ResourceKind::Hls
@@ -194,6 +209,18 @@ mod tests {
         );
         assert_eq!(
             classify_url("https://cdn/live/channel.m3u8?token=session"),
+            ResourceKind::Live
+        );
+        assert_eq!(
+            classify_url("https://cdn/movie.m3u8?live=1"),
+            ResourceKind::Live
+        );
+        assert_eq!(
+            classify_url("https://cdn/movie.m3u8?live=false"),
+            ResourceKind::Hls
+        );
+        assert_eq!(
+            classify_url("https://cdn/opaque?content_type=application/vnd.apple.mpegurl&live=1"),
             ResourceKind::Live
         );
         assert_eq!(
