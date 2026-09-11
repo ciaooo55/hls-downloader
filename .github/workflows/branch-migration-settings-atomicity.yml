@@ -1,0 +1,385 @@
+name: Branch migration settings atomicity
+
+on:
+  push:
+    branches:
+      - '网页版gpt'
+    paths:
+      - '.github/workflows/branch-migration-settings-atomicity.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    if: github.ref == 'refs/heads/网页版gpt'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: '网页版gpt'
+          fetch-depth: 0
+
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: '1.98.1'
+          components: rustfmt
+
+      - name: Apply exact migration atomicity patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $patch = @'
+          from pathlib import Path
+
+          path = Path("native_shell/src/migrate.rs")
+          text = path.read_text(encoding="utf-8")
+
+          start_marker = "fn import_settings(core: &mut PersistentCore, value: &Value) -> Result<(), String> {\n"
+          end_marker = "fn first_u64(value: &Value, keys: &[&str]) -> Option<u64> {\n"
+          start = text.find(start_marker)
+          end = text.find(end_marker)
+          if start < 0 or end < 0 or end <= start:
+              raise SystemExit("migration settings function markers were not found exactly once")
+          if text.find(start_marker, start + 1) >= 0 or text.find(end_marker, end + 1) >= 0:
+              raise SystemExit("migration settings function markers are ambiguous")
+
+          replacement = r'''fn import_settings(core: &mut PersistentCore, value: &Value) -> Result<(), String> {
+              let mut settings = BTreeMap::new();
+              let legal = value
+                  .get("legal_terms_accepted")
+                  .and_then(Value::as_bool)
+                  .unwrap_or(false)
+                  || value.as_object().is_some_and(|map| {
+                      map.keys()
+                          .any(|key| key.starts_with("legal_terms_accepted"))
+                          && map.iter().any(|(key, item)| {
+                              key.starts_with("legal_terms_accepted")
+                                  && match item {
+                                      Value::Bool(true) => true,
+                                      Value::String(text) => !text.trim().is_empty(),
+                                      _ => false,
+                                  }
+                          })
+                  });
+              if legal {
+                  settings.insert("legal_terms_accepted".into(), Value::Bool(true));
+              }
+              collect_u64(
+                  &mut settings,
+                  "download_speed_limit_kib",
+                  first_u64(value, &["download_speed_limit_kib"]),
+              );
+              collect_bool(
+                  &mut settings,
+                  "browser_takeover_enabled",
+                  first_bool(value, &["browser_takeover_enabled"]),
+              );
+              if let Some(bytes) = first_u64(value, &["browser_takeover_minimum_bytes"]) {
+                  collect_u64(
+                      &mut settings,
+                      "browser_takeover_minimum_bytes",
+                      Some(bytes),
+                  );
+              } else if let Some(mb) = first_u64(value, &["browser_takeover_min_mb"]) {
+                  collect_u64(
+                      &mut settings,
+                      "browser_takeover_minimum_bytes",
+                      Some(mb.saturating_mul(1024 * 1024)),
+                  );
+              }
+              collect_bool(
+                  &mut settings,
+                  "download_speed_schedule_enabled",
+                  first_bool(
+                      value,
+                      &["download_speed_schedule_enabled", "speed_schedule_enabled"],
+                  ),
+              );
+              collect_string(
+                  &mut settings,
+                  "download_speed_schedule_start",
+                  first_str(
+                      value,
+                      &["download_speed_schedule_start", "speed_schedule_start"],
+                  ),
+              );
+              collect_string(
+                  &mut settings,
+                  "download_speed_schedule_end",
+                  first_str(
+                      value,
+                      &["download_speed_schedule_end", "speed_schedule_end"],
+                  ),
+              );
+              collect_u64(
+                  &mut settings,
+                  "download_speed_schedule_kib",
+                  first_u64(
+                      value,
+                      &["download_speed_schedule_kib", "speed_schedule_limit_kib"],
+                  ),
+              );
+              collect_u64(
+                  &mut settings,
+                  "queue_max_active",
+                  first_u64(value, &["queue_max_active", "max_concurrent_tasks"])
+                      .map(|value| value.max(1)),
+              );
+              collect_string(&mut settings, "site_rules", first_str(value, &["site_rules"]));
+              collect_bool(
+                  &mut settings,
+                  "auto_category_dirs",
+                  first_bool(value, &["auto_category_dirs"]),
+              );
+              if let Some(dirs) = value.get("browser_category_dirs") {
+                  if dirs.is_object() {
+                      settings.insert(
+                          "browser_category_dirs".into(),
+                          Value::String(dirs.to_string()),
+                      );
+                  }
+              }
+              collect_bool(
+                  &mut settings,
+                  "av_scan_enabled",
+                  first_bool(value, &["av_scan_enabled"]),
+              );
+              collect_string(
+                  &mut settings,
+                  "av_scan_command",
+                  first_str(value, &["av_scan_command"]),
+              );
+              collect_string(
+                  &mut settings,
+                  "torrent_watch_dir",
+                  first_str(value, &["torrent_watch_dir", "watch_dir"]),
+              );
+              collect_bool(
+                  &mut settings,
+                  "watch_torrents",
+                  first_bool(value, &["watch_torrents"]),
+              );
+              collect_string(
+                  &mut settings,
+                  "download_dir",
+                  first_str(value, &["download_dir"]),
+              );
+              collect_string(&mut settings, "temp_dir", first_str(value, &["temp_dir"]));
+              collect_string(
+                  &mut settings,
+                  "default_origin",
+                  first_str(value, &["default_origin"]),
+              );
+              if let Some(hosts) = value.get("allowed_hosts") {
+                  let encoded = hosts
+                      .as_array()
+                      .map(|items| {
+                          items
+                              .iter()
+                              .filter_map(Value::as_str)
+                              .collect::<Vec<_>>()
+                              .join(",")
+                      })
+                      .or_else(|| hosts.as_str().map(str::to_string));
+                  if let Some(encoded) = encoded {
+                      settings.insert("allowed_hosts".into(), Value::String(encoded));
+                  }
+              }
+              collect_bool(
+                  &mut settings,
+                  "av_scan_fail_on_threat",
+                  first_bool(value, &["av_scan_fail_on_threat"]),
+              );
+              collect_u64(
+                  &mut settings,
+                  "bt_upload_limit_kib",
+                  first_u64(value, &["bt_upload_limit_kib"]),
+              );
+              collect_u64(
+                  &mut settings,
+                  "bt_max_connections",
+                  first_u64(value, &["bt_max_connections"]),
+              );
+              collect_bool(
+                  &mut settings,
+                  "bt_enable_dht",
+                  first_bool(value, &["bt_enable_dht"]),
+              );
+              collect_string(&mut settings, "proxy_url", first_str(value, &["proxy_url"]));
+
+              const COOKIE_REF: &str = "settings:default-cookie";
+              const COOKIE_KIND: &str = "default_cookie";
+              let cookie_update = if let Some(raw_cookie) =
+                  first_str(value, &["default_cookie"]).filter(|value| !value.is_empty())
+              {
+                  let cookie = CredentialVault.unprotect(raw_cookie)?;
+                  if !cookie.contains(['\r', '\n', '\0']) && cookie.len() <= 16 * 1024 {
+                      let replay = serde_json::json!({ "cookie": cookie }).to_string();
+                      Some(if cfg!(windows) {
+                          CredentialVault.protect(&replay)?
+                      } else {
+                          replay
+                      })
+                  } else {
+                      None
+                  }
+              } else {
+                  None
+              };
+
+              let previous_cookie = if cookie_update.is_some() {
+                  core.store().load_credential(COOKIE_REF)?
+              } else {
+                  None
+              };
+              if let Some(protected) = cookie_update.as_deref() {
+                  core.store_mut()
+                      .store_credential(COOKIE_REF, protected, COOKIE_KIND)?;
+              }
+              if let Err(error) = core.store_mut().set_settings(&settings) {
+                  if cookie_update.is_some() {
+                      let rollback = match previous_cookie.as_deref() {
+                          Some(blob) => core
+                              .store_mut()
+                              .store_credential(COOKIE_REF, blob, COOKIE_KIND),
+                          None => core.store_mut().delete_credential(COOKIE_REF),
+                      };
+                      if let Err(rollback_error) = rollback {
+                          return Err(format!(
+                              "{error}; rollback legacy default cookie credential: {rollback_error}"
+                          ));
+                      }
+                  }
+                  return Err(error);
+              }
+              Ok(())
+          }
+
+          fn collect_u64(settings: &mut BTreeMap<String, Value>, key: &str, value: Option<u64>) {
+              if let Some(value) = value {
+                  settings.insert(key.to_string(), Value::from(value));
+              }
+          }
+
+          fn collect_bool(settings: &mut BTreeMap<String, Value>, key: &str, value: Option<bool>) {
+              if let Some(value) = value {
+                  settings.insert(key.to_string(), Value::Bool(value));
+              }
+          }
+
+          fn collect_string(settings: &mut BTreeMap<String, Value>, key: &str, value: Option<&str>) {
+              if let Some(value) = value {
+                  settings.insert(key.to_string(), Value::String(value.to_string()));
+              }
+          }
+
+          '''
+          text = text[:start] + replacement + text[end:]
+
+          test_marker = '''    #[test]
+              fn imports_legal_flag_and_skips_missing_db() {
+          '''
+          test_block = r'''    #[test]
+              fn settings_import_is_atomic_when_default_cookie_decode_fails() {
+                  let dir = std::env::temp_dir().join(format!(
+                      "hls-migrate-settings-atomic-{}-{}",
+                      std::process::id(),
+                      std::time::SystemTime::now()
+                          .duration_since(std::time::UNIX_EPOCH)
+                          .unwrap()
+                          .as_nanos()
+                  ));
+                  std::fs::create_dir_all(&dir).unwrap();
+                  let config = dir.join("config.json");
+                  std::fs::write(
+                      &config,
+                      r#"{"download_speed_limit_kib":999,"proxy_url":"http://legacy.proxy:8080","default_cookie":"dpapi:zz"}"#,
+                  )
+                  .unwrap();
+                  let mut core = PersistentCore::in_memory().unwrap();
+                  core.store_mut()
+                      .set_setting("download_speed_limit_kib", 111u64)
+                      .unwrap();
+                  core.store_mut()
+                      .set_setting("proxy_url", "http://v7.proxy:9090")
+                      .unwrap();
+                  core.store_mut()
+                      .store_credential(
+                          "settings:default-cookie",
+                          "existing-cookie-blob",
+                          "default_cookie",
+                      )
+                      .unwrap();
+
+                  let error = migrate_from_5x(&mut core, &config, &dir.join("missing.db"))
+                      .unwrap_err();
+                  assert!(error.contains("DPAPI credential hex is invalid"), "{error}");
+                  assert_eq!(
+                      core.store()
+                          .setting_u64("download_speed_limit_kib", 0)
+                          .unwrap(),
+                      111
+                  );
+                  assert_eq!(
+                      core.store().setting_string("proxy_url", "").unwrap(),
+                      "http://v7.proxy:9090"
+                  );
+                  assert_eq!(
+                      core.store()
+                          .load_credential("settings:default-cookie")
+                          .unwrap()
+                          .as_deref(),
+                      Some("existing-cookie-blob")
+                  );
+                  let _ = std::fs::remove_dir_all(dir);
+              }
+
+              #[test]
+              fn imports_legal_flag_and_skips_missing_db() {
+          '''
+          if text.count(test_marker) != 1:
+              raise SystemExit(f"expected one migration test insertion marker, found {text.count(test_marker)}")
+          text = text.replace(test_marker, test_block, 1)
+          path.write_text(text, encoding="utf-8")
+          '@
+          $patch | python -
+
+      - name: Format and compile Rust Core
+        shell: pwsh
+        working-directory: native_shell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo check --locked
+
+      - name: Run focused migration regressions
+        shell: pwsh
+        working-directory: native_shell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --locked --lib migrate::tests::settings_import_is_atomic_when_default_cookie_decode_fails -- --exact --nocapture
+          cargo test --locked --lib migrate::tests::imports_legal_flag_and_skips_missing_db -- --exact --nocapture
+          cargo test --locked --lib migrate::tests -- --test-threads=1
+
+      - name: Commit only validated migration source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item -LiteralPath '.github/workflows/branch-migration-settings-atomicity.yml' -Force
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- 'native_shell/src/migrate.rs' '.github/workflows/branch-migration-settings-atomicity.yml'
+          git diff --cached --check
+          $files = @(git diff --cached --name-only)
+          if ($files.Count -ne 2 -or $files -notcontains 'native_shell/src/migrate.rs' -or $files -notcontains '.github/workflows/branch-migration-settings-atomicity.yml') {
+            throw "Unexpected staged files: $($files -join ', ')"
+          }
+          git commit -m 'fix(migrate): make legacy settings import atomic'
+          git push origin 'HEAD:网页版gpt'
