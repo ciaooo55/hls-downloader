@@ -178,17 +178,33 @@ fn split_reference_suffix(value: &str) -> (&str, &str) {
 }
 
 fn normalize_url_path(path: &str) -> String {
-    let mut parts = Vec::new();
+    let absolute = path.starts_with('/');
+    let preserve_trailing_slash =
+        path.ends_with('/') || path.ends_with("/.") || path.ends_with("/..");
+    let mut parts: Vec<&str> = Vec::new();
     for part in path.split('/') {
         match part {
-            "" | "." => {}
+            "." => {}
             ".." => {
-                parts.pop();
+                let at_absolute_root = absolute && parts.len() == 1 && parts[0].is_empty();
+                if !at_absolute_root {
+                    parts.pop();
+                }
             }
             _ => parts.push(part),
         }
     }
-    format!("/{}", parts.join("/"))
+    let mut normalized = parts.join("/");
+    if absolute && !normalized.starts_with('/') {
+        normalized.insert(0, '/');
+    }
+    if absolute && normalized.is_empty() {
+        normalized.push('/');
+    }
+    if preserve_trailing_slash && !normalized.ends_with('/') {
+        normalized.push('/');
+    }
+    normalized
 }
 
 fn has_absolute_scheme(value: &str) -> bool {
@@ -317,6 +333,23 @@ mod tests {
             resolve("https://site.test/dir/?token=secret", "?download=1"),
             Some("https://site.test/dir/?download=1".to_string())
         );
+    }
+
+    #[test]
+    fn preserves_repeated_path_separators_when_resolving_links() {
+        assert_eq!(
+            resolve("https://site.test/dir/page.html", "/cdn//signed/file.zip"),
+            Some("https://site.test/cdn//signed/file.zip".to_string())
+        );
+        assert_eq!(
+            resolve(
+                "https://site.test/dir/sub/page.html",
+                "../assets//signed/./file.zip"
+            ),
+            Some("https://site.test/dir/assets//signed/file.zip".to_string())
+        );
+        assert_eq!(normalize_url_path("/a//b/../c/"), "/a//c/");
+        assert_eq!(normalize_url_path("/a/b/.."), "/a/");
     }
 
     #[test]
