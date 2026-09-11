@@ -78,14 +78,17 @@ describe('persistent click-intent store', () => {
     expect(storage.sets).toBe(0)
   })
 
-  it('drops future persisted intents that can never match the current clock', async () => {
+  it('drops future persisted intents before the next durable queue write', async () => {
     const storage = new MemoryStorage()
-    storage.values.intents = [intent({ at: 20_000 })]
+    storage.values.intents = [intent({ at: 20_000, href: 'https://site.test/future' })]
     const store = new ClickIntentStore(storage, 'intents', () => 10_100)
 
     await store.hydrate()
-    await expect(store.consume(matchingDownload())).resolves.toBeUndefined()
-    expect(storage.values.intents).toEqual([])
+    await store.remember(intent({ at: 10_050, href: 'https://site.test/current' }))
+
+    expect(storage.values.intents).toEqual([
+      expect.objectContaining({ href: 'https://site.test/current', at: 10_050 }),
+    ])
   })
 
   it('persists, matches and consumes one same-tab redirect intent exactly once', async () => {
