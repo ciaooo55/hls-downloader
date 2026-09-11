@@ -1,0 +1,211 @@
+name: Branch HLS selected audio integrity fix
+
+on:
+  push:
+    branches:
+      - '网页版gpt'
+    paths:
+      - '.github/workflows/branch-hls-audio-integrity-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    if: github.ref == 'refs/heads/网页版gpt'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: '网页版gpt'
+          fetch-depth: 0
+
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: '1.98.1'
+          components: rustfmt
+
+      - name: Apply exact HLS audio integrity patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $patch = @'
+          from pathlib import Path
+
+          path = Path("native_shell/src/media/hls.rs")
+          text = path.read_text(encoding="utf-8")
+
+          old_finalize = '''    let mut audio_merged = None;
+              if let Some(recorder) = live_audio.as_mut() {
+                  audio_merged = recorder.finish();
+              } else if let Some(audio) = audio_uri {
+                  let audio_dir = task_dir.join("audio");
+                  audio_merged = download_hls(&audio, headers, proxy, &audio_dir, control, false).ok();
+              }
+          '''
+          new_finalize = '''    let mut audio_merged = None;
+              if let Some(recorder) = live_audio.as_mut() {
+                  audio_merged = recorder.finish()?;
+              } else if let Some(audio) = audio_uri {
+                  let audio_dir = task_dir.join("audio");
+                  audio_merged = Some(download_hls(
+                      &audio,
+                      headers,
+                      proxy,
+                      &audio_dir,
+                      control,
+                      false,
+                  )?);
+              }
+          '''
+          if text.count(old_finalize) != 1:
+              raise SystemExit(f"expected one HLS audio finalization block, found {text.count(old_finalize)}")
+          text = text.replace(old_finalize, new_finalize, 1)
+
+          old_finish = '''    fn finish(&mut self) -> Option<PathBuf> {
+                  let _ = fs::write(&self.control, "finish");
+                  self.handle
+                      .take()
+                      .and_then(|handle| handle.join().ok())
+                      .and_then(Result::ok)
+              }
+          '''
+          new_finish = '''    fn finish(&mut self) -> Result<Option<PathBuf>, String> {
+                  let _ = fs::write(&self.control, "finish");
+                  let Some(handle) = self.handle.take() else {
+                      return Ok(None);
+                  };
+                  handle
+                      .join()
+                      .map_err(|_| "HLS live audio worker panicked".to_string())?
+                      .map(Some)
+              }
+          '''
+          if text.count(old_finish) != 1:
+              raise SystemExit(f"expected one LiveAudioRecorder::finish block, found {text.count(old_finish)}")
+          text = text.replace(old_finish, new_finish, 1)
+
+          marker = '''    use std::time::{Duration, Instant};
+
+              #[test]
+              fn master_prefers_resolution_over_audio_only() {
+          '''
+          tests = r'''    use std::time::{Duration, Instant};
+
+              #[test]
+              fn selected_external_audio_failure_fails_vod_and_live_hls_downloads() {
+                  for live in [false, true] {
+                      let mut files = HashMap::new();
+                      files.insert(
+                          "/master.m3u8".into(),
+                          b"#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\",DEFAULT=YES,URI=\"audio.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720,AUDIO=\"aud\"\nvideo.m3u8\n"
+                              .to_vec(),
+                      );
+                      files.insert(
+                          "/video.m3u8".into(),
+                          b"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nvideo.ts\n#EXT-X-ENDLIST\n"
+                              .to_vec(),
+                      );
+                      files.insert("/video.ts".into(), b"VIDEO".to_vec());
+                      let origin = super::super::harness::serve_files(files);
+                      let dir = std::env::temp_dir().join(format!(
+                          "hls-selected-audio-failure-{}-{}-{live}",
+                          std::process::id(),
+                          std::time::SystemTime::now()
+                              .duration_since(std::time::UNIX_EPOCH)
+                              .unwrap()
+                              .as_nanos()
+                      ));
+                      let control = dir.join("control");
+                      std::fs::create_dir_all(&dir).unwrap();
+                      std::fs::write(&control, "run").unwrap();
+
+                      let error = download_hls_with(
+                          &format!("{}/master.m3u8", origin.base),
+                          &HashMap::new(),
+                          "",
+                          &dir,
+                          &control,
+                          HlsDownloadOptions {
+                              live,
+                              ..HlsDownloadOptions::default()
+                          },
+                      )
+                      .unwrap_err();
+                      assert!(error.contains("not an HLS playlist"), "{error}");
+                      assert!(!dir.join("merged.mp4").exists());
+                      assert!(!dir.join("muxed.mp4").exists());
+                      let _ = std::fs::remove_dir_all(dir);
+                  }
+              }
+
+              #[test]
+              fn live_audio_recorder_finish_reports_thread_panic() {
+                  let dir = std::env::temp_dir().join(format!(
+                      "hls-live-audio-panic-{}-{}",
+                      std::process::id(),
+                      std::time::SystemTime::now()
+                          .duration_since(std::time::UNIX_EPOCH)
+                          .unwrap()
+                          .as_nanos()
+                  ));
+                  std::fs::create_dir_all(&dir).unwrap();
+                  let mut recorder = LiveAudioRecorder {
+                      control: dir.join("audio.control"),
+                      handle: Some(std::thread::spawn(|| -> Result<PathBuf, String> {
+                          panic!("intentional live audio worker panic")
+                      })),
+                  };
+
+                  let error = recorder.finish().unwrap_err();
+                  assert!(error.contains("panicked"), "{error}");
+                  assert!(recorder.finish().unwrap().is_none());
+                  let _ = std::fs::remove_dir_all(dir);
+              }
+
+              #[test]
+              fn master_prefers_resolution_over_audio_only() {
+          '''
+          if text.count(marker) != 1:
+              raise SystemExit(f"expected one HLS test insertion marker, found {text.count(marker)}")
+          text = text.replace(marker, tests, 1)
+          path.write_text(text, encoding="utf-8")
+          '@
+          $patch | python -
+
+      - name: Format and compile Rust Core
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo check --locked
+
+      - name: Run focused HLS audio regressions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --locked --lib media::hls::tests::selected_external_audio_failure_fails_vod_and_live_hls_downloads -- --exact --nocapture
+          cargo test --locked --lib media::hls::tests::live_audio_recorder_finish_reports_thread_panic -- --exact --nocapture
+          cargo test --locked --lib media::hls::tests -- --test-threads=1
+
+      - name: Commit only validated HLS source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item -LiteralPath '.github/workflows/branch-hls-audio-integrity-fix.yml' -Force
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- 'native_shell/src/media/hls.rs' '.github/workflows/branch-hls-audio-integrity-fix.yml'
+          git diff --cached --check
+          $files = @(git diff --cached --name-only)
+          if ($files.Count -ne 2 -or $files -notcontains 'native_shell/src/media/hls.rs' -or $files -notcontains '.github/workflows/branch-hls-audio-integrity-fix.yml') {
+            throw "Unexpected staged files: $($files -join ', ')"
+          }
+          git commit -m 'fix(media): fail closed on selected HLS audio loss'
+          git push origin 'HEAD:网页版gpt'
