@@ -27,23 +27,17 @@ function nativeMessageWithSafeResourceStrings(message: Record<string, unknown>):
   const resource = message.resource
   if (!resource || typeof resource !== 'object' || Array.isArray(resource)) return message
   const record = resource as Record<string, unknown>
+  // Snapshot resource metadata when the request enters the queue. Otherwise a
+  // caller mutating a reused resource object before a queued request is posted
+  // can silently change the Native Messaging payload after request() returns.
   const normalized = { ...record }
-  let changed = false
   if (typeof record.title === 'string') {
-    const title = boundedNativeResourceTitle(record.title)
-    if (title !== record.title) {
-      normalized.title = title
-      changed = true
-    }
+    normalized.title = boundedNativeResourceTitle(record.title)
   }
   if (typeof record.filename === 'string') {
-    const filename = scalarSafeNativeText(record.filename)
-    if (filename !== record.filename) {
-      normalized.filename = filename
-      changed = true
-    }
+    normalized.filename = scalarSafeNativeText(record.filename)
   }
-  return changed ? { ...message, resource: normalized } : message
+  return { ...message, resource: normalized }
 }
 
 export interface NativePortLike {
