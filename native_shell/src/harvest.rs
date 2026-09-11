@@ -153,7 +153,9 @@ fn resolve(base: &str, reference: &str) -> Option<String> {
     let origin = &clean_base[..origin_end];
     let (reference_path, suffix) = split_reference_suffix(&value);
     let joined_path = if reference_path.is_empty() {
-        path_start.map(|index| clean_base[index..].to_string()).unwrap_or_else(|| "/".into())
+        path_start
+            .map(|index| clean_base[index..].to_string())
+            .unwrap_or_else(|| "/".into())
     } else if reference_path.starts_with('/') {
         reference_path.to_string()
     } else {
