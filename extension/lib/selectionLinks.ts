@@ -32,6 +32,10 @@ function normalizeSelectedUrl(value: string, baseUrl: string, textExtraction = f
   const candidate = textExtraction ? trimSelectedUrlPunctuation(raw) : raw
   if (!candidate) return ''
   if (/^magnet:\?/i.test(candidate)) return candidate
+  // `new URL('://broken', base)` treats the malformed value as a relative
+  // path. Reject that specific scheme-less form while still allowing normal
+  // relative routes whose query happens to contain `https://...`.
+  if (candidate.startsWith('://')) return ''
   try {
     // Let URL parsing decide whether a candidate is absolute or relative. A
     // relative download route may legitimately contain an absolute URL inside
