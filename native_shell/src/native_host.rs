@@ -1313,10 +1313,7 @@ mod tests {
             .as_str()
             .is_some_and(|message| message.contains("已有投送请求")));
 
-        let events = session
-            .core
-            .local()
-            .events_after(sequence_before_second, 8);
+        let events = session.core.local().events_after(sequence_before_second, 8);
         assert!(events.iter().any(|event| matches!(
             &event.event,
             CoreEvent::MediaPushResolved { request }
