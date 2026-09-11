@@ -247,6 +247,7 @@ fn handle_client(
         .next()
         .and_then(|line| line.split_whitespace().nth(1))
         .unwrap_or("/");
+    let path = path.split_once('?').map(|(path, _)| path).unwrap_or(path);
     if let Some(token) = path.strip_prefix("/tvbox/") {
         let token = token.split('/').next().unwrap_or(token);
         let Some(mount) = resolve_mount(mounts, token) else {
@@ -515,7 +516,7 @@ mod tests {
         server.mount("task-1", file);
         let mut stream = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
         stream
-            .write_all(b"GET /media/task-1 HTTP/1.1\r\nrange: bytes=2-5\r\n\r\n")
+            .write_all(b"GET /media/task-1?cache=1 HTTP/1.1\r\nrange: bytes=2-5\r\n\r\n")
             .unwrap();
         let mut buf = Vec::new();
         stream.read_to_end(&mut buf).unwrap();
@@ -602,6 +603,13 @@ mod tests {
         let mut buf = Vec::new();
         playlist.read_to_end(&mut buf).unwrap();
         assert!(String::from_utf8_lossy(&buf).contains("#EXTM3U"));
+        let mut segment = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
+        segment
+            .write_all(b"GET /media/dash-1/seg-0000.m4s?cache=1 HTTP/1.1\r\n\r\n")
+            .unwrap();
+        buf.clear();
+        segment.read_to_end(&mut buf).unwrap();
+        assert!(String::from_utf8_lossy(&buf).contains("frag"));
         let mut traversal = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
         traversal
             .write_all(b"GET /media/dash-1/../secret HTTP/1.1\r\n\r\n")
@@ -611,7 +619,7 @@ mod tests {
         assert!(String::from_utf8_lossy(&buf).contains("404"));
         let mut tvbox = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
         tvbox
-            .write_all(b"GET /tvbox/dash-1 HTTP/1.1\r\nHost: evil.example\r\n\r\n")
+            .write_all(b"GET /tvbox/dash-1?cache=1 HTTP/1.1\r\nHost: evil.example\r\n\r\n")
             .unwrap();
         buf.clear();
         tvbox.read_to_end(&mut buf).unwrap();
