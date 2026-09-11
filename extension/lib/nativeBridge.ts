@@ -1,38 +1,49 @@
 const MAX_NATIVE_RESOURCE_TITLE_CODE_UNITS = 4096
 
-function boundedNativeResourceTitle(value: string): string {
-  let truncated = value.slice(0, MAX_NATIVE_RESOURCE_TITLE_CODE_UNITS)
-  if (/[\uD800-\uDBFF]$/.test(truncated)) truncated = truncated.slice(0, -1)
+function scalarSafeNativeText(value: string): string {
   let result = ''
-  for (let index = 0; index < truncated.length; index += 1) {
-    const code = truncated.charCodeAt(index)
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
     if (code >= 0xd800 && code <= 0xdbff) {
-      const next = truncated.charCodeAt(index + 1)
+      const next = value.charCodeAt(index + 1)
       if (next >= 0xdc00 && next <= 0xdfff) {
-        result += truncated[index] + truncated[index + 1]
+        result += value[index] + value[index + 1]
         index += 1
       } else result += '\uFFFD'
       continue
     }
-    result += code >= 0xdc00 && code <= 0xdfff ? '\uFFFD' : truncated[index]
+    result += code >= 0xdc00 && code <= 0xdfff ? '\uFFFD' : value[index]
   }
   return result
 }
 
-function nativeMessageWithBoundedResourceTitle(message: Record<string, unknown>): Record<string, unknown> {
+function boundedNativeResourceTitle(value: string): string {
+  let truncated = value.slice(0, MAX_NATIVE_RESOURCE_TITLE_CODE_UNITS)
+  if (/[\uD800-\uDBFF]$/.test(truncated)) truncated = truncated.slice(0, -1)
+  return scalarSafeNativeText(truncated)
+}
+
+function nativeMessageWithSafeResourceStrings(message: Record<string, unknown>): Record<string, unknown> {
   const resource = message.resource
   if (!resource || typeof resource !== 'object' || Array.isArray(resource)) return message
   const record = resource as Record<string, unknown>
-  if (typeof record.title !== 'string') return message
-  const title = boundedNativeResourceTitle(record.title)
-  if (title === record.title) return message
-  return {
-    ...message,
-    resource: {
-      ...record,
-      title,
-    },
+  const normalized = { ...record }
+  let changed = false
+  if (typeof record.title === 'string') {
+    const title = boundedNativeResourceTitle(record.title)
+    if (title !== record.title) {
+      normalized.title = title
+      changed = true
+    }
   }
+  if (typeof record.filename === 'string') {
+    const filename = scalarSafeNativeText(record.filename)
+    if (filename !== record.filename) {
+      normalized.filename = filename
+      changed = true
+    }
+  }
+  return changed ? { ...message, resource: normalized } : message
 }
 
 export interface NativePortLike {
@@ -75,7 +86,7 @@ export class NativeBridge {
     return new Promise((resolve, reject) => {
       const requestId = `${Date.now().toString(36)}-${++this.requestSequence}`
       const request: PendingRequest = {
-        message: { ...nativeMessageWithBoundedResourceTitle(message), __request_id: requestId },
+        message: { ...nativeMessageWithSafeResourceStrings(message), __request_id: requestId },
         requestId,
         timeoutMs,
         retriesRemaining: Math.max(0, Math.floor(retryCount)),

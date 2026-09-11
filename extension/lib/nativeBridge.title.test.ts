@@ -15,22 +15,31 @@ class FakePort implements NativePortLike {
   postMessage(message: Record<string, unknown>) { this.posted.push(message) }
 }
 
-describe('native resource title bounds', () => {
-  it('keeps scalar-safe titles unchanged and sanitizes invalid or truncated surrogates', async () => {
+describe('native resource string safety', () => {
+  it('keeps scalar-safe strings unchanged and sanitizes invalid or truncated surrogates', async () => {
     const port = new FakePort()
     const bridge = new NativeBridge(() => port)
 
     const normalTitle = '普通页面标题 😀'
-    const normal = bridge.request({ op: 'download', resource: { title: normalTitle } })
+    const normalFilename = '视频 😀.mp4'
+    const normal = bridge.request({ op: 'download', resource: { title: normalTitle, filename: normalFilename } })
     expect((port.posted[0].resource as Record<string, unknown>).title).toBe(normalTitle)
+    expect((port.posted[0].resource as Record<string, unknown>).filename).toBe(normalFilename)
     port.onMessage.emit({ ok: true, __request_id: port.posted[0].__request_id })
     await normal
 
     const malformedTitle = `before\uD800middle\uDC00after`
-    const malformed = bridge.request({ op: 'download', resource: { title: malformedTitle } })
-    const sanitizedTitle = String((port.posted[1].resource as Record<string, unknown>).title)
+    const malformedFilename = `file\uD800name\uDC00.mp4`
+    const malformed = bridge.request({
+      op: 'download',
+      resource: { title: malformedTitle, filename: malformedFilename },
+    })
+    const malformedResource = port.posted[1].resource as Record<string, unknown>
+    const sanitizedTitle = String(malformedResource.title)
+    const sanitizedFilename = String(malformedResource.filename)
     expect(sanitizedTitle).toBe('before�middle�after')
-    expect(sanitizedTitle).not.toMatch(/[\uD800-\uDFFF]/)
+    expect(sanitizedFilename).toBe('file�name�.mp4')
+    expect(`${sanitizedTitle}${sanitizedFilename}`).not.toMatch(/[\uD800-\uDFFF]/)
     port.onMessage.emit({ ok: true, __request_id: port.posted[1].__request_id })
     await malformed
 
