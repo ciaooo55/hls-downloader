@@ -771,10 +771,12 @@ pub fn download_hls_with(
     )?;
     let mut audio_merged = None;
     if let Some(recorder) = live_audio.as_mut() {
-        audio_merged = recorder.finish();
+        audio_merged = recorder.finish()?;
     } else if let Some(audio) = audio_uri {
         let audio_dir = task_dir.join("audio");
-        audio_merged = download_hls(&audio, headers, proxy, &audio_dir, control, false).ok();
+        audio_merged = Some(download_hls(
+            &audio, headers, proxy, &audio_dir, control, false,
+        )?);
     }
     let mut subtitles = Vec::new();
     if live && options.download_subtitles {
@@ -1436,12 +1438,15 @@ impl LiveAudioRecorder {
         }
     }
 
-    fn finish(&mut self) -> Option<PathBuf> {
+    fn finish(&mut self) -> Result<Option<PathBuf>, String> {
         let _ = fs::write(&self.control, "finish");
-        self.handle
-            .take()
-            .and_then(|handle| handle.join().ok())
-            .and_then(Result::ok)
+        let Some(handle) = self.handle.take() else {
+            return Ok(None);
+        };
+        handle
+            .join()
+            .map_err(|_| "HLS live audio worker panicked".to_string())?
+            .map(Some)
     }
 }
 
@@ -2287,6 +2292,77 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Condvar;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn selected_external_audio_failure_fails_vod_and_live_hls_downloads() {
+        for live in [false, true] {
+            let mut files = HashMap::new();
+            files.insert(
+                "/master.m3u8".into(),
+                b"#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\",DEFAULT=YES,URI=\"audio.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720,AUDIO=\"aud\"\nvideo.m3u8\n"
+                    .to_vec(),
+            );
+            files.insert(
+                "/video.m3u8".into(),
+                b"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nvideo.ts\n#EXT-X-ENDLIST\n"
+                    .to_vec(),
+            );
+            files.insert("/video.ts".into(), b"VIDEO".to_vec());
+            let origin = super::super::harness::serve_files(files);
+            let dir = std::env::temp_dir().join(format!(
+                "hls-selected-audio-failure-{}-{}-{live}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let control = dir.join("control");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(&control, "run").unwrap();
+
+            let error = download_hls_with(
+                &format!("{}/master.m3u8", origin.base),
+                &HashMap::new(),
+                "",
+                &dir,
+                &control,
+                HlsDownloadOptions {
+                    live,
+                    ..HlsDownloadOptions::default()
+                },
+            )
+            .unwrap_err();
+            assert!(error.contains("not an HLS playlist"), "{error}");
+            assert!(!dir.join("merged.mp4").exists());
+            assert!(!dir.join("muxed.mp4").exists());
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn live_audio_recorder_finish_reports_thread_panic() {
+        let dir = std::env::temp_dir().join(format!(
+            "hls-live-audio-panic-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut recorder = LiveAudioRecorder {
+            control: dir.join("audio.control"),
+            handle: Some(std::thread::spawn(|| -> Result<PathBuf, String> {
+                panic!("intentional live audio worker panic")
+            })),
+        };
+
+        let error = recorder.finish().unwrap_err();
+        assert!(error.contains("panicked"), "{error}");
+        assert!(recorder.finish().unwrap().is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn master_prefers_resolution_over_audio_only() {
