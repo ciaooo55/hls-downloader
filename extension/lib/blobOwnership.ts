@@ -40,13 +40,31 @@ export function inheritHttpBufferSource(
   return inherited
 }
 
-/** Copy HTTP ownership across Blob.slice() and similar derived objects. */
+function derivedObjectSize(value: object): number | undefined {
+  try {
+    const candidate = value as { size?: unknown, byteLength?: unknown }
+    if (candidate.size !== undefined) {
+      const size = Number(candidate.size)
+      if (Number.isFinite(size) && size >= 0) return size
+    }
+    if (candidate.byteLength !== undefined) {
+      const bytes = Number(candidate.byteLength)
+      if (Number.isFinite(bytes) && bytes >= 0) return bytes
+    }
+  } catch {}
+  return undefined
+}
+
+/** Copy HTTP ownership only across content-preserving Blob.slice()-style derivations. */
 export function copyHttpBufferSource(
   sourceObject: object,
   target: object,
   lookup: (value: object) => string | undefined,
   remember: (value: object, sourceUrl: string) => void,
 ): void {
+  const sourceSize = derivedObjectSize(sourceObject)
+  const targetSize = derivedObjectSize(target)
+  if (sourceSize !== undefined && targetSize !== undefined && sourceSize !== targetSize) return
   const source = lookup(sourceObject) || ''
   if (/^https?:\/\//i.test(source)) remember(target, source)
 }

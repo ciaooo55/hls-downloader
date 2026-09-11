@@ -38,12 +38,17 @@ describe('blob download ownership', () => {
     expect(inheritHttpBufferSource(undefined, value => sources.get(value))).toBe('')
   })
 
-  it('copies HTTP ownership onto a sliced Blob', () => {
+  it('copies ownership only when a derived Blob keeps the complete byte payload', () => {
     const sources = new WeakMap<object, string>()
-    const original = { id: 'blob' }
-    const sliced = { id: 'slice' }
+    const original = { id: 'blob', size: 4 }
+    const retagged = { id: 'retagged', size: 4 }
+    const partial = { id: 'partial', size: 2 }
     sources.set(original, 'https://cdn.test/export.zip')
-    copyHttpBufferSource(original, sliced, value => sources.get(value), (value, source) => sources.set(value, source))
-    expect(sources.get(sliced)).toBe('https://cdn.test/export.zip')
+
+    copyHttpBufferSource(original, retagged, value => sources.get(value), (value, source) => sources.set(value, source))
+    copyHttpBufferSource(original, partial, value => sources.get(value), (value, source) => sources.set(value, source))
+
+    expect(sources.get(retagged)).toBe('https://cdn.test/export.zip')
+    expect(sources.get(partial)).toBeUndefined()
   })
 })
