@@ -34,6 +34,67 @@ describe('persistent native bridge', () => {
     bridge.close()
   })
 
+  it('reconciles an immediate media-push rejection before resolving the browser call', async () => {
+    const port = new FakePort()
+    const bridge = new NativeBridge(() => port)
+    const request = bridge.request({ op: 'media_push', kind: 'cast' })
+    const requestId = port.posted[0].__request_id
+
+    port.onMessage.emit({
+      ok: true,
+      id: 'push-overlap',
+      status: 'pending',
+      message: '等待选择设备',
+      __request_id: requestId,
+    })
+    expect(port.posted).toHaveLength(2)
+    expect(port.posted[1]).toMatchObject({
+      op: 'media_push_status',
+      request_id: 'push-overlap',
+      __request_id: requestId,
+    })
+
+    port.onMessage.emit({
+      ok: true,
+      id: 'push-overlap',
+      status: 'failed',
+      message: '已有投送请求正在等待设备选择',
+      __request_id: requestId,
+    })
+    await expect(request).resolves.toMatchObject({
+      id: 'push-overlap',
+      status: 'failed',
+      message: '已有投送请求正在等待设备选择',
+    })
+    bridge.close()
+  })
+
+  it('falls back to the accepted media-push response if the immediate status check disconnects', async () => {
+    const port = new FakePort()
+    const disconnected = vi.fn()
+    const bridge = new NativeBridge(() => port, 30_000, disconnected)
+    const request = bridge.request({ op: 'media_push', kind: 'tvbox' })
+    const requestId = port.posted[0].__request_id
+
+    port.onMessage.emit({
+      ok: true,
+      id: 'push-pending',
+      status: 'pending',
+      message: '等待选择设备',
+      __request_id: requestId,
+    })
+    expect(port.posted[1]).toMatchObject({ op: 'media_push_status', request_id: 'push-pending' })
+    port.onDisconnect.emit()
+
+    await expect(request).resolves.toMatchObject({
+      ok: true,
+      id: 'push-pending',
+      status: 'pending',
+    })
+    expect(disconnected).toHaveBeenCalledOnce()
+    bridge.close()
+  })
+
   it('snapshots queued resource metadata before caller mutation', async () => {
     const port = new FakePort()
     const bridge = new NativeBridge(() => port)

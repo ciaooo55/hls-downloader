@@ -66,6 +66,7 @@ interface PendingRequest {
   resolve(value: unknown): void
   reject(reason: Error): void
   timer?: ReturnType<typeof setTimeout>
+  fallbackResponse?: unknown
 }
 
 export class NativeBridge {
@@ -205,13 +206,57 @@ export class NativeBridge {
     // response to the active request: accepting it would shift the serialized
     // queue and hand an unsolicited/malformed result to the wrong caller.
     if (!message || typeof message !== 'object') return
-    const responseId = String((message as Record<string, unknown>).__request_id || '')
+    const response = message as Record<string, unknown>
+    const responseId = String(response.__request_id || '')
     if (responseId !== request.requestId) return
     if (request.timer) clearTimeout(request.timer)
+    request.timer = undefined
+    if (this.tryMediaPushAdmissionCheck(port, request, response)) return
     this.active = null
     this.queue.shift()
     request.resolve(message)
     this.pump()
+  }
+
+  private tryMediaPushAdmissionCheck(
+    port: NativePortLike,
+    request: PendingRequest,
+    response: Record<string, unknown>,
+  ): boolean {
+    if (String(request.message.op || '') !== 'media_push'
+      || response.ok !== true
+      || String(response.status || '') !== 'pending') return false
+    const id = typeof response.id === 'string' ? response.id.trim() : ''
+    if (!id) return false
+
+    // Core can synchronously reject a second media-push while the older Native
+    // Host still reports the locally constructed request as pending. Re-read
+    // the durable row once on the same serialized port before resolving the
+    // browser call, so an immediate Core failure is visible without waiting
+    // for the content script's one-second polling interval.
+    request.fallbackResponse = response
+    request.message = {
+      op: 'media_push_status',
+      request_id: id,
+      __request_id: request.requestId,
+    }
+    try {
+      request.timer = setTimeout(() => {
+        if (this.active !== request) return
+        this.retryOrRejectActive(port, new Error('投送状态确认超时'))
+      }, Math.min(request.timeoutMs, 3_000))
+      port.postMessage(request.message)
+    } catch {
+      if (request.timer) clearTimeout(request.timer)
+      request.timer = undefined
+      const failedPort = this.port
+      this.port = null
+      this.disconnected()
+      this.resolveActiveFallback()
+      try { failedPort?.disconnect() } catch {}
+      this.pump()
+    }
+    return true
   }
 
   private handleDisconnect(port: NativePortLike): void {
@@ -225,6 +270,11 @@ export class NativeBridge {
     if (request?.timer) clearTimeout(request.timer)
     this.port = null
     this.disconnected()
+    if (this.resolveActiveFallback()) {
+      try { port.disconnect() } catch {}
+      this.pump()
+      return
+    }
     if (request && request.retriesRemaining > 0 && !this.closed) {
       request.retriesRemaining -= 1
       this.active = null
@@ -233,6 +283,17 @@ export class NativeBridge {
     }
     try { port.disconnect() } catch {}
     this.pump()
+  }
+
+  private resolveActiveFallback(): boolean {
+    const request = this.active
+    if (!request || request.fallbackResponse === undefined) return false
+    if (request.timer) clearTimeout(request.timer)
+    request.timer = undefined
+    this.active = null
+    if (this.queue[0] === request) this.queue.shift()
+    request.resolve(request.fallbackResponse)
+    return true
   }
 
   private rejectActive(error: Error): void {
