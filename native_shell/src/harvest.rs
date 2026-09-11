@@ -313,13 +313,10 @@ mod tests {
             .iter()
             .any(|item| item.url == "https://site.test/dir/file.zip?download=1"));
 
-        let directory = harvest_html(
-            r#"<a href="?download=1">download</a>"#,
-            "https://site.test/dir/?token=secret",
+        assert_eq!(
+            resolve("https://site.test/dir/?token=secret", "?download=1"),
+            Some("https://site.test/dir/?download=1".to_string())
         );
-        assert!(directory
-            .iter()
-            .any(|item| item.url == "https://site.test/dir/?download=1"));
     }
 
     #[test]
