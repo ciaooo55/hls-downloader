@@ -13,6 +13,11 @@ describe('Content-Disposition filename parsing', () => {
       .toBe('archive.zip')
   })
 
+  it('falls back when filename* declares an unsupported charset', () => {
+    expect(contentDispositionFilename("attachment; filename*=UTF-16''%FF%FEa%00.zip; filename=archive.zip"))
+      .toBe('archive.zip')
+  })
+
   it('keeps a semicolon inside a quoted legacy filename', () => {
     expect(contentDispositionFilename('attachment; filename="archive; final.zip"')).toBe('archive; final.zip')
   })

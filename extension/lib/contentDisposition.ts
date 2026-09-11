@@ -38,10 +38,9 @@ function decodeExtended(value: string): string {
     try { return decodeURIComponent(value) } catch { return value }
   }
   const charset = (match[1] || 'utf-8').trim().toLowerCase()
-  const safeCharset = ['utf-8', 'utf8', 'iso-8859-1', 'latin1', 'us-ascii'].includes(charset)
-    ? charset : 'utf-8'
+  if (!['utf-8', 'utf8', 'iso-8859-1', 'latin1', 'us-ascii'].includes(charset)) return ''
   try {
-    return new TextDecoder(safeCharset).decode(percentBytes(match[2]))
+    return new TextDecoder(charset).decode(percentBytes(match[2]))
   } catch {
     try { return decodeURIComponent(match[2]) } catch { return match[2] }
   }
