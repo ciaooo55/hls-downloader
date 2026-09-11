@@ -200,6 +200,9 @@ fn peer_allowed(ip: IpAddr, lan: bool) -> bool {
 
 fn read_request_headers(stream: &mut TcpStream) -> Result<String, String> {
     stream
+        .set_nonblocking(false)
+        .map_err(|error| error.to_string())?;
+    stream
         .set_read_timeout(Some(REQUEST_HEADER_TIMEOUT))
         .map_err(|error| error.to_string())?;
     let mut request = Vec::with_capacity(1024);
