@@ -271,10 +271,9 @@ export default defineContentScript({
         rememberBufferSource(value, this.url)
         return value
       }
-      const responsePrototype = Response.prototype as Response & { bytes?: () => Promise<Uint8Array> }
-      const responseBytes = responsePrototype.bytes
+      const responseBytes = Response.prototype.bytes
       if (typeof responseBytes === 'function') {
-        responsePrototype.bytes = async function (this: Response) {
+        Response.prototype.bytes = async function (this: Response) {
           const value = await responseBytes.call(this)
           rememberBufferSource(value, this.url)
           return value
