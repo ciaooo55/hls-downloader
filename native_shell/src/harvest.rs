@@ -126,14 +126,15 @@ fn find_abs(text: &str) -> Option<usize> {
 }
 
 fn resolve(base: &str, reference: &str) -> Option<String> {
-    let value = html_unescape(reference.trim().trim_start_matches('\u{feff}'));
+    let decoded = html_unescape(reference.trim());
+    let value = decoded.trim_start_matches('\u{feff}');
     if value.is_empty() || value.starts_with('#') || value.chars().any(|ch| ch.is_control()) {
         return None;
     }
-    if crate::http_engine::remote_resource_url_allowed(&value) {
-        return Some(value);
+    if crate::http_engine::remote_resource_url_allowed(value) {
+        return Some(value.to_string());
     }
-    if has_absolute_scheme(&value) {
+    if has_absolute_scheme(value) {
         return None;
     }
     let clean_base = base.split(['?', '#']).next().unwrap_or(base);
@@ -151,7 +152,7 @@ fn resolve(base: &str, reference: &str) -> Option<String> {
         .map(|index| authority_start + index);
     let origin_end = path_start.unwrap_or(clean_base.len());
     let origin = &clean_base[..origin_end];
-    let (reference_path, suffix) = split_reference_suffix(&value);
+    let (reference_path, suffix) = split_reference_suffix(value);
     if reference_path.is_empty() {
         let current_path = path_start.map(|index| &clean_base[index..]).unwrap_or("/");
         return Some(format!("{origin}{current_path}{suffix}"));
@@ -266,12 +267,53 @@ pub fn category_for(extension: &str) -> &'static str {
 }
 
 fn html_unescape(value: &str) -> String {
-    value
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
+    let mut decoded = String::with_capacity(value.len());
+    let mut cursor = 0;
+    while let Some(relative) = value[cursor..].find('&') {
+        let start = cursor + relative;
+        decoded.push_str(&value[cursor..start]);
+        let rest = &value[start..];
+        if let Some((character, consumed)) = decode_html_entity(rest) {
+            decoded.push(character);
+            cursor = start + consumed;
+        } else {
+            decoded.push('&');
+            cursor = start + 1;
+        }
+    }
+    decoded.push_str(&value[cursor..]);
+    decoded
+}
+
+fn decode_html_entity(value: &str) -> Option<(char, usize)> {
+    for (entity, character) in [
+        ("&amp;", '&'),
+        ("&quot;", '"'),
+        ("&apos;", '\''),
+        ("&lt;", '<'),
+        ("&gt;", '>'),
+    ] {
+        if value.starts_with(entity) {
+            return Some((character, entity.len()));
+        }
+    }
+    let numeric = value.strip_prefix("&#")?;
+    let end = numeric.find(';')?;
+    if end == 0 || end > 8 {
+        return None;
+    }
+    let token = &numeric[..end];
+    let (digits, radix) = token
+        .strip_prefix('x')
+        .or_else(|| token.strip_prefix('X'))
+        .map(|digits| (digits, 16))
+        .unwrap_or((token, 10));
+    if digits.is_empty() {
+        return None;
+    }
+    let scalar = u32::from_str_radix(digits, radix).ok()?;
+    let character = char::from_u32(scalar)?;
+    Some((character, 2 + end + 1))
 }
 
 #[cfg(test)]
@@ -350,6 +392,25 @@ mod tests {
         );
         assert_eq!(normalize_url_path("/a//b/../c/"), "/a//c/");
         assert_eq!(normalize_url_path("/a/b/.."), "/a/");
+    }
+
+    #[test]
+    fn decodes_numeric_html_entities_without_double_decoding() {
+        for entity in ["&#38;", "&#x26;", "&#X26;"] {
+            assert_eq!(
+                resolve(
+                    "https://site.test/page",
+                    &format!("https://cdn.test/file.zip?x=1{entity}y=2")
+                ),
+                Some("https://cdn.test/file.zip?x=1&y=2".to_string())
+            );
+        }
+        assert_eq!(html_unescape("&amp;#38;"), "&#38;");
+        assert!(resolve(
+            "https://site.test/page",
+            "&#xFEFF;javascript:alert(1).mp4"
+        )
+        .is_none());
     }
 
     #[test]
