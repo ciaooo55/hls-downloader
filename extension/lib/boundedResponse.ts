@@ -3,7 +3,11 @@ export async function readBoundedResponseText(
   response: Response,
   maxBytes: number,
 ): Promise<string | null> {
-  const limit = Math.max(0, Math.floor(maxBytes))
+  const numericLimit = Number(maxBytes)
+  // A broken caller must never turn this safety boundary into an unbounded
+  // reader. NaN/Infinity make every ordinary comparison false or unlimited,
+  // so treat non-finite limits as zero and fail closed on non-empty bodies.
+  const limit = Number.isFinite(numericLimit) ? Math.max(0, Math.floor(numericLimit)) : 0
   const declared = Number(response.headers.get('content-length') || 0)
   if (declared > limit) return null
 
