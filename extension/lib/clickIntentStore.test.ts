@@ -20,6 +20,19 @@ class MemoryStorage implements IntentStorageArea {
   }
 }
 
+class FailFirstGetStorage extends MemoryStorage {
+  private first = true
+
+  override async get(): Promise<Record<string, unknown>> {
+    this.gets += 1
+    if (this.first) {
+      this.first = false
+      throw new Error('session storage waking')
+    }
+    return this.values
+  }
+}
+
 class DelayedFirstSetStorage extends MemoryStorage {
   private first = true
   private releaseFirst!: () => void
@@ -76,6 +89,26 @@ describe('persistent click-intent store', () => {
       await store.consume({ url: 'https://cdn.test/file.zip', tabId: 3 })
     }
     expect(storage.sets).toBe(0)
+  })
+
+  it('merges live and durable intents after a transient hydration failure', async () => {
+    const storage = new FailFirstGetStorage()
+    storage.values.intents = [intent({ at: 9_900, href: 'https://site.test/old-download' })]
+    const store = new ClickIntentStore(storage, 'intents', () => 10_100)
+
+    await store.remember(intent({ at: 10_000, href: 'https://site.test/new-download' }))
+    expect(storage.sets).toBe(0)
+    expect(storage.values.intents).toEqual([
+      expect.objectContaining({ href: 'https://site.test/old-download' }),
+    ])
+
+    await store.hydrate()
+    expect(storage.gets).toBe(2)
+    expect(storage.sets).toBe(1)
+    expect(storage.values.intents).toEqual([
+      expect.objectContaining({ href: 'https://site.test/new-download', at: 10_000 }),
+      expect.objectContaining({ href: 'https://site.test/old-download', at: 9_900 }),
+    ])
   })
 
   it('drops future persisted intents before the next durable queue write', async () => {
