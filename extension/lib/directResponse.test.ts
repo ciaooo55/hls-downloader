@@ -38,6 +38,15 @@ describe('early Chromium direct-download response detection', () => {
     )).toBe(true)
   })
 
+  it('rejects successful statuses that cannot carry downloadable content', () => {
+    for (const statusCode of [204, 205]) {
+      expect(isEarlyDirectDownloadResponse(
+        { type: 'main_frame', method: 'GET', statusCode },
+        { disposition: 'attachment; filename="empty.zip"', resource: resource({ kind: 'file' }) },
+      )).toBe(false)
+    }
+  })
+
   it('accepts a direct installer/archive navigation without Content-Disposition', () => {
     expect(isEarlyDirectDownloadResponse(
       { type: 'main_frame', method: 'GET', statusCode: 200 },

@@ -40,6 +40,10 @@ export function isEarlyDirectDownloadResponse(
   if (String(details.method || 'GET').toUpperCase() !== 'GET') return false
   const statusCode = Number(details.statusCode)
   if (!Number.isFinite(statusCode) || statusCode < 200 || statusCode >= 300) return false
+  // 204/205 are successful control responses with no downloadable content.
+  // Reissuing their URL in the desktop could produce a different later body,
+  // so they must never be treated as evidence for the browser response.
+  if (statusCode === 204 || statusCode === 205) return false
   // `inline` explicitly asks the browser to present the response. A filename
   // or concrete PDF/media MIME on that response is not evidence that the user
   // started a download. If the browser later creates a DownloadItem anyway,
