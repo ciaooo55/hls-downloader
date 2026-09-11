@@ -40,8 +40,8 @@ function normalizePending(value: unknown): PendingTakeoverSettings | null {
  *
  * The user's choice is written locally first and tagged with a unique id. A
  * reconnect later sends the newest pending value to the desktop. Storage
- * writes are serialized so a slow acknowledgement cannot clear or overwrite a
- * newer click that arrives while the previous pending value is being settled.
+ * read-modify-write operations are serialized so concurrent partial updates
+ * merge into the newest pending record instead of overwriting one another.
  */
 export class TakeoverSettingsSync {
   private syncing: Promise<void> | null = null
@@ -55,29 +55,32 @@ export class TakeoverSettingsSync {
   ) {}
 
   async queue(update: TakeoverSettingsUpdate): Promise<Record<string, unknown>> {
-    const stored = await this.storage.get([PENDING_TAKEOVER_SETTINGS_KEY, 'enabled', 'minimumBytes'])
-    const previous = normalizePending(stored[PENDING_TAKEOVER_SETTINGS_KEY])
-    const enabled = typeof update.enabled === 'boolean'
-      ? update.enabled
-      : previous?.enabled
-    const minimumBytes = normalizedBytes(update.minimumBytes) ?? previous?.minimumBytes
-    const pending: PendingTakeoverSettings = {
-      id: this.createId(),
-      ...(typeof enabled === 'boolean' ? { enabled } : {}),
-      ...(minimumBytes !== undefined ? { minimumBytes } : {}),
-    }
-    const local: Record<string, unknown> = { [PENDING_TAKEOVER_SETTINGS_KEY]: pending }
-    if (typeof update.enabled === 'boolean') local.enabled = update.enabled
-    const localMinimum = normalizedBytes(update.minimumBytes)
-    if (localMinimum !== undefined) local.minimumBytes = localMinimum
-    await this.withStorageWrite(() => this.storage.set(local))
+    const response = await this.withStorageWrite(async () => {
+      const stored = await this.storage.get([PENDING_TAKEOVER_SETTINGS_KEY, 'enabled', 'minimumBytes'])
+      const previous = normalizePending(stored[PENDING_TAKEOVER_SETTINGS_KEY])
+      const enabled = typeof update.enabled === 'boolean'
+        ? update.enabled
+        : previous?.enabled
+      const minimumBytes = normalizedBytes(update.minimumBytes) ?? previous?.minimumBytes
+      const pending: PendingTakeoverSettings = {
+        id: this.createId(),
+        ...(typeof enabled === 'boolean' ? { enabled } : {}),
+        ...(minimumBytes !== undefined ? { minimumBytes } : {}),
+      }
+      const local: Record<string, unknown> = { [PENDING_TAKEOVER_SETTINGS_KEY]: pending }
+      if (typeof update.enabled === 'boolean') local.enabled = update.enabled
+      const localMinimum = normalizedBytes(update.minimumBytes)
+      if (localMinimum !== undefined) local.minimumBytes = localMinimum
+      await this.storage.set(local)
+      return {
+        ok: true,
+        queued: true,
+        takeover_enabled: typeof enabled === 'boolean' ? enabled : stored.enabled !== false,
+        takeover_minimum_bytes: minimumBytes ?? normalizedBytes(stored.minimumBytes) ?? 0,
+      }
+    })
     this.triggerSync()
-    return {
-      ok: true,
-      queued: true,
-      takeover_enabled: typeof enabled === 'boolean' ? enabled : stored.enabled !== false,
-      takeover_minimum_bytes: minimumBytes ?? normalizedBytes(stored.minimumBytes) ?? 0,
-    }
+    return response
   }
 
   async applyPing(response: any): Promise<any> {
