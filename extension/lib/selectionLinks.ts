@@ -27,8 +27,9 @@ function trimSelectedUrlPunctuation(value: string): string {
   return candidate
 }
 
-function normalizeSelectedUrl(value: string, baseUrl: string): string {
-  const candidate = trimSelectedUrlPunctuation(String(value || '').trim())
+function normalizeSelectedUrl(value: string, baseUrl: string, textExtraction = false): string {
+  const raw = String(value || '').trim()
+  const candidate = textExtraction ? trimSelectedUrlPunctuation(raw) : raw
   if (!candidate) return ''
   if (/^magnet:\?/i.test(candidate)) return candidate
   if (candidate.includes('://') && !/^https?:\/\//i.test(candidate)) return ''
@@ -42,13 +43,13 @@ function normalizeSelectedUrl(value: string, baseUrl: string): string {
 
 /** Return only links covered by the user's current selection, in visual order. */
 export function selectedDownloadUrls(anchorHrefs: string[], selectedText: string, baseUrl: string): string[] {
-  const values = [
-    ...anchorHrefs,
-    ...(String(selectedText || '').match(TEXT_URL) || []),
+  const values: Array<{ value: string, textExtraction: boolean }> = [
+    ...anchorHrefs.map(value => ({ value, textExtraction: false })),
+    ...(String(selectedText || '').match(TEXT_URL) || []).map(value => ({ value, textExtraction: true })),
   ]
   const unique = new Set<string>()
-  for (const value of values) {
-    const normalized = normalizeSelectedUrl(value, baseUrl)
+  for (const item of values) {
+    const normalized = normalizeSelectedUrl(item.value, baseUrl, item.textExtraction)
     if (normalized) unique.add(normalized)
   }
   return [...unique]
