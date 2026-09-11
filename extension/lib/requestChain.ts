@@ -238,9 +238,19 @@ export class RequestChainStore {
   observeRedirect(details: RequestDetailsLike): RequestChain {
     const chain = this.observeRequest(details)
     chain.urls = appendUrl(chain.urls, details.redirectUrl)
-    if (details.redirectUrl) chain.finalUrl = details.redirectUrl
-    if (details.responseHeaders) chain.responseHeaders = headers(details.responseHeaders)
-    chain.statusCode = details.statusCode || chain.statusCode
+    if (details.redirectUrl) {
+      // Chromium keeps the same request id across redirects. Once finalUrl is
+      // moved to the target, the previous hop's 3xx response no longer proves
+      // anything about that target. Clear response evidence until the target's
+      // own onHeadersReceived event arrives, otherwise successfulOnly can replay
+      // an unconfirmed (or later rejected) redirected request.
+      chain.finalUrl = details.redirectUrl
+      chain.responseHeaders = {}
+      chain.statusCode = 0
+    } else {
+      if (details.responseHeaders) chain.responseHeaders = headers(details.responseHeaders)
+      chain.statusCode = details.statusCode || chain.statusCode
+    }
     return chain
   }
 
