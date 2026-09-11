@@ -1,8 +1,34 @@
 const TEXT_URL = /(?:https?:\/\/|magnet:\?)[^\s<>"']+/gi
-const TRAILING_PUNCTUATION = /[),.;:!?\]}\u3002\uff0c\uff1b\uff1a\uff01\uff1f\u3001\u300b\u3009\u3011\u3015]+$/
+const TRAILING_SENTENCE_PUNCTUATION = /[,.;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f\u3001]+$/
+const TRAILING_CLOSERS: Record<string, string> = {
+  ')': '(',
+  ']': '[',
+  '}': '{',
+  '\u300b': '\u300a',
+  '\u3009': '\u3008',
+  '\u3011': '\u3010',
+  '\u3015': '\u3014',
+}
+
+function trimSelectedUrlPunctuation(value: string): string {
+  let candidate = value.replace(TRAILING_SENTENCE_PUNCTUATION, '')
+  while (candidate) {
+    const close = candidate.at(-1) || ''
+    const open = TRAILING_CLOSERS[close]
+    if (!open) break
+    const openCount = [...candidate].filter(char => char === open).length
+    const closeCount = [...candidate].filter(char => char === close).length
+    // A closing delimiter that balances one inside the URL is part of the URL
+    // (`file_(1).zip`, IPv6 `[::1]`, etc.). Strip only unmatched sentence
+    // punctuation appended after the selected URL.
+    if (closeCount <= openCount) break
+    candidate = candidate.slice(0, -1).replace(TRAILING_SENTENCE_PUNCTUATION, '')
+  }
+  return candidate
+}
 
 function normalizeSelectedUrl(value: string, baseUrl: string): string {
-  const candidate = String(value || '').trim().replace(TRAILING_PUNCTUATION, '')
+  const candidate = trimSelectedUrlPunctuation(String(value || '').trim())
   if (!candidate) return ''
   if (/^magnet:\?/i.test(candidate)) return candidate
   if (candidate.includes('://') && !/^https?:\/\//i.test(candidate)) return ''
