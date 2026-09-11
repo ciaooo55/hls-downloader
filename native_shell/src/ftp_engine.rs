@@ -423,7 +423,12 @@ mod tests {
         assert!(require_reply_code("534 TLS unavailable\r\n", &[234], "AUTH TLS").is_err());
         assert!(require_reply_code("200 Type set\r\n", &[200], "TYPE I").is_ok());
         assert!(require_reply_code("500 TYPE rejected\r\n", &[200], "TYPE I").is_err());
-        assert!(require_reply_code("227 Entering Passive Mode (1,2,3,4,5,6)\r\n", &[227], "PASV").is_ok());
+        assert!(require_reply_code(
+            "227 Entering Passive Mode (1,2,3,4,5,6)\r\n",
+            &[227],
+            "PASV"
+        )
+        .is_ok());
         assert!(require_reply_code("425 No data connection\r\n", &[227], "PASV").is_err());
     }
 }
