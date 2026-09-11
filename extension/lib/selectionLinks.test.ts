@@ -14,6 +14,17 @@ describe('selected download links', () => {
     ])
   })
 
+  it('preserves exact anchor href punctuation', () => {
+    expect(selectedDownloadUrls(
+      ['/release-v1.0.', '/wiki/Function_(mathematics)'],
+      '',
+      'https://site.test/page',
+    )).toEqual([
+      'https://site.test/release-v1.0.',
+      'https://site.test/wiki/Function_(mathematics)',
+    ])
+  })
+
   it('preserves balanced URL closers while removing sentence punctuation', () => {
     expect(selectedDownloadUrls(
       [],
