@@ -152,11 +152,11 @@ fn resolve(base: &str, reference: &str) -> Option<String> {
     let origin_end = path_start.unwrap_or(clean_base.len());
     let origin = &clean_base[..origin_end];
     let (reference_path, suffix) = split_reference_suffix(&value);
-    let joined_path = if reference_path.is_empty() {
-        path_start
-            .map(|index| clean_base[index..].to_string())
-            .unwrap_or_else(|| "/".into())
-    } else if reference_path.starts_with('/') {
+    if reference_path.is_empty() {
+        let current_path = path_start.map(|index| &clean_base[index..]).unwrap_or("/");
+        return Some(format!("{origin}{current_path}{suffix}"));
+    }
+    let joined_path = if reference_path.starts_with('/') {
         reference_path.to_string()
     } else {
         let base_path = path_start.map(|index| &clean_base[index..]).unwrap_or("/");
@@ -312,6 +312,14 @@ mod tests {
         assert!(links
             .iter()
             .any(|item| item.url == "https://site.test/dir/file.zip?download=1"));
+
+        let directory = harvest_html(
+            r#"<a href="?download=1">download</a>"#,
+            "https://site.test/dir/?token=secret",
+        );
+        assert!(directory
+            .iter()
+            .any(|item| item.url == "https://site.test/dir/?download=1"));
     }
 
     #[test]
