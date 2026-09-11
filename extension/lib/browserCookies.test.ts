@@ -38,6 +38,18 @@ describe('cookie site permissions', () => {
     )).toBe(false)
   })
 
+  it('normalizes wildcard host rules before matching subdomains', () => {
+    expect(normalizeCookiePermissionHosts([
+      '*.site.test',
+      'https://*.site.test/watch',
+    ])).toEqual(['site.test'])
+    expect(cookiePermissionAllows(
+      'https://cdn.site.test/video.m3u8',
+      'https://other.test/watch',
+      ['*.site.test'],
+    )).toBe(true)
+  })
+
   it('normalizes, deduplicates, and bounds persisted hosts', () => {
     expect(normalizeCookiePermissionHosts([
       'WWW.Site.Test:443',
