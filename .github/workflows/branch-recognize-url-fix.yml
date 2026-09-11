@@ -1,0 +1,145 @@
+name: Branch strict media URL recognition
+
+on:
+  push:
+    branches:
+      - '网页版gpt'
+    paths:
+      - '.github/workflows/branch-recognize-url-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    if: github.ref == 'refs/heads/网页版gpt'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: '网页版gpt'
+          fetch-depth: 0
+
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: '1.98.1'
+          components: rustfmt
+
+      - name: Apply exact URL recognition patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $patch = @'
+          from pathlib import Path
+
+          path = Path("native_shell/src/recognize.rs")
+          text = path.read_text(encoding="utf-8")
+
+          old_classify = '''    } else if path.contains(".m3u8") || lower.contains("vnd.apple.mpegurl") {
+                  if path.contains("live") || query_marks_live(&lower) {
+                      ResourceKind::Live
+                  } else {
+                      ResourceKind::Hls
+                  }
+              } else if path.contains(".mpd") || lower.contains("dash+xml") {
+                  ResourceKind::Dash
+          '''
+          new_classify = '''    } else if path.ends_with(".m3u8") || lower.contains("vnd.apple.mpegurl") {
+                  if path.contains("live") || query_marks_live(&lower) {
+                      ResourceKind::Live
+                  } else {
+                      ResourceKind::Hls
+                  }
+              } else if path.ends_with(".mpd") || lower.contains("dash+xml") {
+                  ResourceKind::Dash
+          '''
+          if text.count(old_classify) != 1:
+              raise SystemExit(f"expected one media extension classifier, found {text.count(old_classify)}")
+          text = text.replace(old_classify, new_classify, 1)
+
+          old_live = '''        let value = value.trim();
+                  value.is_empty() || !matches!(value, "0" | "false" | "no" | "off")
+          '''
+          new_live = '''        let value = value.trim().to_ascii_lowercase();
+                  value.is_empty() || !matches!(value.as_str(), "0" | "false" | "no" | "off")
+          '''
+          if text.count(old_live) != 1:
+              raise SystemExit(f"expected one live query parser, found {text.count(old_live)}")
+          text = text.replace(old_live, new_live, 1)
+
+          test_marker = '''        assert_eq!(
+                      classify_url("https://cdn/movie.m3u8?live=false"),
+                      ResourceKind::Hls
+                  );
+                  assert_eq!(
+                      classify_url("https://cdn/opaque?content_type=application/vnd.apple.mpegurl&live=1"),
+                      ResourceKind::Live
+                  );
+          '''
+          test_replacement = '''        assert_eq!(
+                      classify_url("https://cdn/movie.m3u8?live=false"),
+                      ResourceKind::Hls
+                  );
+                  assert_eq!(
+                      classify_url("https://cdn/archive.m3u8.txt"),
+                      ResourceKind::File
+                  );
+                  assert_eq!(
+                      classify_url("https://cdn/manifest.mpd.json"),
+                      ResourceKind::File
+                  );
+                  for value in ["FALSE", "False", "NO", "Off"] {
+                      assert!(
+                          !query_marks_live(&format!("https://cdn/movie.m3u8?live={value}")),
+                          "live={value} must remain false"
+                      );
+                  }
+                  assert_eq!(
+                      classify_url("https://cdn/opaque?content_type=application/vnd.apple.mpegurl&live=1"),
+                      ResourceKind::Live
+                  );
+          '''
+          if text.count(test_marker) != 1:
+              raise SystemExit(f"expected one recognition test marker, found {text.count(test_marker)}")
+          text = text.replace(test_marker, test_replacement, 1)
+          path.write_text(text, encoding="utf-8")
+          '@
+          $patch | python -
+
+      - name: Format and compile Rust Core
+        shell: pwsh
+        working-directory: native_shell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo check --locked
+
+      - name: Run focused recognition regressions
+        shell: pwsh
+        working-directory: native_shell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --locked --lib recognize::tests::query_values_do_not_reclassify_the_resource_path -- --exact --nocapture
+          cargo test --locked --lib recognize::tests -- --test-threads=1
+
+      - name: Commit only validated recognition source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item -LiteralPath '.github/workflows/branch-recognize-url-fix.yml' -Force
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- 'native_shell/src/recognize.rs' '.github/workflows/branch-recognize-url-fix.yml'
+          git diff --cached --check
+          $files = @(git diff --cached --name-only)
+          if ($files.Count -ne 2 -or $files -notcontains 'native_shell/src/recognize.rs' -or $files -notcontains '.github/workflows/branch-recognize-url-fix.yml') {
+            throw "Unexpected staged files: $($files -join ', ')"
+          }
+          git commit -m 'fix(recognize): tighten media URL classification'
+          git push origin 'HEAD:网页版gpt'
