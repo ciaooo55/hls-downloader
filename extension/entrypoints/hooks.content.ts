@@ -7,7 +7,11 @@ export default defineContentScript({
   world: 'MAIN',
   runAt: 'document_start',
   main() {
+    // Exact byte-for-byte ownership is used only for Blob/File download replay.
+    // Partial/transformed MSE buffers live in mseBufferSources below so media
+    // correlation can stay permissive without making unsafe download claims.
     const bufferSources = new WeakMap<object, string>()
+    const mseBufferSources = new WeakMap<object, string>()
     const mediaSourceBlobs = new WeakMap<object, string>()
     const sourceBufferOwners = new WeakMap<object, object>()
     const pendingResources: Array<{ url: string; mimeType: string }> = []
@@ -107,6 +111,11 @@ export default defineContentScript({
       if (ArrayBuffer.isView(value)) bufferSources.set(value.buffer, sourceUrl)
       if (/^https?:\/\//i.test(sourceUrl)) installBlobSliceHook()
     }
+    const rememberMseBufferSource = (value: unknown, sourceUrl: string) => {
+      if (!sourceUrl || (!value || (typeof value !== 'object' && typeof value !== 'function'))) return
+      mseBufferSources.set(value as object, sourceUrl)
+      if (ArrayBuffer.isView(value)) mseBufferSources.set(value.buffer, sourceUrl)
+    }
     try {
       const OriginalBlob = window.Blob
       window.Blob = class extends OriginalBlob {
@@ -204,14 +213,13 @@ export default defineContentScript({
           return value
         }
         // Player libraries commonly normalize or trim fetched bytes before
-        // appendBuffer. Preserve ownership across those copies only on MSE
-        // pages; patching every typed-array slice on every website caused
-        // measurable jank on busy live/chat applications.
+        // appendBuffer. Preserve MSE provenance across those copies, but never
+        // upgrade a partial slice into exact download ownership.
         const arrayBufferSlice = ArrayBuffer.prototype.slice
         ArrayBuffer.prototype.slice = function (start?: number, end?: number) {
           const value = arrayBufferSlice.call(this, start, end)
-          const source = bufferSources.get(this)
-          if (source) rememberBufferSource(value, source)
+          const source = mseBufferSources.get(this) || bufferSources.get(this)
+          if (source) rememberMseBufferSource(value, source)
           return value
         }
         const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as {
@@ -221,8 +229,9 @@ export default defineContentScript({
         if (typeof typedArraySlice === 'function') {
           typedArrayPrototype.slice = function (this: ArrayBufferView, start?: number, end?: number) {
             const value = typedArraySlice.call(this, start, end)
-            const source = bufferSources.get(this) || bufferSources.get(this.buffer)
-            if (source) rememberBufferSource(value, source)
+            const source = mseBufferSources.get(this) || bufferSources.get(this)
+              || mseBufferSources.get(this.buffer) || bufferSources.get(this.buffer)
+            if (source) rememberMseBufferSource(value, source)
             return value
           }
         }
@@ -239,7 +248,7 @@ export default defineContentScript({
           prototype.read = async function (...args: any[]) {
             const result = await read.apply(this, args)
             const source = readerSources.get(this)
-            if (source && result && 'value' in result) rememberBufferSource(result.value, source)
+            if (source && result && 'value' in result) rememberMseBufferSource(result.value, source)
             return result
           }
         }
@@ -353,8 +362,10 @@ export default defineContentScript({
         const appendBuffer = SourceBuffer.prototype.appendBuffer
         SourceBuffer.prototype.appendBuffer = function (data: BufferSource) {
           try {
-            const source = bufferSources.get(data as object)
-              || (ArrayBuffer.isView(data) ? bufferSources.get(data.buffer) : '')
+            const source = mseBufferSources.get(data as object) || bufferSources.get(data as object)
+              || (ArrayBuffer.isView(data)
+                ? mseBufferSources.get(data.buffer) || bufferSources.get(data.buffer)
+                : '')
             const owner = sourceBufferOwners.get(this)
             const blobUrl = owner ? mediaSourceBlobs.get(owner) || '' : ''
             if (source && blobUrl) reportMse(blobUrl, source, 'mse')
