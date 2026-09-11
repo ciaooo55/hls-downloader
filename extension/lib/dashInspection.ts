@@ -36,9 +36,9 @@ function attributes(value: string): Record<string, string> {
   return result
 }
 
-function isoDuration(value = ''): number {
+function isoDuration(value = ''): number | null {
   const match = value.match(/^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i)
-  if (!match) return 0
+  if (!match || match.slice(1).every(part => part === undefined)) return null
   return (Number(match[1]) || 0) * 86_400
     + (Number(match[2]) || 0) * 3_600
     + (Number(match[3]) || 0) * 60
@@ -124,10 +124,10 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
   const periods = periodBlocks.length ? periodBlocks : [{ attributes: {}, body: rootBody }]
   const rootDuration = isoDuration(rootAttributes.mediapresentationduration)
   const periodDurations = periods.map(period => isoDuration(period.attributes.duration))
-  const explicitPeriodDuration = periodDurations.length > 0 && periodDurations.every(value => value > 0)
-    ? periodDurations.reduce((total, value) => total + value, 0)
-    : 0
-  const duration = isLive ? undefined : (rootDuration || explicitPeriodDuration)
+  const explicitPeriodDuration = periodDurations.length > 0 && periodDurations.every(value => value !== null)
+    ? periodDurations.reduce((total, value) => total + (value || 0), 0)
+    : null
+  const duration = isLive ? undefined : (rootDuration ?? explicitPeriodDuration ?? 0)
 
   const video: DashCandidate[] = []
   const audioBandwidth: number[] = []

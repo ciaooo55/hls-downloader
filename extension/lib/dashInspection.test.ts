@@ -51,6 +51,22 @@ describe('DASH browser inspection', () => {
     })
   })
 
+  it('accepts an explicit zero-length Period when summing durations', () => {
+    const zeroPeriod = `<MPD type="static">
+      <Period duration="PT0S"><AdaptationSet contentType="video">
+        <Representation id="v1" width="1280" height="720" bandwidth="1000000" />
+      </AdaptationSet></Period>
+      <Period duration="PT10S"><AdaptationSet contentType="video">
+        <Representation id="v2" width="1280" height="720" bandwidth="1000000" />
+      </AdaptationSet></Period>
+    </MPD>`
+
+    expect(parseDashManifest(zeroPeriod, 'https://cdn.test/manifest.mpd')).toMatchObject({
+      duration: 10,
+      estimatedSize: 1_250_000,
+    })
+  })
+
   it('does not invent a partial duration when any Period duration is missing', () => {
     const partial = `<MPD type="static">
       <Period duration="PT10S"><AdaptationSet contentType="video">
