@@ -7,6 +7,12 @@ describe('bounded response reader', () => {
     expect(await readBoundedResponseText(new Response('0123456789'), 4)).toBeNull()
   })
 
+  it('fails closed when the byte limit is non-finite', async () => {
+    expect(await readBoundedResponseText(new Response('x'), Number.NaN)).toBeNull()
+    expect(await readBoundedResponseText(new Response('x'), Number.POSITIVE_INFINITY)).toBeNull()
+    expect(await readBoundedResponseText(new Response(''), Number.NaN)).toBe('')
+  })
+
   it('stops a chunked response as soon as it exceeds the limit', async () => {
     let canceled = false
     const stream = new ReadableStream<Uint8Array>({
