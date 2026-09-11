@@ -52,6 +52,13 @@ fn query_marks_live(url: &str) -> bool {
     })
 }
 
+fn is_http_resource_url(url: &str) -> bool {
+    let Some((scheme, _)) = url.split_once(':') else {
+        return false;
+    };
+    scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+}
+
 pub fn kind_label(kind: ResourceKind) -> &'static str {
     match kind {
         ResourceKind::Hls => "HLS 点播",
@@ -129,9 +136,7 @@ pub fn probe_with_harvest_context(
         let manifest = crate::media::parse_mpd(&String::from_utf8_lossy(&body), url)?;
         variants = crate::media::representation_choices(&manifest);
         variants.extend(crate::media::dash_audio_choices(&manifest));
-    } else if kind == ResourceKind::File
-        && (url.starts_with("http://") || url.starts_with("https://"))
-    {
+    } else if kind == ResourceKind::File && is_http_resource_url(url) {
         if let Ok((status, body)) = crate::http_engine::fetch_bytes(url, headers, proxy) {
             if status == 200 || status == 206 {
                 let text = String::from_utf8_lossy(&body);
@@ -201,6 +206,9 @@ mod tests {
             "<!doctype html><a href=\"https://x/a.bin\">x</a>"
         ));
         assert!(!looks_html("PK\u{3}\u{4}binary"));
+        assert!(is_http_resource_url("http://cdn.test/opaque"));
+        assert!(is_http_resource_url("HTTPS://cdn.test/opaque"));
+        assert!(!is_http_resource_url("ftp://cdn.test/opaque"));
         assert!(probe_url("javascript:alert(1)").is_err());
         assert!(probe_url("file:///C:/Windows/win.ini").is_err());
         assert!(probe_url("ms-msdt:foo").is_err());
