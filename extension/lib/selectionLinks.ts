@@ -31,7 +31,11 @@ function normalizeSelectedUrl(value: string, baseUrl: string, textExtraction = f
   const raw = String(value || '').trim()
   const candidate = textExtraction ? trimSelectedUrlPunctuation(raw) : raw
   if (!candidate) return ''
-  if (/^magnet:\?/i.test(candidate)) return candidate
+  // URI schemes are case-insensitive, but downstream resource classification
+  // uses the canonical lower-case magnet prefix. Plain selected text is not
+  // normalized by an HTMLAnchorElement first, so normalize only the scheme
+  // while preserving the exact info-hash/query bytes.
+  if (/^magnet:\?/i.test(candidate)) return candidate.replace(/^magnet:/i, 'magnet:')
   // `new URL('://broken', base)` treats the malformed value as a relative
   // path. Reject that specific scheme-less form while still allowing normal
   // relative routes whose query happens to contain `https://...`.
