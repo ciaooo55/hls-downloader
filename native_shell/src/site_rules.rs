@@ -203,10 +203,13 @@ pub fn host_of(url: &str) -> String {
 }
 
 pub fn upsert_site_rule(rules: &mut Vec<SiteRule>, rule: SiteRule) {
-    if rule.host.trim().is_empty() {
+    let rule_host = site_rule_match_host(&rule.host).to_ascii_lowercase();
+    if rule_host.is_empty() {
         return;
     }
-    if let Some(existing) = rules.iter_mut().find(|item| item.host == rule.host) {
+    if let Some(existing) = rules.iter_mut().find(|item| {
+        site_rule_match_host(&item.host).eq_ignore_ascii_case(&rule_host)
+    }) {
         existing.enabled = rule.enabled;
         if rule.speed_limit_kib > 0 {
             existing.speed_limit_kib = rule.speed_limit_kib;
@@ -376,6 +379,22 @@ mod tests {
             r#"[{"host":"example.test"},{"host":"*.example.test"}]"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn upsert_reuses_equivalent_wildcard_host() {
+        let mut rules = parse_site_rules("*.example.test=speed:128,conn:2");
+        upsert_site_rule(
+            &mut rules,
+            SiteRule {
+                host: "example.test".into(),
+                concurrency: 4,
+                ..SiteRule::default()
+            },
+        );
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].host, "*.example.test");
+        assert_eq!(rules[0].concurrency, 4);
     }
 
     #[test]
