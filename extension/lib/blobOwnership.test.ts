@@ -10,7 +10,7 @@ describe('blob download ownership', () => {
     expect(inheritHttpBufferSource([bytes], value => sources.get(value))).toBe('https://cdn.test/export.zip')
   })
 
-  it('keeps ownership only when every non-empty part comes from one HTTP response', () => {
+  it('keeps ownership only for one non-empty HTTP-backed part', () => {
     const sources = new WeakMap<object, string>()
     const first = new Uint8Array([1, 2])
     const second = new Uint8Array([3, 4])
@@ -19,8 +19,7 @@ describe('blob download ownership', () => {
     sources.set(second.buffer, 'https://cdn.test/export.zip')
     sources.set(other.buffer, 'https://cdn.test/other.zip')
 
-    expect(inheritHttpBufferSource([first, second], value => sources.get(value)))
-      .toBe('https://cdn.test/export.zip')
+    expect(inheritHttpBufferSource([first, second], value => sources.get(value))).toBe('')
     expect(inheritHttpBufferSource([first, new Uint8Array(0)], value => sources.get(value)))
       .toBe('https://cdn.test/export.zip')
     expect(inheritHttpBufferSource([first, other], value => sources.get(value))).toBe('')
