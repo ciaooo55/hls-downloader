@@ -34,7 +34,8 @@ jobs:
         run: cargo check --manifest-path native_shell/Cargo.toml
 
       - name: Run focused FTP regressions
-        run: cargo test --manifest-path native_shell/Cargo.toml ftp_engine::tests:: -- --test-threads=1
+        run: |
+          cargo test --manifest-path native_shell/Cargo.toml ftp_engine::tests:: -- --test-threads=1
 
       - name: Commit tested core patch on target branch only
         shell: pwsh
