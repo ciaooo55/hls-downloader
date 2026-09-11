@@ -220,10 +220,16 @@ export class RequestChainStore {
       finalUrl: details.url,
       urls,
       pageUrl: details.documentUrl || previous?.pageUrl || details.initiator || '',
-      requestHeaders: Object.keys(capturedHeaders).length
+      // onBeforeRequest and onSendHeaders arrive separately. Preserve the
+      // other listener's data only when this event did not include that field;
+      // an explicitly empty header/body capture is authoritative and must be
+      // able to clear identity removed by the browser on a redirect.
+      requestHeaders: details.requestHeaders !== undefined
         ? capturedHeaders
         : previous?.requestHeaders || {},
-      requestBody: capturedBody || previous?.requestBody || '',
+      requestBody: details.requestBody !== undefined
+        ? capturedBody
+        : previous?.requestBody || '',
       responseHeaders: previous?.responseHeaders || {},
       statusCode: previous?.statusCode || 0,
       startedAt: previous?.startedAt || now,
@@ -240,11 +246,14 @@ export class RequestChainStore {
     chain.urls = appendUrl(chain.urls, details.redirectUrl)
     if (details.redirectUrl) {
       // Chromium keeps the same request id across redirects. Once finalUrl is
-      // moved to the target, the previous hop's 3xx response no longer proves
-      // anything about that target. Clear response evidence until the target's
-      // own onHeadersReceived event arrives, otherwise successfulOnly can replay
-      // an unconfirmed (or later rejected) redirected request.
+      // moved to the target, neither the previous response nor its replay
+      // identity belongs to that target. The target's own onBeforeRequest,
+      // onSendHeaders and onHeadersReceived events repopulate these fields.
+      // Failing closed here also prevents cross-origin Authorization/body data
+      // from being attached to a target when browser APIs intentionally strip it.
       chain.finalUrl = details.redirectUrl
+      chain.requestHeaders = {}
+      chain.requestBody = ''
       chain.responseHeaders = {}
       chain.statusCode = 0
     } else {
