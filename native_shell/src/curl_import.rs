@@ -73,7 +73,8 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
                 "-b" | "--cookie" => {
                     if !value.contains('=') {
                         return Err(
-                            "cURL -b/--cookie 文件导入暂不支持；请使用内联 name=value Cookie".into(),
+                            "cURL -b/--cookie 文件导入暂不支持；请使用内联 name=value Cookie"
+                                .into(),
                         );
                     }
                     headers.insert("cookie".into(), value);
