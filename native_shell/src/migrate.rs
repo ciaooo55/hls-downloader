@@ -243,6 +243,7 @@ fn migrate_from_5x_with_batch(
 }
 
 fn import_settings(core: &mut PersistentCore, value: &Value) -> Result<(), String> {
+    let mut settings = BTreeMap::new();
     let legal = value
         .get("legal_terms_accepted")
         .and_then(Value::as_bool)
@@ -260,120 +261,113 @@ fn import_settings(core: &mut PersistentCore, value: &Value) -> Result<(), Strin
                 })
         });
     if legal {
-        core.store_mut().set_setting("legal_terms_accepted", true)?;
+        settings.insert("legal_terms_accepted".into(), Value::Bool(true));
     }
-    set_u64(
-        core,
+    collect_u64(
+        &mut settings,
         "download_speed_limit_kib",
         first_u64(value, &["download_speed_limit_kib"]),
-    )?;
-    set_bool(
-        core,
+    );
+    collect_bool(
+        &mut settings,
         "browser_takeover_enabled",
         first_bool(value, &["browser_takeover_enabled"]),
-    )?;
+    );
     if let Some(bytes) = first_u64(value, &["browser_takeover_minimum_bytes"]) {
-        set_u64(core, "browser_takeover_minimum_bytes", Some(bytes))?;
+        collect_u64(&mut settings, "browser_takeover_minimum_bytes", Some(bytes));
     } else if let Some(mb) = first_u64(value, &["browser_takeover_min_mb"]) {
-        set_u64(
-            core,
+        collect_u64(
+            &mut settings,
             "browser_takeover_minimum_bytes",
             Some(mb.saturating_mul(1024 * 1024)),
-        )?;
+        );
     }
-    set_bool(
-        core,
+    collect_bool(
+        &mut settings,
         "download_speed_schedule_enabled",
         first_bool(
             value,
             &["download_speed_schedule_enabled", "speed_schedule_enabled"],
         ),
-    )?;
-    set_string(
-        core,
+    );
+    collect_string(
+        &mut settings,
         "download_speed_schedule_start",
         first_str(
             value,
             &["download_speed_schedule_start", "speed_schedule_start"],
         ),
-    )?;
-    set_string(
-        core,
+    );
+    collect_string(
+        &mut settings,
         "download_speed_schedule_end",
         first_str(
             value,
             &["download_speed_schedule_end", "speed_schedule_end"],
         ),
-    )?;
-    set_u64(
-        core,
+    );
+    collect_u64(
+        &mut settings,
         "download_speed_schedule_kib",
         first_u64(
             value,
             &["download_speed_schedule_kib", "speed_schedule_limit_kib"],
         ),
-    )?;
-    set_u64(
-        core,
+    );
+    collect_u64(
+        &mut settings,
         "queue_max_active",
         first_u64(value, &["queue_max_active", "max_concurrent_tasks"]).map(|value| value.max(1)),
-    )?;
-    set_string(core, "site_rules", first_str(value, &["site_rules"]))?;
-    set_bool(
-        core,
+    );
+    collect_string(
+        &mut settings,
+        "site_rules",
+        first_str(value, &["site_rules"]),
+    );
+    collect_bool(
+        &mut settings,
         "auto_category_dirs",
         first_bool(value, &["auto_category_dirs"]),
-    )?;
+    );
     if let Some(dirs) = value.get("browser_category_dirs") {
         if dirs.is_object() {
-            set_string(core, "browser_category_dirs", Some(&dirs.to_string()))?;
+            settings.insert(
+                "browser_category_dirs".into(),
+                Value::String(dirs.to_string()),
+            );
         }
     }
-    set_bool(
-        core,
+    collect_bool(
+        &mut settings,
         "av_scan_enabled",
         first_bool(value, &["av_scan_enabled"]),
-    )?;
-    set_string(
-        core,
+    );
+    collect_string(
+        &mut settings,
         "av_scan_command",
         first_str(value, &["av_scan_command"]),
-    )?;
-    set_string(
-        core,
+    );
+    collect_string(
+        &mut settings,
         "torrent_watch_dir",
         first_str(value, &["torrent_watch_dir", "watch_dir"]),
-    )?;
-    set_bool(
-        core,
+    );
+    collect_bool(
+        &mut settings,
         "watch_torrents",
         first_bool(value, &["watch_torrents"]),
-    )?;
-    set_string(core, "download_dir", first_str(value, &["download_dir"]))?;
-    set_string(core, "temp_dir", first_str(value, &["temp_dir"]))?;
-    set_string(
-        core,
+    );
+    collect_string(
+        &mut settings,
+        "download_dir",
+        first_str(value, &["download_dir"]),
+    );
+    collect_string(&mut settings, "temp_dir", first_str(value, &["temp_dir"]));
+    collect_string(
+        &mut settings,
         "default_origin",
         first_str(value, &["default_origin"]),
-    )?;
-    if let Some(raw_cookie) =
-        first_str(value, &["default_cookie"]).filter(|value| !value.is_empty())
-    {
-        let cookie = CredentialVault.unprotect(raw_cookie)?;
-        if !cookie.contains(['\r', '\n', '\0']) && cookie.len() <= 16 * 1024 {
-            let replay = serde_json::json!({ "cookie": cookie }).to_string();
-            let protected = if cfg!(windows) {
-                CredentialVault.protect(&replay)?
-            } else {
-                replay
-            };
-            core.store_mut().store_credential(
-                "settings:default-cookie",
-                &protected,
-                "default_cookie",
-            )?;
-        }
-    }
+    );
     if let Some(hosts) = value.get("allowed_hosts") {
         let encoded = hosts
             .as_array()
@@ -385,47 +379,96 @@ fn import_settings(core: &mut PersistentCore, value: &Value) -> Result<(), Strin
                     .join(",")
             })
             .or_else(|| hosts.as_str().map(str::to_string));
-        set_string(core, "allowed_hosts", encoded.as_deref())?;
+        if let Some(encoded) = encoded {
+            settings.insert("allowed_hosts".into(), Value::String(encoded));
+        }
     }
-    set_bool(
-        core,
+    collect_bool(
+        &mut settings,
         "av_scan_fail_on_threat",
         first_bool(value, &["av_scan_fail_on_threat"]),
-    )?;
-    set_u64(
-        core,
+    );
+    collect_u64(
+        &mut settings,
         "bt_upload_limit_kib",
         first_u64(value, &["bt_upload_limit_kib"]),
-    )?;
-    set_u64(
-        core,
+    );
+    collect_u64(
+        &mut settings,
         "bt_max_connections",
         first_u64(value, &["bt_max_connections"]),
-    )?;
-    set_bool(core, "bt_enable_dht", first_bool(value, &["bt_enable_dht"]))?;
-    set_string(core, "proxy_url", first_str(value, &["proxy_url"]))?;
-    Ok(())
-}
+    );
+    collect_bool(
+        &mut settings,
+        "bt_enable_dht",
+        first_bool(value, &["bt_enable_dht"]),
+    );
+    collect_string(&mut settings, "proxy_url", first_str(value, &["proxy_url"]));
 
-fn set_u64(core: &mut PersistentCore, key: &str, value: Option<u64>) -> Result<(), String> {
-    if let Some(value) = value {
-        core.store_mut().set_setting(key, value)?;
+    const COOKIE_REF: &str = "settings:default-cookie";
+    const COOKIE_KIND: &str = "default_cookie";
+    let cookie_update = if let Some(raw_cookie) =
+        first_str(value, &["default_cookie"]).filter(|value| !value.is_empty())
+    {
+        let cookie = CredentialVault.unprotect(raw_cookie)?;
+        if !cookie.contains(['\r', '\n', '\0']) && cookie.len() <= 16 * 1024 {
+            let replay = serde_json::json!({ "cookie": cookie }).to_string();
+            Some(if cfg!(windows) {
+                CredentialVault.protect(&replay)?
+            } else {
+                replay
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let previous_cookie = if cookie_update.is_some() {
+        core.store().load_credential(COOKIE_REF)?
+    } else {
+        None
+    };
+    if let Some(protected) = cookie_update.as_deref() {
+        core.store_mut()
+            .store_credential(COOKIE_REF, protected, COOKIE_KIND)?;
+    }
+    if let Err(error) = core.store_mut().set_settings(&settings) {
+        if cookie_update.is_some() {
+            let rollback = match previous_cookie.as_deref() {
+                Some(blob) => core
+                    .store_mut()
+                    .store_credential(COOKIE_REF, blob, COOKIE_KIND),
+                None => core.store_mut().delete_credential(COOKIE_REF),
+            };
+            if let Err(rollback_error) = rollback {
+                return Err(format!(
+                    "{error}; rollback legacy default cookie credential: {rollback_error}"
+                ));
+            }
+        }
+        return Err(error);
     }
     Ok(())
 }
 
-fn set_bool(core: &mut PersistentCore, key: &str, value: Option<bool>) -> Result<(), String> {
+fn collect_u64(settings: &mut BTreeMap<String, Value>, key: &str, value: Option<u64>) {
     if let Some(value) = value {
-        core.store_mut().set_setting(key, value)?;
+        settings.insert(key.to_string(), Value::from(value));
     }
-    Ok(())
 }
 
-fn set_string(core: &mut PersistentCore, key: &str, value: Option<&str>) -> Result<(), String> {
+fn collect_bool(settings: &mut BTreeMap<String, Value>, key: &str, value: Option<bool>) {
     if let Some(value) = value {
-        core.store_mut().set_setting(key, value)?;
+        settings.insert(key.to_string(), Value::Bool(value));
     }
-    Ok(())
+}
+
+fn collect_string(settings: &mut BTreeMap<String, Value>, key: &str, value: Option<&str>) {
+    if let Some(value) = value {
+        settings.insert(key.to_string(), Value::String(value.to_string()));
+    }
 }
 
 fn first_u64(value: &Value, keys: &[&str]) -> Option<u64> {
@@ -866,6 +909,60 @@ fn classify_task(task_type: &str, url: &str) -> ResourceKind {
 mod tests {
     use super::*;
     use crate::PersistentCore;
+
+    #[test]
+    fn settings_import_is_atomic_when_default_cookie_decode_fails() {
+        let dir = std::env::temp_dir().join(format!(
+            "hls-migrate-settings-atomic-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.json");
+        std::fs::write(
+            &config,
+            r#"{"download_speed_limit_kib":999,"proxy_url":"http://legacy.proxy:8080","default_cookie":"dpapi:zz"}"#,
+        )
+        .unwrap();
+        let mut core = PersistentCore::in_memory().unwrap();
+        core.store_mut()
+            .set_setting("download_speed_limit_kib", 111u64)
+            .unwrap();
+        core.store_mut()
+            .set_setting("proxy_url", "http://v7.proxy:9090")
+            .unwrap();
+        core.store_mut()
+            .store_credential(
+                "settings:default-cookie",
+                "existing-cookie-blob",
+                "default_cookie",
+            )
+            .unwrap();
+
+        let error = migrate_from_5x(&mut core, &config, &dir.join("missing.db")).unwrap_err();
+        assert!(error.contains("DPAPI credential hex is invalid"), "{error}");
+        assert_eq!(
+            core.store()
+                .setting_u64("download_speed_limit_kib", 0)
+                .unwrap(),
+            111
+        );
+        assert_eq!(
+            core.store().setting_string("proxy_url", "").unwrap(),
+            "http://v7.proxy:9090"
+        );
+        assert_eq!(
+            core.store()
+                .load_credential("settings:default-cookie")
+                .unwrap()
+                .as_deref(),
+            Some("existing-cookie-blob")
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn imports_legal_flag_and_skips_missing_db() {
