@@ -48,6 +48,7 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
             || arg == "--data-urlencode"
             || arg == "-o"
             || arg == "--output"
+            || arg == "-x"
             || arg == "--proxy"
         {
             let value = args
@@ -94,6 +95,11 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
                 }
                 "--data-urlencode" => {
                     return Err("暂不支持导入 cURL --data-urlencode；拒绝静默改变请求体编码".into());
+                }
+                "-x" | "--proxy" => {
+                    return Err(
+                        "暂不支持导入 cURL 代理选项 -x/--proxy；拒绝静默改变请求路由".into(),
+                    );
                 }
                 _ => {}
             }
@@ -270,6 +276,16 @@ mod tests {
         let error = parse_curl_command(r#"curl --data-urlencode "q=a b" https://cdn.test/form"#)
             .unwrap_err();
         assert!(error.contains("--data-urlencode"));
+    }
+
+    #[test]
+    fn rejects_proxy_options_instead_of_misrouting() {
+        assert!(
+            parse_curl_command("curl --proxy http://proxy.test:8080 https://cdn.test/file").is_err()
+        );
+        assert!(
+            parse_curl_command("curl -x http://proxy.test:8080 https://cdn.test/file").is_err()
+        );
     }
 
     #[test]
