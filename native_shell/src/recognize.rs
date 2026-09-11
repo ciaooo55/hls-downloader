@@ -12,7 +12,7 @@ pub fn classify_url(url: &str) -> ResourceKind {
     } else if lower.starts_with("ftp://") || lower.starts_with("ftps://") {
         ResourceKind::Ftp
     } else if path.ends_with(".m3u8") || lower.contains("vnd.apple.mpegurl") {
-        if path.contains("live") || query_marks_live(&lower) {
+        if path_marks_live(path) || query_marks_live(&lower) {
             ResourceKind::Live
         } else {
             ResourceKind::Hls
@@ -22,6 +22,19 @@ pub fn classify_url(url: &str) -> ResourceKind {
     } else {
         ResourceKind::File
     }
+}
+
+fn path_marks_live(url_without_query: &str) -> bool {
+    let path = if let Some((_, authority_and_path)) = url_without_query.split_once("://") {
+        authority_and_path
+            .find('/')
+            .map(|index| &authority_and_path[index..])
+            .unwrap_or("")
+    } else {
+        url_without_query
+    };
+    path.split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|token| token.eq_ignore_ascii_case("live"))
 }
 
 fn query_marks_live(url: &str) -> bool {
@@ -123,7 +136,7 @@ pub fn probe_with_harvest_context(
             if status == 200 || status == 206 {
                 let text = String::from_utf8_lossy(&body);
                 if text.contains("#EXTM3U") {
-                    kind = if path_lower.contains("live") || query_marks_live(url) {
+                    kind = if path_marks_live(&path_lower) || query_marks_live(url) {
                         ResourceKind::Live
                     } else {
                         ResourceKind::Hls
@@ -240,6 +253,34 @@ mod tests {
         assert_eq!(
             classify_url("https://cdn/opaque?content_type=application/vnd.apple.mpegurl"),
             ResourceKind::Hls
+        );
+    }
+
+    #[test]
+    fn live_path_detection_uses_path_tokens_not_hostname_or_substrings() {
+        assert_eq!(
+            classify_url("https://live.example.com/movie.m3u8"),
+            ResourceKind::Hls
+        );
+        assert_eq!(
+            classify_url("https://cdn/deliver/movie.m3u8"),
+            ResourceKind::Hls
+        );
+        assert_eq!(
+            classify_url("https://cdn/olive/movie.m3u8"),
+            ResourceKind::Hls
+        );
+        assert_eq!(
+            classify_url("https://cdn/live/channel.m3u8"),
+            ResourceKind::Live
+        );
+        assert_eq!(
+            classify_url("https://cdn/events/live.m3u8"),
+            ResourceKind::Live
+        );
+        assert_eq!(
+            classify_url("https://cdn/events/my-live-stream.m3u8"),
+            ResourceKind::Live
         );
     }
 }
