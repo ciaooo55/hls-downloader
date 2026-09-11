@@ -114,7 +114,8 @@ function cleanName(value = '', pathValue = false): string {
   try { result = decodeURIComponent(result) } catch {}
   if (pathValue) result = result.replace(/\\/g, '/').split('/').pop() || ''
   result = result.split(/[?#]/, 1)[0].replace(MANIFEST_EXT, '').replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, ' ').trim().replace(/^[. ]+|[. ]+$/g, '')
-  return result.slice(0, 200)
+  const truncated = result.slice(0, 200)
+  return /[\uD800-\uDBFF]$/.test(truncated) ? truncated.slice(0, -1) : truncated
 }
 
 /** Server MIME types that already name a file, not a page or octet-stream guess. */
