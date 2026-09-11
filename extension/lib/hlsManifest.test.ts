@@ -17,6 +17,25 @@ describe('HLS metadata', () => {
     expect(resourceQuality('https://cdn.test/path/1080p/video.m3u8')).toBe('1080p')
   })
 
+  it('does not synthesize duration from invalid EXTINF values', () => {
+    const infinite = '#EXTM3U\n#EXTINF:Infinity,\na.ts\n#EXT-X-ENDLIST\n'
+    const negative = '#EXTM3U\n#EXTINF:5,\na.ts\n#EXTINF:-1,\nb.ts\n#EXT-X-ENDLIST\n'
+    const zeroThenValid = '#EXTM3U\n#EXTINF:0,\na.ts\n#EXTINF:5,\nb.ts\n#EXT-X-ENDLIST\n'
+
+    expect(parseHlsManifest(infinite, 'https://cdn.test/infinite.m3u8')).toMatchObject({
+      duration: undefined,
+      isLive: false,
+    })
+    expect(parseHlsManifest(negative, 'https://cdn.test/negative.m3u8')).toMatchObject({
+      duration: undefined,
+      isLive: false,
+    })
+    expect(parseHlsManifest(zeroThenValid, 'https://cdn.test/zero.m3u8')).toMatchObject({
+      duration: 5,
+      isLive: false,
+    })
+  })
+
   it('distinguishes an LL-HLS live playlist from an ordinary event window', () => {
     const ordinary = '#EXTM3U\n#EXTINF:4,\na.ts\n'
     const lowLatency = `${ordinary}#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES\n#EXT-X-PART:DURATION=0.5,URI="a.part"\n`

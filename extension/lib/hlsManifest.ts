@@ -42,6 +42,7 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
     } catch {}
   }
   let duration = 0
+  let completeDuration = true
   let completeSegments = 0
   let partialSegments = 0
   for (let index = 0; index < lines.length; index += 1) {
@@ -56,7 +57,9 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
       }
     }
     if (line.startsWith('#EXTINF:')) {
-      duration += Number(line.slice(8).split(',', 1)[0]) || 0
+      const segmentDuration = Number(line.slice(8).split(',', 1)[0])
+      if (Number.isFinite(segmentDuration) && segmentDuration >= 0) duration += segmentDuration
+      else completeDuration = false
       completeSegments += 1
       const uri = lines.slice(index + 1).find(value => !value.startsWith('#'))
       if (uri) rememberPlaybackUrl(uri)
@@ -104,7 +107,7 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
     // The tail of a live window is what the player is currently appending.
     // Bounding this also keeps session storage small on long event playlists.
     playbackUrls: playbackUrls.slice(-24),
-    duration: duration > 0 ? duration : undefined,
+    duration: completeDuration && duration > 0 ? duration : undefined,
     isLive,
     lowLatencyLive,
     partOnlyLive,
