@@ -152,18 +152,28 @@ fn parse_line(line: &str) -> Option<SiteRule> {
 }
 
 pub fn host_of(url: &str) -> String {
-    let rest = url.split("://").nth(1).unwrap_or(url);
-    rest.split(['/', '?', '#'])
+    let rest = url.split_once("://").map(|(_, tail)| tail).unwrap_or(url);
+    let authority = rest
+        .split(['/', '?', '#'])
         .next()
         .unwrap_or("")
-        .split('@')
-        .next_back()
-        .unwrap_or("")
-        .split(':')
+        .rsplit('@')
         .next()
         .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase()
+        .trim();
+    let host = if let Some(bracketed) = authority.strip_prefix('[') {
+        bracketed
+            .split_once(']')
+            .map(|(address, _)| format!("[{address}]"))
+            .unwrap_or_default()
+    } else {
+        authority
+            .split_once(':')
+            .map(|(host, _)| host)
+            .unwrap_or(authority)
+            .to_string()
+    };
+    host.trim().to_ascii_lowercase()
 }
 
 pub fn upsert_site_rule(rules: &mut Vec<SiteRule>, rule: SiteRule) {
@@ -333,6 +343,13 @@ mod tests {
         assert_eq!(rule.speed_limit_kib, 256);
         assert_eq!(rule.concurrency, 2);
         assert!(matching_rule(&rules, "https://other.test/a").is_none());
+    }
+
+    #[test]
+    fn extracts_hostname_without_userinfo_or_port() {
+        assert_eq!(host_of("https://User@Video.Example.Test:8443/watch"), "video.example.test");
+        assert_eq!(host_of("http://[2001:DB8::1]:8080/file"), "[2001:db8::1]");
+        assert_eq!(host_of("https://[::1]/"), "[::1]");
     }
 
     #[test]
