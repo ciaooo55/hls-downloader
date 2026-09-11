@@ -655,7 +655,7 @@ pub fn effective_proxy(
     if spec_proxy == DIRECT_PROXY_SENTINEL {
         return String::new();
     }
-    let host = host_key(url);
+    let (host, _) = url_host_port(url);
     if host_bypassed(&host, bypass) {
         return String::new();
     }
@@ -1072,6 +1072,26 @@ mod tests {
                 "http://127.0.0.1:9",
                 "cdn.test",
                 "https://cdn.test/a",
+                ""
+            ),
+            ""
+        );
+        assert_eq!(
+            effective_proxy(
+                "manual",
+                "http://127.0.0.1:9",
+                "cdn.test",
+                "https://cdn.test:8443/a",
+                ""
+            ),
+            ""
+        );
+        assert_eq!(
+            effective_proxy(
+                "manual",
+                "http://127.0.0.1:9",
+                "cdn.test",
+                "https://user:secret@cdn.test/a",
                 ""
             ),
             ""
