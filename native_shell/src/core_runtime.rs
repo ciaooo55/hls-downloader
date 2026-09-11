@@ -136,16 +136,20 @@ impl CoreRuntime {
                 message,
                 location,
             } => {
-                if let Some(request) = self.media_push_requests.get_mut(&request_id) {
+                if !matches!(status.as_str(), "done" | "failed" | "canceled") {
+                    self.publish(CoreEvent::Error {
+                        code: "media_push_status_invalid".into(),
+                        message: format!("媒体推送终态无效: {status}"),
+                    });
+                } else if let Some(mut request) = self.media_push_requests.remove(&request_id) {
                     request.status = status;
                     request.message = message;
                     request.location = location;
-                    let resolved = request.clone();
-                    self.publish(CoreEvent::MediaPushResolved { request: resolved });
+                    self.publish(CoreEvent::MediaPushResolved { request });
                 } else {
                     self.publish(CoreEvent::Error {
                         code: "media_push_not_found".into(),
-                        message: "媒体推送请求不存在或已过期".into(),
+                        message: "媒体推送请求不存在、已结束或已过期".into(),
                     });
                 }
             }
@@ -1161,6 +1165,65 @@ mod tests {
             status: "downloading".into(),
         });
         assert_eq!(runtime.snapshot("task-1").unwrap().status, "downloading");
+    }
+
+    #[test]
+    fn media_push_resolution_accepts_only_one_terminal_result() {
+        let mut runtime = CoreRuntime::new();
+        runtime.handle(CoreCommand::RequestMediaPush {
+            request: MediaPushRequest {
+                id: "push-1".into(),
+                push_kind: "cast".into(),
+                url: "https://example.test/media.mp4".into(),
+                title: "Demo".into(),
+                status: "pending".into(),
+                message: String::new(),
+                location: String::new(),
+                created_at_ms: 1,
+            },
+        });
+
+        let invalid = runtime.handle(CoreCommand::ResolveMediaPush {
+            request_id: "push-1".into(),
+            status: "pending".into(),
+            message: "not terminal".into(),
+            location: String::new(),
+        });
+        assert!(invalid.iter().any(|event| matches!(
+            &event.event,
+            CoreEvent::Error { code, .. } if code == "media_push_status_invalid"
+        )));
+        assert_eq!(
+            runtime.media_push_requests.get("push-1").unwrap().status,
+            "pending"
+        );
+
+        let failed = runtime.handle(CoreCommand::ResolveMediaPush {
+            request_id: "push-1".into(),
+            status: "failed".into(),
+            message: "receiver failed".into(),
+            location: String::new(),
+        });
+        assert!(failed.iter().any(|event| matches!(
+            &event.event,
+            CoreEvent::MediaPushResolved { request }
+                if request.id == "push-1" && request.status == "failed"
+        )));
+        assert!(!runtime.media_push_requests.contains_key("push-1"));
+
+        let late_success = runtime.handle(CoreCommand::ResolveMediaPush {
+            request_id: "push-1".into(),
+            status: "done".into(),
+            message: "late success".into(),
+            location: "http://127.0.0.1:9978".into(),
+        });
+        assert!(late_success.iter().any(|event| matches!(
+            &event.event,
+            CoreEvent::Error { code, .. } if code == "media_push_not_found"
+        )));
+        assert!(!late_success
+            .iter()
+            .any(|event| matches!(event.event, CoreEvent::MediaPushResolved { .. })));
     }
 
     #[test]
