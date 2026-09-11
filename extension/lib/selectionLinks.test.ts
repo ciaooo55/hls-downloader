@@ -14,6 +14,14 @@ describe('selected download links', () => {
     ])
   })
 
+  it('normalizes the case-insensitive magnet scheme without changing its payload', () => {
+    expect(selectedDownloadUrls(
+      [],
+      'copy MAGNET:?xt=urn:btih:AbC123&dn=Example.',
+      'https://site.test/watch/page',
+    )).toEqual(['magnet:?xt=urn:btih:AbC123&dn=Example'])
+  })
+
   it('preserves exact anchor href punctuation and relative redirect routes', () => {
     expect(selectedDownloadUrls(
       [
