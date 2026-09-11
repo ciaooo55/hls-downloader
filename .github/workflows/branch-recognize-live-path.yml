@@ -1,0 +1,46 @@
+name: Branch live path recognition validation
+
+on:
+  push:
+    branches:
+      - '网页版gpt'
+    paths:
+      - 'native_shell/src/recognize.rs'
+      - '.github/workflows/branch-recognize-live-path.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/网页版gpt'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: '网页版gpt'
+
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: '1.98.1'
+          components: rustfmt
+
+      - name: Format and compile Rust Core
+        shell: pwsh
+        working-directory: native_shell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo fmt --all -- --check
+          cargo check --locked
+
+      - name: Run recognition regressions
+        shell: pwsh
+        working-directory: native_shell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --locked --lib recognize::tests -- --test-threads=1
