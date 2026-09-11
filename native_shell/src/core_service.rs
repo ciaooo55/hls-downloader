@@ -41,7 +41,9 @@ impl PersistentCore {
                 .store
                 .load_handoffs()?
                 .into_iter()
-                .filter_map(|encoded| serde_json::from_str::<crate::MediaPushRequest>(&encoded).ok())
+                .filter_map(|encoded| {
+                    serde_json::from_str::<crate::MediaPushRequest>(&encoded).ok()
+                })
                 .find(|item| item.status == "pending");
             if let Some(active) = active {
                 if active.id == request.id {
