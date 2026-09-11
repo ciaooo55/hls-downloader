@@ -106,7 +106,10 @@ fn valid_site_rule_host(host: &str) -> bool {
     {
         return false;
     }
-    if let Some(address) = host.strip_prefix('[').and_then(|value| value.strip_suffix(']')) {
+    if let Some(address) = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    {
         return address.parse::<std::net::Ipv6Addr>().is_ok();
     }
     !host.contains([':', '[', ']'])
@@ -357,7 +360,10 @@ mod tests {
 
     #[test]
     fn extracts_hostname_without_userinfo_or_port() {
-        assert_eq!(host_of("https://User@Video.Example.Test:8443/watch"), "video.example.test");
+        assert_eq!(
+            host_of("https://User@Video.Example.Test:8443/watch"),
+            "video.example.test"
+        );
         assert_eq!(host_of("http://[2001:DB8::1]:8080/file"), "[2001:db8::1]");
         assert_eq!(host_of("https://[::1]/"), "[::1]");
     }
