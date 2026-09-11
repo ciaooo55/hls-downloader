@@ -76,8 +76,8 @@ pub fn parse_ftp_url(url: &str) -> Result<FtpTarget, String> {
         ("anonymous:", auth)
     };
     let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
-    let user = percent_decode(user);
-    let password = percent_decode(password);
+    let user = percent_decode(user)?;
+    let password = percent_decode(password)?;
     let (host, port) = if let Some((host, port)) = hostport.rsplit_once(':') {
         let port = port
             .parse::<u16>()
@@ -97,7 +97,7 @@ pub fn parse_ftp_url(url: &str) -> Result<FtpTarget, String> {
     } else {
         user
     };
-    let path = format!("/{}", percent_decode(path.trim_start_matches('/')));
+    let path = format!("/{}", percent_decode(path.trim_start_matches('/'))?);
     if !ftp_wire_ok(&user) || !ftp_wire_ok(&password) || !ftp_wire_ok(&path) {
         return Err("FTP 地址不能包含控制字符".into());
     }
@@ -111,25 +111,28 @@ pub fn parse_ftp_url(url: &str) -> Result<FtpTarget, String> {
     })
 }
 
-fn percent_decode(value: &str) -> String {
+fn percent_decode(value: &str) -> Result<String, String> {
     let bytes = value.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let Ok(decoded) = u8::from_str_radix(
-                std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or(""),
-                16,
-            ) {
-                out.push(decoded);
-                index += 3;
-                continue;
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return Err("FTP URL percent escape is incomplete".into());
             }
+            let encoded = std::str::from_utf8(&bytes[index + 1..index + 3])
+                .map_err(|_| "FTP URL percent escape is invalid".to_string())?;
+            let decoded = u8::from_str_radix(encoded, 16)
+                .map_err(|_| "FTP URL percent escape is invalid".to_string())?;
+            out.push(decoded);
+            index += 3;
+            continue;
         }
         out.push(bytes[index]);
         index += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    String::from_utf8(out)
+        .map_err(|_| "FTP URL percent-decoded value is not valid UTF-8".to_string())
 }
 
 fn ftp_wire_ok(value: &str) -> bool {
@@ -465,6 +468,17 @@ mod tests {
         assert_eq!(encoded.path, "/测试/a b.bin");
         assert!(parse_ftp_url("ftp://alice%0d%0aPASS%20x@files.example/a.bin").is_err());
         assert!(parse_ftp_url("ftp://files.example/a%0d%0aSITE%20EXEC%20x").is_err());
+        for malformed in [
+            "ftp://files.example/a%",
+            "ftp://files.example/a%2",
+            "ftp://files.example/a%GG.bin",
+            "ftp://alice%GG@files.example/a.bin",
+        ] {
+            let error = parse_ftp_url(malformed).unwrap_err();
+            assert!(error.contains("percent escape"), "{malformed}: {error}");
+        }
+        let invalid_utf8 = parse_ftp_url("ftp://files.example/a%FF.bin").unwrap_err();
+        assert!(invalid_utf8.contains("valid UTF-8"), "{invalid_utf8}");
     }
 
     #[test]
