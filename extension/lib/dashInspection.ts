@@ -46,20 +46,23 @@ function isoDuration(value = ''): number {
 }
 
 function decodeXml(value: string): string {
-  return value
-    .replace(/&#(x[0-9a-f]+|\d+);/gi, (entity, encoded: string) => {
-      const radix = encoded[0]?.toLowerCase() === 'x' ? 16 : 10
-      const digits = radix === 16 ? encoded.slice(1) : encoded
-      const codePoint = Number.parseInt(digits, radix)
-      if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff
-        || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return entity
-      return String.fromCodePoint(codePoint)
-    })
-    .replace(/&amp;/gi, '&')
-    .replace(/&quot;/gi, '"')
-    .replace(/&apos;/gi, "'")
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
+  const named: Record<string, string> = {
+    amp: '&',
+    quot: '"',
+    apos: "'",
+    lt: '<',
+    gt: '>',
+  }
+  return value.replace(/&(?:#(x[0-9a-f]+|\d+)|(amp|quot|apos|lt|gt));/gi, (entity, encoded?: string, namedEntity?: string) => {
+    if (namedEntity) return named[namedEntity.toLowerCase()] || entity
+    if (!encoded) return entity
+    const radix = encoded[0]?.toLowerCase() === 'x' ? 16 : 10
+    const digits = radix === 16 ? encoded.slice(1) : encoded
+    const codePoint = Number.parseInt(digits, radix)
+    if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff
+      || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return entity
+    return String.fromCodePoint(codePoint)
+  })
 }
 
 function blocks(value: string, tag: string): Array<{ attributes: Record<string, string>; body: string }> {

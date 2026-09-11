@@ -83,6 +83,19 @@ describe('DASH browser inspection', () => {
     expect(result?.playbackPatterns).toEqual(['https://media.test/root/seg-*.m4s?token=a&sig=b'])
   })
 
+  it('decodes each source XML entity exactly once', () => {
+    const encoded = `<MPD type="static" mediaPresentationDuration="PT5S">
+      <BaseURL>https://media.test/root/</BaseURL><Period>
+      <AdaptationSet contentType="video">
+        <SegmentTemplate initialization="literal-&#38;amp;.m4s" media="seg-&#38;amp;-$Number$.m4s" />
+        <Representation id="v" width="640" height="360" bandwidth="500000" />
+      </AdaptationSet></Period></MPD>`
+
+    const result = parseDashManifest(encoded, 'https://cdn.test/path/manifest.mpd')
+    expect(result?.playbackUrls).toEqual(['https://media.test/root/literal-&amp;.m4s'])
+    expect(result?.playbackPatterns).toEqual(['https://media.test/root/seg-&amp;-*.m4s'])
+  })
+
   it('keeps a representation BaseURL file as exact playback evidence', () => {
     const direct = `<MPD type="static" mediaPresentationDuration="PT5S"><Period>
       <AdaptationSet contentType="video"><Representation id="v" width="640" height="360" bandwidth="500000">
