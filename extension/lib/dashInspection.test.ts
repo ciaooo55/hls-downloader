@@ -67,6 +67,27 @@ describe('DASH browser inspection', () => {
     })
   })
 
+  it('rejects non-finite adaptive metadata and overflowing durations', () => {
+    const hugeDuration = '9'.repeat(400)
+    const invalid = `<MPD type="static" mediaPresentationDuration="PT${hugeDuration}S"><Period>
+      <AdaptationSet contentType="video">
+        <Representation id="v" width="1e309" height="-1" bandwidth="Infinity" />
+      </AdaptationSet>
+      <AdaptationSet contentType="audio">
+        <Representation id="a" bandwidth="-1" />
+      </AdaptationSet>
+    </Period></MPD>`
+
+    expect(parseDashManifest(invalid, 'https://cdn.test/manifest.mpd')).toMatchObject({
+      duration: undefined,
+      width: undefined,
+      height: undefined,
+      bandwidth: undefined,
+      estimatedSize: undefined,
+      quality: undefined,
+    })
+  })
+
   it('does not invent a partial duration when any Period duration is missing', () => {
     const partial = `<MPD type="static">
       <Period duration="PT10S"><AdaptationSet contentType="video">

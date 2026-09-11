@@ -36,13 +36,19 @@ function attributes(value: string): Record<string, string> {
   return result
 }
 
+function positiveFiniteNumber(value = ''): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+}
+
 function isoDuration(value = ''): number | null {
   const match = value.match(/^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i)
   if (!match || match.slice(1).every(part => part === undefined)) return null
-  return (Number(match[1]) || 0) * 86_400
+  const seconds = (Number(match[1]) || 0) * 86_400
     + (Number(match[2]) || 0) * 3_600
     + (Number(match[3]) || 0) * 60
     + (Number(match[4]) || 0)
+  return Number.isFinite(seconds) ? seconds : null
 }
 
 function decodeXml(value: string): string {
@@ -144,12 +150,14 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
         : [{ attributes: adaptation, body: '' }]
       for (const candidate of candidates) {
         const mime = `${kind} ${candidate.attributes.contenttype || ''} ${candidate.attributes.mimetype || ''}`.toLowerCase()
-        const bandwidth = Number(candidate.attributes.bandwidth) || 0
-        if (mime.includes('video') || Number(candidate.attributes.width) > 0 || Number(candidate.attributes.height) > 0) {
+        const bandwidth = positiveFiniteNumber(candidate.attributes.bandwidth)
+        const width = positiveFiniteNumber(candidate.attributes.width)
+        const height = positiveFiniteNumber(candidate.attributes.height)
+        if (mime.includes('video') || width > 0 || height > 0) {
           video.push({
             id: candidate.attributes.id || '',
-            width: Number(candidate.attributes.width) || 0,
-            height: Number(candidate.attributes.height) || 0,
+            width,
+            height,
             bandwidth,
             periodBody: period.body,
             adaptationBody: adaptationBlock.body,

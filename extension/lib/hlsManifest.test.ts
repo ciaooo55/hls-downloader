@@ -10,6 +10,28 @@ describe('HLS metadata', () => {
     expect(info.isLive).toBeUndefined()
   })
 
+  it('rejects non-finite adaptive variant metadata', () => {
+    const overflowWidth = '9'.repeat(400)
+    const info = parseHlsManifest(
+      `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=Infinity,RESOLUTION=${overflowWidth}x1080\nbad.m3u8\n`
+      + '#EXT-X-STREAM-INF:BANDWIDTH=-1,RESOLUTION=1280x720\nnegative.m3u8\n',
+      'https://cdn.test/master.m3u8',
+    )
+
+    expect(info.variants[0]).toMatchObject({
+      width: undefined,
+      height: 1080,
+      bandwidth: undefined,
+      quality: '1080p',
+    })
+    expect(info.variants[1]).toMatchObject({
+      width: 1280,
+      height: 720,
+      bandwidth: undefined,
+      quality: '720p',
+    })
+  })
+
   it('totals VOD segment durations and recognizes quality in URLs', () => {
     const live = '#EXTM3U\n#EXTINF:5.5,\na.ts\n#EXTINF:4.5,\nb.ts'
     expect(parseHlsManifest(live, 'https://cdn.test/live.m3u8')).toMatchObject({ duration: 10, isLive: true })

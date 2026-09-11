@@ -29,6 +29,11 @@ function attribute(line: string, name: string): string {
   return (match?.[1] || '').replace(/^"|"$/g, '')
 }
 
+function positiveFiniteNumber(value: string): number | undefined {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
 export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo {
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
   const variants: HlsVariant[] = []
@@ -79,9 +84,9 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
     if (!uri) continue
     const attributes = line.slice('#EXT-X-STREAM-INF:'.length)
     const resolution = attribute(attributes, 'RESOLUTION').match(/^(\d+)x(\d+)$/i)
-    const width = Number(resolution?.[1] || 0) || undefined
-    const height = Number(resolution?.[2] || 0) || undefined
-    const bandwidth = Number(attribute(attributes, 'BANDWIDTH')) || undefined
+    const width = positiveFiniteNumber(resolution?.[1] || '')
+    const height = positiveFiniteNumber(resolution?.[2] || '')
+    const bandwidth = positiveFiniteNumber(attribute(attributes, 'BANDWIDTH'))
     const codecs = attribute(attributes, 'CODECS') || undefined
     variants.push({
       url: inheritManifestAccessQuery(baseUrl, new URL(uri, baseUrl).href),
