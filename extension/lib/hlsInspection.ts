@@ -105,18 +105,20 @@ export async function inspectHlsResource(
   let duration = live ? undefined : info.duration
   let playbackUrls = info.playbackUrls
   if (!duration && best) {
-    const mediaResponse = await fetchManifest(best.url)
-    if (mediaResponse.ok) {
-      const mediaText = await hlsManifestText(mediaResponse)
-      if (mediaText) {
-        const mediaInfo = parseHlsManifest(mediaText, mediaResponse.url || best.url)
-        live = mediaInfo.isLive
-        lowLatencyLive = mediaInfo.lowLatencyLive
-        partOnlyLive = mediaInfo.partOnlyLive
-        playbackUrls = mediaInfo.playbackUrls
-        if (live === false) duration = mediaInfo.duration
+    try {
+      const mediaResponse = await fetchManifest(best.url)
+      if (mediaResponse.ok) {
+        const mediaText = await hlsManifestText(mediaResponse)
+        if (mediaText) {
+          const mediaInfo = parseHlsManifest(mediaText, mediaResponse.url || best.url)
+          live = mediaInfo.isLive
+          lowLatencyLive = mediaInfo.lowLatencyLive
+          partOnlyLive = mediaInfo.partOnlyLive
+          playbackUrls = mediaInfo.playbackUrls
+          if (live === false) duration = mediaInfo.duration
+        }
       }
-    }
+    } catch {}
   }
   const bandwidth = best?.bandwidth || resource.bandwidth
   const fallbackEstimatedSize = typeof resource.estimatedSize === 'number'

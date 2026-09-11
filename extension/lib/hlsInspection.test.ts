@@ -56,6 +56,34 @@ describe('HLS browser inspection', () => {
     })
   })
 
+  it('keeps parsed master metadata when the selected rendition fetch throws', async () => {
+    const fetcher = vi.fn<ManifestFetcher>(async url => {
+      if (url.endsWith('master.m3u8')) return new Response(master, { status: 200 })
+      throw new Error('variant network failure')
+    })
+
+    const result = await inspectHlsResource({ url: 'https://cdn.test/master.m3u8' }, fetcher)
+
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(fetcher.mock.calls[1][0]).toBe('https://cdn.test/1080/index.m3u8')
+    expect(result).toMatchObject({
+      inspected: true,
+      manifestType: 'master',
+      duration: undefined,
+      width: 1920,
+      height: 1080,
+      bandwidth: 8_000_000,
+      estimatedSize: undefined,
+      variants: [{
+        url: 'https://cdn.test/1080/index.m3u8',
+        width: 1920,
+        height: 1080,
+        bandwidth: 8_000_000,
+        quality: '1080p',
+      }],
+    })
+  })
+
   it('does not expose an infinite VOD size when finite HLS metadata multiplication overflows', async () => {
     const huge = '9'.repeat(308)
     const hugeNumber = Number(huge)
