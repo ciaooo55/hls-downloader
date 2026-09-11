@@ -14,7 +14,11 @@ function parameter(value: string, name: string): string {
 }
 
 function clean(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 512)
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, '').trim()
+  let bounded = cleaned.slice(0, 512)
+  const last = bounded.charCodeAt(bounded.length - 1)
+  if (last >= 0xd800 && last <= 0xdbff) bounded = bounded.slice(0, -1)
+  return bounded
 }
 
 function percentBytes(value: string): Uint8Array {

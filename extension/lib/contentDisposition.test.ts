@@ -26,4 +26,11 @@ describe('Content-Disposition filename parsing', () => {
   it('keeps a semicolon inside a quoted legacy filename', () => {
     expect(contentDispositionFilename('attachment; filename="archive; final.zip"')).toBe('archive; final.zip')
   })
+
+  it('does not cut a surrogate pair at the display-length boundary', () => {
+    const prefix = 'a'.repeat(511)
+    const parsed = contentDispositionFilename(`attachment; filename="${prefix}😀.zip"`)
+    expect(parsed).toBe(prefix)
+    expect(parsed.charCodeAt(parsed.length - 1)).not.toBeGreaterThanOrEqual(0xd800)
+  })
 })
