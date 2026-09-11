@@ -98,10 +98,18 @@ pub fn parse_sftp_url(url: &str) -> Result<SftpTarget, String> {
         None if !userinfo.is_empty() => (percent_decode(userinfo), String::new()),
         None => (String::new(), String::new()),
     };
-    let (host, port) = hostport
-        .rsplit_once(':')
-        .map(|(host, port)| (host, port.parse().unwrap_or(22)))
-        .unwrap_or((hostport, 22));
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((host, port)) => {
+            let port = port
+                .parse::<u16>()
+                .map_err(|_| "SFTP 端口无效".to_string())?;
+            if port == 0 {
+                return Err("SFTP 端口无效".into());
+            }
+            (host, port)
+        }
+        None => (hostport, 22),
+    };
     let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
     if !ssh_host_ok(&host) {
         return Err("SFTP 地址缺少有效主机名".into());
@@ -688,6 +696,12 @@ mod tests {
         let debug = format!("{target:?}");
         assert!(debug.contains("***"));
         assert!(!debug.contains("p@ss"));
+    }
+
+    #[test]
+    fn rejects_invalid_explicit_ports() {
+        assert!(parse_sftp_url("sftp://lee@nas.local:not-a-port/pub/a.bin").is_err());
+        assert!(parse_sftp_url("sftp://lee@nas.local:0/pub/a.bin").is_err());
     }
 
     #[test]
