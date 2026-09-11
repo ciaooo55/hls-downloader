@@ -4,7 +4,7 @@
 
 - Active development branch: `网页版gpt`.
 - `main` remains a read-only integration baseline unless the user explicitly asks otherwise.
-- Baseline `80512b037affc354a7339346541b50b02bbdd147` already passed normal source validation, Windows candidate packaging, and prerequisite workflows.
+- Proxy route identity hardening landed on the branch in `e38bba5e7adb05404e36e3fa7f9cf75021354c6e` and passed focused Rust format/check/regression validation before commit; temporary repair tooling was removed in `92c1fd5cfa17e8fab5c0676caea6cdc3c75e9dd4`.
 - Canonical product status remains 27/28 verified with `browser.media_push_device_selection` partial and `release_ready=false`.
 
 ## Development rules
@@ -19,17 +19,17 @@
 
 ## Priority order
 
-### P0 — runtime correctness
+### P0 — installed browser media-push gate
 
-Audit and harden task lifecycle, persistence, resume, cancellation, output publication, credentials, protocol boundaries, and browser handoff ownership. Only change behavior when a concrete failure is identified.
-
-### P0 — browser media push source path
-
-Keep the source-controlled path ready for the remaining real-device gate:
+The source-controlled path is implemented and remains the only canonical route:
 
 `extension -> Native Messaging -> Rust Core -> persisted media-push request -> Compose device picker -> LAN receiver -> browser status`
 
-Do not manufacture receiver evidence or weaken the release gate.
+Existing automated evidence covers Native Host request IDs, Core persistence/resolution, Compose requested/resolved handling and completion feedback, and extension polling. The remaining acceptance step is external: run the installed candidate through real browser registration and a real LAN receiver. Do not manufacture receiver evidence, weaken the gate, or mark the feature verified from mocks alone.
+
+### P0 — runtime correctness
+
+Continue auditing task lifecycle, persistence, resume, cancellation, output publication, credentials, protocol boundaries, and browser handoff ownership. Only change behavior when a concrete failure is identified.
 
 ### P1 — browser takeover reliability
 
@@ -37,7 +37,7 @@ Reduce false takeover, preserve exact request identity, keep short-lived URL rep
 
 ### P1 — protocol/download reliability
 
-Prioritize real server/CDN failure modes: range inconsistency, redirects, expired authorization, HLS/DASH refresh, disk/output failures, and restart recovery.
+Prioritize real server/CDN failure modes: range inconsistency, redirects, expired authorization, HLS/DASH refresh, disk/output failures, restart recovery, and proxy route correctness across direct/system/manual policies.
 
 ### P1 — user-facing failure clarity
 
@@ -49,4 +49,4 @@ Split oversized modules only after behavior is stable. Structural commits must p
 
 ## Release boundary
 
-Formal v7.0.2 readiness still requires the protected Windows release environment and the existing installed-browser -> production Native Host -> Compose picker -> real LAN receiver gate. That external gate remains intentionally outside normal branch development.
+Formal v7.0.2 readiness still requires the protected Windows release environment and the existing installed-browser -> production Native Host -> Compose picker -> real LAN receiver gate. That external gate remains intentionally outside normal branch development. Candidate CI success alone is not publication authorization.
