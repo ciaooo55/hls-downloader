@@ -53,4 +53,24 @@ describe('native resource string safety', () => {
 
     bridge.close()
   })
+
+  it('sanitizes a posted copy without mutating caller resource metadata', async () => {
+    const port = new FakePort()
+    const bridge = new NativeBridge(() => port)
+    const title = `page\uD800title`
+    const filename = `video\uDC00.mp4`
+    const resource = { title, filename }
+
+    const request = bridge.request({ op: 'download', resource })
+    const postedResource = port.posted[0].resource as Record<string, unknown>
+
+    expect(postedResource).not.toBe(resource)
+    expect(postedResource.title).toBe('page�title')
+    expect(postedResource.filename).toBe('video�.mp4')
+    expect(resource).toEqual({ title, filename })
+
+    port.onMessage.emit({ ok: true, __request_id: port.posted[0].__request_id })
+    await request
+    bridge.close()
+  })
 })
