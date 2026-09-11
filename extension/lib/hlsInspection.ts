@@ -55,6 +55,13 @@ async function hlsManifestText(response: Response): Promise<string | null> {
   return text
 }
 
+function estimatedBytes(duration: number | undefined, bandwidth: number | undefined): number | undefined {
+  if (!Number.isFinite(duration) || (duration || 0) <= 0
+    || !Number.isFinite(bandwidth) || (bandwidth || 0) <= 0) return undefined
+  const bytes = (duration || 0) * (bandwidth || 0) / 8
+  return Number.isFinite(bytes) && bytes > 0 ? Math.round(bytes) : undefined
+}
+
 /** Inspect a captured HLS resource without treating a live window as a VOD. */
 export async function inspectHlsResource(
   resource: InspectionResource,
@@ -112,6 +119,10 @@ export async function inspectHlsResource(
     }
   }
   const bandwidth = best?.bandwidth || resource.bandwidth
+  const fallbackEstimatedSize = typeof resource.estimatedSize === 'number'
+    && Number.isFinite(resource.estimatedSize) && resource.estimatedSize > 0
+    ? resource.estimatedSize
+    : undefined
   return {
     inspected: true,
     manifestType: info.variants.length ? 'master' : 'media',
@@ -128,8 +139,8 @@ export async function inspectHlsResource(
     estimatedSize: live
       ? undefined
       : duration && bandwidth
-        ? Math.round(duration * bandwidth / 8)
-        : resource.estimatedSize,
+        ? estimatedBytes(duration, bandwidth)
+        : fallbackEstimatedSize,
     quality: best?.quality ? `最高 ${best.quality}` : resourceQuality(resource.url, resource.height),
   }
 }

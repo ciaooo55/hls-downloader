@@ -56,6 +56,23 @@ describe('HLS browser inspection', () => {
     })
   })
 
+  it('does not expose an infinite VOD size when finite HLS metadata multiplication overflows', async () => {
+    const huge = '9'.repeat(308)
+    const hugeNumber = Number(huge)
+    const hugeMaster = `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=${huge},RESOLUTION=1920x1080\nhuge.m3u8\n`
+    const hugeVod = `#EXTM3U\n#EXTINF:${huge},\na.ts\n#EXT-X-ENDLIST\n`
+    const fetcher = vi.fn<ManifestFetcher>(async url => new Response(
+      url.endsWith('master.m3u8') ? hugeMaster : hugeVod,
+      { status: 200 },
+    ))
+
+    const result = await inspectHlsResource({ url: 'https://cdn.test/master.m3u8' }, fetcher)
+    expect(Number.isFinite(hugeNumber)).toBe(true)
+    expect(result?.duration).toBe(hugeNumber)
+    expect(result?.bandwidth).toBe(hugeNumber)
+    expect(result?.estimatedSize).toBeUndefined()
+  })
+
   it('does not present a live sliding window as total duration or size', async () => {
     const fetcher = vi.fn<ManifestFetcher>(async url => new Response(
       url.endsWith('master.m3u8') ? master : live,

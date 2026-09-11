@@ -41,6 +41,12 @@ function positiveFiniteNumber(value = ''): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
 }
 
+function estimatedBytes(duration: number | undefined, bandwidth: number): number | undefined {
+  if (!Number.isFinite(duration) || (duration || 0) <= 0 || !Number.isFinite(bandwidth) || bandwidth <= 0) return undefined
+  const bytes = (duration || 0) * bandwidth / 8
+  return Number.isFinite(bytes) && bytes > 0 ? Math.round(bytes) : undefined
+}
+
 function isoDuration(value = ''): number | null {
   const match = value.match(/^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i)
   if (!match || match.slice(1).every(part => part === undefined)) return null
@@ -173,7 +179,9 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
     }
   }
   const best = video.sort((left, right) => right.height - left.height || right.bandwidth - left.bandwidth)[0]
-  const totalBandwidth = (best?.bandwidth || 0) + Math.max(0, ...audioBandwidth)
+  const maxAudioBandwidth = audioBandwidth.reduce((maximum, value) => Math.max(maximum, value), 0)
+  const combinedBandwidth = (best?.bandwidth || 0) + maxAudioBandwidth
+  const totalBandwidth = Number.isFinite(combinedBandwidth) ? combinedBandwidth : 0
 
   const hints: string[] = []
   const patterns: string[] = []
@@ -204,7 +212,7 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
     width: best?.width || undefined,
     height: best?.height || undefined,
     bandwidth: best?.bandwidth || undefined,
-    estimatedSize: duration && totalBandwidth ? Math.round(duration * totalBandwidth / 8) : undefined,
+    estimatedSize: estimatedBytes(duration, totalBandwidth),
     quality: best?.height ? `最高 ${best.height}p` : undefined,
     playbackUrls: hints.slice(0, 48),
     playbackPatterns: patterns.slice(0, 48),

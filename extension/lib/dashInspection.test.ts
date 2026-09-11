@@ -105,6 +105,36 @@ describe('DASH browser inspection', () => {
     })
   })
 
+  it('does not expose an infinite size from finite DASH arithmetic', () => {
+    const huge = '9'.repeat(308)
+    const hugeNumber = Number(huge)
+    const productOverflow = `<MPD type="static" mediaPresentationDuration="PT${huge}S"><Period>
+      <AdaptationSet contentType="video">
+        <Representation id="v" width="1280" height="720" bandwidth="${huge}" />
+      </AdaptationSet>
+    </Period></MPD>`
+    const sumOverflow = `<MPD type="static" mediaPresentationDuration="PT1S"><Period>
+      <AdaptationSet contentType="video">
+        <Representation id="v" width="1280" height="720" bandwidth="${huge}" />
+      </AdaptationSet>
+      <AdaptationSet contentType="audio">
+        <Representation id="a" bandwidth="${huge}" />
+      </AdaptationSet>
+    </Period></MPD>`
+
+    expect(Number.isFinite(hugeNumber)).toBe(true)
+    expect(parseDashManifest(productOverflow, 'https://cdn.test/manifest.mpd')).toMatchObject({
+      duration: hugeNumber,
+      bandwidth: hugeNumber,
+      estimatedSize: undefined,
+    })
+    expect(parseDashManifest(sumOverflow, 'https://cdn.test/manifest.mpd')).toMatchObject({
+      duration: 1,
+      bandwidth: hugeNumber,
+      estimatedSize: undefined,
+    })
+  })
+
   it('does not invent a partial duration when any Period duration is missing', () => {
     const partial = `<MPD type="static">
       <Period duration="PT10S"><AdaptationSet contentType="video">
