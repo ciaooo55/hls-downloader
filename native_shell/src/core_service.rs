@@ -36,6 +36,24 @@ impl PersistentCore {
                 lines,
             });
         }
+        if let CoreCommand::RequestMediaPush { request } = &command {
+            let active = self
+                .store
+                .load_handoffs()?
+                .into_iter()
+                .filter_map(|encoded| serde_json::from_str::<crate::MediaPushRequest>(&encoded).ok())
+                .find(|item| item.status == "pending");
+            if let Some(active) = active {
+                if active.id == request.id {
+                    return Ok(Vec::new());
+                }
+                let mut rejected = request.clone();
+                rejected.status = "failed".into();
+                rejected.message = "已有投送请求正在等待设备选择".into();
+                rejected.location.clear();
+                return self.emit(crate::CoreEvent::MediaPushResolved { request: rejected });
+            }
+        }
         let before = self.runtime.clone();
         let created_spec = match &command {
             CoreCommand::CreateTask { spec } => Some(spec.clone()),
@@ -435,6 +453,98 @@ mod tests {
             core.store().setting_string("queue_profiles", "").unwrap(),
             profiles.to_string()
         );
+    }
+
+    #[test]
+    fn concurrent_media_push_is_failed_without_replacing_active_request() {
+        let mut core = PersistentCore::in_memory().unwrap();
+        let first = crate::MediaPushRequest {
+            id: "push-first".into(),
+            push_kind: "cast".into(),
+            url: "https://example.test/first.mp4".into(),
+            title: "First".into(),
+            status: "pending".into(),
+            message: String::new(),
+            location: String::new(),
+            created_at_ms: 1,
+        };
+        let second = crate::MediaPushRequest {
+            id: "push-second".into(),
+            push_kind: "tvbox".into(),
+            url: "https://example.test/second.mp4".into(),
+            title: "Second".into(),
+            status: "pending".into(),
+            message: String::new(),
+            location: String::new(),
+            created_at_ms: 2,
+        };
+
+        let admitted = core
+            .handle(CoreCommand::RequestMediaPush {
+                request: first.clone(),
+            })
+            .unwrap();
+        assert!(admitted.iter().any(|event| matches!(
+            &event.event,
+            crate::CoreEvent::MediaPushRequested { request } if request.id == first.id
+        )));
+
+        let duplicate = core
+            .handle(CoreCommand::RequestMediaPush {
+                request: first.clone(),
+            })
+            .unwrap();
+        assert!(duplicate.is_empty());
+
+        let rejected = core
+            .handle(CoreCommand::RequestMediaPush {
+                request: second.clone(),
+            })
+            .unwrap();
+        assert!(rejected.iter().any(|event| matches!(
+            &event.event,
+            crate::CoreEvent::MediaPushResolved { request }
+                if request.id == second.id
+                    && request.status == "failed"
+                    && request.message.contains("已有投送请求")
+        )));
+        assert!(!rejected.iter().any(|event| matches!(
+            &event.event,
+            crate::CoreEvent::MediaPushRequested { request } if request.id == second.id
+        )));
+
+        let rows: Vec<crate::MediaPushRequest> = core
+            .store()
+            .load_handoffs()
+            .unwrap()
+            .into_iter()
+            .filter_map(|row| serde_json::from_str(&row).ok())
+            .collect();
+        assert!(rows
+            .iter()
+            .any(|request| request.id == first.id && request.status == "pending"));
+        assert!(rows
+            .iter()
+            .any(|request| request.id == second.id && request.status == "failed"));
+
+        core.handle(CoreCommand::ResolveMediaPush {
+            request_id: first.id.clone(),
+            status: "done".into(),
+            message: "ok".into(),
+            location: String::new(),
+        })
+        .unwrap();
+        let third = crate::MediaPushRequest {
+            id: "push-third".into(),
+            created_at_ms: 3,
+            ..second
+        };
+        let next = core
+            .handle(CoreCommand::RequestMediaPush { request: third })
+            .unwrap();
+        assert!(next
+            .iter()
+            .any(|event| matches!(event.event, crate::CoreEvent::MediaPushRequested { .. })));
     }
 
     #[test]
