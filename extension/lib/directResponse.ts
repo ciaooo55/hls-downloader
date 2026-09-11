@@ -38,7 +38,8 @@ export function isEarlyDirectDownloadResponse(
 ): boolean {
   if (!['main_frame', 'sub_frame'].includes(String(details.type || ''))) return false
   if (String(details.method || 'GET').toUpperCase() !== 'GET') return false
-  if (Number(details.statusCode) < 200 || Number(details.statusCode) >= 300) return false
+  const statusCode = Number(details.statusCode)
+  if (!Number.isFinite(statusCode) || statusCode < 200 || statusCode >= 300) return false
   // `inline` explicitly asks the browser to present the response. A filename
   // or concrete PDF/media MIME on that response is not evidence that the user
   // started a download. If the browser later creates a DownloadItem anyway,

@@ -52,7 +52,7 @@ describe('early Chromium direct-download response detection', () => {
     )).toBe(true)
   })
 
-  it('does not pre-offer XHR, HTML, or failed responses', () => {
+  it('does not pre-offer XHR, HTML, failed, or statusless responses', () => {
     expect(isEarlyDirectDownloadResponse(
       { type: 'xmlhttprequest', method: 'GET', statusCode: 200 },
       { disposition: 'attachment', resource: resource() },
@@ -63,6 +63,14 @@ describe('early Chromium direct-download response detection', () => {
     )).toBe(false)
     expect(isEarlyDirectDownloadResponse(
       { type: 'main_frame', method: 'GET', statusCode: 403 },
+      { disposition: 'attachment', resource: resource() },
+    )).toBe(false)
+    expect(isEarlyDirectDownloadResponse(
+      { type: 'main_frame', method: 'GET' },
+      { disposition: 'attachment', resource: resource() },
+    )).toBe(false)
+    expect(isEarlyDirectDownloadResponse(
+      { type: 'main_frame', method: 'GET', statusCode: Number.NaN },
       { disposition: 'attachment', resource: resource() },
     )).toBe(false)
   })
