@@ -335,7 +335,8 @@ mod tests {
             parse_curl_command("curl -x http://proxy.test:8080 https://cdn.test/file").is_err()
         );
         assert!(
-            parse_curl_command("curl --proxy=http://proxy.test:8080 https://cdn.test/file").is_err()
+            parse_curl_command("curl --proxy=http://proxy.test:8080 https://cdn.test/file")
+                .is_err()
         );
     }
 
