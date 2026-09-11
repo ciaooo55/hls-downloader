@@ -46,7 +46,7 @@ pub fn harvest_html_filtered(html: &str, base: &str, min_bytes: u64) -> Vec<Harv
 fn extract_urls(html: &str, base: &str) -> Vec<(String, u64)> {
     let mut urls = Vec::new();
     let mut rest = html;
-    while let Some(index) = rest.find("href=") {
+    while let Some(index) = find_href(rest) {
         let after = &rest[index + 5..];
         let quote = after.chars().next();
         rest = &after[1.min(after.len())..];
@@ -80,6 +80,12 @@ fn extract_urls(html: &str, base: &str) -> Vec<(String, u64)> {
         }
     }
     urls
+}
+
+fn find_href(text: &str) -> Option<usize> {
+    text.as_bytes()
+        .windows(5)
+        .position(|window| window.eq_ignore_ascii_case(b"href="))
 }
 
 fn parse_data_size(tag: &str) -> u64 {
@@ -130,28 +136,55 @@ fn resolve(base: &str, reference: &str) -> Option<String> {
     if has_absolute_scheme(&value) {
         return None;
     }
+    let clean_base = base.split(['?', '#']).next().unwrap_or(base);
+    let scheme_end = clean_base.find("://")?;
+    let scheme = clean_base[..scheme_end].to_ascii_lowercase();
+    if !matches!(scheme.as_str(), "http" | "https" | "ftp" | "ftps" | "sftp") {
+        return None;
+    }
     if value.starts_with("//") {
-        let scheme = base
-            .split("://")
-            .next()
-            .unwrap_or("https")
-            .to_ascii_lowercase();
-        if !matches!(scheme.as_str(), "http" | "https" | "ftp" | "ftps" | "sftp") {
-            return None;
-        }
         return Some(format!("{scheme}:{value}"));
     }
-    if value.starts_with('/') {
-        if let Some(scheme) = base.find("://") {
-            let after = &base[scheme + 3..];
-            let origin_end = after
-                .find('/')
-                .map(|index| scheme + 3 + index)
-                .unwrap_or(base.len());
-            return Some(format!("{}{value}", &base[..origin_end]));
+    let authority_start = scheme_end + 3;
+    let path_start = clean_base[authority_start..]
+        .find('/')
+        .map(|index| authority_start + index);
+    let origin_end = path_start.unwrap_or(clean_base.len());
+    let origin = &clean_base[..origin_end];
+    let (reference_path, suffix) = split_reference_suffix(&value);
+    let joined_path = if reference_path.starts_with('/') {
+        reference_path.to_string()
+    } else {
+        let base_path = path_start.map(|index| &clean_base[index..]).unwrap_or("/");
+        let directory = base_path
+            .rsplit_once('/')
+            .map(|(directory, _)| directory)
+            .unwrap_or("");
+        format!("{directory}/{reference_path}")
+    };
+    let path = normalize_url_path(&joined_path);
+    Some(format!("{origin}{path}{suffix}"))
+}
+
+fn split_reference_suffix(value: &str) -> (&str, &str) {
+    value
+        .find(['?', '#'])
+        .map(|index| (&value[..index], &value[index..]))
+        .unwrap_or((value, ""))
+}
+
+fn normalize_url_path(path: &str) -> String {
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
         }
     }
-    None
+    format!("/{}", parts.join("/"))
 }
 
 fn has_absolute_scheme(value: &str) -> bool {
@@ -251,6 +284,19 @@ mod tests {
         let html = r#"<a href="javascript:alert(1)">x</a><a href="JAVASCRIPT:alert(1)">y</a><a href="file:///C:/secret.mp4">z</a><a href="&#xFEFF;javascript:alert(1)">b</a><a href="ms-msdt:foo.mp4">m</a>"#;
         let links = harvest_html(html, "https://site.test/page");
         assert!(links.is_empty());
+    }
+
+    #[test]
+    fn harvests_case_insensitive_and_relative_hrefs() {
+        let html = r#"<a HREF="child.zip">child</a><a HrEf="../parent.mp4?download=1">parent</a>"#;
+        let links = harvest_html(html, "https://site.test/dir/page.html?token=secret");
+        assert!(links
+            .iter()
+            .any(|item| item.url == "https://site.test/dir/child.zip"));
+        assert!(links
+            .iter()
+            .any(|item| item.url == "https://site.test/parent.mp4?download=1"));
+        assert!(harvest_html(r#"<a HREF="child.zip">x</a>"#, "file:///C:/page.html").is_empty());
     }
 
     #[test]
