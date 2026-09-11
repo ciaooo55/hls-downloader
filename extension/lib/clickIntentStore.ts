@@ -22,6 +22,11 @@ function optionalNumber(value: unknown): number | undefined {
   return Number.isFinite(result) ? result : undefined
 }
 
+function freshIntent(intent: Pick<DownloadClickIntent, 'at'>, now: number): boolean {
+  const age = now - intent.at
+  return Number.isFinite(age) && age >= 0 && age <= RETENTION_MS
+}
+
 /** Small persistent queue that survives MV3 service-worker suspension. */
 export class ClickIntentStore {
   private intents: DownloadClickIntent[] = []
@@ -57,7 +62,7 @@ export class ClickIntentStore {
             controlHint: Boolean(item.controlHint),
             at: Number(item.at) || now,
           }))
-          .filter(item => now - item.at <= RETENTION_MS)
+          .filter(item => freshIntent(item, now))
         const seen = new Set<string>()
         this.intents = [...this.intents, ...restored]
           .sort((left, right) => right.at - left.at)
@@ -91,7 +96,7 @@ export class ClickIntentStore {
     await this.hydrate()
     const now = this.now()
     const previousCount = this.intents.length
-    this.intents = this.intents.filter(intent => now - intent.at <= RETENTION_MS)
+    this.intents = this.intents.filter(intent => freshIntent(intent, now))
     const index = this.intents.findIndex(intent => matchesDownloadClick(intent, download, now))
     if (index < 0) {
       // Waiting for the content-script message is a hot 50 ms poll. Persist
@@ -107,7 +112,7 @@ export class ClickIntentStore {
   private async persist(): Promise<void> {
     const now = this.now()
     this.intents = this.intents
-      .filter(intent => now - intent.at <= RETENTION_MS)
+      .filter(intent => freshIntent(intent, now))
       .sort((left, right) => right.at - left.at)
       .slice(0, MAX_INTENTS)
     const snapshot = [...this.intents]
