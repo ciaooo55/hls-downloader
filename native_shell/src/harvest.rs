@@ -152,7 +152,9 @@ fn resolve(base: &str, reference: &str) -> Option<String> {
     let origin_end = path_start.unwrap_or(clean_base.len());
     let origin = &clean_base[..origin_end];
     let (reference_path, suffix) = split_reference_suffix(&value);
-    let joined_path = if reference_path.starts_with('/') {
+    let joined_path = if reference_path.is_empty() {
+        path_start.map(|index| clean_base[index..].to_string()).unwrap_or_else(|| "/".into())
+    } else if reference_path.starts_with('/') {
         reference_path.to_string()
     } else {
         let base_path = path_start.map(|index| &clean_base[index..]).unwrap_or("/");
@@ -297,6 +299,17 @@ mod tests {
             .iter()
             .any(|item| item.url == "https://site.test/parent.mp4?download=1"));
         assert!(harvest_html(r#"<a HREF="child.zip">x</a>"#, "file:///C:/page.html").is_empty());
+    }
+
+    #[test]
+    fn harvests_query_only_href_against_current_document() {
+        let links = harvest_html(
+            r#"<a href="?download=1">download</a>"#,
+            "https://site.test/dir/file.zip?token=secret",
+        );
+        assert!(links
+            .iter()
+            .any(|item| item.url == "https://site.test/dir/file.zip?download=1"));
     }
 
     #[test]
