@@ -194,10 +194,7 @@ mod tests {
     #[test]
     fn query_only_children_keep_the_base_resource_path() {
         assert_eq!(
-            resolve_http_uri(
-                "https://cdn.example/live/stream.m3u8?token=abc",
-                "?part=2"
-            ),
+            resolve_http_uri("https://cdn.example/live/stream.m3u8?token=abc", "?part=2"),
             "https://cdn.example/live/stream.m3u8?part=2&token=abc"
         );
     }
