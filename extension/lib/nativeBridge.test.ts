@@ -69,6 +69,25 @@ describe('persistent native bridge', () => {
     bridge.close()
   })
 
+  it('normalizes an explicit media-push status error into a terminal failure', async () => {
+    const port = new FakePort()
+    const bridge = new NativeBridge(() => port)
+    const request = bridge.request({ op: 'media_push_status', request_id: 'push-missing' })
+
+    port.onMessage.emit({
+      ok: false,
+      error: '投送请求不存在或已过期',
+      __request_id: port.posted[0].__request_id,
+    })
+
+    await expect(request).resolves.toMatchObject({
+      ok: false,
+      status: 'failed',
+      message: '投送请求不存在或已过期',
+    })
+    bridge.close()
+  })
+
   it('falls back to the accepted media-push response if the immediate status check disconnects', async () => {
     const port = new FakePort()
     const disconnected = vi.fn()

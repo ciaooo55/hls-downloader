@@ -211,10 +211,19 @@ export class NativeBridge {
     if (responseId !== request.requestId) return
     if (request.timer) clearTimeout(request.timer)
     request.timer = undefined
-    if (this.tryMediaPushAdmissionCheck(port, request, response)) return
+    const resolvedResponse = String(request.message.op || '') === 'media_push_status'
+      && response.ok === false
+      && !['done', 'failed', 'canceled'].includes(String(response.status || ''))
+      ? {
+          ...response,
+          status: 'failed',
+          message: String(response.error || '读取桌面端推送状态失败'),
+        }
+      : response
+    if (this.tryMediaPushAdmissionCheck(port, request, resolvedResponse)) return
     this.active = null
     this.queue.shift()
-    request.resolve(message)
+    request.resolve(resolvedResponse)
     this.pump()
   }
 
