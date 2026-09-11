@@ -115,6 +115,10 @@ pub enum CorePipeRequest {
         request_id: u64,
         credential_ref: String,
     },
+    DeleteCredential {
+        request_id: u64,
+        credential_ref: String,
+    },
     SaveHandoff {
         request_id: u64,
         handoff_id: String,
@@ -1134,6 +1138,20 @@ impl CoreIpcClient {
         }
     }
 
+    pub fn delete_credential(&mut self, credential_ref: &str) -> Result<(), String> {
+        match self.request(&CorePipeRequest::DeleteCredential {
+            request_id: 1,
+            credential_ref: credential_ref.into(),
+        })? {
+            CorePipeResponse::Credential {
+                protected_blob: None,
+                ..
+            } => Ok(()),
+            CorePipeResponse::Error { message, .. } => Err(message),
+            other => Err(format!("unexpected credential delete response: {other:?}")),
+        }
+    }
+
     pub fn save_handoff(
         &mut self,
         handoff_id: &str,
@@ -1191,6 +1209,16 @@ mod tests {
                     ..Default::default()
                 },
             },
+        };
+        let decoded: CorePipeRequest = decode_message(&encode_message(&request).unwrap()).unwrap();
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn delete_credential_request_roundtrip_preserves_identity() {
+        let request = CorePipeRequest::DeleteCredential {
+            request_id: 11,
+            credential_ref: "cred-owned".into(),
         };
         let decoded: CorePipeRequest = decode_message(&encode_message(&request).unwrap()).unwrap();
         assert_eq!(decoded, request);

@@ -126,6 +126,14 @@ impl HostCore {
         }
     }
 
+    fn delete_credential(&mut self, credential_ref: &str) -> Result<(), String> {
+        match self {
+            #[cfg(test)]
+            Self::Local(core) => core.store_mut().delete_credential(credential_ref),
+            Self::Remote(client) => client.delete_credential(credential_ref),
+        }
+    }
+
     fn save_handoff(
         &mut self,
         handoff_id: &str,
@@ -330,17 +338,17 @@ impl NativeHostSession {
     fn download(&mut self, message: &Value) -> Result<Value, String> {
         let payload = resource_payload(message)?;
         let offer = parse_offer(payload)?;
-        let credential_ref = self.persist_browser_context(payload)?;
+        let owned_credential_ref = self.persist_browser_context(payload)?;
         let filename = filename(payload, &offer.url);
-        let events = self.core.handle(CoreCommand::CreateTask {
-            spec: TaskSpec {
+        let snapshot = self.create_download_task(
+            TaskSpec {
                 url: offer.url,
                 resource_kind: offer.resource_kind,
                 title: field(payload, "title"),
                 filename,
                 download_dir: String::new(),
                 request_method: offer.request_method,
-                credential_ref: credential_ref.or(offer.credential_ref),
+                credential_ref: owned_credential_ref.clone().or(offer.credential_ref),
                 replay_context_ref: offer.replay_context_ref,
                 concurrency: 8,
                 checksum: None,
@@ -352,19 +360,45 @@ impl NativeHostSession {
                 last_modified: field(payload, "last_modified"),
                 ..Default::default()
             },
-        })?;
-        let snapshot = events
-            .into_iter()
-            .find_map(|event| match event.event {
-                CoreEvent::TaskCreated { snapshot } => Some(snapshot),
-                _ => None,
-            })
-            .ok_or_else(|| "Rust Core 未返回新建任务快照".to_string())?;
+            owned_credential_ref,
+        )?;
         let _ = self.core.handle(CoreCommand::TaskAction {
             task_id: snapshot.task_id.clone(),
             action: "start".into(),
         });
         Ok(json!({"ok": true, "task": snapshot, "activated": true}))
+    }
+
+    fn create_download_task(
+        &mut self,
+        spec: TaskSpec,
+        owned_credential_ref: Option<String>,
+    ) -> Result<TaskSnapshot, String> {
+        let result = self
+            .core
+            .handle(CoreCommand::CreateTask { spec })
+            .and_then(|events| {
+                events
+                    .into_iter()
+                    .find_map(|event| match event.event {
+                        CoreEvent::TaskCreated { snapshot } => Some(snapshot),
+                        _ => None,
+                    })
+                    .ok_or_else(|| "Rust Core 未返回新建任务快照".to_string())
+            });
+        match result {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) => {
+                if let Some(credential_ref) = owned_credential_ref {
+                    if let Err(rollback_error) = self.core.delete_credential(&credential_ref) {
+                        return Err(format!(
+                            "{error}; browser replay credential rollback failed: {rollback_error}"
+                        ));
+                    }
+                }
+                Err(error)
+            }
+        }
     }
 
     fn handoff_status(&mut self, message: &Value) -> Result<Value, String> {
@@ -958,6 +992,74 @@ mod tests {
         let mut input = Cursor::new(output);
         let decoded = read_message(&mut input).unwrap().unwrap();
         assert_eq!(decoded["ok"], true);
+    }
+
+    #[test]
+    fn download_credential_rollback_is_transactional() {
+        let server = crate::CoreServer::in_memory().unwrap();
+        server
+            .coordinator()
+            .set_setting("legal_terms_accepted", json!(false))
+            .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _worker = server.serve(listener);
+        let client = CoreIpcClient::connect_addr(addr).unwrap();
+        let mut session = NativeHostSession::from_backend(HostCore::Remote(client)).unwrap();
+
+        session
+            .core
+            .store_credential("owned-failure", "protected", "browser_replay")
+            .unwrap();
+        let error = session
+            .create_download_task(
+                TaskSpec {
+                    url: "https://cdn.test/fail.bin".into(),
+                    filename: "fail.bin".into(),
+                    credential_ref: Some("owned-failure".into()),
+                    ..Default::default()
+                },
+                Some("owned-failure".into()),
+            )
+            .unwrap_err();
+        assert!(error.contains("legal terms"), "{error}");
+        assert_eq!(
+            server
+                .coordinator()
+                .load_credential("owned-failure")
+                .unwrap(),
+            None
+        );
+
+        server
+            .coordinator()
+            .set_setting("legal_terms_accepted", json!(true))
+            .unwrap();
+        session
+            .core
+            .store_credential("owned-success", "protected", "browser_replay")
+            .unwrap();
+        let snapshot = session
+            .create_download_task(
+                TaskSpec {
+                    url: "https://cdn.test/success.bin".into(),
+                    filename: "success.bin".into(),
+                    credential_ref: Some("owned-success".into()),
+                    ..Default::default()
+                },
+                Some("owned-success".into()),
+            )
+            .unwrap();
+        assert_eq!(snapshot.filename, "success.bin");
+        assert_eq!(
+            server
+                .coordinator()
+                .load_credential("owned-success")
+                .unwrap()
+                .as_deref(),
+            Some("protected")
+        );
+        server.shutdown();
     }
 
     #[test]

@@ -418,6 +418,20 @@ fn dispatch(
                 message: error,
             },
         },
+        CorePipeRequest::DeleteCredential {
+            request_id,
+            credential_ref,
+        } => match coordinator.delete_credential(&credential_ref) {
+            Ok(()) => CorePipeResponse::Credential {
+                request_id,
+                protected_blob: None,
+            },
+            Err(error) => CorePipeResponse::Error {
+                request_id: Some(request_id),
+                code: "credential_failed".into(),
+                message: error,
+            },
+        },
         CorePipeRequest::SaveHandoff {
             request_id,
             handoff_id,
@@ -889,6 +903,25 @@ mod tests {
             }
             other => panic!("unexpected snapshot response: {other:?}"),
         }
+        server.shutdown();
+    }
+
+    #[test]
+    fn credential_delete_roundtrips_over_ipc() {
+        let server = CoreServer::in_memory().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _worker = server.serve(listener);
+        let mut client = CoreIpcClient::connect_addr(addr).unwrap();
+        client
+            .store_credential("rollback-test", "protected", "browser_replay")
+            .unwrap();
+        assert_eq!(
+            client.load_credential("rollback-test").unwrap().as_deref(),
+            Some("protected")
+        );
+        client.delete_credential("rollback-test").unwrap();
+        assert_eq!(client.load_credential("rollback-test").unwrap(), None);
         server.shutdown();
     }
 

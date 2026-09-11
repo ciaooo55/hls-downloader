@@ -1004,6 +1004,10 @@ impl CoreCoordinator {
         self.lock()?.store().load_credential(credential_ref)
     }
 
+    pub fn delete_credential(&self, credential_ref: &str) -> Result<(), String> {
+        self.lock()?.store_mut().delete_credential(credential_ref)
+    }
+
     pub fn default_cookie_configured(&self) -> Result<bool, String> {
         Ok(self
             .load_credential(DEFAULT_COOKIE_CREDENTIAL_REF)?
