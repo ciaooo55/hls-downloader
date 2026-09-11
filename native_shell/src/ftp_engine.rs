@@ -122,20 +122,38 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     } else {
         Conn::Plain(raw)
     };
-    read_reply(&mut ctrl)?;
+    let reply = read_reply(&mut ctrl)?;
+    require_reply_code(&reply, &[220], "server greeting")?;
     if target.tls && !implicit {
-        command(&mut ctrl, "AUTH TLS")?;
+        let reply = command(&mut ctrl, "AUTH TLS")?;
+        require_reply_code(&reply, &[234], "AUTH TLS")?;
         ctrl = wrap_tls(take_plain(ctrl)?, &target.host)?;
-        command(&mut ctrl, "PBSZ 0")?;
-        command(&mut ctrl, "PROT P")?;
+        let reply = command(&mut ctrl, "PBSZ 0")?;
+        require_reply_code(&reply, &[200], "PBSZ")?;
+        let reply = command(&mut ctrl, "PROT P")?;
+        require_reply_code(&reply, &[200], "PROT")?;
     }
-    command(&mut ctrl, &format!("USER {}", target.user))?;
-    command(&mut ctrl, &format!("PASS {}", target.password))?;
-    command(&mut ctrl, "TYPE I")?;
-    let size = command(&mut ctrl, &format!("SIZE {}", target.path))
-        .ok()
-        .and_then(|reply| reply.split_whitespace().nth(1)?.parse().ok())
-        .unwrap_or(0);
+    let reply = command(&mut ctrl, &format!("USER {}", target.user))?;
+    match reply_code(&reply) {
+        Some(230) => {}
+        Some(331) => {
+            let reply = command(&mut ctrl, &format!("PASS {}", target.password))?;
+            require_reply_code(&reply, &[230], "PASS")?;
+        }
+        _ => require_reply_code(&reply, &[230, 331], "USER")?,
+    }
+    let reply = command(&mut ctrl, "TYPE I")?;
+    require_reply_code(&reply, &[200], "TYPE I")?;
+    let size_reply = command(&mut ctrl, &format!("SIZE {}", target.path))?;
+    let size = if reply_code(&size_reply) == Some(213) {
+        size_reply
+            .split_whitespace()
+            .nth(1)
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0)
+    } else {
+        0
+    };
     let resume_from = if resume && output.exists() {
         std::fs::metadata(output)
             .map(|meta| meta.len())
@@ -148,6 +166,7 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
         require_reply_code(&reply, &[350], "REST")?;
     }
     let pasv = command(&mut ctrl, "PASV")?;
+    require_reply_code(&pasv, &[227], "PASV")?;
     let data_port = parse_pasv_port(&pasv)?;
     let data_addr = std::net::SocketAddr::new(ctrl.peer_addr()?.ip(), data_port);
     let data_raw = TcpStream::connect(data_addr).map_err(|error| error.to_string())?;
@@ -394,5 +413,17 @@ mod tests {
             "transfer completion"
         )
         .is_err());
+    }
+
+    #[test]
+    fn session_reply_checks_fail_closed() {
+        assert!(require_reply_code("220 Ready\r\n", &[220], "server greeting").is_ok());
+        assert!(require_reply_code("120 Try later\r\n", &[220], "server greeting").is_err());
+        assert!(require_reply_code("234 AUTH TLS ok\r\n", &[234], "AUTH TLS").is_ok());
+        assert!(require_reply_code("534 TLS unavailable\r\n", &[234], "AUTH TLS").is_err());
+        assert!(require_reply_code("200 Type set\r\n", &[200], "TYPE I").is_ok());
+        assert!(require_reply_code("500 TYPE rejected\r\n", &[200], "TYPE I").is_err());
+        assert!(require_reply_code("227 Entering Passive Mode (1,2,3,4,5,6)\r\n", &[227], "PASV").is_ok());
+        assert!(require_reply_code("425 No data connection\r\n", &[227], "PASV").is_err());
     }
 }
