@@ -154,8 +154,8 @@ fn ssh_option(name: &str, value: &str) -> String {
 }
 
 fn percent_decode(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
     let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' && index + 2 < bytes.len() {
@@ -163,15 +163,15 @@ fn percent_decode(value: &str) -> String {
                 std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or(""),
                 16,
             ) {
-                out.push(decoded as char);
+                out.push(decoded);
                 index += 3;
                 continue;
             }
         }
-        out.push(bytes[index] as char);
+        out.push(bytes[index]);
         index += 1;
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 pub fn known_hosts_path() -> PathBuf {
@@ -688,6 +688,21 @@ mod tests {
         let debug = format!("{target:?}");
         assert!(debug.contains("***"));
         assert!(!debug.contains("p@ss"));
+    }
+
+    #[test]
+    fn percent_decoding_preserves_utf8_userinfo_and_paths() {
+        let encoded = parse_sftp_url(
+            "sftp://%E6%9D%8E:p%E4%B8%AD@nas.local/%E4%B8%AD%E6%96%87.txt",
+        )
+        .unwrap();
+        assert_eq!(encoded.user, "李");
+        assert_eq!(encoded.password, "p中");
+        assert_eq!(encoded.path, "/中文.txt");
+
+        let raw = parse_sftp_url("sftp://李@nas.local/中文.txt").unwrap();
+        assert_eq!(raw.user, "李");
+        assert_eq!(raw.path, "/中文.txt");
     }
 
     #[test]
