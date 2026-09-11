@@ -14,14 +14,19 @@ describe('selected download links', () => {
     ])
   })
 
-  it('preserves exact anchor href punctuation', () => {
+  it('preserves exact anchor href punctuation and relative redirect routes', () => {
     expect(selectedDownloadUrls(
-      ['/release-v1.0.', '/wiki/Function_(mathematics)'],
+      [
+        '/release-v1.0.',
+        '/wiki/Function_(mathematics)',
+        '/download?target=https://cdn.test/file.zip&name=release',
+      ],
       '',
       'https://site.test/page',
     )).toEqual([
       'https://site.test/release-v1.0.',
       'https://site.test/wiki/Function_(mathematics)',
+      'https://site.test/download?target=https://cdn.test/file.zip&name=release',
     ])
   })
 
