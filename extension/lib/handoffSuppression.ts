@@ -11,7 +11,7 @@ const RESOURCE_KINDS = new Set<ResourceKind>(['hls', 'dash', 'media', 'file', 'm
 
 function hostForPage(value: string): string {
   try {
-    return new URL(value).hostname.toLowerCase()
+    return new URL(value).hostname.toLowerCase().replace(/\.$/, '')
   } catch {
     return ''
   }
