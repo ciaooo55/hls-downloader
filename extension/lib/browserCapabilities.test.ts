@@ -36,7 +36,19 @@ describe('browser capability guards', () => {
     expect(create).toHaveBeenCalledWith('worker-heartbeat', { periodInMinutes: 1 })
   })
 
-  it('falls back to the portable period when alarm creation rejects', async () => {
+  it('retries the portable period when Firefox alarm creation rejects', async () => {
+    let attempts = 0
+    const create = vi.fn(() => {
+      attempts += 1
+      return attempts === 1 ? Promise.reject(new Error('alarms service waking')) : Promise.resolve()
+    })
+    await expect(createRecurringAlarm({ create }, 'worker-heartbeat', 0.5, true)).resolves.toBeUndefined()
+    expect(create).toHaveBeenCalledTimes(2)
+    expect(create).toHaveBeenNthCalledWith(1, 'worker-heartbeat', { periodInMinutes: 1 })
+    expect(create).toHaveBeenNthCalledWith(2, 'worker-heartbeat', { periodInMinutes: 1 })
+  })
+
+  it('falls back to the portable period when Chromium alarm creation rejects', async () => {
     const create = vi.fn(() => {
       return Promise.reject(new Error('periodInMinutes must be at least 1'))
     })
