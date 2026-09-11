@@ -103,6 +103,7 @@ fn site_rule_match_host(host: &str) -> &str {
         .strip_prefix("*.")
         .unwrap_or(host.trim())
         .trim_start_matches('.')
+        .trim_end_matches('.')
 }
 
 fn valid_site_rule_host(host: &str) -> bool {
@@ -199,7 +200,7 @@ pub fn host_of(url: &str) -> String {
             .unwrap_or(authority)
             .to_string()
     };
-    host.trim().to_ascii_lowercase()
+    host.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
 pub fn upsert_site_rule(rules: &mut Vec<SiteRule>, rule: SiteRule) {
@@ -365,6 +366,7 @@ mod tests {
         let rule = matching_rule(&rules, "https://a.cdn.example.test/file.bin").unwrap();
         assert_eq!(rule.speed_limit_kib, 256);
         assert_eq!(rule.concurrency, 2);
+        assert!(matching_rule(&rules, "https://a.cdn.example.test./file.bin").is_some());
         assert!(matching_rule(&rules, "https://other.test/a").is_none());
     }
 
@@ -378,6 +380,9 @@ mod tests {
         assert!(validate_site_rules("foo*bar.example.test=speed:128").is_err());
         assert!(
             validate_site_rules(r#"[{"host":"example.test"},{"host":"*.example.test"}]"#).is_err()
+        );
+        assert!(
+            validate_site_rules(r#"[{"host":"example.test"},{"host":"example.test."}]"#).is_err()
         );
     }
 
