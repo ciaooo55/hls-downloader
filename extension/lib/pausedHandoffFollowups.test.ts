@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  PAUSED_FOLLOW_UP_RECHECK_MS,
   PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY,
+  PAUSED_HANDOFF_RESOLUTION_MS,
   PausedHandoffFollowUpStore,
   normalizePausedHandoffFollowUps,
   stepPausedHandoffFollowUp,
@@ -75,7 +77,7 @@ describe('paused handoff follow-up store', () => {
     await store.hydrate()
     expect(store.list()).toEqual([
       followUp({ handoffId: 'handoff-2', downloadId: 8, phase: 'readiness', deadline: 5, createdAt: 4_000 }),
-      followUp(),
+      followUp({ deadline: 129_000, createdAt: 4_000 }),
     ])
   })
 
@@ -205,6 +207,20 @@ describe('paused handoff follow-up normalization', () => {
       followUp({ handoffId: 'handoff-b', deadline: 150_000 }),
       followUp({ handoffId: 'handoff-a', deadline: 90_000 }),
     ], 1_000)
-    expect(normalized.map(item => item.deadline)).toEqual([100_000, 150_000, 200_000])
+    expect(normalized.map(item => item.deadline)).toEqual([100_000, 126_000, 126_000])
+  })
+
+  it('bounds restored future timestamps after the system clock moves backward', () => {
+    const now = 10_000
+    const normalized = normalizePausedHandoffFollowUps([
+      followUp({ handoffId: 'resolution', deadline: 10_000_000, createdAt: 9_000_000 }),
+      followUp({ handoffId: 'readiness', phase: 'readiness', deadline: 10_000_000, createdAt: 8_000_000 }),
+    ], now)
+    const byId = Object.fromEntries(normalized.map(item => [item.handoffId, item]))
+
+    expect(byId.resolution.deadline).toBe(now + PAUSED_HANDOFF_RESOLUTION_MS)
+    expect(byId.readiness.deadline).toBe(now + PAUSED_FOLLOW_UP_RECHECK_MS)
+    expect(byId.resolution.createdAt).toBe(now)
+    expect(byId.readiness.createdAt).toBe(now)
   })
 })
