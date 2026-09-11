@@ -108,11 +108,12 @@ export class TakeoverSettingsSync {
   }
 
   private triggerSync(): void {
-    const active = this.sync()
-    void active.then(async () => {
-      if (this.syncing || !(await this.readPending())) return
-      void this.sync()
-    })
+    // One explicit queue/ping event gets one sync attempt. A protocol or
+    // transport failure must leave the durable pending value for the next
+    // heartbeat instead of spinning in a tight retry loop while the desktop is
+    // rejecting the request. syncLoop already consumes a newer pending value
+    // that arrives while an older acknowledgement is in flight.
+    void this.sync()
   }
 
   private async syncLoop(): Promise<void> {
@@ -130,6 +131,10 @@ export class TakeoverSettingsSync {
         // The durable pending value is retried by the next heartbeat/popup ping.
         return
       }
+      // NativeBridge resolves protocol-level errors as { ok: false, error }.
+      // Only an explicit acknowledgement may retire the user's durable choice;
+      // rejected or malformed replies stay pending for a later reconnect/ping.
+      if (response?.ok !== true) return
       const settled = await this.withStorageWrite(async () => {
         const newest = await this.readPending()
         if (!newest) return true
