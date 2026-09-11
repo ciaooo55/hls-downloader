@@ -75,7 +75,8 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
       }
     }
     if (line.startsWith('#EXTINF:')) {
-      const segmentDuration = Number(line.slice(8).split(',', 1)[0])
+      const durationText = line.slice(8).split(',', 1)[0].trim()
+      const segmentDuration = durationText ? Number(durationText) : Number.NaN
       const uri = followingUri(lines, index, candidate =>
         candidate.startsWith('#EXTINF:') || candidate === '#EXT-X-ENDLIST')
       if (Number.isFinite(segmentDuration) && segmentDuration >= 0 && uri) {
