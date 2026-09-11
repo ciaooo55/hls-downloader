@@ -39,7 +39,13 @@ export class InspectionCache {
 
   private expire(now: number): void {
     for (const [key, claimedAt] of this.entries) {
-      if (now - claimedAt >= this.ttlMs) this.entries.delete(key)
+      const age = now - claimedAt
+      // Date.now() is wall-clock time. If the OS clock moves backward while a
+      // long-lived MV3 worker is alive, keeping a future claim would suppress
+      // re-inspection for the rollback interval plus the normal TTL. Release
+      // it immediately instead; re-fetching a manifest is safer than a blind
+      // cache entry whose age can no longer be trusted.
+      if (age < 0 || age >= this.ttlMs) this.entries.delete(key)
     }
   }
 }
