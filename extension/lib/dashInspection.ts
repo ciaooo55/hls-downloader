@@ -77,9 +77,14 @@ function decodeXml(value: string): string {
   })
 }
 
+function xmlName(tag: string): string {
+  return `(?:[A-Za-z_][\\w.-]*:)?${tag}`
+}
+
 function blocks(value: string, tag: string): Array<{ attributes: Record<string, string>; body: string }> {
   const result: Array<{ attributes: Record<string, string>; body: string }> = []
-  const pattern = new RegExp(`<${tag}\\b([^>]*?)(?:\\/\\s*>|>([\\s\\S]*?)<\\/${tag}\\s*>)`, 'gi')
+  const name = xmlName(tag)
+  const pattern = new RegExp(`<${name}\\b([^>]*?)(?:\\/\\s*>|>([\\s\\S]*?)<\\/${name}\\s*>)`, 'gi')
   for (const match of value.matchAll(pattern)) {
     result.push({ attributes: attributes(match[1]), body: match[2] || '' })
   }
@@ -87,18 +92,21 @@ function blocks(value: string, tag: string): Array<{ attributes: Record<string, 
 }
 
 function withoutBlocks(value: string, tag: string): string {
+  const name = xmlName(tag)
   return value.replace(
-    new RegExp(`<${tag}\\b[^>]*?(?:\\/\\s*>|>[\\s\\S]*?<\\/${tag}\\s*>)`, 'gi'),
+    new RegExp(`<${name}\\b[^>]*?(?:\\/\\s*>|>[\\s\\S]*?<\\/${name}\\s*>)`, 'gi'),
     '',
   )
 }
 
 function directBaseUrl(value: string): string {
-  return decodeXml(value.match(/<BaseURL(?:\s[^>]*)?>([\s\S]*?)<\/BaseURL\s*>/i)?.[1] || '').trim()
+  const name = xmlName('BaseURL')
+  const match = value.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${name}\\s*>`, 'i'))
+  return decodeXml(match?.[1] || '').trim()
 }
 
 function directSegmentTemplate(value: string): Record<string, string> | null {
-  const match = value.match(/<SegmentTemplate\b([^>]*)>/i)
+  const match = value.match(new RegExp(`<${xmlName('SegmentTemplate')}\\b([^>]*)>`, 'i'))
   return match ? attributes(match[1]) : null
 }
 
@@ -127,7 +135,8 @@ function resolvePattern(value: string, baseUrl: string, representationId = ''): 
 
 /** Parse the MPD metadata needed by the browser panel without a DOM dependency. */
 export function parseDashManifest(text: string, baseUrl: string): DashInspectionResult | null {
-  const root = text.match(/<MPD\b([^>]*)>([\s\S]*?)<\/MPD\s*>/i)
+  const rootName = xmlName('MPD')
+  const root = text.match(new RegExp(`<${rootName}\\b([^>]*)>([\\s\\S]*?)<\\/${rootName}\\s*>`, 'i'))
   if (!root) return null
   const rootAttributes = attributes(root[1])
   const rootBody = root[2]
