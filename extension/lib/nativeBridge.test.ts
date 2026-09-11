@@ -34,6 +34,45 @@ describe('persistent native bridge', () => {
     bridge.close()
   })
 
+  it('snapshots queued resource metadata before caller mutation', async () => {
+    const port = new FakePort()
+    const bridge = new NativeBridge(() => port)
+    const first = bridge.request({ op: 'download', resource: { url: 'https://cdn.test/first.mp4' } })
+    const resource = {
+      url: 'https://cdn.test/original.mp4',
+      title: 'Original title',
+      filename: 'original.mp4',
+      request_headers: { Authorization: 'Bearer original' },
+      request_contexts: {
+        'https://cdn.test': { cookie: 'session=original' },
+      },
+    }
+    const second = bridge.request({ op: 'download', resource })
+
+    expect(port.posted).toHaveLength(1)
+    resource.title = 'Mutated title'
+    resource.filename = 'mutated.mp4'
+    resource.request_headers.Authorization = 'Bearer mutated'
+    resource.request_contexts['https://cdn.test'].cookie = 'session=mutated'
+
+    port.onMessage.emit({ ok: true, __request_id: port.posted[0].__request_id })
+    await first
+    expect(port.posted).toHaveLength(2)
+    expect(port.posted[1].resource).toMatchObject({
+      url: 'https://cdn.test/original.mp4',
+      title: 'Original title',
+      filename: 'original.mp4',
+      request_headers: { Authorization: 'Bearer original' },
+      request_contexts: {
+        'https://cdn.test': { cookie: 'session=original' },
+      },
+    })
+
+    port.onMessage.emit({ ok: true, __request_id: port.posted[1].__request_id })
+    await second
+    bridge.close()
+  })
+
   it('preempts an active status request for an interactive offer', async () => {
     const firstPort = new FakePort()
     const secondPort = new FakePort()
