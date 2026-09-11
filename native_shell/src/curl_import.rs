@@ -81,7 +81,7 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
                     headers.insert("authorization".into(), basic_auth(&value));
                 }
                 "-d" | "--data" | "--data-raw" | "--data-binary" => {
-                    if value.starts_with('@') {
+                    if arg != "--data-raw" && value.starts_with('@') {
                         return Err("不能导入引用本机文件的 cURL 请求体".into());
                     }
                     if !body.is_empty() {
@@ -242,6 +242,15 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.method, "POST");
         assert_eq!(parsed.body, "name=daniel&skill=lousy");
+    }
+
+    #[test]
+    fn data_raw_keeps_a_leading_at_sign_literal() {
+        let parsed = parse_curl_command(r#"curl --data-raw "@literal" https://cdn.test/form"#)
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed.method, "POST");
+        assert_eq!(parsed.body, "@literal");
     }
 
     #[test]
