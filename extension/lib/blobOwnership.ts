@@ -22,7 +22,11 @@ export function inheritHttpBufferSource(
     if (!part || (typeof part !== 'object' && typeof part !== 'function')) return ''
 
     const source = lookup(part as object)
-      || (ArrayBuffer.isView(part) ? lookup(part.buffer) : undefined)
+      || (ArrayBuffer.isView(part)
+        && part.byteOffset === 0
+        && part.byteLength === part.buffer.byteLength
+        ? lookup(part.buffer)
+        : undefined)
       || ''
     if (/^https?:\/\//i.test(source)) {
       if (inherited) return ''

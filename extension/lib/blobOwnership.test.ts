@@ -10,6 +10,18 @@ describe('blob download ownership', () => {
     expect(inheritHttpBufferSource([bytes], value => sources.get(value))).toBe('https://cdn.test/export.zip')
   })
 
+  it('rejects partial views that cover only part of an owned backing buffer', () => {
+    const sources = new WeakMap<object, string>()
+    const buffer = new Uint8Array([1, 2, 3, 4]).buffer
+    const full = new Uint8Array(buffer)
+    const partial = new Uint8Array(buffer, 1, 2)
+    sources.set(buffer, 'https://cdn.test/export.zip')
+
+    expect(inheritHttpBufferSource([full], value => sources.get(value)))
+      .toBe('https://cdn.test/export.zip')
+    expect(inheritHttpBufferSource([partial], value => sources.get(value))).toBe('')
+  })
+
   it('keeps ownership only for one non-empty HTTP-backed part', () => {
     const sources = new WeakMap<object, string>()
     const first = new Uint8Array([1, 2])
