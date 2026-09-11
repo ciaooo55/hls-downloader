@@ -692,10 +692,8 @@ mod tests {
 
     #[test]
     fn percent_decoding_preserves_utf8_userinfo_and_paths() {
-        let encoded = parse_sftp_url(
-            "sftp://%E6%9D%8E:p%E4%B8%AD@nas.local/%E4%B8%AD%E6%96%87.txt",
-        )
-        .unwrap();
+        let encoded =
+            parse_sftp_url("sftp://%E6%9D%8E:p%E4%B8%AD@nas.local/%E4%B8%AD%E6%96%87.txt").unwrap();
         assert_eq!(encoded.user, "李");
         assert_eq!(encoded.password, "p中");
         assert_eq!(encoded.path, "/中文.txt");
