@@ -11,6 +11,12 @@ describe('HLS inspection cache', () => {
     expect(cache.claim('resource', 1_200)).toBe(true)
   })
 
+  it('releases a claim when the wall clock moves backward', () => {
+    const cache = new InspectionCache(10_000, 10)
+    expect(cache.claim('resource', 20_000)).toBe(true)
+    expect(cache.claim('resource', 19_000)).toBe(true)
+  })
+
   it('releases closed-tab keys and bounds long browsing sessions', () => {
     const cache = new InspectionCache(10_000, 2)
     cache.claim('1:page:a', 1)
