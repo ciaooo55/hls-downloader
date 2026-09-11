@@ -8,6 +8,11 @@ describe('Content-Disposition filename parsing', () => {
     expect(contentDispositionFilename("attachment; filename*=ISO-8859-1''caf%E9.pdf")).toBe('café.pdf')
   })
 
+  it('falls back when the extended filename cleans to empty', () => {
+    expect(contentDispositionFilename("attachment; filename*=UTF-8''%00; filename=archive.zip"))
+      .toBe('archive.zip')
+  })
+
   it('keeps a semicolon inside a quoted legacy filename', () => {
     expect(contentDispositionFilename('attachment; filename="archive; final.zip"')).toBe('archive; final.zip')
   })

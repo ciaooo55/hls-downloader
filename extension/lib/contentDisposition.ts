@@ -49,6 +49,9 @@ function decodeExtended(value: string): string {
 
 export function contentDispositionFilename(value = ''): string {
   const extended = parameter(value, 'filename\\*')
-  if (extended) return clean(decodeExtended(extended))
+  if (extended) {
+    const decoded = clean(decodeExtended(extended))
+    if (decoded) return decoded
+  }
   return clean(parameter(value, 'filename'))
 }
