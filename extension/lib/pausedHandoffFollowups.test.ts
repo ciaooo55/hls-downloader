@@ -43,6 +43,18 @@ class DelayedFirstSetStorage extends MemoryStorage {
   }
 }
 
+class FailingFirstGetStorage extends MemoryStorage {
+  private failNextGet = true
+
+  override async get(key: string): Promise<Record<string, unknown>> {
+    if (this.failNextGet) {
+      this.failNextGet = false
+      throw new Error('storage temporarily unavailable')
+    }
+    return super.get(key)
+  }
+}
+
 function followUp(overrides: Partial<PausedHandoffFollowUp> = {}): PausedHandoffFollowUp {
   return {
     downloadId: 7, handoffId: 'handoff-1', phase: 'resolution',
@@ -65,6 +77,32 @@ describe('paused handoff follow-up store', () => {
       followUp({ handoffId: 'handoff-2', downloadId: 8, phase: 'readiness', deadline: 5, createdAt: 4_000 }),
       followUp(),
     ])
+  })
+
+  it('does not overwrite unread durable follow-ups after a transient storage failure', async () => {
+    const storage = new FailingFirstGetStorage()
+    storage.values[PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY] = [
+      followUp({ handoffId: 'persisted', downloadId: 1, deadline: 100_000 }),
+    ]
+    const store = new PausedHandoffFollowUpStore(storage, PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY, () => 20_000)
+
+    await store.remember({
+      downloadId: 2,
+      handoffId: 'live',
+      phase: 'resolution',
+      deadline: 110_000,
+    })
+
+    expect(storage.sets).toBe(0)
+    expect(storage.values[PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY]).toEqual([
+      followUp({ handoffId: 'persisted', downloadId: 1, deadline: 100_000 }),
+    ])
+    expect(store.list().map(item => item.handoffId)).toEqual(['live'])
+
+    await store.hydrate()
+    expect(store.list().map(item => item.handoffId)).toEqual(['persisted', 'live'])
+    expect((storage.values[PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY] as PausedHandoffFollowUp[])
+      .map(item => item.handoffId)).toEqual(['persisted', 'live'])
   })
 
   it('upserts one record per handoff without discarding unresolved browser ownership', async () => {
