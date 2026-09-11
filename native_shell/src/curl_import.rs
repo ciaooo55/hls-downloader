@@ -71,6 +71,11 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
                     headers.insert("referer".into(), value);
                 }
                 "-b" | "--cookie" => {
+                    if !value.contains('=') {
+                        return Err(
+                            "cURL -b/--cookie 文件导入暂不支持；请使用内联 name=value Cookie".into(),
+                        );
+                    }
                     headers.insert("cookie".into(), value);
                 }
                 "-u" | "--user" => {
@@ -257,6 +262,15 @@ mod tests {
             .unwrap();
         assert_eq!(parsed.method, "POST");
         assert_eq!(parsed.body, "@literal");
+    }
+
+    #[test]
+    fn rejects_cookie_files_instead_of_sending_filename_as_cookie() {
+        assert!(parse_curl_command("curl -b cookies.txt https://cdn.test/private").is_err());
+        let parsed = parse_curl_command("curl -b session=abc https://cdn.test/private")
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed.cookie, "session=abc");
     }
 
     #[test]
