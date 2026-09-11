@@ -25,4 +25,43 @@ describe('browser client identity', () => {
     expect(create).toHaveBeenCalledOnce()
     expect(data[BROWSER_CLIENT_ID_STORAGE_KEY]).toBe('client-one')
   })
+
+  it('retries a transient storage read before creating a new installation id', async () => {
+    const data: Record<string, unknown> = { [BROWSER_CLIENT_ID_STORAGE_KEY]: 'client-existing' }
+    let reads = 0
+    const storage = {
+      get: vi.fn(async () => {
+        reads += 1
+        if (reads === 1) throw new Error('storage waking')
+        return { ...data }
+      }),
+      set: vi.fn(async (value: Record<string, unknown>) => { Object.assign(data, value) }),
+    }
+    const create = vi.fn(() => 'client-new')
+
+    await expect(stableBrowserClientId(storage, create)).resolves.toBe('client-existing')
+    expect(storage.get).toHaveBeenCalledTimes(2)
+    expect(storage.set).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('recovers the same id when a committed storage write loses its acknowledgement', async () => {
+    const data: Record<string, unknown> = {}
+    let writes = 0
+    const storage = {
+      get: vi.fn(async () => ({ ...data })),
+      set: vi.fn(async (value: Record<string, unknown>) => {
+        Object.assign(data, value)
+        writes += 1
+        if (writes === 1) throw new Error('lost storage acknowledgement')
+      }),
+    }
+    const create = vi.fn(() => 'client-one')
+
+    await expect(stableBrowserClientId(storage, create)).resolves.toBe('client-one')
+    expect(storage.get).toHaveBeenCalledTimes(2)
+    expect(storage.set).toHaveBeenCalledOnce()
+    expect(create).toHaveBeenCalledOnce()
+    expect(data[BROWSER_CLIENT_ID_STORAGE_KEY]).toBe('client-one')
+  })
 })
