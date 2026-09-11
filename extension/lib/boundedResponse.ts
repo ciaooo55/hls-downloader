@@ -29,7 +29,7 @@ export async function readBoundedResponseText(
       }
       bytes += value.byteLength
       if (bytes > limit) {
-        await reader.cancel()
+        try { await reader.cancel() } catch {}
         return null
       }
       try {

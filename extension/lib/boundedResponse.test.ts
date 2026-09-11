@@ -21,6 +21,17 @@ describe('bounded response reader', () => {
     expect(canceled).toBe(true)
   })
 
+  it('fails closed when canceling an oversized response rejects', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('oversized'))
+      },
+      cancel() { return Promise.reject(new Error('cancel failed')) },
+    })
+
+    await expect(readBoundedResponseText(new Response(stream), 4)).resolves.toBeNull()
+  })
+
   it('preserves split UTF-8 and rejects malformed byte sequences', async () => {
     const encoded = new TextEncoder().encode('é')
     const valid = new ReadableStream<Uint8Array>({
