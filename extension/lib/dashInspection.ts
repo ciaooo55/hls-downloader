@@ -122,10 +122,12 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
   const isLive = rootAttributes.type?.toLowerCase() === 'dynamic'
   const periodBlocks = blocks(rootBody, 'Period')
   const periods = periodBlocks.length ? periodBlocks : [{ attributes: {}, body: rootBody }]
-  const periodAttributes = periods[0]?.attributes || {}
-  const duration = isLive
-    ? undefined
-    : isoDuration(rootAttributes.mediapresentationduration || periodAttributes.duration)
+  const rootDuration = isoDuration(rootAttributes.mediapresentationduration)
+  const periodDurations = periods.map(period => isoDuration(period.attributes.duration))
+  const explicitPeriodDuration = periodDurations.length > 0 && periodDurations.every(value => value > 0)
+    ? periodDurations.reduce((total, value) => total + value, 0)
+    : 0
+  const duration = isLive ? undefined : (rootDuration || explicitPeriodDuration)
 
   const video: DashCandidate[] = []
   const audioBandwidth: number[] = []

@@ -35,6 +35,38 @@ describe('DASH browser inspection', () => {
     })
   })
 
+  it('sums explicit Period durations when the MPD has no root duration', () => {
+    const multiPeriod = `<MPD type="static">
+      <Period duration="PT10S"><AdaptationSet contentType="video">
+        <Representation id="v1" width="1280" height="720" bandwidth="1000000" />
+      </AdaptationSet></Period>
+      <Period duration="PT15S"><AdaptationSet contentType="video">
+        <Representation id="v2" width="1280" height="720" bandwidth="1000000" />
+      </AdaptationSet></Period>
+    </MPD>`
+
+    expect(parseDashManifest(multiPeriod, 'https://cdn.test/manifest.mpd')).toMatchObject({
+      duration: 25,
+      estimatedSize: 3_125_000,
+    })
+  })
+
+  it('does not invent a partial duration when any Period duration is missing', () => {
+    const partial = `<MPD type="static">
+      <Period duration="PT10S"><AdaptationSet contentType="video">
+        <Representation id="v1" width="1280" height="720" bandwidth="1000000" />
+      </AdaptationSet></Period>
+      <Period><AdaptationSet contentType="video">
+        <Representation id="v2" width="1280" height="720" bandwidth="1000000" />
+      </AdaptationSet></Period>
+    </MPD>`
+
+    expect(parseDashManifest(partial, 'https://cdn.test/manifest.mpd')).toMatchObject({
+      duration: undefined,
+      estimatedSize: undefined,
+    })
+  })
+
   it('does not invent a finite size for a dynamic MPD', async () => {
     const fetcher = vi.fn<DashManifestFetcher>(async () => new Response(
       vod.replace('type="static"', 'type="dynamic"'),
