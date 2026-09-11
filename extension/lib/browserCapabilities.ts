@@ -43,9 +43,14 @@ export async function createRecurringAlarm(
 ): Promise<void> {
   const requested = { periodInMinutes }
   const portable = { periodInMinutes: Math.max(PORTABLE_RECURRING_ALARM_MINUTES, periodInMinutes) }
-  const attempts = isFirefox && periodInMinutes < PORTABLE_RECURRING_ALARM_MINUTES
-    ? [portable, requested]
-    : [requested, portable]
+  const firstAttempt = isFirefox && periodInMinutes < PORTABLE_RECURRING_ALARM_MINUTES
+    ? portable
+    : requested
+  // Once Firefox has clamped a sub-minute request to the portable cadence,
+  // never retry the known-unsupported original period after a transient
+  // alarms.create failure. Repeating the portable request is the only useful
+  // fallback in that browser.
+  const attempts = [firstAttempt, portable]
   for (const attempt of attempts) {
     try {
       await alarms.create(name, attempt)
