@@ -34,6 +34,19 @@ function positiveFiniteNumber(value: string): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
 }
 
+function followingUri(
+  lines: string[],
+  index: number,
+  boundary: (line: string) => boolean,
+): string {
+  for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+    const candidate = lines[cursor]
+    if (!candidate.startsWith('#')) return candidate
+    if (boundary(candidate)) return ''
+  }
+  return ''
+}
+
 export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo {
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
   const variants: HlsVariant[] = []
@@ -63,10 +76,11 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
     }
     if (line.startsWith('#EXTINF:')) {
       const segmentDuration = Number(line.slice(8).split(',', 1)[0])
-      if (Number.isFinite(segmentDuration) && segmentDuration >= 0) duration += segmentDuration
+      const uri = followingUri(lines, index, candidate =>
+        candidate.startsWith('#EXTINF:') || candidate === '#EXT-X-ENDLIST')
+      if (Number.isFinite(segmentDuration) && segmentDuration >= 0 && uri) duration += segmentDuration
       else completeDuration = false
       completeSegments += 1
-      const uri = lines.slice(index + 1).find(value => !value.startsWith('#'))
       if (uri) rememberPlaybackUrl(uri)
     }
     if (line.startsWith('#EXT-X-PART:')) {
@@ -80,7 +94,8 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
       rememberPlaybackUrl(attribute(line.slice('#EXT-X-PRELOAD-HINT:'.length), 'URI'))
     }
     if (!line.startsWith('#EXT-X-STREAM-INF:')) continue
-    const uri = lines.slice(index + 1).find(value => !value.startsWith('#'))
+    const uri = followingUri(lines, index, candidate =>
+      candidate.startsWith('#EXT-X-STREAM-INF:') || candidate === '#EXT-X-ENDLIST')
     if (!uri) continue
     const attributes = line.slice('#EXT-X-STREAM-INF:'.length)
     const resolution = attribute(attributes, 'RESOLUTION').match(/^(\d+)x(\d+)$/i)

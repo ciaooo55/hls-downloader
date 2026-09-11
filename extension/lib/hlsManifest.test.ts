@@ -32,6 +32,58 @@ describe('HLS metadata', () => {
     })
   })
 
+  it('does not borrow a later variant URI when a STREAM-INF URI is missing', () => {
+    const info = parseHlsManifest(
+      '#EXTM3U\n'
+      + '#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=640x360\n'
+      + '#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080\n'
+      + 'high.m3u8\n',
+      'https://cdn.test/master.m3u8',
+    )
+
+    expect(info.variants).toEqual([{
+      url: 'https://cdn.test/high.m3u8',
+      width: 1920,
+      height: 1080,
+      bandwidth: 4_000_000,
+      quality: '1080p',
+    }])
+  })
+
+  it('does not borrow a later segment URI when an EXTINF URI is missing', () => {
+    const info = parseHlsManifest(
+      '#EXTM3U\n'
+      + '#EXTINF:4,\n'
+      + '#EXTINF:5,\n'
+      + 'b.ts\n'
+      + '#EXT-X-ENDLIST\n',
+      'https://cdn.test/vod.m3u8',
+    )
+
+    expect(info).toMatchObject({
+      duration: undefined,
+      isLive: false,
+      playbackUrls: ['https://cdn.test/b.ts'],
+    })
+  })
+
+  it('keeps segment tags between EXTINF and the segment URI compatible', () => {
+    const info = parseHlsManifest(
+      '#EXTM3U\n'
+      + '#EXTINF:5,\n'
+      + '#EXT-X-BYTERANGE:100@0\n'
+      + 'file.ts\n'
+      + '#EXT-X-ENDLIST\n',
+      'https://cdn.test/vod.m3u8',
+    )
+
+    expect(info).toMatchObject({
+      duration: 5,
+      isLive: false,
+      playbackUrls: ['https://cdn.test/file.ts'],
+    })
+  })
+
   it('totals VOD segment durations and recognizes quality in URLs', () => {
     const live = '#EXTM3U\n#EXTINF:5.5,\na.ts\n#EXTINF:4.5,\nb.ts'
     expect(parseHlsManifest(live, 'https://cdn.test/live.m3u8')).toMatchObject({ duration: 10, isLive: true })
