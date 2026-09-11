@@ -76,6 +76,8 @@ pub fn parse_ftp_url(url: &str) -> Result<FtpTarget, String> {
         ("anonymous:", auth)
     };
     let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
+    let user = percent_decode(user);
+    let password = percent_decode(password);
     let (host, port) = if let Some((host, port)) = hostport.rsplit_once(':') {
         let port = port
             .parse::<u16>()
@@ -90,19 +92,44 @@ pub fn parse_ftp_url(url: &str) -> Result<FtpTarget, String> {
     if host.is_empty() || !ftp_wire_ok(host) {
         return Err("FTP host missing".into());
     }
-    let user = if user.is_empty() { "anonymous" } else { user };
-    let path = format!("/{}", path.trim_start_matches('/'));
-    if !ftp_wire_ok(user) || !ftp_wire_ok(password) || !ftp_wire_ok(&path) {
+    let user = if user.is_empty() {
+        "anonymous".to_string()
+    } else {
+        user
+    };
+    let path = format!("/{}", percent_decode(path.trim_start_matches('/')));
+    if !ftp_wire_ok(&user) || !ftp_wire_ok(&password) || !ftp_wire_ok(&path) {
         return Err("FTP 地址不能包含控制字符".into());
     }
     Ok(FtpTarget {
         host: host.to_string(),
         port,
-        user: user.into(),
-        password: password.into(),
+        user,
+        password,
         path,
         tls,
     })
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Ok(decoded) = u8::from_str_radix(
+                std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or(""),
+                16,
+            ) {
+                out.push(decoded);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn ftp_wire_ok(value: &str) -> bool {
@@ -371,6 +398,15 @@ mod tests {
         assert_eq!(at.password, "p@ss");
         assert_eq!(at.host, "files.example");
         assert_eq!(at.port, 2121);
+        let encoded = parse_ftp_url(
+            "ftp://alice%40team:p%3Ass@files.example/%E6%B5%8B%E8%AF%95/a%20b.bin",
+        )
+        .unwrap();
+        assert_eq!(encoded.user, "alice@team");
+        assert_eq!(encoded.password, "p:ss");
+        assert_eq!(encoded.path, "/测试/a b.bin");
+        assert!(parse_ftp_url("ftp://alice%0d%0aPASS%20x@files.example/a.bin").is_err());
+        assert!(parse_ftp_url("ftp://files.example/a%0d%0aSITE%20EXEC%20x").is_err());
     }
 
     #[test]
