@@ -30,6 +30,9 @@ pub(crate) fn resolve_http_uri(base: &str, reference: &str) -> String {
         return inherit_access_query(base, &format!("{scheme}://{rest}"));
     }
     let clean_base = base.split(['?', '#']).next().unwrap_or(base);
+    if reference.starts_with('?') {
+        return inherit_access_query(base, &format!("{clean_base}{reference}"));
+    }
     if let Some(scheme_end) = clean_base.find("://") {
         let authority_start = scheme_end + 3;
         let path_start = clean_base[authority_start..]
@@ -185,6 +188,17 @@ mod tests {
         assert_eq!(
             resolve_http_uri("https://cdn.example?token=abc", "seg.ts"),
             "https://cdn.example/seg.ts?token=abc"
+        );
+    }
+
+    #[test]
+    fn query_only_children_keep_the_base_resource_path() {
+        assert_eq!(
+            resolve_http_uri(
+                "https://cdn.example/live/stream.m3u8?token=abc",
+                "?part=2"
+            ),
+            "https://cdn.example/live/stream.m3u8?part=2&token=abc"
         );
     }
 
