@@ -10,11 +10,15 @@ export function cookieLookupUrl(value = ''): string {
 export function cookiePermissionHost(value = ''): string {
   const raw = String(value || '').trim().toLowerCase()
   if (!raw) return ''
+  const normalize = (host: string) => host
+    .replace(/^\*\./, '')
+    .replace(/^www\./, '')
+    .replace(/\.$/, '')
   try {
     const parsed = raw.includes('://') ? new URL(raw) : new URL(`https://${raw}`)
-    return parsed.hostname.replace(/^www\./, '').replace(/\.$/, '')
+    return normalize(parsed.hostname)
   } catch {
-    return raw.replace(/^\*\./, '').replace(/^www\./, '').replace(/:\d+$/, '').replace(/\.$/, '')
+    return normalize(raw.replace(/:\d+$/, ''))
   }
 }
 
