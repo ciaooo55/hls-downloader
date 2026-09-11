@@ -98,6 +98,20 @@ fn setting_text_ok(value: &str) -> bool {
     !value.contains('\r') && !value.contains('\n') && !value.contains('\0')
 }
 
+fn valid_site_rule_host(host: &str) -> bool {
+    if host.is_empty()
+        || host.len() > 255
+        || host.chars().any(char::is_whitespace)
+        || host.contains(['/', '\\', '@', '\0'])
+    {
+        return false;
+    }
+    if let Some(address) = host.strip_prefix('[').and_then(|value| value.strip_suffix(']')) {
+        return address.parse::<std::net::Ipv6Addr>().is_ok();
+    }
+    !host.contains([':', '[', ']'])
+}
+
 fn parse_line(line: &str) -> Option<SiteRule> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
@@ -280,11 +294,7 @@ pub fn validate_site_rules(raw: &str) -> Result<(), String> {
     let mut hosts = std::collections::HashSet::new();
     for rule in rules {
         let host = rule.host.trim().to_ascii_lowercase();
-        if host.is_empty()
-            || host.len() > 255
-            || host.chars().any(char::is_whitespace)
-            || host.contains(['/', '\\', ':', '@', '\0'])
-        {
+        if !valid_site_rule_host(&host) {
             return Err("站点规则包含无效域名".into());
         }
         if !hosts.insert(host) {
@@ -350,6 +360,17 @@ mod tests {
         assert_eq!(host_of("https://User@Video.Example.Test:8443/watch"), "video.example.test");
         assert_eq!(host_of("http://[2001:DB8::1]:8080/file"), "[2001:db8::1]");
         assert_eq!(host_of("https://[::1]/"), "[::1]");
+    }
+
+    #[test]
+    fn supports_bracketed_ipv6_site_rules() {
+        assert!(validate_site_rules(r#"[{"host":"[2001:db8::1]"}]"#).is_ok());
+        assert!(validate_site_rules(r#"[{"host":"example.test:443"}]"#).is_err());
+        assert!(validate_site_rules(r#"[{"host":"[not-ipv6]"}]"#).is_err());
+        assert!(validate_site_rules(r#"[{"host":"[2001:db8::1"}]"#).is_err());
+        let rules = parse_site_rules(r#"[{"host":"[2001:db8::1]","speed_limit_kib":64}]"#);
+        let rule = matching_rule(&rules, "https://[2001:db8::1]:8443/file.bin").unwrap();
+        assert_eq!(rule.speed_limit_kib, 64);
     }
 
     #[test]
