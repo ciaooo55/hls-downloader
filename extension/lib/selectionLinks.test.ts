@@ -14,6 +14,23 @@ describe('selected download links', () => {
     ])
   })
 
+  it('preserves balanced URL closers while removing sentence punctuation', () => {
+    expect(selectedDownloadUrls(
+      [],
+      'primary https://cdn.test/file_(1).zip), mirror https://[2001:db8::1]/archive_(final).7z.',
+      'https://site.test/page',
+    )).toEqual([
+      'https://cdn.test/file_(1).zip',
+      'https://[2001:db8::1]/archive_(final).7z',
+    ])
+
+    expect(selectedDownloadUrls(
+      [],
+      'reference https://site.test/wiki/Function_(mathematics).',
+      'https://site.test/page',
+    )).toEqual(['https://site.test/wiki/Function_(mathematics)'])
+  })
+
   it('rejects script, data and malformed selections', () => {
     expect(selectedDownloadUrls(
       ['javascript:alert(1)', 'data:text/plain,hello', '://broken'],
