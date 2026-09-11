@@ -56,6 +56,42 @@ impl IdleHandlePool {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProxyRoute<'a> {
+    Direct,
+    System,
+    Manual(&'a str),
+}
+
+fn proxy_route(proxy: &str) -> ProxyRoute<'_> {
+    let proxy = proxy.trim();
+    if proxy.is_empty() || proxy == crate::net_policy::DIRECT_PROXY_SENTINEL {
+        ProxyRoute::Direct
+    } else if proxy == crate::net_policy::SYSTEM_PROXY_SENTINEL {
+        ProxyRoute::System
+    } else {
+        ProxyRoute::Manual(proxy)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn proxy_route_identity_distinguishes_transports() {
+    assert_eq!(proxy_route(""), ProxyRoute::Direct);
+    assert_eq!(
+        proxy_route(crate::net_policy::DIRECT_PROXY_SENTINEL),
+        ProxyRoute::Direct
+    );
+    assert_eq!(
+        proxy_route(crate::net_policy::SYSTEM_PROXY_SENTINEL),
+        ProxyRoute::System
+    );
+    assert_eq!(
+        proxy_route("http://127.0.0.1:8080"),
+        ProxyRoute::Manual("http://127.0.0.1:8080")
+    );
+}
+
 fn origin_connect_key(proxy: &str, host: &str, port: u16) -> String {
     format!("{proxy}|{host}|{port}")
 }
@@ -1856,7 +1892,7 @@ fn fetch_follow(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineErr
         hop.headers = headers.clone();
         hop.replay_json = replay.clone();
         let parsed = parse_http_url(&url)?;
-        let use_winhttp = parsed.https || !hop.proxy.trim().is_empty();
+        let use_winhttp = parsed.https || !matches!(proxy_route(&hop.proxy), ProxyRoute::Direct);
         if use_winhttp {
             #[cfg(windows)]
             {
@@ -1970,6 +2006,9 @@ fn fetch_via_curl_impersonate(
     range: Option<&str>,
 ) -> Option<Result<FetchResult, EngineError>> {
     let exe = curl_impersonate_exe()?;
+    if matches!(proxy_route(&job.proxy), ProxyRoute::System) {
+        return None;
+    }
     let mut headers = headers_for_request(job, &job.url);
     if let Some(stripped) = strip_stale_cloudflare_cookies(&headers) {
         headers = stripped;
@@ -2013,8 +2052,14 @@ fn fetch_via_curl_impersonate(
     if let Some(range) = range {
         command.arg("-H").arg(format!("Range: {range}"));
     }
-    if !job.proxy.trim().is_empty() {
-        command.arg("-x").arg(&job.proxy);
+    match proxy_route(&job.proxy) {
+        ProxyRoute::Direct => {
+            command.arg("--noproxy").arg("*");
+        }
+        ProxyRoute::System => unreachable!("system route skips curl-impersonate"),
+        ProxyRoute::Manual(proxy) => {
+            command.arg("-x").arg(proxy);
+        }
     }
     command.arg(&job.url);
     let output = match command.output() {
@@ -2399,11 +2444,12 @@ fn http_get(
     ),
     EngineError,
 > {
-    let mut stream = if job.proxy.trim().is_empty() {
-        TcpStream::connect((parsed.host.as_str(), parsed.port))
-            .map_err(|err| EngineError::Failed(err.to_string()))?
-    } else {
-        return Err(EngineError::Failed("http proxy uses WinHTTP".into()));
+    let mut stream = match proxy_route(&job.proxy) {
+        ProxyRoute::Direct => TcpStream::connect((parsed.host.as_str(), parsed.port))
+            .map_err(|err| EngineError::Failed(err.to_string()))?,
+        ProxyRoute::System | ProxyRoute::Manual(_) => {
+            return Err(EngineError::Failed("http proxy uses WinHTTP".into()));
+        }
     };
     stream
         .set_read_timeout(Some(Duration::from_secs(60)))
@@ -2514,6 +2560,9 @@ mod winhttp {
         WINHTTP_QUERY_LOCATION, WINHTTP_QUERY_STATUS_CODE,
     };
 
+    // WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY (stable WinHTTP ABI value).
+    const SYSTEM_PROXY_ACCESS_TYPE: u32 = 4;
+
     pub struct WinHttpBody {
         session: *mut core::ffi::c_void,
         connect: *mut core::ffi::c_void,
@@ -2584,22 +2633,28 @@ mod winhttp {
             return Ok(*handle as *mut core::ffi::c_void);
         }
         unsafe {
-            let session = if proxy.is_empty() {
-                WinHttpOpen(
+            let session = match super::proxy_route(proxy) {
+                super::ProxyRoute::Direct => WinHttpOpen(
                     wide(super::CHROME_UA).as_ptr(),
                     WINHTTP_ACCESS_TYPE_NO_PROXY,
                     null_mut(),
                     null_mut(),
                     0,
-                )
-            } else {
-                WinHttpOpen(
+                ),
+                super::ProxyRoute::System => WinHttpOpen(
+                    wide(super::CHROME_UA).as_ptr(),
+                    SYSTEM_PROXY_ACCESS_TYPE,
+                    null_mut(),
+                    null_mut(),
+                    0,
+                ),
+                super::ProxyRoute::Manual(proxy_url) => WinHttpOpen(
                     wide(super::CHROME_UA).as_ptr(),
                     WINHTTP_ACCESS_TYPE_NAMED_PROXY,
-                    wide(proxy).as_ptr(),
+                    wide(proxy_url).as_ptr(),
                     wide("").as_ptr(),
                     0,
-                )
+                ),
             };
             if session.is_null() {
                 return Err(EngineError::Failed(format!(

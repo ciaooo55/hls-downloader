@@ -645,6 +645,13 @@ pub fn host_bypassed(host: &str, bypass: &str) -> bool {
         })
 }
 
+pub const DIRECT_PROXY_SENTINEL: &str = "hls-downloader://direct-proxy";
+pub const SYSTEM_PROXY_SENTINEL: &str = "hls-downloader://system-proxy";
+
+pub fn proxy_route_sentinel(proxy: &str) -> bool {
+    matches!(proxy.trim(), DIRECT_PROXY_SENTINEL | SYSTEM_PROXY_SENTINEL)
+}
+
 pub fn effective_proxy(
     mode: &str,
     configured: &str,
@@ -652,26 +659,20 @@ pub fn effective_proxy(
     url: &str,
     spec_proxy: &str,
 ) -> String {
-    if spec_proxy == DIRECT_PROXY_SENTINEL {
-        return String::new();
-    }
     let (host, _) = url_host_port(url);
     if host_bypassed(&host, bypass) {
-        return String::new();
+        return DIRECT_PROXY_SENTINEL.into();
+    }
+    let spec_proxy = spec_proxy.trim();
+    if proxy_route_sentinel(spec_proxy) || !spec_proxy.is_empty() {
+        return spec_proxy.to_string();
     }
     match mode.trim().to_ascii_lowercase().as_str() {
-        "direct" => String::new(),
-        _ => {
-            if !spec_proxy.trim().is_empty() {
-                spec_proxy.trim().to_string()
-            } else {
-                configured.trim().to_string()
-            }
-        }
+        "direct" => DIRECT_PROXY_SENTINEL.into(),
+        "manual" => configured.trim().to_string(),
+        _ => SYSTEM_PROXY_SENTINEL.into(),
     }
 }
-
-pub const DIRECT_PROXY_SENTINEL: &str = "hls-downloader://direct-proxy";
 
 pub fn weekday_allowed(days: &str) -> bool {
     weekday_allowed_at(days, local_weekday_iso())
@@ -1064,41 +1065,45 @@ mod tests {
         assert!(!host_bypassed("cdn.example.test", "other.test"));
         assert_eq!(
             effective_proxy("direct", "http://127.0.0.1:9", "", "https://cdn.test/a", ""),
-            ""
+            DIRECT_PROXY_SENTINEL
         );
-        assert_eq!(
-            effective_proxy(
-                "manual",
-                "http://127.0.0.1:9",
-                "cdn.test",
-                "https://cdn.test/a",
-                ""
-            ),
-            ""
-        );
-        assert_eq!(
-            effective_proxy(
-                "manual",
-                "http://127.0.0.1:9",
-                "cdn.test",
-                "https://cdn.test:8443/a",
-                ""
-            ),
-            ""
-        );
-        assert_eq!(
-            effective_proxy(
-                "manual",
-                "http://127.0.0.1:9",
-                "cdn.test",
-                "https://user:secret@cdn.test/a",
-                ""
-            ),
-            ""
-        );
+        for url in [
+            "https://cdn.test/a",
+            "https://cdn.test:8443/a",
+            "https://user:secret@cdn.test/a",
+        ] {
+            assert_eq!(
+                effective_proxy("manual", "http://127.0.0.1:9", "cdn.test", url, ""),
+                DIRECT_PROXY_SENTINEL
+            );
+        }
         assert_eq!(
             effective_proxy("manual", "http://127.0.0.1:9", "", "https://cdn.test/a", ""),
             "http://127.0.0.1:9"
+        );
+        assert_eq!(
+            effective_proxy("system", "http://127.0.0.1:9", "", "https://cdn.test/a", ""),
+            SYSTEM_PROXY_SENTINEL
+        );
+        assert_eq!(
+            effective_proxy(
+                "direct",
+                "http://127.0.0.1:9",
+                "",
+                "https://cdn.test/a",
+                SYSTEM_PROXY_SENTINEL,
+            ),
+            SYSTEM_PROXY_SENTINEL
+        );
+        assert_eq!(
+            effective_proxy(
+                "direct",
+                "http://127.0.0.1:9",
+                "",
+                "https://cdn.test/a",
+                "http://127.0.0.1:7777",
+            ),
+            "http://127.0.0.1:7777"
         );
     }
 

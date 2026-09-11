@@ -2013,9 +2013,6 @@ impl CoreCoordinator {
                 return Err("请求体文件不存在".into());
             }
         }
-        if spec.proxy.trim().is_empty() {
-            spec.proxy = settings.proxy_url.clone();
-        }
         spec.headers
             .retain(|key, value| header_value_allowed(key, value));
         spec.request_method = crate::http_engine::sanitize_http_method(&spec.request_method);
@@ -2027,7 +2024,7 @@ impl CoreCoordinator {
         }
         spec.mirrors
             .retain(|url| crate::http_engine::http_fetch_url_allowed(url));
-        if spec.proxy != crate::net_policy::DIRECT_PROXY_SENTINEL && !proxy_url_allowed(&spec.proxy)
+        if !crate::net_policy::proxy_route_sentinel(&spec.proxy) && !proxy_url_allowed(&spec.proxy)
         {
             return Err("代理地址无效".into());
         }
@@ -3616,6 +3613,7 @@ fn apply_site_rules_to_spec(
         if spec.proxy.trim().is_empty() {
             match rule.proxy_mode.as_str() {
                 "direct" => spec.proxy = crate::net_policy::DIRECT_PROXY_SENTINEL.into(),
+                "system" => spec.proxy = crate::net_policy::SYSTEM_PROXY_SENTINEL.into(),
                 "manual" if !rule.proxy.trim().is_empty() => spec.proxy = rule.proxy.clone(),
                 _ if !rule.proxy.trim().is_empty() => spec.proxy = rule.proxy.clone(),
                 _ => {}
@@ -5433,6 +5431,106 @@ mod tests {
         assert!(coordinator.worker_is_active("task-1").unwrap());
         coordinator.active.lock().unwrap().remove("task-1");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn proxy_route_identity_preserves_global_and_site_modes() {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_settings(BTreeMap::from([
+                ("proxy_mode".into(), serde_json::json!("system")),
+                (
+                    "proxy_url".into(),
+                    serde_json::json!("http://127.0.0.1:9999"),
+                ),
+            ]))
+            .unwrap();
+        let global_system = coordinator
+            .apply_defaults_to_spec(TaskSpec {
+                url: "https://other.test/system.bin".into(),
+                filename: "system.bin".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            global_system.proxy,
+            crate::net_policy::SYSTEM_PROXY_SENTINEL
+        );
+
+        let system_rule = crate::format_site_rules(&[crate::SiteRule {
+            host: "cdn.test".into(),
+            proxy_mode: "system".into(),
+            ..Default::default()
+        }]);
+        coordinator
+            .set_settings(BTreeMap::from([
+                ("proxy_mode".into(), serde_json::json!("manual")),
+                (
+                    "proxy_url".into(),
+                    serde_json::json!("http://127.0.0.1:9999"),
+                ),
+                ("site_rules".into(), serde_json::json!(system_rule)),
+                ("proxy_bypass".into(), serde_json::json!("")),
+            ]))
+            .unwrap();
+        let site_system = coordinator
+            .apply_defaults_to_spec(TaskSpec {
+                url: "https://cdn.test/system.bin".into(),
+                filename: "system.bin".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(site_system.proxy, crate::net_policy::SYSTEM_PROXY_SENTINEL);
+
+        let direct_rule = crate::format_site_rules(&[crate::SiteRule {
+            host: "cdn.test".into(),
+            proxy_mode: "direct".into(),
+            ..Default::default()
+        }]);
+        coordinator
+            .set_setting("site_rules", serde_json::json!(direct_rule))
+            .unwrap();
+        let site_direct = coordinator
+            .apply_defaults_to_spec(TaskSpec {
+                url: "https://cdn.test/direct.bin".into(),
+                filename: "direct.bin".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(site_direct.proxy, crate::net_policy::DIRECT_PROXY_SENTINEL);
+
+        let manual_rule = crate::format_site_rules(&[crate::SiteRule {
+            host: "cdn.test".into(),
+            proxy_mode: "manual".into(),
+            proxy: "http://127.0.0.1:7777".into(),
+            ..Default::default()
+        }]);
+        coordinator
+            .set_settings(BTreeMap::from([
+                ("proxy_mode".into(), serde_json::json!("direct")),
+                ("site_rules".into(), serde_json::json!(manual_rule)),
+            ]))
+            .unwrap();
+        let site_manual = coordinator
+            .apply_defaults_to_spec(TaskSpec {
+                url: "https://cdn.test/manual.bin".into(),
+                filename: "manual.bin".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(site_manual.proxy, "http://127.0.0.1:7777");
+
+        coordinator
+            .set_setting("proxy_bypass", serde_json::json!("cdn.test"))
+            .unwrap();
+        let bypassed = coordinator
+            .apply_defaults_to_spec(TaskSpec {
+                url: "https://cdn.test/bypass.bin".into(),
+                filename: "bypass.bin".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(bypassed.proxy, crate::net_policy::DIRECT_PROXY_SENTINEL);
     }
 
     #[test]
