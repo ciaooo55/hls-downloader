@@ -31,14 +31,21 @@ export function normalizePausedHandoffFollowUp(value: unknown, now: number): Pau
   const handoffId = String(item.handoffId || '')
   const downloadId = Number(item.downloadId)
   if (!handoffId || !Number.isInteger(downloadId) || downloadId < 0) return null
+  const phase: PausedHandoffFollowUpPhase = item.phase === 'readiness' ? 'readiness' : 'resolution'
   const deadline = Number(item.deadline)
   const createdAt = Number(item.createdAt)
+  const maxFutureWait = phase === 'readiness' ? PAUSED_FOLLOW_UP_RECHECK_MS : PAUSED_HANDOFF_RESOLUTION_MS
   return {
     downloadId,
     handoffId,
-    phase: item.phase === 'readiness' ? 'readiness' : 'resolution',
-    deadline: Number.isFinite(deadline) && deadline > 0 ? deadline : now,
-    createdAt: Number.isFinite(createdAt) && createdAt > 0 ? createdAt : now,
+    phase,
+    // Persisted deadlines use wall-clock time. If the OS clock moved backward
+    // between worker/browser sessions, an old record can otherwise appear to
+    // be hours in the future and leave the browser download paused that long.
+    deadline: Number.isFinite(deadline) && deadline > 0
+      ? Math.min(deadline, now + maxFutureWait)
+      : now,
+    createdAt: Number.isFinite(createdAt) && createdAt > 0 ? Math.min(createdAt, now) : now,
   }
 }
 
