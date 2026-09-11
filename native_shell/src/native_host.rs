@@ -300,8 +300,8 @@ impl NativeHostSession {
         }
 
         let mut offer = parse_offer(payload)?;
-        let credential_ref = self.persist_browser_context(payload)?;
-        offer.credential_ref = credential_ref;
+        let owned_credential_ref = self.persist_browser_context(payload)?;
+        offer.credential_ref = owned_credential_ref.clone();
         let id = next_handoff_id();
         offer.handoff_id = id.clone();
         offer.filename = field(payload, "filename");
@@ -321,10 +321,14 @@ impl NativeHostSession {
             request_id: request_id.to_string(),
             suppression: None,
         };
+        let persistence = self.persist_handoff(&handoff);
+        self.rollback_browser_credential_on_error(
+            persistence,
+            owned_credential_ref.as_deref(),
+        )?;
         if !request_id.is_empty() && request_id.len() <= 160 {
             self.request_ids.insert(request_id.to_string(), id.clone());
         }
-        self.persist_handoff(&handoff)?;
         self.handoffs.insert(id.clone(), handoff);
         self.core.handle(CoreCommand::OfferResource { offer })?;
         let response = self
@@ -391,6 +395,26 @@ impl NativeHostSession {
             Err(error) => {
                 if let Some(credential_ref) = owned_credential_ref {
                     if let Err(rollback_error) = self.core.delete_credential(&credential_ref) {
+                        return Err(format!(
+                            "{error}; browser replay credential rollback failed: {rollback_error}"
+                        ));
+                    }
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn rollback_browser_credential_on_error<T>(
+        &mut self,
+        result: Result<T, String>,
+        owned_credential_ref: Option<&str>,
+    ) -> Result<T, String> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                if let Some(credential_ref) = owned_credential_ref {
+                    if let Err(rollback_error) = self.core.delete_credential(credential_ref) {
                         return Err(format!(
                             "{error}; browser replay credential rollback failed: {rollback_error}"
                         ));
@@ -1060,6 +1084,31 @@ mod tests {
             Some("protected")
         );
         server.shutdown();
+    }
+
+    #[test]
+    fn offer_handoff_persistence_failure_rolls_back_browser_credential() {
+        let mut session = NativeHostSession::in_memory().unwrap();
+        session
+            .core
+            .store_credential("offer-owned-failure", "protected", "browser_replay")
+            .unwrap();
+        let error = session
+            .rollback_browser_credential_on_error::<()>(
+                Err("handoff persistence failed".into()),
+                Some("offer-owned-failure"),
+            )
+            .unwrap_err();
+        assert_eq!(error, "handoff persistence failed");
+        assert_eq!(
+            session
+                .core
+                .local()
+                .store()
+                .load_credential("offer-owned-failure")
+                .unwrap(),
+            None
+        );
     }
 
     #[test]
