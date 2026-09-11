@@ -1,3 +1,24 @@
+const MAX_NATIVE_RESOURCE_TITLE_CODE_UNITS = 4096
+
+function boundedNativeResourceTitle(value: string): string {
+  const truncated = value.slice(0, MAX_NATIVE_RESOURCE_TITLE_CODE_UNITS)
+  return /[\uD800-\uDBFF]$/.test(truncated) ? truncated.slice(0, -1) : truncated
+}
+
+function nativeMessageWithBoundedResourceTitle(message: Record<string, unknown>): Record<string, unknown> {
+  const resource = message.resource
+  if (!resource || typeof resource !== 'object' || Array.isArray(resource)) return message
+  const record = resource as Record<string, unknown>
+  if (typeof record.title !== 'string' || record.title.length <= MAX_NATIVE_RESOURCE_TITLE_CODE_UNITS) return message
+  return {
+    ...message,
+    resource: {
+      ...record,
+      title: boundedNativeResourceTitle(record.title),
+    },
+  }
+}
+
 export interface NativePortLike {
   postMessage(message: Record<string, unknown>): void
   disconnect(): void
@@ -38,7 +59,7 @@ export class NativeBridge {
     return new Promise((resolve, reject) => {
       const requestId = `${Date.now().toString(36)}-${++this.requestSequence}`
       const request: PendingRequest = {
-        message: { ...message, __request_id: requestId },
+        message: { ...nativeMessageWithBoundedResourceTitle(message), __request_id: requestId },
         requestId,
         timeoutMs,
         retriesRemaining: Math.max(0, Math.floor(retryCount)),
