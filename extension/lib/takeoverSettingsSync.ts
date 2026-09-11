@@ -20,7 +20,8 @@ type DesktopRequest = (message: Record<string, unknown>) => Promise<any>
 function normalizedBytes(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined
   const result = Number(value)
-  return Number.isFinite(result) ? Math.max(0, result) : undefined
+  if (!Number.isFinite(result)) return undefined
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(result)))
 }
 
 function normalizePending(value: unknown): PendingTakeoverSettings | null {
