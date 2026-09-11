@@ -180,8 +180,51 @@ fn first_checksum(block: &str) -> String {
     String::new()
 }
 
+fn decode_xml_text(value: &str) -> String {
+    if !value.contains('&') {
+        return value.to_string();
+    }
+    let mut decoded = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find('&') {
+        decoded.push_str(&rest[..start]);
+        let entity = &rest[start..];
+        let Some(end) = entity.find(';') else {
+            decoded.push_str(entity);
+            return decoded;
+        };
+        let name = &entity[1..end];
+        let ch = match name {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => name
+                .strip_prefix("#x")
+                .or_else(|| name.strip_prefix("#X"))
+                .and_then(|digits| u32::from_str_radix(digits, 16).ok())
+                .and_then(char::from_u32)
+                .or_else(|| {
+                    name.strip_prefix('#')
+                        .and_then(|digits| digits.parse::<u32>().ok())
+                        .and_then(char::from_u32)
+                }),
+        };
+        if let Some(ch) = ch {
+            decoded.push(ch);
+        } else {
+            decoded.push_str(&entity[..=end]);
+        }
+        rest = &entity[end + 1..];
+    }
+    decoded.push_str(rest);
+    decoded
+}
+
 fn safe_url(raw: &str) -> Option<String> {
-    let value = raw.trim().trim_start_matches('\u{feff}');
+    let decoded = decode_xml_text(raw);
+    let value = decoded.trim().trim_start_matches('\u{feff}');
     if value.is_empty() || value.len() > 8192 || value.chars().any(|ch| ch.is_control()) {
         return None;
     }
@@ -197,7 +240,7 @@ fn attr(block: &str, key: &str) -> Option<String> {
     let start = block.find(&pattern)?;
     let rest = &block[start + pattern.len()..];
     let end = rest.find('"')?;
-    Some(rest[..end].to_string())
+    Some(decode_xml_text(&rest[..end]))
 }
 
 fn tag_text(block: &str, tag: &str) -> Option<String> {
@@ -206,7 +249,7 @@ fn tag_text(block: &str, tag: &str) -> Option<String> {
     let lower = block.to_ascii_lowercase();
     let start = lower.find(&open.to_ascii_lowercase())? + open.len();
     let end = lower[start..].find(&close.to_ascii_lowercase())? + start;
-    Some(block[start..end].trim().to_string())
+    Some(decode_xml_text(block[start..end].trim()))
 }
 
 fn sanitize(name: &str) -> String {
@@ -293,6 +336,18 @@ mod tests {
         .unwrap();
         assert_eq!(files[0].url, "https://cdn.test/File.bin");
         assert_eq!(files[0].mirrors, vec!["https://cdn.test/file.bin"]);
+    }
+
+    #[test]
+    fn decodes_xml_entities_in_signed_urls() {
+        let files = parse_metalink(
+            r#"<metalink><file name="signed.bin"><url priority="&#49;">https://cdn.test/file.bin?token=a&amp;part=1&#38;hex=&#x32;</url></file></metalink>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            files[0].url,
+            "https://cdn.test/file.bin?token=a&part=1&hex=2"
+        );
     }
 
     #[test]
