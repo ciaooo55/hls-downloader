@@ -74,7 +74,9 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
                 }
                 "-u" | "--user" => {
                     if !value.contains(':') {
-                        return Err("cURL -u/--user 必须包含 user:password；导入器无法交互询问密码".into());
+                        return Err(
+                            "cURL -u/--user 必须包含 user:password；导入器无法交互询问密码".into(),
+                        );
                     }
                     headers.insert("authorization".into(), basic_auth(&value));
                 }
@@ -256,10 +258,8 @@ mod tests {
 
     #[test]
     fn rejects_data_urlencode_instead_of_sending_wrong_body() {
-        let error = parse_curl_command(
-            r#"curl --data-urlencode "q=a b" https://cdn.test/form"#,
-        )
-        .unwrap_err();
+        let error = parse_curl_command(r#"curl --data-urlencode "q=a b" https://cdn.test/form"#)
+            .unwrap_err();
         assert!(error.contains("--data-urlencode"));
     }
 
