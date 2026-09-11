@@ -13,6 +13,7 @@ describe('extensionless manifest sniffing', () => {
   it('recognizes HLS and namespaced DASH prefixes', () => {
     expect(detectManifestKind('\ufeff  #EXTM3U\n#EXT-X-TARGETDURATION:2')).toBe('hls')
     expect(detectManifestKind('<mpd:MPD xmlns:mpd="urn:mpeg:dash:schema:mpd:2011">')).toBe('dash')
+    expect(detectManifestKind('\ufeff \n<?xml version="1.0" encoding="UTF-8"?>\n<MPD type="static">')).toBe('dash')
     expect(detectManifestKind('<html>login</html>')).toBeNull()
     expect(manifestMimeType('hls')).toBe('application/vnd.apple.mpegurl')
     expect(manifestMimeType('dash')).toBe('application/dash+xml')

@@ -72,8 +72,9 @@ export function shouldReportMediaResponse(url: string, mimeType = ''): boolean {
 }
 
 export function detectManifestKind(prefix: string): ManifestKind | null {
-  const value = String(prefix || '').replace(/^\s*\uFEFF/, '').trimStart()
+  let value = String(prefix || '').replace(/^\s*\uFEFF/, '').trimStart()
   if (value.startsWith('#EXTM3U')) return 'hls'
+  value = value.replace(/^<\?xml(?:\s+[^?]*?)?\?>\s*/i, '')
   if (/^<(?:[A-Za-z_][\w.-]*:)?MPD(?:\s|>)/i.test(value)) return 'dash'
   return null
 }
