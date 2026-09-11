@@ -398,10 +398,9 @@ mod tests {
         assert_eq!(at.password, "p@ss");
         assert_eq!(at.host, "files.example");
         assert_eq!(at.port, 2121);
-        let encoded = parse_ftp_url(
-            "ftp://alice%40team:p%3Ass@files.example/%E6%B5%8B%E8%AF%95/a%20b.bin",
-        )
-        .unwrap();
+        let encoded =
+            parse_ftp_url("ftp://alice%40team:p%3Ass@files.example/%E6%B5%8B%E8%AF%95/a%20b.bin")
+                .unwrap();
         assert_eq!(encoded.user, "alice@team");
         assert_eq!(encoded.password, "p:ss");
         assert_eq!(encoded.path, "/测试/a b.bin");
