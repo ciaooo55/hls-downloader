@@ -16,7 +16,7 @@ class FakePort implements NativePortLike {
 }
 
 describe('native resource title bounds', () => {
-  it('keeps normal titles unchanged and never posts a dangling surrogate at the bound', async () => {
+  it('keeps scalar-safe titles unchanged and sanitizes invalid or truncated surrogates', async () => {
     const port = new FakePort()
     const bridge = new NativeBridge(() => port)
 
@@ -26,12 +26,20 @@ describe('native resource title bounds', () => {
     port.onMessage.emit({ ok: true, __request_id: port.posted[0].__request_id })
     await normal
 
+    const malformedTitle = `before\uD800middle\uDC00after`
+    const malformed = bridge.request({ op: 'download', resource: { title: malformedTitle } })
+    const sanitizedTitle = String((port.posted[1].resource as Record<string, unknown>).title)
+    expect(sanitizedTitle).toBe('before�middle�after')
+    expect(sanitizedTitle).not.toMatch(/[\uD800-\uDFFF]/)
+    port.onMessage.emit({ ok: true, __request_id: port.posted[1].__request_id })
+    await malformed
+
     const oversizedTitle = `${'a'.repeat(4095)}😀`
     const bounded = bridge.request({ op: 'download', resource: { title: oversizedTitle } })
-    const postedTitle = String((port.posted[1].resource as Record<string, unknown>).title)
+    const postedTitle = String((port.posted[2].resource as Record<string, unknown>).title)
     expect(postedTitle).toBe('a'.repeat(4095))
     expect(postedTitle).not.toMatch(/[\uD800-\uDBFF]$/)
-    port.onMessage.emit({ ok: true, __request_id: port.posted[1].__request_id })
+    port.onMessage.emit({ ok: true, __request_id: port.posted[2].__request_id })
     await bounded
 
     bridge.close()

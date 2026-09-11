@@ -1,20 +1,36 @@
 const MAX_NATIVE_RESOURCE_TITLE_CODE_UNITS = 4096
 
 function boundedNativeResourceTitle(value: string): string {
-  const truncated = value.slice(0, MAX_NATIVE_RESOURCE_TITLE_CODE_UNITS)
-  return /[\uD800-\uDBFF]$/.test(truncated) ? truncated.slice(0, -1) : truncated
+  let truncated = value.slice(0, MAX_NATIVE_RESOURCE_TITLE_CODE_UNITS)
+  if (/[\uD800-\uDBFF]$/.test(truncated)) truncated = truncated.slice(0, -1)
+  let result = ''
+  for (let index = 0; index < truncated.length; index += 1) {
+    const code = truncated.charCodeAt(index)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = truncated.charCodeAt(index + 1)
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        result += truncated[index] + truncated[index + 1]
+        index += 1
+      } else result += '\uFFFD'
+      continue
+    }
+    result += code >= 0xdc00 && code <= 0xdfff ? '\uFFFD' : truncated[index]
+  }
+  return result
 }
 
 function nativeMessageWithBoundedResourceTitle(message: Record<string, unknown>): Record<string, unknown> {
   const resource = message.resource
   if (!resource || typeof resource !== 'object' || Array.isArray(resource)) return message
   const record = resource as Record<string, unknown>
-  if (typeof record.title !== 'string' || record.title.length <= MAX_NATIVE_RESOURCE_TITLE_CODE_UNITS) return message
+  if (typeof record.title !== 'string') return message
+  const title = boundedNativeResourceTitle(record.title)
+  if (title === record.title) return message
   return {
     ...message,
     resource: {
       ...record,
-      title: boundedNativeResourceTitle(record.title),
+      title,
     },
   }
 }
