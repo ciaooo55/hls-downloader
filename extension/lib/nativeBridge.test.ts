@@ -180,4 +180,28 @@ describe('persistent native bridge', () => {
     bridge.close()
     vi.useRealTimers()
   })
+
+  it('gives a replacement native port a fresh timeout after postMessage throws', async () => {
+    vi.useFakeTimers()
+    const failedPort = new FakePort()
+    failedPort.postMessage = vi.fn(() => { throw new Error('host exited') })
+    const replacement = new FakePort()
+    const bridge = new NativeBridge(vi.fn()
+      .mockReturnValueOnce(failedPort)
+      .mockReturnValueOnce(replacement))
+
+    const request = bridge.request({ op: 'ping' }, 100, 1)
+    await vi.advanceTimersByTimeAsync(81)
+    expect(replacement.posted).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(20)
+    expect(replacement.disconnect).not.toHaveBeenCalled()
+
+    replacement.onMessage.emit({
+      ok: true,
+      __request_id: replacement.posted[0].__request_id,
+    })
+    await expect(request).resolves.toMatchObject({ ok: true })
+    bridge.close()
+    vi.useRealTimers()
+  })
 })
