@@ -63,6 +63,7 @@ const REPLAYABLE_POST_CONTENT_TYPES = new Set([
   'application/json',
   'application/x-www-form-urlencoded',
 ])
+const CROSS_ORIGIN_REDIRECT_CONTEXT_HEADERS = new Set(['referer', 'origin', 'user-agent'])
 const ADAPTIVE_MANIFEST_PATH = /\.(?:m3u8?|mpd)$/i
 const VOLATILE_MEDIA_QUERY = /^(?:token|auth|authorization|signature|sig|expires?|expiry|policy|key-pair-id|hdnea|hmac|jwt|session|sessionid|access[_-]?key|x-amz-.+)$/i
 
@@ -246,13 +247,20 @@ export class RequestChainStore {
     chain.urls = appendUrl(chain.urls, details.redirectUrl)
     if (details.redirectUrl) {
       // Chromium keeps the same request id across redirects. Once finalUrl is
-      // moved to the target, neither the previous response nor its replay
-      // identity belongs to that target. The target's own onBeforeRequest,
-      // onSendHeaders and onHeadersReceived events repopulate these fields.
-      // Failing closed here also prevents cross-origin Authorization/body data
-      // from being attached to a target when browser APIs intentionally strip it.
+      // moved to the target, the previous response no longer proves anything
+      // about that target. A cross-origin target may keep browser context such
+      // as Referer/Origin/UA, but it must never inherit Authorization, custom
+      // bearer headers or a POST body from the source hop before its own
+      // request events confirm those values.
+      const sourceOrigin = httpOrigin(details.url)
+      const targetOrigin = httpOrigin(details.redirectUrl)
+      if (!sourceOrigin || !targetOrigin || sourceOrigin !== targetOrigin) {
+        chain.requestHeaders = Object.fromEntries(
+          Object.entries(chain.requestHeaders)
+            .filter(([name]) => CROSS_ORIGIN_REDIRECT_CONTEXT_HEADERS.has(name)),
+        )
+      }
       chain.finalUrl = details.redirectUrl
-      chain.requestHeaders = {}
       chain.requestBody = ''
       chain.responseHeaders = {}
       chain.statusCode = 0
