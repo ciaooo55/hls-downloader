@@ -520,7 +520,6 @@ impl NativeHostSession {
     }
 
     fn media_push(&mut self, message: &Value) -> Result<Value, String> {
-        let _ = self.core.handle(CoreCommand::OpenMain);
         let kind = message
             .get("kind")
             .and_then(Value::as_str)
@@ -558,19 +557,34 @@ impl NativeHostSession {
             location: String::new(),
             created_at_ms: unix_time_ms(),
         };
-        self.core.handle(CoreCommand::RequestMediaPush {
+        let events = self.core.handle(CoreCommand::RequestMediaPush {
             request: request.clone(),
         })?;
-        if let Some(root) = crate::install_root() {
-            let _ = crate::spawn_desktop_ui(&root);
+        let outcome = events
+            .into_iter()
+            .find_map(|event| match event.event {
+                CoreEvent::MediaPushRequested { request: outcome }
+                | CoreEvent::MediaPushResolved { request: outcome }
+                    if outcome.id == request.id =>
+                {
+                    Some(outcome)
+                }
+                _ => None,
+            })
+            .unwrap_or(request);
+        if outcome.status == "pending" {
+            let _ = self.core.handle(CoreCommand::OpenMain);
+            if let Some(root) = crate::install_root() {
+                let _ = crate::spawn_desktop_ui(&root);
+            }
         }
         Ok(json!({
             "ok": true,
-            "id": request.id,
-            "kind": request.push_kind,
-            "status": request.status,
-            "message": request.message,
-            "location": request.location,
+            "id": outcome.id,
+            "kind": outcome.push_kind,
+            "status": outcome.status,
+            "message": outcome.message,
+            "location": outcome.location,
         }))
     }
 
@@ -1264,6 +1278,62 @@ mod tests {
             .unwrap();
         assert_eq!(status["ok"], true);
         assert_eq!(status["status"], "pending");
+    }
+
+    #[test]
+    fn media_push_returns_core_overlap_rejection_without_reopening_ui() {
+        let mut session = NativeHostSession::in_memory().unwrap();
+        let first = session
+            .dispatch(&json!({
+                "op": "media_push",
+                "kind": "tvbox",
+                "resource": {
+                    "url": "https://cdn.test/first.m3u8",
+                    "title": "First"
+                }
+            }))
+            .unwrap();
+        assert_eq!(first["status"], "pending");
+
+        let sequence_before_second = session.core.local().latest_sequence();
+        let second = session
+            .dispatch(&json!({
+                "op": "media_push",
+                "kind": "cast",
+                "resource": {
+                    "url": "https://cdn.test/second.m3u8",
+                    "title": "Second"
+                }
+            }))
+            .unwrap();
+        let second_id = second["id"].as_str().unwrap().to_string();
+        assert_eq!(second["ok"], true);
+        assert_eq!(second["status"], "failed");
+        assert!(second["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("已有投送请求")));
+
+        let events = session
+            .core
+            .local()
+            .events_after(sequence_before_second, 8);
+        assert!(events.iter().any(|event| matches!(
+            &event.event,
+            CoreEvent::MediaPushResolved { request }
+                if request.id == second_id && request.status == "failed"
+        )));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(&event.event, CoreEvent::UiShow { .. })));
+
+        let persisted = session
+            .dispatch(&json!({
+                "op": "media_push_status",
+                "request_id": second_id
+            }))
+            .unwrap();
+        assert_eq!(persisted["ok"], true);
+        assert_eq!(persisted["status"], "failed");
     }
 
     #[test]
