@@ -122,6 +122,11 @@ fn migrate_from_5x_with_batch(
 ) -> Result<(u32, bool), String> {
     let batch_size = batch_size.max(1);
     let mut imported = 0u32;
+    let after_rowid = core
+        .store()
+        .setting_string(MIGRATION_CURSOR_KEY, "")?
+        .parse::<i64>()
+        .unwrap_or(i64::MIN);
     let mut default_download_dir = String::new();
     if config_path.exists() {
         let text = std::fs::read_to_string(config_path).map_err(|error| error.to_string())?;
@@ -133,7 +138,11 @@ fn migrate_from_5x_with_batch(
                 config_path.display()
             ));
         }
-        import_settings(core, &value)?;
+        // Legacy settings seed the new profile only once. Later task batches
+        // must not overwrite settings the user has already changed in v7.
+        if after_rowid == i64::MIN {
+            import_settings(core, &value)?;
+        }
         default_download_dir = value
             .get("download_dir")
             .and_then(Value::as_str)
@@ -153,11 +162,6 @@ fn migrate_from_5x_with_batch(
         .into_iter()
         .filter_map(|task| core.task_spec(&task.task_id).map(|spec| spec.url.clone()))
         .collect();
-    let after_rowid = core
-        .store()
-        .setting_string(MIGRATION_CURSOR_KEY, "")?
-        .parse::<i64>()
-        .unwrap_or(i64::MIN);
     let loaded = load_legacy_tasks(&connection, after_rowid, batch_size.saturating_add(1))?;
     // One extra row beyond the batch proves more rows remain. The persisted
     // rowid cursor makes the next startup continue after the processed batch.
@@ -1014,7 +1018,8 @@ mod tests {
                 )
                 .unwrap();
         }
-        let config = dir.join("missing.json");
+        let config = dir.join("config.json");
+        std::fs::write(&config, r#"{"proxy_url":"http://legacy.proxy:8080"}"#).unwrap();
         let mut core = PersistentCore::in_memory().unwrap();
 
         assert_eq!(
@@ -1023,15 +1028,30 @@ mod tests {
         );
         assert_eq!(core.tasks().len(), 2);
         assert_eq!(
+            core.store().setting_string("proxy_url", "").unwrap(),
+            "http://legacy.proxy:8080"
+        );
+        core.store_mut()
+            .set_setting("proxy_url", "http://v7.proxy:9090")
+            .unwrap();
+        assert_eq!(
             migrate_from_5x_with_batch(&mut core, &config, &db, 2).unwrap(),
             (2, false)
         );
         assert_eq!(core.tasks().len(), 4);
         assert_eq!(
+            core.store().setting_string("proxy_url", "").unwrap(),
+            "http://v7.proxy:9090"
+        );
+        assert_eq!(
             migrate_from_5x_with_batch(&mut core, &config, &db, 2).unwrap(),
             (1, true)
         );
         assert_eq!(core.tasks().len(), 5);
+        assert_eq!(
+            core.store().setting_string("proxy_url", "").unwrap(),
+            "http://v7.proxy:9090"
+        );
         let mut urls = core
             .tasks()
             .into_iter()
