@@ -25,7 +25,15 @@ jobs:
           if ("${{ github.ref_name }}" -ne "网页版gpt") { throw "ref guard failed" }
 
       - name: Apply FTP cancellation patch
-        run: python scripts/branch-ftp-cancel-fix.py
+        shell: pwsh
+        run: |
+          python scripts/branch-ftp-cancel-fix.py
+          $path = "native_shell/src/ftp_engine.rs"
+          $text = Get-Content $path -Raw
+          $old = '        assert_eq!(error, action);'
+          $new = '        assert_eq!(error, if action == "pause" { "paused" } else { "canceled" });'
+          if (-not $text.Contains($old)) { throw "FTP regression assertion anchor missing" }
+          Set-Content -Path $path -Value ($text.Replace($old, $new)) -Encoding utf8 -NoNewline
 
       - name: Format Rust
         run: cargo fmt --manifest-path native_shell/Cargo.toml
