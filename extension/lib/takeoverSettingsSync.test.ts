@@ -51,6 +51,30 @@ describe('offline-safe takeover settings', () => {
     expect(storage.values.enabled).toBe(false)
   })
 
+  it('retains a protocol-rejected change without spinning until a later retry succeeds', async () => {
+    const storage = new MemoryStorage()
+    const desktop = vi.fn().mockResolvedValue({ ok: false, error: 'desktop rejected settings' })
+    const sync = new TakeoverSettingsSync(storage, desktop, () => 'rejected-change')
+
+    await sync.queue({ enabled: false, minimumBytes: 8192 })
+    await sync.sync()
+
+    expect(desktop).toHaveBeenCalledTimes(1)
+    expect(storage.values[PENDING_TAKEOVER_SETTINGS_KEY]).toEqual({
+      id: 'rejected-change',
+      enabled: false,
+      minimumBytes: 8192,
+    })
+    expect(storage.values.enabled).toBe(false)
+    expect(storage.values.minimumBytes).toBe(8192)
+
+    desktop.mockResolvedValue({ ok: true, takeover_enabled: false, takeover_minimum_bytes: 8192 })
+    await sync.sync()
+
+    expect(desktop).toHaveBeenCalledTimes(2)
+    expect(storage.values[PENDING_TAKEOVER_SETTINGS_KEY]).toBeUndefined()
+  })
+
   it('merges concurrent partial updates inside one serialized read-modify-write boundary', async () => {
     const storage = new MemoryStorage()
     const never = new Promise(() => undefined)
