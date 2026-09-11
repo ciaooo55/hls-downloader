@@ -21,9 +21,14 @@ export function contextMenuCapabilities(target: ContextMenuTarget): ContextMenuC
     // a direct download/cast target.
     return { url, download: false, media: false }
   }
+  const http = /^https?:/i.test(url)
+  const downloadable = http || /^magnet:/i.test(url)
   const mediaContext = target.mediaType === 'video' || target.mediaType === 'audio'
   const kind = classifyResource(url)
-  const media = mediaContext || kind === 'hls' || kind === 'dash' || kind === 'media'
-  const download = mediaContext || /^(?:https?|magnet):/i.test(url)
-  return { url, download, media }
+  // A media element can also expose data:, mediastream:, filesystem: or other
+  // page-local schemes. They are valid browser playback sources but cannot be
+  // replayed by the desktop downloader or a LAN receiver, so the context menu
+  // must not advertise actions that the click handler will later reject.
+  const media = http && (mediaContext || kind === 'hls' || kind === 'dash' || kind === 'media')
+  return { url, download: downloadable, media }
 }
