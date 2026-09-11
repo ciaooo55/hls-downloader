@@ -322,10 +322,7 @@ impl NativeHostSession {
             suppression: None,
         };
         let persistence = self.persist_handoff(&handoff);
-        self.rollback_browser_credential_on_error(
-            persistence,
-            owned_credential_ref.as_deref(),
-        )?;
+        self.rollback_browser_credential_on_error(persistence, owned_credential_ref.as_deref())?;
         if !request_id.is_empty() && request_id.len() <= 160 {
             self.request_ids.insert(request_id.to_string(), id.clone());
         }
