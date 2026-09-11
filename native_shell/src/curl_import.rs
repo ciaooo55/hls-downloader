@@ -73,9 +73,12 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
                     headers.insert("cookie".into(), value);
                 }
                 "-u" | "--user" => {
+                    if !value.contains(':') {
+                        return Err("cURL -u/--user 必须包含 user:password；导入器无法交互询问密码".into());
+                    }
                     headers.insert("authorization".into(), basic_auth(&value));
                 }
-                "-d" | "--data" | "--data-raw" | "--data-binary" | "--data-urlencode" => {
+                "-d" | "--data" | "--data-raw" | "--data-binary" => {
                     if value.starts_with('@') {
                         return Err("不能导入引用本机文件的 cURL 请求体".into());
                     }
@@ -86,6 +89,9 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
                     if method == "GET" {
                         method = "POST".into();
                     }
+                }
+                "--data-urlencode" => {
+                    return Err("暂不支持导入 cURL --data-urlencode；拒绝静默改变请求体编码".into());
                 }
                 _ => {}
             }
@@ -234,6 +240,27 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.method, "POST");
         assert_eq!(parsed.body, "name=daniel&skill=lousy");
+    }
+
+    #[test]
+    fn rejects_user_without_noninteractive_password() {
+        assert!(parse_curl_command("curl -u alice https://cdn.test/private").is_err());
+        let parsed = parse_curl_command("curl -u alice:secret https://cdn.test/private")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            parsed.headers.get("authorization").map(String::as_str),
+            Some("Basic YWxpY2U6c2VjcmV0")
+        );
+    }
+
+    #[test]
+    fn rejects_data_urlencode_instead_of_sending_wrong_body() {
+        let error = parse_curl_command(
+            r#"curl --data-urlencode "q=a b" https://cdn.test/form"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("--data-urlencode"));
     }
 
     #[test]
