@@ -51,6 +51,26 @@ describe('offline-safe takeover settings', () => {
     expect(storage.values.enabled).toBe(false)
   })
 
+  it('merges concurrent partial updates inside one serialized read-modify-write boundary', async () => {
+    const storage = new MemoryStorage()
+    const never = new Promise(() => undefined)
+    const desktop = vi.fn(() => never)
+    let sequence = 0
+    const sync = new TakeoverSettingsSync(storage, desktop, () => `change-${++sequence}`)
+
+    const enabled = sync.queue({ enabled: false })
+    const minimum = sync.queue({ minimumBytes: 4096 })
+    await Promise.all([enabled, minimum])
+
+    expect(storage.values.enabled).toBe(false)
+    expect(storage.values.minimumBytes).toBe(4096)
+    expect(storage.values[PENDING_TAKEOVER_SETTINGS_KEY]).toEqual({
+      id: 'change-2',
+      enabled: false,
+      minimumBytes: 4096,
+    })
+  })
+
   it('never lets a slow older response overwrite a newer click', async () => {
     const storage = new MemoryStorage()
     let releaseFirst!: (value: unknown) => void
