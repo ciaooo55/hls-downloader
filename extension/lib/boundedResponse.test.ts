@@ -20,4 +20,34 @@ describe('bounded response reader', () => {
     expect(await readBoundedResponseText(response, 6)).toBeNull()
     expect(canceled).toBe(true)
   })
+
+  it('preserves split UTF-8 and rejects malformed byte sequences', async () => {
+    const encoded = new TextEncoder().encode('é')
+    const valid = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoded.slice(0, 1))
+        controller.enqueue(encoded.slice(1))
+        controller.close()
+      },
+    })
+    expect(await readBoundedResponseText(new Response(valid), 4)).toBe('é')
+
+    let canceled = false
+    const malformed = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(Uint8Array.of(0x66, 0x6f, 0x6f, 0xff))
+      },
+      cancel() { canceled = true },
+    })
+    expect(await readBoundedResponseText(new Response(malformed), 8)).toBeNull()
+    expect(canceled).toBe(true)
+
+    const truncated = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(Uint8Array.of(0xc3))
+        controller.close()
+      },
+    })
+    expect(await readBoundedResponseText(new Response(truncated), 8)).toBeNull()
+  })
 })

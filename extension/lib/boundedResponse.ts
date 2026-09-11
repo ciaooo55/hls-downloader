@@ -13,14 +13,18 @@ export async function readBoundedResponseText(
     return new TextEncoder().encode(text).byteLength <= limit ? text : null
   }
 
-  const decoder = new TextDecoder()
+  const decoder = new TextDecoder('utf-8', { fatal: true })
   let bytes = 0
   let text = ''
   try {
     while (true) {
       const { done, value } = await reader.read()
       if (done) {
-        text += decoder.decode()
+        try {
+          text += decoder.decode()
+        } catch {
+          return null
+        }
         return text
       }
       bytes += value.byteLength
@@ -28,7 +32,12 @@ export async function readBoundedResponseText(
         await reader.cancel()
         return null
       }
-      text += decoder.decode(value, { stream: true })
+      try {
+        text += decoder.decode(value, { stream: true })
+      } catch {
+        try { await reader.cancel() } catch {}
+        return null
+      }
     }
   } finally {
     reader.releaseLock()
