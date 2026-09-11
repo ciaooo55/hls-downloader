@@ -4,7 +4,8 @@
 
 - Active development branch: `网页版gpt`.
 - `main` remains a read-only integration baseline unless the user explicitly asks otherwise.
-- Proxy route identity hardening landed on the branch in `e38bba5e7adb05404e36e3fa7f9cf75021354c6e` and passed focused Rust format/check/regression validation before commit; temporary repair tooling was removed in `92c1fd5cfa17e8fab5c0676caea6cdc3c75e9dd4`.
+- Proxy route identity hardening landed in `e38bba5e7adb05404e36e3fa7f9cf75021354c6e` and passed focused Rust format/check/regression validation before commit.
+- Windows POST body forwarding hardening landed in `9b6dae814d59d0b3a128084cc5dac18949c72b2d`; focused validation covered curl method/body arguments and a real WinHTTP POST to a local receiver.
 - Canonical product status remains 27/28 verified with `browser.media_push_device_selection` partial and `release_ready=false`.
 
 ## Development rules
@@ -29,7 +30,9 @@ Existing automated evidence covers Native Host request IDs, Core persistence/res
 
 ### P0 — runtime correctness
 
-Continue auditing task lifecycle, persistence, resume, cancellation, output publication, credentials, protocol boundaries, and browser handoff ownership. Only change behavior when a concrete failure is identified.
+Continue auditing task lifecycle, persistence, resume, cancellation, output publication, credentials, protocol boundaries, browser handoff ownership, request identity, and transport parity. Only change behavior when a concrete failure is identified.
+
+Current reviewed code-level follow-up: duplicate-reuse request identity. Same-URL reuse must not silently retain stale method, credentials/replay context, headers, or request body. Any change should stay focused in `download_worker.rs` and ship with exact request-identity regressions.
 
 ### P1 — browser takeover reliability
 
@@ -37,7 +40,7 @@ Reduce false takeover, preserve exact request identity, keep short-lived URL rep
 
 ### P1 — protocol/download reliability
 
-Prioritize real server/CDN failure modes: range inconsistency, redirects, expired authorization, HLS/DASH refresh, disk/output failures, restart recovery, and proxy route correctness across direct/system/manual policies.
+Prioritize real server/CDN failure modes: range inconsistency, redirects, expired authorization, HLS/DASH refresh, disk/output failures, restart recovery, direct/system/manual proxy correctness, and method/body parity across native and fallback transports.
 
 ### P1 — user-facing failure clarity
 
