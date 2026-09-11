@@ -47,6 +47,7 @@ function normalizePending(value: unknown): PendingTakeoverSettings | null {
 export class TakeoverSettingsSync {
   private syncing: Promise<void> | null = null
   private storageWrite: Promise<void> = Promise.resolve()
+  private syncRequested = false
 
   constructor(
     private readonly storage: TakeoverSettingsStorageArea,
@@ -108,12 +109,19 @@ export class TakeoverSettingsSync {
   }
 
   private triggerSync(): void {
-    // One explicit queue/ping event gets one sync attempt. A protocol or
-    // transport failure must leave the durable pending value for the next
-    // heartbeat instead of spinning in a tight retry loop while the desktop is
-    // rejecting the request. syncLoop already consumes a newer pending value
-    // that arrives while an older acknowledgement is in flight.
-    void this.sync()
+    if (this.syncing) {
+      // A newer queue/ping arrived while an older attempt was in flight. One
+      // follow-up pass is enough: syncLoop already consumes any newer pending
+      // record it observes before the current acknowledgement settles.
+      this.syncRequested = true
+      return
+    }
+    const active = this.sync()
+    void active.finally(() => {
+      if (!this.syncRequested) return
+      this.syncRequested = false
+      this.triggerSync()
+    })
   }
 
   private async syncLoop(): Promise<void> {
