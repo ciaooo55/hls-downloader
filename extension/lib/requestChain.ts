@@ -53,6 +53,8 @@ export interface RequestChain {
 }
 
 const MAX_REPLAY_BODY_BYTES = 128 * 1024
+const MAX_FORM_FIELDS = 128
+const MAX_FORM_VALUES_PER_FIELD = 128
 const MAX_REQUEST_HEADERS = 64
 const MAX_HEADER_NAME_LENGTH = 256
 const MAX_HEADER_VALUE_LENGTH = 16 * 1024
@@ -112,13 +114,14 @@ export function captureReplayableRequestBody(body?: RequestBodyLike): string {
   }
   if (raw.length) return ''
   if (!body.formData) return ''
+  const entries = Object.entries(body.formData)
+  if (entries.length > MAX_FORM_FIELDS) return ''
   const params = new URLSearchParams()
-  let fieldCount = 0
   let totalChars = 0
-  for (const [name, values] of Object.entries(body.formData).slice(0, 128)) {
-    if (!Array.isArray(values)) return ''
-    if (++fieldCount > 128 || name.length > MAX_HEADER_NAME_LENGTH) return ''
-    for (const value of values.slice(0, 128)) {
+  for (const [name, values] of entries) {
+    if (!Array.isArray(values) || values.length > MAX_FORM_VALUES_PER_FIELD) return ''
+    if (name.length > MAX_HEADER_NAME_LENGTH) return ''
+    for (const value of values) {
       const stringValue = String(value)
       totalChars += name.length + stringValue.length
       if (totalChars > MAX_REPLAY_BODY_BYTES * 2) return ''
