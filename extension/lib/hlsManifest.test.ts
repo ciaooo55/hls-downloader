@@ -91,6 +91,24 @@ describe('HLS metadata', () => {
     expect(resourceQuality('https://cdn.test/path/1080p/video.m3u8')).toBe('1080p')
   })
 
+  it('does not expose an infinite duration when finite EXTINF values overflow in aggregate', () => {
+    const huge = '9'.repeat(308)
+    const info = parseHlsManifest(
+      `#EXTM3U\n#EXTINF:${huge},\na.ts\n#EXTINF:${huge},\nb.ts\n#EXT-X-ENDLIST\n`,
+      'https://cdn.test/overflow.m3u8',
+    )
+
+    expect(Number.isFinite(Number(huge))).toBe(true)
+    expect(info).toMatchObject({
+      duration: undefined,
+      isLive: false,
+      playbackUrls: [
+        'https://cdn.test/a.ts',
+        'https://cdn.test/b.ts',
+      ],
+    })
+  })
+
   it('does not synthesize duration from invalid EXTINF values', () => {
     const infinite = '#EXTM3U\n#EXTINF:Infinity,\na.ts\n#EXT-X-ENDLIST\n'
     const negative = '#EXTM3U\n#EXTINF:5,\na.ts\n#EXTINF:-1,\nb.ts\n#EXT-X-ENDLIST\n'

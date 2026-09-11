@@ -78,8 +78,11 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
       const segmentDuration = Number(line.slice(8).split(',', 1)[0])
       const uri = followingUri(lines, index, candidate =>
         candidate.startsWith('#EXTINF:') || candidate === '#EXT-X-ENDLIST')
-      if (Number.isFinite(segmentDuration) && segmentDuration >= 0 && uri) duration += segmentDuration
-      else completeDuration = false
+      if (Number.isFinite(segmentDuration) && segmentDuration >= 0 && uri) {
+        const nextDuration = duration + segmentDuration
+        if (Number.isFinite(nextDuration)) duration = nextDuration
+        else completeDuration = false
+      } else completeDuration = false
       completeSegments += 1
       if (uri) rememberPlaybackUrl(uri)
     }
