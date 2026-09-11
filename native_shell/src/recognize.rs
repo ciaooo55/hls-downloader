@@ -11,13 +11,13 @@ pub fn classify_url(url: &str) -> ResourceKind {
         ResourceKind::Sftp
     } else if lower.starts_with("ftp://") || lower.starts_with("ftps://") {
         ResourceKind::Ftp
-    } else if path.contains(".m3u8") || lower.contains("vnd.apple.mpegurl") {
+    } else if path.ends_with(".m3u8") || lower.contains("vnd.apple.mpegurl") {
         if path.contains("live") || query_marks_live(&lower) {
             ResourceKind::Live
         } else {
             ResourceKind::Hls
         }
-    } else if path.contains(".mpd") || lower.contains("dash+xml") {
+    } else if path.ends_with(".mpd") || lower.contains("dash+xml") {
         ResourceKind::Dash
     } else {
         ResourceKind::File
@@ -34,8 +34,8 @@ fn query_marks_live(url: &str) -> bool {
         if !key.eq_ignore_ascii_case("live") {
             return false;
         }
-        let value = value.trim();
-        value.is_empty() || !matches!(value, "0" | "false" | "no" | "off")
+        let value = value.trim().to_ascii_lowercase();
+        value.is_empty() || !matches!(value.as_str(), "0" | "false" | "no" | "off")
     })
 }
 
@@ -219,6 +219,20 @@ mod tests {
             classify_url("https://cdn/movie.m3u8?live=false"),
             ResourceKind::Hls
         );
+        assert_eq!(
+            classify_url("https://cdn/archive.m3u8.txt"),
+            ResourceKind::File
+        );
+        assert_eq!(
+            classify_url("https://cdn/manifest.mpd.json"),
+            ResourceKind::File
+        );
+        for value in ["FALSE", "False", "NO", "Off"] {
+            assert!(
+                !query_marks_live(&format!("https://cdn/movie.m3u8?live={value}")),
+                "live={value} must remain false"
+            );
+        }
         assert_eq!(
             classify_url("https://cdn/opaque?content_type=application/vnd.apple.mpegurl&live=1"),
             ResourceKind::Live
