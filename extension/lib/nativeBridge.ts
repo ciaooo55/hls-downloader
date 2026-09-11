@@ -170,6 +170,8 @@ export class NativeBridge {
       }, request.timeoutMs)
       port.postMessage(request.message)
     } catch (error) {
+      if (request.timer) clearTimeout(request.timer)
+      request.timer = undefined
       const failedPort = this.port
       this.port = null
       // connectNative() may succeed even though the first postMessage throws
