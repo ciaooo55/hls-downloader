@@ -406,11 +406,7 @@ mod tests {
             );
         }
         assert_eq!(html_unescape("&amp;#38;"), "&#38;");
-        assert!(resolve(
-            "https://site.test/page",
-            "&#xFEFF;javascript:alert(1).mp4"
-        )
-        .is_none());
+        assert!(resolve("https://site.test/page", "&#xFEFF;javascript:alert(1).mp4").is_none());
     }
 
     #[test]
