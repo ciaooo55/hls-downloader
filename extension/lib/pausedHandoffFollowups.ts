@@ -112,13 +112,26 @@ export class PausedHandoffFollowUpStore {
     if (this.hydrated) return Promise.resolve()
     if (this.hydration) return this.hydration
     this.hydration = (async () => {
+      const hadLocalFollowUps = this.followUps.length > 0
       try {
         const stored = await this.storage.get(this.key)
-        this.followUps = normalizePausedHandoffFollowUps(stored[this.key], this.now())
-      } catch {
-        // In-memory follow-ups remain available when session storage is unavailable.
-      } finally {
+        const restored = normalizePausedHandoffFollowUps(stored[this.key], this.now())
+        // A previous read may have failed while this live worker collected new
+        // ownership records in memory. Keep those newer local records first so
+        // stale durable rows cannot replace them when storage becomes readable.
+        this.followUps = normalizePausedHandoffFollowUps(
+          [...this.followUps, ...restored],
+          this.now(),
+        )
         this.hydrated = true
+        // Once the unknown durable state has finally been read, it is safe to
+        // publish the merged list and make any in-memory-only records durable.
+        if (hadLocalFollowUps) await this.persist()
+      } catch {
+        // Do not mark hydration complete and, crucially, do not overwrite an
+        // unread durable list with a partial in-memory snapshot. A later alarm
+        // or operation can retry the read while the live records stay usable.
+      } finally {
         this.hydration = null
       }
     })()
@@ -134,7 +147,7 @@ export class PausedHandoffFollowUpStore {
     const record: PausedHandoffFollowUp = { ...input, createdAt: input.createdAt || this.now() }
     this.followUps = [record, ...this.followUps.filter(item => item.handoffId !== record.handoffId)]
       .sort((left, right) => right.createdAt - left.createdAt)
-    await this.persist()
+    if (this.hydrated) await this.persist()
     return record
   }
 
@@ -142,7 +155,7 @@ export class PausedHandoffFollowUpStore {
     await this.hydrate()
     if (!this.followUps.some(item => item.handoffId === handoffId)) return
     this.followUps = this.followUps.filter(item => item.handoffId !== handoffId)
-    await this.persist()
+    if (this.hydrated) await this.persist()
   }
 
   private async persist(): Promise<void> {
