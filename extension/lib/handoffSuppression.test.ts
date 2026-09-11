@@ -12,6 +12,15 @@ describe('automatic handoff suppressions', () => {
     expect(isHandoffSuppressed(rules, 'https://cdn.example.test/video.m3u8', 'hls')).toBe(false)
   })
 
+  it('normalizes a fully-qualified trailing dot consistently on storage and page URLs', () => {
+    const rules = normalizeHandoffSuppressions([
+      { host: 'Video.Example.Test.', kind: 'media' },
+    ])
+
+    expect(rules).toEqual([{ host: 'video.example.test', kind: 'media' }])
+    expect(isHandoffSuppressed(rules, 'https://video.example.test./watch/42', 'media')).toBe(true)
+  })
+
   it('drops malformed and duplicate persisted rules', () => {
     expect(normalizeHandoffSuppressions([
       { host: 'Video.Example.Test', kind: 'hls' },
