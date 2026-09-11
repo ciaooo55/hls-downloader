@@ -1,0 +1,397 @@
+name: Branch proxy route fix v5
+
+on:
+  push:
+    branches:
+      - "网页版gpt"
+    paths:
+      - ".github/workflows/branch-proxy-route-fix-v5.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: "网页版gpt"
+
+      - name: Guard target branch
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_name }}" -ne "网页版gpt") { throw "ref guard failed" }
+
+      - name: Patch proxy routing directly
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          # net_policy: preserve route identity all the way to transport selection.
+          p = Path("native_shell/src/net_policy.rs")
+          text = p.read_text(encoding="utf-8")
+          old = '''pub fn effective_proxy(
+              mode: &str,
+              configured: &str,
+              bypass: &str,
+              url: &str,
+              spec_proxy: &str,
+          ) -> String {
+              if spec_proxy == DIRECT_PROXY_SENTINEL {
+                  return String::new();
+              }
+              let (host, _) = url_host_port(url);
+              if host_bypassed(&host, bypass) {
+                  return String::new();
+              }
+              match mode.trim().to_ascii_lowercase().as_str() {
+                  "direct" => String::new(),
+                  _ => {
+                      if !spec_proxy.trim().is_empty() {
+                          spec_proxy.trim().to_string()
+                      } else {
+                          configured.trim().to_string()
+                      }
+                  }
+              }
+          }
+
+          pub const DIRECT_PROXY_SENTINEL: &str = "hls-downloader://direct-proxy";
+          '''
+          new = '''pub const DIRECT_PROXY_SENTINEL: &str = "hls-downloader://direct-proxy";
+          pub const SYSTEM_PROXY_SENTINEL: &str = "hls-downloader://system-proxy";
+
+          pub fn proxy_route_sentinel(proxy: &str) -> bool {
+              matches!(proxy.trim(), DIRECT_PROXY_SENTINEL | SYSTEM_PROXY_SENTINEL)
+          }
+
+          pub fn effective_proxy(
+              mode: &str,
+              configured: &str,
+              bypass: &str,
+              url: &str,
+              spec_proxy: &str,
+          ) -> String {
+              let (host, _) = url_host_port(url);
+              if host_bypassed(&host, bypass) {
+                  return DIRECT_PROXY_SENTINEL.into();
+              }
+              let spec_proxy = spec_proxy.trim();
+              if proxy_route_sentinel(spec_proxy) || !spec_proxy.is_empty() {
+                  return spec_proxy.to_string();
+              }
+              match mode.trim().to_ascii_lowercase().as_str() {
+                  "direct" => DIRECT_PROXY_SENTINEL.into(),
+                  "manual" => configured.trim().to_string(),
+                  _ => SYSTEM_PROXY_SENTINEL.into(),
+              }
+          }
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f"net_policy core anchor mismatch: {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          start = text.index("    #[test]\n    fn weekday_and_proxy_bypass()")
+          end = text.index("\n    #[test]\n    fn allowed_hosts_support_exact_and_subdomain_patterns()", start)
+          replacement = '''    #[test]
+              fn weekday_and_proxy_bypass() {
+                  assert!(weekday_allowed_at("", 3));
+                  assert!(weekday_allowed_at("1,2,3,4,5,6,7", 7));
+                  assert!(!weekday_allowed_at("1,2,3,4,5", 6));
+                  assert!(weekday_allowed_at("6,7", 7));
+                  assert!(host_bypassed("intranet", "<local>"));
+                  assert!(host_bypassed("cdn.example.test", "example.test"));
+                  assert!(!host_bypassed("cdn.example.test", "other.test"));
+                  assert_eq!(
+                      effective_proxy("direct", "http://127.0.0.1:9", "", "https://cdn.test/a", ""),
+                      DIRECT_PROXY_SENTINEL
+                  );
+                  for url in [
+                      "https://cdn.test/a",
+                      "https://cdn.test:8443/a",
+                      "https://user:secret@cdn.test/a",
+                  ] {
+                      assert_eq!(
+                          effective_proxy("manual", "http://127.0.0.1:9", "cdn.test", url, ""),
+                          DIRECT_PROXY_SENTINEL
+                      );
+                  }
+                  assert_eq!(
+                      effective_proxy("manual", "http://127.0.0.1:9", "", "https://cdn.test/a", ""),
+                      "http://127.0.0.1:9"
+                  );
+                  assert_eq!(
+                      effective_proxy("system", "http://127.0.0.1:9", "", "https://cdn.test/a", ""),
+                      SYSTEM_PROXY_SENTINEL
+                  );
+                  assert_eq!(
+                      effective_proxy(
+                          "direct",
+                          "http://127.0.0.1:9",
+                          "",
+                          "https://cdn.test/a",
+                          SYSTEM_PROXY_SENTINEL,
+                      ),
+                      SYSTEM_PROXY_SENTINEL
+                  );
+                  assert_eq!(
+                      effective_proxy(
+                          "direct",
+                          "http://127.0.0.1:9",
+                          "",
+                          "https://cdn.test/a",
+                          "http://127.0.0.1:7777",
+                      ),
+                      "http://127.0.0.1:7777"
+                  );
+              }
+          '''
+          text = text[:start] + replacement + text[end:]
+          p.write_text(text, encoding="utf-8")
+
+          # download_worker: global proxy URL must not overwrite explicit route identity.
+          replace_once(
+              "native_shell/src/download_worker.rs",
+              '''        if spec.proxy.trim().is_empty() {
+              spec.proxy = settings.proxy_url.clone();
+          }
+          ''',
+              '',
+          )
+          replace_once(
+              "native_shell/src/download_worker.rs",
+              '''        if spec.proxy != crate::net_policy::DIRECT_PROXY_SENTINEL && !proxy_url_allowed(&spec.proxy)
+          {
+              return Err("代理地址无效".into());
+          }
+          ''',
+              '''        if !crate::net_policy::proxy_route_sentinel(&spec.proxy)
+              && !proxy_url_allowed(&spec.proxy)
+          {
+              return Err("代理地址无效".into());
+          }
+          ''',
+          )
+          replace_once(
+              "native_shell/src/download_worker.rs",
+              '''            match rule.proxy_mode.as_str() {
+                  "direct" => spec.proxy = crate::net_policy::DIRECT_PROXY_SENTINEL.into(),
+                  "manual" if !rule.proxy.trim().is_empty() => spec.proxy = rule.proxy.clone(),
+                  _ if !rule.proxy.trim().is_empty() => spec.proxy = rule.proxy.clone(),
+                  _ => {}
+              }
+          ''',
+              '''            match rule.proxy_mode.as_str() {
+                  "direct" => spec.proxy = crate::net_policy::DIRECT_PROXY_SENTINEL.into(),
+                  "system" => spec.proxy = crate::net_policy::SYSTEM_PROXY_SENTINEL.into(),
+                  "manual" if !rule.proxy.trim().is_empty() => spec.proxy = rule.proxy.clone(),
+                  _ if !rule.proxy.trim().is_empty() => spec.proxy = rule.proxy.clone(),
+                  _ => {}
+              }
+          ''',
+          )
+
+          # http_engine: resolve identity exactly once at the transport boundary.
+          replace_once(
+              "native_shell/src/http_engine.rs",
+              '''fn origin_connect_key(proxy: &str, host: &str, port: u16) -> String {
+              format!("{proxy}|{host}|{port}")
+          }
+          ''',
+              '''#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+          enum ProxyRoute<'a> {
+              Direct,
+              System,
+              Manual(&'a str),
+          }
+
+          fn proxy_route(proxy: &str) -> ProxyRoute<'_> {
+              let proxy = proxy.trim();
+              if proxy.is_empty() || proxy == crate::net_policy::DIRECT_PROXY_SENTINEL {
+                  ProxyRoute::Direct
+              } else if proxy == crate::net_policy::SYSTEM_PROXY_SENTINEL {
+                  ProxyRoute::System
+              } else {
+                  ProxyRoute::Manual(proxy)
+              }
+          }
+
+          #[cfg(test)]
+          #[test]
+          fn proxy_route_identity_distinguishes_transports() {
+              assert_eq!(proxy_route(""), ProxyRoute::Direct);
+              assert_eq!(
+                  proxy_route(crate::net_policy::DIRECT_PROXY_SENTINEL),
+                  ProxyRoute::Direct
+              );
+              assert_eq!(
+                  proxy_route(crate::net_policy::SYSTEM_PROXY_SENTINEL),
+                  ProxyRoute::System
+              );
+              assert_eq!(
+                  proxy_route("http://127.0.0.1:8080"),
+                  ProxyRoute::Manual("http://127.0.0.1:8080")
+              );
+          }
+
+          fn origin_connect_key(proxy: &str, host: &str, port: u16) -> String {
+              format!("{proxy}|{host}|{port}")
+          }
+          ''',
+          )
+          replace_once(
+              "native_shell/src/http_engine.rs",
+              '''        let use_winhttp = parsed.https || !hop.proxy.trim().is_empty();
+          ''',
+              '''        let use_winhttp =
+              parsed.https || !matches!(proxy_route(&hop.proxy), ProxyRoute::Direct);
+          ''',
+          )
+          replace_once(
+              "native_shell/src/http_engine.rs",
+              '''    let exe = curl_impersonate_exe()?;
+              let mut headers = headers_for_request(job, &job.url);
+          ''',
+              '''    let exe = curl_impersonate_exe()?;
+              if matches!(proxy_route(&job.proxy), ProxyRoute::System) {
+                  return None;
+              }
+              let mut headers = headers_for_request(job, &job.url);
+          ''',
+          )
+          replace_once(
+              "native_shell/src/http_engine.rs",
+              '''    if !job.proxy.trim().is_empty() {
+              command.arg("-x").arg(&job.proxy);
+          }
+          ''',
+              '''    match proxy_route(&job.proxy) {
+              ProxyRoute::Direct => {
+                  command.arg("--noproxy").arg("*");
+              }
+              ProxyRoute::System => unreachable!("system route skips curl-impersonate"),
+              ProxyRoute::Manual(proxy) => {
+                  command.arg("-x").arg(proxy);
+              }
+          }
+          ''',
+          )
+          replace_once(
+              "native_shell/src/http_engine.rs",
+              '''    let mut stream = if job.proxy.trim().is_empty() {
+              TcpStream::connect((parsed.host.as_str(), parsed.port))
+                  .map_err(|err| EngineError::Failed(err.to_string()))?
+          } else {
+              return Err(EngineError::Failed("http proxy uses WinHTTP".into()));
+          };
+          ''',
+              '''    let mut stream = match proxy_route(&job.proxy) {
+              ProxyRoute::Direct => TcpStream::connect((parsed.host.as_str(), parsed.port))
+                  .map_err(|err| EngineError::Failed(err.to_string()))?,
+              ProxyRoute::System | ProxyRoute::Manual(_) => {
+                  return Err(EngineError::Failed("http proxy uses WinHTTP".into()));
+              }
+          };
+          ''',
+          )
+          replace_once(
+              "native_shell/src/http_engine.rs",
+              '''    pub struct WinHttpBody {
+          ''',
+              '''    // WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY. windows-sys 0.59 exposes
+              // the ABI as u32; keep the value local so route handling stays explicit.
+              const SYSTEM_PROXY_ACCESS_TYPE: u32 = 4;
+
+              pub struct WinHttpBody {
+          ''',
+          )
+          replace_once(
+              "native_shell/src/http_engine.rs",
+              '''        unsafe {
+              let session = if proxy.is_empty() {
+                  WinHttpOpen(
+                      wide(super::CHROME_UA).as_ptr(),
+                      WINHTTP_ACCESS_TYPE_NO_PROXY,
+                      null_mut(),
+                      null_mut(),
+                      0,
+                  )
+              } else {
+                  WinHttpOpen(
+                      wide(super::CHROME_UA).as_ptr(),
+                      WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+                      wide(proxy).as_ptr(),
+                      wide("").as_ptr(),
+                      0,
+                  )
+              };
+          ''',
+              '''        unsafe {
+              let session = match super::proxy_route(proxy) {
+                  super::ProxyRoute::Direct => WinHttpOpen(
+                      wide(super::CHROME_UA).as_ptr(),
+                      WINHTTP_ACCESS_TYPE_NO_PROXY,
+                      null_mut(),
+                      null_mut(),
+                      0,
+                  ),
+                  super::ProxyRoute::System => WinHttpOpen(
+                      wide(super::CHROME_UA).as_ptr(),
+                      SYSTEM_PROXY_ACCESS_TYPE,
+                      null_mut(),
+                      null_mut(),
+                      0,
+                  ),
+                  super::ProxyRoute::Manual(proxy_url) => WinHttpOpen(
+                      wide(super::CHROME_UA).as_ptr(),
+                      WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+                      wide(proxy_url).as_ptr(),
+                      wide("").as_ptr(),
+                      0,
+                  ),
+              };
+          ''',
+          )
+
+          Path("docs/architecture/proxy-routing.md").write_text(
+              "# Proxy routing identity\n\n"
+              "The v7 core preserves routing intent instead of collapsing routes into an empty proxy string.\n\n"
+              "- `direct` -> `hls-downloader://direct-proxy`\n"
+              "- `system` -> `hls-downloader://system-proxy`\n"
+              "- `manual` -> the configured proxy URL\n"
+              "- bypass matches -> forced `direct`\n\n"
+              "Site rules are resolved before the global route. Explicit site direct/system/manual routes override the global mode; bypass remains the final safety override.\n\n"
+              "At the HTTP transport boundary, direct routes disable proxying, system routes use WinHTTP automatic proxy selection on Windows, and manual routes use the named proxy URL. curl-impersonate is skipped for system routing so it cannot silently bypass the OS proxy decision.\n",
+              encoding="utf-8",
+          )
+
+      - name: Format Rust
+        run: cargo fmt --manifest-path native_shell/Cargo.toml
+
+      - name: Check native shell
+        run: cargo check --manifest-path native_shell/Cargo.toml
+
+      - name: Run proxy route regressions
+        run: |
+          cargo test --manifest-path native_shell/Cargo.toml proxy_route
+          cargo test --manifest-path native_shell/Cargo.toml weekday_and_proxy_bypass
+
+      - name: Commit tested core patch on target branch only
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_name }}" -ne "网页版gpt") { throw "ref guard failed" }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add native_shell/src/net_policy.rs native_shell/src/download_worker.rs native_shell/src/http_engine.rs docs/architecture/proxy-routing.md
+          git commit -m "fix(net): preserve proxy route identity end-to-end"
+          git push origin HEAD:"网页版gpt"
