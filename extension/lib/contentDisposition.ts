@@ -40,9 +40,9 @@ function decodeExtended(value: string): string {
   const charset = (match[1] || 'utf-8').trim().toLowerCase()
   if (!['utf-8', 'utf8', 'iso-8859-1', 'latin1', 'us-ascii'].includes(charset)) return ''
   try {
-    return new TextDecoder(charset).decode(percentBytes(match[2]))
+    return new TextDecoder(charset, { fatal: true }).decode(percentBytes(match[2]))
   } catch {
-    try { return decodeURIComponent(match[2]) } catch { return match[2] }
+    return ''
   }
 }
 
