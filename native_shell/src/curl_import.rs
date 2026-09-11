@@ -28,35 +28,50 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
     let mut index = 1;
     while index < args.len() {
         let arg = &args[index];
-        if arg == "--url"
-            || arg == "-X"
-            || arg == "--request"
-            || arg == "-H"
-            || arg == "--header"
-            || arg == "-A"
-            || arg == "--user-agent"
-            || arg == "-e"
-            || arg == "--referer"
-            || arg == "-b"
-            || arg == "--cookie"
-            || arg == "-u"
-            || arg == "--user"
-            || arg == "-d"
-            || arg == "--data"
-            || arg == "--data-raw"
-            || arg == "--data-binary"
-            || arg == "--data-urlencode"
-            || arg == "-o"
-            || arg == "--output"
-            || arg == "-x"
-            || arg == "--proxy"
+        let (option, inline_value) = if arg.starts_with("--") {
+            if let Some((name, value)) = arg.split_once('=') {
+                (name, Some(value.to_string()))
+            } else {
+                (arg.as_str(), None)
+            }
+        } else {
+            (arg.as_str(), None)
+        };
+        if option == "--url"
+            || option == "-X"
+            || option == "--request"
+            || option == "-H"
+            || option == "--header"
+            || option == "-A"
+            || option == "--user-agent"
+            || option == "-e"
+            || option == "--referer"
+            || option == "-b"
+            || option == "--cookie"
+            || option == "-u"
+            || option == "--user"
+            || option == "-d"
+            || option == "--data"
+            || option == "--data-raw"
+            || option == "--data-binary"
+            || option == "--data-urlencode"
+            || option == "-o"
+            || option == "--output"
+            || option == "-x"
+            || option == "--proxy"
         {
-            let value = args
-                .get(index + 1)
-                .ok_or_else(|| format!("{arg} 缺少参数"))?
-                .clone();
-            index += 2;
-            match arg.as_str() {
+            let value = if let Some(value) = inline_value {
+                index += 1;
+                value
+            } else {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| format!("{option} 缺少参数"))?
+                    .clone();
+                index += 2;
+                value
+            };
+            match option {
                 "--url" => url = value,
                 "-X" | "--request" => method = value.to_ascii_uppercase(),
                 "-H" | "--header" => {
@@ -88,7 +103,7 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
                     headers.insert("authorization".into(), basic_auth(&value));
                 }
                 "-d" | "--data" | "--data-raw" | "--data-binary" => {
-                    if arg != "--data-raw" && value.starts_with('@') {
+                    if option != "--data-raw" && value.starts_with('@') {
                         return Err("不能导入引用本机文件的 cURL 请求体".into());
                     }
                     if !body.is_empty() {
@@ -246,6 +261,20 @@ mod tests {
     }
 
     #[test]
+    fn parses_long_options_with_inline_values() {
+        let parsed = parse_curl_command(
+            r#"curl --request=POST --header="Origin: https://app.test" --cookie=session=abc --data-raw=q=1 --url=https://cdn.test/form"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(parsed.method, "POST");
+        assert_eq!(parsed.url, "https://cdn.test/form");
+        assert_eq!(parsed.origin, "https://app.test");
+        assert_eq!(parsed.cookie, "session=abc");
+        assert_eq!(parsed.body, "q=1");
+    }
+
+    #[test]
     fn joins_repeated_data_options_like_curl() {
         let parsed = parse_curl_command(
             r#"curl -d "name=daniel" --data-raw "skill=lousy" https://cdn.test/form"#,
@@ -268,6 +297,7 @@ mod tests {
     #[test]
     fn rejects_cookie_files_instead_of_sending_filename_as_cookie() {
         assert!(parse_curl_command("curl -b cookies.txt https://cdn.test/private").is_err());
+        assert!(parse_curl_command("curl --cookie=cookies.txt https://cdn.test/private").is_err());
         let parsed = parse_curl_command("curl -b session=abc https://cdn.test/private")
             .unwrap()
             .unwrap();
@@ -277,6 +307,7 @@ mod tests {
     #[test]
     fn rejects_user_without_noninteractive_password() {
         assert!(parse_curl_command("curl -u alice https://cdn.test/private").is_err());
+        assert!(parse_curl_command("curl --user=alice https://cdn.test/private").is_err());
         let parsed = parse_curl_command("curl -u alice:secret https://cdn.test/private")
             .unwrap()
             .unwrap();
@@ -291,6 +322,7 @@ mod tests {
         let error = parse_curl_command(r#"curl --data-urlencode "q=a b" https://cdn.test/form"#)
             .unwrap_err();
         assert!(error.contains("--data-urlencode"));
+        assert!(parse_curl_command("curl --data-urlencode=q%3Da https://cdn.test/form").is_err());
     }
 
     #[test]
@@ -301,6 +333,9 @@ mod tests {
         );
         assert!(
             parse_curl_command("curl -x http://proxy.test:8080 https://cdn.test/file").is_err()
+        );
+        assert!(
+            parse_curl_command("curl --proxy=http://proxy.test:8080 https://cdn.test/file").is_err()
         );
     }
 
