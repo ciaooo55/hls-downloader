@@ -23,14 +23,24 @@ function boundedNativeResourceTitle(value: string): string {
   return scalarSafeNativeText(truncated)
 }
 
+function snapshotNativeValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(snapshotNativeValue)
+  if (!value || typeof value !== 'object') return value
+  const snapshot: Record<string, unknown> = {}
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    snapshot[key] = snapshotNativeValue(nested)
+  }
+  return snapshot
+}
+
 function nativeMessageWithSafeResourceStrings(message: Record<string, unknown>): Record<string, unknown> {
   const resource = message.resource
   if (!resource || typeof resource !== 'object' || Array.isArray(resource)) return message
   const record = resource as Record<string, unknown>
-  // Snapshot resource metadata when the request enters the queue. Otherwise a
-  // caller mutating a reused resource object before a queued request is posted
-  // can silently change the Native Messaging payload after request() returns.
-  const normalized = { ...record }
+  // Snapshot resource metadata when the request enters the queue. Resource
+  // payloads contain nested request headers/contexts, so a shallow copy would
+  // still let caller mutations alter a queued Native Messaging request later.
+  const normalized = snapshotNativeValue(record) as Record<string, unknown>
   if (typeof record.title === 'string') {
     normalized.title = boundedNativeResourceTitle(record.title)
   }
