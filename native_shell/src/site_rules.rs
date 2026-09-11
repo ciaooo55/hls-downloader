@@ -98,11 +98,20 @@ fn setting_text_ok(value: &str) -> bool {
     !value.contains('\r') && !value.contains('\n') && !value.contains('\0')
 }
 
+fn site_rule_match_host(host: &str) -> &str {
+    host.trim()
+        .strip_prefix("*.")
+        .unwrap_or(host.trim())
+        .trim_start_matches('.')
+}
+
 fn valid_site_rule_host(host: &str) -> bool {
+    let wildcard = host.starts_with("*.");
+    let host = host.strip_prefix("*.").unwrap_or(host);
     if host.is_empty()
         || host.len() > 255
         || host.chars().any(char::is_whitespace)
-        || host.contains(['/', '\\', '@', '\0'])
+        || host.contains(['/', '\\', '@', '*', '\0'])
     {
         return false;
     }
@@ -110,7 +119,7 @@ fn valid_site_rule_host(host: &str) -> bool {
         .strip_prefix('[')
         .and_then(|value| value.strip_suffix(']'))
     {
-        return address.parse::<std::net::Ipv6Addr>().is_ok();
+        return !wildcard && address.parse::<std::net::Ipv6Addr>().is_ok();
     }
     !host.contains([':', '[', ']'])
 }
@@ -250,12 +259,8 @@ pub fn format_site_rules(rules: &[SiteRule]) -> String {
 pub fn matching_rule<'a>(rules: &'a [SiteRule], url: &str) -> Option<&'a SiteRule> {
     let host = host_of(url);
     rules.iter().filter(|rule| rule.enabled).find(|rule| {
-        let needle = rule
-            .host
-            .trim()
-            .trim_start_matches('.')
-            .to_ascii_lowercase();
-        host == needle || host.ends_with(&format!(".{needle}"))
+        let needle = site_rule_match_host(&rule.host).to_ascii_lowercase();
+        !needle.is_empty() && (host == needle || host.ends_with(&format!(".{needle}")))
     })
 }
 
@@ -300,7 +305,8 @@ pub fn validate_site_rules(raw: &str) -> Result<(), String> {
         if !valid_site_rule_host(&host) {
             return Err("站点规则包含无效域名".into());
         }
-        if !hosts.insert(host) {
+        let match_host = site_rule_match_host(&host).to_string();
+        if !hosts.insert(match_host) {
             return Err("站点规则不能包含重复域名".into());
         }
         if rule.concurrency > 128 {
@@ -356,6 +362,20 @@ mod tests {
         assert_eq!(rule.speed_limit_kib, 256);
         assert_eq!(rule.concurrency, 2);
         assert!(matching_rule(&rules, "https://other.test/a").is_none());
+    }
+
+    #[test]
+    fn wildcard_host_is_a_compatible_suffix_alias() {
+        let rules = parse_site_rules("*.example.test=speed:128,conn:2");
+        let rule = matching_rule(&rules, "https://cdn.example.test/file.bin").unwrap();
+        assert_eq!(rule.speed_limit_kib, 128);
+        assert!(matching_rule(&rules, "https://example.test/file.bin").is_some());
+        assert!(validate_site_rules("*.example.test=speed:128").is_ok());
+        assert!(validate_site_rules("foo*bar.example.test=speed:128").is_err());
+        assert!(validate_site_rules(
+            r#"[{"host":"example.test"},{"host":"*.example.test"}]"#
+        )
+        .is_err());
     }
 
     #[test]
