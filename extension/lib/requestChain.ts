@@ -63,6 +63,11 @@ const REPLAYABLE_POST_CONTENT_TYPES = new Set([
   'application/json',
   'application/x-www-form-urlencoded',
 ])
+const GET_BROWSER_CACHE_VALIDATORS = new Set([
+  'if-none-match',
+  'if-modified-since',
+  'if-range',
+])
 const CROSS_ORIGIN_REDIRECT_CONTEXT_HEADERS = new Set(['referer', 'origin', 'user-agent'])
 const ADAPTIVE_MANIFEST_PATH = /\.(?:m3u8?|mpd)$/i
 const VOLATILE_MEDIA_QUERY = /^(?:token|auth|authorization|signature|sig|expires?|expiry|policy|key-pair-id|hdnea|hmac|jwt|session|sessionid|access[_-]?key|x-amz-.+)$/i
@@ -209,14 +214,23 @@ export class RequestChainStore {
     const now = details.timeStamp || Date.now()
     const previous = this.chains.get(details.requestId)
     const urls = appendUrl(previous?.urls || [], details.url)
+    const method = details.method || previous?.method || 'GET'
     const capturedHeaders = headers(details.requestHeaders)
+    if (method.toUpperCase() === 'GET') {
+      // These validators refer to an entity in the browser HTTP cache. The
+      // desktop Core owns a separate transfer/cache and cannot satisfy a 304
+      // or If-Range response using that browser entity. Strip only GET cache
+      // validators; POST application preconditions such as If-None-Match: *
+      // remain part of the exact browser request semantics.
+      for (const name of GET_BROWSER_CACHE_VALIDATORS) delete capturedHeaders[name]
+    }
     const capturedBody = captureReplayableRequestBody(details.requestBody)
     const chain: RequestChain = {
       requestId: details.requestId,
       tabId: details.tabId,
       frameId: details.frameId ?? previous?.frameId ?? -1,
       type: details.type || previous?.type || '',
-      method: details.method || previous?.method || 'GET',
+      method,
       initialUrl: previous?.initialUrl || details.url,
       finalUrl: details.url,
       urls,
