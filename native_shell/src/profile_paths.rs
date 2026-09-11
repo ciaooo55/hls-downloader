@@ -5,11 +5,12 @@
 //! lock without pulling persistence into their build graph.
 
 use std::env;
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub fn default_v7_database_path() -> PathBuf {
-    if let Some(root) = env::var_os("HLS_V7_DATA_DIR") {
-        return PathBuf::from(root).join("data.db");
+    if let Some(root) = env_override("HLS_V7_DATA_DIR") {
+        return root.join("data.db");
     }
     if let Some(root) = portable_v7_root() {
         return root.join("data").join("data.db");
@@ -24,8 +25,8 @@ pub fn default_v7_database_path() -> PathBuf {
 }
 
 pub fn default_v7_download_dir() -> PathBuf {
-    if let Some(root) = env::var_os("HLS_V7_DOWNLOAD_DIR") {
-        return PathBuf::from(root);
+    if let Some(root) = env_override("HLS_V7_DOWNLOAD_DIR") {
+        return root;
     }
     if let Some(root) = portable_v7_root() {
         return root.join("downloads");
@@ -39,6 +40,14 @@ pub fn default_v7_download_dir() -> PathBuf {
     PathBuf::from("downloads")
 }
 
+fn env_override(key: &str) -> Option<PathBuf> {
+    nonempty_path(env::var_os(key))
+}
+
+fn nonempty_path(value: Option<OsString>) -> Option<PathBuf> {
+    value.filter(|value| !value.is_empty()).map(PathBuf::from)
+}
+
 fn portable_v7_root() -> Option<PathBuf> {
     let executable = env::current_exe().ok()?;
     let root = executable.parent()?.parent()?.parent()?;
@@ -47,6 +56,19 @@ fn portable_v7_root() -> Option<PathBuf> {
 
 #[cfg(all(test, feature = "full-core"))]
 mod tests {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    #[test]
+    fn empty_override_is_treated_as_unset() {
+        assert_eq!(super::nonempty_path(None), None);
+        assert_eq!(super::nonempty_path(Some(OsString::new())), None);
+        assert_eq!(
+            super::nonempty_path(Some(OsString::from(r"C:\downloads"))),
+            Some(PathBuf::from(r"C:\downloads"))
+        );
+    }
+
     #[test]
     fn legacy_store_helpers_stay_aligned_until_removed() {
         assert_eq!(
