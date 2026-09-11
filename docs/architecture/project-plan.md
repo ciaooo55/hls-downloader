@@ -6,6 +6,9 @@
 - `main` remains a read-only integration baseline unless the user explicitly asks otherwise.
 - Proxy route identity hardening landed in `e38bba5e7adb05404e36e3fa7f9cf75021354c6e` and passed focused Rust format/check/regression validation before commit.
 - Windows POST body forwarding hardening landed in `9b6dae814d59d0b3a128084cc5dac18949c72b2d`; focused validation covered curl method/body arguments and a real WinHTTP POST to a local receiver.
+- Duplicate request identity hardening landed in `c1d60cce6c7534130fd7021fff352a1a879e4963`.
+- Stalled FTP/FTPS task-control hardening landed in `e3d843d6039111af257cb172ba093396a7eeafde`; focused Windows validation deliberately stalled a data channel and proved pause/cancel remains responsive without short Schannel read timeouts.
+- Native Host replay-credential rollback landed in `73af496086029d77ae9a5c85b7a719d995e2104f`; the resident Core IPC now owns credential deletion and task-creation failure rolls back only the newly created browser replay credential.
 - Canonical product status remains 27/28 verified with `browser.media_push_device_selection` partial and `release_ready=false`.
 
 ## Development rules
@@ -32,7 +35,7 @@ Existing automated evidence covers Native Host request IDs, Core persistence/res
 
 Continue auditing task lifecycle, persistence, resume, cancellation, output publication, credentials, protocol boundaries, browser handoff ownership, request identity, and transport parity. Only change behavior when a concrete failure is identified.
 
-Current reviewed code-level follow-up: duplicate-reuse request identity. Same-URL reuse must not silently retain stale method, credentials/replay context, headers, or request body. Any change should stay focused in `download_worker.rs` and ship with exact request-identity regressions.
+The previously reviewed code-level tail is closed on `网页版gpt`: proxy identity, Windows POST body parity, duplicate request identity, FTP/FTPS stalled-read cancellation, Native Host credential rollback, and Metalink XML entity handling all have focused regression coverage. The next source change must start from a newly demonstrated failure, not from speculative cleanup.
 
 ### P1 — browser takeover reliability
 
