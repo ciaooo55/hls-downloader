@@ -71,6 +71,27 @@ describe('offline-safe takeover settings', () => {
     })
   })
 
+  it('normalizes byte thresholds to the integer range accepted by the native u64 protocol', async () => {
+    const storage = new MemoryStorage()
+    const never = new Promise(() => undefined)
+    let sequence = 0
+    const sync = new TakeoverSettingsSync(storage, () => never, () => `bytes-${++sequence}`)
+
+    await expect(sync.queue({ minimumBytes: 4096.75 })).resolves.toMatchObject({
+      takeover_minimum_bytes: 4096,
+    })
+    expect(storage.values.minimumBytes).toBe(4096)
+    expect(storage.values[PENDING_TAKEOVER_SETTINGS_KEY]).toMatchObject({ minimumBytes: 4096 })
+
+    await expect(sync.queue({ minimumBytes: Number.MAX_VALUE })).resolves.toMatchObject({
+      takeover_minimum_bytes: Number.MAX_SAFE_INTEGER,
+    })
+    expect(storage.values.minimumBytes).toBe(Number.MAX_SAFE_INTEGER)
+    expect(storage.values[PENDING_TAKEOVER_SETTINGS_KEY]).toMatchObject({
+      minimumBytes: Number.MAX_SAFE_INTEGER,
+    })
+  })
+
   it('never lets a slow older response overwrite a newer click', async () => {
     const storage = new MemoryStorage()
     let releaseFirst!: (value: unknown) => void
