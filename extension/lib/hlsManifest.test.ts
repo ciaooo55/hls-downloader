@@ -50,6 +50,25 @@ describe('HLS metadata', () => {
     }])
   })
 
+  it('skips a malformed variant URI without losing later valid variants', () => {
+    const info = parseHlsManifest(
+      '#EXTM3U\n'
+      + '#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=640x360\n'
+      + 'http://[malformed\n'
+      + '#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080\n'
+      + 'high.m3u8\n',
+      'https://cdn.test/master.m3u8',
+    )
+
+    expect(info.variants).toEqual([{
+      url: 'https://cdn.test/high.m3u8',
+      width: 1920,
+      height: 1080,
+      bandwidth: 4_000_000,
+      quality: '1080p',
+    }])
+  })
+
   it('does not borrow a later segment URI when an EXTINF URI is missing', () => {
     const info = parseHlsManifest(
       '#EXTM3U\n'

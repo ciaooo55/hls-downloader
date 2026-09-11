@@ -100,6 +100,12 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
     const uri = followingUri(lines, index, candidate =>
       candidate.startsWith('#EXT-X-STREAM-INF:') || candidate === '#EXT-X-ENDLIST')
     if (!uri) continue
+    let url: string
+    try {
+      url = inheritManifestAccessQuery(baseUrl, new URL(uri, baseUrl).href)
+    } catch {
+      continue
+    }
     const attributes = line.slice('#EXT-X-STREAM-INF:'.length)
     const resolution = attribute(attributes, 'RESOLUTION').match(/^(\d+)x(\d+)$/i)
     const width = positiveFiniteNumber(resolution?.[1] || '')
@@ -107,7 +113,7 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
     const bandwidth = positiveFiniteNumber(attribute(attributes, 'BANDWIDTH'))
     const codecs = attribute(attributes, 'CODECS') || undefined
     variants.push({
-      url: inheritManifestAccessQuery(baseUrl, new URL(uri, baseUrl).href),
+      url,
       width,
       height,
       bandwidth,
