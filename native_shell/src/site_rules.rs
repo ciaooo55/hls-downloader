@@ -207,9 +207,10 @@ pub fn upsert_site_rule(rules: &mut Vec<SiteRule>, rule: SiteRule) {
     if rule_host.is_empty() {
         return;
     }
-    if let Some(existing) = rules.iter_mut().find(|item| {
-        site_rule_match_host(&item.host).eq_ignore_ascii_case(&rule_host)
-    }) {
+    if let Some(existing) = rules
+        .iter_mut()
+        .find(|item| site_rule_match_host(&item.host).eq_ignore_ascii_case(&rule_host))
+    {
         existing.enabled = rule.enabled;
         if rule.speed_limit_kib > 0 {
             existing.speed_limit_kib = rule.speed_limit_kib;
@@ -375,10 +376,9 @@ mod tests {
         assert!(matching_rule(&rules, "https://example.test/file.bin").is_some());
         assert!(validate_site_rules("*.example.test=speed:128").is_ok());
         assert!(validate_site_rules("foo*bar.example.test=speed:128").is_err());
-        assert!(validate_site_rules(
-            r#"[{"host":"example.test"},{"host":"*.example.test"}]"#
-        )
-        .is_err());
+        assert!(
+            validate_site_rules(r#"[{"host":"example.test"},{"host":"*.example.test"}]"#).is_err()
+        );
     }
 
     #[test]
