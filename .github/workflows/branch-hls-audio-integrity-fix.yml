@@ -178,6 +178,7 @@ jobs:
 
       - name: Format and compile Rust Core
         shell: pwsh
+        working-directory: native_shell
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
@@ -187,6 +188,7 @@ jobs:
 
       - name: Run focused HLS audio regressions
         shell: pwsh
+        working-directory: native_shell
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
