@@ -32,8 +32,11 @@ function normalizeSelectedUrl(value: string, baseUrl: string, textExtraction = f
   const candidate = textExtraction ? trimSelectedUrlPunctuation(raw) : raw
   if (!candidate) return ''
   if (/^magnet:\?/i.test(candidate)) return candidate
-  if (candidate.includes('://') && !/^https?:\/\//i.test(candidate)) return ''
   try {
+    // Let URL parsing decide whether a candidate is absolute or relative. A
+    // relative download route may legitimately contain an absolute URL inside
+    // its query (`/download?target=https://cdn/...`). Protocol filtering after
+    // resolution still rejects javascript:, data: and other unsafe schemes.
     const resolved = new URL(candidate, baseUrl)
     return resolved.protocol === 'http:' || resolved.protocol === 'https:' ? resolved.href : ''
   } catch {
