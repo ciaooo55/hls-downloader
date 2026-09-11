@@ -67,6 +67,23 @@ describe('DASH browser inspection', () => {
     })
   })
 
+  it('rejects an explicit Period duration sum that overflows', () => {
+    const hugePeriod = '9'.repeat(308)
+    const overflow = `<MPD type="static">
+      <Period duration="PT${hugePeriod}S"><AdaptationSet contentType="video">
+        <Representation id="v1" width="1280" height="720" bandwidth="1000000" />
+      </AdaptationSet></Period>
+      <Period duration="PT${hugePeriod}S"><AdaptationSet contentType="video">
+        <Representation id="v2" width="1280" height="720" bandwidth="1000000" />
+      </AdaptationSet></Period>
+    </MPD>`
+
+    expect(parseDashManifest(overflow, 'https://cdn.test/manifest.mpd')).toMatchObject({
+      duration: undefined,
+      estimatedSize: undefined,
+    })
+  })
+
   it('rejects non-finite adaptive metadata and overflowing durations', () => {
     const hugeDuration = '9'.repeat(400)
     const invalid = `<MPD type="static" mediaPresentationDuration="PT${hugeDuration}S"><Period>

@@ -131,7 +131,10 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
   const rootDuration = isoDuration(rootAttributes.mediapresentationduration)
   const periodDurations = periods.map(period => isoDuration(period.attributes.duration))
   const explicitPeriodDuration = periodDurations.length > 0 && periodDurations.every(value => value !== null)
-    ? periodDurations.reduce((total, value) => total + (value || 0), 0)
+    ? (() => {
+        const total = periodDurations.reduce((sum, value) => sum + (value || 0), 0)
+        return Number.isFinite(total) ? total : null
+      })()
     : null
   const duration = isLive ? undefined : (rootDuration ?? explicitPeriodDuration ?? 0)
 
