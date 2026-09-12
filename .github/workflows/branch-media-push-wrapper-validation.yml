@@ -1,4 +1,4 @@
-# Branch-local fast check; full v7 CI covers every 网页版gpt push, including cast state, multi-LAN/deadline discovery, and release-gate hardening.
+# Branch-local fast check; full v7 CI covers every 网页版gpt push, including cast state, multi-LAN/deadline discovery, bounded TVBox responses, and release-gate hardening.
 name: Branch media push wrapper validation
 
 on:
