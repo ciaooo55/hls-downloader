@@ -1,0 +1,10 @@
+package com.hlsdownloader.desktop
+
+internal fun shouldCloseMediaPushPicker(
+    activeRequestId: String?,
+    resolvedRequestId: String,
+    status: String,
+): Boolean {
+    val terminal = status.lowercase() in setOf("done", "failed", "canceled")
+    return terminal && activeRequestId != null && activeRequestId == resolvedRequestId
+}
