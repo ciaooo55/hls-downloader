@@ -7,6 +7,11 @@ internal fun mediaPushResolutionRetryDelayMillis(failureCount: Int): Long = when
     else -> 2_000L
 }
 
+internal fun shouldRetryMediaPushResolution(error: Throwable): Boolean {
+    val code = (error as? EngineProtocolException)?.code ?: return true
+    return code !in setOf("media_push_not_found", "media_push_status_invalid")
+}
+
 internal fun shouldCloseMediaPushPicker(
     activeRequestId: String?,
     resolvedRequestId: String,

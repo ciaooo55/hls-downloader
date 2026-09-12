@@ -16,6 +16,14 @@ class MediaPushUiStateTest {
         assertFalse(shouldCloseMediaPushPicker("media-push-a", "media-push-a", "pending"))
     }
     @Test
+    fun terminal_sync_stops_retrying_definitive_core_rejections() {
+        assertFalse(shouldRetryMediaPushResolution(EngineProtocolException("media_push_not_found", "expired")))
+        assertFalse(shouldRetryMediaPushResolution(EngineProtocolException("media_push_status_invalid", "invalid")))
+        assertTrue(shouldRetryMediaPushResolution(EngineProtocolException("engine_busy", "busy")))
+        assertTrue(shouldRetryMediaPushResolution(IllegalStateException("pipe closed")))
+    }
+
+    @Test
     fun terminal_sync_retry_backoff_caps_quickly() {
         assertEquals(250L, mediaPushResolutionRetryDelayMillis(1))
         assertEquals(500L, mediaPushResolutionRetryDelayMillis(2))
