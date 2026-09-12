@@ -3979,11 +3979,11 @@ fn cast_lan_host(device_id: &str) -> Result<String, String> {
 }
 
 fn cast_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEnvelope>, String> {
+    let host = cast_lan_host("")?;
     let loopback = mount_task_url(coordinator, task_id)?;
     let token = media_token_from_url(&loopback).ok_or_else(|| "播放地址无效".to_string())?;
     let server = shared_media()?;
     server.enable_lan();
-    let host = cast_lan_host("")?;
     let location = crate::cast::lan_media_url(server, &token, &host)?;
     let spec = coordinator
         .lock()?
@@ -4020,6 +4020,7 @@ fn cast_to_device(
     task_id: &str,
     device_id: &str,
 ) -> Result<Vec<EventEnvelope>, String> {
+    let host = cast_lan_host(device_id)?;
     let loopback = mount_task_url(coordinator, task_id)?;
     let token = media_token_from_url(&loopback).ok_or_else(|| "播放地址无效".to_string())?;
     let spec = coordinator
@@ -4029,7 +4030,6 @@ fn cast_to_device(
         .ok_or_else(|| format!("unknown task {task_id}"))?;
     let server = shared_media()?;
     server.enable_lan();
-    let host = cast_lan_host(device_id)?;
     let location = crate::cast::lan_media_url(server, &token, &host)?;
     let title = if spec.title.is_empty() {
         spec.filename.clone()
@@ -4112,8 +4112,8 @@ fn share_media(
         } else {
             title.trim().to_string()
         };
-        server.mount(&token, source);
         let host = cast_lan_host(device_id)?;
+        server.mount(&token, source);
         crate::cast::lan_media_url(server, &token, &host)?
     } else {
         let lower = url.to_ascii_lowercase();
@@ -4134,8 +4134,8 @@ fn share_media(
             let _ = crate::cast::ssdp_notify(&media_url);
             media_url.clone()
         } else {
-            server.mount_remote(&token, media_url.clone());
             let host = cast_lan_host("")?;
+            server.mount_remote(&token, media_url.clone());
             let redirect = crate::cast::lan_media_url(server, &token, &host)?;
             let _ = crate::cast::ssdp_notify(&redirect);
             redirect

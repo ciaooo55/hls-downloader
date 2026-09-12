@@ -73,11 +73,11 @@ pub fn start_browser_push(kind: &str, url: &str, title: &str) -> Result<BrowserP
             .unwrap_or_default()
             .as_millis()
     );
-    let token = crate::playback::random_mount_token();
-    server.mount_remote(&token, url.to_string());
     let host = preferred_lan_ipv4()
         .map(|ip| ip.to_string())
         .ok_or_else(|| "没有可用于投屏的局域网地址".to_string())?;
+    let token = crate::playback::random_mount_token();
+    server.mount_remote(&token, url.to_string());
     let location = if kind == "tvbox" {
         format!("http://{host}:{}/tvbox/{token}", server.bound_port())
     } else {
