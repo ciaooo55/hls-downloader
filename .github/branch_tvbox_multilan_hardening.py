@@ -128,18 +128,25 @@ test = r'''    #[test]
         assert_eq!(
             hosts
                 .iter()
-                .filter(|ip| matches!(ip, IpAddr::V4(value) if value.octets()[0..3] == [192, 168, 10]))
+                .filter(|ip| match **ip {
+                    IpAddr::V4(value) => value.octets()[0..3] == [192, 168, 10],
+                    IpAddr::V6(_) => false,
+                })
                 .count(),
             4
         );
         assert_eq!(
             hosts
                 .iter()
-                .filter(|ip| matches!(ip, IpAddr::V4(value) if value.octets()[0..3] == [10, 20, 30]))
+                .filter(|ip| match **ip {
+                    IpAddr::V4(value) => value.octets()[0..3] == [10, 20, 30],
+                    IpAddr::V6(_) => false,
+                })
                 .count(),
             4
         );
-        assert!(hosts.iter().all(|ip| !networks.iter().any(|(local, _)| *ip == IpAddr::V4(*local))));
+        assert!(!hosts.contains(&IpAddr::V4(networks[0].0)));
+        assert!(!hosts.contains(&IpAddr::V4(networks[1].0)));
     }
 
 '''
