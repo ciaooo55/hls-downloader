@@ -29,6 +29,7 @@ struct NativeHostSession {
     core: HostCore,
     handoffs: BTreeMap<String, Handoff>,
     request_ids: BTreeMap<String, String>,
+    media_push_ui_prompted: bool,
 }
 
 enum HostCore {
@@ -214,6 +215,7 @@ impl NativeHostSession {
             core,
             handoffs,
             request_ids,
+            media_push_ui_prompted: false,
         })
     }
 
@@ -572,11 +574,12 @@ impl NativeHostSession {
                 _ => None,
             })
             .unwrap_or(request);
-        if outcome.status == "pending" {
-            let _ = self.core.handle(CoreCommand::OpenMain);
-            if let Some(root) = crate::install_root() {
-                let _ = crate::spawn_desktop_ui(&root);
-            }
+        let should_prompt_ui = outcome.status == "pending"
+            || (!self.media_push_ui_prompted
+                && outcome.status == "failed"
+                && self.has_pending_media_push().unwrap_or(false));
+        if should_prompt_ui {
+            self.prompt_media_push_ui();
         }
         Ok(json!({
             "ok": true,
@@ -613,6 +616,26 @@ impl NativeHostSession {
             "message": push.message,
             "location": push.location,
         }))
+    }
+
+    fn has_pending_media_push(&mut self) -> Result<bool, String> {
+        Ok(self
+            .core
+            .load_handoffs()?
+            .into_iter()
+            .filter_map(|encoded| serde_json::from_str::<MediaPushRequest>(&encoded).ok())
+            .any(|request| request.status == "pending"))
+    }
+
+    fn prompt_media_push_ui(&mut self) {
+        if self.media_push_ui_prompted {
+            return;
+        }
+        self.media_push_ui_prompted = true;
+        let _ = self.core.handle(CoreCommand::OpenMain);
+        if let Some(root) = crate::install_root() {
+            let _ = crate::spawn_desktop_ui(&root);
+        }
     }
 
     fn persist_browser_context(
@@ -1331,6 +1354,54 @@ mod tests {
             .unwrap();
         assert_eq!(persisted["ok"], true);
         assert_eq!(persisted["status"], "failed");
+    }
+
+    #[test]
+    fn media_push_overlap_after_host_restart_reopens_restored_picker() {
+        let mut core = crate::PersistentCore::in_memory().unwrap();
+        core.handle(CoreCommand::RequestMediaPush {
+            request: MediaPushRequest {
+                id: "media-push-restored".into(),
+                push_kind: "tvbox".into(),
+                url: "https://cdn.test/restored.m3u8".into(),
+                title: "Restored".into(),
+                status: "pending".into(),
+                message: "等待在桌面下载器中选择接收设备".into(),
+                location: String::new(),
+                created_at_ms: unix_time_ms(),
+            },
+        })
+        .unwrap();
+        let sequence_before_retry = core.latest_sequence();
+        let mut session = NativeHostSession::from_backend(HostCore::Local(core)).unwrap();
+
+        let retry = session
+            .dispatch(&json!({
+                "op": "media_push",
+                "kind": "cast",
+                "resource": {
+                    "url": "https://cdn.test/retry.m3u8",
+                    "title": "Retry"
+                }
+            }))
+            .unwrap();
+        let retry_id = retry["id"].as_str().unwrap().to_string();
+        assert_eq!(retry["status"], "failed");
+        assert!(retry["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("已有投送请求")));
+
+        let events = session.core.local().events_after(sequence_before_retry, 8);
+        assert!(events.iter().any(|event| matches!(
+            &event.event,
+            CoreEvent::MediaPushResolved { request }
+                if request.id == retry_id && request.status == "failed"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            &event.event,
+            CoreEvent::UiShow { surface } if surface == "main"
+        )));
+        assert!(session.media_push_ui_prompted);
     }
 
     #[test]
