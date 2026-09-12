@@ -958,6 +958,15 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                                     "canceled" -> "info"
                                     else -> "error"
                                 }
+                                if (shouldCloseMediaPushPicker(pendingPushRequestId, request.id, request.status)) {
+                                    deviceResult = null
+                                    pendingCastTask = null
+                                    pendingMediaSource = null
+                                    pendingCastMode = ""
+                                    pendingPushRequestId = null
+                                    castDiscovering = false
+                                    castConnecting = false
+                                }
                                 notice = UiSignal.Notice(level, request.message.ifBlank {
                                     when (level) {
                                         "success" -> if (request.pushKind == "tvbox") "TVBox 推送完成" else "投屏完成"
