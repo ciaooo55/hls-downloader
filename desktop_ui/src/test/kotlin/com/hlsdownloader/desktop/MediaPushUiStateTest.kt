@@ -1,6 +1,7 @@
 package com.hlsdownloader.desktop
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -13,5 +14,13 @@ class MediaPushUiStateTest {
         assertFalse(shouldCloseMediaPushPicker("media-push-b", "media-push-a", "failed"))
         assertFalse(shouldCloseMediaPushPicker(null, "media-push-a", "failed"))
         assertFalse(shouldCloseMediaPushPicker("media-push-a", "media-push-a", "pending"))
+    }
+    @Test
+    fun terminal_sync_retry_backoff_caps_quickly() {
+        assertEquals(250L, mediaPushResolutionRetryDelayMillis(1))
+        assertEquals(500L, mediaPushResolutionRetryDelayMillis(2))
+        assertEquals(1_000L, mediaPushResolutionRetryDelayMillis(3))
+        assertEquals(2_000L, mediaPushResolutionRetryDelayMillis(4))
+        assertEquals(2_000L, mediaPushResolutionRetryDelayMillis(20))
     }
 }

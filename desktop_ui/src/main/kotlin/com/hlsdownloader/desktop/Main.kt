@@ -624,6 +624,28 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         while (noticeHistory.size > 100) noticeHistory.removeAt(0)
     }
     val scope = rememberCoroutineScope()
+    suspend fun resolveMediaPushTerminalReliably(
+        requestId: String,
+        status: String,
+        message: String,
+        location: String = "",
+    ) {
+        var failures = 0
+        while (true) {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    EnginePipeClient().resolveMediaPush(requestId, status, message, location)
+                }
+            }
+            if (result.isSuccess) return
+            failures++
+            if (failures == 1) {
+                result.exceptionOrNull()?.let { UiDiagnostics.error("media_push.resolve_terminal", it, requestId) }
+                notice = UiSignal.Notice("error", "投送结果已确定，但浏览器状态同步失败，正在自动重试")
+            }
+            delay(mediaPushResolutionRetryDelayMillis(failures))
+        }
+    }
     val tasks = remember(visualFixture) {
         mutableStateListOf<DownloadTask>().apply {
             if (visualFixture == "tasks_1000") addAll(auditTasks(1_000))
@@ -1480,8 +1502,18 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     }
     if (!settingsDeviceScanActive) deviceResult?.let { signal -> DevicePickerDialog(signal, pendingCastMode, pendingMediaSource, castDiscovering, castConnecting, settings.preferredCastDeviceId, {
         val requestId = pendingPushRequestId
-        deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""; pendingPushRequestId = null
-        if (requestId != null) scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().resolveMediaPush(requestId, "canceled", "已取消设备选择") } } }
+        if (requestId == null) {
+            deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""
+        } else {
+            castConnecting = true
+            scope.launch {
+                resolveMediaPushTerminalReliably(requestId, "canceled", "已取消设备选择")
+                if (pendingPushRequestId == requestId) {
+                    deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""; pendingPushRequestId = null
+                }
+                castConnecting = false
+            }
+        }
     }, onRescan = {
         castDiscovering = true
         scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().discoverCastDevices(pendingCastMode) } }.onFailure { castDiscovering = false; notice = UiSignal.Notice("error", it.message ?: "设备搜索失败") } }
@@ -1490,20 +1522,26 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         val media = pendingMediaSource
         if (taskId != null || media != null) scope.launch {
             castConnecting = true
-            runCatching { withContext(Dispatchers.IO) {
+            val outcome = runCatching { withContext(Dispatchers.IO) {
                 if (taskId != null) EnginePipeClient().castTask(taskId)
                 else EnginePipeClient().shareMedia(media!!.path, media.url, media.title, "")
             } }
-                .onSuccess { result ->
-                    val requestId = pendingPushRequestId
-                    if (requestId != null) scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().resolveMediaPush(requestId, "done", "已发布局域网播放地址") } } }
+            val requestId = pendingPushRequestId
+            if (outcome.isSuccess) {
+                if (requestId != null) resolveMediaPushTerminalReliably(requestId, "done", "已发布局域网播放地址")
+                if (requestId == null || pendingPushRequestId == requestId) {
                     deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""; pendingPushRequestId = null
                 }
-                .onFailure { error ->
-                    val requestId = pendingPushRequestId
-                    if (requestId != null) scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().resolveMediaPush(requestId, "failed", error.message ?: "局域网发布失败") } } }
-                    notice = UiSignal.Notice("error", error.message ?: "局域网发布失败")
+            } else {
+                val message = outcome.exceptionOrNull()?.message ?: "局域网发布失败"
+                if (requestId != null) {
+                    resolveMediaPushTerminalReliably(requestId, "failed", message)
+                    if (pendingPushRequestId == requestId) {
+                        deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""; pendingPushRequestId = null
+                    }
                 }
+                notice = UiSignal.Notice("error", message)
+            }
             castConnecting = false
         }
     }) { device ->
@@ -1511,22 +1549,35 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         val media = pendingMediaSource
         if (taskId != null || media != null) scope.launch {
             castConnecting = true
-            runCatching { withContext(Dispatchers.IO) {
+            val outcome = runCatching { withContext(Dispatchers.IO) {
                 if (taskId != null) EnginePipeClient().castToDevice(taskId, device.id)
                 else EnginePipeClient().shareMedia(media!!.path, media.url, media.title, device.id)
-                EnginePipeClient().storeSetting("preferred_cast_device_id", device.id)
             } }
-                .onSuccess {
-                    settings = settings.copy(preferredCastDeviceId = device.id)
-                    val requestId = pendingPushRequestId
-                    if (requestId != null) scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().resolveMediaPush(requestId, "done", "已发送到 ${device.label}") } } }
+            val requestId = pendingPushRequestId
+            if (outcome.isSuccess) {
+                settings = settings.copy(preferredCastDeviceId = device.id)
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient().storeSetting("preferred_cast_device_id", device.id) } }
+                    .onFailure { error ->
+                        UiDiagnostics.warning(
+                            "media_push.preferred_device",
+                            error.message ?: "首选投屏设备保存失败",
+                            requestId = requestId.orEmpty(),
+                        )
+                    }
+                if (requestId != null) resolveMediaPushTerminalReliably(requestId, "done", "已发送到 ${device.label}")
+                if (requestId == null || pendingPushRequestId == requestId) {
                     deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""; pendingPushRequestId = null
                 }
-                .onFailure { error ->
-                    val requestId = pendingPushRequestId
-                    if (requestId != null) scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().resolveMediaPush(requestId, "failed", error.message ?: "投屏连接失败") } } }
-                    notice = UiSignal.Notice("error", error.message ?: "投屏连接失败")
+            } else {
+                val message = outcome.exceptionOrNull()?.message ?: "投屏连接失败"
+                if (requestId != null) {
+                    resolveMediaPushTerminalReliably(requestId, "failed", message)
+                    if (pendingPushRequestId == requestId) {
+                        deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""; pendingPushRequestId = null
+                    }
                 }
+                notice = UiSignal.Notice("error", message)
+            }
             castConnecting = false
         }
     } }
@@ -3609,7 +3660,7 @@ private fun HarvestResultDialog(
             }
         }
     }, actions = {
-        DialogSecondary("取消", onDismiss)
+        if (!connecting) DialogSecondary("取消", onDismiss)
         TextButton(onClick = onRescan, enabled = !busy && !connecting) { Icon(Icons.Outlined.Refresh, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text("重新搜索", fontSize = 12.sp) }
         if (mode != "tvbox") DialogPrimary("局域网播放", !busy && !connecting, onPublish)
         DialogPrimary(if (connecting) "正在连接…" else if (mode == "tvbox") "确认推送" else "连接设备", selected != null && !busy && !connecting) { selected?.let(onSelect) }

@@ -56,6 +56,24 @@ impl PersistentCore {
                 return self.emit(crate::CoreEvent::MediaPushResolved { request: rejected });
             }
         }
+        if let CoreCommand::ResolveMediaPush {
+            request_id, status, ..
+        } = &command
+        {
+            if matches!(status.as_str(), "done" | "failed" | "canceled") {
+                let already_resolved = self
+                    .store
+                    .load_handoffs()?
+                    .into_iter()
+                    .filter_map(|encoded| {
+                        serde_json::from_str::<crate::MediaPushRequest>(&encoded).ok()
+                    })
+                    .any(|item| item.id == *request_id && item.status != "pending");
+                if already_resolved {
+                    return Ok(Vec::new());
+                }
+            }
+        }
         let before = self.runtime.clone();
         let created_spec = match &command {
             CoreCommand::CreateTask { spec } => Some(spec.clone()),
@@ -568,6 +586,71 @@ mod tests {
         assert!(next
             .iter()
             .any(|event| matches!(event.event, crate::CoreEvent::MediaPushRequested { .. })));
+    }
+
+    #[test]
+    fn media_push_terminal_resolution_retry_is_idempotent_after_restart() {
+        let path = std::env::temp_dir().join(format!(
+            "hls-v7-media-push-terminal-retry-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let request = crate::MediaPushRequest {
+            id: "push-terminal-retry".into(),
+            push_kind: "cast".into(),
+            url: "https://example.test/retry.mp4".into(),
+            title: "Retry media".into(),
+            status: "pending".into(),
+            message: String::new(),
+            location: String::new(),
+            created_at_ms: 7,
+        };
+        let terminal = CoreCommand::ResolveMediaPush {
+            request_id: request.id.clone(),
+            status: "done".into(),
+            message: "sent".into(),
+            location: "http://192.168.1.8/media/retry".into(),
+        };
+        {
+            let mut core = PersistentCore::open(&path).unwrap();
+            core.handle(CoreCommand::RequestMediaPush {
+                request: request.clone(),
+            })
+            .unwrap();
+            let first = core.handle(terminal.clone()).unwrap();
+            assert!(first.iter().any(|event| matches!(
+                &event.event,
+                crate::CoreEvent::MediaPushResolved { request }
+                    if request.id == "push-terminal-retry" && request.status == "done"
+            )));
+        }
+        let mut reopened = PersistentCore::open(&path).unwrap();
+        assert!(reopened.handle(terminal).unwrap().is_empty());
+        let conflicting_retry = CoreCommand::ResolveMediaPush {
+            request_id: request.id.clone(),
+            status: "failed".into(),
+            message: "late failure".into(),
+            location: String::new(),
+        };
+        assert!(reopened.handle(conflicting_retry).unwrap().is_empty());
+        let persisted = reopened
+            .store()
+            .load_handoffs()
+            .unwrap()
+            .into_iter()
+            .filter_map(|encoded| serde_json::from_str::<crate::MediaPushRequest>(&encoded).ok())
+            .find(|item| item.id == request.id)
+            .unwrap();
+        assert_eq!(persisted.status, "done");
+        assert_eq!(persisted.message, "sent");
+        assert_eq!(persisted.location, "http://192.168.1.8/media/retry");
+        drop(reopened);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
     }
 
     #[test]
