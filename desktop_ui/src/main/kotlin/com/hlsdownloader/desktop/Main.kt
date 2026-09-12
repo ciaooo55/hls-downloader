@@ -638,9 +638,26 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 }
             }
             if (result.isSuccess) return
+            val error = result.exceptionOrNull() ?: return
+            if (!shouldRetryMediaPushResolution(error)) {
+                UiDiagnostics.warning(
+                    "media_push.resolve_terminal_rejected",
+                    error.message ?: "媒体推送终态同步被下载引擎拒绝",
+                    requestId = requestId,
+                )
+                notice = UiSignal.Notice(
+                    "error",
+                    if ((error as? EngineProtocolException)?.code == "media_push_not_found") {
+                        "投送请求已过期，浏览器端将按失败处理"
+                    } else {
+                        "投送状态同步被下载引擎拒绝"
+                    },
+                )
+                return
+            }
             failures++
             if (failures == 1) {
-                result.exceptionOrNull()?.let { UiDiagnostics.error("media_push.resolve_terminal", it, requestId) }
+                UiDiagnostics.error("media_push.resolve_terminal", error, requestId = requestId)
                 notice = UiSignal.Notice("error", "投送结果已确定，但浏览器状态同步失败，正在自动重试")
             }
             delay(mediaPushResolutionRetryDelayMillis(failures))
