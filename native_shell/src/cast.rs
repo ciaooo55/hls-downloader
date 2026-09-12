@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -40,9 +41,28 @@ fn media_server() -> Result<&'static MediaServer, String> {
     }
 }
 
-fn pushes() -> &'static Mutex<HashMap<String, BrowserPush>> {
-    static MAP: OnceLock<Mutex<HashMap<String, BrowserPush>>> = OnceLock::new();
-    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+const MAX_BROWSER_PUSHES: usize = 64;
+
+fn pushes() -> &'static Mutex<VecDeque<BrowserPush>> {
+    static QUEUE: OnceLock<Mutex<VecDeque<BrowserPush>>> = OnceLock::new();
+    QUEUE.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+fn next_browser_push_id() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{millis:x}-{sequence:x}")
+}
+
+fn remember_browser_push(queue: &mut VecDeque<BrowserPush>, push: BrowserPush) {
+    if queue.len() >= MAX_BROWSER_PUSHES {
+        queue.pop_front();
+    }
+    queue.push_back(push);
 }
 
 fn device_cache() -> &'static Mutex<Vec<CastDeviceInfo>> {
@@ -66,13 +86,7 @@ pub fn start_browser_push(kind: &str, url: &str, title: &str) -> Result<BrowserP
     };
     let server = media_server()?;
     server.enable_lan();
-    let id = format!(
-        "{:x}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-    );
+    let id = next_browser_push_id();
     let host = preferred_lan_ipv4()
         .map(|ip| ip.to_string())
         .ok_or_else(|| "没有可用于投屏的局域网地址".to_string())?;
@@ -97,14 +111,20 @@ pub fn start_browser_push(kind: &str, url: &str, title: &str) -> Result<BrowserP
         },
         location,
     };
-    if let Ok(mut map) = pushes().lock() {
-        map.insert(push.id.clone(), push.clone());
+    if let Ok(mut queue) = pushes().lock() {
+        remember_browser_push(&mut queue, push.clone());
     }
     Ok(push)
 }
 
 pub fn browser_push_status(id: &str) -> Option<BrowserPush> {
-    pushes().lock().ok()?.get(id).cloned()
+    pushes()
+        .lock()
+        .ok()?
+        .iter()
+        .rev()
+        .find(|push| push.id == id)
+        .cloned()
 }
 
 pub fn lan_media_url(
@@ -2143,6 +2163,35 @@ mod tests {
         let device = probe_tvbox(tvbox, Duration::from_secs(1)).unwrap();
         assert_eq!(device.service_type, "tvbox");
         tvbox_worker.join().unwrap();
+    }
+
+    #[test]
+    fn browser_push_ids_are_unique_and_cache_is_bounded() {
+        let ids = (0..1024)
+            .map(|_| next_browser_push_id())
+            .collect::<HashSet<_>>();
+        assert_eq!(ids.len(), 1024);
+
+        let mut queue = VecDeque::new();
+        for index in 0..(MAX_BROWSER_PUSHES + 10) {
+            remember_browser_push(
+                &mut queue,
+                BrowserPush {
+                    id: format!("push-{index}"),
+                    kind: "tvbox".into(),
+                    status: "ready".into(),
+                    message: String::new(),
+                    location: "http://192.168.1.2/media/test".into(),
+                },
+            );
+        }
+        assert_eq!(queue.len(), MAX_BROWSER_PUSHES);
+        assert_eq!(queue.front().map(|push| push.id.as_str()), Some("push-10"));
+        let expected_back = format!("push-{}", MAX_BROWSER_PUSHES + 9);
+        assert_eq!(
+            queue.back().map(|push| push.id.as_str()),
+            Some(expected_back.as_str())
+        );
     }
 
     #[test]
