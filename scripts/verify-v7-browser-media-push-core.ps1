@@ -214,6 +214,8 @@ $previousTcp = $env:HLS_V7_CORE_TCP
 $previousBind = $env:HLS_V7_CORE_BIND
 $previousMigrate = $env:HLS_V6_SKIP_MIGRATE
 $result = $null
+$primaryFailure = $null
+$cleanupFailures = New-Object 'System.Collections.Generic.List[string]'
 $expectedNativeHost = [IO.Path]::GetFullPath((Join-Path $InstallDir 'app\resources\HLSDownloaderNativeHost.exe'))
 $packagedNativeHostInput = Join-Path $repo 'desktop_ui\resources\common\HLSDownloaderNativeHost.exe'
 if (-not (Test-Path -LiteralPath $packagedNativeHostInput -PathType Leaf)) {
@@ -299,6 +301,9 @@ try {
     foreach ($browser in @('edge', 'firefox')) {
         $extensionDir = if ($browser -eq 'edge') { $chromiumDir } else { $firefoxDir }
         $reportPath = Join-Path $evidenceRoot "$browser-tvbox-real.json"
+        if (Test-Path -LiteralPath $reportPath) {
+            Remove-Item -LiteralPath $reportPath -Force -ErrorAction Stop
+        }
         $arguments = @(
             (Join-Path $PSScriptRoot 'smoke_extension_tvbox_real.py'),
             '--browser', $browser,
@@ -316,6 +321,9 @@ try {
         if ($driver) { $arguments += @('--driver', $driver) }
         $captured = @(& $pythonExe @arguments 2>&1 | ForEach-Object { $_.ToString() })
         if ($LASTEXITCODE -ne 0) { throw "$browser installed-browser TVBox smoke failed: $($captured -join [Environment]::NewLine)" }
+        if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+            throw "$browser installed-browser TVBox smoke did not create a fresh report: $reportPath"
+        }
         $report = [IO.File]::ReadAllText($reportPath, $utf8NoBom) | ConvertFrom-Json
         if ($report.passed -ne $true -or [string]$report.expected_receiver_host -ne $ExpectedTvboxHost) {
             throw "$browser TVBox report failed identity validation: $($report | ConvertTo-Json -Compress)"
@@ -348,11 +356,52 @@ try {
         expected_receiver_host = $ExpectedTvboxHost
         browser_reports = $reports
     }
-    Write-Output ($result | ConvertTo-Json -Depth 8 -Compress)
+} catch {
+    $primaryFailure = $_
 } finally {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'shutdown-running.ps1') -InstallDir $InstallDir | Out-Null
+    try {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'shutdown-running.ps1') -InstallDir $InstallDir | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            $cleanupFailures.Add("shutdown-running.ps1 exited with $LASTEXITCODE")
+        }
+    } catch {
+        $cleanupFailures.Add("shutdown-running.ps1 failed: $($_.Exception.Message)")
+    }
     if ($installed) {
-        [void](Invoke-Msi @('/x', $candidate, '/qn') $uninstallLog)
+        try {
+            $uninstallExit = Invoke-Msi @('/x', $candidate, '/qn') $uninstallLog
+            if ($uninstallExit -notin @(0, 3010, 1641)) {
+                $cleanupFailures.Add("candidate MSI uninstall failed with exit $uninstallExit")
+            }
+        } catch {
+            $cleanupFailures.Add("candidate MSI uninstall threw: $($_.Exception.Message)")
+        }
+    }
+    try {
+        if ($null -ne (Get-InstalledProduct $upgradeCode)) {
+            $cleanupFailures.Add('candidate MSI product registration survived cleanup')
+        }
+    } catch {
+        $cleanupFailures.Add("failed to verify MSI product cleanup: $($_.Exception.Message)")
+    }
+    if (Test-Path -LiteralPath $expectedNativeHost -PathType Leaf) {
+        $cleanupFailures.Add("installed Native Messaging host survived cleanup: $expectedNativeHost")
+    }
+    try {
+        $postEdgeRegistration = @(Get-NativeHostRegistration 'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts')
+        if ($postEdgeRegistration.Count -gt 0) {
+            $cleanupFailures.Add('Edge Native Messaging registration survived cleanup')
+        }
+    } catch {
+        $cleanupFailures.Add("failed to verify Edge registration cleanup: $($_.Exception.Message)")
+    }
+    try {
+        $postFirefoxRegistration = @(Get-NativeHostRegistration 'HKCU:\Software\Mozilla\NativeMessagingHosts')
+        if ($postFirefoxRegistration.Count -gt 0) {
+            $cleanupFailures.Add('Firefox Native Messaging registration survived cleanup')
+        }
+    } catch {
+        $cleanupFailures.Add("failed to verify Firefox registration cleanup: $($_.Exception.Message)")
     }
     foreach ($name in @('HLS_V7_DATA_DIR','HLS_V7_DOWNLOAD_DIR','HLS_V7_CORE_TCP','HLS_V7_CORE_BIND','HLS_V6_SKIP_MIGRATE')) {
         $previous = switch ($name) {
@@ -365,5 +414,23 @@ try {
         if ($null -eq $previous -or [String]::IsNullOrEmpty([string]$previous)) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
         else { Set-Item "Env:$name" $previous }
     }
-    Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    try {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction Stop
+    } catch {
+        $cleanupFailures.Add("temporary release-gate state survived cleanup: $($_.Exception.Message)")
+    }
 }
+
+if ($null -ne $primaryFailure) {
+    if ($cleanupFailures.Count -gt 0) {
+        throw "Browser media-push validation failed: $($primaryFailure.Exception.Message); cleanup also failed: $($cleanupFailures -join '; ')"
+    }
+    throw $primaryFailure
+}
+if ($cleanupFailures.Count -gt 0) {
+    throw "Browser media-push cleanup failed after validation: $($cleanupFailures -join '; ')"
+}
+if ($null -eq $result) {
+    throw 'Browser media-push validation completed without a result.'
+}
+Write-Output ($result | ConvertTo-Json -Depth 8 -Compress)
