@@ -6,6 +6,9 @@ on:
       - "网页版gpt"
     paths:
       - ".github/workflows/branch-media-push-wrapper-validation.yml"
+      - "scripts/test-v7-media-push-wrapper.ps1"
+      - "scripts/verify-v7-browser-media-push.ps1"
+      - "scripts/verify-v7-browser-media-push-core.ps1"
 
 permissions:
   contents: read
@@ -15,10 +18,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
-      - name: Check out branch
+      - name: Check out triggering commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: "网页版gpt"
       - name: Validate wrapper in Windows PowerShell and PowerShell 7
         shell: pwsh
         run: |
