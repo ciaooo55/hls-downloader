@@ -2223,7 +2223,7 @@ mod tests {
             let _ = stream.read(&mut request);
             let _ = stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\na");
-            for byte in [b'b', b'c', b'd'] {
+            for byte in *b"bcd" {
                 thread::sleep(Duration::from_millis(90));
                 let _ = stream.write_all(&[byte]);
             }
