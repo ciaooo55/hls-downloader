@@ -440,7 +440,7 @@ impl CoreStore {
     pub fn load_handoffs(&self) -> Result<Vec<String>, String> {
         let mut statement = self
             .connection
-            .prepare("SELECT public_json FROM handoffs ORDER BY created_at_ms")
+            .prepare("SELECT public_json FROM handoffs ORDER BY created_at_ms, rowid")
             .map_err(|error| format!("prepare Core handoff restore: {error}"))?;
         let rows = statement
             .query_map([], |row| row.get::<_, String>(0))
