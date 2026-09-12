@@ -1,0 +1,59 @@
+name: TVBox content-length completion hardening
+
+on:
+  push:
+    branches:
+      - "网页版gpt"
+    paths:
+      - ".github/branch_tvbox_content_length_patch.py"
+      - ".github/workflows/branch-tvbox-content-length.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: "1.98.1"
+          components: clippy,rustfmt
+
+      - name: Apply hardening
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python.exe .github/branch_tvbox_content_length_patch.py
+          cargo fmt --manifest-path native_shell/Cargo.toml --all
+
+      - name: Validate hardening
+        working-directory: native_shell
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --locked --lib tvbox_http_response_ -- --test-threads=1
+          cargo test --locked --lib tvbox_push_falls_back_from_post_to_get -- --test-threads=1
+          cargo clippy --locked --all-targets -- -D warnings -A dead_code -A clippy::large_enum_variant -A clippy::too_many_arguments -A clippy::type_complexity
+
+      - name: Commit product change and cleanup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add native_shell/src/cast.rs
+          git commit -m "fix(cast): finish TVBox responses at Content-Length"
+          git rm .github/branch_tvbox_content_length_patch.py .github/workflows/branch-tvbox-content-length.yml
+          git commit -m "chore(branch): remove temporary TVBox content-length patch"
+          git fetch origin "$env:GITHUB_REF_NAME"
+          git rebase "origin/$env:GITHUB_REF_NAME"
+          git push origin "HEAD:$env:GITHUB_REF_NAME"
