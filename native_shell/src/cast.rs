@@ -465,6 +465,8 @@ pub fn push_tvbox(endpoint: &str, media_url: &str, _title: &str) -> Result<(), S
     Ok(())
 }
 
+const MAX_TVBOX_HTTP_RESPONSE_BYTES: usize = 64 * 1024;
+
 #[derive(Debug)]
 struct TvboxHttpResponse {
     status: u16,
@@ -502,10 +504,16 @@ fn tvbox_http_request(
     stream
         .write_all(request.as_bytes())
         .map_err(|error| error.to_string())?;
-    let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
+    let mut response_bytes = Vec::with_capacity(4096);
+    let mut limited = stream.take((MAX_TVBOX_HTTP_RESPONSE_BYTES + 1) as u64);
+    limited
+        .read_to_end(&mut response_bytes)
         .map_err(|error| format!("读取 TVBox 响应: {error}"))?;
+    if response_bytes.len() > MAX_TVBOX_HTTP_RESPONSE_BYTES {
+        return Err("TVBox 响应过大".into());
+    }
+    let response =
+        String::from_utf8(response_bytes).map_err(|_| "TVBox 返回了非 UTF-8 响应".to_string())?;
     let (headers, body) = response.split_once("\r\n\r\n").unwrap_or((&response, ""));
     let status = headers
         .lines()
@@ -2177,6 +2185,30 @@ mod tests {
             body: r#"{"ok":true}"#.into()
         })
         .is_ok());
+    }
+
+    #[test]
+    fn tvbox_http_response_is_bounded() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/action", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request);
+            let body = vec![b'x'; MAX_TVBOX_HTTP_RESPONSE_BYTES + 4096];
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(headers.as_bytes());
+            let _ = stream.write_all(&body);
+        });
+
+        let error = tvbox_http_request("GET", &endpoint, "", Duration::from_secs(1)).unwrap_err();
+        assert_eq!(error, "TVBox 响应过大");
+        server.join().unwrap();
     }
 
     #[test]
