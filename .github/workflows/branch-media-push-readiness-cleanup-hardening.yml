@@ -1,0 +1,65 @@
+name: Branch media push readiness cleanup hardening
+
+on:
+  push:
+    branches:
+      - "网页版gpt"
+    paths:
+      - ".github/branch_media_push_readiness_cleanup_hardening.py"
+      - ".github/workflows/branch-media-push-readiness-cleanup-hardening.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch-readiness-cleanup:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: "网页版gpt"
+          fetch-depth: 0
+
+      - name: Apply readiness cleanup patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python .github/branch_media_push_readiness_cleanup_hardening.py
+
+      - name: Validate PowerShell syntax and wrapper regressions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = 'scripts/verify-v7-browser-media-push-core.ps1'
+          powershell.exe -NoProfile -Command "[scriptblock]::Create([IO.File]::ReadAllText('$script')) | Out-Null"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh.exe -NoProfile -Command "[scriptblock]::Create([IO.File]::ReadAllText('$script')) | Out-Null"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-media-push-wrapper.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-media-push-wrapper.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --check
+          $changed = @(git diff --name-only | Sort-Object)
+          if ($changed.Count -ne 1 -or $changed[0] -ne 'scripts/verify-v7-browser-media-push-core.ps1') {
+            throw "Unexpected changed files: $($changed -join ', ')"
+          }
+
+      - name: Commit product change
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/verify-v7-browser-media-push-core.ps1
+          git commit -m "fix(release): require clean media push gate teardown"
+
+      - name: Remove temporary branch patch machinery
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git rm .github/branch_media_push_readiness_cleanup_hardening.py .github/workflows/branch-media-push-readiness-cleanup-hardening.yml
+          git commit -m "chore(branch): remove temporary readiness cleanup patch"
+          git push origin "HEAD:$env:GITHUB_REF_NAME"
