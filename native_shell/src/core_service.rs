@@ -61,16 +61,18 @@ impl PersistentCore {
         } = &command
         {
             if matches!(status.as_str(), "done" | "failed" | "canceled") {
-                let already_resolved = self
+                let persisted = self
                     .store
                     .load_handoffs()?
                     .into_iter()
                     .filter_map(|encoded| {
                         serde_json::from_str::<crate::MediaPushRequest>(&encoded).ok()
                     })
-                    .any(|item| item.id == *request_id && item.status != "pending");
-                if already_resolved {
-                    return Ok(Vec::new());
+                    .find(|item| item.id == *request_id);
+                match persisted {
+                    Some(item) if item.status != "pending" => return Ok(Vec::new()),
+                    Some(item) => self.runtime.restore_pending_media_push(item),
+                    None => {}
                 }
             }
         }
@@ -586,6 +588,54 @@ mod tests {
         assert!(next
             .iter()
             .any(|event| matches!(event.event, crate::CoreEvent::MediaPushRequested { .. })));
+    }
+
+    #[test]
+    fn media_push_terminal_resolution_rehydrates_missing_runtime_request() {
+        let mut core = PersistentCore::in_memory().unwrap();
+        let request = crate::MediaPushRequest {
+            id: "push-runtime-rehydrate".into(),
+            push_kind: "cast".into(),
+            url: "https://example.test/runtime-rehydrate.mp4".into(),
+            title: "Runtime rehydrate".into(),
+            status: "pending".into(),
+            message: String::new(),
+            location: String::new(),
+            created_at_ms: 8,
+        };
+        core.handle(CoreCommand::RequestMediaPush {
+            request: request.clone(),
+        })
+        .unwrap();
+        core.runtime = CoreRuntime::new();
+
+        let events = core
+            .handle(CoreCommand::ResolveMediaPush {
+                request_id: request.id.clone(),
+                status: "done".into(),
+                message: "sent".into(),
+                location: "http://192.168.1.9/media/runtime-rehydrate".into(),
+            })
+            .unwrap();
+        assert!(events.iter().any(|event| matches!(
+            &event.event,
+            crate::CoreEvent::MediaPushResolved { request }
+                if request.id == "push-runtime-rehydrate" && request.status == "done"
+        )));
+        let persisted = core
+            .store()
+            .load_handoffs()
+            .unwrap()
+            .into_iter()
+            .filter_map(|encoded| serde_json::from_str::<crate::MediaPushRequest>(&encoded).ok())
+            .find(|item| item.id == request.id)
+            .unwrap();
+        assert_eq!(persisted.status, "done");
+        assert_eq!(persisted.message, "sent");
+        assert_eq!(
+            persisted.location,
+            "http://192.168.1.9/media/runtime-rehydrate"
+        );
     }
 
     #[test]

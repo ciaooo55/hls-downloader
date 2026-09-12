@@ -167,6 +167,17 @@ class ProtocolTest {
         assertEquals("dlna:living-room", request.location)
     }
 
+    @Test fun mediaPushTerminalSyncTreatsBusinessErrorEventAsFailure() {
+        val event = protocolJson.decodeFromString<EventEnvelopeDto>(
+            """{"sequence":46,"event":{"kind":"error","code":"media_push_not_found","message":"媒体推送请求不存在"}}""",
+        )
+        val error = assertFailsWith<EngineProtocolException> {
+            requireNoCoreError(CommandResult(12, listOf(event)), "媒体推送状态同步失败")
+        }
+        assertEquals("media_push_not_found", error.code)
+        assertEquals("媒体推送请求不存在", error.message)
+    }
+
     @Test fun powerActionPendingEventKeepsConfirmationDetails() {
         val envelope = protocolJson.decodeFromString<EventEnvelopeDto>(
             """{"sequence":46,"event":{"kind":"power_action_pending","action":"sleep","title":"movie.mp4","delay_seconds":30}}""",

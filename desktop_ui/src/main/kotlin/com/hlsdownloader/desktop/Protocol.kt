@@ -446,13 +446,16 @@ class EnginePipeClient(
             else -> action
         },
     ))
-    fun resolveMediaPush(requestId: String, status: String, message: String = "", location: String = "") = command(buildJsonObject {
-        put("kind", "resolve_media_push")
-        put("request_id", requestId)
-        put("status", status)
-        put("message", message)
-        put("location", location)
-    })
+    fun resolveMediaPush(requestId: String, status: String, message: String = "", location: String = ""): CommandResult {
+        val result = command(buildJsonObject {
+            put("kind", "resolve_media_push")
+            put("request_id", requestId)
+            put("status", status)
+            put("message", message)
+            put("location", location)
+        })
+        return requireNoCoreError(result, "媒体推送状态同步失败")
+    }
     fun probeUrl(url: String) = probeUrl(TaskDraft(url = url))
 
     fun probeUrl(draft: TaskDraft): CommandResult {
@@ -853,6 +856,14 @@ class EnginePipeClient(
 }
 
 class EngineProtocolException(val code: String, message: String) : IllegalStateException(message)
+
+internal fun requireNoCoreError(result: CommandResult, fallback: String): CommandResult {
+    val event = result.events.firstOrNull { it.event["kind"]?.jsonPrimitive?.content == "error" }?.event
+        ?: return result
+    val code = event["code"]?.jsonPrimitive?.content?.takeIf(String::isNotBlank) ?: "engine_error"
+    val message = event["message"]?.jsonPrimitive?.content?.takeIf(String::isNotBlank) ?: fallback
+    throw EngineProtocolException(code, message)
+}
 
 private fun JsonObject.requireType(expected: String, fallback: String) {
     require(this["type"]?.jsonPrimitive?.content == expected) { this["message"]?.jsonPrimitive?.content ?: fallback }
