@@ -55,11 +55,16 @@ if ($portableSha256 -ne ([string]$portableEntry.sha256).ToLowerInvariant()) {
 
 $tempRoot = Join-Path $env:RUNNER_TEMP ('hls-v7-native-host-provenance-' + [guid]::NewGuid().ToString('n'))
 $packageResources = Join-Path $repo 'desktop_ui\resources\common'
+# Refusing pre-existing staging must not delete it in finally. Ownership is
+# acquired only after exclusive directory creation succeeds, including races.
+$ownsTempRoot = $false
+$ownsPackageResources = $false
 try {
     if (Test-Path -LiteralPath $packageResources) {
         throw "Candidate build resource staging unexpectedly survived build cleanup: $packageResources"
     }
-    New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+    New-Item -ItemType Directory -Path $tempRoot -ErrorAction Stop | Out-Null
+    $ownsTempRoot = $true
     Expand-Archive -LiteralPath $portablePath -DestinationPath $tempRoot -Force
     $portableNativeHost = Join-Path $tempRoot 'HLSDownloader\app\resources\HLSDownloaderNativeHost.exe'
     if (-not (Test-Path -LiteralPath $portableNativeHost -PathType Leaf)) {
@@ -67,7 +72,8 @@ try {
     }
     $portableNativeHostSha256 = (Get-FileHash -LiteralPath $portableNativeHost -Algorithm SHA256).Hash.ToLowerInvariant()
 
-    New-Item -ItemType Directory -Force -Path $packageResources | Out-Null
+    New-Item -ItemType Directory -Path $packageResources -ErrorAction Stop | Out-Null
+    $ownsPackageResources = $true
     $stagedNativeHost = Join-Path $packageResources 'HLSDownloaderNativeHost.exe'
     Copy-Item -LiteralPath $portableNativeHost -Destination $stagedNativeHost -Force
     $stagedNativeHostSha256 = (Get-FileHash -LiteralPath $stagedNativeHost -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -106,6 +112,10 @@ try {
     }) -Force
     Write-Output ($summary | ConvertTo-Json -Depth 10 -Compress)
 } finally {
-    Remove-Item -LiteralPath $packageResources -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if ($ownsPackageResources) {
+        Remove-Item -LiteralPath $packageResources -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($ownsTempRoot) {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }

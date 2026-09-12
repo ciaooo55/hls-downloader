@@ -50,6 +50,10 @@ data.db-wal
 *.log
 
 # Local worktrees and editors
+# Local assistant state and delivery files are not product source.
+/.workbuddy-ai/
+/.workbuddy/
+/outputs/
 .worktrees/
 docs/superpowers/
 .idea/

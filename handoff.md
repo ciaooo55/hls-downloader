@@ -3,10 +3,18 @@ repository: ciaooo55/hls-downloader
 default_branch: main
 product_version: 7.0.2
 release_ready: false
-last_updated: 2026-09-11
+last_updated: 2026-09-12
 ---
 
 # Project handoff
+
+## Current operator-approved integration workflow (2026-09-12)
+
+- Keep only local `main`; keep only remote `main` and `网页版gpt`.
+- The web GPT stream updates `网页版gpt`. Local `main` integrates reviewed development updates and local fixes, validates them, then pushes to remote `main` for preservation.
+- Do not create PRs, extra branches or extra worktrees. PR #95 was closed at the operator's request; historical PR records below are evidence, not instructions to reopen them.
+- The older branch-only / fresh Draft-PR continuation instructions below are superseded by this workflow and `AGENTS.md`. Formal-release gates and authorization requirements remain unchanged.
+- Keep product source, validation evidence and deliverables in their designated directories. Preserve `.workbuddy-ai/` project state; remove obsolete copies only after protecting unmerged work and obtaining cleanup confirmation.
 
 ## Current baseline
 
@@ -14,9 +22,9 @@ last_updated: 2026-09-11
 - The remaining partial feature is `browser.media_push_device_selection`; its source path is implemented, but final acceptance still requires the installed-package real-browser and real-LAN-device gate.
 - The active implementation is only `desktop_ui/`, `native_shell/`, `presenter_ui/`, and `extension/`.
 - `native_shell` is the sole resident Core and SQLite owner. Compose and Presenter communicate through `hls-downloader-v7-core` on `\\.\pipe\HLSDownloader.v7`.
-- `main` remains the integration baseline and must not be modified or merged from this workstream without explicit operator authorization.
+- `main` is the operator-authorized integration baseline under the workflow above. Preserve review and validation before pushing; this is not formal-publication authorization.
 
-## `网页版gpt` workstream
+## Historical `网页版gpt` workstream (superseded execution instructions)
 
 - This continuation workstream is branch-only: assistant-authored changes stay on `网页版gpt`; any integration observed on `main` is external unless explicitly authorized.
 - PR #92 was merged outside this workstream at `705b532c9084f7f2cb8c0a24c1bf4c7f8206d8c2`. Draft PR #93 was then merged outside this workstream at docs head `a6478f70ff890bfc4deea0da98838d44086a8c76`, and Draft PR #94 was later merged outside this workstream at product source `b9df58acb002be8f9d7ea72d4bfaceafdfeae7f2` despite its explicit DO NOT MERGE boundary. Post-merge continuation must use a fresh Draft validation PR only; do not merge that PR and do not write `main` from this workstream.
