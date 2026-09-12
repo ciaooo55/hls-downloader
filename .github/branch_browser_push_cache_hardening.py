@@ -111,9 +111,10 @@ test = '''    #[test]
         }
         assert_eq!(queue.len(), MAX_BROWSER_PUSHES);
         assert_eq!(queue.front().map(|push| push.id.as_str()), Some("push-10"));
+        let expected_back = format!("push-{}", MAX_BROWSER_PUSHES + 9);
         assert_eq!(
             queue.back().map(|push| push.id.as_str()),
-            Some(format!("push-{}", MAX_BROWSER_PUSHES + 9).as_str())
+            Some(expected_back.as_str())
         );
     }
 
