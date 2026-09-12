@@ -1,4 +1,4 @@
-# Branch-local fast check; the full v7 CI also runs on pushes to 网页版gpt.
+# Branch-local fast check; full v7 CI covers every 网页版gpt push, including cast/discovery changes.
 name: Branch media push wrapper validation
 
 on:
