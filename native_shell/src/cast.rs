@@ -697,6 +697,13 @@ fn tvbox_http_request(
     let Some((header_end, headers)) = tvbox_http_headers(&response_bytes)? else {
         return Err("TVBox 返回了无效响应".into());
     };
+    // EOF completes only an unframed response. A shorter Content-Length body
+    // must not turn a truncated (possibly empty) receiver reply into success.
+    if let Some(expected_len) = tvbox_http_response_expected_len(&response_bytes)? {
+        if response_bytes.len() < expected_len {
+            return Err("TVBox 返回了不完整 Content-Length 响应".into());
+        }
+    }
     let status = headers
         .lines()
         .next()
@@ -2375,6 +2382,62 @@ mod tests {
             body: r#"{"ok":true}"#.into()
         })
         .is_ok());
+    }
+
+    #[test]
+    fn tvbox_http_response_rejects_truncated_content_length_at_eof() {
+        use std::net::TcpListener;
+
+        // A valid-looking success body (or an empty one) is not a complete
+        // response when the receiver promised more bytes before closing.
+        for body in ["", r#"{"ok":true}"#] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!("http://{}/action", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len() + 1
+                )
+                .unwrap();
+            });
+
+            let response = tvbox_http_request("GET", &endpoint, "", Duration::from_secs(2));
+            server.join().unwrap();
+            assert_eq!(
+                response.unwrap_err(),
+                "TVBox 返回了不完整 Content-Length 响应"
+            );
+        }
+    }
+
+    #[test]
+    fn tvbox_http_response_preserves_zero_length_and_eof_framing() {
+        use std::net::TcpListener;
+
+        for (length_header, body) in [("Content-Length: 0\r\n", ""), ("", r#"{"ok":true}"#)] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!("http://{}/action", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\n{length_header}Connection: close\r\n\r\n{body}"
+                )
+                .unwrap();
+            });
+
+            let response = tvbox_http_request("GET", &endpoint, "", Duration::from_secs(2));
+            server.join().unwrap();
+            let response = response.unwrap();
+            assert_eq!(response.status, 200);
+            assert_eq!(response.body, body);
+        }
     }
 
     #[test]
