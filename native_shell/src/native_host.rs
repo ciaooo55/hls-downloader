@@ -29,7 +29,7 @@ struct NativeHostSession {
     core: HostCore,
     handoffs: BTreeMap<String, Handoff>,
     request_ids: BTreeMap<String, String>,
-    media_push_ui_prompted: bool,
+    media_push_ui_request_id: Option<String>,
 }
 
 enum HostCore {
@@ -215,7 +215,7 @@ impl NativeHostSession {
             core,
             handoffs,
             request_ids,
-            media_push_ui_prompted: false,
+            media_push_ui_request_id: None,
         })
     }
 
@@ -574,12 +574,15 @@ impl NativeHostSession {
                 _ => None,
             })
             .unwrap_or(request);
-        let should_prompt_ui = outcome.status == "pending"
-            || (!self.media_push_ui_prompted
-                && outcome.status == "failed"
-                && self.has_pending_media_push().unwrap_or(false));
-        if should_prompt_ui {
-            self.prompt_media_push_ui();
+        let pending_request_id = if outcome.status == "pending" {
+            Some(outcome.id.clone())
+        } else if outcome.status == "failed" {
+            self.pending_media_push_id().ok().flatten()
+        } else {
+            None
+        };
+        if let Some(request_id) = pending_request_id {
+            self.prompt_media_push_ui(&request_id);
         }
         Ok(json!({
             "ok": true,
@@ -618,20 +621,21 @@ impl NativeHostSession {
         }))
     }
 
-    fn has_pending_media_push(&mut self) -> Result<bool, String> {
+    fn pending_media_push_id(&mut self) -> Result<Option<String>, String> {
         Ok(self
             .core
             .load_handoffs()?
             .into_iter()
             .filter_map(|encoded| serde_json::from_str::<MediaPushRequest>(&encoded).ok())
-            .any(|request| request.status == "pending"))
+            .find(|request| request.status == "pending")
+            .map(|request| request.id))
     }
 
-    fn prompt_media_push_ui(&mut self) {
-        if self.media_push_ui_prompted {
+    fn prompt_media_push_ui(&mut self, request_id: &str) {
+        if self.media_push_ui_request_id.as_deref() == Some(request_id) {
             return;
         }
-        self.media_push_ui_prompted = true;
+        self.media_push_ui_request_id = Some(request_id.to_string());
         let _ = self.core.handle(CoreCommand::OpenMain);
         if let Some(root) = crate::install_root() {
             let _ = crate::spawn_desktop_ui(&root);
@@ -1401,7 +1405,60 @@ mod tests {
             &event.event,
             CoreEvent::UiShow { surface } if surface == "main"
         )));
-        assert!(session.media_push_ui_prompted);
+        assert_eq!(
+            session.media_push_ui_request_id.as_deref(),
+            Some("media-push-restored")
+        );
+    }
+
+    #[test]
+    fn media_push_new_request_reopens_ui_after_previous_request_resolves() {
+        let mut session = NativeHostSession::in_memory().unwrap();
+        let first = session
+            .dispatch(&json!({
+                "op": "media_push",
+                "kind": "tvbox",
+                "resource": {
+                    "url": "https://cdn.test/first.m3u8",
+                    "title": "First"
+                }
+            }))
+            .unwrap();
+        let first_id = first["id"].as_str().unwrap().to_string();
+        session
+            .core
+            .handle(CoreCommand::ResolveMediaPush {
+                request_id: first_id,
+                status: "canceled".into(),
+                message: "用户取消".into(),
+                location: String::new(),
+            })
+            .unwrap();
+
+        let sequence_before_second = session.core.local().latest_sequence();
+        let second = session
+            .dispatch(&json!({
+                "op": "media_push",
+                "kind": "cast",
+                "resource": {
+                    "url": "https://cdn.test/second.m3u8",
+                    "title": "Second"
+                }
+            }))
+            .unwrap();
+        let second_id = second["id"].as_str().unwrap().to_string();
+        assert_eq!(second["status"], "pending");
+        assert_ne!(second_id, first["id"]);
+
+        let events = session.core.local().events_after(sequence_before_second, 8);
+        assert!(events.iter().any(|event| matches!(
+            &event.event,
+            CoreEvent::UiShow { surface } if surface == "main"
+        )));
+        assert_eq!(
+            session.media_push_ui_request_id.as_deref(),
+            Some(second_id.as_str())
+        );
     }
 
     #[test]
