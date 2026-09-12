@@ -155,13 +155,19 @@ if text.count(old) != 2:
 text = text.replace(old, '''    let host = cast_lan_host("")?;''', 1)
 text = text.replace(old, '''    let host = cast_lan_host(device_id)?;''', 1)
 
-old = '''        let host = crate::cast::primary_lan_ipv4()
+old_local = '''        let host = crate::cast::primary_lan_ipv4()
             .map(|ip| ip.to_string())
             .ok_or_else(|| "没有可用于投屏的局域网地址".to_string())?;'''
-if text.count(old) != 2:
-    raise SystemExit(f"share media LAN host count={text.count(old)}")
-text = text.replace(old, '''        let host = cast_lan_host(device_id)?;''', 1)
-text = text.replace(old, '''            let host = cast_lan_host("")?;''', 1)
+if text.count(old_local) != 1:
+    raise SystemExit(f"local share media LAN host count={text.count(old_local)}")
+text = text.replace(old_local, '''        let host = cast_lan_host(device_id)?;''', 1)
+
+old_redirect = '''            let host = crate::cast::primary_lan_ipv4()
+                .map(|ip| ip.to_string())
+                .ok_or_else(|| "没有可用于投屏的局域网地址".to_string())?;'''
+if text.count(old_redirect) != 1:
+    raise SystemExit(f"remote redirect LAN host count={text.count(old_redirect)}")
+text = text.replace(old_redirect, '''            let host = cast_lan_host("")?;''', 1)
 
 old = '''    let server = shared_media()?;
     server.enable_lan();
