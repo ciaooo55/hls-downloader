@@ -175,7 +175,7 @@ fn peer_ipv4_from_endpoint(endpoint: &str) -> Option<Ipv4Addr> {
     (peer.is_private() || peer.is_link_local()).then_some(peer)
 }
 
-fn routed_lan_ipv4(peer: Ipv4Addr) -> Option<Ipv4Addr> {
+pub fn routed_lan_ipv4(peer: Ipv4Addr) -> Option<Ipv4Addr> {
     if !(peer.is_private() || peer.is_link_local()) {
         return None;
     }
@@ -1907,6 +1907,8 @@ mod tests {
         );
         assert_eq!(peer_ipv4_from_endpoint("http://8.8.8.8:80/action"), None);
         assert_eq!(peer_ipv4_from_endpoint("not-an-endpoint"), None);
+        assert_eq!(routed_lan_ipv4(Ipv4Addr::new(8, 8, 8, 8)), None);
+        assert_eq!(routed_lan_ipv4(Ipv4Addr::LOCALHOST), None);
 
         let chromecast = CastDeviceInfo {
             id: "chromecast:kitchen".into(),

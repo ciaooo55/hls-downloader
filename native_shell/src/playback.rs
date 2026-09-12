@@ -313,7 +313,11 @@ fn advertise_host(peer: Option<IpAddr>, port: u16) -> String {
     match peer {
         Some(IpAddr::V4(ip)) if ip.is_loopback() => format!("127.0.0.1:{port}"),
         Some(IpAddr::V6(ip)) if ip.is_loopback() => format!("127.0.0.1:{port}"),
-        Some(_) => crate::cast::primary_lan_ipv4()
+        Some(IpAddr::V4(peer)) => crate::cast::routed_lan_ipv4(peer)
+            .or_else(crate::cast::preferred_lan_ipv4)
+            .map(|ip| format!("{ip}:{port}"))
+            .unwrap_or_else(|| format!("127.0.0.1:{port}")),
+        Some(IpAddr::V6(_)) => crate::cast::preferred_lan_ipv4()
             .map(|ip| format!("{ip}:{port}"))
             .unwrap_or_else(|| format!("127.0.0.1:{port}")),
         None => format!("127.0.0.1:{port}"),
