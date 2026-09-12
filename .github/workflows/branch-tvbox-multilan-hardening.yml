@@ -62,4 +62,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           git rm .github/branch_tvbox_multilan_hardening.py .github/workflows/branch-tvbox-multilan-hardening.yml
           git commit -m "chore(branch): remove temporary TVBox multi-LAN patch"
+          git fetch origin "$env:GITHUB_REF_NAME"
+          git rebase "origin/$env:GITHUB_REF_NAME"
           git push origin "HEAD:$env:GITHUB_REF_NAME"
