@@ -75,9 +75,9 @@ pub fn start_browser_push(kind: &str, url: &str, title: &str) -> Result<BrowserP
     );
     let token = crate::playback::random_mount_token();
     server.mount_remote(&token, url.to_string());
-    let host = primary_lan_ipv4()
+    let host = preferred_lan_ipv4()
         .map(|ip| ip.to_string())
-        .unwrap_or_else(|| "127.0.0.1".into());
+        .ok_or_else(|| "没有可用于投屏的局域网地址".to_string())?;
     let location = if kind == "tvbox" {
         format!("http://{host}:{}/tvbox/{token}", server.bound_port())
     } else {
@@ -139,6 +139,71 @@ pub fn primary_lan_ipv4() -> Option<Ipv4Addr> {
         IpAddr::V4(ip) if ip.is_private() || ip.is_link_local() => Some(ip),
         _ => None,
     }
+}
+
+/// Prefer a physical LAN adapter for address publication. On Windows the
+/// discovery list already excludes loopback, tunnels, common VPNs, WSL and
+/// Hyper-V adapters; the legacy route probe remains a fallback when adapter
+/// enumeration is unavailable.
+pub fn preferred_lan_ipv4() -> Option<Ipv4Addr> {
+    #[cfg(windows)]
+    {
+        lan_ipv4_networks()
+            .into_iter()
+            .map(|(address, _)| address)
+            .next()
+    }
+    #[cfg(not(windows))]
+    {
+        primary_lan_ipv4()
+    }
+}
+
+fn peer_ipv4_from_endpoint(endpoint: &str) -> Option<Ipv4Addr> {
+    let endpoint = endpoint.trim();
+    let host = if endpoint.starts_with("http://") {
+        split_http_url(endpoint).ok()?.0
+    } else if endpoint.contains("://") {
+        host_of(endpoint)?
+    } else if let Some((host, port)) = endpoint.rsplit_once(':') {
+        port.parse::<u16>().ok()?;
+        host.to_string()
+    } else {
+        endpoint.to_string()
+    };
+    let peer = host.parse::<Ipv4Addr>().ok()?;
+    (peer.is_private() || peer.is_link_local()).then_some(peer)
+}
+
+fn routed_lan_ipv4(peer: Ipv4Addr) -> Option<Ipv4Addr> {
+    if !(peer.is_private() || peer.is_link_local()) {
+        return None;
+    }
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect(SocketAddr::from((peer, 9))).ok()?;
+    match socket.local_addr().ok()?.ip() {
+        IpAddr::V4(ip) if (ip.is_private() || ip.is_link_local()) && !ip.is_loopback() => Some(ip),
+        _ => None,
+    }
+}
+
+fn device_peer_ipv4(device: &CastDeviceInfo) -> Option<Ipv4Addr> {
+    peer_ipv4_from_endpoint(&device.control_url)
+        .or_else(|| peer_ipv4_from_endpoint(&device.location))
+}
+
+/// Resolve the local IPv4 address that Windows/Linux would use to reach the
+/// selected receiver. This avoids advertising a VPN/virtual-adapter address
+/// to a TV that was discovered on another interface.
+pub fn device_lan_ipv4(device_id: &str) -> Option<Ipv4Addr> {
+    let device = cached_devices()
+        .into_iter()
+        .find(|item| item.id == device_id || item.control_url == device_id)?;
+    routed_lan_ipv4(device_peer_ipv4(&device)?)
+}
+
+pub fn endpoint_lan_ipv4(endpoint: &str) -> Option<Ipv4Addr> {
+    routed_lan_ipv4(peer_ipv4_from_endpoint(endpoint)?)
 }
 
 #[cfg(windows)]
@@ -1824,6 +1889,36 @@ mod tests {
         if let Some(ip) = primary_lan_ipv4() {
             assert!(ip.is_private() || ip.is_link_local());
         }
+    }
+
+    #[test]
+    fn extracts_private_receiver_addresses_across_cast_protocols() {
+        assert_eq!(
+            peer_ipv4_from_endpoint("http://192.168.1.20:8008/upnp/control/AVTransport"),
+            Some(Ipv4Addr::new(192, 168, 1, 20))
+        );
+        assert_eq!(
+            peer_ipv4_from_endpoint("10.0.0.8:8009"),
+            Some(Ipv4Addr::new(10, 0, 0, 8))
+        );
+        assert_eq!(
+            peer_ipv4_from_endpoint("http://172.16.1.9:9978/action"),
+            Some(Ipv4Addr::new(172, 16, 1, 9))
+        );
+        assert_eq!(peer_ipv4_from_endpoint("http://8.8.8.8:80/action"), None);
+        assert_eq!(peer_ipv4_from_endpoint("not-an-endpoint"), None);
+
+        let chromecast = CastDeviceInfo {
+            id: "chromecast:kitchen".into(),
+            label: "Kitchen".into(),
+            location: "https://192.168.50.9:8009".into(),
+            control_url: "192.168.50.9:8009".into(),
+            service_type: "chromecast".into(),
+        };
+        assert_eq!(
+            device_peer_ipv4(&chromecast),
+            Some(Ipv4Addr::new(192, 168, 50, 9))
+        );
     }
 
     #[test]

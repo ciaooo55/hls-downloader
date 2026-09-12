@@ -3967,14 +3967,23 @@ fn clear_cast_mount() {
     }
 }
 
+fn cast_lan_host(device_id: &str) -> Result<String, String> {
+    let address = if device_id.trim().is_empty() {
+        crate::cast::preferred_lan_ipv4()
+    } else {
+        crate::cast::device_lan_ipv4(device_id)
+    };
+    address
+        .map(|ip| ip.to_string())
+        .ok_or_else(|| "无法确定到投屏设备的局域网出口地址".to_string())
+}
+
 fn cast_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEnvelope>, String> {
     let loopback = mount_task_url(coordinator, task_id)?;
     let token = media_token_from_url(&loopback).ok_or_else(|| "播放地址无效".to_string())?;
     let server = shared_media()?;
     server.enable_lan();
-    let host = crate::cast::primary_lan_ipv4()
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|| "127.0.0.1".into());
+    let host = cast_lan_host("")?;
     let location = crate::cast::lan_media_url(server, &token, &host)?;
     let spec = coordinator
         .lock()?
@@ -4020,9 +4029,7 @@ fn cast_to_device(
         .ok_or_else(|| format!("unknown task {task_id}"))?;
     let server = shared_media()?;
     server.enable_lan();
-    let host = crate::cast::primary_lan_ipv4()
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|| "127.0.0.1".into());
+    let host = cast_lan_host(device_id)?;
     let location = crate::cast::lan_media_url(server, &token, &host)?;
     let title = if spec.title.is_empty() {
         spec.filename.clone()
@@ -4106,9 +4113,7 @@ fn share_media(
             title.trim().to_string()
         };
         server.mount(&token, source);
-        let host = crate::cast::primary_lan_ipv4()
-            .map(|ip| ip.to_string())
-            .ok_or_else(|| "没有可用于投屏的局域网地址".to_string())?;
+        let host = cast_lan_host(device_id)?;
         crate::cast::lan_media_url(server, &token, &host)?
     } else {
         let lower = url.to_ascii_lowercase();
@@ -4130,9 +4135,7 @@ fn share_media(
             media_url.clone()
         } else {
             server.mount_remote(&token, media_url.clone());
-            let host = crate::cast::primary_lan_ipv4()
-                .map(|ip| ip.to_string())
-                .ok_or_else(|| "没有可用于投屏的局域网地址".to_string())?;
+            let host = cast_lan_host("")?;
             let redirect = crate::cast::lan_media_url(server, &token, &host)?;
             let _ = crate::cast::ssdp_notify(&redirect);
             redirect
@@ -4487,10 +4490,6 @@ fn push_task_tvbox(
     let token = media_token_from_url(&loopback).ok_or_else(|| "播放地址无效".to_string())?;
     let server = shared_media()?;
     server.enable_lan();
-    let host = crate::cast::primary_lan_ipv4()
-        .map(|ip| ip.to_string())
-        .ok_or_else(|| "没有可用于 TVBox 的局域网地址".to_string())?;
-    let url = crate::cast::lan_media_url(server, &token, &host)?;
     let spec = coordinator
         .lock()?
         .task_spec(task_id)
@@ -4503,6 +4502,10 @@ fn push_task_tvbox(
     if endpoint.trim().is_empty() {
         return Err("请先在设置里填写 TVBox 地址".into());
     }
+    let host = crate::cast::endpoint_lan_ipv4(&endpoint)
+        .map(|ip| ip.to_string())
+        .ok_or_else(|| "无法确定到 TVBox 的局域网出口地址".to_string())?;
+    let url = crate::cast::lan_media_url(server, &token, &host)?;
     let title = if spec.title.is_empty() {
         spec.filename
     } else {
