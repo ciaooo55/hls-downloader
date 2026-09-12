@@ -1,0 +1,27 @@
+name: Branch media push wrapper validation
+
+on:
+  push:
+    branches:
+      - "网页版gpt"
+    paths:
+      - ".github/workflows/branch-media-push-wrapper-validation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-wrapper:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: "网页版gpt"
+      - name: Validate wrapper in Windows PowerShell and PowerShell 7
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-media-push-wrapper.ps1
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-media-push-wrapper.ps1
