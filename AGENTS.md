@@ -15,6 +15,15 @@ The default protocol is `hls-downloader-v7-core` on `\\.\pipe\HLSDownloader.v7`.
 
 Python/FastAPI, React/Tauri, WebView2 and the v6 Win32 supervisor are historical implementations. Their source is available through Git tags (`v3.0.39`, `v5.0.13`, `v6.0.1`) and must not be restored as active directories.
 
+## Branch ownership and repository hygiene
+
+- Keep exactly one local branch, `main`, and exactly two remote branches, `main` and `网页版gpt`.
+- `origin/网页版gpt` is the web GPT development stream. Local `main` is the sole integration workspace: fetch, review and integrate its updates plus local fixes, validate, then push local `main` to `origin/main` for preservation.
+- Do not create pull requests, extra branches or additional worktrees. Do not force-push or rewrite the web GPT development branch. Historical closed PRs are not active work items.
+- This operator-approved workflow supersedes older branch-only / Draft-PR continuation instructions in `handoff.md` and historical coordination logs. It does not grant formal release authorization or bypass protected-branch/server controls.
+- Keep source in the existing product directories. Put test evidence under `artifacts/v7-productization/` and user-facing deliverables under `outputs/`; do not scatter temporary reports or debug scripts in the repository root. Local state and outputs must not be committed.
+- `.workbuddy-ai/` holds project state and memory, not disposable cache. Preserve it. Before removing obsolete worktrees or personal files, list the exact targets, preserve unmerged changes, back up as required and obtain confirmation.
+
 ## Validation
 
 ```powershell
