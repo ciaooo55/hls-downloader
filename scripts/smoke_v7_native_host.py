@@ -114,9 +114,14 @@ def main() -> int:
         raise RuntimeError("Native Host and engine binaries must exist before smoke testing")
 
     root = Path(tempfile.mkdtemp(prefix="hls-v7-native-host-"))
-    host = args.host.resolve()
-    engine = args.engine.resolve()
+    # The Native Host resolves its Core by the installed product name next to its
+    # own executable, so stage both binaries under product names in an isolated
+    # directory instead of depending on the caller's build layout.
+    host = root / "HLSDownloaderNativeHost.exe"
+    engine = root / "HLSDownloaderEngine.exe"
     try:
+        shutil.copy2(args.host.resolve(), host)
+        shutil.copy2(args.engine.resolve(), engine)
         environment = os.environ.copy()
         environment["HLS_V7_DATA_DIR"] = str(root / "data")
         environment["HLS_V7_PIPE"] = rf"\\.\pipe\HLSDownloader.v7-smoke-{uuid.uuid4().hex}"
