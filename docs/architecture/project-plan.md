@@ -2,8 +2,8 @@
 
 ## Current baseline
 
-- Active development branch: `网页版gpt`.
-- `main` remains a read-only integration baseline unless the user explicitly asks otherwise.
+- Active development branch: local `网页版gpt` (tracks `origin/网页版gpt`).
+- Local `main` is the integration baseline: settled, validated changes are merged from local `网页版gpt` into it. Remote synchronization stays operator-controlled and is currently deferred.
 - Proxy route identity hardening landed in `e38bba5e7adb05404e36e3fa7f9cf75021354c6e` and passed focused Rust format/check/regression validation before commit.
 - Windows POST body forwarding hardening landed in `9b6dae814d59d0b3a128084cc5dac18949c72b2d`; focused validation covered curl method/body arguments and a real WinHTTP POST to a local receiver.
 - Duplicate request identity hardening landed in `c1d60cce6c7534130fd7021fff352a1a879e4963`.
