@@ -69,7 +69,10 @@ try {
         & $cargo test --manifest-path native_shell\Cargo.toml --lib --no-default-features --quiet
     }
     Invoke-Gate 'v7 Rust transfer worker contract' {
-        & $cargo test --manifest-path native_shell\Cargo.toml --lib --no-default-features http_engine --quiet
+        # Transfer worker tests live behind the default `full-core` feature. Running this
+        # filter on the reduced `--no-default-features` surface matches zero tests, and a
+        # zero-match cargo filter exits 0, so the gate would pass without testing anything.
+        & $cargo test --manifest-path native_shell\Cargo.toml --lib http_engine --quiet
         if ($LASTEXITCODE -ne 0) { throw "v7 Rust transfer worker tests failed (exit $LASTEXITCODE)" }
     }
     Invoke-Gate 'Native UI task model invariants' {
