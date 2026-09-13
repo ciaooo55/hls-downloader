@@ -45,14 +45,14 @@ This pre-readiness attestation is evidence for the later narrow feature-metadata
 
 ## What the formal workflow proves
 
-A dispatch from `main` refuses to continue unless the dispatched commit is still the current remote `main` and four exact workflow identities have successful **push** runs for that same `main` SHA:
+A dispatch from `main` refuses to continue unless the dispatched commit is still the current remote `main` and four exact workflow identities have successful runs for that same `main` SHA:
 
 - `v7 CI` at `.github/workflows/ci.yml`;
-- `v7 Candidate Package` at `.github/workflows/package-v7-candidate.yml`;
+- `v7 Candidate Package` at `.github/workflows/package-v7-candidate.yml` (explicit `workflow_dispatch` from `main`);
 - `Maintenance Security` at `.github/workflows/maintenance-security.yml`;
 - `Rust Security` at `.github/workflows/rust-security.yml`.
 
-All four required workflows emit a push result for every `main` commit so an exact-SHA formal release can never be stranded by a docs-only or otherwise path-filtered merge. Pull-request execution remains path-filtered to avoid needlessly running heavyweight validation for unrelated PR changes. The formal workflow binds both workflow display name and canonical workflow path, requires `event=push`, `head_branch=main`, and the exact `GITHUB_SHA`, so a renamed or duplicate-name workflow cannot silently satisfy the gate.
+Candidate packaging runs only on explicit manual dispatch, not on every merge. The other three prerequisites require `event=push`. Both readiness and formal release use `scripts/assert-v7-exact-main-workflows.ps1`, which binds each workflow's display name, canonical path and expected event, plus `head_branch=main` and the exact `GITHUB_SHA`. A renamed, duplicate-name, wrong-event or stale workflow cannot satisfy the gate. After freezing `main`, explicitly run the candidate workflow once and ensure the three push prerequisites succeeded before dispatching readiness.
 
 A fresh release requires no existing canonical-version tag; a retry may reuse only an annotated tag that resolves to that exact same frozen commit and, when a release already exists, only while that release is still a draft. It then:
 

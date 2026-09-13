@@ -14,13 +14,13 @@
 ## 最短安全发布顺序
 
 1. 完成所有已审查仓库工作，冻结最终 `main` SHA；冻结后不要再合入无关提交。
-2. 等待该**同一 SHA** 的四个 main-push 工作流全部成功：
+2. 等待该**同一 SHA** 的四个精确 SHA 工作流（三个 push，候选包为 main 上手动 workflow_dispatch）全部成功：
    - `v7 CI` (`.github/workflows/ci.yml`)
    - `v7 Candidate Package` (`.github/workflows/package-v7-candidate.yml`)
    - `Maintenance Security` (`.github/workflows/maintenance-security.yml`)
    - `Rust Security` (`.github/workflows/rust-security.yml`)
 3. 只有在 canonical 验证结果确实满足正式发布条件后，才能通过单独、可审查的源码变更把 `release_ready` 改为 true；本说明本身不授权该变更。
-4. 冻结新的 ready SHA，并再次等待它自己的四个精确 SHA main-push 工作流成功。任何 `main` 移动都会使之前的正式发布候选失效。
+4. 冻结新的 ready SHA，并再次等待它自己的四个精确 SHA 工作流（三个 push，候选包为 main 上手动 workflow_dispatch）成功。任何 `main` 移动都会使之前的正式发布候选失效。
 5. 由受保护 `v7-release` environment 中的授权操作者，在专用 self-hosted Windows x64 `hls-release` runner 上 dispatch `.github/workflows/release-v7.yml`。不要用普通 hosted runner 替代正式发布机。
 6. 正式 workflow 会在同一冻结 SHA 上重新构建 candidate，运行 browser/performance/installer/rollback 门禁，重新确认 `main` 未移动，再构建 formal package、执行 Authenticode 签名/时间戳验证、生成 SBOM/发布证据、创建或恢复 annotated tag + Draft Release，并逐项验证上传资产的 size/SHA-256 digest。
 7. 首次验证可保持 dispatch 的 `publish=false`，让通过 digest 校验的 Release 保持 Draft；只有明确授权发布时才使用 `publish=true`。已有 draft 的安全重试仍必须绑定同一 annotated tag 和同一冻结 commit。

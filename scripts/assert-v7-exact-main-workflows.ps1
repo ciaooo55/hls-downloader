@@ -26,10 +26,10 @@ $headers = @{
 $uri = "https://api.github.com/repos/$Repository/actions/runs?head_sha=$Sha&status=completed&per_page=100"
 $runs = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
 $requiredWorkflows = @(
-    [pscustomobject]@{ Name = 'v7 CI'; Path = '.github/workflows/ci.yml' },
-    [pscustomobject]@{ Name = 'v7 Candidate Package'; Path = '.github/workflows/package-v7-candidate.yml' },
-    [pscustomobject]@{ Name = 'Maintenance Security'; Path = '.github/workflows/maintenance-security.yml' },
-    [pscustomobject]@{ Name = 'Rust Security'; Path = '.github/workflows/rust-security.yml' }
+    [pscustomobject]@{ Name = 'v7 CI'; Path = '.github/workflows/ci.yml'; Event = 'push' },
+    [pscustomobject]@{ Name = 'v7 Candidate Package'; Path = '.github/workflows/package-v7-candidate.yml'; Event = 'workflow_dispatch' },
+    [pscustomobject]@{ Name = 'Maintenance Security'; Path = '.github/workflows/maintenance-security.yml'; Event = 'push' },
+    [pscustomobject]@{ Name = 'Rust Security'; Path = '.github/workflows/rust-security.yml'; Event = 'push' }
 )
 
 foreach ($required in $requiredWorkflows) {
@@ -38,7 +38,7 @@ foreach ($required in $requiredWorkflows) {
             Where-Object {
                 $_.name -eq $required.Name -and
                 $_.path -eq $required.Path -and
-                $_.event -eq 'push' -and
+                $_.event -eq $required.Event -and
                 $_.head_branch -eq 'main' -and
                 $_.head_sha -eq $Sha
             } |
@@ -55,5 +55,5 @@ Write-Output ([ordered]@{
     passed = $true
     repository = $Repository
     source_commit = $Sha.ToLowerInvariant()
-    workflows = @($requiredWorkflows | ForEach-Object { [ordered]@{ name = $_.Name; path = $_.Path } })
+    workflows = @($requiredWorkflows | ForEach-Object { [ordered]@{ name = $_.Name; path = $_.Path; event = $_.Event } })
 } | ConvertTo-Json -Depth 4 -Compress)

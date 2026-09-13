@@ -8,7 +8,7 @@ The formal v7 release path is one frozen-source pipeline:
 
 1. Dispatch only from current `main`.
 2. Resolve the canonical product version from `artifacts/v7-productization/feature-parity.json`.
-3. Require successful exact-SHA **push** conclusions for the canonical `v7 CI`, `v7 Candidate Package`, `Maintenance Security`, and `Rust Security` workflow paths.
+3. Require successful exact-SHA conclusions for the canonical workflow paths: `workflow_dispatch` for `v7 Candidate Package`, and `push` for `v7 CI`, `Maintenance Security`, and `Rust Security`. Both readiness and formal release use the same assertion script.
 4. Run on the dedicated Windows x64 `hls-release` runner and verify the fixed `E:\h` lifecycle environment.
 5. Build a candidate from that same source SHA.
 6. Produce browser, performance, MSI upgrade, and forced-rollback evidence from that candidate manifest.
@@ -50,7 +50,7 @@ These are release infrastructure and governance prerequisites. A missing prerequ
 
 The exact-SHA model means the releaseable unit is the **final frozen main SHA**, not "the product code before some later docs commits". Any commit that moves `main` creates a new prospective release SHA and requires fresh exact-SHA prerequisite conclusions. Concurrency cancellation of an older SHA after a newer push is therefore expected and safe.
 
-Operational consequence: once the project is preparing a formal release, coordination-only changes should be accumulated on branches and merged deliberately. After the final reviewed merge, stop moving `main` until all four required push workflows finish for that SHA and the formal release dispatch either completes or is abandoned.
+Operational consequence: once the project is preparing a formal release, coordination-only changes should be accumulated on branches and merged deliberately. After the final reviewed merge, explicitly dispatch candidate packaging from `main` and stop moving `main` until that run and the three required push workflows finish for the same SHA and the formal release dispatch either completes or is abandoned.
 
 ## Draft and publication boundary
 

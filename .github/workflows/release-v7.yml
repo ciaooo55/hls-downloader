@@ -103,33 +103,13 @@ jobs:
 
       - name: Require successful exact-SHA source, candidate and security workflows
         shell: pwsh
+        env:
+          HLS_V7_ACTIONS_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          $runs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?head_sha=$env:GITHUB_SHA&status=completed&per_page=100" | ConvertFrom-Json
-          $requiredWorkflows = @(
-            [pscustomobject]@{ Name = 'v7 CI'; Path = '.github/workflows/ci.yml' },
-            [pscustomobject]@{ Name = 'v7 Candidate Package'; Path = '.github/workflows/package-v7-candidate.yml' },
-            [pscustomobject]@{ Name = 'Maintenance Security'; Path = '.github/workflows/maintenance-security.yml' },
-            [pscustomobject]@{ Name = 'Rust Security'; Path = '.github/workflows/rust-security.yml' }
-          )
-          foreach ($required in $requiredWorkflows) {
-            $match = @(
-              $runs.workflow_runs |
-                Where-Object {
-                  $_.name -eq $required.Name -and
-                  $_.path -eq $required.Path -and
-                  $_.event -eq 'push' -and
-                  $_.head_branch -eq 'main' -and
-                  $_.head_sha -eq $env:GITHUB_SHA
-                } |
-                Sort-Object run_number -Descending |
-                Select-Object -First 1
-            )
-            if ($match.Count -ne 1 -or $match[0].conclusion -ne 'success') {
-              throw "$($required.Name) at $($required.Path) has not succeeded for main SHA $env:GITHUB_SHA."
-            }
-          }
+          & .\scripts\assert-v7-exact-main-workflows.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify dedicated Windows release runner
         shell: pwsh

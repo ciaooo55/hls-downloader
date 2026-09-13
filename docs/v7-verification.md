@@ -109,7 +109,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\record-v7-rele
 
 当前 `7.0.2` source line 的本地功能可继续开发/验证，但 `release_ready=false` 明确表示**尚未进入正式发布授权状态**。在任何公开 `v7.0.2` formal tag/Release 前，至少仍必须满足：
 
-1. 同一冻结 main SHA 的 `v7 CI`、`v7 Candidate Package`、`Maintenance Security`、`Rust Security` 四个 push workflow 均成功。
+1. 同一冻结 main SHA 的 `v7 CI`、`v7 Candidate Package`、`Maintenance Security`、`Rust Security` 四个 workflow（三个 push，候选包为 main 上手动 workflow_dispatch） 均成功。
 2. Edge 与 Firefox 对该 SHA 重新构建的 candidate 完成真实 browser 门禁；不得复用历史 7.0.1 扩展包。
 3. 当前 candidate Engine、Native Host、Compose 满足 formal performance thresholds。
 4. 公开 `v7.0.0` MSI 作为不可变升级基线，在固定 `E:\h` 生命周期环境升级到**当前 canonical candidate version**并验证应用进程恢复。
