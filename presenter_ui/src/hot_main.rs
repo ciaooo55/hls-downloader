@@ -983,7 +983,8 @@ fn fit_confirm_window(confirm: &ConfirmWindow) {
         return;
     };
     let window = confirm.window();
-    let Some((width, height)) = confirm_window_logical_size(work_area, window.scale_factor()) else {
+    let Some((width, height)) = confirm_window_logical_size(work_area, window.scale_factor())
+    else {
         trace("确认窗工作区或缩放无效，未调整尺寸");
         return;
     };
@@ -1658,7 +1659,10 @@ mod tests {
     fn confirm_window_size_clamps_both_axes_without_raising_the_work_area() {
         for scale in [1.0_f32, 1.25, 1.5, 2.0] {
             assert_eq!(
-                confirm_window_logical_size(((600.0 * scale) as u32, (320.0 * scale) as u32), scale),
+                confirm_window_logical_size(
+                    ((600.0 * scale) as u32, (320.0 * scale) as u32),
+                    scale
+                ),
                 Some((600.0, 320.0))
             );
         }
@@ -1673,7 +1677,10 @@ mod tests {
     fn confirm_window_size_clamps_width_without_shrinking_fitting_height() {
         for scale in [1.0_f32, 1.25, 1.5, 2.0] {
             assert_eq!(
-                confirm_window_logical_size(((600.0 * scale) as u32, (816.0 * scale) as u32), scale),
+                confirm_window_logical_size(
+                    ((600.0 * scale) as u32, (816.0 * scale) as u32),
+                    scale
+                ),
                 Some((600.0, 584.0)),
                 "仅宽度受限，缩放={scale}"
             );
