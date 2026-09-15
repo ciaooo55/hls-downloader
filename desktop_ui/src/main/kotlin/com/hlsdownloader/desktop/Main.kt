@@ -110,6 +110,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -1143,6 +1145,17 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         }
     }
     LaunchedEffect(Unit) { shellFocus.requestFocus() }
+    val taskActionLimiter = remember { Semaphore(8) }
+    fun launchTaskActions(entries: List<Pair<String, String>>) {
+        entries.forEach { (taskId, action) ->
+            scope.launch {
+                taskActionLimiter.withPermit {
+                    runCatching { withContext(Dispatchers.IO) { EnginePipeClient().taskAction(taskId, action) } }
+                        .onSuccess { refreshKey++ }
+                }
+            }
+        }
+    }
     val modalVisible = newTaskDialog || batchDialog || harvestDialog || settingsDialog || queueManagerDialog ||
         queueAssignTaskIds.isNotEmpty() || detailTaskId != null || extensionDialog || activeHandoff != null ||
         probeResult != null || torrentProbe != null || harvestResult != null || mediaSourceDialog.isNotEmpty() ||
