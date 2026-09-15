@@ -13,11 +13,11 @@ SPECIFIC exit code, and a wrong code is a control failure, not a warning.
 
 Usage
 -----
-  C:\\Users\\lee\\.conda\\envs\\test\\python.exe scripts\\run-validator-controls.py
+  python scripts/run-validator-controls.py
 
 The interpreter matters: ``run_script`` propagates ``sys.executable`` to every child,
 and ``compare-layout.py`` imports cv2/PIL/numpy. Run this file with an interpreter that
-has them (the conda env above), otherwise the compare-layout control "fails" for a
+has them, otherwise the compare-layout control "fails" for a
 reason that has nothing to do with the comparator.
 """
 import contextlib
@@ -29,9 +29,10 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PY = sys.executable
-REPORT = r'A:\Ubuntu\测试\hls-downloader\outputs\v7-ui-audit-2026-09-14.html'
-CAPTURES = r'A:\Ubuntu\测试\hls-downloader\artifacts\v7-productization\compose-visual-all'
-NEG = r'A:\Ubuntu\测试\hls-downloader\artifacts\v7-productization\layout-regression\negative-controls'
+ROOT = os.path.dirname(HERE)
+REPORT = os.path.join(ROOT, 'outputs', 'v7-ui-audit-2026-09-14.html')
+CAPTURES = os.path.join(ROOT, 'artifacts', 'v7-productization', 'compose-visual-all')
+NEG = os.path.join(ROOT, 'artifacts', 'v7-productization', 'layout-regression', 'negative-controls')
 
 results = []
 

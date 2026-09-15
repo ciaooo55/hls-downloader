@@ -61,7 +61,9 @@ def main():
     ap.add_argument("--width", type=int, default=1400)
     ap.add_argument("--height", type=int, default=820)
     ap.add_argument("--port", type=int, default=19740)
-    ap.add_argument("--out", default=r"C:\hls-visual\calib")
+    ap.add_argument("--out", default=os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "artifacts", "v7-productization", "pointer-calibration"))
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)

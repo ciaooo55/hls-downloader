@@ -10,15 +10,18 @@ So: hand chromium the exact expressions used in the CSS, read back
 `getComputedStyle`, and diff the resulting RGB against the parser.
 """
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
-sys.path.insert(0, r'C:\Users\lee\hls-visual')
 import audit_ext_fills as E
 
-CHROME = r'C:\Users\lee\AppData\Local\ms-playwright\chromium-1228\chrome-win64\chrome.exe'
-HTML = r'C:\Users\lee\hls-visual\mixcheck.html'
+CHROME = os.environ.get('HLS_CHROME_BINARY') or str(
+    Path(os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)'))
+    / 'Microsoft/Edge/Application/msedge.exe')
 
 # (label, fg expr, bg expr) -- copied verbatim from the CSS, incl. pre-fix forms
 CASES = [
@@ -82,13 +85,13 @@ html = (
     + token_css('dark') + '\n' + token_css('light') + '\nbody{margin:0}\n'
     + '</style></head><body><pre id="out"></pre><script>' + js + '</script></body></html>'
 )
-with open(HTML, 'w', encoding='utf-8') as fh:
-    fh.write(html)
-
-proc = subprocess.run(
-    [CHROME, '--headless=new', '--disable-gpu', '--no-sandbox',
-     '--virtual-time-budget=4000', '--dump-dom', 'file:///C:/Users/lee/hls-visual/mixcheck.html'],
-    capture_output=True, text=True, encoding='utf-8', timeout=180)
+with tempfile.TemporaryDirectory(prefix='hls-colour-check-') as directory:
+    html_path = Path(directory) / 'mixcheck.html'
+    html_path.write_text(html, encoding='utf-8')
+    proc = subprocess.run(
+        [CHROME, '--headless=new', '--disable-gpu',
+         '--virtual-time-budget=4000', '--dump-dom', html_path.as_uri()],
+        capture_output=True, text=True, encoding='utf-8', timeout=180)
 match = re.search(r'<pre id="out">(.*?)</pre>', proc.stdout, re.S)
 if not match:
     print('DUMP FAILED')
@@ -130,16 +133,29 @@ print('%-22s %-6s %-9s %-9s %-9s %-7s %-7s %s' % (
 print('-' * 104)
 bg_bad = fg_bad = 0
 count = 0
+failures = 0
+seen = set()
 worst = 0.0
 for chunk in match.group(1).split('<br>'):
     line = chunk.strip()
     if not line or '|' not in line:
         continue
     name, theme, col, bg = line.split('|')
+    if (name, theme) in seen:
+        failures += 1
+    seen.add((name, theme))
     fg_expr, bg_expr = LOOKUP[name]
     pbg_hex, pbg = parser_hex(bg_expr, theme)
     pfg_hex, pfg = parser_hex(fg_expr, theme)
     bbg_hex, bfg_hex = to_hex(bg), to_hex(col)
+    if None in (pbg_hex, pfg_hex, bbg_hex, bfg_hex):
+        failures += 1
+        continue
+    # Only a one-unit channel rounding difference is acceptable.
+    if any(abs(a - b) > 1
+           for actual, expected in ((bbg_hex, pbg_hex), (bfg_hex, pfg_hex))
+           for a, b in zip(hex_to_rgb(actual)[:3], hex_to_rgb(expected)[:3])):
+        failures += 1
     ok = bbg_hex == pbg_hex and bfg_hex == pfg_hex
     if bbg_hex != pbg_hex:
         bg_bad += 1
@@ -160,10 +176,9 @@ print('-' * 104)
 print('rows: %d   bg 1-LSB diffs: %d   fg diffs: %d   worst ratio delta: %.3f' % (
     count, bg_bad, fg_bad, worst))
 
-# 退出码。bg 的 1-LSB 差是已知且可接受的（整数中点舍入），不作为失败；
-# 失败只针对"一行都没对上"——解析器和浏览器各读一份数据，若夹具为空，
-# "两者一致"就是空洞成立的，那才是真正需要拦下来的情况。
-if count == 0:
-    print('!! 一行都没比对 —— 对拍失效，不是"两者一致"')
+# All requested rows must be compared, and real colour mismatches must fail.
+if count != len(rows) or failures:
+    print('!! incomplete or mismatched cross-check: expected=%d actual=%d failures=%d'
+          % (len(rows), count, failures))
     sys.exit(1)
 sys.exit(0)

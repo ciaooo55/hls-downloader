@@ -18,7 +18,7 @@ import os
 import re
 import sys
 
-EXT = r"A:\Ubuntu\测试\hls-downloader\extension"
+EXT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "extension")
 THEME = os.path.join(EXT, "lib", "theme.ts")
 
 

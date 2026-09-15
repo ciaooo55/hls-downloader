@@ -11,7 +11,6 @@ carries an `identifiable_by` note recording what else identifies it.
 """
 import sys
 
-sys.path.insert(0, r'C:\Users\lee\hls-visual')
 import audit_ext_fills as E
 
 THRESHOLD = 3.0

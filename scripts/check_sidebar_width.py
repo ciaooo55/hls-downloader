@@ -105,7 +105,7 @@ def detect_width(path, theme):
 
 
 def main():
-    root = Path(sys.argv[1] if len(sys.argv) > 1 else r"A:\Ubuntu\测试\hls-downloader\artifacts\v7-productization\compose-visual-responsive")
+    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / "artifacts/v7-productization/compose-visual-responsive"
     pattern = sys.argv[2] if len(sys.argv) > 2 else "tasks_1000-*.png"
     files = sorted(root.glob(pattern))
     if not files:

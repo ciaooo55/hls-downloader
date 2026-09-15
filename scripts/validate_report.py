@@ -10,8 +10,9 @@ import re
 import sys
 from html.parser import HTMLParser
 
-PATH = (sys.argv[1] if len(sys.argv) > 1
-        else r'A:\Ubuntu\测试\hls-downloader\outputs\v7-ui-audit-2026-09-14.html')
+if len(sys.argv) != 2:
+    sys.exit("Usage: python validate_report.py REPORT.html")
+PATH = sys.argv[1]
 src = open(PATH, encoding='utf-8').read()
 
 placeholders = re.findall(r'@@[A-Z_]+@@', src)

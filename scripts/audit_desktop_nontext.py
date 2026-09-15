@@ -20,7 +20,7 @@ import re
 import sys
 
 MAIN_KT = os.path.join(
-    r'A:\Ubuntu\测试\hls-downloader', 'desktop_ui', 'src', 'main', 'kotlin',
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'desktop_ui', 'src', 'main', 'kotlin',
     'com', 'hlsdownloader', 'desktop', 'Main.kt')
 
 TEXT_THRESHOLD = 4.5

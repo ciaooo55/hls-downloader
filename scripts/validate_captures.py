@@ -103,7 +103,7 @@ def black_fraction(im):
 
 
 def main():
-    root = Path(sys.argv[1] if len(sys.argv) > 1 else r"A:\Ubuntu\测试\hls-downloader\artifacts\v7-productization\compose-visual-responsive")
+    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / "artifacts/v7-productization/compose-visual-responsive"
     report = root / "capture-report.json"
     if not report.exists():
         print(f"找不到采集报告：{report}")

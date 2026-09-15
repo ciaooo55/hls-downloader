@@ -45,6 +45,9 @@ $appDir = [IO.Path]::GetDirectoryName($AppPath)
 $header = @{ 'X-HLS-Test-Token' = $Token }
 $base = "http://127.0.0.1:$Port"
 $productProcessNames = @('HLSDownloader.exe', 'HLSDownloaderEngine.exe', 'HLSDownloaderPresenter.exe', 'HLSDownloaderNativeHost.exe')
+$initialProductIds = @(Get-CimInstance Win32_Process |
+    Where-Object { $_.Name -in $productProcessNames } |
+    ForEach-Object { $_.ProcessId })
 $tmp = Join-Path $env:TEMP 'rail-click-probe'
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
@@ -154,7 +157,9 @@ try {
         & taskkill.exe /PID $runner.Id /T /F 2>$null | Out-Null
         Wait-Process -Id $runner.Id -Timeout 5 -ErrorAction SilentlyContinue
     }
-    foreach ($proc in @(Get-CimInstance Win32_Process | Where-Object { $_.Name -in $productProcessNames })) {
+    foreach ($proc in @(Get-CimInstance Win32_Process | Where-Object {
+        $_.Name -in $productProcessNames -and $_.ProcessId -notin $initialProductIds
+    })) {
         Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
     }
 }

@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import subprocess
@@ -123,10 +124,19 @@ def intersects(box, rect) -> bool:
     return not (x1 <= rx0 or rx1 <= x0 or y1 <= ry0 or ry1 <= y0)
 
 
-def kill_product_processes() -> None:
-    for name in PRODUCT_PROCESS_NAMES:
+def product_processes() -> dict[int, str]:
+    result = subprocess.run(
+        ["tasklist", "/FO", "CSV", "/NH"],
+        capture_output=True, text=True, check=True,
+    )
+    return {int(row[1]): row[0] for row in csv.reader(result.stdout.splitlines())
+            if len(row) >= 2 and row[0] in PRODUCT_PROCESS_NAMES}
+
+
+def kill_product_processes(initial_ids: set[int]) -> None:
+    for pid in product_processes().keys() - initial_ids:
         subprocess.run(
-            ["taskkill", "/IM", name, "/F"],
+            ["taskkill", "/PID", str(pid), "/F"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
@@ -170,7 +180,9 @@ def main() -> int:
         }
     )
 
-    kill_product_processes()
+    initial_processes = product_processes()
+    if "HLSDownloader.exe" in initial_processes.values():
+        raise SystemExit("请先关闭已运行的主工作台，再执行悬停探针。")
     stdout_log = (out / "stdout.log").open("wb")
     stderr_log = (out / "stderr.log").open("wb")
     proc = subprocess.Popen(
@@ -297,7 +309,7 @@ def main() -> int:
             proc.kill()
         stdout_log.close()
         stderr_log.close()
-        kill_product_processes()
+        kill_product_processes(set(initial_processes))
 
     payload = {
         "schema": 1,

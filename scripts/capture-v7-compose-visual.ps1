@@ -47,6 +47,9 @@ $header = @{ 'X-HLS-Test-Token' = $Token }
 $base = "http://127.0.0.1:$Port"
 $results = @()
 $productProcessNames = @('HLSDownloader.exe', 'HLSDownloaderEngine.exe', 'HLSDownloaderPresenter.exe', 'HLSDownloaderNativeHost.exe')
+$initialProductIds = @(Get-CimInstance Win32_Process |
+    Where-Object { $_.Name -in $productProcessNames } |
+    ForEach-Object { $_.ProcessId })
 $ParkPointerActive = [bool]$ParkPointer
 
 # 夹具截图走的是 Robot 的**屏幕截取**（/screenshot 截的是 window.locationOnScreen 那块矩形），
@@ -145,7 +148,9 @@ foreach ($size in $Sizes) {
                     & taskkill.exe /PID $runner.Id /T /F 2>$null | Out-Null
                     Wait-Process -Id $runner.Id -Timeout 5 -ErrorAction SilentlyContinue
                 }
-                foreach ($proc in @(Get-CimInstance Win32_Process | Where-Object { $_.Name -in $productProcessNames })) {
+                foreach ($proc in @(Get-CimInstance Win32_Process | Where-Object {
+                    $_.Name -in $productProcessNames -and $_.ProcessId -notin $initialProductIds
+                })) {
                     Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
                 }
                 Start-Sleep -Milliseconds 800
