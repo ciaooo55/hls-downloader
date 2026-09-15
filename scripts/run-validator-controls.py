@@ -45,7 +45,7 @@ def record(label, expected, actual, extra=''):
 
 
 def run_script(name, *args):
-    proc = subprocess.run([PY, os.path.join(HERE, name)] + list(args),
+    proc = subprocess.run([PY, '-X', 'utf8', os.path.join(HERE, name)] + list(args),
                           capture_output=True, text=True, encoding='utf-8',
                           cwd=HERE, timeout=600)
     tail = [l for l in proc.stdout.splitlines() if l.strip()]
@@ -78,11 +78,23 @@ class _BrowserStub:
     returncode = 0
 
 
-def mixcheck_control():
-    """mixcheck.py is a module-level script, so it has to be run, not imported."""
+def mixcheck_control(mismatch=False):
+    """Check missing output and a complete but incorrect browser response."""
     import runpy
     real_run = subprocess.run
-    subprocess.run = lambda *a, **k: _BrowserStub()
+    def browser_stub(*args, **kwargs):
+        response = _BrowserStub()
+        if mismatch:
+            import json
+            from pathlib import Path
+            from urllib.parse import unquote, urlparse
+            html = Path(unquote(urlparse(args[0][-1]).path).lstrip('/')).read_text(encoding='utf-8')
+            rows = json.loads(html.split('const rows = ', 1)[1].split(';', 1)[0])
+            response.stdout = '<pre id="out">' + '<br>'.join(
+                f"{row['name']}|{row['theme']}|rgb(0,0,0)|rgb(0,0,0)"
+                for row in rows) + '</pre>'
+        return response
+    subprocess.run = browser_stub
     buf = io.StringIO()
     code = None
     try:
@@ -138,6 +150,8 @@ def main():
     print('=== mixcheck: browser stub returns an empty dump ===')
     rc, tail = mixcheck_control()
     record('mixcheck.py: browser returned nothing', 1, rc, tail[:40])
+    rc, tail = mixcheck_control(mismatch=True)
+    record('mixcheck.py: all browser colours are wrong', 1, rc, tail[:40])
     rc, tail = run_script('mixcheck.py')
     record('mixcheck.py: real 42-row cross-check', 0, rc, tail[:40])
 
