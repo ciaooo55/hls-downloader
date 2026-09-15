@@ -5,8 +5,23 @@ import { describe, expect, it } from 'vitest'
 const popupRoot = fileURLToPath(new URL('../entrypoints/popup/', import.meta.url))
 const html = readFileSync(`${popupRoot}/index.html`, 'utf8')
 const main = readFileSync(`${popupRoot}/main.ts`, 'utf8')
+const css = readFileSync(`${popupRoot}/style.css`, 'utf8')
 
 describe('popup first paint', () => {
+  it('keeps the 400px preferred width but clamps boot and loaded surfaces to the viewport', () => {
+    for (const source of [html, css]) {
+      const bodyRule = source.match(/body\s*\{([^}]+)\}/)?.[1] ?? ''
+      expect(bodyRule).toMatch(/(?:^|;)\s*width:\s*400px;/)
+      expect(bodyRule).toMatch(/max-width:\s*100vw;/)
+    }
+  })
+
+  it('lets resource cards and branding shrink without losing action buttons', () => {
+    expect(css).toMatch(/article\s*\{[^}]*min-width:\s*0;/)
+    expect(css).toMatch(/\.brand\s*>\s*div\s*\{[^}]*min-width:\s*0;/)
+    expect(css).toMatch(/\.brand img,\s*\.header-actions\s*\{[^}]*flex-shrink:\s*0;/)
+  })
+
   it('ships a visible no-script/bootstrap surface instead of an empty root', () => {
     expect(html).toContain('<main class="popup-boot"')
     expect(html).toContain('正在读取当前页面')

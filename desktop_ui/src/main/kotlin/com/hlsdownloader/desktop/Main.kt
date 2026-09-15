@@ -2,10 +2,13 @@ package com.hlsdownloader.desktop
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
@@ -48,6 +51,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -98,11 +102,14 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.jsonArray
@@ -301,10 +308,31 @@ private sealed interface UiSignal {
 }
 private data class DestructiveRequest(val action: String, val taskIds: Set<String>)
 private data class MediaSourceSelection(val path: String = "", val url: String = "", val title: String = "")
+
+/** 任务表切精简列的可用宽度门槛，`taskColumnsForWidth` 与 `resolveTaskColumns` 共用。 */
+internal val TASK_TABLE_COMPACT_WIDTH = 930.dp
+
+/** 展开态侧栏宽度；折叠态见 [SidebarRail]。 */
+internal val SIDEBAR_WIDTH = 190.dp
+
+/** 折叠态图标栏宽度：40dp 点击区 + 两侧 8dp 内边距。 */
+internal val SIDEBAR_RAIL_WIDTH = 56.dp
+
+/**
+ * 侧栏折叠门槛 = 930 + 190 = 1120dp。
+ *
+ * 不是拍出来的数：窗口内容区窄于 1120dp 时，扣掉侧栏后表格可用宽度就跌破 930dp，
+ * 表格会自己切到精简列。这时"完整侧栏"和"完整表格列"只能保一个——
+ * 折叠侧栏（56dp）能拿回 134dp，表格可用宽度回到 1064dp，重新越过 930dp 门槛。
+ *
+ * 门槛之上折叠是纯损失（侧栏的计数和分组标题都还有位置放），所以只在门槛之下折叠。
+ */
+internal val SIDEBAR_COLLAPSE_WIDTH = TASK_TABLE_COMPACT_WIDTH + SIDEBAR_WIDTH
+
 internal data class TaskColumns(val name: Dp, val progress: Dp, val status: Dp, val speed: Dp, val size: Dp, val actions: Dp, val compact: Boolean) {
     val requiredWidth: Dp get() = name + progress + status + speed + size + actions + 30.dp
 }
-internal fun taskColumnsForWidth(width: Dp) = if (width < 930.dp) TaskColumns(225.dp, 185.dp, 100.dp, 75.dp, 70.dp, 55.dp, true)
+internal fun taskColumnsForWidth(width: Dp) = if (width < TASK_TABLE_COMPACT_WIDTH) TaskColumns(225.dp, 185.dp, 100.dp, 75.dp, 70.dp, 55.dp, true)
     else TaskColumns(280.dp, 220.dp, 120.dp, 100.dp, 90.dp, 70.dp, false)
 
 internal data class ResolvedTaskColumn(val id: String, val label: String, val width: Dp)
@@ -313,7 +341,7 @@ internal data class ResolvedTaskColumns(val items: List<ResolvedTaskColumn>, val
 }
 
 internal fun resolveTaskColumns(width: Dp): ResolvedTaskColumns {
-    val compact = width < 930.dp
+    val compact = width < TASK_TABLE_COMPACT_WIDTH
     val responsive = taskColumnsForWidth(width)
     val items = listOf(
         ResolvedTaskColumn("name", "名称", responsive.name),
@@ -350,25 +378,26 @@ internal fun nextTaskSort(current: String, field: String): String {
 
 private data class WorkbenchPalette(
     val canvas: Color, val rail: Color, val ink: Color, val muted: Color, val faint: Color,
-    val blue: Color, val border: Color, val surface2: Color, val surface3: Color,
+    val blue: Color, val onBlue: Color, val border: Color, val surface2: Color, val surface3: Color,
     val selected: Color, val dialog: Color, val success: Color, val warning: Color,
     val errorSurface: Color, val errorBorder: Color, val errorStrong: Color, val errorBody: Color,
-    val warnSurface: Color,
+    val warnSurface: Color, val successSurface: Color,
 )
 
 private val lightPalette = WorkbenchPalette(
     canvas = Color(0xFFEEF2F6), rail = Color.White, ink = Color(0xFF0F172A), muted = Color(0xFF475569), faint = Color(0xFF64748B),
-    blue = Color(0xFF2563EB), border = Color(0xFFD8E0EA), surface2 = Color(0xFFF5F7FA), surface3 = Color(0xFFE8EDF3),
+    blue = Color(0xFF2563EB), onBlue = Color.White, border = Color(0xFFD8E0EA), surface2 = Color(0xFFF5F7FA), surface3 = Color(0xFFE8EDF3),
     selected = Color(0xFFE7F0FF), dialog = Color(0xFFFCFDFE), success = Color(0xFF16794B), warning = Color(0xFF9A5B00),
     errorSurface = Color(0xFFFFF3F2), errorBorder = Color(0xFFF2C9C5), errorStrong = Color(0xFF8A1C13), errorBody = Color(0xFF7A2E28),
-    warnSurface = Color(0xFFFFF7E8),
+    warnSurface = Color(0xFFFFF7E8), successSurface = Color(0xFFEAF8EF),
 )
 private val darkPalette = WorkbenchPalette(
     canvas = Color(0xFF151719), rail = Color(0xFF1C1F23), ink = Color(0xFFF4F5F6), muted = Color(0xFFC5C9CF), faint = Color(0xFF969CA4),
-    blue = Color(0xFF5EA2F3), border = Color(0xFF383D43), surface2 = Color(0xFF23272B), surface3 = Color(0xFF2B3035),
-    selected = Color(0xFF263A51), dialog = Color(0xFF22262A), success = Color(0xFF72D6A5), warning = Color(0xFFFFC46B),
+    blue = Color(0xFF5EA2F3), onBlue = Color(0xFF151719), border = Color(0xFF383D43), surface2 = Color(0xFF23272B), surface3 = Color(0xFF2B3035),
+    // Keep blue text above AA with margin (4.65:1) without changing the shared accent.
+    selected = Color(0xFF25364B), dialog = Color(0xFF22262A), success = Color(0xFF72D6A5), warning = Color(0xFFFFC46B),
     errorSurface = Color(0xFF3B2422), errorBorder = Color(0xFF61302B), errorStrong = Color(0xFFFFB3A7), errorBody = Color(0xFFF2BEB7),
-    warnSurface = Color(0xFF39301C),
+    warnSurface = Color(0xFF39301C), successSurface = Color(0xFF1F3A2C),
 )
 private val LocalWorkbenchPalette = staticCompositionLocalOf { lightPalette }
 private const val ENGINE_RECONNECTING_NOTICE = "下载引擎暂时无法连接，正在自动重试"
@@ -378,6 +407,16 @@ internal val ink: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPa
 internal val muted: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.muted
 internal val faint: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.faint
 internal val blue: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.blue
+
+// 蓝色填充上的前景色，刻意跟主题走：调色板里的 blue 在深色主题下是**浅蓝**（#5EA2F3），
+// 因为它绝大多数时候是当"墨色"用的——图标 tint、文字、焦点环、选中标记——压在近黑画布上有 6.8:1。
+// 但白字压在这个浅蓝上只有 2.65:1，悬停色 #7EB7F6 上更是 2.10:1，连 3:1 的控件底线都不到。
+// 和 destructiveFill 是同一个坑：**对当墨色正确的令牌，当填充就是错的**。
+// 所以填充保留浅蓝，前景改用深墨（画布色本身），对 blue 6.8:1、对浅蓝变体 8.6:1。
+// 浅色主题不受影响：#2563EB 够深，白字有 5.2:1，onBlue 就是白色。
+// 改回 Color.White 前请重新核对：DialogPrimary、ToolbarButton(primary=true)、工具栏"新建"、
+// 图标按钮的 active 态、复选框对勾。
+internal val onBlue: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.onBlue
 internal val border: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.border
 internal val surface2: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.surface2
 internal val surface3: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.surface3
@@ -390,6 +429,11 @@ internal val errorBorder: Color @Composable @ReadOnlyComposable get() = LocalWor
 internal val errorStrong: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.errorStrong
 internal val errorBody: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.errorBody
 internal val warnSurface: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.warnSurface
+internal val successSurface: Color @Composable @ReadOnlyComposable get() = LocalWorkbenchPalette.current.successSurface
+
+// 危险操作按钮的填充色刻意不跟主题走：调色板里的 errorStrong 是"深色主题下的浅色文字色"，
+// 拿它当填充会让白字对比度掉到 1.7:1，反而不如固定的深红（对白字 6.57:1）。
+private val destructiveFill = Color(0xFFB42318)
 
 fun main() {
     val instanceLock = WorkbenchInstanceLock.acquire()
@@ -402,9 +446,31 @@ fun main() {
         System.setProperty("javax.accessibility.assistive_technologies", "com.sun.java.accessibility.AccessBridge")
         application {
     val auditSurface = System.getenv("HLS_UI_AUDIT_SURFACE").orEmpty().lowercase()
-    val auditWidth = System.getenv("HLS_UI_AUDIT_WIDTH")?.toIntOrNull()?.coerceAtLeast(1024) ?: 1400
-    val auditHeight = System.getenv("HLS_UI_AUDIT_HEIGHT")?.toIntOrNull()?.coerceAtLeast(600) ?: 820
-    val state = rememberWindowState(width = auditWidth.dp, height = auditHeight.dp)
+    val auditWidth = System.getenv("HLS_UI_AUDIT_WIDTH")?.toIntOrNull()?.coerceAtLeast(1024)
+    val auditHeight = System.getenv("HLS_UI_AUDIT_HEIGHT")?.toIntOrNull()?.coerceAtLeast(600)
+    // 夹具模式必须锁死尺寸，否则截图会被上一次运行留下的窗口尺寸污染。
+    val pinnedGeometry = auditWidth != null || auditHeight != null
+    val restoredGeometry = remember { if (pinnedGeometry) null else WindowGeometryStore.load() }
+    val initialWidth = auditWidth ?: restoredGeometry?.first ?: 1400
+    val initialHeight = auditHeight ?: restoredGeometry?.second ?: 820
+    // 夹具模式把窗口锁到 (0,0)，而不是交给平台默认位置。
+    //
+    // 原来用 PlatformDefault 是为了"保持历史截图可比"，但平台默认位置是**层叠的、非确定的**：
+    // 同一轮采集里实测出现过 (48,48) 和 (805,245) 两种。工作区只有 1536dp 宽，
+    // 1110dp 的夹具落到 (805,245) 时右侧 379dp 直接出屏，截出来一片黑——
+    // 而它仍然"长得像"一张正常截图，不会自己报错，属于会静默污染证据的那类故障。
+    //
+    // (0,0) 是唯一与窗口尺寸无关的确定位置；夹具尺寸下限是 1024×600，一定完整落在 1536×864 工作区内。
+    // 真实运行仍按工作区居中，见 centeredPosition。
+    val initialPosition = remember(initialWidth, initialHeight) {
+        if (pinnedGeometry) 0 to 0 else WindowGeometryStore.centeredPosition(initialWidth, initialHeight)
+    }
+    val state = rememberWindowState(
+        position = initialPosition?.let { WindowPosition(it.first.dp, it.second.dp) }
+            ?: WindowPosition.PlatformDefault,
+        width = initialWidth.dp,
+        height = initialHeight.dp,
+    )
     val appIcon = remember { loadDesktopIcon() }
     val requestExit = { exitApplication() }
     val requestClose = { if (WorkbenchWindow.trayResident) WorkbenchWindow.hideToTray() else exitApplication() }
@@ -420,8 +486,24 @@ fun main() {
         undecorated = true,
         transparent = false,
     ) {
+        // 拖动缩放时尺寸连续变化，用 collectLatest + delay 去抖，避免每个像素变化都写盘。
+        // 最大化 / 全屏下的尺寸不记——否则下次会以一个"屏幕大小"的浮动窗口打开。
+        LaunchedEffect(pinnedGeometry) {
+            if (pinnedGeometry) return@LaunchedEffect
+            snapshotFlow { state.placement to state.size }
+                .distinctUntilChanged()
+                .collectLatest { (placement, size) ->
+                    if (placement != WindowPlacement.Floating) return@collectLatest
+                    delay(700)
+                    // WindowState.size 是 DpSize；按 dp 存取是自洽的，高 DPI 下同样往返一致。
+                    WindowGeometryStore.save(size.width.value.roundToInt(), size.height.value.roundToInt())
+                }
+        }
         LaunchedEffect(Unit) {
-            window.minimumSize = Dimension(1024, 600)
+            // 最小尺寸按工作区夹过：写死 1024×600 时，工作区更小的设备（1366×768@150%、
+            // 1920×1080@200% 等）会得到一个比屏幕还大的窗口，而且用户再也缩不回来。
+            val (minWidth, minHeight) = WindowGeometryStore.minimumWindowSize()
+            window.minimumSize = Dimension(minWidth, minHeight)
             var probeDelayMs = 5_000L
             while (true) {
                 presenterAvailable = withContext(Dispatchers.IO) { EnginePipeClient.ensurePresenterStarted() }
@@ -704,6 +786,9 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     }
     val visible = sortTasks(visibleTasks(tasks, filter, category, query, selectedQueueId), settings.taskSort)
     SideEffect { UiTestState.updateSelection(selected) }
+    // 侧栏筛选也要能读出来：折叠栏把文字标签换成图标后，"点得中、点得对"光看截图证明不了。
+    SideEffect { UiTestState.updateFilter(filter.label) }
+    SideEffect { UiTestState.updateSidebarSelection(category?.label ?: "", selectedQueueId ?: "") }
     fun performTaskAction(taskId: String, action: String) {
         if (action in setOf("delete", "delete_files")) {
             destructiveRequest = DestructiveRequest(action, setOf(taskId))
@@ -1088,7 +1173,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         (!settingsDeviceScanActive && deviceResult != null) || duplicateResult != null || updateResult != null ||
         preparedUpdate != null || powerPending != null || destructiveRequest != null || aboutDialog || noticesDialog
     CompositionLocalProvider(LocalWorkbenchPalette provides if (darkMode) darkPalette else lightPalette) {
-    Column(Modifier.fillMaxSize().focusRequester(shellFocus).focusable().clip(RoundedCornerShape(if (maximized) 0.dp else 9.dp)).background(canvas).border(1.dp, border, RoundedCornerShape(if (maximized) 0.dp else 9.dp)).then(if (modalVisible) Modifier.clearAndSetSemantics { } else Modifier)) {
+    Column(Modifier.fillMaxSize().focusRequester(shellFocus).focusable().clip(RoundedCornerShape(if (maximized) 0.dp else Radius.lg)).background(canvas).border(1.dp, border, RoundedCornerShape(if (maximized) 0.dp else Radius.lg)).then(if (modalVisible) Modifier.clearAndSetSemantics { } else Modifier)) {
         titleBar()
         DesktopToolbar(query, { query = it }, { newTaskUrl = ""; newTaskDialog = true }, {
             scope.launch {
@@ -1101,13 +1186,17 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().storeSetting("dark_mode", darkMode) } } }
         })
         Row(Modifier.weight(1f).fillMaxWidth()) {
-                Sidebar(
-                    filter, category, selectedQueueId, settings.queueProfiles, tasks, engineText, extensionText,
-                    { filter = it; category = null },
-                    { category = if (category == it) null else it },
-                    { selectedQueueId = if (selectedQueueId == it) null else it },
-                    { queueManagerDialog = true },
-                )
+                // 侧栏宽度断点。Row 会把自身的最大宽度原样传给非 weight 子项，所以这里量到的
+                // maxWidth 就是"窗口内容区宽度"，正是断点需要比较的量。
+                BoxWithConstraints(Modifier.fillMaxHeight()) {
+                    Sidebar(
+                        filter, category, selectedQueueId, settings.queueProfiles, tasks, maxWidth < SIDEBAR_COLLAPSE_WIDTH,
+                        { filter = it; category = null },
+                        { category = if (category == it) null else it },
+                        { selectedQueueId = if (selectedQueueId == it) null else it },
+                        { queueManagerDialog = true },
+                    )
+                }
                 Column(Modifier.weight(1f).fillMaxHeight().background(canvas)) {
                 ContentHeader(filter, visible.size, selected.isNotEmpty(), tasks.any { it.status == "已完成" }, { refreshKey++ }, {
                     scope.launch {
@@ -1160,10 +1249,10 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     }
     if (externalDropActive || visualFixture == "drop") {
         Popup(alignment = Alignment.Center, properties = PopupProperties(focusable = false)) {
-            Surface(color = dialogSurface, shape = RoundedCornerShape(9.dp), shadowElevation = 14.dp, border = BorderStroke(2.dp, blue), modifier = Modifier.width(390.dp)) {
+            Surface(color = dialogSurface, shape = RoundedCornerShape(Radius.lg), shadowElevation = Elevation.e3, border = BorderStroke(2.dp, blue), modifier = Modifier.width(390.dp)) {
                 Row(Modifier.padding(horizontal = 20.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Surface(Modifier.size(42.dp), color = selectedSurface, shape = RoundedCornerShape(8.dp)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.FileDownload, null, tint = blue, modifier = Modifier.size(23.dp)) } }
-                    Spacer(Modifier.width(13.dp)); Column { Text("松开以导入", color = ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold); Text("支持任务 JSON、种子、Metalink 和 URL 列表", color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp)) }
+                    Surface(Modifier.size(42.dp), color = selectedSurface, shape = RoundedCornerShape(Radius.md)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.FileDownload, null, tint = blue, modifier = Modifier.size(23.dp)) } }
+                    Spacer(Modifier.width(13.dp)); Column { Text("松开以导入", color = ink, fontSize = TypeScale.title, fontWeight = FontWeight.SemiBold); Text("支持任务 JSON、种子、Metalink 和 URL 列表", color = muted, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 4.dp)) }
                 }
             }
         }
@@ -1926,7 +2015,7 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
         Row(Modifier.fillMaxSize().background(surface2).padding(start = 11.dp), verticalAlignment = Alignment.CenterVertically) {
             if (appIcon != null) Image(appIcon, null, modifier = Modifier.size(17.dp)) else Icon(Icons.Outlined.Downloading, null, tint = blue, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(7.dp))
-            Text("HLS Downloader ${Product.version}", color = ink, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            Text("HLS Downloader ${Product.version}", color = ink, fontSize = TypeScale.caption, fontWeight = FontWeight.Medium)
             Spacer(Modifier.weight(1f))
             IconButton(onClick = onMinimize, modifier = Modifier.width(45.dp).fillMaxHeight()) { Icon(Icons.Outlined.Minimize, "最小化", tint = muted, modifier = Modifier.size(16.dp)) }
             IconButton(onClick = onToggleMaximize, modifier = Modifier.width(45.dp).fillMaxHeight()) { Icon(if (maximized) Icons.Outlined.FilterNone else Icons.Outlined.CropSquare, if (maximized) "还原" else "最大化", tint = muted, modifier = Modifier.size(14.dp)) }
@@ -1957,7 +2046,18 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
             else ToolbarButton(icon, label, action)
         }
         Row(Modifier.fillMaxSize().padding(horizontal = if (narrow) 8.dp else 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            listOf("new", "paste", "batch", "harvest", "start_all", "pause_all", "cast", "tvbox", "extension").forEach { Action(it) }
+            // 9 个入口按用途分组：新建 / 导入 / 批量 / 推送 / 插件。
+            // 只加视觉分隔，不合并也不移动任何入口——交互路径完全不变。
+            listOf(
+                listOf("new"),
+                listOf("paste", "batch", "harvest"),
+                listOf("start_all", "pause_all"),
+                listOf("cast", "tvbox"),
+                listOf("extension"),
+            ).forEachIndexed { index, group ->
+                if (index > 0) ToolbarGroupDivider()
+                group.forEach { Action(it) }
+            }
             Spacer(Modifier.weight(1f))
             ToolbarSearchField(query, onQuery, narrow)
             Spacer(Modifier.width(5.dp))
@@ -1969,8 +2069,8 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
 @Composable private fun ToolbarSearchField(value: String, onValue: (String) -> Unit, narrow: Boolean) {
     var focused by remember { mutableStateOf(false) }
     Row(
-        Modifier.width(if (narrow) 145.dp else 190.dp).height(36.dp).clip(RoundedCornerShape(7.dp))
-            .background(if (focused) rail else surface2).border(1.dp, if (focused) blue else border, RoundedCornerShape(7.dp)).padding(horizontal = 10.dp),
+        Modifier.width(if (narrow) 145.dp else 190.dp).height(36.dp).clip(RoundedCornerShape(Radius.md))
+            .background(if (focused) rail else surface2).border(1.dp, if (focused) blue else border, RoundedCornerShape(Radius.md)).padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Outlined.Search, "搜索", modifier = Modifier.size(17.dp), tint = muted); Spacer(Modifier.width(8.dp))
@@ -1979,45 +2079,190 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
             onValueChange = onValue,
             modifier = Modifier.weight(1f).onFocusChanged { focused = it.isFocused },
             singleLine = true,
-            textStyle = TextStyle(color = ink, fontSize = 11.sp),
+            textStyle = TextStyle(color = ink, fontSize = TypeScale.caption),
             cursorBrush = SolidColor(blue),
-            decorationBox = { field -> if (value.isEmpty()) Text(if (narrow) "搜索" else "搜索任务", color = faint, fontSize = 11.sp, maxLines = 1); field() },
+            decorationBox = { field -> if (value.isEmpty()) Text(if (narrow) "搜索" else "搜索任务", color = faint, fontSize = TypeScale.caption, maxLines = 1); field() },
         )
     }
 }
-@Composable private fun ToolbarButton(icon: ImageVector, label: String, action: () -> Unit, primary: Boolean = false) { Button(onClick = action, colors = ButtonDefaults.buttonColors(containerColor = if (primary) blue else Color.Transparent, contentColor = if (primary) Color.White else ink), border = if (primary) null else BorderStroke(1.dp, Color.Transparent), shape = RoundedCornerShape(7.dp), contentPadding = PaddingValues(horizontal = 8.dp), modifier = Modifier.height(36.dp).padding(horizontal = 1.dp)) { Icon(icon, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text(label, fontSize = 11.sp, fontWeight = if (primary) FontWeight.SemiBold else FontWeight.Medium) } }
+// 分组分隔线。
+//
+// 为什么是 2dp 而不是 1dp：按钮宽度由文字度量决定，是小数，所以分隔线的 x 落在半像素上。
+// 1dp 在 100% DPI 下会被抗锯齿劈成两列各约 40% 覆盖，实测四条线颜色分别是 (212,216,222)、
+// (183,190,201)、(241,242,244)，对比度 1.1:1 ~ 2.1:1 —— 同一条线在不同位置深浅不一，最浅的看不见。
+// 2dp 覆盖约 1.9px，两列各得约 94% 覆盖，四条线颜色收敛到同一档。
+//
+// 为什么不是调色板的 border：浅色 #D8E0EA 对白底只有 1.28:1，实测等于隐形。
+// 这是纯装饰性分组线，不承担"识别控件"的信息，WCAG 1.4.11 不适用；目标是稳定可辨，而非卡 3:1。
+// 取 faint 的 80%：浅色约 3.00~3.24:1、深色约 3.99~4.33:1，顺带也过了 3:1。
+@Composable private fun ToolbarGroupDivider() = Box(Modifier.padding(horizontal = 5.dp).width(2.dp).height(18.dp).background(faint.copy(alpha = .8f)))
+@Composable private fun ToolbarButton(icon: ImageVector, label: String, action: () -> Unit, primary: Boolean = false) { Button(onClick = action, colors = ButtonDefaults.buttonColors(containerColor = if (primary) blue else Color.Transparent, contentColor = if (primary) onBlue else ink), border = if (primary) null else BorderStroke(1.dp, Color.Transparent), shape = RoundedCornerShape(Radius.md), contentPadding = PaddingValues(horizontal = 8.dp), modifier = Modifier.height(36.dp).padding(horizontal = 1.dp)) { Icon(icon, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text(label, fontSize = TypeScale.caption, fontWeight = if (primary) FontWeight.SemiBold else FontWeight.Medium) } }
 @Composable private fun ToolbarIcon(icon: ImageVector, text: String, action: () -> Unit) = WorkbenchTooltip(text) { IconButton(onClick = action, modifier = Modifier.size(36.dp)) { Icon(icon, text, tint = muted, modifier = Modifier.size(18.dp)) } }
 
-@Composable private fun Sidebar(selected: TaskFilter, selectedCategory: TaskCategory?, selectedQueueId: String?, profiles: List<QueueProfileDto>, tasks: List<DownloadTask>, engine: String, extension: String, onSelected: (TaskFilter) -> Unit, onCategory: (TaskCategory) -> Unit, onQueue: (String) -> Unit, onManageQueues: () -> Unit) {
+/**
+ * 侧栏导航行的外壳：悬停换底色、按压缩一点、选中给选中底。
+ *
+ * 三个分组（任务状态 / 下载队列 / 分类）的选中语义、计数和回调完全共用，行外壳也共用，
+ * 只有中间的内容不同，所以外壳收成一个组件 —— 三份手写的 hover 一定会各自漂移。
+ *
+ * 两处刻意的取舍：
+ * 1. **选中态在悬停时不改底色**。选中底 `selectedSurface` 上压着 `blue` 的计数文字，
+ *    把底色往 `blue` 混会同时压低两种主题下的比值（浅色实测 4.51 → 4.18:1，跌破 4.5:1）。
+ *    这与 `TaskRow`「选中压过悬停」的既有约定一致。
+ * 2. **悬停时把图标/文字从 `muted` 提到 `ink`**。只靠 `surface3` 底色的话，浅色主题下
+ *    它压在白底上只有 1.18:1，几乎看不见；而 `muted → ink` 是纯粹的对比度提升
+ *    （浅色 6.41 → 15.1:1、深色 8.0 → 更高），不引入任何新令牌。
+ */
+@Composable
+private fun NavRow(
+    active: Boolean,
+    onSelect: () -> Unit,
+    content: @Composable RowScope.(highlighted: Boolean) -> Unit,
+) {
+    val feedback = rememberPressFeedback(
+        restColor = if (active) selectedSurface else Color.Transparent,
+        hoverColor = if (active) selectedSurface else surface3,
+        pressScale = .99f,
+    )
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(36.dp)
+            .clip(RoundedCornerShape(Radius.md))
+            .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+            .background(feedback.background)
+            .hoverable(feedback.interaction)
+            .selectable(
+                selected = active,
+                interactionSource = feedback.interaction,
+                indication = null,
+                role = Role.Tab,
+                onClick = onSelect,
+            )
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) { content(active || feedback.hovered) }
+}
+
+@Composable private fun Sidebar(selected: TaskFilter, selectedCategory: TaskCategory?, selectedQueueId: String?, profiles: List<QueueProfileDto>, tasks: List<DownloadTask>, compact: Boolean, onSelected: (TaskFilter) -> Unit, onCategory: (TaskCategory) -> Unit, onQueue: (String) -> Unit, onManageQueues: () -> Unit) {
+    // 折叠态只换外壳，三个分组的选中语义、计数和回调完全共用，避免两套导航状态不同步。
+    if (compact) {
+        SidebarRail(selected, selectedCategory, selectedQueueId, profiles, tasks, onSelected, onCategory, onQueue, onManageQueues)
+        return
+    }
     val scrollState = rememberScrollState()
-    Column(Modifier.width(190.dp).fillMaxHeight().background(rail).border(BorderStroke(1.dp, border)).padding(horizontal = 9.dp, vertical = 11.dp)) {
-        Text("任务状态", color = muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+    Column(Modifier.width(SIDEBAR_WIDTH).fillMaxHeight().background(rail).border(BorderStroke(1.dp, border)).padding(horizontal = 9.dp, vertical = 11.dp)) {
+        Text("任务状态", color = muted, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
         Box(Modifier.weight(1f).fillMaxWidth()) {
         Column(Modifier.fillMaxSize().verticalScroll(scrollState).padding(end = 5.dp)) {
         TaskFilter.entries.forEach { item ->
             val active = item == selected
-            Row(Modifier.fillMaxWidth().height(36.dp).clip(RoundedCornerShape(7.dp)).background(if (active) selectedSurface else Color.Transparent).selectable(selected = active, role = Role.Tab) { onSelected(item) }.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(categoryIcon(item), null, tint = if (active) blue else muted, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(8.dp)); Text(item.label, color = if (active) ink else muted, fontSize = 13.sp, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal); Spacer(Modifier.weight(1f)); Text(taskCount(tasks, item).toString(), color = if (active) blue else muted, fontSize = 11.sp, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
+            NavRow(active, { onSelected(item) }) { highlighted ->
+                Icon(categoryIcon(item), null, tint = if (active) blue else if (highlighted) ink else muted, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(8.dp)); Text(item.label, color = if (highlighted) ink else muted, fontSize = TypeScale.body, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal); Spacer(Modifier.weight(1f)); Text(taskCount(tasks, item).toString(), color = if (active) blue else muted, fontSize = TypeScale.caption, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
             }
         }
         Spacer(Modifier.height(14.dp)); Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 2.dp, bottom = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("下载队列", color = muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold); Spacer(Modifier.weight(1f)); WorkbenchTooltip("管理队列") { IconButton(onClick = onManageQueues, modifier = Modifier.size(26.dp)) { Icon(Icons.Outlined.SettingsSuggest, "管理队列", tint = muted, modifier = Modifier.size(15.dp)) } }
+            Text("下载队列", color = muted, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold); Spacer(Modifier.weight(1f)); WorkbenchTooltip("管理队列") { IconButton(onClick = onManageQueues, modifier = Modifier.size(26.dp)) { Icon(Icons.Outlined.SettingsSuggest, "管理队列", tint = muted, modifier = Modifier.size(15.dp)) } }
         }
         profiles.sortedByDescending { it.priority }.forEach { profile ->
             val active = profile.id == selectedQueueId
-            Row(Modifier.fillMaxWidth().height(36.dp).clip(RoundedCornerShape(7.dp)).background(if (active) selectedSurface else Color.Transparent).selectable(selected = active, role = Role.Tab) { onQueue(profile.id) }.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(if (profile.enabled) Icons.AutoMirrored.Outlined.PlaylistPlay else Icons.Outlined.PauseCircleOutline, null, tint = if (active) blue else muted, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(8.dp)); Text(profile.name, color = if (active) ink else muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)); Text(tasks.count { it.source.queueId == profile.id }.toString(), color = if (active) blue else faint, fontSize = 11.sp)
+            NavRow(active, { onQueue(profile.id) }) { highlighted ->
+                Icon(if (profile.enabled) Icons.AutoMirrored.Outlined.PlaylistPlay else Icons.Outlined.PauseCircleOutline, null, tint = if (active) blue else if (highlighted) ink else muted, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(8.dp)); Text(profile.name, color = if (highlighted) ink else muted, fontSize = TypeScale.body, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)); Text(tasks.count { it.source.queueId == profile.id }.toString(), color = if (active) blue else faint, fontSize = TypeScale.caption)
             }
         }
-        Spacer(Modifier.height(14.dp)); Text("分类", color = muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+        Spacer(Modifier.height(14.dp)); Text("分类", color = muted, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
         TaskCategory.entries.forEach { item ->
             val active = item == selectedCategory
-            Row(Modifier.fillMaxWidth().height(36.dp).clip(RoundedCornerShape(7.dp)).background(if (active) selectedSurface else Color.Transparent).selectable(selected = active, role = Role.Tab) { onCategory(item) }.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) { Icon(categoryIcon(item), null, tint = if (active) blue else muted, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(8.dp)); Text(item.label, color = if (active) ink else muted, fontSize = 13.sp, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal); Spacer(Modifier.weight(1f)); Text(tasks.count { taskCategory(it) == item }.toString(), color = if (active) blue else muted, fontSize = 11.sp, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal) }
+            NavRow(active, { onCategory(item) }) { highlighted ->
+                Icon(categoryIcon(item), null, tint = if (active) blue else if (highlighted) ink else muted, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(8.dp)); Text(item.label, color = if (highlighted) ink else muted, fontSize = TypeScale.body, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal); Spacer(Modifier.weight(1f)); Text(tasks.count { taskCategory(it) == item }.toString(), color = if (active) blue else muted, fontSize = TypeScale.caption, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
+            }
         }
         }
         VerticalScrollbar(rememberScrollbarAdapter(scrollState), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp))
         }
-        HorizontalDivider(color = border); Spacer(Modifier.height(10.dp)); Text(engine, color = if (connectionStateOf(engine)) Color(0xFF159447) else Color(0xFFD97706), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp)); Text(extension, color = if (connectionStateOf(extension)) Color(0xFF159447) else muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp))
+    }
+}
+
+/**
+ * 窄屏（窗口内容区 < [SIDEBAR_COLLAPSE_WIDTH]）下的图标栏。
+ *
+ * 导航能力与展开态完全一致：三个分组的每一项都可点，计数改成图标右上角角标，
+ * 分组标题换成细分隔线，文字标签由悬停 tooltip 补回。
+ */
+@Composable private fun SidebarRail(selected: TaskFilter, selectedCategory: TaskCategory?, selectedQueueId: String?, profiles: List<QueueProfileDto>, tasks: List<DownloadTask>, onSelected: (TaskFilter) -> Unit, onCategory: (TaskCategory) -> Unit, onQueue: (String) -> Unit, onManageQueues: () -> Unit) {
+    val scrollState = rememberScrollState()
+    Column(Modifier.width(SIDEBAR_RAIL_WIDTH).fillMaxHeight().background(rail).border(BorderStroke(1.dp, border)).padding(horizontal = 8.dp, vertical = 11.dp)) {
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            Column(Modifier.fillMaxSize().verticalScroll(scrollState).padding(end = 2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                TaskFilter.entries.forEach { item ->
+                    RailItem(categoryIcon(item), item.label, taskCount(tasks, item), item == selected) { onSelected(item) }
+                }
+                RailGroupDivider()
+                profiles.sortedByDescending { it.priority }.forEach { profile ->
+                    RailItem(
+                        if (profile.enabled) Icons.AutoMirrored.Outlined.PlaylistPlay else Icons.Outlined.PauseCircleOutline,
+                        profile.name,
+                        tasks.count { it.source.queueId == profile.id },
+                        profile.id == selectedQueueId,
+                    ) { onQueue(profile.id) }
+                }
+                RailGroupDivider()
+                TaskCategory.entries.forEach { item ->
+                    RailItem(categoryIcon(item), item.label, tasks.count { taskCategory(it) == item }, item == selectedCategory) { onCategory(item) }
+                }
+            }
+            VerticalScrollbar(rememberScrollbarAdapter(scrollState), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp))
+        }
+        // 展开态里"管理队列"是分组标题右侧的小图标；折叠后没有标题行，
+        // 固定到底部并加一条分隔线，免得和分类图标连成一片看不出边界。
+        HorizontalDivider(color = border)
+        Spacer(Modifier.height(6.dp))
+        RailItem(Icons.Outlined.SettingsSuggest, "管理队列", null, false, onManageQueues)
+    }
+}
+
+@Composable private fun RailGroupDivider() {
+    HorizontalDivider(Modifier.padding(vertical = 7.dp), color = border)
+}
+
+/**
+ * 图标栏的一项：40dp 方形点击区，图标居中，计数做右上角角标。
+ *
+ * 选中态同时给底色、图标色和左侧色条三条线索——底色在色觉障碍下不可靠，
+ * 色条是形状线索，对应 WCAG 1.4.1"不能只靠颜色传达信息"。
+ */
+@Composable private fun RailItem(icon: ImageVector, label: String, count: Int?, active: Boolean, onClick: () -> Unit) {
+    WorkbenchTooltip(if (count != null && count > 0) "$label · $count" else label) {
+        // 与展开态 NavRow 同一套规则：悬停换底色 + 图标从 muted 提到 ink，选中态压过悬停。
+        // 按压只缩到 .96f —— 40dp 的方框缩太多会让图标在格子间"跳"。
+        val feedback = rememberPressFeedback(
+            restColor = if (active) selectedSurface else Color.Transparent,
+            hoverColor = if (active) selectedSurface else surface3,
+            pressScale = .96f,
+        )
+        Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.fillMaxSize().clip(RoundedCornerShape(Radius.md))
+                    .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+                    .background(feedback.background)
+                    .hoverable(feedback.interaction)
+                    .selectable(selected = active, interactionSource = feedback.interaction, indication = null, role = Role.Tab, onClick = onClick),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, label, tint = if (active) blue else if (feedback.hovered) ink else muted, modifier = Modifier.size(17.dp))
+            }
+            if (active) Box(Modifier.align(Alignment.CenterStart).width(3.dp).height(18.dp).clip(RoundedCornerShape(Radius.sm)).background(blue))
+            // 角标最多三位：四位数字会把 40dp 方框撑破，超过 99 一律显示 99+。
+            // 描边取角标背后的底色（选中态是 selectedSurface，否则是 rail），
+            // 等于把角标从图标上"挖"出来——没有这圈描边，角标会和图标线条糊在一起。
+            if (count != null && count > 0) Box(
+                Modifier.align(Alignment.TopEnd).padding(top = 2.dp)
+                    .clip(RoundedCornerShape(Radius.sm))
+                    .background(if (active) blue else surface3)
+                    .border(1.5.dp, if (active) selectedSurface else rail, RoundedCornerShape(Radius.sm))
+                    .padding(horizontal = 2.dp),
+            ) { Text(if (count > 99) "99+" else count.toString(), color = if (active) onBlue else muted, fontSize = TypeScale.micro, fontWeight = FontWeight.SemiBold) }
+        }
     }
 }
 private fun categoryIcon(filter: TaskFilter): ImageVector = when (filter) { TaskFilter.RUNNING -> Icons.Outlined.Downloading; TaskFilter.QUEUED -> Icons.Outlined.Schedule; TaskFilter.PAUSED -> Icons.Outlined.PauseCircle; TaskFilter.COMPLETED -> Icons.Outlined.CheckCircle; TaskFilter.FAILED -> Icons.Outlined.ErrorOutline; else -> Icons.Outlined.Folder }
@@ -2028,22 +2273,22 @@ private fun categoryIcon(category: TaskCategory): ImageVector = when (category) 
     BoxWithConstraints(Modifier.height(42.dp).fillMaxWidth().background(surface2).border(BorderStroke(1.dp, border))) {
         val compact = maxWidth < 940.dp
         Row(Modifier.fillMaxSize().padding(horizontal = if (compact) 8.dp else 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(filter.label, color = ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.width(8.dp)); Text("$count 项", color = faint, fontSize = 11.sp)
+            Text(filter.label, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.width(8.dp)); Text("$count 项", color = faint, fontSize = TypeScale.caption)
             if (hasSelection) {
                 Spacer(Modifier.width(if (compact) 8.dp else 16.dp))
-                if (!compact) Text("已选择", color = blue, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                if (!compact) Text("已选择", color = blue, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold)
                 SelectionAction(Icons.Outlined.FileDownload, "开始") { onSelectedAction("start") }; SelectionAction(Icons.Outlined.Pause, "暂停") { onSelectedAction("pause") }; SelectionAction(Icons.AutoMirrored.Outlined.DriveFileMove, "移动队列") { onSelectedAction("move_queue") }; SelectionAction(Icons.Outlined.PlayCircle, "播放") { onSelectedAction("play") }; SelectionAction(Icons.Outlined.Cast, "投屏") { onSelectedAction("cast") }; SelectionAction(Icons.Outlined.Tv, "TVBox 推送") { onSelectedAction("push_tvbox") }; SelectionAction(Icons.Outlined.DeleteOutline, "删除") { onSelectedAction("delete") }
             } else if (!compact) {
-                Spacer(Modifier.width(14.dp)); Text("选择任务后可进行批量操作", color = faint, fontSize = 11.sp)
+                Spacer(Modifier.width(14.dp)); Text("选择任务后可进行批量操作", color = faint, fontSize = TypeScale.caption)
             }
             Spacer(Modifier.weight(1f))
             if (compact) {
                 ToolbarIcon(Icons.Outlined.DeleteSweep, "清理已完成") { if (hasCompleted) onClearCompleted() }; ToolbarIcon(Icons.Outlined.Refresh, "刷新", onRefresh)
             } else {
-                TextButton(onClick = onClearCompleted, enabled = hasCompleted, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(Icons.Outlined.DeleteSweep, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("清理已完成", fontSize = 11.sp) }; TextButton(onClick = onRefresh, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(Icons.Outlined.Refresh, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("刷新", fontSize = 11.sp) }
+                TextButton(onClick = onClearCompleted, enabled = hasCompleted, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(Icons.Outlined.DeleteSweep, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("清理已完成", fontSize = TypeScale.caption) }; TextButton(onClick = onRefresh, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(Icons.Outlined.Refresh, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("刷新", fontSize = TypeScale.caption) }
             }
-            Box { ToolbarIcon(Icons.Outlined.MoreHoriz, "更多操作") { menuOpen = true }; DropdownMenu(menuOpen, { menuOpen = false }, shape = RoundedCornerShape(7.dp), containerColor = dialogSurface, shadowElevation = 6.dp) { listOf("import" to "导入任务或种子", "export" to "导出任务列表", "update" to "检查更新", "cancel_power" to "取消完成后电源动作", "notices" to "通知中心", "about" to "关于 HLS Downloader", "exit" to "退出程序").forEach { (action, label) -> DropdownMenuItem(text = { Text(label, fontSize = 12.sp) }, onClick = { menuOpen = false; onMore(action) }) } } }
+            Box { ToolbarIcon(Icons.Outlined.MoreHoriz, "更多操作") { menuOpen = true }; DropdownMenu(menuOpen, { menuOpen = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface, shadowElevation = Elevation.e2) { listOf("import" to "导入任务或种子", "export" to "导出任务列表", "update" to "检查更新", "cancel_power" to "取消完成后电源动作", "notices" to "通知中心", "about" to "关于 HLS Downloader", "exit" to "退出程序").forEach { (action, label) -> DropdownMenuItem(text = { Text(label, fontSize = TypeScale.body) }, onClick = { menuOpen = false; onMore(action) }) } } }
         }
     }
 }
@@ -2127,9 +2372,9 @@ private data class TaskContextMenuRequest(
                             if (appIcon != null) Image(appIcon, "HLS Downloader", modifier = Modifier.size(62.dp))
                             else Icon(Icons.Outlined.Downloading, "下载任务", tint = blue, modifier = Modifier.size(34.dp))
                             Spacer(Modifier.height(14.dp))
-                            Text("这里还没有下载任务", color = ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            Text("这里还没有下载任务", color = ink, fontSize = TypeScale.title, fontWeight = FontWeight.SemiBold)
                             Spacer(Modifier.height(4.dp))
-                            Text("点击工具栏“新建”或粘贴链接开始下载", color = muted, fontSize = 12.sp)
+                            Text("点击工具栏“新建”或粘贴链接开始下载", color = muted, fontSize = TypeScale.body)
                         }
                     }
                 } else {
@@ -2282,8 +2527,8 @@ private data class TaskContextMenuRequest(
             ) {
                 Surface(
                     color = dialogSurface,
-                    shape = RoundedCornerShape(8.dp),
-                    shadowElevation = 8.dp,
+                    shape = RoundedCornerShape(Radius.md),
+                    shadowElevation = Elevation.e2,
                     border = BorderStroke(1.dp, border),
                     modifier = Modifier.width(220.dp),
                 ) {
@@ -2306,11 +2551,25 @@ private data class TaskContextMenuRequest(
 private fun TaskHeader(value: String, modifier: Modifier, field: String, taskSort: String, onSort: (String) -> Unit) {
     val sortable = field != "actions"
     val active = taskSort.substringBefore(':') == field
+    // 只有可排序的列挂悬停反馈：不可排序的列（actions）挂上 hover 会让人以为点得动。
+    // 表头不缩放 —— 文字在点击时缩一下会像"表格在抖"，反馈只走底色。
+    val feedback = rememberPressFeedback(enabled = sortable, pressScale = 1f, hoverMillis = 120)
     Row(
-        modifier.height(36.dp).then(if (sortable) Modifier.clickable { onSort(field) } else Modifier),
+        modifier
+            .height(36.dp)
+            .then(
+                if (sortable) {
+                    Modifier
+                        .background(feedback.background)
+                        .hoverable(feedback.interaction)
+                        .clickable(interactionSource = feedback.interaction, indication = null) { onSort(field) }
+                } else {
+                    Modifier
+                },
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(value, color = muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        Text(value, color = muted, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold, maxLines = 1)
         if (active) {
             Spacer(Modifier.width(3.dp))
             Icon(
@@ -2348,28 +2607,28 @@ private fun TaskHeader(value: String, modifier: Modifier, field: String, taskSor
         columns.items.forEach { column ->
             key(column.id) {
                 when (column.id) {
-                    "name" -> Row(Modifier.width(column.width), verticalAlignment = Alignment.CenterVertically) { Checkbox(isSelected, { select(false, true) }, Modifier.size(18.dp), accessibilityLabel = "选择 ${task.filename}"); Spacer(Modifier.width(8.dp)); Icon(categoryIcon(taskCategory(task)), null, tint = muted, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); WorkbenchTooltip("${task.filename}\n${safeResourceLocation(task.source.url)}") { Column(Modifier.weight(1f).padding(end = 8.dp)) { Text(task.filename, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, fontWeight = FontWeight.SemiBold); Text(listOf(taskProtocolLabel(task.source), taskExtensionLabel(task.source)).filter { it.isNotBlank() }.joinToString(" · "), color = Color(0xFFC76545), fontSize = 10.sp, fontWeight = FontWeight.SemiBold) } } }
+                    "name" -> Row(Modifier.width(column.width), verticalAlignment = Alignment.CenterVertically) { Checkbox(isSelected, { select(false, true) }, Modifier.size(18.dp), accessibilityLabel = "选择 ${task.filename}"); Spacer(Modifier.width(8.dp)); Icon(categoryIcon(taskCategory(task)), null, tint = muted, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); WorkbenchTooltip("${task.filename}\n${safeResourceLocation(task.source.url)}") { Column(Modifier.weight(1f).padding(end = 8.dp)) { Text(task.filename, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold); Text(listOf(taskProtocolLabel(task.source), taskExtensionLabel(task.source)).filter { it.isNotBlank() }.joinToString(" · "), color = faint, fontSize = TypeScale.micro, fontWeight = FontWeight.SemiBold) } } }
                     "progress" -> Column(Modifier.width(column.width).padding(end = 8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) { LinearProgressIndicator(progress = { task.progress }, modifier = Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)), color = if (task.status == "已暂停") Color(0xFFD97706) else blue, trackColor = surface3); Spacer(Modifier.width(8.dp)); Text("${(task.progress * 100).toInt()}%", color = faint, fontSize = 10.sp) }
+                        Row(verticalAlignment = Alignment.CenterVertically) { LinearProgressIndicator(progress = { task.progress }, modifier = Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(Radius.tiny)), color = if (task.status == "已暂停") warningColor else blue, trackColor = surface3); Spacer(Modifier.width(8.dp)); Text("${(task.progress * 100).toInt()}%", color = faint, fontSize = TypeScale.micro) }
                         Text(
                             when {
                                 task.source.resourceKind.equals("torrent", true) -> "${task.segments} · ${task.source.peerCount} Peer"
                                 task.source.activeWorkers > 0 -> "${task.segments} · ${task.source.activeWorkers} 连接"
                                 else -> task.segments
                             },
-                            color = faint, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            color = faint, fontSize = TypeScale.micro, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(top = 3.dp),
                         )
                     }
-                    "status" -> Column(Modifier.width(column.width)) { StatusBadge(task.status); Text(if (isActiveTaskStatus(task.status)) task.remaining else "", color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 1.dp)) }
-                    "speed" -> Text(if (isActiveTaskStatus(task.status)) task.speed else "—", Modifier.width(column.width), color = ink, fontSize = 11.sp)
-                    "size" -> Text(task.source.totalBytes?.let(::formatBytes) ?: "—", Modifier.width(column.width), color = ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    "status" -> Column(Modifier.width(column.width)) { StatusBadge(task.status); Text(if (isActiveTaskStatus(task.status)) task.remaining else "", color = muted, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 1.dp)) }
+                    "speed" -> Text(if (isActiveTaskStatus(task.status)) task.speed else "—", Modifier.width(column.width), color = ink, fontSize = TypeScale.caption)
+                    "size" -> Text(task.source.totalBytes?.let(::formatBytes) ?: "—", Modifier.width(column.width), color = ink, fontSize = TypeScale.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     "actions" -> Row(Modifier.width(column.width), verticalAlignment = Alignment.CenterVertically) {
                         if (!columns.compact && queueOrder && task.status == "排队中") {
                             var dragY by remember { mutableFloatStateOf(0f) }
                             Icon(Icons.Outlined.DragHandle, "拖动排序", tint = faint, modifier = Modifier.size(28.dp).padding(5.dp).pointerInput(task.id) { detectDragGestures(onDragStart = { dragY = 0f }, onDragEnd = { val delta = (dragY / 52f).toInt(); if (delta != 0) onQueueMove(delta); dragY = 0f }) { change, amount -> change.consume(); dragY += amount.y } })
                         } else if (!columns.compact) Spacer(Modifier.width(28.dp))
-                        Box(Modifier.width(42.dp)) { Box(Modifier.size(34.dp).clip(RoundedCornerShape(6.dp)).clickable { if (!isSelected) select(false, false); overflowOpen = true }, contentAlignment = Alignment.Center) { Icon(Icons.Outlined.MoreVert, "更多操作", tint = muted) }; DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }, shape = RoundedCornerShape(8.dp), containerColor = dialogSurface, tonalElevation = 0.dp, shadowElevation = 6.dp) { TaskMenuEntries(task, { overflowOpen = false }, onDetails, onAction) } }
+                        Box(Modifier.width(42.dp)) { IconButton(onClick = { if (!isSelected) select(false, false); overflowOpen = true }, modifier = Modifier.size(34.dp)) { Icon(Icons.Outlined.MoreVert, "更多操作", tint = muted) }; DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface, tonalElevation = 0.dp, shadowElevation = Elevation.e2) { TaskMenuEntries(task, { overflowOpen = false }, onDetails, onAction) } }
                     }
                 }
             }
@@ -2395,14 +2654,14 @@ private class ContextMenuPositionProvider(private val pointer: IntOffset) : Popu
     )
 }
 @Composable private fun TaskMenuEntries(task: DownloadTask, dismiss: () -> Unit, onDetails: () -> Unit, onAction: (String) -> Unit, actions: List<String> = taskMenuActions(task.source), includeDetails: Boolean = true) {
-    if (includeDetails) DropdownMenuItem(text = { Text("详情与日志", fontSize = 12.sp, color = ink) }, onClick = { dismiss(); onDetails() })
+    if (includeDetails) DropdownMenuItem(text = { Text("详情与日志", fontSize = TypeScale.body, color = ink) }, onClick = { dismiss(); onDetails() })
     actions.forEach { action ->
-        DropdownMenuItem(text = { Text(actionLabel(action), fontSize = 12.sp, color = ink) }, onClick = { dismiss(); onAction(action) })
+        DropdownMenuItem(text = { Text(actionLabel(action), fontSize = TypeScale.body, color = ink) }, onClick = { dismiss(); onAction(action) })
     }
     if (includeDetails && task.status == "排队中") {
         HorizontalDivider(color = border)
         listOf("queue_up", "queue_down", "queue_top", "queue_bottom").forEach { action ->
-            DropdownMenuItem(text = { Text(actionLabel(action), fontSize = 12.sp, color = ink) }, onClick = { dismiss(); onAction(action) })
+            DropdownMenuItem(text = { Text(actionLabel(action), fontSize = TypeScale.body, color = ink) }, onClick = { dismiss(); onAction(action) })
         }
     }
 }
@@ -2438,18 +2697,18 @@ internal fun taskExtensionLabel(task: TaskDto): String {
 private fun formatBytes(bytes: Long) = when { bytes >= 1024L * 1024L * 1024L -> "%.2f GB".format(java.util.Locale.ROOT, bytes / 1024.0 / 1024.0 / 1024.0); bytes >= 1024L * 1024L -> "%.2f MB".format(java.util.Locale.ROOT, bytes / 1024.0 / 1024.0); bytes >= 1024L -> "%.1f KB".format(java.util.Locale.ROOT, bytes / 1024.0); else -> "$bytes B" }
 private fun actionLabel(action: String) = mapOf("details" to "详情与日志", "start" to "开始", "pause" to "暂停", "resume" to "继续", "retry" to "重试", "cancel" to "取消", "open" to "打开文件", "open_folder" to "打开所在位置", "launch" to "运行文件", "copy_file" to "复制文件", "drag_file" to "拖出文件", "delete" to "删除任务", "delete_files" to "删除任务和文件", "play" to "播放", "cast" to "投屏", "push_tvbox" to "TVBox 推送", "move_queue" to "移动到队列", "queue_up" to "上移", "queue_down" to "下移", "queue_top" to "置顶", "queue_bottom" to "置底")[action] ?: action
 @Composable private fun StatusBadge(status: String, modifier: Modifier = Modifier) {
-    val color = when(status) { "已完成" -> Color(0xFF078C46); "失败" -> Color(0xFFDC2626); "已暂停" -> Color(0xFFD97706); else -> blue }
+    val color = when(status) { "已完成" -> successColor; "失败" -> errorStrong; "已暂停" -> warningColor; else -> blue }
     val live = isActiveTaskStatus(status) || status == "排队中"
-    Surface(modifier, color = color.copy(alpha = .10f), shape = RoundedCornerShape(12.dp)) {
+    Surface(modifier, color = color.copy(alpha = .10f), shape = RoundedCornerShape(Radius.pill)) {
         Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(6.dp).clip(RoundedCornerShape(50)).background(color.copy(alpha = if (live) .95f else .7f)))
+            Box(Modifier.size(6.dp).clip(RoundedCornerShape(Radius.pill)).background(color.copy(alpha = if (live) .95f else .7f)))
             Spacer(Modifier.width(5.dp))
-            Text(status, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(status, color = color, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
         }
     }
 }
 private fun taskCount(tasks: List<DownloadTask>, filter: TaskFilter) = when (filter) { TaskFilter.ALL -> tasks.size; TaskFilter.RUNNING -> tasks.count { isActiveTaskStatus(it.status) }; else -> tasks.count { it.status == filter.label } }
-@Composable private fun ConnectionStatus(tasks: List<DownloadTask>, engine: String, extension: String, modifier: Modifier = Modifier) { val activeTasks = tasks.filter { isActiveTaskStatus(it.status) }; val active = activeTasks.size; val bytes = activeTasks.sumOf { it.speedBytes }; Row(modifier.height(28.dp).fillMaxWidth().background(rail).border(BorderStroke(1.dp, border)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) { Text("活动任务 $active", color = muted, fontSize = 11.sp); Spacer(Modifier.width(14.dp)); Text("队列 ${tasks.count { it.status == "排队中" }}", color = muted, fontSize = 11.sp); Spacer(Modifier.width(14.dp)); Text("总速度 ${formatRate(bytes)}", color = blue, fontSize = 11.sp, fontWeight = FontWeight.SemiBold); Spacer(Modifier.weight(1f)); Text(engine, color = if (engine == Product.engineConnected) Color(0xFF16A34A) else Color(0xFFD97706), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Spacer(Modifier.width(14.dp)); Text(extension, color = faint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
+@Composable private fun ConnectionStatus(tasks: List<DownloadTask>, engine: String, extension: String, modifier: Modifier = Modifier) { val activeTasks = tasks.filter { isActiveTaskStatus(it.status) }; val active = activeTasks.size; val bytes = activeTasks.sumOf { it.speedBytes }; Row(modifier.height(28.dp).fillMaxWidth().background(rail).border(BorderStroke(1.dp, border)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) { Text("活动任务 $active", color = muted, fontSize = TypeScale.caption); Spacer(Modifier.width(14.dp)); Text("队列 ${tasks.count { it.status == "排队中" }}", color = muted, fontSize = TypeScale.caption); Spacer(Modifier.width(14.dp)); Text("总速度 ${formatRate(bytes)}", color = blue, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold); Spacer(Modifier.weight(1f)); Text(engine, color = if (engine == Product.engineConnected) successColor else warningColor, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Spacer(Modifier.width(14.dp)); Text(extension, color = faint, fontSize = TypeScale.caption, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
 
 internal data class DialogBounds(val width: Dp, val maxHeight: Dp)
 
@@ -2488,26 +2747,32 @@ internal fun WorkbenchDialog(
                 )
             }
             val bounds = dialogBounds(width, maxWidth, maxHeight)
+            // 原先写的是 AnimatedVisibility(visible = true, …)：那是**死代码**。
+            // 内部走 updateTransition(visible)，首帧的初始状态就等于目标状态，入场不会播；
+            // 退出更不会播，因为父级 `if (flag) WorkbenchDialog(…)` 直接把整棵子树卸载了。
+            // 改成状态从 false 起步，入场才真的会播（退出仍需父级配合保留挂载，本轮不做）。
+            val reduceMotion by MotionPreferences.reduceMotion
+            val enterState = remember { MutableTransitionState(false).apply { targetState = true } }
             AnimatedVisibility(
-                visible = true,
-                enter = fadeIn() + scaleIn(initialScale = .97f),
-                exit = fadeOut() + scaleOut(targetScale = .97f),
+                visibleState = enterState,
+                enter = fadeIn(tween(motionDurationMillis(reduceMotion, 130))) + scaleIn(tween(motionDurationMillis(reduceMotion, 130)), initialScale = .97f),
+                exit = fadeOut(tween(motionDurationMillis(reduceMotion, 110))) + scaleOut(tween(motionDurationMillis(reduceMotion, 110)), targetScale = .97f),
             ) {
             Surface(
                 modifier = Modifier
                     .width(bounds.width)
                     .heightIn(max = bounds.maxHeight)
                     .semantics { paneTitle = title },
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(Radius.lg),
                 color = dialogSurface,
-                shadowElevation = 16.dp,
+                shadowElevation = Elevation.e3,
                 border = BorderStroke(1.dp, border),
             ) {
                 Column(Modifier.fillMaxWidth().padding(18.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
                         Column(Modifier.weight(1f)) {
-                            Text(title, color = ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                            Text(description, color = muted, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
+                            Text(title, color = ink, fontSize = TypeScale.display, fontWeight = FontWeight.SemiBold)
+                            Text(description, color = muted, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 4.dp))
                         }
                         if (dismissible) IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
                             Icon(Icons.Outlined.Close, "关闭", tint = muted, modifier = Modifier.size(18.dp))
@@ -2517,10 +2782,11 @@ internal fun WorkbenchDialog(
                     HorizontalDivider(color = border)
                     Spacer(Modifier.height(13.dp))
                     Column(
+                        // 内容区高度由弹窗上限（dialogBounds 统一压到 680dp 以内）决定，这里不再写死上限。
+                        // 写死 420dp 时，字号刻度调整后设置页内容会超出，最后一行被滚动视口切掉半行。
                         Modifier
                             .fillMaxWidth()
                             .weight(1f, fill = false)
-                            .heightIn(max = 420.dp)
                             .then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier),
                         content = content,
                     )
@@ -2534,9 +2800,9 @@ internal fun WorkbenchDialog(
         }
     }
 }
-@Composable internal fun DialogPrimary(label: String, enabled: Boolean = true, onClick: () -> Unit) = Button(onClick = onClick, enabled = enabled, shape = RoundedCornerShape(7.dp), contentPadding = PaddingValues(horizontal = 15.dp), colors = ButtonDefaults.buttonColors(containerColor = blue, contentColor = Color.White)) { Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
-@Composable internal fun DialogSecondary(label: String, onClick: () -> Unit) = TextButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 12.dp)) { Text(label, fontSize = 12.sp, color = muted) }
-@Composable internal fun DialogLabel(value: String) = Text(value, color = muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 5.dp))
+@Composable internal fun DialogPrimary(label: String, enabled: Boolean = true, onClick: () -> Unit) = Button(onClick = onClick, enabled = enabled, shape = RoundedCornerShape(Radius.md), contentPadding = PaddingValues(horizontal = 15.dp), colors = ButtonDefaults.buttonColors(containerColor = blue, contentColor = onBlue)) { Text(label, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold) }
+@Composable internal fun DialogSecondary(label: String, onClick: () -> Unit) = TextButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 12.dp)) { Text(label, fontSize = TypeScale.body, color = muted) }
+@Composable internal fun DialogLabel(value: String) = Text(value, color = muted, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 5.dp))
 
 internal fun queueProfilesValid(profiles: List<QueueProfileDto>): Boolean {
     if (profiles.isEmpty() || profiles.size > 32 || profiles.none { it.id == "default" }) return false
@@ -2571,25 +2837,32 @@ private fun QueueAssignDialog(
         500.dp,
         content = {
             if (available.isEmpty()) {
-                Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(8.dp)) {
-                    Text("当前没有启用的下载队列，请先在队列管理中启用一个队列。", color = muted, fontSize = 12.sp, modifier = Modifier.padding(14.dp))
+                Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(Radius.md)) {
+                    Text("当前没有启用的下载队列，请先在队列管理中启用一个队列。", color = muted, fontSize = TypeScale.body, modifier = Modifier.padding(14.dp))
                 }
             } else {
                 available.forEach { profile ->
                     val selected = selectedId == profile.id
+                    val feedback = rememberPressFeedback(
+                        restColor = if (selected) selectedSurface else Color.Transparent,
+                        hoverColor = if (selected) selectedSurface else surface3,
+                        pressScale = .99f,
+                    )
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp))
-                            .background(if (selected) selectedSurface else Color.Transparent)
-                            .clickable { selectedId = profile.id }
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md))
+                            .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+                            .background(feedback.background)
+                            .hoverable(feedback.interaction)
+                            .clickable(interactionSource = feedback.interaction, indication = null) { selectedId = profile.id }
                             .padding(horizontal = 11.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(selected, { selectedId = profile.id }, accessibilityLabel = "选择队列 ${profile.name}")
                         Spacer(Modifier.width(8.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(profile.name, color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            Text(profile.name, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
                             val speed = if (profile.speedLimitKib > 0) " · ${profile.speedLimitKib} KiB/s" else " · 不限速"
-                            Text("优先级 ${profile.priority} · 最多 ${profile.maxActive} 个活动任务$speed", color = faint, fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp))
+                            Text("优先级 ${profile.priority} · 最多 ${profile.maxActive} 个活动任务$speed", color = faint, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 2.dp))
                         }
                     }
                 }
@@ -2631,7 +2904,7 @@ private fun QueueManagerDialog(
             Row(Modifier.fillMaxWidth().heightIn(min = 360.dp, max = 420.dp)) {
                 Column(Modifier.width(218.dp).fillMaxHeight().padding(end = 14.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("队列", color = muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text("队列", color = muted, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         IconButton(onClick = {
                             val id = "queue-${System.currentTimeMillis().toString(36)}"
                             profiles = profiles + QueueProfileDto(id = id, name = "新队列", priority = (profiles.maxOfOrNull { it.priority } ?: 0) + 1)
@@ -2642,19 +2915,26 @@ private fun QueueManagerDialog(
                     Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                         profiles.forEach { profile ->
                             val active = profile.id == selected.id
+                            val feedback = rememberPressFeedback(
+                                restColor = if (active) selectedSurface else Color.Transparent,
+                                hoverColor = if (active) selectedSurface else surface3,
+                                pressScale = .99f,
+                            )
                             Row(
-                                Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp))
-                                    .background(if (active) selectedSurface else Color.Transparent)
-                                    .clickable { selectedId = profile.id }
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md))
+                                    .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+                                    .background(feedback.background)
+                                    .hoverable(feedback.interaction)
+                                    .clickable(interactionSource = feedback.interaction, indication = null) { selectedId = profile.id }
                                     .padding(horizontal = 10.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Icon(if (profile.enabled) Icons.Outlined.PlayCircleOutline else Icons.Outlined.PauseCircleOutline, null, tint = if (profile.enabled) blue else faint, modifier = Modifier.size(17.dp))
                                 Spacer(Modifier.width(8.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Text(profile.name, color = ink, fontSize = 12.sp, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(profile.name, color = ink, fontSize = TypeScale.body, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     val speed = if (profile.speedLimitKib > 0) " · ${profile.speedLimitKib} KiB/s" else " · 不限速"
-                                    Text("优先级 ${profile.priority} · 并发 ${profile.maxActive}$speed", color = faint, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("优先级 ${profile.priority} · 并发 ${profile.maxActive}$speed", color = faint, fontSize = TypeScale.micro, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
                         }
@@ -2668,24 +2948,24 @@ private fun QueueManagerDialog(
                                 profiles = profiles.filterNot { it.id == selected.id }
                                 selectedId = profiles.first().id
                             }
-                        }, enabled = selected.id != "default" && profiles.size > 1) { Icon(Icons.Outlined.DeleteOutline, "删除队列", tint = if (selected.id == "default") faint else Color(0xFFDC2626)) }
+                        }, enabled = selected.id != "default" && profiles.size > 1) { Icon(Icons.Outlined.DeleteOutline, "删除队列", tint = if (selected.id == "default") faint else errorStrong) }
                     }
                 }
                 Box(Modifier.width(1.dp).fillMaxHeight().background(border))
                 Column(Modifier.weight(1f).fillMaxHeight().padding(start = 16.dp).verticalScroll(rememberScrollState())) {
                     DialogLabel("队列名称")
-                    OutlinedTextField(selected.name, { value -> update { it.copy(name = value.take(40)) } }, Modifier.fillMaxWidth(), singleLine = true, isError = selected.name.isBlank(), shape = RoundedCornerShape(7.dp))
+                    OutlinedTextField(selected.name, { value -> update { it.copy(name = value.take(40)) } }, Modifier.fillMaxWidth(), singleLine = true, isError = selected.name.isBlank(), shape = RoundedCornerShape(Radius.md))
                     Spacer(Modifier.height(8.dp))
                     SettingRow("启用队列", "停用后保留任务，但不会开始新的下载", selected.enabled) { value -> update { it.copy(enabled = value) } }
                     Row(Modifier.fillMaxWidth()) {
                         Column(Modifier.weight(1f)) {
                             DialogLabel("优先级 (-100 至 100)")
-                            OutlinedTextField(selected.priority.toString(), { value -> value.toIntOrNull()?.let { number -> update { it.copy(priority = number.coerceIn(-100, 100)) } } }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp))
+                            OutlinedTextField(selected.priority.toString(), { value -> value.toIntOrNull()?.let { number -> update { it.copy(priority = number.coerceIn(-100, 100)) } } }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md))
                         }
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             DialogLabel("最大活动任务")
-                            OutlinedTextField(selected.maxActive.toString(), { value -> value.toIntOrNull()?.let { number -> update { it.copy(maxActive = number.coerceIn(1, 64)) } } }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp))
+                            OutlinedTextField(selected.maxActive.toString(), { value -> value.toIntOrNull()?.let { number -> update { it.copy(maxActive = number.coerceIn(1, 64)) } } }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md))
                         }
                     }
                     Spacer(Modifier.height(8.dp))
@@ -2695,15 +2975,15 @@ private fun QueueManagerDialog(
                         { value -> value.toLongOrNull()?.let { number -> update { it.copy(speedLimitKib = number.coerceIn(0, 1_048_576)) } } },
                         Modifier.fillMaxWidth(),
                         singleLine = true,
-                        supportingText = { Text("0 表示不限速；同一队列的活动任务共享该速度", color = faint, fontSize = 9.sp) },
-                        shape = RoundedCornerShape(7.dp),
+                        supportingText = { Text("0 表示不限速；同一队列的活动任务共享该速度", color = faint, fontSize = TypeScale.micro) },
+                        shape = RoundedCornerShape(Radius.md),
                     )
                     SettingRow("启用时间表", "只在指定星期和时段启动新任务", selected.scheduleEnabled) { value -> update { it.copy(scheduleEnabled = value) } }
                     if (selected.scheduleEnabled) {
                         Row(Modifier.fillMaxWidth()) {
-                            Column(Modifier.weight(1f)) { DialogLabel("开始时间"); OutlinedTextField(selected.startTime, { value -> update { it.copy(startTime = value.take(5)) } }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)) }
+                            Column(Modifier.weight(1f)) { DialogLabel("开始时间"); OutlinedTextField(selected.startTime, { value -> update { it.copy(startTime = value.take(5)) } }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)) }
                             Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) { DialogLabel("停止时间"); OutlinedTextField(selected.stopTime, { value -> update { it.copy(stopTime = value.take(5)) } }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)) }
+                            Column(Modifier.weight(1f)) { DialogLabel("停止时间"); OutlinedTextField(selected.stopTime, { value -> update { it.copy(stopTime = value.take(5)) } }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)) }
                         }
                         Spacer(Modifier.height(8.dp)); DialogLabel("生效星期")
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -2711,24 +2991,24 @@ private fun QueueManagerDialog(
                                 val day = index + 1
                                 val days = selected.activeDays.split(',').mapNotNull(String::toIntOrNull)
                                 val active = day in days
-                                TextButton(onClick = { update { profile -> profile.copy(activeDays = (if (active) days - day else days + day).distinct().sorted().joinToString(",")) } }, modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (active) selectedSurface else surface2), contentPadding = PaddingValues(0.dp)) { Text(label, color = if (active) blue else muted, fontSize = 11.sp) }
+                                TextButton(onClick = { update { profile -> profile.copy(activeDays = (if (active) days - day else days + day).distinct().sorted().joinToString(",")) } }, modifier = Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (active) selectedSurface else surface2), contentPadding = PaddingValues(0.dp)) { Text(label, color = if (active) blue else muted, fontSize = TypeScale.caption) }
                             }
                         }
                     }
                     Spacer(Modifier.height(8.dp))
                     DialogLabel("队列全部完成后")
-                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2).padding(3.dp)) {
+                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) {
                         listOf("none" to "无", "sleep" to "睡眠", "hibernate" to "休眠", "shutdown" to "关机").forEach { (value, label) ->
                             val active = selected.completionAction == value
                             TextButton(
                                 onClick = { update { it.copy(completionAction = value) } },
-                                modifier = Modifier.weight(1f).clip(RoundedCornerShape(5.dp)).background(if (active) selectedSurface else Color.Transparent),
+                                modifier = Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (active) selectedSurface else Color.Transparent),
                                 contentPadding = PaddingValues(horizontal = 4.dp),
-                            ) { Text(label, color = if (active) blue else muted, fontSize = 10.sp) }
+                            ) { Text(label, color = if (active) blue else muted, fontSize = TypeScale.micro) }
                         }
                     }
-                    Text("只有该队列中的任务全部成功完成后才会触发，执行前可取消。", color = faint, fontSize = 9.sp, modifier = Modifier.padding(top = 4.dp))
-                    if (!valid) Text("请检查队列名称、时间范围和重复名称。", color = Color(0xFFDC2626), fontSize = 10.sp, modifier = Modifier.padding(top = 8.dp))
+                    Text("只有该队列中的任务全部成功完成后才会触发，执行前可取消。", color = faint, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 4.dp))
+                    if (!valid) Text("请检查队列名称、时间范围和重复名称。", color = errorStrong, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 8.dp))
                 }
             }
         },
@@ -2796,7 +3076,7 @@ private fun NewTaskDialog(
         )
     }
     WorkbenchDialog(onDismiss, "新建下载", "创建文件、媒体、远程协议或 BT 下载任务", 760.dp, content = {
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2).padding(3.dp)) { listOf("基本", "连接", "请求", "计划").forEach { item -> TextButton(onClick = { tab = item }, Modifier.weight(1f).clip(RoundedCornerShape(5.dp)).background(if (tab == item) rail else Color.Transparent)) { Text(item, color = if (tab == item) blue else muted, fontSize = 11.sp, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal) } } }
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) { listOf("基本", "连接", "请求", "计划").forEach { item -> TextButton(onClick = { tab = item }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (tab == item) rail else Color.Transparent)) { Text(item, color = if (tab == item) blue else muted, fontSize = TypeScale.caption, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal) } } }
         Spacer(Modifier.height(14.dp))
         when (tab) {
             "基本" -> {
@@ -2811,7 +3091,7 @@ private fun NewTaskDialog(
                     minLines = if (curlMode) 3 else 1,
                     maxLines = if (curlMode) 5 else 1,
                     isError = url.isNotBlank() && !validInput,
-                    shape = RoundedCornerShape(7.dp),
+                    shape = RoundedCornerShape(Radius.md),
                     supportingText = {
                         Text(
                             when {
@@ -2820,52 +3100,52 @@ private fun NewTaskDialog(
                                 normalized != null -> "类型：${EnginePipeClient.recognizeResourceKind(normalized)}"
                                 else -> "等待输入"
                             },
-                            fontSize = 10.sp,
+                            fontSize = TypeScale.micro,
                         )
                     },
                 )
-                Spacer(Modifier.height(8.dp)); DialogLabel("文件名（留空自动识别）"); OutlinedTextField(filename, { filename = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(8.dp)); DialogLabel("保存到"); Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { OutlinedTextField(directory, { directory = it }, Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.width(8.dp)); DialogSecondary("选择目录") { chooseDirectory(directory, "选择下载保存目录")?.let { directory = it } } }; SettingRow("允许重复任务", "同一资源已存在时仍创建新任务", allowDuplicate) { allowDuplicate = it }
+                Spacer(Modifier.height(8.dp)); DialogLabel("文件名（留空自动识别）"); OutlinedTextField(filename, { filename = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(8.dp)); DialogLabel("保存到"); Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { OutlinedTextField(directory, { directory = it }, Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.width(8.dp)); DialogSecondary("选择目录") { chooseDirectory(directory, "选择下载保存目录")?.let { directory = it } } }; SettingRow("允许重复任务", "同一资源已存在时仍创建新任务", allowDuplicate) { allowDuplicate = it }
             }
             "连接" -> {
-                DialogLabel("并发连接数（0 使用默认值）"); OutlinedTextField(concurrency, { concurrency = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("任务限速 KiB/s（0 不限制）"); OutlinedTextField(speed, { speed = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("代理地址（可选）"); OutlinedTextField(proxy, { proxy = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("校验和（算法:值，可选）"); OutlinedTextField(checksum, { checksum = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp), placeholder = { Text("sha256:...") }); Spacer(Modifier.height(9.dp)); DialogLabel("备用下载地址（每行一个）"); OutlinedTextField(mirrors, { mirrors = it }, Modifier.fillMaxWidth(), minLines = 3, maxLines = 4, shape = RoundedCornerShape(7.dp), placeholder = { Text("https://mirror.example.com/file.bin") }); Text("仅普通 HTTP(S) 文件使用；媒体清单、BT 与远程协议会忽略。", color = faint, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp))
+                DialogLabel("并发连接数（0 使用默认值）"); OutlinedTextField(concurrency, { concurrency = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("任务限速 KiB/s（0 不限制）"); OutlinedTextField(speed, { speed = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("代理地址（可选）"); OutlinedTextField(proxy, { proxy = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("校验和（算法:值，可选）"); OutlinedTextField(checksum, { checksum = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md), placeholder = { Text("sha256:...") }); Spacer(Modifier.height(9.dp)); DialogLabel("备用下载地址（每行一个）"); OutlinedTextField(mirrors, { mirrors = it }, Modifier.fillMaxWidth(), minLines = 3, maxLines = 4, shape = RoundedCornerShape(Radius.md), placeholder = { Text("https://mirror.example.com/file.bin") }); Text("仅普通 HTTP(S) 文件使用；媒体清单、BT 与远程协议会忽略。", color = faint, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 5.dp))
             }
             "请求" -> {
                 if (curlMode) {
-                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(selectedSurface).padding(11.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.Security, null, tint = blue, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(9.dp)); Text("cURL 中的请求上下文由下载引擎解析并加密保存，下方字段作为显式覆盖值。", color = muted, fontSize = 10.sp)
+                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(selectedSurface).padding(11.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Security, null, tint = blue, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(9.dp)); Text("cURL 中的请求上下文由下载引擎解析并加密保存，下方字段作为显式覆盖值。", color = muted, fontSize = TypeScale.micro)
                     }
                     Spacer(Modifier.height(10.dp))
                 }
                 DialogLabel("请求方式")
-                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2).padding(3.dp)) {
-                    listOf("GET", "POST", "HEAD").forEach { value -> TextButton(onClick = { requestMethod = value }, Modifier.weight(1f).clip(RoundedCornerShape(5.dp)).background(if (requestMethod == value) selectedSurface else Color.Transparent)) { Text(value, color = if (requestMethod == value) blue else muted, fontSize = 11.sp) } }
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) {
+                    listOf("GET", "POST", "HEAD").forEach { value -> TextButton(onClick = { requestMethod = value }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (requestMethod == value) selectedSurface else Color.Transparent)) { Text(value, color = if (requestMethod == value) blue else muted, fontSize = TypeScale.caption) } }
                 }
                 Spacer(Modifier.height(9.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Column(Modifier.weight(1f)) {
                         DialogLabel("Referer")
-                        OutlinedTextField(referer, { referer = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp))
+                        OutlinedTextField(referer, { referer = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md))
                     }
                     Column(Modifier.weight(1f)) {
                         DialogLabel("Origin")
-                        OutlinedTextField(origin, { origin = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp))
+                        OutlinedTextField(origin, { origin = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md))
                     }
                 }
                 Spacer(Modifier.height(9.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Column(Modifier.weight(1f)) {
                         DialogLabel("User-Agent")
-                        OutlinedTextField(userAgent, { userAgent = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp))
+                        OutlinedTextField(userAgent, { userAgent = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md))
                     }
                     Column(Modifier.weight(1f)) {
                         DialogLabel("Cookie")
-                        OutlinedTextField(cookie, { cookie = it }, Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), shape = RoundedCornerShape(7.dp), placeholder = { Text("下载引擎加密保存") })
+                        OutlinedTextField(cookie, { cookie = it }, Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), shape = RoundedCornerShape(Radius.md), placeholder = { Text("下载引擎加密保存") })
                     }
                 }
-                Spacer(Modifier.height(9.dp)); DialogLabel("其他请求头（每行“名称: 值”）"); OutlinedTextField(requestHeaders, { requestHeaders = it }, Modifier.fillMaxWidth(), minLines = 3, maxLines = 3, isError = parsedHeaders.isFailure, shape = RoundedCornerShape(7.dp), placeholder = { Text("Authorization: Bearer ...\nX-Playback-Token: ...") }); Text(parsedHeaders.exceptionOrNull()?.message ?: "敏感请求头只保存在下载引擎的加密凭据中。", color = if (parsedHeaders.isFailure) Color(0xFFDC2626) else faint, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp))
+                Spacer(Modifier.height(9.dp)); DialogLabel("其他请求头（每行“名称: 值”）"); OutlinedTextField(requestHeaders, { requestHeaders = it }, Modifier.fillMaxWidth(), minLines = 3, maxLines = 3, isError = parsedHeaders.isFailure, shape = RoundedCornerShape(Radius.md), placeholder = { Text("Authorization: Bearer ...\nX-Playback-Token: ...") }); Text(parsedHeaders.exceptionOrNull()?.message ?: "敏感请求头只保存在下载引擎的加密凭据中。", color = if (parsedHeaders.isFailure) errorStrong else faint, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 5.dp))
             }
             else -> {
-                DialogLabel("计划开始（ISO 时间或留空）"); OutlinedTextField(startAt, { startAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("计划停止（ISO 时间或留空）"); OutlinedTextField(stopAt, { stopAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.height(9.dp)); DialogLabel("完成后动作"); Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2).padding(3.dp)) { listOf("none" to "无", "sleep" to "睡眠", "hibernate" to "休眠", "shutdown" to "关机").forEach { (value, label) -> TextButton(onClick = { completionAction = value }, Modifier.weight(1f).clip(RoundedCornerShape(5.dp)).background(if (completionAction == value) selectedSurface else Color.Transparent), contentPadding = PaddingValues(horizontal = 4.dp)) { Text(label, color = if (completionAction == value) blue else muted, fontSize = 10.sp) } } }
+                DialogLabel("计划开始（ISO 时间或留空）"); OutlinedTextField(startAt, { startAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("计划停止（ISO 时间或留空）"); OutlinedTextField(stopAt, { stopAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("完成后动作"); Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) { listOf("none" to "无", "sleep" to "睡眠", "hibernate" to "休眠", "shutdown" to "关机").forEach { (value, label) -> TextButton(onClick = { completionAction = value }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (completionAction == value) selectedSurface else Color.Transparent), contentPadding = PaddingValues(horizontal = 4.dp)) { Text(label, color = if (completionAction == value) blue else muted, fontSize = TypeScale.micro) } } }
             }
         }
     }, actions = {
@@ -2874,7 +3154,7 @@ private fun NewTaskDialog(
             onClick = { if (normalized != null && parsedHeaders.isSuccess) onProbe(buildDraft()) },
             enabled = normalized != null && parsedHeaders.isSuccess,
             contentPadding = PaddingValues(horizontal = 12.dp),
-        ) { Text("分析资源", fontSize = 12.sp, color = if (normalized != null && parsedHeaders.isSuccess) muted else faint) }
+        ) { Text("分析资源", fontSize = TypeScale.body, color = if (normalized != null && parsedHeaders.isSuccess) muted else faint) }
         DialogPrimary("创建下载", validInput && parsedHeaders.isSuccess) {
             onCreate(buildDraft())
         }
@@ -2901,7 +3181,7 @@ internal fun parseRequestHeaderLines(value: String): Map<String, String> {
     }
     return headers
 }
-@Composable private fun BatchAddDialog(onDismiss: () -> Unit, onCreate: (List<String>) -> Unit) { var urls by remember { mutableStateOf("") }; val inputFocus = remember { FocusRequester() }; LaunchedEffect(Unit) { delay(120); inputFocus.requestFocus() }; val entries = urls.lineSequence().map(String::trim).filter(String::isNotBlank).toList(); val valid = entries.filter { runCatching { EnginePipeClient.normalizeDownloadUrl(it) }.isSuccess }; WorkbenchDialog(onDismiss, "批量添加", "每行一个下载链接，可一次创建多个任务", 620.dp, content = { DialogLabel("链接列表"); OutlinedTextField(urls, { urls = it }, Modifier.fillMaxWidth().heightIn(min = 180.dp), focusRequester = inputFocus, placeholder = { Text("https://example.com/file.zip") }, minLines = 7, maxLines = 10, shape = RoundedCornerShape(7.dp)); Text("有效 ${valid.size} / 输入 ${entries.size} 条链接", color = if (entries.isNotEmpty() && valid.size != entries.size) Color(0xFFB54708) else faint, fontSize = 11.sp, modifier = Modifier.padding(top = 7.dp)) }, actions = { DialogSecondary("取消", onDismiss); DialogPrimary("创建 ${valid.size} 个任务", valid.isNotEmpty()) { onCreate(valid) } }) }
+@Composable private fun BatchAddDialog(onDismiss: () -> Unit, onCreate: (List<String>) -> Unit) { var urls by remember { mutableStateOf("") }; val inputFocus = remember { FocusRequester() }; LaunchedEffect(Unit) { delay(120); inputFocus.requestFocus() }; val entries = urls.lineSequence().map(String::trim).filter(String::isNotBlank).toList(); val valid = entries.filter { runCatching { EnginePipeClient.normalizeDownloadUrl(it) }.isSuccess }; WorkbenchDialog(onDismiss, "批量添加", "每行一个下载链接，可一次创建多个任务", 620.dp, content = { DialogLabel("链接列表"); OutlinedTextField(urls, { urls = it }, Modifier.fillMaxWidth().heightIn(min = 180.dp), focusRequester = inputFocus, placeholder = { Text("https://example.com/file.zip") }, minLines = 7, maxLines = 10, shape = RoundedCornerShape(Radius.md)); Text("有效 ${valid.size} / 输入 ${entries.size} 条链接", color = if (entries.isNotEmpty() && valid.size != entries.size) warningColor else faint, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 7.dp)) }, actions = { DialogSecondary("取消", onDismiss); DialogPrimary("创建 ${valid.size} 个任务", valid.isNotEmpty()) { onCreate(valid) } }) }
 @Composable
 private fun HarvestDialog(
     onDismiss: () -> Unit,
@@ -2928,13 +3208,13 @@ private fun HarvestDialog(
                 focusRequester = inputFocus,
                 placeholder = { Text("https://example.com/files/") },
                 singleLine = true,
-                shape = RoundedCornerShape(7.dp),
+                shape = RoundedCornerShape(Radius.md),
                 isError = url.isNotBlank() && !validUrl,
             )
             Text(
                 "不会执行网页脚本，也不会继续打开子页面；单次最多返回 100 个资源。",
                 color = faint,
-                fontSize = 11.sp,
+                fontSize = TypeScale.caption,
                 modifier = Modifier.padding(top = 7.dp),
             )
             Spacer(Modifier.height(13.dp))
@@ -2945,10 +3225,10 @@ private fun HarvestDialog(
                 Modifier.fillMaxWidth(),
                 placeholder = { Text("留空时使用上面的网页地址") },
                 singleLine = true,
-                shape = RoundedCornerShape(7.dp),
+                shape = RoundedCornerShape(Radius.md),
                 isError = !validReferer,
             )
-            Text("用于需要来源页校验的文件和媒体地址。", color = faint, fontSize = 11.sp, modifier = Modifier.padding(top = 7.dp))
+            Text("用于需要来源页校验的文件和媒体地址。", color = faint, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 7.dp))
         },
         actions = {
             DialogSecondary("取消", onDismiss)
@@ -2956,8 +3236,8 @@ private fun HarvestDialog(
         },
     )
 }
-@Composable internal fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) = Column(Modifier.fillMaxWidth().padding(end = 5.dp, bottom = 14.dp), content = { Text(title, color = ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold); Spacer(Modifier.height(12.dp)); content(); Spacer(Modifier.height(8.dp)) })
-@Composable internal fun SettingRow(label: String, detail: String, checked: Boolean, onChecked: (Boolean) -> Unit) = Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(label, color = ink, fontSize = 12.sp, fontWeight = FontWeight.Medium); Text(detail, color = faint, fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp)) }; Switch(checked, onChecked, accessibilityLabel = label) }
+@Composable internal fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) = Column(Modifier.fillMaxWidth().padding(end = 5.dp, bottom = 14.dp), content = { Text(title, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold); Spacer(Modifier.height(12.dp)); content(); Spacer(Modifier.height(8.dp)) })
+@Composable internal fun SettingRow(label: String, detail: String, checked: Boolean, onChecked: (Boolean) -> Unit) = Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(label, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.Medium); Text(detail, color = faint, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 3.dp)) }; Switch(checked, onChecked, accessibilityLabel = label) }
 
 @Composable private fun TaskDetailsDialog(
     task: DownloadTask,
@@ -2993,22 +3273,22 @@ private fun HarvestDialog(
         torrentLoading = false
     }
     WorkbenchDialog(onDismiss, "任务详情", "进度、连接、速度和运行日志", 780.dp, content = {
-        Text(task.filename, color = ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(task.filename, color = ink, fontSize = TypeScale.title, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(12.dp))
-        LinearProgressIndicator(progress = { task.progress }, modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(4.dp)), color = blue, trackColor = surface3)
+        LinearProgressIndicator(progress = { task.progress }, modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(Radius.sm)), color = blue, trackColor = surface3)
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             StatusBadge(task.status); Spacer(Modifier.width(9.dp))
             Text(
                 if (torrentTask) "${(task.progress * 100).toInt()}% · ${task.speed} · ${task.segments}"
                 else "${(task.progress * 100).toInt()}% · ${task.speed} · ${task.segments} · ${task.source.activeWorkers} 个连接",
                 color = muted,
-                fontSize = 11.sp,
+                fontSize = TypeScale.caption,
             )
         }
         Spacer(Modifier.height(14.dp))
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2).padding(3.dp)) {
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) {
             (listOf("概览", "连接", "速度", "日志") + if (canPreview) listOf("预览") else emptyList()).forEach { item ->
-                TextButton(onClick = { tab = item; if (item == "日志") onAction("log") }, Modifier.weight(1f).clip(RoundedCornerShape(5.dp)).background(if (tab == item) rail else Color.Transparent)) { Text(item, color = if (tab == item) blue else muted, fontSize = 11.sp, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal) }
+                TextButton(onClick = { tab = item; if (item == "日志") onAction("log") }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (tab == item) rail else Color.Transparent)) { Text(item, color = if (tab == item) blue else muted, fontSize = TypeScale.caption, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal) }
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -3030,34 +3310,34 @@ private fun HarvestDialog(
                 }
                 if (task.source.scheduledStartAt.isNotBlank()) DetailLine("开始", task.source.scheduledStartAt)
                 if (task.source.scheduledStopAt.isNotBlank()) DetailLine("停止", task.source.scheduledStopAt)
-                if (task.source.outputMissing) DetailLine("输出", "文件已删除，可重新下载", Color(0xFFB42318))
+                if (task.source.outputMissing) DetailLine("输出", "文件已删除，可重新下载", errorStrong)
                 TaskVerificationDetails(task.source)
                 taskFailureDetails(task.source)?.let { failure ->
                     Spacer(Modifier.height(13.dp))
                     Surface(
                         Modifier.fillMaxWidth(),
                         color = errorSurface,
-                        shape = RoundedCornerShape(7.dp),
+                        shape = RoundedCornerShape(Radius.md),
                         border = BorderStroke(1.dp, errorBorder),
                     ) {
                         Column(Modifier.padding(12.dp)) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Outlined.ErrorOutline, null, tint = errorStrong, modifier = Modifier.size(17.dp))
                                 Spacer(Modifier.width(7.dp))
-                                Text(failure.title, Modifier.weight(1f), color = errorStrong, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Text(failure.title, Modifier.weight(1f), color = errorStrong, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
                                 TextButton(onClick = {
                                     runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(taskFailureDiagnostic(task)), null) }
                                     diagnosticsCopied = true
-                                }, contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp)) { Text(if (diagnosticsCopied) "已复制" else "复制诊断", color = blue, fontSize = 10.sp) }
+                                }, contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp)) { Text(if (diagnosticsCopied) "已复制" else "复制诊断", color = blue, fontSize = TypeScale.micro) }
                             }
                             failure.items.forEach { (label, value) -> DetailLine(label, value, errorBody) }
                             task.source.errorMessage?.takeIf(String::isNotBlank)?.let { message ->
-                                Spacer(Modifier.height(8.dp)); Text("失败原因", color = errorStrong, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-                                Text(redactDiagnosticText(message), color = errorBody, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 3.dp))
+                                Spacer(Modifier.height(8.dp)); Text("失败原因", color = errorStrong, fontSize = TypeScale.micro, fontWeight = FontWeight.SemiBold)
+                                Text(redactDiagnosticText(message), color = errorBody, fontSize = TypeScale.caption, lineHeight = 17.sp, modifier = Modifier.padding(top = 3.dp))
                             }
                             if (failure.steps.isNotEmpty()) {
-                                Spacer(Modifier.height(8.dp)); Text("建议步骤", color = errorStrong, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-                                failure.steps.forEachIndexed { index, step -> Text("${index + 1}. $step", color = errorBody, fontSize = 11.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 2.dp)) }
+                                Spacer(Modifier.height(8.dp)); Text("建议步骤", color = errorStrong, fontSize = TypeScale.micro, fontWeight = FontWeight.SemiBold)
+                                failure.steps.forEachIndexed { index, step -> Text("${index + 1}. $step", color = errorBody, fontSize = TypeScale.caption, lineHeight = 17.sp, modifier = Modifier.padding(top = 2.dp)) }
                             }
                         }
                     }
@@ -3065,28 +3345,28 @@ private fun HarvestDialog(
                 if (torrentTask) {
                     Spacer(Modifier.height(13.dp)); HorizontalDivider(color = border); Spacer(Modifier.height(11.dp))
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("BT 文件选择", Modifier.weight(1f), color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        Text("已选 ${torrentFiles.count { it.selected }} / ${torrentFiles.size} · ${formatBytes(torrentFiles.filter { it.selected }.sumOf { it.size })}", color = muted, fontSize = 10.sp)
+                        Text("BT 文件选择", Modifier.weight(1f), color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
+                        Text("已选 ${torrentFiles.count { it.selected }} / ${torrentFiles.size} · ${formatBytes(torrentFiles.filter { it.selected }.sumOf { it.size })}", color = muted, fontSize = TypeScale.micro)
                     }
                     Row(Modifier.padding(top = 5.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                        TextButton(onClick = { torrentFiles = torrentFiles.map { it.copy(selected = true) } }, enabled = torrentFiles.isNotEmpty(), contentPadding = PaddingValues(horizontal = 7.dp)) { Text("全选", fontSize = 10.sp) }
-                        TextButton(onClick = { torrentFiles = torrentFiles.map { it.copy(selected = !it.selected) } }, enabled = torrentFiles.isNotEmpty(), contentPadding = PaddingValues(horizontal = 7.dp)) { Text("反选", fontSize = 10.sp) }
+                        TextButton(onClick = { torrentFiles = torrentFiles.map { it.copy(selected = true) } }, enabled = torrentFiles.isNotEmpty(), contentPadding = PaddingValues(horizontal = 7.dp)) { Text("全选", fontSize = TypeScale.micro) }
+                        TextButton(onClick = { torrentFiles = torrentFiles.map { it.copy(selected = !it.selected) } }, enabled = torrentFiles.isNotEmpty(), contentPadding = PaddingValues(horizontal = 7.dp)) { Text("反选", fontSize = TypeScale.micro) }
                     }
                     when {
-                        torrentLoading -> Text("正在读取种子元数据…", color = muted, fontSize = 11.sp, modifier = Modifier.padding(vertical = 18.dp))
-                        torrentFiles.isEmpty() -> Text("尚未取得文件清单。磁力任务需要先取得元数据。", color = muted, fontSize = 11.sp, modifier = Modifier.padding(vertical = 14.dp))
-                        else -> Column(Modifier.fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState()).border(BorderStroke(1.dp, border), RoundedCornerShape(7.dp)).padding(horizontal = 9.dp, vertical = 5.dp)) {
+                        torrentLoading -> Text("正在读取种子元数据…", color = muted, fontSize = TypeScale.caption, modifier = Modifier.padding(vertical = 18.dp))
+                        torrentFiles.isEmpty() -> Text("尚未取得文件清单。磁力任务需要先取得元数据。", color = muted, fontSize = TypeScale.caption, modifier = Modifier.padding(vertical = 14.dp))
+                        else -> Column(Modifier.fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState()).border(BorderStroke(1.dp, border), RoundedCornerShape(Radius.md)).padding(horizontal = 9.dp, vertical = 5.dp)) {
                             torrentFiles.forEachIndexed { index, file ->
                                 Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Checkbox(file.selected, { checked -> torrentFiles = torrentFiles.toMutableList().also { it[index] = file.copy(selected = checked) } }, accessibilityLabel = "选择 ${file.path}")
-                                    Spacer(Modifier.width(6.dp)); Text(file.path, Modifier.weight(1f), color = ink, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    Spacer(Modifier.width(8.dp)); Text(formatBytes(file.size), color = muted, fontSize = 10.sp)
+                                    Spacer(Modifier.width(6.dp)); Text(file.path, Modifier.weight(1f), color = ink, fontSize = TypeScale.caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Spacer(Modifier.width(8.dp)); Text(formatBytes(file.size), color = muted, fontSize = TypeScale.micro)
                                 }
                             }
                         }
                     }
-                    if (task.status == "进行中") Text("当前内置 BT 引擎需先暂停任务，才能安全调整文件选择。", color = Color(0xFFB54708), fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp))
-                    if (torrentNotice.isNotBlank()) Text(torrentNotice, color = if (torrentNotice.contains("已保存")) Color(0xFF078C46) else Color(0xFFB42318), fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp))
+                    if (task.status == "进行中") Text("当前内置 BT 引擎需先暂停任务，才能安全调整文件选择。", color = warningColor, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 6.dp))
+                    if (torrentNotice.isNotBlank()) Text(torrentNotice, color = if (torrentNotice.contains("已保存")) successColor else errorStrong, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 6.dp))
                     DialogPrimary(if (torrentBusy) "正在保存…" else "保存文件选择", !torrentBusy && task.status != "进行中" && torrentFiles.any { it.selected }) {
                         torrentBusy = true; torrentNotice = ""
                         detailScope.launch {
@@ -3099,13 +3379,13 @@ private fun HarvestDialog(
                 }
                 if (task.status != "已完成") {
                     Spacer(Modifier.height(13.dp)); HorizontalDivider(color = border); Spacer(Modifier.height(11.dp)); DialogLabel("任务限速 KiB/s（0 不限制）")
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { OutlinedTextField(speedLimit, { speedLimit = it.filter(Char::isDigit) }, Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(7.dp)); Spacer(Modifier.width(8.dp)); DialogSecondary("应用") { onAction("speed:${speedLimit.toLongOrNull()?.coerceIn(0, 1_048_576) ?: 0}") } }
-                    if (canRefresh) { Spacer(Modifier.height(8.dp)); TextButton(onClick = { showRefresh = !showRefresh }, contentPadding = PaddingValues(0.dp)) { Text(if (showRefresh) "收起链接更新" else "更新下载链接", color = blue, fontSize = 11.sp) } }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { OutlinedTextField(speedLimit, { speedLimit = it.filter(Char::isDigit) }, Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.width(8.dp)); DialogSecondary("应用") { onAction("speed:${speedLimit.toLongOrNull()?.coerceIn(0, 1_048_576) ?: 0}") } }
+                    if (canRefresh) { Spacer(Modifier.height(8.dp)); TextButton(onClick = { showRefresh = !showRefresh }, contentPadding = PaddingValues(0.dp)) { Text(if (showRefresh) "收起链接更新" else "更新下载链接", color = blue, fontSize = TypeScale.caption) } }
                     if (showRefresh) {
-                        OutlinedTextField(refreshUrl, { refreshUrl = it }, Modifier.fillMaxWidth(), label = { Text("新的资源地址") }, minLines = 2, maxLines = 3, shape = RoundedCornerShape(7.dp))
+                        OutlinedTextField(refreshUrl, { refreshUrl = it }, Modifier.fillMaxWidth(), label = { Text("新的资源地址") }, minLines = 2, maxLines = 3, shape = RoundedCornerShape(Radius.md))
                         Spacer(Modifier.height(7.dp))
-                        OutlinedTextField(refreshCookie, { refreshCookie = it }, Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("新的 Cookie（可选）") }, shape = RoundedCornerShape(7.dp))
-                        Text("留空保留同站点原凭据；跨站地址会自动丢弃旧凭据。适合 401、403 和短效签名过期。", color = muted, fontSize = 10.sp, lineHeight = 15.sp, modifier = Modifier.padding(top = 5.dp))
+                        OutlinedTextField(refreshCookie, { refreshCookie = it }, Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("新的 Cookie（可选）") }, shape = RoundedCornerShape(Radius.md))
+                        Text("留空保留同站点原凭据；跨站地址会自动丢弃旧凭据。适合 401、403 和短效签名过期。", color = muted, fontSize = TypeScale.micro, lineHeight = 16.sp, modifier = Modifier.padding(top = 5.dp))
                         DialogPrimary("更新并继续", refreshUrl.isNotBlank()) {
                             onRefreshRequest(refreshUrl.trim(), refreshCookie)
                             refreshCookie = ""
@@ -3116,7 +3396,7 @@ private fun HarvestDialog(
             "连接" -> ConnectionMap(task.source.connectionParts, task.source.connectionHint)
             "速度" -> SpeedHistory(task.source.speedHistory)
             "预览" -> ImagePreview(preview)
-            else -> Surface(Modifier.fillMaxWidth().heightIn(min = 210.dp, max = 320.dp), color = surface2, shape = RoundedCornerShape(7.dp), border = BorderStroke(1.dp, border)) { Text((logLines ?: task.source.logTail).ifEmpty { listOf("暂无日志记录") }.joinToString("\n"), Modifier.padding(12.dp), color = muted, fontSize = 11.sp, lineHeight = 17.sp) }
+            else -> Surface(Modifier.fillMaxWidth().heightIn(min = 210.dp, max = 320.dp), color = surface2, shape = RoundedCornerShape(Radius.md), border = BorderStroke(1.dp, border)) { Text((logLines ?: task.source.logTail).ifEmpty { listOf("暂无日志记录") }.joinToString("\n"), Modifier.padding(12.dp), color = muted, fontSize = TypeScale.caption, lineHeight = 17.sp) }
         }
     }, actions = {
         val mediaCapable = taskSupportsMediaActions(task.source)
@@ -3143,11 +3423,11 @@ internal fun loadLocalImagePreview(path: String): Result<ImageBitmap> = runCatch
 }
 
 @Composable private fun ImagePreview(preview: Result<ImageBitmap>?) {
-    Surface(Modifier.fillMaxWidth().heightIn(min = 220.dp, max = 380.dp), color = surface2, shape = RoundedCornerShape(7.dp), border = BorderStroke(1.dp, border)) {
+    Surface(Modifier.fillMaxWidth().heightIn(min = 220.dp, max = 380.dp), color = surface2, shape = RoundedCornerShape(Radius.md), border = BorderStroke(1.dp, border)) {
         Box(Modifier.fillMaxSize().padding(10.dp), contentAlignment = Alignment.Center) {
             when {
-                preview == null -> Text("正在读取图片…", color = muted, fontSize = 11.sp)
-                preview.isFailure -> Text(preview.exceptionOrNull()?.message ?: "图片预览失败", color = Color(0xFFB42318), fontSize = 11.sp)
+                preview == null -> Text("正在读取图片…", color = muted, fontSize = TypeScale.caption)
+                preview.isFailure -> Text(preview.exceptionOrNull()?.message ?: "图片预览失败", color = errorStrong, fontSize = TypeScale.caption)
                 else -> Image(preview.getOrThrow(), "已下载图片预览", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             }
         }
@@ -3156,10 +3436,10 @@ internal fun loadLocalImagePreview(path: String): Result<ImageBitmap> = runCatch
 
 @Composable private fun ConnectionMap(parts: List<ConnectionPartDto>, hint: String) {
     Column {
-        Text(hint.ifBlank { if (parts.isEmpty()) "当前任务没有活动分段" else "${parts.size} 个连接分段" }, color = muted, fontSize = 11.sp)
+        Text(hint.ifBlank { if (parts.isEmpty()) "当前任务没有活动分段" else "${parts.size} 个连接分段" }, color = muted, fontSize = TypeScale.caption)
         Spacer(Modifier.height(10.dp))
-        if (parts.isEmpty()) Surface(Modifier.fillMaxWidth().height(84.dp), color = surface2, shape = RoundedCornerShape(7.dp)) { Box(contentAlignment = Alignment.Center) { Text("下载开始后显示各连接覆盖范围", color = faint, fontSize = 11.sp) } }
-        else Column(verticalArrangement = Arrangement.spacedBy(6.dp)) { parts.chunked(8).forEach { row -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) { row.forEach { part -> val length = (part.end - part.start + 1).coerceAtLeast(1); val progress = (part.done.toFloat() / length).coerceIn(0f, 1f); Column(Modifier.weight(1f)) { LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(3.dp)), color = if (part.state == "failed") Color(0xFFDC2626) else blue, trackColor = surface3); Text("${(progress * 100).toInt()}%", color = faint, fontSize = 9.sp) } }; repeat(8 - row.size) { Spacer(Modifier.weight(1f)) } } } }
+        if (parts.isEmpty()) Surface(Modifier.fillMaxWidth().height(84.dp), color = surface2, shape = RoundedCornerShape(Radius.md)) { Box(contentAlignment = Alignment.Center) { Text("下载开始后显示各连接覆盖范围", color = faint, fontSize = TypeScale.caption) } }
+        else Column(verticalArrangement = Arrangement.spacedBy(6.dp)) { parts.chunked(8).forEach { row -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) { row.forEach { part -> val length = (part.end - part.start + 1).coerceAtLeast(1); val progress = (part.done.toFloat() / length).coerceIn(0f, 1f); Column(Modifier.weight(1f)) { LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(Radius.tiny)), color = if (part.state == "failed") errorStrong else blue, trackColor = surface3); Text("${(progress * 100).toInt()}%", color = faint, fontSize = TypeScale.micro) } }; repeat(8 - row.size) { Spacer(Modifier.weight(1f)) } } } }
     }
 }
 
@@ -3167,11 +3447,11 @@ internal fun loadLocalImagePreview(path: String): Result<ImageBitmap> = runCatch
     val values = history.takeLast(48)
     val maximum = values.maxOrNull()?.coerceAtLeast(1) ?: 1
     Column {
-        Text(if (values.isEmpty()) "暂无速度采样" else "峰值 ${formatRate(maximum)} · 最近 ${values.size} 个采样", color = muted, fontSize = 11.sp)
+        Text(if (values.isEmpty()) "暂无速度采样" else "峰值 ${formatRate(maximum)} · 最近 ${values.size} 个采样", color = muted, fontSize = TypeScale.caption)
         Spacer(Modifier.height(10.dp))
-        Row(Modifier.fillMaxWidth().height(150.dp).clip(RoundedCornerShape(7.dp)).background(surface2).padding(horizontal = 10.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.Bottom) {
-            if (values.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("任务运行后显示实时速度", color = faint, fontSize = 11.sp) }
-            else values.forEach { value -> Box(Modifier.weight(1f).fillMaxHeight((value.toFloat() / maximum).coerceIn(.03f, 1f)).clip(RoundedCornerShape(2.dp)).background(blue.copy(alpha = .78f))) }
+        Row(Modifier.fillMaxWidth().height(150.dp).clip(RoundedCornerShape(Radius.md)).background(surface2).padding(horizontal = 10.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.Bottom) {
+            if (values.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("任务运行后显示实时速度", color = faint, fontSize = TypeScale.caption) }
+            else values.forEach { value -> Box(Modifier.weight(1f).fillMaxHeight((value.toFloat() / maximum).coerceIn(.03f, 1f)).clip(RoundedCornerShape(Radius.tiny)).background(blue.copy(alpha = .78f))) }
         }
     }
 }
@@ -3183,7 +3463,7 @@ private fun TaskVerificationDetails(task: TaskDto) {
     if (task.expectedChecksum.isBlank() && task.avScan == null && mirrorResults.isEmpty()) return
     Spacer(Modifier.height(13.dp))
     HorizontalDivider(color = border)
-    Text("完成检查", color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 11.dp))
+    Text("完成检查", color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 11.dp))
     if (task.expectedChecksum.isNotBlank()) {
         val result = when (task.checksumVerified) {
             true -> "已通过"
@@ -3191,8 +3471,8 @@ private fun TaskVerificationDetails(task: TaskDto) {
             null -> "等待下载完成"
         }
         val resultColor = when (task.checksumVerified) {
-            true -> Color(0xFF15803D)
-            false -> Color(0xFFB42318)
+            true -> successColor
+            false -> errorStrong
             null -> muted
         }
         DetailLine("文件校验", result, resultColor)
@@ -3208,7 +3488,7 @@ private fun TaskVerificationDetails(task: TaskDto) {
             "skipped" -> "已跳过"
             else -> "扫描异常"
         }
-        DetailLine("病毒扫描", result, if (scan.state == "clean") Color(0xFF15803D) else if (scan.state == "threat") Color(0xFFB42318) else muted)
+        DetailLine("病毒扫描", result, if (scan.state == "clean") successColor else if (scan.state == "threat") errorStrong else muted)
         if (scan.engine.isNotBlank()) DetailLine("扫描引擎", scan.engine)
         if (scan.detail.isNotBlank()) DetailLine("扫描详情", scan.detail)
     }
@@ -3224,11 +3504,11 @@ private fun TaskVerificationDetails(task: TaskDto) {
             if (mirror.ranges) add("支持分段")
             mirror.detail.takeIf(String::isNotBlank)?.let(::add)
         }.joinToString(" · ")
-        DetailLine(label, detail, if (mirror.state == "failed") Color(0xFFB42318) else null)
+        DetailLine(label, detail, if (mirror.state == "failed") errorStrong else null)
     }
 }
 
-@Composable private fun DetailLine(label: String, value: String, color: Color? = null) = Row(Modifier.fillMaxWidth().padding(top = 9.dp)) { Text(label, Modifier.width(72.dp), color = faint, fontSize = 11.sp); Text(value, Modifier.weight(1f), color = color ?: muted, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+@Composable private fun DetailLine(label: String, value: String, color: Color? = null) = Row(Modifier.fillMaxWidth().padding(top = 9.dp)) { Text(label, Modifier.width(72.dp), color = faint, fontSize = TypeScale.caption); Text(value, Modifier.weight(1f), color = color ?: muted, fontSize = TypeScale.caption, maxLines = 2, overflow = TextOverflow.Ellipsis) }
 
 internal fun safeResourceLocation(value: String): String {
     val raw = value.trim()
@@ -3303,18 +3583,18 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
     else -> stage
 }
 
-@Composable private fun ExtensionDialog(status: String, onDismiss: () -> Unit) = WorkbenchDialog(onDismiss, "浏览器插件", "识别网页媒体并交给下载器", 550.dp, content = { Surface(Modifier.fillMaxWidth(), color = if (connectionStateOf(status)) Color(0xFFEAF8EF) else surface2, shape = RoundedCornerShape(8.dp)) { Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) { Icon(if (connectionStateOf(status)) Icons.Outlined.CheckCircle else Icons.Outlined.Extension, null, tint = if (connectionStateOf(status)) Color(0xFF16A34A) else blue); Spacer(Modifier.width(10.dp)); Text(status, color = if (connectionStateOf(status)) Color(0xFF15803D) else ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) } }; Spacer(Modifier.height(14.dp)); Text("安装或更新插件后，重新打开浏览器标签页即可建立连接。插件会识别下载点击、媒体清单、音视频轨道和网页播放器，不影响页面的其他功能。", color = muted, fontSize = 12.sp, lineHeight = 19.sp) }, actions = { DialogPrimary("完成", onClick = onDismiss) })
+@Composable private fun ExtensionDialog(status: String, onDismiss: () -> Unit) = WorkbenchDialog(onDismiss, "浏览器插件", "识别网页媒体并交给下载器", 550.dp, content = { Surface(Modifier.fillMaxWidth(), color = if (connectionStateOf(status)) successSurface else surface2, shape = RoundedCornerShape(Radius.md)) { Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) { Icon(if (connectionStateOf(status)) Icons.Outlined.CheckCircle else Icons.Outlined.Extension, null, tint = if (connectionStateOf(status)) successColor else blue); Spacer(Modifier.width(10.dp)); Text(status, color = if (connectionStateOf(status)) successColor else ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold) } }; Spacer(Modifier.height(14.dp)); Text("安装或更新插件后，重新打开浏览器标签页即可建立连接。插件会识别下载点击、媒体清单、音视频轨道和网页播放器，不影响页面的其他功能。", color = muted, fontSize = TypeScale.body, lineHeight = 19.sp) }, actions = { DialogPrimary("完成", onClick = onDismiss) })
 
 @Composable private fun AboutDialog(engine: String, extension: String, onOpenLogs: () -> Unit, onOpenHomepage: () -> Unit, onDismiss: () -> Unit) = WorkbenchDialog(onDismiss, "关于", "HLS Downloader", 470.dp, content = {
-    Text("HLS Downloader ${Product.version}", color = ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+    Text("HLS Downloader ${Product.version}", color = ink, fontSize = TypeScale.display, fontWeight = FontWeight.SemiBold)
     Spacer(Modifier.height(6.dp))
-    Text("Windows 桌面下载管理器：HLS/DASH 直播与点播、BT 磁力、HTTP、FTP/SFTP 与浏览器下载接管。", color = muted, fontSize = 12.sp, lineHeight = 19.sp)
+    Text("Windows 桌面下载管理器：HLS/DASH 直播与点播、BT 磁力、HTTP、FTP/SFTP 与浏览器下载接管。", color = muted, fontSize = TypeScale.body, lineHeight = 19.sp)
     Spacer(Modifier.height(14.dp))
     AboutRow("核心协议", "hls-downloader-v7-core · v1")
     AboutRow("下载引擎", engine.substringAfter("·").trim())
     AboutRow("浏览器插件", extension.substringAfter("·").trim())
     Spacer(Modifier.height(6.dp))
-    Text("日志与诊断数据仅保存在本机。", color = faint, fontSize = 11.sp)
+    Text("日志与诊断数据仅保存在本机。", color = faint, fontSize = TypeScale.caption)
 }, actions = {
     DialogSecondary("打开日志文件夹", onOpenLogs)
     DialogSecondary("项目主页", onOpenHomepage)
@@ -3322,23 +3602,23 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
 })
 
 @Composable private fun AboutRow(label: String, value: String) = Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-    Text(label, color = muted, fontSize = 12.sp, modifier = Modifier.width(96.dp))
-    Text(value, color = ink, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    Text(label, color = muted, fontSize = TypeScale.body, modifier = Modifier.width(96.dp))
+    Text(value, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.Medium)
 }
 
 @Composable private fun NoticesDialog(entries: List<NoticeHistoryEntry>, onClear: () -> Unit, onDismiss: () -> Unit) = WorkbenchDialog(onDismiss, "通知中心", "最近的提示与错误记录（最多保留 100 条）", 560.dp, content = {
     if (entries.isEmpty()) {
-        Text("暂无通知。任务失败、引擎警告等记录会出现在这里。", color = muted, fontSize = 12.sp, modifier = Modifier.padding(vertical = 18.dp))
+        Text("暂无通知。任务失败、引擎警告等记录会出现在这里。", color = muted, fontSize = TypeScale.body, modifier = Modifier.padding(vertical = 18.dp))
     } else {
         Column(Modifier.fillMaxWidth().heightIn(max = 380.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             entries.asReversed().forEach { entry ->
-                val tone = if (entry.level == "error") Color(0xFFB42318) else if (entry.level == "success") Color(0xFF078C46) else blue
+                val tone = if (entry.level == "error") errorStrong else if (entry.level == "success") successColor else blue
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                    Box(Modifier.padding(top = 5.dp).size(6.dp).clip(RoundedCornerShape(50)).background(tone))
+                    Box(Modifier.padding(top = 5.dp).size(6.dp).clip(RoundedCornerShape(Radius.pill)).background(tone))
                     Spacer(Modifier.width(9.dp))
-                    Text(java.time.Instant.ofEpochMilli(entry.at).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")), color = faint, fontSize = 11.sp)
+                    Text(java.time.Instant.ofEpochMilli(entry.at).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")), color = faint, fontSize = TypeScale.caption)
                     Spacer(Modifier.width(9.dp))
-                    Text(entry.message, color = ink, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.weight(1f))
+                    Text(entry.message, color = ink, fontSize = TypeScale.body, lineHeight = 19.sp, modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -3348,13 +3628,21 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
 @Composable private fun NoticeToast(signal: UiSignal.Notice, onDismiss: () -> Unit) {
     LaunchedEffect(signal) { delay(3_600); onDismiss() }
     Popup(alignment = Alignment.TopEnd, offset = androidx.compose.ui.unit.IntOffset(-18, 72), properties = PopupProperties(focusable = false)) {
-        val tone = if (signal.level == "error") Color(0xFFB42318) else if (signal.level == "success") Color(0xFF078C46) else blue
-        Surface(color = dialogSurface, shape = RoundedCornerShape(8.dp), shadowElevation = 8.dp, border = BorderStroke(1.dp, border), modifier = Modifier.widthIn(min = 300.dp, max = 440.dp)) {
+        val tone = if (signal.level == "error") errorStrong else if (signal.level == "success") successColor else blue
+        val reduceMotion by MotionPreferences.reduceMotion
+        // 从上方 8dp 滑入 + 淡入：通知条贴在右上角，向下滑的动势和它的落点方向一致。
+        val enterState = remember { MutableTransitionState(false).apply { targetState = true } }
+        AnimatedVisibility(
+            visibleState = enterState,
+            enter = fadeIn(tween(motionDurationMillis(reduceMotion, 150))) + slideInVertically(tween(motionDurationMillis(reduceMotion, 150))) { -8 },
+        ) {
+        Surface(color = dialogSurface, shape = RoundedCornerShape(Radius.md), shadowElevation = Elevation.e2, border = BorderStroke(1.dp, border), modifier = Modifier.widthIn(min = 300.dp, max = 440.dp)) {
             Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(if (signal.level == "error") Icons.Outlined.ErrorOutline else Icons.Outlined.Info, null, tint = tone, modifier = Modifier.size(19.dp))
-                Spacer(Modifier.width(10.dp)); Text(signal.message, color = ink, fontSize = 12.sp, modifier = Modifier.weight(1f), maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.width(10.dp)); Text(signal.message, color = ink, fontSize = TypeScale.body, modifier = Modifier.weight(1f), maxLines = 3, overflow = TextOverflow.Ellipsis)
                 IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) { Icon(Icons.Outlined.Close, "关闭", tint = muted, modifier = Modifier.size(16.dp)) }
             }
+        }
         }
     }
 }
@@ -3365,14 +3653,14 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
     WorkbenchDialog(onDismiss, "选择种子文件", "${data.name} · ${files.size} 个文件", 680.dp, content = {
         Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Checkbox(files.all { it.selected }, { checked -> files = files.map { it.copy(selected = checked) } }, accessibilityLabel = "选择全部种子文件")
-            Spacer(Modifier.width(6.dp)); Text("全选", color = ink, fontSize = 12.sp)
-            Spacer(Modifier.weight(1f)); Text("已选 ${files.count { it.selected }} / ${files.size} · ${formatBytes(selectedBytes)}", color = muted, fontSize = 11.sp)
+            Spacer(Modifier.width(6.dp)); Text("全选", color = ink, fontSize = TypeScale.body)
+            Spacer(Modifier.weight(1f)); Text("已选 ${files.count { it.selected }} / ${files.size} · ${formatBytes(selectedBytes)}", color = muted, fontSize = TypeScale.caption)
         }
         HorizontalDivider(color = border)
         if (files.isEmpty()) {
             Column(Modifier.fillMaxWidth().padding(vertical = 34.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("未取得种子文件清单", color = ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Text("磁力链接还没有返回完整元数据", color = muted, fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
+                Text("未取得种子文件清单", color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
+                Text("磁力链接还没有返回完整元数据", color = muted, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 6.dp))
             }
         } else {
             Column(Modifier.fillMaxWidth().heightIn(max = 390.dp).verticalScroll(rememberScrollState())) {
@@ -3380,8 +3668,8 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
                     Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(file.selected, { checked -> files = files.toMutableList().also { it[index] = file.copy(selected = checked) } }, accessibilityLabel = "选择 ${file.path}")
                         Spacer(Modifier.width(6.dp)); Column(Modifier.weight(1f)) {
-                            Text(file.path, color = ink, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Text(formatBytes(file.size), color = muted, fontSize = 10.sp)
+                            Text(file.path, color = ink, fontSize = TypeScale.body, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(formatBytes(file.size), color = muted, fontSize = TypeScale.micro)
                         }
                     }
                 }
@@ -3402,12 +3690,18 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
     WorkbenchDialog(onDismiss, "媒体资源", "选择清晰度、音轨或直接使用自动选择", 660.dp, content = {
         DetailLine("资源链接", safeResourceLocation(signal.url))
         Spacer(Modifier.height(12.dp))
-        if (signal.variants.isEmpty()) Text("下载引擎未发现可选择的媒体轨道，将使用自动识别结果。", color = muted, fontSize = 12.sp)
+        if (signal.variants.isEmpty()) Text("下载引擎未发现可选择的媒体轨道，将使用自动识别结果。", color = muted, fontSize = TypeScale.body)
         else signal.variants.forEach { variant ->
             val active = selected == variant
-            Row(Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(7.dp)).background(if (active) selectedSurface else surface2).clickable { selected = variant }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            val feedback = rememberPressFeedback(
+                restColor = if (active) selectedSurface else surface2,
+                hoverColor = if (active) selectedSurface else surface3,
+                pressedColor = if (active) selectedSurface else surface3.blendToward(ink, .05f),
+                pressScale = 1f,
+            )
+            Row(Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(Radius.md)).graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }.background(feedback.background).hoverable(feedback.interaction).clickable(interactionSource = feedback.interaction, indication = null) { selected = variant }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 RadioButton(active, { selected = variant }, accessibilityLabel = "选择 ${variant.label}"); Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) { Text(variant.label.ifBlank { variant.name.ifBlank { "媒体轨道" } }, color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold); Text(listOfNotNull(variant.height.takeIf { it > 0 }?.let { "${it}p" }, variant.bandwidth.takeIf { it > 0 }?.let { formatRate(it / 8) }, variant.kind.takeIf(String::isNotBlank)).joinToString(" · "), color = muted, fontSize = 10.sp) }
+                Column(Modifier.weight(1f)) { Text(variant.label.ifBlank { variant.name.ifBlank { "媒体轨道" } }, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold); Text(listOfNotNull(variant.height.takeIf { it > 0 }?.let { "${it}p" }, variant.bandwidth.takeIf { it > 0 }?.let { formatRate(it / 8) }, variant.kind.takeIf(String::isNotBlank)).joinToString(" · "), color = muted, fontSize = TypeScale.micro) }
             }
         }
     }, actions = { DialogSecondary("取消", onDismiss); DialogPrimary("创建下载") { onCreate(selected) } })
@@ -3432,14 +3726,27 @@ private fun HarvestChip(label: String, active: Boolean, enabled: Boolean = true,
         active -> blue
         else -> muted
     }
+    // 分类筛选条：悬停把底色从 surface2 提到 surface3，按下再缩一点（28dp 的小胶囊缩 3% 已足够可感）。
+    val feedback = rememberPressFeedback(
+        restColor = if (active) selectedSurface else surface2,
+        hoverColor = if (active) selectedSurface else surface3,
+        enabled = enabled,
+        pressScale = .97f,
+        hoverMillis = 120,
+    )
     Surface(
-        modifier = Modifier.height(28.dp).clip(RoundedCornerShape(7.dp)).clickable(enabled = enabled, onClick = onClick),
-        color = if (active) selectedSurface else surface2,
-        shape = RoundedCornerShape(7.dp),
+        modifier = Modifier
+            .height(28.dp)
+            .clip(RoundedCornerShape(Radius.md))
+            .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+            .hoverable(feedback.interaction)
+            .clickable(interactionSource = feedback.interaction, indication = null, enabled = enabled, onClick = onClick),
+        color = feedback.background,
+        shape = RoundedCornerShape(Radius.md),
         border = BorderStroke(1.dp, if (active) blue.copy(alpha = .55f) else border),
     ) {
         Box(Modifier.padding(horizontal = 9.dp), contentAlignment = Alignment.Center) {
-            Text(label, color = foreground, fontSize = 10.sp, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
+            Text(label, color = foreground, fontSize = TypeScale.micro, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
         }
     }
 }
@@ -3477,8 +3784,8 @@ private fun HarvestResultDialog(
             DetailLine("来源页面", safeResourceLocation(signal.url))
             Spacer(Modifier.height(11.dp))
             if (signal.links.isEmpty()) {
-                Text("页面未发现可下载的静态文件链接。", color = muted, fontSize = 12.sp)
-                Text("这里只读取当前页面 HTML，不执行脚本，也不继续打开子页面。", color = faint, fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
+                Text("页面未发现可下载的静态文件链接。", color = muted, fontSize = TypeScale.body)
+                Text("这里只读取当前页面 HTML，不执行脚本，也不继续打开子页面。", color = faint, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 6.dp))
             } else {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     harvestCategories.filter { (id, _) -> id == "all" || counts.getOrDefault(id, 0) > 0 }.forEach { (id, label) ->
@@ -3496,15 +3803,30 @@ private fun HarvestResultDialog(
                     HarvestChip("全部大小", minimumBytes == 0L) { minimumBytes = 0L }
                     HarvestChip("≥ 1 MB", minimumBytes == 1024L * 1024L, probed) { minimumBytes = 1024L * 1024L }
                     HarvestChip("≥ 10 MB", minimumBytes == 10L * 1024L * 1024L, probed) { minimumBytes = 10L * 1024L * 1024L }
-                    Text("已选 ${selectedVisible.size} / ${visible.size}", color = muted, fontSize = 10.sp)
+                    Text("已选 ${selectedVisible.size} / ${visible.size}", color = muted, fontSize = TypeScale.micro)
                 }
                 Spacer(Modifier.height(9.dp))
-                Column(Modifier.fillMaxWidth().border(1.dp, border, RoundedCornerShape(7.dp)).clip(RoundedCornerShape(7.dp))) {
+                Column(Modifier.fillMaxWidth().border(1.dp, border, RoundedCornerShape(Radius.md)).clip(RoundedCornerShape(Radius.md))) {
                     visible.forEachIndexed { index, item ->
+                        val isPicked = item.url in selected
+                        // 整行通宽（约 760dp），不做缩放：横向缩 1% 就是 7px 的内容位移，
+                        // 看起来像布局在抖。宽行一律用底色档位表达按压（pressScale = 1f）。
+                        val feedback = rememberPressFeedback(
+                            restColor = if (isPicked) selectedSurface.copy(alpha = .55f) else Color.Transparent,
+                            hoverColor = if (isPicked) selectedSurface.copy(alpha = .55f) else surface3,
+                            pressedColor = if (isPicked) selectedSurface.copy(alpha = .55f) else surface3.blendToward(ink, .05f),
+                            pressScale = 1f,
+                            hoverMillis = 120,
+                        )
                         Row(
-                            Modifier.fillMaxWidth().clickable {
-                                selected = if (item.url in selected) selected - item.url else selected + item.url
-                            }.background(if (item.url in selected) selectedSurface.copy(alpha = .55f) else Color.Transparent).padding(horizontal = 9.dp, vertical = 7.dp),
+                            Modifier.fillMaxWidth()
+                                .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+                                .background(feedback.background)
+                                .hoverable(feedback.interaction)
+                                .clickable(interactionSource = feedback.interaction, indication = null) {
+                                    selected = if (item.url in selected) selected - item.url else selected + item.url
+                                }
+                                .padding(horizontal = 9.dp, vertical = 7.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Checkbox(
@@ -3514,13 +3836,13 @@ private fun HarvestResultDialog(
                             )
                             Spacer(Modifier.width(7.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(item.filename.ifBlank { item.url.substringAfterLast('/') }, color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(item.filename.ifBlank { item.url.substringAfterLast('/') }, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 val details = buildList {
                                     add(harvestCategories.firstOrNull { it.first == item.category }?.second ?: "文件")
                                     item.extension.trimStart('.').takeIf(String::isNotBlank)?.let { add(".$it") }
                                     if (item.size > 0) add(formatBytes(item.size)) else if (probed) add("大小未知")
                                 }
-                                Text(details.joinToString(" · "), color = muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(details.joinToString(" · "), color = muted, fontSize = TypeScale.micro, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             WorkbenchTooltip(item.url) {
                                 Icon(Icons.Outlined.Link, null, tint = faint, modifier = Modifier.size(16.dp))
@@ -3529,17 +3851,17 @@ private fun HarvestResultDialog(
                         if (index < visible.lastIndex) HorizontalDivider(color = border)
                     }
                 }
-                if (visible.isEmpty()) Text("当前筛选条件下没有资源。", color = muted, fontSize = 11.sp, modifier = Modifier.padding(top = 9.dp))
+                if (visible.isEmpty()) Text("当前筛选条件下没有资源。", color = muted, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 9.dp))
             }
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Column(Modifier.weight(1f)) {
                     DialogLabel("Referer（可选）")
-                    OutlinedTextField(referer, { referer = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp), isError = !refererValid)
+                    OutlinedTextField(referer, { referer = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md), isError = !refererValid)
                 }
                 Column(Modifier.width(120.dp)) {
                     DialogLabel("并发")
-                    OutlinedTextField(concurrency, { concurrency = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(7.dp), isError = parsedConcurrency == 0L)
+                    OutlinedTextField(concurrency, { concurrency = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md), isError = parsedConcurrency == 0L)
                 }
             }
         },
@@ -3563,29 +3885,41 @@ private fun HarvestResultDialog(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("local" to Triple(Icons.Outlined.VideoFile, "本机文件", "共享电脑中的视频或音频"), "url" to Triple(Icons.Outlined.Link, "媒体链接", "发送设备可直接访问的链接")).forEach { (id, item) ->
                 val active = source == id
+                // 卡片约 290dp 宽、64dp 高，缩放会让内部图标+两行文字一起位移，所以只走底色。
+                val feedback = rememberPressFeedback(
+                    restColor = if (active) selectedSurface else surface2,
+                    hoverColor = if (active) selectedSurface else surface3,
+                    pressedColor = if (active) selectedSurface else surface3.blendToward(ink, .05f),
+                    pressScale = 1f,
+                )
                 Row(
-                    Modifier.weight(1f).height(64.dp).clip(RoundedCornerShape(8.dp)).background(if (active) selectedSurface else surface2)
-                        .border(1.dp, if (active) blue else border, RoundedCornerShape(8.dp)).clickable { source = id; error = "" }.padding(11.dp),
+                    Modifier.weight(1f).height(64.dp).clip(RoundedCornerShape(Radius.md))
+                        .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+                        .background(feedback.background)
+                        .border(1.dp, if (active) blue else border, RoundedCornerShape(Radius.md))
+                        .hoverable(feedback.interaction)
+                        .clickable(interactionSource = feedback.interaction, indication = null) { source = id; error = "" }
+                        .padding(11.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(item.first, null, tint = if (active) blue else muted, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(10.dp))
-                    Column { Text(item.second, color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold); Text(item.third, color = muted, fontSize = 10.sp, maxLines = 1) }
+                    Column { Text(item.second, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold); Text(item.third, color = muted, fontSize = TypeScale.micro, maxLines = 1) }
                 }
             }
         }
         Spacer(Modifier.height(14.dp))
         if (source == "local") {
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2).padding(12.dp), verticalAlignment = Alignment.Top) {
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(12.dp), verticalAlignment = Alignment.Top) {
                 Icon(Icons.Outlined.Info, null, tint = blue, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(8.dp))
-                Text("文件由下载引擎临时共享到局域网，支持电视端 Range 拖动；关闭主界面不会中断播放地址。", color = muted, fontSize = 10.sp, lineHeight = 15.sp)
+                Text("文件由下载引擎临时共享到局域网，支持电视端 Range 拖动；关闭主界面不会中断播放地址。", color = muted, fontSize = TypeScale.micro, lineHeight = 16.sp)
             }
         } else {
-            OutlinedTextField(url, { url = it; error = "" }, Modifier.fillMaxWidth(), label = { Text("媒体链接") }, placeholder = { Text("https://example.com/video.mp4") }, singleLine = true, shape = RoundedCornerShape(7.dp))
+            OutlinedTextField(url, { url = it; error = "" }, Modifier.fillMaxWidth(), label = { Text("媒体链接") }, placeholder = { Text("https://example.com/video.mp4") }, singleLine = true, shape = RoundedCornerShape(Radius.md))
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), label = { Text("显示名称（可选）") }, singleLine = true, shape = RoundedCornerShape(7.dp))
-            Text("需要登录、Cookie 或即将过期的链接可能无法被电视直接访问。", color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 7.dp))
+            OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), label = { Text("显示名称（可选）") }, singleLine = true, shape = RoundedCornerShape(Radius.md))
+            Text("需要登录、Cookie 或即将过期的链接可能无法被电视直接访问。", color = muted, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 7.dp))
         }
-        if (error.isNotEmpty()) Text(error, color = Color(0xFFDC2626), fontSize = 11.sp, modifier = Modifier.padding(top = 9.dp))
+        if (error.isNotEmpty()) Text(error, color = errorStrong, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 9.dp))
     }, actions = {
         DialogSecondary("取消", onDismiss)
         if (source == "local") DialogPrimary("选择本机文件") {
@@ -3616,13 +3950,13 @@ private fun HarvestResultDialog(
     }
     WorkbenchDialog(onDismiss, "选择${verb}设备", if (mode == "tvbox") "自动搜索同一局域网内的 TVBox，发送前确认目标" else "自动搜索同一局域网内的 DLNA 和 Chromecast", 620.dp, dismissible = !connecting, content = {
         source?.let { media ->
-            Surface(Modifier.fillMaxWidth(), color = selectedSurface, shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, blue.copy(alpha = .35f))) {
+            Surface(Modifier.fillMaxWidth(), color = selectedSurface, shape = RoundedCornerShape(Radius.md), border = BorderStroke(1.dp, blue.copy(alpha = .35f))) {
                 Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(if (media.path.isNotBlank()) Icons.Outlined.VideoFile else Icons.Outlined.Link, null, tint = blue, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(9.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(media.title.ifBlank { "待发送媒体" }, color = ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(if (media.path.isNotBlank()) media.path else safeResourceLocation(media.url), color = muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(media.title.ifBlank { "待发送媒体" }, color = ink, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(if (media.path.isNotBlank()) media.path else safeResourceLocation(media.url), color = muted, fontSize = TypeScale.micro, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -3630,20 +3964,20 @@ private fun HarvestResultDialog(
         }
         when {
             busy -> repeat(3) { index ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(8.dp)).background(surface2).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Surface(Modifier.size(34.dp), color = surface3, shape = RoundedCornerShape(7.dp)) {}
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(Radius.md)).background(surface2).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(Modifier.size(34.dp), color = surface3, shape = RoundedCornerShape(Radius.md)) {}
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Surface(Modifier.width((150 + index * 28).dp).height(11.dp), color = surface3, shape = RoundedCornerShape(4.dp)) {}
-                        Spacer(Modifier.height(8.dp)); Surface(Modifier.width(210.dp).height(8.dp), color = surface3, shape = RoundedCornerShape(4.dp)) {}
+                        Surface(Modifier.width((150 + index * 28).dp).height(11.dp), color = surface3, shape = RoundedCornerShape(Radius.sm)) {}
+                        Spacer(Modifier.height(8.dp)); Surface(Modifier.width(210.dp).height(8.dp), color = surface3, shape = RoundedCornerShape(Radius.sm)) {}
                     }
                 }
             }
             devices.isEmpty() -> Box(Modifier.fillMaxWidth().height(170.dp), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Outlined.Cast, null, tint = faint, modifier = Modifier.size(38.dp))
-                    Spacer(Modifier.height(11.dp)); Text("没有发现可用设备", color = ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    Text("确认电脑和电视连接到同一局域网，然后重新搜索。", color = muted, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
+                    Spacer(Modifier.height(11.dp)); Text("没有发现可用设备", color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
+                    Text("确认电脑和电视连接到同一局域网，然后重新搜索。", color = muted, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 4.dp))
                 }
             }
             else -> devices.forEach { device ->
@@ -3654,38 +3988,48 @@ private fun HarvestResultDialog(
                     else -> "DLNA"
                 }
                 val metadata = if (device.label.contains(protocol, ignoreCase = true)) device.location else listOf(protocol, device.location).filter(String::isNotBlank).joinToString(" · ")
+                // 设备卡是整行通宽，同上：只走底色档位，不做缩放。
+                val feedback = rememberPressFeedback(
+                    restColor = if (active) selectedSurface else surface2,
+                    hoverColor = if (active) selectedSurface else surface3,
+                    pressedColor = if (active) selectedSurface else surface3.blendToward(ink, .05f),
+                    pressScale = 1f,
+                )
                 Row(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(8.dp))
-                        .background(if (active) selectedSurface else surface2)
-                        .border(1.dp, if (active) blue else Color.Transparent, RoundedCornerShape(8.dp))
-                        .clickable { selected = device }.padding(13.dp),
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(Radius.md))
+                        .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+                        .background(feedback.background)
+                        .border(1.dp, if (active) blue else Color.Transparent, RoundedCornerShape(Radius.md))
+                        .hoverable(feedback.interaction)
+                        .clickable(interactionSource = feedback.interaction, indication = null) { selected = device }
+                        .padding(13.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Surface(Modifier.size(36.dp), color = if (active) blue else surface3, shape = RoundedCornerShape(7.dp)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Tv, null, tint = if (active) Color.White else muted, modifier = Modifier.size(20.dp)) } }
+                    Surface(Modifier.size(36.dp), color = if (active) blue else surface3, shape = RoundedCornerShape(Radius.md)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Tv, null, tint = if (active) onBlue else muted, modifier = Modifier.size(20.dp)) } }
                     Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) {
-                        Text(device.label, color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(metadata, color = muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(device.label, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(metadata, color = muted, fontSize = TypeScale.micro, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     if (active) Icon(Icons.Outlined.CheckCircle, "已选择", tint = blue, modifier = Modifier.size(19.dp))
                 }
             }
         }
         if (!busy) {
-            Spacer(Modifier.height(10.dp)); Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.height(10.dp)); Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.Info, null, tint = muted, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp))
-                Text(if (mode == "tvbox") "TVBox 需要开启接收服务；确认推送后会在电视端打开媒体。" else "设备无法接收时，可发布局域网播放地址并在电视播放器中打开。", color = muted, fontSize = 10.sp)
+                Text(if (mode == "tvbox") "TVBox 需要开启接收服务；确认推送后会在电视端打开媒体。" else "设备无法接收时，可发布局域网播放地址并在电视播放器中打开。", color = muted, fontSize = TypeScale.micro)
             }
         }
     }, actions = {
         if (!connecting) DialogSecondary("取消", onDismiss)
-        TextButton(onClick = onRescan, enabled = !busy && !connecting) { Icon(Icons.Outlined.Refresh, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text("重新搜索", fontSize = 12.sp) }
+        TextButton(onClick = onRescan, enabled = !busy && !connecting) { Icon(Icons.Outlined.Refresh, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text("重新搜索", fontSize = TypeScale.body) }
         if (mode != "tvbox") DialogPrimary("局域网播放", !busy && !connecting, onPublish)
         DialogPrimary(if (connecting) "正在连接…" else if (mode == "tvbox") "确认推送" else "连接设备", selected != null && !busy && !connecting) { selected?.let(onSelect) }
     })
 }
 
 @Composable private fun DuplicateDialog(signal: UiSignal.Duplicate, onDismiss: () -> Unit, onConfirm: () -> Unit) = WorkbenchDialog(onDismiss, "发现重复任务", signal.message, 520.dp, content = {
-    Text("已有任务可以${actionLabel(signal.action)}，继续将对现有任务执行该操作。", color = muted, fontSize = 12.sp)
+    Text("已有任务可以${actionLabel(signal.action)}，继续将对现有任务执行该操作。", color = muted, fontSize = TypeScale.body)
 }, actions = { DialogSecondary("取消", onDismiss); DialogPrimary(actionLabel(signal.action), onClick = onConfirm) })
 
 @Composable private fun UpdateDialog(signal: UiSignal.Update, busy: Boolean, onDismiss: () -> Unit, onRelease: () -> Unit, onDownload: () -> Unit) = WorkbenchDialog(onDismiss, "发现新版本", "安全覆盖升级", 590.dp, dismissible = !busy, content = {
@@ -3695,15 +4039,15 @@ private fun HarvestResultDialog(
         UpdateVersionCell("可用版本", signal.latest, Modifier.weight(1f), emphasized = true)
     }
     Spacer(Modifier.height(12.dp))
-    if (signal.notes.isNotBlank()) Text(signal.notes, color = ink, fontSize = 12.sp, lineHeight = 19.sp, maxLines = 7, overflow = TextOverflow.Ellipsis)
+    if (signal.notes.isNotBlank()) Text(signal.notes, color = ink, fontSize = TypeScale.body, lineHeight = 19.sp, maxLines = 7, overflow = TextOverflow.Ellipsis)
     Spacer(Modifier.height(12.dp))
-    Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(8.dp)) {
+    Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(Radius.md)) {
         Column(Modifier.padding(horizontal = 13.dp, vertical = 11.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(signal.installerName.ifBlank { "未找到可自动安装的 Windows x64 MSI" }, color = ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(if (signal.installerSize > 0) "${formatBytes(signal.installerSize)} · SHA-256 ${if (signal.sha256Verified) "发布方摘要已确认" else "摘要缺失"}" else "自动升级已停用，请从发布页人工核验", color = if (signal.sha256Verified) successColor else warningColor, fontSize = 10.sp)
+            Text(signal.installerName.ifBlank { "未找到可自动安装的 Windows x64 MSI" }, color = ink, fontSize = TypeScale.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(if (signal.installerSize > 0) "${formatBytes(signal.installerSize)} · SHA-256 ${if (signal.sha256Verified) "发布方摘要已确认" else "摘要缺失"}" else "自动升级已停用，请从发布页人工核验", color = if (signal.sha256Verified) successColor else warningColor, fontSize = TypeScale.micro)
         }
     }
-    Spacer(Modifier.height(12.dp)); Text("安装程序将覆盖当前版本，配置、任务数据库和下载文件会保留。开始安装前会安全暂停活动任务并保存断点；升级不会自动重启 Windows。", color = muted, fontSize = 11.sp, lineHeight = 17.sp)
+    Spacer(Modifier.height(12.dp)); Text("安装程序将覆盖当前版本，配置、任务数据库和下载文件会保留。开始安装前会安全暂停活动任务并保存断点；升级不会自动重启 Windows。", color = muted, fontSize = TypeScale.caption, lineHeight = 17.sp)
 }, actions = {
     DialogSecondary("稍后", onDismiss)
     if (signal.releaseUrl.isNotBlank()) DialogSecondary("查看发布页", onRelease)
@@ -3717,19 +4061,19 @@ private fun HarvestResultDialog(
     width = 590.dp,
     dismissible = !busy,
     content = {
-        Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(8.dp)) {
+        Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(Radius.md)) {
             Column(Modifier.padding(horizontal = 13.dp, vertical = 11.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(Modifier.fillMaxWidth()) {
-                    Text("产品", color = muted, fontSize = 10.sp, modifier = Modifier.width(82.dp))
-                    Text("${signal.productName} ${signal.productVersion}", color = ink, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                    Text("产品", color = muted, fontSize = TypeScale.micro, modifier = Modifier.width(82.dp))
+                    Text("${signal.productName} ${signal.productVersion}", color = ink, fontSize = TypeScale.caption, fontWeight = FontWeight.Medium)
                 }
                 Row(Modifier.fillMaxWidth()) {
-                    Text("安装包", color = muted, fontSize = 10.sp, modifier = Modifier.width(82.dp))
-                    Text(signal.installerPath.substringAfterLast('/').substringAfterLast('\\'), color = ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("安装包", color = muted, fontSize = TypeScale.micro, modifier = Modifier.width(82.dp))
+                    Text(signal.installerPath.substringAfterLast('/').substringAfterLast('\\'), color = ink, fontSize = TypeScale.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Row(Modifier.fillMaxWidth()) {
-                    Text("SHA-256", color = muted, fontSize = 10.sp, modifier = Modifier.width(82.dp))
-                    Text(signal.sha256.take(16) + "…" + signal.sha256.takeLast(8), color = successColor, fontSize = 10.sp)
+                    Text("SHA-256", color = muted, fontSize = TypeScale.micro, modifier = Modifier.width(82.dp))
+                    Text(signal.sha256.take(16) + "…" + signal.sha256.takeLast(8), color = successColor, fontSize = TypeScale.micro)
                 }
             }
         }
@@ -3737,7 +4081,7 @@ private fun HarvestResultDialog(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Icon(Icons.Outlined.RestartAlt, null, tint = blue, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(9.dp))
-            Text("开始后，下载引擎会暂停活动任务并保存断点，工作台和临时窗口随后关闭。独立更新助手会等待文件释放、执行覆盖安装并重新打开 HLS Downloader。", color = muted, fontSize = 11.sp, lineHeight = 17.sp)
+            Text("开始后，下载引擎会暂停活动任务并保存断点，工作台和临时窗口随后关闭。独立更新助手会等待文件释放、执行覆盖安装并重新打开 HLS Downloader。", color = muted, fontSize = TypeScale.caption, lineHeight = 17.sp)
         }
     },
     actions = {
@@ -3747,19 +4091,19 @@ private fun HarvestResultDialog(
 )
 
 @Composable private fun UpdateVersionCell(label: String, value: String, modifier: Modifier = Modifier, emphasized: Boolean = false) {
-    Column(modifier.clip(RoundedCornerShape(8.dp)).background(if (emphasized) selectedSurface else surface2).padding(horizontal = 13.dp, vertical = 11.dp)) {
-        Text(label, color = muted, fontSize = 10.sp)
-        Text(value.ifBlank { "-" }, color = if (emphasized) blue else ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp))
+    Column(modifier.clip(RoundedCornerShape(Radius.md)).background(if (emphasized) selectedSurface else surface2).padding(horizontal = 13.dp, vertical = 11.dp)) {
+        Text(label, color = muted, fontSize = TypeScale.micro)
+        Text(value.ifBlank { "-" }, color = if (emphasized) blue else ink, fontSize = TypeScale.display, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp))
     }
 }
 
 @Composable private fun DestructiveConfirmDialog(request: DestructiveRequest, onDismiss: () -> Unit, onConfirm: () -> Unit) = WorkbenchDialog(
     onDismiss, if (request.action == "delete_files") "删除任务和文件" else "删除任务", "此操作将影响 ${request.taskIds.size} 个任务", 520.dp,
     content = {
-        Surface(color = errorSurface, shape = RoundedCornerShape(7.dp), modifier = Modifier.fillMaxWidth()) {
-            Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) { Icon(Icons.Outlined.WarningAmber, null, tint = errorStrong); Spacer(Modifier.width(10.dp)); Text(if (request.action == "delete_files") "任务记录、已下载文件和过程文件都会删除。" else "只删除任务记录，已完成文件将保留。", color = errorBody, fontSize = 12.sp, lineHeight = 18.sp) }
+        Surface(color = errorSurface, shape = RoundedCornerShape(Radius.md), modifier = Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) { Icon(Icons.Outlined.WarningAmber, null, tint = errorStrong); Spacer(Modifier.width(10.dp)); Text(if (request.action == "delete_files") "任务记录、已下载文件和过程文件都会删除。" else "只删除任务记录，已完成文件将保留。", color = errorBody, fontSize = TypeScale.body, lineHeight = 19.sp) }
         }
-    }, actions = { DialogSecondary("取消", onDismiss); Button(onClick = onConfirm, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB42318), contentColor = Color.White), shape = RoundedCornerShape(7.dp)) { Text("确认删除", fontSize = 12.sp, fontWeight = FontWeight.SemiBold) } },
+    }, actions = { DialogSecondary("取消", onDismiss); Button(onClick = onConfirm, colors = ButtonDefaults.buttonColors(containerColor = destructiveFill, contentColor = Color.White), shape = RoundedCornerShape(Radius.md)) { Text("确认删除", fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold) } },
 )
 
 @Composable private fun PowerActionDialog(signal: UiSignal.PowerPending, onCancel: () -> Unit, onConfirm: () -> Unit) = WorkbenchDialog(
@@ -3769,8 +4113,8 @@ private fun HarvestResultDialog(
     width = 480.dp,
     content = {
         val action = when (signal.action) { "shutdown" -> "关机"; "sleep" -> "进入睡眠"; "hibernate" -> "进入休眠"; else -> "执行系统操作" }
-        Text("${signal.title.ifBlank { "下载任务" }} 已完成。${signal.delaySeconds} 秒后将$action。", color = ink, fontSize = 12.sp, lineHeight = 19.sp)
-        Text("可以立即执行，或取消本次操作。", color = muted, fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp))
+        Text("${signal.title.ifBlank { "下载任务" }} 已完成。${signal.delaySeconds} 秒后将$action。", color = ink, fontSize = TypeScale.body, lineHeight = 19.sp)
+        Text("可以立即执行，或取消本次操作。", color = muted, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 8.dp))
     },
     actions = { DialogSecondary("取消操作", onCancel); DialogPrimary("立即执行", onClick = onConfirm) },
 )
@@ -3782,13 +4126,13 @@ private fun HarvestResultDialog(
     var audioMenu by remember { mutableStateOf(false) }
     var subtitleMenu by remember { mutableStateOf(false) }
     Popup(alignment = Alignment.BottomEnd, offset = androidx.compose.ui.unit.IntOffset(-18, -46), properties = PopupProperties(focusable = false)) {
-        Surface(color = dialogSurface, shape = RoundedCornerShape(9.dp), shadowElevation = 10.dp, border = BorderStroke(1.dp, border), modifier = Modifier.width(430.dp)) {
+        Surface(color = dialogSurface, shape = RoundedCornerShape(Radius.lg), shadowElevation = Elevation.e3, border = BorderStroke(1.dp, border), modifier = Modifier.width(430.dp)) {
             Column(Modifier.padding(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Surface(Modifier.size(34.dp), color = selectedSurface, shape = RoundedCornerShape(7.dp)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.SmartDisplay, null, tint = blue, modifier = Modifier.size(19.dp)) } }
+                    Surface(Modifier.size(34.dp), color = selectedSurface, shape = RoundedCornerShape(Radius.md)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.SmartDisplay, null, tint = blue, modifier = Modifier.size(19.dp)) } }
                     Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) {
-                        Text(signal.title.ifBlank { "正在播放" }, color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("本机播放器 · ${playerStatusLabel(signal.status)} · ${formatPlayerSpeed(signal.speed)}", color = muted, fontSize = 10.sp)
+                        Text(signal.title.ifBlank { "正在播放" }, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("本机播放器 · ${playerStatusLabel(signal.status)} · ${formatPlayerSpeed(signal.speed)}", color = muted, fontSize = TypeScale.micro)
                     }
                     if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = blue)
                     IconButton(onClick = { if (!busy) onAction("stop") }, enabled = !busy) { Icon(Icons.Outlined.Stop, "停止播放", tint = muted) }
@@ -3805,24 +4149,24 @@ private fun HarvestResultDialog(
                         accessibilityLabel = "播放位置",
                     )
                     Row(Modifier.fillMaxWidth()) {
-                        Text(formatClock(scrubPosition.toLong()), color = muted, fontSize = 10.sp)
+                        Text(formatClock(scrubPosition.toLong()), color = muted, fontSize = TypeScale.micro)
                         Spacer(Modifier.weight(1f))
-                        Text(formatClock(signal.durationSeconds.toLong()), color = muted, fontSize = 10.sp)
+                        Text(formatClock(signal.durationSeconds.toLong()), color = muted, fontSize = TypeScale.micro)
                     }
                     if (signal.audioTracks > 0 || signal.subtitleTracks > 0) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("音轨 ${signal.audioTracks} · 字幕 ${signal.subtitleTracks}", color = muted, fontSize = 10.sp)
+                            Text("音轨 ${signal.audioTracks} · 字幕 ${signal.subtitleTracks}", color = muted, fontSize = TypeScale.micro)
                             Spacer(Modifier.weight(1f))
                             if (signal.audioTracks > 0) Box {
-                                TextButton(onClick = { audioMenu = true }, enabled = !busy, contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp), modifier = Modifier.height(25.dp)) { Text("选择音轨", color = blue, fontSize = 10.sp) }
-                                DropdownMenu(expanded = audioMenu, onDismissRequest = { audioMenu = false }, shape = RoundedCornerShape(7.dp), containerColor = dialogSurface) {
-                                    (1..signal.audioTracks).forEach { id -> DropdownMenuItem(text = { Text("音轨 $id", color = ink, fontSize = 11.sp) }, onClick = { audioMenu = false; onAction("audio:$id") }) }
+                                TextButton(onClick = { audioMenu = true }, enabled = !busy, contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp), modifier = Modifier.height(25.dp)) { Text("选择音轨", color = blue, fontSize = TypeScale.micro) }
+                                DropdownMenu(expanded = audioMenu, onDismissRequest = { audioMenu = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface) {
+                                    (1..signal.audioTracks).forEach { id -> DropdownMenuItem(text = { Text("音轨 $id", color = ink, fontSize = TypeScale.caption) }, onClick = { audioMenu = false; onAction("audio:$id") }) }
                                 }
                             }
                             if (signal.subtitleTracks > 0) Box {
-                                TextButton(onClick = { subtitleMenu = true }, enabled = !busy, contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp), modifier = Modifier.height(25.dp)) { Text("选择字幕", color = blue, fontSize = 10.sp) }
-                                DropdownMenu(expanded = subtitleMenu, onDismissRequest = { subtitleMenu = false }, shape = RoundedCornerShape(7.dp), containerColor = dialogSurface) {
-                                    (1..signal.subtitleTracks).forEach { id -> DropdownMenuItem(text = { Text("字幕 $id", color = ink, fontSize = 11.sp) }, onClick = { subtitleMenu = false; onAction("subtitle:$id") }) }
+                                TextButton(onClick = { subtitleMenu = true }, enabled = !busy, contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp), modifier = Modifier.height(25.dp)) { Text("选择字幕", color = blue, fontSize = TypeScale.micro) }
+                                DropdownMenu(expanded = subtitleMenu, onDismissRequest = { subtitleMenu = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface) {
+                                    (1..signal.subtitleTracks).forEach { id -> DropdownMenuItem(text = { Text("字幕 $id", color = ink, fontSize = TypeScale.caption) }, onClick = { subtitleMenu = false; onAction("subtitle:$id") }) }
                                 }
                             }
                         }
@@ -3835,7 +4179,7 @@ private fun HarvestResultDialog(
                     ToolbarIcon(if (signal.paused) Icons.Outlined.PlayArrow else Icons.Outlined.Pause, if (signal.paused) "继续播放" else "暂停") { if (!busy) onAction(if (signal.paused) "resume" else "pause") }
                     ToolbarIcon(Icons.Outlined.Forward10, "前进 10 秒") { if (!busy) onAction("seek_fwd") }
                     ToolbarIcon(Icons.AutoMirrored.Outlined.VolumeUp, "提高音量") { if (!busy) onAction("vol_up") }
-                    TextButton(onClick = { if (!busy) onAction("speed:$nextSpeed") }, enabled = !busy, contentPadding = PaddingValues(horizontal = 7.dp), modifier = Modifier.height(34.dp)) { Text(formatPlayerSpeed(signal.speed), color = blue, fontSize = 10.sp, fontWeight = FontWeight.SemiBold) }
+                    TextButton(onClick = { if (!busy) onAction("speed:$nextSpeed") }, enabled = !busy, contentPadding = PaddingValues(horizontal = 7.dp), modifier = Modifier.height(34.dp)) { Text(formatPlayerSpeed(signal.speed), color = blue, fontSize = TypeScale.micro, fontWeight = FontWeight.SemiBold) }
                     ToolbarIcon(Icons.Outlined.PictureInPictureAlt, "画中画") { if (!busy) onAction("pip") }
                     ToolbarIcon(Icons.Outlined.Fullscreen, "全屏") { if (!busy) onAction("fullscreen") }
                 }
@@ -3852,14 +4196,14 @@ private fun playerStatusLabel(status: String) = when (status.uppercase()) { "PAU
     val offline = signal.status.equals("OFFLINE", true)
     val controllable = signal.supportedActions.contains("play") && !offline
     Popup(alignment = Alignment.BottomEnd, offset = androidx.compose.ui.unit.IntOffset(-18, if (raised) -190 else -46), properties = PopupProperties(focusable = false)) {
-        Surface(color = dialogSurface, shape = RoundedCornerShape(9.dp), shadowElevation = 10.dp, border = BorderStroke(1.dp, border), modifier = Modifier.width(420.dp)) {
+        Surface(color = dialogSurface, shape = RoundedCornerShape(Radius.lg), shadowElevation = Elevation.e3, border = BorderStroke(1.dp, border), modifier = Modifier.width(420.dp)) {
             Column(Modifier.padding(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Surface(Modifier.size(34.dp), color = selectedSurface, shape = RoundedCornerShape(7.dp)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.CastConnected, null, tint = blue, modifier = Modifier.size(19.dp)) } }
+                    Surface(Modifier.size(34.dp), color = selectedSurface, shape = RoundedCornerShape(Radius.md)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.CastConnected, null, tint = blue, modifier = Modifier.size(19.dp)) } }
                     Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) {
-                        Text(signal.title.ifBlank { task?.filename ?: "正在投屏" }, color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(signal.title.ifBlank { task?.filename ?: "正在投屏" }, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         val protocol = castProtocolLabel(signal.deviceKind)
-                        Text(listOf(signal.device, protocol.takeUnless { signal.device.contains(it, ignoreCase = true) }.orEmpty(), castStatusLabel(signal.status)).filter(String::isNotBlank).joinToString(" · "), color = muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(listOf(signal.device, protocol.takeUnless { signal.device.contains(it, ignoreCase = true) }.orEmpty(), castStatusLabel(signal.status)).filter(String::isNotBlank).joinToString(" · "), color = muted, fontSize = TypeScale.micro, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     if (offline) IconButton(onClick = { onAction("status", 0) }, enabled = !busy) { Icon(Icons.Outlined.Refresh, "重新连接", tint = blue) }
                     IconButton(onClick = { onAction("stop", 0) }, enabled = !busy) { Icon(Icons.Outlined.Stop, "停止投屏", tint = muted) }
@@ -3873,22 +4217,22 @@ private fun playerStatusLabel(status: String) = when (status.uppercase()) { "PAU
                     }
                     if (signal.positionAvailable && signal.durationSeconds > 0) {
                         Slider(value = scrubPosition.coerceIn(0f, signal.durationSeconds.toFloat()), onValueChange = { scrubPosition = it }, onValueChangeFinished = { onAction("seek_to", scrubPosition.toLong()) }, valueRange = 0f..signal.durationSeconds.toFloat(), modifier = Modifier.fillMaxWidth().height(28.dp), colors = SliderDefaults.colors(thumbColor = blue, activeTrackColor = blue, inactiveTrackColor = surface3, activeTickColor = blue, inactiveTickColor = surface3), accessibilityLabel = "投屏播放位置")
-                        Row(Modifier.fillMaxWidth()) { Text(formatClock(scrubPosition.toLong()), color = muted, fontSize = 10.sp); Spacer(Modifier.weight(1f)); Text(formatClock(signal.durationSeconds), color = muted, fontSize = 10.sp) }
+                        Row(Modifier.fillMaxWidth()) { Text(formatClock(scrubPosition.toLong()), color = muted, fontSize = TypeScale.micro); Spacer(Modifier.weight(1f)); Text(formatClock(signal.durationSeconds), color = muted, fontSize = TypeScale.micro) }
                     }
                 } else {
-                    Spacer(Modifier.height(9.dp)); Text(if (offline) "与接收设备的连接已中断。检查电视和局域网后点击重新连接。" else if (signal.deviceKind == "tvbox") "已推送到 TVBox。此类设备没有统一的远程控制协议，请在电视端操作。" else "局域网播放地址已发布，请在接收设备中控制播放。", color = if (offline) Color(0xFFDC2626) else muted, fontSize = 10.sp, lineHeight = 15.sp)
+                    Spacer(Modifier.height(9.dp)); Text(if (offline) "与接收设备的连接已中断。检查电视和局域网后点击重新连接。" else if (signal.deviceKind == "tvbox") "已推送到 TVBox。此类设备没有统一的远程控制协议，请在电视端操作。" else "局域网播放地址已发布，请在接收设备中控制播放。", color = if (offline) errorStrong else muted, fontSize = TypeScale.micro, lineHeight = 16.sp)
                 }
                 if (signal.deviceKind == "lan" && signal.mediaUrl.isNotBlank()) {
                     Spacer(Modifier.height(10.dp))
-                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2).border(1.dp, border, RoundedCornerShape(7.dp)).padding(start = 10.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(signal.mediaUrl, color = muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).border(1.dp, border, RoundedCornerShape(Radius.md)).padding(start = 10.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(signal.mediaUrl, color = muted, fontSize = TypeScale.micro, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                         IconButton(onClick = { onCopy(signal.mediaUrl) }, modifier = Modifier.size(32.dp)) { Icon(Icons.Outlined.ContentCopy, "复制播放地址", tint = blue, modifier = Modifier.size(16.dp)) }
                     }
                 }
                 task?.let {
                     Spacer(Modifier.height(10.dp)); HorizontalDivider(color = border); Spacer(Modifier.height(9.dp))
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("下载进度", color = muted, fontSize = 10.sp); Spacer(Modifier.weight(1f)); Text("${(it.progress * 100).toInt()}% · ${it.speed}", color = muted, fontSize = 10.sp) }
-                    Spacer(Modifier.height(5.dp)); LinearProgressIndicator(progress = { it.progress }, modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)), color = blue, trackColor = surface3)
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("下载进度", color = muted, fontSize = TypeScale.micro); Spacer(Modifier.weight(1f)); Text("${(it.progress * 100).toInt()}% · ${it.speed}", color = muted, fontSize = TypeScale.micro) }
+                    Spacer(Modifier.height(5.dp)); LinearProgressIndicator(progress = { it.progress }, modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(Radius.tiny)), color = blue, trackColor = surface3)
                 }
             }
         }
@@ -3965,37 +4309,37 @@ private fun castStatusLabel(status: String) = when (status.uppercase()) {
                     }
                 },
             ) {
-                Surface(Modifier.fillMaxWidth(), color = selectedSurface, shape = RoundedCornerShape(8.dp)) {
+                Surface(Modifier.fillMaxWidth(), color = selectedSurface, shape = RoundedCornerShape(Radius.md)) {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.Downloading, "下载文件", tint = blue, modifier = Modifier.size(26.dp))
                         Spacer(Modifier.width(11.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(filename.ifBlank { offer.title.ifBlank { "新下载" } }, color = ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(filename.ifBlank { offer.title.ifBlank { "新下载" } }, color = ink, fontSize = TypeScale.title, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Text(
                                 listOf(resourceKindLabel(offer.resourceKind), extension, offer.mimeType.takeIf { it.isNotBlank() }, if (offer.size > 0) formatBytes(offer.size) else "大小未知").filterNotNull().joinToString(" · "),
                                 color = muted,
-                                fontSize = 11.sp,
+                                fontSize = TypeScale.caption,
                                 modifier = Modifier.padding(top = 3.dp),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                            if (downloadHost.isNotBlank()) Text(downloadHost, color = faint, fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (downloadHost.isNotBlank()) Text(downloadHost, color = faint, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 2.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
                 duplicate?.let {
                     Spacer(Modifier.height(9.dp))
-                    Surface(Modifier.fillMaxWidth(), color = warnSurface, shape = RoundedCornerShape(7.dp)) {
+                    Surface(Modifier.fillMaxWidth(), color = warnSurface, shape = RoundedCornerShape(Radius.md)) {
                         Row(Modifier.padding(horizontal = 11.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Outlined.WarningAmber, "重复任务", tint = warningColor, modifier = Modifier.size(17.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text("已有同一地址的任务：${it.filename}（${it.status}）", color = ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("已有同一地址的任务：${it.filename}（${it.status}）", color = ink, fontSize = TypeScale.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
                 Spacer(Modifier.height(13.dp))
                 DialogLabel("文件名")
-                OutlinedTextField(filename, { filename = it }, Modifier.fillMaxWidth(), enabled = !busy, singleLine = true, isError = filename.isNotBlank() && !validFilename, shape = RoundedCornerShape(7.dp), supportingText = { if (filename.isNotBlank() && !validFilename) Text("文件名不能包含路径或控制字符", fontSize = 10.sp) })
+                OutlinedTextField(filename, { filename = it }, Modifier.fillMaxWidth(), enabled = !busy, singleLine = true, isError = filename.isNotBlank() && !validFilename, shape = RoundedCornerShape(Radius.md), supportingText = { if (filename.isNotBlank() && !validFilename) Text("文件名不能包含路径或控制字符", fontSize = TypeScale.micro) })
                 Spacer(Modifier.height(7.dp))
                 DialogLabel("分类")
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -4006,40 +4350,40 @@ private fun castStatusLabel(status: String) = when (status.uppercase()) {
                             enabled = !busy,
                             border = BorderStroke(1.dp, if (category == choice) blue else border),
                             colors = ButtonDefaults.buttonColors(if (category == choice) selectedSurface else rail, if (category == choice) blue else ink),
-                        ) { Text(choice.label, fontSize = 11.sp, fontWeight = if (category == choice) FontWeight.SemiBold else FontWeight.Normal) }
+                        ) { Text(choice.label, fontSize = TypeScale.caption, fontWeight = if (category == choice) FontWeight.SemiBold else FontWeight.Normal) }
                     }
                 }
                 Spacer(Modifier.height(10.dp))
                 DialogLabel("保存到")
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(directory, { directory = it }, Modifier.weight(1f), enabled = !busy, singleLine = true, shape = RoundedCornerShape(7.dp), placeholder = { Text("使用下载引擎默认目录") })
+                    OutlinedTextField(directory, { directory = it }, Modifier.weight(1f), enabled = !busy, singleLine = true, shape = RoundedCornerShape(Radius.md), placeholder = { Text("使用下载引擎默认目录") })
                     Spacer(Modifier.width(7.dp))
                     Button(onClick = { chooseDirectory(directory, "选择下载保存位置")?.let { directory = it } }, enabled = !busy, colors = ButtonDefaults.buttonColors(rail, ink), border = BorderStroke(1.dp, border)) {
                         Icon(Icons.Outlined.FolderOpen, "选择保存文件夹", modifier = Modifier.size(17.dp))
-                        Spacer(Modifier.width(6.dp)); Text("选择", fontSize = 11.sp)
+                        Spacer(Modifier.width(6.dp)); Text("选择", fontSize = TypeScale.caption)
                     }
                 }
                 Row(Modifier.fillMaxWidth().padding(top = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(rememberDirectory, { rememberDirectory = it }, accessibilityLabel = "记住此分类的保存位置")
-                    Spacer(Modifier.width(8.dp)); Text("记住“${category.label}”文件的保存位置", color = ink, fontSize = 11.sp)
+                    Spacer(Modifier.width(8.dp)); Text("记住“${category.label}”文件的保存位置", color = ink, fontSize = TypeScale.caption)
                 }
                 Spacer(Modifier.height(11.dp))
-                Surface(Modifier.fillMaxWidth(), color = dialogSurface, shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, border)) {
+                Surface(Modifier.fillMaxWidth(), color = dialogSurface, shape = RoundedCornerShape(Radius.md), border = BorderStroke(1.dp, border)) {
                     Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                         Row(Modifier.fillMaxWidth()) {
-                            Icon(Icons.Outlined.GppGood, "请求上下文已继承", tint = Color(0xFF16A34A), modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(7.dp)); Text("网站请求上下文", color = ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                            Spacer(Modifier.weight(1f)); Text("由下载引擎安全保管", color = Color(0xFF15803D), fontSize = 10.sp)
+                            Icon(Icons.Outlined.GppGood, "请求上下文已继承", tint = successColor, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(7.dp)); Text("网站请求上下文", color = ink, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.weight(1f)); Text("由下载引擎安全保管", color = successColor, fontSize = TypeScale.micro)
                         }
                         DetailLine("来源网页", sourceHost.ifBlank { "未捕获" })
                         DetailLine("来源地址", safeResourceLocation(source))
                         DetailLine("下载地址", safeResourceLocation(offer.url))
-                        Text("支持沿用 Referer、Origin、User-Agent、Cookie 与 Authorization；敏感值只由下载引擎保管。", color = faint, fontSize = 10.sp, lineHeight = 15.sp)
+                        Text("支持沿用 Referer、Origin、User-Agent、Cookie 与 Authorization；敏感值只由下载引擎保管。", color = faint, fontSize = TypeScale.micro, lineHeight = 16.sp)
                     }
                 }
                 if (sourceHost.isNotBlank()) Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(suppressSiteKind, { suppressSiteKind = it }, accessibilityLabel = "以后不再提示此网站的同类资源")
-                    Spacer(Modifier.width(8.dp)); Text("以后不再自动提示 $sourceHost 的${resourceKindLabel(offer.resourceKind)}", color = ink, fontSize = 11.sp)
+                    Spacer(Modifier.width(8.dp)); Text("以后不再自动提示 $sourceHost 的${resourceKindLabel(offer.resourceKind)}", color = ink, fontSize = TypeScale.caption)
                 }
             }
         },

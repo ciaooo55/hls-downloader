@@ -118,6 +118,55 @@ def percentile95(values: list[float]) -> float:
     return ordered[max(0, math.ceil(len(ordered) * 0.95) - 1)]
 
 
+def presenter_process_ids(suffix: str = "presenter.exe") -> list[int]:
+    """Return the PIDs of running processes whose image name ends with `suffix`.
+
+    A leftover presenter holds the session-global named mutex
+    ``Local\\HLSDownloader.v7.presenter``. Any such instance makes a freshly
+    launched presenter lose the election and exit with code 0 before it ever
+    renders, which surfaces as a confusing "exited during renderer prewarm"
+    failure that has nothing to do with the product under test.
+    """
+
+    class ProcessEntry32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry32W)]
+    kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry32W)]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+    if not snapshot or snapshot == ctypes.c_void_p(-1).value:
+        return []
+    entry = ProcessEntry32W()
+    entry.dwSize = ctypes.sizeof(ProcessEntry32W)
+    pids: list[int] = []
+    try:
+        if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+            return []
+        while True:
+            if str(entry.szExeFile).lower().endswith(suffix):
+                pids.append(int(entry.th32ProcessID))
+            if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                break
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return pids
+
+
 def stop_process(process: subprocess.Popen[bytes] | None) -> None:
     if process is None or process.poll() is not None:
         return
@@ -159,7 +208,22 @@ def visible_handoff_smoke(
         prewarm_started = time.perf_counter()
         while not ready_file.exists():
             if presenter_process.poll() is not None:
-                raise RuntimeError(f"Presenter exited during renderer prewarm: {presenter_process.returncode}")
+                details = ""
+                if presenter_process.stderr is not None:
+                    details = presenter_process.stderr.read().decode("utf-8", errors="replace").strip()
+                hint = ""
+                if presenter_process.returncode == 0:
+                    hint = (
+                        " A clean exit here means the presenter lost the single-instance election: "
+                        "another instance holds the session-global mutex "
+                        "Local\\HLSDownloader.v7.presenter (any leftover copy, including one left "
+                        "behind by an earlier packaged-app gate run, is enough)."
+                    )
+                raise RuntimeError(
+                    f"Presenter exited during renderer prewarm: {presenter_process.returncode}"
+                    f"; windows={process_windows(presenter_process.pid)!r}"
+                    f"; stderr={details!r}.{hint}"
+                )
             if time.perf_counter() - prewarm_started > 15:
                 details = ""
                 if presenter_process.stderr is not None and presenter_process.poll() is not None:
@@ -290,6 +354,16 @@ def main() -> int:
     parser.add_argument("--engine", type=Path)
     parser.add_argument("--recovery-only", action="store_true")
     args = parser.parse_args()
+    stray = presenter_process_ids()
+    if stray:
+        raise SystemExit(
+            "another presenter instance is already running "
+            f"(pid={', '.join(str(pid) for pid in stray)}); the presenter holds the "
+            "session-global mutex Local\\HLSDownloader.v7.presenter, so the instance launched "
+            "below would exit with code 0 before rendering and every assertion in this smoke "
+            "would fail for the wrong reason. Stop the stray instance first: "
+            "Get-Process HLSDownloaderPresenter | Stop-Process -Force"
+        )
     presenter = str(args.presenter.resolve())
     first = subprocess.Popen([presenter, "--lock-test"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:

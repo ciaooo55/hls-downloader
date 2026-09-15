@@ -58,6 +58,11 @@ internal fun validateUiTestAction(action: UiTestAction, width: Int, height: Int)
         action.x !in 0 until width || action.y !in 0 until height || action.toX !in 0 until width || action.toY !in 0 until height -> "coordinates are outside the current window"
         else -> null
     }
+    "move" -> when {
+        action.x == null || action.y == null -> "move action requires x and y"
+        action.x !in 0 until width || action.y !in 0 until height -> "coordinates are outside the current window"
+        else -> null
+    }
     "scroll" -> when {
         action.x == null || action.y == null || action.delta == null || action.delta == 0 -> "scroll action requires x, y and a non-zero delta"
         action.x !in 0 until width || action.y !in 0 until height -> "coordinates are outside the current window"
@@ -88,6 +93,31 @@ internal object UiTestState {
     @Volatile private var contextMenuPosition: List<Int> = emptyList()
     @Volatile private var contextMenuTaskIds: List<String> = emptyList()
     @Volatile private var contextMenuActions: List<String> = emptyList()
+
+    /**
+     * 当前生效的侧栏筛选（[TaskFilter.label]），折叠栏与展开态共用同一个状态。
+     *
+     * 为什么需要它：折叠栏把文字标签换成了图标，**"点得中、点得对"就不再是肉眼能确认的事**——
+     * 40dp 的点击区、11 个入口、还有底部固定的"管理队列"，光看截图只能证明它长得对。
+     * 有了这个字段，`/state` 就能直接断言"点了第 4 个图标 ⇒ 筛选变成 失败"，
+     * 而不是靠"选中数从 3 变 0"这种间接推断。
+     */
+    @Volatile private var activeFilter: String = ""
+
+    /** 当前选中的分类标签（未选为空串）。与 [activeFilter] 同理，让折叠栏的分类组也可断言。 */
+    @Volatile private var activeCategory: String = ""
+
+    /** 当前选中的队列 id（未选为空串）。 */
+    @Volatile private var activeQueueId: String = ""
+
+    fun updateFilter(label: String) {
+        activeFilter = label
+    }
+
+    fun updateSidebarSelection(categoryLabel: String, queueId: String) {
+        activeCategory = categoryLabel
+        activeQueueId = queueId
+    }
 
     fun updateSelection(ids: Set<String>) {
         selectedTaskIds = ids.sorted()
@@ -130,6 +160,9 @@ internal object UiTestState {
         contextMenuPosition,
         contextMenuTaskIds,
         contextMenuActions,
+        activeFilter,
+        activeCategory,
+        activeQueueId,
     )
 }
 
@@ -141,6 +174,10 @@ internal data class UiSelectionSnapshot(
     val contextMenuPosition: List<Int>,
     val contextMenuTaskIds: List<String>,
     val contextMenuActions: List<String>,
+    // 末尾新增字段，带默认值 ⇒ 旧脚本按原字段读不受影响（JSON 是增量扩展）。
+    val activeFilter: String = "",
+    val activeCategory: String = "",
+    val activeQueueId: String = "",
 )
 
 internal class UiTestApi private constructor(
@@ -259,6 +296,7 @@ internal class UiTestApi private constructor(
                 "drag" -> {
                     dispatchMouseDrag(action.x!!, action.y!!, action.toX!!, action.toY!!, action.modifiers)
                 }
+                "move" -> dispatchMouseMove(action.x!!, action.y!!)
                 "scroll" -> dispatchMouseWheel(action.x!!, action.y!!, action.delta!!, action.modifiers)
                 "select_task" -> onEventThread { UiTestState.selectTask(action.index!!, action.modifiers) }
                 "open_task_menu" -> onEventThread { UiTestState.openTaskMenu(action.index!!, action.x!!, action.y!!) }
@@ -305,6 +343,20 @@ internal class UiTestApi private constructor(
             robot.delay(25)
             robot.mouseRelease(buttonMask)
         }
+    }
+
+    /**
+     * 只把指针移过去、不按键——用来触发 hover 态（tooltip、`:hover` 样式）。
+     *
+     * 悬停是能改变布局与配色的状态，本项目在 hover 规则上栽过（淡底家族那条最差项就是 `:hover`），
+     * 所以它必须能被夹具测到，而不是只能靠人手去悬停。
+     */
+    private fun dispatchMouseMove(x: Int, y: Int) {
+        val point = onEventThread {
+            mouseTarget(x, y)
+            window.locationOnScreen.let { Point(it.x + x, it.y + y) }
+        }
+        robot.mouseMove(point.x, point.y)
     }
 
     private fun dispatchMouseDrag(fromX: Int, fromY: Int, toX: Int, toY: Int, modifiers: List<String>) {

@@ -21,8 +21,12 @@ class UiTestApiTest {
         assertNull(validateUiTestAction(UiTestAction(type = "open_task_menu", index = 4, x = 500, y = 300), 1024, 600))
         assertNull(validateUiTestAction(UiTestAction("key", key = "F5"), 1024, 600))
         assertNull(validateUiTestAction(UiTestAction("type", text = "测试 text"), 1024, 600))
+        // 悬停动作：tooltip / :hover 只能靠它触发
+        assertNull(validateUiTestAction(UiTestAction("move", 40, 200), 1024, 600))
         assertEquals("coordinates are outside the current window", validateUiTestAction(UiTestAction("click", 1024, 20), 1024, 600))
         assertEquals("click actions require x and y", validateUiTestAction(UiTestAction("click"), 1024, 600))
+        assertEquals("move action requires x and y", validateUiTestAction(UiTestAction("move"), 1024, 600))
+        assertEquals("coordinates are outside the current window", validateUiTestAction(UiTestAction("move", 40, 600), 1024, 600))
         assertEquals("drag actions require x, y, to_x and to_y", validateUiTestAction(UiTestAction("drag", 10, 20), 1024, 600))
         assertEquals("scroll action requires x, y and a non-zero delta", validateUiTestAction(UiTestAction("scroll", x = 10, y = 20), 1024, 600))
         assertEquals("scroll delta must be between -20 and 20", validateUiTestAction(UiTestAction("scroll", x = 10, y = 20, delta = 21), 1024, 600))

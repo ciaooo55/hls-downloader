@@ -2,8 +2,8 @@
 
 ## Current baseline
 
-- Active development branch: local `网页版gpt` (tracks `origin/网页版gpt`).
-- Local `main` is the integration baseline: settled, validated changes are merged from local `网页版gpt` into it. Remote synchronization stays operator-controlled and is currently deferred.
+- The only development and integration branch is local `main` (tracks `origin/main`).
+- Review and validate changes on `main`; remote synchronization stays operator-controlled. The 2026-09-15 single-main workflow supersedes the former two-branch arrangement.
 - Proxy route identity hardening landed in `e38bba5e7adb05404e36e3fa7f9cf75021354c6e` and passed focused Rust format/check/regression validation before commit.
 - Windows POST body forwarding hardening landed in `9b6dae814d59d0b3a128084cc5dac18949c72b2d`; focused validation covered curl method/body arguments and a real WinHTTP POST to a local receiver.
 - Duplicate request identity hardening landed in `c1d60cce6c7534130fd7021fff352a1a879e4963`.
@@ -35,7 +35,7 @@ Existing automated evidence covers Native Host request IDs, Core persistence/res
 
 Continue auditing task lifecycle, persistence, resume, cancellation, output publication, credentials, protocol boundaries, browser handoff ownership, request identity, and transport parity. Only change behavior when a concrete failure is identified.
 
-The previously reviewed code-level tail is closed on `网页版gpt`: proxy identity, Windows POST body parity, duplicate request identity, FTP/FTPS stalled-read cancellation, Native Host credential rollback, and Metalink XML entity handling all have focused regression coverage. The next source change must start from a newly demonstrated failure, not from speculative cleanup.
+The previously reviewed code-level tail is integrated on `main`: proxy identity, Windows POST body parity, duplicate request identity, FTP/FTPS stalled-read cancellation, Native Host credential rollback, and Metalink XML entity handling all have focused regression coverage. The next source change must start from a newly demonstrated failure, not from speculative cleanup.
 
 ### P1 — browser takeover reliability
 

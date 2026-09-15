@@ -33,6 +33,17 @@ The recommended way to get HLS Downloader is from **GitHub Releases**:
 
 Release bundles may include Windows x64 **EXE / MSI / Portable ZIP** packages together with matching **Chromium / Firefox browser extensions**.
 
+### Requirements
+
+| Item | Requirement |
+| --- | --- |
+| Operating system | Windows 10 or Windows 11 (x64) |
+| CPU architecture | **x64 only.** Playback and part of the capture path rely on the x64 native libraries shipped in the package (libmpv, curl-impersonate), so ARM64 Windows cannot run it |
+| Runtime | No pre-installed Java required — the installer bundles a trimmed JRE |
+| Privileges | Per-user install, **no administrator rights needed**; data lives in `%LOCALAPPDATA%` |
+| Browser | Chromium-based (Chrome / Edge) or Firefox, for download handoff |
+| Display | 1024×600 minimum; the UI follows the system DPI scaling |
+
 > [!NOTE]
 > `main` currently tracks the **7.0.2** source line. Public installers are published through Releases; builds marked `candidate` or `pre-release` should be treated as test builds.
 

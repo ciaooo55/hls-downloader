@@ -5,9 +5,9 @@ slint::include_modules!();
 use hls_native_shell::{
     activate_window_by_title, begin_caption_drag, center_window_by_title,
     claim_v7_presenter_instance, completion_sound, hide_window_from_taskbar_by_title, install_root,
-    is_already_running_error, os_reduce_motion, spawn_core, spawn_desktop_ui, CoreCommand,
-    CoreEvent, CoreIpcClient, CorePipeResponse, EventEnvelope, ResourceKind, ResourceOffer,
-    TaskSnapshot,
+    is_already_running_error, os_reduce_motion, spawn_core, spawn_desktop_ui,
+    window_work_area_size_by_title, CoreCommand, CoreEvent, CoreIpcClient, CorePipeResponse,
+    EventEnvelope, ResourceKind, ResourceOffer, TaskSnapshot,
 };
 use serde::Deserialize;
 use slint::{ComponentHandle, RenderingState, Timer, TimerMode};
@@ -630,7 +630,7 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
     });
 
     match kind {
-        "confirm" => {
+        "confirm" | "confirm-error" => {
             let window = ConfirmWindow::new()?;
             window.set_window_title(CONFIRM.into());
             window.global::<Tokens>().set_dark(dark);
@@ -649,12 +649,20 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             window.set_category("media".into());
             window.set_duplicate_text("已有同一地址的任务：示例视频.mp4（已暂停）".into());
             window.set_remaining("  ·  后面还有 2 个".into());
+            if kind == "confirm-error" {
+                window.set_error_text(
+                    "保存位置不可用，请选择其他目录后重试。\n当前请求仍可保留浏览器下载。".into(),
+                );
+            }
             window.on_command(|command| {
                 if command != "drag" {
                     let _ = slint::quit_event_loop();
                 }
             });
             window.show()?;
+            fit_confirm_window(&window);
+            let _ = center_window_by_title(CONFIRM);
+            let _ = activate_window_by_title(CONFIRM);
             write_ready_marker();
             slint::run_event_loop_until_quit()?;
         }
@@ -957,6 +965,31 @@ fn load_pending_offers(client: &mut CoreIpcClient) -> VecDeque<ResourceOffer> {
         })
 }
 
+// 输入为 rcWork 的物理尺寸；不抬高工作区上限，正常区域保持 620×584。
+fn confirm_window_logical_size(work_area: (u32, u32), scale_factor: f32) -> Option<(f32, f32)> {
+    if work_area.0 == 0 || work_area.1 == 0 || !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return None;
+    }
+    Some((
+        (work_area.0 as f32 / scale_factor).min(620.0),
+        (work_area.1 as f32 / scale_factor).min(584.0),
+    ))
+}
+
+// 仅在真实确认或 fixture 的 show() 成功后调用；离屏预热不参与尺寸适配。
+fn fit_confirm_window(confirm: &ConfirmWindow) {
+    let Some(work_area) = window_work_area_size_by_title(CONFIRM) else {
+        trace("无法读取确认窗工作区，未调整尺寸");
+        return;
+    };
+    let window = confirm.window();
+    let Some((width, height)) = confirm_window_logical_size(work_area, window.scale_factor()) else {
+        trace("确认窗工作区或缩放无效，未调整尺寸");
+        return;
+    };
+    window.set_size(slint::LogicalSize::new(width, height));
+}
+
 fn show_next_offer(
     window: &slint::Weak<ConfirmWindow>,
     pending: &Arc<Mutex<VecDeque<ResourceOffer>>>,
@@ -1064,6 +1097,7 @@ fn show_next_offer(
             *active = Some(offer.handoff_id.clone());
         }
         let _ = hide_window_from_taskbar_by_title(CONFIRM);
+        fit_confirm_window(&item);
         let _ = center_window_by_title(CONFIRM);
         let _ = activate_window_by_title(CONFIRM);
     } else if let Ok(mut active) = active_handoff.lock() {
@@ -1580,10 +1614,98 @@ fn attach_parent_console() {}
 #[cfg(test)]
 mod tests {
     use super::{
-        download_category, file_extension, format_request_details, format_resource_meta,
-        safe_display_url, ActiveTaskHud,
+        confirm_window_logical_size, download_category, file_extension, format_request_details,
+        format_resource_meta, safe_display_url, ActiveTaskHud,
     };
     use hls_native_shell::{ResourceKind, ResourceOffer, TaskSnapshot};
+
+    #[test]
+    fn confirm_window_size_matches_work_area_height_at_each_dpi() {
+        for scale in [1.0_f32, 1.25, 1.5, 2.0] {
+            for (logical_height, expected_height) in [
+                (480.0_f32, 480.0),
+                (516.0, 516.0),
+                (568.0, 568.0),
+                (584.0, 584.0),
+                (816.0, 584.0),
+            ] {
+                let physical = ((960.0 * scale) as u32, (logical_height * scale) as u32);
+                assert_eq!(
+                    confirm_window_logical_size(physical, scale),
+                    Some((620.0, expected_height)),
+                    "工作区={physical:?}，缩放={scale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn confirm_window_size_keeps_preferred_size_when_it_fits() {
+        for scale in [1.0_f32, 1.25, 1.5, 2.0] {
+            for (width, height) in [(620.0, 584.0), (960.0, 816.0), (1920.0, 1080.0)] {
+                assert_eq!(
+                    confirm_window_logical_size(
+                        ((width * scale) as u32, (height * scale) as u32),
+                        scale,
+                    ),
+                    Some((620.0, 584.0))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn confirm_window_size_clamps_both_axes_without_raising_the_work_area() {
+        for scale in [1.0_f32, 1.25, 1.5, 2.0] {
+            assert_eq!(
+                confirm_window_logical_size(((600.0 * scale) as u32, (320.0 * scale) as u32), scale),
+                Some((600.0, 320.0))
+            );
+        }
+        // 物理像素不能整除缩放时，也不能向上取整越过工作区。
+        let (width, height) = confirm_window_logical_size((901, 719), 1.5).unwrap();
+        assert!((width - 901.0 / 1.5).abs() < 0.001);
+        assert!((height - 719.0 / 1.5).abs() < 0.001);
+        assert!(width * 1.5 <= 901.001 && height * 1.5 <= 719.001);
+    }
+
+    #[test]
+    fn confirm_window_size_clamps_width_without_shrinking_fitting_height() {
+        for scale in [1.0_f32, 1.25, 1.5, 2.0] {
+            assert_eq!(
+                confirm_window_logical_size(((600.0 * scale) as u32, (816.0 * scale) as u32), scale),
+                Some((600.0, 584.0)),
+                "仅宽度受限，缩放={scale}"
+            );
+        }
+    }
+
+    #[test]
+    fn confirm_window_size_converts_physical_work_area_before_clamping() {
+        // 直接给出物理工作区，防止把物理像素当成逻辑尺寸或重复应用 DPI。
+        for (physical, scale, expected) in [
+            ((1366, 720), 1.5_f32, (620.0, 480.0)),
+            ((1920, 1032), 2.0, (620.0, 516.0)),
+            ((1600, 852), 1.5, (620.0, 568.0)),
+            ((1280, 730), 1.25, (620.0, 584.0)),
+            ((1920, 1020), 1.25, (620.0, 584.0)),
+        ] {
+            assert_eq!(
+                confirm_window_logical_size(physical, scale),
+                Some(expected),
+                "物理工作区={physical:?}，缩放={scale}"
+            );
+        }
+    }
+
+    #[test]
+    fn confirm_window_size_rejects_invalid_work_area_or_scale() {
+        assert_eq!(confirm_window_logical_size((0, 584), 1.0), None);
+        assert_eq!(confirm_window_logical_size((620, 0), 1.0), None);
+        for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(confirm_window_logical_size((620, 584), scale), None);
+        }
+    }
 
     fn hud_snapshot(task_id: &str, status: &str) -> TaskSnapshot {
         TaskSnapshot {

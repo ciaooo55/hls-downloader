@@ -33,6 +33,17 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 
 发布包可包含 Windows x64 的 **EXE / MSI / Portable ZIP**，以及配套的 **Chromium / Firefox 浏览器扩展**。
 
+### 系统要求
+
+| 项目 | 要求 |
+| --- | --- |
+| 操作系统 | Windows 10 或 Windows 11（x64） |
+| 处理器架构 | **仅 x64**。播放与部分抓取依赖随包的 x64 原生库（libmpv、curl-impersonate），ARM64 Windows 无法运行 |
+| 运行时 | 无需预装 Java——安装包内置裁剪过的 JRE |
+| 权限 | 按用户安装，**不需要管理员权限**；数据存放在 `%LOCALAPPDATA%` |
+| 浏览器 | Chromium 系（Chrome / Edge）或 Firefox，用于下载接管 |
+| 显示器 | 最低 1024×600；界面跟随系统 DPI 缩放 |
+
 > [!NOTE]
 > 当前 `main` 是 **7.0.2** 源码开发线。公开安装包以 Releases 页面为准；带 `candidate` / `pre-release` 标记的版本应按测试版使用。
 

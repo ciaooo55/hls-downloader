@@ -2,6 +2,7 @@ package com.hlsdownloader.desktop
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.ScrollbarStyle
@@ -16,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -148,14 +150,25 @@ internal fun FullSettingsDialog(
             ) {
                 tabs.forEach { tab ->
                     val active = tab.label == selected
+                    // 左侧标签栏：悬停把底色从 surface2 提到 surface3，按下缩 2%。
+                    // 选中态在悬停时不改底色（选中底上压着 blue 图标，往 blue 混会压低比值）。
+                    val feedback = rememberPressFeedback(
+                        restColor = if (active) selectedSurface else surface2,
+                        hoverColor = if (active) selectedSurface else surface3,
+                        pressScale = .98f,
+                        hoverMillis = 120,
+                    )
                     Row(
-                        Modifier.fillMaxWidth().height(38.dp).clip(RoundedCornerShape(7.dp))
-                            .background(if (active) selectedSurface else surface2)
-                            .clickable { selected = tab.label }.padding(horizontal = 10.dp),
+                        Modifier.fillMaxWidth().height(38.dp).clip(RoundedCornerShape(Radius.md))
+                            .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+                            .background(feedback.background)
+                            .hoverable(feedback.interaction)
+                            .clickable(interactionSource = feedback.interaction, indication = null) { selected = tab.label }
+                            .padding(horizontal = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(tab.icon, null, modifier = Modifier.size(17.dp), tint = if (active) blue else muted)
-                        Spacer(Modifier.width(8.dp)); Text(tab.label, fontSize = 12.sp, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal, color = ink)
+                        Spacer(Modifier.width(8.dp)); Text(tab.label, fontSize = TypeScale.body, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal, color = ink)
                     }
                 }
             }
@@ -208,17 +221,17 @@ internal fun FullSettingsDialog(
                     }
                     "网络" -> SettingsSection("代理与站点") {
                         Row(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp))
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md))
                                 .background(selectedSurface).padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.Top,
                         ) {
                             Icon(Icons.Outlined.VerifiedUser, null, modifier = Modifier.size(17.dp), tint = blue)
                             Spacer(Modifier.width(9.dp))
                             Column {
-                                Text("浏览器任务自动沿用页面请求", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = ink)
+                                Text("浏览器任务自动沿用页面请求", fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold, color = ink)
                                 Text(
                                     "下载引擎优先使用页面和资源源站实际的 Referer、Origin、User-Agent 及同源凭据。",
-                                    color = muted, fontSize = 10.sp, lineHeight = 15.sp, modifier = Modifier.padding(top = 3.dp),
+                                    color = muted, fontSize = TypeScale.micro, lineHeight = 16.sp, modifier = Modifier.padding(top = 3.dp),
                                 )
                             }
                         }
@@ -227,7 +240,7 @@ internal fun FullSettingsDialog(
                         if (draft.proxyMode == "manual") V7Field("代理地址", draft.proxyUrl) { draft = draft.copy(proxyUrl = it) }
                         V7Field("代理绕过列表", draft.proxyBypass) { draft = draft.copy(proxyBypass = it) }
                         DialogLabel("手动任务默认请求头（可选）")
-                        Text("只在任务没有浏览器请求上下文时使用。", color = muted, fontSize = 10.sp, modifier = Modifier.padding(bottom = 8.dp))
+                        Text("只在任务没有浏览器请求上下文时使用。", color = muted, fontSize = TypeScale.micro, modifier = Modifier.padding(bottom = 8.dp))
                         V7Field("默认 Referer", draft.defaultReferer) { draft = draft.copy(defaultReferer = it) }
                         V7Field("默认 Origin", draft.defaultOrigin) { draft = draft.copy(defaultOrigin = it) }
                         DialogLabel("默认 Cookie")
@@ -237,7 +250,7 @@ internal fun FullSettingsDialog(
                                 { defaultCookie = it; clearDefaultCookie = false },
                                 Modifier.weight(1f),
                                 singleLine = true,
-                                shape = RoundedCornerShape(7.dp),
+                                shape = RoundedCornerShape(Radius.md),
                                 placeholder = { Text(if (current.defaultCookieConfigured) "已安全保存；留空保持不变" else "例如 sessionid=…") },
                                 visualTransformation = PasswordVisualTransformation(),
                             )
@@ -246,7 +259,7 @@ internal fun FullSettingsDialog(
                                 DialogSecondary(if (clearDefaultCookie) "已清除" else "清除") { defaultCookie = ""; clearDefaultCookie = true }
                             }
                         }
-                        Text("下载引擎会安全保存凭据，界面不会回显内容。", color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp, bottom = 9.dp))
+                        Text("下载引擎会安全保存凭据，界面不会回显内容。", color = muted, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 5.dp, bottom = 9.dp))
                         V7Field("默认 User-Agent", draft.defaultUserAgent, lines = 2) { draft = draft.copy(defaultUserAgent = it) }
                         V7Field("允许的域名（逗号分隔，留空不限制）", draft.allowedHosts) { draft = draft.copy(allowedHosts = it) }
                         V7SiteRulesEditor(siteRules, siteRuleError) { siteRules = it }
@@ -274,10 +287,10 @@ internal fun FullSettingsDialog(
                         val isTvBoxMode = deviceMode == "tvbox"
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(if (isTvBoxMode) "TVBox 接收端" else "投屏设备", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = ink)
+                                Text(if (isTvBoxMode) "TVBox 接收端" else "投屏设备", fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold, color = ink)
                                 Text(
                                     if (isTvBoxMode) "查找已开启推送接收服务的电视盒子。" else "查找支持 DLNA 或 Chromecast 的电视和音箱。",
-                                    color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp),
+                                    color = muted, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 2.dp),
                                 )
                             }
                             TextButton(onClick = { onDiscoverDevices(deviceMode) }, enabled = !discoveringDevices) {
@@ -285,14 +298,14 @@ internal fun FullSettingsDialog(
                                 Spacer(Modifier.width(6.dp))
                                 Text(
                                     if (discoveringDevices) "正在扫描" else if (isTvBoxMode) "扫描 TVBox" else "扫描投屏设备",
-                                    fontSize = 11.sp, color = blue,
+                                    fontSize = TypeScale.caption, color = blue,
                                 )
                             }
                         }
                         Spacer(Modifier.height(8.dp))
                         if (visibleDevices.isEmpty()) {
                             Box(
-                                Modifier.fillMaxWidth().height(72.dp).clip(RoundedCornerShape(7.dp)).background(surface2),
+                                Modifier.fillMaxWidth().height(72.dp).clip(RoundedCornerShape(Radius.md)).background(surface2),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(
@@ -301,26 +314,36 @@ internal fun FullSettingsDialog(
                                         isTvBoxMode -> "未发现 TVBox；可扫描或填写下方手工地址"
                                         else -> "未发现投屏设备；请确认电视已开启投屏功能"
                                     },
-                                    color = muted, fontSize = 11.sp,
+                                    color = muted, fontSize = TypeScale.caption,
                                 )
                             }
                         } else {
                             visibleDevices.forEach { device ->
                                 val active = draft.preferredCastDeviceId == device.id
+                                // 整行通宽（约 700dp），不做缩放，按压只走底色档位。
+                                val feedback = rememberPressFeedback(
+                                    restColor = if (active) selectedSurface else surface2,
+                                    hoverColor = if (active) selectedSurface else surface3,
+                                    pressedColor = if (active) selectedSurface else surface3.blendToward(ink, .05f),
+                                    pressScale = 1f,
+                                    hoverMillis = 120,
+                                )
                                 Row(
-                                    Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(7.dp))
-                                        .background(if (active) selectedSurface else surface2)
-                                        .clickable { draft = draft.copy(preferredCastDeviceId = device.id) }
+                                    Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(Radius.md))
+                                        .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+                                        .background(feedback.background)
+                                        .hoverable(feedback.interaction)
+                                        .clickable(interactionSource = feedback.interaction, indication = null) { draft = draft.copy(preferredCastDeviceId = device.id) }
                                         .padding(horizontal = 11.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Icon(castDeviceIcon(device), null, Modifier.size(18.dp), tint = if (active) blue else muted)
                                     Spacer(Modifier.width(10.dp))
                                     Column(Modifier.weight(1f)) {
-                                        Text(device.label, color = ink, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-                                        Text(castDeviceDescription(device), color = muted, fontSize = 10.sp, maxLines = 1)
+                                        Text(device.label, color = ink, fontSize = TypeScale.caption, fontWeight = FontWeight.Medium, maxLines = 1)
+                                        Text(castDeviceDescription(device), color = muted, fontSize = TypeScale.micro, maxLines = 1)
                                     }
-                                    if (active) Text("首选", color = blue, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                                    if (active) Text("首选", color = blue, fontSize = TypeScale.micro, fontWeight = FontWeight.SemiBold)
                                 }
                                 Spacer(Modifier.height(5.dp))
                             }
@@ -328,28 +351,28 @@ internal fun FullSettingsDialog(
                         if (isTvBoxMode) {
                             Spacer(Modifier.height(10.dp))
                             V7Field("TVBox 手工地址（可选）", draft.tvboxEndpoint) { draft = draft.copy(tvboxEndpoint = it) }
-                            Text("自动扫描未发现接收端时，可填写完整的 HTTP(S) 地址。", color = muted, fontSize = 10.sp)
+                            Text("自动扫描未发现接收端时，可填写完整的 HTTP(S) 地址。", color = muted, fontSize = TypeScale.micro)
                         } else {
                             Spacer(Modifier.height(10.dp))
-                            Text("投屏会建立可控制的播放会话；TVBox 推送是另一种接收协议，请切换到“TVBox 推送”。", color = muted, fontSize = 10.sp, lineHeight = 15.sp)
+                            Text("投屏会建立可控制的播放会话；TVBox 推送是另一种接收协议，请切换到“TVBox 推送”。", color = muted, fontSize = TypeScale.micro, lineHeight = 16.sp)
                         }
                     }
                     "安全" -> SettingsSection("发布与扫描") {
                         SettingRow("完成后病毒扫描", "使用 Windows Defender 或指定扫描程序", draft.avScanEnabled) { draft = draft.copy(avScanEnabled = it) }
                         V7Field("扫描命令", draft.avScanCommand, lines = 2) { draft = draft.copy(avScanCommand = it) }
                         SettingRow("发现威胁时标记失败", "保留文件并将任务标记为失败，关闭后只记录扫描结果", draft.avScanFailOnThreat) { draft = draft.copy(avScanFailOnThreat = it) }
-                        Text("凭据由下载引擎安全保存，界面只显示是否已配置。", color = muted, fontSize = 11.sp, lineHeight = 17.sp)
+                        Text("凭据由下载引擎安全保存，界面只显示是否已配置。", color = muted, fontSize = TypeScale.caption, lineHeight = 17.sp)
                     }
                     "浏览器" -> SettingsSection("浏览器下载接管") {
                         SettingRow("接管浏览器下载", "插件识别到资源后显示确认窗口", draft.takeoverEnabled) { draft = draft.copy(takeoverEnabled = it) }
                         V7NumberField("最小接管大小（字节）", takeoverMinimum) { takeoverMinimum = it }
                         V7NumberField("页面抓取最小大小（字节）", harvestMinimum) { harvestMinimum = it }
-                        Text("插件会自动确认与下载器的兼容状态。", color = muted, fontSize = 11.sp)
+                        Text("插件会自动确认与下载器的兼容状态。", color = muted, fontSize = TypeScale.caption)
                     }
                     else -> SettingsSection("外观与可访问性") {
                         SettingRow("深色模式", "切换工作台与所有弹窗的配色", draft.darkMode) { draft = draft.copy(darkMode = it) }
                         SettingRow("减弱动画", "关闭非必要过渡并降低动态反馈", draft.reduceMotion) { draft = draft.copy(reduceMotion = it) }
-                        Text("界面字体使用 Segoe UI Variable / Microsoft YaHei UI，并跟随 Windows DPI。", color = muted, fontSize = 11.sp, lineHeight = 17.sp)
+                        Text("界面字体使用 Segoe UI Variable / Microsoft YaHei UI，并跟随 Windows DPI。", color = muted, fontSize = TypeScale.caption, lineHeight = 17.sp)
                     }
                 }
             }
@@ -359,7 +382,7 @@ internal fun FullSettingsDialog(
                 style = ScrollbarStyle(
                     minimalHeight = 28.dp,
                     thickness = 6.dp,
-                    shape = RoundedCornerShape(3.dp),
+                    shape = RoundedCornerShape(Radius.tiny),
                     hoverDurationMillis = 160,
                     unhoverColor = muted.copy(alpha = 0.42f),
                     hoverColor = blue.copy(alpha = 0.82f),
@@ -415,28 +438,28 @@ private fun V7SiteRulesEditor(
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text("按站点下载规则", color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            Text("从上到下第一条匹配规则生效；浏览器任务仍优先沿用实际页面请求。", color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp))
+            Text("按站点下载规则", color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
+            Text("从上到下第一条匹配规则生效；浏览器任务仍优先沿用实际页面请求。", color = muted, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 2.dp))
         }
         TextButton(
             onClick = { if (items.size < 100) onChange(items + EditableSiteRule(SiteRuleDto())) },
             enabled = items.size < 100,
         ) {
             Icon(Icons.Outlined.Add, null, Modifier.size(16.dp), tint = blue)
-            Spacer(Modifier.width(5.dp)); Text("添加规则", color = blue, fontSize = 11.sp)
+            Spacer(Modifier.width(5.dp)); Text("添加规则", color = blue, fontSize = TypeScale.caption)
         }
     }
     if (items.isEmpty()) {
         Box(
-            Modifier.fillMaxWidth().height(68.dp).clip(RoundedCornerShape(7.dp)).background(surface2),
+            Modifier.fillMaxWidth().height(68.dp).clip(RoundedCornerShape(Radius.md)).background(surface2),
             contentAlignment = Alignment.Center,
-        ) { Text("没有站点规则，所有任务使用全局设置", color = muted, fontSize = 11.sp) }
+        ) { Text("没有站点规则，所有任务使用全局设置", color = muted, fontSize = TypeScale.caption) }
     }
     items.forEachIndexed { index, item ->
         val rule = item.rule
         Spacer(Modifier.height(8.dp))
         Column(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2)
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2)
                 .padding(horizontal = 10.dp, vertical = 9.dp),
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -451,7 +474,7 @@ private fun V7SiteRulesEditor(
                     onValueChange = { update(index, item.copy(rule = rule.copy(host = it.take(255)), hostTouched = true)) },
                     modifier = Modifier.weight(1f),
                     singleLine = true,
-                    placeholder = { Text("example.com", color = faint, fontSize = 11.sp) },
+                    placeholder = { Text("example.com", color = faint, fontSize = TypeScale.caption) },
                     isError = item.hostTouched && rule.host.isBlank(),
                 )
                 Spacer(Modifier.width(4.dp))
@@ -466,7 +489,7 @@ private fun V7SiteRulesEditor(
                     })
                 }, enabled = index < items.lastIndex) { Icon(Icons.Outlined.KeyboardArrowDown, "规则下移", Modifier.size(18.dp), tint = muted) }
                 IconButton({ onChange(items.filterIndexed { itemIndex, _ -> itemIndex != index }) }) {
-                    Icon(Icons.Outlined.DeleteOutline, "删除站点规则", Modifier.size(17.dp), tint = Color(0xFFB42318))
+                    Icon(Icons.Outlined.DeleteOutline, "删除站点规则", Modifier.size(17.dp), tint = errorStrong)
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -502,7 +525,7 @@ private fun V7SiteRulesEditor(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(if (item.expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null, Modifier.size(17.dp), tint = blue)
-                Spacer(Modifier.width(5.dp)); Text(if (item.expanded) "收起请求与目录" else "请求身份、目录与登录信息", color = blue, fontSize = 11.sp)
+                Spacer(Modifier.width(5.dp)); Text(if (item.expanded) "收起请求与目录" else "请求身份、目录与登录信息", color = blue, fontSize = TypeScale.caption)
             }
             if (item.expanded) {
                 V7Field("保存目录（留空跟随分类）", rule.downloadDirectory) { value -> update(index, item.copy(rule = rule.copy(downloadDirectory = value))) }
@@ -516,7 +539,7 @@ private fun V7SiteRulesEditor(
                     Modifier.fillMaxWidth(),
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
-                    placeholder = { Text(if (rule.credentialRef.isNotBlank()) "已安全保存" else "可选", color = faint, fontSize = 11.sp) },
+                    placeholder = { Text(if (rule.credentialRef.isNotBlank()) "已安全保存" else "可选", color = faint, fontSize = TypeScale.caption) },
                 )
                 Spacer(Modifier.height(8.dp))
                 V7Field("自定义请求头（每行“名称: 值”）", item.requestHeaders, lines = 3) { value -> update(index, item.copy(requestHeaders = value, clearCredential = false)) }
@@ -525,18 +548,18 @@ private fun V7SiteRulesEditor(
                         update(index, item.copy(clearCredential = it, cookie = if (it) "" else item.cookie, requestHeaders = if (it) "" else item.requestHeaders))
                     }
                 } else {
-                    Text("Cookie 与敏感请求头只由下载引擎安全保存，设置文本不会记录原值。", color = muted, fontSize = 10.sp, lineHeight = 15.sp)
+                    Text("Cookie 与敏感请求头只由下载引擎安全保存，设置文本不会记录原值。", color = muted, fontSize = TypeScale.micro, lineHeight = 16.sp)
                 }
             }
         }
     }
-    if (error != null) Text(error, color = Color(0xFFB42318), fontSize = 10.sp, modifier = Modifier.padding(top = 7.dp))
+    if (error != null) Text(error, color = errorStrong, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 7.dp))
     Spacer(Modifier.height(10.dp))
 }
 
 @Composable private fun V7Field(label: String, value: String, lines: Int = 1, onValue: (String) -> Unit) {
     DialogLabel(label)
-    OutlinedTextField(value, onValue, Modifier.fillMaxWidth(), singleLine = lines == 1, minLines = lines, maxLines = lines.coerceAtLeast(3), shape = RoundedCornerShape(7.dp))
+    OutlinedTextField(value, onValue, Modifier.fillMaxWidth(), singleLine = lines == 1, minLines = lines, maxLines = lines.coerceAtLeast(3), shape = RoundedCornerShape(Radius.md))
     Spacer(Modifier.height(9.dp))
 }
 
@@ -555,18 +578,18 @@ private fun V7WeekdayChoice(value: String, onValue: (String) -> Unit) {
                     val next = if (selected) active - day else active + day
                     if (next.isNotEmpty()) onValue(next.sorted().joinToString(","))
                 },
-                modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (selected) selectedSurface else surface2),
+                modifier = Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (selected) selectedSurface else surface2),
                 contentPadding = PaddingValues(0.dp),
-            ) { Text(label, color = if (selected) blue else muted, fontSize = 11.sp) }
+            ) { Text(label, color = if (selected) blue else muted, fontSize = TypeScale.caption) }
         }
     }
-    Text("至少保留一天；星期设置同时用于自动开始和自动停止。", color = faint, fontSize = 9.sp, modifier = Modifier.padding(top = 4.dp, bottom = 9.dp))
+    Text("至少保留一天；星期设置同时用于自动开始和自动停止。", color = faint, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 4.dp, bottom = 9.dp))
 }
 
 @Composable private fun V7DirectoryField(label: String, value: String, title: String, onValue: (String) -> Unit) {
     DialogLabel(label)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(value, onValue, Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(7.dp))
+        OutlinedTextField(value, onValue, Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(Radius.md))
         Spacer(Modifier.width(8.dp))
         DialogSecondary("选择目录") { chooseDirectory(value, title)?.let(onValue) }
     }
@@ -575,8 +598,8 @@ private fun V7WeekdayChoice(value: String, onValue: (String) -> Unit) {
 
 @Composable private fun V7Choice(label: String, options: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
     DialogLabel(label)
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(surface2).padding(3.dp)) {
-        options.forEach { (value, text) -> TextButton(onClick = { onSelect(value) }, Modifier.weight(1f).clip(RoundedCornerShape(5.dp)).background(if (selected == value) selectedSurface else androidx.compose.ui.graphics.Color.Transparent)) { Text(text, fontSize = 11.sp, color = if (selected == value) blue else muted) } }
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) {
+        options.forEach { (value, text) -> TextButton(onClick = { onSelect(value) }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (selected == value) selectedSurface else androidx.compose.ui.graphics.Color.Transparent)) { Text(text, fontSize = TypeScale.caption, color = if (selected == value) blue else muted) } }
     }
     Spacer(Modifier.height(9.dp))
 }

@@ -52,6 +52,101 @@ class ResponsiveLayoutTest {
     }
 
     @Test
+    fun the_settings_dialog_never_shrinks_at_the_minimum_workbench_width() {
+        // 最小窗口是 1024dp（window.minimumSize，与采集脚本的 1024x600 下限一致），
+        // 而设置弹窗请求 880dp：1024 - 32 = 992 > 880，所以弹窗宽度在任何可达窗口下都是 880dp。
+        // 这条是"窄屏设置弹窗要不要改成顶部标签"的判据——内容列恒为 880 - 36 - 138 - 14 = 692dp，
+        // 10 个标签横排需要约 900dp 放不下，所以竖排标签列在任何可达尺寸下都不是问题。
+        listOf(1024.dp, 1110.dp, 1130.dp, 1400.dp, 1536.dp).forEach { viewport ->
+            assertEquals(880.dp, dialogBounds(880.dp, viewport, 820.dp).width, "视口 ${viewport} 下弹窗被压窄了")
+        }
+    }
+
+    @Test
+    fun narrow_workspaces_collapse_the_sidebar_instead_of_dropping_table_columns() {
+        // 折叠门槛是推导出来的，不是拍的：表格切精简列的门槛 + 侧栏宽度。
+        assertEquals(TASK_TABLE_COMPACT_WIDTH + SIDEBAR_WIDTH, SIDEBAR_COLLAPSE_WIDTH)
+        assertEquals(1120.dp, SIDEBAR_COLLAPSE_WIDTH)
+
+        // 门槛之下：留着 190dp 侧栏会让表格跌破 930dp（切精简列），折叠成 56dp 才能回到门槛之上。
+        val below = SIDEBAR_COLLAPSE_WIDTH - 10.dp
+        assertTrue(resolveTaskColumns(below - SIDEBAR_WIDTH).compact, "不折叠时表格应当已经切精简列")
+        assertFalse(resolveTaskColumns(below - SIDEBAR_RAIL_WIDTH).compact, "折叠后表格必须恢复完整列")
+
+        // 门槛之上：折叠是纯损失，所以不折叠。
+        val above = SIDEBAR_COLLAPSE_WIDTH + 10.dp
+        assertFalse(resolveTaskColumns(above - SIDEBAR_WIDTH).compact)
+        assertTrue(SIDEBAR_RAIL_WIDTH < SIDEBAR_WIDTH)
+    }
+
+    @Test
+    fun the_minimum_window_size_never_exceeds_the_workspace() {
+        // 本机工作区 1536×816（1920×1080@125%）⇒ 最小尺寸保持 1024×600，行为不变。
+        assertEquals(1024, WindowGeometryStore.effectiveMinimum(1024, 1536))
+        assertEquals(600, WindowGeometryStore.effectiveMinimum(600, 816))
+        // 无图形环境：只夹下限，不夹上限。
+        assertEquals(1024, WindowGeometryStore.effectiveMinimum(1024, null))
+
+        // 工作区比最小尺寸还小的档位。本机只有 125%，这些档位测不到，
+        // 只能按逻辑验证：`maximumWindowBounds` 返回逻辑值，所以缩放越大工作区越小。
+        assertEquals(911, WindowGeometryStore.effectiveMinimum(1024, 911))   // 1366×768 @150%
+        assertEquals(480, WindowGeometryStore.effectiveMinimum(600, 480))
+        assertEquals(960, WindowGeometryStore.effectiveMinimum(1024, 960))   // 1920×1080 @200%
+        assertEquals(540, WindowGeometryStore.effectiveMinimum(600, 540))
+        assertEquals(568, WindowGeometryStore.effectiveMinimum(600, 568))    // 1600×900 @150%
+    }
+
+    @Test
+    fun a_small_workspace_shrinks_the_window_instead_of_pushing_it_off_screen() {
+        // 1366×768@150% ⇒ 工作区 911×480。旧写法（`coerceIn(1024, max(工作区,1024))`）
+        // 在这里得到 1024×600：窗口比屏幕还大，右下角含状态栏永远够不到，而且用户缩不回来。
+        assertEquals(911 to 480, WindowGeometryStore.clampToWorkArea(1400, 820, 911 to 480))
+        assertEquals(911 to 480, WindowGeometryStore.clampToWorkArea(1024, 600, 911 to 480))
+        // 1920×1080@200% ⇒ 工作区 960×540：宽高都放不下。
+        assertEquals(960 to 540, WindowGeometryStore.clampToWorkArea(1400, 820, 960 to 540))
+        // 1600×900@150% ⇒ 工作区 1067×568：宽度够，高度不够。
+        assertEquals(1067 to 568, WindowGeometryStore.clampToWorkArea(1400, 820, 1067 to 568))
+
+        // 本机 125% 下行为不变：下限 1024×600，上限工作区（820 > 816 ⇒ 高度夹到 816）。
+        assertEquals(1400 to 816, WindowGeometryStore.clampToWorkArea(1400, 820, 1536 to 816))
+        assertEquals(1024 to 600, WindowGeometryStore.clampToWorkArea(400, 300, 1536 to 816))
+        assertEquals(1536 to 816, WindowGeometryStore.clampToWorkArea(4000, 3000, 1536 to 816))
+
+        // 无图形环境：只夹下限，不夹上限。
+        assertEquals(1024 to 600, WindowGeometryStore.clampToWorkArea(400, 300, null))
+        assertEquals(4000 to 3000, WindowGeometryStore.clampToWorkArea(4000, 3000, null))
+    }
+
+    @Test
+    fun the_sidebar_collapse_and_fixture_origin_stay_wired_up() {
+        val source = java.io.File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
+        // 折叠态与展开态共用同一套选中/回调，别让两套导航状态各走各的。
+        assertTrue(source.contains("if (compact) {"))
+        assertTrue(source.contains("SidebarRail(selected, selectedCategory, selectedQueueId, profiles, tasks"))
+        assertTrue(source.contains("maxWidth < SIDEBAR_COLLAPSE_WIDTH"))
+        assertTrue(source.contains("Modifier.width(SIDEBAR_RAIL_WIDTH)"))
+        // 夹具模式必须锁在 (0,0)：平台默认位置是层叠的，实测出现过 (805,245)，
+        // 1110dp 的窗口在那个位置右侧 379dp 出屏，截出来一片黑且不会报错。
+        assertTrue(
+            source.contains("if (pinnedGeometry) 0 to 0 else WindowGeometryStore.centeredPosition(initialWidth, initialHeight)"),
+            "夹具窗口位置又交回平台默认了",
+        )
+        // 最小窗口尺寸必须按工作区夹过，不能退回写死的 1024×600。
+        assertTrue(source.contains("window.minimumSize = Dimension(minWidth, minHeight)"))
+        assertFalse(source.contains("window.minimumSize = Dimension(1024, 600)"))
+        // 侧栏筛选要能被 /state 读出来：折叠栏把文字换成图标后，
+        // "点得中、点得对"光靠截图证明不了，必须有可断言的字段。
+        assertTrue(
+            source.contains("UiTestState.updateFilter(filter.label)"),
+            "侧栏筛选不再上报，折叠栏的点击行为就没法验证了",
+        )
+        assertTrue(
+            source.contains("UiTestState.updateSidebarSelection(category?.label ?: \"\", selectedQueueId ?: \"\")"),
+            "分类/队列不再上报，折叠栏另外两组入口的点击行为就没法验证了",
+        )
+    }
+
+    @Test
     fun displayed_resource_locations_hide_credentials_and_signed_parameters() {
         val shown = safeResourceLocation("https://name:secret@cdn.example.test/media/1080/movie.mp4?token=private&expires=9#track")
         assertEquals("cdn.example.test/1080/movie.mp4", shown)
@@ -96,7 +191,12 @@ class ResponsiveLayoutTest {
         assertTrue(build.contains("com.sun.java.accessibility.AccessBridge"))
         assertTrue(build.contains("\"jdk.accessibility\""))
         assertTrue(build.contains("\"jdk.httpserver\""))
-        assertTrue(components.contains(".toggleable(value = checked"))
+        // 断言"用的是真实 Compose 无障碍语义"这件事本身，而不是某一行怎么换行。
+        // 原先匹配字面量 `.toggleable(value = checked`：给 toggleable 补 interactionSource
+        // 让参数换行之后，它就假失败了 —— 判据被排版绑死，属于假失败，与假通过一样有害。
+        assertTrue(components.contains(".toggleable("))
+        assertTrue(components.contains("role = Role.Checkbox"))
+        assertTrue(components.contains("role = Role.Switch"))
         assertTrue(components.contains(".selectable(selected = selected"))
         assertTrue(components.contains("progressBarRangeInfo = ProgressBarRangeInfo"))
         assertTrue(components.contains("setProgress { target ->"))

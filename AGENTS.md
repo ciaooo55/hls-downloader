@@ -17,11 +17,11 @@ Python/FastAPI, React/Tauri, WebView2 and the v6 Win32 supervisor are historical
 
 ## Branch ownership and repository hygiene
 
-- Keep exactly two local branches, `main` and `网页版gpt`, and exactly two remote branches, `main` and `网页版gpt`.
-- Local `网页版gpt` is the development workspace: make, review and validate changes there, including updates integrated from the web GPT stream. Local `main` is the integration baseline: merge settled, validated changes from local `网页版gpt` into it.
-- Remote synchronization is operator-controlled and currently deferred. Push local `main` to `origin/main` only when the operator explicitly asks; do not write `origin/网页版gpt` from this workspace unless instructed.
-- Do not create pull requests, additional branches or additional worktrees. Do not force-push or rewrite the web GPT development branch. Historical closed PRs are not active work items.
-- This operator-approved workflow supersedes older branch-only / Draft-PR continuation instructions in `handoff.md` and historical coordination logs. It does not grant formal release authorization or bypass protected-branch/server controls.
+- Keep exactly one local branch, `main`, and one remote branch, `origin/main`.
+- Develop, review and validate on local `main`. Preserve useful changes from retired branches and dependency updates before removing their refs.
+- Remote synchronization remains operator-controlled: push local `main` only when explicitly requested. Never force-push or rewrite published history.
+- Do not create pull requests, additional branches or additional worktrees. Dependency version-update PRs are paused; retain the security audit workflows and review dependency updates on `main`.
+- This operator-approved single-main workflow (2026-09-15) supersedes the older two-branch / Draft-PR instructions in `handoff.md` and historical coordination logs. It does not grant formal release authorization or bypass protected-branch/server controls.
 - Keep source in the existing product directories. Put test evidence under `artifacts/v7-productization/` and user-facing deliverables under `outputs/`; do not scatter temporary reports or debug scripts in the repository root. Local state and outputs must not be committed.
 - `.workbuddy-ai/` holds project state and memory, not disposable cache. Preserve it. Before removing obsolete worktrees or personal files, list the exact targets, preserve unmerged changes, back up as required and obtain confirmation.
 

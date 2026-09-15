@@ -181,4 +181,5 @@ pub use updater::{check_for_update, is_newer_version, run_update_helper, CURRENT
 pub use window_util::{
     activate_window_by_title, begin_caption_drag, center_window_by_title,
     hide_window_from_taskbar_by_title, os_reduce_motion, window_handle_by_title,
+    window_work_area_size_by_title,
 };

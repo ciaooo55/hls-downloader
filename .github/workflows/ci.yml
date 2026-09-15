@@ -2,7 +2,7 @@ name: v7 CI
 
 on:
   push:
-    branches: [main, "网页版gpt"]
+    branches: [main]
   pull_request:
     paths:
       - '.github/workflows/ci.yml'

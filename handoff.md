@@ -3,18 +3,18 @@ repository: ciaooo55/hls-downloader
 default_branch: main
 product_version: 7.0.2
 release_ready: false
-last_updated: 2026-09-14
+last_updated: 2026-09-15
 ---
 
 # Project handoff
 
-## Current operator-approved integration workflow (2026-09-14)
+## Current operator-approved integration workflow (2026-09-15)
 
-- Keep local `main` and local `网页版gpt`; keep remote `main` and remote `网页版gpt`.
-- Local `网页版gpt` is the development workspace. Local `main` is the integration baseline: settled, validated changes are merged from local `网页版gpt` into it.
-- Remote synchronization is operator-controlled and currently deferred. Do not push or otherwise write remote branches unless the operator explicitly asks.
+- Keep only local `main` and remote `origin/main`.
+- Develop, review and validate on local `main`. Preserve useful source changes and dependency updates before removing redundant branch refs.
+- Remote synchronization is operator-controlled. Do not push or otherwise write remote branches unless the operator explicitly asks.
 - Do not create PRs, additional branches or additional worktrees. PR #95 was closed at the operator's request; historical PR records below are evidence, not instructions to reopen them.
-- The older branch-only / fresh Draft-PR continuation instructions below are superseded by this workflow and `AGENTS.md`. Formal-release gates and authorization requirements remain unchanged.
+- The older two-branch / branch-only / fresh Draft-PR continuation instructions below are superseded by this workflow and `AGENTS.md`. Dependency version-update PRs are paused; security audit workflows remain active. Formal-release gates and authorization requirements remain unchanged.
 - Keep product source, validation evidence and deliverables in their designated directories. Preserve `.workbuddy-ai/` project state; remove obsolete copies only after protecting unmerged work and obtaining cleanup confirmation.
 
 ## Current baseline
