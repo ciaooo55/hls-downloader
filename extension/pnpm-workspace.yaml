@@ -1,14 +1,14 @@
-# image-size 2.0.3 is listed as the patched version for these advisories but has
-# not been published to npm. Keep these two narrowly scoped exceptions until an
-# installable upstream fix reaches web-ext/addons-linter; all other audit findings
-# remain blocking.
-auditConfig:
-  ignoreGhsas:
-    - GHSA-5p2g-fcmc-qvqq
-    - GHSA-w3rx-r6r6-pgpr
+# image-size 2.0.3 and 2.0.4 contain the parser-loop fixes; 2.0.4 is selected
+# as the latest patched release. Both were published within the age cutoff on
+# 2026-09-14, so this single narrow exception is required until they age out.
+overrides:
+  image-size: 2.0.4
+  adm-zip: 0.6.1
 onlyBuiltDependencies:
   - esbuild
   - spawn-sync
 allowBuilds:
   esbuild: true
   spawn-sync: true
+minimumReleaseAgeExclude:
+  - image-size@2.0.4
