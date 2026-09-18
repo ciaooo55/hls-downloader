@@ -27,6 +27,9 @@
 | 5 | 扩展：`wxt prepare` → `tsc --noEmit` → `vitest run` → `wxt build -b chrome` → `wxt build -b firefox`（经 `extension\node_modules\.bin`，等价 `pnpm test` / `pnpm run build`） | 全部退出码 0；`vitest` 43 文件 / 301 用例通过；chrome-mv3 生成、249.58 kB；firefox-mv3 生成、249.35 kB |
 | 6 | `validate-powershell.ps1`（PowerShell 5.1 与 PowerShell 7.6.6 各一次） | 均退出码 0：45 个脚本解析通过；三方 gate-id 契约通过；版本契约 `7.0.2 / release_ready=False / v7_0_2_iteration_in_progress` 同步，MSI 生命周期不一致检查 fail closed |
 | 7 | gate-id 三方一致性（脚本抽取比对） | `invoke-v7-release-gates.ps1`、`record-v7-release-gate.ps1` 的 `ValidateSet`、`verify-v7-feature-parity.ps1` 的 `$requiredGateIds` 三者均为同一集合 `browser / performance / browser_media_push / installer / rollback`（5 项） |
+| 8 | Native Host 注册：`target\\debug\\HLSDownloaderEngine.exe --register-native-host` | 退出码 0（"Native Host repair complete: 7 registration(s)"）；HKCU 下 Chrome/Edge/Firefox 的 NativeMessagingHosts 均指向生成的 `HLSDownloaderNativeHost.chrome.json`/`.firefox.json`，chrome 清单 `allowed_origins` = 商店 ID，firefox 清单 `allowed_extensions` = 商店 ID |
+| 9 | Native Messaging 协议直探（`target\\debug\\HLSDownloaderNativeHost.exe` 4 字节 LE 长度 + UTF-8 JSON 帧） | 引擎先行占用命名管道 `\\\\.\\pipe\\HLSDownloader.v7`；发送 `{op:"ping"}` 收到定长帧回复 `{"ok":true,"protocol":"hls-downloader-v7-core","protocol_version":1,"version":"7.0.2",...}`；发送 `{op:"offer"}` 返回真实 handoff（`status:"pending"`、`presentation_mode:"native-rust"`、`presented:true`） |
+| 10 | 扩展在真实浏览器 Edge 内加载并调用本机引擎（`--load-extension extension\\.output\\chrome-mv3`，经 CDP 在扩展 service worker 内执行 `chrome.runtime.sendNativeMessage`） | Edge 加载扩展，service worker 以商店 ID `bbdfldcjnikaemnimalegbopgaknjhla` 运行；popup 渲染并显示"下载引擎已连接"；`sendNativeMessage('com.ciaooo55.hls_downloader',{op:'ping'})` 返回 `lastError:null`、`ok:true`、`protocol:"hls-downloader-v7-core"`，`offer` 返回真实 handoff |
 
 第 4 项首次执行时 `:test` 为 `UP-TO-DATE`（Gradle 缓存），不足以作为"实际执行"证据，
 故用 `--rerun-tasks` 强制重跑并以 `build/test-results/test/TEST-*.xml` 逐类核对用例数与失败数。
@@ -35,12 +38,14 @@
 
 - **正式门禁五项实机证据**：`browser`、`performance`、`browser_media_push`、`installer`、`rollback` 均未在本机执行。
 - **正式打包 / 签名 / 发布**：未运行 `build-v7.ps1 -Task package`、`release-v7.yml`、任何 Authenticode 签名或 Draft Release 流程。
-- **实机安装与真实浏览器 / 局域网 TVBox**：本机无 `E:\h` 安装根、无已安装 Edge/Firefox 的 Native Messaging 注册验证、无真实 TVBox 接收端，`browser.media_push_device_selection` 维持 `partial`。
+- **实机安装与真实浏览器 / 局域网 TVBox**：本机无 `E:\h` 安装根、无"安装后"的 Edge/Firefox Native Messaging 注册验证、无真实 TVBox 接收端，`browser.media_push_device_selection` 维持 `partial`。注：已在本机以**开发构建**完成 Native Host 注册 + 扩展在 Edge 内加载 + `sendNativeMessage` 端到端握手（见上表第 8–10 项），但这属开发态连通性证据，不等同于"安装后正式环境 + 实机 TVBox"证据，故不改变 parity 状态。
 - **四个 exact-SHA 前置工作流**（`v7 CI`、`v7 Candidate Package`、`Maintenance Security`、`Rust Security`）：本机无法触发，需在 GitHub 侧对冻结 `main` SHA 运行。
 
 ## 边界结论
 
 本机可完成的部分（Rust 单元测试、clippy/fmt 静态检查、Compose 测试、扩展测试与双目标构建、
+本机可完成的部分（Rust 单元测试、clippy/fmt 静态检查、Compose 测试、扩展测试与双目标构建、
+Native Host 注册与 Native Messaging 端到端握手、扩展在 Edge 内的真实加载与引擎连通、
 PowerShell 双版本校验、仓库与门禁契约核对）均已真实执行且通过，源码可编译、可测试、契约自洽。
 正式发布仍被**本机之外**的条件卡住，见 `docs/v7-release-runbook-local.md` 与
 `docs/v7-release-runner.md`：`release_ready=false` 保持不变，`browser.media_push_device_selection`
