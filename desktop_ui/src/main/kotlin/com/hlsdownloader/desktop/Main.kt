@@ -3637,7 +3637,7 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
                     contentPadding = PaddingValues(horizontal = 0.dp),
                     modifier = Modifier.padding(top = 5.dp),
                 ) {
-                    Icon(Icons.Outlined.OpenInNew, null, tint = blue, modifier = Modifier.size(16.dp))
+                    Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, tint = blue, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("在 Firefox Add-ons 安装", color = blue, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
                 }
