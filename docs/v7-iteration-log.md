@@ -151,7 +151,30 @@ git 收尾:`v7-refinement` 以 --no-ff 合回 `main` 并推送 `origin/main`,
 | `extension` | 删除已全 no-op 的 `lib/directBackend.ts` 及其测试；`background.ts` 的 `native()` 去掉死掉的 loopback 分支，只走 Native Messaging；把扩展唯一的 v7 协议常量 `V7_CORE_PROTOCOL` 迁到 `lib/nativeBridge.ts`，并同步 `build-v7.ps1` 的扩展协议核对路径（否则正式构建会因读取已删除文件而失败）。 |
 | `docs` | `docs/manger.log` 更名为 `docs/manager.md`；`docs/v7-branch-state.md` 注明三个安全审计工作流保留 `pull_request` 触发器的用途；`.gitignore` 把 `/.pi/` 归入"本地助手状态不入库"分组（与 `/.workbuddy-ai/`、`/outputs/` 同类）。 |
 
-本轮只做静态检查：`validate-powershell.ps1` 在 PowerShell 5.1 与 7 下均通过
-（45 个脚本解析、三方 gate-id 契约、版本契约一致），关键 JSON 均无 BOM。
-按约束未执行 `cargo test` / Gradle / `pnpm test` / 任意构建或打包；
-`feature-parity.json` 维持 27 verified / 1 partial、`release_ready=false` 不变。
+本轮既有静态检查，也在本机补齐了实际执行：`validate-powershell.ps1` 在
+PowerShell 5.1 与 7 下均通过（45 个脚本解析、三方 gate-id 契约、版本契约一致），
+关键 JSON 均无 BOM。本机运行结果：`cargo test --manifest-path native_shell/Cargo.toml
+--lib` 464 passed / 0 failed / 1 ignored；`cargo test --manifest-path
+presenter_ui/Cargo.toml` 9 passed / 0 failed；`cargo clippy --manifest-path
+native_shell/Cargo.toml --locked --all-targets -- -D warnings -A dead_code ...` 无告警；
+`desktop_ui\gradlew.bat test --no-daemon` BUILD SUCCESSFUL（用临时下载的 Microsoft
+OpenJDK 21 工具链）；扩展 `tsc --noEmit` 通过、`vitest run` 43 文件 / 301 用例全通过、
+`wxt build -b chrome|firefox` 均成功。未执行正式打包、签名、实机安装或真实浏览器 /
+LAN TVBox 门禁。`feature-parity.json` 维持 27 verified / 1 partial、
+ 
+ ## 第十轮本机验证记录（2026-09-19，本地 `main` @ `2c634c6`）
+ 
+ 本轮在本机 Windows（不使用 WSL）实机执行可执行的测试与静态检查，结果与工具链、
+ 逐类用例数、未执行项完整记录在 `docs/v7-local-verification-record.md`；
+ 操作者在 `hls-release` 机器上的发布执行顺序见 `docs/v7-release-runbook-local.md`。
+ 
+ 实机结果摘要（Rust 侧按仓库 pin 的 1.98.1 运行，与 `ci.yml:103` 一致）：`native_shell`
+ 464 passed / 0 failed / 1 ignored；`presenter_ui` 9 passed；两个 crate 的 clippy
+ （与 `ci.yml:129`/`ci.yml:164` 参数一致）与 `cargo fmt --check` 均通过；`desktop_ui` 用
+ `--rerun-tasks` 强制重跑 13 个测试类 / 71 用例，0 失败；扩展 `wxt prepare` + `tsc --noEmit`
+ + `vitest run`(43 文件 / 301 用例) + `wxt build -b chrome|firefox` 全部成功；
+ `validate-powershell.ps1` 在 PowerShell 5.1 与 7.6.6 下均通过，三方 gate-id 契约一致（5 项）。
+ 
+ 未执行（不得视为通过）：正式五项实机门禁、正式打包/签名/发布、实机安装与真实浏览器 /
+ 局域网 TVBox 证据、四个 exact-SHA 前置工作流。`feature-parity.json` 维持
+ 27 verified / 1 partial（`browser.media_push_device_selection`）、`release_ready=false` 不变。
