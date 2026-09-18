@@ -45,7 +45,8 @@ Rust Core + SQLite (唯一状态/凭据/传输所有者)
 - Core 启动恢复的 SQLite 写失败会向启动方传播，watcher 只在恢复成功后创建；v7 `Shutdown` 会先暂停活动 worker、等待断点状态收敛，再唤醒命名管道 accept 有序停服。
 - Compose 主工作台通过跨进程文件锁保持单实例，重复启动仅发送 `open_main`；系统关闭按钮和自绘标题栏关闭按钮共用托盘驻留规则；Presenter 的暂停/取消与打开主窗口操作不再阻塞 UI 线程，并按当前任务隔离反馈。
 - NativeBridge 只接受与当前请求严格匹配的 v7 response id；首次发送同步失败时主动断开无效端口，避免队列错配和 Native Host 连接泄漏。
-- 构建门禁核对扩展协议常量；安装覆盖前验证 `E:\h` 所有权；Portable 升级与回滚验证 Chromium/Firefox 扩展身份连续。本轮只修改脚本，不执行安装或打包。
+- 发布门禁自洽：`verify-v7-feature-parity.ps1` 的 requiredGateIds 已与 invoke/record 三方统一为五项（`browser`、`performance`、`browser_media_push`、`installer`、`rollback`），`validate-powershell.ps1` 增加三方契约断言，正式打包路径不再自我阻断。`native_shell` 的媒体测试夹具改为 `#[cfg(test)]`；`store.rs` 与 `profile_paths.rs` 的重复路径函数收敛为一处；`default_core_bind()` 坏环境变量改为错误传播而非 panic；扩展删除已 no-op 的 `directBackend` 桥。
+- 构建门禁核对扩展协议常量；安装覆盖前验证 `E:\h` 所有权；Portable 升级与回滚验证 Chromium/Firefox 扩展身份连续。
 - 设置保存先完成 Core 持久化，失败时保留对话框草稿；Presenter 探测完成前暂存接管事件，避免启动竞态。
 - 工作台在事件序列断档时重新读取快照；Presenter 每次重连都恢复任务快照和待处理交接，托盘/Presenter 唤起优先激活已有工作台。
 - candidate/formal 产物目录写入 `ARTIFACT-MANIFEST.json`，统一记录 EXE、MSI、Portable 和扩展摘要。

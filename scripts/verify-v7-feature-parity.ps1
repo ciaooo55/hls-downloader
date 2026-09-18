@@ -288,10 +288,10 @@ if ($RequireReleaseReady) {
             }
         }
 
-        $requiredGateIds = @('browser', 'performance', 'installer', 'rollback')
+        $requiredGateIds = @('browser', 'performance', 'browser_media_push', 'installer', 'rollback')
         $gates = @($releaseEvidence.gates)
         if ((@($gates.id | Sort-Object -Unique) -join "`n") -ne (($requiredGateIds | Sort-Object) -join "`n")) {
-            $errors.Add('Release evidence must contain exactly browser, performance, installer, and rollback gates.')
+            $errors.Add('Release evidence must contain exactly browser, performance, browser_media_push, installer, and rollback gates.')
         }
         foreach ($gate in $gates) {
             $gateId = [string]$gate.id

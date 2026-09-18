@@ -21,7 +21,6 @@ import { contentDispositionFilename } from '../lib/contentDisposition'
 import { InspectionCache } from '../lib/inspectionCache'
 import { cookieLookupUrl, cookiePermissionAllows, normalizeCookiePermissionHosts } from '../lib/browserCookies'
 import { detectBrowserFamily, stableBrowserClientId } from '../lib/browserClient'
-import { BrowserDirectBackend, shouldAttachLoopbackBridge, shouldClearLoopbackBridge, shouldRouteThroughLoopbackBridge } from '../lib/directBackend'
 import { isEarlyDirectDownloadResponse, type ObservedDownloadResource } from '../lib/directResponse'
 import { clickIntentPollsForKind, earlyTakeoverRequiresClick } from '../lib/fileTakeover'
 import { ClickIntentStore } from '../lib/clickIntentStore'
@@ -111,7 +110,6 @@ function downloadIdentity(item: Browser.downloads.DownloadItem): { tabId?: numbe
 const requestChains = new RequestChainStore()
 const blobSources = new BlobSourceStore()
 let nativeBridge: NativeBridge | null = null
-let directBackend: BrowserDirectBackend | null = null
 let takeoverSettingsSync: TakeoverSettingsSync | null = null
 let concealedDownloadCount = 0
 let downloadUiFailsafe: ReturnType<typeof setTimeout> | null = null
@@ -700,26 +698,7 @@ async function native(message: Record<string, unknown>, timeoutMs?: number): Pro
     client_id: await browserClientId(),
     browser: identity.browser,
   }
-  if (directBackend && shouldRouteThroughLoopbackBridge(operation, true)) {
-    try {
-      return await directBackend.request(payload, {
-        version: identity.version,
-        client_id: String(payload.client_id),
-        browser: identity.browser,
-      }, timeoutMs)
-    } catch {
-      // Core restart, token rotation or an older backend: renew pairing over
-      // Native Messaging without surfacing a false "未连接" state.
-      directBackend = null
-    }
-  }
-  const response = await nativeBridge.request(payload, timeoutMs, retryCount)
-  if (shouldClearLoopbackBridge(response)) {
-    directBackend = null
-  } else if (shouldAttachLoopbackBridge(response)) {
-    directBackend = new BrowserDirectBackend(String(response.bridge_base), String(response.bridge_token))
-  }
-  return response
+  return nativeBridge.request(payload, timeoutMs, retryCount)
 }
 
 async function pingDesktop(): Promise<any> {

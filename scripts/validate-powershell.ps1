@@ -72,7 +72,27 @@ if ($usingDefaultPath) {
     if ($missingGateIds.Count -ne 0) {
         throw "Formal release invokes GateId values rejected by the recorder: $($missingGateIds -join ', ')"
     }
+
+    # verify-v7-feature-parity.ps1 is the gate that actually enforces the release-evidence
+    # gate set during formal packaging. It must therefore require exactly the same gate ids
+    # the caller invokes and the recorder accepts; otherwise a newly added gate silently
+    # makes `build-v7.ps1 -Task package` fail closed. Guard all three sources here.
+    $paritySource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'verify-v7-feature-parity.ps1') -Raw -Encoding UTF8
+    $parityMatch = [regex]::Match($paritySource, '\$requiredGateIds\s*=\s*@\(([^)]*)\)')
+    if (-not $parityMatch.Success) {
+        throw 'Could not resolve the requiredGateIds set from verify-v7-feature-parity.ps1.'
+    }
+    $requiredGateIds = @(
+        [regex]::Matches($parityMatch.Groups[1].Value, "'([^']+)'") |
+            ForEach-Object { $_.Groups[1].Value } |
+            Sort-Object -Unique
+    )
+    if (($requiredGateIds -join ',') -ne ($invokedGateIds -join ',')) {
+        throw "Release-evidence gate-id sets diverge: invoke=[$($invokedGateIds -join ', ')] verify=[$($requiredGateIds -join ', ')]."
+    }
     Write-Output "Formal release gate-id contract passed: $($invokedGateIds -join ', ')."
+
+    Write-Output "Release-evidence gate-id contract passed across invoke, recorder, and verify."
 
     # The default validation path also acts as an early product-version drift
     # gate before expensive Rust/Compose/Candidate work starts. Keep this last:

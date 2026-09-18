@@ -115,9 +115,10 @@ impl CoreServer {
                 }
                 Ok(())
             });
-            return Ok((default_core_bind(), worker));
+            return Ok((default_core_bind()?, worker));
         }
-        let listener = TcpListener::bind(default_core_bind())
+        let bind = default_core_bind()?;
+        let listener = TcpListener::bind(bind)
             .or_else(|_| TcpListener::bind("127.0.0.1:0"))
             .map_err(|error| format!("bind v7 Core: {error}"))?;
         let addr = listener

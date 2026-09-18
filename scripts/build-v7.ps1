@@ -11,7 +11,7 @@ $contractSource = Get-Content -LiteralPath (Join-Path $repo 'native_shell\src\co
 if ($contractSource -notmatch 'V7_PROTOCOL_NAME\s*:\s*&str\s*=\s*"hls-downloader-v7-core"') {
     throw 'v7 build refused: Rust v7 protocol contract is missing.'
 }
-$extensionProtocolSource = Get-Content -LiteralPath (Join-Path $repo 'extension\lib\directBackend.ts') -Raw -Encoding UTF8
+$extensionProtocolSource = Get-Content -LiteralPath (Join-Path $repo 'extension\lib\nativeBridge.ts') -Raw -Encoding UTF8
 if ($extensionProtocolSource -notmatch "V7_CORE_PROTOCOL\s*=\s*'hls-downloader-v7-core'") {
     throw 'v7 build refused: browser extension v7 Core protocol contract is missing.'
 }

@@ -10,7 +10,7 @@ This document defines how ChatGPT participants cooperate in `ciaooo55/hls-downlo
 - Cross-project visitor area: Issue #42
 - Machine-readable state: `docs/coordination/tasks.json`
 - Fast handoff entrypoint: `handoff.md`
-- Coordinator log: `docs/manger.log`
+- Coordinator log: `docs/manager.md`
 - Worker logs: `docs/worker-logs/<task-id>.md`
 
 ## Roles
@@ -56,7 +56,7 @@ If concurrent sessions nevertheless allocate the same ID to different work:
 2. preserve any already-merged task meaning under that ID rather than rewriting history;
 3. if one duplicate meaning never began or has been completed by the already-merged task, mark it cancelled/superseded in durable evidence;
 4. allocate a fresh sequence number for any remaining distinct work;
-5. record the collision and resolution in Issue #39, `docs/manger.log`, machine state, handoff, and affected worker logs.
+5. record the collision and resolution in Issue #39, `docs/manager.md`, machine state, handoff, and affected worker logs.
 
 Never keep two live machine task objects with the same ID and never silently redefine an integrated task after merge.
 
@@ -76,7 +76,7 @@ Never keep two live machine task objects with the same ID and never silently red
 
 Every assigned task must have concrete acceptance criteria before substantial implementation. Criteria belong in the task registry and are copied to the top of the worker log so later scope drift is visible.
 
-If the original task is no longer reasonable, the coordinator may change the route. The decision, reason, replacement task/criteria, and reassignment must be written to `docs/manger.log` and reflected in the registry.
+If the original task is no longer reasonable, the coordinator may change the route. The decision, reason, replacement task/criteria, and reassignment must be written to `docs/manager.md` and reflected in the registry.
 
 ## Heartbeat and disconnect handling
 

@@ -21,6 +21,7 @@ v7 活动树不再包含 Python/FastAPI、React/Tauri 或 Slint 主工作台。�
 
 当前 canonical 版本是 `7.0.2` 且 `release_ready=false`，因此没有正式 v7.0.2 发布授权。任何未来 ready 变更都必须先作为可审查源码状态落入 `main`，然后等待该新 SHA 自己的 v7 CI、v7 Candidate Package、Maintenance Security、Rust Security 四个精确 SHA 工作流（三个 push，候选包为 main 上手动 workflow_dispatch）成功，再进入受保护的 formal release workflow。
 
+三个安全审计工作流（`ci.yml`、`rust-security.yml`、`maintenance-security.yml`）除 `push: main` 外仍保留 `pull_request` 触发器：它只在该仓库真的收到外部/机器人 PR 时按路径过滤运行，作为供应链与依赖审查的纵深防线（见 `docs/architecture/dependency-maintenance.md` 的历史 PR 流程），不属于日常开发路径，也不改变“不在本仓库新建 PR”的策略。若某天确认不再接受任何 PR，可再一并移除这三个触发器。
 `v7.0.0` 的标签/Release/资产保持不可变；`v7.0.1-candidate.1` 保持历史候选原样。旧 candidate 的 manifest、provenance、哈希或浏览器包不能作为当前 7.0.2 SHA 的发布证据。
 
 ## 清理边界

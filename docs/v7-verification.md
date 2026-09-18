@@ -63,7 +63,7 @@ formal package 写入 `artifacts/v7-productization/package`，额外要求 canon
 
 ## release evidence 合同
 
-formal package 必须提供当前 `artifacts/v7-productization/release-evidence.json`。该文件绑定同一个 source commit/tree 和 candidate `ARTIFACT-MANIFEST.json` SHA-256，并且只接受固定的 `browser`、`performance`、`installer`、`rollback` 四项门禁。每项记录精确命令、输入、原样输出、退出码、candidate manifest 哈希及报告路径/哈希。
+formal package 必须提供当前 `artifacts/v7-productization/release-evidence.json`。该文件绑定同一个 source commit/tree 和 candidate `ARTIFACT-MANIFEST.json` SHA-256，并且只接受固定的 `browser`、`performance`、`browser_media_push`、`installer`、`rollback` 五项门禁（与 `docs/v7-release-runner.md` 的 formal workflow 一致）。每项记录精确命令、输入、原样输出、退出码、candidate manifest 哈希及报告路径/哈希。
 
 正式门禁会重算 candidate EXE/MSI/Portable 与所有报告哈希，并从 Portable 重新提取两种扩展，核对 ZIP digest 和扩展 `manifest.version` **等于当前 canonical product version**；不再把 `7.0.1` 当作可执行常量。只修改 parity 状态或只改文档不能通过这些门禁。
 
@@ -76,7 +76,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\record-v7-rele
   -Command '<实际浏览器生产冒烟命令>'
 ```
 
-同样记录 `performance`、`installer`、`rollback`。脚本捕获输出和退出码，生成 `artifacts/v7-productization/release-evidence/<gate>.json` 并原子更新 `release-evidence.json`；命令失败时仍记录 `failed`，formal gate 不会放行。每份 report 的 `gate_id`、`product_version`、`source_commit`、`source_tree`、`candidate_artifact_manifest_sha256`、`command`、`input`、`output`、`result`、`exit_status` 必须与 release evidence 一致。
+同样记录 `performance`、`browser_media_push`、`installer`、`rollback`。脚本捕获输出和退出码，生成 `artifacts/v7-productization/release-evidence/<gate>.json` 并原子更新 `release-evidence.json`；命令失败时仍记录 `failed`，formal gate 不会放行。每份 report 的 `gate_id`、`product_version`、`source_commit`、`source_tree`、`candidate_artifact_manifest_sha256`、`command`、`input`、`output`、`result`、`exit_status` 必须与 release evidence 一致。
 
 版本字段示例应跟随 canonical contract，而不是复制旧版本号：
 
@@ -103,7 +103,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\record-v7-rele
 }
 ```
 
-`gates` 数组须包含其余三个固定 ID；每份 report 重用同一组结果字段。浏览器生产冒烟（media、takeover、browsers）必须显式传入 candidate/formal 产物解压后的扩展目录；脚本不得默认读取工作树 `extension/.output`，避免把开发输出误当成交付证据。
+`gates` 数组须包含其余四个固定 ID；每份 report 重用同一组结果字段。浏览器生产冒烟（media、takeover、browsers）必须显式传入 candidate/formal 产物解压后的扩展目录；脚本不得默认读取工作树 `extension/.output`，避免把开发输出误当成交付证据。
 
 ## 当前正式发布前门槛
 

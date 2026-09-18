@@ -1,3 +1,6 @@
+// Native Messaging is the extension's only transport to the resident v7 Core.
+export const V7_CORE_PROTOCOL = 'hls-downloader-v7-core'
+
 const MAX_NATIVE_RESOURCE_TITLE_CODE_UNITS = 4096
 
 function scalarSafeNativeText(value: string): string {

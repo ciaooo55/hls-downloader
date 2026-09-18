@@ -1,6 +1,7 @@
 //! HLS / DASH playlist helpers and FFmpeg mux.
 
 mod dash;
+#[cfg(test)]
 mod harness;
 mod hls;
 mod merge;

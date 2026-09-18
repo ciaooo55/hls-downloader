@@ -68,16 +68,4 @@ mod tests {
             Some(PathBuf::from(r"C:\downloads"))
         );
     }
-
-    #[test]
-    fn legacy_store_helpers_stay_aligned_until_removed() {
-        assert_eq!(
-            super::default_v7_database_path(),
-            crate::store::default_v7_database_path()
-        );
-        assert_eq!(
-            super::default_v7_download_dir(),
-            crate::store::default_v7_download_dir()
-        );
-    }
 }

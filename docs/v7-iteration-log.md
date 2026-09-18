@@ -134,3 +134,24 @@ git 收尾:`v7-refinement` 以 --no-ff 合回 `main` 并推送 `origin/main`,
 
 本轮仍不执行本地测试、编译、构建、打包、安装或 UI 自动化；只进行一次
 最终静态一致性检查。`feature-parity.json` 的 4 个 partial 仍由其既有实机门禁决定。
+
+## 第九轮收口批次记录（2026-09-18，本地 `main`）
+
+本轮按"先修发布门禁阻断缺陷，再清确定性债，最后静态收口"的顺序执行，
+不改任何发布门禁的判定强度，也不提前置真 `release_ready`。
+
+| 模块 | 已收敛内容 |
+| --- | --- |
+| `scripts/verify-v7-feature-parity.ps1` | `$requiredGateIds` 由 4 项补为 5 项（加 `browser_media_push`），错误文案同步；正式打包路径 `build-v7.ps1 -Task package` 不再自我阻断。 |
+| `scripts/validate-powershell.ps1` | 新增 invoke / recorder / verify 三方 gate-id 契约断言，杜绝门禁集合再次分叉（此前只比对 invoke↔recorder）。 |
+| `docs/v7-verification.md` | "四项门禁"更正为五项，与 `docs/v7-release-runner.md` 的 "five candidate-bound release gates" 对齐。 |
+| `native_shell/media` | `mod harness;` 加 `#[cfg(test)]`，媒体测试夹具不再进入正式二进制；移除 `harness.rs` 中随之冗余的两处 `#[allow(dead_code)]`（CI clippy 已全局 `-A dead_code`）。 |
+| `native_shell/store.rs` | 删除与 `profile_paths.rs` 重复的 `default_v7_database_path`/`default_v7_download_dir`（含仅被其使用的 `portable_v7_root`），路径解析收敛到 `profile_paths` 单处；移除随之无用的 `use std::env;` 与 `profile_paths.rs` 的自引用对齐测试。 |
+| `native_shell/core_ipc.rs` | `default_core_bind()` 改为返回 `Result`，坏 `HLS_V7_CORE_BIND` 不再 panic，错误沿 `core_server::bind_local` / `CoreIpcClient::connect_existing` 向上传播；保留端口占用时的临时端口回退。 |
+| `extension` | 删除已全 no-op 的 `lib/directBackend.ts` 及其测试；`background.ts` 的 `native()` 去掉死掉的 loopback 分支，只走 Native Messaging；把扩展唯一的 v7 协议常量 `V7_CORE_PROTOCOL` 迁到 `lib/nativeBridge.ts`，并同步 `build-v7.ps1` 的扩展协议核对路径（否则正式构建会因读取已删除文件而失败）。 |
+| `docs` | `docs/manger.log` 更名为 `docs/manager.md`；`docs/v7-branch-state.md` 注明三个安全审计工作流保留 `pull_request` 触发器的用途；`.gitignore` 把 `/.pi/` 归入"本地助手状态不入库"分组（与 `/.workbuddy-ai/`、`/outputs/` 同类）。 |
+
+本轮只做静态检查：`validate-powershell.ps1` 在 PowerShell 5.1 与 7 下均通过
+（45 个脚本解析、三方 gate-id 契约、版本契约一致），关键 JSON 均无 BOM。
+按约束未执行 `cargo test` / Gradle / `pnpm test` / 任意构建或打包；
+`feature-parity.json` 维持 27 verified / 1 partial、`release_ready=false` 不变。

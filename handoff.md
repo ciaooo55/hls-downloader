@@ -81,7 +81,7 @@ last_updated: 2026-09-15
 ## Repository guidance
 
 - Treat `main` plus the canonical feature matrix as the release source of truth; branch-specific hardening remains isolated until explicitly authorized for integration.
-- Files under `docs/coordination/`, `docs/worker-logs/`, and `docs/manger.log` are retained historical execution evidence, not live task-assignment instructions.
+- Files under `docs/coordination/`, `docs/worker-logs/`, and `docs/manager.md` (formerly `docs/manger.log`) are retained historical execution evidence, not live task-assignment instructions.
 - Historical Python/FastAPI, React/Tauri, WebView2, and v6 implementations remain available through Git history and tags; do not restore them as active directories.
 - Candidate CI success does not authorize formal publication. Formal packaging still requires complete canonical parity, a separately reviewed `release_ready=true`, exact-main evidence, visual/performance/installer/rollback gates, signing, and explicit operator authorization.
 

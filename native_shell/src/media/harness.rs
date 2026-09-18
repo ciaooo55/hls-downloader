@@ -15,9 +15,7 @@ use super::{download_dash, download_hls, download_hls_with, HlsDownloadOptions};
 #[derive(Clone)]
 pub struct FixtureOrigin {
     pub base: String,
-    #[allow(dead_code)]
     pub requests: Arc<Mutex<Vec<String>>>,
-    #[allow(dead_code)]
     pub body_bytes: Arc<AtomicU64>,
 }
 
