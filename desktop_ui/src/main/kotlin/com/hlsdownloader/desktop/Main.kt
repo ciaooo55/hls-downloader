@@ -3572,7 +3572,86 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
     else -> stage
 }
 
-@Composable private fun ExtensionDialog(status: String, onDismiss: () -> Unit) = WorkbenchDialog(onDismiss, "浏览器插件", "识别网页媒体并交给下载器", 550.dp, content = { Surface(Modifier.fillMaxWidth(), color = if (connectionStateOf(status)) successSurface else surface2, shape = RoundedCornerShape(Radius.md)) { Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) { Icon(if (connectionStateOf(status)) Icons.Outlined.CheckCircle else Icons.Outlined.Extension, null, tint = if (connectionStateOf(status)) successColor else blue); Spacer(Modifier.width(10.dp)); Text(status, color = if (connectionStateOf(status)) successColor else ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold) } }; Spacer(Modifier.height(14.dp)); Text("安装或更新插件后，重新打开浏览器标签页即可建立连接。插件会识别下载点击、媒体清单、音视频轨道和网页播放器，不影响页面的其他功能。", color = muted, fontSize = TypeScale.body, lineHeight = 19.sp) }, actions = { DialogPrimary("完成", onClick = onDismiss) })
+@Composable private fun ExtensionDialog(status: String, onDismiss: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var message by remember { mutableStateOf("") }
+    var working by remember { mutableStateOf(false) }
+    WorkbenchDialog(onDismiss, "浏览器插件", "安装、重载并连接 Chromium 或 Firefox 插件", 620.dp, content = {
+        Surface(Modifier.fillMaxWidth(), color = if (connectionStateOf(status)) successSurface else surface2, shape = RoundedCornerShape(Radius.md)) {
+            Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(if (connectionStateOf(status)) Icons.Outlined.CheckCircle else Icons.Outlined.Extension, null, tint = if (connectionStateOf(status)) successColor else blue)
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text(status, color = if (connectionStateOf(status)) successColor else ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
+                    Text(if (connectionStateOf(status)) "插件已可发送资源和接管下载" else "未连接时浏览器仍使用自己的下载器，不会静默丢失文件", color = muted, fontSize = TypeScale.caption)
+                }
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Text("插件功能", color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
+        Text("识别 HLS、DASH、音视频轨道和网页播放器；接管普通下载；向桌面端发送 Cookie 授权后的请求身份；发起投屏和 TVBox 推送。", color = muted, fontSize = TypeScale.body, lineHeight = 19.sp, modifier = Modifier.padding(top = 5.dp))
+        Spacer(Modifier.height(15.dp))
+        Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(Radius.md)) {
+            Column(Modifier.padding(13.dp)) {
+                Text("Chrome / Edge / Chromium", color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
+                Text("打开扩展管理页和已解压的 ${Product.version} 插件目录；首次安装选择“加载已解压的扩展程序”，升级后点击“重新加载”。", color = muted, fontSize = TypeScale.caption, lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp))
+                Button(
+                    onClick = {
+                        working = true
+                        message = ""
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) { openChromiumExtensionInstaller() }
+                            working = false
+                            message = if (result.ok) {
+                                "${if (result.browserOpened) "已打开扩展管理页和插件目录。" else "已打开插件目录，请手动打开浏览器扩展管理页。"} 目录：${result.path}"
+                            } else result.error
+                        }
+                    },
+                    enabled = !working,
+                    modifier = Modifier.padding(top = 10.dp),
+                    shape = RoundedCornerShape(Radius.md),
+                    colors = ButtonDefaults.buttonColors(containerColor = blue, contentColor = onBlue),
+                ) {
+                    Icon(Icons.Outlined.FolderOpen, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (working) "正在准备插件…" else "安装或重载 Chromium 插件", fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(Radius.md)) {
+            Column(Modifier.padding(13.dp)) {
+                Text("Firefox", color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
+                Text("使用 Mozilla Add-ons 签名版，商店会自动更新；插件身份与 Native Messaging 注册保持一致。", color = muted, fontSize = TypeScale.caption, lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp))
+                TextButton(
+                    onClick = {
+                        working = true
+                        message = ""
+                        scope.launch {
+                            val opened = withContext(Dispatchers.IO) { openFirefoxAddonPage() }
+                            working = false
+                            message = if (opened) "已用默认浏览器打开 Firefox Add-ons 安装页。" else "无法打开 Firefox Add-ons 安装页。"
+                        }
+                    },
+                    enabled = !working,
+                    contentPadding = PaddingValues(horizontal = 0.dp),
+                    modifier = Modifier.padding(top = 5.dp),
+                ) {
+                    Icon(Icons.Outlined.OpenInNew, null, tint = blue, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("在 Firefox Add-ons 安装", color = blue, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+        if (message.isNotBlank()) {
+            Spacer(Modifier.height(10.dp))
+            Surface(Modifier.fillMaxWidth(), color = blue.copy(alpha = .09f), shape = RoundedCornerShape(Radius.md)) {
+                Text(message, color = ink, fontSize = TypeScale.caption, lineHeight = 17.sp, modifier = Modifier.padding(10.dp))
+            }
+        }
+        Text("安装或重载后请刷新正在播放的网页。Cookie 只在你对具体站点明确授权后读取。", color = faint, fontSize = TypeScale.caption, lineHeight = 17.sp, modifier = Modifier.padding(top = 12.dp))
+    }, actions = { DialogPrimary("完成", onClick = onDismiss) })
+}
 
 @Composable private fun AboutDialog(engine: String, extension: String, onOpenLogs: () -> Unit, onOpenHomepage: () -> Unit, onDismiss: () -> Unit) = WorkbenchDialog(onDismiss, "关于", "HLS Downloader", 470.dp, content = {
     Text("HLS Downloader ${Product.version}", color = ink, fontSize = TypeScale.display, fontWeight = FontWeight.SemiBold)
