@@ -5609,11 +5609,17 @@ mod tests {
 
     #[test]
     fn advanced_defaults_are_applied_and_host_scope_is_enforced() {
+        // 隔离的临时工作目录：本用例会真正派发 CreateTask，若用硬编码绝对路径
+        // （原为 D:\HLS\Cache）就会在本机写出版本库之外的目录，轮转测试时污染磁盘。
+        let root =
+            std::env::temp_dir().join(format!("hls-v7-advanced-defaults-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let work_dir = root.to_string_lossy().into_owned();
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         coordinator
             .set_settings(BTreeMap::from([
                 ("legal_terms_accepted".into(), serde_json::json!(true)),
-                ("temp_dir".into(), serde_json::json!(r"D:\HLS\Cache")),
+                ("temp_dir".into(), serde_json::json!(work_dir.clone())),
                 (
                     "default_origin".into(),
                     serde_json::json!("https://player.example.test"),
@@ -5643,7 +5649,7 @@ mod tests {
             .task_spec(&task_id)
             .cloned()
             .unwrap();
-        assert_eq!(spec.work_dir, r"D:\HLS\Cache");
+        assert_eq!(spec.work_dir, work_dir);
         assert_eq!(
             spec.headers.get("Origin").map(String::as_str),
             Some("https://player.example.test")
@@ -5658,6 +5664,7 @@ mod tests {
             })
             .unwrap_err();
         assert!(error.contains("允许的域名"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
