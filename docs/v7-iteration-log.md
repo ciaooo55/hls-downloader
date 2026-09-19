@@ -178,3 +178,33 @@ LAN TVBox 门禁。`feature-parity.json` 维持 27 verified / 1 partial、
  未执行（不得视为通过）：正式五项实机门禁、正式打包/签名/发布、实机安装与真实浏览器 /
  局域网 TVBox 证据、四个 exact-SHA 前置工作流。`feature-parity.json` 维持
  27 verified / 1 partial（`browser.media_push_device_selection`）、`release_ready=false` 不变。
+
+## 第十一轮：浏览器插件失效原因与本地恢复（2026-09-19，本地 `main` @ `8cf413a`）
+
+发现现象：插件"不能用"。只读排查确认原因不是代码或扩展产物损坏，而是此前的本机卸载清理
+连带移除了插件运行所必需的三样依赖：
+
+1. **Native Messaging 注册被清除**：`HKCU\Software\{Google\Chrome,Microsoft\Edge,Mozilla,Chromium}\NativeMessagingHosts\com.ciaooo55.hls_downloader` 全部不存在。
+2. **引擎可执行文件被清除**：清理构建缓存时一并删掉了 `hls-downloader-engine.exe` / `HLSDownloaderEngine.exe`，Native Host 即使注册成功也无后端可拉起。
+3. **没有任何 HLS 进程或命名管道**：`\\.\pipe\HLSDownloader.v7` 不存在。
+
+扩展自身完好：`extension/.output/chrome-mv3` 与 `firefox-mv3` 两份产物存在，清单 `key` 与商店
+ID 一致，`nativeMessaging` 权限在位；源码未改动。本机仅安装 Edge，无 Chrome / Firefox。
+
+本地恢复（不重装桌面端，不动源码，不重新下载工具链）：
+
+1. `cargo +1.98.1 build --bin hls-downloader-engine`（`CARGO_TARGET_DIR` 指向仓库内 `.tool-cache\build-cache\cargo-target`）编译成功。
+2. 将 `hls-downloader-engine.exe` 复制为同目录 `HLSDownloaderEngine.exe`，满足 `core_spawn::locate_core_executable` 与 Native Host 同目录查找约定。
+3. `HLSDownloaderEngine.exe --register-native-host` → `Native Host repair complete: 7 registration(s)`；共写入 7 条用户级注册（Chrome / Edge / Brave / Chromium / Vivaldi / Opera 6 条 Chromium 系 + Firefox 1 条），均指向生成的清单。
+4. 真实 Edge 加载扩展（`--load-extension extension\.output\chrome-mv3`），service worker 以商店 ID `bbdfldcjnikaemnimalegbopgaknjhla` 运行；经 CDP 在 service worker 内执行 `chrome.runtime.sendNativeMessage('com.ciaooo55.hls_downloader', {op:'ping'})` → `lastError:null`、`ok:true`、`protocol:"hls-downloader-v7-core"`、`version:"7.0.2"`。
+5. 同一通道内执行真实 `offer` → 返回真实 handoff `handoff-1a0b8fd90ef-1`，`status:"pending"`、`presentation_mode:"native-rust"`、`presentation_ok:true`；popup 渲染并显示"下载引擎已连接"。
+
+边界：以上是**开发构建态**的连通性证据（引擎来自 `target\debug`，注册指向仓库内构建产物），
+不等于"安装后正式环境 + 实机 TVBox"证据。因此 `feature-parity.json` 维持
+27 verified / 1 partial（`browser.media_push_device_selection`），`release_ready=false` 不变。
+
+注意：这是**开发态注册**，仅让本机插件可用；它指向工作区内的构建产物路径。正式安装仍应通过
+`build-v7.ps1 -Task package` + `release-v7.yml` 由操作者在 `hls-release` 机器上完成。
+
+另注：引擎在 `%LOCALAPPDATA%\HLS Downloader\v7\` 下重建了 `data.db`（含 WAL/SHM）与 `instance.lock`，
+这是插件运行必需的运行期数据，不属于安装残留，未清理。

@@ -44,7 +44,6 @@
 ## 边界结论
 
 本机可完成的部分（Rust 单元测试、clippy/fmt 静态检查、Compose 测试、扩展测试与双目标构建、
-本机可完成的部分（Rust 单元测试、clippy/fmt 静态检查、Compose 测试、扩展测试与双目标构建、
 Native Host 注册与 Native Messaging 端到端握手、扩展在 Edge 内的真实加载与引擎连通、
 PowerShell 双版本校验、仓库与门禁契约核对）均已真实执行且通过，源码可编译、可测试、契约自洽。
 正式发布仍被**本机之外**的条件卡住，见 `docs/v7-release-runbook-local.md` 与
