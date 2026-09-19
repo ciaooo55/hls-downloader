@@ -377,3 +377,61 @@ BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`�
 
 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
 （`browser.media_push_device_selection`），`release_ready=false` 不变。
+
+## 第十六轮：本机对抗性测试闭环与缺陷修复（目标契约执行）
+
+按批准的目标契约在本机 Windows（未使用 WSL，复用已装工具链）跑通全部可本机执行的测试面，
+对抗性暴露真实缺陷并以第一性原理修根因。三项测试侧缺陷已修复并复现验证（提交 `103fdce`），
+均未改动任何生产行为路径，也未放宽任何发布门禁或断言。
+
+### 已修复缺陷（测试侧，根因修复）
+
+1. **`native_shell/src/native_host.rs` 并行必挂**：
+   `offer_is_idempotent_for_the_extension_request_id` 与 `browser_offer_rejects_javascript_and_file_urls`
+   断言进程级全局计数器 `NEXT_HANDOFF` 的绝对值不变；该计数器被 handoff id / credential ref /
+   media-push id 三处生产路径共用，默认并行下被其他测试推进 → 假失败（实测 left:15 / right:14）。
+   修复：新增 `NEXT_HANDOFF_TEST_LOCK` 互斥 + `lock_next_handoff()`，仅把两处断言串行隔离，
+   保留「无谓消耗序号」的回归防护语义。生产路径不变。
+2. **`scripts/smoke_v7_presenter.py` 延迟自检的百分位数学回归**：
+   上一轮曾把暖机样本从 P95 集合中剔除，使集合缩到 17 个元素；`percentile95` 在小集合上退化为
+   最大值，单个调度抖动即翻转 100ms 门限。修复：恢复采集 **20 个稳态样本**（P95 再次丢弃最高 1 个），
+   仅剔除「启动后第 1 个 offer」和「每次崩溃恢复后第 1 个 offer」这两类一次性暖机样本，
+   暖机样本单独记录（`warmup_samples_ms` / `warmup_max_ms`）以便观测。**100ms 门限不变**。
+3. **`native_shell/src/download_worker.rs` 并行负载下的假失败**：
+   `live_torrent_selection_update_cancels_requested_file_and_publishes_remaining_file`
+   为 tracker HTTP + BT 握手就绪等待设了 5 秒墙钟预算；462 路并行在共享 4 核主机上偶发超时。
+   该测试是行为测试而非延迟测试，修复：三处就绪等待统一为宽松的 `MACHINERY_WAIT = 60s`。
+   真正的挂起仍会失败。仅测试改动。
+
+### 本机全测试面结果（提交 `103fdce`，工作树干净）
+
+- `cargo +1.98.1 test --manifest-path native_shell/Cargo.toml --lib`：默认并行连续 3 次均为
+  `462 passed / 0 failed / 1 ignored`。
+- `cargo +1.98.1 test --manifest-path presenter_ui/Cargo.toml`：`9 passed / 0 failed`。
+- `extension`：`tsc --noEmit` 通过；`vitest run` 43 文件 / 300 passed。
+- `desktop_ui`：`gradlew.bat test --no-daemon --rerun-tasks`：BUILD SUCCESSFUL（8 任务实执行）。
+- `cargo +1.98.1 clippy --locked --manifest-path native_shell/Cargo.toml --all-targets --
+  -D warnings -A dead_code -A clippy::large_enum_variant -A clippy::too_many_arguments
+  -A clippy::type_complexity`：exit 0；`cargo fmt --check`（native_shell + presenter_ui）：exit 0。
+- `scripts/validate-powershell.ps1`：Windows PowerShell 5.1 与 PowerShell 7 均 exit 0
+  （45 脚本；正式发布 gate-id 契约 = browser, browser_media_push, installer, performance, rollback）。
+- `scripts/adversarial-v7.ps1 -Scope native`：架构边界、冷启动门、256MiB 真实 Range 吞吐与内存门全过。
+- `scripts/verify-v7-feature-parity.ps1 -PackageTier candidate -RequireNoBlocked -RequireCleanWorktree`：
+  通过，`FEATURE_PARITY=96.4% (27/28 verified, 1 partial, 0 blocked)`，`COMMIT=103fdce`，
+  `SHA256=177c72e8…` 不变。
+
+### 如实列出的未验证项（本机条件所限，不谎报通过）
+
+- **AC3 / AC8 的 presenter 稳态可见延迟 100ms 门限**：在本机（i7-7700HQ 4 核笔记本，与 ChatGPT /
+  PI-Desktop / 浏览器等无关负载共享）实测 presenter「offer 提交 → 确认窗口可见」的稳态 P95 为
+  **90–110ms**，恰跨在 100ms 门限上：即使瞬时 CPU 负载为 0% 也有约 40% 的采样越界，且此时
+  `native_host_submit_max_ms` 仅 26–38ms（host/Core 段无停顿），即越界出在 presenter 自身的
+  窗口显示腿（`post_submit_visible_p95` 亦达 85–101ms）。对照 `feature-parity.json` 记录的
+  专用机基线（3 连跑最大值 42.65/45.35/48.22ms、P95 47.59ms）可判定：**这不是产品性能回归，
+  而是本机吞吐低于该绝对门限**。契约边界禁止提高 100ms 门限，故 AC3/AC8 在本机判为「环境受限、
+  未达成」，并保留 `adversarial-v7.ps1` 的 presenter smoke 门限原样不动。
+- 真实设备投送（cast / TVBox）、正式签名/打包/发布、缺失的真实浏览器二进制项：仍需操作方 +
+  自托管 `hls-release` 运行器与真实 LAN 接收端，本机无法核验。
+
+边界不变：`feature-parity.json` 维持 27 verified / 1 partial
+（`browser.media_push_device_selection`），`release_ready=false` 不变。
