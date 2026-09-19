@@ -880,16 +880,6 @@ fn fetch_bytes_with_transport(
     result
 }
 
-pub fn fetch_bytes_range(
-    url: &str,
-    headers: &HashMap<String, String>,
-    proxy: &str,
-    start: u64,
-    length: u64,
-) -> Result<Vec<u8>, EngineError> {
-    fetch_bytes_range_with_transport(url, headers, proxy, start, length, false)
-}
-
 pub fn fetch_hls_bytes_range(
     url: &str,
     headers: &HashMap<String, String>,
@@ -3071,7 +3061,7 @@ mod tests {
         let body = b"0123456789";
         let seen = Arc::new(Mutex::new(Vec::new()));
         let url = serve_capped_ranges(body, 64, Arc::clone(&seen));
-        let bytes = fetch_bytes_range(&url, &HashMap::new(), "", 3, 4).unwrap();
+        let bytes = fetch_hls_bytes_range(&url, &HashMap::new(), "", 3, 4).unwrap();
         assert_eq!(bytes, b"3456");
         assert!(seen
             .lock()
@@ -3356,7 +3346,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let url = serve_recording_headers(b"body", Arc::clone(&seen));
         assert_eq!(
-            fetch_bytes_range(&url, &HashMap::new(), "", 0, 4).unwrap(),
+            fetch_hls_bytes_range(&url, &HashMap::new(), "", 0, 4).unwrap(),
             b"body"
         );
         assert!(seen

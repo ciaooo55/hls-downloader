@@ -8,7 +8,7 @@ use crate::{TorrentFileEntry, TorrentFileSelection};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 /// Stable BT entry used by Core. Do not call swarm helpers from UI or NM.
 pub trait TorrentSession: Send + Sync {
@@ -1298,36 +1298,6 @@ fn percent_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("%{byte:02X}")).collect()
 }
 
-fn download_from_peer(
-    addr: std::net::SocketAddr,
-    meta: &TorrentMeta,
-    output: &Path,
-    control: &Path,
-) -> Result<u64, String> {
-    let mut extra = Vec::new();
-    download_from_peer_ex(addr, meta, output, control, &mut extra)
-}
-
-fn download_from_peer_ex(
-    addr: std::net::SocketAddr,
-    meta: &TorrentMeta,
-    output: &Path,
-    control: &Path,
-    extra_peers: &mut Vec<std::net::SocketAddr>,
-) -> Result<u64, String> {
-    let mut telemetry = TorrentTelemetry::default();
-    download_from_peer_ex_with_telemetry(
-        addr,
-        meta,
-        output,
-        control,
-        extra_peers,
-        &mut telemetry,
-        &mut |_| {},
-        Path::new(""),
-    )
-}
-
 fn download_from_peer_ex_with_telemetry(
     addr: std::net::SocketAddr,
     meta: &TorrentMeta,
@@ -1901,20 +1871,6 @@ impl BValue {
     }
 }
 
-pub fn watch_delay() -> Duration {
-    Duration::from_secs(2)
-}
-
-pub fn is_fresh(path: &Path, now: SystemTime) -> bool {
-    path.metadata()
-        .and_then(|meta| meta.modified())
-        .ok()
-        .map(|stamp| {
-            now.duration_since(stamp).unwrap_or_default() < Duration::from_secs(60 * 60 * 24 * 30)
-        })
-        .unwrap_or(true)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2249,7 +2205,19 @@ mod tests {
         let output = dir.join("demo.bin");
         let control = dir.join("control");
         fs::write(&control, "run").unwrap();
-        download_from_peer(addr, &meta, &output, &control).unwrap();
+        let mut extra_peers = Vec::new();
+        let mut telemetry = TorrentTelemetry::default();
+        download_from_peer_ex_with_telemetry(
+            addr,
+            &meta,
+            &output,
+            &control,
+            &mut extra_peers,
+            &mut telemetry,
+            &mut |_| {},
+            Path::new(""),
+        )
+        .unwrap();
         assert_eq!(fs::read(&output).unwrap(), payload);
         let _ = fs::remove_dir_all(dir);
     }
@@ -2337,7 +2305,19 @@ mod tests {
         fs::write(&control, "run").unwrap();
         // Piece 0 is already present; the transfer must request only piece 1.
         fs::write(&output, &payload[..piece_length]).unwrap();
-        download_from_peer(addr, &meta, &output, &control).unwrap();
+        let mut extra_peers = Vec::new();
+        let mut telemetry = TorrentTelemetry::default();
+        download_from_peer_ex_with_telemetry(
+            addr,
+            &meta,
+            &output,
+            &control,
+            &mut extra_peers,
+            &mut telemetry,
+            &mut |_| {},
+            Path::new(""),
+        )
+        .unwrap();
         assert_eq!(fs::read(&output).unwrap(), payload);
         let _ = fs::remove_dir_all(dir);
     }
@@ -2373,7 +2353,19 @@ mod tests {
         let control = dir.join("control");
         fs::write(&control, "run").unwrap();
         let dummy = "127.0.0.1:1".parse().unwrap();
-        download_from_peer(dummy, &meta, &output, &control).unwrap();
+        let mut extra_peers = Vec::new();
+        let mut telemetry = TorrentTelemetry::default();
+        download_from_peer_ex_with_telemetry(
+            dummy,
+            &meta,
+            &output,
+            &control,
+            &mut extra_peers,
+            &mut telemetry,
+            &mut |_| {},
+            Path::new(""),
+        )
+        .unwrap();
         assert_eq!(fs::read(&output).unwrap(), payload);
         let _ = fs::remove_dir_all(dir);
     }
@@ -2478,8 +2470,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "hls-swarm-multifile-resume-{}-{:?}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
@@ -2501,7 +2493,19 @@ mod tests {
                 first_tx,
             )
         });
-        assert!(download_from_peer(first_addr, &meta, &output, &control).is_err());
+        let mut extra_peers = Vec::new();
+        let mut telemetry = TorrentTelemetry::default();
+        assert!(download_from_peer_ex_with_telemetry(
+            first_addr,
+            &meta,
+            &output,
+            &control,
+            &mut extra_peers,
+            &mut telemetry,
+            &mut |_| {},
+            Path::new(""),
+        )
+        .is_err());
         assert_eq!(first_rx.recv().unwrap(), vec![0, 1]);
         assert_eq!(
             &fs::read(&output).unwrap()[..piece_length],
@@ -2521,7 +2525,19 @@ mod tests {
                 second_tx,
             )
         });
-        download_from_peer(second_addr, &meta, &output, &control).unwrap();
+        let mut extra_peers = Vec::new();
+        let mut telemetry = TorrentTelemetry::default();
+        download_from_peer_ex_with_telemetry(
+            second_addr,
+            &meta,
+            &output,
+            &control,
+            &mut extra_peers,
+            &mut telemetry,
+            &mut |_| {},
+            Path::new(""),
+        )
+        .unwrap();
         assert_eq!(second_rx.recv().unwrap(), vec![1, 2]);
         assert_eq!(fs::read(&output).unwrap(), payload);
 

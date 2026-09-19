@@ -2654,7 +2654,6 @@ private class ContextMenuPositionProvider(private val pointer: IntOffset) : Popu
         }
     }
 }
-private fun categoryLabel(category: TaskCategory) = when (category) { TaskCategory.MEDIA -> "媒体"; TaskCategory.PROGRAM -> "程序"; TaskCategory.ARCHIVE -> "压缩包"; TaskCategory.OTHER -> "其他" }
 private fun taskProtocolLabel(task: TaskDto) = when {
     task.resourceKind.equals("hls", true) -> "HLS"
     task.resourceKind.equals("dash", true) -> "DASH"

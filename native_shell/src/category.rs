@@ -96,16 +96,6 @@ pub fn parse_category_dirs(raw: &str) -> CategoryDirs {
     }
 }
 
-pub fn category_dirs_json(dirs: &CategoryDirs) -> String {
-    serde_json::json!({
-        "media": dirs.media,
-        "program": dirs.program,
-        "archive": dirs.archive,
-        "other": dirs.other,
-    })
-    .to_string()
-}
-
 impl CategoryDirs {
     pub fn get(&self, category: &str) -> &str {
         match category {
@@ -199,7 +189,6 @@ mod tests {
             parse_category_dirs(r#"{"media":" E:\\Videos ","program":""}"#).media,
             "E:\\Videos"
         );
-        assert!(category_dirs_json(&override_media).contains("Videos"));
     }
 
     #[test]

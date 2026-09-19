@@ -2,23 +2,12 @@
 
 use crate::playback::MediaServer;
 use crate::CastDeviceInfo;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BrowserPush {
-    pub id: String,
-    pub kind: String,
-    pub status: String,
-    pub message: String,
-    pub location: String,
-}
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CastPlaybackStatus {
@@ -33,98 +22,9 @@ pub struct CastPlaybackStatus {
     pub state: String,
 }
 
-fn media_server() -> Result<&'static MediaServer, String> {
-    static SERVER: OnceLock<Result<MediaServer, String>> = OnceLock::new();
-    match SERVER.get_or_init(MediaServer::start) {
-        Ok(server) => Ok(server),
-        Err(error) => Err(error.clone()),
-    }
-}
-
-const MAX_BROWSER_PUSHES: usize = 64;
-
-fn pushes() -> &'static Mutex<VecDeque<BrowserPush>> {
-    static QUEUE: OnceLock<Mutex<VecDeque<BrowserPush>>> = OnceLock::new();
-    QUEUE.get_or_init(|| Mutex::new(VecDeque::new()))
-}
-
-fn next_browser_push_id() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{millis:x}-{sequence:x}")
-}
-
-fn remember_browser_push(queue: &mut VecDeque<BrowserPush>, push: BrowserPush) {
-    if queue.len() >= MAX_BROWSER_PUSHES {
-        queue.pop_front();
-    }
-    queue.push_back(push);
-}
-
 fn device_cache() -> &'static Mutex<Vec<CastDeviceInfo>> {
     static CACHE: OnceLock<Mutex<Vec<CastDeviceInfo>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-pub fn start_browser_push(kind: &str, url: &str, title: &str) -> Result<BrowserPush, String> {
-    let url = url.trim().trim_start_matches('\u{feff}');
-    let lower = url.to_ascii_lowercase();
-    if !lower.starts_with("http://") && !lower.starts_with("https://") {
-        return Err("浏览器投送请求无效".into());
-    }
-    if url.chars().any(|ch| ch.is_control()) {
-        return Err("浏览器投送地址无效".into());
-    }
-    let kind = if kind == "tvbox" || kind == "push_to_tv" {
-        "tvbox"
-    } else {
-        "cast"
-    };
-    let server = media_server()?;
-    server.enable_lan();
-    let id = next_browser_push_id();
-    let host = preferred_lan_ipv4()
-        .map(|ip| ip.to_string())
-        .ok_or_else(|| "没有可用于投屏的局域网地址".to_string())?;
-    let token = crate::playback::random_mount_token();
-    server.mount_remote(&token, url.to_string());
-    let location = if kind == "tvbox" {
-        format!("http://{host}:{}/tvbox/{token}", server.bound_port())
-    } else {
-        lan_media_url(server, &token, &host)?
-    };
-    if kind == "cast" {
-        let _ = ssdp_notify(&location);
-    }
-    let push = BrowserPush {
-        id,
-        kind: kind.to_string(),
-        status: "ready".into(),
-        message: if title.trim().is_empty() {
-            "已在局域网发布播放地址".into()
-        } else {
-            format!("已发布：{}", title.trim())
-        },
-        location,
-    };
-    if let Ok(mut queue) = pushes().lock() {
-        remember_browser_push(&mut queue, push.clone());
-    }
-    Ok(push)
-}
-
-pub fn browser_push_status(id: &str) -> Option<BrowserPush> {
-    pushes()
-        .lock()
-        .ok()?
-        .iter()
-        .rev()
-        .find(|push| push.id == id)
-        .cloned()
 }
 
 pub fn lan_media_url(
@@ -361,13 +261,6 @@ pub fn ssdp_notify(location: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-pub fn tvbox_payload(location: &str, title: &str) -> String {
-    format!(
-        "{{\"url\":\"{location}\",\"title\":\"{}\"}}",
-        title.replace('"', "'")
-    )
-}
-
 pub fn cached_devices() -> Vec<CastDeviceInfo> {
     device_cache()
         .lock()
@@ -421,10 +314,6 @@ pub fn discover_devices_for_mode(
         *cache = devices.clone();
     }
     Ok(devices)
-}
-
-pub fn discover_devices(timeout: Duration) -> Result<Vec<CastDeviceInfo>, String> {
-    discover_devices_for_mode(timeout, "")
 }
 
 fn percent_encode(value: &str) -> String {
@@ -906,11 +795,6 @@ fn discover_tvboxes(timeout: Duration) -> Vec<CastDeviceInfo> {
         .ok()
         .and_then(|items| items.into_inner().ok())
         .unwrap_or_default()
-}
-
-fn probe_tvbox(address: SocketAddr, timeout: Duration) -> Option<CastDeviceInfo> {
-    let deadline = Instant::now().checked_add(timeout)?;
-    probe_tvbox_until(address, deadline, timeout)
 }
 
 fn probe_tvbox_until(
@@ -2210,9 +2094,6 @@ mod tests {
         assert!(is_lan_host("192.168.1.8"));
         assert!(is_lan_host("10.0.0.2"));
         assert!(!is_lan_host("8.8.8.8"));
-        assert!(start_browser_push("cast", "javascript:alert(1)", "x").is_err());
-        assert!(start_browser_push("cast", "https://cdn.test/a.mp4\0", "x").is_err());
-        assert!(start_browser_push("cast", "file:///C:/Windows/video.mp4", "x").is_err());
         let server = MediaServer::start().unwrap();
         assert!(lan_media_url(&server, "t", "8.8.8.8").is_err());
         if let Some(ip) = primary_lan_ipv4() {
@@ -2642,10 +2523,11 @@ mod tests {
             (address, worker)
         }
         let (generic, generic_worker) = serve("plain web service");
-        assert!(probe_tvbox(generic, Duration::from_secs(1)).is_none());
+        let deadline = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
+        assert!(probe_tvbox_until(generic, deadline, Duration::from_secs(1)).is_none());
         generic_worker.join().unwrap();
         let (tvbox, tvbox_worker) = serve("TVBox player /action push");
-        let device = probe_tvbox(tvbox, Duration::from_secs(1)).unwrap();
+        let device = probe_tvbox_until(tvbox, deadline, Duration::from_secs(1)).unwrap();
         assert_eq!(device.service_type, "tvbox");
         tvbox_worker.join().unwrap();
     }
@@ -2661,35 +2543,6 @@ mod tests {
         let budget = tvbox_remaining_timeout(future, Duration::from_millis(140)).unwrap();
         assert!(budget > Duration::ZERO);
         assert!(budget <= Duration::from_millis(140));
-    }
-
-    #[test]
-    fn browser_push_ids_are_unique_and_cache_is_bounded() {
-        let ids = (0..1024)
-            .map(|_| next_browser_push_id())
-            .collect::<HashSet<_>>();
-        assert_eq!(ids.len(), 1024);
-
-        let mut queue = VecDeque::new();
-        for index in 0..(MAX_BROWSER_PUSHES + 10) {
-            remember_browser_push(
-                &mut queue,
-                BrowserPush {
-                    id: format!("push-{index}"),
-                    kind: "tvbox".into(),
-                    status: "ready".into(),
-                    message: String::new(),
-                    location: "http://192.168.1.2/media/test".into(),
-                },
-            );
-        }
-        assert_eq!(queue.len(), MAX_BROWSER_PUSHES);
-        assert_eq!(queue.front().map(|push| push.id.as_str()), Some("push-10"));
-        let expected_back = format!("push-{}", MAX_BROWSER_PUSHES + 9);
-        assert_eq!(
-            queue.back().map(|push| push.id.as_str()),
-            Some(expected_back.as_str())
-        );
     }
 
     #[test]

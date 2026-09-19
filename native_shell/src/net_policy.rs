@@ -527,23 +527,6 @@ pub fn schedule_window_active(start: &str, end: &str) -> bool {
     in_window(start, end)
 }
 
-pub fn effective_limit_kib(
-    global_kib: u64,
-    schedule_enabled: bool,
-    schedule_start: &str,
-    schedule_end: &str,
-    schedule_kib: u64,
-) -> u64 {
-    effective_limit_kib_at(
-        global_kib,
-        schedule_enabled,
-        schedule_start,
-        schedule_end,
-        schedule_kib,
-        chrono_minutes_now(),
-    )
-}
-
 fn effective_limit_kib_at(
     global_kib: u64,
     schedule_enabled: bool,
@@ -869,10 +852,6 @@ mod tests {
         assert!(!in_window_at("22:00", "06:00", 12 * 60));
         assert!(!in_window_at("10:00", "10:00", 10 * 60));
         assert_eq!(parse_hhmm("08:30"), Some(8 * 60 + 30));
-        assert_eq!(
-            effective_limit_kib(2048, false, "00:00", "23:59", 128),
-            2048
-        );
     }
 
     #[test]

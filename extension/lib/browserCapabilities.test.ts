@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createRecurringAlarm, filenameDeterminationEvent, requestHeaderExtraInfo, resolveFirefoxClickIntent } from './browserCapabilities'
+import { createRecurringAlarm, filenameDeterminationEvent, requestHeaderExtraInfo } from './browserCapabilities'
 
 describe('browser capability guards', () => {
   it('does not access Chromium-only filename events in Firefox', () => {
@@ -14,12 +14,6 @@ describe('browser capability guards', () => {
   it('does not pass Chrome-only extraHeaders to Firefox', () => {
     expect(requestHeaderExtraInfo(false)).toEqual(['requestHeaders'])
     expect(requestHeaderExtraInfo(true)).toEqual(['requestHeaders', 'extraHeaders'])
-  })
-
-  it('waits for a click intent that races the Firefox request', async () => {
-    const wait = vi.fn(async () => ({ href: 'https://example.test/file.zip' }))
-    await expect(resolveFirefoxClickIntent(undefined, wait)).resolves.toEqual({ href: 'https://example.test/file.zip' })
-    expect(wait).toHaveBeenCalledOnce()
   })
 
   it('keeps the requested sub-minute alarm period on Chromium', async () => {

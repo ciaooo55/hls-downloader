@@ -4,11 +4,9 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-
-static PORT: AtomicU16 = AtomicU16::new(0);
 
 const STREAM_CHUNK: usize = 64 * 1024;
 const REQUEST_HEADER_LIMIT: usize = 16 * 1024;
@@ -50,7 +48,6 @@ impl MediaServer {
             .set_nonblocking(true)
             .map_err(|error| error.to_string())?;
         let addr = listener.local_addr().map_err(|error| error.to_string())?;
-        PORT.store(addr.port(), Ordering::SeqCst);
         let server = Self {
             inner: Arc::new(Mutex::new(MediaState::default())),
             lan: Arc::new(AtomicBool::new(false)),
@@ -107,20 +104,12 @@ impl MediaServer {
         self.lan.store(true, Ordering::SeqCst);
     }
 
-    pub fn lan_enabled(&self) -> bool {
-        self.lan.load(Ordering::SeqCst)
-    }
-
     pub fn url_for(&self, token: &str) -> String {
         format!("http://127.0.0.1:{}/media/{token}", self.port)
     }
 
     pub fn bound_port(&self) -> u16 {
         self.port
-    }
-
-    pub fn port() -> u16 {
-        PORT.load(Ordering::SeqCst)
     }
 
     fn store(&self, token: &str, mount: Mount) {

@@ -27,15 +27,6 @@ pub fn is_armed(action: &str) -> bool {
     normalize(action).is_ok()
 }
 
-pub fn label(action: &str) -> &'static str {
-    match normalize(action) {
-        Ok("shutdown") => "关机",
-        Ok("sleep") => "睡眠",
-        Ok("hibernate") => "休眠",
-        _ => "",
-    }
-}
-
 pub fn pending() -> Option<String> {
     PENDING
         .lock()
@@ -168,7 +159,6 @@ mod tests {
         assert!(!is_armed("none"));
         assert!(!is_armed(""));
         assert!(is_armed("shutdown"));
-        assert_eq!(label("sleep"), "睡眠");
     }
 
     #[test]

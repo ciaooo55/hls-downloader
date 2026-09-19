@@ -132,15 +132,6 @@ data class CommandResult(val requestId: Long, val events: List<EventEnvelopeDto>
 data class TaskExportResult(val format: String, val data: String, val taskCount: Int)
 
 @Serializable
-data class EngineCapabilities(
-    @SerialName("product_version") val productVersion: String = Product.version,
-    @SerialName("protocol_version") val protocolVersion: Int = 1,
-    val commands: List<String> = emptyList(),
-    val settings: List<String> = emptyList(),
-    @SerialName("max_frame_bytes") val maxFrameBytes: Long = EnginePipeClient.MAX_FRAME.toLong(),
-)
-
-@Serializable
 data class StreamVariantDto(
     val label: String,
     val bandwidth: Long = 0,
@@ -351,13 +342,6 @@ class EnginePipeClient(
     }
 
     fun snapshot(): List<TaskDto> = snapshotState().tasks
-
-    fun capabilities(): EngineCapabilities = session { connection ->
-        val response = connection.request(request("capabilities"))
-        response.requireType("capabilities", "读取下载引擎能力失败")
-        protocolJson.decodeFromJsonElement(EngineCapabilities.serializer(), response)
-    }
-
     fun createTask(url: String) = createTask(TaskDraft(url = url))
 
     fun createTask(draft: TaskDraft): CommandResult {
@@ -424,7 +408,6 @@ class EnginePipeClient(
         put("auto_resume", autoResume)
     })
     fun reorderQueue(taskId: String, delta: Int) = command(commandOf("reorder_queue", "task_id" to taskId, "delta" to delta))
-    fun placeQueue(taskId: String, beforeId: String) = command(commandOf("place_queue", "task_id" to taskId, "before_id" to beforeId))
     fun assignQueue(taskIds: Collection<String>, queueId: String) = command(buildJsonObject {
         put("kind", "assign_queue")
         put("task_ids", buildJsonArray { taskIds.map(String::trim).filter(String::isNotBlank).distinct().forEach { add(JsonPrimitive(it)) } })

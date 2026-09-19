@@ -165,13 +165,12 @@ fn has_absolute_scheme(reference: &str) -> bool {
 
 #[allow(unused_imports)]
 pub use dash::{
-    audio_choices as dash_audio_choices, download_dash, download_dash_selected, parse_mpd,
-    representation_choices,
+    audio_choices as dash_audio_choices, download_dash_selected, parse_mpd, representation_choices,
 };
 #[allow(unused_imports)]
 pub use hls::{
-    audio_choices, download_hls, download_hls_selected, download_hls_with, parse_playlist,
-    variant_choices, HlsDownloadOptions,
+    audio_choices, download_hls, download_hls_with, parse_playlist, variant_choices,
+    HlsDownloadOptions,
 };
 #[allow(unused_imports)]
 pub use merge::{concat_files, merge_with_ffmpeg, mux_av};

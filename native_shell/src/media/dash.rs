@@ -216,16 +216,6 @@ fn select_video(
     }
 }
 
-pub fn download_dash(
-    url: &str,
-    headers: &HashMap<String, String>,
-    proxy: &str,
-    task_dir: &Path,
-    control: &Path,
-) -> Result<PathBuf, String> {
-    download_dash_selected(url, headers, proxy, task_dir, control, 0, true, "")
-}
-
 pub fn download_dash_selected(
     url: &str,
     headers: &HashMap<String, String>,

@@ -66,10 +66,6 @@ fn apply_execution_state(active: bool) {
     }
 }
 
-pub fn is_active() -> bool {
-    ACTIVE.load(Ordering::SeqCst)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,9 +74,7 @@ mod tests {
     fn toggling_is_idempotent() {
         set_active(false);
         set_active(true);
-        assert!(is_active());
         set_active(true);
         set_active(false);
-        assert!(!is_active());
     }
 }

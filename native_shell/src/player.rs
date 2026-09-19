@@ -148,24 +148,6 @@ impl Player {
         self.command_locked(&mut inner, &format!("seek {:.3} relative", seconds))
     }
 
-    pub fn last_url(&self) -> String {
-        self.last_url
-            .lock()
-            .map(|url| url.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn last_preview(&self) -> f64 {
-        self.last_preview.lock().map(|value| *value).unwrap_or(0.0)
-    }
-
-    pub fn last_embed(&self) -> String {
-        self.last_embed
-            .lock()
-            .map(|value| value.clone())
-            .unwrap_or_default()
-    }
-
     pub fn metadata(&self) -> PlayerMetadata {
         if null_backend_enabled() {
             return PlayerMetadata::default();
@@ -667,7 +649,6 @@ mod tests {
         std::env::set_var("HLS_V7_PLAYER_NULL", "1");
         let player = Player::default();
         player.play("http://127.0.0.1:9/media/task-1").unwrap();
-        assert!(player.last_url().contains("task-1"));
         player.pause(true).unwrap();
         player.set_speed(1.5).unwrap();
         player.set_audio_track("1").unwrap();
@@ -677,13 +658,10 @@ mod tests {
         player.set_pip(true).unwrap();
         player.set_pip(false).unwrap();
         player.attach_embed_hwnd(42, 0, 48, 720, 220).unwrap();
-        assert!(player.last_embed().contains("embed_hwnd:42"));
         player
             .attach_embed_host(PLAYER_WINDOW_TITLE, 0, 48, 720, 220)
             .unwrap();
-        assert!(player.last_embed().contains("720,220"));
         player.preview_percent(37.5).unwrap();
-        assert!((player.last_preview() - 37.5).abs() < f64::EPSILON);
         assert!(quote_mpv("http://127.0.0.1/a.mp4; run calc")
             .unwrap()
             .starts_with('"'));

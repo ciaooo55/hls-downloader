@@ -10,13 +10,11 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use super::{download_dash, download_hls, download_hls_with, HlsDownloadOptions};
+use super::{download_hls, download_hls_with, HlsDownloadOptions};
 
 #[derive(Clone)]
 pub struct FixtureOrigin {
     pub base: String,
-    pub requests: Arc<Mutex<Vec<String>>>,
-    pub body_bytes: Arc<AtomicU64>,
 }
 
 pub fn serve_files(files: HashMap<String, Vec<u8>>) -> FixtureOrigin {
@@ -65,8 +63,6 @@ pub fn serve_dynamic(
     });
     FixtureOrigin {
         base: format!("http://127.0.0.1:{}", addr.port()),
-        requests,
-        body_bytes,
     }
 }
 
@@ -145,31 +141,6 @@ pub fn run_hls_live_fixture() -> Result<(Vec<u8>, String), String> {
     Ok((bytes, playlist))
 }
 
-pub fn run_dash_static_fixture() -> Result<Vec<u8>, String> {
-    let mut files = HashMap::new();
-    files.insert(
-        "/manifest.mpd".into(),
-        br#"<MPD type="static"><Period><AdaptationSet><Representation id="v" bandwidth="1000" mimeType="video/mp4"><BaseURL>/</BaseURL><SegmentList><SegmentURL media="init.mp4"/><SegmentURL media="1.m4s"/></SegmentList></Representation></AdaptationSet></Period></MPD>"#.to_vec(),
-    );
-    files.insert("/init.mp4".into(), b"INIT".to_vec());
-    files.insert("/1.m4s".into(), b"DASH".to_vec());
-    let origin = serve_files(files);
-    let dir = std::env::temp_dir().join(format!("dash-harness-{}", std::process::id()));
-    let control = dir.join("control");
-    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    std::fs::write(&control, "run").map_err(|error| error.to_string())?;
-    let merged = download_dash(
-        &format!("{}/manifest.mpd", origin.base),
-        &HashMap::new(),
-        "",
-        &dir,
-        &control,
-    )?;
-    let bytes = std::fs::read(&merged).map_err(|error| error.to_string())?;
-    let _ = std::fs::remove_dir_all(dir);
-    Ok(bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,7 +148,6 @@ mod tests {
     #[test]
     fn hls_vod_dash_and_live_share_one_origin_harness() {
         assert_eq!(run_hls_vod_fixture().unwrap(), b"AAABBB");
-        assert_eq!(run_dash_static_fixture().unwrap(), b"INITDASH");
         let (live, playlist) = run_hls_live_fixture().unwrap();
         assert!(live == b"L0L1" || live == b"L0", "live bytes {live:?}");
         assert!(

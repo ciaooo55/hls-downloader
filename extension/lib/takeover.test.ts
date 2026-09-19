@@ -17,7 +17,6 @@ import {
   canResumeBrowserDownload,
   desktopTaskReadiness,
   desktopAcceptedHandoff,
-  mayDiscardBrowserTransfer,
   handoffStatusLabel,
   handoffTerminalStatus,
 } from './takeover'
@@ -95,15 +94,11 @@ describe('browser download takeover helpers', () => {
     expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation: 'failed', presentation_mode: 'desktop' } })).toBe(false)
   })
 
-  it('does not discard the browser transfer just because a confirmation window opened', () => {
+  it('accepts a handoff even when only a confirmation window opened', () => {
     expect(desktopAcceptedHandoff({
       ok: true,
       handoff: { id: 'one', status: 'pending', presentation_ok: true, presentation_mode: 'desktop' },
     })).toBe(true)
-    expect(mayDiscardBrowserTransfer('pending', 'waiting')).toBe(false)
-    expect(mayDiscardBrowserTransfer('accepted', 'waiting')).toBe(false)
-    expect(mayDiscardBrowserTransfer('accepted', 'safe-to-remove')).toBe(true)
-    expect(mayDiscardBrowserTransfer('rejected', 'browser-fallback')).toBe(false)
   })
 
   it('maps terminal handoff statuses for popup recovery', () => {

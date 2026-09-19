@@ -412,16 +412,6 @@ internal class UiTestApi private constructor(
             .firstOrNull { it.mouseListeners.isNotEmpty() || it.mouseMotionListeners.isNotEmpty() }
             ?: deepest).also(UiTestState::updateInputTarget)
     }
-
-    private fun mouseModifierMask(modifiers: List<String>): Int = modifiers.fold(0) { mask, modifier ->
-        mask or when (modifier.uppercase()) {
-            "CTRL", "CONTROL" -> InputEvent.CTRL_DOWN_MASK
-            "SHIFT" -> InputEvent.SHIFT_DOWN_MASK
-            "ALT" -> InputEvent.ALT_DOWN_MASK
-            else -> 0
-        }
-    }
-
     private fun typeText(value: String) {
         onEventThread {
             val target = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
@@ -456,20 +446,6 @@ internal class UiTestApi private constructor(
             target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_RELEASED, now + 1, modifierMask, code, KeyEvent.CHAR_UNDEFINED))
         }
     }
-
-    private fun pasteText(value: String) {
-        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-        val previous = runCatching { clipboard.getContents(null) }.getOrNull()
-        clipboard.setContents(StringSelection(value), null)
-        try {
-            dispatchKeyStroke(KeyEvent.VK_V, listOf("CTRL"))
-            robot.waitForIdle()
-            Thread.sleep(250)
-        } finally {
-            if (previous != null) runCatching { clipboard.setContents(previous, null) }
-        }
-    }
-
     private fun keyCode(name: String): Int = when (name.trim().uppercase()) {
         "CTRL", "CONTROL" -> KeyEvent.VK_CONTROL
         "SHIFT" -> KeyEvent.VK_SHIFT

@@ -315,10 +315,6 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
     Ok(playlist)
 }
 
-pub fn select_variant(playlist: &Playlist) -> Option<&Variant> {
-    select_variant_for(playlist, 0, 0)
-}
-
 pub fn select_variant_for(
     playlist: &Playlist,
     preferred_bandwidth: u64,
@@ -463,13 +459,6 @@ pub fn select_audio_track<'a>(
     tracks.into_iter().next()
 }
 
-pub fn select_default_audio<'a>(
-    playlist: &'a Playlist,
-    variant: &Variant,
-) -> Option<&'a Rendition> {
-    select_audio_track(playlist, variant, "")
-}
-
 pub fn select_subtitles(playlist: &Playlist) -> Vec<Rendition> {
     let mut tracks: Vec<Rendition> = playlist
         .renditions
@@ -559,31 +548,6 @@ pub fn download_hls(
         control,
         HlsDownloadOptions {
             live,
-            ..HlsDownloadOptions::default()
-        },
-    )
-}
-
-pub fn download_hls_selected(
-    url: &str,
-    headers: &HashMap<String, String>,
-    proxy: &str,
-    task_dir: &Path,
-    control: &Path,
-    live: bool,
-    preferred_bandwidth: u64,
-    preferred_height: u32,
-) -> Result<PathBuf, String> {
-    download_hls_with(
-        url,
-        headers,
-        proxy,
-        task_dir,
-        control,
-        HlsDownloadOptions {
-            live,
-            preferred_bandwidth,
-            preferred_height,
             ..HlsDownloadOptions::default()
         },
     )
@@ -1990,47 +1954,6 @@ fn download_one_with_range(
     Ok(output.to_path_buf())
 }
 
-fn write_local_playlist(
-    task_dir: &Path,
-    target_duration: f64,
-    has_map: bool,
-    files: &[PathBuf],
-    durations: &[f64],
-    discontinuities: &[bool],
-    complete: bool,
-) -> Result<(), String> {
-    let mut text = String::from("#EXTM3U\n#EXT-X-VERSION:6\n");
-    if complete {
-        text.push_str("#EXT-X-PLAYLIST-TYPE:VOD\n");
-    } else {
-        text.push_str("#EXT-X-PLAYLIST-TYPE:EVENT\n");
-    }
-    text.push_str(&format!(
-        "#EXT-X-TARGETDURATION:{}\n#EXT-X-MEDIA-SEQUENCE:0\n",
-        target_duration.max(1.0) as u64
-    ));
-    let media = if has_map {
-        text.push_str("#EXT-X-MAP:URI=\"segments/init.mp4\"\n");
-        files.get(1..).unwrap_or(&[])
-    } else {
-        files
-    };
-    for (index, file) in media.iter().enumerate() {
-        if discontinuities.get(index).copied().unwrap_or(false) {
-            text.push_str("#EXT-X-DISCONTINUITY\n");
-        }
-        let duration = durations.get(index).copied().unwrap_or(1.0);
-        text.push_str(&format!(
-            "#EXTINF:{duration:.3},\nsegments/{}\n",
-            playlist_leaf(file)
-        ));
-    }
-    if complete {
-        text.push_str("#EXT-X-ENDLIST\n");
-    }
-    write_text_atomic(&task_dir.join("local.m3u8"), &text)
-}
-
 fn playlist_leaf(path: &Path) -> String {
     let name = path
         .file_name()
@@ -2223,35 +2146,6 @@ fn parse_resolution(value: &str) -> (u32, u32) {
     (width.parse().unwrap_or(0), height.parse().unwrap_or(0))
 }
 
-fn load_seen(path: &Path) -> std::collections::BTreeSet<String> {
-    let Ok(text) = fs::read_to_string(path) else {
-        return std::collections::BTreeSet::new();
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return std::collections::BTreeSet::new();
-    };
-    if let Some(items) = value.get("seen").and_then(|item| item.as_array()) {
-        return items
-            .iter()
-            .filter_map(|item| item.as_str().map(str::to_string))
-            .collect();
-    }
-    value
-        .get("segments")
-        .and_then(|item| item.as_array())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    item.get("url")
-                        .and_then(|url| url.as_str())
-                        .map(str::to_string)
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 pub(crate) fn resume_segment_path(
     seg_dir: &Path,
     index: usize,
@@ -2265,11 +2159,6 @@ pub(crate) fn resume_segment_path(
     candidates
         .into_iter()
         .find(|path| path.is_file() && path.metadata().map(|meta| meta.len() > 0).unwrap_or(false))
-}
-
-fn save_seen(path: &Path, seen: &std::collections::BTreeSet<String>) -> Result<(), String> {
-    let value = serde_json::json!({ "seen": seen.iter().cloned().collect::<Vec<_>>() });
-    fs::write(path, value.to_string()).map_err(|error| error.to_string())
 }
 
 fn extension(uri: &str) -> &str {
@@ -2370,10 +2259,6 @@ mod tests {
         let playlist = parse_playlist(text, "https://cdn.test/master.m3u8").unwrap();
         assert!(playlist.is_master);
         assert_eq!(
-            select_variant(&playlist).unwrap().uri,
-            "https://cdn.test/high.m3u8"
-        );
-        assert_eq!(
             select_variant_for(&playlist, 800_000, 0).unwrap().uri,
             "https://cdn.test/low.m3u8"
         );
@@ -2385,17 +2270,14 @@ mod tests {
         assert_eq!(audio_choices(&playlist).len(), 1);
         assert_eq!(audio_choices(&playlist)[0].kind, "audio");
         assert_eq!(
-            select_audio_track(&playlist, select_variant(&playlist).unwrap(), "English")
-                .unwrap()
-                .name,
+            select_audio_track(
+                &playlist,
+                select_variant_for(&playlist, 0, 0).unwrap(),
+                "English"
+            )
+            .unwrap()
+            .name,
             "English"
-        );
-        assert_eq!(
-            select_default_audio(&playlist, select_variant(&playlist).unwrap())
-                .unwrap()
-                .uri
-                .as_deref(),
-            Some("https://cdn.test/audio.m3u8")
         );
     }
 
@@ -2944,33 +2826,6 @@ mod tests {
         );
         stop.store(true, Ordering::SeqCst);
         server.join().unwrap();
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn live_local_playlist_is_event_until_complete() {
-        let dir = std::env::temp_dir().join(format!("hls-event-{}", std::process::id()));
-        let seg_dir = dir.join("segments");
-        std::fs::create_dir_all(&seg_dir).unwrap();
-        let file = seg_dir.join("000000.ts");
-        std::fs::write(&file, b"seg").unwrap();
-        write_local_playlist(
-            &dir,
-            4.0,
-            false,
-            std::slice::from_ref(&file),
-            &[1.0],
-            &[false],
-            false,
-        )
-        .unwrap();
-        let live = std::fs::read_to_string(dir.join("local.m3u8")).unwrap();
-        assert!(live.contains("#EXT-X-PLAYLIST-TYPE:EVENT"));
-        assert!(!live.contains("#EXT-X-ENDLIST"));
-        write_local_playlist(&dir, 4.0, false, &[file], &[1.0], &[false], true).unwrap();
-        let vod = std::fs::read_to_string(dir.join("local.m3u8")).unwrap();
-        assert!(vod.contains("#EXT-X-PLAYLIST-TYPE:VOD"));
-        assert!(vod.contains("#EXT-X-ENDLIST"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
