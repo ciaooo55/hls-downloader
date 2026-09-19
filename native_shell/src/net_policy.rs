@@ -13,7 +13,6 @@ pub const PER_HOST_CONNECTION_LIMIT: u32 = 24;
 struct BudgetState {
     global: u32,
     hosts: HashMap<String, u32>,
-    retry_until: HashMap<String, Instant>,
 }
 
 pub struct ConnectionGuard {
@@ -201,17 +200,6 @@ pub fn acquire(url: &str) -> Result<ConnectionGuard, String> {
     let host = host_key(url);
     let mut state = budget().lock().map_err(|_| "connection budget poisoned")?;
     loop {
-        if let Some(until) = state.retry_until.get(&host).copied() {
-            let now = Instant::now();
-            if until > now {
-                let wait = until - now;
-                state = BUDGET_PULSE
-                    .wait_timeout(state, wait)
-                    .map_err(|_| "connection budget wait")?
-                    .0;
-                continue;
-            }
-        }
         let host_used = state.hosts.get(&host).copied().unwrap_or(0);
         if state.global < GLOBAL_CONNECTION_LIMIT && host_used < PER_HOST_CONNECTION_LIMIT {
             state.global += 1;
@@ -231,17 +219,6 @@ fn release(host: &str) {
         if let Some(used) = state.hosts.get_mut(host) {
             *used = used.saturating_sub(1);
         }
-        BUDGET_PULSE.notify_all();
-    }
-}
-
-pub fn note_retry_after(url: &str, seconds: u64) {
-    let host = host_key(url);
-    if let Ok(mut state) = budget().lock() {
-        state.retry_until.insert(
-            host,
-            Instant::now() + Duration::from_secs(seconds.clamp(1, 60)),
-        );
         BUDGET_PULSE.notify_all();
     }
 }

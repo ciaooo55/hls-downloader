@@ -987,10 +987,6 @@ fn completed_actions(snapshot: &TaskSnapshot) -> Vec<String> {
     actions.push("delete".into());
     actions
 }
-
-#[allow(dead_code)]
-fn _keep_contract_types_visible(_: ResourceOffer) {}
-
 fn pending_mirror_status(mirrors: &[String]) -> Vec<MirrorStatus> {
     mirrors
         .iter()

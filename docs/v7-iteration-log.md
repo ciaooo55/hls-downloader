@@ -275,3 +275,40 @@ ID 一致，`nativeMessaging` 权限在位；源码未改动。本机仅安装 E
 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
 （`browser.media_push_device_selection`），`release_ready=false` 不变。投屏 / TVBox 的真实
 设备投送仍缺实机证据（本机所在网段无可用接收端），属发布门禁而非插件 UI 缺陷。
+
+## 第十四轮：native_shell 死代码与断链清理（本地 `main`，本轮）
+
+目标：在本机（不使用 WSL）对 `native_shell` 做一轮编译器自证的清理，只动「零生产行为影响」
+的真实缺陷与死代码，不新增功能、不改引擎行为。
+
+### 修复项
+
+| 项 | 位置 | 说明 |
+| --- | --- | --- |
+| Retry-After 断链 | `native_shell/src/net_policy.rs` | `acquire()`（每个 HTTP 作业都经 `http_engine.rs:run_job_once` 调用）会读 `retry_until` 来阻塞 host，但唯一写入者 `note_retry_after` 全仓库无调用者，三条传输路径（curl / WinHTTP / 主 `http_get`）也不解析 `Retry-After` 头。即读侧活在活跃生产路径、写侧从未接线，属于半接线的空机制。删除 `retry_until` 字段、`acquire()` 中的读分支、`note_retry_after` 函数，使连接预算只按其本职（全局/单 host 连接上限）工作，行为不变。 |
+| 测试夹具混入生产构建 | `native_shell/src/sftp_engine.rs` | `FixtureSession` / `FixtureFile` 定义在非测试区，仅被 `#[cfg(test)]` 代码引用（生产函数 `download_sftp` 的 `#[cfg(test)]` 分支与 `mod tests`）。给定义、trait 实现与 `use std::io::Read` 补 `#[cfg(test)]` 门控。 |
+| 空 no-op 占位 | `native_shell/src/core_runtime.rs` | 删除 `#[allow(dead_code)] fn _keep_contract_types_visible(_: ResourceOffer) {}`。`ResourceOffer` 本身在生产代码被大量真实使用，"保持类型可见"的借口不成立，是纯死代码。 |
+| 文档矛盾 | `docs/architecture/coordination-protocol.md` | "Branch and PR contract" 一节仍要求按任务建分支并走 PR，与已生效的单 `main` 工作流冲突。补 Superseded 说明（镜像 `handoff.md` 措辞），不改历史记录正文。 |
+
+### 验证
+
+- `cargo +1.98.1 test --manifest-path native_shell/Cargo.toml --lib`：464 passed / 0 failed / 1 ignored（与改动前基线一致）。
+- `cargo +1.98.1 test --manifest-path presenter_ui/Cargo.toml`：9 passed。
+- `cargo +1.98.1 clippy --locked --all-targets -- -D warnings -A dead_code -A clippy::large_enum_variant -A clippy::too_many_arguments -A clippy::type_complexity`：通过（与 `ci.yml:129` 参数一致）。
+- `cargo +1.98.1 fmt --manifest-path native_shell/Cargo.toml -- --check` 与 presenter_ui 同名检查：均通过。
+
+### 未处理（记录为既有债务，不在本轮范围）
+
+`cargo check --lib` 仍有 28 条 `dead_code` 警告（既有、非本轮引入），集中在：`cast.rs` 的
+BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`）、`media/hls.rs` 的
+`select_variant` / `select_default_audio` / `download_hls_selected` / `write_local_playlist` /
+`load_seen` / `save_seen`、`media/dash.rs:download_dash`、`torrent_engine.rs` 的
+`download_from_peer(_ex)` / `watch_delay` / `is_fresh`、`http_engine.rs:fetch_bytes_range`、
+`player.rs` 的 `last_url` / `last_preview` / `last_embed`、`playback.rs` 的 `lan_enabled` / `port`、
+`power_action.rs:label`、`sleep_inhibit.rs:is_active`、`category.rs:category_dirs_json`、
+`net_policy.rs:effective_limit_kib`、`cast.rs` 的 `discover_devices` / `tvbox_payload` /
+`browser_push_status`。其中不少是"薄包装 + 仅测试引用"，删除需连同对应测试一并处理，属独立的
+测试重构工作，本轮不动。
+
+边界不变：`feature-parity.json` 维持 27 verified / 1 partial
+（`browser.media_push_device_selection`），`release_ready=false` 不变。

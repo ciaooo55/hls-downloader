@@ -62,6 +62,12 @@ Never keep two live machine task objects with the same ID and never silently red
 
 ## Branch and PR contract
 
+**Superseded (2026-09-15).** The branch-per-task and pull-request steps below are
+historical. The current operator-approved workflow keeps exactly one local branch
+`main` and one remote `origin/main`, forbids creating branches, PRs or worktrees, and
+is defined in `AGENTS.md` and `handoff.md`. Nothing below authorizes a new branch or
+PR; it is retained only to explain the historical coordination records.
+
 1. Start from the current intended base, normally `main`.
 2. Use a task-specific branch. A helper may branch from the worker branch and merge back to it.
 3. Split logically independent changes into multiple commits where useful; commit messages should communicate state to other agents.

@@ -5,7 +5,9 @@
 //! fallback when the URL has no password. URL passwords never go to OpenSSH.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(test)]
+use std::io::Read;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -439,14 +441,17 @@ fn transfer_from_session(
     Ok(written)
 }
 
+#[cfg(test)]
 struct FixtureSession {
     root: PathBuf,
 }
 
+#[cfg(test)]
 struct FixtureFile {
     file: File,
 }
 
+#[cfg(test)]
 impl SftpFile for FixtureFile {
     fn seek(&mut self, offset: u64) -> Result<(), String> {
         self.file
@@ -460,6 +465,7 @@ impl SftpFile for FixtureFile {
     }
 }
 
+#[cfg(test)]
 impl SftpSession for FixtureSession {
     fn stat(&self, path: &str) -> Result<SftpStat, String> {
         let source = self.root.join(path.trim_start_matches('/'));
