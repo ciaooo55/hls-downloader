@@ -1038,6 +1038,17 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    // `NEXT_HANDOFF` 是进程级共享计数器（handoff id / credential ref / media-push id 共用），
+    // 凡是断言它「绝对值没有推进」的测试必须彼此串行，否则并行执行时会被其他测试推进而假失败。
+    // 持锁即隔离该全局计数器，同时保留「无谓消耗序号」这一回归防护语义。
+    static NEXT_HANDOFF_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_next_handoff() -> std::sync::MutexGuard<'static, ()> {
+        NEXT_HANDOFF_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn rejects_unknown_operations_before_dispatch() {
         let mut session = NativeHostSession::in_memory().unwrap();
@@ -1173,6 +1184,7 @@ mod tests {
 
     #[test]
     fn offer_is_idempotent_for_the_extension_request_id() {
+        let _guard = lock_next_handoff();
         let mut session = NativeHostSession::in_memory().unwrap();
         let request = json!({
             "op": "offer",
@@ -1502,6 +1514,7 @@ mod tests {
 
     #[test]
     fn browser_offer_rejects_javascript_and_file_urls() {
+        let _guard = lock_next_handoff();
         let mut session = NativeHostSession::in_memory().unwrap();
         let sequence_before_invalid = NEXT_HANDOFF.load(Ordering::Relaxed);
         let javascript = session

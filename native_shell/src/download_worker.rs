@@ -6076,10 +6076,15 @@ mod tests {
 
     #[test]
     fn live_torrent_selection_update_cancels_requested_file_and_publishes_remaining_file() {
+        // 该用例验证的是「取消已选文件并发布剩余文件」的行为，不是延迟。
+        // 下面三处等待（BT 对端收到首个请求 / 收到取消消息 / 任务完成）都是等待异步
+        // 机制就绪的墙钟预算：在 462 个用例并行、共享 4 核 CPU 时，tracker HTTP +
+        // BT 握手偶发超过 5s，导致与本次改动无关的假失败。放宽为充足预算即可消除
+        // 调度抖动噪声；真正的挂起仍会在该预算内失败，回归防护语义不变。
+        const MACHINERY_WAIT: Duration = Duration::from_secs(60);
         use std::io::Read;
         use std::net::TcpStream;
         use std::sync::mpsc;
-
         let payload = b"aaaabbbb".to_vec();
         let pieces: Vec<[u8; 20]> = payload.chunks(4).map(crate::crypto_lite::sha1).collect();
         let stamp = std::time::SystemTime::now()
@@ -6263,7 +6268,7 @@ mod tests {
             })
             .unwrap();
 
-        requested_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        requested_rx.recv_timeout(MACHINERY_WAIT).unwrap();
         let in_flight = coordinator
             .tasks()
             .unwrap()
@@ -6293,12 +6298,9 @@ mod tests {
             &event.event,
             CoreEvent::Toast { message, .. } if message.contains("BT 文件选择已更新")
         )));
-        assert_eq!(
-            cancel_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
-            (0, 0, 4)
-        );
+        assert_eq!(cancel_rx.recv_timeout(MACHINERY_WAIT).unwrap(), (0, 0, 4));
 
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + MACHINERY_WAIT;
         let completed = loop {
             let task = coordinator
                 .tasks()
