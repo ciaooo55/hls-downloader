@@ -311,4 +311,69 @@ BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`�
 测试重构工作，本轮不动。
 
 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
+
+## 第十五轮：删除无用旧代码与历史脚手架（本地 `main`，本轮）
+
+目标（操作方指示）：完成一个全新项目；删掉确定没用的旧代码，不为不存在的功能做兼容，
+也不保留对旧代码的向后兼容。只动经编译器或全仓库检索证明无生产引用的代码与文档，
+不改引擎行为、不新增功能。
+
+### native_shell（删除项，均经 `cargo check --all-targets` 零警告 + 全仓库检索确认）
+
+| 位置 | 删除内容 |
+| --- | --- |
+| `cast.rs` | BrowserPush 投送链、`tvbox_payload`、`discover_devices`、测试用包装 `probe_tvbox`（测试改为直接调用生产的 `probe_tvbox_until`） |
+| `media/hls.rs` | `select_variant`、`select_default_audio`、`download_hls_selected`、`write_local_playlist`、`load_seen`、`save_seen` |
+| `media/dash.rs` | `download_dash` |
+| `media/harness.rs` | `run_dash_static_fixture`，以及仅测试读取的 `FixtureOrigin.requests` / `body_bytes` 字段（保留内部 Arc 克隆，服务线程不受影响） |
+| `torrent_engine.rs` | 包装 `download_from_peer` / `download_from_peer_ex`、`watch_delay`、`is_fresh`（测试改为直接调用 `download_from_peer_ex_with_telemetry`，已核对语义等价） |
+| `net_policy.rs` | `effective_limit_kib` 与遗留令牌桶 |
+| `playback.rs` | `lan_enabled` 与静态 `port()` |
+| `player.rs` | 三个只读 getter（字段保留，生产仍写入） |
+| `power_action.rs` / `sleep_inhibit.rs` / `category.rs` / `http_engine.rs` / `core_runtime.rs` | `label`、`is_active`、`category_dirs_json`、`fetch_bytes_range`、no-op 占位 `_keep_contract_types_visible` |
+| `media/mod.rs` | 随上述删除同步收敛的 re-export |
+
+### extension
+
+- 删 `storeIdentity.ts:CHROMIUM_EXTENSION_ID`（保留 `CHROMIUM_PUBLIC_KEY`、`FIREFOX_EXTENSION_ID`）。
+- 删 `browserCapabilities.ts:resolveFirefoxClickIntent`。
+- 删 `takeover.ts:mayDiscardBrowserTransfer`。
+- 对应测试同步收紧。
+
+### desktop_ui
+
+- `Protocol.kt`：删 `EngineCapabilities` 数据类、`capabilities()`、`placeQueue()`。
+- `Main.kt`：删 `categoryLabel()`。
+- `UiTestApi.kt`：删 `mouseModifierMask()`、`pasteText()`。
+
+### docs（历史协调脚手架，自闭合、只被彼此与 `handoff.md` 交叉引用）
+
+- 删 `docs/worker-logs/`（21 个）、`docs/coordination/`（2 个）、`docs/manager.md`、
+  `docs/architecture/project-plan.md`、`docs/architecture/v7-contract-audit.md`、
+  `docs/architecture/v7-final-readiness-audit.md`、`docs/architecture/coordination-protocol.md`、
+  `docs/v7-bt-selection-evidence.md`、`docs/v7-hls-auth-resume-evidence.md`、
+  `docs/v7-hls-candidate-auth-resume-evidence.md`、`docs/v7-refinement-plan.md`、
+  `docs/v7-ui-polish.md`、`docs/v7-ui-test-api.md`。`docs` 由 52 个文件收敛到 19 个。
+- `handoff.md` 同步改写，说明该脚手架已随单 `main` 工作流移除、历史留在 Git。
+
+### 保留（经核实仍被真实依赖，不属「无用旧代码」）
+
+- **v6 → v7 已装数据库迁移**：`migrate.rs` / `v6_migrate.rs` 由 `lib.rs`、`core_server.rs` 实际调用，
+  是 AGENTS.md 要求的已安装用户升级路径，删除即数据丢失。
+- **`extension/lib/nativeBridge.ts:V7_CORE_PROTOCOL`**：被 `scripts/build-v7.ps1` 引用。
+- **`wait_handoff` 超时表项**：Core 的合法操作，删除会改变未知操作回退行为。
+- **整个 `scripts/`**：80 个脚本都服务现有功能或发布流程，无「旧代码」。
+
+### 验证（本地 Windows，未使用 WSL）
+
+- `cargo +1.98.1 check --manifest-path native_shell/Cargo.toml --all-targets`：零警告。
+- `cargo +1.98.1 test --manifest-path native_shell/Cargo.toml --lib`：462 passed / 0 failed / 1 ignored
+  （相对上一轮 464 少 2，为删除项对应的专用测试）。
+- `cargo +1.98.1 test --manifest-path presenter_ui/Cargo.toml`：9 passed。
+- `extension`：`tsc --noEmit` 通过；`vitest run` 43 文件 / 300 passed（相对上一轮 301 少 1）。
+- `desktop_ui`：`gradlew.bat compileKotlin` 与 `test` 均 BUILD SUCCESSFUL。
+- `scripts/verify-v7-feature-parity.ps1 -PackageTier candidate -RequireNoBlocked -RequireCleanWorktree`：
+  通过，`FEATURE_PARITY=96.4% (27/28 verified, 1 partial, 0 blocked)`，`COMMIT=36aa601`。
+
+边界不变：`feature-parity.json` 维持 27 verified / 1 partial
 （`browser.media_push_device_selection`），`release_ready=false` 不变。
