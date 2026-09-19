@@ -77,4 +77,11 @@ footer { display: flex; align-items: center; justify-content: center; gap: 8px; 
 .quality-menu button:hover { background: var(--surface-2); }
 .quality-menu button i { display: inline-grid; place-items: center; width: 13px; color: var(--primary); font-style: normal; font-weight: 700; }
 .quality-check .hlsd-icon { width: 13px; height: 13px; }
+.resource-meta { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.resource-meta > small { min-width: 0; flex: 1; }
+.copy-link { display: inline-flex; align-items: center; gap: 4px; flex: none; height: 20px; padding: 0 6px; border: 1px solid var(--control-border); border-radius: 5px; background: var(--surface-2); color: var(--muted); cursor: pointer; font: 500 10px system-ui, sans-serif; white-space: nowrap; }
+.copy-link:hover { border-color: color-mix(in srgb, var(--primary) 50%, var(--control-border)); color: var(--primary-ink); }
+.copy-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.copy-link.copied { border-color: var(--green); color: var(--green); }
+.copy-link .hlsd-icon { width: 11px; height: 11px; }
 article { position: relative; }

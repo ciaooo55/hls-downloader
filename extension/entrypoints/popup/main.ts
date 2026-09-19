@@ -50,6 +50,7 @@ const ICONS: Record<string, string> = {
   check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>',
   scan: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7"/></svg>',
   media: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3Z"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>',
 }
 function icon(name: string, label = '') {
   const node = el('span', 'hlsd-icon')
@@ -154,8 +155,8 @@ async function main() {
 
   const controls = el('div', 'controls')
   const enableBtn = el('button', 'hlsd-button', '\u81ea\u52a8\u63a5\u7ba1')
-  const cookieBtn = el('button', 'hlsd-button', 'Cookie')
-  const excludeBtn = el('button', 'hlsd-button', '\u6392\u9664\u672c\u7ad9')
+  const cookieBtn = el('button', 'hlsd-button', '\u672c\u7ad9 Cookie')
+  const excludeBtn = el('button', 'hlsd-button', '\u672c\u7ad9\u63d0\u793a')
   // The popup DOM becomes visible before its asynchronous storage/bootstrap
   // work finishes. Do not present controls as clickable until their handlers
   // and local source of truth are ready; a very fast click was otherwise lost.
@@ -273,9 +274,17 @@ async function main() {
       const article = el('article')
       const body = el('div', 'resource-body')
       const name = el('strong', '', item.title || item.filename || item.url.split('/').pop() || item.url)
-      name.title = item.filename || item.title || item.url
+      const cardUrl = item.url
+      name.title = item.filename || item.title || cardUrl
       const line = el('span', '', meta)
+      line.title = meta
       const mime = el('small', '', [item.mimeType, itemHost].filter(Boolean).join(' \u00b7 '))
+      mime.title = [item.mimeType, itemHost].filter(Boolean).join(' \u00b7 ')
+      const copyBtn = el('button', 'copy-link') as HTMLButtonElement
+      copyBtn.type = 'button'
+      copyBtn.append(icon('copy'), el('span', '', '\u590d\u5236\u94fe\u63a5'))
+      copyBtn.title = itemHost ? `\u590d\u5236\u5b8c\u6574\u94fe\u63a5\uff08${itemHost}\uff09` : '\u590d\u5236\u5b8c\u6574\u94fe\u63a5'
+      copyBtn.addEventListener('click', () => void copyLink(cardUrl, copyBtn))
       let selected = item
       const remembered = chosenVariant[item.id]
       if (remembered) {
@@ -330,7 +339,9 @@ async function main() {
         })
         body.append(trigger)
       }
-      body.append(mime)
+      const metaRow = el('div', 'resource-meta')
+      metaRow.append(mime, copyBtn)
+      body.append(metaRow)
       const sendState = sending[item.id]
       const label = sendState ? SEND_LABELS[sendState] : '下载'
       const button = el('button', 'hlsd-button primary')
@@ -366,17 +377,24 @@ async function main() {
   }
 
   const refreshButtons = () => {
-    enableBtn.textContent = enabled ? '\u63a5\u7ba1\u4e0b\u8f7d\uff1a\u5f00' : '\u63a5\u7ba1\u4e0b\u8f7d\uff1a\u5173'
+    // 这些按钮显示“当前状态”，不是动作。加前缀 + aria-pressed，避免被读成
+    // “点击后会发生什么”的开关。
+    enableBtn.textContent = enabled ? '\u81ea\u52a8\u63a5\u7ba1\uff1a\u5df2\u5f00\u542f' : '\u81ea\u52a8\u63a5\u7ba1\uff1a\u5df2\u5173\u95ed'
+    enableBtn.title = enabled ? '\u5f53\u524d\u5df2\u63a5\u7ba1\u672c\u7ad9\u4e0b\u8f7d\uff1b\u70b9\u51fb\u5173\u95ed' : '\u5f53\u524d\u672a\u63a5\u7ba1\u672c\u7ad9\u4e0b\u8f7d\uff1b\u70b9\u51fb\u5f00\u542f'
+    enableBtn.setAttribute('aria-pressed', String(enabled))
     enableBtn.classList.toggle('active', enabled)
     const cookieAuthorized = Boolean(host && authorizedCookieHosts.includes(host))
-    cookieBtn.textContent = cookieAuthorized ? '\u672c\u7ad9\u767b\u5f55\u72b6\u6001\uff1a\u5f00' : '\u672c\u7ad9\u767b\u5f55\u72b6\u6001\uff1a\u5173'
+    cookieBtn.textContent = cookieAuthorized ? '\u672c\u7ad9 Cookie\uff1a\u5df2\u6388\u6743' : '\u672c\u7ad9 Cookie\uff1a\u672a\u6388\u6743'
     cookieBtn.title = cookieAuthorized
-      ? '\u53d1\u9001\u672c\u7ad9\u5a92\u4f53\u65f6\uff0c\u53ea\u8bfb\u53d6\u6d4f\u89c8\u5668\u5bf9\u5b9e\u9645\u8d44\u6e90\u5730\u5740\u4f1a\u53d1\u9001\u7684 Cookie\uff1b\u70b9\u51fb\u53ef\u64a4\u9500'
-      : '\u9ed8\u8ba4\u4e0d\u8bfb\u53d6 Cookie\uff1b\u4ec5\u6388\u6743\u5f53\u524d\u7ad9\u70b9\u540e\uff0c\u53d1\u9001\u8d44\u6e90\u65f6\u624d\u4f1a\u8bfb\u53d6'
+      ? '\u5df2\u6388\u6743\uff1a\u53d1\u9001\u672c\u7ad9\u5a92\u4f53\u65f6\u4f1a\u53ea\u8bfb\u53d6\u6d4f\u89c8\u5668\u5bf9\u8be5\u8d44\u6e90\u5730\u5740\u53d1\u9001\u7684 Cookie\uff1b\u70b9\u51fb\u64a4\u9500\u6388\u6743'
+      : '\u672a\u6388\u6743\uff1a\u9ed8\u8ba4\u4e0d\u8bfb\u53d6 Cookie\uff1b\u70b9\u51fb\u6388\u6743\u5f53\u524d\u7ad9\u70b9'
+    cookieBtn.setAttribute('aria-pressed', String(cookieAuthorized))
     cookieBtn.classList.toggle('active', cookieAuthorized)
     cookieBtn.disabled = !host
     const siteExcluded = excluded.includes(host)
-    excludeBtn.textContent = siteExcluded ? '\u672c\u7ad9\u4e0d\u663e\u793a\uff1a\u5f00' : '\u672c\u7ad9\u4e0d\u663e\u793a\uff1a\u5173'
+    excludeBtn.textContent = siteExcluded ? '\u672c\u7ad9\u63d0\u793a\uff1a\u5df2\u9690\u85cf' : '\u672c\u7ad9\u63d0\u793a\uff1a\u5df2\u663e\u793a'
+    excludeBtn.title = siteExcluded ? '\u5f53\u524d\u5df2\u5728\u672c\u7ad9\u9690\u85cf\u81ea\u52a8\u63d0\u793a\uff1b\u70b9\u51fb\u6062\u590d' : '\u5f53\u524d\u4f1a\u5728\u672c\u7ad9\u663e\u793a\u81ea\u52a8\u63d0\u793a\uff1b\u70b9\u51fb\u9690\u85cf'
+    excludeBtn.setAttribute('aria-pressed', String(siteExcluded))
     excludeBtn.classList.toggle('active', siteExcluded)
     excludeBtn.disabled = !host
     const suppressedKinds = suppressions.filter(rule => rule.host === host).map(rule => rule.kind)
@@ -444,6 +462,36 @@ async function main() {
       setError(reason instanceof Error ? reason.message : '投屏到电视失败')
     } finally {
       renderList()
+    }
+  }
+
+  const copyLink = async (url: string, node: HTMLButtonElement) => {
+    const label = node.querySelector('span') as HTMLSpanElement | null
+    const restore = label ? label.textContent : ''
+    const done = (text: string) => {
+      if (label) label.textContent = text
+      node.classList.add('copied')
+      setTimeout(() => { if (label) label.textContent = restore; node.classList.remove('copied') }, 1_800)
+    }
+    try {
+      // navigator.clipboard needs a focused document; the popup already is one,
+      // but keep the textarea fallback for browsers that deny the async API.
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url)
+      } else {
+        const scratch = document.createElement('textarea')
+        scratch.value = url
+        scratch.setAttribute('readonly', '')
+        scratch.style.position = 'fixed'
+        scratch.style.opacity = '0'
+        document.body.append(scratch)
+        scratch.select()
+        document.execCommand('copy')
+        scratch.remove()
+      }
+      done('\u5df2\u590d\u5236')
+    } catch {
+      setError('\u590d\u5236\u94fe\u63a5\u5931\u8d25\uff0c\u8bf7\u624b\u52a8\u9009\u62e9')
     }
   }
 

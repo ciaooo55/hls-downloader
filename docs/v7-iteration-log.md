@@ -208,3 +208,30 @@ ID 一致，`nativeMessaging` 权限在位；源码未改动。本机仅安装 E
 
 另注：引擎在 `%LOCALAPPDATA%\HLS Downloader\v7\` 下重建了 `data.db`（含 WAL/SHM）与 `instance.lock`，
 这是插件运行必需的运行期数据，不属于安装残留，未清理。
+
+## 第十二轮：浏览器插件功能与 UI 收口（2026-09-19，本地 `main` @ `aafb34b`）
+
+目标：在已恢复连通的插件上，补齐真实可用的功能与 UI。范围为 popup 层
+（`extension/entrypoints/popup/main.ts` 与 `style.css`），不改引擎/后端——识别、下载、落盘
+三条链路此前已在本机端到端验证可用。
+
+本轮修复的三个 UI 缺陷（均为「用户实际会遇到的」缺陷，非风格问题）：
+
+| 缺陷 | 现象 | 修复 |
+| --- | --- | --- |
+| 资源元信息与主机名截断无提示 | 长文件名/URL 被 CSS 截断后无法看到完整值 | 给 `name` / 元信息行 / mime+host 行补 `title` 提示（分别显示完整文件名、完整元信息、`mimeType · host`） |
+| 无法复制资源链接 | 用户只能肉眼抄 URL | 新增「复制链接」按钮（`.copy-link`），`navigator.clipboard.writeText` 为主、textarea + `execCommand('copy')` 兜底；成功翻转文案为「已复制」1.8s，失败提示「复制链接失败，请手动选择」 |
+| 开关语义含糊 | `自动接管` / `Cookie` / `排除本站` 三个按钮只显示名词，读不出当前是开还是关 | 改为状态语义：`自动接管：已开启/已关闭`、`本站 Cookie：已授权/未授权`、`本站提示：已隐藏/已显示`，并补 `aria-pressed` 与 `title` 说明 |
+
+验证（真实 Edge，CDP 驱动，全链路）：
+
+1. 识别：实验室页 `http://127.0.0.1:8765/index.m3u8` 被正常识别，`article` 计数为 1。
+2. 复制链接：点击后文案翻转为「已复制」，剪贴板读回值为 `http://127.0.0.1:8765/index.m3u8`（经 `Browser.grantPermissions` 授予 `clipboardReadWrite`）。
+3. 标题提示：`copyTitle=复制完整链接（127.0.0.1:8765）`、`lineTitle=HLS · .m3u8 · 0:06 · 大小未知`、`metaTitle=application/vnd.apple.mpegurl · 127.0.0.1:8765`。
+4. 开关状态：`aria-pressed=true`、文案 `自动接管：已开启`。
+5. 下载回归：点击资源卡「下载」（`article .article-actions .hlsd-button.primary`）后，引擎真实落盘 `%LOCALAPPDATA%\HLS Downloader\v7\downloads\HLS Lab`（11280 字节，3×3760 分片 + 头）及 `.hls-tasks\task-3\{local.m3u8,published.path,vod_segments.json,segments\00000N.ts}`。
+
+静态检查：`tsc --noEmit` 通过；`vitest run` 43 文件 / 301 用例全绿。
+
+边界不变：`feature-parity.json` 维持 27 verified / 1 partial
+（`browser.media_push_device_selection`），`release_ready=false` 不变；本轮不产生新的实机门禁证据。
