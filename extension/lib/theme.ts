@@ -83,6 +83,7 @@ export const THEME_TOKENS_CSS = `
  *   .result.error        --red     on mix(--red     12%, --surface)
  *   .send-error          --red     on mix(--red     10%, --surface)
  *   .push-button         --purple  on mix(--purple  22%, --surface-3)
+ *   .cast-button         --purple  on mix(--purple  22%, --surface-3)
  *
  * The tint lifts the background *towards* the accent, which eats exactly the
  * contrast the accent was relying on. Measured worst case was 3.41:1 (dark

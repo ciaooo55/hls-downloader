@@ -175,6 +175,7 @@ describe('contrast guards', () => {
       expect(contrast(t['red-ink'], mix(t['red'], t['surface'], 12))).toBeGreaterThanOrEqual(4.5) // .result.error
       expect(contrast(t['red-ink'], mix(t['red'], t['surface'], 10))).toBeGreaterThanOrEqual(4.5) // .send-error
       expect(contrast(t['purple-ink'], mix(t['purple'], t['surface-3'], 22))).toBeGreaterThanOrEqual(4.5) // .push-button
+      expect(contrast(t['purple-ink'], mix(t['purple'], t['surface-3'], 22))).toBeGreaterThanOrEqual(4.5) // .cast-button
     })
   }
 

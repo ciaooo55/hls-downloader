@@ -235,3 +235,43 @@ ID 一致，`nativeMessaging` 权限在位；源码未改动。本机仅安装 E
 
 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
 （`browser.media_push_device_selection`），`release_ready=false` 不变；本轮不产生新的实机门禁证据。
+
+## 第十三轮：插件 UI / 选项 / 悬浮窗全量核对（2026-09-19，本地 `main` @ `b09cc2f`）
+
+目标：按「插件签名先不管，先确保功能、UI、选项、悬浮窗没问题」的要求，把 popup、页面悬浮面板、
+视频悬浮工具条三处 UI 面逐一核对，只修真实缺陷，不为风格或可选优化动手。
+
+### 修复的真实缺陷：投屏按钮无样式（`cast-button`）
+
+- 现象：`extension/entrypoints/popup/main.ts:366` 为投屏按钮设置 `class="cast-button"`，但
+  `style.css` 与 `theme.ts` 均无 `.cast-button` 规则，按钮退回基础样式；同排的 TVBox 按钮
+  `.push-button` 有专属紫色样式（`style.css:47-48`、`theme.ts:85`）。功能完整（`ICONS.cast`、
+  `CAST_PUSH_LABELS` 均在位），仅缺视觉区分。
+- 修复：在 `.push-button` 规则后补 `.cast-button` 与其 `:hover`（复用设计契约的
+  `--purple` 22% 混入 `--surface-3` 底、`--purple-ink` 前景）；`theme.test.ts:177` 补同款
+  对比度守卫；`theme.ts` 设计契约注释补 `.cast-button` 行。改动仅 3 个文件、共 4 行。
+- 证据：构建后 `.output/chrome-mv3/assets/popup-*.css` 内含 `cast-button`（此前只含
+  `push-button`）。真实 Edge 内另测得页面悬浮面板的投屏按钮 `.download.cast` 背景为绿色、
+  TVBox `.download.push-tv` 为紫色、下载 `.download` 为蓝色，三者前景均为白色（可读）——
+  该三色属 content 脚本内联样式（`.download.cast` 用 `--green`），与 popup 新增的
+  `.cast-button`（紫色，与 `.push-button` 同款）是两套不同 UI 组件，各自非缺陷。
+
+### 其余 UI 面核对结论（无缺陷，不需要改）
+
+- 选项开关语义：`自动接管 / 本站 Cookie / 本站提示` 均已带状态文案 + `aria-pressed`，与桌面端
+  `set-takeover-settings` 往返同步（`takeoverSettingsSync.ts`），正确。
+- 清晰度菜单：点击生成、backdrop `mousedown` 关闭、按触发元素定位，正确。
+- 页面悬浮面板（`<hls-downloader-media-panel>`）与视频悬浮工具条（`.video-hover`）：真实 Edge 内
+  确认 Shadow DOM 挂载、主题令牌在 Shadow Root 内正确解析（`data-hlsd-theme=light`、
+  `--primary #2563eb`、`--purple #7c3aed`）、资源卡三按钮（下载/TVBox/投屏）样式正确、
+  工具条 `下载视频` 主按钮 + `⋯` 更多按钮 + 悬浮卡片（标题/状态/事实标签/来源/下载·投屏·TVBox
+  三个动作）结构完整且展开态可见。逐类核对 popup 与 content 脚本使用的每个 class，除
+  `popup-boot*`（在 `popup/index.html` 内联定义）外均有样式，`cast-button` 是唯一遗漏项。
+
+### 静态检查
+
+`tsc --noEmit` 通过；`vitest run` 43 文件 / 301 用例全绿；`wxt build -b chrome` 成功。
+
+边界不变：`feature-parity.json` 维持 27 verified / 1 partial
+（`browser.media_push_device_selection`），`release_ready=false` 不变。投屏 / TVBox 的真实
+设备投送仍缺实机证据（本机所在网段无可用接收端），属发布门禁而非插件 UI 缺陷。

@@ -46,6 +46,8 @@ article:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--borde
 .article-actions .hlsd-button .hlsd-icon { width: 13px; height: 13px; }
 .push-button { background: color-mix(in srgb, var(--purple) 22%, var(--surface-3)); color: var(--purple-ink); }
 .push-button:hover:not(:disabled) { background: var(--purple); color: var(--on-primary); }
+.cast-button { background: color-mix(in srgb, var(--purple) 22%, var(--surface-3)); color: var(--purple-ink); }
+.cast-button:hover:not(:disabled) { background: var(--purple); color: var(--on-primary); }
 
 .empty { display: flex; min-height: 152px; margin: 0 2px; padding: 18px 20px; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed var(--border); border-radius: 8px; color: var(--faint); text-align: center; }
 .empty-icon { display: grid; width: 38px; height: 38px; margin-bottom: 9px; place-items: center; border-radius: 8px; background: color-mix(in srgb, var(--primary) 10%, var(--surface)); color: var(--primary-ink); }
