@@ -1139,6 +1139,9 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         write_progress(&job.progress, total, total, 0.0, "done");
         return Ok(());
     }
+    // 只有"从零开始"的下载才能把 200 解释成服务器不支持 Range：此时没有任何已保留片段，
+    // 续传偏移也为 0，整包 body 可以安全地作为完整资源重新下载。
+    let fresh_start = !output_existed && loaded.is_empty() && job.resume_from == 0;
     let scheduler = Arc::new(RangeScheduler::new(pending.to_vec(), workers));
     let downloaded = Arc::new(AtomicU64::new(already));
     let completed = Arc::new(Mutex::new(loaded));
@@ -1164,6 +1167,7 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
                     completed,
                     failed,
                     stop,
+                    fresh_start,
                 );
             });
         }));
@@ -1202,6 +1206,14 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     let _ = progress.join();
     let _ = fs::remove_file(active_ranges_path(&job.progress));
     if let Some(code) = failed.lock().unwrap_or_else(|err| err.into_inner()).take() {
+        // 从零开始的下载遇到"服务器根本不支持 Range"时，退回单流整包下载：
+        // 已启动的 worker 全部join 完毕，不会有并发写；download_sequential 会重建输出文件。
+        // 这样用户至少能拿到文件（失去分段并发与断点续传），而不是拿着已到手的整包失败。
+        if fresh_start && matches!(code, EngineErrorCode::RangeIgnored(_)) {
+            let _ = fs::remove_file(completed_ranges_path(job));
+            let _ = fs::remove_file(active_ranges_path(&job.progress));
+            return download_sequential(job);
+        }
         return Err(code.into_error());
     }
     match read_control(&job.control) {
@@ -1231,6 +1243,10 @@ enum EngineErrorCode {
     Pause,
     Cancel,
     RangeUnsupported(String),
+    /// 服务器对 Range 请求直接返回 200 整包，且本次下载没有已保留片段、响应身份与任务一致。
+    /// 这与 If-Range 未命中（身份已变）或续传位置错位有本质区别：这里只是服务器不支持 Range，
+    /// 整包 body 就是目标资源，可以退回单流下载。
+    RangeIgnored(String),
     Failed(String),
 }
 
@@ -1240,6 +1256,9 @@ impl EngineErrorCode {
             Self::Pause => EngineError::Pause,
             Self::Cancel => EngineError::Cancel,
             Self::RangeUnsupported(message) => EngineError::RangeUnsupported(message),
+            // 对外语义不变：仍然是 RANGE_UNSUPPORTED 退出码与同一条消息，
+            // 只有 download_ranges 会识别这个变体并决定退回单流。
+            Self::RangeIgnored(message) => EngineError::RangeUnsupported(message),
             Self::Failed(message) => EngineError::Failed(message),
         }
     }
@@ -1446,6 +1465,8 @@ fn range_worker(
     completed: Arc<Mutex<Vec<(u64, u64)>>>,
     failed: Arc<Mutex<Option<EngineErrorCode>>>,
     stop: Arc<AtomicBool>,
+    // 本次下载是否从零开始（无已保留片段、无续传偏移），含义见 fetch_range。
+    fresh: bool,
 ) {
     let Ok(mut file) = OpenOptions::new().read(true).write(true).open(&job.output) else {
         let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
@@ -1492,6 +1513,7 @@ fn range_worker(
             &downloaded,
             &completed,
             &scheduler,
+            fresh,
         );
         scheduler.complete(active.id);
         match result {
@@ -1569,6 +1591,9 @@ fn fetch_range(
     downloaded: &AtomicU64,
     completed: &Mutex<Vec<(u64, u64)>>,
     scheduler: &RangeScheduler,
+    // 本次下载是否从零开始（没有已保留片段、没有续传偏移）。只有为真时，
+    // 服务器返回 200 才能被解释为"不支持 Range"而不是"资源身份已变"。
+    fresh: bool,
 ) -> Result<(u64, u64), EngineErrorCode> {
     let start = progress
         .lock()
@@ -1606,6 +1631,17 @@ fn fetch_range(
             }
         };
         if fetched.status == 200 {
+            // 服务器忽略 Range 返回整包。只有当这次下载本来没有任何已保留片段、
+            // 且响应身份与任务一致（或无身份可校验）时，才能断定"这只是不支持 Range 的服务器"，
+            // 整包 body 就是目标资源；否则可能是 If-Range 未命中（资源已变）或续传位置错位，
+            // 拼接整包会污染已保留数据，必须按原来的 RangeUnsupported 失败。
+            let identity_matches =
+                fetched.etag.is_empty() || job.etag.is_empty() || fetched.etag == job.etag;
+            if fresh && identity_matches {
+                return Err(EngineErrorCode::RangeIgnored(
+                    "server ignored Range and returned 200".into(),
+                ));
+            }
             return Err(EngineErrorCode::RangeUnsupported(
                 "server ignored Range and returned 200".into(),
             ));
@@ -4281,6 +4317,74 @@ mod tests {
             }
         });
         format!("http://127.0.0.1:{}", addr.port())
+    }
+
+    /// 模拟 Python http.server 一类"完全不支持 Range"的服务器：返回 200 整包且不给 ETag。
+    fn serve_full_body_ignoring_range_without_etag(body: &'static [u8]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).is_err() {
+                    continue;
+                }
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let mut stream = reader.into_inner();
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+        format!("http://127.0.0.1:{}", addr.port())
+    }
+
+    #[test]
+    fn fresh_download_falls_back_to_sequential_when_server_ignores_range() {
+        let body: &'static [u8] = b"range-less-server-payload-0123456789";
+        let url = serve_full_body_ignoring_range_without_etag(body);
+        let (job, dir) = temp_job(&url, false, body.len() as u64, 3);
+        run_job(&job).unwrap();
+        assert_eq!(fs::read(&job.output).unwrap(), body);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn partial_download_still_fails_when_server_ignores_range() {
+        // 已有保留片段时，200 整包无法按续传偏移拼接，必须继续失败而不是污染文件。
+        let body: &'static [u8] = b"range-less-server-payload-0123456789";
+        let url = serve_full_body_ignoring_range_without_etag(body);
+        let (job, dir) = temp_job(&url, false, body.len() as u64, 2);
+        fs::write(&job.output, &body[..8]).unwrap();
+        fs::write(
+            completed_ranges_path(&job),
+            format!(
+                r#"{{"version":2,"resource_key":"{}","total":{},"ranges":[[0,7]]}}"#,
+                job.resource_key, job.total
+            ),
+        )
+        .unwrap();
+        let err = run_job(&job).unwrap_err();
+        assert_eq!(err.exit_code(), EXIT_RANGE_UNSUPPORTED);
+        let output = fs::read(&job.output).unwrap();
+        // download_ranges 会先 set_len(total) 预分配，所以文件长度就是 total；
+        // 关键是已保留前缀未被 200 整包覆盖，其余部分仍是零填充。
+        assert_eq!(output.len(), body.len());
+        assert_eq!(&output[..8], &body[..8], "reserved prefix must survive");
+        assert!(
+            output[8..].iter().all(|byte| *byte == 0),
+            "200 body must not be stitched into the reserved file: {output:?}"
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
