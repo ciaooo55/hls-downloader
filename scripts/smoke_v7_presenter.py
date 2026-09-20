@@ -255,6 +255,8 @@ def visible_handoff_smoke(
         warmup_latencies: list[float] = []
         submit_latencies: list[float] = []
         visibility_latencies: list[float] = []
+        warmup_submit_latencies: list[float] = []
+        warmup_visibility_latencies: list[float] = []
         presenter_pid_before_crash = 0
         presenter_pid_after_restart = 0
         # 恢复点：第 5 次原始 offer 之后重启 presenter，第 10 次之后重启 host+core。
@@ -310,14 +312,20 @@ def visible_handoff_smoke(
             sample_ms = (visible - started) * 1000
             # 暖机样本：presenter 首次渲染（第 1 个 offer）以及每次崩溃恢复后的第 1 个 offer
             # 含一次性窗口首绘/重绘开销，不代表稳态可见延迟，故不计入 100ms 稳态 P95 门限，
-            # 单独记录以便观测；其余样本计入稳态集合，直到收满 STEADY_STATE_SAMPLES 个。
+            # 也不计入各分段的稳态百分位（否则一次性暖机离群值会污染 native_host_submit /
+            # post_submit_visible 这两个本应描述稳态的指标）；单独记录以便观测。
+            # 其余样本计入稳态集合，直到收满 STEADY_STATE_SAMPLES 个。
+            submit_ms = (submitted - started) * 1000
+            visibility_ms = (visible - submitted) * 1000
             if expect_warmup_next:
                 warmup_latencies.append(sample_ms)
+                warmup_submit_latencies.append(submit_ms)
+                warmup_visibility_latencies.append(visibility_ms)
                 expect_warmup_next = False
             else:
                 latencies.append(sample_ms)
-            submit_latencies.append((submitted - started) * 1000)
-            visibility_latencies.append((visible - submitted) * 1000)
+                submit_latencies.append(submit_ms)
+                visibility_latencies.append(visibility_ms)
             handoff_id = handoff.get("id")
             if index == presenter_restart_after:
                 presenter_pid_before_crash = presenter_process.pid
@@ -348,6 +356,10 @@ def visible_handoff_smoke(
             "steady_state_samples": len(latencies),
             "visible_offer_p95_ms": round(p95, 2),
             "visible_offer_max_ms": round(max(latencies), 2),
+            "warmup_submit_max_ms": round(max(warmup_submit_latencies), 2) if warmup_submit_latencies else 0.0,
+            "warmup_post_submit_visible_max_ms": round(max(warmup_visibility_latencies), 2)
+            if warmup_visibility_latencies
+            else 0.0,
             "samples_ms": [round(value, 2) for value in latencies],
             "warmup_samples_ms": [round(value, 2) for value in warmup_latencies],
             "warmup_max_ms": round(max(warmup_latencies), 2) if warmup_latencies else 0.0,
