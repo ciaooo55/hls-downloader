@@ -84,3 +84,21 @@
    "全部功能在代码层面已实现且通过本机可执行的回归测试；其中投屏/TVBox/正式安装/正式发布
    这几项依赖本机没有的硬件与授权环境，属未实测，`browser.media_push_device_selection` 保持 partial，
    `release_ready=false` 不变。"
+
+## 真实浏览器端到端验证（2026-09-20，本机 Edge 153 + 未打包扩展 + 已注册原生主机）
+
+**方法**：用独立 Edge profile（`--user-data-dir` 指向仓库内 `.tool-cache\build-cache\edge-inject*`，
+不触碰用户自己的 Edge 数据）以 `--load-extension` 加载 `extension\.output\chrome-mv3`，
+通过 CDP 导航与求值；浏览器进程设置隔离的 `HLS_V7_DATA_DIR` / `HLS_V7_DOWNLOAD_DIR`，
+避免污染真实数据目录。
+
+| 验证项 | 实测结果 |
+| --- | --- |
+| 内容脚本真实注入 | `document.documentElement[data-hls-downloader-extension]="1"`（加载完成态），shadow root 已挂载 |
+| 播放 overlay 激活 | 合成 `play` 事件后 `.video-buttons` 图层 `display:block` / `position:fixed`，1 个操作组；按钮 aria-label 为 `下载当前视频`、`更多操作：投屏或推送当前媒体链接`，hover 面板含 `下载` / `投屏` / `TVBox` |
+| overlay 截图 | 1240x845，1192 种颜色，非白像素 9.1%，含主题色 `#2563EB`（3720 px） |
+| popup 真实扩展上下文 | `chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/popup.html` 正常渲染：`HLS Downloader / 连接中… / 打开 / 自动接管 / 本站 Cookie / 本站提示 / 已识别资源 0 / 重新识别 / 浏览器插件 版本 7.0.2`；9 个按钮、资源列表存在、**无"未启用/无法连接"错误**（原生消息通道可用） |
+| popup 截图 | 420x640，952 种颜色，非白像素 86.0%，含主题色 `#2563EB` |
+
+**仍未覆盖**：本机无 Firefox、无任何 WebDriver，故 Firefox 与 Brave / Vivaldi / Opera / Chromium
+未实测；投屏 / TVBox 的真实推送仍需真实局域网接收端。

@@ -598,3 +598,29 @@ BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`�
 - 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
   （`browser.media_push_device_selection`），`release_ready=false` 不变；
   未做任何签名或正式发布。
+### 第二十二轮（2026-09-20，继续修复）：把"真实浏览器插件注入与 UI 渲染"从受阻项变成已实测项
+
+- **突破点**：此前判定"真实浏览器内容脚本注入受阻"是因为只试了
+  `--headless=new`（`--dump-dom` 对网页返回空 DOM）与 `about:blank`
+  （Edge 直接 exit 13）。改为**有头模式 + 真实 URL + 独立 profile + `--load-extension`**
+  后 CDP 立即可用，注入验证一次通过。
+- **内容脚本注入（真实 Edge 153 + 未打包扩展）**：
+  `document.documentElement[data-hls-downloader-extension]="1"`，shadow root 挂载成功。
+- **播放 overlay 真实渲染**：合成 `play` 事件后 `.video-buttons` 图层
+  `display:block` / `position:fixed`，1 个操作组；按钮 aria-label 为
+  `下载当前视频`、`更多操作：投屏或推送当前媒体链接`，hover 面板含
+  `下载` / `投屏` / `TVBox`。截图 1240x845、1192 种颜色、非白像素 9.1%、
+  含主题色 `#2563EB`（3720 px）。
+- **popup 真实渲染**：`chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/popup.html`
+  （与商店 ID 一致）输出
+  `HLS Downloader / 连接中… / 打开 / 自动接管 / 本站 Cookie / 本站提示 / 已识别资源 0 /
+  重新识别 / 浏览器插件 版本 7.0.2`，9 个按钮、资源列表存在、
+  **无"未启用 / 无法连接"错误**，说明真实原生消息通道可用。截图 420x640、非白像素 86.0%。
+- **安全边界**：浏览器使用仓库内 `.tool-cache\build-cache\edge-inject*` 独立 profile，
+  未触碰用户自己的 Edge 数据；数据目录指向隔离的 `HLS_V7_DATA_DIR` /
+  `HLS_V7_DOWNLOAD_DIR`；探针脚本与截图只写在 PI scratch；结束后进程与 profile 全部清理。
+- **仍未覆盖**：本机无 Firefox 与任何 WebDriver，故 Firefox 与 Brave / Vivaldi /
+  Opera / Chromium 未实测；投屏 / TVBox 真实推送仍需真实局域网接收端。
+- 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
+  （`browser.media_push_device_selection`），`release_ready=false` 不变；
+  未做任何签名或正式发布。
