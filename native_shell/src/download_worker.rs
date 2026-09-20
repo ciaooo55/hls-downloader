@@ -5052,7 +5052,13 @@ mod tests {
             resource_kind: ResourceKind::File,
             title: "File".into(),
             filename: "../bad:name?.bin".into(),
-            download_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+            // 必须隔离到本进程专属子目录：`build_job()` 会调用 `prepare()` 真实落盘，
+            // 直接指向 `%TEMP%` 会在共享临时目录根部留下 `.hls-tasks` 残留，
+            // 且多个测试进程/真实实例之间会互相撞同一个固定路径。
+            download_dir: std::env::temp_dir()
+                .join(format!("hls-v7-spec-{}", std::process::id()))
+                .to_string_lossy()
+                .into_owned(),
             request_method: "GET".into(),
             credential_ref: None,
             replay_context_ref: None,
@@ -5747,6 +5753,8 @@ mod tests {
         spec.request_method = "POST".into();
         let (post_job, post_paths) = build_job("task-post", &spec).unwrap();
         assert!(post_job.sequential);
+        // 连同隔离根一起删除，避免只删 `.hls-tasks/<task>` 而把空父目录留在 %TEMP%。
+        let _ = fs::remove_dir_all(spec.download_dir);
         let _ = fs::remove_dir_all(paths.task_dir());
         let _ = fs::remove_dir_all(post_paths.task_dir());
     }

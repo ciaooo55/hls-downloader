@@ -463,6 +463,9 @@ mod tests {
         assert_eq!(reopened.store().latest_sequence().unwrap(), 2);
         let events = reopened.handle(CoreCommand::Ping).unwrap();
         assert_eq!(events[0].sequence, 3);
+        // Windows 上无法删除仍被 SQLite 持有的文件：先释放 owner 再清理，
+        // 否则 `remove_file` 静默失败并在 %TEMP% 堆积测试数据库。
+        drop(reopened);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));
@@ -743,6 +746,8 @@ mod tests {
             event.event,
             crate::CoreEvent::MediaPushResolved { ref request } if request.id == "push-restart" && request.status == "done"
         )));
+        // 见 `file_store_restores_tasks_after_core_restart`：先释放 owner 再删除。
+        drop(reopened);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));
@@ -845,6 +850,8 @@ mod tests {
             crate::CoreEvent::MediaPushRequested { request } if request.id == next_request.id
         )));
 
+        // 见 `file_store_restores_tasks_after_core_restart`：先释放 owner 再删除。
+        drop(reopened);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));
@@ -917,6 +924,8 @@ mod tests {
             row.get("id").and_then(serde_json::Value::as_str) == Some(push.id.as_str())
                 && row.get("status").and_then(serde_json::Value::as_str) == Some("pending")
         }));
+        // 见 `file_store_restores_tasks_after_core_restart`：先释放 owner 再删除。
+        drop(reopened);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));
@@ -975,6 +984,8 @@ mod tests {
             (task.uploaded_bytes, task.upload_speed_bytes_per_sec),
             (0, 0)
         );
+        // 见 `file_store_restores_tasks_after_core_restart`：先释放 owner 再删除。
+        drop(reopened);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));

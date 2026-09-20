@@ -455,3 +455,34 @@ BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`�
   `v6_migrate::tests` 7 项全过（`absolute_dirs_are_left_untouched` 真实执行并通过）；
   `cargo clippy --locked --all-targets -- -D warnings -A dead_code -A clippy::large_enum_variant
   -A clippy::too_many_arguments -A clippy::type_complexity` exit 0；`cargo fmt --check` exit 0。
+
+### 第十八轮（2026-09-20，继续检查）：修复测试在共享 `%TEMP%` 根部固定路径的写入与泄漏
+
+- **现象一（确定性失败）**：`cargo test --lib` 默认并行连续 6 次出现
+  `v6_migrate::tests::absolute_dirs_are_left_untouched` 失败；单跑该用例或整组都过。
+- **根因一**：`v6_migrate.rs` 测试助手 `test_dir()` 用 `CARGO_TARGET_DIR` 作基目录，而本仓
+  该变量是相对路径 `.tool-cache\build-cache\cargo-target`，于是用例构造的「绝对路径」输入
+  实际是相对路径，被迁移逻辑正确地重解析，与用例前提矛盾。
+- **现象二（残留）**：每跑一轮完整套件，`%TEMP%` 就多出 5 个测试数据库
+  （`hls-v6-core-restart-*`、`hls-v7-media-push-restart-*`、`hls-v7-media-push-normalize-*`、
+  `hls-v7-side-row-transaction-*`、`hls-v7-verification-*`），累计已 350+；
+  以及 `%TEMP%\.hls-tasks` 目录根的残留。
+- **根因二**：5 个 Core 重启类用例在 `reopened`（持有 SQLite 文件句柄）仍存活时调用
+  `remove_file`；Windows 上无法删除已打开文件，删除失败但错误被 `let _ =` 吞掉。
+  另 `download_worker::tests::spec()` 的 `download_dir` 直接写 `%TEMP%`，而 `build_job()`
+  会调用 `prepare()` 真实落盘，于是把 `.hls-tasks` 写进共享临时目录根部，且是固定路径
+  （多个测试进程/真实实例会互撞）。
+- **修复**：`test_dir()` 把基目录解析为绝对路径；5 处清理前先 `drop(reopened)`；
+  `spec()` 改用本进程专属隔离子目录，并在 `get_job_without_size_is_not_forced_sequential`
+  里连同隔离根一起删除。**未改动任何生产逻辑**（迁移判定、SQLite 生命周期、TaskPaths 均不变）。
+- **验证**：`cargo test --lib` 默认并行连续 3 次 462 passed / 0 failed / 1 ignored；
+  套件跑完后 `%TEMP%` 的 `hls-*` 残留数为 0（修复前为 5 个数据库 + 1 个目录）；
+  `cargo clippy --locked --all-targets -- -D warnings -A dead_code -A clippy::large_enum_variant
+  -A clippy::too_many_arguments -A clippy::type_complexity` exit 0；`cargo fmt --check` exit 0。
+- 其余四套回归同轮复核：`presenter_ui` 9 passed；extension `typecheck` exit 0 且
+  `vitest run` 300 passed；`desktop_ui` `gradlew test` BUILD SUCCESSFUL；
+  `validate-powershell.ps1` PS 5.1 + PS 7 均 exit 0；`verify-v7-feature-parity.ps1
+  -PackageTier candidate -RequireNoBlocked -RequireCleanWorktree` 通过（27/28、1 partial）。
+
+边界不变：`feature-parity.json` 维持 27 verified / 1 partial
+（`browser.media_push_device_selection`），`release_ready=false` 不变。
