@@ -486,3 +486,27 @@ BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`�
 
 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
 （`browser.media_push_device_selection`），`release_ready=false` 不变。
+
+### 第十九轮（2026-09-20，项目落地）：修复 FFmpeg 供应链固定腐烂导致的打包全面阻断
+
+- **现象**：`scripts\build-v7.ps1 -Task candidate` 在 cargo release 与扩展构建全部成功后中断：
+  `Candidate/formal packaging requires HLS_V7_FFMPEG_DIR or ffmpeg.exe on PATH`。
+  进一步 `scripts\bootstrap-v7-media-tools.ps1` 直接失败：
+  `Invoke-WebRequest ... 404 未找到`。
+- **根因**：`bootstrap-v7-media-tools.ps1` 把 FFmpeg 固定到 BtbN 的 **autobuild 日期** 资产
+  `autobuild-2026-09-06-13-06 / ffmpeg-n9.0.1-26-g5c8e7e2433-win64-gpl-9.0.zip`。
+  BtbN 只保留最近约 5 个 autobuild 发布，该发布已被上游删除，资产返回 404。
+  因此这不只是本机构建问题：`.github/workflows/package-v7-candidate.yml` 调用同一个脚本，
+  候选打包 CI 同样会失败。即**固定方式本身会腐烂**，与产品代码无关。
+- **修复**：重新固定到当前仍存在的 `autobuild-2026-09-19-13-11 / ffmpeg-n9.0.2-win64-gpl-9.0.zip`
+  （同为不带独立 DLL 集的静态 win64-gpl 构建，FFmpeg 9.0.1 → 9.0.2），
+  SHA-256 `44083538105b4e64d439f9e67bd875bd264b4271239c808b2acea09773ad1aa3`（实测）。
+  供应链属性不变：仍是「固定版本 + 固定摘要 + 下载后校验」，且脚本仍校验
+  `ffmpeg.exe`/`ffprobe.exe`/`ffplay.exe` 三者同目录。文件头注明腐烂原因与再固定流程。
+  未改动任何产品代码、未改动发布门禁、未改动 `feature-parity.json`。
+- **验证**：`bootstrap-v7-media-tools.ps1` 退出 0 并返回
+  `.tool-cache\build-cache\ffmpeg-n9.0.2-win64-gpl-9.0\bin`；`ffmpeg -version` / `ffprobe -version`
+  正常输出 `n9.0.2-20260919`；`validate-powershell.ps1` PS 5.1 + PS 7 均 exit 0。
+
+边界不变：`feature-parity.json` 维持 27 verified / 1 partial
+（`browser.media_push_device_selection`），`release_ready=false` 不变。

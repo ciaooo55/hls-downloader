@@ -13,14 +13,19 @@ $cacheRoot = if ($env:HLS_V7_BUILD_CACHE) {
     Join-Path $repo '.tool-cache\build-cache'
 }
 
-# A dated BtbN release plus an asset digest keeps release packaging independent
-# of moving FFmpeg aliases. Use the static Windows build because build-v7.ps1
-# intentionally bundles the three executables without a separate DLL set.
-$ffmpegRelease = 'autobuild-2026-09-06-13-06'
-$ffmpegArchiveName = 'ffmpeg-n9.0.1-26-g5c8e7e2433-win64-gpl-9.0.zip'
+# 说明：本固定方式已被证明会腐烂，务必读这段再改。
+# 上游 BtbN 只保留最近约 5 个 autobuild 发布，所以「固定到某个 autobuild 日期」
+# 必然随时间失效：原先固定的 autobuild-2026-09-06-13-06 已被上游删除，资产返回
+# 404，导致 bootstrap、本地候选打包与 package-v7-candidate CI 同时失败。
+# 2026-09-20 重新固定到当前仍存在的 autobuild-2026-09-19-13-11 静态 win64-gpl 构建
+# （FFmpeg 9.0.1 → 9.0.2，同为不带独立 DLL 集的静态构建），并记录实测 SHA-256。
+# 供应链属性不变：仍为「固定版本 + 固定摘要 + 下载后校验」。
+# 若日后再遇 404，按同样流程重新固定并在此注明原因与日期。
+$ffmpegRelease = 'autobuild-2026-09-19-13-11'
+$ffmpegArchiveName = 'ffmpeg-n9.0.2-win64-gpl-9.0.zip'
 $ffmpegArchiveUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$ffmpegRelease/$ffmpegArchiveName"
-$ffmpegSha256 = 'dd232ccf8661f837a1faa5f534a1a0bdbdb25c42afe79391e8345154df78f791'
-$toolRoot = Join-Path $cacheRoot 'ffmpeg-n9.0.1-26-g5c8e7e2433-win64-gpl-9.0'
+$ffmpegSha256 = '44083538105b4e64d439f9e67bd875bd264b4271239c808b2acea09773ad1aa3'
+$toolRoot = Join-Path $cacheRoot 'ffmpeg-n9.0.2-win64-gpl-9.0'
 $downloadsRoot = Join-Path $cacheRoot 'downloads'
 $archivePath = Join-Path $downloadsRoot $ffmpegArchiveName
 
