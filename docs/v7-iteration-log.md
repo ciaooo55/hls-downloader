@@ -555,3 +555,46 @@ BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`�
 
 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
 （`browser.media_push_device_selection`），`release_ready=false` 不变；未做任何签名或正式发布。
+### 第二十一轮（2026-09-20，继续修复）：修掉 presenter 稳态百分位被暖机样本污染的证据缺陷
+
+- **现象**：`scripts\smoke_v7_presenter.py` 的 `visible_offer_p95_ms`（100ms 门限）
+  已经把暖机样本排除在 `latencies` 之外，但 `submit_latencies` / `visibility_latencies`
+  对每个样本都追加，于是与稳态门限并列输出的
+  `native_host_submit_p95_ms` / `post_submit_visible_p95_ms`
+  实际被一次性的首绘/崩溃恢复重绘离群值污染，**不能描述稳态**，
+  会直接把后面的延迟归因带偏（此前一次 110.01ms 的失败归因就受此影响）。
+- **修复**：暖机样本不再进入这两个分段集合，改记到
+  `warmup_submit_max_ms` / `warmup_post_submit_visible_max_ms` 单独观测。
+  门限语义不变：仍是稳态可见 offer 的 P95 <= 100ms。
+- **验证（本机，commit ff0ad2e）**：
+  - 单独跑一次 smoke：`visible_offer_p95_ms=75.84`、`native_host_submit_p95_ms=27.23`、
+    `post_submit_visible_p95_ms=52.65`、`latency_passed=true`。
+  - `adversarial-v7.ps1 -Scope @('browser','transfer')` **PASS**：presenter
+    `visible_offer_p95_ms=89.82`、`native_host_submit_p95_ms=27.20`、
+    `post_submit_visible_p95_ms=61.89`；Compose 协议与敌意输入
+    （gradle test + native_shell 462 passed / 0 failed / 1 ignored + presenter 9 +
+    extension 300 passed）全绿。
+  - `adversarial-v7.ps1 -Scope @('native')` **PASS**：presenter
+    `visible_offer_p95_ms=75.37`、submit P95 24.24 / 可见段 53.95；
+    Native Host 冷启动 810.38ms（门限 1500）；真实 Range 吞吐 **113.82 MiB/s**
+    （门限 20）、工作集增长 5.75 MiB（门限 256）、发布后额外网络字节 0。
+- **候选包范围补充验证**：`verify-hls-candidate-auth-resume.ps1 -Runs 2` **PASS**，
+  便携包内引擎的认证 VOD 与 Live 暂停/续跑均通过（401 → 鉴权 → 续跑，
+  live 模式 checkpoint=present）。
+- **注册表复核**：HKCU 下 7 条 `com.ciaooo55.hls_downloader` 注册
+  （Chrome / Edge / Brave / Chromium / Vivaldi / Opera + Firefox）全部存在，
+  且 Chromium 系 6 条均指向打包资源目录的
+  `HLSDownloaderNativeHost.chrome.json`，Firefox 指向 `.firefox.json`；
+  早前"Opera 注册缺失"的记录已过时。
+- **真实浏览器内容脚本注入验证：本机受阻（未通过，非代码问题）**。
+  Edge 153 headless=new 下：`--dump-dom` 对网页（file:// 与 http://）返回空 DOM
+  （仅对 `chrome-extension://` 弹窗页有效，该页此前已验证）；
+  `--remote-debugging-port` 始终不绑定（profile 内不生成 `DevToolsActivePort`，
+  新 profile 启动常以 exit code 13 退出）；本机也没有 Firefox 与任何 WebDriver。
+  因此"扩展在真实浏览器里注入页面并挂载 shadow UI"这一项仍未验证。
+- **未执行项维持原判**：`verify-v7-msi-lifecycle.ps1` 要求把 MSI 装回 `E:\h`
+  并需要 msiexec 提权，与"本机清理干净、不重复安装"的既有约定冲突，不做；
+  `smoke-installed-v7.ps1` 同理；完整浏览器矩阵仍缺 Firefox + WebDriver。
+- 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
+  （`browser.media_push_device_selection`），`release_ready=false` 不变；
+  未做任何签名或正式发布。
