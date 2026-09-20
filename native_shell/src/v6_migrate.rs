@@ -443,9 +443,17 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        // 测试基目录必须是绝对路径：absolute_dirs_are_left_untouched 之类的
+        // 用例依赖它构造「绝对路径」输入。CARGO_TARGET_DIR 可能是相对路径，
+        // 因此这里统一解析成绝对路径，避免迁移逻辑把绝对输入误判为相对。
         let base = std::env::var_os("CARGO_TARGET_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap().join("target"));
+        let base = if base.is_absolute() {
+            base
+        } else {
+            std::env::current_dir().unwrap().join(base)
+        };
         let dir = base
             .join("v6-migrate-tests")
             .join(format!("{label}-{}-{seq}-{nonce}", std::process::id()));

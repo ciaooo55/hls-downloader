@@ -435,3 +435,23 @@ BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`�
 
 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
 （`browser.media_push_device_selection`），`release_ready=false` 不变。
+
+### 第十七轮（2026-09-20，继续检查）：修复 v6 迁移测试基目录不是绝对路径的确定性失败
+
+- **现象**：`cargo test --manifest-path native_shell/Cargo.toml --lib`（462 用例默认并行）连续 6 次
+  出现 1 个失败：`v6_migrate::tests::absolute_dirs_are_left_untouched` 在 `src\v6_migrate.rs:634`
+  断言 `spec.download_dir == 绝对路径` 失败；单跑该用例、或改跑整组 `v6_migrate::tests` 都通过。
+  之前怀疑的 `download_worker::tests::live_torrent_selection_…` 仅是被误读的日志，
+  其真实错误信息为 `v7 task task-1 failed: url path invalid`，属于并行调度下
+  BT 对端监听线程先退出的时序噪声，实际失败点在本测试。
+- **根因**：`v6_migrate.rs` 测试助手 `test_dir()` 用 `CARGO_TARGET_DIR`（本仓建的是
+  `.tool-cache\build-cache\cargo-target`，**相对路径**）作为基目录。相对基目录下
+  `absolute = <base>\v6\keep` 不是绝对路径，于是迁移逻辑在 `original.is_absolute()`
+  分支正确地把它当相对路径重解析，与 `absolute_dirs_are_left_untouched` 的用例前提矛盾。
+  生产路径完全正确，缺陷只在测试夹具对「绝对路径」的假设。
+- **修复**：`test_dir()` 在拿到基目录后统一解析为绝对路径（相对则与当前工作目录拼接），
+  不改动任何迁移生产逻辑。
+- **验证**：`cargo +1.98.1 test --lib` 默认并行连续 5 次 462 passed / 0 failed / 1 ignored；
+  `v6_migrate::tests` 7 项全过（`absolute_dirs_are_left_untouched` 真实执行并通过）；
+  `cargo clippy --locked --all-targets -- -D warnings -A dead_code -A clippy::large_enum_variant
+  -A clippy::too_many_arguments -A clippy::type_complexity` exit 0；`cargo fmt --check` exit 0。
