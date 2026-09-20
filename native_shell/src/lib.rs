@@ -30,11 +30,7 @@ mod curl_import;
 #[cfg(feature = "full-core")]
 mod download_worker;
 #[cfg(feature = "full-core")]
-mod drop_target;
-#[cfg(feature = "full-core")]
 mod duplicate;
-#[cfg(feature = "full-core")]
-mod file_dialog;
 #[cfg(feature = "full-core")]
 mod ftp_engine;
 #[cfg(feature = "full-core")]
@@ -137,10 +133,6 @@ pub use credentials::{
 pub use curl_import::{parse_curl_command, CurlDownload};
 #[cfg(feature = "full-core")]
 pub use download_worker::{CoreCoordinator, CoreSettings, TaskPaths};
-#[cfg(feature = "full-core")]
-pub use drop_target::attach_file_drop;
-#[cfg(feature = "full-core")]
-pub use file_dialog::{pick_export_path, pick_import_paths};
 #[cfg(feature = "full-core")]
 pub use harvest::{harvest_html, harvest_html_filtered, HarvestLink};
 #[cfg(feature = "full-core")]
