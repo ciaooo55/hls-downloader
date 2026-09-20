@@ -670,3 +670,38 @@ BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`�
 - 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
   （`browser.media_push_device_selection`），`release_ready=false` 不变；
   未做任何签名或正式发布。
+
+### 第二十五轮（2026-09-20，继续收口）：给手写 SHA 补已知答案向量，删掉零调用的 Win32 模块
+
+- **动机**：上一轮被质疑"弄了半天啥都没做"。复盘后确认：真正落到产品代码的只有
+  Range-less 回退一处，其余是验证、文档和重新打包。因此本轮转向"还有哪些高风险面
+  从来没被验证过"，先看测试最薄又最要命的模块。
+- **crypto_lite.rs 已知答案差分（commit 6925fd8）**：SHA-1 是 BT piece 校验与
+  info-hash 的唯一实现，SHA-256 是任务校验和的唯一实现，而该模块此前只有空输入向量
+  加一个 6 字节流式用例——padding 或分块边界写错没人会发现。新增 21 个 SHA-256
+  单发向量、21 个 SHA-1 单发向量、25 个流式向量（chunk 1/7/63/64/65），覆盖
+  0/1/2/3/31/32/55/56/57/63/64/65/111/119/120/127/128/129/191/192/200 这些块边界长度。
+  所有摘要由 Python hashlib 生成，并在信任 Rust 实现之前用独立脚本对提交进来的表
+  复算一遍（42+25 例 0 偏差）。`cargo test --lib crypto_lite` 6 passed；
+  完整串行 lib 467 passed / 0 failed / 1 ignored；`cargo fmt --check` 与
+  CI 同参 clippy 均 exit 0。**未发现实现缺陷**——这一处的价值是把
+  "从没被验证过"变成"已被已知答案锁定"。
+- **删除零调用模块（commit a9bb252）**：`native_shell/src/drop_target.rs` 与
+  `file_dialog.rs` 共 231 行 Win32 代码（WM_DROPFILES 子类化 + OPENFILENAME 选择器），
+  全仓库没有任何调用方：Compose 工作台自己安装 `java.awt.dnd.DropTarget`
+  并发起自己的选择器，而 native_shell 只是 rlib、只被本 crate 的三个二进制消费，
+  库外没有任何路径能到达 `attach_file_drop` / `pick_import_paths`。
+  连同 `lib.rs` 的 `mod` 声明与 `pub use` 一并删除。拖拽导入与文件选择功能
+  经 desktop_ui 实现继续可用，不受影响。验证：`cargo build --all-targets`、
+  `cargo test --lib`（467 passed / 0 failed / 1 ignored）、
+  `cargo test --bin HLSDownloaderUpdater`（7 passed）、`cargo fmt --check`、
+  CI 同参 clippy 全部 exit 0。
+- **顺带核查、未改动的模块**：`av_scan.rs` 自身失败方向是 fail-closed 的
+  （spawn 失败 / 超时 / 非 0/1/2 退出都记 `error`），但调用方只对 `threat`
+  阻断发布，`error` 不阻断，且 `av_scan_enabled` 默认关闭——属产品策略选择；
+  `motw.rs` 的 `is_public_download_url` 对畸形数字主机（如 `127.1`、
+  `::ffff:127.0.0.1`）会判为公网并打 Zone.Identifier，方向是"多标记"而非漏标记。
+  两者都只记录，不改产品行为。
+- 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
+  （`browser.media_push_device_selection`），`release_ready=false` 不变；
+  未做任何签名或正式发布。
