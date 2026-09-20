@@ -18,7 +18,7 @@
 - `192.168.2.11`（历史 DLNA/Phicomm 证据设备）：ARP `Unreachable`，ping 不通。
 - `192.168.2.5`（历史 TVBox 证据设备）：主机可达（MAC `FC-7C-02-49-D6-6D`），但 **TVBox 端口 9978 未开放**（连接被拒），当前**不是**可用接收器。
 - SSDP `M-SEARCH` 主动探测 4s：**0 个** DLNA 设备响应。
-- `libmpv-2.dll`：仓库源码树内没有；仅存在于打包产物（`artifacts/v7-productization/candidate*/**`、`outputs/local-latest-20260915/**`）与 Compose 构建缓存中。
+- `libmpv-2.dll`：仓库源码树内没有；仅存在于打包产物（`artifacts/v7-productization/candidate/**`、当前交付目录 `outputs/local-*/**`）与 Compose 构建缓存中。
 
 结论：本机当前**没有任何可用的投屏/TVBox/DLNA 接收端**，因此所有"需要真实接收设备"的门禁在本机无法闭环。
 
