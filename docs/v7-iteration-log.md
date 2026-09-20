@@ -510,3 +510,48 @@ BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`�
 
 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
 （`browser.media_push_device_selection`），`release_ready=false` 不变。
+
+### 第二十轮（2026-09-20，项目落地）：从当前源码产出 candidate 交付并把插件链路接实
+
+- **修复第十九轮的阻断后，`scripts\build-v7.ps1 -Task candidate` 全流程跑通**（前台执行，
+  中途工具超时不影响子进程继续）：扩展构建 → cargo release（native_shell 2m27s +
+  presenter 5m01s）→ gradle `clean createDistributable packageDistributionForCurrentOS`
+  （BUILD SUCCESSFUL 6m44s，13 tasks executed）→ MSI 回滚序重写 → 便携 zip → 扩展 zip →
+  产物清单与溯源。产物 `source_commit=495bd11`（= 当前 HEAD），`tree=58e695d0`（= `HEAD^{tree}`）。
+- **产物完整性（逐个实测）**：exe / msi / portable / Chromium / Firefox 的 SHA-256 与
+  `ARTIFACT-MANIFEST.json` 全部一致；便携包内 `BUILD-PROVENANCE.json` 的 commit/tree 等于 HEAD、
+  `package_tier=candidate`；包内 `FEATURE-PARITY.json` 哈希等于仓库 canonical 文件。
+- **扩展 manifest（用 .NET 显式 UTF-8 解析，避开 PowerShell 代码页把中文读坏的问题）**：
+  Chromium 与 Firefox 均 `version=7.0.2` + `manifest_version=3`；Chromium 携带 216 字符商店公钥；
+  Firefox `gecko.id=hls-downloader-store@ciaooo55.com`；`popup.html` 引用的
+  `chunks/popup-DfY81R3S.js`、`assets/popup-N6bGNzxR.css`、`icon-32.png` 全部存在。
+- **扩展 ID 与注册 origins 对齐（自行按 Chromium 规则复算）**：把 manifest `key` 做
+  DER→SHA-256→前 16 字节→a-p 十六进制，得到 `bbdfldcjnikaemnimalegbopgaknjhla`，
+  与 `allowed_origins` 中的扩展 ID 完全一致。
+- **原生主机注册改指向出厂二进制**：原先注册的是 `cargo-target\debug\HLSDownloaderNativeHost.exe`
+  （与交付包不同哈希），且该目录里引擎叫 `hls-downloader-engine.exe`，宿主要找的却是
+  `HLSDownloaderEngine.exe`，所以宿主无法自启 Core（报
+  `HLSDownloaderEngine.exe is not next to the desktop UI`）。改为对
+  `.tool-cache\build-cache\compose-build\compose\binaries\main\app\HLSDownloader\app\resources\HLSDownloaderEngine.exe`
+  执行 `--register-native-host`，7 处注册全部指向该目录；三处浏览器注册已验证。
+- **插件端到端冒烟（官方探针，不用自制管道）**：`smoke_v7_native_host.py` 对**包内**二进制跑
+  冷启动：`cold_first_response_ms=576.54`（门限 1500）、两次帧式 ping、隔离 Core 建库、干净退出。
+  `smoke_v7_presenter.py --recovery-only`：`latency_passed=true`、`visible_offer_p95_ms=57.66`、
+  `native_host_submit_p95_ms=21.85`、`presenter_pending_recovery=true`。
+- **完整原生对抗门 `adversarial-v7.ps1 -Scope native` PASS**：Core 协议 30 passed、
+  传输 worker 45 passed、presenter 9 passed、player process passed、Compose 协议与恶意输入
+  （gradle test + native_shell 462 passed/0 failed/1 ignored + presenter 9 + extension 300 passed）
+  、Native Host 冷启动 760.02ms、真实 Range 吞吐 **110.31 MiB/s**（门限 20）、
+  工作集增长 5.68 MiB（门限 256）、发布后额外网络字节 0。
+- **无头 Edge 真实加载交付包 popup**：`--dump-dom` 得到
+  「HLS Downloader 正在载入浏览器插件… 浏览器插件脚本未启用。」——popup JS 真实执行并正确进入降级态
+  （file:// 独立加载下的预期行为）；截图 420x640、329 种颜色、24.8 万非白像素。
+- **本机交付目录**：`outputs\local-20260920-183500\`（exe / msi / portable / 两个扩展 zip /
+  ARTIFACT-MANIFEST / BUILD-PROVENANCE / FEATURE-PARITY / latest.json + README 使用与验证说明）。
+  `outputs/` 与 `artifacts/` 均不入库。
+- **未验证项如实记录**：本机无 msedgedriver / chromedriver / geckodriver，也未安装 Firefox，
+  故 `verify-v7-candidate-browser.ps1` 的完整浏览器矩阵无法运行；Presenter 稳态延迟门本轮
+  57.66 / 75.44ms 低于 100ms，但同机历史采样曾达 90–110ms，不声称其在本机稳定达成。
+
+边界不变：`feature-parity.json` 维持 27 verified / 1 partial
+（`browser.media_push_device_selection`），`release_ready=false` 不变；未做任何签名或正式发布。
