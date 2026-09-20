@@ -405,4 +405,284 @@ mod tests {
             sha256_hex(b"abcdef")
         );
     }
+
+    // 手写 SHA 的 padding 与分块边界是最容易出错的地方，而 BT piece 校验（SHA-1）
+    // 与任务校验和（SHA-256）都依赖它。下面用 Python hashlib 生成的已知答案向量，
+    // 覆盖 55/56/57/63/64/65/119/120 这些块边界长度。
+    fn pattern(length: usize) -> Vec<u8> {
+        (0..length)
+            .map(|index| ((index * 31 + 7) % 256) as u8)
+            .collect()
+    }
+
+    const SHA256_ONE_SHOT: &[(usize, &str)] = &[
+        (
+            0,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (
+            1,
+            "ca358758f6d27e6cf45272937977a748fd88391db679ceda7dc7bf1f005ee879",
+        ),
+        (
+            2,
+            "140d811b81973993df99b8b1742b383ab83f6f52bf7af850812e7bba02ff11da",
+        ),
+        (
+            3,
+            "647674a296197442f518bcca323ec605dd8d098b2d4f22ee1fdcdd2bb753a189",
+        ),
+        (
+            31,
+            "5e5f9fa56d6337115e86a2508477e87c7d5296d0b0743ecfde2d0caeed2db37d",
+        ),
+        (
+            32,
+            "8e889f10b21cdd1b3ad72f740317a827d76e1b5b3f721e33c566f06d1deff8ea",
+        ),
+        (
+            55,
+            "8aa994584139d128848eeebc4e815639ba5ab6e6e39574195a63ac4f14f7c43b",
+        ),
+        (
+            56,
+            "ad574708f75c044c9b85de64cb568ee7711ff4f36448c6242f053ba8f6cc2b63",
+        ),
+        (
+            57,
+            "5b46e502092be01b1100193e089fdda95638c12e19a1d24f308eb2c3d3ae849d",
+        ),
+        (
+            63,
+            "280ed3e8ff1df845b2e7dfe6ac6cee817bef20e783cc65abc41b818b4d2fe076",
+        ),
+        (
+            64,
+            "c6ab9724ade5b6a7a1edfffb12f3aa9181351355af8fd08c919952ad211339dd",
+        ),
+        (
+            65,
+            "788367c73c7ddf4c53f65e68cc0d943e6227ab55b0e78ba63ace822b1c6301c0",
+        ),
+        (
+            111,
+            "dd1413178fb627f9abbc041ffe39c44aa7aaa0e2e6d2ca5c4528ac7073a2da45",
+        ),
+        (
+            119,
+            "3d610547d68216dedf7435a4fb6260353911f6b3fd3f18805ddb8be285d726fe",
+        ),
+        (
+            120,
+            "1f80156a804cb7862ad113e8200e9d74499723e7c7854d5f48776d3148e09656",
+        ),
+        (
+            127,
+            "192409cd280e14b743642ad1343fbd3e82d9305de72c078117745a679210cc3d",
+        ),
+        (
+            128,
+            "cc548ca2dec1f6fe4f58b2e27aa9c7521607df1130d140b55a4dad0665302356",
+        ),
+        (
+            129,
+            "81e89a7b2911aaa7795f9e3d4910cb47d6cd2b00d83b8399481527261a1a7519",
+        ),
+        (
+            191,
+            "2a30958d124d569d0a4832c608c772181557edbae684ff368be6592d3bf500c7",
+        ),
+        (
+            192,
+            "6e3a9b4ecba7af3a46e4f5c90fe02c99b5715144444b38049a42ac8313b30346",
+        ),
+        (
+            200,
+            "44cae5223d431caed4a9e32271d6abf17c3f2f4abac45fcdb48a99fcc6072a09",
+        ),
+    ];
+
+    #[test]
+    fn sha256_matches_known_answers_across_block_boundaries() {
+        for (length, expected) in SHA256_ONE_SHOT {
+            assert_eq!(sha256_hex(&pattern(*length)), *expected, "length {length}");
+        }
+    }
+
+    const SHA1_ONE_SHOT: &[(usize, &str)] = &[
+        (0, "da39a3ee5e6b4b0d3255bfef95601890afd80709"),
+        (1, "5d1be7e9dda1ee8896be5b7e34a85ee16452a7b4"),
+        (2, "7878ac025cfe0384191ff21ebb1627fd25f8a60c"),
+        (3, "d2df16b976a43628c63ea246436fccf6d7635d09"),
+        (31, "8a3cfab36a8e4e5510d5800dd0063725f29c614f"),
+        (32, "4a9f58da1bac35a4d50e87dc0f9e49f3a740192f"),
+        (55, "749bbefb28edc4638b28b2b9a9e03ab9a4032b90"),
+        (56, "a5b6e9c29d201c774753ff8e7fb64931656f5e63"),
+        (57, "eb0737bed5451790722b2df351829ce117e3d9dd"),
+        (63, "d1a454409359fc372b4d22b3cea6488d6ba1be00"),
+        (64, "39a0d8b645ad85f1f976731ed112ac9455e28b78"),
+        (65, "d0c96e18890114a14716e9686528d2e3fdba8d9e"),
+        (111, "b7b42d19ae6be209c36efe0c5dfe5bde4d306c43"),
+        (119, "562ecf8a430f8e1056e3619bae33628e9a1d0a4e"),
+        (120, "353f6d2bf0e91aa91b74a2e0b3f297510f7d825f"),
+        (127, "bebc42d2d3d1e5fb8ad8895c2dcef2d68a6c279a"),
+        (128, "0060f2a7e34b6e4d459f560197ef93243732a400"),
+        (129, "3a16082d1bf09b604907ec6908b9893ca3e937c0"),
+        (191, "90d881e31a36af55e527ceb7f011b051a6dd4ac2"),
+        (192, "9d9112152625f518fae155f757471e6564167ac8"),
+        (200, "9194d8145e556594766df1e7699e2dfda424d1ee"),
+    ];
+
+    #[test]
+    fn sha1_matches_known_answers_across_block_boundaries() {
+        // SHA-1 是 BT piece 校验与 info-hash 的唯一实现，错一块整包就废了。
+        for (length, expected) in SHA1_ONE_SHOT {
+            assert_eq!(sha1_hex(&pattern(*length)), *expected, "length {length}");
+        }
+    }
+
+    const STREAMING_CASES: &[(usize, usize, &str)] = &[
+        (
+            0,
+            1,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (
+            1,
+            1,
+            "ca358758f6d27e6cf45272937977a748fd88391db679ceda7dc7bf1f005ee879",
+        ),
+        (
+            55,
+            1,
+            "8aa994584139d128848eeebc4e815639ba5ab6e6e39574195a63ac4f14f7c43b",
+        ),
+        (
+            55,
+            7,
+            "8aa994584139d128848eeebc4e815639ba5ab6e6e39574195a63ac4f14f7c43b",
+        ),
+        (
+            56,
+            1,
+            "ad574708f75c044c9b85de64cb568ee7711ff4f36448c6242f053ba8f6cc2b63",
+        ),
+        (
+            56,
+            7,
+            "ad574708f75c044c9b85de64cb568ee7711ff4f36448c6242f053ba8f6cc2b63",
+        ),
+        (
+            57,
+            1,
+            "5b46e502092be01b1100193e089fdda95638c12e19a1d24f308eb2c3d3ae849d",
+        ),
+        (
+            57,
+            7,
+            "5b46e502092be01b1100193e089fdda95638c12e19a1d24f308eb2c3d3ae849d",
+        ),
+        (
+            63,
+            1,
+            "280ed3e8ff1df845b2e7dfe6ac6cee817bef20e783cc65abc41b818b4d2fe076",
+        ),
+        (
+            63,
+            63,
+            "280ed3e8ff1df845b2e7dfe6ac6cee817bef20e783cc65abc41b818b4d2fe076",
+        ),
+        (
+            64,
+            1,
+            "c6ab9724ade5b6a7a1edfffb12f3aa9181351355af8fd08c919952ad211339dd",
+        ),
+        (
+            64,
+            63,
+            "c6ab9724ade5b6a7a1edfffb12f3aa9181351355af8fd08c919952ad211339dd",
+        ),
+        (
+            64,
+            64,
+            "c6ab9724ade5b6a7a1edfffb12f3aa9181351355af8fd08c919952ad211339dd",
+        ),
+        (
+            65,
+            1,
+            "788367c73c7ddf4c53f65e68cc0d943e6227ab55b0e78ba63ace822b1c6301c0",
+        ),
+        (
+            65,
+            64,
+            "788367c73c7ddf4c53f65e68cc0d943e6227ab55b0e78ba63ace822b1c6301c0",
+        ),
+        (
+            65,
+            65,
+            "788367c73c7ddf4c53f65e68cc0d943e6227ab55b0e78ba63ace822b1c6301c0",
+        ),
+        (
+            119,
+            1,
+            "3d610547d68216dedf7435a4fb6260353911f6b3fd3f18805ddb8be285d726fe",
+        ),
+        (
+            119,
+            64,
+            "3d610547d68216dedf7435a4fb6260353911f6b3fd3f18805ddb8be285d726fe",
+        ),
+        (
+            119,
+            65,
+            "3d610547d68216dedf7435a4fb6260353911f6b3fd3f18805ddb8be285d726fe",
+        ),
+        (
+            120,
+            1,
+            "1f80156a804cb7862ad113e8200e9d74499723e7c7854d5f48776d3148e09656",
+        ),
+        (
+            120,
+            64,
+            "1f80156a804cb7862ad113e8200e9d74499723e7c7854d5f48776d3148e09656",
+        ),
+        (
+            129,
+            1,
+            "81e89a7b2911aaa7795f9e3d4910cb47d6cd2b00d83b8399481527261a1a7519",
+        ),
+        (
+            129,
+            65,
+            "81e89a7b2911aaa7795f9e3d4910cb47d6cd2b00d83b8399481527261a1a7519",
+        ),
+        (
+            200,
+            1,
+            "44cae5223d431caed4a9e32271d6abf17c3f2f4abac45fcdb48a99fcc6072a09",
+        ),
+        (
+            200,
+            64,
+            "44cae5223d431caed4a9e32271d6abf17c3f2f4abac45fcdb48a99fcc6072a09",
+        ),
+    ];
+
+    #[test]
+    fn sha256_hasher_matches_known_answers_for_every_chunk_boundary() {
+        for (length, chunk, expected) in STREAMING_CASES {
+            let data = pattern(*length);
+            let mut hasher = Sha256Hasher::new();
+            for piece in data.chunks(*chunk) {
+                hasher.update(piece);
+            }
+            let digest = hasher
+                .finish()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            assert_eq!(digest, *expected, "length {length} chunk {chunk}");
+        }
+    }
 }
