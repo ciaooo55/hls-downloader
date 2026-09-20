@@ -624,3 +624,49 @@ BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`�
 - 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
   （`browser.media_push_device_selection`），`release_ready=false` 不变；
   未做任何签名或正式发布。
+### 第二十三轮（2026-09-20，继续修复）：修掉"服务器不支持 Range 就整个下载失败"的引擎缺陷
+
+- **复现路径（真实产品链路）**：有头 Edge + 未打包扩展 + 已注册原生主机，
+  页面里放一个可真实播放的本地视频，点 overlay「下载当前视频」→
+  扩展 `download-now` → 原生主机 → 引擎建任务 → 引擎把 148680 字节全部拿到，
+  然后 **失败**：`DOWNLOAD_FAILED server ignored Range and returned 200`，
+  已到手的整包被丢弃。本机用 Python `http.server` 这类不支持 Range 的服务器时，
+  所有直链文件下载都不可能成功。
+- **根因**：`http_engine.rs` 的 `fetch_range` 只要收到 200 就判 `RangeUnsupported`，
+  该错误一路冒泡成任务失败；而 `download_sequential`（本就能处理 200 整包）
+  只在 POST / `sequential` / `total==0` 时被选中。
+- **修复**：`download_ranges` 识别"从零开始 + 响应身份与任务一致（或无身份可校验）"
+  的 200，退回 `download_sequential` 单流整包下载。为此新增内部变体
+  `EngineErrorCode::RangeIgnored`，对外退出码与消息保持不变。
+  **安全边界不变**：If-Range 未命中（资源身份已变）与续传位置错位仍然失败，
+  绝不会用外来 body 覆盖已保留数据（`etag_change_range_200_does_not_stitch_new_body`
+  继续通过）。
+- **测试**：新增 `fresh_download_falls_back_to_sequential_when_server_ignores_range`
+  与 `partial_download_still_fails_when_server_ignores_range`；
+  `http_engine` 47 项全过；完整 `native_shell` 套件 464 passed / 0 failed / 1 ignored；
+  `cargo fmt --check` 与 CI 同参 clippy 均 exit 0。
+- **进程级端到端复验（真实引擎 + 真实原生主机）**：对 Range-less 服务器发 `download` op，
+  `task-1` 状态 `completed`、`downloaded_bytes=148680/148680`、
+  产出文件 SHA-256 与源一致，`passed=true`。
+- **修复后重跑对抗 native 范围 PASS**：Core 协议 30、传输 worker 45、presenter 9、
+  Compose 协议与敌意输入（native_shell 462 + presenter 9 + 扩展 300）、
+  Native Host 冷启动 832.25ms（门限 1500）、真实 Range 吞吐 67.38 MiB/s（门限 20，
+  32 个 range 请求 / 0 个整包请求 / 0 重叠 / 发布后额外字节 0）、
+  工作集增长 5.87 MiB（门限 256）；presenter 稳态 P95 68.62ms（门限 100）。
+- **重新产出 candidate 交付**：`build-v7.ps1 -Task candidate` 全流程重跑，
+  `source_commit=e28aa75`、`source_tree=53d724ce`、工作树干净；
+  5 个产物 SHA-256 与 `ARTIFACT-MANIFEST.json` 逐一复算一致；
+  parity 门禁在干净工作树上 PASS（27/28，`release_ready=false` 未变）。
+  交付目录 `outputs\local-20260920-211500\`（含两个扩展 zip 与更新后的 README），
+  并清掉今天两份不完整的旧交付目录。
+- **真实浏览器插件链路的进展与边界**：有头 Edge + 独立 profile + `--load-extension` + CDP
+  首次跑通——内容脚本真实注入（`data-hls-downloader-extension="1"`）、shadow UI 挂载、
+  overlay 真实渲染（`下载当前视频` / `更多操作：投屏或推送当前媒体链接` / `下载`·`投屏`·`TVBox`）、
+  popup 在真实扩展上下文渲染且原生消息通道可用。
+  但"点 overlay 后由浏览器侧完成确认"这一步依赖视频真实播放：
+  本机探针页的 `<video>` 反复出现 `networkState=2` 却从不发请求（不带扩展也一样），
+  属测试环境问题；扩展对此的正确行为是 fail-closed 报"浏览器尚未确认该媒体请求"。
+  该场景的下载闭环改由上面的进程级端到端验证覆盖。
+- 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
+  （`browser.media_push_device_selection`），`release_ready=false` 不变；
+  未做任何签名或正式发布。
