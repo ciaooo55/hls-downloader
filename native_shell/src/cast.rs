@@ -769,7 +769,10 @@ fn discover_tvboxes(timeout: Duration) -> Vec<CastDeviceInfo> {
     let targets = tvbox_scan_targets(&networks, 512);
     let queue = Arc::new(Mutex::new(targets));
     let found = Arc::new(Mutex::new(Vec::new()));
-    let probe_cap = timeout.min(Duration::from_millis(140));
+    // 单个探测的上限对齐 v5 的 0.45s：电视这类慢设备回一个根页面经常超过 140ms。
+    // 之前不敢放宽是因为幻影主机会把这个上限整个吃光；现在非局域网连接在读之前就被
+    // 放弃，扫描预算已经花在真实主机上，2500ms 的共享截止仍然由 tvbox_remaining_timeout 把关。
+    let probe_cap = timeout.min(Duration::from_millis(450));
     // 只有从本机自己的局域网地址出去的连接才可能真的到达局域网接收端。
     let lan_sources: Arc<Vec<Ipv4Addr>> =
         Arc::new(networks.iter().map(|(item, _)| *item).collect());
@@ -856,13 +859,21 @@ fn probe_tvbox_until(
         .into_iter()
         .any(|marker| lower.contains(marker))
         || text.contains("影视");
-    if !matched {
+    // v5 起就有的一条规则：已知 TVBox 端口上的设备，即使根页面没有返回任何标记也要
+    // 报出来。不少分支只回一个空白或极简页面，只靠标记匹配会把它们全部漏掉。
+    // 反过来，非 TVBox 端口上的普通 HTTP 服务仍然必须有标记才会被当成接收端。
+    if !matched && !TVBOX_PORTS.contains(&address.port()) {
         return None;
     }
+    let label = if matched {
+        "TVBox / 影视盒子"
+    } else {
+        "局域网设备"
+    };
     let endpoint = format!("http://{address}");
     Some(CastDeviceInfo {
         id: format!("tvbox:{endpoint}"),
-        label: "TVBox / 影视盒子".into(),
+        label: label.into(),
         location: endpoint.clone(),
         control_url: endpoint,
         service_type: "tvbox".into(),
@@ -2697,6 +2708,91 @@ mod tests {
         assert!(
             device.is_none(),
             "没有从本机局域网地址出去的连接不能被当成接收端"
+        );
+        worker.join().unwrap();
+    }
+
+    /// 绑到某个已知 TVBox 端口上，回一个没有任何标记的 200 页面。
+    fn serve_tvbox_port_without_marker() -> Option<(SocketAddr, thread::JoinHandle<()>)> {
+        let mut listener = None;
+        for port in TVBOX_PORTS {
+            if let Ok(bound) = TcpListener::bind(("127.0.0.1", port)) {
+                listener = Some(bound);
+                break;
+            }
+        }
+        let listener = listener?;
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buffer = [0u8; 1024];
+                let _ = stream.read(&mut buffer);
+                let body = "";
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        Some((address, worker))
+    }
+
+    #[test]
+    fn tvbox_probe_reports_a_known_tvbox_port_without_a_marker() {
+        // v5 起就有这条规则：已知 TVBox 端口上的设备即使根页面没有任何标记也要报出来，
+        // 标签降级成"局域网设备"。只靠标记匹配会把只回空白页的分支全部漏掉，
+        // 这正是用户反馈"以前的版本能找到"的那一条。
+        let Some((address, worker)) = serve_tvbox_port_without_marker() else {
+            return;
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let device = probe_tvbox_until(
+            address,
+            &[Ipv4Addr::LOCALHOST],
+            deadline,
+            Duration::from_secs(2),
+        );
+        assert!(
+            device.is_some(),
+            "已知 TVBox 端口上的设备不能被空白页面漏掉"
+        );
+        let device = device.unwrap();
+        assert_eq!(device.service_type, "tvbox");
+        assert_eq!(device.label, "局域网设备");
+        assert!(device.id.starts_with("tvbox:"));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn tvbox_probe_still_rejects_a_plain_http_service_on_another_port() {
+        // 非 TVBox 端口上的普通 HTTP 服务仍然必须有标记，否则整个局域网的服务端
+        // 都会被当成投屏目标列出来。
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        assert!(!TVBOX_PORTS.contains(&address.port()));
+        let worker = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buffer = [0u8; 1024];
+                let _ = stream.read(&mut buffer);
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+            }
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let device = probe_tvbox_until(
+            address,
+            &[Ipv4Addr::LOCALHOST],
+            deadline,
+            Duration::from_secs(2),
+        );
+        assert!(
+            device.is_none(),
+            "非 TVBox 端口且没有标记的服务不能被当成接收端"
         );
         worker.join().unwrap();
     }
