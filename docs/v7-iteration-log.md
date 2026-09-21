@@ -705,3 +705,44 @@ BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`�
 - 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
   （`browser.media_push_device_selection`），`release_ready=false` 不变；
   未做任何签名或正式发布。
+
+### 第二十六轮（2026-09-21，按钮动效）：把"点了没反应"的按钮反馈补上，并用真实浏览器验证
+
+- **问题**：用户反馈"有 UI 的按钮动画效果基本没用、很差"。核查后确认是真实缺陷，
+  而且不在 Compose 侧——Compose 的 `rememberPressFeedback`（hover 底色 / press 缩放 /
+  focus 边框，全部走 `motionDurationMillis` 尊重"减弱动画"设置）本来就是健全的。
+  问题集中在扩展的 CSS：
+  1. `.video-download` 声明了 `transition:…transform .16s ease`，但 `:hover` 只改背景色、
+     `:active` 只改 cursor，**没有任何状态改变 transform** —— 这条过渡是死代码。
+  2. `.video-more`、`.hover-action`（下载/投屏/TVBox/查看并选择）**完全没有 transition**。
+  3. popup 里 7 个自绘按钮类（`.update-notice button`、`.scan-button`、`.empty-retry`、
+     `.copy-link`、`.quality-trigger`、`.quality-menu button`、`.restore-site-prompts`）
+     **全部没有 transition**，hover 是颜色瞬间硬切。
+  4. content script 的 `prefers-reduced-motion` 只关了 `transition`，没关 `animation`。
+- **修复**：在 content.ts 的 shadow-DOM 样式表末尾追加一套统一微交互，
+  与 `.hlsd-button`（transform .12s）和 Compose（hover 130ms / press 90ms）对齐：
+  hover 抬升 `translateY(-1px)` + 阴影提升，press 缩放（主按钮 .96、图标按钮 .92、
+  面板按钮 .94、文字链不缩放只换色）。
+  popup 的 7 个按钮类逐个补上 transition 与 `:active` 缩放。
+  reduced-motion 两边都改为同时关闭 transition 与 animation。
+  **三条安全边界**：拖拽中（`.video-action-group.dragging`）禁用按钮 transform，
+  因为拖拽改的是 group 的 left/top，按钮再缩放会看起来在抖；
+  `identifying`（aria-disabled 的"识别中"）不给抬升/按压反馈，避免暗示可交互；
+  `.scan-button:disabled` / `.hover-action[disabled]` 不参与按压缩放。
+  **没有加入场动画**：`updateVideoButtons()` 在 scroll / resize / ResizeObserver 时
+  会 `replaceChildren()` 重建控件，入场动画会随滚动反复播放。
+- **测试**：新增 `extension/lib/buttonMotion.test.ts`（16 项），
+  解析两份样式表并断言"每个交互按钮都声明 transition、press 时真的改变 transform、
+  reduced-motion 同时关两种动效、拖拽与 identifying 状态不误反馈"。
+  回归有效性已实测：临时回退 `.scan-button` 的 transition 与 `:active` → 2 项失败；恢复 → 16 项全过。
+  扩展全量：`typecheck` exit 0，`vitest run` **44 文件 / 316 测试全过**（原 300，+16）；
+  `theme.test.ts` 的 16 项对比度守卫未被破坏；`wxt build` chrome + firefox 均成功。
+- **真实浏览器验证（有头 Edge 153 + 独立 profile + CDP）**：读取三个按钮的 computed style，
+  `transition` 均为 `background-color, color, transform, box-shadow 0.15s, 0.15s, 0.12s, 0.15s`
+  （修复前 `.video-more` / `.hover-action` 为无过渡）；并把 transform 从 `none` 改为
+  `translateY(-1px)`，逐帧采样到**过渡插值中间帧** `matrix(0.996644, 0, 0, 0.996644, 0, -0.162072)`，
+  250ms 后稳定在 `matrix(1, 0, 0, 1, 0, -1)` —— 证明 transform 过渡真实生效，
+  修复前它是死代码。探针 profile 已清理。
+- 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
+  （`browser.media_push_device_selection`），`release_ready=false` 不变；
+  未做任何签名或正式发布。

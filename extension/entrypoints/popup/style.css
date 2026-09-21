@@ -23,14 +23,17 @@ h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0; white-spac
 .update-notice { display: flex; align-items: center; gap: 8px; margin: 8px 10px 0; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--primary) 42%, var(--border)); border-radius: 7px; background: color-mix(in srgb, var(--primary) 10%, var(--surface)); color: var(--text); font-size: 11px; }
 .update-notice[hidden] { display: none; }
 .update-notice span { min-width: 0; flex: 1; }
-.update-notice button { flex: none; padding: 3px 7px; border: 0; border-radius: 5px; background: var(--primary); color: var(--on-primary); cursor: pointer; font: 600 10.5px system-ui, sans-serif; }
+.update-notice button { flex: none; padding: 3px 7px; border: 0; border-radius: 5px; background: var(--primary); color: var(--on-primary); cursor: pointer; font: 600 10.5px system-ui, sans-serif; transition: background-color .15s ease, transform .12s ease; }
+.update-notice button:hover { background: var(--primary-hover); }
+.update-notice button:active { transform: scale(.97); }
 
 section { min-height: 0; overflow: auto; flex: 1; }
 .section-header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; min-height: 38px; padding: 5px 10px 4px 12px; background: var(--bg); }
 .section-title { display: flex; align-items: center; gap: 6px; color: var(--faint); font-size: 10.5px; }
 .section-title b { color: var(--primary); font-size: 10.5px; }
-.scan-button { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--primary); cursor: pointer; font: 600 10.5px system-ui, sans-serif; }
+.scan-button { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--primary); cursor: pointer; font: 600 10.5px system-ui, sans-serif; transition: background-color .15s ease, color .15s ease, transform .12s ease; }
 .scan-button:hover:not(:disabled) { background: color-mix(in srgb, var(--primary) 10%, var(--surface)); color: var(--primary-ink); }
+.scan-button:active:not(:disabled) { transform: scale(.97); }
 .scan-button:disabled { cursor: default; color: var(--faint); opacity: .65; }
 .scan-button .hlsd-icon { width: 13px; height: 13px; }
 .list { display: grid; gap: 6px; padding: 0 8px 8px; }
@@ -54,12 +57,13 @@ article:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--borde
 .empty-icon .hlsd-icon { width: 20px; height: 20px; }
 .empty strong { color: var(--text); font-size: 12px; font-weight: 600; }
 .empty > span { max-width: 292px; margin-top: 4px; font-size: 10.5px; line-height: 1.5; }
-.empty-retry { display: inline-flex; align-items: center; gap: 5px; height: 28px; margin-top: 11px; padding: 0 10px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; font: 600 10.5px system-ui, sans-serif; }
+.empty-retry { display: inline-flex; align-items: center; gap: 5px; height: 28px; margin-top: 11px; padding: 0 10px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; font: 600 10.5px system-ui, sans-serif; transition: border-color .15s ease, background-color .15s ease, color .15s ease, transform .12s ease; }
 .empty-retry:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--control-border)); background: var(--surface-2); }
+.empty-retry:active { transform: scale(.97); }
 .empty-retry .hlsd-icon { width: 13px; height: 13px; color: var(--primary); }
 .send-error { margin: 8px 10px 0; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--red) 40%, var(--border)); border-radius: 6px; background: color-mix(in srgb, var(--red) 10%, var(--surface)); color: var(--red-ink); font-size: 11px; }
 footer { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: auto; height: 34px; padding: 0 10px; border-top: 1px solid var(--border); background: var(--surface); color: var(--faint); font-size: 11px; white-space: nowrap; }
-.restore-site-prompts { overflow: hidden; max-width: 116px; padding: 0; border: 0; background: transparent; color: var(--primary); cursor: pointer; font: inherit; text-overflow: ellipsis; white-space: nowrap; }
+.restore-site-prompts { overflow: hidden; max-width: 116px; padding: 0; border: 0; background: transparent; color: var(--primary); cursor: pointer; font: inherit; text-overflow: ellipsis; white-space: nowrap; transition: color .15s ease; }
 .restore-site-prompts:hover { color: var(--primary-hover); text-decoration: underline; }
 .restore-site-prompts:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 
@@ -68,21 +72,24 @@ footer { display: flex; align-items: center; justify-content: center; gap: 8px; 
 ::-webkit-scrollbar-track { background: transparent; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
-.quality-trigger { display: inline-flex; align-items: center; gap: 6px; max-width: min(220px, 100%); height: 28px; margin-top: 6px; padding: 0 9px; border: 1px solid var(--control-border); border-radius: 7px; background: var(--surface-2); color: var(--text); cursor: pointer; font: 12px system-ui, sans-serif; white-space: nowrap; transition: border-color .18s ease, background-color .18s ease; }
+.quality-trigger { display: inline-flex; align-items: center; gap: 6px; max-width: min(220px, 100%); height: 28px; margin-top: 6px; padding: 0 9px; border: 1px solid var(--control-border); border-radius: 7px; background: var(--surface-2); color: var(--text); cursor: pointer; font: 12px system-ui, sans-serif; white-space: nowrap; transition: border-color .15s ease, background-color .15s ease, transform .12s ease; }
 .quality-trigger:hover { border-color: color-mix(in srgb, var(--primary) 50%, var(--control-border)); }
+.quality-trigger:active { transform: scale(.98); }
 .quality-trigger em { font-style: normal; overflow: hidden; text-overflow: ellipsis; }
 .quality-trigger .hlsd-icon { width: 13px; height: 13px; color: var(--muted); }
 .quality-menu-backdrop { position: fixed; inset: 0; z-index: 40; }
 .quality-menu { position: absolute; z-index: 50; min-width: 180px; padding: 5px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 4px 8px var(--shadow); animation: menu-in .14s ease-out; transform-origin: top left; }
 @keyframes menu-in { from { opacity: 0; transform: translateY(-3px) scale(.98); } to { opacity: 1; transform: none; } }
-.quality-menu button { display: flex; align-items: center; gap: 7px; width: 100%; height: 30px; padding: 0 9px; border: 0; border-radius: 7px; background: transparent; color: var(--text); cursor: pointer; font: 12px system-ui, sans-serif; text-align: left; white-space: nowrap; }
+.quality-menu button { display: flex; align-items: center; gap: 7px; width: 100%; height: 30px; padding: 0 9px; border: 0; border-radius: 7px; background: transparent; color: var(--text); cursor: pointer; font: 12px system-ui, sans-serif; text-align: left; white-space: nowrap; transition: background-color .15s ease, transform .12s ease; }
 .quality-menu button:hover { background: var(--surface-2); }
+.quality-menu button:active { transform: scale(.98); }
 .quality-menu button i { display: inline-grid; place-items: center; width: 13px; color: var(--primary); font-style: normal; font-weight: 700; }
 .quality-check .hlsd-icon { width: 13px; height: 13px; }
 .resource-meta { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
 .resource-meta > small { min-width: 0; flex: 1; }
-.copy-link { display: inline-flex; align-items: center; gap: 4px; flex: none; height: 20px; padding: 0 6px; border: 1px solid var(--control-border); border-radius: 5px; background: var(--surface-2); color: var(--muted); cursor: pointer; font: 500 10px system-ui, sans-serif; white-space: nowrap; }
+.copy-link { display: inline-flex; align-items: center; gap: 4px; flex: none; height: 20px; padding: 0 6px; border: 1px solid var(--control-border); border-radius: 5px; background: var(--surface-2); color: var(--muted); cursor: pointer; font: 500 10px system-ui, sans-serif; white-space: nowrap; transition: border-color .15s ease, color .15s ease, transform .12s ease; }
 .copy-link:hover { border-color: color-mix(in srgb, var(--primary) 50%, var(--control-border)); color: var(--primary-ink); }
+.copy-link:active { transform: scale(.96); }
 .copy-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .copy-link.copied { border-color: var(--green); color: var(--green); }
 .copy-link .hlsd-icon { width: 11px; height: 11px; }
