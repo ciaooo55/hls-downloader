@@ -289,7 +289,10 @@ if (Test-Path -LiteralPath $desktopExtensionBackup) {
     throw "Previous desktop extension rollback image still exists: $desktopExtensionBackup"
 }
 
-New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
+$targetParent = Split-Path $target -Parent
+if (-not (Test-Path -LiteralPath $targetParent -PathType Container)) {
+    New-Item -ItemType Directory -Force -Path $targetParent | Out-Null
+}
 Copy-Item -LiteralPath $source -Destination $stage -Recurse -Force
 Remove-Item -LiteralPath (Join-Path $stage 'portable') -Force -ErrorAction SilentlyContinue
 # jpackage marks launchers and runtime files read-only. Normalize the staged
