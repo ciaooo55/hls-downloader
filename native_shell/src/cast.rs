@@ -770,17 +770,22 @@ fn discover_tvboxes(timeout: Duration) -> Vec<CastDeviceInfo> {
     let queue = Arc::new(Mutex::new(targets));
     let found = Arc::new(Mutex::new(Vec::new()));
     let probe_cap = timeout.min(Duration::from_millis(140));
+    // 只有从本机自己的局域网地址出去的连接才可能真的到达局域网接收端。
+    let lan_sources: Arc<Vec<Ipv4Addr>> =
+        Arc::new(networks.iter().map(|(item, _)| *item).collect());
     let workers = (0..64)
         .map(|_| {
             let queue = Arc::clone(&queue);
             let found = Arc::clone(&found);
+            let lan_sources = Arc::clone(&lan_sources);
             thread::spawn(move || loop {
                 if tvbox_remaining_timeout(deadline, probe_cap).is_none() {
                     break;
                 }
                 let address = queue.lock().ok().and_then(|mut items| items.pop_front());
                 let Some(address) = address else { break };
-                if let Some(device) = probe_tvbox_until(address, deadline, probe_cap) {
+                if let Some(device) = probe_tvbox_until(address, &lan_sources, deadline, probe_cap)
+                {
                     if let Ok(mut devices) = found.lock() {
                         devices.push(device);
                     }
@@ -799,11 +804,20 @@ fn discover_tvboxes(timeout: Duration) -> Vec<CastDeviceInfo> {
 
 fn probe_tvbox_until(
     address: SocketAddr,
+    lan_sources: &[Ipv4Addr],
     deadline: Instant,
     probe_cap: Duration,
 ) -> Option<CastDeviceInfo> {
     let connect_timeout = tvbox_remaining_timeout(deadline, probe_cap)?;
     let mut stream = TcpStream::connect_timeout(&address, connect_timeout).ok()?;
+    // Clash/Mihomo 之类的 TUN 适配器会替不存在的目标在本地完成 TCP 握手，所以
+    // "连上了"根本不能证明对端在局域网上：它可能只是一个幻影主机，甚至可能是隧道
+    // 代理返回的页面。只有确认这条连接是从本机自己的某个局域网地址出去的，才继续
+    // 当接收端探测；否则立刻放弃，既不浪费扫描预算，也不会误报出一个 TVBox。
+    match stream.local_addr().ok()?.ip() {
+        IpAddr::V4(local) if lan_sources.contains(&local) => {}
+        _ => return None,
+    }
 
     let write_timeout = tvbox_remaining_timeout(deadline, probe_cap)?;
     stream.set_write_timeout(Some(write_timeout)).ok()?;
@@ -2524,10 +2538,22 @@ mod tests {
         }
         let (generic, generic_worker) = serve("plain web service");
         let deadline = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
-        assert!(probe_tvbox_until(generic, deadline, Duration::from_secs(1)).is_none());
+        assert!(probe_tvbox_until(
+            generic,
+            &[Ipv4Addr::LOCALHOST],
+            deadline,
+            Duration::from_secs(1)
+        )
+        .is_none());
         generic_worker.join().unwrap();
         let (tvbox, tvbox_worker) = serve("TVBox player /action push");
-        let device = probe_tvbox_until(tvbox, deadline, Duration::from_secs(1)).unwrap();
+        let device = probe_tvbox_until(
+            tvbox,
+            &[Ipv4Addr::LOCALHOST],
+            deadline,
+            Duration::from_secs(1),
+        )
+        .unwrap();
         assert_eq!(device.service_type, "tvbox");
         tvbox_worker.join().unwrap();
     }
@@ -2616,5 +2642,62 @@ mod tests {
         assert!(targets
             .iter()
             .any(|target| target.ip() == Ipv4Addr::new(10, 0, 0, 2)));
+    }
+
+    /// 起一个只回一次的最小 HTTP 响应，响应体里带 TVBox 标记。
+    fn spawn_tvbox_responder() -> (SocketAddr, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                // 先读请求再回包：和真实 HTTP 服务端一致，也避免探测端的 write
+                // 撞上"对端已关闭"而失败。
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+                let body = "tvbox";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (address, worker)
+    }
+
+    #[test]
+    fn tvbox_probe_accepts_a_connection_that_left_via_the_lan() {
+        let (address, worker) = spawn_tvbox_responder();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let device = probe_tvbox_until(
+            address,
+            &[Ipv4Addr::LOCALHOST],
+            deadline,
+            Duration::from_secs(2),
+        );
+        assert!(
+            device.is_some(),
+            "从本机局域网地址出去的探测必须被当成接收端"
+        );
+        assert!(device.unwrap().id.starts_with("tvbox:"));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn tvbox_probe_rejects_a_connection_that_did_not_leave_via_the_lan() {
+        // Clash/Mihomo TUN 会替不存在的目标在本地完成握手：连接确实建立，但本地端点
+        // 不是本机的局域网地址。这种情况必须放弃，否则会把隧道/代理误报成 TVBox，
+        // 并且让整个扫描预算耗在幻影主机上。
+        let (address, worker) = spawn_tvbox_responder();
+        let declared_lan = Ipv4Addr::new(192, 168, 1, 10);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let device = probe_tvbox_until(address, &[declared_lan], deadline, Duration::from_secs(2));
+        assert!(
+            device.is_none(),
+            "没有从本机局域网地址出去的连接不能被当成接收端"
+        );
+        worker.join().unwrap();
     }
 }
