@@ -507,14 +507,28 @@ def run(
                     lambda: _cdp_evaluate(
                         str(site_popup_target["webSocketDebuggerUrl"]),
                         "[...document.querySelectorAll('button')].some(button => "
-                        "button.textContent.includes('本站不显示：关') && !button.disabled)",
+                        "button.textContent.includes('本站提示：已显示') && !button.disabled)",
                     ),
                     "排除本站按钮绑定顶层页面",
                 )
+                # 先等到按钮真的可点再点：popup 的控件文案是在读到 storage 之后才写入的，
+                # 上一轮直接点会撞上"按钮还没渲染好"。失败时把真实文案带进错误信息。
+                click_deadline = time.monotonic() + 20
+                button_texts: list[str] = []
+                while True:
+                    button_texts = _cdp_evaluate(
+                        str(site_popup_target["webSocketDebuggerUrl"]),
+                        "[...document.querySelectorAll('button')].map(button => button.textContent)",
+                    )
+                    if any("本站提示：已显示" in text for text in button_texts):
+                        break
+                    if time.monotonic() >= click_deadline:
+                        raise AssertionError(f"排除本站按钮未出现：{button_texts}")
+                    time.sleep(0.1)
                 _cdp_evaluate(
                     str(site_popup_target["webSocketDebuggerUrl"]),
                     "[...document.querySelectorAll('button')].find(button => "
-                    "button.textContent.includes('本站不显示：关')).click()"
+                    "button.textContent.includes('本站提示：已显示')).click()"
                 )
                 _wait_until(
                     lambda: _cdp_evaluate(
@@ -534,10 +548,23 @@ def run(
                     raise AssertionError("排除本站后仍把文件发送给桌面端")
 
                 # Unexclude through the same real popup control.
+                # 恢复显示同样要等按钮文案翻转过来再点，否则点的还是排除前那个状态。
+                restore_deadline = time.monotonic() + 20
+                restore_texts: list[str] = []
+                while True:
+                    restore_texts = _cdp_evaluate(
+                        str(site_popup_target["webSocketDebuggerUrl"]),
+                        "[...document.querySelectorAll('button')].map(button => button.textContent)",
+                    )
+                    if any("本站提示：已隐藏" in text for text in restore_texts):
+                        break
+                    if time.monotonic() >= restore_deadline:
+                        raise AssertionError(f"取消排除本站按钮未出现：{restore_texts}")
+                    time.sleep(0.1)
                 _cdp_evaluate(
                     str(site_popup_target["webSocketDebuggerUrl"]),
                     "[...document.querySelectorAll('button')].find(button => "
-                    "button.textContent.includes('本站不显示：开')).click()"
+                    "button.textContent.includes('本站提示：已隐藏')).click()"
                 )
                 _wait_until(
                     lambda: not _cdp_evaluate(
@@ -554,7 +581,7 @@ def run(
                 driver.switch_to.window(inspector)
                 def auto_button():
                     return driver.find_element(
-                        By.XPATH, "//button[starts-with(normalize-space(.), '接管下载')]"
+                        By.XPATH, "//button[starts-with(normalize-space(.), '自动接管')]"
                     )
                 _wait_until(lambda: not auto_button().get_attribute("disabled"), "自动接管按钮就绪")
                 auto_button().click()
