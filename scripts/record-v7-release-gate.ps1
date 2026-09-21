@@ -61,7 +61,10 @@ $manifestRelativePath = $manifestPath.Substring($repoPrefix.Length).Replace('\',
 $previousErrorActionPreference = $ErrorActionPreference
 try {
     $ErrorActionPreference = 'Continue'
-    $captured = @(& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $Command 2>&1 |
+    # -WindowStyle Hidden：这层子控制台若可见，会把 Compose 窗口挤到后台，performance 门禁的
+    # 帧采样会因此失真（实测 p95 从 28.1ms 劣化到 41.6ms、超限样本 0 -> 41），
+    # 而窗口本身是被 smoke 以 Hidden 拉起的，本该是前台。这里只改启动方式，不动任何门禁判据。
+    $captured = @(& powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command $Command 2>&1 |
         ForEach-Object { $_.ToString() })
     $exitStatus = $LASTEXITCODE
 } finally {
