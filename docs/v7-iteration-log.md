@@ -852,3 +852,57 @@ BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`�
 - **边界不变**：`feature-parity.json` 维持 27 verified / 1 partial
   （`browser.media_push_device_selection`），`release_ready=false`，未做任何签名或正式发布。
 
+
+### 第二十九轮（2026-09-21 夜，TUN 下的 TVBox 发现 · 续）：把 v5 丢掉的两条规则找回来，并修掉抢前台的测量装置
+
+- **clippy 的“28 条错误”是假的**：本地直接 `cargo clippy --all-targets -- -D warnings`
+  会报 13+15 条（`large_enum_variant` / `too_many_arguments` / `type_complexity`），
+  但 `.github/workflows/ci.yml:129` 的正式命令显式豁免了这四类结构性 lint：
+  `-D warnings -A dead_code -A clippy::large_enum_variant -A clippy::too_many_arguments
+  -A clippy::type_complexity`。按 CI 同参跑 exit 0，一个都不用改。
+  教训：本地校验命令必须和 CI 合同一致，否则会把契约允许的东西当成回归。
+
+- **用户指出“以前的版本能找到”，git 里确实有依据**：`v5.0.0:backend/app/tvbox.py`
+  的 `_probe` 有一条明确规则——**已知 TVBox 端口上的设备，即使根页面没有返回任何标记
+  也要报出来**（标签降级成 `局域网设备`），并且 `scan_tvboxes(timeout=0.45)` 给每个
+  探测 450ms。v7 重写成 Rust 时两条都丢了：只剩“必须有标记”，单探测上限压到 140ms。
+  只回空白页或极简页面的 TVBox 分支因此全部扫不出来。
+
+- **修复**（`native_shell/src/cast.rs`，commit `d31e304`）：
+  1. `if !matched && !TVBOX_PORTS.contains(&address.port()) { return None }`——
+     已知端口即可，标签按 v5 分成 `TVBox / 影视盒子` / `局域网设备`；
+     非 TVBOX 端口仍然必须有标记，否则整个局域网的服务端都会被当成投屏目标。
+  2. `probe_cap` 从 140ms 对齐回 v5 的 450ms。之前不敢放宽是因为幻影主机会把上限
+     整个吃光；现在非局域网连接在读之前就被放弃，2500ms 的共享截止仍由
+     `tvbox_remaining_timeout` 把关，不会变成无界扫描。
+  - 回归测试两条，均已实测有效性：把判据改回修复前的 `if !matched`，
+    `tvbox_probe_reports_a_known_tvbox_port_without_a_marker` 按预期失败。
+  - 完整 lib 套件 469 → **471 passed / 0 failed / 1 ignored**；fmt 0；CI 同参 clippy 0。
+
+- **局域网真实设备盘点（绑定 WLAN 源地址 192.168.2.6 后实测，避开 TUN 幻影）**：
+  ARP 表现存主机 `.1`（网关，MAC 50-33-f0-da-ab-30）、`.2`、`.3`、`.5`、`.9`、`.55`。
+  在 9976/9977/9978/9979 以及 8899/5000/8080/8000/8025/1900/7000 上逐一探测：
+  **没有任何一台开放 TVBox 端口**。只有 `.5:8080` 回 `HTTP/1.1 404 Not Found`，
+  `.55:5000` 能连上但回空（不是 HTTP）。`192.168.2.11` 依然不存在。
+  结论：这台电视上目前没有跑接收端程序，所以“自动发现不到”首先是电视侧没开接收端，
+  不是产品 bug。产品侧仍可用手动填地址的通道（`tvbox_endpoint` 设置 →
+  device id `tvbox:configured`，`download_worker.rs:4553` 对 tvbox 模式同样生效）。
+
+- **另一个真实 harness 缺陷：recorder 的子控制台抢前台**（commit `f5038a9`）。
+  `record-v7-release-gate.ps1` 用 `powershell.exe -Command` 跑门禁命令，那层子控制台
+  默认可见，会把 Compose 窗口挤到后台。同一台机器、同一个 candidate 的实测对比：
+  | 启动方式 | frame_p95 | over_threshold_count | window_active_at_start |
+  | --- | --- | --- | --- |
+  | 可见子控制台 | 41.644 ms | 41 | false |
+  | 隐藏子控制台 | 22.735 ms | 0 | false（当时用户自己的窗口占着前台） |
+  | 隐藏子控制台（机器空闲） | 28.128 ms | 0 | **true** |
+  修复只加 `-WindowStyle Hidden`，不动任何阈值或判据；`invoke-v7-release-gates.ps1`
+  通过 recorder 跑五道门禁，正式 runner 同样受益。
+  剩下那次 `window_active_at_start=false` 是用户自己的 `APIVisualWorkbench` 窗口
+  占着前台，Compose 的 `toFront()` 抢不过来——这是环境条件，不是产品缺陷。
+
+- **边界不变**：`feature-parity.json` 维持 27 verified / 1 partial
+  （`browser.media_push_device_selection`），`release_ready=false`。
+  `browser` 门禁原本卡在“没有 Firefox”，本轮发现 Firefox 156 已在
+  `E:\Firefox\firefox.exe` 运行，但 `geckodriver` 仍未就位，门禁仍未闭环。
+
