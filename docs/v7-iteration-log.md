@@ -746,3 +746,55 @@ BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`�
 - 边界不变：`feature-parity.json` 维持 27 verified / 1 partial
   （`browser.media_push_device_selection`），`release_ready=false` 不变；
   未做任何签名或正式发布。
+
+### 第二十七轮（2026-09-21 晚，performance 门禁收口 + 构建脚本 PowerShell 5.1 兼容）
+
+- **问题 1：`performance` 门禁连续两次失败在冷启动上**（1990.58 ms / 1978.19 ms > 1500 ms 阈），
+  而同一批二进制手工测只有 672–732 ms。不是偶发，是测量方式差异。
+- **根因定位（受控变量实验）**：`benchmark-v7.ps1` 第 14 行把 `$env:TEMP` 指进仓库，
+  于是 `smoke_v7_native_host.py` 的隔离副本被放在仓库所在的 **A: 盘**上；
+  `Get-PhysicalDisk` 证实 A: 在 Disk 1 = `ST1000LM048`（**HDD**），C: 在 Disk 0 = Phison **SSD**。
+  定量对照（同一批二进制、短 ASCII 路径排除路径因素）：
+  - exe 在 A 盘 + db 在 A 盘：1834.6 / 1938.26 / 2148.95 ms
+  - exe 在 A 盘 + db 在 C 盘：1836.65 / 1841.14 / 2628.22 ms（**数据库位置无关**）
+  - exe 在 C 盘 + db 在 A 盘：704.06 / 727.1 / 745.83 ms
+  - exe 在 C 盘 + db 在 C 盘：668.1 / 636.3 / 643.01 ms
+  - **同一条 A 盘路径**：第 1 次 1907.97 ms，第 2 次 323.93 ms，第 3 次 321.24 ms
+  结论：那 ~1.6 s 是"在一个**全新路径**上首次执行文件"的一次性系统开销
+  （实时扫描 + 无预取记录），**不是产品启动耗时**。门禁测到的是测试装置自己造的磁盘开销。
+- **修复**（阈值一动不动）：`smoke_v7_native_host.py` 增加 `--stage-root`
+  （默认 `tempfile.gettempdir()`），并把 `stage_volume` / `stage_root` 写进报告；
+  `benchmark-v7.ps1` 改为从 User→Machine 注册表环境变量取**真实**系统临时卷
+  （绕开进程级覆盖）并显式传入，所有证据 JSON 仍落在仓库内。
+  提交 `d6c55ca`。
+- **顺带暴露并量化了第二个门槛敏感点**：Compose 帧 p95 随 CPU 负载变化。
+  CPU 7–12% 时 p95 = 32.147 / 29.225 / 25.372 ms（全通过）；
+  CPU 100% 时 37.977 ms、超阈 27 帧（失败）。同一脚本、同一二进制。
+  本机当时被另一个并发工作区（`A:\deepseek-harness`，约 20 个 Codex node worker）打满。
+  这是主机容量限制，不是产品缺陷；契约里的专用机基线仍然有效。
+- **问题 2（构建期才发现）：`build-v7.ps1 -Task candidate` 在 Windows PowerShell 5.1 下
+  根本无法完成构建**。cargo / gradle / pnpm / wxt 都把进度写到 stderr，
+  PS 5.1 在 `$ErrorActionPreference='Stop'` 下会把原生命令的 stderr 升级成终止性
+  `NativeCommandError`；PS 7 不会，所以历史上的构建**只在 pwsh 7 下跑通过**。
+  修复：契约校验前言保持 `Stop`，进入构建阶段改为 `Continue`；
+  每个外部调用后面都仍有显式 `$LASTEXITCODE` 检查，每个产物都仍有存在性与 SHA-256 断言。
+  提交 `2d89bb3` → `8bc5e57`。
+- **结果**：
+  - `build-v7.ps1 -Task candidate` 在 **Windows PowerShell 5.1** 下完整跑通
+    （EXIT=0、`BUILD SUCCESSFUL in 8m 42s`、MSI 回滚顺序已写入、portable 已生成）。
+  - candidate 重建，`source_commit=8bc5e57` / `source_tree=8e12333` 与 HEAD 一致；
+    5 个产物 SHA-256 独立复算全部 MATCH。
+  - **`performance` 门禁完整通过**（绑定新 candidate）：帧 p95 **22.687 ms**（阈 33，超阈 0）、
+    冷启动 **643.17 ms**（阈 1500，`stage_volume=C:`）、IPC p95 **0.226 ms**（阈 75）、
+    真实传输 **26.95 MiB/s**（阈 20）、工作集增长 6.27 MiB（阈 256）、
+    发布后额外网络字节 **0**。证据落在
+    `artifacts/v7-productization/release-evidence/performance.json`。
+  - parity 门禁在干净工作树上 PASS（27/28，`release_ready=false` 与 SHA256 均未变）。
+  - 新交付物 `outputs/local-20260921-201500/`。**未放入 `latest.json`**：
+    `adversarial-v7.ps1 -Scope native` 本轮被正确拦下——用户自己的
+    `E:\h\HLSDownloaderPresenter.exe`（PID 23964）占着会话级 mutex
+    `Local\HLSDownloader.v7.presenter`，冒烟脚本 fail-closed 拒绝在错误原因下继续。
+    前面的 cargo 测试三段已通过。没有真实来源就不放文件。
+- **边界不变**：`feature-parity.json` 维持 27 verified / 1 partial
+  （`browser.media_push_device_selection`），`release_ready=false` 不变；
+  未做任何签名或正式发布；用户自己的 `E:\h` 进程（22004 / 31328 / 23964）未被触碰。
