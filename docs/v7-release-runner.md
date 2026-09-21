@@ -2,9 +2,9 @@
 
 `v7 Candidate Package` remains suitable for ordinary GitHub-hosted Windows runners. Formal public release is intentionally stricter: `.github/workflows/release-v7.yml` only targets a dedicated self-hosted Windows x64 runner carrying the custom label `hls-release`.
 
-The formal version is **not hard-coded in this document**. The workflow reads `artifacts/v7-productization/feature-parity.json.product_version` from the dispatched frozen `main` SHA and derives tag `v<product_version>`. The active contract currently says `7.0.2` and `release_ready=false`, so there is no current formal v7.0.2 publication authorization. The public `v7.0.1-candidate.1` remains a historical hosted candidate, not the formal target.
+The formal version is **not hard-coded in this document**. The workflow reads `artifacts/v7-productization/feature-parity.json.product_version` from the dispatched frozen `main` SHA and derives tag `v<product_version>`. The active contract currently says `7.0.2` and `release_ready=false`, so there is no current formal v7.0.2 publication authorization. The public `v7.0.2-candidate.1` remains a historical hosted candidate, not the formal target; `v7.0.1-candidate.1` is older history.
 
-The runner distinction is deliberate. The MSI lifecycle contract verifies the immutable public `v7.0.0` MSI as the upgrade baseline and requires the real install root `E:\h`; browser evidence needs installed Edge and Firefox; installed-browser media-push evidence also needs a real interactive desktop and reachable LAN receiver; public Windows artifacts require a code-signing private key that must never be stored in the repository or copied into an ordinary hosted runner.
+The public `v7.0.2-candidate.1` is the latest hosted candidate, but it targets remote commit `74f8473` and is not evidence for a newer `main` SHA. The runner distinction is deliberate. The MSI lifecycle contract verifies the immutable public `v7.0.0` MSI as the upgrade baseline and requires the real install root `E:\h`; browser evidence needs installed Edge and Firefox; installed-browser media-push evidence also needs a real interactive desktop and reachable LAN receiver; public Windows artifacts require a code-signing private key that must never be stored in the repository or copied into an ordinary hosted runner.
 
 ## Runner contract
 

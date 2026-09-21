@@ -2,7 +2,7 @@
 
 本文描述当前 `7.0.2` source line 的本机升级路径。安装/扩展版本实际上由 `artifacts/v7-productization/feature-parity.json.product_version` 驱动，不应在脚本逻辑中依赖本文标题。
 
-> 历史说明：公开 `v7.0.1-candidate.1` 是上一轮测试包；它可以作为历史验收证据，但不能替代当前 7.0.2 提交重新生成的 candidate/provenance。
+> 历史说明：公开 `v7.0.2-candidate.1`（远程标签提交 `74f8473`）早于当前 `main`；它可以作为历史验收证据，但不能替代当前 7.0.2 提交重新生成的 candidate/provenance。`v7.0.1-candidate.1` 是更早的测试线。
 
 ## 当前安装
 
@@ -96,6 +96,6 @@ Portable 使用包根的 `data` 保存数据库，使用 `downloads` 保存下�
 - v6.0.1：Rust/Slint 历史发布参考。
 - v7.0.0：已发布稳定升级基线，标签、Release 和资产保持不变。
 - v7.0.1：历史 Compose/Rust/WXT candidate 测试线；公开 `v7.0.1-candidate.1` 保留原样。
-- v7.0.2：当前活动 source/candidate 版本；正式发布仍由 `release_ready=false` 和 formal release gates 阻止。
+- v7.0.2：当前活动 source/candidate 版本；公开 `v7.0.2-candidate.1` 保留原样，正式发布仍由 `release_ready=false` 和 formal release gates 阻止。
 
 旧源码不复制到活动树，通过 Git 标签查看。历史性能数字与当前门禁边界见 `docs/v7-verification.md`。

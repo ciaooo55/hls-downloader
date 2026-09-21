@@ -1,6 +1,6 @@
 # HLS Downloader v7 验证状态
 
-当前源码状态核验：2026-09-08。活动 canonical 产品版本为 `7.0.2`，`release_ready=false`。
+当前源码状态核验：2026-09-21。活动 canonical 产品版本为 `7.0.2`，`release_ready=false`。
 
 本文同时保存较早 v7.0.1 阶段的实测基线。**历史数字只证明当时对应提交/产物，不自动证明当前 `main`。** 当前提交是否可进入正式发布，必须以 canonical feature contract、同一 SHA 的四个 prerequisite workflows、当前 candidate provenance 与重新生成的 release evidence 为准。
 
@@ -10,7 +10,7 @@
 - 当前 `product_version=7.0.2`、`release_ready=false`、`audit_state=v7_0_2_iteration_in_progress`。
 - candidate 可以在 `release_ready=false` 时构建以收集实机证据；formal `package` 仍要求 canonical completeness、clean worktree、当前 release evidence 和 `release_ready=true`。
 - 正式 GitHub 发布还必须由 `.github/workflows/release-v7.yml` 在专用 self-hosted Windows x64 `hls-release` runner 上，对冻结 `main` SHA 执行 exact-SHA prerequisite、真实浏览器/性能/MSI/rollback、签名/时间戳、Draft asset digest 与显式 publish 授权。
-- 最新公开可下载测试包仍为历史 `v7.0.1-candidate.1`；其文件名、manifest、provenance 和 SHA-256 不可当作当前 7.0.2 SHA 的证据。
+- 最新公开可下载测试包为 `v7.0.2-candidate.1`（远程标签提交 `74f8473`，早于当前 `main`）；其文件名、manifest、provenance 和 SHA-256 不可当作当前 7.0.2 SHA 的证据。
 
 ## 历史已通过（v7.0.1 阶段基线）
 

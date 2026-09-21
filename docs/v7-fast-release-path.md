@@ -2,14 +2,14 @@
 
 当前活动源码版本来自 `artifacts/v7-productization/feature-parity.json`，目前为 `7.0.2`。正式发布流程本身不应把版本硬编码在文档或脚本分支里；`.github/workflows/release-v7.yml` 会从该 canonical contract 解析产品版本和 `v<version>` 标签。
 
-> 历史说明：公开的 `v7.0.1-candidate.1` 仍是上一轮可下载测试包，它及其 manifest/provenance/哈希属于 7.0.1 测试线，不是当前 7.0.2 提交的发布证据。
+> 历史说明：公开的 `v7.0.2-candidate.1`（远程标签提交 `74f8473`）是当前 7.0.2 线的旧 candidate；它及其 manifest/provenance/哈希不属于当前 `main` 提交的发布证据。`v7.0.1-candidate.1` 是更早的测试线。
 
 ## 当前状态
 
 - canonical 产品版本：`7.0.2`。
 - canonical `release_ready=false`，因此**当前没有正式发布授权**，正式 `package` 必须继续 fail closed。
 - HLS-C009/C010/C011 已分别收紧自动更新 signer、Core TCP loopback 和跨 origin replay header 边界；这些安全修复不会自动把 `release_ready` 改成 true。
-- `v7.0.0` 的已发布标签、Release 和资产保持不变；历史 `v7.0.1-candidate.1` 也保持历史原样。
+- `v7.0.0` 的已发布标签、Release 和资产保持不变；公开 `v7.0.2-candidate.1` 与历史 `v7.0.1-candidate.1` 也保持原样。
 
 ## 最短安全发布顺序
 

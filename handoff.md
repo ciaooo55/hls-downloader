@@ -3,7 +3,7 @@ repository: ciaooo55/hls-downloader
 default_branch: main
 product_version: 7.0.2
 release_ready: false
-last_updated: 2026-09-15
+last_updated: 2026-09-21
 ---
 
 # Project handoff

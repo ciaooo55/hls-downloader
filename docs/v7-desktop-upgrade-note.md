@@ -2,7 +2,7 @@
 
 当前活动产品版本来自 `artifacts/v7-productization/feature-parity.json`，目前为 `7.0.2`；canonical `release_ready=false`，所以本文描述当前源码/本机 candidate 行为，不代表正式 v7.0.2 已发布。
 
-> 历史公开测试包 `v7.0.1-candidate.1` 保持原样；它的扩展包、manifest/provenance 和哈希属于上一轮 7.0.1 测试线。
+> 历史公开测试包 `v7.0.2-candidate.1`（远程标签提交 `74f8473`）保持原样；它的扩展包、manifest/provenance 和哈希早于当前 `main`，不能替代当前提交的 candidate。`v7.0.1-candidate.1` 属于更早的测试线。
 
 ## 架构升级
 
