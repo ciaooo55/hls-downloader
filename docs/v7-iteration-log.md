@@ -798,3 +798,57 @@ BrowserPush 一族（含仅测试引用的 `start_browser_push` / `probe_tvbox`�
 - **边界不变**：`feature-parity.json` 维持 27 verified / 1 partial
   （`browser.media_push_device_selection`），`release_ready=false` 不变；
   未做任何签名或正式发布；用户自己的 `E:\h` 进程（22004 / 31328 / 23964）未被触碰。
+
+### 第二十八轮（2026-09-21 夜，Clash TUN 下的 TVBox 发现）：判据不是"连上了"，而是"从哪块网卡出去的"
+
+- **问题**：用户全程开着 Clash/Mihomo TUN，要求"用 TUN 模式也能找到"电视接收端。
+  但本机 `192.168.2.11`（此前记录的候选地址）根本不存在，之前所有"端口打开"的结论
+  都是 **Mihomo TUN 在本地替不存在的主机完成了 TCP 握手**：连接确实建立，本地端点是
+  `198.18.0.1` 而不是 WLAN 的 `192.168.2.6`，一个字节都没离开本机。
+  ARP 表里真实主机只有 `.1 / .2 / .3 / .5 / .9`；ICMP 全网被禁；SSDP M-SEARCH 零响应。
+
+- **实测三种情形（不绑定源地址，即产品原本的探测方式）**：
+  | 目标 | 结果 | 本地端点 |
+  | --- | --- | --- |
+  | `192.168.2.1:9978`（真实主机、端口关闭） | 1215ms 后 `TimeoutError` | — |
+  | `192.168.2.1:80`（真实主机、端口开放） | 2ms 连上，返回 HTTP 302 | `192.168.2.6` |
+  | `192.168.2.11:9978`（不存在的主机） | 19ms 连上，不返回任何数据 | `198.18.0.1` |
+  | `192.168.2.200:9978`（不存在的主机） | 1ms 连上，不返回任何数据 | `198.18.0.1` |
+
+- **修复**（`native_shell/src/cast.rs`，commit `cc89a49`）：`probe_tvbox_until` 在
+  `connect_timeout` 之后立刻检查 `stream.local_addr()`，只有确认这条连接是从本机自己的
+  某个局域网地址出去的，才继续当接收端探测；否则立即放弃。
+  真实主机（可 ARP 解析、流量确实从 WLAN 网卡出去）不受影响；幻影主机不再占用扫描预算，
+  也不会把隧道/代理端点当成局域网接收端上报。
+
+- **A/B 实测（同一台机器、TUN 开启、真实产品二进制跑 `discover_cast_devices(mode=tvbox)`）**：
+  | 构建 | 设备数 | 发现耗时 |
+  | --- | --- | --- |
+  | 判据关掉（`if false`） | 0 | **2499.1 ms**（撞上 2500ms 共享截止，扫描未完成） |
+  | 判据开启 | 0 | **178.3 ms**（扫完 512 个主机） |
+
+  本局域网当前没有任何 TVBox 接收端，所以两边都是 0 个设备；**差别在预算**：旧逻辑要把
+  每个幻影连接 write+read 到 140ms 的单次上限才放弃，64 个 worker 在 2500ms 内根本扫不完
+  512 个主机，排在扫描顺序后面的真实接收端永远不会被探到。新逻辑 14 倍速扫完整个 /24。
+
+- **一处此前的错误结论已纠正**：旧代码并没有把幻影主机报成设备（幻影连接不返回数据，
+  read 超时后返回 `None`），所以问题不是误报，而是扫描预算被幻影主机吃光。
+  commit message 最初写成"扫描结果几乎全是假设备"，已 amend 为实测结论。
+
+- **测试**：新增 `tvbox_probe_accepts_a_connection_that_left_via_the_lan` 与
+  `tvbox_probe_rejects_a_connection_that_did_not_leave_via_the_lan`，
+  另有 `spawn_tvbox_responder()`（先读请求再回包，否则探测端 `write_all` 会撞 ECONNRESET）。
+  回归有效性已实测：把判据改回 `if false`，拒绝方向那条测试按预期失败。
+  完整 lib 套件 **469 passed / 0 failed / 1 ignored**；`cargo fmt --check` 0；
+  **CI 同参 clippy exit 0**（`-D warnings -A dead_code -A clippy::large_enum_variant
+  -A clippy::too_many_arguments -A clippy::type_complexity`，见 `.github/workflows/ci.yml:129`——
+  这四类结构性 lint 是契约里显式豁免的，本地直接用 `-D warnings` 会报 28 条假错误）。
+
+- **仍未闭环**：本机只有一块 WLAN，`tvbox_scan_targets` 按设计跳过本机自身地址，
+  所以没有第二台真实主机就无法给出"真的发现到一个设备"的正向证据。
+  已在 `192.168.2.6:18080` 起一个只记录客户端 IP 的服务，让用户在电视浏览器里打开一次，
+  即可拿到电视真实 IP；拿到后用 `scripts/smoke_v7_tvbox_real.py --expected-host <IP>` 收口。
+
+- **边界不变**：`feature-parity.json` 维持 27 verified / 1 partial
+  （`browser.media_push_device_selection`），`release_ready=false`，未做任何签名或正式发布。
+
