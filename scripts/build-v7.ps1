@@ -29,6 +29,11 @@ $moduleVersions = @(
 if ([String]::IsNullOrWhiteSpace($productVersion) -or @($moduleVersions | Where-Object { $_ -ne $productVersion }).Count -ne 0) {
     throw "Product version mismatch: feature parity=$productVersion; modules=$($moduleVersions -join ', ')"
 }
+# 验证阶段保持 Stop。进入构建阶段后改为 Continue：cargo/gradle/pnpm/wxt/tar 等原生
+# 工具把进度写到 stderr，Windows PowerShell 5.1 在 Stop 下会把它升级成终止性
+# NativeCommandError 并中止整个构建（PowerShell 7 不会）。每个外部调用后面都有显式
+# $LASTEXITCODE 检查，每个产物都有存在性与 SHA-256 校验，这些才是真正的门。
+$ErrorActionPreference = 'Continue'
 $isPackage = @('candidate', 'package') -contains $Task
 $packageTier = if ($Task -eq 'candidate') { 'candidate' } else { 'formal' }
 $packageRoot = if ($Task -eq 'candidate') {
@@ -229,14 +234,8 @@ function Build-Extension([string]$Resources, [switch]$TestOnly) {
     $package = Get-Content -LiteralPath (Join-Path $repo 'extension\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($package.version -ne $productVersion) { throw "Browser extension package version must be ${productVersion}: $($package.version)" }
     $previousCi = $env:CI
-    # pnpm/wxt 把构建进度写到 stderr；Windows PowerShell 5.1 在
-    # ErrorActionPreference='Stop' 下会把它变成终止性 NativeCommandError，
-    # 即使构建已经成功。下面每一步都有显式 $LASTEXITCODE 检查作为真正的门，
-    # 所以只在这一段放宽错误偏好。
-    $previousErrorPreference = $ErrorActionPreference
     Push-Location (Join-Path $repo 'extension')
     try {
-        $ErrorActionPreference = 'Continue'
         $env:CI = 'true'
         # Probe inside the extension directory so corepack resolves the pnpm
         # version pinned by extension/package.json instead of its global default.
@@ -253,7 +252,6 @@ function Build-Extension([string]$Resources, [switch]$TestOnly) {
         & $pnpmPath run build
         if ($LASTEXITCODE -ne 0) { throw "pnpm run build failed with exit $LASTEXITCODE" }
     } finally {
-        $ErrorActionPreference = $previousErrorPreference
         $env:CI = $previousCi
         Pop-Location
     }
