@@ -13,6 +13,13 @@ Remove-Item $runtime -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $runtime | Out-Null
 $env:TEMP = Join-Path $runtime 'temp'; $env:TMP = $env:TEMP
 New-Item -ItemType Directory -Force $env:TEMP | Out-Null
+# 进程级 $env:TEMP 已被上面指到仓库所在卷；冷启动测量必须改用真实系统临时卷，
+# 否则测到的是“首次执行一个全新路径”的系统开销（杀毒扫描/预取缺失），不是产品启动耗时。
+$systemTemp = [Environment]::GetEnvironmentVariable('TEMP', 'User')
+if ([string]::IsNullOrWhiteSpace($systemTemp)) { $systemTemp = [Environment]::GetEnvironmentVariable('TEMP', 'Machine') }
+if ([string]::IsNullOrWhiteSpace($systemTemp)) { $systemTemp = Join-Path $env:LOCALAPPDATA 'Temp' }
+$stageRoot = Join-Path $systemTemp 'hls-v7-performance-stage'
+New-Item -ItemType Directory -Force $stageRoot | Out-Null
 Expand-Archive $portable $runtime -Force
 $candidate = Join-Path $runtime 'HLSDownloader'
 $resources = Join-Path $candidate 'app\resources'
@@ -29,7 +36,7 @@ $frameReport = Join-Path $reportDir 'compose-1000-task-frames.json'
 Invoke-Checked 'powershell.exe' @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'smoke-v7-compose-frames.ps1'),'-ReportPath',$frameReport,'-AppPath',(Join-Path $candidate 'HLSDownloader.exe'))
 $frame = Get-Content $frameReport -Raw -Encoding UTF8 | ConvertFrom-Json
 $hostReport = Join-Path $reportDir 'native-host-cold-start.json'
-Invoke-Checked $python @((Join-Path $PSScriptRoot 'smoke_v7_native_host.py'),'--host',(Join-Path $resources 'HLSDownloaderNativeHost.exe'),'--engine',(Join-Path $resources 'HLSDownloaderEngine.exe'),'--report',$hostReport)
+Invoke-Checked $python @((Join-Path $PSScriptRoot 'smoke_v7_native_host.py'),'--host',(Join-Path $resources 'HLSDownloaderNativeHost.exe'),'--engine',(Join-Path $resources 'HLSDownloaderEngine.exe'),'--stage-root',$stageRoot,'--report',$hostReport)
 $nativeHostResult = Get-Content $hostReport -Raw -Encoding UTF8 | ConvertFrom-Json
 $soakReport = Join-Path $reportDir 'candidate-runtime-soak.json'
 Invoke-Checked $python @((Join-Path $PSScriptRoot 'soak_v7_runtime.py'),'--engine',(Join-Path $resources 'HLSDownloaderEngine.exe'),'--report',$soakReport,'--idle-seconds','30','--stress-requests','1000')
@@ -39,7 +46,7 @@ Invoke-Checked $python @((Join-Path $PSScriptRoot 'smoke_v7_transfer_performance
 $transfer = Get-Content $transferReport -Raw -Encoding UTF8 | ConvertFrom-Json
 $result = [ordered]@{
  schema=1; product_version=[string]$manifest.product_version; candidate_manifest=$manifestPath; candidate_source_commit=[string]$manifest.source_commit; candidate_source_tree=[string]$manifest.source_tree; compose_render_api=$composeRenderApi; measured_at=[DateTime]::UtcNow.ToString('o')
- thousand_task_frame_p95_ms=$frame.frame_p95_ms; ipc_command_p95_ms=$soak.stress.ipc_p95_ms; native_host_cold_start_ms=$nativeHostResult.cold_first_response_ms
+ thousand_task_frame_p95_ms=$frame.frame_p95_ms; ipc_command_p95_ms=$soak.stress.ipc_p95_ms; native_host_cold_start_ms=$nativeHostResult.cold_first_response_ms; native_host_stage_volume=[string]$nativeHostResult.stage_volume
  real_transfer_throughput_mib_s=$transfer.throughput_mib_s; real_transfer_working_set_growth_mib=$transfer.working_set_growth_mib; post_publish_extra_network_bytes=$transfer.post_publish_extra_network_bytes
  thresholds=[ordered]@{ thousand_task_frame_p95_ms=33; ipc_command_p95_ms=75; native_host_cold_start_ms=1500; minimum_local_throughput_mib_s=20; maximum_working_set_growth_mib=256; post_publish_extra_network_bytes=0 }
  passed=($frame.passed -and [double]$soak.stress.ipc_p95_ms -le 75 -and $nativeHostResult.cold_first_response_ms -le 1500 -and $transfer.passed)

@@ -109,11 +109,15 @@ def main() -> int:
     parser.add_argument("--host", required=True, type=Path)
     parser.add_argument("--engine", required=True, type=Path)
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--stage-root", type=Path, default=None)
     args = parser.parse_args()
     if not args.host.is_file() or not args.engine.is_file():
         raise RuntimeError("Native Host and engine binaries must exist before smoke testing")
 
-    root = Path(tempfile.mkdtemp(prefix="hls-v7-native-host-"))
+    # 隔离 stage 目录的卷决定了“首次执行全新路径”的系统开销（杀毒扫描/预取缺失）。
+    # 默认沿用系统临时目录；调用方可用 --stage-root 显式指定，并把卷记入报告。
+    stage_root = Path(args.stage_root) if args.stage_root else Path(tempfile.gettempdir())
+    root = Path(tempfile.mkdtemp(prefix="hls-v7-native-host-", dir=str(stage_root)))
     # The Native Host resolves its Core by the installed product name next to its
     # own executable, so stage both binaries under product names in an isolated
     # directory instead of depending on the caller's build layout.
@@ -136,7 +140,9 @@ def main() -> int:
             raise RuntimeError(f"Cold Native Host/Core first response exceeded 1500ms: {first_response_ms:.2f}ms")
         report = {
             "schema": 1,
-            "cold_first_response_ms": round(first_response_ms, 2),
+        "stage_volume": str(root.resolve().drive).upper(),
+        "stage_root": str(stage_root),
+        "cold_first_response_ms": round(first_response_ms, 2),
             "two_response_total_ms": round(two_response_ms, 2),
             "threshold_ms": 1500,
             "passed": True,
