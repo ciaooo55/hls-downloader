@@ -16,13 +16,15 @@ $portable = [IO.Path]::GetFullPath((Join-Path (Split-Path $manifestPath) ([strin
 if ((Get-FileHash $portable -Algorithm SHA256).Hash.ToLowerInvariant() -ne ([string]$manifest.artifacts.portable.sha256).ToLowerInvariant()) { throw 'Candidate Portable SHA-256 mismatch.' }
 Remove-Item $runtime -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $runtime | Out-Null
-$env:TEMP = Join-Path $runtime 'temp'; $env:TMP = $env:TEMP
-New-Item -ItemType Directory -Force $env:TEMP | Out-Null
-# 进程级 $env:TEMP 已被上面指到仓库所在卷；冷启动测量必须改用真实系统临时卷，
-# 否则测到的是“首次执行一个全新路径”的系统开销（杀毒扫描/预取缺失），不是产品启动耗时。
+# 门禁必须测量产品本身，而不是仓库所在卷的写入速度。进程级 $env:TEMP 一律保留在真实
+# 系统临时卷上：本机实测仓库卷写入吞吐约为系统盘的 1/8（A: 10.88 vs C: 81.06 MiB/s），
+# 而传输夹具的 256MiB 暂存经 tempfile 默认目录跟随进程 TEMP，落在哪个卷直接决定
+# 传输分项测到的是磁盘还是传输引擎。同理，冷启动若用仓库卷的全新 stage 路径，测到的
+# 会是杀毒扫描/预取缺失的系统开销，也不是产品启动耗时。
 $systemTemp = [Environment]::GetEnvironmentVariable('TEMP', 'User')
 if ([string]::IsNullOrWhiteSpace($systemTemp)) { $systemTemp = [Environment]::GetEnvironmentVariable('TEMP', 'Machine') }
 if ([string]::IsNullOrWhiteSpace($systemTemp)) { $systemTemp = Join-Path $env:LOCALAPPDATA 'Temp' }
+$env:TEMP = $systemTemp; $env:TMP = $systemTemp
 $stageRoot = Join-Path $systemTemp 'hls-v7-performance-stage'
 New-Item -ItemType Directory -Force $stageRoot | Out-Null
 Expand-Archive $portable $runtime -Force
