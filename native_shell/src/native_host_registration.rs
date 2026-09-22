@@ -389,6 +389,11 @@ pub fn register_packaged_native_host(engine: &Path) -> Result<usize, String> {
     }
 }
 
+pub fn prepare_packaged_native_host_manifests(engine: &Path) -> Result<usize, String> {
+    let _ = prepare_manifests(engine)?;
+    Ok(2)
+}
+
 pub fn unregister_packaged_native_host(engine: &Path) -> Result<usize, String> {
     let host = expected_host(engine, false)?;
     let preferred = manifest_paths(
@@ -456,6 +461,7 @@ mod tests {
     #[test]
     fn generated_manifests_use_an_absolute_host_and_cover_all_browsers() {
         let (engine, root) = fixture();
+        assert_eq!(prepare_packaged_native_host_manifests(&engine).unwrap(), 2);
         let (host, manifests) =
             prepare_manifests_with_fallback(&engine, &root.join("fallback")).unwrap();
         assert!(host.is_absolute());

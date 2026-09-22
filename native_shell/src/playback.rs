@@ -548,11 +548,9 @@ mod tests {
         let text = String::from_utf8_lossy(&buf);
         assert!(text.contains("206"));
         assert!(text.contains("2345"));
-        assert!(
-            server
-                .cast_url_for("task-1", "192.168.2.6")
-                .ends_with("/media/task-1/file.bin")
-        );
+        assert!(server
+            .cast_url_for("task-1", "192.168.2.6")
+            .ends_with("/media/task-1/file.bin"));
         let mut cast_stream = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
         cast_stream
             .write_all(b"GET /media/task-1/file.bin HTTP/1.1\r\n\r\n")

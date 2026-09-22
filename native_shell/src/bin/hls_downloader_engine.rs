@@ -117,6 +117,12 @@ fn main() -> ExitCode {
     if args.iter().any(|arg| arg == "--register-native-host") {
         return native_host_registration(false);
     }
+    if args
+        .iter()
+        .any(|arg| arg == "--prepare-native-host-manifests")
+    {
+        return native_host_manifest_preparation();
+    }
     if args.iter().any(|arg| arg == "--unregister-native-host") {
         return native_host_registration(true);
     }
@@ -193,6 +199,26 @@ fn main() -> ExitCode {
     }
 }
 
+fn native_host_manifest_preparation() -> ExitCode {
+    let engine = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("resolve Engine path for Native Host manifests: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    match hls_native_shell::prepare_packaged_native_host_manifests(&engine) {
+        Ok(count) => {
+            println!("Native Host manifest preparation complete: {count} manifest(s)");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Native Host manifest preparation failed: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn native_host_registration(unregister: bool) -> ExitCode {
     let engine = match std::env::current_exe() {
         Ok(path) => path,
@@ -240,6 +266,7 @@ mod tests {
         assert!(source.contains("hls_native_shell::spawn_tray(sender)"));
         assert!(source.contains("focus_existing_workbench()"));
         assert!(source.contains("SunAwtFrame"));
+        assert!(source.contains("--prepare-native-host-manifests"));
         assert!(source.contains("register_packaged_native_host"));
         assert!(source.contains("--unregister-native-host"));
     }

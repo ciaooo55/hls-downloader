@@ -118,10 +118,22 @@ function Set-MsiExecutableAction(
     $escapedCondition = $Condition.Replace("'", "''")
     Invoke-MsiNonQuery "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='$Action'"
     Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$Action'"
-    # Type 1042 is an installed-file EXE (18) deferred in the execution script
-    # (1024). It remains impersonated so Native Host registration writes HKCU.
+    # Type 1042 is an installed-file EXE deferred in the execution script.
+    # It only creates manifests under INSTALLDIR; MSI owns the HKCU entries.
     Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('$Action',1042,'$SourceFile','$escapedArguments')"
     Invoke-MsiNonQuery "INSERT INTO ``InstallExecuteSequence`` (``Action``,``Condition``,``Sequence``) VALUES ('$Action','$escapedCondition',$Sequence)"
+}
+
+function Set-MsiRegistryDefaultValue(
+    [string]$Id,
+    [string]$Key,
+    [string]$Value,
+    [string]$Component
+) {
+    $escapedKey = $Key.Replace("'", "''")
+    $escapedValue = $Value.Replace("'", "''")
+    Invoke-MsiNonQuery "DELETE FROM ``Registry`` WHERE ``Registry``='$Id'"
+    Invoke-MsiNonQuery "INSERT INTO ``Registry`` (``Registry``,``Root``,``Key``,``Name``,``Value``,``Component_``) VALUES ('$Id',1,'$escapedKey',NULL,'$escapedValue','$Component')"
 }
 
 try {
@@ -142,6 +154,10 @@ try {
     }
     if ([String]::IsNullOrWhiteSpace($engineFile)) {
         throw 'MSI does not contain HLSDownloaderEngine.exe for Native Host registration actions.'
+    }
+    $engineComponent = Invoke-MsiStringQuery "SELECT ``Component_`` FROM ``File`` WHERE ``File``='$engineFile'"
+    if ([String]::IsNullOrWhiteSpace($engineComponent)) {
+        throw 'MSI does not expose the HLSDownloaderEngine.exe component for Native Host registry ownership.'
     }
     Invoke-MsiNonQuery "UPDATE ``Property`` SET ``Value``='$ProductCode' WHERE ``Property``='ProductCode'"
 
@@ -168,14 +184,27 @@ try {
         Invoke-MsiNonQuery "UPDATE ``InstallExecuteSequence`` SET ``Sequence``=$target WHERE ``Action``='RemoveExistingProducts'"
     }
 
-    $registerSequence = [int]$installFiles + 10
-    $unregisterSequence = [int]$removeFiles - 10
-    if ($registerSequence -ge [int]$finalize -or $unregisterSequence -le 0) {
+    $prepareSequence = [int]$installFiles + 10
+    if ($prepareSequence -ge [int]$finalize) {
         throw 'MSI does not provide legal Native Host registration action slots.'
     }
-    Set-MsiExecutableAction 'V7RegisterNativeHost' $engineFile '--register-native-host' 'NOT REMOVE~="ALL"' $registerSequence
-    # A major upgrade must leave the new product's repaired registration intact.
-    Set-MsiExecutableAction 'V7UnregisterNativeHost' $engineFile '--unregister-native-host' 'REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE' $unregisterSequence
+    foreach ($legacyAction in @('V7RegisterNativeHost', 'V7UnregisterNativeHost')) {
+        Invoke-MsiNonQuery "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='$legacyAction'"
+        Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$legacyAction'"
+    }
+    Set-MsiExecutableAction 'V7PrepareNativeHostManifests' $engineFile '--prepare-native-host-manifests' 'NOT REMOVE~="ALL"' $prepareSequence
+    $nativeHostRegistry = @(
+        @('V7NativeHostChrome', 'Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
+        @('V7NativeHostEdge', 'Software\Microsoft\Edge\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
+        @('V7NativeHostBrave', 'Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
+        @('V7NativeHostChromium', 'Software\Chromium\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
+        @('V7NativeHostVivaldi', 'Software\Vivaldi\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
+        @('V7NativeHostOpera', 'Software\Opera Software\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
+        @('V7NativeHostFirefox', 'Software\Mozilla\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.firefox.json')
+    )
+    foreach ($entry in $nativeHostRegistry) {
+        Set-MsiRegistryDefaultValue $entry[0] $entry[1] $entry[2] $engineComponent
+    }
 
     $database.GetType().InvokeMember(
         'Commit', 'InvokeMethod', $null, $database, $null
@@ -203,12 +232,9 @@ try {
     $database = $verifyDatabase
     $verified = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveExistingProducts'"
     $verifiedProductCode = Invoke-MsiStringQuery "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductCode'"
-    $verifiedRegisterSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='V7RegisterNativeHost'"
-    $verifiedUnregisterSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='V7UnregisterNativeHost'"
-    $verifiedRegisterType = Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='V7RegisterNativeHost'"
-    $verifiedUnregisterType = Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='V7UnregisterNativeHost'"
-    $verifiedRegisterTarget = Invoke-MsiStringQuery "SELECT ``Target`` FROM ``CustomAction`` WHERE ``Action``='V7RegisterNativeHost'"
-    $verifiedUnregisterTarget = Invoke-MsiStringQuery "SELECT ``Target`` FROM ``CustomAction`` WHERE ``Action``='V7UnregisterNativeHost'"
+    $verifiedPrepareSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='V7PrepareNativeHostManifests'"
+    $verifiedPrepareType = Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='V7PrepareNativeHostManifests'"
+    $verifiedPrepareTarget = Invoke-MsiStringQuery "SELECT ``Target`` FROM ``CustomAction`` WHERE ``Action``='V7PrepareNativeHostManifests'"
     $verifiedInstallDirSearch = Invoke-MsiStringQuery "SELECT ``Signature_`` FROM ``AppSearch`` WHERE ``Property``='INSTALLDIR'"
     if ($verifiedInstallDirSearch -ne $installDirSearch) {
         throw 'MSI maintenance install-directory search verification failed.'
@@ -220,14 +246,26 @@ try {
         throw "MSI ProductCode verification failed: expected $ProductCode, got $verifiedProductCode."
     }
     if (
-        [int]$verifiedRegisterSequence -ne $registerSequence -or
-        [int]$verifiedUnregisterSequence -ne $unregisterSequence -or
-        [int]$verifiedRegisterType -ne 1042 -or
-        [int]$verifiedUnregisterType -ne 1042 -or
-        $verifiedRegisterTarget -ne '--register-native-host' -or
-        $verifiedUnregisterTarget -ne '--unregister-native-host'
+        [int]$verifiedPrepareSequence -ne $prepareSequence -or
+        [int]$verifiedPrepareType -ne 1042 -or
+        $verifiedPrepareTarget -ne '--prepare-native-host-manifests'
     ) {
         throw 'MSI Native Host registration action verification failed.'
+    }
+    foreach ($entry in $nativeHostRegistry) {
+        $id = $entry[0]
+        $verifiedRoot = Invoke-MsiScalarQuery "SELECT ``Root`` FROM ``Registry`` WHERE ``Registry``='$id'"
+        $verifiedKey = Invoke-MsiStringQuery "SELECT ``Key`` FROM ``Registry`` WHERE ``Registry``='$id'"
+        $verifiedValue = Invoke-MsiStringQuery "SELECT ``Value`` FROM ``Registry`` WHERE ``Registry``='$id'"
+        $verifiedComponent = Invoke-MsiStringQuery "SELECT ``Component_`` FROM ``Registry`` WHERE ``Registry``='$id'"
+        if (
+            [int]$verifiedRoot -ne 1 -or
+            $verifiedKey -ne $entry[1] -or
+            $verifiedValue -ne $entry[2] -or
+            $verifiedComponent -ne $engineComponent
+        ) {
+            throw "MSI Native Host registry verification failed for $id."
+        }
     }
 } finally {
     $database = $null
@@ -249,10 +287,9 @@ try {
     install_files_sequence = [int]$installFiles
     install_finalize_sequence = [int]$finalize
     native_host_engine_file = $engineFile
-    native_host_register_type = [int]$verifiedRegisterType
-    native_host_unregister_type = [int]$verifiedUnregisterType
-    native_host_register_sequence = [int]$verifiedRegisterSequence
-    native_host_unregister_sequence = [int]$verifiedUnregisterSequence
+    native_host_prepare_type = [int]$verifiedPrepareType
+    native_host_prepare_sequence = [int]$verifiedPrepareSequence
+    native_host_registry_count = $nativeHostRegistry.Count
     sha256_before = $beforeHash
     sha256_after = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash
 } | ConvertTo-Json

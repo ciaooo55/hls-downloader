@@ -150,7 +150,8 @@ pub use migrate::{maybe_migrate_from_5x, migrate_from_5x};
 pub use native_host::run as run_native_host;
 #[cfg(feature = "full-core")]
 pub use native_host_registration::{
-    register_packaged_native_host, unregister_packaged_native_host,
+    prepare_packaged_native_host_manifests, register_packaged_native_host,
+    unregister_packaged_native_host,
 };
 #[cfg(feature = "full-core")]
 pub use ole_drag::{begin_file_drag, completed_file_drag, hdrop_bytes};

@@ -232,14 +232,13 @@ fn lan_ipv4_state() -> (Vec<(Ipv4Addr, u8)>, bool) {
         let item = unsafe { &*adapter };
         let name = unsafe { wide_text(item.FriendlyName) }.to_ascii_lowercase();
         let description = unsafe { wide_text(item.Description) }.to_ascii_lowercase();
-        let tunnel =
-            item.IfType == IF_TYPE_TUNNEL || tunnel_adapter_name(&name, &description);
+        let tunnel = item.IfType == IF_TYPE_TUNNEL || tunnel_adapter_name(&name, &description);
         if item.OperStatus == IfOperStatusUp && tunnel {
             tun_active = true;
         }
         let ignored_name = ["virtual", "vpn", "loopback", "wsl", "hyper-v", "虚拟"]
-        .iter()
-        .any(|marker| name.contains(marker) || description.contains(marker));
+            .iter()
+            .any(|marker| name.contains(marker) || description.contains(marker));
         if item.OperStatus == IfOperStatusUp
             && item.IfType != IF_TYPE_SOFTWARE_LOOPBACK
             && !tunnel
@@ -2329,7 +2328,10 @@ mod tests {
 
         let bare_origin = xml
             .replace("http://192.168.1.20:8008/", "http://192.168.1.20:8008")
-            .replace("/upnp/control/AVTransport", "_urn:schemas-upnp-org:service:AVTransport_control");
+            .replace(
+                "/upnp/control/AVTransport",
+                "_urn:schemas-upnp-org:service:AVTransport_control",
+            );
         let device =
             parse_device_description(&bare_origin, "http://192.168.1.20:8008/desc.xml").unwrap();
         assert_eq!(
