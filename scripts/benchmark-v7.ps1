@@ -4,7 +4,11 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot\..").Path
 $reportDir = Join-Path $repo 'artifacts\v7-productization\performance'
 $runtime = Join-Path $reportDir 'candidate-runtime'
-$manifestPath = [IO.Path]::GetFullPath((Join-Path $repo $CandidateManifestPath))
+$manifestPath = if ([IO.Path]::IsPathRooted($CandidateManifestPath)) {
+    [IO.Path]::GetFullPath($CandidateManifestPath)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $repo $CandidateManifestPath))
+}
 $manifest = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 if ([string]$manifest.package_tier -ne 'candidate' -or [string]::IsNullOrWhiteSpace([string]$manifest.product_version)) { throw 'Artifact manifest must identify a candidate product version.' }
 $portable = [IO.Path]::GetFullPath((Join-Path (Split-Path $manifestPath) ([string]$manifest.artifacts.portable.path)))

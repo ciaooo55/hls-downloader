@@ -12,7 +12,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot\..").Path
 $artifactRoot = Join-Path $repo 'artifacts\v7-productization\candidate-browser'
-$manifestPath = [IO.Path]::GetFullPath((Join-Path $repo $CandidateManifestPath))
+$manifestPath = if ([IO.Path]::IsPathRooted($CandidateManifestPath)) {
+    [IO.Path]::GetFullPath($CandidateManifestPath)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $repo $CandidateManifestPath))
+}
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $manifestRoot = Split-Path $manifestPath
 $portable = [IO.Path]::GetFullPath((Join-Path $manifestRoot ([string]$manifest.artifacts.portable.path)))
