@@ -10,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $productVersion = [string](Get-Content -LiteralPath (Join-Path $repo 'artifacts\v7-productization\feature-parity.json') -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
 $repoPrefix = $repo.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar

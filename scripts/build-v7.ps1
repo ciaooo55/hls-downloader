@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param([ValidateSet('run','test','candidate','package','adversarial')][string]$Task='run')
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 $repo=(Resolve-Path "$PSScriptRoot\..").Path
 $protocolSource = Get-Content -LiteralPath (Join-Path $repo 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt') -Raw -Encoding UTF8
 if ($protocolSource -notmatch 'CORE_PROTOCOL\s*=\s*"hls-downloader-v7-core"' -or

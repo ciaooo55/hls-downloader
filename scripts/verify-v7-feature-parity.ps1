@@ -12,6 +12,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 $repo = (Resolve-Path "$PSScriptRoot\..").Path
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 

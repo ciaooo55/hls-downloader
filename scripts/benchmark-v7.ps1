@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param([string]$CandidateManifestPath = 'artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json')
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 $repo = (Resolve-Path "$PSScriptRoot\..").Path
 $reportDir = Join-Path $repo 'artifacts\v7-productization\performance'
 $runtime = Join-Path $reportDir 'candidate-runtime'

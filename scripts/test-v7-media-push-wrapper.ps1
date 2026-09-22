@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 $ProgressPreference = 'SilentlyContinue'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $wrapper = if ($WrapperPath) { (Resolve-Path -LiteralPath $WrapperPath).Path } else { Join-Path $PSScriptRoot 'verify-v7-browser-media-push.ps1' }

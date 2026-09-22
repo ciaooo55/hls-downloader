@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param([string]$JdkRoot='',[string]$GradleHome='')
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 $repo=(Resolve-Path "$PSScriptRoot\..").Path
 
 # Toolchain downloads default inside the repository; HLS_V7_BUILD_CACHE relocates bootstrap/build/cleanup together.

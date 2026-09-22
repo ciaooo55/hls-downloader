@@ -2,6 +2,7 @@ param(
     [string]$OutZip = ''
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $composeBuild = if ($env:HLS_COMPOSE_BUILD_DIR) { $env:HLS_COMPOSE_BUILD_DIR } else { Join-Path $repo '.tool-cache\build-cache\compose-build' }
 $appImage = Join-Path $composeBuild 'compose\binaries\main\app\HLSDownloader'

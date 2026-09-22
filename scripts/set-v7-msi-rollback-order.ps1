@@ -8,6 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 $resolved = (Resolve-Path -LiteralPath $MsiPath).Path
 $beforeHash = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash
 $installer = $null

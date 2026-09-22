@@ -10,6 +10,7 @@ param(
     [string]$Go = 'go'
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 $repo = (Resolve-Path "$PSScriptRoot\..").Path
 $artifactRoot = Join-Path $repo 'artifacts\v7-productization\candidate-browser'
 $manifestPath = if ([IO.Path]::IsPathRooted($CandidateManifestPath)) {
