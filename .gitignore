@@ -14,6 +14,7 @@ venv/
 
 # Frontend
 node_modules/
+/scripts/probe/*.class
 /target/
 native_shell/target/
 native_shell/site-cache/
