@@ -595,7 +595,7 @@ private fun V7WeekdayChoice(value: String, onValue: (String) -> Unit) {
                 },
                 modifier = Modifier.weight(1f)
                     .clip(RoundedCornerShape(Radius.sm))
-                    .background(if (selected) selectedSurface else surface2)
+                    .background(segmentBackground(selected, selectedSurface, surface2))
                     .border(1.dp, if (selected) blue else Color.Transparent, RoundedCornerShape(Radius.sm)),
                 contentPadding = PaddingValues(0.dp),
             ) { Text(label, color = if (selected) blue else muted, fontSize = TypeScale.caption) }
@@ -622,7 +622,7 @@ private fun V7WeekdayChoice(value: String, onValue: (String) -> Unit) {
                 onClick = { onSelect(value) },
                 Modifier.weight(1f)
                     .clip(RoundedCornerShape(Radius.sm))
-                    .background(if (selected == value) selectedSurface else Color.Transparent)
+                    .background(segmentBackground(selected == value, selectedSurface, Color.Transparent))
                     .border(1.dp, if (selected == value) blue else Color.Transparent, RoundedCornerShape(Radius.sm)),
             ) { Text(text, fontSize = TypeScale.caption, color = if (selected == value) blue else muted) }
         }

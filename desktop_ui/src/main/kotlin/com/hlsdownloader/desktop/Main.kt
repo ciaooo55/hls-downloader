@@ -2988,7 +2988,7 @@ private fun QueueManagerDialog(
                                 val day = index + 1
                                 val days = selected.activeDays.split(',').mapNotNull(String::toIntOrNull)
                                 val active = day in days
-                                TextButton(onClick = { update { profile -> profile.copy(activeDays = (if (active) days - day else days + day).distinct().sorted().joinToString(",")) } }, modifier = Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (active) selectedSurface else surface2), contentPadding = PaddingValues(0.dp)) { Text(label, color = if (active) blue else muted, fontSize = TypeScale.caption) }
+                                TextButton(onClick = { update { profile -> profile.copy(activeDays = (if (active) days - day else days + day).distinct().sorted().joinToString(",")) } }, modifier = Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(active, selectedSurface, surface2)), contentPadding = PaddingValues(0.dp)) { Text(label, color = if (active) blue else muted, fontSize = TypeScale.caption) }
                             }
                         }
                     }
@@ -2999,7 +2999,7 @@ private fun QueueManagerDialog(
                             val active = selected.completionAction == value
                             TextButton(
                                 onClick = { update { it.copy(completionAction = value) } },
-                                modifier = Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (active) selectedSurface else Color.Transparent),
+                                modifier = Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(active, selectedSurface, Color.Transparent)),
                                 contentPadding = PaddingValues(horizontal = 4.dp),
                             ) { Text(label, color = if (active) blue else muted, fontSize = TypeScale.micro) }
                         }
@@ -3073,7 +3073,7 @@ private fun NewTaskDialog(
         )
     }
     WorkbenchDialog(onDismiss, "新建下载", "创建文件、媒体、远程协议或 BT 下载任务", 760.dp, content = {
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) { listOf("基本", "连接", "请求", "计划").forEach { item -> TextButton(onClick = { tab = item }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (tab == item) rail else Color.Transparent)) { Text(item, color = if (tab == item) blue else muted, fontSize = TypeScale.caption, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal) } } }
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) { listOf("基本", "连接", "请求", "计划").forEach { item -> TextButton(onClick = { tab = item }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(tab == item, rail, Color.Transparent))) { Text(item, color = if (tab == item) blue else muted, fontSize = TypeScale.caption, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal) } } }
         Spacer(Modifier.height(14.dp))
         when (tab) {
             "基本" -> {
@@ -3115,7 +3115,7 @@ private fun NewTaskDialog(
                 }
                 DialogLabel("请求方式")
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) {
-                    listOf("GET", "POST", "HEAD").forEach { value -> TextButton(onClick = { requestMethod = value }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (requestMethod == value) selectedSurface else Color.Transparent)) { Text(value, color = if (requestMethod == value) blue else muted, fontSize = TypeScale.caption) } }
+                    listOf("GET", "POST", "HEAD").forEach { value -> TextButton(onClick = { requestMethod = value }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(requestMethod == value, selectedSurface, Color.Transparent))) { Text(value, color = if (requestMethod == value) blue else muted, fontSize = TypeScale.caption) } }
                 }
                 Spacer(Modifier.height(9.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -3142,7 +3142,7 @@ private fun NewTaskDialog(
                 Spacer(Modifier.height(9.dp)); DialogLabel("其他请求头（每行“名称: 值”）"); OutlinedTextField(requestHeaders, { requestHeaders = it }, Modifier.fillMaxWidth(), minLines = 3, maxLines = 3, isError = parsedHeaders.isFailure, shape = RoundedCornerShape(Radius.md), placeholder = { Text("Authorization: Bearer ...\nX-Playback-Token: ...") }); Text(parsedHeaders.exceptionOrNull()?.message ?: "敏感请求头只保存在下载引擎的加密凭据中。", color = if (parsedHeaders.isFailure) errorStrong else faint, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 5.dp))
             }
             else -> {
-                DialogLabel("计划开始（ISO 时间或留空）"); OutlinedTextField(startAt, { startAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("计划停止（ISO 时间或留空）"); OutlinedTextField(stopAt, { stopAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("完成后动作"); Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) { listOf("none" to "无", "sleep" to "睡眠", "hibernate" to "休眠", "shutdown" to "关机").forEach { (value, label) -> TextButton(onClick = { completionAction = value }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (completionAction == value) selectedSurface else Color.Transparent), contentPadding = PaddingValues(horizontal = 4.dp)) { Text(label, color = if (completionAction == value) blue else muted, fontSize = TypeScale.micro) } } }
+                DialogLabel("计划开始（ISO 时间或留空）"); OutlinedTextField(startAt, { startAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("计划停止（ISO 时间或留空）"); OutlinedTextField(stopAt, { stopAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("完成后动作"); Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) { listOf("none" to "无", "sleep" to "睡眠", "hibernate" to "休眠", "shutdown" to "关机").forEach { (value, label) -> TextButton(onClick = { completionAction = value }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(completionAction == value, selectedSurface, Color.Transparent)), contentPadding = PaddingValues(horizontal = 4.dp)) { Text(label, color = if (completionAction == value) blue else muted, fontSize = TypeScale.micro) } } }
             }
         }
     }, actions = {
@@ -3285,7 +3285,7 @@ private fun HarvestDialog(
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) {
             (listOf("概览", "连接", "速度", "日志") + if (canPreview) listOf("预览") else emptyList()).forEach { item ->
-                TextButton(onClick = { tab = item; if (item == "日志") onAction("log") }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (tab == item) rail else Color.Transparent)) { Text(item, color = if (tab == item) blue else muted, fontSize = TypeScale.caption, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal) }
+                TextButton(onClick = { tab = item; if (item == "日志") onAction("log") }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(tab == item, rail, Color.Transparent))) { Text(item, color = if (tab == item) blue else muted, fontSize = TypeScale.caption, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal) }
             }
         }
         Spacer(Modifier.height(12.dp))

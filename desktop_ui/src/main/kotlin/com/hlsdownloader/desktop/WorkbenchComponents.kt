@@ -272,6 +272,31 @@ internal class PressFeedback(
     val scale: Float,
 )
 
+/**
+ * 分段选中态（分段控件、tab 段、星期/选项按钮）的底色过渡。
+ *
+ * 这些目标原本是 Modifier.background(if (selected) ...) 的瞬时切换，选中时整块跳变。
+ * 这里只补颜色这一层：选中语义、尺寸、Role、非颜色线索（左侧色条、描边）全部不变。
+ *
+ * 约束沿用 [rememberPressFeedback]：选中底**不要**往 `blue` 混合（实测对比度 4.51 → 4.18，
+ * 跌破 4.5:1），所以只做 selected / rest 两档，悬停由调用方自己的档位承担。
+ */
+@Composable
+internal fun segmentBackground(
+    selected: Boolean,
+    selectedColor: Color,
+    restColor: Color,
+    millis: Int = 120,
+): Color {
+    val reduceMotion by MotionPreferences.reduceMotion
+    val animated by animateColorAsState(
+        targetValue = if (selected) selectedColor else restColor,
+        animationSpec = tween(motionDurationMillis(reduceMotion, millis)),
+        label = "segment-background",
+    )
+    return animated
+}
+
 internal data class ButtonColors(
     val container: Color,
     val content: Color,
@@ -302,7 +327,13 @@ internal fun Button(
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val reduceMotion by MotionPreferences.reduceMotion
-    val container = if (enabled) colors.container else colors.disabledContainer
+    val containerTarget = if (enabled) colors.container else colors.disabledContainer
+    // 容器色走过渡：选中态切换（如"分类"选择按钮的 selectedSurface）和禁用态不再跳变。
+    val container by animateColorAsState(
+        targetValue = containerTarget,
+        animationSpec = tween(motionDurationMillis(reduceMotion, 140)),
+        label = "button-container",
+    )
     val contentColor = if (enabled) colors.content else colors.disabledContent
     val feedback = rememberPressFeedback(
         restColor = container,
