@@ -2130,7 +2130,16 @@ private fun NavRow(
             )
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
-    ) { content(active || feedback.hovered) }
+    ) {
+        // 选中态保留固定宽度的左侧色条：即使不看颜色，形状也能标出当前入口。
+        Box(
+            Modifier.width(3.dp).height(18.dp)
+                .clip(RoundedCornerShape(Radius.sm))
+                .background(if (active) blue else Color.Transparent),
+        )
+        Spacer(Modifier.width(7.dp))
+        content(active || feedback.hovered)
+    }
 }
 
 @Composable private fun Sidebar(selected: TaskFilter, selectedCategory: TaskCategory?, selectedQueueId: String?, profiles: List<QueueProfileDto>, tasks: List<DownloadTask>, compact: Boolean, onSelected: (TaskFilter) -> Unit, onCategory: (TaskCategory) -> Unit, onQueue: (String) -> Unit, onManageQueues: () -> Unit) {

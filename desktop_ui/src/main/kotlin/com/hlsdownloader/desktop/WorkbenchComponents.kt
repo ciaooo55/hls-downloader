@@ -235,11 +235,12 @@ internal fun rememberPressFeedback(
     hoverColor: Color = surface3,
     pressedColor: Color = Color.Unspecified,
     enabled: Boolean = true,
+    interactionSource: MutableInteractionSource? = null,
     pressScale: Float = .985f,
     hoverMillis: Int = 130,
     pressMillis: Int = 90,
 ): PressFeedback {
-    val interaction = remember { MutableInteractionSource() }
+    val interaction = interactionSource ?: remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
     val reduceMotion by MotionPreferences.reduceMotion
@@ -300,14 +301,21 @@ internal fun Button(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    val reduceMotion by MotionPreferences.reduceMotion
     val container = if (enabled) colors.container else colors.disabledContainer
     val contentColor = if (enabled) colors.content else colors.disabledContent
     val feedback = rememberPressFeedback(
         restColor = container,
         hoverColor = container.blendToward(Color.White, .08f),
         enabled = enabled,
+        interactionSource = interaction,
         pressScale = .985f,
         hoverMillis = 140,
+    )
+    val focusAlpha by animateFloatAsState(
+        if (focused && enabled) 1f else 0f,
+        animationSpec = tween(motionDurationMillis(reduceMotion, 120)),
+        label = "button-focus-ring",
     )
     Row(
         modifier
@@ -315,7 +323,8 @@ internal fun Button(
             .clip(shape)
             .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
             .background(feedback.background)
-            .then(if (focused) Modifier.border(2.dp, blue, shape) else if (border != null) Modifier.border(border, shape) else Modifier)
+            .border(2.dp, blue.copy(alpha = focusAlpha), shape)
+            .then(if (!(focused && enabled) && border != null) Modifier.border(border, shape) else Modifier)
             .hoverable(interaction)
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(contentPadding),
@@ -351,11 +360,24 @@ internal fun IconButton(
     content: @Composable BoxScope.() -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val reduceMotion by MotionPreferences.reduceMotion
     val feedback = rememberPressFeedback(
         hoverColor = surface3,
         enabled = enabled,
+        interactionSource = interaction,
         pressScale = .9f,
         hoverMillis = 120,
+    )
+    val focusAlpha by animateFloatAsState(
+        if (focused && enabled) 1f else 0f,
+        animationSpec = tween(motionDurationMillis(reduceMotion, 120)),
+        label = "icon-button-focus-ring",
+    )
+    val enabledAlpha by animateFloatAsState(
+        if (enabled) 1f else .42f,
+        animationSpec = tween(motionDurationMillis(reduceMotion, 120)),
+        label = "icon-button-enabled",
     )
     Box(
         modifier
@@ -363,9 +385,10 @@ internal fun IconButton(
             .clip(RoundedCornerShape(Radius.sm))
             .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
             .background(feedback.background)
+            .border(2.dp, blue.copy(alpha = focusAlpha), RoundedCornerShape(Radius.sm))
             .hoverable(interaction)
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
-            .alpha(if (enabled) 1f else .42f),
+            .alpha(enabledAlpha),
         contentAlignment = Alignment.Center,
         content = content,
     )

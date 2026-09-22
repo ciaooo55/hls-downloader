@@ -1,6 +1,7 @@
 package com.hlsdownloader.desktop
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.rememberScrollState
@@ -8,6 +9,7 @@ import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.ScrollbarStyle
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -19,6 +21,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -163,10 +166,22 @@ internal fun FullSettingsDialog(
                             .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
                             .background(feedback.background)
                             .hoverable(feedback.interaction)
-                            .clickable(interactionSource = feedback.interaction, indication = null) { selected = tab.label }
+                            .selectable(
+                                selected = active,
+                                interactionSource = feedback.interaction,
+                                indication = null,
+                                role = Role.Tab,
+                                onClick = { selected = tab.label },
+                            )
                             .padding(horizontal = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        Box(
+                            Modifier.width(3.dp).height(18.dp)
+                                .clip(RoundedCornerShape(Radius.sm))
+                                .background(if (active) blue else Color.Transparent),
+                        )
+                        Spacer(Modifier.width(7.dp))
                         Icon(tab.icon, null, modifier = Modifier.size(17.dp), tint = if (active) blue else muted)
                         Spacer(Modifier.width(8.dp)); Text(tab.label, fontSize = TypeScale.body, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal, color = ink)
                     }
@@ -578,7 +593,10 @@ private fun V7WeekdayChoice(value: String, onValue: (String) -> Unit) {
                     val next = if (selected) active - day else active + day
                     if (next.isNotEmpty()) onValue(next.sorted().joinToString(","))
                 },
-                modifier = Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (selected) selectedSurface else surface2),
+                modifier = Modifier.weight(1f)
+                    .clip(RoundedCornerShape(Radius.sm))
+                    .background(if (selected) selectedSurface else surface2)
+                    .border(1.dp, if (selected) blue else Color.Transparent, RoundedCornerShape(Radius.sm)),
                 contentPadding = PaddingValues(0.dp),
             ) { Text(label, color = if (selected) blue else muted, fontSize = TypeScale.caption) }
         }
@@ -599,7 +617,15 @@ private fun V7WeekdayChoice(value: String, onValue: (String) -> Unit) {
 @Composable private fun V7Choice(label: String, options: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
     DialogLabel(label)
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) {
-        options.forEach { (value, text) -> TextButton(onClick = { onSelect(value) }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(if (selected == value) selectedSurface else androidx.compose.ui.graphics.Color.Transparent)) { Text(text, fontSize = TypeScale.caption, color = if (selected == value) blue else muted) } }
+        options.forEach { (value, text) ->
+            TextButton(
+                onClick = { onSelect(value) },
+                Modifier.weight(1f)
+                    .clip(RoundedCornerShape(Radius.sm))
+                    .background(if (selected == value) selectedSurface else Color.Transparent)
+                    .border(1.dp, if (selected == value) blue else Color.Transparent, RoundedCornerShape(Radius.sm)),
+            ) { Text(text, fontSize = TypeScale.caption, color = if (selected == value) blue else muted) }
+        }
     }
     Spacer(Modifier.height(9.dp))
 }

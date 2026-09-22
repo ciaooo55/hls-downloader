@@ -33,15 +33,12 @@ pub fn lan_media_url(
     advertise_host: &str,
 ) -> Result<String, String> {
     if advertise_host == "127.0.0.1" || advertise_host == "localhost" {
-        return Ok(server.url_for(token));
+        return Ok(server.cast_url_for(token, "127.0.0.1"));
     }
     if !is_lan_host(advertise_host) {
         return Err("cast host must be a private LAN address".into());
     }
-    Ok(format!(
-        "http://{advertise_host}:{}/media/{token}",
-        server.bound_port()
-    ))
+    Ok(server.cast_url_for(token, advertise_host))
 }
 
 pub fn is_lan_host(host: &str) -> bool {
@@ -101,10 +98,57 @@ pub fn routed_lan_ipv4(peer: Ipv4Addr) -> Option<Ipv4Addr> {
     }
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
     socket.connect(SocketAddr::from((peer, 9))).ok()?;
-    match socket.local_addr().ok()?.ip() {
+    let routed = match socket.local_addr().ok()?.ip() {
         IpAddr::V4(ip) if (ip.is_private() || ip.is_link_local()) && !ip.is_loopback() => Some(ip),
         _ => None,
+    };
+    #[cfg(windows)]
+    {
+        physical_lan_source(&lan_ipv4_networks(), peer, routed)
     }
+    #[cfg(not(windows))]
+    {
+        routed
+    }
+}
+
+fn ipv4_network_contains(local: Ipv4Addr, prefix: u8, peer: Ipv4Addr) -> bool {
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix.min(32))
+    };
+    u32::from(local) & mask == u32::from(peer) & mask
+}
+
+fn physical_lan_source(
+    networks: &[(Ipv4Addr, u8)],
+    peer: Ipv4Addr,
+    routed: Option<Ipv4Addr>,
+) -> Option<Ipv4Addr> {
+    networks
+        .iter()
+        .find(|(local, prefix)| ipv4_network_contains(*local, *prefix, peer))
+        .map(|(local, _)| *local)
+        .or_else(|| routed.filter(|route| networks.iter().any(|(local, _)| local == route)))
+}
+
+fn tunnel_adapter_name(name: &str, description: &str) -> bool {
+    let identity = format!("{name} {description}").to_ascii_lowercase();
+    [
+        "tun",
+        "tap",
+        "tunnel",
+        "wintun",
+        "wireguard",
+        "mihomo",
+        "clash",
+        "sing-box",
+        "tailscale",
+        "zerotier",
+    ]
+    .iter()
+    .any(|marker| identity.contains(marker))
 }
 
 fn device_peer_ipv4(device: &CastDeviceInfo) -> Option<Ipv4Addr> {
@@ -127,7 +171,7 @@ pub fn endpoint_lan_ipv4(endpoint: &str) -> Option<Ipv4Addr> {
 }
 
 #[cfg(windows)]
-fn lan_ipv4_networks() -> Vec<(Ipv4Addr, u8)> {
+fn lan_ipv4_state() -> (Vec<(Ipv4Addr, u8)>, bool) {
     use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
     use windows_sys::Win32::NetworkManagement::IpHelper::{
         GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
@@ -173,24 +217,32 @@ fn lan_ipv4_networks() -> Vec<(Ipv4Addr, u8)> {
         };
     }
     if status != NO_ERROR {
-        return primary_lan_ipv4()
-            .map(|address| vec![(address, 24)])
-            .unwrap_or_default();
+        return (
+            primary_lan_ipv4()
+                .map(|address| vec![(address, 24)])
+                .unwrap_or_default(),
+            false,
+        );
     }
 
     let mut networks = Vec::new();
+    let mut tun_active = false;
     let mut adapter = buffer.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
     while !adapter.is_null() {
         let item = unsafe { &*adapter };
         let name = unsafe { wide_text(item.FriendlyName) }.to_ascii_lowercase();
-        let ignored_name = [
-            "virtual", "vpn", "tunnel", "loopback", "mihomo", "wsl", "hyper-v", "虚拟",
-        ]
+        let description = unsafe { wide_text(item.Description) }.to_ascii_lowercase();
+        let tunnel =
+            item.IfType == IF_TYPE_TUNNEL || tunnel_adapter_name(&name, &description);
+        if item.OperStatus == IfOperStatusUp && tunnel {
+            tun_active = true;
+        }
+        let ignored_name = ["virtual", "vpn", "loopback", "wsl", "hyper-v", "虚拟"]
         .iter()
-        .any(|marker| name.contains(marker));
+        .any(|marker| name.contains(marker) || description.contains(marker));
         if item.OperStatus == IfOperStatusUp
             && item.IfType != IF_TYPE_SOFTWARE_LOOPBACK
-            && item.IfType != IF_TYPE_TUNNEL
+            && !tunnel
             && !ignored_name
         {
             let mut unicast = item.FirstUnicastAddress;
@@ -216,12 +268,22 @@ fn lan_ipv4_networks() -> Vec<(Ipv4Addr, u8)> {
         }
         adapter = item.Next;
     }
-    if networks.is_empty() {
+    if networks.is_empty() && !tun_active {
         if let Some(address) = primary_lan_ipv4() {
             networks.push((address, 24));
         }
     }
-    networks
+    (networks, tun_active)
+}
+
+#[cfg(windows)]
+fn lan_ipv4_networks() -> Vec<(Ipv4Addr, u8)> {
+    lan_ipv4_state().0
+}
+
+#[cfg(windows)]
+pub fn tun_mode_active() -> bool {
+    lan_ipv4_state().1
 }
 
 #[cfg(not(windows))]
@@ -231,6 +293,40 @@ fn lan_ipv4_networks() -> Vec<(Ipv4Addr, u8)> {
         .unwrap_or_default()
 }
 
+#[cfg(not(windows))]
+pub fn tun_mode_active() -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn set_multicast_interface(socket: &UdpSocket, interface: Ipv4Addr) -> Result<(), String> {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{
+        setsockopt, IPPROTO_IP, IP_MULTICAST_IF, SOCKET_ERROR,
+    };
+
+    let address = interface.octets();
+    let status = unsafe {
+        setsockopt(
+            socket.as_raw_socket() as usize,
+            IPPROTO_IP,
+            IP_MULTICAST_IF,
+            address.as_ptr(),
+            address.len() as i32,
+        )
+    };
+    if status == SOCKET_ERROR {
+        Err(std::io::Error::last_os_error().to_string())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn set_multicast_interface(_socket: &UdpSocket, _interface: Ipv4Addr) -> Result<(), String> {
+    Ok(())
+}
+
 fn discovery_interface_addresses() -> Vec<Ipv4Addr> {
     let mut addresses = lan_ipv4_networks()
         .into_iter()
@@ -238,7 +334,7 @@ fn discovery_interface_addresses() -> Vec<Ipv4Addr> {
         .collect::<Vec<_>>();
     addresses.sort_unstable();
     addresses.dedup();
-    if addresses.is_empty() {
+    if addresses.is_empty() && !tun_mode_active() {
         addresses.push(Ipv4Addr::UNSPECIFIED);
     }
     addresses
@@ -248,17 +344,23 @@ pub fn ssdp_notify(location: &str) -> Result<(), String> {
     if location.contains('\r') || location.contains('\n') || !location.starts_with("http://") {
         return Err("投屏通告地址无效".into());
     }
-    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|error| error.to_string())?;
-    socket
-        .set_broadcast(true)
-        .map_err(|error| error.to_string())?;
     let body = format!(
         "NOTIFY * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nNT: upnp:rootdevice\r\nNTS: ssdp:alive\r\nLOCATION: {location}\r\nUSN: uuid:hls-downloader::upnp:rootdevice\r\nCACHE-CONTROL: max-age=30\r\n\r\n"
     );
-    socket
-        .send_to(body.as_bytes(), "239.255.255.250:1900")
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+    let mut sent = false;
+    for interface in discovery_interface_addresses() {
+        let Ok(socket) = UdpSocket::bind((interface, 0)) else {
+            continue;
+        };
+        if interface != Ipv4Addr::UNSPECIFIED {
+            let _ = set_multicast_interface(&socket, interface);
+        }
+        sent |= socket
+            .send_to(body.as_bytes(), "239.255.255.250:1900")
+            .is_ok();
+    }
+    sent.then_some(())
+        .ok_or_else(|| "投屏通告未能通过物理局域网发送".to_string())
 }
 
 pub fn cached_devices() -> Vec<CastDeviceInfo> {
@@ -1214,6 +1316,7 @@ fn ssdp_search_on(interface: Ipv4Addr, timeout: Duration) -> Vec<String> {
         Err(_) => return Vec::new(),
     };
     let _ = socket.set_nonblocking(true);
+    let _ = set_multicast_interface(&socket, interface);
     let targets = [
         "urn:schemas-upnp-org:device:MediaRenderer:1",
         "urn:schemas-upnp-org:service:AVTransport:1",
@@ -1421,7 +1524,11 @@ fn resolve_url(base: &str, reference: &str) -> String {
     if reference.starts_with('/') {
         return format!("{}{reference}", origin_of(base));
     }
-    let dir = base.rsplit_once('/').map(|(left, _)| left).unwrap_or(base);
+    let dir = if base == origin_of(base) {
+        base
+    } else {
+        base.rsplit_once('/').map(|(left, _)| left).unwrap_or(base)
+    };
     format!("{dir}/{reference}")
 }
 
@@ -1606,6 +1713,7 @@ fn discover_chromecasts_on(interface: Ipv4Addr, timeout: Duration) -> Vec<CastDe
         Err(_) => return Vec::new(),
     };
     let _ = socket.set_nonblocking(true);
+    let _ = set_multicast_interface(&socket, interface);
     let _ = socket.join_multicast_v4(&Ipv4Addr::new(224, 0, 0, 251), &interface);
     let query = mdns_googlecast_query();
     for _ in 0..2 {
@@ -2159,6 +2267,33 @@ mod tests {
     }
 
     #[test]
+    fn tun_mode_keeps_receiver_traffic_on_the_physical_lan() {
+        let networks = [(Ipv4Addr::new(192, 168, 2, 6), 24)];
+        assert!(tunnel_adapter_name("Mihomo", "Meta Tunnel"));
+        assert!(tunnel_adapter_name("Ethernet 3", "WireGuard Tunnel"));
+        assert!(!tunnel_adapter_name(
+            "WLAN",
+            "Intel(R) Dual Band Wireless-AC 3168"
+        ));
+        assert_eq!(
+            physical_lan_source(
+                &networks,
+                Ipv4Addr::new(192, 168, 2, 5),
+                Some(Ipv4Addr::new(198, 18, 0, 1))
+            ),
+            Some(Ipv4Addr::new(192, 168, 2, 6))
+        );
+        assert_eq!(
+            physical_lan_source(
+                &networks,
+                Ipv4Addr::new(10, 0, 0, 8),
+                Some(Ipv4Addr::new(198, 18, 0, 1))
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn parses_ssdp_location_header() {
         let response = "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=100\r\nLOCATION: http://192.168.1.20:8008/desc.xml\r\nST: urn:schemas-upnp-org:service:AVTransport:1\r\n\r\n";
         assert_eq!(
@@ -2191,6 +2326,16 @@ mod tests {
             "http://192.168.1.20:8008/upnp/control/AVTransport"
         );
         assert!(device.service_type.contains("AVTransport"));
+
+        let bare_origin = xml
+            .replace("http://192.168.1.20:8008/", "http://192.168.1.20:8008")
+            .replace("/upnp/control/AVTransport", "_urn:schemas-upnp-org:service:AVTransport_control");
+        let device =
+            parse_device_description(&bare_origin, "http://192.168.1.20:8008/desc.xml").unwrap();
+        assert_eq!(
+            device.control_url,
+            "http://192.168.1.20:8008/_urn:schemas-upnp-org:service:AVTransport_control"
+        );
     }
 
     #[test]

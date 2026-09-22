@@ -4586,6 +4586,11 @@ fn discover_cast(coordinator: &CoreCoordinator, mode: &str) -> Result<Vec<EventE
             }
         )
     };
+    let message = if crate::cast::tun_mode_active() {
+        format!("{message}；已识别 TUN 模式并使用物理局域网")
+    } else {
+        message
+    };
     crate::cast::remember_devices(devices.clone());
     let mut core = coordinator.lock()?;
     let mut events = core.emit(CoreEvent::CastDevices { devices })?;

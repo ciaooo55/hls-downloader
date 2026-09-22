@@ -108,6 +108,27 @@ impl MediaServer {
         format!("http://127.0.0.1:{}/media/{token}", self.port)
     }
 
+    pub fn cast_url_for(&self, token: &str, host: &str) -> String {
+        let suffix = self
+            .inner
+            .lock()
+            .ok()
+            .and_then(|state| {
+                state
+                    .mounts
+                    .iter()
+                    .find(|(name, _)| name == token)
+                    .and_then(|(_, mount)| match mount {
+                        Mount::File(path) => file_cast_name(path).map(|name| format!("/{name}")),
+                        Mount::Dir(_) => Some("/local.m3u8".into()),
+                        Mount::Remote(_) => None,
+                    })
+            })
+            .unwrap_or_default();
+        format!("http://{host}:{}/media/{token}{suffix}", self.port)
+    }
+
+    #[cfg(test)]
     pub fn bound_port(&self) -> u16 {
         self.port
     }
@@ -278,7 +299,7 @@ fn handle_client(
             return write_redirect(&mut stream, url);
         }
         Mount::File(path) => {
-            if !sub.is_empty() {
+            if !sub.is_empty() && file_cast_name(path).as_deref() != Some(sub) {
                 write_status(&mut stream, 404, b"not found")?;
                 return Ok(());
             }
@@ -444,6 +465,17 @@ fn content_type(path: &Path) -> &'static str {
     }
 }
 
+fn file_cast_name(path: &Path) -> Option<String> {
+    let extension = path.extension()?.to_str()?;
+    if extension.is_empty()
+        || extension.len() > 12
+        || !extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    Some(format!("file.{extension}"))
+}
+
 fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
     if total == 0 {
         return None;
@@ -516,6 +548,18 @@ mod tests {
         let text = String::from_utf8_lossy(&buf);
         assert!(text.contains("206"));
         assert!(text.contains("2345"));
+        assert!(
+            server
+                .cast_url_for("task-1", "192.168.2.6")
+                .ends_with("/media/task-1/file.bin")
+        );
+        let mut cast_stream = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
+        cast_stream
+            .write_all(b"GET /media/task-1/file.bin HTTP/1.1\r\n\r\n")
+            .unwrap();
+        let mut cast_body = Vec::new();
+        cast_stream.read_to_end(&mut cast_body).unwrap();
+        assert!(String::from_utf8_lossy(&cast_body).contains("0123456789"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
