@@ -599,7 +599,6 @@ async function main() {
         1_500,
         '\u9875\u9762\u8bc6\u522b\u54cd\u5e94\u8d85\u65f6',
       )
-      await new Promise(resolve => setTimeout(resolve, 180))
       const listed = await withDeadline(
         browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab.id }),
         1_500,

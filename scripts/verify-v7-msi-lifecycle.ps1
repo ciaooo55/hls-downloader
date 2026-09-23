@@ -232,6 +232,11 @@ try {
     Add-Step 'upgrade-code-match' ($upgradeCode -eq '{1C80D5F7-A1EC-4BAE-A4A6-E010C5A3EE6B}' -and (Get-MsiProperty $old 'UpgradeCode') -eq $upgradeCode) $upgradeCode
     Add-Step 'candidate-product-code-is-new' ($candidateProductCode -ne $oldProductCode) $candidateProductCode
 
+    $existingProduct = Get-InstalledProduct $upgradeCode
+    if ($null -ne $existingProduct) {
+        throw "MSI lifecycle gate requires a clean product state; found $($existingProduct.version) ($($existingProduct.product_code))."
+    }
+
     $installLog = Join-Path $artifacts "$($Scenario.ToLowerInvariant())-install-old.log"
     $exit = Invoke-Msi @('/i', $old, '/qn', "INSTALLDIR=$InstallDir") $installLog
     Add-Step 'install-old-exit' ($exit -in @(0, 3010, 1641)) $exit

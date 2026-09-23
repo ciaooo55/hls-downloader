@@ -65,6 +65,7 @@ export interface EarlyBrowserTakeover {
   promise: Promise<{ resource: MediaResource, response: any } | null>
 }
 const earlyBrowserTakeovers = new Map<string, EarlyBrowserTakeover>()
+const activeDirectDownloads = new Map<string, Promise<any>>()
 
 /**
  * Locate an early takeover when the request chain is no longer available.
@@ -954,8 +955,23 @@ async function downloadNow(
   chain?: RequestChain,
   options: { allowUnverified?: boolean } = {},
 ) {
-  const payload = await resourcePayload(resource, chain, options)
-  return native({ op: 'download', resource: payload })
+  const key = `${resource.tabId ?? -1}:${resourceFingerprint(resource)}`
+  const active = activeDirectDownloads.get(key)
+  if (active) return active
+  const request = resourcePayload(resource, chain, options)
+    .then(payload => native({ op: 'download', resource: payload }))
+    .then(response => {
+      if (response?.ok === false) activeDirectDownloads.delete(key)
+      else setTimeout(() => {
+        if (activeDirectDownloads.get(key) === request) activeDirectDownloads.delete(key)
+      }, 30_000)
+      return response
+    }, error => {
+      activeDirectDownloads.delete(key)
+      throw error
+    })
+  activeDirectDownloads.set(key, request)
+  return request
 }
 
 async function pushToTv(resource: MediaResource): Promise<{ ok: true; id: string }> {
@@ -1721,8 +1737,10 @@ export default defineBackground(() => {
         frameId: message.resource.frameId ?? sender.frameId,
       }
       void saveResource(resource, sender.tab?.id ?? -1)
+        .then(() => sendResponse({ ok: true }))
+        .catch(error => sendResponse({ ok: false, error: String(error) }))
       void inspectAdaptive(resource, sender.tab?.id ?? -1)
-      return
+      return true
     }
     if (message?.type === 'download-now') {
       const resource = {

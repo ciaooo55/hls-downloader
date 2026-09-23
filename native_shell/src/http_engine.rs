@@ -1035,6 +1035,10 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
         require_content_range_start(fetched.content_range.as_deref(), resume_from)?;
         require_content_range_total(fetched.content_range.as_deref(), job.total)?;
     }
+    let expected_downloaded = fetched
+        .content_length
+        .map(|length| resume_from.saturating_add(length))
+        .or_else(|| (job.total > 0).then_some(job.total));
     let mut reader = fetched.body;
     let mut file = if resume_from > 0 {
         OpenOptions::new()
@@ -1079,6 +1083,13 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
     }
     file.flush()
         .map_err(|err| EngineError::Failed(err.to_string()))?;
+    if let Some(expected) = expected_downloaded {
+        if downloaded != expected {
+            return Err(EngineError::Failed(format!(
+                "response body length mismatch: expected {expected}, got {downloaded}"
+            )));
+        }
+    }
     write_progress(&job.progress, downloaded, downloaded, 0.0, "done");
     Ok(())
 }
@@ -3291,6 +3302,31 @@ mod tests {
         let (job, dir) = temp_job(&url, true, 0, 1);
         run_job(&job).unwrap();
         assert_eq!(fs::read(&job.output).unwrap(), body);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sequential_rejects_truncated_content_length() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                    break;
+                }
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nshort",
+                )
+                .unwrap();
+        });
+        let (job, dir) = temp_job(&format!("http://{addr}"), true, 0, 1);
+        let error = run_job(&job).unwrap_err().to_string();
+        assert!(error.contains("response body length mismatch"), "{error}");
         let _ = fs::remove_dir_all(dir);
     }
 

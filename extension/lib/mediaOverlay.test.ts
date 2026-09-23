@@ -22,6 +22,7 @@ describe('manual page rescan', () => {
     expect(branch).toContain('__hls_downloader_replay__')
     expect(branch).toContain("querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video,audio')")
     expect(branch).toContain("performance.getEntriesByType('resource')")
+    expect(branch).toContain('Promise.all([...pendingResourceWrites])')
     expect(branch).not.toContain('setOpen(true)')
   })
 })

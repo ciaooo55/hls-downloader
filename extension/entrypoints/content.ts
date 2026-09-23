@@ -31,6 +31,7 @@ export default defineContentScript({
   // producing one denied chrome-extension request on every page.
   cssInjectionMode: 'manual',
   async main(ctx) {
+    const pendingResourceWrites = new Set<Promise<unknown>>()
     const eventVideo = (event: Event): HTMLVideoElement | null => {
       const path = typeof event.composedPath === 'function' ? event.composedPath() : []
       return (path.find(value => value instanceof HTMLVideoElement)
@@ -859,7 +860,10 @@ export default defineContentScript({
       }
       const changed = addResource(resource)
       if (changed) scheduleRender()
-      void runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
+      const write = runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
+      pendingResourceWrites.add(write)
+      void write.finally(() => pendingResourceWrites.delete(write))
+      return write
     }
 
     const markVideoPlayback = (video: HTMLVideoElement, eventType: string) => {
@@ -1137,6 +1141,7 @@ export default defineContentScript({
         performance.getEntriesByType('resource').forEach(entry => add(entry.name))
         syncPlayingVideos()
         scheduleRender()
+        return Promise.all([...pendingResourceWrites]).then(() => ({ ok: true }))
       }
     }
     browser.runtime.onMessage.addListener(handleRuntimeMessage)

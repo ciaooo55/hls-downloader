@@ -145,6 +145,7 @@ try {
     )
     $current = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveExistingProducts'"
     $originalProductCode = Invoke-MsiStringQuery "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductCode'"
+    $upgradableAttributes = Invoke-MsiScalarQuery "SELECT ``Attributes`` FROM ``Upgrade`` WHERE ``ActionProperty``='JP_UPGRADABLE_FOUND'"
     $initialize = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='InstallInitialize'"
     $installFiles = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='InstallFiles'"
     $removeFiles = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveFiles'"
@@ -161,6 +162,33 @@ try {
         throw 'MSI does not expose the HLSDownloaderEngine.exe component for Native Host registry ownership.'
     }
     Invoke-MsiNonQuery "UPDATE ``Property`` SET ``Value``='$ProductCode' WHERE ``Property``='ProductCode'"
+    if ($null -eq $upgradableAttributes) {
+        throw 'MSI is missing the JP_UPGRADABLE_FOUND upgrade rule.'
+    }
+    # Candidate rebuilds keep the product version but receive a new ProductCode.
+    # Include VersionMax so a newer candidate replaces the earlier one cleanly.
+    $sameVersionAttributes = [int]$upgradableAttributes -bor 0x200
+    $view = $database.GetType().InvokeMember(
+        'OpenView', 'InvokeMethod', $null, $database,
+        @("SELECT * FROM ``Upgrade`` WHERE ``ActionProperty``='JP_UPGRADABLE_FOUND'")
+    )
+    $upgradeRecord = $null
+    try {
+        $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null
+        $upgradeRecord = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+        if ($null -eq $upgradeRecord) {
+            throw 'MSI is missing the JP_UPGRADABLE_FOUND upgrade row.'
+        }
+        $view.GetType().InvokeMember('Modify', 'InvokeMethod', $null, $view, @([int]6, $upgradeRecord)) | Out-Null
+        $upgradeRecord.GetType().InvokeMember('IntegerData', 'SetProperty', $null, $upgradeRecord, @(5, $sameVersionAttributes)) | Out-Null
+        $view.GetType().InvokeMember('Modify', 'InvokeMethod', $null, $view, @([int]1, $upgradeRecord)) | Out-Null
+    } finally {
+        if ($null -ne $upgradeRecord) {
+            [Runtime.InteropServices.Marshal]::FinalReleaseComObject($upgradeRecord) | Out-Null
+        }
+        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) | Out-Null
+        $view = $null
+    }
 
     # jpackage restores the saved directory for RemoveFoldersEx only. Standard
     # ARP uninstall also needs it for installed-file custom actions.
@@ -233,6 +261,7 @@ try {
     $database = $verifyDatabase
     $verified = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveExistingProducts'"
     $verifiedProductCode = Invoke-MsiStringQuery "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductCode'"
+    $verifiedUpgradableAttributes = Invoke-MsiScalarQuery "SELECT ``Attributes`` FROM ``Upgrade`` WHERE ``ActionProperty``='JP_UPGRADABLE_FOUND'"
     $verifiedPrepareSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='V7PrepareNativeHostManifests'"
     $verifiedPrepareType = Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='V7PrepareNativeHostManifests'"
     $verifiedPrepareTarget = Invoke-MsiStringQuery "SELECT ``Target`` FROM ``CustomAction`` WHERE ``Action``='V7PrepareNativeHostManifests'"
@@ -245,6 +274,9 @@ try {
     }
     if ($verifiedProductCode -ne $ProductCode) {
         throw "MSI ProductCode verification failed: expected $ProductCode, got $verifiedProductCode."
+    }
+    if (([int]$verifiedUpgradableAttributes -band 0x200) -eq 0) {
+        throw 'MSI same-version upgrade verification failed.'
     }
     if (
         [int]$verifiedPrepareSequence -ne $prepareSequence -or
@@ -291,6 +323,7 @@ try {
     native_host_prepare_type = [int]$verifiedPrepareType
     native_host_prepare_sequence = [int]$verifiedPrepareSequence
     native_host_registry_count = $nativeHostRegistry.Count
+    same_version_upgrade_attributes = [int]$verifiedUpgradableAttributes
     sha256_before = $beforeHash
     sha256_after = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash
 } | ConvertTo-Json
