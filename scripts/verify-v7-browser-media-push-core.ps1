@@ -89,15 +89,21 @@ function Get-FreeTcpPort {
 }
 
 function Get-NativeHostRegistration([string]$Parent) {
-    if (-not (Test-Path -LiteralPath $Parent)) { return @() }
+    # HKCU 必须走 .NET Registry API：msiexec 在进程外写入的新子键，在同一 pwsh 会话里
+    # 经 HKCU 驱动器/Get-ChildItem/Test-Path 读取会命中 hive 快照缓存而误报不存在。
+    $relative = $Parent -replace '^HKCU:\\', ''
+    $parentKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($relative)
+    if ($null -eq $parentKey) { return @() }
     return @(
-        Get-ChildItem -LiteralPath $Parent |
-            Where-Object { $_.PSChildName -eq 'com.ciaooo55.hls_downloader' } |
+        $parentKey.GetSubKeyNames() |
+            Where-Object { $_ -eq 'com.ciaooo55.hls_downloader' } |
             ForEach-Object {
-                $manifestPath = [string]$_.GetValue('')
+                $child = $parentKey.OpenSubKey($_)
+                if ($null -eq $child) { return }
+                $manifestPath = [string]$child.GetValue('')
                 [ordered]@{
-                    key = $_.Name
-                    host_name = $_.PSChildName
+                    key = [string]$parentKey
+                    host_name = $_
                     manifest = $manifestPath
                     exists = (Test-Path -LiteralPath $manifestPath -PathType Leaf)
                 }

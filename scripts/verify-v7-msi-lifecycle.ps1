@@ -110,8 +110,12 @@ function Get-RegistrationState {
         'HKCU:\Software\Mozilla\NativeMessagingHosts'
     )
     return @($parents | ForEach-Object {
-        if (Test-Path -LiteralPath $_) {
-            Get-ChildItem -LiteralPath $_ | Where-Object { $_.PSChildName -match 'hls.?downloader' } | Select-Object -ExpandProperty Name
+        # 与 browser-media-push 门禁同源：HKCU 读取必须走 .NET Registry API，
+        # 否则同一 PowerShell 进程内看不到 msiexec 刚写入的子键。
+        $relative = $_ -replace '^HKCU:\\', ''
+        $parentKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($relative)
+        if ($null -ne $parentKey) {
+            $parentKey.GetSubKeyNames() | Where-Object { $_ -match 'hls.?downloader' } | ForEach-Object { "$_`NAME" }
         }
     })
 }
