@@ -32,6 +32,14 @@ function Invoke-Case([string]$Name, [string]$ExpectedError = '') {
     New-Item -ItemType Directory -Path $scripts, $candidateRoot, $runnerTemp -Force | Out-Null
     $fixtureWrapper = Join-Path $scripts 'verify-v7-browser-media-push.ps1'
     Copy-Item -LiteralPath $wrapper -Destination $fixtureWrapper
+    # Production wrapper dot-sources V7HashFunctions.ps1 from its own directory (PowerShell 5.1
+    # compatibility), so the fixture has to copy it too, otherwise dot-sourcing a missing file
+    # makes every case fail with "not recognized".
+    # Constraint: ASCII-only comment, a UTF-8 CJK char can end on a byte that pairs with the
+    # following LF and swallows the newline when 5.1 decodes this BOM-less file as GBK.
+    $hashModule = Join-Path $PSScriptRoot 'V7HashFunctions.ps1'
+    if (-not [IO.File]::Exists($hashModule)) { throw "V7HashFunctions.ps1 not found: $hashModule" }
+    Copy-Item -LiteralPath $hashModule -Destination (Join-Path $scripts 'V7HashFunctions.ps1') -ErrorAction Stop
     $resources = Join-Path $caseRoot 'desktop_ui\resources\common'
     $calledPath = Join-Path $caseRoot 'core-called.txt'
     $zipPath = Join-Path $candidateRoot 'portable.zip'
