@@ -308,6 +308,8 @@ async function main() {
           event.stopPropagation()
           const host = trigger.closest('article') as HTMLElement | null
           if (!host) return
+          // 先判断"这张卡片是否已打开菜单"，再清理：反序会让 `open` 恒为 null，
+          // 于是"再点一次 trigger 收起"变成死代码，用户只能点遮罩关闭。
           const open = host.querySelector('.quality-menu')
           document.querySelectorAll('.quality-menu, .quality-menu-backdrop').forEach(node => node.remove())
           if (open) return

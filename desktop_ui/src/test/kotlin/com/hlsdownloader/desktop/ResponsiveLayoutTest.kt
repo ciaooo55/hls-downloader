@@ -197,7 +197,12 @@ class ResponsiveLayoutTest {
         assertTrue(components.contains(".toggleable("))
         assertTrue(components.contains("role = Role.Checkbox"))
         assertTrue(components.contains("role = Role.Switch"))
-        assertTrue(components.contains(".selectable(selected = selected"))
+        // 与上面 `.toggleable(` 同一处理：判据钉"用的是真实 Compose 语义"，不钉参数怎么换行。
+        // RadioButton 的 selectable 调用补上 interactionSource/indication 后按仓库惯例多行书写
+        // （Main.kt:2124、SettingsV7.kt:169、本文件 Checkbox/Switch 全是多行），继续钉单行字面量
+        // 会让任何排版调整都变成假失败。role 单独断言，"单选"语义仍然被完整覆盖。
+        assertTrue(components.contains(".selectable("))
+        assertTrue(components.contains("role = Role.RadioButton"))
         assertTrue(components.contains("progressBarRangeInfo = ProgressBarRangeInfo"))
         assertTrue(components.contains("setProgress { target ->"))
         assertTrue(source.contains("paneTitle = title"))

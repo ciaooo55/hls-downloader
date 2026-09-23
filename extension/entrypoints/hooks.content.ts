@@ -315,6 +315,12 @@ export default defineContentScript({
       username?: string | null,
       password?: string | null,
     ) => void
+    // 同一个 XHR 对象可以被重复 open()（轮询播放器就复用一个 XHR），而旧写法每次
+    // open 都 addEventListener('load', …)：闭包互不相同、从不移除，复用对象最终会
+    // 为一次响应触发 N 次上报，N 个闭包还一直跟着这个对象。改为每个对象只注册一次，
+    // 并用 WeakMap 记住最近一次请求的 URL 作为 responseURL 的回退。
+    const xhrRequestedUrls = new WeakMap<XMLHttpRequest, string>()
+    const instrumentedXhrs = new WeakSet<XMLHttpRequest>()
     XMLHttpRequest.prototype.open = function (
       method: string,
       url: string | URL,
@@ -322,25 +328,29 @@ export default defineContentScript({
       username?: string | null,
       password?: string | null,
     ) {
-      this.addEventListener('load', () => {
-        const responseUrl = this.responseURL || String(url)
-        const mimeType = this.getResponseHeader('content-type') || ''
-        report(responseUrl, mimeType)
-        if (shouldInspectManifestResponse(responseUrl, mimeType)
-          && (!this.responseType || this.responseType === 'text')) {
-          try {
-            const kind = detectManifestKind(String(this.responseText || '').slice(0, 128 * 1024))
-            if (kind) report(responseUrl, manifestMimeType(kind))
-          } catch {
-            // Binary XHR responses expose no responseText; fetch/MSE hooks
-            // still provide the normal ownership evidence in that case.
+      xhrRequestedUrls.set(this, String(url))
+      if (!instrumentedXhrs.has(this)) {
+        instrumentedXhrs.add(this)
+        this.addEventListener('load', () => {
+          const responseUrl = this.responseURL || xhrRequestedUrls.get(this) || ''
+          const mimeType = this.getResponseHeader('content-type') || ''
+          report(responseUrl, mimeType)
+          if (shouldInspectManifestResponse(responseUrl, mimeType)
+            && (!this.responseType || this.responseType === 'text')) {
+            try {
+              const kind = detectManifestKind(String(this.responseText || '').slice(0, 128 * 1024))
+              if (kind) report(responseUrl, manifestMimeType(kind))
+            } catch {
+              // Binary XHR responses expose no responseText; fetch/MSE hooks
+              // still provide the normal ownership evidence in that case.
+            }
           }
-        }
-        const response = this.response
-        if (response && typeof response === 'object') {
-          rememberBufferSource(response, responseUrl)
-        }
-      })
+          const response = this.response
+          if (response && typeof response === 'object') {
+            rememberBufferSource(response, responseUrl)
+          }
+        })
+      }
       if (async === undefined) return invokeOpen.call(this, method, url)
       return invokeOpen.call(this, method, url, async, username, password)
     }

@@ -485,6 +485,17 @@ internal fun Checkbox(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modi
     }
 }
 
+/**
+ * 单选按钮。
+ *
+ * 这是工作台里最后一个没接 [rememberPressFeedback] 的可交互控件：此前 `selectable`
+ * 既没传 interactionSource 也没传 indication，于是它用平台默认 indication，而其余控件
+ * 一律 `indication = null` + 自绘反馈——同一个界面里出现两套按压表现。
+ * 现在与 [Checkbox]/[Switch] 对齐：悬停把底色朝"背离底色的方向"推一点（未选中是灰、
+ * 不会读成"已选中"），按压按窄目标的规则缩到 .9f。
+ *
+ * 底色档位仍然由 `animatedFill` 承担选中语义，反馈只做混合，不新增档位。
+ */
 @Composable
 internal fun RadioButton(selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, accessibilityLabel: String? = null) {
     val reduceMotion by MotionPreferences.reduceMotion
@@ -493,17 +504,32 @@ internal fun RadioButton(selected: Boolean, onClick: () -> Unit, modifier: Modif
         animationSpec = tween(motionDurationMillis(reduceMotion, 150)),
         label = "radio-fill",
     )
+    // 悬停方向必须"背离底色"：浅色主题的 ink 是深色、深色主题的 ink 是浅色，
+    // 所以 `blendToward(ink, …)` 在两个主题下都成立，不需要为 hover 另立令牌。
+    val feedback = rememberPressFeedback(
+        restColor = animatedFill,
+        hoverColor = animatedFill.blendToward(ink, .10f),
+        pressScale = .9f,
+    )
     Box(
         modifier
             .defaultMinSize(18.dp, 18.dp)
+            .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
             .clip(CircleShape)
-            .background(animatedFill)
+            .background(feedback.background)
             .border(1.dp, if (selected) blue else border, CircleShape)
             .semantics {
                 stateDescription = if (selected) "已选择" else "未选择"
                 if (accessibilityLabel != null) contentDescription = accessibilityLabel
             }
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
+            .hoverable(feedback.interaction)
+            .selectable(
+                selected = selected,
+                interactionSource = feedback.interaction,
+                indication = null,
+                role = Role.RadioButton,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         if (selected) Box(Modifier.size(9.dp).clip(CircleShape).background(blue))

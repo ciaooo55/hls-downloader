@@ -1,4 +1,10 @@
 * { box-sizing: border-box; }
+ /* 键盘焦点环。popup 里 5 个手写按钮（update-notice / scan / empty-retry /
+    quality-trigger / quality-menu）此前没有 :focus-visible，键盘用户看不到焦点落在哪；
+    共享 `.hlsd-button` 自带焦点环，这里用一条通用规则给其余按钮补上同一条。 */
+ button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+ /* 实底按钮的焦点环要多留 2px 间隙：offset 1px 时圆环紧贴主色填充，两者同色分不开。 */
+ .update-notice button:focus-visible { outline-offset: 2px; }
 body { margin: 0; width: 400px; max-width: 100vw; background: var(--bg); color: var(--text); font: 12px/1.45 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
 main { display: flex; min-height: 0; max-height: 640px; flex-direction: column; animation: pop .18s cubic-bezier(.2,.8,.2,1); }
 @keyframes pop { from { opacity: 0; transform: translateY(4px) scale(.99); } to { opacity: 1; transform: none; } }
@@ -47,10 +53,14 @@ article:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--borde
 .article-actions { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 5px; margin-top: 9px; }
 .article-actions .hlsd-button { width: 100%; height: 32px; }
 .article-actions .hlsd-button .hlsd-icon { width: 13px; height: 13px; }
-.push-button { background: color-mix(in srgb, var(--purple) 22%, var(--surface-3)); color: var(--purple-ink); }
-.push-button:hover:not(:disabled) { background: var(--purple); color: var(--on-primary); }
-.cast-button { background: color-mix(in srgb, var(--purple) 22%, var(--surface-3)); color: var(--purple-ink); }
-.cast-button:hover:not(:disabled) { background: var(--purple); color: var(--on-primary); }
+ /* `.hlsd-button` 由 main.ts 在运行时 append 到 head 末尾，与这里的规则同特异性时是
+    "后来者胜"，所以并列使用 `.hlsd-button` 的变体必须自己带上 `.hlsd-button` 前缀，
+    把特异性抬到 (0,2,0)/(0,4,0)。少了前缀，紫色底和紫色文字会被通用按钮规则整块盖掉
+    （实测渲染成 surface-3 灰底 + --text，与普通按钮完全同色），紫色语义提示整个失效。 */
+ .hlsd-button.push-button { background: color-mix(in srgb, var(--purple) 22%, var(--surface-3)); color: var(--purple-ink); }
+ .hlsd-button.push-button:hover:not(:disabled) { background: var(--purple); color: var(--on-primary); }
+ .hlsd-button.cast-button { background: color-mix(in srgb, var(--purple) 22%, var(--surface-3)); color: var(--purple-ink); }
+ .hlsd-button.cast-button:hover:not(:disabled) { background: var(--purple); color: var(--on-primary); }
 
 .empty { display: flex; min-height: 152px; margin: 0 2px; padding: 18px 20px; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed var(--border); border-radius: 8px; color: var(--faint); text-align: center; }
 .empty-icon { display: grid; width: 38px; height: 38px; margin-bottom: 9px; place-items: center; border-radius: 8px; background: color-mix(in srgb, var(--primary) 10%, var(--surface)); color: var(--primary-ink); }

@@ -786,7 +786,12 @@ function concealBrowserDownload(): void {
 }
 
 function revealBrowserDownload(): void {
-  concealedDownloadCount = Math.max(0, concealedDownloadCount - 1)
+  // 引用计数为 0 时直接返回：没有配对的 conceal 就恢复下载栏，会在 takeover
+  // 删除浏览器下载项的窗口期把即将被移除的项闪回给用户。两个已知误调来源：
+  // onCreated 的 `finally`（同页未被接管的下载也会走到）和 nativeBridge 的
+  // `disconnected()`（单次超时重试同样会触发），见各自调用点。
+  if (concealedDownloadCount <= 0) return
+  concealedDownloadCount -= 1
   if (concealedDownloadCount) return
   if (downloadUiFailsafe) clearTimeout(downloadUiFailsafe)
   downloadUiFailsafe = null
