@@ -115,7 +115,11 @@ function Get-RegistrationState {
         $relative = $_ -replace '^HKCU:\\', ''
         $parentKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($relative)
         if ($null -ne $parentKey) {
-            $parentKey.GetSubKeyNames() | Where-Object { $_ -match 'hls.?downloader' } | ForEach-Object { "$_`NAME" }
+            try {
+                $parentKey.GetSubKeyNames() | Where-Object { $_ -match 'hls.?downloader' } | Sort-Object | ForEach-Object { "HKEY_CURRENT_USER\$relative\$_" }
+            } finally {
+                $parentKey.Dispose()
+            }
         }
     })
 }
