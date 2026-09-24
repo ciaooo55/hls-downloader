@@ -170,7 +170,7 @@ jobs:
           & .\scripts\build-v7.ps1 -Task candidate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Run browser, performance, installer and rollback gates
+      - name: Run browser, performance, browser media-push, installer and rollback gates
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'

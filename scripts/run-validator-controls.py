@@ -108,24 +108,49 @@ def mixcheck_control(mismatch=False):
     return code, (tail[-1] if tail else '')
 
 
+def skip_if_absent(path, label):
+    """A control whose input is absent must not be recorded as a pass.
+
+    A missing *negative* fixture makes the tool exit non-zero because the file is
+    not there, which is indistinguishable from the expected rejection, so the
+    control would look green without ever having been exercised.  Record it as a
+    failure with an explicit reason instead of fabricating either outcome.
+    """
+    if os.path.exists(path):
+        return True
+    print('  %-58s [SKIPPED: input absent, control not exercised]' % label)
+    results.append(False)
+    return False
+
+
 def main():
     print('=== subprocess-level controls ===')
-    rc, tail = run_script('validate_report.py', REPORT)
-    record('validate_report: real report', 0, rc, tail[:40])
-    rc, tail = run_script('validate_report.py', os.path.join(NEG, 'empty-report.html'))
-    record('validate_report: no tables, no images', 1, rc, tail[:40])
+    if skip_if_absent(REPORT, 'validate_report: real report'):
+        rc, tail = run_script('validate_report.py', REPORT)
+        record('validate_report: real report', 0, rc, tail[:40])
+    if skip_if_absent(os.path.join(NEG, 'empty-report.html'),
+                      'validate_report: no tables, no images'):
+        rc, tail = run_script('validate_report.py', os.path.join(NEG, 'empty-report.html'))
+        record('validate_report: no tables, no images', 1, rc, tail[:40])
 
-    rc, tail = run_script('validate_captures.py', CAPTURES)
-    record('validate_captures: real 24-capture set', 0, rc, tail[:40])
-    rc, tail = run_script('validate_captures.py', os.path.join(NEG, 'empty-report'))
-    record('validate_captures: empty results', 1, rc, tail[:40])
-    rc, tail = run_script('validate_captures.py', os.path.join(NEG, 'count-mismatch'))
-    record('validate_captures: claims 24, holds 1', 1, rc, tail[:40])
-    rc, tail = run_script('validate_captures.py', os.path.join(NEG, 'dialog-missing'))
-    record('validate_captures: dialog never rendered (anchor)', 1, rc, tail[:40])
+    if skip_if_absent(CAPTURES, 'validate_captures: real 24-capture set'):
+        rc, tail = run_script('validate_captures.py', CAPTURES)
+        record('validate_captures: real 24-capture set', 0, rc, tail[:40])
+    if skip_if_absent(os.path.join(NEG, 'empty-report'), 'validate_captures: empty results'):
+        rc, tail = run_script('validate_captures.py', os.path.join(NEG, 'empty-report'))
+        record('validate_captures: empty results', 1, rc, tail[:40])
+    if skip_if_absent(os.path.join(NEG, 'count-mismatch'),
+                      'validate_captures: claims 24, holds 1'):
+        rc, tail = run_script('validate_captures.py', os.path.join(NEG, 'count-mismatch'))
+        record('validate_captures: claims 24, holds 1', 1, rc, tail[:40])
+    if skip_if_absent(os.path.join(NEG, 'dialog-missing'),
+                      'validate_captures: dialog never rendered (anchor)'):
+        rc, tail = run_script('validate_captures.py', os.path.join(NEG, 'dialog-missing'))
+        record('validate_captures: dialog never rendered (anchor)', 1, rc, tail[:40])
 
-    rc, tail = run_script('compare-layout.py', '--selftest', CAPTURES)
-    record('compare_layout: its own 3 controls', 0, rc, tail[:40])
+    if skip_if_absent(CAPTURES, 'compare_layout: its own 3 controls'):
+        rc, tail = run_script('compare-layout.py', '--selftest', CAPTURES)
+        record('compare_layout: its own 3 controls', 0, rc, tail[:40])
 
     print()
     print('=== in-process controls (data source stubbed to empty) ===')

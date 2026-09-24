@@ -11,7 +11,7 @@ The formal v7 release path is one frozen-source pipeline:
 3. Require successful exact-SHA conclusions for the canonical workflow paths: `workflow_dispatch` for `v7 Candidate Package`, and `push` for `v7 CI`, `Maintenance Security`, and `Rust Security`. Both readiness and formal release use the same assertion script.
 4. Run on the dedicated Windows x64 `hls-release` runner and verify the fixed `E:\h` lifecycle environment.
 5. Build a candidate from that same source SHA.
-6. Produce browser, performance, MSI upgrade, and forced-rollback evidence from that candidate manifest.
+6. Produce browser, performance, browser media-push (real TVBox device selection), MSI upgrade, and forced-rollback evidence from that candidate manifest.
 7. Reconfirm that remote `main` has not moved.
 8. Build the formal package from the same evidence.
 9. Authenticode-sign and timestamp the public Windows artifacts, then verify trust.

@@ -31,6 +31,20 @@ function Write-Fixture([string]$Path, [bool]$WithGap) {
     [IO.File]::WriteAllText($Path, ($feature | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
 }
 
+function Write-Empty-Fixture([string]$Path) {
+    # A matrix that lists no feature at all must never look like "no gaps": the gap
+    # filter trivially matches nothing, so without a guard the assert script would
+    # emit passed=true for a matrix that verifies nothing at all.
+    $feature = [ordered]@{
+        schema = 1
+        product_version = '7.0.2'
+        release_ready = $false
+        audit_state = 'test'
+        features = @()
+    }
+    [IO.File]::WriteAllText($Path, ($feature | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+}
+
 function Invoke-Assert([string]$Fixture) {
     $previousErrorActionPreference = $ErrorActionPreference
     try {
@@ -64,6 +78,15 @@ try {
     }
     if ($gapResult.Output -notmatch 'Formal release is blocked by residual canonical feature gap') {
         throw "Residual-gap failure under $Shell did not expose the fail-closed reason: $($gapResult.Output)"
+    }
+    $empty = Join-Path $tempRoot 'empty.json'
+    Write-Empty-Fixture $empty
+    $emptyResult = Invoke-Assert $empty
+    if ($emptyResult.ExitCode -eq 0) {
+        throw "Empty-feature fixture must fail under $Shell. output=$($emptyResult.Output)"
+    }
+    if ($emptyResult.Output -notmatch 'zero features') {
+        throw "Empty-feature failure under $Shell did not expose the fail-closed reason: $($emptyResult.Output)"
     }
 
     Write-Output ([ordered]@{

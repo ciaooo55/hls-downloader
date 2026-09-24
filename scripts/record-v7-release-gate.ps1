@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)]
     [ValidateSet('browser', 'performance', 'browser_media_push', 'installer', 'rollback')]

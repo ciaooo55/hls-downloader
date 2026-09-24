@@ -20,6 +20,14 @@ try {
 } catch {
     throw "Feature parity matrix is not valid JSON: $($_.Exception.Message)"
 }
+$features = @($feature.features)
+if ($null -eq $feature -or $null -eq $feature.features -or $features.Count -eq 0) {
+    # A manifest with no features at all must never look like "no gaps": an empty
+    # set trivially satisfies the filter below and would emit passed=true.  Note
+    # `@($null)` has Count 1, so a JSON `null`/scalar/array matrix would otherwise
+    # sail through - the explicit $null checks are what close that hole.
+    throw "Feature parity matrix lists zero features (empty feature set): $path"
+}
 
 $gaps = @(
     @($feature.features) |

@@ -138,7 +138,10 @@ def main():
     print(f"共 {len(files)} 张：不符 {failures} 张，不确定 {undecided} 张")
     if undecided:
         print("注：'不确定'不是通过。")
-    return 1 if failures else 0
+    # `undecided` means the sidebar border was never found, i.e. **unverified**.
+    # The docstring above contracts that None must not be treated as a pass, and
+    # line 140 prints exactly that, so it has to fail the exit code too.
+    return 1 if (failures or undecided) else 0
 
 
 if __name__ == "__main__":

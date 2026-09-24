@@ -88,7 +88,12 @@ jobs:
           pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-release-gap-contract.ps1 -Shell pwsh.exe
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-media-push-wrapper.ps1
           pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-media-push-wrapper.ps1
-          python.exe -m py_compile scripts/smoke_extension_tvbox_real.py
+          # Every Python tool in scripts/ used to be unchecked except one file, so a
+          # syntax error in a validator could sit there until an operator ran it by hand.
+          # py_compile only checks syntax, so a broken tool now fails CI instead.
+          Get-ChildItem -Path scripts -Filter *.py | ForEach-Object {
+            python.exe -m py_compile $_.FullName
+          }
 
   rust_core:
     name: Rust Core
