@@ -584,14 +584,37 @@ fn openssh_get(
     }
     let sftp = which("sftp").ok_or_else(|| "OpenSSH sftp not found".to_string())?;
     let local = output.display().to_string().replace('\\', "/");
+    // This path has no `SftpSession`, so the sidecar state is the only record of
+    // what the partial file on disk actually is.  Resuming on the file's bare
+    // size -- which is what this used to do -- appends to whatever happens to
+    // share the output path: a leftover from a different resource, or a prefix
+    // from before the remote file changed.  The result is a silent mix of two
+    // different entities reported as a completed download.
+    let state = load_state(&state_path(output));
     let current = if output.exists() {
         fs::metadata(output).map(|meta| meta.len()).unwrap_or(0)
     } else {
         0
     };
+    let resume_from = if current > 0
+        && state.version == STATE_VERSION
+        && state.resource_key == target.resource_key()
+        && state.offset == current
+        && state.total > current
+    {
+        current
+    } else {
+        0
+    };
+    if resume_from == 0 && output.exists() {
+        let _ = fs::remove_file(output);
+    }
+    // `ls -l` rides along as the first batch entry, so the listing costs no extra
+    // connection: it is the only authority this path has over the remote entity.
     let batch = format!(
-        "{} \"{}\" \"{}\"\n",
-        if current > 0 { "get -a" } else { "get" },
+        "ls -l \"{}\"\n{} \"{}\" \"{}\"\n",
+        target.path.replace('"', ""),
+        if resume_from > 0 { "get -a" } else { "get" },
         target.path.replace('"', ""),
         local.replace('"', "")
     );
@@ -618,7 +641,7 @@ fn openssh_get(
             &target.host,
         ])
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .and_then(|mut child| {
@@ -635,24 +658,79 @@ fn openssh_get(
         let stderr = String::from_utf8_lossy(&status.stderr);
         return Err(format!("sftp failed: {stderr}"));
     }
-    fs::metadata(output)
+    let written = fs::metadata(output)
         .map(|meta| meta.len())
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    // The returned byte count is treated as success by every caller, so a short
+    // or mis-targeted transfer must surface as an error.  The native path already
+    // enforces `stat`; this one reports its own length, which is exactly why it
+    // needs the same check before it claims the download fit.
+    match parse_ls_size(&String::from_utf8_lossy(&status.stdout), &target.path) {
+        Some(remote) if remote == written => Ok(remote),
+        Some(remote) => Err(format!("文件长度不匹配，期望 {remote}，实际 {written}")),
+        None => Err("OpenSSH sftp 未返回远程文件大小，无法校验下载结果".to_string()),
+    }
 }
 
+/// Parse the remote size out of one `ls -l` line from the OpenSSH sftp client.
+///
+/// A line looks like `-rw-r--r--    0 1000     1000        12345 Sep 24 15:00
+/// file.mp4`: permissions, links, uid, gid, size, then the date.  OpenSSH prints
+/// numeric uid/gid, so the size is always whitespace field 4 after the
+/// permissions.  Anything whose permissions do not start with `-` is a directory
+/// or a symlink, neither of which is a downloadable entity, so such a line is
+/// rejected rather than guessed at, and a listing that never mentions the
+/// requested path yields `None` so the caller fails closed.
+fn parse_ls_size(listing: &str, remote_path: &str) -> Option<u64> {
+    listing
+        .lines()
+        .filter(|line| line.contains(remote_path))
+        .find_map(|line| {
+            let mut fields = line.split_whitespace();
+            let permissions = fields.next()?;
+            if !permissions.starts_with('-') {
+                return None;
+            }
+            fields.nth(3)?.parse::<u64>().ok()
+        })
+}
+/// Resolve an OpenSSH tool by name.
+///
+/// `sftp` and `ssh-keyscan` are spawned with the user's own privileges, so the
+/// resolver decides which binary actually runs.  On Windows a PATH-first lookup
+/// hands execution to any attacker-writable directory that happens to precede
+/// the real OpenSSH, so the admin-writable `%SystemRoot%\System32\OpenSSH` copy
+/// is preferred and PATH is only consulted when the tool is not installed
+/// there.  That ordering keeps a custom/portable OpenSSH working, which a
+/// SystemRoot-only resolver would break.
+#[cfg(windows)]
 fn which(name: &str) -> Option<PathBuf> {
+    let system_root = PathBuf::from(std::env::var_os("SystemRoot")?);
+    let preferred = [
+        system_root.join("System32").join("OpenSSH"),
+        system_root.join("System32"),
+    ];
+    resolve_in(&preferred, name).or_else(|| resolve_in_path(name))
+}
+
+#[cfg(not(windows))]
+fn which(name: &str) -> Option<PathBuf> {
+    resolve_in_path(name)
+}
+
+/// Search a fixed directory list, preferring `<name>.exe` over the bare name.
+/// Split out from `which` so directory ordering and the `.exe` preference can
+/// be exercised without mutating the process environment.
+fn resolve_in(dirs: &[PathBuf], name: &str) -> Option<PathBuf> {
+    dirs.iter()
+        .flat_map(|dir| [dir.join(format!("{name}.exe")), dir.join(name)])
+        .find(|candidate| candidate.is_file())
+}
+
+fn resolve_in_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(name);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-        let exe = dir.join(format!("{name}.exe"));
-        if exe.exists() {
-            return Some(exe);
-        }
-    }
-    None
+    let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    resolve_in(&dirs, name)
 }
 
 #[cfg(test)]
@@ -926,6 +1004,71 @@ mod tests {
 
         drop(server);
         std::env::remove_var("HLS_V7_DATA_DIR");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // The OpenSSH fallback has no `SftpSession`, so the client's own `ls -l`
+    // output is the only authority it has over the remote entity.  A wrong parse
+    // here either fails a good download or, worse, accepts a partial or
+    // mis-targeted one.
+    #[test]
+    fn parses_the_size_out_of_an_openssh_ls_line() {
+        let line = "-rw-r--r--    0 1000     1000        12345 Sep 24 15:00 /video/a.mp4";
+        assert_eq!(parse_ls_size(line, "/video/a.mp4"), Some(12345));
+        // Directories and symlinks are not downloadable entities.
+        assert_eq!(
+            parse_ls_size(
+                "drwxr-xr-x    2 1000     1000         4096 Sep 24 15:00 /video",
+                "/video"
+            ),
+            None
+        );
+        assert_eq!(
+            parse_ls_size(
+                "lrwxrwxrwx    1 1000     1000           12 Sep 24 15:00 /video/a.mp4",
+                "/video/a.mp4"
+            ),
+            None
+        );
+        // A listing that never mentions the requested path must be guessed at by
+        // nobody, so the caller fails closed instead of trusting its own bytes.
+        assert_eq!(parse_ls_size(line, "/video/other.mp4"), None);
+        assert_eq!(
+            parse_ls_size(
+                "Couldn't stat remote file: No such file or directory",
+                "/video/a.mp4"
+            ),
+            None
+        );
+    }
+
+    // `resolve_in` decides which binary actually runs with the user's privileges,
+    // so its ordering is part of the fix.  The `.exe` preference and the
+    // first-match-wins rule are pinned here without touching the real environment.
+    #[test]
+    fn openssh_resolution_prefers_the_exe_and_the_first_match() {
+        let root = std::env::temp_dir().join(format!("hls-which-{}", std::process::id()));
+        let first = root.join("first");
+        let second = root.join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        // Only the later directory has the tool: the earlier one is skipped.
+        fs::write(second.join("sftp.exe"), b"tool").unwrap();
+        assert_eq!(
+            resolve_in(&[first.clone(), second.clone()], "sftp").as_deref(),
+            Some(second.join("sftp.exe").as_path())
+        );
+        // Now both have it: the first directory wins, and `.exe` beats the bare
+        // name inside it even though the bare name is checked first in source.
+        fs::write(first.join("sftp"), b"bare").unwrap();
+        fs::write(first.join("sftp.exe"), b"exe").unwrap();
+        assert_eq!(
+            resolve_in(&[first.clone(), second.clone()], "sftp").as_deref(),
+            Some(first.join("sftp.exe").as_path())
+        );
+        // A directory alone is never a match: `is_file` keeps dirs out.
+        fs::create_dir_all(first.join("ssh-keyscan")).unwrap();
+        assert_eq!(resolve_in(&[first, second], "ssh-keyscan"), None);
         let _ = fs::remove_dir_all(root);
     }
 }

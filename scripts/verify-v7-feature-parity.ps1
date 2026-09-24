@@ -83,6 +83,49 @@ foreach ($feature in $features) {
         $errors.Add("Feature '$($feature.id)' has invalid status '$($feature.status)'.")
     }
 }
+# A "verified" feature is only as good as the evidence it cites.  The matrix
+# names concrete tests, and a renamed or deleted test used to leave its citation
+# behind as a phantom: the field is non-empty, so the loop above passed, while
+# nothing in the repository ran what the claim rested on.  Two features were
+# carrying exactly that -- tests renamed from
+# `replay_json_does_not_send_task_secrets_...` to
+# `replay_json_does_not_send_base_request_headers_...`.  Cited test names are
+# therefore required to resolve against the source tree.
+$citedEvidenceRoots = @(
+    (Join-Path $repo 'native_shell\src'),
+    (Join-Path $repo 'desktop_ui\src'),
+    (Join-Path $repo 'presenter_ui\src'),
+    (Join-Path $repo 'extension\entrypoints'),
+    (Join-Path $repo 'extension\lib'),
+    (Join-Path $repo 'scripts')
+)
+$searchableEvidenceExtensions = @('.rs', '.kt', '.ts', '.ps1', '.py')
+$citedEvidenceHaystack = New-Object 'System.Text.StringBuilder'
+foreach ($root in $citedEvidenceRoots) {
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+    foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue) {
+        if ($searchableEvidenceExtensions -notcontains $file.Extension.ToLowerInvariant()) { continue }
+        if ($file.FullName -match '\\node_modules\\|\\target\\|\\build\\|\\\.output\\|\\\.wxt\\') { continue }
+        # An undecodable file must not abort validation; it simply contributes
+        # nothing to the haystack, which fails the citations it would have proven.
+        try {
+            [void]$citedEvidenceHaystack.Append([IO.File]::ReadAllText($file.FullName, $utf8NoBom))
+            [void]$citedEvidenceHaystack.Append("`n")
+        } catch {}
+    }
+}
+$citedEvidence = $citedEvidenceHaystack.ToString()
+foreach ($feature in $features) {
+    # snake_case identifiers of three or more parts, and CamelCase `...Test(s)`
+    # class names, are how the matrix names actual tests.  Everything else is
+    # prose and is left alone, so a rewritten sentence cannot fail the gate.
+    foreach ($match in [regex]::Matches([string]$feature.verification, '\b[a-z][a-z0-9]*(?:_[a-z0-9]+){2,}\b|\b[A-Z][A-Za-z0-9]*Tests?\b')) {
+        $cited = $match.Value
+        if (-not $citedEvidence.Contains($cited)) {
+            $errors.Add("Feature '$($feature.id)' cites '$cited' as verification, but no source file in the repository defines it.")
+        }
+    }
+}
 if (@($features.id | Sort-Object -Unique).Count -ne $features.Count) {
     $errors.Add('Feature IDs must be unique.')
 }

@@ -18,6 +18,18 @@ pub struct CoreStore {
     path: Option<PathBuf>,
 }
 
+/// One half of an atomic credential write.  `Delete` removes the row.
+#[derive(Debug, Clone, Copy)]
+pub enum CredentialWrite<'a> {
+    Store {
+        credential_ref: &'a str,
+        protected_blob: &'a str,
+        kind: &'a str,
+    },
+    Delete {
+        credential_ref: &'a str,
+    },
+}
 impl CoreStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref();
@@ -372,6 +384,77 @@ impl CoreStore {
         transaction
             .commit()
             .map_err(|error| format!("commit Core settings transaction: {error}"))
+    }
+
+    /// Apply a credential mutation together with the settings that name it, as
+    /// one transaction.
+    ///
+    /// Credentials and the settings that reference them live in different tables,
+    /// so committing them with separate statements leaves a window where the
+    /// setting points at a row that is already gone.  For a deletion that window
+    /// is unrecoverable: the plaintext never reached the database, so the user
+    /// has to retype the cookie.  `None` writes the settings alone, which is the
+    /// legitimate case of clearing a reference that was already empty.
+    pub fn apply_credential_with_settings(
+        &mut self,
+        write: Option<CredentialWrite<'_>>,
+        settings: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<(), String> {
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(|error| format!("begin Core credential transaction: {error}"))?;
+        let applied = (|| -> Result<(), String> {
+            match write {
+                Some(CredentialWrite::Store {
+                    credential_ref,
+                    protected_blob,
+                    kind,
+                }) => {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                        .min(i64::MAX as u128) as i64;
+                    transaction.execute(
+                        "INSERT INTO credentials(credential_ref, protected_blob, kind, created_at_ms)\n                         VALUES (?1, ?2, ?3, ?4)\n                         ON CONFLICT(credential_ref) DO UPDATE SET protected_blob = excluded.protected_blob, kind = excluded.kind",
+                        params![credential_ref, protected_blob, kind, now],
+                    ).map_err(|error| format!("store Core credential {credential_ref}: {error}"))?;
+                }
+                Some(CredentialWrite::Delete { credential_ref }) => {
+                    transaction
+                        .execute(
+                            "DELETE FROM credentials WHERE credential_ref = ?1",
+                            params![credential_ref],
+                        )
+                        .map_err(|error| {
+                            format!("delete Core credential {credential_ref}: {error}")
+                        })?;
+                }
+                None => {}
+            }
+            for (key, value) in settings {
+                let encoded = serde_json::to_string(value)
+                    .map_err(|error| format!("encode Core setting {key}: {error}"))?;
+                transaction
+                    .execute(
+                        r#"INSERT INTO settings(key, value_json) VALUES (?1, ?2)
+                           ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json"#,
+                        params![key, encoded],
+                    )
+                    .map_err(|error| format!("write Core setting {key}: {error}"))?;
+            }
+            Ok(())
+        })();
+        match applied {
+            Ok(()) => transaction
+                .commit()
+                .map_err(|error| format!("commit Core credential transaction: {error}")),
+            Err(error) => {
+                let _ = transaction.rollback();
+                Err(error)
+            }
+        }
     }
 
     pub fn store_credential(
@@ -747,5 +830,91 @@ mod tests {
             .unwrap();
         assert!(store.load_tasks().unwrap().is_empty());
         assert_eq!(store.latest_sequence().unwrap(), 12);
+    }
+
+    // A credential is the only copy of a secret the plaintext of which never
+    // reaches the database, so the settings write that names it has to share its
+    // transaction.  The test lives in this module, so it can arm a trigger that
+    // makes the settings INSERT fail -- the only honest way to reach the
+    // "second statement fails" shape without a hook in production code.
+    #[test]
+    fn a_failed_settings_write_rolls_back_the_credential_delete() {
+        let mut store = CoreStore::in_memory().unwrap();
+        store
+            .store_credential("site:example", "blob", "site_rule")
+            .unwrap();
+        assert!(store.load_credential("site:example").unwrap().is_some());
+
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER abort_settings BEFORE INSERT ON settings \
+                 BEGIN SELECT RAISE(ABORT, 'injected settings failure'); END;",
+            )
+            .unwrap();
+        let broken = BTreeMap::from([("site_rules".to_string(), serde_json::json!([]))]);
+        let error = store
+            .apply_credential_with_settings(
+                Some(CredentialWrite::Delete {
+                    credential_ref: "site:example",
+                }),
+                &broken,
+            )
+            .unwrap_err();
+        assert!(!error.is_empty(), "{error}");
+        assert!(
+            store.load_credential("site:example").unwrap().is_some(),
+            "the delete must not survive a settings write that never committed"
+        );
+        store
+            .connection
+            .execute("DROP TRIGGER abort_settings", [])
+            .unwrap();
+
+        let settings = BTreeMap::from([("site_rules".to_string(), serde_json::json!([]))]);
+        store
+            .apply_credential_with_settings(
+                Some(CredentialWrite::Delete {
+                    credential_ref: "site:example",
+                }),
+                &settings,
+            )
+            .unwrap();
+        assert!(store.load_credential("site:example").unwrap().is_none());
+        assert_eq!(store.setting_string("site_rules", "MISSING").unwrap(), "[]");
+    }
+
+    // The commitment has to hold in the other direction too: storing a new
+    // credential must not be visible while the rule that names it is still the
+    // old one.
+    #[test]
+    fn storing_a_credential_lands_with_its_setting() {
+        let mut store = CoreStore::in_memory().unwrap();
+        let settings = BTreeMap::from([("site_rules".to_string(), serde_json::json!(["a"]))]);
+        store
+            .apply_credential_with_settings(
+                Some(CredentialWrite::Store {
+                    credential_ref: "site:a",
+                    protected_blob: "blob",
+                    kind: "site_rule",
+                }),
+                &settings,
+            )
+            .unwrap();
+        assert_eq!(
+            store.load_credential("site:a").unwrap().as_deref(),
+            Some("blob")
+        );
+        assert_eq!(store.setting_string("site_rules", "").unwrap(), "[\"a\"]");
+
+        // `None` still writes the settings, which is what clearing an
+        // already-empty reference legitimately needs.
+        store
+            .apply_credential_with_settings(
+                None,
+                &BTreeMap::from([("site_rules".to_string(), serde_json::json!(["b"]))]),
+            )
+            .unwrap();
+        assert_eq!(store.setting_string("site_rules", "").unwrap(), "[\"b\"]");
     }
 }

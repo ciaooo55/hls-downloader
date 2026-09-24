@@ -798,7 +798,17 @@ fn run_job_once(job: &Job) -> Result<(), EngineError> {
         Control::Run => {}
     }
     let _slot = crate::net_policy::acquire(&job.url).map_err(EngineError::Failed)?;
-    if job.method.eq_ignore_ascii_case("POST") || job.sequential || job.total == 0 {
+    // A HEAD job must take the sequential path even when it carries a total: a
+    // HEAD range response is 206 + Content-Range with no body, so the range
+    // workers read zero bytes forever and the job dies as "made no progress
+    // after 5 attempts" although nothing was ever going to arrive.  Read the
+    // method through `request_method` so `" Head"` is routed exactly like the
+    // wire request, matching the exemption inside `download_sequential`.
+    if request_method(job).eq_ignore_ascii_case("POST")
+        || request_method(job).eq_ignore_ascii_case("HEAD")
+        || job.sequential
+        || job.total == 0
+    {
         let _ = fs::remove_file(completed_ranges_path(job));
         let _ = fs::remove_file(active_ranges_path(&job.progress));
         download_sequential(job)
@@ -1787,10 +1797,12 @@ enum Body {
         stream: TcpStream,
         remaining: Option<u64>,
     },
-    Memory {
-        data: Vec<u8>,
-        at: usize,
-    },
+    /// curl-impersonate streams the entity straight to a temp file.  Reading it
+    /// back into RAM (the only option before this variant existed) turned a
+    /// multi-gigabyte media download into an equally large allocation, which
+    /// ends as an OOM kill mid-download.  The temp dir has to outlive the reader,
+    /// so the variant owns it and `Drop` removes it on every exit path.
+    File { file: File, temp_dir: PathBuf },
     #[cfg(windows)]
     WinHttp(winhttp::WinHttpBody),
 }
@@ -1830,17 +1842,19 @@ impl Read for Body {
                 }
                 Ok(count)
             }
-            Self::Memory { data, at } => {
-                if *at >= data.len() {
-                    return Ok(0);
-                }
-                let take = (data.len() - *at).min(buf.len());
-                buf[..take].copy_from_slice(&data[*at..*at + take]);
-                *at += take;
-                Ok(take)
-            }
+            Self::File { file, .. } => file.read(buf),
             #[cfg(windows)]
             Self::WinHttp(body) => body.read(buf),
+        }
+    }
+}
+
+impl Drop for Body {
+    fn drop(&mut self) {
+        // Only the file-backed reader owns a temp dir; the other variants hold
+        // sockets and plain buffers that release themselves.
+        if let Self::File { temp_dir, .. } = self {
+            let _ = fs::remove_dir_all(temp_dir);
         }
     }
 }
@@ -2135,8 +2149,10 @@ fn fetch_via_curl_impersonate(
     let meta = parse_header_meta(&headers);
     // A body read failure must not look like an empty body: `unwrap_or_default`
     // silently turned a partial transfer into a truncated-but-"successful" file.
-    let data = match fs::read(&body_path) {
-        Ok(data) => data,
+    // The entity itself stays on disk and is streamed (see `Body::File`), so only
+    // the open is checked here and nothing is buffered into RAM.
+    let body_file = match File::open(&body_path) {
+        Ok(file) => file,
         Err(error) => {
             let _ = fs::remove_dir_all(&dir);
             return Some(Err(EngineError::Failed(format!(
@@ -2145,17 +2161,17 @@ fn fetch_via_curl_impersonate(
         }
     };
     // `--compressed` makes this branch request gzip/br and hand *decoded* bytes
-    // in `data`, while the header dump still reports the compressed wire length.
+    // on disk, while the header dump still reports the compressed wire length.
     // Reporting that wire length as the content length makes `download_sequential`
-    // reject every complete download from a compressing server, so the decoded
-    // length wins.  This branch buffers the whole body, so `data.len()` is the
-    // exact entity size.
+    // reject every complete download from a compressing server, so the length of
+    // what curl actually wrote wins.
     let content_length = if meta.content_encoding {
-        Some(data.len() as u64)
+        fs::metadata(&body_path)
+            .map(|file_meta| file_meta.len())
+            .ok()
     } else {
         meta.content_length
     };
-    let _ = fs::remove_dir_all(&dir);
     if !output.status.success() && status == 0 {
         return Some(Err(EngineError::Failed(
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
@@ -2169,7 +2185,12 @@ fn fetch_via_curl_impersonate(
         etag: meta.etag,
         last_modified: meta.last_modified,
         accept_ranges: meta.accept_ranges,
-        body: Body::Memory { data, at: 0 },
+        // `dir` moves into the reader: `Drop for Body` removes it once the entity
+        // has been consumed, including on the early `?` returns in the caller.
+        body: Body::File {
+            file: body_file,
+            temp_dir: dir,
+        },
     }))
 }
 
@@ -3424,6 +3445,42 @@ mod tests {
         });
         let (mut job, dir) = temp_job(&format!("http://{addr}"), true, 0, 1);
         job.method = " Head".into();
+        run_job(&job).unwrap();
+        assert_eq!(fs::read(&job.output).unwrap(), Vec::<u8>::new());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    // The dispatch used to send any non-POST job with a total to `download_ranges`.
+    // A HEAD range response is 206 + Content-Range with no body, so the range
+    // workers read zero bytes and the job died as "made no progress after 5
+    // attempts" even though nothing was ever going to arrive.  HEAD now takes the
+    // sequential path regardless of the total, which is what this pins.
+    #[test]
+    fn head_job_with_a_total_uses_the_sequential_path() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                    break;
+                }
+            }
+            // A HEAD reply to a Range request: 206 + Content-Range, never a body.
+            let response = concat!(
+                "HTTP/1.1 206 Partial Content\r\n",
+                "Content-Range: bytes 0-9/10\r\n",
+                "Content-Length: 10\r\n",
+                "Connection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        // sequential = false and total = 10 is exactly the shape that used to be
+        // routed to `download_ranges`.
+        let (mut job, dir) = temp_job(&format!("http://{addr}"), false, 10, 1);
+        job.method = "HEAD".into();
         run_job(&job).unwrap();
         assert_eq!(fs::read(&job.output).unwrap(), Vec::<u8>::new());
         let _ = fs::remove_dir_all(dir);
@@ -4749,5 +4806,56 @@ mod tests {
             Some(tool.as_path())
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    // The curl-impersonate path used to buffer the whole entity into RAM and only
+    // then hand it to the writer, so a multi-gigabyte download became an equally
+    // large allocation and the process was OOM-killed mid-transfer.  `Body::File`
+    // streams from disk instead; these two properties are what keep it honest.
+    #[test]
+    fn a_file_backed_body_streams_from_disk_and_cleans_up_its_temp_dir() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-body-file-{}-{}",
+            std::process::id(),
+            NEXT_TEMP_JOB_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        // 320 KiB forces several 64 KiB reads, so the reader really is streaming
+        // rather than handing back the whole buffer in one call.
+        let data = vec![0x5au8; 320 * 1024];
+        fs::write(root.join("body"), &data).unwrap();
+        let mut body = Body::File {
+            file: File::open(root.join("body")).unwrap(),
+            temp_dir: root.clone(),
+        };
+        let mut copied = Vec::new();
+        body.read_to_end(&mut copied).unwrap();
+        assert_eq!(copied, data);
+        drop(body);
+        assert!(
+            !root.exists(),
+            "the temp dir must not outlive the reader that owns it"
+        );
+    }
+
+    // Dropping the reader part-way is what happens on every `?` early return in
+    // `download_sequential`, so the cleanup has to hold on that path too.
+    #[test]
+    fn a_file_backed_body_dropped_early_still_cleans_up_its_temp_dir() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-body-file-early-{}-{}",
+            std::process::id(),
+            NEXT_TEMP_JOB_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("body"), b"0123456789").unwrap();
+        let mut body = Body::File {
+            file: File::open(root.join("body")).unwrap(),
+            temp_dir: root.clone(),
+        };
+        let mut one = [0u8; 4];
+        assert_eq!(body.read(&mut one).unwrap(), 4);
+        drop(body);
+        assert!(!root.exists(), "an early drop must still clean up");
     }
 }

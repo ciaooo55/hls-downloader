@@ -1048,19 +1048,33 @@ impl CoreCoordinator {
         {
             return Err("站点自定义请求头无效".into());
         }
-        let raw = self.lock()?.store().setting_string("site_rules", "")?;
+        // The read, the credential mutation and the pointer write now share one
+        // lock guard and one transaction.  Doing them separately is what made
+        // this destructive: a `clear` that deleted the credential row first and
+        // then failed to persist `site_rules` left a rule pointing at a password
+        // that no longer existed anywhere -- the plaintext never reaches the
+        // database, so the user has to retype it.  Holding the guard also closes
+        // the read-modify-write window in which two concurrent callers could
+        // overwrite each other's rules.
+        let mut core = self.lock()?;
+        let raw = core.store().setting_string("site_rules", "")?;
         let mut rules = crate::parse_site_rules(&raw);
         let rule = rules
             .iter_mut()
             .find(|rule| rule.host.trim().eq_ignore_ascii_case(&normalized_host))
             .ok_or_else(|| "保存凭据前请先保存站点规则".to_string())?;
-        if clear {
-            if !rule.credential_ref.trim().is_empty() {
-                self.lock()?
-                    .store_mut()
-                    .delete_credential(&rule.credential_ref)?;
-            }
-            rule.credential_ref.clear();
+        // Everything the transaction needs to name is owned by this function, so
+        // the borrows handed to `apply_credential_with_settings` cannot outlive
+        // the values they point at.
+        let (stored_ref, new_ref, protected) = if clear {
+            // The stored reference, not a derived one: an imported or hand-edited
+            // rule may point at a value `credential_ref_for_host` would never
+            // rebuild, so deleting by the derived name would orphan it.
+            (
+                std::mem::take(&mut rule.credential_ref),
+                String::new(),
+                String::new(),
+            )
         } else {
             let replay = serde_json::json!({
                 "cookie": cookie.trim(),
@@ -1073,13 +1087,34 @@ impl CoreCoordinator {
                 replay
             };
             let credential_ref = crate::site_rules::credential_ref_for_host(&normalized_host);
-            self.store_credential(&credential_ref, &protected, "site_rule")?;
-            rule.credential_ref = credential_ref;
-        }
-        self.set_setting(
-            "site_rules",
-            serde_json::json!(crate::format_site_rules(&rules)),
-        )
+            rule.credential_ref = credential_ref.clone();
+            (String::new(), credential_ref, protected)
+        };
+        let write = if clear {
+            (!stored_ref.trim().is_empty()).then_some(crate::store::CredentialWrite::Delete {
+                credential_ref: stored_ref.trim(),
+            })
+        } else {
+            Some(crate::store::CredentialWrite::Store {
+                credential_ref: &new_ref,
+                protected_blob: &protected,
+                kind: "site_rule",
+            })
+        };
+        core.store_mut().apply_credential_with_settings(
+            write,
+            &BTreeMap::from([(
+                "site_rules".to_string(),
+                serde_json::json!(crate::format_site_rules(&rules)),
+            )]),
+        )?;
+        // `set_setting` used to announce the change; going straight to the store
+        // must not silence it, or the UI keeps showing the credential it thought
+        // it just saved.
+        core.emit(CoreEvent::SettingsChanged {
+            keys: vec!["site_rules".to_string()],
+        })?;
+        Ok(())
     }
 
     pub fn save_handoff(
