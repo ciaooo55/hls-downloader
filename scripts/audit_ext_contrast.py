@@ -56,7 +56,15 @@ def parse_color(text, toks, depth=0):
         a = float(parts[3]) if len(parts) > 3 else 1.0
         return (r, g, b, a)
     if text.startswith("color-mix("):
-        inner = text[len("color-mix("):].rstrip(")")
+        # Strip exactly ONE trailing paren: rstrip(")") would also eat the
+        # inner paren of a trailing var(--x), making every
+        # `color-mix(...,var(--surface))` silently unparseable.  main() then
+        # drops the whole rule at `if bg is None or fg is None: continue`, so
+        # the auditor reports "below 3.0: 0" without ever looking at the
+        # translucent tints -- precisely the rules worth auditing.
+        inner = text[len("color-mix("):]
+        if inner.endswith(")"):
+            inner = inner[:-1]
         # strip the colour space token
         inner = re.sub(r"^in\s+\w+\s*,", "", inner).strip()
         stops = split_stops(inner)

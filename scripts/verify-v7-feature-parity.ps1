@@ -8,7 +8,11 @@ param(
     [ValidateSet('candidate', 'formal')]
     [string]$PackageTier = '',
     [string]$ProvenancePath = '',
-    [string]$ReleaseEvidencePath = ''
+    [string]$ReleaseEvidencePath = '',
+    # Cited screenshots/capture directories are git-ignored on purpose, so they
+    # are normally absent in CI.  This switch promotes the resulting warnings to
+    # errors, for an audit that needs every citation to resolve locally.
+    [switch]$RequireEvidenceArtifacts
 )
 
 $ErrorActionPreference = 'Stop'
@@ -125,6 +129,60 @@ foreach ($feature in $features) {
             $errors.Add("Feature '$($feature.id)' cites '$cited' as verification, but no source file in the repository defines it.")
         }
     }
+}
+
+# Cited artifact paths are the other half of the citation surface.  A "verified"
+# feature may rest on a captured screenshot or a capture directory just as much
+# as on a test name, and those artifacts are git-ignored on purpose (release
+# evidence stays local).  The consequence is that a citation naming a directory
+# that no longer exists is invisible: the field is non-empty and nothing
+# resolves the path, so the summary line used to imply every claim was auditable
+# when 9 of the 28 features cited artifacts that resolve nowhere.  The matrix is
+# left untouched -- the claims are the operator's -- but the count below is now
+# reported so the reader can tell auditable citations from unresolvable ones.
+$citedArtifactRoots = @(
+    (Join-Path $repo 'artifacts\\v7-productization'),
+    (Join-Path $repo 'artifacts'),
+    (Join-Path $repo 'outputs'),
+    $repo
+)
+$citedArtifactExtensions = @('.png', '.jpg', '.jpeg', '.json', '.txt', '.log', '.html', '.htm', '.mp4', '.zip', '.csv', '.md', '.xml', '.yaml', '.yml')
+# `visual/` and `ui-api/` are the two capture trees the matrix cites by
+# directory, without a file extension; anything else must carry a known evidence
+# extension, which keeps prose such as "192.168.2.11:9978" or "v7.0.1" out.
+$citedArtifactPattern = '(?<![A-Za-z0-9._/-])(?:(?:visual|ui-api)/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*|[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+\.[A-Za-z0-9]{2,5})(?![A-Za-z0-9._-])'
+$citedArtifactCount = 0
+$resolvedArtifactCount = 0
+$unresolvedArtifacts = New-Object 'System.Collections.Generic.List[string]'
+foreach ($feature in $features) {
+    $citedInThisFeature = @{}
+    foreach ($match in [regex]::Matches([string]$feature.verification, $citedArtifactPattern)) {
+        $cited = $match.Value.Replace('\\', '/')
+        $isKnownPrefix = $cited.StartsWith('visual/') -or $cited.StartsWith('ui-api/')
+        if (-not $isKnownPrefix -and $citedArtifactExtensions -notcontains [IO.Path]::GetExtension($cited).ToLowerInvariant()) { continue }
+        if ($citedInThisFeature.ContainsKey($cited)) { continue }
+        $citedInThisFeature[$cited] = $true
+        $citedArtifactCount++
+        $resolvedTo = ''
+        foreach ($root in $citedArtifactRoots) {
+            $candidatePath = [IO.Path]::GetFullPath((Join-Path $root $cited.Replace('/', '\\')))
+            if (Test-Path -LiteralPath $candidatePath) { $resolvedTo = $candidatePath; break }
+        }
+        if ([String]::IsNullOrWhiteSpace($resolvedTo)) {
+            $unresolvedArtifacts.Add("Feature '$($feature.id)' cites artifact '$cited', which is not present in this checkout, so that part of the claim cannot be audited here.")
+        } else {
+            $resolvedArtifactCount++
+        }
+    }
+}
+foreach ($note in $unresolvedArtifacts) {
+    if ($RequireEvidenceArtifacts) { $errors.Add($note) } else { Write-Warning $note }
+}
+if ($PackageTier -eq 'formal' -and $citedArtifactCount -gt 0 -and $resolvedArtifactCount -lt $citedArtifactCount) {
+    # Formal packaging asserts every feature is verified.  A citation that no
+    # longer resolves means the assertion rests on evidence nobody can open, so
+    # the strict tier must not accept it silently.
+    $errors.Add("Formal packaging requires every cited artifact to resolve; $($citedArtifactCount - $resolvedArtifactCount) of $citedArtifactCount cited artifacts are missing.")
 }
 if (@($features.id | Sort-Object -Unique).Count -ne $features.Count) {
     $errors.Add('Feature IDs must be unique.')
@@ -462,4 +520,4 @@ if (-not [String]::IsNullOrWhiteSpace($ProvenancePath)) {
     [IO.File]::WriteAllText($outputPath, ($provenance | ConvertTo-Json -Depth 8), $utf8NoBom)
 }
 
-Write-Output "FEATURE_PARITY=$verifiedPercent% ($($verified.Count)/$($features.Count) verified, $($partial.Count) partial, $($blocked.Count) blocked); COMMIT=$commit; TREE=$tree; SHA256=$featureHash"
+Write-Output "FEATURE_PARITY=$verifiedPercent% ($($verified.Count)/$($features.Count) verified, $($partial.Count) partial, $($blocked.Count) blocked); CITED_ARTIFACTS=$resolvedArtifactCount/$citedArtifactCount resolved; COMMIT=$commit; TREE=$tree; SHA256=$featureHash"

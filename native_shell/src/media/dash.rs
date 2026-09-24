@@ -85,7 +85,13 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
                 bandwidth,
             ));
         }
-        for line in block.split("<SegmentURL") {
+        // Only look at the chunks AFTER `<SegmentURL`: chunk 0 is the text
+        // before it, which for a Representation-level `<SegmentTemplate ...>`
+        // still carries that template's own `media` attribute.  Taking it
+        // pushed the raw, unexpanded `$RepresentationID$/$Number%05d$.m4s`
+        // into the segment list, so `download_dash_selected` fetched a literal
+        // `$...$` URL and aborted the whole download.
+        for line in block.split("<SegmentURL").skip(1) {
             if let Some(source) = attr(line, "media") {
                 media.push(resolve(&base_url, &source));
             }
@@ -274,7 +280,7 @@ pub fn download_dash_selected(
                     continue;
                 }
                 if read_control(control) != "run" {
-                    break;
+                    return Err(control_stop_error(control));
                 }
                 let index = files.len();
                 let dest = task_dir.join(format!("seg-{index:04}.m4s"));
@@ -319,7 +325,7 @@ pub fn download_dash_selected(
                     continue;
                 }
                 if read_control(control) != "run" {
-                    break;
+                    return Err(control_stop_error(control));
                 }
                 let index = files.len();
                 let dest = task_dir.join(format!("seg-{index:04}.m4s"));
@@ -768,6 +774,20 @@ fn read_control(path: &Path) -> String {
         .unwrap_or_else(|_| "run".into())
         .trim()
         .to_ascii_lowercase()
+}
+
+/// A stopped control value is not a valid completion.
+///
+/// The HLS segment loop returns `Err("paused")` / `Err("canceled")`; DASH used
+/// to `break` out of its segment loops and then fall straight into
+/// `finish_dash`, which merges only the segments fetched so far and returns
+/// `Ok`.  A pause or cancel on a static VOD task therefore produced a truncated
+/// `merged.mp4` reported as a successful download.
+fn control_stop_error(control: &Path) -> String {
+    match read_control(control).as_str() {
+        "pause" => "paused".to_string(),
+        _ => "canceled".to_string(),
+    }
 }
 
 fn report_dash_progress(task_dir: &Path, files: &[PathBuf], live: bool) {
@@ -1222,6 +1242,45 @@ mod tests {
             parsed.representations[0].media[0],
             "https://cdn.test/v/init.mp4"
         );
+    }
+
+    #[test]
+    fn representation_level_segment_template_segments_are_all_expanded() {
+        // The old `block.split("<SegmentURL")` loop also inspected chunk 0 --
+        // the text before the first `<SegmentURL` -- which for a
+        // Representation-level `<SegmentTemplate>` still carries that
+        // template's own `media` attribute.  The raw `$...$` template was
+        // pushed as a segment URL, so every fetch of it failed and aborted the
+        // download.
+        let xml = r#"<MPD type="static"><Period><AdaptationSet mimeType="video/mp4"><Representation id="v1" bandwidth="800000"><BaseURL>https://cdn.test/v1/</BaseURL><SegmentTemplate timescale="90000" initialization="$RepresentationID$/init.mp4" media="$RepresentationID$/$Number%05d$.m4s" startNumber="1"><SegmentTimeline><S t="0" d="180000"/><S t="180000" d="180000"/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>"#;
+        let parsed = parse_mpd(xml, "https://cdn.test/manifest.mpd").unwrap();
+        assert_eq!(
+            parsed.representations[0].media,
+            vec![
+                "https://cdn.test/v1/v1/00001.m4s",
+                "https://cdn.test/v1/v1/00002.m4s",
+            ],
+            "a raw $...$ template must never reach the segment list"
+        );
+    }
+
+    #[test]
+    fn a_stopped_control_sentinel_surfaces_as_an_error_not_a_completion() {
+        // The static branch used to `break` out of its segment loop and then
+        // merge only the segments fetched so far into a "successful"
+        // merged.mp4, so the sentinel itself has to name the failure the way
+        // the HLS path does.
+        let root = std::env::temp_dir().join(format!("dash-control-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        std::fs::write(&control, "pause").unwrap();
+        assert_eq!(control_stop_error(&control), "paused");
+        std::fs::write(&control, "cancel").unwrap();
+        assert_eq!(control_stop_error(&control), "canceled");
+        // A missing control file reads as "run", which must never be a stop.
+        assert_eq!(control_stop_error(&root.join("absent")), "canceled");
+        assert_eq!(read_control(&control), "cancel");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

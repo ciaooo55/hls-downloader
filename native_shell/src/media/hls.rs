@@ -3,7 +3,7 @@
 use crate::http_engine::{fetch_hls_bytes, fetch_hls_bytes_range};
 use crate::media::merge::{concat_files, merge_with_ffmpeg, mux_av};
 use crate::media::subtitles::{has_cues, merge_webvtt_segments, webvtt_to_srt};
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -650,13 +650,29 @@ pub fn download_hls_with(
             &mut key_cache,
             &mut map_cache,
         )?;
-        download_prepared_segments(
+        let (completed, stop_error) = download_prepared_segments(
             &prepared,
             headers,
             proxy,
             control,
             options.concurrency.max(1),
-        )?;
+        );
+        if let Some(error) = stop_error {
+            // A stopping run must still vouch for the segments that landed:
+            // `remember`/`save` used to sit after this call, so a pause threw
+            // away the record of every completed segment and the resumed run
+            // downloaded them again.
+            if !live {
+                for item in prepared
+                    .iter()
+                    .filter(|item| completed.contains(&item.path))
+                {
+                    vod.remember(item.slot, &item.identity, file_len(&item.path));
+                }
+                let _ = vod.save(task_dir);
+            }
+            return Err(error);
+        }
         for prepared in prepared {
             if !live {
                 vod.remember(prepared.slot, &prepared.identity, file_len(&prepared.path));
@@ -1186,11 +1202,15 @@ fn prepare_segments(
                 Some(existing) if vod.can_reuse(slot, &identity, file_len(&existing)) => {
                     (existing, false)
                 }
-                Some(existing) if vod.has_slot(slot) => {
+                // An on-disk segment that carries no matching checkpoint record
+                // is never trusted.  A run killed between `fs::write(output, ..)`
+                // and `vod.save(...)` leaves a complete-looking file behind, and
+                // a playlist change reuses slot numbers, so reusing it anywhere
+                // silent-splices stale or truncated bytes into the output.
+                Some(existing) => {
                     let _ = fs::remove_file(existing);
                     (output, true)
                 }
-                Some(existing) => (existing, false),
                 None => (output, true),
             }
         };
@@ -1207,13 +1227,18 @@ fn prepare_segments(
     Ok(prepared)
 }
 
+/// Returns the segment files that actually landed, plus the first error.
+///
+/// The caller persists the VOD checkpoint for the landed segments even when the
+/// run is stopping, so a segment that completed before a pause is not
+/// re-downloaded on resume -- which is what the reused-segment contract needs.
 fn download_prepared_segments(
     prepared: &[PreparedSegment],
     headers: &HashMap<String, String>,
     proxy: &str,
     control: &Path,
     concurrency: usize,
-) -> Result<(), String> {
+) -> (HashSet<PathBuf>, Option<String>) {
     let queue: VecDeque<SegmentWork> = prepared
         .iter()
         .filter(|item| item.needs_download)
@@ -1224,17 +1249,19 @@ fn download_prepared_segments(
         })
         .collect();
     if queue.is_empty() {
-        return Ok(());
+        return (HashSet::new(), None);
     }
     let worker_count = concurrency.min(queue.len()).max(1);
     let queue = Arc::new(Mutex::new(queue));
     let errors = Arc::new(Mutex::new(Vec::new()));
+    let completed: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
     let replay = crate::credentials::scoped_replay_json();
     let throttle = crate::net_policy::current_throttle_context();
     std::thread::scope(|scope| {
         for _ in 0..worker_count {
             let queue = Arc::clone(&queue);
             let errors = Arc::clone(&errors);
+            let completed = Arc::clone(&completed);
             let replay = replay.clone();
             let throttle = throttle.clone();
             scope.spawn(move || {
@@ -1244,7 +1271,7 @@ fn download_prepared_segments(
                         let Some(work) = work else {
                             break;
                         };
-                        if let Err(error) = download_segment(
+                        match download_segment(
                             &work.segment,
                             headers,
                             proxy,
@@ -1254,24 +1281,35 @@ fn download_prepared_segments(
                             work.segment.key.as_ref(),
                             work.segment.media_sequence,
                         ) {
-                            if let Ok(mut errors) = errors.lock() {
-                                errors.push(error);
+                            Ok(_) => {
+                                if let Ok(mut completed) = completed.lock() {
+                                    completed.insert(work.path.clone());
+                                }
                             }
-                            break;
+                            Err(error) => {
+                                if let Ok(mut errors) = errors.lock() {
+                                    errors.push(error);
+                                }
+                                break;
+                            }
                         }
                     })
                 });
             });
         }
     });
-    let errors = errors.lock().map_err(|_| "HLS worker mutex poisoned")?;
-    if let Some(error) = errors.first() {
-        return Err(error.clone());
+    let completed = completed
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+    let errors = errors.lock().map(|guard| guard.clone()).unwrap_or_default();
+    let mut error = errors.first().cloned();
+    if error.is_none() {
+        if let Some(missing) = prepared.iter().find(|item| file_len(&item.path) == 0) {
+            error = Some(format!("HLS 分片下载结果为空: {}", missing.segment.uri));
+        }
     }
-    if let Some(missing) = prepared.iter().find(|item| file_len(&item.path) == 0) {
-        return Err(format!("HLS 分片下载结果为空: {}", missing.segment.uri));
-    }
-    Ok(())
+    (completed, error)
 }
 
 fn load_key(
@@ -1770,7 +1808,9 @@ impl VodCheckpoint {
         }
         match self.records.get(&slot.to_string()) {
             Some((saved, saved_size)) => saved == identity && *saved_size == size,
-            None => true,
+            // No record means nothing vouches for this file, which is not the
+            // same as "it is fine".
+            None => false,
         }
     }
 
@@ -2894,6 +2934,57 @@ mod tests {
             stable_media_url("https://cdn.test/a.ts?token=new&keep=1"),
             "/a.ts?keep=1"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn vod_resume_never_reuses_a_segment_with_no_checkpoint_record() {
+        // A run killed between `fs::write(output, ..)` and `vod.save(...)`
+        // leaves a complete-looking file behind with nothing vouching for it,
+        // and slot numbers are reused across playlists.  Reusing such a file
+        // silent-splices stale or truncated bytes into the output, so the
+        // checkpoint must fail closed.
+        let dir = std::env::temp_dir().join(format!("hls-vod-norecord-{}", std::process::id()));
+        let seg_dir = dir.join("segments");
+        std::fs::create_dir_all(&seg_dir).unwrap();
+        std::fs::write(seg_dir.join("000000.ts"), b"AAA").unwrap();
+        let segment = Segment {
+            uri: "https://cdn.test/a.ts?token=old".into(),
+            media_sequence: 0,
+            part_index: None,
+            key: None,
+            init_map: None,
+            gap: false,
+            duration: 1.0,
+            discontinuity: false,
+            byterange: None,
+            is_part: false,
+            is_ad: false,
+        };
+        let identity = vod_segment_identity(&segment, 0, None, None);
+
+        // No vod_segments.json at all: the file on disk proves nothing.
+        let vod = VodCheckpoint::load(&dir);
+        let path = resume_segment_path(&seg_dir, 0, &segment.uri).unwrap();
+        assert!(!vod.can_reuse(0, &identity, file_len(&path)));
+        assert!(!vod.has_slot(0));
+        // prepare_segments therefore has to drop it and re-download.
+        assert!(resume_segment_path(&seg_dir, 0, &segment.uri).is_some());
+
+        // A record that does not match is still refused.
+        std::fs::write(
+            dir.join("vod_segments.json"),
+            serde_json::json!({
+                "version": 1,
+                "segments": {"0": {"identity": "some-other-segment", "size": 3}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let vod = VodCheckpoint::load(&dir);
+        assert!(vod.has_slot(0));
+        assert!(!vod.can_reuse(0, &identity, file_len(&path)));
+
         let _ = std::fs::remove_dir_all(dir);
     }
 

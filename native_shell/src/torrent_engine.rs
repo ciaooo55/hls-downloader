@@ -375,20 +375,47 @@ fn torrent_files(
     entries
 }
 
+/// One predicate for both selection branches.
+///
+/// A torrent's `path` list reaches the filesystem as
+/// `destination.join(path.replace('/', MAIN_SEPARATOR_STR))`, so the check has
+/// to reject everything that can survive that join as a traversal: any
+/// backslash (a Windows separator the torrent format does not use, and the
+/// escape hatch for `..\..\evil.exe`), and any `/`-separated component that is
+/// empty, `.` or `..`.  `torrent_files` only drops components that are exactly
+/// `".."`, which does not catch the backslash form.
+fn torrent_path_is_safe(path: &str) -> bool {
+    !path.contains('\\')
+        && !path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+}
+
 pub fn validate_torrent_selection(
     meta: &TorrentMeta,
     selections: &[TorrentFileSelection],
 ) -> Result<Vec<TorrentFileSelection>, String> {
     if selections.is_empty() {
-        return Ok(meta
-            .files
-            .iter()
-            .map(|file| TorrentFileSelection {
+        // "Select everything" is the default for a fresh task, so it is exactly
+        // the path a hostile torrent takes.  It used to return every file
+        // without the component checks the explicit branch applies below, and
+        // `materialize_selected_files` then did
+        // `destination.join(path.replace('/', MAIN_SEPARATOR_STR))` -- so a
+        // single path component such as `..\..\Windows\Temp\evil.exe` (kept by
+        // `torrent_files`, which only drops components that ARE exactly "..")
+        // joined outside the download directory and wrote there.
+        let mut every = Vec::with_capacity(meta.files.len());
+        for file in &meta.files {
+            if !torrent_path_is_safe(&file.path) {
+                return Err(format!("种子文件路径无效: {}", file.path));
+            }
+            every.push(TorrentFileSelection {
                 index: file.index,
                 path: file.path.clone(),
                 selected: true,
-            })
-            .collect());
+            });
+        }
+        return Ok(every);
     }
     let mut selected = Vec::with_capacity(selections.len());
     for item in selections {
@@ -399,12 +426,7 @@ pub fn validate_torrent_selection(
         else {
             return Err(format!("种子文件不存在: {}", item.path));
         };
-        if item.path.contains('\\')
-            || item
-                .path
-                .split('/')
-                .any(|part| part.is_empty() || part == "." || part == "..")
-        {
+        if !torrent_path_is_safe(&item.path) {
             return Err(format!("种子文件路径无效: {}", item.path));
         }
         selected.push(TorrentFileSelection {
@@ -1792,7 +1814,15 @@ mod bencode {
             .parse()
             .map_err(|error: std::num::ParseIntError| error.to_string())?;
         let start = colon + 1;
-        let end = start + len;
+        // A declared length is attacker-controlled, so `start + len` must not
+        // wrap: a torrent carrying `18446744073709551615:` used to overflow
+        // (panic in debug, wrap in release), after which the `end > input.len()`
+        // guard passed on the wrapped value and `&input[start..end]` panicked
+        // with a slice-index error -- crashing the resident Core from a peer's
+        // ut_metadata payload or a fetched .torrent.
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| "byte string length overflows".to_string())?;
         if end > input.len() {
             return Err("truncated byte string".into());
         }
@@ -2006,6 +2036,61 @@ mod tests {
             }]
         )
         .is_err());
+    }
+
+    #[test]
+    fn select_all_rejects_a_backslash_traversal_component() {
+        // "Select everything" used to skip validation entirely, and
+        // `torrent_files` only drops components that are exactly "..", so a
+        // single component carrying the traversal survived into
+        // `destination.join(path.replace('/', MAIN_SEPARATOR_STR))`.
+        let hostile = TorrentMeta {
+            name: "hostile".into(),
+            magnet: false,
+            web_seeds: Vec::new(),
+            info_hash: String::new(),
+            announce: Vec::new(),
+            hint_peers: Vec::new(),
+            piece_length: 16,
+            pieces: Vec::new(),
+            length: 1,
+            files: vec![TorrentFileEntry {
+                index: 0,
+                path: "..\\..\\Windows\\Temp\\evil.exe".into(),
+                size: 1,
+                offset: 0,
+            }],
+        };
+        let error = validate_torrent_selection(&hostile, &[]).unwrap_err();
+        assert!(error.contains("种子文件路径无效"), "{error}");
+        assert!(error.contains("evil.exe"), "{error}");
+
+        let clean = TorrentMeta {
+            files: vec![TorrentFileEntry {
+                index: 0,
+                path: "dir/one.bin".into(),
+                size: 1,
+                offset: 0,
+            }],
+            ..hostile
+        };
+        assert_eq!(validate_torrent_selection(&clean, &[]).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn bencode_rejects_a_declared_length_that_overflows_the_slice_index() {
+        // The declared length comes off the wire as a usize; `start + len` used
+        // to wrap, after which the `end > input.len()` guard passed on the
+        // wrapped value and `&input[start..end]` panicked.
+        assert_eq!(
+            bencode::parse_value(b"18446744073709551615:x").unwrap_err(),
+            "byte string length overflows"
+        );
+        // A merely oversized (non-wrapping) length still fails as truncated.
+        assert_eq!(
+            bencode::parse_value(b"999:x").unwrap_err(),
+            "truncated byte string"
+        );
     }
 
     #[test]

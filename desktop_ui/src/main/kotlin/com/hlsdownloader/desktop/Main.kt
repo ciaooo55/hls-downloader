@@ -707,7 +707,13 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         location: String = "",
     ) {
         var failures = 0
-        while (true) {
+        while (failures < maxMediaPushResolutionAttempts) {
+            if (pendingPushRequestId != requestId) {
+                // The picker that started this sync is gone -- dismissed,
+                // resolved elsewhere, or superseded -- so the loop must not
+                // outlive it and keep hammering the Core until app exit.
+                return
+            }
             val result = runCatching {
                 withContext(Dispatchers.IO) {
                     EnginePipeClient().resolveMediaPush(requestId, status, message, location)
@@ -738,6 +744,15 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             }
             delay(mediaPushResolutionRetryDelayMillis(failures))
         }
+        // Guaranteed delivery stops being a guarantee once the Core stays
+        // unreachable: surface a persistent failure instead of retrying
+        // forever, which also starved every other coroutine of the pipe.
+        UiDiagnostics.error(
+            "media_push.resolve_terminal_exhausted",
+            IllegalStateException("媒体推送终态同步在 $maxMediaPushResolutionAttempts 次尝试后仍未完成"),
+            requestId = requestId,
+        )
+        notice = UiSignal.Notice("error", "投送状态同步多次失败，请在浏览器端重试该投送")
     }
     val tasks = remember(visualFixture) {
         mutableStateListOf<DownloadTask>().apply {
@@ -964,7 +979,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             if (!snapshotReady) { delay(80); continue }
             val received = runCatching { withContext(Dispatchers.IO) { EnginePipeClient().waitEvents(eventSequence) } }
             received.onSuccess { events ->
-                events.forEach { envelope ->
+                events.forEach { envelope -> try {
                     // Core 的事件序号单调且随快照下发基线；快照后的下一个事件应为 eventSequence + 1，
                     // 无论基线是否为 0（Core 重新启动时基线来自持久化检查点）
                     if (envelope.sequence > eventSequence + 1) {
@@ -1107,7 +1122,16 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         }
                     })
                     if (attentionRequired) onAttention()
-                }
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    // One malformed envelope must not end live event delivery:
+                    // this poller is keyed on Unit, so an exception escaping the
+                    // per-envelope processing cancelled the coroutine and it
+                    // never restarted -- no progress, no new tasks, no handoffs,
+                    // no cast/player/update events until the process restarted.
+                    UiDiagnostics.error("engine.apply_event", error)
+                } }
                 engineHasConnected = true
                 engineText = Product.engineConnected
             }.onFailure { error ->
@@ -1809,8 +1833,14 @@ private fun applyEngineEvent(
     taskDeleted: (String) -> Unit,
 ): UiSignal? {
     return when (event["kind"]?.toString()?.trim('"')) {
+        // This was the only decode in this `when` without `runCatching`, so a
+        // Core snapshot that failed to decode threw straight out of the poller
+        // above.  The snapshot is untrusted pipe input; a bad one now skips that
+        // event instead of killing the stream.
         "task_created", "task_updated", "task_progress" -> event["snapshot"]?.jsonObject?.let { snapshot ->
-            val task = downloadTask(protocolJson.decodeFromJsonElement(TaskDto.serializer(), snapshot))
+            val task = runCatching {
+                downloadTask(protocolJson.decodeFromJsonElement(TaskDto.serializer(), snapshot))
+            }.getOrNull() ?: return@let null
             val index = tasks.indexOfFirst { it.id == task.id }
             if (index >= 0) tasks[index] = task else tasks += task
             null

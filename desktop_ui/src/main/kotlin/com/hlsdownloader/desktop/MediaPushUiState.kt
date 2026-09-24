@@ -1,5 +1,11 @@
 package com.hlsdownloader.desktop
 
+/// How many times a terminal media-push status may be retried before the UI
+/// gives up and tells the operator.  The backoff below tops out at 2s, so an
+/// unbounded loop kept a coroutine plus pipe traffic alive for the lifetime of
+/// the process after the picker that started it was already gone.
+internal const val maxMediaPushResolutionAttempts: Int = 30
+
 internal fun mediaPushResolutionRetryDelayMillis(failureCount: Int): Long = when {
     failureCount <= 1 -> 250L
     failureCount == 2 -> 500L

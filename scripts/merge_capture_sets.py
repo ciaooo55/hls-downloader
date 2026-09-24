@@ -43,18 +43,23 @@ def load_one(directory):
         data = json.loads(path.read_text(encoding="utf-8"))
     except ValueError as exc:
         return [], None, ["%s 不是合法 JSON：%s" % (path, exc)]
+    # A top-level array is a valid capture report shape (compare_captures.py
+    # accepts it), but it carries no dict-level metadata: calling .get() on it
+    # used to raise an unhandled AttributeError and abort the merge instead of
+    # reporting the missing metadata.
     rows = data if isinstance(data, list) else data.get("results", [])
+    meta = data if isinstance(data, dict) else {}
     if not rows:
-        return [], data.get("app_path"), ["%s 里有 0 条 results —— 这一批什么都没采到" % path]
-    declared_total = data.get("total")
+        return [], meta.get("app_path"), ["%s 里有 0 条 results —— 这一批什么都没采到" % path]
+    declared_total = meta.get("total")
     if isinstance(declared_total, int) and declared_total != len(rows):
         problems.append("%s 自称 total=%d，实际 %d 条 —— 采集可能中途中断"
                         % (path, declared_total, len(rows)))
-    declared_captured = data.get("captured")
+    declared_captured = meta.get("captured")
     n_captured = sum(1 for r in rows if r.get("status") == "captured")
     if isinstance(declared_captured, int) and declared_captured != n_captured:
         problems.append("%s 自称 captured=%d，实际 %d 条" % (path, declared_captured, n_captured))
-    return rows, data.get("app_path"), problems
+    return rows, meta.get("app_path"), problems
 
 
 def main():

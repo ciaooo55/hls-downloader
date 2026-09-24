@@ -268,6 +268,12 @@ def visible_handoff_smoke(
         while len(latencies) < STEADY_STATE_SAMPLES and index + 1 < MAX_OFFER_ATTEMPTS:
             index += 1
             if index == core_restart_after:
+                # Same one-time redraw cost as the presenter restart below: the
+                # first offer after a cold engine+host relaunch is a warmup
+                # sample, not steady state.  Without this it lands in
+                # `latencies` and pollutes visible_offer_p95_ms/_max_ms, which
+                # is exactly what the comment above promises will not happen.
+                expect_warmup_next = True
                 stop_process(host_process)
                 host_process = None
                 stop_process(engine_process)
