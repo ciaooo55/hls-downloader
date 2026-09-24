@@ -182,4 +182,7 @@ $summary = [pscustomobject]@{
 }
 [IO.File]::WriteAllText($reportPath, ($summary | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding($false)))
 Write-Host ($summary | ConvertTo-Json -Depth 2 -Compress)
+if ($results.Count -eq 0) {
+    throw 'No visual fixtures were resolved; nothing was captured and an empty run must not pass.'
+}
 if ($passed -ne $results.Count) { exit 1 }

@@ -29,10 +29,12 @@ if ([String]::IsNullOrWhiteSpace($PythonPath)) {
     if ([String]::IsNullOrWhiteSpace($envPython)) {
         $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
         if ($null -ne $pythonCommand) { $PythonPath = $pythonCommand.Source }
-        else { $PythonPath = 'C:\Users\lee\.conda\envs\test\python.exe' }
     } else {
         $PythonPath = $envPython
     }
+}
+if ([String]::IsNullOrWhiteSpace($PythonPath)) {
+    throw 'python.exe was not found on PATH. Install Python, or set HLS_V7_PYTHON to the interpreter this gate should use.'
 }
 $PythonPath = [IO.Path]::GetFullPath($PythonPath)
 if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) {

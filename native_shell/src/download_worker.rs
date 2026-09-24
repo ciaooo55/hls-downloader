@@ -2991,12 +2991,19 @@ fn run_task_with_throttle(
                 )
             };
             if !latest_spec.torrent_selection.is_empty() {
+                // The non-torrent transports run ensure_publish_allowed inside
+                // complete_payload before the payload is moved into place; this branch
+                // publishes without that check, so a pause or cancel that lands in the
+                // finalization window is ignored and the files are published and the task
+                // marked complete anyway.
+                ensure_publish_allowed(&paths.control)?;
                 let meta = crate::torrent_engine::probe_torrent_source(
                     &latest_spec.url,
                     &headers,
                     &latest_spec.proxy,
                     enable_dht,
                 )?;
+                ensure_publish_allowed(&paths.control)?;
                 let published = crate::torrent_engine::materialize_selected_files(
                     &paths.output,
                     &paths.final_output,
@@ -3004,18 +3011,21 @@ fn run_task_with_throttle(
                     &latest_spec.torrent_selection,
                 )?;
                 remember_published(&paths, &paths.final_output);
-                core.lock()
-                    .map_err(|_| "v7 Core mutex poisoned".to_string())?
-                    .set_output_path(task_id, paths.final_output.to_string_lossy().into_owned())?;
-                mark_progress(
+                // The selected files are already in place and recorded, so this tail
+                // must not fail the task either: the caller would mark it failed and
+                // re-queue it, re-downloading files the user already has — the same
+                // regression finish_published_task closes for every other transport.
+                // `published` is the byte count materialize_selected_files wrote, not
+                // a file size: final_output is the selection directory.
+                finish_published_task(
                     &core,
                     task_id,
-                    published,
+                    &paths,
+                    &paths.final_output,
                     Some(published),
-                    "finished",
-                    "completed",
-                )?;
-                maybe_schedule_power(&core, &latest_spec)
+                    &latest_spec,
+                    false,
+                )
             } else {
                 complete_payload(&core, task_id, &paths, &paths.output, &spec)
             }
@@ -3435,29 +3445,85 @@ fn complete_payload(
         .ok()
         .and_then(|guard| guard.store().setting_bool("download_subtitles", true).ok())
         .unwrap_or(true);
-    let mut core_guard = core
-        .lock()
-        .map_err(|_| "v7 Core mutex poisoned".to_string())?;
+    // Everything from here on runs after the payload is already at its final
+    // location, so a store or power-action failure in this tail must not turn a
+    // finished download into a failed task: the caller would mark it failed and
+    // re-queue it, downloading a file the user already has while the on-disk state
+    // contradicts the reported status. finish_published_task logs instead.
     ensure_publish_allowed(&paths.control)?;
     let published =
         crate::output_path::publish_file(payload, &paths.final_output, &policy, keep_temp)?;
     remember_published(paths, &published);
-    core_guard.set_output_path(task_id, published.to_string_lossy().into_owned())?;
-    crate::motw::mark_downloaded_file(&published, &spec.url);
-    if download_subtitles {
-        copy_subtitle_sidecars(&paths.task_dir(), &published);
+    // Returns Ok by construction; the signature keeps the "must never fail" contract
+    // visible and lets the regression test assert it directly.
+    finish_published_task(
+        core,
+        task_id,
+        paths,
+        &published,
+        None,
+        spec,
+        download_subtitles,
+    )
+}
+
+/// Finishes a task whose payload is already published at `published`.
+///
+/// Every step is best effort and none of them is allowed to fail the task, for the
+/// reasons spelled out at the call site. The Core mutex is deliberately not held
+/// across the MOTW write or the subtitle copy: `publish_file` may already have
+/// copied the whole payload (a different volume, or `keep_temp_files`), and every
+/// other worker plus every IPC request takes this same mutex.
+///
+/// `total` is the size to report when the caller already knows it. The torrent
+/// selection branch publishes a *directory*, so measuring it would report the
+/// directory's own metadata instead of the bytes it just wrote.
+fn finish_published_task(
+    core: &Arc<Mutex<PersistentCore>>,
+    task_id: &str,
+    paths: &TaskPaths,
+    published: &Path,
+    total: Option<u64>,
+    spec: &TaskSpec,
+    download_subtitles: bool,
+) -> Result<(), String> {
+    let total = total.or_else(|| fs::metadata(published).ok().map(|meta| meta.len()));
+    match core.lock() {
+        Ok(mut guard) => {
+            if let Err(error) =
+                guard.set_output_path(task_id, published.to_string_lossy().into_owned())
+            {
+                eprintln!(
+                    "v7 task {task_id} was published but recording its output path failed: {error}"
+                );
+            }
+            if let Err(error) = guard.handle(CoreCommand::UpdateProgress {
+                task_id: task_id.into(),
+                downloaded_bytes: total.unwrap_or(0),
+                total_bytes: total,
+                speed_bytes_per_sec: 0,
+                stage: "finished".into(),
+                status: "completed".into(),
+            }) {
+                eprintln!(
+                    "v7 task {task_id} was published but publishing its completion failed: {error}"
+                );
+            }
+        }
+        Err(_) => {
+            eprintln!("v7 task {task_id} was published but the Core mutex was poisoned")
+        }
     }
-    let total = fs::metadata(&published).ok().map(|meta| meta.len());
-    core_guard.handle(CoreCommand::UpdateProgress {
-        task_id: task_id.into(),
-        downloaded_bytes: total.unwrap_or(0),
-        total_bytes: total,
-        speed_bytes_per_sec: 0,
-        stage: "finished".into(),
-        status: "completed".into(),
-    })?;
-    drop(core_guard);
-    maybe_schedule_power(core, spec)
+    crate::motw::mark_downloaded_file(published, &spec.url);
+    if download_subtitles {
+        copy_subtitle_sidecars(&paths.task_dir(), published);
+    }
+    if let Err(error) = maybe_schedule_power(core, spec) {
+        eprintln!(
+            "v7 task {task_id} was published but its completion power action failed: {error}"
+        );
+    }
+    Ok(())
 }
 
 fn ensure_publish_allowed(control: &Path) -> Result<(), String> {
@@ -5153,7 +5219,7 @@ mod tests {
     fn spec() -> TaskSpec {
         TaskSpec {
             url: "https://example.test/path/file.bin".into(),
-            resource_kind: ResourceKind::File,
+            resource_kind: crate::ResourceKind::File,
             title: "File".into(),
             filename: "../bad:name?.bin".into(),
             // 必须隔离到本进程专属子目录：`build_job()` 会调用 `prepare()` 真实落盘，
@@ -5909,7 +5975,7 @@ mod tests {
             .dispatch(CoreCommand::CreateTask {
                 spec: TaskSpec {
                     url: format!("http://{address}/fixture.bin"),
-                    resource_kind: ResourceKind::File,
+                    resource_kind: crate::ResourceKind::File,
                     title: "Fixture".into(),
                     filename: "fixture.bin".into(),
                     download_dir: download_dir.to_string_lossy().into_owned(),
@@ -6001,7 +6067,7 @@ mod tests {
         coordinator
             .dispatch_created(TaskSpec {
                 url: "https://expired.test/signed.bin".into(),
-                resource_kind: ResourceKind::File,
+                resource_kind: crate::ResourceKind::File,
                 filename: "refreshed.bin".into(),
                 download_dir: download_dir.to_string_lossy().into_owned(),
                 expected_size: Some(body.len() as u64),
@@ -6073,7 +6139,7 @@ mod tests {
         coordinator
             .dispatch_created(TaskSpec {
                 url: "https://cdn.test/expired.bin".into(),
-                resource_kind: ResourceKind::File,
+                resource_kind: crate::ResourceKind::File,
                 filename: "signed.bin".into(),
                 ..Default::default()
             })
@@ -6658,7 +6724,7 @@ mod tests {
         coordinator
             .dispatch_created(TaskSpec {
                 url: "https://cdn.test/video.mp4".into(),
-                resource_kind: ResourceKind::File,
+                resource_kind: crate::ResourceKind::File,
                 title: "测试影片".into(),
                 filename: "video.mp4".into(),
                 download_dir: dir.to_string_lossy().into_owned(),
@@ -6724,7 +6790,7 @@ mod tests {
             .dispatch(CoreCommand::CreateTask {
                 spec: TaskSpec {
                     url: r#"<metalink><file name="demo.bin"><url priority="1">https://cdn.example.test/demo.bin</url><url priority="2">https://mirror.example.test/demo.bin</url></file></metalink>"#.into(),
-                    resource_kind: ResourceKind::File,
+                    resource_kind: crate::ResourceKind::File,
                     filename: String::new(),
                     ..Default::default()
                 },
@@ -7965,7 +8031,7 @@ mod tests {
         coordinator
             .dispatch_created(TaskSpec {
                 url: "https://cdn.test/archive.zip".into(),
-                resource_kind: ResourceKind::File,
+                resource_kind: crate::ResourceKind::File,
                 title: "Archive".into(),
                 filename: "archive.zip".into(),
                 ..Default::default()
@@ -8001,7 +8067,7 @@ mod tests {
         source
             .dispatch_created(TaskSpec {
                 url: "https://cdn.test/archive.zip".into(),
-                resource_kind: ResourceKind::File,
+                resource_kind: crate::ResourceKind::File,
                 title: "Archive".into(),
                 filename: "archive.zip".into(),
                 speed_limit_kib: 256,
@@ -8472,4 +8538,148 @@ fn stopping_cast_revokes_the_active_media_mount() {
     clear_cast_mount();
     assert!(request(&token).starts_with("HTTP/1.1 404"));
     let _ = std::fs::remove_dir_all(dir);
+}
+
+fn published_task_fixture(
+    label: &str,
+) -> (Arc<Mutex<PersistentCore>>, TaskPaths, PathBuf, PathBuf) {
+    let root = std::env::temp_dir().join(format!(
+        "hls-publish-{label}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let published = root.join("movie.mp4");
+    std::fs::write(&published, b"a complete payload").unwrap();
+    let core = Arc::new(Mutex::new(PersistentCore::in_memory().unwrap()));
+    let spec = TaskSpec {
+        url: "https://cdn.test/movie.mp4".into(),
+        resource_kind: crate::ResourceKind::File,
+        filename: "movie.mp4".into(),
+        expected_size: Some(17),
+        ..Default::default()
+    };
+    core.lock()
+        .unwrap()
+        .handle(CoreCommand::CreateTask { spec })
+        .unwrap();
+    let _ = core.lock().unwrap().tasks()[0].task_id.clone();
+    let paths = TaskPaths {
+        output: root.join("payload.part"),
+        final_output: published.clone(),
+        control: root.join("control"),
+        progress: root.join("progress.json"),
+        torrent_selection: root.join("torrent-selection.json"),
+    };
+    let core = Arc::clone(&core);
+    (core, paths, published, root)
+}
+
+#[test]
+fn a_published_payload_is_recorded_not_failed() {
+    let (core, paths, published, root) = published_task_fixture("recorded");
+    let task_id = core.lock().unwrap().tasks()[0].task_id.clone();
+    let spec = task_spec_for(&core, &task_id);
+    finish_published_task(&core, &task_id, &paths, &published, None, &spec, false).unwrap();
+
+    let snapshot = core
+        .lock()
+        .unwrap()
+        .tasks()
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .cloned()
+        .unwrap();
+    assert_eq!(snapshot.status, "completed");
+    assert_eq!(
+        snapshot.output_path,
+        published.to_string_lossy().into_owned()
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+// The regression this closes: `complete_payload` tail-called `maybe_schedule_power`,
+// which fails on a store read or a power-action error. The payload was already
+// published, but the error escaped and the caller marked the task failed and
+// re-queued it, downloading a file the user already had.
+#[test]
+fn a_published_payload_never_fails_the_task() {
+    let (core, paths, published, root) = published_task_fixture("poison");
+    let task_id = core.lock().unwrap().tasks()[0].task_id.clone();
+    let spec = task_spec_for(&core, &task_id);
+
+    // Poison the Core mutex the way a panicking worker would, so every post-publish
+    // store and power-action step inside finish_published_task fails.
+    let victim = Arc::clone(&core);
+    let worker = std::thread::spawn(move || {
+        let _guard = victim.lock().unwrap();
+        panic!("poison the Core mutex on purpose");
+    });
+    let _ = worker.join();
+    assert!(core.lock().is_err(), "the mutex must be poisoned");
+
+    assert!(
+        finish_published_task(&core, &task_id, &paths, &published, None, &spec, false).is_ok(),
+        "a payload that is already on disk must not fail its task"
+    );
+    assert_eq!(
+        std::fs::read(&published).unwrap(),
+        b"a complete payload",
+        "the published file must survive untouched"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+fn task_spec_for(core: &Arc<Mutex<PersistentCore>>, task_id: &str) -> TaskSpec {
+    core.lock()
+        .unwrap()
+        .task_spec(task_id)
+        .cloned()
+        .unwrap_or_else(TaskSpec::default)
+}
+
+// A torrent selection publishes a *directory*, so the size cannot be measured
+// from `published` and the caller passes the byte count it wrote. The torrent
+// branch used to do that with mark_progress directly; routing it through
+// finish_published_task must not lose the number.
+#[test]
+fn a_published_selection_directory_reports_the_bytes_it_wrote() {
+    let (core, paths, published, root) = published_task_fixture("selection");
+    let task_id = core.lock().unwrap().tasks()[0].task_id.clone();
+    let spec = task_spec_for(&core, &task_id);
+    let selection = root.join("selection");
+    std::fs::create_dir_all(&selection).unwrap();
+
+    finish_published_task(
+        &core,
+        &task_id,
+        &paths,
+        &selection,
+        Some(4242),
+        &spec,
+        false,
+    )
+    .unwrap();
+
+    let snapshot = core
+        .lock()
+        .unwrap()
+        .tasks()
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .cloned()
+        .unwrap();
+    assert_eq!(snapshot.status, "completed");
+    assert_eq!(snapshot.downloaded_bytes, 4242);
+    assert_eq!(snapshot.total_bytes, Some(4242));
+    assert_eq!(
+        snapshot.output_path,
+        selection.to_string_lossy().into_owned()
+    );
+    // The single-file payload beside it must be untouched by a directory publish.
+    assert_eq!(std::fs::read(&published).unwrap(), b"a complete payload");
+    let _ = std::fs::remove_dir_all(root);
 }

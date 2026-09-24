@@ -53,10 +53,20 @@ export function desktopTaskReadiness(handoff: BrowserHandoffPayload): DesktopTas
   if (taskStatus === 'done' || taskStatus === 'completed') return 'safe-to-remove'
   if (Math.max(0, Number(handoff.task_downloaded_bytes || 0)) > 0) return 'safe-to-remove'
 
-  // Merging/verifying can only be reached after the transfer succeeded. Do
-  // not use status=downloading alone: HTTP tasks enter that status before the
-  // probing request, which is exactly where a one-use URL can still fail.
-  if (['merging', 'remuxing', 'verifying', 'verifying_checksum'].includes(String(handoff.task_stage || ''))) {
+  // Merging/checking can only be reached after the payload is fully fetched, so
+  // they are the stages that prove the transfer succeeded. Do not use
+  // status=downloading alone: HTTP tasks enter that status before the probing
+  // request, which is exactly where a one-use URL can still fail.
+  //
+  // The list must match the stage names the Rust Core actually emits
+  // (download_worker.rs): "merging" for the multi-segment merge, and "checking"
+  // for the size/checksum/AV verification inside complete_payload. Names that
+  // look plausible but do not exist ("remuxing", "verifying",
+  // "verifying_checksum") previously made a task with no known Content-Length
+  // sit in "checking" with downloaded_bytes=0 and never reach
+  // safe-to-remove, burning the whole readiness window and leaving Chromium's
+  // duplicate item paused.
+  if (['merging', 'checking'].includes(String(handoff.task_stage || ''))) {
     return 'safe-to-remove'
   }
   return 'waiting'

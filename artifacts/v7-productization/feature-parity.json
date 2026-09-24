@@ -213,7 +213,7 @@
       "compose_entry": "Settings > 网络 explains automatic browser identity and manual-only fallback headers",
       "core_command": "offer_resource/create_task",
       "state_event": "handoff_offered/task_created/error",
-      "verification": "extension resources/requestChain tests; Native Host DPAPI replay context; browser_page_identity_is_fallback_and_exact_origin_context_wins; replay_json_does_not_send_base_request_headers_to_unscoped_cross_origin_child; exact_scoped_context_clears_base_identity_and_restores_target_headers; cross_origin_redirect_does_not_forward_cookie; extension 46 files/323 tests"
+      "verification": "extension resources/requestChain tests; Native Host DPAPI replay context; browser_page_identity_is_fallback_and_exact_origin_context_wins; replay_json_does_not_send_base_request_headers_to_unscoped_cross_origin_child; exact_scoped_context_clears_base_identity_and_restores_target_headers; cross_origin_redirect_does_not_forward_cookie; extension 46 files/326 tests"
     },
     {
       "id": "browser.takeover_and_recovery",
@@ -222,7 +222,7 @@
       "compose_entry": "ExtensionDialog/HandoffDialog",
       "core_command": "present_handoff/accept_handoff/reject_handoff",
       "state_event": "handoff_offered/handoff_resolved/browser_status",
-      "verification": "Rust Core IPC handoff tests; extension 46 test files/323 test cases; production Edge takeover accept/reject/disconnect fallback smoke with acceptPausedBytes=0 and three 8388608-byte browser recovery paths; production Chromium content-script smoke including hover pointer transition, popup rescan and isolated selected-link panel; current source restores persisted pending offers in Compose on startup/reconnect and ui_show(main), reports failures to the user, and atomically claims a persisted 15-second Presenter lease before show with 5-second renewal; 2026-09-04 both focused Presenter lease regressions passed; release browser evidence additionally exercises candidate Edge 152, Firefox 155 and Presenter crash/restart during confirmation"
+      "verification": "Rust Core IPC handoff tests; extension 46 test files/326 test cases; production Edge takeover accept/reject/disconnect fallback smoke with acceptPausedBytes=0 and three 8388608-byte browser recovery paths; production Chromium content-script smoke including hover pointer transition, popup rescan and isolated selected-link panel; current source restores persisted pending offers in Compose on startup/reconnect and ui_show(main), reports failures to the user, and atomically claims a persisted 15-second Presenter lease before show with 5-second renewal; 2026-09-04 both focused Presenter lease regressions passed; release browser evidence additionally exercises candidate Edge 152, Firefox 155 and Presenter crash/restart during confirmation"
     },
     {
       "id": "browser.media_push_device_selection",

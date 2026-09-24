@@ -27,7 +27,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$AppPath,
-    [string]$JdkHome = $(if ($env:JAVA_HOME) { $env:JAVA_HOME } else { 'A:\hls-build-cache\jdk-21' }),
+    [string]$JdkHome,
     [int]$Port = 19741,
     [string]$Token = 'hls-seg-anim-20260923',
     [int]$Tx = 100,
@@ -41,12 +41,40 @@ param(
     [string]$Theme = 'dark',
     [int]$Width = 1400,
     [int]$Height = 820,
-    [string]$Out = 'A:\hls-build-cache\logs\anim-probe\run',
-    [string]$BuildCache = 'A:\hls-build-cache'
+    [string]$Out,
+    [string]$BuildCache
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+# The shared build-cache override wins over the local default, exactly like
+# bootstrap/build/cleanup/smoke-compose-frames. Hardcoding a default here would
+# clobber an inherited HLS_V7_BUILD_CACHE and read or write a second cache tree.
+if ($env:HLS_V7_BUILD_CACHE -and -not [IO.Path]::IsPathRooted($env:HLS_V7_BUILD_CACHE)) {
+    throw 'HLS_V7_BUILD_CACHE must be an absolute path.'
+}
+if ([String]::IsNullOrWhiteSpace($BuildCache)) {
+    $BuildCache = if ($env:HLS_V7_BUILD_CACHE) {
+        [IO.Path]::GetFullPath($env:HLS_V7_BUILD_CACHE)
+    } else {
+        Join-Path $root '.tool-cache\build-cache'
+    }
+}
+if ([String]::IsNullOrWhiteSpace($JdkHome)) {
+    $JdkHome = if ($env:JAVA_HOME) { $env:JAVA_HOME } else { Join-Path $BuildCache 'jdk-21' }
+}
+if ([String]::IsNullOrWhiteSpace($Out)) {
+    $Out = Join-Path $BuildCache 'logs\anim-probe\run'
+}
+# An explicit -BuildCache or -JdkHome parameter is not validated by the env check
+# above, and GetFullPath would silently resolve a relative one against the .NET
+# process CWD, which can differ from the PowerShell location. Fail closed instead
+# of reading or writing the wrong cache tree.
+if (-not [IO.Path]::IsPathRooted($BuildCache) -or -not [IO.Path]::IsPathRooted($JdkHome)) {
+    throw 'BuildCache and JdkHome must be absolute paths.'
+}
+$BuildCache = [IO.Path]::GetFullPath($BuildCache)
+$JdkHome = [IO.Path]::GetFullPath($JdkHome)
 $probeDir = Join-Path $PSScriptRoot 'probe'
 $src = Join-Path $probeDir 'ProbeSegmentAnim.java'
 $javac = Join-Path $JdkHome 'bin\javac.exe'

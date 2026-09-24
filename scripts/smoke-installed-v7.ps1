@@ -54,12 +54,19 @@ if ($health.version -ne $productVersion -or -not $health.ok) {
     throw "Installed v7 health response is invalid: $($health | ConvertTo-Json -Compress)"
 }
 $windowDeadline = (Get-Date).AddSeconds(30)
+$window = $null
 do {
-    $window = Invoke-RestMethod -Uri "http://127.0.0.1:${Port}/window" -Headers $headers -TimeoutSec 5
+    try {
+        $window = Invoke-RestMethod -Uri "http://127.0.0.1:${Port}/window" -Headers $headers -TimeoutSec 5
+    } catch {
+        # A transient 5xx must not abort the poll with an opaque transport error;
+        # the loop's own deadline and the check below report it properly.
+        $window = $null
+    }
     if ($window.showing) { break }
     Start-Sleep -Milliseconds 200
 } while ((Get-Date) -lt $windowDeadline)
-if (-not $window.showing -or $window.width -ne 1280 -or $window.height -ne 760 -or $window.iconCount -lt 1) {
+if ($null -eq $window -or -not $window.showing -or $window.width -ne 1280 -or $window.height -ne 760 -or $window.iconCount -lt 1) {
     throw "Installed v7 window state is invalid: $($window | ConvertTo-Json -Compress)"
 }
 

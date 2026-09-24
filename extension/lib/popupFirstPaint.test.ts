@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 const popupRoot = fileURLToPath(new URL('../entrypoints/popup/', import.meta.url))
 const html = readFileSync(`${popupRoot}/index.html`, 'utf8')
 const main = readFileSync(`${popupRoot}/main.ts`, 'utf8')
+const background = readFileSync(fileURLToPath(new URL('../entrypoints/background.ts', import.meta.url)), 'utf8')
 const css = readFileSync(`${popupRoot}/style.css`, 'utf8')
 
 describe('popup first paint', () => {
@@ -41,6 +42,49 @@ describe('popup first paint', () => {
     expect(main).toContain('function renderStartupError')
     expect(main).toContain('插件界面加载失败')
     expect(main).toContain('void main().catch(renderStartupError)')
+  })
+
+  it('ignores a theme restore that is older than the last click', () => {
+    // The storage read is issued after the shell is painted but resolves later,
+    // with the value that was stored before any click. Without a generation
+    // guard the restore re-stamps the old theme and rolls themePreference back
+    // while storage already holds the new one, so the DOM and storage disagree.
+    expect(main).toContain('let themeChangeGeneration = 0')
+    expect(main).toContain('themeChangeGeneration += 1')
+    expect(main).toContain('const themeRestoreGeneration = themeChangeGeneration')
+    expect(main).toContain('if (themeRestoreGeneration !== themeChangeGeneration) return')
+  })
+
+
+  it('attaches a rejection handler to fire-and-forget resource and badge writes', () => {
+    // saveResource/refreshTabBadge/refreshOpenTabBadges hand back the raw
+    // SessionListStore.update operation (only the store's internal tail swallows
+    // errors), so a bare `void` site turns a storage.session failure into an
+    // unhandled rejection in the service worker, where no caller can log or
+    // recover from it.
+    //
+    // A promise chain keeps going when the next line starts with a member access
+    // or a closing delimiter, so statements are reassembled before checking.
+    const statements: string[] = []
+    let current = ''
+    const lines = background.split(/\r?\n/)
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index].trim()
+      if (!line) continue
+      current = current ? `${current} ${line}` : line
+      const next = (lines[index + 1] || '').trim()
+      if (next.startsWith('.') || next.startsWith(')') || next.startsWith(',')) continue
+      statements.push(current)
+      current = ''
+    }
+    if (current) statements.push(current)
+
+    const guarded = /^void (?:saveResource|refreshTabBadge|refreshOpenTabBadges)\(/
+    const sites = statements.filter(statement => guarded.test(statement))
+    expect(sites.length).toBeGreaterThan(0)
+    for (const site of sites) {
+      expect(site, `unguarded fire-and-forget call: ${site}`).toContain('.catch(')
+    }
   })
 
   it('offers a real current-page rescan with distinct loading and empty states', () => {

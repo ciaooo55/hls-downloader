@@ -130,11 +130,16 @@ async function main() {
   // keeping all DOM behind that await left a permanent white page whenever
   // bootstrap was delayed or rejected.
   let themePreference: ThemePreference = 'auto'
+  // Every user click bumps this. The async storage restore below captures it and
+  // bails out when it is stale, because a restore that resolves after a click
+  // still carries the pre-click value and would roll the surface back to it.
+  let themeChangeGeneration = 0
   let removeThemeListener = applyTheme(document.documentElement, themePreference)
   const themeBtn = el('button', 'hlsd-button subtle')
   themeBtn.append(icon(themePreference, THEME_LABELS[themePreference]))
   themeBtn.title = THEME_LABELS[themePreference]
   themeBtn.addEventListener('click', async () => {
+    themeChangeGeneration += 1
     themePreference = THEME_ORDER[(THEME_ORDER.indexOf(themePreference) + 1) % THEME_ORDER.length]
     removeThemeListener()
     removeThemeListener = applyTheme(document.documentElement, themePreference)
@@ -200,8 +205,12 @@ async function main() {
   root.append(mainEl)
   document.documentElement.dataset.popupReady = 'shell'
 
+  const themeRestoreGeneration = themeChangeGeneration
   void withDeadline(browser.storage.local.get(THEME_STORAGE_KEY), 1_000)
     .then(storedTheme => {
+      // A click that happened while this read was in flight already applied and
+      // persisted a newer preference; honour it instead of the stale snapshot.
+      if (themeRestoreGeneration !== themeChangeGeneration) return
       const restoredTheme = normalizeThemePreference(storedTheme[THEME_STORAGE_KEY])
       if (restoredTheme === themePreference) return
       themePreference = restoredTheme

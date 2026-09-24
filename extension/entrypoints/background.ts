@@ -660,7 +660,7 @@ function refreshOpenTabBadgesWhenDue(): void {
   const now = Date.now()
   if (now - lastBadgeRefreshAt < BADGE_REFRESH_MINIMUM_MS) return
   lastBadgeRefreshAt = now
-  void refreshOpenTabBadges()
+  void refreshOpenTabBadges().catch(error => console.warn('HLS Downloader badge refresh failed', error))
 }
 
 async function sendCapturedResource(tabId: number, resource: Omit<MediaResource, 'id' | 'seenAt'>): Promise<void> {
@@ -1221,7 +1221,11 @@ function observedResponse(details: any, chain?: RequestChain) {
       final_url: String(chain?.finalUrl || details.url || ''),
     },
   }
-  void saveResource(resource, details.tabId)
+  // saveResource/refreshTabBadge return the raw SessionListStore.update operation
+  // (only the store's internal tail swallows errors), so a storage.session failure
+  // would otherwise surface as an unhandled rejection in the service worker with
+  // no caller able to log or recover from it.
+  void saveResource(resource, details.tabId).catch(error => console.warn('HLS Downloader resource persistence failed', error))
   void inspectAdaptive(resource, details.tabId)
   void sendCapturedResource(details.tabId, resource)
   return { disposition, resource }
@@ -1328,7 +1332,7 @@ export default defineBackground(() => {
     }
   })
   browser.tabs.onActivated.addListener(activeInfo => {
-    void refreshTabBadge(activeInfo.tabId)
+    void refreshTabBadge(activeInfo.tabId).catch(error => console.warn('HLS Downloader badge refresh failed', error))
   })
   browser.tabs.onRemoved.addListener(tabId => {
     requestChains.clearTab(tabId)

@@ -16,6 +16,8 @@ if ($usingDefaultPath) {
 }
 
 $failed = $false
+$profilePathOffenders = @()
+$profilePathPattern = '(?i)[A-Z]:\\Users\\[^\\]+\\'
 foreach ($item in $Path) {
     $candidate = if ([IO.Path]::IsPathRooted($item)) { $item } else { Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..')).Path $item }
     $resolved = (Resolve-Path -LiteralPath $candidate).Path
@@ -29,6 +31,21 @@ foreach ($item in $Path) {
     foreach ($parseError in @($errors)) {
         $failed = $true
         Write-Error "$resolved`: $($parseError.Message)"
+    }
+
+    # Release scripts must not depend on a developer-specific Windows user profile
+    # path. This used to be a build-v7.ps1-only check in ci.yml, so two personal
+    # conda interpreter fallbacks shipped unnoticed. Scanning every script makes an
+    # operator's own checkout fail locally instead of only on the shared runner.
+    $source = Get-Content -LiteralPath $resolved -Raw -Encoding UTF8
+    if ($source -match $profilePathPattern) {
+        $profilePathOffenders += $resolved
+    }
+}
+if ($profilePathOffenders.Count -ne 0) {
+    $failed = $true
+    foreach ($offender in $profilePathOffenders) {
+        Write-Error "$offender must not depend on a developer-specific Windows user profile path."
     }
 }
 if ($failed) {

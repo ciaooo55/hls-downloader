@@ -2,9 +2,10 @@
 
 use crate::playback::MediaServer;
 use crate::CastDeviceInfo;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -1780,7 +1781,7 @@ pub fn decode_cast_payload(frame: &[u8]) -> Option<(String, String)> {
         return None;
     }
     let len = u32::from_be_bytes(frame[0..4].try_into().ok()?) as usize;
-    let body = frame.get(4..4 + len)?;
+    let body = frame.get(4..4usize.checked_add(len)?)?;
     let mut at = 0;
     let mut namespace = String::new();
     let mut payload = String::new();
@@ -1795,7 +1796,11 @@ pub fn decode_cast_payload(frame: &[u8]) -> Option<(String, String)> {
         } else if wire == 2 {
             let (nlen, next) = proto_read_varint(body, at)?;
             at = next;
-            let end = at + nlen as usize;
+            // `nlen` is a network-supplied varint. Without a checked add a length
+            // near usize::MAX wraps in release builds and survives only because
+            // `body.get(..)` then returns None; an overflow-checked build panics on
+            // the add instead. Fail closed instead of relying on the wrap.
+            let end = at.checked_add(nlen as usize)?;
             let text = std::str::from_utf8(body.get(at..end)?).ok()?.to_string();
             if field == 4 {
                 namespace = text;
@@ -1918,11 +1923,151 @@ fn chromecast_connect_windows(
     let cred = schannel::schannel_cred::SchannelCred::builder()
         .acquire(schannel::schannel_cred::Direction::Outbound)
         .map_err(|error| error.to_string())?;
-    schannel::tls_stream::Builder::new()
-        .domain(host)
-        .verify_callback(|_| Ok(()))
-        .connect(cred, raw)
-        .map_err(|error| error.to_string())
+    // The Chromecast certificate is self-signed, so chain verification can never
+    // succeed and the leaf has to be accepted. It must not be accepted blindly:
+    // pin the leaf, and refuse an endpoint whose certificate changed. See
+    // check_cast_certificate.
+    let endpoint = cast_tls_endpoint(host, port);
+    let pinned = pinned_cast_fingerprint(&endpoint);
+    let observed: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let stream = {
+        let endpoint = endpoint.clone();
+        let observed = Arc::clone(&observed);
+        schannel::tls_stream::Builder::new()
+            .domain(host)
+            .verify_callback(move |validation| {
+                let Some(fingerprint) = cast_certificate_fingerprint(&validation) else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Chromecast 未提供可用于固定的 TLS 证书",
+                    ));
+                };
+                if let Err(error) =
+                    check_cast_certificate(pinned.as_deref(), &endpoint, &fingerprint)
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        error,
+                    ));
+                }
+                if let Ok(mut slot) = observed.lock() {
+                    *slot = Some(fingerprint);
+                }
+                Ok(())
+            })
+            .connect(cred, raw)
+    };
+    let stream = stream.map_err(|error| error.to_string())?;
+    if let Ok(guard) = observed.lock() {
+        if let Some(fingerprint) = guard.as_ref() {
+            remember_cast_fingerprint(&endpoint, fingerprint);
+        }
+    }
+    Ok(stream)
+}
+
+/// SHA-256 fingerprint of the leaf certificate the server presented, uppercase hex.
+#[cfg(windows)]
+fn cast_certificate_fingerprint(
+    validation: &schannel::tls_stream::CertValidationResult,
+) -> Option<String> {
+    let leaf = validation.chain()?.get(0)?;
+    let digest = leaf
+        .fingerprint(schannel::cert_context::HashAlgorithm::sha256())
+        .ok()?;
+    Some(digest.iter().map(|byte| format!("{byte:02X}")).collect())
+}
+
+/// Trust-on-first-use TLS pinning for Chromecast connections.
+///
+/// A Chromecast presents a self-signed certificate, so normal chain verification
+/// can never succeed and the leaf has to be accepted. Accepting *every*
+/// certificate is not the same thing: an on-path LAN attacker needs no trusted root
+/// to impersonate a receiver, and the media URL, transportId and playback status all
+/// travel over that channel.
+///
+/// The leaf certificate is therefore fingerprinted per endpoint. The first
+/// connection pins it; a later connection to the same endpoint that presents a
+/// different certificate is refused. See `check_cast_certificate`.
+const CAST_TLS_PIN_FILE: &str = "cast-tls-pins.json";
+
+fn cast_tls_pins() -> &'static Mutex<BTreeMap<String, String>> {
+    static PINS: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
+    PINS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+/// The directory the Core database lives in, so a pin travels with its database.
+fn cast_profile_root() -> Option<PathBuf> {
+    crate::profile_paths::default_v7_database_path()
+        .parent()
+        .map(Path::to_path_buf)
+}
+
+fn cast_tls_endpoint(host: &str, port: u16) -> String {
+    format!("{host}:{port}")
+}
+
+fn read_cast_pins(root: &Path) -> BTreeMap<String, String> {
+    let Ok(text) = std::fs::read_to_string(root.join(CAST_TLS_PIN_FILE)) else {
+        return BTreeMap::new();
+    };
+    serde_json::from_str::<BTreeMap<String, String>>(&text).unwrap_or_default()
+}
+
+/// Pins `fingerprint` for `endpoint`, replacing any previous value.
+fn remember_cast_tls_pin(root: &Path, endpoint: &str, fingerprint: &str) {
+    let mut pins = read_cast_pins(root);
+    pins.insert(endpoint.to_string(), fingerprint.to_string());
+    let Ok(text) = serde_json::to_string_pretty(&pins) else {
+        return;
+    };
+    let path = root.join(CAST_TLS_PIN_FILE);
+    if let Err(error) = std::fs::create_dir_all(root).and_then(|()| std::fs::write(&path, text)) {
+        // Not fatal: the in-process map still refuses a certificate change for the
+        // rest of this run.
+        eprintln!(
+            "v7 could not record the Chromecast TLS pin in {}: {error}",
+            path.display()
+        );
+    }
+}
+
+/// The fingerprint pinned for `endpoint`, if this Core or a previous one saw it.
+fn pinned_cast_fingerprint(endpoint: &str) -> Option<String> {
+    if let Ok(guard) = cast_tls_pins().lock() {
+        if let Some(fingerprint) = guard.get(endpoint) {
+            return Some(fingerprint.clone());
+        }
+    }
+    cast_profile_root().and_then(|root| read_cast_pins(&root).remove(endpoint))
+}
+
+fn remember_cast_fingerprint(endpoint: &str, fingerprint: &str) {
+    if let Ok(mut guard) = cast_tls_pins().lock() {
+        guard.insert(endpoint.to_string(), fingerprint.to_string());
+    }
+    if let Some(root) = cast_profile_root() {
+        remember_cast_tls_pin(&root, endpoint, fingerprint);
+    }
+}
+
+/// Decides whether a freshly observed Chromecast certificate may be trusted.
+///
+/// Kept free of I/O so the decision itself is testable. `pinned` is the previously
+/// recorded fingerprint for the endpoint, if any.
+fn check_cast_certificate(
+    pinned: Option<&str>,
+    endpoint: &str,
+    fingerprint: &str,
+) -> Result<(), String> {
+    match pinned {
+        Some(pinned) if pinned == fingerprint => Ok(()),
+        Some(pinned) => Err(format!(
+            "Chromecast {endpoint} 的 TLS 证书已变化（已固定 {pinned}，当前 {fingerprint}）。\
+             若这是您重新配台的设备，请删除 Core 同目录下的 {CAST_TLS_PIN_FILE} 后重试。"
+        )),
+        None => Ok(()),
+    }
 }
 
 #[cfg(windows)]
@@ -2395,6 +2540,105 @@ mod tests {
             chromecast_mime("http://10.0.0.2/local.m3u8", "live"),
             "application/vnd.apple.mpegurl"
         );
+    }
+
+    #[test]
+    fn cast_v2_frame_rejects_a_length_that_would_overflow() {
+        // A field length near usize::MAX must be refused, not wrapped. `at + nlen`
+        // wraps in release builds and survives only because `body.get(..)` then
+        // returns None; an overflow-checked build panics on the add instead. The
+        // checked add makes the refusal deliberate.
+        let mut frame = 15u32.to_be_bytes().to_vec();
+        // tag: field 4, wire type 2 (0x22)
+        frame.push(0x22);
+        // a complete varint for u64::MAX
+        frame.extend_from_slice(&[0xFF; 9]);
+        frame.push(0x01);
+        frame.extend_from_slice(b"abcd");
+        assert_eq!(frame.len() - 4, 15);
+        assert!(decode_cast_payload(&frame).is_none());
+
+        // A frame body that claims to be longer than the buffer is refused too.
+        let mut frame = 64u32.to_be_bytes().to_vec();
+        frame.extend_from_slice(b"short");
+        assert!(decode_cast_payload(&frame).is_none());
+    }
+
+    #[test]
+    fn a_changed_chromecast_certificate_is_refused() {
+        // The whole point of pinning: blanket acceptance accepted any certificate,
+        // which is exactly what an on-path LAN attacker presents.
+        let endpoint = "192.168.2.11:8009";
+        assert!(check_cast_certificate(None, endpoint, "AAAA").is_ok());
+        assert!(check_cast_certificate(Some("AAAA"), endpoint, "AAAA").is_ok());
+        let error = check_cast_certificate(Some("AAAA"), endpoint, "BBBB").unwrap_err();
+        assert!(error.contains("TLS 证书已变化"), "{error}");
+        assert!(error.contains(CAST_TLS_PIN_FILE), "{error}");
+        // A re-paired device must be recoverable, and the message has to say how.
+        assert!(error.contains("删除"), "{error}");
+    }
+
+    #[test]
+    fn the_chromecast_handshake_does_not_blanket_accept_certificates() {
+        // A canary for the security invariant itself, which cannot be exercised
+        // without a real receiver: the Schannel callback must consult the pin, and
+        // must never be a bare `Ok(())`. Reintroducing blanket acceptance fails here
+        // instead of silently opening the cast channel to an on-path LAN attacker.
+        let source = include_str!("cast.rs");
+        // The needles are assembled at runtime so this test cannot match its own
+        // literals, which would make every assertion vacuously true.
+        let blanket_accept = ["verify_callback(|_| Ok(", "())"].concat();
+        let pin_check = ["check_cast_", "certificate("].concat();
+        let fingerprint = ["cast_certificate_", "fingerprint("].concat();
+        assert!(
+            !source.contains(&blanket_accept),
+            "the Chromecast TLS handshake accepts every certificate again"
+        );
+        assert!(
+            source.contains(&pin_check),
+            "the Chromecast TLS handshake no longer checks the pinned certificate"
+        );
+        assert!(
+            source.contains(&fingerprint),
+            "the Chromecast TLS handshake no longer fingerprints the certificate"
+        );
+    }
+
+    #[test]
+    fn chromecast_pins_survive_a_restart_and_ignore_corruption() {
+        let dir = std::env::temp_dir().join(format!(
+            "hls-cast-pins-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(read_cast_pins(&dir).is_empty());
+
+        remember_cast_tls_pin(&dir, "192.168.2.11:8009", "AAAA");
+        remember_cast_tls_pin(&dir, "192.168.2.12:8009", "BBBB");
+        let pins = read_cast_pins(&dir);
+        assert_eq!(
+            pins.get("192.168.2.11:8009").map(String::as_str),
+            Some("AAAA")
+        );
+
+        // Re-pinning replaces, never duplicates.
+        remember_cast_tls_pin(&dir, "192.168.2.11:8009", "CCCC");
+        assert_eq!(read_cast_pins(&dir).len(), 2);
+        assert_eq!(
+            read_cast_pins(&dir)
+                .get("192.168.2.11:8009")
+                .map(String::as_str),
+            Some("CCCC")
+        );
+
+        // A truncated write must not wedge the next connection.
+        std::fs::write(dir.join(CAST_TLS_PIN_FILE), b"{ not json").unwrap();
+        assert!(read_cast_pins(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

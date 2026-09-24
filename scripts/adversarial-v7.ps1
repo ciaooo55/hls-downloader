@@ -32,7 +32,10 @@ if(-not $jdkRoot -and (Test-Path 'E:\HLSDownloaderBuildCache\jdk-21\bin\java.exe
 if(-not $jdkRoot){ throw 'JDK 21 was not found. Set HLS_V7_JAVA_HOME or run scripts\bootstrap-v7-toolchain.ps1.' }
 $env:JAVA_HOME = $jdkRoot
 $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
-$pythonExe = if ($env:HLS_V7_PYTHON) { $env:HLS_V7_PYTHON } elseif ($pythonCommand) { $pythonCommand.Source } else { 'C:\Users\lee\.conda\envs\test\python.exe' }
+$pythonExe = if ($env:HLS_V7_PYTHON) { $env:HLS_V7_PYTHON } elseif ($pythonCommand) { $pythonCommand.Source } else { $null }
+if ([String]::IsNullOrWhiteSpace($pythonExe)) {
+    throw 'python.exe was not found on PATH. Install Python, or set HLS_V7_PYTHON to the interpreter this gate should use.'
+}
 $reportDirectory = Join-Path $repo 'artifacts\v7-implementation\adversarial'
 $reportPath = Join-Path $reportDirectory 'latest.json'
 $completedGates = [System.Collections.Generic.List[string]]::new()

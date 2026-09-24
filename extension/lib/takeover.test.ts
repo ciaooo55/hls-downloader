@@ -130,4 +130,46 @@ describe('browser download takeover helpers', () => {
       .toBe('waiting')
     expect(desktopTaskReadiness({ status: 'rejected' })).toBe('browser-fallback')
   })
+
+  it('recognises the stage names the Rust Core actually emits after a transfer', () => {
+    // download_worker.rs marks the multi-segment merge "merging" and the
+    // size/checksum/AV verification inside complete_payload "checking". Both are
+    // only reachable once the payload is fully fetched, so both prove the
+    // transfer succeeded.
+    expect(desktopTaskReadiness({
+      status: 'accepted',
+      task_status: 'downloading',
+      task_stage: 'merging',
+      task_downloaded_bytes: 0,
+    })).toBe('safe-to-remove')
+
+    // The regression: a task with no known Content-Length enters "checking" with
+    // downloaded_bytes still 0. The old list named 'verifying'/'verifying_checksum'
+    // instead, so readiness stayed 'waiting' for the full 180 s window and
+    // Chromium's duplicate item was left paused and re-polled.
+    expect(desktopTaskReadiness({
+      status: 'accepted',
+      task_status: 'checking',
+      task_stage: 'checking',
+      task_downloaded_bytes: 0,
+    })).toBe('safe-to-remove')
+
+    // Stages that look plausible but do not exist must not be assumed to appear;
+    // an unknown stage still means "not proven yet", which is the safe answer.
+    expect(desktopTaskReadiness({
+      status: 'accepted',
+      task_status: 'downloading',
+      task_stage: 'remuxing',
+      task_downloaded_bytes: 0,
+    })).toBe('waiting')
+
+    // A pre-transfer stage must keep returning 'waiting': a one-use URL can still
+    // fail during probing.
+    expect(desktopTaskReadiness({
+      status: 'accepted',
+      task_status: 'downloading',
+      task_stage: 'probing',
+      task_downloaded_bytes: 0,
+    })).toBe('waiting')
+  })
 })

@@ -1798,6 +1798,10 @@ impl VodCheckpoint {
         Self { records }
     }
 
+    // Test-only helper: it distinguishes "no record at all" from "a record that
+    // belongs to a different segment", which `can_reuse` deliberately reports the
+    // same way.
+    #[cfg(test)]
     fn has_slot(&self, slot: usize) -> bool {
         self.records.contains_key(&slot.to_string())
     }
