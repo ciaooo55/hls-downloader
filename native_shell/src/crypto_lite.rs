@@ -378,6 +378,105 @@ const K: [u32; 64] = [
 mod tests {
     use super::*;
 
+    fn unhex(text: &str) -> Vec<u8> {
+        assert!(text.len().is_multiple_of(2), "hex input must be even");
+        (0..text.len() / 2)
+            .map(|index| {
+                let byte = &text[index * 2..index * 2 + 2];
+                u8::from_str_radix(byte, 16).unwrap_or_else(|_| panic!("bad hex {byte}"))
+            })
+            .collect()
+    }
+
+    // AES-128 CBC (PKCS7) had no test at all while HLS AES-128 segments depend on
+    // it, so a wrong S-box byte, a wrong round-key order or a wrong inv_shift_rows
+    // index would show up as silently corrupt media instead of a clean failure.
+    // FIPS-197 Appendix B (the canonical AES-128 example) supplies the pair used
+    // here; NIST SP 800-38A F.1.1 ECB-AES128.Encrypt block #1 is the same pair.
+    #[test]
+    fn aes128_block_decrypt_matches_fips197_example() {
+        let key = unhex("2b7e151628aed2a6abf7158809cf4f3c");
+        let round_keys = expand_key(&key);
+        let mut block = [0u8; 16];
+        block.copy_from_slice(&unhex("3925841d02dc09fbdc118597196a0b32"));
+        decrypt_block(&round_keys, &mut block);
+        assert_eq!(
+            block.to_vec(),
+            unhex("3243f6a8885a308d313198a2e0370734"),
+            "AES-128 block inverse does not match FIPS-197 Appendix B"
+        );
+    }
+
+    // A second, independent key/plaintext pair: an error that happened to cancel
+    // out for one input is unlikely to survive a different key schedule.
+    #[test]
+    fn aes128_block_decrypt_matches_fips197_key_schedule_example() {
+        let key = unhex("000102030405060708090a0b0c0d0e0f");
+        let round_keys = expand_key(&key);
+        let mut block = [0u8; 16];
+        block.copy_from_slice(&unhex("69c4e0d86a7b0430d8cdb78070b4c55a"));
+        decrypt_block(&round_keys, &mut block);
+        assert_eq!(
+            block.to_vec(),
+            unhex("00112233445566778899aabbccddeeff"),
+            "AES-128 block inverse does not match the FIPS-197 C.1 pair"
+        );
+    }
+
+    // NIST SP 800-38A F.1.1 ECB-AES128.Encrypt block #2.
+    #[test]
+    fn aes128_block_decrypt_matches_nist_sp80038a_block() {
+        let key = unhex("2b7e151628aed2a6abf7158809cf4f3c");
+        let round_keys = expand_key(&key);
+        let mut block = [0u8; 16];
+        block.copy_from_slice(&unhex("f5d3d58503b9699de785895a96fdbaaf"));
+        decrypt_block(&round_keys, &mut block);
+        assert_eq!(
+            block.to_vec(),
+            unhex("ae2d8a571e03ac9c9eb76fac45af8e51"),
+            "AES-128 block inverse does not match SP 800-38A F.1.1 block 2"
+        );
+    }
+    #[test]
+    fn aes128_cbc_rejects_bad_shapes_before_touching_the_cipher() {
+        assert!(decrypt_aes128_cbc_pkcs7(&[0u8; 15], &[0u8; 16], &[0u8; 16]).is_err());
+        assert!(decrypt_aes128_cbc_pkcs7(&[0u8; 16], &[0u8; 15], &[0u8; 16]).is_err());
+        assert!(decrypt_aes128_cbc_pkcs7(&[0u8; 16], &[0u8; 16], &[]).is_err());
+        assert!(decrypt_aes128_cbc_pkcs7(&[0u8; 16], &[0u8; 16], &[0u8; 17]).is_err());
+    }
+
+    #[test]
+    fn aes128_cbc_rejects_invalid_pkcs7_padding() {
+        // FIPS-197 Appendix B ciphertext decrypts to ...e0370734, whose last byte
+        // 0x34 is not a legal PKCS7 pad length, so the wrapper must refuse it
+        // instead of handing HLS a silently mis-framed segment.
+        let error = decrypt_aes128_cbc_pkcs7(
+            &unhex("2b7e151628aed2a6abf7158809cf4f3c"),
+            &[0u8; 16],
+            &unhex("3925841d02dc09fbdc118597196a0b32"),
+        )
+        .expect_err("invalid padding must be rejected");
+        assert!(error.contains("padding"), "{error}");
+    }
+
+    // The upper bound of the pad check is the boundary that matters: a plaintext
+    // whose length is an exact multiple of 16 gets a *full* pad block, so `pad == 16`
+    // must be accepted.  Writing `pad >= 16` instead of `pad > 16` would reject every
+    // such HLS segment.  FIPS-197 Appendix B block decrypts to
+    // 3243f6a8885a308d313198a2e0370734, so XOR that with the all-0x10 pad block to
+    // get the IV that makes this ciphertext decrypt to a full pad block.
+    #[test]
+    fn aes128_cbc_accepts_a_full_block_of_pkcs7_padding() {
+        let key = unhex("2b7e151628aed2a6abf7158809cf4f3c");
+        let iv = unhex("2253e6b8984a209d212188b2f0271724");
+        let plain = decrypt_aes128_cbc_pkcs7(&key, &iv, &unhex("3925841d02dc09fbdc118597196a0b32"))
+            .expect("a full pad block must be accepted");
+        assert!(
+            plain.is_empty(),
+            "pad == 16 must strip the whole block: {plain:?}"
+        );
+    }
+
     #[test]
     fn sha256_empty_matches_known_vector() {
         assert_eq!(

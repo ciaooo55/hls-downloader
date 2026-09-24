@@ -1035,10 +1035,23 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
         require_content_range_start(fetched.content_range.as_deref(), resume_from)?;
         require_content_range_total(fetched.content_range.as_deref(), job.total)?;
     }
-    let expected_downloaded = fetched
-        .content_length
-        .map(|length| resume_from.saturating_add(length))
-        .or_else(|| (job.total > 0).then_some(job.total));
+    // Only the response may describe its own size.  `job.total` can be a stale
+    // caller-supplied expected size or a `bytes=0-0` probe result, so it is trusted
+    // only for a 206, where `require_content_range_total` above already proved the
+    // server agrees with it.  A HEAD response carries an entity Content-Length but
+    // no body at all, so it is never length-checked here.  The method must be read
+    // through `request_method`, which trims and allowlists exactly what goes on the
+    // wire: a job JSON carrying `" Head"` sends HEAD yet would fail this test
+    // against the raw `job.method` and reintroduce the very "expected N, got 0"
+    // failure this exemption exists to remove.
+    let expected_downloaded = if request_method(job).eq_ignore_ascii_case("HEAD") {
+        None
+    } else {
+        fetched
+            .content_length
+            .map(|length| resume_from.saturating_add(length))
+            .or_else(|| (fetched.status == 206 && job.total > 0).then_some(job.total))
+    };
     let mut reader = fetched.body;
     let mut file = if resume_from > 0 {
         OpenOptions::new()
@@ -2072,8 +2085,14 @@ fn fetch_via_curl_impersonate(
         .arg("-sS")
         .arg("--connect-timeout")
         .arg("15")
-        .arg("--max-time")
-        .arg("60")
+        // A total `--max-time` cap made every download above ~60 s on this
+        // fallback path abort mid-transfer.  The rest of the engine bounds stalls
+        // (Tcp read timeout, WinHttp 60 s receive timeout), so mirror that shape:
+        // abort only when the transfer stalls, never because it is merely long.
+        .arg("--speed-time")
+        .arg("30")
+        .arg("--speed-limit")
+        .arg("1024")
         .arg("-D")
         .arg(&header_path)
         .arg("-o")
@@ -2114,7 +2133,28 @@ fn fetch_via_curl_impersonate(
         .unwrap_or(0);
     let headers = fs::read_to_string(&header_path).unwrap_or_default();
     let meta = parse_header_meta(&headers);
-    let data = fs::read(&body_path).unwrap_or_default();
+    // A body read failure must not look like an empty body: `unwrap_or_default`
+    // silently turned a partial transfer into a truncated-but-"successful" file.
+    let data = match fs::read(&body_path) {
+        Ok(data) => data,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&dir);
+            return Some(Err(EngineError::Failed(format!(
+                "curl-impersonate body read failed: {error}"
+            ))));
+        }
+    };
+    // `--compressed` makes this branch request gzip/br and hand *decoded* bytes
+    // in `data`, while the header dump still reports the compressed wire length.
+    // Reporting that wire length as the content length makes `download_sequential`
+    // reject every complete download from a compressing server, so the decoded
+    // length wins.  This branch buffers the whole body, so `data.len()` is the
+    // exact entity size.
+    let content_length = if meta.content_encoding {
+        Some(data.len() as u64)
+    } else {
+        meta.content_length
+    };
     let _ = fs::remove_dir_all(&dir);
     if !output.status.success() && status == 0 {
         return Some(Err(EngineError::Failed(
@@ -2125,7 +2165,7 @@ fn fetch_via_curl_impersonate(
         status,
         location: meta.location.clone(),
         content_range: meta.content_range,
-        content_length: meta.content_length,
+        content_length,
         etag: meta.etag,
         last_modified: meta.last_modified,
         accept_ranges: meta.accept_ranges,
@@ -2294,6 +2334,7 @@ struct HeaderMeta {
     last_modified: String,
     accept_ranges: bool,
     chunked: bool,
+    content_encoding: bool,
 }
 
 fn parse_header_meta(head: &str) -> HeaderMeta {
@@ -2323,6 +2364,11 @@ fn parse_header_meta(head: &str) -> HeaderMeta {
             meta.chunked = value
                 .split(',')
                 .any(|part| part.trim().eq_ignore_ascii_case("chunked"));
+        }
+        if let Some(value) = header_value(line, "Content-Encoding") {
+            // `identity` and an empty value describe the unchanged entity.
+            meta.content_encoding =
+                !value.trim().is_empty() && !value.trim().eq_ignore_ascii_case("identity");
         }
     }
     meta
@@ -3328,6 +3374,101 @@ mod tests {
         let error = run_job(&job).unwrap_err().to_string();
         assert!(error.contains("response body length mismatch"), "{error}");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn head_response_with_content_length_completes_without_a_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                    break;
+                }
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        });
+        let (mut job, dir) = temp_job(&format!("http://{addr}"), true, 0, 1);
+        job.method = "HEAD".into();
+        // A HEAD reply carries the entity Content-Length but never a body, so the
+        // byte-count check must not treat that header as an expected body length.
+        run_job(&job).unwrap();
+        assert_eq!(fs::read(&job.output).unwrap(), Vec::<u8>::new());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    // The exemption must key off the method that actually reaches the wire, not the
+    // raw string: `request_method` trims, so a job JSON carrying `" Head"` sends HEAD
+    // yet would fail the byte-count check against the untrimmed `job.method`.
+    #[test]
+    fn head_method_with_surrounding_whitespace_still_completes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                    break;
+                }
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        });
+        let (mut job, dir) = temp_job(&format!("http://{addr}"), true, 0, 1);
+        job.method = " Head".into();
+        run_job(&job).unwrap();
+        assert_eq!(fs::read(&job.output).unwrap(), Vec::<u8>::new());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sequential_ignores_a_stale_total_when_the_body_has_no_content_length() {
+        let body: &[u8] = b"0123456789";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                    break;
+                }
+            }
+            // Close-delimited body: the response itself declares no size, so a
+            // caller-supplied (here deliberately wrong) total must not be used.
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            stream.write_all(body).unwrap();
+        });
+        let (job, dir) = temp_job(&format!("http://{addr}"), true, 999, 1);
+        run_job(&job).unwrap();
+        assert_eq!(fs::read(&job.output).unwrap(), body);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn parse_header_meta_recognises_a_decoded_content_encoding() {
+        let plain = parse_header_meta("Content-Length: 4");
+        assert!(!plain.content_encoding);
+        assert_eq!(plain.content_length, Some(4));
+
+        let encoded = parse_header_meta("Content-Length: 4\r\nContent-Encoding: gzip");
+        assert!(encoded.content_encoding);
+        assert!(parse_header_meta("Content-Encoding: br").content_encoding);
+
+        // `identity` and an empty value describe the unchanged entity.
+        assert!(!parse_header_meta("Content-Encoding: identity").content_encoding);
+        assert!(!parse_header_meta("Content-Encoding:   ").content_encoding);
     }
 
     #[test]

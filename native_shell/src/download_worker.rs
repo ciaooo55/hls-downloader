@@ -3146,7 +3146,7 @@ fn task_failure_from_error(
             _ => "服务器拒绝了下载请求，请检查资源地址和站点规则",
         };
         (format!("HTTP_{status}"), hint.to_string())
-    } else if lower.contains("size mismatch") {
+    } else if is_size_disagreement(&lower) {
         (
             "SIZE_MISMATCH".into(),
             "服务端文件内容已变化，请重新识别后再下载".into(),
@@ -3229,11 +3229,22 @@ fn extract_http_status(error: &str) -> Option<u16> {
     None
 }
 
+/// Every transport words a size disagreement differently, so the classifier has
+/// to recognise all of them.  Matching only the literal "size mismatch" silently
+/// dropped HTTP body/range, SFTP and web-seed failures into the generic hint,
+/// which told the user to re-check the URL instead of telling them the resource
+/// itself had changed.
+fn is_size_disagreement(lower: &str) -> bool {
+    lower.contains("size mismatch")
+        || lower.contains("length mismatch")
+        || lower.contains("大小不匹配")
+        || lower.contains("长度不匹配")
+}
 fn failure_stage(current: &str, error: &str) -> String {
     let lower = error.to_ascii_lowercase();
     if lower.contains("checksum") || lower.contains("校验") {
         "checksum".into()
-    } else if lower.contains("size mismatch") {
+    } else if is_size_disagreement(&lower) {
         "size".into()
     } else if lower.contains("av_threat") || lower.contains("virus") || lower.contains("病毒") {
         "av_scan".into()
@@ -4991,6 +5002,59 @@ mod tests {
     use crate::{ResourceKind, TaskSpec};
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn size_disagreement_classifies_as_size_mismatch() {
+        let failure = task_failure_from_error(
+            "response body length mismatch: expected 10, got 4",
+            "transfer",
+            "https://cdn.test/file.bin",
+            1,
+            false,
+        );
+        assert_eq!(failure.code, "SIZE_MISMATCH");
+        assert!(
+            failure.hint.contains("服务端文件内容已变化"),
+            "{}",
+            failure.hint
+        );
+        assert_eq!(
+            failure_stage("transfer", "file length mismatch, expected 10, got 4"),
+            "size"
+        );
+    }
+
+    #[test]
+    fn every_transport_size_disagreement_is_recognised() {
+        // Wording copied from the producers so a rename in any engine re-breaks
+        // this: http_engine response body / range checks, sftp_engine, ftp_engine,
+        // torrent_engine web seeds, and the task spec check itself.
+        for engine_error in [
+            "response body length mismatch: expected 10, got 4",
+            "file length mismatch, expected 10, got 4",
+            "FTP transfer size mismatch: expected 10, received 4",
+            "web seed payload length mismatch: expected 10, got 4",
+            "size mismatch: expected 10, got 4",
+            "文件长度不匹配，期望 10，实际 4",
+            "文件大小不匹配，期望 10，实际 4",
+        ] {
+            assert!(
+                is_size_disagreement(&engine_error.to_ascii_lowercase()),
+                "not recognised: {engine_error}"
+            );
+        }
+        for unrelated in [
+            "connection reset by peer",
+            "HTTP 403",
+            "no space left on device",
+            "checksum mismatch: abc",
+        ] {
+            assert!(
+                !is_size_disagreement(&unrelated.to_ascii_lowercase()),
+                "false positive: {unrelated}"
+            );
+        }
+    }
 
     #[test]
     fn duplicate_identity_requires_same_safe_request_shape() {
