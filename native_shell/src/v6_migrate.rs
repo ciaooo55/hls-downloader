@@ -338,31 +338,40 @@ fn normalize_download_dirs(
         )
         .optional()
         .map_err(|error| format!("read v6 default download directory: {error}"))?;
-    let configured = raw_download_dir
-        .as_deref()
-        .and_then(|encoded| serde_json::from_str::<String>(encoded).ok())
-        .unwrap_or_default();
-    let configured_path = PathBuf::from(configured.trim());
-    if !configured_path.is_absolute() {
-        let relative = if configured_path.as_os_str().is_empty() {
-            Path::new("downloads")
-        } else {
-            configured_path.as_path()
-        };
-        let resolved = roots
-            .iter()
-            .map(|root| root.join(relative))
-            .find(|candidate| candidate.is_dir())
-            .unwrap_or(default);
-        transaction
-            .execute(
-                "INSERT INTO settings(key, value_json) VALUES ('download_dir', ?1) \
+    // A value that is not a JSON string is an unrecognised shape. Decoding it to
+    // an empty string used to send the migration down the "not absolute" branch
+    // below, which overwrote the user's download directory with a discovered
+    // legacy root or the default while the migration still reported success. An
+    // unrecognised value is left exactly as it is instead.
+    let configured = match raw_download_dir.as_deref() {
+        Some(encoded) => serde_json::from_str::<String>(encoded).ok(),
+        None => Some(String::new()),
+    };
+    if let Some(configured) = configured {
+        let configured_path = PathBuf::from(configured.trim());
+        if !configured_path.is_absolute() {
+            let relative = if configured_path.as_os_str().is_empty() {
+                Path::new("downloads")
+            } else {
+                configured_path.as_path()
+            };
+            let resolved = roots
+                .iter()
+                .map(|root| root.join(relative))
+                .find(|candidate| candidate.is_dir())
+                .unwrap_or(default);
+            transaction
+                .execute(
+                    "INSERT INTO settings(key, value_json) VALUES ('download_dir', ?1) \
                  ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
-                params![serde_json::to_string(&resolved.to_string_lossy()).map_err(
-                    |error| format!("encode migrated v6 default download directory: {error}")
-                )?],
-            )
-            .map_err(|error| format!("write migrated v6 default download directory: {error}"))?;
+                    params![serde_json::to_string(&resolved.to_string_lossy()).map_err(
+                        |error| format!("encode migrated v6 default download directory: {error}")
+                    )?],
+                )
+                .map_err(|error| {
+                    format!("write migrated v6 default download directory: {error}")
+                })?;
+        }
     }
     transaction
         .execute(
@@ -673,6 +682,58 @@ mod tests {
         assert_eq!(
             Path::new(&resolved),
             &source.parent().unwrap().join("downloads")
+        );
+        assert_eq!(
+            read_setting(&connection, MIGRATED_FLAG).as_deref(),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn missing_download_dir_is_resolved_during_migration() {
+        let base = test_dir("missing-download-dir");
+        let source = base.join("v6").join("data.db");
+        let target = base.join("v7").join("data.db");
+        let connection = seed_database(&source, crate::CURRENT_SCHEMA_VERSION);
+        drop(connection);
+        let downloads = source.parent().unwrap().join("downloads");
+        fs::create_dir_all(&downloads).unwrap();
+        migrate_v6_database_from(&source, &target, &base.join("local")).unwrap();
+        let connection =
+            Connection::open_with_flags(&target, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let configured: String =
+            serde_json::from_str(&read_setting(&connection, "download_dir").unwrap()).unwrap();
+        assert_eq!(PathBuf::from(configured), downloads);
+    }
+
+    #[test]
+    fn an_unrecognised_download_dir_survives_the_migration() {
+        let base = test_dir("unrecognised");
+        let source = base.join("v6").join("data.db");
+        let target = base.join("v7").join("data.db");
+        let local_app_data = base.join("local");
+
+        let connection = seed_database(&source, crate::CURRENT_SCHEMA_VERSION);
+        connection
+            .execute(
+                "INSERT INTO settings(key, value_json) VALUES ('download_dir', 'null')",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+        // A `downloads` directory under the v6 root, so the old code had something
+        // to resolve to: decoding the value to an empty string sent it down the
+        // "not absolute" branch, which overwrote it with exactly this path.
+        fs::create_dir_all(source.parent().unwrap().join("downloads")).unwrap();
+
+        migrate_v6_database_from(&source, &target, &local_app_data).unwrap();
+
+        let connection =
+            Connection::open_with_flags(&target, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        assert_eq!(
+            read_setting(&connection, "download_dir").as_deref(),
+            Some("null"),
+            "a download directory the migration does not understand must not be replaced"
         );
         assert_eq!(
             read_setting(&connection, MIGRATED_FLAG).as_deref(),

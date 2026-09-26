@@ -425,31 +425,17 @@ fn import_settings(core: &mut PersistentCore, value: &Value) -> Result<(), Strin
         None
     };
 
-    let previous_cookie = if cookie_update.is_some() {
-        core.store().load_credential(COOKIE_REF)?
-    } else {
-        None
-    };
-    if let Some(protected) = cookie_update.as_deref() {
-        core.store_mut()
-            .store_credential(COOKIE_REF, protected, COOKIE_KIND)?;
-    }
-    if let Err(error) = core.store_mut().set_settings(&settings) {
-        if cookie_update.is_some() {
-            let rollback = match previous_cookie.as_deref() {
-                Some(blob) => core
-                    .store_mut()
-                    .store_credential(COOKIE_REF, blob, COOKIE_KIND),
-                None => core.store_mut().delete_credential(COOKIE_REF),
-            };
-            if let Err(rollback_error) = rollback {
-                return Err(format!(
-                    "{error}; rollback legacy default cookie credential: {rollback_error}"
-                ));
-            }
-        }
-        return Err(error);
-    }
+    // 凭据和引用它的设置必须一起提交，避免补偿写入失败丢失旧凭据。
+    let credential_write =
+        cookie_update
+            .as_deref()
+            .map(|protected_blob| crate::store::CredentialWrite::Store {
+                credential_ref: COOKIE_REF,
+                protected_blob,
+                kind: COOKIE_KIND,
+            });
+    core.store_mut()
+        .apply_credential_with_settings(credential_write, &settings)?;
     Ok(())
 }
 
@@ -962,6 +948,31 @@ mod tests {
             Some("existing-cookie-blob")
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_legacy_cookie_and_its_settings_land_in_one_transaction() {
+        // The credential and the settings describing it are one migration step.
+        // Storing them with the autocommit credential helper and then a separate
+        // settings write leaves a window in which the new cookie exists while the
+        // old settings do not, and the hand-rolled compensation that used to paper
+        // over it could itself fail and lose the previous blob.
+        // `apply_credential_with_settings` already commits both or neither, and
+        // `store.rs` proves that guarantee with an injected settings failure. What
+        // is not covered by a behavioural test is that this migration actually uses
+        // it, so this canary exists. The needles are assembled at runtime so the
+        // assertions cannot match their own literals.
+        let source = include_str!("migrate.rs");
+        let separate_transaction = ["set_settings(&", "settings)"].concat();
+        let atomic_api = ["apply_credential_with_", "settings("].concat();
+        assert!(
+            !source.contains(&separate_transaction),
+            "the legacy cookie and its settings are being written in two transactions again"
+        );
+        assert!(
+            source.contains(&atomic_api),
+            "the legacy cookie and its settings must be written in one transaction"
+        );
     }
 
     #[test]

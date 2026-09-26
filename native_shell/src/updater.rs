@@ -694,19 +694,37 @@ fn write_install_result(path: &Path, result: &InstallResult) -> Result<(), Strin
     let data =
         serde_json::to_vec_pretty(result).map_err(|error| format!("编码升级结果失败: {error}"))?;
     std::fs::write(&temporary, data).map_err(|error| format!("写入升级结果失败: {error}"))?;
-    let _ = std::fs::remove_file(path);
+    // `rename` on Windows already replaces the destination. Removing the old file
+    // first opens a window in which neither the old result nor the new one exists,
+    // so a helper killed in that window loses the only record of how the upgrade
+    // ended: take_install_result then reports nothing and the workbench is never
+    // told the upgrade failed. Publish in one step.
     std::fs::rename(&temporary, path).map_err(|error| format!("发布升级结果失败: {error}"))
 }
 
 pub fn take_install_result() -> Result<Option<InstallResult>, String> {
-    let path = update_root().join("last-install-result.json");
-    if !path.is_file() {
+    take_install_result_at(&update_root().join("last-install-result.json"))
+}
+
+/// Reads and consumes the last recorded upgrade result at `path`.
+///
+/// An older build published with remove-then-rename, so an upgrade interrupted in
+/// that window left the result in its `.part` sidecar while the published file was
+/// already gone. Reading the sidecar is what makes such an upgrade report a
+/// failure instead of silently reporting nothing at all.
+fn take_install_result_at(path: &Path) -> Result<Option<InstallResult>, String> {
+    let source = if path.is_file() {
+        path.to_path_buf()
+    } else {
+        path.with_extension("json.part")
+    };
+    if !source.is_file() {
         return Ok(None);
     }
-    let data = std::fs::read(&path).map_err(|error| format!("读取升级结果失败: {error}"))?;
+    let data = std::fs::read(&source).map_err(|error| format!("读取升级结果失败: {error}"))?;
     let result =
         serde_json::from_slice(&data).map_err(|error| format!("解析升级结果失败: {error}"))?;
-    std::fs::remove_file(&path).map_err(|error| format!("确认升级结果失败: {error}"))?;
+    std::fs::remove_file(&source).map_err(|error| format!("确认升级结果失败: {error}"))?;
     Ok(Some(result))
 }
 
@@ -1120,6 +1138,48 @@ mod tests {
             serde_json::from_slice::<InstallResult>(&bytes).unwrap(),
             expected
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_install_result_interrupted_mid_publish_is_still_reported() {
+        // The old publish order was remove-then-rename. A helper killed between
+        // those two steps left the published file already deleted and the result
+        // only in its `.part` sidecar, so take_install_result reported nothing and
+        // the workbench was never told the upgrade had failed. Rebuild exactly that
+        // on-disk state and require the result to survive it.
+        let root = std::env::temp_dir().join(format!(
+            "hls-updater-part-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = root.join("last-install-result.json");
+        let expected = InstallResult {
+            version: "7.1.0".into(),
+            status: "failed".into(),
+            exit_code: 1603,
+            message: "覆盖升级未完成".into(),
+            install_log: r"C:\Temp\upgrade.log".into(),
+        };
+        write_install_result(&path, &expected).unwrap();
+        // Recreate the interrupted state: the published file is gone and the result
+        // is left only in the `.part` sidecar the rename would have consumed.
+        let sidecar = path.with_extension("json.part");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&sidecar, serde_json::to_vec_pretty(&expected).unwrap()).unwrap();
+        assert!(sidecar.is_file(), "the sidecar must hold the result");
+
+        assert_eq!(
+            take_install_result_at(&path).unwrap(),
+            Some(expected),
+            "an upgrade interrupted mid-publish must still report its outcome"
+        );
+        // Consuming the result must not leave the sidecar behind for a re-read.
+        assert!(!sidecar.is_file());
+        assert_eq!(take_install_result_at(&path).unwrap(), None);
         std::fs::remove_dir_all(root).unwrap();
     }
 
