@@ -3434,6 +3434,14 @@ fn complete_payload(
                     .ok()
             })
             .unwrap_or(true);
+        // `error` 不是扫描结果，是"扫描没跑起来"（引擎崩溃/超时、命令被校验
+        // 拒绝、产物消失）。用户把 av_scan_enabled 打开，产品就不能用"没查出
+        // 威胁"冒充"查过了"。这一条不受 fail_on_threat 影响：那个开关只决定
+        // "发现威胁时是否阻止"，不决定"扫描状态未知时是否放行"。
+        if result.state == "error" {
+            mark_progress(core, task_id, 0, None, "av_scan", "failed")?;
+            return Err(format!("av_scan_error: {}", result.detail));
+        }
         if result.state == "threat" && fail_on_threat {
             mark_progress(core, task_id, 0, None, "av_scan", "failed")?;
             return Err(format!("av_threat: {}", result.detail));
@@ -6021,6 +6029,134 @@ mod tests {
         );
         assert_eq!(published.file_name().unwrap(), "fixture_1.bin");
         assert_eq!(fs::read(&published).unwrap(), body);
+        let _ = fs::remove_dir_all(download_dir);
+    }
+
+    /// AV 门禁的 fail-closed 回归：扫描引擎根本起不来时（命令合法但 exe 不
+    /// 存在、引擎崩溃/超时同理），任务必须失败、不得发布。以前这种情况返回
+    /// skipped，发布路径只看 state == "threat"，于是"用户开了扫描"和"产品
+    /// 根本没扫"被当成同一件事。
+    /// 这里故意把 av_scan_fail_on_threat 关掉：扫描没跑起来不是扫描结果，
+    /// 不该受"发现威胁才阻止"这个开关豁免。
+    #[test]
+    fn a_scan_that_cannot_run_never_publishes_the_download() {
+        let body: &'static [u8] = b"v6-core-http-fixture";
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                reader.read_line(&mut request).unwrap();
+                let mut stream = reader.into_inner();
+                let header = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len() - 1,
+                    body.len(),
+                    body.len()
+                );
+                stream.write_all(header.as_bytes()).unwrap();
+                stream.write_all(body).unwrap();
+            }
+        });
+
+        let download_dir = std::env::temp_dir().join(format!(
+            "hls-v6-av-gate-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&download_dir).unwrap();
+        fs::write(download_dir.join("fixture.bin"), b"existing").unwrap();
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting(
+                "download_dir",
+                serde_json::json!(download_dir.to_string_lossy()),
+            )
+            .unwrap();
+        coordinator
+            .set_setting("av_scan_enabled", serde_json::json!(true))
+            .unwrap();
+        // 命令本身合法（不在解释器黑名单、带 {file}），但 exe 不存在：
+        // spawn 失败 = 扫描没跑起来。被解释器黑名单拒绝的命令根本存不进来
+        // （set_setting 有 reject_scan_shell，见对抗用例），那条路在
+        // av_scan.rs 的单测里单独钉住。
+        coordinator
+            .set_setting(
+                "av_scan_command",
+                serde_json::json!(r"C:\hls-av-scan-no-such-engine.exe {file}"),
+            )
+            .unwrap();
+        coordinator
+            .set_setting("av_scan_fail_on_threat", serde_json::json!(false))
+            .unwrap();
+        coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: format!("http://{address}/fixture.bin"),
+                    resource_kind: crate::ResourceKind::File,
+                    title: "Fixture".into(),
+                    filename: "fixture.bin".into(),
+                    download_dir: download_dir.to_string_lossy().into_owned(),
+                    request_method: "GET".into(),
+                    credential_ref: None,
+                    replay_context_ref: None,
+                    concurrency: 1,
+                    checksum: None,
+                    expected_size: Some(body.len() as u64),
+                    etag: String::new(),
+                    last_modified: String::new(),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        coordinator
+            .dispatch(CoreCommand::TaskAction {
+                task_id: "task-1".into(),
+                action: "start".into(),
+            })
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let failure = loop {
+            let task = coordinator
+                .tasks()
+                .unwrap()
+                .into_iter()
+                .find(|task| task.task_id == "task-1")
+                .unwrap();
+            if task.status == "failed" {
+                break task;
+            }
+            assert_ne!(task.status, "completed", "扫描没跑起来却发布了 payload");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "task neither failed nor completed: {task:?}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        let message = failure.error_message.clone().unwrap_or_default();
+        assert!(
+            message.contains("av_scan_error"),
+            "失败原因应点名扫描没跑起来，实际 {message:?}"
+        );
+        assert_eq!(
+            fs::read(download_dir.join("fixture.bin")).unwrap(),
+            b"existing",
+            "payload 不得离开下载目录"
+        );
+        // 发布名不得出现。暂存 payload 与校验失败等其它失败路径一致留在下载
+        // 目录里（那是用户数据，不是垃圾）。
+        assert!(
+            !download_dir.join("fixture_1.bin").exists(),
+            "不得出现已发布的产物"
+        );
         let _ = fs::remove_dir_all(download_dir);
     }
 

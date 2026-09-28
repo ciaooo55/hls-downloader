@@ -15,14 +15,26 @@ pub struct ScanResult {
 
 pub fn scan_file(path: &Path, template: &str) -> ScanResult {
     if !path.is_file() {
+        // 待发布的产物不见了/不是文件。这不是"没配扫描器"的跳过：
+        // 扫描器要扫的东西不存在，照旧发布等于没扫就发布。
         return ScanResult {
-            state: "skipped".into(),
+            state: "error".into(),
             engine: "none".into(),
             detail: "output is not a file".into(),
         };
     }
     let (engine, argv) = resolve_command(path, template);
     if argv.is_empty() {
+        // 只有"压根没配扫描器、机器上也没有 Defender"才是可以接受的跳过。
+        // 模板填了却被校验拒绝（缺 {file}、解释器黑名单、非法字符）属于
+        // "扫描没跑起来"：用户开了扫描，产品却静默不扫——必须报错。
+        if engine == "custom" {
+            return ScanResult {
+                state: "error".into(),
+                engine,
+                detail: "扫描命令未通过校验，已拒绝执行".into(),
+            };
+        }
         return ScanResult {
             state: "skipped".into(),
             engine,
@@ -189,7 +201,7 @@ fn run_command(engine: &str, argv: &[String]) -> ScanResult {
 fn run_command_with_timeout(engine: &str, argv: &[String], timeout: Duration) -> ScanResult {
     if argv.is_empty() {
         return ScanResult {
-            state: "skipped".into(),
+            state: "error".into(),
             engine: engine.into(),
             detail: "empty scanner argv".into(),
         };
@@ -331,8 +343,35 @@ mod tests {
     fn custom_template_requires_file_placeholder() {
         let path = std::env::temp_dir().join("hls-av-scan.bin");
         std::fs::write(&path, b"ok").unwrap();
-        let skipped = scan_file(&path, "echo");
-        assert_eq!(skipped.state, "skipped");
+        // 模板缺 {file} 被校验拒绝 = 扫描没跑起来，必须是 error。
+        // 以前这里返回 skipped，发布路径照旧放行——用户开了扫描却静默没扫。
+        let rejected = scan_file(&path, "echo");
+        assert_eq!(rejected.state, "error");
+        assert!(rejected.detail.contains("拒绝执行"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// 反证：没配置任何扫描器（模板为空）时才允许 skipped——没开扫描的用户
+    /// 不能被本配置文件挡住。这一条和上面的 error 互为边界。
+    #[test]
+    fn no_scanner_configured_is_the_only_skipped_state() {
+        let path = std::env::temp_dir().join("hls-av-scan-none.bin");
+        std::fs::write(&path, b"ok").unwrap();
+        let missing = std::env::temp_dir().join("hls-av-scan-vanished.bin");
+        let _ = std::fs::remove_file(&missing);
+        // 产物不存在 -> error（要扫的东西没了，不是"没配扫描器"）。
+        let vanished = scan_file(&missing, "");
+        assert_eq!(vanished.state, "error");
+        assert!(vanished.detail.contains("not a file"));
+        // 模板为空且机器上恰好没有 Defender 时才 skipped。
+        let (engine, argv) = resolve_command(&path, "  ");
+        assert!(
+            engine != "custom",
+            "空模板不应走进 custom 分支：{engine:?} {argv:?}"
+        );
+        if engine == "none" {
+            assert_eq!(scan_file(&path, "  ").state, "skipped");
+        }
         let _ = std::fs::remove_file(path);
     }
 
@@ -343,6 +382,7 @@ mod tests {
             vec!["C:\\scan.exe", "-f", "C:\\a bin.dat"]
         );
         let path = std::env::temp_dir().join("hls av scan.bin");
+        std::fs::write(&path, b"ok").unwrap();
         let (_, argv) = resolve_command(&path, r#"C:\scan.exe -f {file}"#);
         assert_eq!(
             argv,
@@ -354,8 +394,10 @@ mod tests {
         );
         assert!(validate_custom_command(r"C:\Windows\explorer.exe {file}").is_err());
         assert!(validate_custom_command("%COMSPEC% /c calc {file}").is_err());
-        let skipped = scan_file(&path, r"C:\Windows\explorer.exe {file}");
-        assert_eq!(skipped.state, "skipped");
+        let rejected = scan_file(&path, r"C:\Windows\explorer.exe {file}");
+        assert_eq!(rejected.state, "error");
+        assert!(rejected.detail.contains("拒绝执行"));
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
