@@ -58,7 +58,7 @@ impl SimulatedCastDevice {
         let port = listener.local_addr().unwrap().port();
         let log = Arc::new(Mutex::new(DeviceLog::default()));
         let m_searches = Arc::new(AtomicUsize::new(0));
-        // 2) SSDP 响应者：绑定 0.0.0.0:1900 并加入多播组，收到 M-SEARCH 就单播回 LOCATION。
+        // 2) SSDP 响应者：加入 SSDP 多播组，收到 M-SEARCH 就单播回 LOCATION。
         //    先绑 UDP 再起任何线程——失败时不留孤儿线程。
         let ssdp = match UdpSocket::bind(("0.0.0.0", 1900)) {
             Ok(socket) => socket,
@@ -71,8 +71,14 @@ impl SimulatedCastDevice {
         };
         ssdp.set_nonblocking(true).expect("set_nonblocking ssdp");
         let group: std::net::Ipv4Addr = "239.255.255.250".parse().expect("ssdp group");
-        let any: std::net::Ipv4Addr = "0.0.0.0".parse().expect("any interface");
-        ssdp.join_multicast_v4(&group, &any)
+        // 关键：多播组必须按"发现流程真正会用的那个物理局域网口"加入。
+        // 以前用 0.0.0.0（任意口），Windows 依据路由度量把组固定到默认路由；
+        // 机器上同时有 TUN 且 TUN 是默认路由时（本仓库的开发机就是这样），
+        // M-SEARCH 从 WLAN 发出去、多播组却挂在 TUN 上，假设备时收时不收，
+        // 用例就变成了随机红/绿。固定到同一口之后收发两侧始终一致。
+        let announced =
+            hls_native_shell::cast::preferred_lan_ipv4().unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
+        ssdp.join_multicast_v4(&group, &announced)
             .expect("join ssdp group");
         let http_log = log.clone();
         let shutdown_tx = Arc::new(AtomicBool::new(false));

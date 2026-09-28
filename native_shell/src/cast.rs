@@ -327,17 +327,66 @@ fn set_multicast_interface(_socket: &UdpSocket, _interface: Ipv4Addr) -> Result<
     Ok(())
 }
 
-fn discovery_interface_addresses() -> Vec<Ipv4Addr> {
-    let mut addresses = lan_ipv4_networks()
-        .into_iter()
-        .map(|(address, _)| address)
+/// 算出"该在哪些本机地址上发发现请求"。
+///
+/// 抽成纯函数（不读网卡）是为了能对"物理地址有/无"两种组合做单元测试——
+/// 这块逻辑以前一行测试都没有，而它恰好是"有没有 TUN 网卡都能不能找到设备"的分岔点。
+///
+/// 规则：
+/// - 有物理网卡地址就逐个绑，每个地址一个 socket（`IP_MULTICAST_IF` 指到该网卡），
+///   这样 Wi-Fi + 有线双网卡的机器两条路都能找到设备；
+/// - 一个都没有时**必须**退回 `0.0.0.0`，让操作系统自己挑出口。
+///
+/// 以前这里是 `addresses.is_empty() && !tun_mode_active()`：TUN 一开就把兜底也关掉。
+/// 而"TUN 开着、物理地址又枚举不到"（局域网在 100.64/10 这类非 RFC1918 段、只有
+/// vEthernet/Hyper-V 虚拟交换机带地址、`GetAdaptersAddresses` 探测失败……）恰恰是
+/// 最需要兜底的场景，结果是一条 M-SEARCH / mDNS 查询都发不出去，电视和盒子必然
+/// 找不到，而界面只会告诉用户"没有发现设备"。所以这里不再看 TUN 状态。
+fn effective_discovery_interfaces(networks: &[(Ipv4Addr, u8)]) -> Vec<Ipv4Addr> {
+    let mut addresses = networks
+        .iter()
+        .map(|(address, _)| *address)
         .collect::<Vec<_>>();
     addresses.sort_unstable();
     addresses.dedup();
-    if addresses.is_empty() && !tun_mode_active() {
+    if addresses.is_empty() {
         addresses.push(Ipv4Addr::UNSPECIFIED);
     }
     addresses
+}
+
+fn discovery_interface_addresses() -> Vec<Ipv4Addr> {
+    #[cfg(windows)]
+    {
+        let (networks, _tun_active) = lan_ipv4_state();
+        effective_discovery_interfaces(&networks)
+    }
+    #[cfg(not(windows))]
+    {
+        effective_discovery_interfaces(&lan_ipv4_networks())
+    }
+}
+
+/// 供 TCP 扫描用的本机「地址 + 前缀」列表。与 [discovery_interface_addresses]
+/// 分开：扫描必须知道前缀才能推出同网段的候选主机。
+///
+/// 同样不允许空：物理网卡枚举不到时退回路由探测拿到的本机地址并假定 /24。
+/// 以前 `discover_tvboxes` 在这里 `networks.is_empty()` 就 `return Vec::new()`，
+/// 一台连接都不发——和上面那条是同一个病根。
+fn effective_scan_networks(
+    networks: &[(Ipv4Addr, u8)],
+    routed: Option<Ipv4Addr>,
+) -> Vec<(Ipv4Addr, u8)> {
+    if !networks.is_empty() {
+        return networks.to_vec();
+    }
+    routed
+        .map(|address| vec![(address, 24)])
+        .unwrap_or_default()
+}
+
+fn discovery_scan_networks() -> Vec<(Ipv4Addr, u8)> {
+    effective_scan_networks(&lan_ipv4_networks(), primary_lan_ipv4())
 }
 
 pub fn ssdp_notify(location: &str) -> Result<(), String> {
@@ -376,17 +425,39 @@ pub fn remember_devices(devices: Vec<CastDeviceInfo>) {
     }
 }
 
+/// 一次设备发现要开哪几路扫描。
+///
+/// [DiscoveryPlan::ssdp] **永远为真**：SSDP 是 DLNA / 投屏接收端自己的通告通道，
+/// TVBox 模式一样要听。以前用一个 `scan_cast = mode != "tvbox"` 同时管住 SSDP 和
+/// Chromecast 的 mDNS，于是 tvbox 模式下只做裸端口扫描（9976-9979 四个口），
+/// 凡是靠 SSDP 通告的盒子一概看不见——这正是"投屏能找到、TVBox 找不到"的直接原因。
+///
+/// 抽成纯函数同样是为了能对三种 mode 做单元测试。
+#[derive(Debug, PartialEq, Eq)]
+struct DiscoveryPlan {
+    ssdp: bool,
+    chromecast: bool,
+    tvbox_sweep: bool,
+}
+
+fn discovery_scan_plan(mode: &str) -> DiscoveryPlan {
+    let normalized = mode.trim().to_ascii_lowercase();
+    DiscoveryPlan {
+        ssdp: true,
+        chromecast: normalized != "tvbox",
+        tvbox_sweep: normalized != "cast",
+    }
+}
+
 pub fn discover_devices_for_mode(
     timeout: Duration,
     mode: &str,
 ) -> Result<Vec<CastDeviceInfo>, String> {
-    #[cfg(test)]
     if std::env::var_os("HLS_V7_CAST_NULL").is_some() {
         return Ok(Vec::new());
     }
-    let scan_cast = mode != "tvbox";
-    let scan_tvbox = mode != "cast";
-    let ssdp_worker = scan_cast.then(|| {
+    let plan = discovery_scan_plan(mode);
+    let ssdp_worker = plan.ssdp.then(|| {
         thread::spawn(move || {
             ssdp_search(timeout)
                 .unwrap_or_default()
@@ -395,8 +466,12 @@ pub fn discover_devices_for_mode(
                 .collect::<Vec<_>>()
         })
     });
-    let chromecast_worker = scan_cast.then(|| thread::spawn(move || discover_chromecasts(timeout)));
-    let tvbox_worker = scan_tvbox.then(|| thread::spawn(move || discover_tvboxes(timeout)));
+    let chromecast_worker = plan
+        .chromecast
+        .then(|| thread::spawn(move || discover_chromecasts(timeout)));
+    let tvbox_worker = plan
+        .tvbox_sweep
+        .then(|| thread::spawn(move || discover_tvboxes(timeout)));
     let mut devices = ssdp_worker
         .and_then(|worker| worker.join().ok())
         .unwrap_or_default();
@@ -861,7 +936,10 @@ fn discover_tvboxes(timeout: Duration) -> Vec<CastDeviceInfo> {
     if timeout.is_zero() {
         return Vec::new();
     }
-    let networks = lan_ipv4_networks();
+    // 走 discovery_scan_networks()：物理网卡地址枚举不到时退回路由探测拿到的本机
+    // 地址并假定 /24。以前这里用的是 lan_ipv4_networks()，空表就整个放弃扫描——
+    // 一个 TCP 连接都不发，和"TUN 一开就关掉组播兜底"是同一个病根。
+    let networks = discovery_scan_networks();
     if networks.is_empty() {
         return Vec::new();
     }
@@ -2376,6 +2454,124 @@ mod tests {
         if let Some(ip) = primary_lan_ipv4() {
             assert!(ip.is_private() || ip.is_link_local());
         }
+    }
+    #[test]
+    fn a_tunnel_only_machine_is_not_treated_as_a_dead_end() {
+        // lan_ipv4_state() 会把隧道网卡整个过滤掉，所以"本机只剩 TUN"时送进
+        // 来的就是空表。以前空表还要再看一眼 !tun_mode_active() 才兜底，于是
+        // TUN 一开兜底也没了。现在兜底与 TUN 状态彻底脱钩：只要没有可用的
+        // 物理地址，就一定退回 0.0.0.0。
+        let only_a_tunnel_adapter: Vec<(Ipv4Addr, u8)> = Vec::new();
+        assert_eq!(
+            effective_discovery_interfaces(&only_a_tunnel_adapter),
+            vec![Ipv4Addr::UNSPECIFIED],
+            "只剩隧道网卡也必须有一个能发发现请求的地址"
+        );
+        // 198.18.0.0/15 是各家 TUN 客户端最爱用的段，Rust 的 is_private() 不认它，
+        // 所以它本来就进不来；这里把"它偶然出现在输入里"也一并钉住：照样不改变
+        // "空表必须有兜底"这条规则——有地址就按地址发，没有就兜底。
+        let tun_address = [(Ipv4Addr::new(198, 18, 0, 1), 24u8)];
+        assert_eq!(
+            effective_discovery_interfaces(&tun_address),
+            vec![Ipv4Addr::new(198, 18, 0, 1)]
+        );
+    }
+
+    // ===== 设备发现的网卡来源：TUN 开关都不能让它失灵 =====
+    //
+    // 这三个用例盯的是同一处病根的两半：以前 `discovery_interface_addresses()` 是
+    // `addresses.is_empty() && !tun_mode_active()` 才兜底，`discover_tvboxes()` 又是
+    // `networks.is_empty()` 就 return。于是"TUN 开着 + 物理地址枚举不到"时，
+    // M-SEARCH、mDNS 查询、SSDP 通告、TCP 扫描四条路同时归零——电视和盒子
+    // 一个都找不到，而 UI 只说"没有发现设备"。
+
+    #[test]
+    fn a_machine_with_no_usable_physical_address_still_has_a_discovery_interface() {
+        // 空表必须兜到 0.0.0.0，让操作系统挑出口，而不是一条请求都不发。
+        assert_eq!(
+            effective_discovery_interfaces(&[]),
+            vec![Ipv4Addr::UNSPECIFIED]
+        );
+    }
+
+    #[test]
+    fn discovery_interfaces_cover_every_physical_address_in_a_stable_order() {
+        // Wi-Fi + 有线双网卡：两个地址都要各建一个 socket，重复项去重，顺序固定
+        // （测试才对结果稳定，不用依赖网卡枚举顺序）。
+        let networks = [
+            (Ipv4Addr::new(192, 168, 1, 20), 24u8),
+            (Ipv4Addr::new(10, 0, 0, 5), 16u8),
+            (Ipv4Addr::new(192, 168, 1, 20), 24u8),
+        ];
+        assert_eq!(
+            effective_discovery_interfaces(&networks),
+            vec![Ipv4Addr::new(10, 0, 0, 5), Ipv4Addr::new(192, 168, 1, 20)]
+        );
+    }
+
+    #[test]
+    fn tvbox_sweep_keeps_targets_when_no_physical_interface_qualifies() {
+        // 物理地址为空时必须退回路由探测拿到的本机地址（按 /24 推同网段主机），
+        // 不能一个 TCP 连接都不发。
+        let routed = Some(Ipv4Addr::new(192, 168, 31, 7));
+        assert_eq!(
+            effective_scan_networks(&[], routed),
+            vec![(Ipv4Addr::new(192, 168, 31, 7), 24u8)]
+        );
+        // 有物理地址时优先用物理地址，路由探测只作兜底。
+        let physical = vec![(Ipv4Addr::new(10, 1, 2, 3), 24u8)];
+        assert_eq!(effective_scan_networks(&physical, routed), physical);
+        // 连路由探测都没有时允许为空——此时 SSDP/mDNS 的 0.0.0.0 兜底仍然在跑。
+        assert!(effective_scan_networks(&[], None).is_empty());
+    }
+
+    #[test]
+    fn tvbox_mode_still_listens_to_ssdp() {
+        // "投屏能找到、TVBox 找不到"的直接原因：tvbox 模式把 SSDP 也关了，
+        // 只剩 9976-9979 四个裸端口。靠 SSDP 通告的盒子因此一律看不见。
+        let tvbox = discovery_scan_plan("tvbox");
+        assert!(
+            tvbox.ssdp,
+            "tvbox 模式必须听 SSDP，盒子的通告就在这条通道上"
+        );
+        assert!(!tvbox.chromecast);
+        assert!(tvbox.tvbox_sweep);
+        assert_eq!(
+            discovery_scan_plan("tvbox"),
+            DiscoveryPlan {
+                ssdp: true,
+                chromecast: false,
+                tvbox_sweep: true
+            }
+        );
+    }
+
+    #[test]
+    fn cast_and_default_modes_keep_the_full_scan() {
+        assert_eq!(
+            discovery_scan_plan("cast"),
+            DiscoveryPlan {
+                ssdp: true,
+                chromecast: true,
+                tvbox_sweep: false
+            }
+        );
+        assert_eq!(
+            discovery_scan_plan(""),
+            DiscoveryPlan {
+                ssdp: true,
+                chromecast: true,
+                tvbox_sweep: true
+            }
+        );
+        assert_eq!(
+            discovery_scan_plan(" TVBox "),
+            DiscoveryPlan {
+                ssdp: true,
+                chromecast: false,
+                tvbox_sweep: true
+            }
+        );
     }
 
     #[test]
