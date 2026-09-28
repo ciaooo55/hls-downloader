@@ -985,7 +985,14 @@ fun EngineSettingsDto.toStorageMap(): Map<String, JsonElement> = linkedMapOf(
     "download_speed_schedule_end" to JsonPrimitive(scheduleEnd),
     "download_speed_schedule_kib" to JsonPrimitive(scheduleKib),
     "auto_category_dirs" to JsonPrimitive(autoCategory),
-    "browser_category_dirs" to JsonPrimitive(listOf(categoryDirMedia, categoryDirProgram, categoryDirArchive, categoryDirOther).joinToString("|")),
+    // Rust 侧 category::parse_category_dirs 只认 {"media":…,"program":…,"archive":…,"other":…}，
+    // 写成竖线拼接的字符串会被静默解析成空目录，之前就是这么丢设置的。
+    "browser_category_dirs" to buildJsonObject {
+        put("media", categoryDirMedia)
+        put("program", categoryDirProgram)
+        put("archive", categoryDirArchive)
+        put("other", categoryDirOther)
+    },
     "queue_max_active" to JsonPrimitive(queueMax),
     "queue_profiles" to buildJsonArray { queueProfiles.forEach { add(protocolJson.encodeToJsonElement(QueueProfileDto.serializer(), it)) } },
     "site_rules" to JsonPrimitive(siteRules),

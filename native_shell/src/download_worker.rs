@@ -848,6 +848,7 @@ impl CoreCoordinator {
         }
         if key == "browser_category_dirs" {
             if let Some(raw) = value.as_str() {
+                crate::category::validate_category_dirs(raw)?;
                 let dirs = crate::category::parse_category_dirs(raw);
                 reject_path_escape(&dirs.media)?;
                 reject_path_escape(&dirs.program)?;
@@ -5112,6 +5113,31 @@ mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
 
+    #[test]
+    fn saving_category_dirs_in_the_pipe_shape_is_refused_instead_of_dropped() {
+        // 这正是 Compose 主界面曾经发过来的形状。之前 validate_setting 对它毫无意见，
+        // parse_category_dirs 静默回退成四个空目录，用户填的分类目录整段消失。
+        let refused = CoreCoordinator::validate_setting(
+            "browser_category_dirs",
+            &serde_json::json!("E:/Videos|E:/Apps|E:/Archives|E:/Other"),
+        );
+        assert!(
+            refused.is_err(),
+            "竖线拼接的形状必须被拒绝，不能悄悄存进去: {refused:?}"
+        );
+
+        // 合法形状照旧放行，而且四个目录一个都不能丢。
+        for stored in [
+            serde_json::json!({"media":"E:/Videos","program":"E:/Apps","archive":"E:/Archives","other":"E:/Other"}),
+            serde_json::json!(null),
+            serde_json::json!(""),
+        ] {
+            assert!(
+                CoreCoordinator::validate_setting("browser_category_dirs", &stored).is_ok(),
+                "合法形状被误拒: {stored}"
+            );
+        }
+    }
     #[test]
     fn size_disagreement_classifies_as_size_mismatch() {
         let failure = task_failure_from_error(

@@ -96,6 +96,33 @@ pub fn parse_category_dirs(raw: &str) -> CategoryDirs {
     }
 }
 
+/// 写入 `browser_category_dirs` 前必须先过这一关。
+///
+/// `parse_category_dirs` 故意宽容：历史脏数据照样读得出来（读路径不能炸）。
+/// 但写路径必须严格——Compose 主界面曾经把这个键写成
+/// `"E:/Videos|E:/Apps|..."`，Rust 解析失败后静默回退成四个空目录，
+/// 用户在设置里填的分类目录整段消失，而且 download_worker 的越界校验也被跳过。
+/// 现在格式不对就明确拒绝，坏数据再也进不到 Core 状态里。
+pub fn validate_category_dirs(raw: &str) -> Result<(), String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(trimmed).map_err(|_| "分类目录格式无效".to_string())?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "分类目录格式无效".to_string())?;
+    for key in ["media", "program", "archive", "other"] {
+        if let Some(item) = object.get(key) {
+            if !item.is_string() {
+                return Err(format!("分类目录 {key} 必须是字符串"));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl CategoryDirs {
     pub fn get(&self, category: &str) -> &str {
         match category {
@@ -189,6 +216,45 @@ mod tests {
             parse_category_dirs(r#"{"media":" E:\\Videos ","program":""}"#).media,
             "E:\\Videos"
         );
+    }
+
+    #[test]
+    fn writing_category_dirs_rejects_the_pipe_joined_shape_the_ui_once_sent() {
+        // Compose 主界面当年把四个目录用 "|" 拼成一个字符串发过来，parse_category_dirs
+        // 解析失败后静默回退成空目录——用户填的目录整段消失。写路径必须把它挡掉。
+        let pipe_joined = "E:/Videos|E:/Apps|E:/Archives|E:/Other";
+        assert!(validate_category_dirs(pipe_joined).is_err());
+        // 而且旧形状读出来必须是空的，证明这不是"两边格式不一致但都能用"。
+        assert_eq!(parse_category_dirs(pipe_joined), CategoryDirs::default());
+
+        // 空串是合法的（表示没有覆盖），Core 的 Settings 响应也会把它原样带回。
+        assert!(validate_category_dirs("").is_ok());
+        assert!(validate_category_dirs("  ").is_ok());
+
+        // 合法形状：媒体/程序/压缩包/其他 四个键都是字符串。
+        assert!(validate_category_dirs(
+            r#"{"media":"E:/Videos","program":"","archive":"","other":""}"#
+        )
+        .is_ok());
+        // 只要有一个键在，也算合法——presenter 会逐个键累积写入。
+        assert!(validate_category_dirs(r#"{"other":"E:/Other"}"#).is_ok());
+
+        // 不是对象、或者值是数字/数组，一律拒绝。
+        assert!(validate_category_dirs(r#"["E:/Videos"]"#).is_err());
+        assert!(validate_category_dirs(r#"{"media":12}"#).is_err());
+        assert!(validate_category_dirs(r#"not json at all"#).is_err());
+    }
+
+    #[test]
+    fn round_trip_keeps_all_four_directories() {
+        let stored =
+            r#"{"media":"E:/Videos","program":"E:/Apps","archive":"E:/Arch","other":"E:/Other"}"#;
+        assert!(validate_category_dirs(stored).is_ok());
+        let dirs = parse_category_dirs(stored);
+        assert_eq!(dirs.media, "E:/Videos");
+        assert_eq!(dirs.program, "E:/Apps");
+        assert_eq!(dirs.archive, "E:/Arch");
+        assert_eq!(dirs.other, "E:/Other");
     }
 
     #[test]

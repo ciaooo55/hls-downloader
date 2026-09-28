@@ -27,6 +27,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.ScrollbarStyle
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -103,7 +104,35 @@ internal object TypeScale {
 
     /** 弹窗主标题、大号数值 */
     val display = 17.sp
+
+    /**
+     * 行高刻度。此前 `lineHeight` 是 24 处裸字面量（16 / 17 / 19sp 三档，Main.kt 19 处、
+     * SettingsV7.kt 5 处），字号早就走 [TypeScale] 了，行高却还是"随手写一个数"。
+     * 按配对的正文角色取值，和 `fontSize` 一样只允许三个数。
+     */
+    val lineMicro = 16.sp
+
+    /** 与 [body] 配对：表格单元格、两行标签、说明文字 */
+    val lineBody = 17.sp
+
+    /** 与 [title] / [display] 配对：标题、大号数值 */
+    val lineTitle = 19.sp
 }
+
+/**
+ * 竖向滚动条外观。此前这段 8 行的 `ScrollbarStyle(...)` 在 Main.kt 里手抄了 3 份、
+ * SettingsV7.kt 里 1 份，而侧边栏那几处 `VerticalScrollbar` 连 style 都不传，
+ * 用 Compose 自带的灰条——同一个控件在不同窗格里长得不一样。
+ */
+@Composable
+internal fun workbenchScrollbarStyle(): ScrollbarStyle = ScrollbarStyle(
+    minimalHeight = 28.dp,
+    thickness = 6.dp,
+    shape = RoundedCornerShape(Radius.tiny),
+    hoverDurationMillis = 160,
+    unhoverColor = muted.copy(alpha = 0.42f),
+    hoverColor = blue.copy(alpha = 0.82f),
+)
 
 /**
  * 圆角刻度。原来有 10 种取值（2/3/4/5/6/7/8/9/10/12dp），
@@ -271,6 +300,28 @@ internal class PressFeedback(
     val background: Color,
     val scale: Float,
 )
+
+/**
+ * 把 [rememberPressFeedback] 产出的状态接到修饰链上。
+ *
+ * 在此之前，三行一模一样的修饰被手抄了 12 处：
+ * ```kotlin
+ * .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+ * .background(feedback.background)
+ * .hoverable(feedback.interaction)
+ * ```
+ * 状态收敛在 [rememberPressFeedback]、**应用**它却是复制的，改一处忘记另一处就会
+ * "有的按钮有按压缩放、有的没有"。这里把顺序也固定下来：先缩放、再铺底、最后注册悬停，
+ * 与既有的每一处写法逐字一致，所以是纯收敛，不改变任何视觉结果。
+ *
+ * 只覆盖这三步；`clickable` / `selectable` / `toggleable` 的 `interactionSource`、
+ * `role`、`enabled` 每个调用点都不一样，仍然由调用方接着写。
+ */
+internal fun Modifier.pressFeedback(feedback: PressFeedback): Modifier =
+    this
+        .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+        .background(feedback.background)
+        .hoverable(feedback.interaction)
 
 /**
  * 分段选中态（分段控件、tab 段、星期/选项按钮）的底色过渡。
@@ -823,9 +874,7 @@ internal fun DropdownMenuItem(
         modifier
             .fillMaxWidth()
             .heightIn(min = 34.dp)
-            .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
-            .background(feedback.background)
-            .hoverable(feedback.interaction)
+            .pressFeedback(feedback)
             .clickable(
                 interactionSource = feedback.interaction,
                 indication = null,

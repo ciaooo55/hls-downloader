@@ -224,10 +224,11 @@ class ProtocolTest {
         assertEquals(JsonPrimitive("name:desc"), values["task_sort"])
         assertEquals(JsonPrimitive("new:1,paste:1,batch:1,harvest:1,start_all:1,pause_all:1,cast:1,tvbox:1,extension:0"), values["toolbar_actions"])
         assertEquals(JsonPrimitive(true), values["download_speed_schedule_enabled"])
-        assertEquals(
-            JsonPrimitive("D:/Media|D:/Apps|D:/Archives|D:/Other"),
-            values["browser_category_dirs"],
-        )
+        val categoryDirs = values["browser_category_dirs"]!!.jsonObject
+        assertEquals("D:/Media", categoryDirs["media"]?.jsonPrimitive?.content)
+        assertEquals("D:/Apps", categoryDirs["program"]?.jsonPrimitive?.content)
+        assertEquals("D:/Archives", categoryDirs["archive"]?.jsonPrimitive?.content)
+        assertEquals("D:/Other", categoryDirs["other"]?.jsonPrimitive?.content)
         assertEquals(JsonPrimitive(false), values["download_progress_window_enabled"])
         assertEquals(JsonPrimitive(false), values["download_complete_popup_enabled"])
         assertEquals(JsonPrimitive(true), values["resume_interrupted_on_startup"])

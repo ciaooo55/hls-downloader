@@ -25,7 +25,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.HorizontalScrollbar
 import androidx.compose.foundation.VerticalScrollbar
-import androidx.compose.foundation.ScrollbarStyle
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -2366,9 +2365,7 @@ private fun NavRow(
             .fillMaxWidth()
             .height(36.dp)
             .clip(RoundedCornerShape(Radius.md))
-            .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
-            .background(feedback.background)
-            .hoverable(feedback.interaction)
+            .pressFeedback(feedback)
             .selectable(
                 selected = active,
                 interactionSource = feedback.interaction,
@@ -2424,7 +2421,7 @@ private fun NavRow(
             }
         }
         }
-        VerticalScrollbar(rememberScrollbarAdapter(scrollState), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp))
+        VerticalScrollbar(rememberScrollbarAdapter(scrollState), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp), style = workbenchScrollbarStyle())
         }
     }
 }
@@ -2458,7 +2455,7 @@ private fun NavRow(
                     RailItem(categoryIcon(item), item.label, tasks.count { taskCategory(it) == item }, item == selectedCategory, Modifier.reportControlBounds("rail.category.${item.label}")) { onCategory(item) }
                 }
             }
-            VerticalScrollbar(rememberScrollbarAdapter(scrollState), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp))
+            VerticalScrollbar(rememberScrollbarAdapter(scrollState), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp), style = workbenchScrollbarStyle())
         }
         // 展开态里"管理队列"是分组标题右侧的小图标；折叠后没有标题行，
         // 固定到底部并加一条分隔线，免得和分类图标连成一片看不出边界。
@@ -2490,9 +2487,7 @@ private fun NavRow(
         Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
             Box(
                 modifier.fillMaxSize().clip(RoundedCornerShape(Radius.md))
-                    .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
-                    .background(feedback.background)
-                    .hoverable(feedback.interaction)
+                    .pressFeedback(feedback)
                     .selectable(selected = active, interactionSource = feedback.interaction, indication = null, role = Role.Tab, onClick = onClick),
                 contentAlignment = Alignment.Center,
             ) {
@@ -3127,14 +3122,7 @@ internal fun WorkbenchDialog(
                             VerticalScrollbar(
                                 rememberScrollbarAdapter(dialogContentScroll),
                                 Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp),
-                                style = ScrollbarStyle(
-                                    minimalHeight = 28.dp,
-                                    thickness = 6.dp,
-                                    shape = RoundedCornerShape(Radius.tiny),
-                                    hoverDurationMillis = 160,
-                                    unhoverColor = muted.copy(alpha = 0.42f),
-                                    hoverColor = blue.copy(alpha = 0.82f),
-                                ),
+                                style = workbenchScrollbarStyle(),
                             )
                         }
                     }
@@ -3242,9 +3230,7 @@ private fun QueueAssignDialog(
                     )
                     Row(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md))
-                            .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
-                            .background(feedback.background)
-                            .hoverable(feedback.interaction)
+                            .pressFeedback(feedback)
                             .clickable(interactionSource = feedback.interaction, indication = null) { selectedId = profile.id }
                             .padding(horizontal = 11.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -3314,9 +3300,7 @@ private fun QueueManagerDialog(
                             )
                             Row(
                                 Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md))
-                                    .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
-                                    .background(feedback.background)
-                                    .hoverable(feedback.interaction)
+                                    .pressFeedback(feedback)
                                     .clickable(interactionSource = feedback.interaction, indication = null) { selectedId = profile.id }
                                     .padding(horizontal = 10.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -3726,11 +3710,11 @@ private fun HarvestDialog(
                             failure.items.forEach { (label, value) -> DetailLine(label, value, errorBody) }
                             task.source.errorMessage?.takeIf(String::isNotBlank)?.let { message ->
                                 Spacer(Modifier.height(8.dp)); Text("失败原因", color = errorStrong, fontSize = TypeScale.micro, fontWeight = FontWeight.SemiBold)
-                                Text(redactDiagnosticText(message), color = errorBody, fontSize = TypeScale.caption, lineHeight = 17.sp, modifier = Modifier.padding(top = 3.dp))
+                                Text(redactDiagnosticText(message), color = errorBody, fontSize = TypeScale.caption, lineHeight = TypeScale.lineBody, modifier = Modifier.padding(top = 3.dp))
                             }
                             if (failure.steps.isNotEmpty()) {
                                 Spacer(Modifier.height(8.dp)); Text("建议步骤", color = errorStrong, fontSize = TypeScale.micro, fontWeight = FontWeight.SemiBold)
-                                failure.steps.forEachIndexed { index, step -> Text("${index + 1}. $step", color = errorBody, fontSize = TypeScale.caption, lineHeight = 17.sp, modifier = Modifier.padding(top = 2.dp)) }
+                                failure.steps.forEachIndexed { index, step -> Text("${index + 1}. $step", color = errorBody, fontSize = TypeScale.caption, lineHeight = TypeScale.lineBody, modifier = Modifier.padding(top = 2.dp)) }
                             }
                         }
                     }
@@ -3762,14 +3746,7 @@ private fun HarvestDialog(
                             VerticalScrollbar(
         rememberScrollbarAdapter(torrentFilesScroll),
         Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp),
-        style = ScrollbarStyle(
-            minimalHeight = 28.dp,
-            thickness = 6.dp,
-            shape = RoundedCornerShape(Radius.tiny),
-            hoverDurationMillis = 160,
-            unhoverColor = muted.copy(alpha = 0.42f),
-            hoverColor = blue.copy(alpha = 0.82f),
-        ),
+        style = workbenchScrollbarStyle(),
     )
                         }
                     }
@@ -3793,7 +3770,7 @@ private fun HarvestDialog(
                         OutlinedTextField(refreshUrl, { refreshUrl = it }, Modifier.fillMaxWidth(), label = { Text("新的资源地址") }, minLines = 2, maxLines = 3, shape = RoundedCornerShape(Radius.md))
                         Spacer(Modifier.height(7.dp))
                         OutlinedTextField(refreshCookie, { refreshCookie = it }, Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("新的 Cookie（可选）") }, shape = RoundedCornerShape(Radius.md))
-                        Text("留空保留同站点原凭据；跨站地址会自动丢弃旧凭据。适合 401、403 和短效签名过期。", color = muted, fontSize = TypeScale.micro, lineHeight = 16.sp, modifier = Modifier.padding(top = 5.dp))
+                        Text("留空保留同站点原凭据；跨站地址会自动丢弃旧凭据。适合 401、403 和短效签名过期。", color = muted, fontSize = TypeScale.micro, lineHeight = TypeScale.lineMicro, modifier = Modifier.padding(top = 5.dp))
                         DialogPrimary("更新并继续", refreshUrl.isNotBlank()) {
                             onRefreshRequest(refreshUrl.trim(), refreshCookie)
                             refreshCookie = ""
@@ -3804,7 +3781,7 @@ private fun HarvestDialog(
             "连接" -> ConnectionMap(task.source.connectionParts, task.source.connectionHint)
             "速度" -> SpeedHistory(task.source.speedHistory)
             "预览" -> ImagePreview(preview)
-            else -> Surface(Modifier.fillMaxWidth().heightIn(min = 210.dp, max = 320.dp), color = surface2, shape = RoundedCornerShape(Radius.md), border = BorderStroke(1.dp, border)) { Text((logLines ?: task.source.logTail).ifEmpty { listOf("暂无日志记录") }.joinToString("\n"), Modifier.padding(12.dp), color = muted, fontSize = TypeScale.caption, lineHeight = 17.sp) }
+            else -> Surface(Modifier.fillMaxWidth().heightIn(min = 210.dp, max = 320.dp), color = surface2, shape = RoundedCornerShape(Radius.md), border = BorderStroke(1.dp, border)) { Text((logLines ?: task.source.logTail).ifEmpty { listOf("暂无日志记录") }.joinToString("\n"), Modifier.padding(12.dp), color = muted, fontSize = TypeScale.caption, lineHeight = TypeScale.lineBody) }
         }
     }, actions = {
         val mediaCapable = taskSupportsMediaActions(task.source)
@@ -4008,12 +3985,12 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
         }
         Spacer(Modifier.height(14.dp))
         Text("插件功能", color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
-        Text("识别 HLS、DASH、音视频轨道和网页播放器；接管普通下载；向桌面端发送 Cookie 授权后的请求身份；发起投屏和 TVBox 推送。", color = muted, fontSize = TypeScale.body, lineHeight = 19.sp, modifier = Modifier.padding(top = 5.dp))
+        Text("识别 HLS、DASH、音视频轨道和网页播放器；接管普通下载；向桌面端发送 Cookie 授权后的请求身份；发起投屏和 TVBox 推送。", color = muted, fontSize = TypeScale.body, lineHeight = TypeScale.lineTitle, modifier = Modifier.padding(top = 5.dp))
         Spacer(Modifier.height(15.dp))
         Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(Radius.md)) {
             Column(Modifier.padding(13.dp)) {
                 Text("Chrome / Edge / Chromium", color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
-                Text("打开扩展管理页和已解压的 ${Product.version} 插件目录；首次安装选择“加载已解压的扩展程序”，升级后点击“重新加载”。", color = muted, fontSize = TypeScale.caption, lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp))
+                Text("打开扩展管理页和已解压的 ${Product.version} 插件目录；首次安装选择“加载已解压的扩展程序”，升级后点击“重新加载”。", color = muted, fontSize = TypeScale.caption, lineHeight = TypeScale.lineBody, modifier = Modifier.padding(top = 4.dp))
                 Button(
                     onClick = {
                         working = true
@@ -4041,7 +4018,7 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
         Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(Radius.md)) {
             Column(Modifier.padding(13.dp)) {
                 Text("Firefox", color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
-                Text("使用 Mozilla Add-ons 签名版，商店会自动更新；插件身份与 Native Messaging 注册保持一致。", color = muted, fontSize = TypeScale.caption, lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp))
+                Text("使用 Mozilla Add-ons 签名版，商店会自动更新；插件身份与 Native Messaging 注册保持一致。", color = muted, fontSize = TypeScale.caption, lineHeight = TypeScale.lineBody, modifier = Modifier.padding(top = 4.dp))
                 TextButton(
                     onClick = {
                         working = true
@@ -4067,17 +4044,17 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
         if (message.isNotBlank()) {
             Spacer(Modifier.height(10.dp))
             Surface(Modifier.fillMaxWidth(), color = blue.copy(alpha = .09f), shape = RoundedCornerShape(Radius.md)) {
-                Text(message, color = ink, fontSize = TypeScale.caption, lineHeight = 17.sp, modifier = Modifier.padding(10.dp))
+                Text(message, color = ink, fontSize = TypeScale.caption, lineHeight = TypeScale.lineBody, modifier = Modifier.padding(10.dp))
             }
         }
-        Text("安装或重载后请刷新正在播放的网页。Cookie 只在你对具体站点明确授权后读取。", color = faint, fontSize = TypeScale.caption, lineHeight = 17.sp, modifier = Modifier.padding(top = 12.dp))
+        Text("安装或重载后请刷新正在播放的网页。Cookie 只在你对具体站点明确授权后读取。", color = faint, fontSize = TypeScale.caption, lineHeight = TypeScale.lineBody, modifier = Modifier.padding(top = 12.dp))
     }, actions = { DialogPrimary("完成", onClick = onDismiss) })
 }
 
 @Composable private fun AboutDialog(engine: String, extension: String, onOpenLogs: () -> Unit, onOpenHomepage: () -> Unit, onDismiss: () -> Unit) = WorkbenchDialog(onDismiss, "关于", "HLS Downloader", 470.dp, content = {
     Text("HLS Downloader ${Product.version}", color = ink, fontSize = TypeScale.display, fontWeight = FontWeight.SemiBold)
     Spacer(Modifier.height(6.dp))
-    Text("Windows 桌面下载管理器：HLS/DASH 直播与点播、BT 磁力、HTTP、FTP/SFTP 与浏览器下载接管。", color = muted, fontSize = TypeScale.body, lineHeight = 19.sp)
+    Text("Windows 桌面下载管理器：HLS/DASH 直播与点播、BT 磁力、HTTP、FTP/SFTP 与浏览器下载接管。", color = muted, fontSize = TypeScale.body, lineHeight = TypeScale.lineTitle)
     Spacer(Modifier.height(14.dp))
     AboutRow("核心协议", "hls-downloader-v7-core · v1")
     AboutRow("下载引擎", engine.substringAfter("·").trim())
@@ -4109,21 +4086,14 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
                         Spacer(Modifier.width(9.dp))
                         Text(java.time.Instant.ofEpochMilli(entry.at).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")), color = faint, fontSize = TypeScale.caption)
                         Spacer(Modifier.width(9.dp))
-                        Text(entry.message, color = ink, fontSize = TypeScale.body, lineHeight = 19.sp, modifier = Modifier.weight(1f))
+                        Text(entry.message, color = ink, fontSize = TypeScale.body, lineHeight = TypeScale.lineTitle, modifier = Modifier.weight(1f))
                     }
                 }
             }
             VerticalScrollbar(
         rememberScrollbarAdapter(noticesScroll),
         Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp),
-        style = ScrollbarStyle(
-            minimalHeight = 28.dp,
-            thickness = 6.dp,
-            shape = RoundedCornerShape(Radius.tiny),
-            hoverDurationMillis = 160,
-            unhoverColor = muted.copy(alpha = 0.42f),
-            hoverColor = blue.copy(alpha = 0.82f),
-        ),
+        style = workbenchScrollbarStyle(),
     )
         }
     }
@@ -4180,7 +4150,7 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
                         }
                     }
                 }
-                VerticalScrollbar(rememberScrollbarAdapter(torrentFilesScroll), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp))
+                VerticalScrollbar(rememberScrollbarAdapter(torrentFilesScroll), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp), style = workbenchScrollbarStyle())
             }
         }
     }, actions = {
@@ -4328,9 +4298,7 @@ private fun HarvestResultDialog(
                         )
                         Row(
                             Modifier.fillMaxWidth()
-                                .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
-                                .background(feedback.background)
-                                .hoverable(feedback.interaction)
+                                .pressFeedback(feedback)
                                 .clickable(interactionSource = feedback.interaction, indication = null) {
                                     selected = if (item.url in selected) selected - item.url else selected + item.url
                                 }
@@ -4419,7 +4387,7 @@ private fun HarvestResultDialog(
         if (source == "local") {
             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(12.dp), verticalAlignment = Alignment.Top) {
                 Icon(Icons.Outlined.Info, null, tint = blue, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(8.dp))
-                Text("文件由下载引擎临时共享到局域网，支持电视端 Range 拖动；关闭主界面不会中断播放地址。", color = muted, fontSize = TypeScale.micro, lineHeight = 16.sp)
+                Text("文件由下载引擎临时共享到局域网，支持电视端 Range 拖动；关闭主界面不会中断播放地址。", color = muted, fontSize = TypeScale.micro, lineHeight = TypeScale.lineMicro)
             }
         } else {
             OutlinedTextField(url, { url = it; error = "" }, Modifier.fillMaxWidth(), label = { Text("媒体链接") }, placeholder = { Text("https://example.com/video.mp4") }, singleLine = true, shape = RoundedCornerShape(Radius.md))
@@ -4548,7 +4516,7 @@ private fun HarvestResultDialog(
         UpdateVersionCell("可用版本", signal.latest, Modifier.weight(1f), emphasized = true)
     }
     Spacer(Modifier.height(12.dp))
-    if (signal.notes.isNotBlank()) Text(signal.notes, color = ink, fontSize = TypeScale.body, lineHeight = 19.sp, maxLines = 7, overflow = TextOverflow.Ellipsis)
+    if (signal.notes.isNotBlank()) Text(signal.notes, color = ink, fontSize = TypeScale.body, lineHeight = TypeScale.lineTitle, maxLines = 7, overflow = TextOverflow.Ellipsis)
     Spacer(Modifier.height(12.dp))
     Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(Radius.md)) {
         Column(Modifier.padding(horizontal = 13.dp, vertical = 11.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -4556,7 +4524,7 @@ private fun HarvestResultDialog(
             Text(if (signal.installerSize > 0) "${formatBytes(signal.installerSize)} · SHA-256 ${if (signal.sha256Verified) "发布方摘要已确认" else "摘要缺失"}" else "自动升级已停用，请从发布页人工核验", color = if (signal.sha256Verified) successColor else warningColor, fontSize = TypeScale.micro)
         }
     }
-    Spacer(Modifier.height(12.dp)); Text("安装程序将覆盖当前版本，配置、任务数据库和下载文件会保留。开始安装前会安全暂停活动任务并保存断点；升级不会自动重启 Windows。", color = muted, fontSize = TypeScale.caption, lineHeight = 17.sp)
+    Spacer(Modifier.height(12.dp)); Text("安装程序将覆盖当前版本，配置、任务数据库和下载文件会保留。开始安装前会安全暂停活动任务并保存断点；升级不会自动重启 Windows。", color = muted, fontSize = TypeScale.caption, lineHeight = TypeScale.lineBody)
 }, actions = {
     DialogSecondary("稍后", onDismiss)
     if (signal.releaseUrl.isNotBlank()) DialogSecondary("查看发布页", onRelease)
@@ -4590,7 +4558,7 @@ private fun HarvestResultDialog(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Icon(Icons.Outlined.RestartAlt, null, tint = blue, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(9.dp))
-            Text("开始后，下载引擎会暂停活动任务并保存断点，工作台和临时窗口随后关闭。独立更新助手会等待文件释放、执行覆盖安装并重新打开 HLS Downloader。", color = muted, fontSize = TypeScale.caption, lineHeight = 17.sp)
+            Text("开始后，下载引擎会暂停活动任务并保存断点，工作台和临时窗口随后关闭。独立更新助手会等待文件释放、执行覆盖安装并重新打开 HLS Downloader。", color = muted, fontSize = TypeScale.caption, lineHeight = TypeScale.lineBody)
         }
     },
     actions = {
@@ -4610,7 +4578,7 @@ private fun HarvestResultDialog(
     onDismiss, if (request.action == "delete_files") "删除任务和文件" else "删除任务", "此操作将影响 ${request.taskIds.size} 个任务", 520.dp,
     content = {
         Surface(color = errorSurface, shape = RoundedCornerShape(Radius.md), modifier = Modifier.fillMaxWidth()) {
-            Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) { Icon(Icons.Outlined.WarningAmber, null, tint = errorStrong); Spacer(Modifier.width(10.dp)); Text(if (request.action == "delete_files") "任务记录、已下载文件和过程文件都会删除。" else "只删除任务记录，已完成文件将保留。", color = errorBody, fontSize = TypeScale.body, lineHeight = 19.sp) }
+            Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) { Icon(Icons.Outlined.WarningAmber, null, tint = errorStrong); Spacer(Modifier.width(10.dp)); Text(if (request.action == "delete_files") "任务记录、已下载文件和过程文件都会删除。" else "只删除任务记录，已完成文件将保留。", color = errorBody, fontSize = TypeScale.body, lineHeight = TypeScale.lineTitle) }
         }
     }, actions = { DialogSecondary("取消", onDismiss); Button(onClick = onConfirm, colors = ButtonDefaults.buttonColors(containerColor = destructiveFill, contentColor = Color.White), shape = RoundedCornerShape(Radius.md), modifier = Modifier.reportControlBounds("dialog.primary.确认删除")) { Text("确认删除", fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold) } },
 )
@@ -4622,7 +4590,7 @@ private fun HarvestResultDialog(
     width = 480.dp,
     content = {
         val action = when (signal.action) { "shutdown" -> "关机"; "sleep" -> "进入睡眠"; "hibernate" -> "进入休眠"; else -> "执行系统操作" }
-        Text("${signal.title.ifBlank { "下载任务" }} 已完成。${signal.delaySeconds} 秒后将$action。", color = ink, fontSize = TypeScale.body, lineHeight = 19.sp)
+        Text("${signal.title.ifBlank { "下载任务" }} 已完成。${signal.delaySeconds} 秒后将$action。", color = ink, fontSize = TypeScale.body, lineHeight = TypeScale.lineTitle)
         Text("可以立即执行，或取消本次操作。", color = muted, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 8.dp))
     },
     actions = { DialogSecondary("取消操作", onCancel); DialogPrimary("立即执行", onClick = onConfirm) },
@@ -4729,7 +4697,7 @@ private fun playerStatusLabel(status: String) = when (status.uppercase()) { "PAU
                         Row(Modifier.fillMaxWidth()) { Text(formatClock(scrubPosition.toLong()), color = muted, fontSize = TypeScale.micro); Spacer(Modifier.weight(1f)); Text(formatClock(signal.durationSeconds), color = muted, fontSize = TypeScale.micro) }
                     }
                 } else {
-                    Spacer(Modifier.height(9.dp)); Text(if (offline) "与接收设备的连接已中断。检查电视和局域网后点击重新连接。" else if (signal.deviceKind == "tvbox") "已推送到 TVBox。此类设备没有统一的远程控制协议，请在电视端操作。" else "局域网播放地址已发布，请在接收设备中控制播放。", color = if (offline) errorStrong else muted, fontSize = TypeScale.micro, lineHeight = 16.sp)
+                    Spacer(Modifier.height(9.dp)); Text(if (offline) "与接收设备的连接已中断。检查电视和局域网后点击重新连接。" else if (signal.deviceKind == "tvbox") "已推送到 TVBox。此类设备没有统一的远程控制协议，请在电视端操作。" else "局域网播放地址已发布，请在接收设备中控制播放。", color = if (offline) errorStrong else muted, fontSize = TypeScale.micro, lineHeight = TypeScale.lineMicro)
                 }
                 if (signal.deviceKind == "lan" && signal.mediaUrl.isNotBlank()) {
                     Spacer(Modifier.height(10.dp))
@@ -4887,7 +4855,7 @@ private fun castStatusLabel(status: String) = when (status.uppercase()) {
                         DetailLine("来源网页", sourceHost.ifBlank { "未捕获" })
                         DetailLine("来源地址", safeResourceLocation(source))
                         DetailLine("下载地址", safeResourceLocation(offer.url))
-                        Text("支持沿用 Referer、Origin、User-Agent、Cookie 与 Authorization；敏感值只由下载引擎保管。", color = faint, fontSize = TypeScale.micro, lineHeight = 16.sp)
+                        Text("支持沿用 Referer、Origin、User-Agent、Cookie 与 Authorization；敏感值只由下载引擎保管。", color = faint, fontSize = TypeScale.micro, lineHeight = TypeScale.lineMicro)
                     }
                 }
                 if (sourceHost.isNotBlank()) Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {

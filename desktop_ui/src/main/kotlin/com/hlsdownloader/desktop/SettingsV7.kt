@@ -6,7 +6,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.rememberScrollbarAdapter
-import androidx.compose.foundation.ScrollbarStyle
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.selectable
@@ -163,9 +162,7 @@ internal fun FullSettingsDialog(
                     )
                     Row(
                         Modifier.fillMaxWidth().height(38.dp).clip(RoundedCornerShape(Radius.md))
-                            .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
-                            .background(feedback.background)
-                            .hoverable(feedback.interaction)
+                            .pressFeedback(feedback)
                             .selectable(
                                 selected = active,
                                 interactionSource = feedback.interaction,
@@ -246,7 +243,7 @@ internal fun FullSettingsDialog(
                                 Text("浏览器任务自动沿用页面请求", fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold, color = ink)
                                 Text(
                                     "下载引擎优先使用页面和资源源站实际的 Referer、Origin、User-Agent 及同源凭据。",
-                                    color = muted, fontSize = TypeScale.micro, lineHeight = 16.sp, modifier = Modifier.padding(top = 3.dp),
+                                    color = muted, fontSize = TypeScale.micro, lineHeight = TypeScale.lineMicro, modifier = Modifier.padding(top = 3.dp),
                                 )
                             }
                         }
@@ -345,9 +342,7 @@ internal fun FullSettingsDialog(
                                 )
                                 Row(
                                     Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(Radius.md))
-                                        .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
-                                        .background(feedback.background)
-                                        .hoverable(feedback.interaction)
+                                        .pressFeedback(feedback)
                                         .clickable(interactionSource = feedback.interaction, indication = null) { draft = draft.copy(preferredCastDeviceId = device.id) }
                                         .padding(horizontal = 11.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
@@ -369,14 +364,14 @@ internal fun FullSettingsDialog(
                             Text("自动扫描未发现接收端时，可填写完整的 HTTP(S) 地址。", color = muted, fontSize = TypeScale.micro)
                         } else {
                             Spacer(Modifier.height(10.dp))
-                            Text("投屏会建立可控制的播放会话；TVBox 推送是另一种接收协议，请切换到“TVBox 推送”。", color = muted, fontSize = TypeScale.micro, lineHeight = 16.sp)
+                            Text("投屏会建立可控制的播放会话；TVBox 推送是另一种接收协议，请切换到“TVBox 推送”。", color = muted, fontSize = TypeScale.micro, lineHeight = TypeScale.lineMicro)
                         }
                     }
                     "安全" -> SettingsSection("发布与扫描") {
                         SettingRow("完成后病毒扫描", "使用 Windows Defender 或指定扫描程序", draft.avScanEnabled) { draft = draft.copy(avScanEnabled = it) }
                         V7Field("扫描命令", draft.avScanCommand, lines = 2) { draft = draft.copy(avScanCommand = it) }
                         SettingRow("发现威胁时标记失败", "保留文件并将任务标记为失败，关闭后只记录扫描结果", draft.avScanFailOnThreat) { draft = draft.copy(avScanFailOnThreat = it) }
-                        Text("凭据由下载引擎安全保存，界面只显示是否已配置。", color = muted, fontSize = TypeScale.caption, lineHeight = 17.sp)
+                        Text("凭据由下载引擎安全保存，界面只显示是否已配置。", color = muted, fontSize = TypeScale.caption, lineHeight = TypeScale.lineBody)
                     }
                     "浏览器" -> SettingsSection("浏览器下载接管") {
                         SettingRow("接管浏览器下载", "插件识别到资源后显示确认窗口", draft.takeoverEnabled) { draft = draft.copy(takeoverEnabled = it) }
@@ -387,21 +382,14 @@ internal fun FullSettingsDialog(
                     else -> SettingsSection("外观与可访问性") {
                         SettingRow("深色模式", "切换工作台与所有弹窗的配色", draft.darkMode) { draft = draft.copy(darkMode = it) }
                         SettingRow("减弱动画", "关闭非必要过渡并降低动态反馈", draft.reduceMotion) { draft = draft.copy(reduceMotion = it) }
-                        Text("界面字体使用 Segoe UI Variable / Microsoft YaHei UI，并跟随 Windows DPI。", color = muted, fontSize = TypeScale.caption, lineHeight = 17.sp)
+                        Text("界面字体使用 Segoe UI Variable / Microsoft YaHei UI，并跟随 Windows DPI。", color = muted, fontSize = TypeScale.caption, lineHeight = TypeScale.lineBody)
                     }
                 }
             }
             VerticalScrollbar(
                 rememberScrollbarAdapter(contentScroll),
                 Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp),
-                style = ScrollbarStyle(
-                    minimalHeight = 28.dp,
-                    thickness = 6.dp,
-                    shape = RoundedCornerShape(Radius.tiny),
-                    hoverDurationMillis = 160,
-                    unhoverColor = muted.copy(alpha = 0.42f),
-                    hoverColor = blue.copy(alpha = 0.82f),
-                ),
+                style = workbenchScrollbarStyle(),
             )
             }
         }
@@ -563,7 +551,7 @@ private fun V7SiteRulesEditor(
                         update(index, item.copy(clearCredential = it, cookie = if (it) "" else item.cookie, requestHeaders = if (it) "" else item.requestHeaders))
                     }
                 } else {
-                    Text("Cookie 与敏感请求头只由下载引擎安全保存，设置文本不会记录原值。", color = muted, fontSize = TypeScale.micro, lineHeight = 16.sp)
+                    Text("Cookie 与敏感请求头只由下载引擎安全保存，设置文本不会记录原值。", color = muted, fontSize = TypeScale.micro, lineHeight = TypeScale.lineMicro)
                 }
             }
         }
