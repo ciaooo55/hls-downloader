@@ -34,10 +34,6 @@ impl CoreRuntime {
         Self::default()
     }
 
-    pub fn from_snapshots(snapshots: impl IntoIterator<Item = TaskSnapshot>) -> Self {
-        Self::from_state(snapshots, std::iter::empty(), 0)
-    }
-
     pub fn from_state(
         snapshots: impl IntoIterator<Item = TaskSnapshot>,
         specs: impl IntoIterator<Item = (String, TaskSpec)>,

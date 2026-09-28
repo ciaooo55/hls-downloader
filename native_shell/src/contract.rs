@@ -846,54 +846,6 @@ pub enum CoreEvent {
     },
 }
 
-impl CoreEvent {
-    pub fn sequence_key(&self) -> Option<&str> {
-        match self {
-            Self::TaskCreated { snapshot }
-            | Self::TaskUpdated { snapshot }
-            | Self::TaskProgress { snapshot } => Some(snapshot.task_id.as_str()),
-            Self::TaskDeleted { task_id } | Self::TaskTorrentFiles { task_id, .. } => {
-                Some(task_id.as_str())
-            }
-            Self::HandoffResolved { handoff_id, .. } => Some(handoff_id.as_str()),
-            Self::MediaPushRequested { request } | Self::MediaPushResolved { request } => {
-                Some(request.id.as_str())
-            }
-            Self::HandoffOffered { offer } => Some(offer.owner.as_str()),
-            Self::DuplicateOffered { task_id, .. } => Some(task_id.as_str()),
-            Self::TaskLog { task_id, .. } => Some(task_id.as_str()),
-            Self::Ready { .. }
-            | Self::SettingsChanged { .. }
-            | Self::ClipboardOffer { .. }
-            | Self::Error { .. }
-            | Self::UiShow { .. }
-            | Self::ProbeResult { .. }
-            | Self::CastDevices { .. }
-            | Self::UpdateAvailable { .. }
-            | Self::UpdateCurrent { .. }
-            | Self::UpdateReady { .. }
-            | Self::UpdateInstallStarted { .. }
-            | Self::UpdateInstallResult { .. }
-            | Self::Toast { .. }
-            | Self::HarvestResult { .. }
-            | Self::HarvestProbeResult { .. }
-            | Self::TorrentProbeResult { .. }
-            | Self::TorrentSelectionResult { .. }
-            | Self::TaskExport { .. }
-            | Self::BrowserStatus { .. }
-            | Self::PowerActionPending { .. }
-            | Self::CastSession { .. }
-            | Self::PlayerSession { .. } => None,
-        }
-    }
-
-    /// Convert a high-frequency event into a compact JSON payload for the UI.
-    /// This deliberately avoids passing request headers, cookies or bodies.
-    pub fn ui_payload(&self) -> Value {
-        serde_json::to_value(self).expect("core event is serializable")
-    }
-}
-
 fn default_method() -> String {
     "GET".to_string()
 }
@@ -1008,10 +960,12 @@ mod tests {
                 scheduled_stop_at: String::new(),
             },
         };
-        let payload = event.ui_payload();
+        // 与下面那些测试保持同一种序列化方式：直接 to_value，不给 CoreEvent 另造一个
+        // “专用序列化入口”。管道上发事件本来就是 serde 直接序列化这个枚举，
+        // 所以这条泄漏断言守护的就是生产路径本身，不是某个只为测试存在的包装。
+        let payload = serde_json::to_value(&event).unwrap();
         assert!(payload.get("cookie").is_none());
         assert!(payload.get("authorization").is_none());
-        assert_eq!(event.sequence_key(), Some("task-1"));
     }
 
     #[test]
@@ -1046,7 +1000,7 @@ mod tests {
             position_available: false,
         };
         assert_eq!(
-            event.ui_payload()["media_url"],
+            serde_json::to_value(&event).unwrap()["media_url"],
             "http://192.168.1.8:49152/media/token/video.mp4"
         );
         let legacy: CoreEvent = serde_json::from_value(serde_json::json!({

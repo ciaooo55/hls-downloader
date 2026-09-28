@@ -863,6 +863,9 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         taskLogOrder.remove(taskId)
     }
     val handoffQueue = remember { mutableStateListOf<HandoffOfferDto>() }
+    // presenterReady 与 handoffQueue 同属"演示端在不在"这一组状态，放在一起；
+    // applyEngineEventHere 要读它，而 Kotlin 的局部变量必须声明在使用之前。
+    val presenterReady = rememberUpdatedState(presenterProbeComplete && presenterAvailable)
     LaunchedEffect(presenterAvailable, presenterProbeComplete) {
         if (presenterAvailable) {
             handoffQueue.removeAll { it.presentation != "fallback" }
@@ -870,7 +873,28 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             refreshKey++
         }
     }
-    val presenterReady = rememberUpdatedState(presenterProbeComplete && presenterAvailable)
+
+    // applyEngineEvent 的四个回调（setExtension / offerHandoff / resolveHandoff / taskDeleted）
+    // 在 AppShell 里被逐字抄了 6 遍：单条任务操作、批量任务操作、剪贴板探测 poller、拖入导入、
+    // 媒体推送握手、结果轮询各一份。抄 6 遍的意思是改一次要记得改 6 处——漏掉 taskDeleted 就会留下
+    // “任务已删但日志缓存还在”这种只在特定入口复现的问题。
+    // 这里只收拢「事件怎么落到任务表上」；信号分发仍由调用方自己写，因为不同入口要接的 UiSignal
+    // 分支不一样（只有剪贴板探测那段要额外弹新任务框、塞探测结果）。
+    // 必须排在 handoffQueue / presenterReady 之后：Kotlin 的局部变量要在使用前声明。
+    val applyEngineEventHere: (kotlinx.serialization.json.JsonObject) -> UiSignal? = { event ->
+        applyEngineEvent(
+            tasks,
+            event,
+            setExtension = { connected -> extensionText = connected },
+            offerHandoff = { offer ->
+                if (!presenterReady.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
+                    handoffQueue += offer
+                }
+            },
+            resolveHandoff = { handoffId -> handoffQueue.removeAll { it.handoffId == handoffId } },
+            taskDeleted = { deletedId -> forgetTaskLog(deletedId) },
+        )
+    }
     val fallbackCandidate = if (presenterProbeComplete && !presenterAvailable) {
         handoffQueue.firstOrNull { it.presentation != "fallback" }
     } else {
@@ -926,18 +950,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 // 不再 refreshKey++：命令响应里已经带回本次动作的事件（applyEngineEvent 用的是和
                 // 事件轮询同一个函数），省掉 effect 重跑带来的 loadHandoffs + loadSettings 两次往返。
                 result.events.forEach { envelope ->
-                    handleSignal(applyEngineEvent(
-                        tasks,
-                        envelope.event,
-                        setExtension = { connected -> extensionText = connected },
-                        offerHandoff = { offer ->
-                            if (!presenterReady.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
-                                handoffQueue += offer
-                            }
-                        },
-                        resolveHandoff = { handoffId -> handoffQueue.removeAll { it.handoffId == handoffId } },
-                        taskDeleted = { deletedId -> forgetTaskLog(deletedId) },
-                    )) { signal -> if (signal is UiSignal.Notice) notice = signal }
+                    handleSignal(applyEngineEventHere(envelope.event)) { signal -> if (signal is UiSignal.Notice) notice = signal }
                 }
             }.onFailure { error ->
                 UiDiagnostics.error("task_action.$action", error, taskId, requestId)
@@ -964,18 +977,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     .onSuccess { results ->
                         results.forEach { result ->
                             result.events.forEach { envelope ->
-                                handleSignal(applyEngineEvent(
-                                    tasks,
-                                    envelope.event,
-                                    setExtension = { connected -> extensionText = connected },
-                                    offerHandoff = { offer ->
-                                        if (!presenterReady.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
-                                            handoffQueue += offer
-                                        }
-                                    },
-                                    resolveHandoff = { handoffId -> handoffQueue.removeAll { it.handoffId == handoffId } },
-                                    taskDeleted = { deletedId -> forgetTaskLog(deletedId) },
-                                )) { signal -> if (signal is UiSignal.Notice) notice = signal }
+                                handleSignal(applyEngineEventHere(envelope.event)) { signal -> if (signal is UiSignal.Notice) notice = signal }
                             }
                         }
                     }
@@ -1163,18 +1165,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                             }
                         }
                     }
-                    handleSignal(applyEngineEvent(
-                        tasks,
-                        envelope.event,
-                        setExtension = { connected -> extensionText = connected },
-                        offerHandoff = { offer ->
-                            if (!presenterReady.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
-                                handoffQueue += offer
-                            }
-                        },
-                        resolveHandoff = { handoffId -> handoffQueue.removeAll { it.handoffId == handoffId } },
-                        taskDeleted = { taskId -> forgetTaskLog(taskId) },
-                    ), { signal ->
+                    handleSignal(applyEngineEventHere(envelope.event), { signal ->
                         when (signal) {
                             is UiSignal.Notice -> notice = signal
                             is UiSignal.Clipboard -> {
@@ -1315,18 +1306,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     runCatching { withContext(Dispatchers.IO) { EnginePipeClient().taskAction(taskId, action) } }
                         .onSuccess { result ->
                             result.events.forEach { envelope ->
-                                handleSignal(applyEngineEvent(
-                                    tasks,
-                                    envelope.event,
-                                    setExtension = { connected -> extensionText = connected },
-                                    offerHandoff = { offer ->
-                                        if (!presenterReady.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
-                                            handoffQueue += offer
-                                        }
-                                    },
-                                    resolveHandoff = { handoffId -> handoffQueue.removeAll { it.handoffId == handoffId } },
-                                    taskDeleted = { deletedId -> forgetTaskLog(deletedId) },
-                                )) { signal -> if (signal is UiSignal.Notice) notice = signal }
+                                handleSignal(applyEngineEventHere(envelope.event)) { signal -> if (signal is UiSignal.Notice) notice = signal }
                             }
                         }
                 }
@@ -1390,18 +1370,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                             .onSuccess { results ->
                                 results.forEach { result ->
                                     result.events.forEach { envelope ->
-                                        handleSignal(applyEngineEvent(
-                                            tasks,
-                                            envelope.event,
-                                            setExtension = { connected -> extensionText = connected },
-                                            offerHandoff = { offer ->
-                                                if (!presenterReady.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
-                                                    handoffQueue += offer
-                                                }
-                                            },
-                                            resolveHandoff = { handoffId -> handoffQueue.removeAll { it.handoffId == handoffId } },
-                                            taskDeleted = { deletedId -> forgetTaskLog(deletedId) },
-                                        )) { signal -> if (signal is UiSignal.Notice) notice = signal }
+                                        handleSignal(applyEngineEventHere(envelope.event)) { signal -> if (signal is UiSignal.Notice) notice = signal }
                                     }
                                 }
                             }.onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it)) }
@@ -1982,18 +1951,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     selected = selected - request.taskIds
                     results.forEach { result ->
                         result.events.forEach { envelope ->
-                            handleSignal(applyEngineEvent(
-                                tasks,
-                                envelope.event,
-                                setExtension = { connected -> extensionText = connected },
-                                offerHandoff = { offer ->
-                                    if (!presenterReady.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
-                                        handoffQueue += offer
-                                    }
-                                },
-                                resolveHandoff = { handoffId -> handoffQueue.removeAll { it.handoffId == handoffId } },
-                                taskDeleted = { deletedId -> forgetTaskLog(deletedId) },
-                            )) { signal -> if (signal is UiSignal.Notice) notice = signal }
+                            handleSignal(applyEngineEventHere(envelope.event)) { signal -> if (signal is UiSignal.Notice) notice = signal }
                         }
                     }
                 }

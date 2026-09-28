@@ -8702,6 +8702,10 @@ fn stopping_cast_revokes_the_active_media_mount() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+// 只服务于下面三个 #[test]，却少了 #[cfg(test)]：于是每次不带 cfg(test) 的构建
+// （例如 `cargo test --bin HLSDownloaderUpdater` 里作为依赖编译的 lib）都会拿到
+// 两个"从未使用"的死函数告警。测试助手必须跟测试一起消失。
+#[cfg(test)]
 fn published_task_fixture(
     label: &str,
 ) -> (Arc<Mutex<PersistentCore>>, TaskPaths, PathBuf, PathBuf) {
@@ -8795,6 +8799,8 @@ fn a_published_payload_never_fails_the_task() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+// 同上：只被 #[test] 使用，必须随测试一起编译。
+#[cfg(test)]
 fn task_spec_for(core: &Arc<Mutex<PersistentCore>>, task_id: &str) -> TaskSpec {
     core.lock()
         .unwrap()

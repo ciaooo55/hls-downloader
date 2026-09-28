@@ -7,6 +7,7 @@ import { extensionNeedsUpgrade } from '../../lib/version'
 import { engineConnectionLabel, EXTENSION_PRODUCT_LABEL, extensionVersionLabel } from '../../lib/productCopy'
 import { withDeadline } from '../../lib/asyncDeadline'
 import { mediaPushTerminalResult } from '../../lib/mediaPush'
+import { formatBytes, formatDuration } from '../../lib/format'
 import {
   THEME_BASE_CSS,
   THEME_STORAGE_KEY,
@@ -59,30 +60,6 @@ function icon(name: string, label = '') {
   return node
 }
 const LEGACY_PENDING_HANDOFF_STORAGE_KEY = 'popup-pending-handoffs-v1'
-
-function formatDuration(seconds?: number) {
-  if (!seconds || seconds <= 0) return ''
-  const total = Math.round(seconds)
-  const h = Math.floor(total / 3600)
-  const m = Math.floor((total % 3600) / 60)
-  const s = total % 60
-  const mm = String(m).padStart(2, '0')
-  const ss = String(s).padStart(2, '0')
-  if (h) return h + ':' + mm + ':' + ss
-  return m + ':' + ss
-}
-
-function formatSize(size: number) {
-  const units = ['B', 'KB', 'MB', 'GB']
-  let value = size
-  let index = 0
-  while (value >= 1024 && index < units.length - 1) {
-    value /= 1024
-    index += 1
-  }
-  const amount = value >= 100 || index === 0 ? value.toFixed(0) : value.toFixed(1)
-  return amount + ' ' + units[index]
-}
 
 function resourceKindLabel(item: MediaResource) {
   if (item.kind === 'hls') return 'HLS'
@@ -273,7 +250,7 @@ async function main() {
       let itemHost = item.url
       try { itemHost = new URL(item.url).host } catch {}
       const likelySize = item.size || item.estimatedSize || 0
-      const size = item.size && item.size > 0 ? formatSize(item.size) : likelySize > 0 ? `\u7ea6 ${formatSize(likelySize)}` : '\u5927\u5c0f\u672a\u77e5'
+      const size = item.size && item.size > 0 ? formatBytes(item.size) : likelySize > 0 ? `约 ${formatBytes(likelySize)}` : '大小未知'
       const quality = item.quality || resourceQuality(item.url, item.height)
       const resolution = item.width && item.height ? (item.width + '\u00d7' + item.height) : ''
       const bandwidth = item.bandwidth ? ((item.bandwidth / 1_000_000).toFixed(1) + ' Mbps') : ''

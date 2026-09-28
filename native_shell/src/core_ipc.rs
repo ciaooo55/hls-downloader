@@ -587,27 +587,6 @@ impl NamedPipeServer {
     pub fn new(name: impl Into<String>) -> Self {
         Self { name: name.into() }
     }
-
-    pub fn serve_once<F>(&self, mut handler: F) -> Result<(), String>
-    where
-        F: FnMut(CorePipeRequest) -> CorePipeResponse,
-    {
-        let mut stream = self.serve_once_inner(None)?;
-        loop {
-            match read_server_pipe_message::<CorePipeRequest>(&mut stream) {
-                Ok(Some(request)) => {
-                    let response = handler(request);
-                    write_message(&mut stream, &response)?;
-                }
-                Ok(None) => return Ok(()),
-                Err(error) => {
-                    report_protocol_violation(&mut stream, &error);
-                    return Err(error);
-                }
-            }
-        }
-    }
-
     pub fn serve_loop(
         &self,
         stop: Arc<AtomicBool>,

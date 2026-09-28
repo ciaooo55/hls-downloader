@@ -5,6 +5,7 @@ import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
 import { withDeadline } from '../lib/asyncDeadline'
 import { selectedDownloadUrls } from '../lib/selectionLinks'
+import { formatBytes, formatDuration } from '../lib/format'
 
 async function runtimeMessage(message: Record<string, unknown>, retries = 1): Promise<any> {
   let lastError: unknown
@@ -740,7 +741,7 @@ export default defineContentScript({
         const duration = resource.duration ? formatDuration(resource.duration) : ''
         const bandwidth = resource.bandwidth ? `${(resource.bandwidth / 1_000_000).toFixed(1)} Mbps` : ''
         const likelySize = resource.size || resource.estimatedSize || 0
-        const sizeLabel = resource.size ? formatSize(resource.size) : likelySize ? `约 ${formatSize(likelySize)}` : '大小未知'
+        const sizeLabel = resource.size ? formatBytes(resource.size) : likelySize ? `约 ${formatBytes(likelySize)}` : '大小未知'
         const kind = document.createElement('div'); kind.className = 'kind'; kind.textContent = [resource.kind.toUpperCase(), streamMode, quality, resource.width && resource.height ? `${resource.width}×${resource.height}` : '', bandwidth, duration, sizeLabel, host].filter(Boolean).join(' · ')
         const resourceLocation = safeResourceLocation(resource.url)
         const resourceUrl = document.createElement('code'); resourceUrl.className = 'resource-url'; resourceUrl.title = resourceLocation; resourceUrl.textContent = resourceLocation
@@ -1200,20 +1201,4 @@ export default defineContentScript({
 
 function pageKey(value: string): string {
   try { const url = new URL(value); url.hash = ''; return url.href } catch { return value.split('#', 1)[0] }
-}
-
-function formatSize(size: number): string {
-  if (!Number.isFinite(size) || size <= 0) return '大小未知'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let value = size; let index = 0
-  while (value >= 1024 && index < units.length - 1) { value /= 1024; index += 1 }
-  return `${value >= 100 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`
-}
-
-function formatDuration(seconds: number): string {
-  const rounded = Math.round(seconds)
-  const hours = Math.floor(rounded / 3600)
-  const minutes = Math.floor((rounded % 3600) / 60)
-  const remaining = rounded % 60
-  return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${String(remaining).padStart(2, '0')}` : `${minutes}:${String(remaining).padStart(2, '0')}`
 }

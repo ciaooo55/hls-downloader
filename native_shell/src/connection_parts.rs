@@ -145,46 +145,14 @@ pub fn summarize(parts: &[ConnectionPart]) -> (u32, u64, u64, String) {
     )
 }
 
-pub fn sample_cells(
-    parts: &[ConnectionPart],
-    total: u64,
-    downloaded: u64,
-    cells: usize,
-) -> Vec<i32> {
-    let cells = cells.max(1);
-    let span = total.max(downloaded).max(1);
-    let mut out = vec![0; cells];
-    if parts.is_empty() {
-        let filled = ((downloaded as f64 / span as f64) * cells as f64).round() as usize;
-        for (index, cell) in out.iter_mut().enumerate() {
-            *cell = if index + 1 < filled {
-                2
-            } else if index < filled {
-                1
-            } else {
-                0
-            };
-        }
-        return out;
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1}MB", bytes as f64 / 1024.0 / 1024.0)
+    } else if bytes >= 1024 {
+        format!("{:.0}KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes}B")
     }
-    for (index, cell) in out.iter_mut().enumerate() {
-        let pos = span.saturating_mul(index as u64) / cells as u64;
-        *cell = parts
-            .iter()
-            .find_map(|part| {
-                if part.start <= pos && pos <= part.end {
-                    Some(match part.state.as_str() {
-                        "done" => 2,
-                        "active" => 1,
-                        _ => 0,
-                    })
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(0);
-    }
-    out
 }
 
 fn load_completed_ranges(progress_path: &Path) -> Option<Vec<(u64, u64)>> {
@@ -297,16 +265,6 @@ fn coalesce(parts: &mut Vec<ConnectionPart>) {
     *parts = out;
 }
 
-fn format_bytes(bytes: u64) -> String {
-    if bytes >= 1024 * 1024 {
-        format!("{:.1}MB", bytes as f64 / 1024.0 / 1024.0)
-    } else if bytes >= 1024 {
-        format!("{:.0}KB", bytes as f64 / 1024.0)
-    } else {
-        format!("{bytes}B")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,15 +277,6 @@ mod tests {
         assert_eq!(parts[0].end, 2);
         assert_eq!(parts[1].state, "active");
         assert_eq!(parts[2].state, "queued");
-        let (workers, done, total, hint) = summarize(&parts);
-        assert_eq!(workers, 1);
-        assert_eq!(done, 1);
-        assert_eq!(total, 3);
-        assert!(hint.contains("已完成"));
-        let cells = sample_cells(&parts, 8, 3, 8);
-        assert_eq!(cells[0], 2);
-        assert!(cells.contains(&1));
-        assert!(cells.contains(&0));
     }
 
     #[test]
