@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$AppPath,
     [string]$OutputDir = '',
@@ -9,12 +9,19 @@ param(
     [int]$Port = 19739,
     [int]$TimeoutSeconds = 120,
     [int]$SettleMilliseconds = 2500,
+    # 与 scripts/validate_captures.py 的 BLACK_FRACTION_LIMIT 同源：纯黑占比达到这个数
+    # 就说明这一帧不是"工作台的画面"，不能进证据目录。
+    [double]$BlackFractionLimit = 0.03,
     [switch]$ParkPointer,
     [int]$ParkPointerX = 4,
     [int]$ParkPointerY = 4
 )
 
 $ErrorActionPreference = 'Stop'
+# 判"这一帧是不是全黑"要用 GDI+ 解码 PNG。Windows 上 PS 5.1 / PS 7 都自带
+# System.Drawing，不需要额外依赖；加载失败会在捕获时把该夹具标记为失败，
+# 而不是静默跳过这道检查。
+Add-Type -AssemblyName System.Drawing
 $repo = (Resolve-Path "$PSScriptRoot\..").Path
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
     $OutputDir = Join-Path $repo 'artifacts\v7-productization\compose-visual'
@@ -93,6 +100,43 @@ function Wait-Health {
     }
     return $null
 }
+function Measure-BlackFraction {
+    param([string]$Path)
+    # 先把整幅缩到一张小代理图再数：Graphics.DrawImage 是原生缩放，
+    # 比在 PowerShell 里逐像素遍历 114 万点快几个量级，PS 5.1 / 7 都能跑。
+    # 缩放会把黑与邻色混一混，所以这里数出来的是偏小的值 —— 宁可漏报也不要误报。
+    $source = New-Object System.Drawing.Bitmap($Path)
+    try {
+        $width = 160
+        $height = [int][Math]::Max(1, [Math]::Round($source.Height * ($width / [double]$source.Width)))
+        $proxy = New-Object System.Drawing.Bitmap($width, $height)
+        try {
+            $graphics = [System.Drawing.Graphics]::FromImage($proxy)
+            try {
+                $graphics.InterpolationMode = 'HighQualityBilinear'
+                $graphics.DrawImage($source, 0, 0, $width, $height)
+            } finally {
+                $graphics.Dispose()
+            }
+            $black = 0
+            $total = 0
+            for ($y = 0; $y -lt $height; $y++) {
+                for ($x = 0; $x -lt $width; $x++) {
+                    $pixel = $proxy.GetPixel($x, $y)
+                    if ($pixel.R -eq 0 -and $pixel.G -eq 0 -and $pixel.B -eq 0) { $black++ }
+                    $total++
+                }
+            }
+            if ($total -eq 0) { return 1.0 }
+            return $black / [double]$total
+        } finally {
+            $proxy.Dispose()
+        }
+    } finally {
+        $source.Dispose()
+    }
+}
+
 
 foreach ($size in $Sizes) {
     $parts = $size -split 'x'
@@ -139,6 +183,15 @@ foreach ($size in $Sizes) {
                 $window = (Invoke-WebRequest -Uri "$base/window" -Headers $header -TimeoutSec 10 -UseBasicParsing).Content
                 $bytes = (Get-Item -LiteralPath $pngPath).Length
                 if ($bytes -lt 4096) { throw "screenshot is implausibly small ($bytes bytes)" }
+                # 字节数只能挡住"整幅纯黑"（1400x820 全黑 PNG 约 3.4 KB，会被上面那句拦住）。
+                # 但"大部分是黑、只有一小块有内容"的帧仍然 ≥ 4096 字节，会被静默当成有效证据——
+                # 实测过：窗口在 (0,0) 但 Robot 取不到合成画面时，tasks_1000-light 采到过
+                # 纯黑占 75.5% 的帧。所以这里必须按像素再判一次，阈值与
+                # scripts/validate_captures.py 的 BLACK_FRACTION_LIMIT 保持同一个数。
+                $black = Measure-BlackFraction -Path $pngPath
+                if ($black -ge $BlackFractionLimit) {
+                    throw "screenshot is $($black.ToString('P1')) pure black >= $($BlackFractionLimit.ToString('P0')) (compositor or off-screen window); refusing to keep it as evidence"
+                }
                 $status = 'captured'
                 $detail = "$window"
             } catch {
