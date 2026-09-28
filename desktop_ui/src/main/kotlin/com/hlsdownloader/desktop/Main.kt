@@ -2186,7 +2186,38 @@ private fun displayStatus(status: String) = when (status.lowercase()) {
     // 未知状态显式展示为"其他"，避免被静默归入"排队中"导致过滤计数失真
     else -> "其他"
 }
-internal fun taskCategory(task: DownloadTask) = when (task.filename.substringAfterLast('.', "").lowercase()) { "m3u8", "mpd", "mp4", "mkv", "webm", "mp3", "flac", "wav", "avi", "mov" -> TaskCategory.MEDIA; "exe", "msi", "appx", "apk", "dmg", "pkg" -> TaskCategory.PROGRAM; "zip", "rar", "7z", "tar", "gz", "bz2", "xz" -> TaskCategory.ARCHIVE; else -> TaskCategory.OTHER }
+private val mediaResourceKinds = setOf("hls", "dash", "live", "media")
+internal val catMEDIA_EXTENSIONS = setOf(
+    "mp4", "mkv", "webm", "mov", "avi", "m4v", "ts", "mp3", "m4a", "flac", "wav",
+    "jpg", "png", "gif", "webp",
+)
+internal val catPROGRAM_EXTENSIONS = setOf("exe", "msi", "msix", "appx", "bat", "cmd")
+internal val catARCHIVE_EXTENSIONS = setOf("zip", "7z", "rar", "tar", "gz", "bz2", "xz", "iso")
+/**
+ * 下载分类的**唯一**实现，与 `native_shell/src/category.rs::download_category` 一一对应。
+ *
+ * 在此之前它是两份代码，而且已经分叉：[taskCategory]（任务栏/分类筛选）漏了
+ * ts / m4v / m4a / jpg / png / gif / webp，多了 Core 不认识的 apk / dmg / pkg，
+ * 又少了 iso，还没有 hls/dash/live 的媒体短路。同一个 .ts 文件在接管弹窗里是"媒体"、
+ * 在任务栏里却是"其他"。现在两边都走这一个函数。
+ *
+ * 改这张表必须同时改 category.rs；desktop_ui 的 CategoryParityTest 会把两边的
+ * 扩展名清单逐项比对，防止再次分叉。
+ */
+internal fun downloadCategory(filename: String, resourceKind: String): TaskCategory {
+    // Core：ResourceKind::Hls | Dash | Live 一律算媒体，不看扩展名。
+    // Rust 的 ResourceKind 没有 media 变体，这里保留它只为向后兼容旧接管报文。
+    if (resourceKind.lowercase() in mediaResourceKinds) return TaskCategory.MEDIA
+    val extension = filename.substringAfterLast('.', "").lowercase()
+    return when (extension) {
+        in catMEDIA_EXTENSIONS -> TaskCategory.MEDIA
+        in catPROGRAM_EXTENSIONS -> TaskCategory.PROGRAM
+        in catARCHIVE_EXTENSIONS -> TaskCategory.ARCHIVE
+        else -> TaskCategory.OTHER
+    }
+}
+
+internal fun taskCategory(task: DownloadTask) = downloadCategory(task.filename, task.source.resourceKind)
 internal fun visibleTasks(tasks: List<DownloadTask>, filter: TaskFilter, category: TaskCategory?, query: String, queueId: String? = null): List<DownloadTask> =
     tasks.filter { (filter == TaskFilter.ALL || (filter == TaskFilter.RUNNING && isActiveTaskStatus(it.status)) || it.status == filter.label) && (category == null || taskCategory(it) == category) && (queueId == null || it.source.queueId == queueId) && it.filename.contains(query, true) }
 private fun formatRate(bytes: Long): String = when { bytes <= 0 -> "—"; bytes >= 1024L * 1024L -> "%.1f MB/s".format(java.util.Locale.ROOT, bytes / 1024.0 / 1024.0); else -> "%.0f KB/s".format(java.util.Locale.ROOT, bytes / 1024.0) }
@@ -4871,15 +4902,8 @@ private fun castStatusLabel(status: String) = when (status.uppercase()) {
     )
 }
 
-private fun handoffCategory(offer: HandoffOfferDto): TaskCategory {
-    if (offer.resourceKind.lowercase() in setOf("hls", "dash", "live", "media")) return TaskCategory.MEDIA
-    return when (offer.filename.substringAfterLast('.', "").lowercase()) {
-        "mp4", "mkv", "webm", "mov", "avi", "m4v", "ts", "mp3", "m4a", "flac", "wav", "jpg", "png", "gif", "webp" -> TaskCategory.MEDIA
-        "exe", "msi", "msix", "appx", "bat", "cmd" -> TaskCategory.PROGRAM
-        "zip", "7z", "rar", "tar", "gz", "bz2", "xz", "iso" -> TaskCategory.ARCHIVE
-        else -> TaskCategory.OTHER
-    }
-}
+private fun handoffCategory(offer: HandoffOfferDto): TaskCategory =
+    downloadCategory(offer.filename, offer.resourceKind)
 
 private fun canonicalHandoffUrl(value: String) = value.substringBefore('#').trimEnd('/')
 
