@@ -761,6 +761,18 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     var pendingPushRequestId by remember { mutableStateOf<String?>(if (visualFixture == "media_push_pending") "media-push-visual-fixture" else null) }
     var castDiscovering by remember { mutableStateOf(visualFixture == "devices_loading") }
     var castConnecting by remember { mutableStateOf(false) }
+    // 投屏/推送的收尾复位。这五条赋值原本在 6 处逐字重复（cancelled / published /
+    // failed 各一到两处），漏一条就留下半个会话——比如 deviceResult 清了而
+    // pendingCastTask 没清，下次点投屏会把上一个任务重新发一遍。
+    // 六处调用点的判定条件都一样（requestId == null 或 pendingPushRequestId == requestId），
+    // 所以直接统一成一条；requestId == null 时 pendingPushRequestId 本来就是 null。
+    val resetCastState = {
+        deviceResult = null
+        pendingCastTask = null
+        pendingMediaSource = null
+        pendingCastMode = ""
+        pendingPushRequestId = null
+    }
     var castControlBusy by remember { mutableStateOf(false) }
     var playerControlBusy by remember { mutableStateOf(false) }
     var updateDownloadBusy by remember { mutableStateOf(false) }
@@ -1815,13 +1827,13 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     if (!settingsDeviceScanActive) deviceResult?.let { signal -> DevicePickerDialog(signal, pendingCastMode, pendingMediaSource, castDiscovering, castConnecting, settings.preferredCastDeviceId, {
         val requestId = pendingPushRequestId
         if (requestId == null) {
-            deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""
+            resetCastState()
         } else {
             castConnecting = true
             scope.launch {
                 resolveMediaPushTerminalReliably(requestId, "canceled", "已取消设备选择")
                 if (pendingPushRequestId == requestId) {
-                    deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""; pendingPushRequestId = null
+                    resetCastState()
                 }
                 castConnecting = false
             }
@@ -1842,14 +1854,14 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             if (outcome.isSuccess) {
                 if (requestId != null) resolveMediaPushTerminalReliably(requestId, "done", "已发布局域网播放地址")
                 if (requestId == null || pendingPushRequestId == requestId) {
-                    deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""; pendingPushRequestId = null
+                    resetCastState()
                 }
             } else {
                 val message = describeFailure(outcome.exceptionOrNull(), "局域网发布失败")
                 if (requestId != null) {
                     resolveMediaPushTerminalReliably(requestId, "failed", message)
                     if (pendingPushRequestId == requestId) {
-                        deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""; pendingPushRequestId = null
+                        resetCastState()
                     }
                 }
                 notice = UiSignal.Notice("error", message)
@@ -1878,14 +1890,14 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     }
                 if (requestId != null) resolveMediaPushTerminalReliably(requestId, "done", "已发送到 ${device.label}")
                 if (requestId == null || pendingPushRequestId == requestId) {
-                    deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""; pendingPushRequestId = null
+                    resetCastState()
                 }
             } else {
                 val message = describeFailure(outcome.exceptionOrNull(), "投屏连接失败")
                 if (requestId != null) {
                     resolveMediaPushTerminalReliably(requestId, "failed", message)
                     if (pendingPushRequestId == requestId) {
-                        deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""; pendingPushRequestId = null
+                        resetCastState()
                     }
                 }
                 notice = UiSignal.Notice("error", message)
@@ -2551,7 +2563,7 @@ private fun categoryIcon(category: TaskCategory): ImageVector = when (category) 
             if (hasSelection) {
                 Spacer(Modifier.width(if (compact) 8.dp else 16.dp))
                 if (!compact) Text("已选择", color = blue, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold)
-                SelectionAction(Icons.Outlined.FileDownload, "开始") { onSelectedAction("start") }; SelectionAction(Icons.Outlined.Pause, "暂停") { onSelectedAction("pause") }; SelectionAction(Icons.AutoMirrored.Outlined.DriveFileMove, "移动队列") { onSelectedAction("move_queue") }; SelectionAction(Icons.Outlined.PlayCircle, "播放") { onSelectedAction("play") }; SelectionAction(Icons.Outlined.Cast, "投屏") { onSelectedAction("cast") }; SelectionAction(Icons.Outlined.Tv, "TVBox 推送") { onSelectedAction("push_tvbox") }; SelectionAction(Icons.Outlined.DeleteOutline, "删除") { onSelectedAction("delete") }
+                ToolbarIcon(Icons.Outlined.FileDownload, "开始") { onSelectedAction("start") }; ToolbarIcon(Icons.Outlined.Pause, "暂停") { onSelectedAction("pause") }; ToolbarIcon(Icons.AutoMirrored.Outlined.DriveFileMove, "移动队列") { onSelectedAction("move_queue") }; ToolbarIcon(Icons.Outlined.PlayCircle, "播放") { onSelectedAction("play") }; ToolbarIcon(Icons.Outlined.Cast, "投屏") { onSelectedAction("cast") }; ToolbarIcon(Icons.Outlined.Tv, "TVBox 推送") { onSelectedAction("push_tvbox") }; ToolbarIcon(Icons.Outlined.DeleteOutline, "删除") { onSelectedAction("delete") }
             } else if (!compact) {
                 Spacer(Modifier.width(14.dp)); Text("选择任务后可进行批量操作", color = faint, fontSize = TypeScale.caption)
             }
@@ -2565,7 +2577,6 @@ private fun categoryIcon(category: TaskCategory): ImageVector = when (category) 
         }
     }
 }
-@Composable private fun SelectionAction(icon: ImageVector, label: String, onClick: () -> Unit) = ToolbarIcon(icon, label, onClick)
 private data class TaskContextMenuRequest(
     val task: DownloadTask,
     val targets: List<DownloadTask>,
