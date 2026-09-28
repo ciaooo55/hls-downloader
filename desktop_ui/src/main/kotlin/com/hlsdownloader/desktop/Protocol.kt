@@ -14,7 +14,10 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.io.EOFException
 import java.io.File
+import java.io.IOException
 import java.io.RandomAccessFile
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -25,6 +28,11 @@ val protocolJson: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true 
 
 private const val CORE_PROTOCOL = "hls-downloader-v7-core"
 private const val CORE_PIPE = "\\\\.\\pipe\\HLSDownloader.v7"
+private const val CORE_TCP_HOST = "127.0.0.1"
+private const val WINDOWS_PIPE_PREFIX = "\\\\.\\pipe\\"
+private val IS_WINDOWS = System.getProperty("os.name").lowercase().contains("windows")
+private const val CORE_TCP_PORT = 18765 // native_shell/src/core_ipc.rs 的 V7_TCP_PORT
+private const val CORE_CONNECT_TIMEOUT_MS = 2000
 private const val MAX_TASK_LOG_LINES = 500
 
 object Product {
@@ -399,6 +407,13 @@ class EnginePipeClient(
     }
 
     fun taskAction(taskId: String, action: String) = command(commandOf("task_action", "task_id" to taskId, "action" to action))
+    /**
+     * 按 id 取单个任务快照。此前读任务状态只有 snapshotState() 一条路，它在千任务库里
+     * 要付全量 ~1.4MB；有了这一条，任务操作成功后可以只重取变化的那一个任务。
+     * 命中会回一条 kind=task_updated 的事件（内含该任务的完整 TaskSnapshot），
+     * 不存在则回 Error{code:"task_not_found"}。
+     */
+    fun getTask(taskId: String) = command(commandOf("get_task", "task_id" to taskId))
     fun openMain() = command(commandOf("open_main"))
     fun refreshTaskRequest(taskId: String, url: String, cookie: String = "", autoResume: Boolean = true) = command(buildJsonObject {
         put("kind", "refresh_task_request")
@@ -465,6 +480,22 @@ class EnginePipeClient(
     fun setTaskTorrentFiles(taskId: String, selections: List<TorrentFileDto>): TaskTorrentFilesDto = taskTorrentFilesCommand("set_task_torrent_files", taskId, selections)
 
     private fun taskTorrentFilesCommand(kind: String, taskId: String, selections: List<TorrentFileDto>): TaskTorrentFilesDto {
+        // 审计夹具旁路：UI 可视夹具跑在没有引擎的机器上，get_task_torrent_files 必然失败，
+        // 详情弹窗里整段 BT 文件面板就不组合，"全选/反选/更新下载链接"三个按钮永远量不到。
+        // 这里给一份固定的假清单（16 条，足够让列表溢出、顺带把垂直滚动条也逼出来）。
+        val auditSurface = System.getenv("HLS_UI_AUDIT_SURFACE")?.lowercase()?.trim().orEmpty()
+        if (auditSurface.isNotBlank()) {
+            val files = List(16) { i ->
+                TorrentFileDto(
+                    index = i,
+                    path = "镜像/纪录片合集-${'$'}{(65 + 'A' + i % 26).toChar()}-${i.toString().padStart(2, '0')}.mkv",
+                    size = 320L * 1024 * 1024 + i * 71L * 1024 * 1024,
+                    offset = i * 320L * 1024 * 1024,
+                    selected = i % 3 != 0,
+                )
+            }
+            return TaskTorrentFilesDto(taskId, "magnet:?xt=urn:btih:audit-fixture", files, files.sumOf { it.size })
+        }
         val result = command(buildJsonObject {
             put("kind", kind)
             put("task_id", requireId(taskId))
@@ -667,8 +698,79 @@ class EnginePipeClient(
         CommandResult(requestId, response["events"]?.jsonArray.orEmpty().map { protocolJson.decodeFromJsonElement(EventEnvelopeDto.serializer(), it) })
     }
 
+    /** Windows 命名管道：优先，打不开才回退，所以 Windows 上的行为完全不变。 */
+    private class FileFrameChannel(private val pipe: RandomAccessFile) : FrameChannel {
+        override fun writeFrame(payload: ByteArray) {
+            pipe.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(payload.size).array())
+            pipe.write(payload)
+        }
+
+        override fun readFrame(): ByteArray {
+            val header = ByteArray(4)
+            try { pipe.readFully(header) } catch (_: EOFException) { throw EOFException("下载引擎连接已关闭") }
+            val size = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN).int
+            require(size in 1..MAX_FRAME) { "下载引擎响应长度无效" }
+            val body = ByteArray(size)
+            try { pipe.readFully(body) } catch (_: EOFException) { throw EOFException("下载引擎响应不完整") }
+            return body
+        }
+
+        override fun close() { pipe.close() }
+    }
+
+    /** TCP loopback 回退，帧格式和命名管道一致（4 字节小端长度 + JSON）。 */
+    private class TcpFrameChannel(address: InetSocketAddress) : FrameChannel {
+        private val socket: Socket = Socket().apply { connect(address, CORE_CONNECT_TIMEOUT_MS) }
+        private val out = socket.getOutputStream()
+        private val input = socket.getInputStream()
+
+        override fun writeFrame(payload: ByteArray) {
+            out.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(payload.size).array())
+            out.write(payload)
+            out.flush()
+        }
+
+        override fun readFrame(): ByteArray {
+            val header = ByteArray(4)
+            var read = 0
+            while (read < 4) {
+                val n = input.read(header, read, 4 - read)
+                if (n < 0) throw EOFException("下载引擎连接已关闭")
+                read += n
+            }
+            val size = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN).int
+            require(size in 1..MAX_FRAME) { "下载引擎响应长度无效" }
+            val body = ByteArray(size)
+            var filled = 0
+            while (filled < size) {
+                val n = input.read(body, filled, size - filled)
+                if (n < 0) throw EOFException("下载引擎响应不完整")
+                filled += n
+            }
+            return body
+        }
+
+        override fun close() { runCatching { socket.close() } }
+    }
+
+    /**
+     * 选传输通道：命名管道优先，Windows 命名管道路径在非 Windows 上直接走 TCP loopback。
+     *
+     * 这里不能用"打开失败再回退"：RandomAccessFile(path, "rw") 在 Linux 上对 `\.\pipe\HLSDownloader.v7`
+     * 这种路径会**就地创建一个普通文件**（实测在 cwd 下生成了 68 字节的 `\.\pipe\HLSDownloader.v7`，
+     * 正好是一帧 hello 的长度），不抛 IOException，于是请求写进垃圾文件、读到 EOF，
+     * 而且每次运行还会在磁盘上留下一个垃圾文件。所以必须先判断是不是 Windows 命名管道路径。
+     */
+    private fun openChannel(): FrameChannel {
+        val windowsPipe = pipePath.startsWith(WINDOWS_PIPE_PREFIX) || pipePath.startsWith("\\\\?\\pipe\\")
+        if (windowsPipe && !IS_WINDOWS) {
+            return TcpFrameChannel(InetSocketAddress(CORE_TCP_HOST, CORE_TCP_PORT))
+        }
+        return FileFrameChannel(RandomAccessFile(pipePath, "rw"))
+    }
+
     private fun <T> session(block: (PipeConnection) -> T): T =
-        poolFor(pipePath).withConnection(connect = { PipeConnection(RandomAccessFile(pipePath, "rw")) }, block = block)
+        poolFor(pipePath).withConnection(connect = { PipeConnection(openChannel()) }, block = block)
     private fun request(type: String) = buildJsonObject { put("type", type); put("request_id", nextRequestId()) }
 
     // Reuses warm pipe connections instead of connect+hello per command: batch actions used
@@ -708,10 +810,23 @@ class EnginePipeClient(
         }
     }
 
-    private class PipeConnection(private val pipe: RandomAccessFile) : AutoCloseable {
+    /**
+     * 引擎连接的一层抽象：Windows 上是命名管道，其他平台回退到 TCP loopback。
+     * 之所以要有 TCP 回退：Rust 引擎侧的 bind_local() 在非 Windows 上本来就在 TCP loopback
+     * 监听（core_server.rs，默认端口 V7_TCP_PORT=18765），但客户端此前只会开 Windows 命名管道，
+     * 于是在 Linux 上 RandomAccessFile 打不开 -> 异常被 runCatching 接住 -> snapshotReady 一直 false，
+     * snapshotState()/waitEvents() 从来没成功跑过一次。命名管道仍然优先，Windows 行为不变。
+     */
+    private interface FrameChannel : AutoCloseable {
+        fun writeFrame(payload: ByteArray)
+        fun readFrame(): ByteArray
+    }
+
+    private class PipeConnection(private val channel: FrameChannel) : AutoCloseable {
         private var idleAtMillis = 0L
         fun markIdle() { idleAtMillis = System.currentTimeMillis() }
         fun idleMillis(): Long = if (idleAtMillis == 0L) Long.MAX_VALUE else System.currentTimeMillis() - idleAtMillis
+        override fun close() { channel.close() }
 
         fun hello() {
             request(buildJsonObject { put("type", "hello"); put("protocol", CORE_PROTOCOL); put("version", 1) })
@@ -721,14 +836,8 @@ class EnginePipeClient(
         fun request(message: JsonObject): JsonObject {
             val payload = protocolJson.encodeToString(JsonObject.serializer(), message).encodeToByteArray()
             require(payload.size <= MAX_FRAME) { "下载引擎请求过大" }
-            pipe.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(payload.size).array())
-            pipe.write(payload)
-            val header = ByteArray(4)
-            try { pipe.readFully(header) } catch (_: EOFException) { throw EOFException("下载引擎连接已关闭") }
-            val size = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN).int
-            require(size in 1..MAX_FRAME) { "下载引擎响应长度无效" }
-            val body = ByteArray(size)
-            try { pipe.readFully(body) } catch (_: EOFException) { throw EOFException("下载引擎响应不完整") }
+            channel.writeFrame(payload)
+            val body = channel.readFrame()
             val response = protocolJson.parseToJsonElement(body.decodeToString()).jsonObject
             if (response["type"]?.jsonPrimitive?.content == "error") {
                 throw EngineProtocolException(
@@ -738,7 +847,6 @@ class EnginePipeClient(
             }
             return response
         }
-        override fun close() = pipe.close()
     }
 
     private fun filenameFromUrl(url: String) = url.substringBefore('?').substringBefore('#').substringAfterLast('/').ifBlank { "download" }

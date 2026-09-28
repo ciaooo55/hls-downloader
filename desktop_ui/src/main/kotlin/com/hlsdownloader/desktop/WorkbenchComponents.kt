@@ -322,6 +322,14 @@ internal fun Button(
     border: BorderStroke? = null,
     contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
     colors: ButtonColors = ButtonDefaults.buttonColors(blue, onBlue),
+    /**
+     * 底色是透明时（TextButton、"文字按钮"那一类），`blendToward(White, .08f)` 是**从无到有的 8%**，
+     * 叠在深色底上每个通道只动一两个数，肉眼和截图差分都看不出来——等于没有悬停反馈。
+     * 所以允许显式指定一档可见的 hover / press 色；不传则沿用原来的"朝白推 8%"。
+     */
+    hoverColor: Color? = null,
+    pressedColor: Color? = null,
+    pressScale: Float? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -337,10 +345,11 @@ internal fun Button(
     val contentColor = if (enabled) colors.content else colors.disabledContent
     val feedback = rememberPressFeedback(
         restColor = container,
-        hoverColor = container.blendToward(Color.White, .08f),
+        hoverColor = hoverColor ?: container.blendToward(Color.White, .08f),
+        pressedColor = pressedColor ?: Color.Unspecified,
         enabled = enabled,
         interactionSource = interaction,
-        pressScale = .985f,
+        pressScale = pressScale ?: .985f,
         hoverMillis = 140,
     )
     val focusAlpha by animateFloatAsState(
@@ -372,6 +381,9 @@ internal fun TextButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     contentPadding: PaddingValues = PaddingValues(horizontal = 10.dp, vertical = 7.dp),
+    hoverColor: Color? = null,
+    pressedColor: Color? = null,
+    pressScale: Float? = null,
     content: @Composable RowScope.() -> Unit,
 ) = Button(
     onClick = onClick,
@@ -380,6 +392,13 @@ internal fun TextButton(
     shape = RoundedCornerShape(Radius.sm),
     contentPadding = contentPadding,
     colors = ButtonDefaults.buttonColors(Color.Transparent, if (enabled) blue else faint),
+    // 注意：这里**不能**默认给 hoverColor。分段控件（GET/POST、详情页 tab）用的是同一个
+    // TextButton，底色由调用方 `.background(segmentBackground(...))` 提供；一旦在这里
+    // 默认铺一档 surface3，悬停时就会盖掉选中段的颜色（选中态反而被抹掉）。
+    // 需要可见悬停档位的调用方（DialogSecondary、非 primary 的 ToolbarButton）显式传。
+    hoverColor = hoverColor,
+    pressedColor = pressedColor,
+    pressScale = pressScale,
     content = content,
 )
 

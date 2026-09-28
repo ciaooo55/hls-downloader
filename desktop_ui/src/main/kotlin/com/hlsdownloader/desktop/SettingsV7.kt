@@ -596,8 +596,11 @@ private fun V7WeekdayChoice(value: String, onValue: (String) -> Unit) {
                 modifier = Modifier.weight(1f)
                     .clip(RoundedCornerShape(Radius.sm))
                     .background(segmentBackground(selected, selectedSurface, surface2))
-                    .border(1.dp, if (selected) blue else Color.Transparent, RoundedCornerShape(Radius.sm)),
+                    .border(1.dp, if (selected) blue else Color.Transparent, RoundedCornerShape(Radius.sm))
+                    .reportControlBounds("settings.day.$day"),
                 contentPadding = PaddingValues(0.dp),
+                hoverColor = if (selected) selectedSurface else surface3,
+                pressScale = SEGMENT_SCALE,
             ) { Text(label, color = if (selected) blue else muted, fontSize = TypeScale.caption) }
         }
     }
@@ -623,7 +626,10 @@ private fun V7WeekdayChoice(value: String, onValue: (String) -> Unit) {
                 Modifier.weight(1f)
                     .clip(RoundedCornerShape(Radius.sm))
                     .background(segmentBackground(selected == value, selectedSurface, Color.Transparent))
-                    .border(1.dp, if (selected == value) blue else Color.Transparent, RoundedCornerShape(Radius.sm)),
+                    .border(1.dp, if (selected == value) blue else Color.Transparent, RoundedCornerShape(Radius.sm))
+                    .reportControlBounds("settings.choice.$value"),
+            hoverColor = if (selected == value) selectedSurface else surface3,
+            pressScale = SEGMENT_SCALE,
             ) { Text(text, fontSize = TypeScale.caption, color = if (selected == value) blue else muted) }
         }
     }

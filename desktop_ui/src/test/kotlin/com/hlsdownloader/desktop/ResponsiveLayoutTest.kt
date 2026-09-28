@@ -136,13 +136,26 @@ class ResponsiveLayoutTest {
         assertFalse(source.contains("window.minimumSize = Dimension(1024, 600)"))
         // 侧栏筛选要能被 /state 读出来：折叠栏把文字换成图标后，
         // "点得中、点得对"光靠截图证明不了，必须有可断言的字段。
+        // 三个镜子现在集中在 UiTestStateMirror 里（Main.kt），由它按组合期读取的
+        // key 触发；行为由 UiStateMirrorEffectTest 兜底。
         assertTrue(
-            source.contains("UiTestState.updateFilter(filter.label)"),
+            source.contains("UiTestStateMirror(selected, visible.size, filter.label"),
             "侧栏筛选不再上报，折叠栏的点击行为就没法验证了",
         )
         assertTrue(
-            source.contains("UiTestState.updateSidebarSelection(category?.label ?: \"\", selectedQueueId ?: \"\")"),
+            source.contains("UiTestState.updateSidebarSelection(categoryLabel, selectedQueueId ?: \"\")"),
             "分类/队列不再上报，折叠栏另外两组入口的点击行为就没法验证了",
+        )
+        // 历史上这里写坏过一次：镜子是 AppShell 里的 SideEffect，而 selected 只在
+        // 内层 TaskTable 调用点被读取 ⇒ 外层作用域不失效 ⇒ 镜子首次后再也不触发，
+        // /state 的 selectedCount 永远停在 0（行已高亮）。别改回 SideEffect。
+        assertFalse(
+            source.contains("SideEffect { UiTestState.updateSelection"),
+            "/state 的选择镜像又挂回 SideEffect 了：selected 只在内层被读取，外层作用域不会失效",
+        )
+        assertTrue(
+            source.contains("LaunchedEffect(selected, visibleCount)"),
+            "/state 的选择镜像不再按键触发，外部写入选择就跟不上了",
         )
     }
 
@@ -210,6 +223,23 @@ class ResponsiveLayoutTest {
     }
 
     @Test
+    fun task_row_press_state_has_its_own_feedback_step() {
+        val source = java.io.File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
+        // 任务行是自己手写 interaction 的（要同时吃 hover / 双击 / 右键 / 拖动），没走
+        // rememberPressFeedback，所以"按下"这一态必须在这里显式收。原先只有 collectIsHoveredAsState：
+        // hover 换底色，按下和抬起之间肉眼一模一样——表格里最高频的手势偏偏没有反馈。
+        assertTrue(source.contains("val pressed by rowInteraction.collectIsPressedAsState()"))
+        assertTrue(source.contains("isSelected && pressed -> selectedSurface.blendToward(ink, .05f)"))
+        assertTrue(source.contains("pressed -> surface3"))
+        // 档位必须是 hover 之上再加一格：未选中按下压到 surface3，停在 surface2 就等于没做。
+        assertFalse(source.contains("pressed -> surface2"))
+        // 表头同一类问题：注释写"反馈只走底色"，但没传 pressedColor，按下时底色停在 hover 档。
+        assertTrue(source.contains("pressedColor = if (active) selectedSurface else surface3.blendToward(ink, .05f)"))
+        // 表头仍然不缩放（文字缩一下像"表格在抖"），所以这一处必须继续是 1f。
+        assertTrue(source.contains("pressScale = 1f,"))
+    }
+
+    @Test
     fun startup_retries_without_raw_pipe_text_and_modals_hide_the_workbench_tree() {
         val source = java.io.File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
         assertTrue(source.contains("while (!snapshotReady)"))
@@ -244,6 +274,7 @@ class ResponsiveLayoutTest {
     @Test
     fun settings_visual_fixtures_open_the_requested_page_without_pointer_input() {
         assertEquals("通用", auditSettingsTab("settings"))
+        assertEquals("计划", auditSettingsTab("settings_plan"))
         assertEquals("下载", auditSettingsTab("settings_download"))
         assertEquals("网络", auditSettingsTab("settings_network"))
         assertEquals("投屏与推送", auditSettingsTab("settings_devices"))

@@ -493,6 +493,12 @@ pub enum CoreCommand {
         #[serde(default)]
         options: TaskSpec,
     },
+    /// 按 task_id 取单个任务的快照。UI 侧此前只有 CorePipeRequest::Snapshot 一条路读任务状态，
+    /// 那一条在千任务库里要付 1.4MB（snapshot.tasks[] 每项约 1.5KB）。有了这一条，
+    /// 任务操作成功后可以只重取变化的那一个任务，而不是整个列表。
+    GetTask {
+        task_id: String,
+    },
     TaskAction {
         task_id: String,
         action: String,

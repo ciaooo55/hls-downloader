@@ -25,8 +25,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.HorizontalScrollbar
 import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.ScrollbarStyle
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.selection.selectable
@@ -44,7 +46,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
@@ -104,6 +108,7 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberWindowState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -186,7 +191,74 @@ internal fun selectionAfterDrag(taskIds: List<String>, firstIndex: Int, lastInde
     val end = maxOf(firstIndex, lastIndex).coerceIn(0, taskIds.lastIndex)
     return (if (additive) selected.toMutableSet() else mutableSetOf()).apply {
         taskIds.subList(start, end + 1).forEach(::add)
+    }}
+
+/**
+ * 任务表的键盘命令。整张表的键盘模型（Ctrl+A 全选 / Esc 清选 / Delete 删除 /
+ * Enter 详情 / 上下键移动）原先写在 `onPreviewKeyEvent` 的 lambda 里：
+ * 合成期才存在，**没法单测**，而它又是本产品里唯一成体系的表格键盘交互。
+ *
+ * 抽成纯函数后每个分支都能被真实断言。"到真机上按一遍"在这里不可行——
+ * 本机 Xvfb 没有窗口管理器，Robot 的按键到不了任何窗口（已用纯 AWT 探针证明），
+ * 所以剩下唯一可靠的验证手段就是把映射本身变成可测代码。
+ *
+ * 返回 null 表示"这个键不属于本表"，由调用方交还给焦点链上游。
+ */
+internal enum class TaskTableKeyCommand { SelectAll, ClearSelection, DeleteSelection, OpenDetails, MoveSelection }
+
+internal fun resolveTaskTableKeyCommand(key: Key, ctrl: Boolean, selectedCount: Int, taskCount: Int): TaskTableKeyCommand? = when {
+    // Ctrl+A 不判断空列表：与原有行为一致——0 行时也消费该键并清空选择/锚点。
+    ctrl && key == Key.A -> TaskTableKeyCommand.SelectAll
+    key == Key.Escape && selectedCount > 0 -> TaskTableKeyCommand.ClearSelection
+    key == Key.Delete && selectedCount > 0 -> TaskTableKeyCommand.DeleteSelection
+    key == Key.Enter && selectedCount > 0 -> TaskTableKeyCommand.OpenDetails
+    (key == Key.DirectionDown || key == Key.DirectionUp) && taskCount > 0 -> TaskTableKeyCommand.MoveSelection
+    else -> null
+}
+
+/**
+ * `/state` 的三个镜子：当前选择、当前筛选、分类/队列选中项。
+ *
+ * 折叠侧栏只剩图标后，"点得中、点得对"光看截图证明不了，所以校验脚本靠这几个字段断言；
+ * 侧栏同理。它们必须**跟着写入方**更新，而不是跟着"调用方作用域何时恰好重组"更新。
+ *
+ * 这里曾经是三个 `SideEffect`，直接挂在 `AppShell` 里，结果 `/state` 的
+ * `selectedCount` 永远停在 0：`selected` 只在内层的 `TaskTable(...)` 调用点被读取，
+ * 外层作用域不会因此失效，而 SideEffect 只在包含它的作用域重新执行时才触发——
+ * Linux 上用 UI 测试 API 实测复现（点中任务行 1 秒后仍报 selected=0，而行已高亮；
+ * 追踪日志里 `onSelection` 以 size=1 被调用，却没有后续的 SideEffect）。
+ *
+ * `LaunchedEffect` 的 key 在**组合期**读取，会让所在作用域按预期失效，
+ * 因此镜像与选择/筛选的真实状态一致。key 里带上 `visibleCount`：
+ * 可见任务集变化后选择与可见行的对应关系要重算（否则筛选后残留旧 id）。
+ */
+@Composable
+internal fun UiTestStateMirror(selected: Set<String>, visibleCount: Int, filterLabel: String, categoryLabel: String, selectedQueueId: String?) {
+    LaunchedEffect(selected, visibleCount) { UiTestState.updateSelection(selected) }
+    LaunchedEffect(filterLabel, categoryLabel, selectedQueueId) {
+        UiTestState.updateFilter(filterLabel)
+        UiTestState.updateSidebarSelection(categoryLabel, selectedQueueId ?: "")
     }
+}
+
+/**
+ * 可见任务集变化后，选择集该如何收敛。
+ *
+ * 为什么需要它：批量操作的目标是 `tasks.filter { it.id in selected }`（`TaskRow`
+ * 的菜单与快捷键都走这条），而表头的"N 已选"读的是 `selected.isNotEmpty()`。
+ * 一旦 `selected` 里留下当前筛选看不到的 id，这两个读数就会一起骗人：
+ * 表头说有 4 个，屏幕上 0 个，删除却命中 4 个（其中 3 个用户看不见）。
+ *
+ * 规则：
+ * - 选择为空、或可见集为空（筛选无结果 / 列表正在重载）时原样返回：
+ *   这两种情况下清空都只会让用户丢选择，却换不来任何一致性。
+ * - 否则收敛到可见行上；没有变化时**返回同一个实例**，调用方因此可以跳过写入，
+ *   也就不会在每次列表刷新（进度变化同样会重建 `visible`）时空转一次重组。
+ */
+internal fun selectionAfterVisibleSetChange(selected: Set<String>, visibleIds: Set<String>, visibleCount: Int): Set<String> {
+    if (selected.isEmpty() || visibleCount == 0) return selected
+    if (selected.all { it in visibleIds }) return selected
+    return selected.filterTo(HashSet()) { it in visibleIds }
 }
 internal fun harvestFilterCounts(links: List<HarvestCandidateUi>): Map<String, Int> = buildMap {
     put("all", links.size)
@@ -594,6 +666,7 @@ fun main() {
 
 internal fun auditSettingsTab(surface: String): String? = when (surface) {
     "settings" -> "通用"
+    "settings_plan" -> "计划"
     "settings_download" -> "下载"
     "settings_network" -> "网络"
     "settings_devices" -> "投屏与推送"
@@ -624,6 +697,10 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     var extensionDialog by remember { mutableStateOf(visualFixture == "extension") }
     var newTaskUrl by remember { mutableStateOf("") }
     var detailTaskId by remember { mutableStateOf<String?>(null) }
+    // 详情弹窗原先只从任务列表里取（tasks.firstOrNull），列表里没有就静默不弹窗。
+    // 这里补一个按 id 单独取的兜底：**列表优先，取回来的只在前者没有时使用**——
+    // 反过来（取回的优先）会让弹窗停在打开那一刻的快照，因为事件更新的是 tasks 而不是这份兜底拷贝。
+    var detailTaskFallback by remember { mutableStateOf<DownloadTask?>(null) }
     var settings by remember { mutableStateOf(EngineSettingsDto()) }
     // 本地先行修改（深色模式/排序）的代数：异步加载返回时若代数已前进则丢弃结果，避免旧值回跳
     var settingsEpoch by remember { mutableIntStateOf(0) }
@@ -658,7 +735,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         "cast_offline" -> UiSignal.Cast(true, "示例影片 1080p", "客厅电视", "OFFLINE", deviceKind = "dlna", supportedActions = listOf("status", "play", "pause", "seek_to", "stop"), paused = true, positionSeconds = 754, durationSeconds = 5420, positionAvailable = true)
         else -> null
     }) }
-    var playerSession by remember { mutableStateOf<UiSignal.Player?>(if (visualFixture in setOf("player", "media_stack")) UiSignal.Player(true, "示例影片 1080p", "visual-fixture", "PLAYING", speed = 1.25) else null) }
+    var playerSession by remember { mutableStateOf<UiSignal.Player?>(if (visualFixture in setOf("player", "media_stack")) UiSignal.Player(true, "示例影片 1080p", "visual-fixture", "PLAYING", speed = 1.25, durationSeconds = 632.0, positionSeconds = 218.0, positionAvailable = true, audioTracks = 2, subtitleTracks = 2) else null) }
     var duplicateResult by remember { mutableStateOf<UiSignal.Duplicate?>(null) }
     var updateResult by remember { mutableStateOf<UiSignal.Update?>(if (visualFixture == "update") UiSignal.Update(
         current = "7.0.0",
@@ -724,7 +801,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             if (!shouldRetryMediaPushResolution(error)) {
                 UiDiagnostics.warning(
                     "media_push.resolve_terminal_rejected",
-                    error.message ?: "媒体推送终态同步被下载引擎拒绝",
+                    describeTaskActionFailure(error, "媒体推送终态同步被下载引擎拒绝"),
                     requestId = requestId,
                 )
                 notice = UiSignal.Notice(
@@ -794,10 +871,16 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         null
     }
     val visible = sortTasks(visibleTasks(tasks, filter, category, query, selectedQueueId), settings.taskSort)
-    SideEffect { UiTestState.updateSelection(selected) }
-    // 侧栏筛选也要能读出来：折叠栏把文字标签换成图标后，"点得中、点得对"光看截图证明不了。
-    SideEffect { UiTestState.updateFilter(filter.label) }
-    SideEffect { UiTestState.updateSidebarSelection(category?.label ?: "", selectedQueueId ?: "") }
+    // 可见集一变，选择就要收敛到可见行上。否则筛选后台头仍显示"4 已选"，
+    // 而屏幕上一行都没选中，紧接着的批量删除会连被筛掉的 3 个任务一起删——
+    // 用户在屏幕上根本看不到它们。Linux 上实测复现（见迭代日志第三十四轮）：
+    // 连点 全部→进行中→排队中→已暂停→已完成→失败，selectedCount 一直是 4。
+    val visibleIds = visible.mapTo(HashSet()) { it.id }
+    LaunchedEffect(visibleIds, visible.size) {
+        val pruned = selectionAfterVisibleSetChange(selected, visibleIds, visible.size)
+        if (pruned != selected) selected = pruned
+    }
+    UiTestStateMirror(selected, visible.size, filter.label, category?.label ?: "", selectedQueueId)
     fun performTaskAction(taskId: String, action: String) {
         if (action in setOf("delete", "delete_files")) {
             destructiveRequest = DestructiveRequest(action, setOf(taskId))
@@ -829,10 +912,25 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 }
             } }.onSuccess { result ->
                 if (action == "log") recordTaskLog(taskId, result.taskLogLines())
-                refreshKey++
+                // 不再 refreshKey++：命令响应里已经带回本次动作的事件（applyEngineEvent 用的是和
+                // 事件轮询同一个函数），省掉 effect 重跑带来的 loadHandoffs + loadSettings 两次往返。
+                result.events.forEach { envelope ->
+                    handleSignal(applyEngineEvent(
+                        tasks,
+                        envelope.event,
+                        setExtension = { connected -> extensionText = connected },
+                        offerHandoff = { offer ->
+                            if (!presenterReady.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
+                                handoffQueue += offer
+                            }
+                        },
+                        resolveHandoff = { handoffId -> handoffQueue.removeAll { it.handoffId == handoffId } },
+                        taskDeleted = { deletedId -> forgetTaskLog(deletedId) },
+                    )) { signal -> if (signal is UiSignal.Notice) notice = signal }
+                }
             }.onFailure { error ->
                 UiDiagnostics.error("task_action.$action", error, taskId, requestId)
-                notice = UiSignal.Notice("error", error.message ?: "任务操作失败")
+                notice = UiSignal.Notice("error", describeTaskActionFailure(error))
             }
         }
     }
@@ -846,9 +944,31 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             "delete", "delete_files" -> destructiveRequest = DestructiveRequest(action, taskIds)
             "move_queue" -> queueAssignTaskIds = taskIds
             else -> scope.launch {
-                runCatching { withContext(Dispatchers.IO) { taskIds.forEach { EnginePipeClient().taskAction(it, action) } } }
-                    .onSuccess { refreshKey++ }
-                    .onFailure { notice = UiSignal.Notice("error", it.message ?: "批量操作失败") }
+                // 任务操作成功后不再 refreshKey++ 拉全量快照：
+                // core_runtime.rs 的 action() 每条出口都发事件（start/resume/retry/pause/cancel -> TaskUpdated，
+                // 状态不允许/任务不存在/未知动作 -> Error），而 taskAction() 返回的 CommandResult.events
+                // 里就装着这些信封；按 id upsert 进 tasks 即可。事件轮询仍在跑，漏掉的下一轮 waitEvents 会补。
+                // 千任务库里全量 snapshot 约 1.4MB，这个钱每次操作都付没有必要。
+                runCatching { withContext(Dispatchers.IO) { taskIds.map { EnginePipeClient().taskAction(it, action) } } }
+                    .onSuccess { results ->
+                        results.forEach { result ->
+                            result.events.forEach { envelope ->
+                                handleSignal(applyEngineEvent(
+                                    tasks,
+                                    envelope.event,
+                                    setExtension = { connected -> extensionText = connected },
+                                    offerHandoff = { offer ->
+                                        if (!presenterReady.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
+                                            handoffQueue += offer
+                                        }
+                                    },
+                                    resolveHandoff = { handoffId -> handoffQueue.removeAll { it.handoffId == handoffId } },
+                                    taskDeleted = { deletedId -> forgetTaskLog(deletedId) },
+                                )) { signal -> if (signal is UiSignal.Notice) notice = signal }
+                            }
+                        }
+                    }
+                    .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "批量操作失败")) }
             }
         }
     }
@@ -863,7 +983,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             harvestDialog -> { harvestDialog = false; true }
             settingsDialog -> { settingsDialog = false; true }
             extensionDialog -> { extensionDialog = false; true }
-            detailTaskId != null -> { detailTaskId = null; true }
+            detailTaskId != null -> { detailTaskId = null; detailTaskFallback = null; true }
             selected.isNotEmpty() -> { selected = emptySet(); true }
             else -> false
         }
@@ -891,7 +1011,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     notice = UiSignal.Notice("success", "已导入 $count 项任务")
                     refreshKey++
                 }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "拖入文件失败") }
+                .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "拖入文件失败")) }
             onExternalDropConsumed()
         }
     }
@@ -944,6 +1064,12 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 }
             }
             .onFailure { error ->
+                // LaunchedEffect(refreshKey) 每次 refreshKey 变化都会取消并重启这个协程；
+                // 取消时 withContext(loadHandoffs()) 抛出的 CancellationException 会被
+                // runCatching 吞掉，其 message 是组合框架的
+                // "The coroutine scope left the composition"。那是**正常取消**，不是失败——
+                // 必须原样抛回，绝不能变成一条 error 通知给用户看。
+                if (error is CancellationException) throw error
                 UiDiagnostics.error("handoff.restore", error)
                 notice = UiSignal.Notice("error", error.message ?: "读取浏览器接管请求失败")
             }
@@ -967,7 +1093,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         deviceResult = UiSignal.Devices(emptyList())
                         scope.launch {
                             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().discoverCastDevices(request.pushKind) } }
-                                .onFailure { castDiscovering = false; notice = UiSignal.Notice("error", it.message ?: "设备搜索失败") }
+                                .onFailure { castDiscovering = false; notice = UiSignal.Notice("error", describeFailure(it, "设备搜索失败")) }
                         }
                     }
                 }
@@ -1065,7 +1191,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                                 deviceResult = UiSignal.Devices(emptyList())
                                 scope.launch {
                                     runCatching { withContext(Dispatchers.IO) { EnginePipeClient().discoverCastDevices(signal.request.pushKind) } }
-                                        .onFailure { castDiscovering = false; notice = UiSignal.Notice("error", it.message ?: "设备搜索失败") }
+                                        .onFailure { castDiscovering = false; notice = UiSignal.Notice("error", describeFailure(it, "设备搜索失败")) }
                                 }
                             }
                             is UiSignal.MediaPushResolved -> {
@@ -1148,7 +1274,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         delay(5_000)
         while (true) {
             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().checkUpdate(silent = true) } }
-                .onFailure { UiDiagnostics.warning("update.check.silent", it.message ?: "静默检查更新失败") }
+                .onFailure { UiDiagnostics.warning("update.check.silent", describeFailure(it, "静默检查更新失败")) }
             delay(24 * 60 * 60 * 1_000L)
         }
     }
@@ -1162,7 +1288,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     castPollFailures++
                     if (castPollFailures >= 2) castSession = castSession?.copy(status = "OFFLINE", playing = false, paused = true)
                     // 只在设备从可达变为不可达时提示一次，避免每秒轮询失败都弹出错误通知
-                    if (castPollReachable) notice = UiSignal.Notice("error", error.message ?: "无法读取投屏设备状态")
+                    if (castPollReachable) notice = UiSignal.Notice("error", describeFailure(error, "无法读取投屏设备状态"))
                     castPollReachable = false
                     delay(2_000)
                 }
@@ -1174,8 +1300,24 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         entries.forEach { (taskId, action) ->
             scope.launch {
                 taskActionLimiter.withPermit {
+                    // 同上：靠命令响应里已经带回的事件增量更新任务行，不再拉全量快照。
                     runCatching { withContext(Dispatchers.IO) { EnginePipeClient().taskAction(taskId, action) } }
-                        .onSuccess { refreshKey++ }
+                        .onSuccess { result ->
+                            result.events.forEach { envelope ->
+                                handleSignal(applyEngineEvent(
+                                    tasks,
+                                    envelope.event,
+                                    setExtension = { connected -> extensionText = connected },
+                                    offerHandoff = { offer ->
+                                        if (!presenterReady.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
+                                            handoffQueue += offer
+                                        }
+                                    },
+                                    resolveHandoff = { handoffId -> handoffQueue.removeAll { it.handoffId == handoffId } },
+                                    taskDeleted = { deletedId -> forgetTaskLog(deletedId) },
+                                )) { signal -> if (signal is UiSignal.Notice) notice = signal }
+                            }
+                        }
                 }
             }
         }
@@ -1214,14 +1356,14 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 ContentHeader(filter, visible.size, selected.isNotEmpty(), tasks.any { it.status == "已完成" }, { refreshKey++ }, {
                     scope.launch {
                         runCatching { withContext(Dispatchers.IO) { EnginePipeClient().clearCompleted() } }
-                            .onSuccess { refreshKey++ }.onFailure { notice = UiSignal.Notice("error", it.message ?: "清理已完成任务失败") }
+                            .onSuccess { refreshKey++ }.onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "清理已完成任务失败")) }
                     }
                 }, onMore = { action ->
                     when (action) {
-                        "import" -> chooseImportPaths()?.let { paths -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().importPaths(paths) } }.onSuccess { result -> notice = UiSignal.Notice("success", "已导入 ${result.events.count { it.event["kind"]?.jsonPrimitive?.content == "task_created" }} 项任务"); refreshKey++ }.onFailure { notice = UiSignal.Notice("error", it.message ?: "导入失败") } } }
-                        "export" -> chooseExportPath()?.let { path -> scope.launch { runCatching { withContext(Dispatchers.IO) { exportTaskList(path, selected.toList()) } }.onSuccess { result -> notice = UiSignal.Notice("success", "已导出 ${result.taskCount} 项任务") }.onFailure { notice = UiSignal.Notice("error", it.message ?: "导出失败") } } }
-                        "update" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().checkUpdate(silent = false) } }.onFailure { notice = UiSignal.Notice("error", it.message ?: "检查更新失败") } }
-                        "cancel_power" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().cancelPowerAction() } }.onFailure { notice = UiSignal.Notice("error", it.message ?: "取消电源动作失败") } }
+                        "import" -> chooseImportPaths()?.let { paths -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().importPaths(paths) } }.onSuccess { result -> notice = UiSignal.Notice("success", "已导入 ${result.events.count { it.event["kind"]?.jsonPrimitive?.content == "task_created" }} 项任务"); refreshKey++ }.onFailure { notice = UiSignal.Notice("error", describeFailure(it, "导入失败")) } } }
+                        "export" -> chooseExportPath()?.let { path -> scope.launch { runCatching { withContext(Dispatchers.IO) { exportTaskList(path, selected.toList()) } }.onSuccess { result -> notice = UiSignal.Notice("success", "已导出 ${result.taskCount} 项任务") }.onFailure { notice = UiSignal.Notice("error", describeFailure(it, "导出失败")) } } }
+                        "update" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().checkUpdate(silent = false) } }.onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "检查更新失败")) } }
+                        "cancel_power" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().cancelPowerAction() } }.onFailure { notice = UiSignal.Notice("error", describeFailure(it, "取消电源动作失败")) } }
                         "notices" -> noticesDialog = true
                         "about" -> aboutDialog = true
                         "exit" -> onExit()
@@ -1231,8 +1373,27 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     else if (action == "move_queue") queueAssignTaskIds = selected
                     else if (action in setOf("play", "cast", "push_tvbox")) selected.firstOrNull()?.let { performTaskAction(it, action) }
                     else scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { selected.forEach { EnginePipeClient().taskAction(it, action) } } }
-                            .onSuccess { refreshKey++ }.onFailure { notice = UiSignal.Notice("error", it.message ?: "批量操作失败") }
+                        // 同上（与 runTaskActions / launchTaskActions 一致）：靠命令响应里已经带回的
+                        // 事件增量更新，不再 refreshKey++ 拉全量快照。
+                        runCatching { withContext(Dispatchers.IO) { selected.map { EnginePipeClient().taskAction(it, action) } } }
+                            .onSuccess { results ->
+                                results.forEach { result ->
+                                    result.events.forEach { envelope ->
+                                        handleSignal(applyEngineEvent(
+                                            tasks,
+                                            envelope.event,
+                                            setExtension = { connected -> extensionText = connected },
+                                            offerHandoff = { offer ->
+                                                if (!presenterReady.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
+                                                    handoffQueue += offer
+                                                }
+                                            },
+                                            resolveHandoff = { handoffId -> handoffQueue.removeAll { it.handoffId == handoffId } },
+                                            taskDeleted = { deletedId -> forgetTaskLog(deletedId) },
+                                        )) { signal -> if (signal is UiSignal.Notice) notice = signal }
+                                    }
+                                }
+                            }.onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it)) }
                     }
                 }
                 TaskTable(
@@ -1241,11 +1402,11 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     appIcon,
                     settings.taskSort,
                     { selected = it },
-                    { detailTaskId = it.id },
+                    { detailTaskId = it },
                     onDeleteSelection = { if (selected.isNotEmpty()) destructiveRequest = DestructiveRequest("delete", selected) },
                     onQueueMove = { taskId, delta -> scope.launch {
                         runCatching { withContext(Dispatchers.IO) { EnginePipeClient().reorderQueue(taskId, delta) } }
-                            .onSuccess { refreshKey++ }.onFailure { notice = UiSignal.Notice("error", it.message ?: "队列排序失败") }
+                            .onSuccess { refreshKey++ }.onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "队列排序失败")) }
                     } },
                     modifier = Modifier.weight(1f),
                     onBatchAction = ::performTaskActions,
@@ -1276,14 +1437,14 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             scope.launch {
                 runCatching { withContext(Dispatchers.IO) { EnginePipeClient().probeTorrent(draft.url) } }
                     .onSuccess { newTaskDialog = false }
-                    .onFailure { notice = UiSignal.Notice("error", it.message ?: "种子分析失败") }
+                    .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "种子分析失败")) }
             }
         } else {
             scope.launch {
                 probeDraft = draft
                 runCatching { withContext(Dispatchers.IO) { EnginePipeClient().probeUrl(draft) } }
                     .onSuccess { newTaskDialog = false }
-                    .onFailure { notice = UiSignal.Notice("error", it.message ?: "资源分析失败") }
+                    .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "资源分析失败")) }
             }
         }
     }) { draft ->
@@ -1292,7 +1453,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             scope.launch {
                 runCatching { withContext(Dispatchers.IO) { EnginePipeClient().probeTorrent(draft.url) } }
                     .onSuccess { newTaskDialog = false }
-                    .onFailure { notice = UiSignal.Notice("error", it.message ?: "种子分析失败") }
+                    .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "种子分析失败")) }
             }
             return@NewTaskDialog
         }
@@ -1302,7 +1463,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 if (queued.curlCommand.isNotBlank()) EnginePipeClient().importCurl(queued) else EnginePipeClient().createTask(queued)
             } }
                 .onSuccess { newTaskDialog = false; refreshKey++ }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "创建下载失败") }
+                .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "创建下载失败")) }
         }
     }
     torrentProbe?.let { signal -> TorrentSelectionDialog(signal.data, { torrentProbe = null; torrentDraft = null }) { files ->
@@ -1314,14 +1475,14 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     EnginePipeClient().createTask(draft.copy(torrentSelection = files))
                 }
             }.onSuccess { torrentProbe = null; torrentDraft = null; refreshKey++ }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "创建种子任务失败") }
+                .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "创建种子任务失败")) }
         }
     } }
     if (batchDialog) BatchAddDialog({ batchDialog = false }) { urls ->
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { urls.forEach { EnginePipeClient().createTask(TaskDraft(url = it, queueId = selectedQueueId ?: "default")) } } }
                 .onSuccess { refreshKey++ }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "批量创建任务失败") }
+                .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "批量创建任务失败")) }
         }
         batchDialog = false
     }
@@ -1331,7 +1492,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().harvestPage(url, effectiveReferer) } }
                 .onSuccess { refreshKey++ }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "页面抓取失败") }
+                .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "页面抓取失败")) }
         }
         harvestDialog = false
     }
@@ -1353,7 +1514,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 runCatching { withContext(Dispatchers.IO) { EnginePipeClient().discoverCastDevices(mode) } }
                     .onFailure { error ->
                         castDiscovering = false
-                        notice = UiSignal.Notice("error", error.message ?: "设备扫描失败")
+                        notice = UiSignal.Notice("error", describeFailure(error, "设备扫描失败"))
                     }
             }
         },
@@ -1377,7 +1538,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     if (pendingCastTask == null && pendingMediaSource == null) deviceResult = null
                     notice = UiSignal.Notice("success", "设置已保存")
                 }
-                .onFailure { error -> notice = UiSignal.Notice("error", error.message ?: "设置保存失败") }
+                .onFailure { error -> notice = UiSignal.Notice("error", describeFailure(error, "设置保存失败")) }
             settingsSaveBusy = false
         }
     }
@@ -1391,7 +1552,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 queueManagerDialog = false
                 refreshKey++
                 notice = UiSignal.Notice("success", "队列设置已保存")
-            }.onFailure { notice = UiSignal.Notice("error", it.message ?: "队列设置保存失败") }
+            }.onFailure { notice = UiSignal.Notice("error", describeFailure(it, "队列设置保存失败")) }
         }
     }
     if (queueAssignTaskIds.isNotEmpty()) QueueAssignDialog(
@@ -1404,10 +1565,43 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().assignQueue(taskIds, queueId) } }
                 .onSuccess { refreshKey++; notice = UiSignal.Notice("success", "已移动 ${taskIds.size} 个任务") }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "移动任务失败") }
+                .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "移动任务失败")) }
         }
     }
-    detailTaskId?.let { taskId -> tasks.firstOrNull { it.id == taskId } }?.let { task ->
+    LaunchedEffect(detailTaskId) {
+        val id = detailTaskId
+        // 列表里已有就什么都不做（那份本来就会随事件实时更新，也多一次 IPC）
+        if (id == null || tasks.any { it.id == id }) {
+            detailTaskFallback = null
+            return@LaunchedEffect
+        }
+        val fetched = runCatching {
+            withContext(Dispatchers.IO) { EnginePipeClient().getTask(id) }
+        }.getOrNull()
+        detailTaskFallback = if (fetched == null) null else {
+            val scratch = mutableStateListOf<DownloadTask>()
+            fetched.events.forEach { envelope ->
+                applyEngineEvent(
+                    scratch,
+                    envelope.event,
+                    setExtension = {},
+                    offerHandoff = {},
+                    resolveHandoff = {},
+                    taskDeleted = {},
+                )
+            }
+            scratch.firstOrNull()
+        }
+    }
+    LaunchedEffect(engineText) { UiTestState.updateEngineText(engineText) }
+    // notice 历史导给 /state：断言"某条提示真的出现过、就是这个字符串"。
+    // 用最后一条的时间戳作 key —— 列表每次重组都会 toList() 出新对象，
+    // 拿它当 key 会让 effect 每次重组都跑一遍，没有意义。
+    val lastNoticeAt = noticeHistory.lastOrNull()?.at ?: 0L
+    LaunchedEffect(lastNoticeAt) {
+        UiTestState.updateNotices(noticeHistory.takeLast(12).map { Triple(it.level, it.message, it.at) })
+    }
+    detailTaskId?.let { taskId -> tasks.firstOrNull { it.id == taskId } ?: detailTaskFallback }?.let { task ->
         TaskDetailsDialog(
             task = task,
             logLines = taskLogs[task.id],
@@ -1419,7 +1613,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         .onSuccess { refreshKey++; notice = UiSignal.Notice("success", if (cookie.isBlank()) "下载地址已更新" else "下载地址和凭据已更新") }
                         .onFailure { error ->
                             UiDiagnostics.error("task_refresh_request", error, task.id, requestId)
-                            notice = UiSignal.Notice("error", error.message ?: "更新下载请求失败")
+                            notice = UiSignal.Notice("error", describeFailure(error, "更新下载请求失败"))
                         }
                 }
             },
@@ -1465,7 +1659,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             if (!failureReported) {
                 UiDiagnostics.warning(
                     "handoff.claim_fallback",
-                    claimed.exceptionOrNull()?.message ?: "等待下载确认窗口释放请求",
+                    describeFailure(claimed.exceptionOrNull(), "等待下载确认窗口释放请求"),
                     offer.handoffId,
                 )
                 failureReported = true
@@ -1497,7 +1691,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     .onFailure { error ->
                         if (!statusReadFailed) {
                             UiDiagnostics.error("handoff.status", error, offer.handoffId)
-                            notice = UiSignal.Notice("error", error.message ?: "读取浏览器接管状态失败")
+                            notice = UiSignal.Notice("error", describeFailure(error, "读取浏览器接管状态失败"))
                         }
                         statusReadFailed = true
                     }
@@ -1534,7 +1728,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         .onSuccess { handoffQueue.removeAll { it.handoffId == offer.handoffId }; refreshKey++ }
                         .onFailure { error ->
                             UiDiagnostics.error("handoff.accept", error, offer.handoffId)
-                            notice = UiSignal.Notice("error", error.message ?: "接受浏览器接管请求失败")
+                            notice = UiSignal.Notice("error", describeTaskActionFailure(error, "接受浏览器接管请求失败"))
                         }
                     handoffBusy = false
                 }
@@ -1546,7 +1740,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         .onSuccess { handoffQueue.removeAll { it.handoffId == offer.handoffId } }
                         .onFailure { error ->
                             UiDiagnostics.error("handoff.reject", error, offer.handoffId)
-                            notice = UiSignal.Notice("error", error.message ?: "拒绝浏览器接管请求失败")
+                            notice = UiSignal.Notice("error", describeTaskActionFailure(error, "拒绝浏览器接管请求失败"))
                         }
                     handoffBusy = false
                 }
@@ -1565,7 +1759,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 ))
             } }
                 .onSuccess { probeResult = null; probeDraft = null; refreshKey++ }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "创建媒体任务失败") }
+                .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "创建媒体任务失败")) }
         }
     } }
     harvestResult?.let { signal -> HarvestResultDialog(
@@ -1583,7 +1777,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     harvestResult = harvestResult?.let { current ->
                         current.copy(links = mergeHarvestSizes(current.links, sizes))
                     }
-                }.onFailure { notice = UiSignal.Notice("error", it.message ?: "读取文件大小失败") }
+                }.onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "读取文件大小失败")) }
                 harvestProbeBusy = false
             }
         },
@@ -1603,7 +1797,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 }
             }
                 .onSuccess { harvestResult = null; refreshKey++ }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "创建抓取任务失败") }
+                .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "创建抓取任务失败")) }
         }
     } }
     if (mediaSourceDialog.isNotEmpty()) MediaSourcePickerDialog(mediaSourceDialog, { mediaSourceDialog = "" }) { source ->
@@ -1616,7 +1810,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         deviceResult = UiSignal.Devices(emptyList())
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().discoverCastDevices(pendingCastMode) } }
-                .onFailure { castDiscovering = false; notice = UiSignal.Notice("error", it.message ?: "设备搜索失败") }
+                .onFailure { castDiscovering = false; notice = UiSignal.Notice("error", describeFailure(it, "设备搜索失败")) }
         }
     }
     if (!settingsDeviceScanActive) deviceResult?.let { signal -> DevicePickerDialog(signal, pendingCastMode, pendingMediaSource, castDiscovering, castConnecting, settings.preferredCastDeviceId, {
@@ -1635,7 +1829,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         }
     }, onRescan = {
         castDiscovering = true
-        scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().discoverCastDevices(pendingCastMode) } }.onFailure { castDiscovering = false; notice = UiSignal.Notice("error", it.message ?: "设备搜索失败") } }
+        scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().discoverCastDevices(pendingCastMode) } }.onFailure { castDiscovering = false; notice = UiSignal.Notice("error", describeFailure(it, "设备搜索失败")) } }
     }, onPublish = {
         val taskId = pendingCastTask
         val media = pendingMediaSource
@@ -1652,7 +1846,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""; pendingPushRequestId = null
                 }
             } else {
-                val message = outcome.exceptionOrNull()?.message ?: "局域网发布失败"
+                val message = describeFailure(outcome.exceptionOrNull(), "局域网发布失败")
                 if (requestId != null) {
                     resolveMediaPushTerminalReliably(requestId, "failed", message)
                     if (pendingPushRequestId == requestId) {
@@ -1679,7 +1873,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     .onFailure { error ->
                         UiDiagnostics.warning(
                             "media_push.preferred_device",
-                            error.message ?: "首选投屏设备保存失败",
+                            describeFailure(error, "首选投屏设备保存失败"),
                             requestId = requestId.orEmpty(),
                         )
                     }
@@ -1688,7 +1882,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     deviceResult = null; pendingCastTask = null; pendingMediaSource = null; pendingCastMode = ""; pendingPushRequestId = null
                 }
             } else {
-                val message = outcome.exceptionOrNull()?.message ?: "投屏连接失败"
+                val message = describeFailure(outcome.exceptionOrNull(), "投屏连接失败")
                 if (requestId != null) {
                     resolveMediaPushTerminalReliably(requestId, "failed", message)
                     if (pendingPushRequestId == requestId) {
@@ -1717,7 +1911,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             updateDownloadBusy = true
             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().downloadUpdate() } }
                 .onSuccess { notice = UiSignal.Notice("success", "安装包已下载并完成身份校验") }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "下载或校验安装包失败") }
+                .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "下载或校验安装包失败")) }
             updateDownloadBusy = false
         }
     } }
@@ -1730,7 +1924,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     delay(100)
                     onExit()
                 }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "无法开始覆盖升级") }
+                .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "无法开始覆盖升级")) }
             updateDownloadBusy = false
         }
     } }
@@ -1739,20 +1933,20 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().cancelPowerAction() } }
                 .onSuccess { notice = UiSignal.Notice("info", "已取消完成后电源动作") }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "取消电源动作失败") }
+                .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "取消电源动作失败")) }
         }
     }, onConfirm = {
         powerPending = null
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().confirmPowerAction() } }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "执行电源动作失败") }
+                .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "执行电源动作失败")) }
         }
     }) }
     playerSession?.takeIf { it.active }?.let { signal -> PlayerSessionHud(signal, playerControlBusy) { action ->
         if (!playerControlBusy) scope.launch {
             playerControlBusy = true
             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().playerControl(action) } }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "播放器控制失败") }
+                .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "播放器控制失败")) }
             playerControlBusy = false
         }
     } }
@@ -1765,16 +1959,34 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             castControlBusy = true
             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().controlCast(action, seconds) } }
                 .onSuccess { if (action == "stop") castSession = null }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "投屏控制失败") }
+                .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "投屏控制失败")) }
             castControlBusy = false
         }
     } }
     destructiveRequest?.let { request -> DestructiveConfirmDialog(request, { destructiveRequest = null }) {
         destructiveRequest = null
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { request.taskIds.forEach { EnginePipeClient().taskAction(it, request.action) } } }
-                .onSuccess { selected = selected - request.taskIds; refreshKey++ }
-                .onFailure { notice = UiSignal.Notice("error", it.message ?: "删除失败") }
+            runCatching { withContext(Dispatchers.IO) { request.taskIds.map { EnginePipeClient().taskAction(it, request.action) } } }
+                .onSuccess { results ->
+                    selected = selected - request.taskIds
+                    results.forEach { result ->
+                        result.events.forEach { envelope ->
+                            handleSignal(applyEngineEvent(
+                                tasks,
+                                envelope.event,
+                                setExtension = { connected -> extensionText = connected },
+                                offerHandoff = { offer ->
+                                    if (!presenterReady.value && handoffQueue.none { it.handoffId == offer.handoffId }) {
+                                        handoffQueue += offer
+                                    }
+                                },
+                                resolveHandoff = { handoffId -> handoffQueue.removeAll { it.handoffId == handoffId } },
+                                taskDeleted = { deletedId -> forgetTaskLog(deletedId) },
+                            )) { signal -> if (signal is UiSignal.Notice) notice = signal }
+                        }
+                    }
+                }
+                .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "删除失败")) }
         }
     } }
     }
@@ -1813,7 +2025,12 @@ internal fun auditTasks(count: Int): List<DownloadTask> = List(count.coerceAtLea
             totalRanges = 32,
             playbackReady = extension in setOf("mp4", "m3u8") && downloaded > 0,
             url = "https://audit.invalid/files/task-$index.$extension",
-            resourceKind = if (extension == "m3u8") "hls" else "file",
+            // 第 1 行做成 BT 任务，好让"任务详情"里那段需要 torrentFiles 的面板（全选/反选/更新下载链接）
+            // 能在本机量到。选 index==1 是因为它 status="queued"、availableActions 里有 start，
+            // 这样 canRefresh 也为真，更新下载链接那个按钮才出现；而且它排在可见区第二行，
+            // 不依赖滚动（滚轮在本机是废的）。
+            // resourceKind 只影响展示标签（"BT"、"Piece"），不影响其它夹具。
+            resourceKind = if (index == 1) "torrent" else if (extension == "m3u8") "hls" else "file",
             availableActions = when (status) {
                 "running" -> listOf("pause", "cancel", "details")
                 "paused" -> listOf("resume", "delete", "details")
@@ -2115,8 +2332,8 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
 // 这是纯装饰性分组线，不承担"识别控件"的信息，WCAG 1.4.11 不适用；目标是稳定可辨，而非卡 3:1。
 // 取 faint 的 80%：浅色约 3.00~3.24:1、深色约 3.99~4.33:1，顺带也过了 3:1。
 @Composable private fun ToolbarGroupDivider() = Box(Modifier.padding(horizontal = 5.dp).width(2.dp).height(18.dp).background(faint.copy(alpha = .8f)))
-@Composable private fun ToolbarButton(icon: ImageVector, label: String, action: () -> Unit, primary: Boolean = false) { Button(onClick = action, colors = ButtonDefaults.buttonColors(containerColor = if (primary) blue else Color.Transparent, contentColor = if (primary) onBlue else ink), border = if (primary) null else BorderStroke(1.dp, Color.Transparent), shape = RoundedCornerShape(Radius.md), contentPadding = PaddingValues(horizontal = 8.dp), modifier = Modifier.height(36.dp).padding(horizontal = 1.dp)) { Icon(icon, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text(label, fontSize = TypeScale.caption, fontWeight = if (primary) FontWeight.SemiBold else FontWeight.Medium) } }
-@Composable private fun ToolbarIcon(icon: ImageVector, text: String, action: () -> Unit) = WorkbenchTooltip(text) { IconButton(onClick = action, modifier = Modifier.size(36.dp)) { Icon(icon, text, tint = muted, modifier = Modifier.size(18.dp)) } }
+@Composable private fun ToolbarButton(icon: ImageVector, label: String, action: () -> Unit, primary: Boolean = false) { Button(onClick = action, colors = ButtonDefaults.buttonColors(containerColor = if (primary) blue else Color.Transparent, contentColor = if (primary) onBlue else ink), border = if (primary) null else BorderStroke(1.dp, Color.Transparent), shape = RoundedCornerShape(Radius.md), contentPadding = PaddingValues(horizontal = 8.dp), modifier = Modifier.height(36.dp).padding(horizontal = 1.dp).reportControlBounds("toolbar.$label"), hoverColor = if (primary) null else surface3, pressedColor = if (primary) null else surface3.blendToward(ink, .05f)) { Icon(icon, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text(label, fontSize = TypeScale.caption, fontWeight = if (primary) FontWeight.SemiBold else FontWeight.Medium) } }
+@Composable private fun ToolbarIcon(icon: ImageVector, text: String, action: () -> Unit) = WorkbenchTooltip(text) { IconButton(onClick = action, modifier = Modifier.size(36.dp).reportControlBounds("toolbar.$text")) { Icon(icon, text, tint = muted, modifier = Modifier.size(18.dp)) } }
 
 /**
  * 侧栏导航行的外壳：悬停换底色、按压缩一点、选中给选中底。
@@ -2136,6 +2353,7 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
 private fun NavRow(
     active: Boolean,
     onSelect: () -> Unit,
+    modifier: Modifier = Modifier,
     content: @Composable RowScope.(highlighted: Boolean) -> Unit,
 ) {
     val feedback = rememberPressFeedback(
@@ -2144,7 +2362,7 @@ private fun NavRow(
         pressScale = .99f,
     )
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .height(36.dp)
             .clip(RoundedCornerShape(Radius.md))
@@ -2185,7 +2403,7 @@ private fun NavRow(
         Column(Modifier.fillMaxSize().verticalScroll(scrollState).padding(end = 5.dp)) {
         TaskFilter.entries.forEach { item ->
             val active = item == selected
-            NavRow(active, { onSelected(item) }) { highlighted ->
+            NavRow(active, { onSelected(item) }, Modifier.reportControlBounds("sidebar.status.${item.label}")) { highlighted ->
                 Icon(categoryIcon(item), null, tint = if (active) blue else if (highlighted) ink else muted, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(8.dp)); Text(item.label, color = if (highlighted) ink else muted, fontSize = TypeScale.body, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal); Spacer(Modifier.weight(1f)); Text(taskCount(tasks, item).toString(), color = if (active) blue else muted, fontSize = TypeScale.caption, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
             }
         }
@@ -2194,14 +2412,14 @@ private fun NavRow(
         }
         profiles.sortedByDescending { it.priority }.forEach { profile ->
             val active = profile.id == selectedQueueId
-            NavRow(active, { onQueue(profile.id) }) { highlighted ->
+            NavRow(active, { onQueue(profile.id) }, Modifier.reportControlBounds("sidebar.queue.${profile.name}")) { highlighted ->
                 Icon(if (profile.enabled) Icons.AutoMirrored.Outlined.PlaylistPlay else Icons.Outlined.PauseCircleOutline, null, tint = if (active) blue else if (highlighted) ink else muted, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(8.dp)); Text(profile.name, color = if (highlighted) ink else muted, fontSize = TypeScale.body, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)); Text(tasks.count { it.source.queueId == profile.id }.toString(), color = if (active) blue else faint, fontSize = TypeScale.caption)
             }
         }
         Spacer(Modifier.height(14.dp)); Text("分类", color = muted, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
         TaskCategory.entries.forEach { item ->
             val active = item == selectedCategory
-            NavRow(active, { onCategory(item) }) { highlighted ->
+            NavRow(active, { onCategory(item) }, Modifier.reportControlBounds("sidebar.category.${item.label}")) { highlighted ->
                 Icon(categoryIcon(item), null, tint = if (active) blue else if (highlighted) ink else muted, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(8.dp)); Text(item.label, color = if (highlighted) ink else muted, fontSize = TypeScale.body, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal); Spacer(Modifier.weight(1f)); Text(tasks.count { taskCategory(it) == item }.toString(), color = if (active) blue else muted, fontSize = TypeScale.caption, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
             }
         }
@@ -2223,7 +2441,7 @@ private fun NavRow(
         Box(Modifier.weight(1f).fillMaxWidth()) {
             Column(Modifier.fillMaxSize().verticalScroll(scrollState).padding(end = 2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 TaskFilter.entries.forEach { item ->
-                    RailItem(categoryIcon(item), item.label, taskCount(tasks, item), item == selected) { onSelected(item) }
+                    RailItem(categoryIcon(item), item.label, taskCount(tasks, item), item == selected, Modifier.reportControlBounds("rail.status.${item.label}")) { onSelected(item) }
                 }
                 RailGroupDivider()
                 profiles.sortedByDescending { it.priority }.forEach { profile ->
@@ -2232,11 +2450,12 @@ private fun NavRow(
                         profile.name,
                         tasks.count { it.source.queueId == profile.id },
                         profile.id == selectedQueueId,
+                        Modifier.reportControlBounds("rail.queue.${profile.name}"),
                     ) { onQueue(profile.id) }
                 }
                 RailGroupDivider()
                 TaskCategory.entries.forEach { item ->
-                    RailItem(categoryIcon(item), item.label, tasks.count { taskCategory(it) == item }, item == selectedCategory) { onCategory(item) }
+                    RailItem(categoryIcon(item), item.label, tasks.count { taskCategory(it) == item }, item == selectedCategory, Modifier.reportControlBounds("rail.category.${item.label}")) { onCategory(item) }
                 }
             }
             VerticalScrollbar(rememberScrollbarAdapter(scrollState), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp))
@@ -2245,7 +2464,7 @@ private fun NavRow(
         // 固定到底部并加一条分隔线，免得和分类图标连成一片看不出边界。
         HorizontalDivider(color = border)
         Spacer(Modifier.height(6.dp))
-        RailItem(Icons.Outlined.SettingsSuggest, "管理队列", null, false, onManageQueues)
+        RailItem(Icons.Outlined.SettingsSuggest, "管理队列", null, false, Modifier.reportControlBounds("rail.manage"), onManageQueues)
     }
 }
 
@@ -2259,7 +2478,7 @@ private fun NavRow(
  * 选中态同时给底色、图标色和左侧色条三条线索——底色在色觉障碍下不可靠，
  * 色条是形状线索，对应 WCAG 1.4.1"不能只靠颜色传达信息"。
  */
-@Composable private fun RailItem(icon: ImageVector, label: String, count: Int?, active: Boolean, onClick: () -> Unit) {
+@Composable private fun RailItem(icon: ImageVector, label: String, count: Int?, active: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     WorkbenchTooltip(if (count != null && count > 0) "$label · $count" else label) {
         // 与展开态 NavRow 同一套规则：悬停换底色 + 图标从 muted 提到 ink，选中态压过悬停。
         // 按压只缩到 .96f —— 40dp 的方框缩太多会让图标在格子间"跳"。
@@ -2270,7 +2489,7 @@ private fun NavRow(
         )
         Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
             Box(
-                Modifier.fillMaxSize().clip(RoundedCornerShape(Radius.md))
+                modifier.fillMaxSize().clip(RoundedCornerShape(Radius.md))
                     .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
                     .background(feedback.background)
                     .hoverable(feedback.interaction)
@@ -2314,7 +2533,7 @@ private fun categoryIcon(category: TaskCategory): ImageVector = when (category) 
             if (compact) {
                 ToolbarIcon(Icons.Outlined.DeleteSweep, "清理已完成") { if (hasCompleted) onClearCompleted() }; ToolbarIcon(Icons.Outlined.Refresh, "刷新", onRefresh)
             } else {
-                TextButton(onClick = onClearCompleted, enabled = hasCompleted, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(Icons.Outlined.DeleteSweep, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("清理已完成", fontSize = TypeScale.caption) }; TextButton(onClick = onRefresh, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(Icons.Outlined.Refresh, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("刷新", fontSize = TypeScale.caption) }
+                TextButton(onClick = onClearCompleted, enabled = hasCompleted, contentPadding = PaddingValues(horizontal = 8.dp), hoverColor = surface3, pressedColor = surface3.blendToward(ink, .05f), modifier = Modifier.reportControlBounds("content_header.clear_completed")) { Icon(Icons.Outlined.DeleteSweep, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("清理已完成", fontSize = TypeScale.caption) }; TextButton(onClick = onRefresh, contentPadding = PaddingValues(horizontal = 8.dp), hoverColor = surface3, pressedColor = surface3.blendToward(ink, .05f), modifier = Modifier.reportControlBounds("content_header.refresh")) { Icon(Icons.Outlined.Refresh, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("刷新", fontSize = TypeScale.caption) }
             }
             Box { ToolbarIcon(Icons.Outlined.MoreHoriz, "更多操作") { menuOpen = true }; DropdownMenu(menuOpen, { menuOpen = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface, shadowElevation = Elevation.e2) { listOf("import" to "导入任务或种子", "export" to "导出任务列表", "update" to "检查更新", "cancel_power" to "取消完成后电源动作", "notices" to "通知中心", "about" to "关于 HLS Downloader", "exit" to "退出程序").forEach { (action, label) -> DropdownMenuItem(text = { Text(label, fontSize = TypeScale.body) }, onClick = { menuOpen = false; onMore(action) }) } } }
         }
@@ -2327,7 +2546,7 @@ private data class TaskContextMenuRequest(
     val position: IntOffset,
 )
 @OptIn(ExperimentalComposeUiApi::class)
-@Composable private fun TaskTable(tasks: List<DownloadTask>, selected: Set<String>, appIcon: ImageBitmap?, taskSort: String, onSelection: (Set<String>) -> Unit, onDetails: (DownloadTask) -> Unit, onDeleteSelection: () -> Unit, onQueueMove: (String, Int) -> Unit, modifier: Modifier = Modifier, onBatchAction: (Set<String>, String) -> Unit, onSort: (String) -> Unit, onAction: (String, String) -> Unit) {
+@Composable private fun TaskTable(tasks: List<DownloadTask>, selected: Set<String>, appIcon: ImageBitmap?, taskSort: String, onSelection: (Set<String>) -> Unit, onDetails: (String) -> Unit, onDeleteSelection: () -> Unit, onQueueMove: (String, Int) -> Unit, modifier: Modifier = Modifier, onBatchAction: (Set<String>, String) -> Unit, onSort: (String) -> Unit, onAction: (String, String) -> Unit) {
     var anchorId by remember { mutableStateOf<String?>(null) }
     var tableFocused by remember { mutableStateOf(false) }
     var contextMenu by remember { mutableStateOf<TaskContextMenuRequest?>(null) }
@@ -2350,26 +2569,43 @@ private data class TaskContextMenuRequest(
             contextMenu = TaskContextMenuRequest(task, targets, position)
             UiTestState.updateContextMenu(position, targets.mapTo(mutableSetOf()) { it.id }, actions)
         }
+        // 详情弹窗的真实入口（行双击、行内菜单"详情与日志"）在本机夹具里都点不中，
+        // 这里给测试 API 一个按行索引直接打开的钩子，让详情相关改动能拿到运行时证据。
+        // 不靠坐标直接触发上下文菜单动作：菜单项 onClick 调的就是
+        // performTaskActions(targets, action)，这里走同一条路，
+        // 于是断线时批量操作的人话提示可以被一条调用验到（不需要点中菜单项）。
+        UiTestState.installTaskContextActionInvoker { index, action ->
+            val task = index?.let { tasks.getOrNull(it) } ?: return@installTaskContextActionInvoker
+            val targets = if (task.id in selected) tasks.filter { it.id in selected } else listOf(task)
+            onBatchAction(targets.mapTo(mutableSetOf()) { it.id }, action)
+        }
+        UiTestState.installTaskDetailsOpener { index, taskId, _, _ ->
+            // 按 task_id 直接打开（目标任务可以不在列表里，用来触达"按 id 单独取"的兜底分支），
+            // 否则按行索引解析出 id。与 installTaskSelector 的解析方式一致。
+            val id = taskId ?: index?.let { tasks.getOrNull(it)?.id } ?: return@installTaskDetailsOpener
+            onDetails(id)
+        }
     }
-    DisposableEffect(Unit) { onDispose { UiTestState.installTaskSelector(null); UiTestState.installTaskContextOpener(null) } }
+    DisposableEffect(Unit) { onDispose { UiTestState.installTaskSelector(null); UiTestState.installTaskContextOpener(null); UiTestState.installTaskDetailsOpener(null) } }
     BoxWithConstraints(
         modifier.fillMaxWidth().background(rail)
             .semantics { contentDescription = "下载任务列表，共 ${tasks.size} 项，已选择 ${selected.size} 项" }
             .focusRequester(focusRequester).onFocusChanged { tableFocused = it.isFocused }.focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                when {
-                    event.isCtrlPressed && event.key == Key.A -> { onSelection(tasks.mapTo(mutableSetOf()) { it.id }); anchorId = tasks.lastOrNull()?.id; true }
-                    event.key == Key.Escape && selected.isNotEmpty() -> { onSelection(emptySet()); anchorId = null; true }
-                    event.key == Key.Delete && selected.isNotEmpty() -> { onDeleteSelection(); true }
-                    event.key == Key.Enter && selected.isNotEmpty() -> { tasks.firstOrNull { it.id in selected }?.let(onDetails); true }
-                    event.key == Key.DirectionDown || event.key == Key.DirectionUp -> {
-                        if (tasks.isEmpty()) return@onPreviewKeyEvent false
+                when (resolveTaskTableKeyCommand(event.key, event.isCtrlPressed, selected.size, tasks.size)) {
+                    TaskTableKeyCommand.SelectAll -> {
+                        onSelection(tasks.mapTo(mutableSetOf()) { it.id }); anchorId = tasks.lastOrNull()?.id; true
+                    }
+                    TaskTableKeyCommand.ClearSelection -> { onSelection(emptySet()); anchorId = null; true }
+                    TaskTableKeyCommand.DeleteSelection -> { onDeleteSelection(); true }
+                    TaskTableKeyCommand.OpenDetails -> { tasks.firstOrNull { it.id in selected }?.let { onDetails(it.id) }; true }
+                    TaskTableKeyCommand.MoveSelection -> {
                         val current = tasks.indexOfFirst { it.id == anchorId }.let { if (it < 0) 0 else it }
                         val next = (current + if (event.key == Key.DirectionDown) 1 else -1).coerceIn(0, tasks.lastIndex)
                         selectTask(tasks[next].id, event.isShiftPressed, false); true
                     }
-                    else -> false
+                    null -> false
                 }
             }.border(1.dp, if (tableFocused) blue.copy(alpha = .7f) else Color.Transparent)
     ) {
@@ -2532,7 +2768,7 @@ private data class TaskContextMenuRequest(
                                 taskSort == "queue:asc",
                                 task.id in selected,
                                 { shift, toggle -> if (System.nanoTime() >= suppressRowClickUntilNanos) { focusRequester.requestFocus(); selectTask(task.id, shift, toggle) } },
-                                { onDetails(task) },
+                                { onDetails(task.id) },
                                 { delta -> onQueueMove(task.id, delta) },
                                 { position ->
                                     val actions = batchTaskMenuActions(contextTargets.map { it.source })
@@ -2541,16 +2777,50 @@ private data class TaskContextMenuRequest(
                                 },
                             ) { action -> onAction(task.id, action) }
                         } }
-                        if (tasks.size > 8) VerticalScrollbar(rememberScrollbarAdapter(listState), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(7.dp))
+                        // 不再用 tasks.size > 8 当"会不会溢出"的代理：窗口矮的时候 8 行就装不下，
+                        // 实测 1440x500 下第 7 行起被切掉，而 8 条任务恰好不满足 > 8，于是一点滚动提示都没有。
+                        // 是否溢出由 listState 自己说——VerticalScrollbar 在没有可滚动内容时本来就不绘制。
+                        // LazyColumn 的滚动条走 rememberScrollbarAdapter(LazyListState) 这条路，
+                        // 实测在这台机器上画不出来（1000 行、确定溢出，预期位置整段都是 rail 底色，
+                        // 悬停也没有任何变化）。而 ScrollState 那条路是画得出来的（设置内容区实测有 389px 竖条）。
+                        // 任务表是主界面、行数最多，不能没有滚动提示，所以这里用 listState 自己画。
+                        val taskTotal = listState.layoutInfo.totalItemsCount
+                        val taskVisible = listState.layoutInfo.visibleItemsInfo.size
+                        if (taskTotal > taskVisible && taskVisible > 0) {
+                            val taskThumbColor = muted.copy(alpha = 0.42f)   // muted 是 @Composable get()，必须在 Composable 上下文里取
+                            val taskThumbMin = 28.dp
+                            Box(
+                                Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(7.dp).padding(vertical = 3.dp)
+                                    .drawBehind {
+                                        val track = size.height
+                                        if (track <= 0f) return@drawBehind
+                                        val ratio = taskVisible.toFloat() / taskTotal.toFloat()
+                                        val thumbH = maxOf(track * ratio, taskThumbMin.toPx())
+                                        val maxScroll = (taskTotal - taskVisible).coerceAtLeast(1).toFloat()
+                                        val frac = (listState.firstVisibleItemIndex.toFloat() / maxScroll).coerceIn(0f, 1f)
+                                        val y = (track - thumbH) * frac
+                                        drawRoundRect(
+                                            color = taskThumbColor,
+                                            topLeft = Offset(0f, y),
+                                            size = Size(size.width, thumbH),
+                                            cornerRadius = CornerRadius(size.width / 2f),
+                                        )
+                                    },
+                            )
+                        }
                     }
                 }
             }
         }
         if (tableWidth > maxWidth) HorizontalScrollbar(rememberScrollbarAdapter(horizontalState), Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(9.dp))
         contextMenu?.let { request ->
+            val closeMenu = {
+                contextMenu = null
+                UiTestState.closeContextMenu()
+            }
             Popup(
                 popupPositionProvider = ContextMenuPositionProvider(request.position),
-                onDismissRequest = { contextMenu = null },
+                onDismissRequest = { closeMenu() },
                 properties = PopupProperties(focusable = true),
             ) {
                 Surface(
@@ -2563,8 +2833,8 @@ private data class TaskContextMenuRequest(
                     Column(Modifier.padding(vertical = 4.dp)) {
                         TaskMenuEntries(
                             request.task,
-                            { contextMenu = null },
-                            { onDetails(request.task) },
+                            { closeMenu() },
+                            { onDetails(request.task.id) },
                             { action -> onBatchAction(request.targets.mapTo(mutableSetOf()) { it.id }, action) },
                             actions = batchTaskMenuActions(request.targets.map { it.source }),
                             includeDetails = request.targets.size == 1,
@@ -2581,7 +2851,15 @@ private fun TaskHeader(value: String, modifier: Modifier, field: String, taskSor
     val active = taskSort.substringBefore(':') == field
     // 只有可排序的列挂悬停反馈：不可排序的列（actions）挂上 hover 会让人以为点得动。
     // 表头不缩放 —— 文字在点击时缩一下会像"表格在抖"，反馈只走底色。
-    val feedback = rememberPressFeedback(enabled = sortable, pressScale = 1f, hoverMillis = 120)
+    // 但"只走底色"原先只走通了 hover：没给 pressedColor，按下时底色停在 hover 档不动，
+    // 用 press（按住不抬）实测按住表头与悬停态像素级相同（差 0）。补上按下档，
+    // 与 NavRow / 媒体轨带同一套"hover 一档、press 再深一档"的底色阶梯。
+    val feedback = rememberPressFeedback(
+        enabled = sortable,
+        pressScale = 1f,
+        pressedColor = if (active) selectedSurface else surface3.blendToward(ink, .05f),
+        hoverMillis = 120,
+    )
     Row(
         modifier
             .height(36.dp)
@@ -2618,13 +2896,21 @@ private fun TaskHeader(value: String, modifier: Modifier, field: String, taskSor
     var clickCtrl by remember { mutableStateOf(false) }
     val rowInteraction = remember { MutableInteractionSource() }
     val hovered by rowInteraction.collectIsHoveredAsState()
+    val pressed by rowInteraction.collectIsPressedAsState()
+    // 行是自己手写 interaction 的（要同时吃 hover / 双击 / 右键 / 拖动），所以没有走
+    // rememberPressFeedback——于是"按下"这一态原先整条漏掉了：hover 有反馈（rail→surface2），
+    // 按下和抬起之间肉眼完全一样。按住任务行时没有"我按住了"的信号，而这是表格里最高频的手势。
+    // 档位与 NavRow / 轨带选择一致：未选中按下压到 surface3（比 hover 深一档），
+    // 已选中按下用 selectedSurface 朝 ink 混 5%——两种选中态下都留得下一格按压痕迹。
     val rowColor = when {
+        isSelected && pressed -> selectedSurface.blendToward(ink, .05f)
         isSelected -> selectedSurface
+        pressed -> surface3
         hovered -> surface2
         else -> rail
     }
     val separatorColor = border
-    Row(Modifier.fillMaxWidth().height(52.dp).onGloballyPositioned { rowWindowOrigin = it.positionInWindow(); rowSize = it.size }.background(rowColor).drawBehind { drawLine(separatorColor, androidx.compose.ui.geometry.Offset(0f, size.height - 1f), androidx.compose.ui.geometry.Offset(size.width, size.height - 1f), 1f) }.hoverable(rowInteraction).semantics { selected = isSelected; contentDescription = taskAccessibilityLabel(task) }.onPointerEvent(PointerEventType.Press, PointerEventPass.Initial) {
+    Row(Modifier.fillMaxWidth().height(52.dp).reportControlBounds("taskrow.${task.id}").onGloballyPositioned { rowWindowOrigin = it.positionInWindow(); rowSize = it.size }.background(rowColor).drawBehind { drawLine(separatorColor, androidx.compose.ui.geometry.Offset(0f, size.height - 1f), androidx.compose.ui.geometry.Offset(size.width, size.height - 1f), 1f) }.hoverable(rowInteraction).semantics { selected = isSelected; contentDescription = taskAccessibilityLabel(task) }.onPointerEvent(PointerEventType.Press, PointerEventPass.Initial) {
         clickShift = it.keyboardModifiers.isPointerShiftPressed
         clickCtrl = it.keyboardModifiers.isPointerCtrlPressed
         if (it.button == PointerButton.Secondary || it.buttons.isSecondaryPressed) {
@@ -2762,6 +3048,23 @@ internal fun WorkbenchDialog(
         BoxWithConstraints(
             Modifier
                 .fillMaxSize()
+                // Esc 关闭：`Popup` 的 `onDismissRequest` 只覆盖"点遮罩/失焦"，
+                // 桌面端按键不会自动映射到它（实测：无此处理时 Esc 对
+                // WorkbenchDialog 完全无效）。浏览器下载确认弹窗此前单独挂了
+                // Enter/Esc 预览键处理，这里把 Esc 收进共享组件，其余所有
+                // WorkbenchDialog（新建/批量/嗅探/设置/队列/详情/关于/通知中心/
+                // 危险操作确认/设备选择）都获得同样的键盘出口。
+                // 挂在根节点而不是内容列：内容可能有输入框（Enter 属于输入框），
+                // 而 Esc 在模态对话框里永远只表示"关闭"。`dismissible=false`
+                // 的忙碌态弹窗不注册，保持原先的防误触语义。
+                .onPreviewKeyEvent { event ->
+                    if (dismissible && event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                        onDismiss()
+                        true
+                    } else {
+                        false
+                    }
+                }
                 .background(Color.Black.copy(alpha = .34f)),
             contentAlignment = Alignment.Center,
         ) {
@@ -2808,15 +3111,33 @@ internal fun WorkbenchDialog(
                     Spacer(Modifier.height(13.dp))
                     HorizontalDivider(color = border)
                     Spacer(Modifier.height(13.dp))
-                    Column(
-                        // 内容区高度由弹窗上限（dialogBounds 统一压到 680dp 以内）决定，这里不再写死上限。
-                        // 写死 420dp 时，字号刻度调整后设置页内容会超出，最后一行被滚动视口切掉半行。
-                        Modifier
-                            .fillMaxWidth()
-                            .weight(1f, fill = false)
-                            .then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier),
-                        content = content,
-                    )
+                    // 内容区高度由弹窗上限（dialogBounds 统一压到 680dp 以内）决定，这里不再写死上限。
+                    // 写死 420dp 时，字号刻度调整后设置页内容会超出，最后一行被滚动视口切掉半行。
+                    // 滚动条：scrollState 提到 val，滚动条才能拿到同一个 state；内联 rememberScrollState() 时
+                    // 任何滚动条都拿不到它，于是内容超出后用户看不到"下面还有"，只有半行被切掉的暗示。
+                    Box(Modifier.fillMaxWidth().weight(1f, fill = false)) {
+                        val dialogContentScroll = rememberScrollState()
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .then(if (scrollable) Modifier.verticalScroll(dialogContentScroll) else Modifier),
+                            content = content,
+                        )
+                        if (scrollable) {
+                            VerticalScrollbar(
+                                rememberScrollbarAdapter(dialogContentScroll),
+                                Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp),
+                                style = ScrollbarStyle(
+                                    minimalHeight = 28.dp,
+                                    thickness = 6.dp,
+                                    shape = RoundedCornerShape(Radius.tiny),
+                                    hoverDurationMillis = 160,
+                                    unhoverColor = muted.copy(alpha = 0.42f),
+                                    hoverColor = blue.copy(alpha = 0.82f),
+                                ),
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(14.dp))
                     HorizontalDivider(color = border)
                     Spacer(Modifier.height(10.dp))
@@ -2827,9 +3148,53 @@ internal fun WorkbenchDialog(
         }
     }
 }
-@Composable internal fun DialogPrimary(label: String, enabled: Boolean = true, onClick: () -> Unit) = Button(onClick = onClick, enabled = enabled, shape = RoundedCornerShape(Radius.md), contentPadding = PaddingValues(horizontal = 15.dp), colors = ButtonDefaults.buttonColors(containerColor = blue, contentColor = onBlue)) { Text(label, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold) }
-@Composable internal fun DialogSecondary(label: String, onClick: () -> Unit) = TextButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 12.dp)) { Text(label, fontSize = TypeScale.body, color = muted) }
+@Composable internal fun DialogPrimary(label: String, enabled: Boolean = true, onClick: () -> Unit) = Button(onClick = onClick, enabled = enabled, shape = RoundedCornerShape(Radius.md), contentPadding = PaddingValues(horizontal = 15.dp), colors = ButtonDefaults.buttonColors(containerColor = blue, contentColor = onBlue), modifier = Modifier.reportControlBounds("dialog.primary.$label")) { Text(label, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold) }
+@Composable internal fun DialogSecondary(label: String, onClick: () -> Unit) = TextButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 12.dp), hoverColor = surface3, pressedColor = surface3.blendToward(ink, .05f), modifier = Modifier.reportControlBounds("dialog.secondary.$label")) { Text(label, fontSize = TypeScale.body, color = muted) }
 @Composable internal fun DialogLabel(value: String) = Text(value, color = muted, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 5.dp))
+
+/**
+ * 分段按钮的按压缩放。`Button` 默认 .985f 是为了整行/整块目标不失真，
+ * 但分段按钮只有约 24dp 高，1.5% 不足一个像素——用 `press` 动作量出来差分是 0。
+ * 窄目标的规则沿用 [IconButton] / [RadioButton] 的既有约定：缩到 .92f。
+ */
+internal const val SEGMENT_SCALE = .92f
+/**
+ * 把任务操作失败翻译成用户能照着做的提示。
+ *
+ * 为什么需要：断线时 raw message 往往是 "Connection refused"、"system error: 2" 之类，
+ * 用户看到也不知道该怎么办。断线是这台机器上最常见的一种失败
+ * （引擎没起来、被杀了、正在重连），所以值得单独给一句话：
+ * 操作没发出去、正在自动重连、稍后重试即可。
+ */
+
+
+internal fun describeTaskActionFailure(error: Throwable, fallback: String = "任务操作失败"): String {
+    // 正常协程取消不是失败：runCatching 会把 CancellationException 也吞进来，
+    // 这里必须原样抛回，否则一次正常取消会变成一条 error 通知。
+    if (error is CancellationException) throw error
+    val raw = error.message ?: return fallback
+    val lowered = raw.lowercase()
+    val connectionish =
+        lowered.contains("refused") || lowered.contains("timed out") ||
+            lowered.contains("timeout") || lowered.contains("closed") ||
+            lowered.contains("reset") || lowered.contains("unreachable") ||
+            lowered.contains("no such file") || lowered.contains("cannot find") ||
+            lowered.contains("pipe") || lowered.contains("not connected")
+    return if (connectionish) "下载引擎当前未连接，操作未能发送；正在自动重连，请稍后重试" else raw
+}
+
+/**
+ * 非任务类操作的失败文案（导入/导出/设置/更新/投屏…）。
+ *
+ * 与 [describeTaskActionFailure] 唯一的区别：这里**不掺引擎连接语义**——
+ * 读一个文件失败跟下载引擎连没连上是两件事，不能都回同一句话。
+ * 但"正常取消必须抛回、不能被 runCatching 吞成一条 error 通知"同样成立。
+ */
+internal fun describeFailure(error: Throwable?, fallback: String): String {
+    if (error is CancellationException) throw error
+    return error?.message ?: fallback
+}
+
 
 internal fun queueProfilesValid(profiles: List<QueueProfileDto>): Boolean {
     if (profiles.isEmpty() || profiles.size > 32 || profiles.none { it.id == "default" }) return false
@@ -3018,7 +3383,7 @@ private fun QueueManagerDialog(
                                 val day = index + 1
                                 val days = selected.activeDays.split(',').mapNotNull(String::toIntOrNull)
                                 val active = day in days
-                                TextButton(onClick = { update { profile -> profile.copy(activeDays = (if (active) days - day else days + day).distinct().sorted().joinToString(",")) } }, modifier = Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(active, selectedSurface, surface2)), contentPadding = PaddingValues(0.dp)) { Text(label, color = if (active) blue else muted, fontSize = TypeScale.caption) }
+                                TextButton(onClick = { update { profile -> profile.copy(activeDays = (if (active) days - day else days + day).distinct().sorted().joinToString(",")) } }, modifier = Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(active, selectedSurface, surface2)), contentPadding = PaddingValues(0.dp), hoverColor = if (active) selectedSurface else surface3, pressedColor = if (active) selectedSurface else surface3.blendToward(ink, .05f), pressScale = SEGMENT_SCALE) { Text(label, color = if (active) blue else muted, fontSize = TypeScale.caption) }
                             }
                         }
                     }
@@ -3030,7 +3395,7 @@ private fun QueueManagerDialog(
                             TextButton(
                                 onClick = { update { it.copy(completionAction = value) } },
                                 modifier = Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(active, selectedSurface, Color.Transparent)),
-                                contentPadding = PaddingValues(horizontal = 4.dp),
+                                contentPadding = PaddingValues(horizontal = 4.dp), hoverColor = if (active) selectedSurface else surface3, pressedColor = if (active) selectedSurface else surface3.blendToward(ink, .05f), pressScale = SEGMENT_SCALE,
                             ) { Text(label, color = if (active) blue else muted, fontSize = TypeScale.micro) }
                         }
                     }
@@ -3103,7 +3468,7 @@ private fun NewTaskDialog(
         )
     }
     WorkbenchDialog(onDismiss, "新建下载", "创建文件、媒体、远程协议或 BT 下载任务", 760.dp, content = {
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) { listOf("基本", "连接", "请求", "计划").forEach { item -> TextButton(onClick = { tab = item }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(tab == item, rail, Color.Transparent))) { Text(item, color = if (tab == item) blue else muted, fontSize = TypeScale.caption, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal) } } }
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) { listOf("基本", "连接", "请求", "计划").forEach { item -> TextButton(onClick = { tab = item }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(tab == item, rail, Color.Transparent)).reportControlBounds("newtask.tab.$item"), hoverColor = if (tab == item) rail else surface3, pressedColor = if (tab == item) rail else surface3.blendToward(ink, .05f), pressScale = SEGMENT_SCALE) { Text(item, color = if (tab == item) blue else muted, fontSize = TypeScale.caption, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal) } } }
         Spacer(Modifier.height(14.dp))
         when (tab) {
             "基本" -> {
@@ -3111,7 +3476,7 @@ private fun NewTaskDialog(
                 OutlinedTextField(
                     url,
                     { url = it },
-                    Modifier.fillMaxWidth(),
+                    Modifier.fillMaxWidth().reportControlBounds("newtask.url"),
                     focusRequester = urlFocus,
                     placeholder = { Text("粘贴链接、磁力链接或浏览器“复制为 cURL”") },
                     singleLine = !curlMode,
@@ -3145,7 +3510,7 @@ private fun NewTaskDialog(
                 }
                 DialogLabel("请求方式")
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) {
-                    listOf("GET", "POST", "HEAD").forEach { value -> TextButton(onClick = { requestMethod = value }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(requestMethod == value, selectedSurface, Color.Transparent))) { Text(value, color = if (requestMethod == value) blue else muted, fontSize = TypeScale.caption) } }
+                    listOf("GET", "POST", "HEAD").forEach { value -> TextButton(onClick = { requestMethod = value }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(requestMethod == value, selectedSurface, Color.Transparent)).reportControlBounds("newtask.method.$value"), hoverColor = if (requestMethod == value) selectedSurface else surface3, pressedColor = if (requestMethod == value) selectedSurface else surface3.blendToward(ink, .05f), pressScale = SEGMENT_SCALE) { Text(value, color = if (requestMethod == value) blue else muted, fontSize = TypeScale.caption) } }
                 }
                 Spacer(Modifier.height(9.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -3172,7 +3537,7 @@ private fun NewTaskDialog(
                 Spacer(Modifier.height(9.dp)); DialogLabel("其他请求头（每行“名称: 值”）"); OutlinedTextField(requestHeaders, { requestHeaders = it }, Modifier.fillMaxWidth(), minLines = 3, maxLines = 3, isError = parsedHeaders.isFailure, shape = RoundedCornerShape(Radius.md), placeholder = { Text("Authorization: Bearer ...\nX-Playback-Token: ...") }); Text(parsedHeaders.exceptionOrNull()?.message ?: "敏感请求头只保存在下载引擎的加密凭据中。", color = if (parsedHeaders.isFailure) errorStrong else faint, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 5.dp))
             }
             else -> {
-                DialogLabel("计划开始（ISO 时间或留空）"); OutlinedTextField(startAt, { startAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("计划停止（ISO 时间或留空）"); OutlinedTextField(stopAt, { stopAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("完成后动作"); Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) { listOf("none" to "无", "sleep" to "睡眠", "hibernate" to "休眠", "shutdown" to "关机").forEach { (value, label) -> TextButton(onClick = { completionAction = value }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(completionAction == value, selectedSurface, Color.Transparent)), contentPadding = PaddingValues(horizontal = 4.dp)) { Text(label, color = if (completionAction == value) blue else muted, fontSize = TypeScale.micro) } } }
+                DialogLabel("计划开始（ISO 时间或留空）"); OutlinedTextField(startAt, { startAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("计划停止（ISO 时间或留空）"); OutlinedTextField(stopAt, { stopAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("完成后动作"); Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) { listOf("none" to "无", "sleep" to "睡眠", "hibernate" to "休眠", "shutdown" to "关机").forEach { (value, label) -> TextButton(onClick = { completionAction = value }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(completionAction == value, selectedSurface, Color.Transparent)), contentPadding = PaddingValues(horizontal = 4.dp), hoverColor = if (completionAction == value) selectedSurface else surface3, pressedColor = if (completionAction == value) selectedSurface else surface3.blendToward(ink, .05f), pressScale = SEGMENT_SCALE) { Text(label, color = if (completionAction == value) blue else muted, fontSize = TypeScale.micro) } } }
             }
         }
     }, actions = {
@@ -3181,6 +3546,7 @@ private fun NewTaskDialog(
             onClick = { if (normalized != null && parsedHeaders.isSuccess) onProbe(buildDraft()) },
             enabled = normalized != null && parsedHeaders.isSuccess,
             contentPadding = PaddingValues(horizontal = 12.dp),
+            modifier = Modifier.reportControlBounds("newtask.probe"),
         ) { Text("分析资源", fontSize = TypeScale.body, color = if (normalized != null && parsedHeaders.isSuccess) muted else faint) }
         DialogPrimary("创建下载", validInput && parsedHeaders.isSuccess) {
             onCreate(buildDraft())
@@ -3296,7 +3662,7 @@ private fun HarvestDialog(
         torrentLoading = true
         runCatching { withContext(Dispatchers.IO) { EnginePipeClient().getTaskTorrentFiles(task.id) } }
             .onSuccess { torrentFiles = it.files }
-            .onFailure { torrentNotice = it.message ?: "读取 BT 文件清单失败" }
+            .onFailure { torrentNotice = describeTaskActionFailure(it, "读取 BT 文件清单失败") }
         torrentLoading = false
     }
     WorkbenchDialog(onDismiss, "任务详情", "进度、连接、速度和运行日志", 780.dp, content = {
@@ -3315,7 +3681,7 @@ private fun HarvestDialog(
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) {
             (listOf("概览", "连接", "速度", "日志") + if (canPreview) listOf("预览") else emptyList()).forEach { item ->
-                TextButton(onClick = { tab = item; if (item == "日志") onAction("log") }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(tab == item, rail, Color.Transparent))) { Text(item, color = if (tab == item) blue else muted, fontSize = TypeScale.caption, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal) }
+                TextButton(onClick = { tab = item; if (item == "日志") onAction("log") }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(tab == item, rail, Color.Transparent)), hoverColor = if (tab == item) rail else surface3, pressedColor = if (tab == item) rail else surface3.blendToward(ink, .05f), pressScale = SEGMENT_SCALE) { Text(item, color = if (tab == item) blue else muted, fontSize = TypeScale.caption, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal) }
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -3376,20 +3742,35 @@ private fun HarvestDialog(
                         Text("已选 ${torrentFiles.count { it.selected }} / ${torrentFiles.size} · ${formatBytes(torrentFiles.filter { it.selected }.sumOf { it.size })}", color = muted, fontSize = TypeScale.micro)
                     }
                     Row(Modifier.padding(top = 5.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                        TextButton(onClick = { torrentFiles = torrentFiles.map { it.copy(selected = true) } }, enabled = torrentFiles.isNotEmpty(), contentPadding = PaddingValues(horizontal = 7.dp)) { Text("全选", fontSize = TypeScale.micro) }
-                        TextButton(onClick = { torrentFiles = torrentFiles.map { it.copy(selected = !it.selected) } }, enabled = torrentFiles.isNotEmpty(), contentPadding = PaddingValues(horizontal = 7.dp)) { Text("反选", fontSize = TypeScale.micro) }
+                        TextButton(onClick = { torrentFiles = torrentFiles.map { it.copy(selected = true) } }, enabled = torrentFiles.isNotEmpty(), contentPadding = PaddingValues(horizontal = 7.dp), hoverColor = surface3, pressedColor = surface3.blendToward(ink, .05f), modifier = Modifier.reportControlBounds("task_details.select_all")) { Text("全选", fontSize = TypeScale.micro) }
+                        TextButton(onClick = { torrentFiles = torrentFiles.map { it.copy(selected = !it.selected) } }, enabled = torrentFiles.isNotEmpty(), contentPadding = PaddingValues(horizontal = 7.dp), hoverColor = surface3, pressedColor = surface3.blendToward(ink, .05f), modifier = Modifier.reportControlBounds("task_details.select_none")) { Text("反选", fontSize = TypeScale.micro) }
                     }
                     when {
                         torrentLoading -> Text("正在读取种子元数据…", color = muted, fontSize = TypeScale.caption, modifier = Modifier.padding(vertical = 18.dp))
                         torrentFiles.isEmpty() -> Text("尚未取得文件清单。磁力任务需要先取得元数据。", color = muted, fontSize = TypeScale.caption, modifier = Modifier.padding(vertical = 14.dp))
-                        else -> Column(Modifier.fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState()).border(BorderStroke(1.dp, border), RoundedCornerShape(Radius.md)).padding(horizontal = 9.dp, vertical = 5.dp)) {
-                            torrentFiles.forEachIndexed { index, file ->
-                                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Checkbox(file.selected, { checked -> torrentFiles = torrentFiles.toMutableList().also { it[index] = file.copy(selected = checked) } }, accessibilityLabel = "选择 ${file.path}")
-                                    Spacer(Modifier.width(6.dp)); Text(file.path, Modifier.weight(1f), color = ink, fontSize = TypeScale.caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    Spacer(Modifier.width(8.dp)); Text(formatBytes(file.size), color = muted, fontSize = TypeScale.micro)
+                        else -> Box(Modifier.fillMaxWidth().heightIn(max = 220.dp)) {
+                            val torrentFilesScroll = rememberScrollState()
+                            Column(Modifier.fillMaxWidth().verticalScroll(torrentFilesScroll).border(BorderStroke(1.dp, border), RoundedCornerShape(Radius.md)).padding(horizontal = 9.dp, vertical = 5.dp)) {
+                                torrentFiles.forEachIndexed { index, file ->
+                                    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(file.selected, { checked -> torrentFiles = torrentFiles.toMutableList().also { it[index] = file.copy(selected = checked) } }, accessibilityLabel = "选择 ${file.path}")
+                                        Spacer(Modifier.width(6.dp)); Text(file.path, Modifier.weight(1f), color = ink, fontSize = TypeScale.caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        Spacer(Modifier.width(8.dp)); Text(formatBytes(file.size), color = muted, fontSize = TypeScale.micro)
+                                    }
                                 }
                             }
+                            VerticalScrollbar(
+        rememberScrollbarAdapter(torrentFilesScroll),
+        Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp),
+        style = ScrollbarStyle(
+            minimalHeight = 28.dp,
+            thickness = 6.dp,
+            shape = RoundedCornerShape(Radius.tiny),
+            hoverDurationMillis = 160,
+            unhoverColor = muted.copy(alpha = 0.42f),
+            hoverColor = blue.copy(alpha = 0.82f),
+        ),
+    )
                         }
                     }
                     if (task.status == "进行中") Text("当前内置 BT 引擎需先暂停任务，才能安全调整文件选择。", color = warningColor, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 6.dp))
@@ -3399,7 +3780,7 @@ private fun HarvestDialog(
                         detailScope.launch {
                             runCatching { withContext(Dispatchers.IO) { EnginePipeClient().setTaskTorrentFiles(task.id, torrentFiles) } }
                                 .onSuccess { torrentFiles = it.files; torrentNotice = "文件选择已保存，将在开始或恢复时生效" }
-                                .onFailure { torrentNotice = it.message ?: "保存文件选择失败" }
+                                .onFailure { torrentNotice = describeTaskActionFailure(it, "保存文件选择失败") }
                             torrentBusy = false
                         }
                     }
@@ -3407,7 +3788,7 @@ private fun HarvestDialog(
                 if (task.status != "已完成") {
                     Spacer(Modifier.height(13.dp)); HorizontalDivider(color = border); Spacer(Modifier.height(11.dp)); DialogLabel("任务限速 KiB/s（0 不限制）")
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { OutlinedTextField(speedLimit, { speedLimit = it.filter(Char::isDigit) }, Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.width(8.dp)); DialogSecondary("应用") { onAction("speed:${speedLimit.toLongOrNull()?.coerceIn(0, 1_048_576) ?: 0}") } }
-                    if (canRefresh) { Spacer(Modifier.height(8.dp)); TextButton(onClick = { showRefresh = !showRefresh }, contentPadding = PaddingValues(0.dp)) { Text(if (showRefresh) "收起链接更新" else "更新下载链接", color = blue, fontSize = TypeScale.caption) } }
+                    if (canRefresh) { Spacer(Modifier.height(8.dp)); TextButton(onClick = { showRefresh = !showRefresh }, contentPadding = PaddingValues(0.dp), hoverColor = surface3, pressedColor = surface3.blendToward(ink, .05f), modifier = Modifier.reportControlBounds("task_details.refresh_link")) { Text(if (showRefresh) "收起链接更新" else "更新下载链接", color = blue, fontSize = TypeScale.caption) } }
                     if (showRefresh) {
                         OutlinedTextField(refreshUrl, { refreshUrl = it }, Modifier.fillMaxWidth(), label = { Text("新的资源地址") }, minLines = 2, maxLines = 3, shape = RoundedCornerShape(Radius.md))
                         Spacer(Modifier.height(7.dp))
@@ -3454,7 +3835,7 @@ internal fun loadLocalImagePreview(path: String): Result<ImageBitmap> = runCatch
         Box(Modifier.fillMaxSize().padding(10.dp), contentAlignment = Alignment.Center) {
             when {
                 preview == null -> Text("正在读取图片…", color = muted, fontSize = TypeScale.caption)
-                preview.isFailure -> Text(preview.exceptionOrNull()?.message ?: "图片预览失败", color = errorStrong, fontSize = TypeScale.caption)
+                preview.isFailure -> Text(describeFailure(preview.exceptionOrNull(), "图片预览失败"), color = errorStrong, fontSize = TypeScale.caption)
                 else -> Image(preview.getOrThrow(), "已下载图片预览", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             }
         }
@@ -3673,7 +4054,9 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
                     },
                     enabled = !working,
                     contentPadding = PaddingValues(horizontal = 0.dp),
-                    modifier = Modifier.padding(top = 5.dp),
+                    hoverColor = surface3,
+                    pressedColor = surface3.blendToward(ink, .05f),
+                    modifier = Modifier.reportControlBounds("extension.firefox_install").padding(top = 5.dp),
                 ) {
                     Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, tint = blue, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
@@ -3716,17 +4099,32 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
     if (entries.isEmpty()) {
         Text("暂无通知。任务失败、引擎警告等记录会出现在这里。", color = muted, fontSize = TypeScale.body, modifier = Modifier.padding(vertical = 18.dp))
     } else {
-        Column(Modifier.fillMaxWidth().heightIn(max = 380.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            entries.asReversed().forEach { entry ->
-                val tone = if (entry.level == "error") errorStrong else if (entry.level == "success") successColor else blue
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                    Box(Modifier.padding(top = 5.dp).size(6.dp).clip(RoundedCornerShape(Radius.pill)).background(tone))
-                    Spacer(Modifier.width(9.dp))
-                    Text(java.time.Instant.ofEpochMilli(entry.at).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")), color = faint, fontSize = TypeScale.caption)
-                    Spacer(Modifier.width(9.dp))
-                    Text(entry.message, color = ink, fontSize = TypeScale.body, lineHeight = 19.sp, modifier = Modifier.weight(1f))
+        Box(Modifier.fillMaxWidth().heightIn(max = 380.dp)) {
+            val noticesScroll = rememberScrollState()
+            Column(Modifier.fillMaxWidth().verticalScroll(noticesScroll), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                entries.asReversed().forEach { entry ->
+                    val tone = if (entry.level == "error") errorStrong else if (entry.level == "success") successColor else blue
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                        Box(Modifier.padding(top = 5.dp).size(6.dp).clip(RoundedCornerShape(Radius.pill)).background(tone))
+                        Spacer(Modifier.width(9.dp))
+                        Text(java.time.Instant.ofEpochMilli(entry.at).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")), color = faint, fontSize = TypeScale.caption)
+                        Spacer(Modifier.width(9.dp))
+                        Text(entry.message, color = ink, fontSize = TypeScale.body, lineHeight = 19.sp, modifier = Modifier.weight(1f))
+                    }
                 }
             }
+            VerticalScrollbar(
+        rememberScrollbarAdapter(noticesScroll),
+        Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp),
+        style = ScrollbarStyle(
+            minimalHeight = 28.dp,
+            thickness = 6.dp,
+            shape = RoundedCornerShape(Radius.tiny),
+            hoverDurationMillis = 160,
+            unhoverColor = muted.copy(alpha = 0.42f),
+            hoverColor = blue.copy(alpha = 0.82f),
+        ),
+    )
         }
     }
 }, actions = { if (entries.isNotEmpty()) DialogSecondary("清空记录", onClear); DialogPrimary("关闭", onClick = onDismiss) })
@@ -3769,16 +4167,20 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
                 Text("磁力链接还没有返回完整元数据", color = muted, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 6.dp))
             }
         } else {
-            Column(Modifier.fillMaxWidth().heightIn(max = 390.dp).verticalScroll(rememberScrollState())) {
-                files.forEachIndexed { index, file ->
-                    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(file.selected, { checked -> files = files.toMutableList().also { it[index] = file.copy(selected = checked) } }, accessibilityLabel = "选择 ${file.path}")
-                        Spacer(Modifier.width(6.dp)); Column(Modifier.weight(1f)) {
-                            Text(file.path, color = ink, fontSize = TypeScale.body, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Text(formatBytes(file.size), color = muted, fontSize = TypeScale.micro)
+            Box(Modifier.fillMaxWidth().heightIn(max = 390.dp)) {
+                val torrentFilesScroll = rememberScrollState()
+                Column(Modifier.fillMaxWidth().verticalScroll(torrentFilesScroll)) {
+                    files.forEachIndexed { index, file ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(file.selected, { checked -> files = files.toMutableList().also { it[index] = file.copy(selected = checked) } }, accessibilityLabel = "选择 ${file.path}")
+                            Spacer(Modifier.width(6.dp)); Column(Modifier.weight(1f)) {
+                                Text(file.path, color = ink, fontSize = TypeScale.body, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(formatBytes(file.size), color = muted, fontSize = TypeScale.micro)
+                            }
                         }
                     }
                 }
+                VerticalScrollbar(rememberScrollbarAdapter(torrentFilesScroll), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp))
             }
         }
     }, actions = {
@@ -4103,6 +4505,7 @@ private fun HarvestResultDialog(
                 )
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(Radius.md))
+                        .reportControlBounds("device.${device.id}")
                         .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
                         .background(feedback.background)
                         .border(1.dp, if (active) blue else Color.Transparent, RoundedCornerShape(Radius.md))
@@ -4128,7 +4531,7 @@ private fun HarvestResultDialog(
         }
     }, actions = {
         if (!connecting) DialogSecondary("取消", onDismiss)
-        TextButton(onClick = onRescan, enabled = !busy && !connecting) { Icon(Icons.Outlined.Refresh, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text("重新搜索", fontSize = TypeScale.body) }
+        TextButton(onClick = onRescan, enabled = !busy && !connecting, contentPadding = PaddingValues(horizontal = 12.dp), hoverColor = surface3, pressedColor = surface3.blendToward(ink, .05f), modifier = Modifier.reportControlBounds("device.rescan")) { Icon(Icons.Outlined.Refresh, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text("重新搜索", fontSize = TypeScale.body) }
         if (mode != "tvbox") DialogPrimary("局域网播放", !busy && !connecting, onPublish)
         DialogPrimary(if (connecting) "正在连接…" else if (mode == "tvbox") "确认推送" else "连接设备", selected != null && !busy && !connecting) { selected?.let(onSelect) }
     })
@@ -4209,7 +4612,7 @@ private fun HarvestResultDialog(
         Surface(color = errorSurface, shape = RoundedCornerShape(Radius.md), modifier = Modifier.fillMaxWidth()) {
             Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) { Icon(Icons.Outlined.WarningAmber, null, tint = errorStrong); Spacer(Modifier.width(10.dp)); Text(if (request.action == "delete_files") "任务记录、已下载文件和过程文件都会删除。" else "只删除任务记录，已完成文件将保留。", color = errorBody, fontSize = TypeScale.body, lineHeight = 19.sp) }
         }
-    }, actions = { DialogSecondary("取消", onDismiss); Button(onClick = onConfirm, colors = ButtonDefaults.buttonColors(containerColor = destructiveFill, contentColor = Color.White), shape = RoundedCornerShape(Radius.md)) { Text("确认删除", fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold) } },
+    }, actions = { DialogSecondary("取消", onDismiss); Button(onClick = onConfirm, colors = ButtonDefaults.buttonColors(containerColor = destructiveFill, contentColor = Color.White), shape = RoundedCornerShape(Radius.md), modifier = Modifier.reportControlBounds("dialog.primary.确认删除")) { Text("确认删除", fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold) } },
 )
 
 @Composable private fun PowerActionDialog(signal: UiSignal.PowerPending, onCancel: () -> Unit, onConfirm: () -> Unit) = WorkbenchDialog(
@@ -4264,13 +4667,13 @@ private fun HarvestResultDialog(
                             Text("音轨 ${signal.audioTracks} · 字幕 ${signal.subtitleTracks}", color = muted, fontSize = TypeScale.micro)
                             Spacer(Modifier.weight(1f))
                             if (signal.audioTracks > 0) Box {
-                                TextButton(onClick = { audioMenu = true }, enabled = !busy, contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp), modifier = Modifier.height(25.dp)) { Text("选择音轨", color = blue, fontSize = TypeScale.micro) }
+                                TextButton(onClick = { audioMenu = true }, enabled = !busy, contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp), hoverColor = surface3, pressedColor = surface3.blendToward(ink, .05f), modifier = Modifier.reportControlBounds("player.audio_track").height(25.dp)) { Text("选择音轨", color = blue, fontSize = TypeScale.micro) }
                                 DropdownMenu(expanded = audioMenu, onDismissRequest = { audioMenu = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface) {
                                     (1..signal.audioTracks).forEach { id -> DropdownMenuItem(text = { Text("音轨 $id", color = ink, fontSize = TypeScale.caption) }, onClick = { audioMenu = false; onAction("audio:$id") }) }
                                 }
                             }
                             if (signal.subtitleTracks > 0) Box {
-                                TextButton(onClick = { subtitleMenu = true }, enabled = !busy, contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp), modifier = Modifier.height(25.dp)) { Text("选择字幕", color = blue, fontSize = TypeScale.micro) }
+                                TextButton(onClick = { subtitleMenu = true }, enabled = !busy, contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp), hoverColor = surface3, pressedColor = surface3.blendToward(ink, .05f), modifier = Modifier.reportControlBounds("player.subtitle").height(25.dp)) { Text("选择字幕", color = blue, fontSize = TypeScale.micro) }
                                 DropdownMenu(expanded = subtitleMenu, onDismissRequest = { subtitleMenu = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface) {
                                     (1..signal.subtitleTracks).forEach { id -> DropdownMenuItem(text = { Text("字幕 $id", color = ink, fontSize = TypeScale.caption) }, onClick = { subtitleMenu = false; onAction("subtitle:$id") }) }
                                 }
@@ -4285,7 +4688,7 @@ private fun HarvestResultDialog(
                     ToolbarIcon(if (signal.paused) Icons.Outlined.PlayArrow else Icons.Outlined.Pause, if (signal.paused) "继续播放" else "暂停") { if (!busy) onAction(if (signal.paused) "resume" else "pause") }
                     ToolbarIcon(Icons.Outlined.Forward10, "前进 10 秒") { if (!busy) onAction("seek_fwd") }
                     ToolbarIcon(Icons.AutoMirrored.Outlined.VolumeUp, "提高音量") { if (!busy) onAction("vol_up") }
-                    TextButton(onClick = { if (!busy) onAction("speed:$nextSpeed") }, enabled = !busy, contentPadding = PaddingValues(horizontal = 7.dp), modifier = Modifier.height(34.dp)) { Text(formatPlayerSpeed(signal.speed), color = blue, fontSize = TypeScale.micro, fontWeight = FontWeight.SemiBold) }
+                    TextButton(onClick = { if (!busy) onAction("speed:$nextSpeed") }, enabled = !busy, contentPadding = PaddingValues(horizontal = 7.dp), hoverColor = surface3, pressedColor = surface3.blendToward(ink, .05f), modifier = Modifier.reportControlBounds("player.speed").height(34.dp)) { Text(formatPlayerSpeed(signal.speed), color = blue, fontSize = TypeScale.micro, fontWeight = FontWeight.SemiBold) }
                     ToolbarIcon(Icons.Outlined.PictureInPictureAlt, "画中画") { if (!busy) onAction("pip") }
                     ToolbarIcon(Icons.Outlined.Fullscreen, "全屏") { if (!busy) onAction("fullscreen") }
                 }

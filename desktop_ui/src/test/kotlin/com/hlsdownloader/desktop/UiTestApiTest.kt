@@ -9,6 +9,20 @@ import kotlin.test.assertNull
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
+/**
+ * 已证实的根因记录（批量删除成功后出现的多余错误通知）：
+ *
+ * 那条 "The coroutine scope left the composition" **不是删除链路产生的**。
+ * 用临时委托拦截 notice 的写入点拿到调用栈，确认它来自
+ * `LaunchedEffect(refreshKey)` 里 `loadHandoffs()` 的 `.onFailure`：
+ * refreshKey 变化会取消并重启该协程，`runCatching` 吞掉
+ * CancellationException，其 message 被原样当成错误通知显示。
+ *
+ * 修复是在那条 `.onFailure` 里把 CancellationException 抛回（与轮询器
+ * 同文件的既有约定一致）。`describeTaskActionFailure` 与 handoff 恢复都在
+ * AppShell 这个 @Composable 里，没有可单测的顶层函数，本环境的验证是行为级的。
+ */
+
 class UiTestApiTest {
     @Test
     fun action_validation_rejects_unsafe_or_incomplete_input() {
@@ -23,6 +37,11 @@ class UiTestApiTest {
         assertNull(validateUiTestAction(UiTestAction("type", text = "测试 text"), 1024, 600))
         // 悬停动作：tooltip / :hover 只能靠它触发
         assertNull(validateUiTestAction(UiTestAction("move", 40, 200), 1024, 600))
+        // 按下不抬/抬起来：按下反馈只活在按下期间，只有它 + 截图才采得到那一帧
+        assertNull(validateUiTestAction(UiTestAction("press", 40, 200), 1024, 600))
+        assertNull(validateUiTestAction(UiTestAction("release"), 1024, 600))
+        assertEquals("press actions require x and y", validateUiTestAction(UiTestAction("press"), 1024, 600))
+        assertEquals("coordinates are outside the current window", validateUiTestAction(UiTestAction("press", 40, 600), 1024, 600))
         assertEquals("coordinates are outside the current window", validateUiTestAction(UiTestAction("click", 1024, 20), 1024, 600))
         assertEquals("click actions require x and y", validateUiTestAction(UiTestAction("click"), 1024, 600))
         assertEquals("move action requires x and y", validateUiTestAction(UiTestAction("move"), 1024, 600))
@@ -105,4 +124,5 @@ class UiTestApiTest {
         assertTrue(build.contains("app-icon.ico"))
         assertNotNull(javaClass.classLoader.getResource("app-icon.png"))
     }
+
 }

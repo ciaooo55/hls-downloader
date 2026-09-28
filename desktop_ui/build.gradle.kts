@@ -32,10 +32,17 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     testImplementation(kotlin("test"))
+    testImplementation(compose.desktop.uiTestJUnit4)
 }
 kotlin { jvmToolchain(21) }
 tasks.test {
     useJUnitPlatform()
+    // Compose UI tests (DialogKeyboardDismissTest) load Skiko's native library,
+    // which caches into <user.home>/.skiko by default. Point the cache at the
+    // (git-ignored) build directory instead: it keeps every machine — including
+    // sandboxed hosts whose home is read-only — on one known-writable path, and
+    // avoids a per-developer cache that survives `gradle clean`.
+    jvmArgs("-Dskiko.data.path=" + layout.buildDirectory.get().asFile.resolve("skiko-test").absolutePath)
     // Keep benchmark measurements in CI and local verification logs.
     testLogging { showStandardStreams = true }
 }

@@ -1299,4 +1299,29 @@ mod tests {
         let decoded: CorePipeRequest = decode_message(&hello).unwrap();
         assert_eq!(decoded, hello_request());
     }
+
+    #[test]
+    fn adversarial_pipe_frame_rejects_valid_frame_with_unparseable_payload() {
+        // 帧头合法、载荷不是 CorePipeRequest：第九十轮记录过 handle_stream 用 `?`
+        // 传播这个错误、于是**关掉连接**而不是回一条错误帧。这里把"分类为解析错误"
+        // 钉住，让将来改动传输层时不会悄悄把它变成别的东西。
+        let payload = br#"{"type":"command","request_id":1,"command":{"kind":"nope"}}"#;
+        let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
+        frame.extend_from_slice(payload);
+        let err = decode_message::<CorePipeRequest>(&frame).unwrap_err();
+        assert!(err.contains("JSON invalid"), "unexpected error: {err}");
+
+        // 载荷不是对象而是合法 JSON 的其它类型，同样必须被分类成解析错误。
+        let payload = b"1234";
+        let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
+        frame.extend_from_slice(payload);
+        assert!(decode_message::<CorePipeRequest>(&frame).is_err());
+
+        // 空载荷：长度合法但没有任何 JSON。
+        let mut frame = 0u32.to_le_bytes().to_vec();
+        assert!(decode_message::<CorePipeRequest>(&frame).is_err());
+        frame.extend_from_slice(b" ");
+        let err = decode_message::<CorePipeRequest>(&frame).unwrap_err();
+        assert!(err.contains("JSON invalid"), "unexpected error: {err}");
+    }
 }

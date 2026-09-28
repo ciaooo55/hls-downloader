@@ -90,6 +90,18 @@ impl CoreRuntime {
                 let snapshot = self.create_task(spec);
                 self.publish(CoreEvent::TaskCreated { snapshot });
             }
+            // 单任务查询：发布 TaskUpdated（复用 snapshot()，TaskSnapshot 本来就是独立类型）。
+            // 注意 snapshot() 借的是 &self，publish() 要 &mut self，所以先 cloned() 拿到owned。
+            CoreCommand::GetTask { task_id } => {
+                if let Some(snapshot) = self.snapshot(&task_id).cloned() {
+                    self.publish(CoreEvent::TaskUpdated { snapshot });
+                } else {
+                    self.publish(CoreEvent::Error {
+                        code: "task_not_found".into(),
+                        message: format!("unknown task {task_id}"),
+                    });
+                }
+            }
             CoreCommand::TaskAction { task_id, action } => self.action(&task_id, &action),
             CoreCommand::UpdateProgress {
                 task_id,
@@ -1000,6 +1012,32 @@ fn pending_mirror_status(mirrors: &[String]) -> Vec<MirrorStatus> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn get_task_returns_single_task_snapshot() {
+        // 协议层此前没有"按 task_id 查单个任务"，UI 只能拉全量快照；
+        // 千任务库里全量约 1.4MB。这里锁住 GetTask 的行为。
+        let mut runtime = CoreRuntime::new();
+        runtime.handle(CoreCommand::CreateTask { spec: task() });
+        let events = runtime.handle(CoreCommand::GetTask {
+            task_id: "task-1".into(),
+        });
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(&e.event, CoreEvent::TaskUpdated { .. })),
+            "GetTask 对已存在的任务应回 TaskUpdated，实际 {:?}",
+            events.iter().map(|e| &e.event).collect::<Vec<_>>()
+        );
+        let missing = runtime.handle(CoreCommand::GetTask {
+            task_id: "no-such-task".into(),
+        });
+        assert!(
+            missing.iter().any(|e| matches!(&e.event,
+            CoreEvent::Error { code, .. } if code == "task_not_found")),
+            "GetTask 对不存在的任务应回 task_not_found"
+        );
+    }
+
     use super::*;
 
     fn task() -> TaskSpec {
